@@ -89,6 +89,11 @@ ubuntu-22.04 runner 退役窗口（26.04 GA 后）需预登记迁移方案（24.
   fsyncRealDirectory，一律平台无关地只吞这两个错误码，身份复验保留，EIO 等仍 loud。
 - 插件/宿主 pnpm 入口：`pnpm-launcher.ts` 的候选集按目标平台拼接（`<resourcesPath>/pnpm/bin/pnpm.cjs`
   等），Linux 不再有额外的 pnpm home 扫描；托管宿主 PATH 无 pnpm 时由控制面供给随包 wrapper（02 §3.1）。
+- **远端浏览器 forward（design 28）的 Linux 进程面**：每条 forward 一个 `ssh -N -L` child，`spawn` 用
+  `detached: true` 建 POSIX 进程组，停止/回收走 `kill(-pgid, SIGTERM)` → 1.5s → `SIGKILL`；启动 reaper
+  只处理在册 pid，要求 `(pid 存活, start-time 匹配, cmdline 含本方案标记)` 三元成立才杀，证不出即
+  **不杀**（fail-closed，记录留到下次启动）；`kill -9` 父进程后的 listener 存活窗口上界 = 下一次启动。
+  askpass 复用 `ssh-provider` 既有的 `SSH_ASKPASS_REQUIRE=force`，每条 forward 一个 lease。
 - **已知未动项（STATUS 指向本节）**：托盘图标候选两死路径（跨平台既有 P2）；pnpm home 的 XDG_DATA_HOME
   偏移未覆盖（低优；macOS `~/Library/pnpm` 超出 Linux 范围）；`private-fs.ts` syncPinnedDirectory
   （private-file 的兄弟站点）保持严格无容错、未并入；gateway 裸 CLI 默认 stateDir 与 control-plane standalone

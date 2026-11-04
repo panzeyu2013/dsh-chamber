@@ -576,6 +576,20 @@
       }
     },
     {
+      "id": "typecheck.browser",
+      "title": "Type check (remote browser)",
+      "command": "typecheck:browser",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
       "id": "typecheck.mobile",
       "title": "Type check (mobile)",
       "command": "typecheck:mobile",
@@ -845,6 +859,20 @@
       "id": "tests.open-in",
       "title": "Package tests: open-in",
       "command": "test:open-in",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "tests.browser",
+      "title": "Package tests: remote browser",
+      "command": "test:browser",
       "modes": [
         "tests"
       ],

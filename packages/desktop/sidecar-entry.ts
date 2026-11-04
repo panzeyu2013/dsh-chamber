@@ -52,6 +52,7 @@ import {
   QUIT_INBOUND_ERROR,
 } from './node-edges.ts'
 import { buildHeadlessCtx, settleShutdownLegs, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
+import { disposeForwardService } from './shell-ipc-open-in.ts'
 import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts'
 import {
   EXIT_GRACEFUL,
@@ -672,6 +673,7 @@ async function shutdown(code: number): Promise<void> {
     // will-quit 即单个 Promise.allSettled；两腿各自 loud、互不阻断，失败不改写退出码。
     await settleShutdownLegs(
       [
+        { label: 'forward 回收失败', run: () => disposeForwardService() },
         { label: 'ctx 回收失败', run: () => headless?.dispose() },
         { label: 'cp.stop 失败', run: () => controlPlaneInstance?.stop() },
       ],

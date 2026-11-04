@@ -18,11 +18,12 @@
  * method channel must be in the manifest, and every manifest invoke channel
  * must be exposed by a method (except the internal hydration channel).
  *
- * Count semantics: EXPECTED_SURFACE's 50 invoke is the namespace-exposed
+ * Count semantics: EXPECTED_SURFACE's 54 invoke is the namespace-exposed
  * surface (the two internal channels — `dsh-chamber:info` hydration and
  * `dsh-chamber:native-theme-set` — are not counted); bridge-manifest.json
- * counts.invoke=52 (both internals included) + 9 push = 61, and the
- * desktopSsh namespace alone is 22 invoke + 2 push. The user plugin write
+ * counts.invoke=56 (both internals included) + 9 push = 65, and the
+ * desktopSsh namespace alone is 22 invoke + 2 push (the later forward
+ * namespace adds 4 invoke, 0 push — design 28 §7). The user plugin write
  * surface (apply / undo / materialize / npm search / local add-remove) was
  * retired with the 2026-09 C layering ruling.
  *
@@ -61,14 +62,16 @@ export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info', 'dsh-chambe
  * row. Counts are per `FACTORY_TO_NAMESPACE` namespace.
  */
 export const EXPECTED_SURFACE = {
-  namespaces: 10,
-  members: 59,
-  invoke: 50,
+  namespaces: 11,
+  members: 63,
+  invoke: 54,
   push: 9,
   perNamespace: {
     badge: 1,
     deepLink: 3,
     desktopSsh: 24,
+    // Remote Browser v4 (design 28 §7): 4 invoke, 0 push — v1 polls list().
+    forward: 4,
     notifications: 5,
     openIn: 2,
     rendererStall: 1,
@@ -150,6 +153,7 @@ export const FACTORY_TO_NAMESPACE = {
   runtimeApi: 'runtime',
   notificationsApi: 'notifications',
   badgeApi: 'badge',
+  forwardApi: 'forward',
 }
 
 /** preload factory declarations: `function <name>Api(): <Surface> {`. */

@@ -34,6 +34,11 @@
 - `reaper.ts resolveDeps`:win32 默认 = CIM 身份 + netstat + taskkill 信号 + `realAlive || hasWindowsResidualTree` 树存活;POSIX 默认零改动。
 - `spawn-dsh.ts signalManagedGroup`:win32 → `treeKillWindows`(gone=false 即 ESRCH 等价);spawn 补 `windowsHide: true`(detached 子进程不弹控制台窗口)。
 - 集成测试:`control-plane/test/windows/win32-lifecycle.integration.test.ts`(win32-only,自 skip)。
+- **远端浏览器 forward（design 28）**:每条 forward 一条 `ssh -N -L` child,停止/回收复用本节的
+  `taskkill /PID <pid> /T /F` 树终止,**不引入 Job Object**(无原生 addon);进程身份由
+  `remote-forward-windows.ts` 查 `Win32_Process` 的 `CreationDate`/`CommandLine`(纯解析单测),
+  证不出即不杀(fail-closed)。仅密码主机可用 askpass,不做 key-only 升级;真实 Windows 腿仍未实机
+  (STATUS)。
 
 **语义让步(记录)**:Windows 无 POSIX 信号 → SIGTERM 段与 SIGKILL 段同形(taskkill);身份证明依赖 PowerShell 存在且同行权限可读 CommandLine;以上均 fail-closed。
 

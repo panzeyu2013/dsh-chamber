@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // Self-contained package: no cross-package source imports, so the compile
+    // root is the repository root only to reuse the shared compiler options
+    // (the same layout precedent as the other chamber client packages).
+    "rootDir": "../..",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src",
+    "test"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/vendor/**"
+  ]
+}

@@ -166,6 +166,7 @@ export interface ShellAssemblyCtx {
     | 'exec'
     | 'appendLog'
     | 'loadFailure'
+    | 'setSourceRetiredListener'
   >
   /** 非秘密审计叶（appendAuditEvent({ file:
    *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非

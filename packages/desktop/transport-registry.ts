@@ -1,10 +1,4 @@
-/**
- * Persisted transport registry: load/save/list of the instance set, the durable
- * document, corrupt-aside recovery and the load-health state. Split out of
- * transport-manager.ts (B2-1); every effect (log, atomic write, provider lookup,
- * connect/disconnect) arrives through the deps object, so the module owns no
- * transport lifecycle of its own.
- */
+/** Persisted transport registry: load/save/list, corrupt-aside recovery and load-health. */
 import { existsSync, readFileSync } from 'node:fs'
 import {
   MAX_TRANSPORT_INSTANCES, type TransportInstanceInput, type TransportInstanceSpec,
@@ -32,12 +26,13 @@ export interface TransportRegistryDeps {
   disconnect: (id: string) => void
   execIdentityChanged: (a: TransportInstanceSpec, b: TransportInstanceSpec) => boolean
   lastFailureProbeAt: Map<string, number>
+  onSourceRetired?: (sourceId: string) => void
 }
 
 export function createTransportRegistry(deps: TransportRegistryDeps) {
   const {
     instances, states, instancesFile, state, log, warn, writeFileAtomic, resolveProvider,
-    connect, disconnect, execIdentityChanged, lastFailureProbeAt,
+    connect, disconnect, execIdentityChanged, lastFailureProbeAt, onSourceRetired,
   } = deps
   /** Load the persisted instance set; a missing file is an empty set. */
   function loadInstances(): TransportInstanceSpec[] {
@@ -151,6 +146,7 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
     const restartIds: string[] = []
     const stopBeforeReplaceIds: string[] = []
     const projectionResetIds: string[] = []
+    const retiredSourceIds = new Set<string>()
     const seenIds = new Set<string>()
     for (const [index, entry] of next.entries()) {
       // Save is all-or-nothing: a malformed entry rejects the whole roster before
@@ -177,6 +173,7 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
       const state = previous === undefined ? undefined : states.get(normalized.id)
       if (previous !== undefined && execIdentityChanged(previous, normalized)) {
         projectionResetIds.push(normalized.id)
+        retiredSourceIds.add(previous.kind + '-' + previous.id)
       }
       // transport/insecureHttp/SPKI are part of the live-transport identity:
       // switching mechanism, scheme or pin while live must restart the transport so
@@ -188,6 +185,7 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
         // Always revoke the old generation, including the between-child gap of a
         // multi-stage exec; only an actually live transport is restarted.
         stopBeforeReplaceIds.push(normalized.id)
+        retiredSourceIds.add(previous.kind + '-' + previous.id)
         if (state.phase !== 'idle') restartIds.push(normalized.id)
       }
       kept.push(normalized)
@@ -219,6 +217,7 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
       if (!nextIds.has(id)) {
         const removedSpec = instances.get(id)
         log(`transport-manager: instance ${id} removed from the set; disconnecting its transport`)
+        if (removedSpec !== undefined) retiredSourceIds.add(removedSpec.kind + '-' + removedSpec.id)
         disconnect(id)
         // The instance is GONE: drop its runtime state so a later same-id reuse
         // starts clean. An in-flight exec of the removed instance can never write
@@ -253,6 +252,7 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
       log(`transport-manager: instance ${id} transport kind/parameters changed; starting replacement transport`)
       connect(id)
     }
+    for (const sourceId of retiredSourceIds) onSourceRetired?.(sourceId)
     return listInstances()
   }
 

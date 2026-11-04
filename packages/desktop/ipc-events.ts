@@ -55,6 +55,16 @@ export const IPC_CHANNELS = {
   DEEP_LINK_ACK: 'dsh-chamber:deep-link-ack',
   DEEP_LINK_INTENT: 'dsh-chamber:deep-link-intent',
 
+  /** Remote-browser forward domain (design 28 §7): the four invoke channels of
+   *  window.dshChamber.forward, registered by shell-ipc-browser.ts. The wire's
+   *  reserved push name ('forward:changed') must never be added here — v1 is
+   *  poll-only (forward.list), so a 10th push would renumber the whole
+   *  manifest/Swift/surface lockstep for nothing. */
+  FORWARD_REQUEST: 'dsh-chamber:forward-request',
+  FORWARD_RELEASE: 'dsh-chamber:forward-release',
+  FORWARD_LIST: 'dsh-chamber:forward-list',
+  FORWARD_OPEN_IN_BROWSER: 'dsh-chamber:forward-open-in-browser',
+
   SYSTEM_RESUME: 'dsh-chamber:system-resume',
 
   /** Renderer-stall evidence (frame-probe strikes / input-block RTT): main →

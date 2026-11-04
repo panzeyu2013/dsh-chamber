@@ -49,7 +49,7 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 1. 新增根级运行模块不得命中下面的 negate 例外表（与 `package.json` 的 `build.files` 同序）。测试的常规位置是 `packages/desktop/test/<domain>/`（包根三条glob不收取）；例外：留在包根的根级 `*.test.ts`（清单唯一来源 = `packages/desktop/scripts/test.mjs`，不在此抄名单）——由该清单显式接线，`ci.yml` 的 `test-macos` 桥面锁步步骤按包根路径调用其中若干，故 `!*.test.ts` negate载荷相关（勿删）；
 2. `main.ts` / `preload.cts` 的传递import闭包不得指到 `scripts/`、`vendor/` 或未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
-被收取的根级模块（名单 = **当前快照**，唯一用途是与下面 `count = 88` 的自检命令对拍；增删的批次叙述归 `CHANGELOG.md` 与 git 历史，不在本文件维护）：
+被收取的根级模块（名单 = **当前快照**，唯一用途是与下面 `count = 95` 的自检命令对拍；增删的批次叙述归 `CHANGELOG.md` 与 git 历史，不在本文件维护）：
 
 `main.ts`、`preload.cts`、`apply-now-gate.ts`、`audit-log.ts`、`auth-recovery.ts`、`auth-recovery-policy.ts`、
 `badge.ts`、`bounded-lines.ts`、`chamber-lock.ts`、`chamber-settings.ts`、
@@ -62,9 +62,10 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 `gateway-sync-registry.ts`、`host-assembly.ts`、`host-exit.ts`、`host-edges.ts`、`host-package-dirs.ts`、
 `host-registry-transition.ts`、`host-root-lease.ts`、`ipc-events.ts`、`lockfile-facts-memo.ts`、`node-edges.ts`、
 `notifications.ts`、`open-in.ts`、`owner-only-secret-file.ts`、`plugin-sync.ts`、
-`pnpm-launcher.ts`、`registry-projection.ts`、`renderer-frame-watchdog.ts`、`renderer-trust.ts`、
+`pnpm-launcher.ts`、`registry-projection.ts`、`remote-forward-args.ts`、`remote-forward-lifecycle.ts`、
+`remote-forward-manager.ts`、`remote-forward-namespace.ts`、`remote-forward-service.ts`、`remote-forward-windows.ts`、`renderer-frame-watchdog.ts`、`renderer-trust.ts`、
 `runtime-probe-detail.ts`、`runtime-startup-host.ts`、`runtime-tree-check.ts`、`sanitize-error.ts`、
-`shell-assembly-ctx.ts`、`shell-core.ts`、`shell-ipc-connections.ts`、`shell-ipc-ctx.ts`、
+`shell-assembly-ctx.ts`、`shell-core.ts`、`shell-ipc-browser.ts`、`shell-ipc-connections.ts`、`shell-ipc-ctx.ts`、
 `shell-ipc-open-in.ts`、`shell-ipc-plugins-gateway.ts`、`shell-ipc-plugins-local.ts`、`shell-ipc-plugins-ssh.ts`、
 `shell-ipc-runtime.ts`、`shell-ipc-settings.ts`、`shell-ipc-update.ts`、`shell-locale.ts`、
 `shortcuts-bridge.ts`、
@@ -81,7 +82,7 @@ count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mj
   | grep -v '/sidecar-stub\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"
-test "$count" = 88 || { echo "STALE: 名单/计数需同步（见上方 88 个）"; exit 1; }
+test "$count" = 95 || { echo "STALE: 名单/计数需同步（见上方 95 个）"; exit 1; }
 ```
 
 **例外名单 = `build.files` 的 negate 项（勿删；顺序同package.json）**：

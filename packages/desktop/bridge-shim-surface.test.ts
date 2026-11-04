@@ -4,7 +4,7 @@
  * bridge-manifest.json invoke/push 集。
  *
  * 断言链（全部静态文本解析，不执行 shim）：
- *  ① 10 命名空间各自的方法名集合：preload（*Api 工厂返回对象）== shim
+ *  ① 11 命名空间各自的方法名集合：preload（*Api 工厂返回对象）== shim
  *     （var <ns> = {…} 块）——无缺无多（含 on* 订阅方法；update/runtime 的
  *     onStateChanged 等 preload 面外别名不得出现）；
  *  ② 方法→通道逐条映射：同 (命名空间, 方法) 下 preload 的
@@ -13,10 +13,10 @@
  *     的解包方法、ready/ack 的 {deliveryId,attempt} 类形状方法——本测试锁
  *     通道名；update 面两个确认动作的 payload 键由 ⑥ 逐条锁死，其余面的
  *     payload 形状由实现注释与 Swift 集成测试覆盖）；
- *  ③ 顶层面：preload exposeInMainWorld('dshChamber', {…}) 的 13 个键
- *     （4 标量 + 10 命名空间）== shim dshChamberApi 键；
+ *  ③ 顶层面：preload exposeInMainWorld('dshChamber', {…}) 的 15 个键
+ *     （4 标量 + 11 命名空间）== shim dshChamberApi 键；
  *  ④ invoke 通道集：preload 全部 invoke 字面量 == shim 全部 invoke 字面量
- *     == manifest invoke 集（52）；push 通道集：preload 全部
+ *     == manifest invoke 集（56）；push 通道集：preload 全部
  *     ipcRenderer.on 字面量 == shim PUSH_EVENTS 值 == manifest push 集（9）；
  *  ⑤ 无 poc-unimplemented 兜底残留：shim 不含 pocUnimplemented/rejectMethods
  *     代码形态（头部注记文本仅描述 sidecar 桩，不属于兜底代码）。
@@ -52,6 +52,7 @@ const API_FACTORY_TO_NAMESPACE: Record<string, string> = {
   runtimeApi: 'runtime',
   notificationsApi: 'notifications',
   badgeApi: 'badge',
+  forwardApi: 'forward',
 }
 const NAMESPACES = Object.values(API_FACTORY_TO_NAMESPACE)
 
@@ -211,15 +212,15 @@ test('② 方法→通道映射逐条相等（preload 字面量 == shim 解析�
   }
 })
 
-test('③ 顶层面：preload expose 键 == shim dshChamberApi 键（4 标量 + 10 命名空间）', () => {
+test('③ 顶层面：preload expose 键 == shim dshChamberApi 键（4 标量 + 11 命名空间）', () => {
   const expected = new Set([...EXPECTED_SCALARS, ...NAMESPACES])
   const exposeKeys = extractExposeKeys(preloadSource)
-  assert.deepEqual(exposeKeys, expected, 'preload exposeInMainWorld 键应为 4 标量 + 10 命名空间')
+  assert.deepEqual(exposeKeys, expected, 'preload exposeInMainWorld 键应为 4 标量 + 11 命名空间')
   const shimKeys = extractShimTopKeys()
-  assert.deepEqual(shimKeys, expected, 'shim dshChamberApi 键应为 4 标量 + 10 命名空间')
+  assert.deepEqual(shimKeys, expected, 'shim dshChamberApi 键应为 4 标量 + 11 命名空间')
 })
 
-test('④ invoke/push 通道集：preload == shim == manifest（52 invoke / 9 push）', () => {
+test('④ invoke/push 通道集：preload == shim == manifest（56 invoke / 9 push）', () => {
   // 内部 bootstrap 通道（无命名空间方法暴露）：与 verify-shim-payload-shape 的
   // INTERNAL_INVOKE_CHANNELS 同集——info hydration + macOS 主题源 observer。
   const INTERNAL_INVOKE = ['dsh-chamber:info', 'dsh-chamber:native-theme-set']

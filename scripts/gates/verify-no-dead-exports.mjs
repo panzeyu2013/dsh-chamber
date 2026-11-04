@@ -142,6 +142,7 @@ export const RUNTIME_LOADED_PACKAGES = {
   'dsh-chamber-seed-git-worktree': 'host-graph insert row: the dsh loader imports dist/index.js by package name and reads the default-exported gateway',
   'dsh-chamber-seed-archive-cleanup': 'host-graph insert row: the dsh loader imports dist/index.js by package name and reads the default-exported gateway',
   'dsh-chamber-seed-open-in': 'host-graph insert row: the dsh loader imports dist/index.js by package name and reads the default-exported gateway',
+  'dsh-chamber-client-ui-browser': 'client-plugin loader: the composite entry imports the ./client half by package name (deferred chunk); the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-git': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-layout': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-mobile': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
@@ -188,6 +189,16 @@ export const ENTRYLESS_SEAMS = [
   { package: 'renderer', name: '__resetSessionFactsGoalWarningForTests', reason: 'session-facts-source suite re-arms the one-shot goal-shape warning; the suite owns the seam' },
   { package: 'renderer', name: 'resetRendererStallEvidence', reason: 'renderer-stall-evidence suite resets the module singleton between cases; the suite owns the seam' },
   { package: 'desktop', name: 'clearGatewaySyncRegistrations', reason: 'gateway-sync-registry suite resets module state between cases' },
+  // Remote Browser v4 (design 28) W0/S1 slice. forward-service.ts (the S1
+  // assembly) now imports ForwardNamespaces, ForwardChildLedger and
+  // reapForwardChildren, so those three seams were retired in that change (the
+  // gate flags a seam that gained a production consumer, so they cannot go
+  // quietly stale). RETIRE each remaining entry in the same change that imports
+  // the name from a production file.
+  { package: 'desktop', name: 'FORWARD_SSH_FORBIDDEN_OPTION_NAMES', reason: 'design 28 argv-discipline constant; forward argv golden suite owns it (no production reader by design)' },
+  { package: 'desktop', name: 'canForwardTransition', reason: 'design 28 transition table reader for review/suite; the manager drives states through its own patches, so no production reader exists' },
+  { package: 'desktop', name: 'FORWARD_REAP_SEMANTICS', reason: 'design 28 crash-window documentation constant; the lifecycle suite asserts it (documentation, not a code path)' },
+  { package: 'desktop', name: 'forwardSpawnSupervision', reason: 'design 28 POSIX detached/win32 policy; asserted by the lifecycle suite, the launcher states the same policy inline with its spawn call' },
 ]
 
 /**

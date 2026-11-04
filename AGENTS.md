@@ -141,8 +141,9 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-chamber-client-ui-settings-plugin-manager` | Reuses the upstream plugin manager as its own Settings section (`settings.section` id `plugin-manager`, after the official Built-in plugins inventory); owns no sidebar panel (design 05) |
 | `packages/dsh-chamber-client-ui-git` | Git worktree client plugin (design 08); facts and actions stay client-side and never become a control-plane execution surface |
 | `packages/dsh-chamber-client-ui-open-in` | Desktop open-in client plugin (designs 16, 20) + the conversation stream-health seat (design 14 §D4) |
+| `packages/dsh-chamber-client-ui-browser` | Client-only right-sidebar Browser launcher (design 28): address bar + per-source forward list, loaded as a deferred covered row by the composite; **not seeded** (a renderer workspace client package, not a host package). Entry only for `dsh` + `ssh` sources; each source maps remote loopback to its own `127.0.0.n` alias and opens it in the system browser. It never renders a page (no iframe / webview / native child view), never opens a gateway tunnel, and keeps **no shared `127.0.0.1` fallback** |
 | `packages/dsh-chamber-client-ui-mobile` | Packaged mobile client served by the gateway — the single packaged plugin exception (design 17) |
-| `packages/desktop` | Electron shell: single frame over the control-plane origin, trusted domain-scoped IPC, open-in/deep-link routing, edge notifications, crash-safe credential and runtime management |
+| `packages/desktop` | Electron shell: single frame over the control-plane origin, trusted domain-scoped IPC, open-in/deep-link routing, edge notifications, crash-safe credential and runtime management, and the SSH forward service behind the remote-browser launcher (`remote-forward-args`, `remote-forward-namespace`, `remote-forward-manager`, `remote-forward-lifecycle`, `remote-forward-service`, `remote-forward-windows`, `shell-ipc-browser`; design 28) — it opens remote-loopback URLs in the system browser and never becomes a dsh execution surface |
 | `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup, in-instance open-in catalog/icons/launch (designs 09, 08, 24, 20) |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
 | `packages/gateway` | Separately invoked server shape (design 17): authenticated-by-default public boundary, single local-dsh proxy, host duties, seed registry |
@@ -175,6 +176,6 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall (`pnpm-workspace.yaml` allowBuilds note
   + `scripts/dev/ensure-harness-vendor.mjs` shim), not a runtime dependency of the chamber tree; it
   heads the runtime tree's `ALLOW_BUILDS`.
-- Removed domains and the bounded exceptions (designs 08, 17, 19, 20, 24 — narrowest boundaries in
-  design 24 §2, and for the open-in host domain in design 20 §6.3) are stated in
-  `docs/design/01-overview.md` §4 and §5.
+- Removed domains and the bounded exceptions (designs 08, 17, 19, 20, 24, 28 — narrowest boundaries in
+  design 24 §2, for the open-in host domain in design 20 §6.3, and for the remote-browser launcher in
+  design 28 §13) are stated in `docs/design/01-overview.md` §4 and §5.

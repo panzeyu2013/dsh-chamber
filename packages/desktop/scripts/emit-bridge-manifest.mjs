@@ -5,14 +5,14 @@
  *
  * 输入（两份，缺一不可）：
  *   ① 名单源 packages/desktop/ipc-events.ts 的 `IPC_CHANNELS` 常量表：
- *      值 = 通道名、键 = 常量名（当前 61 键）。表即全量通道集合。
+ *      值 = 通道名、键 = 常量名（当前 65 键）。表即全量通道集合。
  *   ② 方向维度（实测集合法，不靠常量名启发）：main 侧注册事实 ——
  *      packages/desktop 的 MAIN_SIDE_FILES（main.ts / shell-core.ts /
  *      electron-edges.ts + shell-ipc-*.ts、runtime-startup-host.ts、
  *      host-assembly.ts 与 host-registry-transition.ts；
  *      与 ipc-surface-mirror.test.ts 的扫描面一致）中 `IPC_CHANNELS.X`
  *      的注册调用：
- *        `(?:ipcMain|deps\.ipc).handle(IPC_CHANNELS.X`  →  invoke（52）
+ *        `(?:ipcMain|deps\.ipc).handle(IPC_CHANNELS.X`  →  invoke（56）
  *        `(?:webContents\.send|rendererPush)(IPC_CHANNELS.X` →  push（9）
  *      注释先剥离再扫描（与镜像测试的逐字扫描器同语义——shell-core.ts 注释
  *      里就有 rendererPush(IPC_CHANNELS.DEEP_LINK_INTENT 的措辞，不剥离会
@@ -22,7 +22,7 @@
  *
  * 产出（写入位置默认相对本脚本所在仓库）：
  *   A. packages/desktop/bridge-manifest.json（提交物）——
- *      { "invoke": [{channel,key}×52], "push": [{channel,key}×9],
+ *      { "invoke": [{channel,key}×56], "push": [{channel,key}×9],
  *        "counts": {invoke,push,total} }，两数组均按 IPC_CHANNELS 定义序。
  *   B. macos/Sources/DSHChamber/Generated/BridgeManifest.swift（生成物、
  *      提交）——`enum BridgeManifest` 两份 Set<String>（invokeChannels /

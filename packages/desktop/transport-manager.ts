@@ -1,15 +1,10 @@
 /**
- * Generic transport runtime: the source-agnostic half of the connection
- * manager. Instances carry orthogonal `kind`/`transport`; the runtime resolves
- * the provider for that transport and owns the generic lifecycle.
- * - Atomic, fail-loud persisted registry (corrupt is never a fake-empty set;
- *   legacy v1 kind entries normalize on load/save).
- * - Phase machine idle → connecting → ready ⇄ degraded → error with two-tier
- *   retry (bounded fast burst, then indefinite slow re-probe); terminal
- *   failures set requiresUserAction and are never auto-retried.
- * - Readiness = TCP accept AND the provider's verifyUp identity check, so a
- *   non-dsh service never presents as ready; the transport URL never leaves
- *   this module raw. Provider/spawn/probe/allocator/RNG are injectable.
+ * Generic transport runtime: source-agnostic half of the connection manager.
+ * Instances carry orthogonal kind/transport; this module owns the generic
+ * lifecycle: atomic persisted registry, phase machine (idle/connecting/ready/
+ * degraded/error), readiness (TCP + provider verifyUp), and injectable
+ * provider/spawn/probe/allocator/RNG seams. The transport URL never leaves raw.
+ * - terminal failures set requiresUserAction and are never auto-retried.
  */
 
 import { createTransportRegistry, type SaveInstancesProvenance } from './transport-registry.ts'
@@ -287,6 +282,8 @@ export interface TransportManager {
   /** Failure-driven probe: a forwarded request got no HTTP answer while the link
    *  was healthy. Throttled; a no-op for non-ready/suspect/down/busy instances. */
   notifyLinkFailure(id: string): void
+  /** Register the forward-plane retirement hook (design 28 source delete/retarget). */
+  setSourceRetiredListener?(listener: ((sourceId: string) => void) | null): void
   /** The ready transport URL — INTERNAL ONLY. */
   readyUrl(id: string): string | null
   logs(id: string): TransportLogEntry[]
@@ -1181,6 +1178,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     incomplete: false,
     droppedCount: 0,
   }
+  let sourceRetiredListener: ((sourceId: string) => void) | null = null
   const registry = createTransportRegistry({
     instances,
     states,
@@ -1194,6 +1192,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     disconnect: (id) => { disconnect(id) },
     execIdentityChanged,
     lastFailureProbeAt,
+    onSourceRetired: sourceId => { sourceRetiredListener?.(sourceId) },
   })
   const { loadInstances, saveInstances, listInstances } = registry
 
@@ -1395,6 +1394,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     reverify,
     reverifyAll,
     notifyLinkFailure,
+    setSourceRetiredListener: (listener) => { sourceRetiredListener = listener },
     readyUrl,
     logs,
     clearLogs,

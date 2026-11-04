@@ -90,9 +90,10 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
 | 23 | [23-windows-support.md](23-windows-support.md) | Windows 11 x64 支持契约（代码面可用；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
 | 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{probe,purge}`（purge 带可选子集过滤 / `force` / 保护集 `protectSessionIds`；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover「查看已归档内容」打开——查看 / 恢复 / 逐条删除，整集删除只能显式全选后删选中、无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
-| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、61 通道 manifest 锁步（52 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留 |
+| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、65 通道 manifest 锁步（56 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留 |
 | 26 | [26-page-channel.md](26-page-channel.md) | 现行 | 页面级多路复用通道：一条同源 WS 承载全部长活流（health / pluginGraph / sessionFacts），实例在通道内以 instanceId 定址、容量归控制面（O(活跃订阅)）；每订阅信用窗口流控；通道独占重连与重订阅；不变量 I-1（页面长活 HTTP 流 = 0）配静态与运行期断言；健康 SSE 端点退役；§D7 页面级同源 HTTP 派发预算（有界队列、local 保留槽、`dispatched` 证据、fetch 唯一所有权 allowlist） |
 | 27 | [27-network-io-resilience.md](27-network-io-resilience.md) | v1 代码面完成（实机/组装态门禁见 STATUS） | WAN 网络 IO 韧性：transport link health 子态（healthy/suspect/down）、两次网络失败才 down、suspect 放行/down 复用 503、注册边沿、上传总预算、页面通道 link epoch、载波 closed 逃生、mutation unknown 分类；不新增包/phase/503 码 |
+| 28 | [28-remote-browser.md](28-remote-browser.md) | 现行（W0/S1/S2 实现面；S3/真机验收未完成，开放项见 STATUS） | 远端浏览器启动器：右栏 Browser = 地址栏 + 每来源 SSH loopback forward 列表，经系统浏览器打开；`dsh` + `ssh` 才有入口，per-source `127.0.0.n` alias、永不复用、无共享 `127.0.0.1` 回退；不内嵌页面/不做 gateway 隧道。**§4 有界例外**，不是 web 预览回归 |
 
 ---
 
@@ -107,13 +108,13 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 控制面会话运行时/统一索引/交互管线 | **移除** | 各实例前端 runtime 自有（N-ctx） |
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
-| walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）** | 宿主原生覆盖，控制面只接入/服务 |
+| walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）**；「web 预览」的裁决见下（design 28 是有界例外，不是回归） | 宿主原生覆盖，控制面只接入/服务 |
 | 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步、mobile 打包例外，design 17 §10）+ **第三方插件管理写面**（design 21 A1 裁决：`installed`/`install`/`remove`/`materialize`/`tasks`，串行队列 + 持久 journal + 单写者租约，契约见 design 17 §10.2 与 design 21 §6.2/§6.3，受保护集合与代耦合见 design 21 §6.11） |
 | git/GitHub | **插件化** | design 08 实例内插件是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；gateway 服务器侧 worktree 记录已随编排面剥离 |
 
-> **有界例外（与 AGENTS.md 同列：designs 08 / 17 / 19 / 20 / 24）**：design 08 实例内
+> **有界例外（与 AGENTS.md 同列：designs 08 / 17 / 19 / 20 / 24 / 28）**：design 08 实例内
 > Git 插件、design 17 独立 gateway、design 19 桌面原生边沿通知投影、design 20 可信
-> open-in 边缘能力、design 24 实例内归档清理宿主域——全部显式窄边界。
+> open-in 边缘能力、design 24 实例内归档清理宿主域、design 28 远端浏览器启动器——全部显式窄边界。
 > `packages/control-plane` 本身仍不建立 Git/会话索引、不运行 Git、不认证；Desktop
 > 仍仅接入/分发。gateway 派生状态丢失后必须能从 dsh 权威重建，且 gateway 未显式
 > 启动时这些域完全不存在。design 18 §9 是 17/18 的有界扩展：gateway 获得与桌面同源
@@ -132,6 +133,14 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 > 清理宿主域（宿主包 `packages/dsh-chamber-seed-archive-cleanup`，控制面只随种子把它同步进
 > 实例图，见 `packages/control-plane/src/host-graph-seed.ts`）：只删不读、运行中整棵跳过、
 > 幂等，域缺失 404 给诚实文案；控制面不持有归档事实、不新增执行面，最窄边界见 design 24 §2。
+>
+> **design 28 远端浏览器 = 有界例外，不是「web 预览」回归**：只从右栏 Browser 条目发起，只对
+> `dsh` + `ssh` 来源把远端 `127.0.0.1:<port>` 经 SSH `-L` 映射到该来源专属的 `127.0.0.n` alias，
+> 再交给系统浏览器；公网 http(s) 仍走既有链接腿。面板**不渲染任何页面**（无 iframe / webview /
+> 原生子视图）、不代答、不注入，**不建 gateway 隧道**、不做远端 LAN/主机名/任意 target；
+> per-source alias 永不复用（删除即 tombstone），且**没有共享 `127.0.0.1` 回退**。故 §4 的
+> 「web 预览（移出）」仍成立：被否决的是在宿主 UI 内渲染页面内容，不是把远端 loopback 端口
+> 交到系统浏览器。
 
 宿主已覆盖的“通知中心”UI/历史/管理域属移出面；设计 19 的桌面原生边沿通知只投影
 renderer 已有的每实例运行时事实，不建立控制面通知消费者/历史/中心，不属该移出域。

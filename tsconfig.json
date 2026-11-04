@@ -20,7 +20,7 @@
       // @dsh-chamber/dsh-chamber-client-core resolves through the workspace
       // node_modules link + its package.json exports (source targets): no paths
       // mirror is declared here on purpose (R4 P3; typecheck proves the link).
-      // The four chamber client-plugin entries are checked by their own package
+      // The five chamber client-plugin entries are checked by their own package
       // programs (their loose vendor faces collide when merged into one program);
       // the renderer consumes them only through this narrow registration face.
       // The module-loader contract is compiled by the client-web fork's own
@@ -63,6 +63,11 @@
         "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ],
       "@dsh-chamber/dsh-chamber-client-ui-open-in/client": [
+        "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
+      ],
+      // Remote Browser launcher (design 28): a deferred, dsh+ssh-only row; the root
+      // program consumes its registration face only (the package program owns the rest).
+      "@dsh-chamber/dsh-chamber-client-ui-browser/client": [
         "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ]
     }

@@ -73,6 +73,22 @@
       "key": "DEEP_LINK_ACK"
     },
     {
+      "channel": "dsh-chamber:forward-request",
+      "key": "FORWARD_REQUEST"
+    },
+    {
+      "channel": "dsh-chamber:forward-release",
+      "key": "FORWARD_RELEASE"
+    },
+    {
+      "channel": "dsh-chamber:forward-list",
+      "key": "FORWARD_LIST"
+    },
+    {
+      "channel": "dsh-chamber:forward-open-in-browser",
+      "key": "FORWARD_OPEN_IN_BROWSER"
+    },
+    {
       "channel": "desktop_ssh_instances_get",
       "key": "SSH_INSTANCES_GET"
     },
@@ -248,8 +264,8 @@
     }
   ],
   "counts": {
-    "invoke": 52,
+    "invoke": 56,
     "push": 9,
-    "total": 61
+    "total": 65
   }
 }

@@ -436,6 +436,137 @@ export interface OpenInSurface {
   open(appId: string, instanceId: string, path: string, sourceFingerprint: string): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
+/**
+ * Remote-browser forward wire mirror (design 28 §7; the `forward` namespace).
+ *
+ * The cross-process authority is `packages/dsh-chamber-wire/src/forward.ts`;
+ * packages/desktop cannot import it yet (no dependency + lockfile change in this
+ * slice), so this block duplicates the contract and `test/forward/forward-wire.test.ts`
+ * asserts the desktop mirror (`remote-forward-manager.ts`) agrees with the wire
+ * tables. The renderer mirror is `packages/renderer/src/global.d.ts` — the two
+ * blocks are compared by `test/ipc/ipc-surface-mirror.test.ts`.
+ */
+export type ForwardScheme = 'http' | 'https'
+
+/** Forward lifecycle state (7 values; `bound` means the LOCAL listener accepted
+ *  a probe, not that the remote service is reachable). */
+export type ForwardState = 'requested' | 'starting' | 'bound' | 'reconnecting' | 'closing' | 'closed' | 'error'
+
+/** Closed forward error table — one launcher message + action per code. */
+export type ForwardErrorCode =
+  | 'source_unknown'
+  | 'source_not_dsh'
+  | 'transport_not_ssh'
+  | 'source_changed'
+  | 'browser_disabled'
+  | 'confirmation_declined'
+  | 'confirmation_late'
+  | 'target_port_invalid'
+  | 'target_port_reserved'
+  | 'scheme_invalid'
+  | 'too_many_for_source'
+  | 'too_many_global'
+  | 'namespace_unavailable'
+  | 'alias_exhausted'
+  | 'port_exhausted'
+  | 'local_bind_failed'
+  | 'auth_failed'
+  | 'forward_failed'
+  | 'forward_not_found'
+  | 'forward_not_owned'
+  | 'forward_not_bound'
+  | 'forward_stale'
+  | 'invalid_path'
+  | 'rate_limited'
+  | 'open_failed'
+
+/** One non-secret failure; `detail` is main-composed and never ssh material. */
+export interface ForwardError {
+  code: ForwardErrorCode
+  detail: string | null
+}
+
+/** One forwarded port as shown by the launcher (no child handle, no ssh argv). */
+export interface ForwardRecord {
+  readonly id: string
+  readonly sourceId: string
+  readonly namespace: number
+  readonly aliasHost: string
+  readonly localPort: number
+  readonly scheme: ForwardScheme
+  readonly targetHost: '127.0.0.1'
+  readonly targetPort: number
+  readonly state: ForwardState
+  readonly stale: boolean
+  readonly error: ForwardError | null
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly boundAt: number | null
+}
+
+/** Cap usage for one source snapshot (the launcher names what holds a slot). */
+export interface ForwardLimitsSnapshot {
+  readonly perSource: number
+  readonly global: number
+  readonly perSourceUsed: number
+  readonly globalUsed: number
+}
+
+/** `forward.request` arguments (idempotent on (sourceId, targetPort)). */
+export interface ForwardRequestArgs {
+  readonly sourceId: string
+  readonly sourceFingerprint: string
+  readonly port: number
+  readonly scheme?: ForwardScheme
+}
+
+/** `forward.release` arguments. */
+export interface ForwardReleaseArgs {
+  readonly sourceId: string
+  readonly sourceFingerprint: string
+  readonly id: string
+}
+
+/** `forward.list` arguments (the poll face). */
+export interface ForwardListArgs {
+  readonly sourceId: string
+  readonly sourceFingerprint: string
+}
+
+/** `forward.openInBrowser` arguments — main composes the URL, never the renderer. */
+export interface ForwardOpenArgs {
+  readonly sourceId: string
+  readonly sourceFingerprint: string
+  readonly id: string
+  readonly path?: string
+}
+
+export type ForwardRequestResult =
+  | { readonly ok: true; readonly record: ForwardRecord }
+  | { readonly ok: false; readonly error: ForwardError }
+
+export type ForwardReleaseResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: ForwardError }
+
+export type ForwardListResult =
+  | { readonly ok: true; readonly records: readonly ForwardRecord[]; readonly limits: ForwardLimitsSnapshot }
+  | { readonly ok: false; readonly error: ForwardError }
+
+export type ForwardOpenResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: ForwardError }
+
+/** window.dshChamber.forward — the four-invoke remote-browser forward surface
+ *  (design 28 §7). No subscribe member: v1 polls list() every 1-2s (D6), and
+ *  the wire's reserved 'forward:changed' push is deliberately absent. */
+export interface ForwardSurface {
+  request(input: ForwardRequestArgs): Promise<ForwardRequestResult>
+  release(input: ForwardReleaseArgs): Promise<ForwardReleaseResult>
+  list(input: ForwardListArgs): Promise<ForwardListResult>
+  openInBrowser(input: ForwardOpenArgs): Promise<ForwardOpenResult>
+}
+
 /** Normalized deep-link intent push payload (design 16 §2). */
 export interface DeepLinkIntent {
   instanceId: string
@@ -520,7 +651,8 @@ export interface BadgeSurface {
 }
 
 /** The full bridge: app info + platform + ssh + update + chamber settings
- *  + system resume + open-in + deep-link + notifications + badge surfaces. */
+ *  + system resume + open-in + deep-link + notifications + badge + forward
+ *  surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -539,6 +671,8 @@ export interface DshChamberBridge {
   runtime: RuntimeSurface
   notifications: NotificationSurface
   badge: BadgeSurface
+  /** Remote-browser forward surface (design 28 §7): four invokes, no subscribe. */
+  forward: ForwardSurface
 }
 
 /** dsh runtime version management surface (design 18 M2 IPC). */
@@ -730,6 +864,43 @@ function openInApi(): OpenInSurface {
       return payload.apps;
     },
     open: (appId, instanceId, path, sourceFingerprint) => ipcRenderer.invoke('dsh-chamber:open-in', { appId, instanceId, path, sourceFingerprint }),
+  };
+}
+
+/**
+ * The dsh-chamber:forward-* IPC surface (design 28 §7; shell-ipc-browser.ts).
+ *
+ * Every method takes ONE input object and spells its payload keys explicitly.
+ * `verify:shim-payload` compares the key set written at this call site against
+ * the Swift shim's, and a `{ ...input }` spread would be parsed as an EMPTY key
+ * set on both sides (silently passing while the real shapes drift). `path` is
+ * always written (possibly undefined): main treats an absent or undefined path
+ * as the root path, and Electron's structured clone keeps the key while the
+ * Swift JSON bridge drops it — both normalize to '/'.
+ */
+function forwardApi(): ForwardSurface {
+  return {
+    request: input => ipcRenderer.invoke('dsh-chamber:forward-request', {
+      sourceId: input.sourceId,
+      sourceFingerprint: input.sourceFingerprint,
+      port: input.port,
+      scheme: input.scheme,
+    }),
+    release: input => ipcRenderer.invoke('dsh-chamber:forward-release', {
+      sourceId: input.sourceId,
+      sourceFingerprint: input.sourceFingerprint,
+      id: input.id,
+    }),
+    list: input => ipcRenderer.invoke('dsh-chamber:forward-list', {
+      sourceId: input.sourceId,
+      sourceFingerprint: input.sourceFingerprint,
+    }),
+    openInBrowser: input => ipcRenderer.invoke('dsh-chamber:forward-open-in-browser', {
+      sourceId: input.sourceId,
+      sourceFingerprint: input.sourceFingerprint,
+      id: input.id,
+      path: input.path,
+    }),
   };
 }
 
@@ -1149,6 +1320,7 @@ requestAppInfo().then(
       runtime: runtimeApi(),
       notifications: notificationsApi(),
       badge: badgeApi(),
+      forward: forwardApi(),
     });
   },
   (err: unknown) => {
@@ -1168,6 +1340,7 @@ requestAppInfo().then(
       runtime: runtimeApi(),
       notifications: notificationsApi(),
       badge: badgeApi(),
+      forward: forwardApi(),
     });
   },
 );

@@ -312,13 +312,20 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 > pin 树内存在的单一路径（故四条 mirror 条目仍写 `apps/desktop/src`，逐文件覆盖清单写在各条目 evidence 与本表行内）。
 > Swift 腿窗口量不单列条目：由 design 25
 > §5.6 逐值重锚 + §4 的 mobile anchors 门覆盖（T-04 记明上游无 Sparkle、Swift 更新链自建）。
+>
+> **TODO(W0) 官方 `ui-sidebar-browser` 行**：本表 `browser-guests.ts` / `preload-browser.ts` 的
+> `not-applicable` 只覆盖上游桌面的 webview 租客/preload 文件，**不是**官方
+> `@deepseek-ai/dsh-client-ui-sidebar-browser` 客户端行在 pin 的 web profile 是否加载的证据。
+> 该行目前没有 vendored pin 证据，保持 TODO/not-applicable；W0 必须用真实 `vendor/harness-checkout`
+> 复核 `bundle/web-app/cordis.patch.yml` 与 web profile。若加载，按 design 28 §5.1 / design 09 §3.5
+> 加 covered 家族③ skip + 负例。在拿到证据前不得写“已证明不加载”。
 
 | 上游文件 | 分类 | chamber 对照点 | 一句理由 |
 |---|---|---|---|
 | `account-backend.ts` | not-applicable | 无（对照面：`packages/control-plane` 的无认证 loopback 模型） | 上游 DeepSeek 账号后端（WebSocket 账号流 + 会话 cookie）；chamber 是匿名 loopback 连接管理器，无账号面。 |
 | `backend-controller.ts` | different-adopted | `packages/control-plane/src/local-connection.ts`、`packages/desktop/host-assembly.ts` | 本地 dsh 后端的启动/就绪/失败状态机归控制面持有，desktop 只消费 PlaneHandle，不再由 Electron 主进程自持 backend。 |
 | `background-notice.ts` | not-applicable | `packages/desktop/chamber-settings.ts`（windowCloseBehavior）、`packages/desktop/main.ts`（maybeCreateTray） | 上游 Windows「首次隐藏到托盘」的一次性确认+标记文件；chamber 的关窗行为是设置项 + 托盘恢复入口，没有该确认产品面。 |
-| `browser-guests.ts` | not-applicable | `packages/desktop/README.md`（webPreferences 无 webviewTag） | 上游为官方 sidebar-browser 的 webview 租客做分区/租约隔离；chamber 单窗口无 webviewTag、也不加载该客户端行。 |
+| `browser-guests.ts` | not-applicable | `packages/desktop/README.md`（webPreferences 无 webviewTag） | 上游为官方 sidebar-browser 的 webview 租客做分区/租约隔离；chamber 单窗口无 webviewTag。该客户端行在 pin 的 web profile 是否加载见上方 TODO(W0)，未复核前不写“已证明不加载”。 |
 | `client-metadata.ts` | not-applicable | 无 | 账号客户端元数据（版本/语言）供账号平台使用；chamber 无账号面。 |
 | `client/WelcomePage.tsx` | not-applicable | 无 | 上游欢迎/登录页 React 组件（账号登录 UI）；chamber 不采用 welcome 产品面。 |
 | `client/styles.d.ts` | not-applicable | 无 | 欢迎页 CSS module 类型垫片，随 welcome 面一起不采用。 |
@@ -345,7 +352,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 | `platform-view.ts` | not-applicable | 无 | 账号登录 WebContentsView（cookie 合并 / platform headers）；chamber 无账号登录面。 |
 | `policy-test-auth.ts` | not-applicable | 无 | 上游强制更新策略的登录测试助手；不适用。 |
 | `preload-app.ts` | mirror | `packages/desktop/preload.cts`（exposeDesktopCarrier：protocolVersion 1 + updates/keyboard/shortcuts；exposeHostPaths：webUtils.getPathForFile + painted-source 门控）、`macos/Sources/DSHChamber/Resources/bridge-shim.js`（dshDesktop + `__DSH_HOST_PATHS__`：HostPathCatalog 拖拽板快照 × 事件批次）、`packages/renderer/src/host-path-scope.ts`（data-chamber-painted-source）、`packages/desktop/upstream-seats.test.ts`（S-52/S-56） | dshDesktop 载体与 `__DSH_HOST_PATHS__` 宿主路径面的存在、成员、安装时机与值契约双 flavor 锁步（S-56）；本地实例的 @ 引用入口，远端/浏览器回退上传；browser 臂不采用（chamber 无 webview 租客）。 |
-| `preload-browser.ts` | not-applicable | 无 | sidebar-browser 的 preload 桥；chamber 不加载该客户端行。 |
+| `preload-browser.ts` | not-applicable | 无 | sidebar-browser 的 preload 桥；chamber 无 webview 租客。官方客户端行是否在 pin 的 web profile 加载见上方 TODO(W0)。 |
 | `preload-mandatory-overlay.ts` | not-applicable | 无 | 强制更新遮罩 preload；不采用。 |
 | `preload-mandatory.ts` | not-applicable | 无 | 强制更新窗口 preload；不采用。 |
 | `preload-menu.ts` | not-applicable | `packages/desktop/main.ts`（唯一 Menu 是托盘上下文菜单，无 setApplicationMenu） | 上游 Windows 应用菜单（原生菜单 + 窗口控制）；chamber 无应用菜单产品面。 |

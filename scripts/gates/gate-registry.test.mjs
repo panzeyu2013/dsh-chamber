@@ -51,8 +51,8 @@ test('the shipped registry resolves to the documented per-mode counts', () => {
     const modes = deriveModes(registry, { platform })
     return [modes.static.length, modes.typecheck.length, modes.tests.length, modes.full.length]
   }
-  assert.deepEqual(counts('linux'), [22, 13, 22, 57], 'linux mode counts drifted: a gate was added/removed without updating this golden')
-  assert.deepEqual(counts('darwin'), [22, 13, 30, 65], 'darwin mode counts drifted')
+  assert.deepEqual(counts('linux'), [22, 14, 23, 59], 'linux mode counts drifted: a gate was added/removed without updating this golden')
+  assert.deepEqual(counts('darwin'), [22, 14, 31, 67], 'darwin mode counts drifted')
   const linux = deriveModes(registry, { platform: 'linux' })
   assert.deepEqual(linux.full, [...linux.static, ...linux.typecheck, ...linux.tests], 'full must be exactly static+typecheck+tests')
 })
@@ -67,7 +67,7 @@ test('the gate identity surface is a golden (id -> command, and the proof set)',
   const registry = loadGateRegistry()
   const pairs = registry.gates.map(gate => gate.id + ' ' + gate.command)
   const hash = createHash('sha256').update(JSON.stringify(pairs)).digest('hex').slice(0, 16)
-  assert.equal(hash, 'cee7d45e272ab9a8', 'a gate was added, removed, renamed or re-commanded: update this golden in the same change')
+  assert.equal(hash, 'b382ed5640ff8432', 'a gate was added, removed, renamed or re-commanded: update this golden in the same change')
   assert.deepEqual(proofGateIds(registry), ['policy.workflow-pins', 'upstream.registry', 'upstream.anchors'],
     'the proof set is a release contract; changing it must be a deliberate edit of this assertion')
 })

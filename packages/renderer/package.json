@@ -16,11 +16,13 @@
   },
   "dependencies": {
     "@dsh-chamber/dsh-chamber-client-core": "workspace:^",
+    "@dsh-chamber/dsh-chamber-client-ui-browser": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-git": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-layout": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-open-in": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^",
     "@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager": "workspace:^",
+    "@dsh-chamber/dsh-chamber-wire": "workspace:^",
     "@dsh-chamber/dsh-stream-state": "workspace:^",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

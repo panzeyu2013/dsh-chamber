@@ -26,7 +26,7 @@
 ## 0. 摘要（给决策者的三分钟版）
 
 - **路线 A**：Swift/AppKit 只做"壳"（窗口、WKWebView、菜单/托盘/通知/角标/深链/对话框/外部打开），**壳内不承载业务**；业务 = control-plane + desktop 纯 Node 模块，打包为 sidecar 子进程（B 桥 stdio JSON-RPC）；Web UI 100% 复用，仅把 preload 的 `window.dshChamber` 换成 shim（A 桥）。
-- **可行性**：真实依赖 Electron 仅 main.ts、electron-edges.ts、preload.cts、updater.ts 4 文件；其余纯 Node 模块零 import、测试直接 `node *.test.ts` 可跑（`transport-manager.ts:56` 仅注释；`electron-free-gate.test.ts` 传递闭包断言）；控制面经 `createControlPlane(options)` 握手（`control-plane/src/index.ts:159-227`）；dsh 实例是 Node 进程（`spawn-dsh.ts` → `process.execPath`，基名表含捆绑名 `dsh-chamber-helper`，§4.3）；桥接面 52 个 `ipcMain.handle` + 9 push，键集单源 `ipc-events.ts` 的 `IPC_CHANNELS`（61 键），`ipc-surface-mirror.test.ts` / `bridge-manifest.json` / `bridge-shim-surface.test.ts` 锁步（§4.4.3）。
+- **可行性**：真实依赖 Electron 仅 main.ts、electron-edges.ts、preload.cts、updater.ts 4 文件；其余纯 Node 模块零 import、测试直接 `node *.test.ts` 可跑（`transport-manager.ts:56` 仅注释；`electron-free-gate.test.ts` 传递闭包断言）；控制面经 `createControlPlane(options)` 握手（`control-plane/src/index.ts:159-227`）；dsh 实例是 Node 进程（`spawn-dsh.ts` → `process.execPath`，基名表含捆绑名 `dsh-chamber-helper`，§4.3）；桥接面 56 个 `ipcMain.handle` + 9 push，键集单源 `ipc-events.ts` 的 `IPC_CHANNELS`（65 键），`ipc-surface-mirror.test.ts` / `bridge-manifest.json` / `bridge-shim-surface.test.ts` 锁步（§4.4.3）。
 - **工作量（人-日）**：M0 1–2 → M1 5–10 → M2 10–15 → M3 15–20 → M4 10–15 → M5 5–10，合计 **46–72 人-日（9–14 人周）**；Electron 版并行保留，Win/Linux 不受影响。
 - **不做**：不重写 UI（luochenw/deepseek-harness-macos 全原生 = 3–6 人月 + parity 维护）；不在 Swift 重写宿主服务（summer-521/deepseek-harness-swift ≈900KB Swift + 自研 JS desktop-host = 路线 B，见 §2）；不碰 gateway。
 - **决策点**：双壳**共存**还是**替换**；bundle id 区分（通知授权身份）；更新「v1 blocked-available + v2 Sparkle」；双线防漂移（§4.4.3 / §9 R1）。
@@ -135,7 +135,7 @@ Node 侧。移植条件因此罕见：**把壳换掉，业务与测试资产原�
 │ sidecar 子进程（打包的 Node + JS bundle，纯 Node 无 Electron）│
 │  = main.ts 拆分出的 core（§4.1）                             │
 │    transport-manager / ssh-provider / gateway-provider/…     │
-│    52 invoke 处理器（含 info）+ 9 push 事件源（语义校验原样）│
+│    56 invoke 处理器（含 info）+ 9 push 事件源（语义校验原样）│
 │  + control-plane（createControlPlane，loopback HTTP/WS）      │
 │  + dsh-runtime / pnpm（运行时版本管理、安装）                 │
 │  + 数据面：userData/{state, ssh-instances.json,              │
@@ -299,7 +299,7 @@ Apple 凭据（外部阻断）。
 
 现状：`main.ts`（5802 行）把业务装配与 Electron 边沿调用交织。P1 原则：**只做搬运与参数化，不改
 语义、不重排状态机**。目标形态：
-- `shell-core.ts`（Electron-free）：原样搬入全部业务装配、52 个 invoke 处理器体（含 info）+ 9 个事件源（语义
+- `shell-core.ts`（Electron-free）：原样搬入全部业务装配、56 个 invoke 处理器体（含 info）+ 9 个事件源（语义
   校验原地保留）、退出状态机、深链 intent 队列、通知 click 有界 ACK 队列/去重/限速（notifications.ts
   纯逻辑 + main.ts 队列语义）、资源路径参数化收口。
 - `HostEdges` 依赖注入面（下述）。判定标准：core 对 `electron` 零 import（CI lint 门禁，
@@ -350,7 +350,7 @@ interface HostEdges {
 > 注：与 v2 草案差异 = 新增 `rendererPush`/`mainWindowAlive`/`badgeCountApiAvailable`/
 > `retireNotificationsForSources`；`showNativeNotification` 带 `clickRoute` 并返回 `{dispose, shown}`；
 > `setBadge` 判别形态、`showMessage` 归 number（原 `pickPluginSource` 随写面退役删除）；v1 草案的
-> `pickDirectory()` 已删除——`desktop_pick_directory` 在 IPC_CHANNELS（61 键 = 52 invoke + 9 push）与 preload
+> `pickDirectory()` 已删除——`desktop_pick_directory` 在 IPC_CHANNELS（65 键 = 56 invoke + 9 push）与 preload
 > 中均已不存在（仅 05 §7.4 旧文残留，A10）。宿主对象登记/淘汰（BoundedActiveNotifications 持 Electron
 > Notification、淘汰=evicted.close()）留 electron-edges，core 只持有界 ACK 队列/去重/限速（B4）。
 > **`notifyClicked` 与 `resolveResource` 已作为零消费者死契约删除**（`host-edges.ts` 头注：Swift 对经 `notify`
@@ -385,7 +385,7 @@ interface HostEdges {
 
 #### 4.4.1 A 桥（web ↔ Swift，preload 等价物）
 
-- preload 职责：`contextBridge.exposeInMainWorld('dshChamber', {…})` = **4 个 info 标量（controlPlaneUrl/dshVersion/version/platform）+ 10 个命名空间面（desktopSsh/update/settings/systemResume/openIn/deepLink/runtime/notifications/badge/rendererStall）**（preload.cts:929-965；命名空间成员口径合计 **50 invoke + 9 订阅**，另加两个内部通道 `dsh-chamber:info` 与 `dsh-chamber:native-theme-set`；manifest 全量 = 52 invoke + 9 push = 61，其中 `desktopSsh` 面 22 invoke（含 `instances_health`））。Swift 注入 `bridge-shim.js`（WKUserScript、.page world、documentStart；资源名 = MainWindowController.swift:42）定义同形 API：
+- preload 职责：`contextBridge.exposeInMainWorld('dshChamber', {…})` = **4 个 info 标量（controlPlaneUrl/dshVersion/version/platform）+ 11 个命名空间面（desktopSsh/update/settings/systemResume/rendererStall/openIn/deepLink/runtime/notifications/badge/forward）**（preload.cts:929-965；命名空间成员口径合计 **54 invoke + 9 订阅**，另加两个内部通道 `dsh-chamber:info` 与 `dsh-chamber:native-theme-set`；manifest 全量 = 56 invoke + 9 push = 65，其中 `desktopSsh` 面 22 invoke（含 `instances_health`）、`forward` 面 4 invoke（design 28 §7））。Swift 注入 `bridge-shim.js`（WKUserScript、.page world、documentStart；资源名 = MainWindowController.swift:42）定义同形 API：
   - **挂出时机（D1）**：documentStart 定义内部管路（resolve/emit/rehydrate，带窗口随机令牌），**`dsh-chamber:info` 成功后**才暴露 `dshChamber`；info 未就绪/失败期 invoke 回 `ipc_not_ready`（1 次 + 10 次 50ms 重试），渲染端走既有 surface 缺失链自愈；全败分支与 preload 同形（surface 在、标量 null）（bridge-shim.js、BridgeShimInjector.swift；G22/T-12 有门禁与登记）。
   - 方法面：按 manifest 生成 `dshChamber.<ns>.<method>(args)` → postMessage({id, method, payload})，以 id 关联 Promise（info 的 10×50ms 重试照搬——仅 reject 时重试）。事件面：9 个 push → shim 订阅表，Swift `evaluateJavaScript` ("__dshChamberEmit(event,payload)") 派发（通道名/载荷以 IPC_CHANNELS/05 §7.4 为权威）。防护：Object.defineProperty 非可配置挂载防页面覆盖。
 - Swift `WKScriptMessageHandler` 护栏（只做传输层，语义校验在 sidecar）：1. 主 frame；2. **壳文档判定**（origin === 当前控制面 origin **且** pathname == "/" 且无 query——与 Electron `isTrustedRendererUrl` 对齐；port 只在 ready 帧后放开）；3. 信封结构/尺寸上限（≤4 MiB）、method ∈ manifest 白名单；4. 不响应"新窗口/导航"（WKUIDelegate 建窗返回 nil + decidePolicyFor 阻断离开 origin；外链交 NSWorkspace——含 **mailto:/vscode:// 等非 http(s) scheme 导航策略实测**，C6）。语义校验（payload schema、来源指纹、generation、ACK 队列……）全部留在 sidecar 原处理器。
@@ -394,7 +394,7 @@ interface HostEdges {
 
 - 传输：sidecar stdin/stdout 行式 JSON-RPC（NDJSON）；stderr 独立为日志。**sidecar-entry 入口必须把存量 console.* 重定向到 stderr**——main.ts 端口行（:1787）、will-quit 完成串（:1673，实机门禁断言该串）等遍布代码，否则"业务原样复用"与协议纪律冲突（D2）。
 - 信封：{id, method, payload} / {id, ok, result|error} / {notify, payload}（唯一推送面）/ edge:*（sidecar→Swift 的 HostEdge 请求，Swift 执行后回响应）；id 单调。`event` 族随 `onEvent` 订阅面一并退役（桩已迁 notify；`FrameCodec` 不再分类，旧桩 event 行落未知帧丢弃）。
-- **保留入站 method（Swift → sidecar，不在 61 通道 manifest 内；单源 = `packages/desktop/node-edges.ts` `HOST_INBOUND`）**：`__host.hostFacts`、`__host.notifyClicked`、`__host.systemResume`、`__host.mainWindowShown`、`__host.deepLink {url}`（§4.5：`application(_:open:)` 冷/热启动统一入口 → core `enqueueDeepLink`）、`__host.rendererLifecycle {event}`（§5 E19 三事件映射：did-start-loading / did-finish-load / crashed / closed → core `onRendererLifecycle` 复位 ready 位 + in-flight requeue/drain）、`__host.quitFacts {quitRequested, recoveryAvailable}` → **决策投影**（§5 E1/E9/E20：core 依 chamber settings 的 `windowCloseBehavior`/`quitConfirmation` + `LOCAL_RUNNING_STATES × localProcessAlive` 用既有纯函数 `shouldHideToTray`/`computeQuitRisk` 合成，返回 `{hideOnClose, quitNeedsConfirm, quitReasons}`——判据单源在 core，Swift 只执行隐藏/退出链，绝不复制决策）。Swift 拼写单源 = `HostInboundMethod`，与 TS 表锁步由 `HostInboundMethodTests` 断言。
+- **保留入站 method（Swift → sidecar，不在 65 通道 manifest 内；单源 = `packages/desktop/node-edges.ts` `HOST_INBOUND`）**：`__host.hostFacts`、`__host.notifyClicked`、`__host.systemResume`、`__host.mainWindowShown`、`__host.deepLink {url}`（§4.5：`application(_:open:)` 冷/热启动统一入口 → core `enqueueDeepLink`）、`__host.rendererLifecycle {event}`（§5 E19 三事件映射：did-start-loading / did-finish-load / crashed / closed → core `onRendererLifecycle` 复位 ready 位 + in-flight requeue/drain）、`__host.quitFacts {quitRequested, recoveryAvailable}` → **决策投影**（§5 E1/E9/E20：core 依 chamber settings 的 `windowCloseBehavior`/`quitConfirmation` + `LOCAL_RUNNING_STATES × localProcessAlive` 用既有纯函数 `shouldHideToTray`/`computeQuitRisk` 合成，返回 `{hideOnClose, quitNeedsConfirm, quitReasons}`——判据单源在 core，Swift 只执行隐藏/退出链，绝不复制决策）。Swift 拼写单源 = `HostInboundMethod`，与 TS 表锁步由 `HostInboundMethodTests` 断言。
 - 退出纪律：清理后入站 invoke 一律回 `{error:'app is quitting', code:'app_quitting'}`（sidecar-entry.ts:396-400；与 renderer-trust 的 `createTrustedIpc` 同码同语义）；清理自身 4.5s 硬顶（`QUIT_CLEANUP_TIMEOUT_MS=5_000` − 500，早于宿主 5s SIGKILL grace 留 500ms 余量；`shell-core.ts#QUIT_CLEANUP_TIMEOUT_MS` / `sidecar-entry.ts` 的同一硬顶 `QUIT_CLEANUP_DEADLINE_MS`）。
 - 护栏：Swift 只接受自己 spawn 的进程 fd；帧长上限与超时；非协议帧 fail-loud。事件推送经 B 桥到 Swift → A 桥 emit，事件名清单 = manifest。
 - **出站写与期限**：Swift 的 invoke 和 edge 应答共用每个 sidecar 会话独立的串行写器；排队上限为 64 帧 / 16 MiB（另有正在写的单帧 ≤4 MiB）。edge 应答越过尚未写出的普通请求，满队列时可淘汰排队请求并将其明确结算为写失败。invoke 在登记 pending 时启动全程期限（缺省 60s，页面普通 45s、长交互 720s），涵盖排队、管道背压、sidecar 执行与响应读取；过期排队帧在真正写入前丢弃。单次物理写超过 20s 时重建 sidecar；stop / 自然退出立即作废旧写器，重启使用新写器。写抛错可能留下半帧，因此同样作废整条出站传输并终止本代 sidecar，由 Supervisor 建立新协议会话。已经进入内核的写不能撤回，超时后的远端副作用须靠宿主事实对账；sidecar 对未收到 edge 应答另设普通 30s / 交互 660s 期限。
@@ -410,7 +410,7 @@ interface HostEdges {
   BridgeManifest.swift`（提交物）与 `Resources/chamber-bridge.stub.js`（提交物；**不进 Swift target、
   不随 .app 打包**，仅锁步样本，见 `Package.swift` 的 `exclude`）。**命名空间归属不由 manifest 承载**：
   preload/shim 暴露面是唯一单源，`bridge-shim-surface.test.ts` 逐命名空间断言 shim 方法集与 preload 一一对应。
-- 三件锁步测试：`bridge-manifest.test.ts`（重生成 == 提交物 + **通道数守恒 61 = 52+9 + 无死键断言**（52 == 50 命名空间成员 + `info` + `native-theme-set`），
+- 三件锁步测试：`bridge-manifest.test.ts`（重生成 == 提交物 + **通道数守恒 65 = 56+9 + 无死键断言**（56 == 54 命名空间成员 + `info` + `native-theme-set`），
   B12/E8）、`bridge-shim.test.ts`（`chamber-bridge.stub.js` 重生成逐字节 == 提交物 + invoke/push 数组与
   计数）、`BridgeManifestConsistencyTests`（Swift 白名单 == JSON）；Swift 产品代码禁止手写通道字符串。
 - `ipc-surface-mirror.test.ts` 的 `MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']`
@@ -1114,7 +1114,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
   的 isPackaged 门 flavor 化**：`isPackagedSidecarRuntime()`（`DSH_CHAMBER_SIDECAR_COMPILED=1`）时加载
   `<sidecar>/dist/control-plane/index.js`，否则走 workspace 源码 import（:47-90）。
 - 产出 `sidecar-entry.ts` + `node-edges.ts`；sidecar 可在纯 Node 下以"假 Swift"驱动（`sidecar-stdio.test.ts`）跑通
-  全量 61 通道冒烟——**写 Swift 前先用现有 JS 测试资产钉住 B 桥协议**。
+  全量 65 通道冒烟——**写 Swift 前先用现有 JS 测试资产钉住 B 桥协议**。
 
 ### 8.3 P2 Swift 壳 v1（3–4 人周）
 
@@ -1170,7 +1170,7 @@ WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
 | JS 业务 | desktop/control-plane/runtime 现有单测与镜像测试 | **原样复用**（P1 后跑同一文件集 + 3 个文本锚点测试随迁） |
 | B 桥 | 信封/帧长/超时/乱序/edge 往返——node 侧假 Swift 驱动（`sidecar-stdio.test.ts`），Swift 侧 XCTest | `sidecar-stdio.test.ts` + `BridgeClient*Tests` |
 | A 桥/护栏 | shim 与 manifest 一致性（bridge-manifest / bridge-shim / bridge-shim-surface）、origin 门、尺寸门 | 有测试覆盖 |
-| 集成 | node 集成测试拉起 Swift harness 断言真实窗口/通知/深链 | 无 GUI 通道冒烟（61/61）；真实窗口 harness（`swift-harness-driver`）未实施——需 GUI 会话 |
+| 集成 | node 集成测试拉起 Swift harness 断言真实窗口/通知/深链 | 无 GUI 通道冒烟（65/65）；真实窗口 harness（`swift-harness-driver`）未实施——需 GUI 会话 |
 | 壳视图策略 | 视口越界策略（§5.2）的注入契约与装配点 | `ShellOverscrollPolicy` 有单测锁定 CSS/注入契约（`ShellOverscrollPolicyTests`）；视口实际效果仍属实机目检（§8.5 矩阵 / S-50） |
 | 实机 | §8.5 矩阵（含 W7 刷新率三工况，S-48）+ C1/C2 | 未判，发布前执行（STATUS） |
 
@@ -1191,7 +1191,7 @@ WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
 - R10 开发期双后端竞态：Electron dev 与 sidecar dev 共享 cp 端口族 → 各自
   退避 + 端口钉死 + 独立 .dev-user-data（companion）。
 - R11 Swift 侧人手单点：护栏规则集中 DSHChamber 单 target + Generated 产物减少手写面。
-- R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 + 通道数守恒断言（70=61+9）。
+- R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 + 通道数守恒断言（65 = 56 + 9；命名空间成员口径 63 = 54 + 9）。
 - R13 WKWebView devtools：默认关；发布态由设置页运行期开关显式开启（§5.1.1），`#if DEBUG`
   构建仅在**无设置文件/文件级损坏**（不动作）时保留开发便利的默认开。inspector 属信任边界。
 

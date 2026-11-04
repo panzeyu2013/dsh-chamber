@@ -98,6 +98,7 @@ bash install-gateway.sh
 - Git Worktree生命周期 — 侧边栏按实例展示仓库拓扑并闭环创建worktree → workspace → session；删除采用Git-first可重试事务：主工作树/locked/运行中目标硬阻断，dirty目标须显式勾选「丢弃未提交更改」后才以force移除（分支与已提交内容保留），可选删除本地分支
 - 多实例并行（N-ctx） — 一个窗口内多个dsh shell共存，随时切换活动实例
 - open-in打开注册表 — 会话头部统一打开面：本地来源在Finder/文件管理器显示目录；本地或SSH远程来源可拉起VS Code（本地 `vscode://file/`、远程Remote-SSH）；支持 `dsh-chamber://` 深链
+- 远端浏览器 — 右栏「浏览器」页签为dsh + SSH来源提供地址栏：远端 `127.0.0.1`/`localhost` 端口经SSH转发到该来源专属的 `127.0.0.n` 后交给系统浏览器；公网http(s) 走既有链接腿。面板不内嵌页面、不做gateway隧道，也没有共享 `127.0.0.1` 回退
 - 桌面通知 — 会话完成 / 提问 / 审批时推送桌面通知，点击直达会话；设置「通知」分组可开关
 - 桌面端更新 — stable与beta配置和feed独立；静默检查，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
 - 睡眠/后台常驻 — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（macOS）；OS唤醒即时重连；保持唤醒开关
@@ -107,6 +108,7 @@ bash install-gateway.sh
 ## 常见问题
 
 - **`pnpm run smoke` 为什么打印SKIP？** — 冒烟测试需要dsh安装；找不到时打印SKIP并以0退出，属正常而非失败。
+- **怎么单独检查远端浏览器？** — `pnpm run typecheck:browser` 做类型检查，`pnpm run test:browser` 跑该插件测试。
 - **我的凭据会被存到哪里？** — 两处，都在本机：① 实例自身的配置平面（本地 = 本机dsh home，远程 = 远端dsh home，由该实例的dsh管理）；② 桌面壳在 `<userData>` 下保存的连接凭据（Gateway凭据优先系统密钥链加密、不可用时0600明文兜底；SSH密码按用户决策为0600明文兜底），用于免重录重连。凭据只经write-only表单输入，从不回填界面，也不进入渲染层或日志；Gateway安装向导写入的配置文件为0600权限。
 - **它和官方Desktop有什么区别？** — 官方Desktop覆盖「只在本机用」的场景；dsh-chamber的差异集中在远程与多机：SSH接入远端实例、认证Gateway、本地与远程同为窗口内一等来源。本地场景两者都开箱即用，按是否需要远程来选。
 - **远程实例需要什么？** — dsh目标需要可达的API profile；gateway目标需要已部署的 `@dsh-chamber/gateway`。两者均可经SSH隧道或显式HTTP(S) 直连；远端无需单独装web前端，UI复用本地前端并经同源反代。

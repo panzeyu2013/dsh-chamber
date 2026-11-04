@@ -34,7 +34,9 @@
   `chamber-entry.ts:31-42`，读取与校验 `chamber-entry.ts:366-389`，安装 `shell.ts:259-266`），以及
   **页级机器目录** `chamberMachineCatalog`（同一 reader 对象注入每个 entry，`shell.ts:266`，§4.2）
   ——入口只读自己 ctx 上的事实，不读页面级可变全局值；另两个页级事实 `chamberBootGeneration` /
-  `chamberReportBootDegraded` 沿用"消费方宽松 cast"，故未进那份声明。
+  `chamberReportBootDegraded` 沿用"消费方宽松 cast"，故未进那份声明。design 28 的远端浏览器 forward
+  **复用同一组事实**：`chamberSourceFingerprint` 做来源代 proof、source id 前缀派生 kind，**不新增
+  boot fact**；它只把这些既有事实当入口门，不引入 `chamberTargetKind`。
 - **官方超集**：官方那份能做的都能做，且**不依赖**上游运行时行为（§7）。
 
 ### 非目标（明确不做）

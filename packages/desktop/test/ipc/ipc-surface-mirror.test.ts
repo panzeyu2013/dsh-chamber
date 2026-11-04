@@ -627,6 +627,38 @@ test('the five remaining surfaces match their GOLDEN method baselines in BOTH mi
   }
 })
 
+// ---------------------------------------------------------------------------
+// Remote Browser v4 (design 28 §7): `forward` is the 11th bridge namespace.
+// Its four member names, their normalized single-line signatures and the
+// DshChamberBridge field are locked across both mirrors here; the channel
+// mapping and payload key sets are locked on the shim leg by
+// bridge-shim-surface.test.ts / bridge-shim.test.ts and by
+// verify:shim-payload-shape.mjs (preload ↔ shim call sites), and the main-side
+// registration is locked by the channel-set + "exactly once" tests below.
+// ---------------------------------------------------------------------------
+test('the forward surface keeps its four-method contract across preload and renderer mirrors (design 28 §7)', () => {
+  const golden = ['list', 'openInBrowser', 'release', 'request']
+  assert.deepEqual(interfaceMethodNames(preload, 'ForwardSurface'), golden,
+    'preload.cts ForwardSurface drifted from the design 28 §7 API')
+  assert.deepEqual(interfaceMethodNames(renderer, 'ForwardSurface'), golden,
+    'renderer global.d.ts ForwardSurface drifted from the design 28 §7 API')
+  const signatures = [
+    'list(input: ForwardListArgs):Promise<ForwardListResult>',
+    'openInBrowser(input: ForwardOpenArgs):Promise<ForwardOpenResult>',
+    'release(input: ForwardReleaseArgs):Promise<ForwardReleaseResult>',
+    'request(input: ForwardRequestArgs):Promise<ForwardRequestResult>',
+  ]
+  assert.deepEqual(interfaceMethodSignatures(preload, 'ForwardSurface'), signatures,
+    'preload.cts ForwardSurface signatures drifted from the frozen API')
+  assert.deepEqual(interfaceMethodSignatures(renderer, 'ForwardSurface'), signatures,
+    'renderer global.d.ts ForwardSurface signatures drifted from the frozen API')
+  for (const field of interfaceFieldSignatures(preload, 'DshChamberBridge')) {
+    if (field.startsWith('forward')) {
+      assert.equal(field, 'forward:ForwardSurface', 'DshChamberBridge.forward must stay the ForwardSurface field')
+    }
+  }
+})
+
 test('the five remaining surfaces keep identical normalized signatures across preload and renderer (P2 — type-sensitive drift guard)', () => {
   for (const surface of P2_SURFACES) {
     const authoritative = surfaceMethodSignatures(preload, surface)
@@ -1022,7 +1054,7 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
   }
 })
 
-test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 61/61 恰用一次由事实变断言)', () => {
+test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 65/65 恰用一次由事实变断言)', () => {
   // 每个 channel 常量必须在 MAIN_SIDE_FILES 的代码引用中各恰用一次：
   // 0 次 = 死 channel（注册/发送丢失），>1 次 = 意外双引用（镜像集合
   // 相等看不见）。计数只认 `IPC_CHANNELS.<KEY>` 拼写，注释剥离用下方单趟状态机

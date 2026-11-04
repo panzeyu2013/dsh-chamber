@@ -6,11 +6,12 @@
  *
  * It mirrors the window.dshChamber surface of packages/desktop/preload.cts
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
- * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
- * deepLink/runtime/notifications/badge)（全表面实现）：每个方法的通道、
- * payload 形状与返回映射逐字对齐 preload.cts（50 个 invoke-backed 方法 →
- * 52 manifest invoke 通道（含 info 与 native-theme-set 两个内部通道）+ 9 个 on* 订阅 → 9 manifest push
- * 通道），文件内零 poc-unimplemented 兜底。用户插件写面（apply/undo/
+ * platform) + 11 namespaces (desktopSsh/update/settings/systemResume/
+ * rendererStall/openIn/deepLink/runtime/notifications/badge/forward)（全表面
+ * 实现）：每个方法的通道、payload 形状与返回映射逐字对齐 preload.cts
+ * （54 个 invoke-backed 方法 → 56 manifest invoke 通道（含 info 与
+ * native-theme-set 两个内部通道）+ 9 个 on* 订阅 → 9 manifest push 通道），
+ * 文件内零 poc-unimplemented 兜底。用户插件写面（apply/undo/
  * materialize/npm search/local add-remove）已随 2026-09 C 分层裁决退役。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
  * 传输 + preload 逐字面。
@@ -52,6 +53,12 @@
  *     open-notification-settings（无载荷）/ notifications-ready /
  *     notification-open-ack {deliveryId,attempt}；onOpen → notification-open
  *   badge（1 invoke）→ badge-count {count}
+ *   forward（4 invoke、零订阅；design 28 §7）→ dsh-chamber:forward-request
+ *     {sourceId,sourceFingerprint,port,scheme} / forward-release
+ *     {sourceId,sourceFingerprint,id} / forward-list {sourceId,sourceFingerprint} /
+ *     forward-open-in-browser {sourceId,sourceFingerprint,id,path}。main 侧
+ *     shell-ipc-browser 做指纹/归属/path 校验并由 main 拼 URL；wire 保留的
+ *     'forward:changed' 推送刻意不接（v1 轮询 list）。
  *
  * 宿主侧差异注记（shim 层照常 invoke，错误如实上抛）：
  *   - update.download / update.restartAndInstall：sidecar 的 updateController
@@ -66,7 +73,7 @@
  *     （不是任何宿主路径的缺省回退，见下），故 shim 不为其改形。
  *
  * 注意：Swift 的 dev 缺省侧车是 packages/desktop/sidecar-entry.ts
- * （61/61 语义、A 桥 ready 帧齐全）；sidecar-stub.ts 只注册 8 通道、
+ * （65/65 语义、A 桥 ready 帧齐全）；sidecar-stub.ts 只注册 8 通道、
  * 其余回 {error:'poc-unimplemented'}，不在缺省回退里
  * ——只有显式 DSH_CHAMBER_SIDECAR 指向它时才会被加载（届时须自行发 ready 帧）。
  *
@@ -446,7 +453,7 @@
     }
   }
 
-  // ---- the 9 namespaces + 4 scalars --------------------------------------
+  // ---- the 11 namespaces + 4 scalars -------------------------------------
   // Every method below invokes its real manifest channel with the exact
   // preload.cts payload shape; no poc-unimplemented stub remains.
 
@@ -547,7 +554,7 @@
     }
   }
 
-  /** deepLink — ready/ack 接真实通道（sidecar 61/61）。ack 载荷按 preload
+  /** deepLink — ready/ack 接真实通道（sidecar 65/65）。ack 载荷按 preload
    *  契约 {deliveryId, attempt}（core pendingRendererIntents.acknowledge
    *  同款）。onIntent 校验镜像 preload（malformed → loud drop）。 */
   var deepLink = {
@@ -561,7 +568,7 @@
   }
 
   /** runtime — 12 invoke 全接 dsh-chamber:runtime-* 真实通道（sidecar
-   *  61/61；payload 逐字 preload：install/cleanupVersion/clearFailure 带
+   *  65/65；payload 逐字 preload：install/cleanupVersion/clearFailure 带
    *  {version}、restorePreRollback 带 {stashName}、其余无载荷）。Swift flavor
    *  的 runtime 控制器腿（ctx）落地前 invoke 错误如实上抛。 */
   var runtime = {
@@ -606,6 +613,26 @@
    *  平台门 + Swift dock 腿（返回值如实透传，渲染端静默容忍 false）。 */
   var badge = {
     set: function (count) { return invoke('dsh-chamber:badge-count', { count: count }) }
+  }
+
+  /** forward — 远端 loopback SSH 端口转发（design 28 §7）：四个 invoke、零订阅
+   *  （v1 轮询 list；wire 保留的 'forward:changed' 推送刻意不接）。成员只做
+   *  传输、不做参数校验：指纹/归属/path 校验在 sidecar 的 shell-ipc-browser，
+   *  URL 由 main 构造（renderer 只传 id + 相对 path）。载荷键逐字 preload.cts
+   *  ——verify:shim-payload 比对调用位键集，条件展开会让两侧键集不等而变红。 */
+  var forward = {
+    request: function (input) {
+      return invoke('dsh-chamber:forward-request', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, port: input.port, scheme: input.scheme })
+    },
+    release: function (input) {
+      return invoke('dsh-chamber:forward-release', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, id: input.id })
+    },
+    list: function (input) {
+      return invoke('dsh-chamber:forward-list', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint })
+    },
+    openInBrowser: function (input) {
+      return invoke('dsh-chamber:forward-open-in-browser', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, id: input.id, path: input.path })
+    }
   }
 
   // ---- dshDesktop carrier (rc.2 official desktop surface) -----------------
@@ -917,7 +944,8 @@
     deepLink: deepLink,
     runtime: runtime,
     notifications: notifications,
-    badge: badge
+    badge: badge,
+    forward: forward
   }
 
   // ---- info hydration ----------------------------------------------------

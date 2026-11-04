@@ -47,6 +47,7 @@ import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_P
 // 共享宿主装配（transport/gateway/seed/runtime 单一实现，与 Swift sidecar 同一份）。
 import { createHostAssembly } from './host-assembly.ts';
 import type { HostAssembly } from './host-assembly.ts';
+import { disposeForwardService } from './shell-ipc-open-in.ts';
 // pnpm 入口候选集/选择算法的单一实现（runtime 安装器 + sidecar 装配共用）。
 import { bundledPnpmEntryCandidates, firstExistingPnpmEntry } from './pnpm-launcher.ts';
 // 深链 scheme 的单一来源（协议注册字面量）。
@@ -207,6 +208,7 @@ function runQuitCleanupChain(): Promise<void> {
   controlPlane = null;
   const assembly = hostAssembly;
   quitCleanupPromise = Promise.allSettled([
+    disposeForwardService(),
     assembly === null ? Promise.resolve() : assembly.dispose(),
     cp?.stop().catch((err) => console.error('[dsh-chamber] 控制面停止失败：', err)),
   ]).then(() => undefined).finally(() => {

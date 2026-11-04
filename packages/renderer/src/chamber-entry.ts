@@ -27,6 +27,7 @@ import {
 } from './required-extra-rows.ts'
 import { withLocaleOwnership } from './locale-ownership.ts'
 import { isChamberSourceId } from './transport-source.ts'
+import { installChamberForward } from './chamber-forward-adapter.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -172,6 +173,11 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
   ['@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager/client')],
   ['@dsh-chamber/dsh-chamber-client-ui-settings-connections', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-connections/client')],
   ['@dsh-chamber/dsh-chamber-client-ui-settings-bridge', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client')],
+  // Remote Browser launcher (design 28): a dsh+ssh-only tab type over the
+  // per-source SSH loopback forwards. The chunk loads on every source; its
+  // apply() early-returns unless the boot facts are dsh+ssh, so local/gateway
+  // sources register nothing (and never name sidebarRightTabs in their probe).
+  ['@dsh-chamber/dsh-chamber-client-ui-browser', () => import('@dsh-chamber/dsh-chamber-client-ui-browser/client')],
 ]
 
 /**
@@ -477,6 +483,14 @@ export function apply(ctx: Context): void {
   register('@deepseek-ai/dsh-client-ui-approval', UiApproval)
   // Directory-picker `browse` face for every instance; the host pins the same capability.
   register('@deepseek-ai/dsh-client-ui-directory-picker-browse', UiDirectoryPickerBrowse)
+  // Page-level forward bridge (design 28): the trusted preload/Swift shim owns
+  // `window.dshChamber.forward` (the wire contract); the deferred remote-browser
+  // launcher probes `ctx.chamberForward`. Install the ONE wire→launcher
+  // translation here, before any deferred chunk mounts. A page without that
+  // namespace (gateway / plain browser deployment, older preload) gets NO
+  // service: the launcher then renders its honest no-bridge state instead of a
+  // fake empty list. This adds no page global.
+  installChamberForward(ctx)
   // Deferred families: fetched in the background and registered once loaded, never
   // awaited. The seam is shared with the required-service probe below, so both
   // post-settle verdicts land on the one channel the App self-heals from.

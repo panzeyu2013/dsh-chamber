@@ -273,6 +273,11 @@ export default defineConfig({
       // through the preload bridge (zero @dsh-chamber dependencies).
       { find: /^@dsh-chamber\/dsh-chamber-client-ui-open-in$/, replacement: src('../dsh-chamber-client-ui-open-in/src/index.ts') },
       { find: /^@dsh-chamber\/dsh-chamber-client-ui-open-in\/client$/, replacement: src('../dsh-chamber-client-ui-open-in/src/client/index.ts') },
+      // Remote Browser launcher (design 28): a dsh+ssh-only deferred tab type over
+      // the per-source SSH loopback forwards. It never embeds a page; a public URL
+      // rides the existing link leg and a remote loopback URL is opened by main.
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-browser$/, replacement: src('../dsh-chamber-client-ui-browser/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-browser\/client$/, replacement: src('../dsh-chamber-client-ui-browser/src/client/index.ts') },
       // The chamber-owned ui-layout fork (design 06) resolves to source the
       // same way: it replaces the official layout in the boot graph, and its
       // client imports the vendor frame through `@deepseek-ai/.../src/*` deep

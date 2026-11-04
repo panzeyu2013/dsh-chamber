@@ -58,6 +58,30 @@ export const GROUPS = {
     'test/transport/ssh-config.test.ts',
     'test/transport/free-port.test.ts',
   ],
+  // forward: remote-browser port forwards (design 28, W0/S1): wire contract,
+  // ssh argv golden, browserNamespace/alias allocator, manager state machine,
+  // the crash-safe child registry/reaper, the IPC/bridge layer
+  // (forward-ipc = registrar + rejection matrix; forward-open = main-side URL
+  // composition/path guard; forward-log-redaction = no payload echo/log path),
+  // and the production assembly (forward-service = source resolver/stores/
+  // launcher/authorize/openExternal + the shell-ipc-open-in singleton).
+  // Every file is pure Node (injected adapters; no ssh, no fs, no Electron), so
+  // the same set runs on every leg.
+  forward: [
+    'test/forward/forward-wire.test.ts',
+    'test/forward/ssh-forward-args.test.ts',
+    'test/forward/forward-namespace.test.ts',
+    'test/forward/forward-manager.test.ts',
+    'test/forward/forward-lifecycle.test.ts',
+    'test/forward/forward-ipc.test.ts',
+    'test/forward/forward-open.test.ts',
+    'test/forward/forward-log-redaction.test.ts',
+    'test/forward/forward-service.test.ts',
+    'test/forward/forward-windows.test.ts',
+    'test/forward/forward-spawn.test.ts',
+    'test/forward/forward-real-ssh.test.ts',
+    'test/forward/forward-storage-compiled.test.ts',
+  ],
   // gateway: gateway provider/session and the manual gateway chamber seed sync path
   gateway: [
     // 凭据两维交叉矩阵（design 17 §2.3）。
@@ -188,6 +212,13 @@ export const GROUPS = {
 /** Windows CI leg (`test:win32` / `--win32`): win32-real or platform-neutral units only. */
 export const WIN32_FILES = [
   'test/local-state/win-acl.test.ts',
+  // design 28 §9.6 ssh argv golden: argv + the shared `-o` discipline are
+  // platform-neutral (the ssh binary differs, the argv contract does not), so
+  // the Windows leg runs the same lockstep. The win32-only forward pieces
+  // (`taskkill /T`, no Job Object) live in forward-lifecycle's injected seam and
+  // a dedicated forward-win32 suite is still TODO (S1); do not move the other
+  // forward files here — they would then stop running on the POSIX legs.
+  'test/forward/ssh-forward-args.test.ts',
 ]
 
 /** macOS CI leg (`test:macos` / `--macos`): darwin lock assertions + packaging-script suites. */

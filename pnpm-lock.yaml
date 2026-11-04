@@ -157,6 +157,25 @@ importers:
         specifier: workspace:^
         version: link:../dsh-stream-state
 
+  packages/dsh-chamber-client-ui-browser:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/cordis
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-locale
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      react:
+        specifier: ^19.0.0
+        version: 19.2.8
+
   packages/dsh-chamber-client-ui-git:
     dependencies:
       '@deepseek-ai/cordis':
@@ -685,6 +704,9 @@ importers:
       '@dsh-chamber/dsh-chamber-client-core':
         specifier: workspace:^
         version: link:../dsh-chamber-client-core
+      '@dsh-chamber/dsh-chamber-client-ui-browser':
+        specifier: workspace:^
+        version: link:../dsh-chamber-client-ui-browser
       '@dsh-chamber/dsh-chamber-client-ui-git':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-git
@@ -700,6 +722,9 @@ importers:
       '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
+      '@dsh-chamber/dsh-chamber-wire':
+        specifier: workspace:^
+        version: link:../dsh-chamber-wire
       '@dsh-chamber/dsh-stream-state':
         specifier: workspace:^
         version: link:../dsh-stream-state

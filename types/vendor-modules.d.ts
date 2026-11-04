@@ -482,7 +482,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx' {
   } & ButtonHTMLAttributes<HTMLButtonElement>): ReactNode
 }
 
-// Chamber client-plugin registration faces (designs 05/06/08/16).
+// Chamber client-plugin registration faces (designs 05/06/08/16/28).
 declare module '@dsh-chamber/dsh-chamber-client-ui-sidebar/client' {
   export const inject: string[]; export function apply(ctx: any): void
   /** Owner share of the per-workspace Git occupant (declared by the Git plugin). */
@@ -492,6 +492,12 @@ declare module '@dsh-chamber/dsh-chamber-client-ui-git/client' {
   export const inject: string[]; export function apply(ctx: any): void
 }
 declare module '@dsh-chamber/dsh-chamber-client-ui-open-in/client' {
+  export const inject: string[]; export function apply(ctx: any): void
+}
+// design 28: the deferred remote-browser launcher (a dsh+ssh-only tab type; its
+// apply early-returns on every other source, so the exported inject face stays
+// slots/locale and never names sidebarRightTabs).
+declare module '@dsh-chamber/dsh-chamber-client-ui-browser/client' {
   export const inject: string[]; export function apply(ctx: any): void
 }
 declare module '@dsh-chamber/dsh-chamber-client-ui-layout/client' {

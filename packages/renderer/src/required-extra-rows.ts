@@ -198,6 +198,8 @@ export const DEFERRED_EXTRA_ROW_IDS: readonly string[] = [
   '@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager',
   '@dsh-chamber/dsh-chamber-client-ui-settings-connections',
   '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
+  // Remote Browser launcher (design 28): dsh+ssh-only deferred row (design 28 §5.1).
+  '@dsh-chamber/dsh-chamber-client-ui-browser',
 ]
 
 /**

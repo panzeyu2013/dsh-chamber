@@ -139,6 +139,11 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager',
   '@dsh-chamber/dsh-chamber-client-ui-settings-connections',
   '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
+  // Remote Browser launcher (design 28): a dsh+ssh-only deferred row. Its apply()
+  // registers a sidebar-right tab type, the keyed body/title seats and a locale
+  // namespace only when the boot facts are dsh+ssh; local/gateway/http sources
+  // leave no trace. Covered so the host graph can never load a second copy.
+  '@dsh-chamber/dsh-chamber-client-ui-browser',
   // page-own rows (see header comment)
   '@deepseek-ai/dsh-client-ui-sidebar',
   // The official layout registration the chamber ui-layout fork REPLACES: loading

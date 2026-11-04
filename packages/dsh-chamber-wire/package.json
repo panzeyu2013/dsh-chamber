@@ -9,6 +9,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./forward": {
+      "types": "./src/forward.ts",
+      "default": "./src/forward.ts"
+    },
     "./page-channel": {
       "types": "./src/page-channel.ts",
       "default": "./src/page-channel.ts"

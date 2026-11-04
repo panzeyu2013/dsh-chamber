@@ -24,6 +24,11 @@ export const MAIN_SIDE_FILES = [
   'shell-ipc-plugins-gateway.ts',
   'shell-ipc-plugins-local.ts',
   'shell-ipc-open-in.ts',
+  // Remote-browser forward registrar (design 28 §7). Mounted from
+  // shell-ipc-open-in.ts (w0-ipc-gate-map §3.2 option C: shell-core stays at its
+  // 1318/1318 ratchet), so the four forward invoke channels are registered here
+  // — leaving this file out would make the generator report them as dead keys.
+  'shell-ipc-browser.ts',
   'shell-ipc-update.ts',
   'shell-ipc-runtime.ts',
   'runtime-startup-host.ts',

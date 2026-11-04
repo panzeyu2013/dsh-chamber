@@ -58,6 +58,7 @@ Design authority: `docs/design/` (01 entry point, 05 v1 surface/architecture con
 |`packages/dsh-chamber-seed-client-graph`|Host-side package: read-only exposure of the instance's client-plugin boot graph via Typert Remote|
 |`packages/dsh-chamber-client-ui-git`|Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly|
 |`packages/dsh-chamber-client-ui-open-in`|Chamber-bundled open-in client plugin (a superset of the official client, replacing its registration): session-header utilities open button—local app catalog + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link|
+|`packages/dsh-chamber-client-ui-browser`|Chamber-bundled remote-browser client plugin (design 28; client-only, not seeded): right-sidebar Browser tab + address bar + per-source forward list; registers only for dsh+ssh sources, embeds no page, opens no gateway tunnel, and leaves opening to the main process `forward.openInBrowser`|
 |`packages/dsh-chamber-seed-git-worktree`|In-instance host package: authoritative workspace/agent guards + constrained local-only Git worktree lifecycle|
 |`packages/dsh-chamber-seed-archive-cleanup`|In-instance host package: archived-session content cleanup `archiveCleanup/{probe,purge}` (delete-only, idempotent; design 24)|
 |`packages/dsh-chamber-seed-open-in`|In-instance host package (local shape only): fork of the upstream `dsh-host-open-in-app` serving the local app catalog, real bundle icons and launches over the `openInApp/*` Typert Remote (design 20 §6)|
@@ -177,6 +178,8 @@ packages/
                             In-instance archive-cleanup host Remote (design 24)
   dsh-chamber-client-ui-open-in/
                             Open-in client plugin (session-header local app / VS Code open)
+  dsh-chamber-client-ui-browser/
+                            Remote-browser client plugin (right-sidebar Browser + per-source forward list; not seeded)
   dsh-chamber-seed-open-in/
                             In-instance open-in host Remote (local app catalog + icons + launches; local shape only)
 docs/
@@ -217,8 +220,10 @@ vendor/
 |`pnpm run build:host-packages`|Build the four host packages (graph / git-worktree / archive-cleanup / open-in), in order|
 |`pnpm run build:desktop`|Four host packages + renderer + control-plane compile/host-package copy + preload + dsh bundling|
 |`pnpm run typecheck:git`|Type-check the Git worktree client plugin|
+|`pnpm run typecheck:browser`|Type-check the remote-browser client plugin (design 28)|
 |`pnpm run typecheck:host-git`|Type-check the in-instance Git worktree host package|
 |`pnpm run test:git`|Run the Git worktree client-plugin tests|
+|`pnpm run test:browser`|Run the remote-browser client-plugin tests (design 28)|
 |`pnpm run test:host-git`|Run the Git host core lifecycle and safety-guard tests|
 |`pnpm run dist:desktop:mac`|Package the macOS app (dmg + zip)|
 |`pnpm run dist:desktop:win`|Package the Windows app (nsis only; must run on Windows)|
