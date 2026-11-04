@@ -997,6 +997,14 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 
 ## 5. 已知取舍与开放项
 
+- **窄窗 drawer（0.2.2-alpha.3）：采用上游帧的声明/交互语义最小面，不做产品化**——帧宽 <768px 时 vendor
+  `AppFrame` 把侧栏改为覆盖层（`data-sidebar-drawer`/`drawerMask`、center/rightbar `inert`、`shell.leading`
+  重新挂载）；侧栏 fork 接收 `drawer` 并补齐模态语义（`useModalLayer` 关闭路径、`role=dialog`/`aria-modal`/
+  `data-shortcut-modal=sidebar`、关闭后焦点回 opener），快捷键 `modals:['sidebar']` 放行其它模态。被否方案：
+  ①CSS 反向覆盖回旧的内联侧栏——与 vendor frame 的 inert/mask 相冲，窄窗会留下「主区已 inert、侧栏却内联」
+  的死区；②完整产品化（重设布局/宽度记忆/移动端入口）——超出 pin 升级范围；③只接 `drawer` 属性不做模态层——
+  窄窗没有 Escape/外点关闭路径，只能靠快捷键退出。残余：drawer 内 `newSession` 的 darwin 填充未镜像上游
+  `:where(.root:not([role='dialog']))` 门控（Swift 锁步要求带 vibrancy 的裸选择器）＝纯视觉差异（STATUS）。
 - **置顶（pin）：渲染分区已落地（Phase 4 选项 1），残余 = 块内拖拽 + 跨块守卫 + 账号写入**——
   pin/unpin 写入口、静息标记、两个行入口与**置顶分区**都已按上游形态落地（§7）：置顶行在其所属
   分组、树节点与 flat 列表里领跑（上游 `sectionMembers` 的 blank → pinned → 其余三段语义，

@@ -262,6 +262,8 @@ declare module '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts' {
   /** Contract-frozen column geometry (mirrors the vendor columns.ts constants). */
   export const CENTER_MIN: number; export const SIDEBAR_MIN: number; export const SIDEBAR_MAX: number
   export const SIDEBAR_DEFAULT: number; export const SIDEBAR_COLLAPSED: number; export const SIDEBAR_AUTO_COLLAPSE: number
+  /** 0.2.2-alpha.3: frame width below which the sidebar presents as an overlay drawer. */
+  export const SIDEBAR_DRAWER_BREAKPOINT: number
   export const RIGHTBAR_MIN: number; export const RIGHTBAR_MAX_RATIO: number; export const RIGHTBAR_DEFAULT_RATIO: number
   export function clampWidth(px: number, min: number, max: number): number
   export function computeColumns(
@@ -270,6 +272,12 @@ declare module '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts' {
 }
 
 declare module '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx' {
+  /** 0.2.2-alpha.3 injected face: the frame reads the browser posture hook. */
+  export interface AppFrameInjected {
+    hooks: {
+      foldedLandscape: { getSnapshot(): boolean; subscribe(listener: () => void): () => void }
+    }
+  }
   /** The vendor three-column shell frame (loose face). */
   export const AppFrame: (props: any) => any
 }
@@ -392,6 +400,10 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     disabled?: boolean; portal?: boolean; maxWidth?: number; children: ReactElement
   }
   export function Tooltip(props: TooltipProps): JSX.Element | null
+  /** 0.2.2-alpha.3 drawer layer (vendor useModalLayer.ts): Escape / outside press closes; focus restored. */
+  export function useModalLayer(dialog: { readonly current: HTMLElement | null }, open: boolean, onClose: () => void): void
+  export function isBehindModal(anchor: HTMLElement | null): boolean
+  export function focusWithoutRing(element: HTMLElement, options?: FocusOptions): void
   /** Shortcut keycaps (vendor ShortcutKeys.tsx): one `kbd` per effective key label,
    *  `'+'` renders as the combination separator; `variant` selects the tooltip face. */
   export interface ShortcutKeysProps {

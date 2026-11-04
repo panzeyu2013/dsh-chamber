@@ -30,6 +30,12 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-remote-access',
   // 0.2.2: required by ui-chat/ui-attachment (fileDrag inject); first-screen.
   '@deepseek-ai/dsh-client-ui-file-drag',
+  // 0.2.2-alpha.3: the context-menu hub. It provides the useContextMenu root standard
+  // prop that the covered ui-chat/ui-deliverables read at render, and the contextMenus
+  // service ui-workspace/ui-sidebar-right/ui-open-in-app inject. Covered first-screen for
+  // the same reason as shortcuts/file-drag: an uncovered provider leaves covered families
+  // PENDING (or throws at render) on a degraded or older host graph while boot reports success.
+  '@deepseek-ai/dsh-client-ui-context-menu',
   '@deepseek-ai/dsh-api-remotes',
   // provider group: the platform store word (a PLATFORM_MODULES seed), the two
   // api controllers (ctx.sessions / ctx.workspaces), and the three conversation
@@ -196,6 +202,12 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-remote-access',
   // 0.2.2: required by ui-chat/ui-attachment (fileDrag inject); first-screen.
   '@deepseek-ai/dsh-client-ui-file-drag',
+  // 0.2.2-alpha.3: the context-menu hub. It provides the useContextMenu root standard
+  // prop that the covered ui-chat/ui-deliverables read at render, and the contextMenus
+  // service ui-workspace/ui-sidebar-right/ui-open-in-app inject. Covered first-screen for
+  // the same reason as shortcuts/file-drag: an uncovered provider leaves covered families
+  // PENDING (or throws at render) on a degraded or older host graph while boot reports success.
+  '@deepseek-ai/dsh-client-ui-context-menu',
   '@deepseek-ai/dsh-api-remotes',
   // provider group: the store is a platform word (registered factory, no
   // ctx.plugin); the controllers and conversation families are first-screen

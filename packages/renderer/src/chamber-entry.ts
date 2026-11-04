@@ -53,6 +53,10 @@ import * as ApiRemoteAccess from '@deepseek-ai/dsh-api-remote-access/client'
 // rc.2 shortcuts failure mode: without a first-screen covered factory the conversation
 // chain stays PENDING on a host graph that never emits the row (older remote instance).
 import * as ClientFileDrag from '@deepseek-ai/dsh-client-ui-file-drag/client'
+// 0.2.2-alpha.3: the context-menu hub. Covered first-screen rows read its
+// useContextMenu root standard prop at render; ui-workspace/ui-sidebar-right/
+// ui-open-in-app inject contextMenus. Same rule as shortcuts/file-drag.
+import * as UiContextMenu from '@deepseek-ai/dsh-client-ui-context-menu/client'
 import * as ApiRemotes from '@deepseek-ai/dsh-api-remotes/client'
 // provider group: the platform store word (plain module, covered factory only — never
 // ctx.plugin'd) plus the two api controllers (ctx.sessions / ctx.workspaces). All
@@ -440,6 +444,8 @@ export function apply(ctx: Context): void {
   register('@deepseek-ai/dsh-api-remote-access', ApiRemoteAccess)
   // Before the conversation families: ui-chat/ui-attachment inject `fileDrag`.
   register('@deepseek-ai/dsh-client-ui-file-drag', ClientFileDrag)
+  // The context-menu hub: its root standard prop is read by covered conversation rows.
+  register('@deepseek-ai/dsh-client-ui-context-menu', UiContextMenu)
   register('@deepseek-ai/dsh-api-remotes', ApiRemotes)
   // Provider group: the store is a platform word (covered factory, no plugin); the api
   // controllers provide ctx.sessions / ctx.workspaces; ui-session/ui-chat/ui-approval are
@@ -613,6 +619,7 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-api-gateway', coveredFactory(ApiGateway)],
   ['@deepseek-ai/dsh-api-remote-access', coveredFactory(ApiRemoteAccess)],
   ['@deepseek-ai/dsh-client-ui-file-drag', coveredFactory(ClientFileDrag)],
+  ['@deepseek-ai/dsh-client-ui-context-menu', coveredFactory(UiContextMenu)],
   ['@deepseek-ai/dsh-api-remotes', coveredFactory(ApiRemotes)],
   // provider group: the seed provides the store word too; this factory is the
   // composite-side fallback for the same require edge (seed wins). Controllers and

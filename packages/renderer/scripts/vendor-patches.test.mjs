@@ -225,6 +225,10 @@ test('the node view forwards the root standard prop into the markdown component 
     // 0.2.2: the node view reads the folded-replies policy through this hook.
     usePresentation: (select) => select({ foldedReplies: 'none' }),
     t: 't',
+    // 0.2.2-alpha.3: the node view opens the context-menu bindings at render.
+    sessionId: 'local',
+    useContextMenu: () => ({ getTriggerProps: () => ({}) }),
+    resolveFilePath: (path) => path,
     ...(basePath === undefined ? {} : { chamberFileApiBase: basePath }),
   })
 
@@ -930,6 +934,8 @@ test('the delivery-card file actions carry the per-entry base path (executed pat
       useChangesDiff: () => undefined, useChangesSummary: () => undefined, useSessions: (selector) => selector({ byId: {} }),
       usePresentedHost: (selector) => selector({ available: true }), usePresentedOpen: (selector) => selector({}),
       useShowCodeDiff: (selector) => selector(false), t: (key) => key,
+      // 0.2.2-alpha.3: the delivery card opens the context-menu bindings at render.
+      useContextMenu: () => ({ getTriggerProps: () => ({}) }),
       renderSlot: (name, owner) => { slots.push({ name, owner }); return null },
       ...(basePath === undefined ? {} : { chamberFileApiBase: basePath }),
     })

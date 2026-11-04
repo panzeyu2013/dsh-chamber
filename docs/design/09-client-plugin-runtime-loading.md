@@ -258,6 +258,17 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
   （执行期断言）。alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。rc.2 同理：新徽标行 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`（官方 web-app 行，占 `conversation.input.model.label` 单槽，chamber 无同槽占用者）不进覆盖集、由宿主图加载；其 create-time require 只有 `react/jsx-runtime` 与 ui-primitives（后者由复合 factory 应答），不需要 factory 或 disable 行。pin 0.2.2-alpha.2 同样按此判定：闭包新增的 `dsh-client-ui-action-cards` / `dsh-client-ui-creation-recommendations` / `dsh-client-ui-plugin-recommendations` / `dsh-message-quotes` / `dsh-cua` 都由宿主图 extra row 载入、不进覆盖集；唯一例外是 `dsh-client-ui-file-drag`——`ui-chat` 根 inject 与 `ui-attachment` 的 `inject = ['slots', 'fileDrag']` 直接依赖它，缺行会让会话链停在 PENDING，故按 shortcuts/remoteAccess 先例升为**首屏 covered factory**。判定规则：一行是否升 covered 只看「是否被首屏根 inject 强制依赖」，不看它有没有自己的产品面。
+  **pin 0.2.2-alpha.3 的 roster 裁决与 Rejected alternatives**：`dsh-client-ui-context-menu` 升首屏 covered——它经
+  `provideRoot` 提供 `useContextMenu` 根标准 prop、并以 `ctx.provide('contextMenus')` 提供 cordis 服务；被覆盖的
+  `ui-chat`/`ui-deliverables` 在渲染期直接解构该 prop，`ui-workspace`/`ui-sidebar-right`/`ui-open-in-app` 的 inject
+  集合含 `contextMenus`，属同一判定。被否方案：①按延迟簇加载 + 探针——`required-extra-rows` 的探针只报不门，且
+  渲染期解构发生在探针之前（TypeError 先于诊断）；②让各上游组件容忍 provider 缺席——越界改上游且把缺陷摊进每个
+  组件；③只留官方宿主行——图通道降级或旧宿主时 covered 的 `ui-workspace` 永 PENDING、会话面渲染即崩。
+  `dsh-client-ui-file-actions` 则**保持宿主图加载：不覆盖、不打补丁**——文件菜单的来源恒带 `read`
+  （`remote.workspaceFiles.readBytes`，走 per-entry api-gateway base），真正使用文档相对 URL 的只有「无
+  path/sessionId 的 image 目标」。被否方案：①整行跳过——该行是新增的官方面，跳过等于删掉一个可工作的功能；
+  ②covered + 构建期补丁——运行期 bundle 的模块不在复合构建图里，登记补丁会被 §3.6 的「patch never applied」
+  覆盖门硬失败，且要为 `remote.workspaceFiles` 再造覆盖前提。
 - **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 HMR 行（宿主半身 always mounted；dev-only 的只是 rebuild watcher）
   `@deepseek-ai/dsh-client-hmr` 在覆盖集内但**永不加载**——它开的是 **document-relative**
   `new EventSource('plugins/events')`，单页多实例下会打到控制面 origin（SPA 回退答 `text/html`）；
@@ -708,7 +719,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - 版本漂移：宿主图 rev 与复合 bundle 的合并是 union 语义，不要求两图同 rev（复合由 chamber 构建管、宿主图由
   实例插件集管）；壳版本落后/超前时多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——当前 pin =
-  dsh `0.2.2-alpha.2` / `f3803c96`（`packages/desktop/vendor/dsh/
+  dsh `0.2.2-alpha.3` / `05b1cae8db`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git
   submodule（gitlink = pin，升级走 `scripts/upstream/update-vendor.mjs <tag>`）。宿主 wire 只增不改——

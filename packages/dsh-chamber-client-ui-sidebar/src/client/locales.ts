@@ -7,6 +7,7 @@ export const zh = {
   // 上游 workspace 头的 `+` tooltip 用独立键 `actions.newSession`（vendor ui-workspace 字典逐字：
   // zh「新会话」/ en "New session"）；与 `session.new` 同值、与 `session.new.label` 形近，但键与值都照上游。
   'actions.newSession': '新会话',
+  'navigation.label': '侧边栏',
   'toggle.open': '打开侧边栏',
   'toggle.collapse': '收起侧边栏',
   // 行级操作的无障碍名：上游行动作一律用参数化行名（vendor ui-workspace locales.ts `actions.*.aria`）；泛化标签会让 AT 听到一排无法区分的“新建会话/更多操作”。
@@ -248,6 +249,7 @@ export const en = {
   'panels.label': 'Global panels',
   'session.new.label': 'New session',
   'actions.newSession': 'New session',
+  'navigation.label': 'Sidebar',
   'toggle.open': 'Open sidebar',
   'toggle.collapse': 'Collapse sidebar',
   'action.newSession.aria': 'New session in {name}',

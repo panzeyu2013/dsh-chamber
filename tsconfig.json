@@ -42,6 +42,12 @@
       "@deepseek-ai/dsh-client-ui-file-drag/client": [
         "./vendor/harness-packages/@deepseek-ai/dsh-client-ui-file-drag/src/client/index.ts"
       ],
+      // 0.2.2-alpha.3: the composite covers the context-menu hub first-screen (it provides
+      // the useContextMenu root prop and the contextMenus service). Source-only vendor
+      // face, like file-drag above.
+      "@deepseek-ai/dsh-client-ui-context-menu/client": [
+        "./vendor/harness-packages/@deepseek-ai/dsh-client-ui-context-menu/src/client/index.ts"
+      ],
       // 0.2.1-alpha.3 lineage: the account family is a deferred covered row again; the build-time
       // vendor patch gates its desktop onboarding overlay off (design 09 §3.5).
       "@deepseek-ai/dsh-client-ui-settings-account/client": [

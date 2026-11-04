@@ -288,13 +288,20 @@ vendorTest('上游：pin/unpin 的形态、座席顺序、文案与线协议（�
     '行钮无障碍名必须仍是行菜单长名（chamber 照此，不对行名参数化）')
   assert.ok(pin.includes('<IconPinFillRegular size={14} />') && pin.includes('<IconPinOutlineRegular size={14} />'),
     '行钮必须是 14px 双字形')
-  // 0.2.2：两个入口的守卫合并成 `archived || !allowed`（新增访问快照门），归档互斥语义不变。
-  assert.equal((pin.match(/if \(archived \|\| !allowed\) return null/g) ?? []).length, 2,
-    '菜单项与行钮两个入口都必须对归档行（或访问门拒绝）返回 null（chamber 的 pin/archive 互斥押在它上面）')
-  // 2) 座席注册顺序：菜单 pin(100) 先于 rename(200)；行动作 archive(100) 先于 pin(200)（pin 最右）。
+  // 0.2.2-alpha.3：行钮仍住 PinSession.tsx，行菜单项迁到 session-actions/context-menus.tsx；
+  // 两个入口的归档互斥语义不变（chamber 的 pin/archive 互斥押在它上面）。
+  assert.equal((pin.match(/if \(archived \|\| !allowed\) return null/g) ?? []).length, 1,
+    '行钮必须对归档行（或访问门拒绝）返回 null')
+  const sessionMenus = readVendor('dsh-client-ui-workspace/src/client/session-actions/context-menus.tsx')
+  assert.ok(sessionMenus.includes("if (archived(target) || !allowed(target, pinned ? 'workspace/unpinSession' : 'workspace/pinSession')) return []"),
+    '行菜单的 pin 项必须对归档行（或访问门拒绝）返回空贡献')
+  // 2) 注册顺序：alpha.3 起行菜单项住在 session-actions/context-menus.tsx，
+  //    pin(100) 仍先于 rename(200)；行动作仍住 index.ts：archive(100) 先于 pin(200)。
+  const pinMenu = sessionMenus.indexOf("register('pin', 100,")
+  const renameMenu = sessionMenus.indexOf("register('rename', 200,")
+  assert.ok(pinMenu !== -1 && renameMenu !== -1 && pinMenu < renameMenu,
+    '行菜单的 pin 必须仍是 order 100 的首项（先于 rename 200）')
   const index = readVendor('dsh-client-ui-workspace/src/client/index.ts')
-  assert.ok(index.includes("{ name: 'sidebar.workspaces.session.menu.item', id: 'pin', order: 100"),
-    '菜单座席的 pin 必须仍是 order 100 的首项')
   assert.ok(index.includes("{ name: 'sidebar.workspaces.session.row.action', id: 'pin', order: 200"),
     '行动作座席的 pin 必须仍是最右成员（order 200）')
   const archiveSeat = index.indexOf("{ name: 'sidebar.workspaces.session.row.action', id: 'archive', order: 100")

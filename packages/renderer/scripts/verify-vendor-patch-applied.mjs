@@ -126,13 +126,10 @@ export const VENDOR_PATCH_MARKERS = [
   {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
     what: 'ui-chat node view forwards the file-API base prop',
-    // Patched: `chamberFileApiBase` closes the destructured parameter list and
-    // the component body still starts from `node.data` - the forwarding edit.
-    // `const` in the production chunk, `let` under the esbuild fixture's minifySyntax:
-    // the declaration keyword is not a patched fact, so accept all three.
-    // 0.2.2 起函数体首行前可能被压出一个 `var <id>;` 提升（`{var N;const z=e.data,…`），
-    // 故允许一个可选的 var 声明前缀；声明关键字与 `=<x>.data,` 仍是补丁事实。
-    present: /chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\s*\}\s*\)\s*\{\s*(?:var\s+[A-Za-z_$][\w$]*\s*;\s*)?(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*[A-Za-z_$][\w$]*\.data\s*,/,
+    // Patched: the file-API base prop closes the destructured parameter list. Since alpha.3
+    // the context-menu threading adds the same bindings to ChatView/AssistantMarkdown, so the
+    // marker binds a node-view-only prop key (`turnProcess`) ahead of the appended base prop.
+    present: /turnProcess\s*:\s*[A-Za-z_$][\w$]*[\s\S]{0,300}?chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*/u,
   },
   {
     vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',

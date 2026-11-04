@@ -19,7 +19,7 @@ import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-clie
 import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
 import { en, ja, es, fr, de, ru, pt, zh } from './shortcut-locales.ts'
 import type { PanelInfo } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
-import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
+import { AppFrame, type AppFrameInjected } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
 import { createLayoutStore, trackLayoutInstance } from './stores.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
@@ -109,10 +109,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** Sidebar owner share: live column state from the frame's concession solve. */
 export interface SidebarOwnerProps {
-  /** True when the sidebar is closed (the column renders the compact control rail). */
+  /** True when the sidebar is closed; a drawer is hidden, other browser columns retain a rail. */
   collapsed: boolean
-  /** Rendered column width in px (SIDEBAR_COLLAPSED when collapsed). */
+  /** Rendered sidebar width in px; a hidden drawer retains its expanded width. */
   width: number
+  /** Present the retained sidebar content as an overlay drawer (alpha.3 frame share). */
+  drawer: boolean
 }
 
 /** Right column owner share: resolved normal geometry and opening eligibility. */
@@ -143,6 +145,17 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     // Minted EAGERLY and shared with the registration: AppFrame reads it through
     // PropsStore, ctx.layout wraps its bound actions, usePanelInfo projects panelInfo.
+    // alpha.3: the frame's posture hook. Headless profiles may instantiate client
+    // registrations without browser media APIs, so the query is optional.
+    const query = typeof matchMedia === 'function'
+      ? matchMedia('(device-posture: folded) and (orientation: landscape)') : undefined
+    const foldedLandscape: HostObservable<boolean> = {
+      getSnapshot: () => query?.matches ?? false,
+      subscribe: (listener) => {
+        query?.addEventListener('change', listener)
+        return () => { query?.removeEventListener('change', listener) }
+      },
+    }
     const handle = createLayoutStore()
     const instance = handle.create()
     const store: typeof handle = { ...handle, create: () => instance }
@@ -186,6 +199,8 @@ export function apply(ctx: ClientContext): void {
       },
       // Exclusive store: the shared root instance (delivered to AppFrame as standard props).
       store,
+      // alpha.3: AppFrame reads the posture hook through its injected face.
+      inject: (): AppFrameInjected => ({ hooks: { foldedLandscape } }),
     }, AppFrame)
     const disposeShortcut = ctx.shortcuts.register({
       id: 'sidebar.left.toggle' as ShortcutCommandId, label: () => t('toggle'), aliases: ['sidebar', 'toggle left sidebar'],
@@ -196,8 +211,10 @@ export function apply(ctx: ClientContext): void {
         'web:macos': { code: 'KeyB', modifiers: ['primary', 'alt'] },
         'web:windows': { code: 'KeyB', modifiers: ['primary', 'alt'] },
       },
-      regions: ['page', 'editable'], modals: [],
-      resolve: () => ({ status: 'handled', run: () => { layout.toggleSidebar() } }),
+      regions: ['page', 'editable'], modals: ['sidebar'],
+      resolve: ({ modal }: { modal: string | null }) => modal !== null && modal !== 'sidebar'
+        ? { status: 'pass' }
+        : { status: 'handled', run: () => { layout.toggleSidebar() } },
     })
     const disposePanels = ctx.slots.subscribe('main', retainMainPanels)
     retainMainPanels()

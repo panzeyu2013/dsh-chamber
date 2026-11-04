@@ -199,6 +199,8 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-api-remote-access', ['remote', 'slots']],
   // 0.2.2: ui-chat/ui-attachment inject fileDrag; provided by this first-screen covered row.
   ['@deepseek-ai/dsh-client-ui-file-drag', ['slots', 'locale']],
+  // 0.2.2-alpha.3: the context-menu hub (useContextMenu root prop + contextMenus service).
+  ['@deepseek-ai/dsh-client-ui-context-menu', ['slots', 'locale', 'shortcuts']],
   ['@deepseek-ai/dsh-api-remotes', ['remote']],
   ['@deepseek-ai/dsh-api-session-controller',
     ['connection', 'fileUpload', 'typert', 'remote', 'remote.commands', 'remote.session', 'remote.subagents']],
@@ -218,7 +220,7 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-client-ui-commands', ['inputTriggers', 'sessions', 'remote', 'remote.commands', 'locale']],
   ['@deepseek-ai/dsh-client-ui-input-trigger', ['sessions', 'locale']],
   ['@deepseek-ai/dsh-client-ui-workspace',
-    ['slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts', 'remoteAccess']],
+    ['contextMenus', 'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts', 'remoteAccess']],
   ['@deepseek-ai/dsh-client-ui-model-selection', ['commandUi', 'locale', 'sessions', 'slots', 'remote', 'remote.session']],
   ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots', 'remote', 'remoteAccess']],
   ['@deepseek-ai/dsh-client-ui-chat',

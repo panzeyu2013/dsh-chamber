@@ -214,6 +214,9 @@ test('the inert official open-in probes stay a recorded, unpatched site', { skip
     [
       'FileRouteAction.tsx: fetch(@1',
       'OpenTargetButton.tsx: src=@1',
+      // 0.2.2-alpha.3: menu app icons ride the same document-relative icon route as the
+      // existing OpenTargetButton probe; inert under the N-ctx shell (broken image, no action).
+      'context-menus.tsx: src=@1',
       'controller.ts: fetch(@1',
     ],
     'the inert open-in probes changed shape: re-derive the recorded gap before trusting this lock',

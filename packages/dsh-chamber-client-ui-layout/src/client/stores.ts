@@ -13,7 +13,7 @@
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import {
   clampWidth, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN,
-  SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN,
+  SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT, SIDEBAR_DRAWER_BREAKPOINT, SIDEBAR_MAX, SIDEBAR_MIN,
 } from '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
 import { getViewPrefs, subscribeViewPrefs, updateViewPrefs } from '@dsh-chamber/dsh-chamber-client-core'
 import {
@@ -33,6 +33,7 @@ const defaultEnvironment: LayoutStoreEnvironment = {
     SIDEBAR_MIN,
     SIDEBAR_MAX,
     SIDEBAR_AUTO_COLLAPSE,
+    SIDEBAR_DRAWER_BREAKPOINT,
     RIGHTBAR_MIN,
     RIGHTBAR_MAX_RATIO,
     RIGHTBAR_DEFAULT_RATIO,

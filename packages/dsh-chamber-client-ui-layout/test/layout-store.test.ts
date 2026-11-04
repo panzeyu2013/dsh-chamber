@@ -29,6 +29,7 @@ import {
   RIGHTBAR_MIN,
   SIDEBAR_AUTO_COLLAPSE,
   SIDEBAR_DEFAULT,
+  SIDEBAR_DRAWER_BREAKPOINT,
   SIDEBAR_MIN,
   SIDEBAR_MAX,
 } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
@@ -132,6 +133,7 @@ function makeEnv(
       SIDEBAR_MIN,
       SIDEBAR_MAX,
       SIDEBAR_AUTO_COLLAPSE,
+      SIDEBAR_DRAWER_BREAKPOINT,
       RIGHTBAR_MIN,
       RIGHTBAR_MAX_RATIO,
       RIGHTBAR_DEFAULT_RATIO,

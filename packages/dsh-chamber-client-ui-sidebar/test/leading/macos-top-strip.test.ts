@@ -100,10 +100,13 @@ test('the darwin transparency rules keep the pinned upstream bodies', (context) 
     // 同一份 vendor 体也挂在 vibrancy 标记的那条上（Swift 锁步只检查选择器存在，
     // 这里补上「两份规则的声明体都必须等于上游」）。
     ['.brand（vibrancy 标记）', gated(' .brand'), pinned(' .brand')],
-    ['.newSession', gated(' .newSession'), pinned(' .newSession')],
-    ['.newSession:hover', gated(' .newSession:hover'), pinned(' .newSession:hover')],
-    ['[data-ds-dark-theme] .newSession', gated(" :global([data-ds-dark-theme]) .newSession"), pinned(" :global([data-ds-dark-theme]) .newSession")],
-    ['[data-ds-dark-theme] .newSession:hover', gated(" :global([data-ds-dark-theme]) .newSession:hover"), pinned(" :global([data-ds-dark-theme]) .newSession:hover")],
+    // alpha.3 guards the upstream darwin fill against the drawer dialog (role=dialog). Our
+    // rule body is identical; the vibrancy gate keeps the Swift lockstep selector, so the
+    // dialog guard is not mirrored here (STATUS carries the cosmetic difference).
+    ['.newSession', gated(' .newSession'), pinned(" :where(.root:not([role='dialog'])) .newSession")],
+    ['.newSession:hover', gated(' .newSession:hover'), pinned(" :where(.root:not([role='dialog'])) .newSession:hover")],
+    ['[data-ds-dark-theme] .newSession', gated(" :global([data-ds-dark-theme]) .newSession"), pinned(" :global([data-ds-dark-theme]) :where(.root:not([role='dialog'])) .newSession")],
+    ['[data-ds-dark-theme] .newSession:hover', gated(" :global([data-ds-dark-theme]) .newSession:hover"), pinned(" :global([data-ds-dark-theme]) :where(.root:not([role='dialog'])) .newSession:hover")],
   ]
   // 只比声明体：本仓选择器多一层门控，比整条规则会把门控本身算成漂移。
   const body = (source: string, selector: string): string => {

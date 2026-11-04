@@ -352,10 +352,13 @@ export const VENDOR_PATCHES = Object.freeze([
     edits: Object.freeze([
       Object.freeze({
         expect: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, loadImage, fileMentions,\n'
-          + '  usePresentation, renderSlot, t,\n}: AssistantNodeViewProps) {',
+          + '  usePresentation, renderSlot, t, sessionId, useContextMenu, resolveFilePath,\n}: AssistantNodeViewProps) {',
         replace: '  node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, loadImage, fileMentions,\n'
-          + '  usePresentation, renderSlot, t,\n'
-          + '  chamberFileApiBase,\n}: AssistantNodeViewProps) {',
+          + '  usePresentation, renderSlot, t, sessionId, useContextMenu, resolveFilePath,\n'
+          + '  chamberFileApiBase,\n}: AssistantNodeViewProps & {\n'
+          + '  /** chamber patch: per-entry API base prefix. */\n'
+          + '  chamberFileApiBase?: string | undefined\n'
+          + '}) {',
       }),
       Object.freeze({
         expect: '      mentions={mentions}\n      t={t}\n    />',
@@ -537,8 +540,8 @@ export const VENDOR_PATCHES = Object.freeze([
     reason: 'the delivery-card file-action owner route (api/present.open) is document-relative, so the official open-in consumer fetches the control-plane page origin in the N-ctx shell: the delivery-card folder menu cannot list applications',
     edits: Object.freeze([
       Object.freeze({
-        expect: '& Pick<GlobalStandardProps, \'useSessions\'> & InjectFace<DeliverablesInjected>',
-        replace: '& Pick<GlobalStandardProps, \'useSessions\'> & {\n'
+        expect: '& Pick<GlobalStandardProps, \'useSessions\' | \'useContextMenu\'> & InjectFace<DeliverablesInjected>',
+        replace: '& Pick<GlobalStandardProps, \'useSessions\' | \'useContextMenu\'> & {\n'
         + '  /**\n'
         + '   * chamber patch: this entry\'s API base path (`/api/i/<id>`, no trailing\n'
         + '   * slash), absent when the chamber fact is absent. An owner action route must\n'

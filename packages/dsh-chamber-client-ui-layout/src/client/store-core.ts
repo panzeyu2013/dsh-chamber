@@ -75,6 +75,8 @@ export interface LayoutStoreColumns {
   SIDEBAR_MIN: number
   SIDEBAR_MAX: number
   SIDEBAR_AUTO_COLLAPSE: number
+  /** Frame width below which the sidebar presents as an overlay drawer. */
+  SIDEBAR_DRAWER_BREAKPOINT: number
   RIGHTBAR_MIN: number
   RIGHTBAR_MAX_RATIO: number
   RIGHTBAR_DEFAULT_RATIO: number
@@ -282,6 +284,8 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
       // A global panel id replaces the Conversation in the centre; retain clears an unregistered selection.
       selectPanel: (d, panelId: MainPanelId | null) => {
         d.panelInfo.activePanelId = panelId
+        // alpha.3: a drawer-width frame drops the narrow override when the centre takes a panel.
+        if (d.layoutInfo.viewportWidth < columns.SIDEBAR_DRAWER_BREAKPOINT) d.layoutInfo.narrowExpanded = false
       },
       retainMainPanels: (d, panelIds: readonly string[]) => {
         if (d.panelInfo.activePanelId !== null && !panelIds.includes(d.panelInfo.activePanelId)) {
@@ -308,7 +312,8 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
       setViewportWidth: (d, width: number) => {
         if (d.layoutInfo.viewportWidth === width) return
         d.layoutInfo.rightbarInstant = false
-        if ((d.layoutInfo.viewportWidth < columns.SIDEBAR_AUTO_COLLAPSE) !== (width < columns.SIDEBAR_AUTO_COLLAPSE)) {
+        if ((d.layoutInfo.viewportWidth < columns.SIDEBAR_AUTO_COLLAPSE) !== (width < columns.SIDEBAR_AUTO_COLLAPSE)
+          || (d.layoutInfo.viewportWidth < columns.SIDEBAR_DRAWER_BREAKPOINT) !== (width < columns.SIDEBAR_DRAWER_BREAKPOINT)) {
           d.layoutInfo.narrowExpanded = false
         }
         d.layoutInfo.viewportWidth = width

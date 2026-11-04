@@ -10,11 +10,11 @@
  * (cross-ctx live sync); drag commits go through the wire with an optimistic override that
  * self-heals on the next pull; search is a debounced per-source unary content search (one
  * 30s-aborted job per query); the pinned 待办区 is a pure projection over the SAME merged facts. */
-import { useCallback, useMemo, useRef, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
   BrandWordmark, FishLogo, IconNewChatOutlineMedium, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
-  ShortcutKeys, Tooltip, isDarwinDesktop,
+  ShortcutKeys, Tooltip, focusWithoutRing, isBehindModal, isDarwinDesktop, useModalLayer,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ShortcutsHook, SidebarRootComponentProps } from './contract/slots.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
@@ -69,6 +69,7 @@ function useStableHandlers<T extends object>(handlers: T): T {
 export function SidebarRoot({
   collapsed,
   width,
+  drawer = false,
   startSession,
   toggleSidebar,
   selectPanel,
@@ -102,6 +103,21 @@ export function SidebarRoot({
   // 跨切面状态由各主题 hook 持有；每个 hook 无条件按固定顺序调用，effect 顺序稳定。
   const { wide, column, lastWideWidth, pointerInside, setPointerInside, cancelLinger, armLinger } =
     useSidebarCollapse(collapsed, width)
+  // 0.2.2-alpha.3 drawer semantics (vendor ui-sidebar): a narrow frame presents the
+  // retained sidebar as a modal layer; Escape / outside press closes it, and focus
+  // returns to the opener (or the rail toggle) after a drawer collapse.
+  const sidebarFocus = useRef<Element | null>(null)
+  useModalLayer(column, drawer && !collapsed, toggleSidebar)
+  useLayoutEffect(() => {
+    if (!collapsed) return
+    const controlled = sidebarFocus.current?.getAttribute('aria-controls')?.split(/\s+/u) ?? []
+    const ownsMenuFocus = controlled.some(id => document.getElementById(id)?.contains(document.activeElement))
+    if (sidebarFocus.current !== document.activeElement && !ownsMenuFocus) return
+    const opener = drawer
+      ? column.current?.ownerDocument.querySelector<HTMLElement>('[data-sidebar-opener]')
+      : column.current?.querySelector<HTMLElement>('[data-sidebar-toggle]')
+    if (opener != null && !isBehindModal(opener)) focusWithoutRing(opener, { preventScroll: true })
+  }, [drawer, collapsed])
   const {
     servers, viewPrefs, orderedServers, toggleWorkspaceFold, toggleSourceFold, setOrderBy, setGroupBy, setArchivedFilter,
     sessionOrderOverride, setSessionOrderOverride, workspaceOrderOverride, setWorkspaceOrderOverride,
@@ -254,9 +270,12 @@ export function SidebarRoot({
       label={collapsed ? t('toggle.open') : t('toggle.collapse')}
       shortcutKeys={toggleShortcut?.keys}
       delayMs={500}
+      portal={drawer}
     >
       <button
         type="button"
+        data-sidebar-toggle
+        data-modal-autofocus={drawer || undefined}
         className={clsx(css.iconButton, css.toggle)}
         aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
         aria-keyshortcuts={toggleShortcut?.aria}
@@ -276,6 +295,12 @@ export function SidebarRoot({
   return (
     <div
       ref={column}
+      onFocusCapture={(event) => { sidebarFocus.current = event.target }}
+      role={drawer ? 'dialog' : undefined}
+      data-shortcut-modal={drawer ? 'sidebar' : undefined}
+      aria-modal={drawer && !collapsed ? true : undefined}
+      aria-label={drawer ? t('navigation.label') : undefined}
+      tabIndex={drawer ? -1 : undefined}
       className={clsx(
         css.root, !wide && css.collapsed,
         collapsed && wide && css.fading, !pointerInside && css.quietBars,
