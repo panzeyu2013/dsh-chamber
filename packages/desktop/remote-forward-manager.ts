@@ -1164,9 +1164,11 @@ export class RemoteForwardManager {
       // Use the window length rather than the injected clock for the wait:
       // tests can hold a fixed clock and still observe deterministic spacing.
       await this.#delay(this.#spawnWindowMs)
+      if (!alive()) return false
       // Consume the new slot; do not wipe the window (that let every subsequent
       // request bypass the 1/2s throttle).
       this.#spawnWindows.set(sourceId, [this.#now()])
+      return true
     }
   }
 
