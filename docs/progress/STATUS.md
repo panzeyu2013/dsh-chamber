@@ -17,7 +17,6 @@
 - **会话打开停滞（design 14 §D4）**：宿主无首帧期限；触屏档无载波层、blank 恢复入口、移动端 source↔artifact 锁、FNV 键碰撞、`socket-silent` 消费面、`presented` 近似、阈值、unary 引导、取证小面、实例级回退、补读面——均待接线/退役或校准。
 - **连接稳定性**：24h 494 次 WS 关闭全为 upstream close（local 108 次、0 heartbeat lost），但独立 Node 客户端同 mux 400s 无 close ⇒ 页面侧差异；下一步抓 close code（1006/4000）并对齐 `[chamber:evidence]`。
 - **degraded 服务化真机验收**（design 02 §3.5 / 04 §4.2）：打包态与真机尚未复验 degraded 窗口内页面与 gateway 的实际体验（45s 超时/504 而非快速 503）、旧客户端（≤ 0.4.2）忽略 503 `details.state` 的兼容、以及 stopped/restart-exhausted 的终态文案是否点到「启动实例」；另需确认「活着但不再服务」的宿主最长约 10min（20×30s 周期探测，请求失败不加速恢复）在真机上可接受；判据 = 远端 gateway 升级后的 journal + 打包态目检。
-- **JSC 崩溃 → 静默重载**：WebKit 22625；16 份/8 天基线 ≈0.29 次/小时页面存续，入口全为 WS 消息派发；开放 = 重载后草稿复原真机验证、事实持久消费面、vendor 事件窗口淘汰。
 - **页面级 HTTP 预算（design 26 §D7）**：①参数 `4/1/2` 待真机标定（queueMs p50/p95、`zeroWaitGrants`、leaseExpired、成功率、bundle 帽对 boot 影响）；②残余通道（connection RPC/script/deferred chunk）不经预算；③bundle 槽无 queueDeadline；④元素/worker 同源加载不在预算。
 - **页面通道/事实源残余**：page-channel 上游连接不计反代并发（`stats()` 无消费方）；权威门 producer 无 `reportedAt`；预算拒绝诊断 `not-injected`；gateway 不挂 page-channel 且 `degraded=true` 成因未查；design 26 打包态复验未跑。
 - **本地 facts 间歇降级**：待真机 fetch 排队测量（≥3 个 SSH 慢源时 in-flight 是否恒 6；`unscheduled booked=false` 与慢窗口同拍；单慢源阴性对照）。
@@ -59,7 +58,7 @@
 
 ### 1.4 打包态与真机门禁（按来源/版本）
 
-**壳与窗口**：T-10 调试模式人工判；多来源 sleep/wake、版本歪斜、gateway 回归；隐藏/遮挡（S-10：rAF/定时器/`visibilityState`/App Nap、≥60s 页面通道与 mux、唤醒重连、30s 轮询补偿）；macOS chrome（红绿灯 (16,18)、vibrancy、Reduce Transparency、`data-fullscreen`、失败页、整窗拖动）；ProMotion 三工况（插电 120/低电 60/60Hz 外屏不回退）；原生席位/W7 语言与主题；托盘图标（等高不裁、与 Swift 18pt 一致）；设置页拖拽（按下可拖、正文不被选择、按钮可点）；S-50 根级回弹（整页零位移、滚动/惯性/键盘无回归）；Swift soak（流式中点开 ×20、mux churn/JSC 基线）。
+**壳与窗口**：T-10 调试模式人工判；多来源 sleep/wake、版本歪斜、gateway 回归；隐藏/遮挡（S-10：rAF/定时器/`visibilityState`/App Nap、≥60s 页面通道与 mux、唤醒重连、30s 轮询补偿）；macOS chrome（红绿灯 (16,18)、vibrancy、Reduce Transparency、`data-fullscreen`、失败页、整窗拖动）；ProMotion 三工况（插电 120/低电 60/60Hz 外屏不回退）；原生席位/W7 语言与主题；托盘图标（等高不裁、与 Swift 18pt 一致）；设置页拖拽（按下可拖、正文不被选择、按钮可点）；S-50 根级回弹（整页零位移、滚动/惯性/键盘无回归）；Swift soak（流式中点开 ×20、mux churn）。
 
 **来源与启动**：vendor 补丁可见态 A/B；右栏栈/session v3 迁移；open-in host 包（两代探针、图标/缓存/CSP/fence/cwd、macOS 清单、Windows 盘符/UNC、第三方 scheme）；终止失败闩锁；写者静默门（409 停 `starting`）；降级提示三处；切源座席/字标；boot 死区（idle 不启、1.5s 判死、10s 重试、502 自愈）；idle 排队 68s。
 
