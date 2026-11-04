@@ -366,7 +366,7 @@ test('below the breakpoint the toggle flips narrowExpanded and never touches the
   assert.equal(instance.getSnapshot().layoutInfo.sidebar, 0) // wide toggle now closes
 })
 
-test('setViewportWidth drops the narrow override only when the breakpoint is crossed', () => {
+test('setViewportWidth drops the narrow override when either breakpoint is crossed', () => {
   const { env } = makeEnv()
   const instance = createLayoutStore(env).create()
   instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE - 1)
@@ -378,6 +378,57 @@ test('setViewportWidth drops the narrow override only when the breakpoint is cro
   // Crossing the breakpoint clears it.
   instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE + 10)
   assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false)
+  // The boundary itself is the WIDE side: the comparison is <, not <=.
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE - 1)
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false, 'exactly at the breakpoint is wide')
+})
+
+test('the drawer boundary itself stays on the wide side', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setViewportWidth(SIDEBAR_DRAWER_BREAKPOINT)
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  instance.actions.selectPanel('workflow' as never)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true, 'exactly at 768 the override survives')
+  instance.actions.setViewportWidth(SIDEBAR_DRAWER_BREAKPOINT - 1)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false, 'one pixel inside the drawer clears it')
+})
+
+test('setViewportWidth clears the narrow override on the drawer breakpoint alone', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setViewportWidth(SIDEBAR_DRAWER_BREAKPOINT - 1)
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  // Both widths stay below SIDEBAR_AUTO_COLLAPSE, so only the drawer boundary moves.
+  instance.actions.setViewportWidth(SIDEBAR_DRAWER_BREAKPOINT + 1)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false, 'the drawer boundary clears it')
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  // Staying on the same side of the drawer boundary keeps the override.
+  instance.actions.setViewportWidth(SIDEBAR_DRAWER_BREAKPOINT + 40)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+})
+
+test('selectPanel drops the narrow override inside the drawer width only', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setViewportWidth(SIDEBAR_DRAWER_BREAKPOINT - 1)
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  instance.actions.selectPanel('workflow' as never)
+  assert.equal(instance.getSnapshot().panelInfo.activePanelId, 'workflow')
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false, 'a drawer-width frame drops the override')
+  // Above the drawer width the centre panel and the narrow override coexist.
+  instance.actions.setViewportWidth(SIDEBAR_DRAWER_BREAKPOINT + 200)
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  instance.actions.selectPanel('conversation' as never)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true, 'the wide branch keeps it')
 })
 
 // ---- root main-panel selection (alpha.2) ----
