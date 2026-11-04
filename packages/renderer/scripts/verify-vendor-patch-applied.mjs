@@ -126,10 +126,11 @@ export const VENDOR_PATCH_MARKERS = [
   {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx',
     what: 'ui-chat node view forwards the file-API base prop',
-    // Patched: the file-API base prop closes the destructured parameter list. Since alpha.3
-    // the context-menu threading adds the same bindings to ChatView/AssistantMarkdown, so the
-    // marker binds a node-view-only prop key (`turnProcess`) ahead of the appended base prop.
-    present: /turnProcess\s*:\s*[A-Za-z_$][\w$]*[\s\S]{0,300}?chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*/u,
+    // Patched: the node view FORWARDS the base into the AssistantMarkdown element, as the prop that
+    // closes that element's prop object right after `t`. The destructured parameter list carries the
+    // same name, but that mention is this patch's own first edit — binding the call site instead keeps
+    // the marker on the forwarding step, which is what would silently go missing.
+    present: /mentions\s*:\s*[A-Za-z_$][\w$]*,t\s*:\s*[A-Za-z_$][\w$]*,chamberFileApiBase\s*:\s*[A-Za-z_$][\w$]*\}/u,
   },
   {
     vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
