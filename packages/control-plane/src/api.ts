@@ -27,6 +27,7 @@ import type { Logger } from './types.ts'
 const MAX_BODY_BYTES = 10 * 1024 * 1024
 /** Management body per-chunk idle timeout. */
 const BODY_IDLE_TIMEOUT_MS = 10_000
+const BODY_TOTAL_TIMEOUT_MS = 30_000
 
 /**
  * The minimal request surface the HTTP layer reads. Structural on purpose: both
@@ -240,6 +241,13 @@ export function createApi(deps: ApiDeps) {
     let oversize = false
     let idleTimer: NodeJS.Timeout | undefined
     let idleExpired = false
+    // Total body budget: the per-chunk idle window alone lets a 1-byte/9s
+    // trickle outlive the old 35s request deadline now that Node's dead-man is 31min.
+    const totalTimer = setTimeout(() => {
+      idleExpired = true
+      req.destroy?.()
+    }, BODY_TOTAL_TIMEOUT_MS)
+    totalTimer.unref?.()
     // Per-chunk idle timeout: a slow body must not hold a connection slot for the whole request
     // timeout — management bodies are small JSON, so 10s of silence means the client is gone.
     const armIdle = (): void => {
@@ -268,6 +276,7 @@ export function createApi(deps: ApiDeps) {
       return null
     } finally {
       if (idleTimer !== undefined) clearTimeout(idleTimer)
+      clearTimeout(totalTimer)
     }
     if (oversize || chunks.length === 0) return null
     try {

@@ -107,11 +107,20 @@ const GROUPS = {
     'test/proxy/instance-proxy.test.ts',
     'test/proxy/agent-pool.test.ts',
     'test/proxy/budget-contract.test.ts',
+    'test/proxy/http-limits.test.ts',
+    'test/proxy/inbound-budget.test.ts',
+    // P1-1 请求体阈值流式：声明 >8MiB 才走 req.pipe(counter).pipe(upstream)，
+    // 声明长度透传、pin 前零字节、单一 size 预算（首字节起）、finish 后才武装头窗、
+    // 超声明字节 413、客户端 abort 释放。阈值/开关/预算边界的负控也在本文件。
+    'test/proxy/streaming-body.test.ts',
     'test/proxy/response-encoding.test.ts',
     'test/proxy/ws-upgrade.test.ts',
     'test/proxy/liveness-timeout.test.ts',
     'test/proxy/real-node-spki.test.ts',
     'test/proxy/gateway-transport.test.ts',
+    // P2-1：POSIX ssh 隧道 UDS（真实 unix socket 上的 HTTP/WS 转发、socketPath 注册校验、
+    // keep-alive 池按 socketPath 隔离、探测载体经 UDS）。
+    'test/proxy/uds-forward.test.ts',
     'test/proxy/ws-frames.test.ts',
     'test/proxy/static-serving.test.ts',
     // Injection-budget pin: MAX_HTML_INJECTION_BYTES is the single source
@@ -122,6 +131,12 @@ const GROUPS = {
     // Last-Event-ID 经实例代理的透传、SSE 帧序与客户端断开的释放，
     // 行为级锁定——若代理吃掉该头，续传会静默降级为整量重取。
     'test/proxy/sse-resume.test.ts',
+    // P2-4 并发隔离：每 connectionId 的 HTTP/WS/pending 公平份额、local 保留
+    // 槽、独立的 long-RPC 池（单实例打满不 503 另一实例；长 RPC 不占普通槽）。
+    'test/proxy/concurrency-isolation.test.ts',
+    // P2-4 192 软上限：真实 TCP 连接计数到 192 后第 193 条收 raw 503 + close，
+    // 且关闭后槽位可释放（取代 Node maxConnections 的静默丢弃）。
+    'test/proxy/max-connections.test.ts',
   ],
   // page-channel: 页面级多路复用通道（design 26）——WS 服务端、三类上游适配、
   // 每订阅信用窗口、订阅/断线/关停清理，以及 index.ts 的接线（升级路由、

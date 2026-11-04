@@ -12,10 +12,13 @@ import { createLinkHealth } from './transport-link-health.ts'
 import { createLinkLoop } from './transport-link-loop.ts'
 import type { InstanceState } from './transport-instance-state.ts'
 export type { SaveInstancesProvenance } from './transport-registry.ts'
+import type { HostKeyGuard } from './host-key.ts'
+import { toHostKeyProjection } from './host-key.ts'
 import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 import { signalChild } from './transport-provider.ts'
+import { clearSshChild, recordSshChild } from './ssh-orphan.ts'
 import net from 'node:net'
 import { dirname } from 'node:path'
 
@@ -54,8 +57,38 @@ export const RING_BUFFER_LIMIT = 200
 export const RING_LOG_MESSAGE_MAX_CHARS = 4 * 1024
 const RING_LOG_TRUNCATION_SUFFIX = ' … [truncated]'
 
-/** How long the transport has to come up (local port accept / endpoint probe) before degraded. */
+/** How long the transport listener has to accept TCP (local port / direct endpoint)
+ *  before the attempt counts as unreachable. This window bounds REACHABILITY only:
+ *  once the port accepts, the identity/composite verify gets its own window. */
 export const READY_TIMEOUT_MS = 10_000
+
+/** Authentication / composite-verify window once the endpoint accepts TCP. The
+ *  connect-time verify budget is max(this, provider.verifyUpBudgetMs + cushion), so a
+ *  slow multi-exchange gateway login is never judged by the 10s reachability window. */
+export const AUTH_READY_TIMEOUT_MS = 20_000
+
+/** Slack over the provider-declared verify budget: the provider's own inner timeout
+ *  must classify the failure first; this outer dead-man deadline only releases a
+ *  verifier that never settles. */
+export const VERIFY_BUDGET_CUSHION_MS = 5_000
+
+/**
+ * Budget of ONE connect-time verify. The provider declares its composite worst case
+ * (gateway password flow: login 10s → probe 5s → 401 → re-login 10s → re-probe 5s =
+ * 30s, declared 35s); the cushion keeps the manager's outer deadline behind that
+ * declared flow, and the authentication window is the floor for single-exchange
+ * providers. The total attempt deadline is therefore
+ * READY_TIMEOUT_MS + this budget, never just READY_TIMEOUT_MS.
+ */
+export function connectVerifyBudgetMs(
+  authReadyTimeoutMs: number,
+  providerBudgetMs: number,
+  cushionMs: number = VERIFY_BUDGET_CUSHION_MS,
+): number {
+  // probeBudgetFor already guarantees a positive finite provider budget (it falls
+  // back to linkPolicy.probeTimeoutMs), so the arithmetic is monotonic here.
+  return Math.max(authReadyTimeoutMs, providerBudgetMs + cushionMs)
+}
 
 /** Poll interval while waiting for the transport to come up. */
 export const PROBE_INTERVAL_MS = 100
@@ -99,7 +132,14 @@ export const PROBE_ATTEMPT_TIMEOUT_MS = 400
 
 /** Tunable runtime behavior (tests pass small values). */
 export interface TransportManagerOptions {
+  /** TCP/port reachability window (default READY_TIMEOUT_MS). */
   readyTimeoutMs?: number
+  /** Authentication/composite-verify window after TCP accepts (default
+   *  AUTH_READY_TIMEOUT_MS); the connect verify budget is max(this, provider
+   *  verifyUpBudgetMs + verifyBudgetCushionMs). */
+  authReadyTimeoutMs?: number
+  /** Slack over the provider-declared verify budget (default VERIFY_BUDGET_CUSHION_MS). */
+  verifyBudgetCushionMs?: number
   probeIntervalMs?: number
   maxRetryAttempts?: number
   retryBaseMs?: number
@@ -140,7 +180,16 @@ export interface TransportManagerDeps {
    *  kind-keyed override is gone: a `kind`-keyed entry resolves to nothing. */
   providers?: Partial<Record<TransportMethod, TransportProvider>>
   spawnFn?: (command: string, args: readonly string[], options: SpawnOptions) => SpawnedProcess
-  portProbe?: (port: number, opts?: { timeoutMs?: number; host?: string }) => Promise<boolean>
+  /**
+   * SSH host-key guard (P0-3): the app-owned known_hosts. When present, ssh tunnels are gated
+   * BEFORE spawn (an unknown target never reaches ssh's own policy), a host-key stderr failure
+   * runs the self-proof probe, and the argv pins StrictHostKeyChecking=yes/UserKnownHostsFile.
+   * Absent = no gate (tests/direct-endpoint-only hosts).
+   */
+  hostKey?: HostKeyGuard
+  /** `socketPath` present = dial the UDS listener (port/host are then display
+   *  facts only); absent = TCP. */
+  portProbe?: (port: number, opts?: { timeoutMs?: number; host?: string; socketPath?: string }) => Promise<boolean>
   /** One-shot endpoint identity verification; defaults to the provider's
    *  verifyUp. Runs after the port probe reports the endpoint up and before the
    *  phase may become ready. Injectable so tests can fake it. */
@@ -149,6 +198,13 @@ export interface TransportManagerDeps {
   /** Injectable RNG for the jittered reconnect backoff (tests pass a fixed value). */
   random?: () => number
   instancesFile: string
+  /**
+   * Crash-orphan ledger directory (ssh-orphan.ts). When set, every spawned ssh
+   * child gets `<dir>/ssh-children/<pid>.json` and the record is removed on a
+   * clean exit/error; a crashed app leaves it for the NEXT startup's sweep. Absent
+   * = no ledger (tests and direct-endpoint-only hosts).
+   */
+  sshOrphanStateDir?: string
   logger?: { log?(message: string): void; warn?(message: string): void; error?(message: string): void }
   options?: TransportManagerOptions
 }
@@ -286,6 +342,10 @@ export interface TransportManager {
   setSourceRetiredListener?(listener: ((sourceId: string) => void) | null): void
   /** The ready transport URL — INTERNAL ONLY. */
   readyUrl(id: string): string | null
+  /** The ready POSIX UDS tunnel socket — INTERNAL ONLY (ssh on non-win32).
+   *  null on TCP/direct transports and whenever the instance is not ready. The
+   *  control-plane registration consumes it together with readyUrl(). */
+  readySocketPath(id: string): string | null
   logs(id: string): TransportLogEntry[]
   clearLogs(id: string): boolean
   /** Append one line to an instance's ring buffer from OUTSIDE the runtime
@@ -380,10 +440,11 @@ function writeFileAtomic(filePath: string, text: string): void {
   atomicWritePrivateFileNoFollow(filePath, text, { mode: 0o600 })
 }
 
-/** Default readiness probe: one bounded TCP connect to host:port (loopback default). */
-function defaultPortProbe(port: number, { timeoutMs = PROBE_ATTEMPT_TIMEOUT_MS, host = '127.0.0.1' }: { timeoutMs?: number; host?: string } = {}): Promise<boolean> {
+/** Default readiness probe: one bounded TCP connect to host:port (loopback
+ *  default), or — POSIX ssh tunnels — a connect to the UDS listener. */
+function defaultPortProbe(port: number, { timeoutMs = PROBE_ATTEMPT_TIMEOUT_MS, host = '127.0.0.1', socketPath }: { timeoutMs?: number; host?: string; socketPath?: string } = {}): Promise<boolean> {
   return new Promise(resolve => {
-    const socket = net.connect({ port, host })
+    const socket = net.connect(socketPath === undefined ? { port, host } : { path: socketPath })
     socket.unref()
     const done = (ok: boolean) => {
       socket.destroy()
@@ -397,9 +458,11 @@ function defaultPortProbe(port: number, { timeoutMs = PROBE_ATTEMPT_TIMEOUT_MS, 
 
 /** Create the transport runtime for one provider: the provider owns source-
  *  specific validation/argv/classification/exec, everything else is generic. */
-export function createTransportManager({ provider, providers, spawnFn, portProbe, verifyProbe, allocatePort, random, instancesFile, logger, options = {} }: TransportManagerDeps): TransportManager {
+export function createTransportManager({ provider, providers, spawnFn, portProbe, verifyProbe, allocatePort, random, instancesFile, logger, options = {}, hostKey, sshOrphanStateDir }: TransportManagerDeps): TransportManager {
   const linkPolicy: LinkPolicy = { ...LINK_POLICY, ...(options.linkPolicy ?? {}) }
   const readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS
+  const authReadyTimeoutMs = options.authReadyTimeoutMs ?? AUTH_READY_TIMEOUT_MS
+  const verifyBudgetCushionMs = options.verifyBudgetCushionMs ?? VERIFY_BUDGET_CUSHION_MS
   const probeIntervalMs = options.probeIntervalMs ?? PROBE_INTERVAL_MS
   const maxRetryAttempts = options.maxRetryAttempts ?? MAX_RETRY_ATTEMPTS
   const retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS
@@ -419,6 +482,36 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const doSpawn: (command: string, args: readonly string[], opts: SpawnOptions) => SpawnedProcess =
     spawnFn ?? ((command: string, args: readonly string[], opts: SpawnOptions) => spawn(command, args, opts))
   const doProbe = portProbe ?? defaultPortProbe
+  /** Crash-orphan ledger (ssh-orphan.ts): records are per CHILD pid and are removed
+   *  on every exit/error path this runtime observes. A crash skips the removal and
+   *  the next startup's sweep reclaims the leftover ssh process. Failures here are
+   *  diagnostics only — the transport itself must never fail because the ledger did. */
+  const orphanStateDir = sshOrphanStateDir
+  function childPidOf(child: SpawnedProcess): number | null {
+    const pid = child.pid
+    return typeof pid === 'number' && Number.isSafeInteger(pid) && pid > 0 ? pid : null
+  }
+  function recordOrphan(child: SpawnedProcess, spec: TransportInstanceSpec): void {
+    if (orphanStateDir === undefined) return
+    const pid = childPidOf(child)
+    if (pid === null) return
+    const target = `${spec.user === null ? '' : `${spec.user}@`}${spec.host}:${String(spec.remotePort)}`
+    try {
+      recordSshChild(orphanStateDir, pid, { target, startedAt: Date.now() })
+    } catch (error) {
+      warn(`transport-manager: ssh orphan record write failed: ${describeTransportError(error)}`)
+    }
+  }
+  function clearOrphan(child: SpawnedProcess): void {
+    if (orphanStateDir === undefined) return
+    const pid = childPidOf(child)
+    if (pid === null) return
+    try {
+      clearSshChild(orphanStateDir, pid)
+    } catch (error) {
+      warn(`transport-manager: ssh orphan record clear failed: ${describeTransportError(error)}`)
+    }
+  }
   /** Resolve the provider for a spec (design 17 §2.2): the TRANSPORT-keyed
    * override wins (`providers: { ssh, http }` — one provider per mechanism,
    * serving both target kinds), else the default provider. The pre-v2
@@ -477,9 +570,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       state = {
         phase: 'idle',
         localPort: null,
+        socketPath: null,
         child: null,
         childExited: false,
         authFailed: false,
+        hostKeyFailed: false,
+        hostKeyProbing: false,
+        hostKey: null,
         retryAttempt: 0,
         requiresUserAction: false,
         userActionKind: null,
@@ -630,7 +727,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * config/auth failures set requiresUserAction; provider exceptions remain an
    * internal failure, never a false instruction to repair connection settings.
    * `userActionKind` discriminates the class for the UI: 'auth' = transport/
-   * credential-level (SSH auth, host key, spawn), 'endpoint' = instance-level
+   * credential-level (SSH auth, spawn), 'hostkey' = the SSH host key needs a
+   * fingerprint review/trust (never a password hint), 'endpoint' = instance-level
    * terminal probe failure — the tunnel itself is fine, so the UI must never
    * suggest fixing SSH credentials. Defaults to 'auth'.
    */
@@ -639,7 +737,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state: InstanceState,
     message: string,
     requiresUserAction = true,
-    userActionKind: 'auth' | 'endpoint' | null = 'auth',
+    userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null = 'auth',
   ) {
     if (!isCurrentState(id, state)) return
     if (state.phase === 'error') return
@@ -654,11 +752,59 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
     state.child = null
     state.localPort = null
+    state.socketPath = null
     state.retryAttempt = 0
     state.requiresUserAction = requiresUserAction
     state.userActionKind = requiresUserAction ? userActionKind : null
     transition(id, 'error', message, state)
     appendLogInternal(state, 'error', message)
+  }
+
+  /** A missing/unexecutable ssh binary is an environment problem, not a credential
+   *  one: the repair surface is PATH/prefix/permissions, and the card must say so. */
+  function spawnFailureKind(error: unknown): 'environment' | 'auth' {
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM' || code === 'ENOTDIR'
+      ? 'environment'
+      : 'auth'
+  }
+
+  /** P0-3: one self-proof probe per attempt (the exit handler and the ready loop may both observe
+   *  the host-key flag). The probe is bounded and never throws; an absent guard is a no-op. */
+  async function probeHostKeyForAttempt(id: string, state: InstanceState, spec: TransportInstanceSpec, guard: HostKeyGuard) {
+    if (state.hostKeyProbing) return
+    // Fence the probe to the attempt that started it: a 20s self-proof can
+    // outlive disconnect()/a replacement child, and its late projection must
+    // never overwrite the next attempt (review R1-B M2).
+    const epoch = state.tunnelEpoch
+    state.hostKeyProbing = true
+    try {
+      const projection = toHostKeyProjection(await guard.probe(spec))
+      if (!isCurrentState(id, state) || state.tunnelEpoch !== epoch) return
+      state.hostKey = projection
+      // The terminal transition may already have been emitted by the other
+      // observer (hostKeyProbing made it return early). Publish the late
+      // projection so the trust panel still shows the changed fingerprints.
+      emitStatus(id, state)
+    } catch (error) {
+      warn(`transport-manager: host-key probe threw: ${describeTransportError(error)}`)
+    } finally {
+      if (state.tunnelEpoch === epoch) state.hostKeyProbing = false
+    }
+  }
+
+  /** A host-key failure is terminal with its OWN repair surface: probe the presented key first so
+   *  the projection carries the fingerprint, then fail with userActionKind 'hostkey' (never 'auth'). */
+  async function failHostKey(id: string, state: InstanceState) {
+    const spec = instances.get(id)
+    if (!isCurrentState(id, state) || spec === undefined) return
+    const epoch = state.tunnelEpoch
+    const phase = state.phase
+    if (hostKey !== undefined) await probeHostKeyForAttempt(id, state, spec, hostKey)
+    // A late probe from a revoked attempt must not fail the idle/new attempt.
+    if (!isCurrentState(id, state) || state.tunnelEpoch !== epoch || state.phase !== phase) return
+    appendLogInternal(state, 'error', 'host key verification failed (requires user action)')
+    failTerminal(id, state, 'host key verification failed — review the fingerprint and trust it', true, 'hostkey')
   }
 
   /**
@@ -684,6 +830,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       }
       state.child = null
       state.localPort = null
+      state.socketPath = null
       transition(id, 'error', `transport failed: max retry attempts exceeded (${reason}); retrying periodically`, state)
       appendLogInternal(state, 'error', `max retry attempts exceeded (${reason}); slow re-probe in ${slowRetryMs}ms`)
       // The phase stays error (honest red state — the probe is background
@@ -704,6 +851,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
     state.child = null
     state.localPort = null
+    state.socketPath = null
     state.retryAttempt += 1
     // A throwing injected RNG must never crash main from the exit handler — fall
     // back to the raw backoff.
@@ -731,6 +879,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const {
     cancelReadyVerify, clearDownGrace, probeBudgetFor,
   } = linkHealth
+
+  /** Budget of one connect-time verify for this provider/spec: provider-declared
+   *  composite flow + cushion, floored by the authentication window. Deliberately
+   *  independent from readyTimeoutMs (the TCP/reachability window). */
+  const connectVerifyBudgetMsFor = (spec: TransportInstanceSpec, providerForSpec: TransportProvider): number =>
+    connectVerifyBudgetMs(authReadyTimeoutMs, probeBudgetFor(spec, providerForSpec), verifyBudgetCushionMs)
 
   const linkLoop = createLinkLoop({
     states,
@@ -775,12 +929,17 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       state.portBindFailed = false
       state.portBindRetries += 1
       state.localPort = null
+      state.socketPath = null
       state.childExited = false
       appendLogInternal(state, 'info', 'local forward bind lost; re-allocating port without a retry attempt')
       void startTransport(id).catch(error => warn(`transport-manager: bind re-allocation rejected: ${describeTransportError(error)}`))
       return
     }
     if (state.phase === 'idle' || state.phase === 'error') return
+    if (state.hostKeyFailed) {
+      void failHostKey(id, state)
+      return
+    }
     if (state.authFailed || state.requiresUserAction) {
       failTerminal(id, state, 'authentication failed — requires user action')
       return
@@ -817,12 +976,21 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.childExited = false
     state.portBindFailed = false
     state.authFailed = false
+    state.hostKeyFailed = false
+    state.hostKeyProbing = false
+    state.hostKey = null
     state.requiresUserAction = false
     state.userActionKind = null
     // This invocation IS the transport attempt: bump the epoch so an in-flight
     // invocation of a previous attempt aborts at its guard instead of stealing it.
     state.tunnelEpoch += 1
     const epoch = state.tunnelEpoch
+    // P2-3 auth evidence is PER ATTEMPT and lives in this invocation's closure: a
+    // single auth-looking stderr line is a hint, never a verdict; two CONSECUTIVE
+    // lines (or an exit-255 confirmation of a line already seen) are the verdict,
+    // and the ready edge clears whatever the attempt accumulated.
+    let authLineStreak = 0
+    let sawAuthLine = false
     // Every fresh attempt starts with a clean link-health streak. The ready edge
     // bumps linkEpoch; a failed attempt never inherits the previous streak.
     state.link = { ...INITIAL_LINK_HEALTH }
@@ -830,9 +998,42 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // Entered here so the post-await guards and readiness loop have a stable anchor.
     transition(id, 'connecting', 'starting transport', state)
 
+    // P0-3 pre-spawn host-key gate: an ssh target with no key in the APP-OWNED known_hosts is
+    // never handed to ssh (the argv pins StrictHostKeyChecking=yes; auto-accept is unreachable).
+    // The self-proof probe projects the fingerprint and the user must trust it before the next
+    // attempt — this is the only door from 'unknown' to 'known'.
+    if (hostKey !== undefined && spec.transport === 'ssh' && providerForSpec.buildStartArgs !== undefined
+      && !hostKey.isKnown(spec)) {
+      await probeHostKeyForAttempt(id, state, spec, hostKey)
+      if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
+      appendLogInternal(state, 'error', 'host key is not trusted yet — review the fingerprint and trust it')
+      failTerminal(id, state, 'host key verification failed — review the fingerprint and trust it', true, 'hostkey')
+      return
+    }
+
+    // POSIX ssh tunnel: resolve the UDS listener BEFORE any port allocation. A
+    // non-null path means no TCP listener exists at all; its path-budget check
+    // runs here, so a too-deep tmpdir fails loudly instead of binding a
+    // truncated path.
+    let socketPath: string | null = null
+    if (providerForSpec.buildStartArgs !== undefined && providerForSpec.transportSocketPath !== undefined) {
+      try {
+        socketPath = providerForSpec.transportSocketPath(spec)
+      } catch (socketError) {
+        if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
+        const detail = describeTransportError(socketError)
+        appendLogInternal(state, 'error', `transport socket unavailable: ${detail}`)
+        failTerminal(id, state, `transport socket unavailable: ${detail}`, false)
+        return
+      }
+      if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
+    }
+    state.socketPath = socketPath
+
     let localPort: number | null = null
-    // buildStartArgs present = tunnel (local port); absent = DIRECT ENDPOINT mode.
-    if (providerForSpec.buildStartArgs !== undefined) {
+    // buildStartArgs present = tunnel (TCP port or UDS); absent = DIRECT ENDPOINT
+    // mode. A UDS tunnel has no local TCP port to allocate.
+    if (providerForSpec.buildStartArgs !== undefined && socketPath === null) {
       try {
         localPort = await doAllocate()
       } catch (allocateError) {
@@ -861,7 +1062,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     let args: readonly string[] | null = null
     if (providerForSpec.buildStartArgs !== undefined) {
       try {
-        args = providerForSpec.buildStartArgs(spec, localPort as number)
+        args = providerForSpec.buildStartArgs(spec, localPort, hostKey?.knownHostsArgs(), state.socketPath)
       } catch (buildError) {
         // A throwing provider must never leave the machine stuck in connecting.
         const detail = describeTransportError(buildError)
@@ -872,13 +1073,18 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     }
     const directEndpoint = args === null
     // A contradictory provider (buildStartArgs returning null) must not leak the
-    // never-bound port into projections/readyUrl — direct mode owns neither.
-    if (directEndpoint) state.localPort = null
+    // never-bound port/socket into projections/readyUrl — direct mode owns neither.
+    if (directEndpoint) {
+      state.localPort = null
+      state.socketPath = null
+    }
     const probeTarget = (() => {
       try {
         return directEndpoint
           ? (providerForSpec.probeTarget?.(spec) ?? { host: spec.host, port: spec.remotePort })
-          : { host: '127.0.0.1', port: localPort as number }
+          : state.socketPath !== null
+            ? { host: '127.0.0.1', port: spec.remotePort, socketPath: state.socketPath }
+            : { host: '127.0.0.1', port: localPort as number }
       } catch (probeError) {
         // A throwing probeTarget must leave a loud error, never stuck connecting.
         const detail = describeTransportError(probeError)
@@ -927,13 +1133,18 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       } catch (spawnError) {
         releaseTransportLease()
         state.requiresUserAction = true
-        failTerminal(id, state, `failed to spawn transport: ${describeTransportError(spawnError)}`)
+        failTerminal(id, state, `failed to spawn transport: ${describeTransportError(spawnError)}`, true, spawnFailureKind(spawnError))
         return
       }
       // Bind provider-owned ephemeral resources to the ACTUAL child lifetime before
       // stale-epoch handling can signal it (Node may emit both error and exit).
       child.on('exit', releaseTransportLease)
       child.on('error', releaseTransportLease)
+      // Ledger the child BEFORE the stale-epoch branch can signal it: a replaced
+      // child that is already in flight must still be reclaimable after a crash.
+      recordOrphan(child, spec)
+      child.on('exit', () => clearOrphan(child))
+      child.on('error', () => clearOrphan(child))
       if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) {
         // A stale epoch (newer attempt took over mid-spawn): the fresh child must
         // still get the SIGKILL escalation or it becomes an unreaped orphan.
@@ -962,13 +1173,18 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         if (redacted !== '') appendLogInternal(state, 'info', redacted)
       }, outputOverflow)
       const processStderr = createBoundedLineProcessor(line => {
+        // A replaced child's late stderr must never latch a verdict onto the new
+        // attempt (R1-B M2 / R2-A MAJOR-2).
+        if (!isCurrentState(id, state) || state.tunnelEpoch !== epoch || state.phase === 'idle') return
         if (PORT_BIND_FAILURE_PATTERN.test(line)) state.portBindFailed = true
         let logLine: string
         let terminalAuth: boolean
+        let terminalHostKey: boolean
         try {
           const classified = providerForSpec.classifyStderr(line)
           logLine = classified.log
           terminalAuth = classified.terminalAuth
+          terminalHostKey = classified.hostKey === true
         } catch {
           // The classifier is also the redaction boundary: never echo its exception
           // or the raw input into logs.
@@ -978,9 +1194,27 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         }
         if (logLine === '') return
         appendLogInternal(state, 'info', logLine)
-        if (terminalAuth) {
-          state.authFailed = true
-          appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
+        if (terminalHostKey) {
+          // Host-key failures have their own terminal class (P0-3): never booked as auth.
+          state.hostKeyFailed = true
+          appendLogInternal(state, 'error', 'host key verification failed (requires user action)')
+        } else if (terminalAuth) {
+          // Chatty banners/ProxyCommand output can mention credentials without proving a
+          // credential verdict: ONE line is a hint, only the second CONSECUTIVE line is
+          // terminal. A ready transport has already proven its identity — late chatter can
+          // never latch a credential verdict onto a healthy incarnation.
+          if (state.phase === 'ready') return
+          authLineStreak += 1
+          sawAuthLine = true
+          if (authLineStreak >= 2) {
+            state.authFailed = true
+            appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
+          } else {
+            appendLogInternal(state, 'warn', 'authentication failure hint (1 of 2 consecutive lines) — waiting for confirmation')
+          }
+        } else {
+          // "Consecutive" is the point: an intervening diagnostic line breaks the streak.
+          authLineStreak = 0
         }
       }, outputOverflow)
       child.stdout?.on('data', chunk => {
@@ -993,6 +1227,14 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         if (state.child === child) {
           processStdout('\n')
           processStderr('\n')
+          // ssh exits 255 for every failure of its own (auth, DNS, refused, timeout).
+          // Before ready, an auth line already seen on stderr CONFIRMS the credential
+          // class even when no second consecutive line arrived; a BARE 255 stays on the
+          // bounded retry path (a transient network failure must keep self-healing).
+          if (code === 255 && sawAuthLine && !state.authFailed && state.phase !== 'ready') {
+            state.authFailed = true
+            appendLogInternal(state, 'error', 'authentication failure detected (requires user action)')
+          }
         }
         onChildExit(id, state, child, code, exitSignal)
       })
@@ -1007,21 +1249,29 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         const detail = describeTransportError(error)
         appendLogInternal(state, 'error', `transport spawn error: ${detail}`)
         state.requiresUserAction = true
-        failTerminal(id, state, `failed to spawn transport: ${detail}`)
+        failTerminal(id, state, `failed to spawn transport: ${detail}`, true, spawnFailureKind(error))
         clearTunnelKillEscalation(child)
       })
     }
 
     const controller = new AbortController()
     state.readyLoop = controller
+    // REACHABILITY deadline only (the port/endpoint must accept TCP). The identity
+    // verification below is a separate phase with its own budget: a slow but
+    // successful composite verify must never be judged by this 10s window, so the
+    // total attempt deadline is this window + the verify budget by construction.
     const deadline = Date.now() + readyTimeoutMs
     void (async () => {
       while (!controller.signal.aborted) {
         if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
+        if (state.hostKeyFailed) return void failHostKey(id, state)
         if (state.authFailed) return failTerminal(id, state, 'authentication failed — requires user action')
         if (state.childExited) return
         // A rejecting probe is simply "not up yet" — never a hang or a crash.
-        const up = await doProbe(probeTarget.port, { host: probeTarget.host }).catch(() => false)
+        const up = await doProbe(probeTarget.port, {
+          host: probeTarget.host,
+          ...(probeTarget.socketPath === undefined ? {} : { socketPath: probeTarget.socketPath }),
+        }).catch(() => false)
         if (controller.signal.aborted || !isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
         if (up) {
           // TCP-up is not an honest "the destination is dsh" signal — ANY service
@@ -1031,13 +1281,15 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
             let verification: TransportVerifyResult
             const connectProbeAbort = new AbortController()
             state.probeAbort = connectProbeAbort
+            // The verify phase owns its own window: max(AUTH_READY_TIMEOUT_MS,
+            // provider budget + cushion). This is what lets a slow composite gateway
+            // login (up to ~30s of real exchanges) settle instead of being reaped by
+            // the TCP window; the provider's own inner timeout fires first.
+            const verifyBudgetMs = connectVerifyBudgetMsFor(spec, providerForSpec)
             try {
-              // Same provider-declared budget as the ready-state probe: a verifier
-              // that violates its contract must not freeze the connect loop, and a
-              // composite gateway verify must be allowed its whole 30s.
               verification = await withProbeDeadline(
                 doVerify(spec, probeTarget, connectProbeAbort.signal),
-                probeBudgetFor(spec, providerForSpec),
+                verifyBudgetMs,
                 () => { connectProbeAbort.abort() },
               )
             } catch (verifyError) {
@@ -1047,7 +1299,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
             }
             if (state.probeAbort === connectProbeAbort) state.probeAbort = null
             if (controller.signal.aborted || !isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
-            // An auth failure that landed during verification must stay terminal.
+            // A host-key/auth failure that landed during verification must stay terminal.
+            if (state.hostKeyFailed) return void failHostKey(id, state)
             if (state.authFailed) return failTerminal(id, state, 'authentication failed — requires user action')
             if (!verification.ok) {
               const reason = verification.detail ?? 'the endpoint is not a dsh instance'
@@ -1063,18 +1316,25 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
             }
           }
           if (!state.childExited && (directEndpoint || state.child !== null)) {
+            // The ready edge retires this attempt's auth evidence: a stray banner line
+            // that arrived while connecting can never latch a credential verdict onto a
+            // transport that just proved its identity.
+            state.authFailed = false
+            authLineStreak = 0
+            sawAuthLine = false
             state.retryAttempt = 0
             state.requiresUserAction = false
             // A fresh ready edge starts the watch window: the first heartbeats run
             // at the tight cadence while the new relay path is still unproven.
             state.lastLinkEventAt = Date.now()
             transition(id, 'ready', 'transport is up', state)
-            appendLogInternal(state, 'info', `transport ready on ${probeTarget.host}:${probeTarget.port}`)
+            appendLogInternal(state, 'info', `transport ready on ${probeTarget.host}:${probeTarget.port}${probeTarget.socketPath === undefined ? '' : ' via unix socket'}`)
           }
           return
         }
         if (Date.now() >= deadline) {
-          // An auth failure that landed during the final probe must stay terminal.
+          // A host-key/auth failure that landed during the final probe must stay terminal.
+          if (state.hostKeyFailed) return void failHostKey(id, state)
           if (state.authFailed) return failTerminal(id, state, 'authentication failed — requires user action')
           if (state.childExited) return
           appendLogInternal(state, 'warn', `transport did not come up within ${readyTimeoutMs}ms`)
@@ -1140,6 +1400,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         execTimeoutMs,
         runTimeoutMs: runExecTimeoutMs,
         disconnectGraceMs,
+        ...(hostKey === undefined ? {} : { knownHosts: hostKey.knownHostsArgs() }),
         log: (level, message) => {
           // Stale-exec guard: never write into a reused/kind-switched instance.
           if (!execIsCurrent()) return
@@ -1259,9 +1520,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     const spec = instances.get(id)
     if (spec !== undefined) resolveProvider(spec).disposeAuth?.(spec)
     state.localPort = null
+    state.socketPath = null
     state.retryAttempt = 0
     state.requiresUserAction = false
     state.userActionKind = null
+    state.hostKeyFailed = false
+    state.hostKeyProbing = false
+    state.hostKey = null
     transition(id, 'idle', 'disconnected', state)
     appendLogInternal(state, 'info', 'disconnected')
   }
@@ -1279,11 +1544,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       insecureHttp: spec.insecureHttp,
       phase: state.phase,
       localPort: state.localPort,
+      transportSocket: state.socketPath === null ? 'tcp' : 'unix',
       sshPort: spec.sshPort,
       remotePort: spec.remotePort,
       retryAttempt: state.retryAttempt,
       requiresUserAction: state.requiresUserAction,
       userActionKind: state.userActionKind,
+      ...(state.hostKey === null ? {} : { hostKey: state.hostKey }),
       serviceActive: state.serviceActive,
       remoteDshHome: spec.remoteDshHome,
       logSummary: state.logSummary,
@@ -1296,14 +1563,27 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
 
   /** The ready transport URL — INTERNAL ONLY, never exposed through status() or the
    *  IPC surface (the renderer builds webview URLs from localPort alone). null unless
-   *  the local tunnel is ready. */
+   *  the local tunnel is ready. A UDS tunnel's URL carries the REMOTE loopback
+   *  authority (Host/authority semantics identical to its TCP form) while the actual
+   *  dial target is readySocketPath(). */
   function readyUrl(id: string): string | null {
     const state = states.get(id)
     if (state?.phase !== 'ready') return null
+    if (state.socketPath !== null) {
+      const spec = instances.get(id)
+      return spec === undefined ? null : `http://127.0.0.1:${String(spec.remotePort)}`
+    }
     if (state.localPort !== null) return `http://127.0.0.1:${state.localPort}`
     const spec = instances.get(id)
     if (spec === undefined) return null
     return resolveProvider(spec).endpointUrl?.(spec) ?? null
+  }
+
+  /** The ready UDS socket for one instance (null on TCP/direct/not-ready). */
+  function readySocketPath(id: string): string | null {
+    const state = states.get(id)
+    if (state?.phase !== 'ready' || state.socketPath === null) return null
+    return state.socketPath
   }
 
   /** Ring-buffer log lines for one instance (copies; newest last). */
@@ -1396,6 +1676,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     notifyLinkFailure,
     setSourceRetiredListener: (listener) => { sourceRetiredListener = listener },
     readyUrl,
+    readySocketPath,
     logs,
     clearLogs,
     appendLog,

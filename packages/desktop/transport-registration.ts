@@ -34,6 +34,10 @@ export interface RegistrationTarget {
   readonly headers?: Record<string, string> | undefined
   readonly spkiPin?: string | undefined
   readonly authority?: string | undefined
+  /** POSIX ssh tunnel UDS listener; undefined = TCP. Part of the identity: a
+   *  shape switch (TCP ↔ UDS) must re-register instead of keeping a forward
+   *  table that dials the wrong listener. */
+  readonly socketPath?: string | undefined
 }
 
 export function registrationKey(target: RegistrationTarget): string {
@@ -44,6 +48,7 @@ export function registrationKey(target: RegistrationTarget): string {
     authHeadersFingerprint(target.headers),
     target.spkiPin ?? '',
     target.authority ?? '',
+    target.socketPath ?? '',
   ])
 }
 

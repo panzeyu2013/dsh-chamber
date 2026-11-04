@@ -129,6 +129,11 @@ export const TEST_ONLY_EXPORT_ALLOWLIST = [
   // PRODUCTION importer (the proxy's header window), so it is not test-only; the
   // worst-case helper is consumed by the contract test (the client must outlive it).
   { package: 'dsh-chamber-wire', name: 'proxyWorstCaseMs', reason: 'proxy worst case asserted by the budget-contract test (the client must outlive it)' },
+  // P0-1: the inbound+flush total is the number the client budget must outlive;
+  // only the contract suite names it (production composes it through
+  // mutationCallBudgetMs).
+  { package: 'dsh-chamber-wire', name: 'proxyTotalWorstCaseMs', reason: 'inbound+flush total asserted by the budget-contract test (the client must outlive it)' },
+
 ]
 
 /**

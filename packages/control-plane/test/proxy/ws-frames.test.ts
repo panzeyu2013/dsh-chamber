@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { encodePingFrame, PongScanner, WS_CONTROL_PAYLOAD_MAX } from '../../src/ws-frames.ts'
+import { ControlFrameScanner, encodePingFrame, PongScanner, WS_CONTROL_PAYLOAD_MAX } from '../../src/ws-frames.ts'
 import { pongFrame } from '../support/utils.ts'
 
 /** Build a complete text data frame (opcode 0x1) for scanner fixtures. */
@@ -136,4 +136,67 @@ test('ws-frames: scanner survives a zero-length extended-form frame (no desync)'
   const empty = Buffer.from([0x80 | 0x1, 126, 0x00, 0x00])
   assert.equal(scanner.push(empty), false)
   assert.equal(scanner.push(pongFrame(Buffer.from('z'), false)), true)
+})
+
+// ── ControlFrameScanner: close codes ──────────────────────────────────────
+
+/** Build a close frame (opcode 0x8); masked for browser→proxy fixtures. */
+function closeFrame(code: number, reason = '', masked = false): Buffer {
+  const payload = Buffer.allocUnsafe(2 + Buffer.byteLength(reason))
+  payload.writeUInt16BE(code, 0)
+  payload.write(reason, 2)
+  if (!masked) {
+    const header = Buffer.from([0x80 | 0x8, payload.length])
+    return Buffer.concat([header, payload])
+  }
+  const key = Buffer.from([1, 2, 3, 4])
+  const maskedPayload = Buffer.allocUnsafe(payload.length)
+  for (let i = 0; i < payload.length; i++) maskedPayload[i] = payload[i] ^ key[i % 4]
+  const header = Buffer.from([0x80 | 0x8, 0x80 | payload.length, ...key])
+  return Buffer.concat([header, maskedPayload])
+}
+
+test('ws-frames: control scanner reports an unmasked close code', () => {
+  const scanner = new ControlFrameScanner()
+  const hit = scanner.push(closeFrame(1000, 'bye', false))
+  assert.equal(hit.close, 1000)
+})
+
+test('ws-frames: control scanner unmasks a browser close code', () => {
+  const scanner = new ControlFrameScanner()
+  const hit = scanner.push(closeFrame(4401, 'auth', true))
+  assert.equal(hit.close, 4401)
+})
+
+test('ws-frames: control scanner assembles a close frame split across chunks', () => {
+  const scanner = new ControlFrameScanner()
+  const frame = closeFrame(4002, 'malformed', true)
+  let code: number | undefined
+  for (const byte of frame) {
+    const hit = scanner.push(Buffer.from([byte]))
+    if (hit.close !== undefined) code = hit.close
+  }
+  assert.equal(code, 4002)
+})
+
+test('ws-frames: control scanner skips interleaved data frames before the close', () => {
+  const scanner = new ControlFrameScanner()
+  const hit = scanner.push(Buffer.concat([dataFrame(Buffer.from('tail'), false), closeFrame(1012, '', false)]))
+  assert.equal(hit.close, 1012)
+})
+
+test('ws-frames: control scanner handles a zero-length close as 1005', () => {
+  const scanner = new ControlFrameScanner()
+  // RFC 6455 §5.5.1: a close frame with no body has no status code (1005).
+  const hit = scanner.push(Buffer.from([0x88, 0x00]))
+  assert.equal(hit.close, 1005)
+  // The scanner stays in sync for the next frame.
+  assert.equal(scanner.push(closeFrame(1000, '', false)).close, 1000)
+})
+
+test('ws-frames: control scanner still detects pongs alongside closes', () => {
+  const scanner = new ControlFrameScanner()
+  const hit = scanner.push(Buffer.concat([pongFrame(Buffer.from('p'), false), closeFrame(1001, '', false)]))
+  assert.equal(hit.pong, true)
+  assert.equal(hit.close, 1001)
 })

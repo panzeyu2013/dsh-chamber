@@ -6,7 +6,11 @@
  * Credentials are SERVER STATE, not deployment config: each file is a
  * schemaVersion-2 JSON envelope
  *    `{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>,
- *    verifier|hash:'scrypt$salt$hash'}`.
+ *    verifier|hash}`.
+ * The password verifier is always `scrypt$salt$hash`; the token verifier is the
+ * union `scrypt$salt$hash | hmac$<64 hex>` — legacy scrypt token records stay
+ * readable (auth.ts upgrades them on the first successful verification) while
+ * the O(1) HMAC shape is keyed by the state-local 0600 `auth/token-key`.
  * `source:'config'` records are re-asserted by seeding on every startup;
  * `source:'runtime'` records are authoritative and never overwritten (legacy v1
  * files read as config-sourced and migrate on write). The state ROOT is the caller's
@@ -14,7 +18,7 @@
 
 import { lstatSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { randomBytes, scryptSync } from 'node:crypto'
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import {
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
@@ -83,9 +87,13 @@ type CredentialParse =
 
 function parseCredential(text: string | null, field: 'verifier' | 'hash', mtimeMs: number): CredentialParse {
   if (text === null) return { kind: 'absent' }
+  // The field selects the schema: a password file may only hold the scrypt
+  // shape, a token file the scrypt|hmac union. An unknown shape never reads as
+  // a credential, so a garbage verifier can never silently disable auth.
+  const pattern = field === 'verifier' ? PASSWORD_VERIFIER_RE : TOKEN_VERIFIER_RE
   if (!text.startsWith('{')) {
     if (field === 'verifier') {
-      return /^scrypt\$/.test(text)
+      return pattern.test(text)
         ? { kind: 'record', record: { verifier: text, source: 'config', updatedAt: mtimeMs } }
         : { kind: 'unrecognized' }
     }
@@ -99,7 +107,7 @@ function parseCredential(text: string | null, field: 'verifier' | 'hash', mtimeM
     // Legacy v1 tokens.json `{"hash": …}` → config-sourced, mtime as write time.
     if (field === 'hash') {
       const hash = doc.hash
-      if (typeof hash === 'string' && hash !== '') {
+      if (typeof hash === 'string' && pattern.test(hash)) {
         return { kind: 'record', record: { verifier: hash, source: 'config', updatedAt: mtimeMs } }
       }
       return { kind: 'legacy-unreadable' }
@@ -107,7 +115,7 @@ function parseCredential(text: string | null, field: 'verifier' | 'hash', mtimeM
     return { kind: 'unrecognized' }
   }
   const verifier = field === 'verifier' ? doc.verifier : doc.hash
-  if (typeof verifier !== 'string' || !CREDENTIAL_VERIFIER_RE.test(verifier)
+  if (typeof verifier !== 'string' || !pattern.test(verifier)
     || (doc.source !== 'config' && doc.source !== 'runtime')
     || typeof doc.updatedAt !== 'number' || !Number.isFinite(doc.updatedAt)) {
     return { kind: 'corrupt-v2' }
@@ -158,15 +166,26 @@ function removeSecret(file: string): void {
 }
 
 export interface GatewayStore {
-  /** tokens.json (0600, hash only): the current token verifier hash, or null.
-   * Re-read from disk on every call so runtime changes take effect immediately. */
+  /** tokens.json (0600): the current token verifier (`hmac$…`, or the legacy
+   * `scrypt$…` shape), or null. Re-read from disk on every call so runtime
+   * changes take effect immediately. */
   getTokenHash(): string | null
   /** tokens.json full record for seeding decisions; null when no token is configured. */
   getTokenCredential(): CredentialRecord | null
-  /** Persist the token hash as a v2 document (source defaults to `'config'`;
-   * runtime changes pass `'runtime'`), or delete the file when null. Never
+  /** Persist the token verifier as a v2 document (source defaults to `'config'`;
+   * runtime changes pass `'runtime'`), or delete the file when null. The shape is
+   * validated BEFORE writing and the file is read back afterwards, so a caller
+   * can never publish a verifier this module would then refuse to read. Never
    * rotates jwt-secret. */
   setTokenHash(hash: string | null, source?: CredentialSource): void
+  /** <stateDir>/auth/token-key as 32 bytes, or null when absent/corrupt.
+   * READ-ONLY: verification never creates or repairs the key (fail-closed). */
+  getTokenKey(): Buffer | null
+  /** Read-or-create the token key (32 CSPRNG bytes, 0600 atomic write, read
+   * back before first use). The writer path — missing/corrupt keys are
+   * regenerated here, which invalidates every previously stored hmac verifier
+   * (the operator must reset the token). */
+  ensureTokenKey(): Buffer
   /** jwt-secret — the session signing key (0600, rotatable). */
   getJwtSecret(): string
   rotateJwtSecret(): string
@@ -183,10 +202,19 @@ export interface GatewayStore {
 
 const SCRYPT_SALT_LEN = 16
 
-/** Canonical verifier shape produced by hashCredential (16-byte salt + 32-byte
- * key, hex); anything else reads as corrupt, so a garbage verifier can never
- * silently disable authentication. */
-const CREDENTIAL_VERIFIER_RE = /^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i
+/** Canonical PASSWORD verifier shape produced by hashCredential (16-byte salt +
+ * 32-byte key, hex); anything else reads as corrupt. */
+const PASSWORD_VERIFIER_RE = /^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i
+
+/** TOKEN verifier union: the O(1) HMAC-SHA256 shape `hmac$<64 hex>` plus the
+ * legacy salted-scrypt shape, which stays readable and is upgraded on the first
+ * successful verification (auth.ts). Anything else reads as corrupt, so a
+ * garbage verifier can never silently disable authentication. */
+const TOKEN_VERIFIER_RE = /^(?:scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}|hmac\$[0-9a-f]{64})$/i
+
+/** 32 CSPRNG bytes, hex-encoded into the 64-character <stateDir>/auth/token-key. */
+const TOKEN_KEY_BYTES = 32
+const TOKEN_KEY_RE = /^[0-9a-f]{64}$/
 
 /** Corrupt/unreadable credential files are warned ONCE per process (re-read on every request). */
 const CREDENTIAL_WARN_ONCE = new Set<string>()
@@ -201,6 +229,25 @@ export function hashCredential(plain: string): string {
   const salt = randomBytes(SCRYPT_SALT_LEN).toString('hex')
   const derived = scryptSync(plain, salt, 32).toString('hex')
   return `scrypt$${salt}$${derived}`
+}
+
+/** HMAC-SHA256 token verifier `hmac$<64 hex>`, keyed by the state-local token
+ * key: verification is one MAC + one constant-time compare (O(1), no salted
+ * key derivation on the request path). */
+export function hashToken(plain: string, key: Buffer): string {
+  return `hmac$${createHmac('sha256', key).update(plain).digest('hex')}`
+}
+
+/** Constant-time compare a plaintext token against an `hmac$64hex` verifier.
+ * A missing key, a legacy scrypt verifier or any other shape is `false`: tokens
+ * fail closed whenever the key cannot be read. */
+export function verifyToken(plain: string, stored: string | null, key: Buffer | null): boolean {
+  if (stored === null || key === null) return false
+  const parts = stored.split('$')
+  if (parts.length !== 2 || parts[0] !== 'hmac' || !/^[0-9a-f]{64}$/i.test(parts[1])) return false
+  const expected = Buffer.from(parts[1], 'hex')
+  const actual = createHmac('sha256', key).update(plain).digest()
+  return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
 /** Constant-time compare a plaintext against a stored `scrypt$salt$hash`. */
@@ -245,6 +292,8 @@ export function createGatewayStore(
   ensurePrivateDirectoryNoFollow(root, 0o700)
 
   const tokensFile = join(stateDir, 'tokens.json')
+  const tokenKeyDir = join(stateDir, 'auth')
+  const tokenKeyFile = join(tokenKeyDir, 'token-key')
   const jwtSecretFile = join(stateDir, 'jwt-secret')
   const passwordCredentialFile = join(stateDir, 'password-credential')
 
@@ -269,7 +318,50 @@ export function createGatewayStore(
       removeSecret(tokensFile)
       return
     }
+    // Self-validate BEFORE any write: a verifier this module would later read as
+    // corrupt must never reach the file (that is the lockout this hardening
+    // closes), so the previous credential stays in force on a bad caller.
+    if (!TOKEN_VERIFIER_RE.test(hash)) {
+      throw new TypeError('gateway-store: refusing to persist an unrecognized token verifier shape')
+    }
     writeSecret(tokensFile, `${JSON.stringify({ schemaVersion: 2, source, updatedAt: Date.now(), hash })}\n`)
+    // Read back through the same parser the request path uses: a publish that
+    // does not round-trip (shape/JSON/mode failure) is reported, never assumed.
+    const readBack = readTokenCredential()
+    if (readBack === null || readBack.verifier !== hash || readBack.source !== source) {
+      throw new Error(`gateway-store: token verifier did not read back after write (${tokensFile})`)
+    }
+  }
+
+  /** Read the HMAC token key or null when absent/corrupt; NEVER writes. A
+   * corrupt file reads as absent (fail-closed), and a missing key leaves every
+   * stored hmac verifier unusable — the documented "key lost ⇒ reset the token". */
+  function getTokenKey(): Buffer | null {
+    const { value } = readSecretFile(tokenKeyFile)
+    if (value === null) return null
+    const hex = value.trim()
+    if (!TOKEN_KEY_RE.test(hex)) {
+      warnOnce(tokenKeyFile, `gateway-store: corrupt token-key (${tokenKeyFile}); HMAC tokens cannot verify until it is rewritten`, logger)
+      return null
+    }
+    return Buffer.from(hex, 'hex')
+  }
+
+  /** Read-or-create the token key: 32 CSPRNG bytes, 0600 atomic write, then a
+   * read-back proof. This is the writer path only (seed/change/migration); the
+   * verify path uses {@link getTokenKey} and therefore never heals a bad key
+   * behind an operator's back. */
+  function ensureTokenKey(): Buffer {
+    const existing = getTokenKey()
+    if (existing !== null) return existing
+    ensurePrivateDirectoryNoFollow(tokenKeyDir, 0o700)
+    const fresh = randomBytes(TOKEN_KEY_BYTES).toString('hex')
+    writeSecret(tokenKeyFile, fresh)
+    const readBack = getTokenKey()
+    if (readBack === null || readBack.toString('hex') !== fresh) {
+      throw new Error(`gateway-store: token-key did not read back after write (${tokenKeyFile})`)
+    }
+    return readBack
   }
 
   function readPasswordCredential(): CredentialRecord | null {
@@ -312,6 +404,7 @@ export function createGatewayStore(
 
   return {
     getTokenHash, getTokenCredential: readTokenCredential, setTokenHash,
+    getTokenKey, ensureTokenKey,
     getJwtSecret, rotateJwtSecret,
     getPasswordCredential, getPasswordCredentialRecord: readPasswordCredential, setPasswordCredential,
   }

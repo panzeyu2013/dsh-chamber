@@ -26,7 +26,10 @@ test('gateway state directories and every persisted document are owner-only', as
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
   const store = createGatewayStore(stateDir, { log() {}, warn() {}, error() {} })
 
-  store.setTokenHash('hash-only')
+  // setTokenHash self-validates the verifier union (scrypt legacy | hmac), so the
+  // permission fixture uses a real verifier; a garbage shape is refused before
+  // any write (covered by token-fast-path.test.ts).
+  store.setTokenHash(hashCredential('0123456789abcdef0123456789abcdef'))
   store.getJwtSecret()
   store.setPasswordCredential(hashCredential('a sufficiently long private password'))
 

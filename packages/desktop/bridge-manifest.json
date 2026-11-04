@@ -165,6 +165,14 @@
       "key": "SSH_RESTART_SERVICE"
     },
     {
+      "channel": "desktop_ssh_host_key_probe",
+      "key": "SSH_HOST_KEY_PROBE"
+    },
+    {
+      "channel": "desktop_ssh_host_key_trust",
+      "key": "SSH_HOST_KEY_TRUST"
+    },
+    {
       "channel": "desktop_ssh_plugin_list",
       "key": "SSH_PLUGIN_LIST"
     },
@@ -264,8 +272,8 @@
     }
   ],
   "counts": {
-    "invoke": 56,
+    "invoke": 58,
     "push": 9,
-    "total": 65
+    "total": 67
   }
 }

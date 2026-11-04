@@ -1,7 +1,7 @@
 // chamber-bridge.stub.js — GENERATED, do not edit.
 //
 // shim 存根（design 25 §4.4.3）：manifest 通道常量单源桥
-// （65 通道 = 56 invoke + 9 push）。
+// （67 通道 = 58 invoke + 9 push）。
 // 与手写 bridge-shim.js（POC 运行时面）并存——全量 shim 生成以此为准。
 // 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs
 // 用法：在 WebKit 页面上下文执行本文件后，window.__DSH_CHAMBER_MANIFEST__
@@ -51,6 +51,8 @@
         "desktop_ssh_stop_service",
         "desktop_ssh_is_active",
         "desktop_ssh_restart_service",
+        "desktop_ssh_host_key_probe",
+        "desktop_ssh_host_key_trust",
         "desktop_ssh_plugin_list",
         "desktop_local_plugin_list",
         "desktop_ssh_seed_host_graph",
@@ -78,7 +80,7 @@
         "desktop_ssh_instances_changed",
         "dsh-chamber:runtime-state-changed",
     ],
-    counts: { invoke: 56, push: 9, total: 65 }
+    counts: { invoke: 58, push: 9, total: 67 }
   };
   var invokeSet = {};
   manifest.invoke.forEach(function (ch) { invokeSet[ch] = true; });

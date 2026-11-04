@@ -493,6 +493,12 @@
     plugin_list: function (id) { return invoke('desktop_ssh_plugin_list', { id: id }) },
     local_plugin_list: function () { return invoke('desktop_local_plugin_list', null) },
     seed_host_graph: function (id) { return invoke('desktop_ssh_seed_host_graph', { id: id }) },
+    // P0-3 host-key trust: probe returns the presented key/fingerprint (public material only);
+    // trust accepts ONLY the last probe's (type, blob) server-side (5-minute TTL).
+    host_key_probe: function (id) { return invoke('desktop_ssh_host_key_probe', { id: id }) },
+    host_key_trust: function (id, type, blob) {
+      return invoke('desktop_ssh_host_key_trust', { id: id, type: type, blob: blob })
+    },
     onStatusChanged: function (callback) {
       return subscribe(PUSH_EVENTS.SSH_STATUS_CHANGED, makePassthroughListener(callback))
     },

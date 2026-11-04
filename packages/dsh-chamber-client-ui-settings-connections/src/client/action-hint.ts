@@ -7,6 +7,9 @@
  * dsh instance is the problem.
  *
  * Selection order (per spec.kind / spec.transport):
+ * - `userActionKind === 'hostkey'` → hostKeyActionHint (P0-3: the repair surface is the
+ *   fingerprint trust panel, never a password/URL hint — checked first so a gateway-over-ssh
+ *   host-key failure does not tell the user to re-enter a token);
  * - kind 'gateway'   → gatewayAuthActionHint (URL/credentials are the repair surface — covers
  *   instance-level 401/403 too);
  * - transport 'http' → directActionHint (URL / reachability / dsh web profile);
@@ -34,6 +37,8 @@ export function actionHintKey(
 ): SettingsConnectionsKey | null {
   if (status?.requiresUserAction !== true) return null
   if (!isUserActionPhase(phase)) return null
+  if (status.userActionKind === 'hostkey') return 'hostKeyActionHint'
+  if (status.userActionKind === 'environment') return 'environmentActionHint'
   if (spec.kind === 'gateway') return 'gatewayAuthActionHint'
   if (spec.transport === 'http') return 'directActionHint'
   // dsh over SSH: the class discriminator decides the repair surface. An endpoint-class failure

@@ -397,6 +397,39 @@ test('ensureSession: an http origin with a pin stays unpinned (no TLS layer — 
     mgr.dispose()
   }
 })
+test('a POSIX UDS tunnel login dials socketPath while the Host authority stays remote', async () => {
+  const calls: Array<{ url: string; options: any }> = []
+  const request = ((url: unknown, options: unknown, cb: (res: any) => void) => {
+    calls.push({ url: String(url), options })
+    const req = new EventEmitter() as any
+    req.end = () => {}
+    req.destroy = () => {}
+    setImmediate(() => {
+      const res = new EventEmitter() as any
+      res.statusCode = 302
+      res.headers = { 'set-cookie': [COOKIE] }
+      res.resume = () => res
+      cb(res)
+    })
+    return req
+  }) as GatewayHttpRequest
+  const mgr = createGatewaySessionManager({ request })
+  const origin = buildGatewaySessionOrigin({
+    baseUrl: 'http://127.0.0.1:2222',
+    insecureHttp: true,
+    scope: 'uds:login',
+    authority: '127.0.0.1:2222',
+    socketPath: '/tmp/dsh-uds-login.sock',
+  })
+  const result = await mgr.ensureSession(origin, PASSWORD)
+  assert.equal(result.ok, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]!.url, 'http://127.0.0.1:2222/auth/login')
+  assert.equal(calls[0]!.options.socketPath, '/tmp/dsh-uds-login.sock')
+  assert.equal(calls[0]!.options.headers.host, '127.0.0.1:2222')
+  assert.equal(mgr.cachedCookie(origin), COOKIE)
+})
+
 test('buildGatewaySessionOrigin is the single origin construction point (optional keys stay absent)', () => {
   assert.deepEqual(
     buildGatewaySessionOrigin({ baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 's' }),
@@ -473,6 +506,7 @@ function refreshHarness(overrides: Partial<GatewaySessionRefreshDeps> = {}) {
     passwordFor: id => state.passwords.get(id) ?? null,
     tokenFor: id => state.tokens.get(id) ?? null,
     readyUrlFor: id => state.readyUrls.get(id) ?? null,
+    socketPathFor: () => null,
     tlsPinFor: id => state.pins.get(id) ?? null,
     authorityFor: id => state.authorities.get(id),
     scopeFor: id => state.scopes.get(id) ?? 'test:' + id,

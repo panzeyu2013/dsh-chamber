@@ -653,11 +653,18 @@ export function httpBudgetLaneFor(sourceId: string): HttpBudgetLane {
   return sourceId === 'local' ? 'local' : 'foreground'
 }
 
-/** Lease with headroom over the caller's own deadline, never below the default. */
+/** Hard cap for one page-level slot lease. Long uploads/calls may legitimately
+ *  outlive it; the watchdog then releases the slot and the request continues
+ *  (the existing "release only, never re-dispatch" semantics). Without the cap a
+ *  30-60min mutation budget would pin a 4-slot page budget for its whole life. */
+export const MAX_UNARY_LEASE_MS = 5 * 60_000
+
+/** Lease with headroom over the caller's own deadline, never below the default
+ *  and never above MAX_UNARY_LEASE_MS. */
 export function httpBudgetLeaseFor(timeoutMs: number): number {
   // Reads the LIVE limits so a test seam (or a future tuning table) changes both
   // the dispatcher and the lease derived from it (review Minor: two sources).
-  return Math.max(limits.defaultLeaseMs, timeoutMs + 5_000)
+  return Math.min(MAX_UNARY_LEASE_MS, Math.max(limits.defaultLeaseMs, timeoutMs + 5_000))
 }
 
 // 现场可读出口（真机 inspector）：挂函数而不是快照，读数始终是最新值。

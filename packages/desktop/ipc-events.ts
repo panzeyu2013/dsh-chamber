@@ -97,6 +97,10 @@ export const IPC_CHANNELS = {
   SSH_STOP_SERVICE: 'desktop_ssh_stop_service',
   SSH_IS_ACTIVE: 'desktop_ssh_is_active',
   SSH_RESTART_SERVICE: 'desktop_ssh_restart_service',
+  /** SSH host-key trust (P0-3): the self-proof probe (state/type/blob/fingerprints) and the
+   *  trust write into the app-owned known_hosts. Both are non-secret public key material. */
+  SSH_HOST_KEY_PROBE: 'desktop_ssh_host_key_probe',
+  SSH_HOST_KEY_TRUST: 'desktop_ssh_host_key_trust',
 
   SSH_PLUGIN_LIST: 'desktop_ssh_plugin_list',
   LOCAL_PLUGIN_LIST: 'desktop_local_plugin_list',

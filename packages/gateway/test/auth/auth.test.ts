@@ -72,11 +72,13 @@ test('token provider enforces the inbound Bearer bounds before persisted-hash or
   const { store, cleanup } = tempStore()
   try {
     const auth = createAuth({ kind: 'token', token: TOKEN }, store)
-    const originalGetTokenHash = store.getTokenHash.bind(store)
+    // The token leaf reads the full record (verifier + provenance) on the
+    // authenticated path; malformed wire credentials must not reach that read.
+    const originalGetTokenCredential = store.getTokenCredential.bind(store)
     let hashReads = 0
-    store.getTokenHash = () => {
+    store.getTokenCredential = () => {
       hashReads += 1
-      return originalGetTokenHash()
+      return originalGetTokenCredential()
     }
 
     const malformed: Array<string | string[]> = [
@@ -111,6 +113,9 @@ test('a deferred old-token verification cannot authenticate after token rotation
     let markStarted!: () => void
     const started = new Promise<void>(resolve => { markStarted = resolve })
     let deferOldToken = true
+    // Keep the bearer on the legacy scrypt record so the deferred-verifier seam
+    // is reached at all: an hmac record verifies O(1) and never queues.
+    store.setTokenHash(hashCredential(TOKEN), 'config')
     const auth = createAuth(
       { kind: 'password+token', password: PASSWORD, token: TOKEN },
       store,
@@ -396,6 +401,9 @@ test('a secure-socket login stamps the session cookie Secure', async () => {
 test('password+token composition preserves a valid cookie when the bearer verifier is saturated', async () => {
   const { store, cleanup } = tempStore()
   try {
+    // The work gate only governs the legacy scrypt token shape now (hmac is
+    // O(1) and never queues); seed one so the saturation premise is real.
+    store.setTokenHash(hashCredential(TOKEN), 'config')
     const auth = createAuth({ kind: 'password+token', password: PASSWORD, token: TOKEN }, store)
     const login = await auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8' })
     const cookie = /dsh_gateway_session=([^;]+)/.exec(login.setCookie ?? '')?.[1]

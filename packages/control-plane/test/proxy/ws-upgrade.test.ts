@@ -9,6 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
+import { encodeCloseFrame } from '../../src/ws-frames.ts'
 import {
   fakeHttpRequest,
   fakeRequest,
@@ -192,7 +193,7 @@ test('upgrade: an upstream connect failure rejects 502 upstream_failed (matches 
 
 /** A captured-upgrade http.request factory: exposes the spliced upstream
  * socket so tests can drive its error/close events. */
-function fakeUpgradeRequest() {
+function fakeUpgradeRequest(upstreamHead: Buffer = Buffer.alloc(0)) {
   let captured: EventEmitter | null = null
   const fn: any = () => {
     const req = new EventEmitter() as any
@@ -206,7 +207,7 @@ function fakeUpgradeRequest() {
       upstreamSocket.pipe = (target: unknown) => target
       upstreamSocket.destroy = () => { upstreamSocket.destroyed = true }
       captured = upstreamSocket
-      req.emit('upgrade', upstreamRes, upstreamSocket, Buffer.alloc(0))
+      req.emit('upgrade', upstreamRes, upstreamSocket, upstreamHead)
     }
     return req
   }
@@ -352,5 +353,165 @@ test('upgrade response forwards only WebSocket handshake headers', async () => {
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /sec-websocket-accept: accepted/i)
   assert.doesNotMatch(socket.written, /set-cookie|x-upstream-secret/i)
+})
+
+
+test('upgrade splice: close codes from both legs land in diagnostics', async () => {
+  const factory = fakeUpgradeRequest()
+  const proxy = proxyFor(factory.fn)
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
+  const up = factory.upstreamSocket
+  assert.ok(up !== null)
+  // Host→proxy close is unmasked; browser→proxy close is masked.
+  up.emit('data', encodeCloseFrame(4002, 'malformed'))
+  const maskedPayload = Buffer.from([0x03 ^ 1, 0xe8 ^ 2])
+  ;(down as unknown as EventEmitter).emit('data', Buffer.from([0x88, 0x82, 1, 2, 3, 4, ...maskedPayload]))
+  up.emit('close')
+  const diagnostics = proxy.getDiagnostics()
+  assert.equal(diagnostics.wsCloseCodes['up:4002'], 1)
+  assert.equal(diagnostics.wsCloseCodes['down:1000'], 1)
+})
+
+
+test('upgrade: an upstream 401 completes a local handshake and closes 4401', async () => {
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      const upstreamRes = new EventEmitter() as any
+      upstreamRes.statusCode = 401
+      upstreamRes.headers = {}
+      upstreamRes.destroy = () => {}
+      req.emit('response', upstreamRes)
+    }
+    return req
+  }
+  const proxy = proxyFor(fn)
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET', {
+    upgrade: 'websocket',
+    'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+  }), down, Buffer.alloc(0))
+  assert.match(down.written, /HTTP\/1\.1 101/)
+  assert.match(down.written, /Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK\+xOo=/)
+  const close = down.writtenBuffers.find(buffer => buffer.length >= 4 && buffer[0] === 0x88)
+  assert.ok(close !== undefined, 'a close frame must follow the 101')
+  assert.equal(close.readUInt16BE(2), 4401)
+  assert.equal(down.closed, true)
+})
+
+
+test('upgrade: the browser Origin is rewritten to the upstream authority', async () => {
+  const upstream = fakeHttpRequest(() => ({ upgrade: { status: 101, headers: {} } }))
+  const proxy = proxyFor(upstream.fn)
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET', {
+    origin: 'https://evil.example',
+  }), down, Buffer.alloc(0))
+  const originHeaders = upstream.calls[0].options.headers as Record<string, string | undefined>
+  assert.equal(
+    originHeaders.origin,
+    'http://127.0.0.1:' + String(DEFAULT_DSH_START_PORT),
+  )
+
+  const noOrigin = fakeHttpRequest(() => ({ upgrade: { status: 101, headers: {} } }))
+  const proxy2 = proxyFor(noOrigin.fn)
+  await proxy2.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), fakeSocket(), Buffer.alloc(0))
+  const noOriginHeaders = noOrigin.calls[0].options.headers as Record<string, string | undefined>
+  assert.equal(noOriginHeaders.origin, undefined, 'no Origin must not be invented')
+})
+
+
+test('a throwing socket inside the upgrade listener tears down instead of crashing (M4)', async () => {
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      req.emit('finish')
+      setImmediate(() => {
+        const upstreamRes = new EventEmitter() as any
+        upstreamRes.statusCode = 101
+        upstreamRes.headers = {}
+        const upstreamSocket = new EventEmitter() as any
+        upstreamSocket.write = () => true
+        upstreamSocket.pipe = (target: unknown) => target
+        upstreamSocket.destroy = () => {}
+        req.emit('upgrade', upstreamRes, upstreamSocket, Buffer.alloc(0))
+      })
+    }
+    return req
+  }
+  const warnings: string[] = []
+  const proxy = proxyFor(fn, {
+    logger: { log: () => {}, warn: (message: string) => { warnings.push(message) }, error: () => {} },
+  })
+  const down = fakeSocket()
+  let writes = 0
+  const throwing = Object.assign(down, {
+    write: () => {
+      writes += 1
+      throw new Error('simulated downstream write failure')
+    },
+  })
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), throwing, Buffer.alloc(0))
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.ok(writes > 0, 'the listener reached the write that throws')
+  assert.ok(warnings.some(message => /upgrade splice setup failed/u.test(message)), 'the catch path ran (not just a close event)')
+  assert.equal(proxy.getDiagnostics().activeStreams, 0, 'the catch released the live stream')
+})
+
+
+test('a client RST during the upgrade handshake is absorbed (R4 A-M4)', async () => {
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      setTimeout(() => {
+        const upstreamRes = new EventEmitter() as any
+        upstreamRes.statusCode = 401
+        upstreamRes.headers = {}
+        upstreamRes.destroy = () => {}
+        req.emit('response', upstreamRes)
+      }, 20)
+    }
+    return req
+  }
+  const proxy = proxyFor(fn)
+  const down = fakeSocket()
+  const pending = proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET', {
+    upgrade: 'websocket',
+    'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+  }), down, Buffer.alloc(0))
+  ;(down as unknown as EventEmitter).emit('error', new Error('ECONNRESET'))
+  await pending
+  await new Promise(resolve => setTimeout(resolve, 40))
+  // Reaching here proves the emit did not surface as an uncaughtException.
+})
+
+
+test('a close frame in the client upgrade head is scanned (R5 A-head)', async () => {
+  const factory = fakeUpgradeRequest()
+  const proxy = proxyFor(factory.fn)
+  const down = fakeSocket()
+  const close = Buffer.alloc(2)
+  close.writeUInt16BE(4003, 0)
+  const masked = Buffer.from([0x88, 0x82, 1, 2, 3, 4, close[0] ^ 1, close[1] ^ 2])
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, masked)
+  const up = factory.upstreamSocket
+  assert.ok(up !== null)
+  up.emit('close')
+  assert.equal(proxy.getDiagnostics().wsCloseCodes['down:4003'], 1)
+})
+
+test('a close frame in the upstream upgrade head is scanned (R5 A-head)', async () => {
+  const factory = fakeUpgradeRequest(encodeCloseFrame(4002, 'upstream-bye'))
+  const proxy = proxyFor(factory.fn)
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
+  const up = factory.upstreamSocket
+  assert.ok(up !== null)
+  up.emit('close')
+  assert.equal(proxy.getDiagnostics().wsCloseCodes['up:4002'], 1)
 })
 

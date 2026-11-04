@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, GATEWAY_SESSION_EXPIRY_SKEW_MS, GATEWAY_SESSION_TTL_MS, type GatewayHttpRequest } from '../../gateway-session.ts'
+import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionKeyFor, GATEWAY_SESSION_EXPIRY_SKEW_MS, GATEWAY_SESSION_TTL_MS, type GatewayHttpRequest } from '../../gateway-session.ts'
 import { gatewayTunnelAuthority } from '../../gateway-session-refresh.ts'
 import {
   configureGatewaySessionProvider,
@@ -89,13 +89,18 @@ test('invalidateScope clears every historical tunnel local-port generation for o
   const l1 = { baseUrl: 'http://127.0.0.1:40001', insecureHttp: true, authority, scope }
   const l2 = { baseUrl: 'http://127.0.0.1:40002', insecureHttp: true, authority, scope }
   const proofOnly = { baseUrl: 'http://127.0.0.1:40003', insecureHttp: true, authority, scope }
+  // The suffix must match EXACTLY: a scope that merely starts with the invalidated
+  // one is a different target and must survive.
+  const prefixNeighbor = { ...l1, scope: scope + '-x' }
   const unrelated = { ...l1, authority: gatewayTunnelAuthority(30802), scope: 'v1:target-b:' + 'b'.repeat(64) }
   try {
     assert.equal((await mgr.ensureSession(l1, PASSWORD)).ok, true)
-    assert.equal((await mgr.ensureSession(l2, PASSWORD)).ok, true)
+    assert.equal((await mgr.ensureSession(prefixNeighbor, PASSWORD)).ok, true)
     assert.equal((await mgr.ensureSession(unrelated, PASSWORD)).ok, true)
-    assert.notEqual(mgr.cachedCookie(l1), null)
-    assert.notEqual(mgr.cachedCookie(l2), null)
+    assert.equal(mgr.cachedCookie(l1), COOKIE)
+    // P2-3: one session key covers every local-port generation of the same target, so
+    // a reconnected tunnel's fresh port reads the very same cookie entry.
+    assert.equal(mgr.cachedCookie(l2), COOKIE, 'the reconnected local port L2 reuses the L1 session')
     mgr.setRegistrationAuthProof(l2, 'cookie')
     mgr.setRegistrationAuthProof(proofOnly, 'bearer')
     mgr.invalidateScope(scope)
@@ -103,6 +108,7 @@ test('invalidateScope clears every historical tunnel local-port generation for o
     assert.equal(mgr.cachedCookie(l2), null, 'recreated connection local port L2 is gone too')
     assert.equal(mgr.registrationAuthProof(l2), null, 'scope cleanup also removes an exact registration proof')
     assert.equal(mgr.registrationAuthProof(proofOnly), null, 'a proof-only key is included in scope cleanup')
+    assert.equal(mgr.cachedCookie(prefixNeighbor), COOKIE, 'the suffix match is exact, never a prefix match')
     assert.notEqual(mgr.cachedCookie(unrelated), null, 'another connection scope is isolated')
     assert.throws(() => mgr.invalidateScope('bad/path'), /scope/)
   } finally {
@@ -336,6 +342,70 @@ test('sessions are cached per origin — one gateway login never leaks to anothe
     await gw1.close()
     await gw2.close()
   }
+})
+
+test('a tunnel reconnect on the same SSH target reuses the session across the new local port (no second login)', async () => {
+  // An ssh -L reconnect allocates a NEW loopback port for the SAME gateway target. The
+  // session identity is the connection/target scope (+ scheme/authority), never the
+  // network origin, so verifyUp's fast path must find the cookie instead of logging in.
+  const logins: LoginRecord[] = []
+  const gw = await startGateway(loginHandler(logins))
+  const mgr = createGatewaySessionManager()
+  const authority = gatewayTunnelAuthority(30801)
+  const scope = 'v1:reconnect:' + '7'.repeat(64)
+  const first = { ...gw.origin, authority, scope }
+  // The reconnected tunnel's new local port; deliberately unreachable: a cache miss
+  // would try to log in against it and fail instead of silently succeeding.
+  const reconnected = { baseUrl: 'http://127.0.0.1:9', insecureHttp: true, authority, scope }
+  const resetProvider = bindSessionManager(mgr)
+  try {
+    assert.equal((await mgr.ensureSession(first, PASSWORD)).ok, true)
+    assert.equal(logins.length, 1)
+    assert.equal(mgr.cachedCookie(reconnected), COOKIE, 'the new local port finds the same scoped session')
+    let probedCookie: string | null = null
+    const verification = await verifyGatewayPasswordSession(reconnected, PASSWORD, async cookie => {
+      probedCookie = cookie
+      return { ok: true }
+    })
+    assert.equal(verification.ok, true)
+    assert.equal(probedCookie, COOKIE, 'the verify probe rides the cached cookie')
+    assert.equal(logins.length, 1, 'the reconnect must not log in again')
+    assert.equal(mgr.registrationAuthProof(reconnected), 'cookie', 'the reused session proves cookie auth for registration')
+  } finally {
+    resetProvider()
+    mgr.dispose()
+    await gw.close()
+  }
+})
+
+test('different SSH targets sharing one tunnel authority never share a session (design 05 §8 negative control)', async () => {
+  const logins: LoginRecord[] = []
+  const gw = await startGateway(loginHandler(logins))
+  const mgr = createGatewaySessionManager()
+  const authority = gatewayTunnelAuthority(30801)
+  const targetA = { ...gw.origin, authority, scope: 'v1:target-a:' + 'a'.repeat(64) }
+  const targetB = { ...gw.origin, authority, scope: 'v1:target-b:' + 'b'.repeat(64) }
+  try {
+    assert.equal((await mgr.ensureSession(targetA, PASSWORD)).ok, true)
+    assert.equal(mgr.cachedCookie(targetB), null, 'the authority is routing, not ownership: B cannot read A')
+    assert.equal((await mgr.ensureSession(targetB, 'password for B target')).ok, true)
+    assert.equal(logins.length, 2, 'B performs its own login')
+    assert.notEqual(mgr.cachedCookie(targetA), null)
+  } finally {
+    mgr.dispose()
+    await gw.close()
+  }
+})
+
+test('the session-key constructor is stable across tunnel ports and qualified by scheme/authority/scope', () => {
+  const scope = 'v1:key:' + '0'.repeat(64)
+  const origin = { baseUrl: 'http://127.0.0.1:40001', insecureHttp: true, authority: '127.0.0.1:30801', scope }
+  const key = gatewaySessionKeyFor(origin, 'http:')
+  assert.equal(gatewaySessionKeyFor({ ...origin, baseUrl: 'http://127.0.0.1:40002' }, 'http:'), key, 'the local port is transport detail, not identity')
+  assert.ok(key.endsWith('|scope:' + scope), 'invalidateScope still matches the exact scope suffix')
+  assert.notEqual(gatewaySessionKeyFor({ ...origin, scope: scope + '-x' }, 'http:'), key, 'a different scope is a different session')
+  assert.notEqual(gatewaySessionKeyFor({ ...origin, authority: '127.0.0.1:30802' }, 'http:'), key, 'a different Host authority is a different session')
+  assert.notEqual(gatewaySessionKeyFor(origin, 'https:'), key, 'the scheme qualifies the key')
 })
 
 test('dispose clears every cached session', async () => {

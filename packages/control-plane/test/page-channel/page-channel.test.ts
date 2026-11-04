@@ -302,6 +302,57 @@ test('an upstream answering non-200 fails that subscription with upstream_failed
   assert.equal(client.items('pg-503').length, 0)
 })
 
+test('upstream status classification: 4xx refusals are permanent except auth/timeout/limit retries', async (t) => {
+  // 一个可变状态的上游：同一条路由按用例切状态码。分类只认「状态类 + 三个例外」，
+  // 所以两侧都放上边界值（450/499 是永久一侧的类边界，301 是「未分类状态必须保持
+  // 既有瞬态行为」的负控面）。
+  let status = 404
+  const upstream = await startSseUpstream((_req, res) => {
+    res.writeHead(status, { 'content-type': 'text/plain' })
+    res.end('refused')
+  })
+  t.after(() => upstream.close())
+  const harness = await startChannel({ resolveTargetFor: () => ({ baseUrl: upstream.baseUrl }) })
+  t.after(() => harness.close())
+  const client = await harness.connect()
+  t.after(() => client.ws.close())
+
+  const cases: Array<[string, number]> = [
+    // 永久：4xx 是对**请求本身**的拒绝，重发同一条请求只会得到同一个拒绝。
+    ['upstream_rejected', 400],
+    // 401/403 come from a transport-injected Authorization; a token refresh must
+    // be able to revive the subscription, so they stay on the transient ladder.
+    ['upstream_failed', 401],
+    ['upstream_failed', 403],
+    ['upstream_rejected', 404],
+    ['upstream_rejected', 410],
+    ['upstream_rejected', 418],
+    ['upstream_rejected', 450],
+    ['upstream_rejected', 451],
+    ['upstream_rejected', 499],
+    // 瞬态：认证/超时/限流的 4xx + 5xx + Node 不跟随的 3xx。
+    ['upstream_failed', 408],
+    ['upstream_failed', 425],
+    ['upstream_failed', 429],
+    ['upstream_failed', 500],
+    ['upstream_failed', 503],
+    ['upstream_failed', 504],
+    ['upstream_failed', 301],
+  ]
+  for (const [expectedCode, value] of cases) {
+    status = value
+    const id = 'pg-status-' + String(value)
+    client.send({ type: 'subscribe', id, family: 'pluginGraph', instanceId: 'dsh-x' })
+    const failure = await client.waitForType('error', id)
+    assert.equal(failure.code, expectedCode, 'HTTP ' + String(value) + ' 必须判成 ' + expectedCode)
+    assert.match(String(failure.message), new RegExp(String(value)), '失败原因必须点名状态码')
+    assert.equal(client.messages.filter(message => message.type === 'ready' && message.id === id).length, 0,
+      '非 200 在 ready 之前失败')
+  }
+  // 负控：把 4xx 分支改回一律 upstream_failed 时第一条断言即红；把 408/425/429 当永久
+  // 拒绝时瞬态一侧三红。
+})
+
 test('a 200 with a non-SSE content-type fails the subscription before ready instead of black-holing it', async (t) => {
   const upstream = await startSseUpstream((_req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
@@ -589,6 +640,41 @@ test('stats reports live accounting only: one upstream per non-health subscripti
 
   client.ws.close()
   await waitFor(() => harness.channel.stats().sockets === 0, 5000, 'socket accounting after close')
+  assert.deepEqual(harness.channel.stats(), { sockets: 0, subscriptions: 0, upstreams: 0 })
+})
+
+test('stats: a periodic diagnostics line reports live accounting, and closeAll leaves the pre-teardown counts', async (t) => {
+  const lines: string[] = []
+  const upstream = await startSseUpstream((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: alive\n\n')
+  })
+  t.after(() => upstream.close())
+  const harness = await startChannel({
+    logger: { log: message => { lines.push(String(message)) }, warn: () => {}, error: () => {} },
+    statsIntervalMs: 20,
+    resolveTargetFor: () => ({ baseUrl: upstream.baseUrl }),
+  })
+  t.after(() => harness.close())
+
+  // 负控：没有活动页面 socket 时不写 0/0/0 行（20ms 一拍，90ms ≈ 4 拍）。
+  await new Promise(resolve => setTimeout(resolve, 90))
+  assert.equal(lines.filter(line => line.includes('stats')).length, 0, '空闲控制面不得输出零计数行')
+
+  const client = await harness.connect()
+  t.after(() => client.ws.close())
+  client.send({ type: 'subscribe', id: 'health-stats-log', family: 'health' })
+  client.send({ type: 'subscribe', id: 'pg-stats-log', family: 'pluginGraph', instanceId: 'dsh-x' })
+  await client.waitForType('ready', 'pg-stats-log')
+
+  const periodic = 'page-channel: stats sockets=1 subscriptions=2 upstreams=1'
+  await waitFor(() => lines.includes(periodic), 2_000, '周期性 stats 行（' + String(lines.length) + ' 行日志）')
+  assert.deepEqual(harness.channel.stats(), { sockets: 1, subscriptions: 2, upstreams: 1 },
+    '日志行与 stats() 必须读同一实现')
+
+  harness.channel.closeAll()
+  assert.ok(lines.includes('page-channel: shutdown stats sockets=1 subscriptions=2 upstreams=1'),
+    'closeAll 必须留下拆除前的 sockets/subscriptions/upstreams 现场，之后的计数已经归零')
   assert.deepEqual(harness.channel.stats(), { sockets: 0, subscriptions: 0, upstreams: 0 })
 })
 

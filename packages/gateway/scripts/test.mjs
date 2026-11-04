@@ -20,6 +20,9 @@ const GROUPS = {
     'test/auth/cli-auth.test.ts',
     'test/auth/warmup-login-page.test.ts',
     'test/auth/store-permissions.test.ts',
+    // Token verifier fast path: hmac$ + <stateDir>/auth/token-key, legacy scrypt
+    // read-compat/in-place upgrade, shape-aware config replay, fail-closed shapes.
+    'test/auth/token-fast-path.test.ts',
   ],
   // boundary: the public request boundary - exposure config, policy/dispatch chain, audit trail, error redaction.
   boundary: [

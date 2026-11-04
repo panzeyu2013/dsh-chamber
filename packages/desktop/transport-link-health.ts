@@ -27,7 +27,12 @@ export function createLinkHealth(deps: LinkHealthDeps) {
     state: InstanceState,
   ): TransportProbeEndpoint | null {
     if (providerForSpec.buildStartArgs !== undefined) {
-      // Tunnel mode: the probe rides the live tunnel listener (loopback).
+      // Tunnel mode: the probe rides the live tunnel listener — a UDS socket when
+      // this attempt has one, else the loopback TCP port. host/port keep naming
+      // the REMOTE loopback destination for the HTTP request semantics.
+      if (state.socketPath !== null) {
+        return { host: '127.0.0.1', port: spec.remotePort, socketPath: state.socketPath }
+      }
       return state.localPort === null ? null : { host: '127.0.0.1', port: state.localPort }
     }
     try {

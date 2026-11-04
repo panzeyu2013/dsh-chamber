@@ -5,7 +5,6 @@
  */
 import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { ConnectionCredentialMutations } from './connection-save.ts'
-import type { GatewaySessionOrigin } from './gateway-session.ts'
 import type { TransportInstanceInput, TransportInstanceSpec } from './transport-provider.ts'
 import { INSTANCE_ID_PATTERN, commitTransportCredentialUpdate, type TransportManager } from './transport-manager.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
@@ -15,7 +14,8 @@ import { describeError } from './describe-error.ts'
 import { admitClearOnly } from './clear-only-credentials.ts'
 import { describeUnknownError } from './deep-link.ts'
 import { discoverSshConfigHosts } from './ssh-config.ts'
-import { gatewayPasswordValidationError, gatewayProvider, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from './gateway-provider.ts'
+import { createHostKeyGuard, defaultUserKnownHostsPath, knownHostsPathFor, type HostKeyGuard } from './host-key.ts'
+import { gatewayPasswordValidationError, gatewayProvider, gatewaySessionOriginFor, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from './gateway-provider.ts'
 import { gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts'
 import { gatewaySessionScopeForConnection } from './gateway-session.ts'
 
@@ -29,16 +29,10 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   // V5-A：装配侧注入的是完整 createTransportManager，但共享 ShellAssemblyCtx Pick
   // 只扩到 loadFailure——roster 两个只读诊断经结构面读取，不加宽 Pick。
   const rosterHealth = sm as unknown as Pick<TransportManager, 'registryIncomplete' | 'loadDroppedCount'>
-  /** 注册实例的 gateway-session origin（per-origin session key）：scheme 来自
-   *  insecureHttp、端口显式——URL.origin 会省默认端口，缓存 key 必须与注册 baseUrl
-   *  及探针 origin 一致。 */
-  function gatewayOriginFor(spec: TransportInstanceSpec): GatewaySessionOrigin {
-    return {
-      baseUrl: `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}`,
-      insecureHttp: spec.insecureHttp,
-      scope: gatewaySessionScopeForConnection(spec),
-    };
-  }
+  // The direct-endpoint session origin is NOT re-derived here: it is the same
+  // construction verifyUp uses (gateway-provider.gatewaySessionOriginFor), and the
+  // session manager keys it by scheme + scope, so an invalidation can never miss
+  // the cookie it means to clear.
 
   const normalizeConnectionInput = (candidate: TransportInstanceInput): TransportInstanceSpec | null => {
     if (candidate === null || typeof candidate !== 'object') return null;
@@ -137,7 +131,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     const invalidateGatewaySessionsFor = (spec: TransportInstanceSpec | null, readyUrl: string | null): void => {
       if (spec === null || spec.kind !== 'gateway') return;
       if (gatewaySessions === null) throw new Error('gateway session manager is unavailable');
-      if (spec.transport === 'http') gatewaySessions.invalidate(gatewayOriginFor(spec));
+      if (spec.transport === 'http') gatewaySessions.invalidate(gatewaySessionOriginFor(spec));
       if (spec.transport === 'ssh') gatewaySessions.invalidateScope(gatewaySessionScopeForConnection(spec));
       if (readyUrl !== null) {
         const liveOrigin = gatewaySessionOriginForUrl(
@@ -227,7 +221,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       setGatewaySecrets: (id, token, password, bindingSpec) => setInstanceSecrets(id, token, password, bindingSpec),
       invalidateGatewaySessions: spec => {
         if (gatewaySessions === null) throw new Error('gateway session manager is unavailable');
-        if (spec.transport === 'http') gatewaySessions.invalidate(gatewayOriginFor(spec));
+        if (spec.transport === 'http') gatewaySessions.invalidate(gatewaySessionOriginFor(spec));
         if (spec.transport === 'ssh') gatewaySessions.invalidateScope(gatewaySessionScopeForConnection(spec));
         const readyUrl = sm.readyUrl(spec.id);
         if (readyUrl !== null) {
@@ -333,7 +327,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     try {
       // 清除密码前失效全部缓存登录会话：直接与 SSH origin 都按连接/目标 scope 归属，跨历史 localPort。
       if (gatewaySessions === null) throw new Error('gateway session manager is unavailable');
-      if (spec.transport === 'http') gatewaySessions.invalidate(gatewayOriginFor(spec));
+      if (spec.transport === 'http') gatewaySessions.invalidate(gatewaySessionOriginFor(spec));
       if (spec.transport === 'ssh') gatewaySessions.invalidateScope(gatewaySessionScopeForConnection(spec));
       const liveReadyUrl = sm.readyUrl(id);
       if (liveReadyUrl !== null) {
@@ -435,4 +429,56 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
     ).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
   });
+
+  // —— G 组 ——SSH 主机密钥信任（P0-3）。app 自有 known_hosts 的唯一写入口：probe 跑一次
+  // 「ssh 自证」（throwaway known_hosts + PreferredAuthentications=none），trust 只接受最近一次
+  // 探测（TTL 5min）出现过的 (type, blob)——渲染器无法凭空构造密钥材料。guard 与 transport
+  // manager 的 pre-spawn 门读同一个文件，探测登记表是模块级的，因此这里探测、那边信任可用。
+  let hostKeyGuardCache: HostKeyGuard | null = null
+  const hostKeyGuard = (): HostKeyGuard => {
+    // The assembly injects the ONE guard the transport manager also gates on (shared probe
+    // registry + file mutex). The runtime fallback keeps the handler honest in headless harnesses
+    // that do not build a full assembly ctx.
+    const configured = ctx.deps.ctx.hostKey
+    if (configured !== null && typeof configured === 'object') return configured
+    hostKeyGuardCache ??= createHostKeyGuard({
+      knownHostsFile: knownHostsPathFor(ctx.deps.ctx.runtimeBaseDir),
+      userKnownHostsFile: defaultUserKnownHostsPath(),
+    })
+    return hostKeyGuardCache
+  }
+  const sshSpecFor = (id: unknown): TransportInstanceSpec | null => {
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) return null
+    const spec = sm.listInstances().find(instance => instance.id === id) ?? null
+    return spec !== null && spec.transport === 'ssh' ? spec : null
+  }
+  deps.ipc.handle(IPC_CHANNELS.SSH_HOST_KEY_PROBE, async (payload: unknown) => {
+    const record = payload !== null && typeof payload === 'object' ? payload as { id?: unknown } : {}
+    const spec = sshSpecFor(record.id)
+    if (spec === null) return { ok: false as const, error: 'unknown ssh instance' }
+    try {
+      return { ok: true as const, hostKey: await hostKeyGuard().probe(spec) }
+    } catch (error) {
+      return { ok: false as const, error: describeError(error) }
+    }
+  })
+  deps.ipc.handle(IPC_CHANNELS.SSH_HOST_KEY_TRUST, async (payload: unknown) => {
+    const record = payload !== null && typeof payload === 'object'
+      ? payload as { id?: unknown; type?: unknown; blob?: unknown }
+      : {}
+    const spec = sshSpecFor(record.id)
+    if (spec === null) return { ok: false as const, error: 'unknown ssh instance' }
+    // The server-side probe record is the ONLY source of truth for TTL/equality; a caller-supplied
+    // probedAt (or any other field) cannot extend or forge it.
+    if (typeof record.type !== 'string' || typeof record.blob !== 'string') {
+      return { ok: false as const, error: 'invalid host key payload' }
+    }
+    try {
+      const trusted = await hostKeyGuard().trust(spec, { type: record.type, blob: record.blob })
+      if (!trusted.ok) return { ok: false as const, error: trusted.error }
+      return { ok: true as const, replaced: trusted.replaced, status: sm.status(spec.id) }
+    } catch (error) {
+      return { ok: false as const, error: describeError(error) }
+    }
+  })
 }

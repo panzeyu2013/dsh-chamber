@@ -16,6 +16,9 @@ import { changeDraftEndpointUrl, changeDraftKind, changeDraftTransport, credenti
 const desktopAuthority = [
   '../../../desktop/transport-provider.ts',
   '../../../desktop/ssh-provider.ts',
+  // P2-5 moved MAX_SSH_PASSWORD_CHARS to the credential-store leaf; the
+  // provider re-exports it, but the authority scan needs the declaration.
+  '../../../desktop/ssh-credentials.ts',
 ].map(path => readFileSync(new URL(path, import.meta.url), 'utf8')).join('\n')
 
 function assertDesktopExport(name: string, value: RegExp | number): void {

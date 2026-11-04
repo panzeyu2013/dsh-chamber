@@ -123,17 +123,25 @@ test('a dormancy backoff keeps a quiet stream from probing forever', () => {
   assert.match(checkStall, /quietProbes: this\.quietProbes/u)
   assert.match(checkStall, /this\.quietProbes \+= 1/u, 'a probe without advance must widen the cadence')
   assert.match(checkStall, /this\.quietProbes = 0/u, 'an advanced probe resets the cadence')
-  assert.match(journal, /if \(change\.type === 'replace' \|\| change\.type === 'append'\) \{\s*\n\s*this\.lastProgressAt = elapsedClock\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*\}\s*\n\s*this\.options\.publish\(change\)/u)
+  assert.match(journal, /this\.lastProgressAt = elapsedClock\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*this\.options\.publish\(change\)/u)
   assert.match(policy, /export function streamStallProbeIntervalMs\(quietProbes: number, timing: StreamStallTiming\): number/u)
   assert.match(policy, /export const MAX_STREAM_STALL_PROBE_INTERVAL_MS = 90_000/u)
 })
 
-test('only a replace/append publication advances the silence window', () => {
-  // Prepending old history and cursorless assistant frames reach the view but do
-  // NOT prove the durable tail advanced, so they must not postpone the probe.
+test('EVERY publication advances the silence window (notification/prepend included)', () => {
+  // P1-4: the field comment always claimed every published value is progress, while
+  // the code gated on replace/append — so a notification-only assistant stream was
+  // probed at 45 s even though its Host was producing. Prepend (a delivered page) and
+  // cursorless notifications arrive over the LIVE generation, so they are delivery
+  // evidence too; the fork patch's lock pins the unconditional mark.
   assert.match(
     journal,
-    /private publish\(change: RemoteJournalChange<Page, Entry, Notification>\): void \{\s*\n\s*if \(this\.disposed\) return\s*\n\s*if \(change\.type === 'replace' \|\| change\.type === 'append'\) \{\s*\n\s*this\.lastProgressAt = elapsedClock\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*\}\s*\n\s*this\.options\.publish\(change\)/u,
+    /private publish\(change: RemoteJournalChange<Page, Entry, Notification>\): void \{\s*\n\s*if \(this\.disposed\) return\s*\n\s*this\.lastProgressAt = elapsedClock\(\)\s*\n\s*this\.quietProbes = 0\s*\n\s*this\.options\.publish\(change\)/u,
+  )
+  assert.doesNotMatch(
+    journal,
+    /if \(change\.type === 'replace' \|\| change\.type === 'append'\) \{/u,
+    'the type-gated progress mark must not return',
   )
   assert.equal([...journal.matchAll(/this\.options\.publish\(/gu)].length, 1, 'publishing goes through the one progress-marking wrapper')
 })

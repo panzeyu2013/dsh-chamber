@@ -4,11 +4,15 @@
  * reads phase/serviceActive and clears retired entries, so the type lives in its own
  * leaf instead of the manager (B2-0).
  */
-import type { SpawnedProcess, TransportLogEntry, TransportPhase } from './transport-provider.ts'
+import type { HostKeyProjection, SpawnedProcess, TransportLogEntry, TransportPhase } from './transport-provider.ts'
 import type { LinkHealthState } from './transport-health.ts'
 export interface InstanceState {
   phase: TransportPhase
   localPort: number | null
+  /** POSIX UDS tunnel listener of THIS attempt (null = TCP or direct endpoint).
+   *  Set before spawn, cleared with localPort on every stop/failure path; the
+   *  ready URL, probes and proxy registration all derive from it. */
+  socketPath: string | null
   child: SpawnedProcess | null
   childExited: boolean
   authFailed: boolean
@@ -16,10 +20,19 @@ export interface InstanceState {
   requiresUserAction: boolean
   /** Class of the terminal failure behind requiresUserAction ('auth' = transport/
    *  credential-level, 'endpoint' = instance-level terminal probe failure — the
-   *  transport reached the destination and the answer rejected the connection);
-   *  null otherwise. Projected so an endpoint failure never masquerades as SSH
-   *  auth failure. */
-  userActionKind: 'auth' | 'endpoint' | null
+   *  transport reached the destination and the answer rejected the connection,
+   *  'hostkey' = the SSH host key is untrusted/new/changed and the user must review
+   *  and trust its fingerprint); null otherwise. Projected so an endpoint failure
+   *  never masquerades as SSH auth failure. */
+  userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null
+  /** Stderr-classified host-key failure of the current attempt (terminal; the settle
+   *  path runs the self-proof probe before failTerminal so the UI gets fingerprints). */
+  hostKeyFailed: boolean
+  /** In-flight self-proof probe guard: the exit handler and the ready loop may both
+   *  observe hostKeyFailed; only one ssh probe may run per attempt. */
+  hostKeyProbing: boolean
+  /** Last non-secret host-key probe projection for this attempt (null = not probed). */
+  hostKey: HostKeyProjection | null
   serviceActive: boolean | null
   logSummary: string
   reconnectTimer: ReturnType<typeof setTimeout> | null

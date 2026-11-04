@@ -35,12 +35,15 @@ export function gatewayTunnelAuthority(remotePort: number): string {
  *  ready registration use, so the cached session key matches. `insecureHttp` is the scheme selector
  *  the session manager's origin gate requires (for a tunnel a scheme fact, not an "insecure"
  *  judgement). `spkiPin` rides the origin, so the refresh login is pinned exactly like verifyUp.
+ *  `socketPath` (POSIX ssh tunnels) rides it too: the refresh login reaches the same UDS listener
+ *  verifyUp used, so a password gateway keeps re-authenticating after the transport switches shape.
  *  Returns null for a structurally invalid URL (programmer-error guard). */
 export function gatewaySessionOriginForUrl(
   url: string,
   spkiPin?: string,
   authority?: string,
   scope?: string,
+  socketPath?: string,
 ): GatewaySessionOrigin | null {
   let parsed: URL
   try {
@@ -61,6 +64,7 @@ export function gatewaySessionOriginForUrl(
     scope,
     spkiPin,
     authority,
+    ...(socketPath === undefined ? {} : { socketPath }),
   })
 }
 
@@ -75,6 +79,9 @@ export interface GatewaySessionRefreshDeps {
   tokenFor(id: string): string | null
   /** The instance's current ready transport URL, or null when not ready. */
   readyUrlFor(id: string): string | null
+  /** The instance's ready UDS tunnel socket (POSIX ssh), or null/none on TCP. The
+   *  refresh login must dial the same listener verifyUp used. */
+  socketPathFor(id: string): string | null
   /** The configured SPKI certificate pin, or null — rides the re-registration AND the refresh login
    *  origin exactly like the ready registration, so a pinned internal-CA gateway never fails the
    *  refresh as an untrusted-chain network failure. */
@@ -169,6 +176,7 @@ export function createGatewaySessionRefresh(deps: GatewaySessionRefreshDeps): Ga
     pin: string | null
     authority: string | undefined
     scope: string
+    socketPath: string | null
     origin: GatewaySessionOrigin
   }
 
@@ -180,9 +188,10 @@ export function createGatewaySessionRefresh(deps: GatewaySessionRefreshDeps): Ga
     const authority = deps.authorityFor(id)
     const scope = deps.scopeFor(id)
     if (scope === undefined) return null
-    const origin = gatewaySessionOriginForUrl(url, pin ?? undefined, authority, scope)
+    const socketPath = deps.socketPathFor(id)
+    const origin = gatewaySessionOriginForUrl(url, pin ?? undefined, authority, scope, socketPath ?? undefined)
     if (origin === null) return null
-    return { password, token: deps.tokenFor(id), url, pin, authority, scope, origin }
+    return { password, token: deps.tokenFor(id), url, pin, authority, scope, socketPath, origin }
   }
 
   function factsAreCurrent(id: string, epoch: number, facts: RefreshFacts): boolean {
@@ -193,6 +202,7 @@ export function createGatewaySessionRefresh(deps: GatewaySessionRefreshDeps): Ga
       && deps.tlsPinFor(id) === facts.pin
       && deps.authorityFor(id) === facts.authority
       && deps.scopeFor(id) === facts.scope
+      && deps.socketPathFor(id) === facts.socketPath
   }
 
   /** The refresh fire: re-check live facts, re-login, re-register with the fresh cookie, re-arm. */

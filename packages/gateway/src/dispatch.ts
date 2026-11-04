@@ -181,12 +181,15 @@ function sendBoundaryRejection(res: ApiResponse, req: ApiRequest, decision: Gate
   })
 }
 
-function rejectWs(socket: { end(data: string): unknown }, status: number, message: string, code?: string): void {
+function rejectWs(socket: { end(data: string): unknown; on?(event: 'error', listener: () => void): unknown }, status: number, message: string, code?: string): void {
   const reason = status === 400 ? 'Bad Request'
     : status === 401 ? 'Unauthorized'
       : status === 404 ? 'Not Found'
         : status === 421 ? 'Misdirected Request'
           : status === 503 ? 'Service Unavailable' : 'Forbidden'
+  // Node removed its socket error listener before emit('upgrade'); a peer RST
+  // after this rejection would otherwise crash the gateway process.
+  socket.on?.('error', () => {})
   socket.end(
     `HTTP/1.1 ${status} ${reason}\r\n`
     + 'Content-Type: application/json\r\n'

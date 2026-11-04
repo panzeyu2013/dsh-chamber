@@ -49,6 +49,10 @@ export type {
   SshConfigDiscovery,
   SshConfigHost,
   SshExecIpcResult,
+  // P0-3 主机密钥探测/信任（非秘密公钥材料）：renderer 面同样单源。
+  SshHostKeyProbe,
+  SshHostKeyProbeResult,
+  SshHostKeyTrustResult,
   SshInstanceInput,
   SshInstanceSpec,
   SshLogEntry,

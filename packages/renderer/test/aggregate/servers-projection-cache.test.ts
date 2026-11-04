@@ -33,7 +33,7 @@ const instance: SshInstanceSpec = {
 
 /** instanceConnected 只读 kind + phase，但投影类型要求全字段，故给一份完整的 ready 投影。 */
 const readyStatus: SshStatusProjection = {
-  kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'ready', localPort: null, sshPort: null,
+  kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'ready', localPort: null, transportSocket: 'tcp', sshPort: null,
   remotePort: 1, remoteDshHome: null, retryAttempt: 0, requiresUserAction: false, userActionKind: null,
   serviceActive: null, logSummary: '',
 }

@@ -13,12 +13,12 @@ import type { AddressInfo } from 'node:net'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
-import { createTransportManager, jitteredBackoffMs, RING_BUFFER_LIMIT, RING_LOG_MESSAGE_MAX_CHARS } from '../../transport-manager.ts'
+import { AUTH_READY_TIMEOUT_MS, connectVerifyBudgetMs, createTransportManager, jitteredBackoffMs, READY_TIMEOUT_MS, RING_BUFFER_LIMIT, RING_LOG_MESSAGE_MAX_CHARS, VERIFY_BUDGET_CUSHION_MS } from '../../transport-manager.ts'
 import { CHAMBER_HOST_PACKAGES } from '../../control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS } from '../../bounded-lines.ts'
-import { configureSshPasswordStore, probeChamberHostLive, purgeSshAuth, setSshPassword, sshProvider, verifyDshEndpoint } from '../../ssh-provider.ts'
+import { configureSshPasswordStore, probeChamberHostLive, purgeSshAuth, setSshPassword, sshProvider, VERIFY_UP_TIMEOUT_MS, verifyDshEndpoint } from '../../ssh-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportVerifyResult } from '../../transport-provider.ts'
-import { gatewayProvider } from '../../gateway-provider.ts'
+import { GATEWAY_VERIFY_BUDGET_MS, gatewayProvider } from '../../gateway-provider.ts'
 import { reconnectStaleTransports } from '../../transport-reconnect.ts'
 import { silentLogger, FakeChild, fakeEnvProvider, makeManager, tempDir, sleep, waitFor, readyThenDrop, EXEC_INSTANCE, type StatusWithNoUrlLeak, type ManagerHarness } from '../support/transport-manager-harness.ts'
 
@@ -70,10 +70,12 @@ async function exhaustBurst(harness: Pick<ManagerHarness, 'manager' | 'children'
   }
 }
 
-/** A manager whose allocated local port IS the given identity server. */
+/** A manager whose allocated local port IS the given identity server (TCP
+ *  tunnel shape — the UDS listener cannot be pointed at a test server). */
 function managerOn(dir: string, port: number) {
   return createTransportManager({
-    provider: sshProvider, spawnFn: () => new FakeChild(), instancesFile: join(dir, 'ssh-instances.json'),
+    provider: { ...sshProvider, transportSocketPath: () => null },
+    spawnFn: () => new FakeChild(), instancesFile: join(dir, 'ssh-instances.json'),
     logger: silentLogger, portProbe: async () => true, allocatePort: async () => port,
     options: { readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 10, retryMaxMs: 40, maxRetryAttempts: 3 },
   })
@@ -219,8 +221,10 @@ test('manual disconnect cancels the slow re-probe (no auto-reconnect while idle)
 test('a terminal failure never arms the slow re-probe', async t => {
   // probe=false keeps the ready loop iterating (re-checking authFailed each
   // turn); with probe=true the machine would race to ready before the auth
-  // line lands (ready-loop auth re-checks are in-flight-only).
+  // line lands (ready-loop auth re-checks are in-flight-only). P2-3: the
+  // credential verdict needs TWO consecutive auth lines.
   const { manager, children, spawnCalls } = await noProbeManager(t, { options: { slowRetryMs: 20 } })
+  children[0].stderrWrite('Permission denied (publickey).\n')
   children[0].stderrWrite('Permission denied (publickey).\n')
   await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'terminal auth error')
   assert.equal(manager.status('s1')!.requiresUserAction, true)
@@ -228,6 +232,84 @@ test('a terminal failure never arms the slow re-probe', async t => {
   await sleep(60) // well past slowRetryMs — no probe may fire for a terminal failure
   assert.equal(spawnCalls.length, 1, 'no auto-retry after a terminal failure')
 })
+test('a single auth-looking stderr line is a hint, not a verdict (P2-3 two-hit)', async t => {
+  // A banner/ProxyCommand line can mention credentials without proving a credential
+  // verdict. One such line must not land terminal; two CONSECUTIVE auth-bearing lines
+  // are the confirmation, and an intervening diagnostic line breaks the streak.
+  const { manager, children, spawnCalls } = await noProbeManager(t, { options: { readyTimeoutMs: 5_000 } })
+  children[0].stderrWrite('Permission denied (publickey).\n')
+  await sleep(60)
+  assert.equal(manager.status('s1')!.phase, 'connecting', 'one auth line never terminals')
+  assert.equal(manager.status('s1')!.requiresUserAction, false)
+  assert.ok(manager.logs('s1').some(entry => entry.message.includes('authentication failure hint')), 'the hint is recorded, not a verdict')
+  // A non-auth diagnostic breaks the streak: the count is CONSECUTIVE, not cumulative.
+  children[0].stderrWrite('debug1: channel 0: new [client-session]\n')
+  children[0].stderrWrite('Permission denied (publickey).\n')
+  await sleep(60)
+  assert.equal(manager.status('s1')!.phase, 'connecting', 'non-consecutive lines never add up')
+  // The second consecutive line confirms the credential verdict.
+  children[0].stderrWrite('Permission denied (publickey).\n')
+  await waitFor(() => manager.status('s1')!.phase === 'error', 3_000, 'two consecutive auth lines terminal')
+  assert.equal(manager.status('s1')!.requiresUserAction, true)
+  assert.equal(manager.status('s1')!.userActionKind, 'auth')
+  assert.equal(spawnCalls.length, 1, 'no auto-retry after the confirmed credential failure')
+})
+
+test('mid-line password chatter from banners never counts as auth evidence (P2-3 tightening)', async t => {
+  // ssh's own password PROMPT ends with `password:`; a Banner/ProxyCommand line that
+  // merely CONTAINS the word must not latch the credential class (ssh-provider narrowed
+  // /password:/i to /password:\s*$/i). Two such banner lines would have been two hits.
+  const { manager, children } = await noProbeManager(t, { options: { readyTimeoutMs: 5_000 } })
+  children[0].stderrWrite('Authorized use only. Password: rotate it at https://intranet.example\n')
+  children[0].stderrWrite('ProxyCommand output: your password: expired\n')
+  await sleep(60)
+  assert.equal(manager.status('s1')!.phase, 'connecting', 'banner text never terminals')
+  assert.ok(!manager.logs('s1').some(entry => entry.message.includes('authentication failure')), 'banner text records no auth evidence')
+  // The prompt-tail form still classifies as evidence (the credential exchange itself).
+  children[0].stderrWrite("alice@home.example.com's password:\n")
+  await sleep(60)
+  assert.equal(manager.status('s1')!.phase, 'connecting', 'one prompt is still only a hint')
+  assert.ok(manager.logs('s1').some(entry => entry.message.includes('authentication failure hint')), 'the prompt-tail line is evidence')
+})
+
+test('exit 255 confirms an auth line already seen; a bare 255 stays transient (P2-3)', async t => {
+  // ssh exits 255 for every failure of its own (auth, DNS, refused, timeout). With an
+  // auth line already observed the code confirms the credential class even without the
+  // second line; with NO evidence a 255 must keep the bounded retry path — making every
+  // DNS/refused blip terminal would disable the self-healing design.
+  const confirmed = await noProbeManager(t)
+  confirmed.children[0].stderrWrite('Permission denied (publickey).\n')
+  confirmed.children[0].simulateExit(255)
+  await waitFor(() => confirmed.manager.status('s1')!.phase === 'error', 3_000, 'exit 255 confirms the auth line')
+  assert.equal(confirmed.manager.status('s1')!.requiresUserAction, true)
+  assert.equal(confirmed.manager.status('s1')!.userActionKind, 'auth')
+
+  const bare = await noProbeManager(t, { options: { readyTimeoutMs: 5_000, retryBaseMs: 500 } })
+  bare.children[0].simulateExit(255)
+  await waitFor(() => bare.manager.status('s1')!.phase === 'degraded', 3_000, 'a bare 255 re-enters the retry path')
+  assert.equal(bare.manager.status('s1')!.requiresUserAction, false, 'no credential verdict without evidence')
+})
+
+test('the ready edge retires auth chatter so a later drop reconnects instead of terminal auth', async t => {
+  const { manager, children, spawnCalls, setProbe } = makeManager(t, { options: { readyTimeoutMs: 5_000, retryBaseMs: 500 } })
+  setProbe(false)
+  manager.connect('s1')
+  await waitFor(() => children.length === 1, 3_000, 'first spawn')
+  children[0].stderrWrite('Permission denied (publickey).\n')
+  setProbe(true)
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3_000, 'ready despite one pre-ready hint')
+  // Late credential chatter on a proven transport must never latch a verdict.
+  children[0].stderrWrite('Permission denied (publickey).\n')
+  children[0].stderrWrite('Permission denied (publickey).\n')
+  await sleep(40)
+  assert.equal(manager.status('s1')!.phase, 'ready')
+  assert.equal(manager.status('s1')!.requiresUserAction, false)
+  children[0].simulateExit(0)
+  await waitFor(() => manager.status('s1')!.phase === 'degraded', 3_000, 'a ready drop reconnects')
+  assert.equal(manager.status('s1')!.requiresUserAction, false, 'no auth terminal after a ready edge')
+  await waitFor(() => spawnCalls.length === 2, 3_000, 'reconnect spawn')
+})
+
 test('an endpoint that accepts TCP but fails the identity verification is never ready', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, { verifyProbe: async () => ({ ok: false, detail: 'the destination is not a dsh instance' }) })
   setProbe(true)
@@ -581,8 +663,8 @@ test('an auth failure landing while the final probe is in flight stays terminal'
     instancesFile: join(dir, 'ssh-instances.json'),
     logger: silentLogger,
     allocatePort: async () => 43123,
-    // A probe that stays in flight past the ready deadline: the auth line
-    // lands while the loop awaits, and the deadline branch must re-check
+    // A probe that stays in flight past the ready deadline: the confirming auth
+    // lines land while the loop awaits, and the deadline branch must re-check
     // authFailed instead of falling through to a reconnect.
     portProbe: () => new Promise<boolean>(resolve => { resolveProbe = resolve }),
     options: { readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 10, retryMaxMs: 40, maxRetryAttempts: 3 },
@@ -590,6 +672,7 @@ test('an auth failure landing while the final probe is in flight stays terminal'
   saveCompleted(manager, [{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
   manager.connect('s1')
   await waitFor(() => spawnCalls.length === 1)
+  spawnCalls[0].child.stderrWrite('Permission denied (publickey).\n')
   spawnCalls[0].child.stderrWrite('Permission denied (publickey).\n')
   await sleep(150)
   resolveProbe(false)
@@ -1546,7 +1629,78 @@ test('a real request failure forces one throttled identity probe', async t => {
 })
 
 
-test('a hanging connect-time verifier is bounded by the provider budget', async t => {
+test('a slow composite verify is bounded by the verify budget, never by the TCP ready window', async t => {
+  // Scaled stand-in for the production shape (TCP window 10s; a gateway composite
+  // verify that takes ~25s inside the 35s+5s budget). The verifier takes LONGER than
+  // BOTH the TCP window and the provider's declared inner budget; the connect verify
+  // budget (max(auth window, provider + cushion)) is what must govern it.
+  const { manager, setProbe } = await noProbeManager(t, {
+    options: {
+      readyTimeoutMs: 40,
+      authReadyTimeoutMs: 400,
+      verifyBudgetCushionMs: 20,
+      probeIntervalMs: 5,
+      retryBaseMs: 10,
+      retryMaxMs: 40,
+      maxRetryAttempts: 2,
+    },
+    probeBudgetMs: 50,
+    verifyProbe: async () => { await sleep(120); return { ok: true } },
+  })
+  setProbe(true)
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3_000, 'the slow verify still lands ready')
+  assert.equal(manager.status('s1')!.requiresUserAction, false)
+})
+
+test('a fast verify lands ready inside the TCP window', async t => {
+  const { manager, setProbe } = await noProbeManager(t, {
+    options: { readyTimeoutMs: 5_000, authReadyTimeoutMs: 5_000, probeIntervalMs: 5 },
+    verifyProbe: async () => ({ ok: true }),
+  })
+  const started = Date.now()
+  setProbe(true)
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3_000, 'fast verify ready')
+  assert.ok(Date.now() - started < 1_000, 'the auth window is a ceiling, not a delay')
+})
+
+test('the TCP/port window stays independent of a huge verify budget', async t => {
+  const started = Date.now()
+  const { manager } = await noProbeManager(t, {
+    options: {
+      readyTimeoutMs: 40,
+      authReadyTimeoutMs: 60_000,
+      verifyBudgetCushionMs: 5_000,
+      probeIntervalMs: 5,
+      retryBaseMs: 200,
+      retryMaxMs: 200,
+      maxRetryAttempts: 2,
+    },
+    probeBudgetMs: 60_000,
+  })
+  await waitFor(() => manager.status('s1')!.phase === 'degraded', 3_000, 'the port window still expires')
+  assert.ok(Date.now() - started < 1_000, 'the verify budget never stretches TCP/port readiness')
+  assert.ok(manager.logs('s1').some(entry => entry.message.includes('did not come up within')), 'the reachability window is what expired')
+})
+
+test('the shipped ready/verify budgets keep the gateway composite verify independent (plan v0.2 §4.11)', () => {
+  // Single source: the TCP window and the auth window are independent, and the connect
+  // verify budget is max(auth window, real provider budget + cushion), so the total
+  // attempt deadline is never earlier than the verify budget.
+  assert.equal(READY_TIMEOUT_MS, 10_000, 'TCP/port reachability window')
+  assert.equal(AUTH_READY_TIMEOUT_MS, 20_000, 'authentication/composite-verify window')
+  assert.equal(VERIFY_BUDGET_CUSHION_MS, 5_000, 'cushion keeps the provider inner timeout first')
+  assert.equal(connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, GATEWAY_VERIFY_BUDGET_MS), 40_000, 'gateway 35s composite flow + cushion')
+  assert.equal(connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, VERIFY_UP_TIMEOUT_MS), 20_000, 'single-exchange dsh probe keeps the auth floor')
+  assert.equal(connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, GATEWAY_VERIFY_BUDGET_MS) - GATEWAY_VERIFY_BUDGET_MS, VERIFY_BUDGET_CUSHION_MS, 'the outer deadline sits exactly one cushion behind the declared flow')
+  assert.equal(READY_TIMEOUT_MS + connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, VERIFY_UP_TIMEOUT_MS), 30_000, 'documented TCP+AUTH total for the ssh leg')
+  // The OLD total deadline was the bare 10s TCP window, i.e. EARLIER than the 35s gateway
+  // verify budget. The total is now TCP window + verify budget and must clear that budget.
+  const gatewayTotal = READY_TIMEOUT_MS + connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, GATEWAY_VERIFY_BUDGET_MS)
+  assert.equal(gatewayTotal, 50_000, 'TCP window + composite verify budget')
+  assert.ok(gatewayTotal > GATEWAY_VERIFY_BUDGET_MS, 'the total deadline is never earlier than the verify budget')
+})
+
+test('a hanging connect-time verifier is bounded by the connect verify budget', async t => {
   const { manager, setProbe } = await noProbeManager(t, {
     options: {
       readyTimeoutMs: 5_000,
@@ -1554,6 +1708,10 @@ test('a hanging connect-time verifier is bounded by the provider budget', async 
       retryBaseMs: 10,
       retryMaxMs: 20,
       maxRetryAttempts: 2,
+      // P2-3: the connect verify budget is max(auth window, provider + cushion);
+      // inject small values so the dead-man deadline is observable in ms.
+      authReadyTimeoutMs: 60,
+      verifyBudgetCushionMs: 5,
       linkPolicy: { probeTimeoutMs: 20 },
     },
     probeBudgetMs: 30,
@@ -1575,6 +1733,8 @@ test('a hung connect-time probe is canceled by its deadline', async t => {
       retryBaseMs: 10,
       retryMaxMs: 20,
       maxRetryAttempts: 2,
+      authReadyTimeoutMs: 60,
+      verifyBudgetCushionMs: 5,
       linkPolicy: { probeTimeoutMs: 20 },
     },
     probeBudgetMs: 30,

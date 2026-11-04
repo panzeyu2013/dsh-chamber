@@ -10,15 +10,16 @@
  * `RemoteStreamMuxClient` through a fake WebSocket and asserts the recovery.
  */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import { RemoteStream } from '../../src/client/remote-stream.ts'
-import { ClientUplinkQueue, RemoteStreamCarrierError, RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
+import { ClientUplinkQueue, RemoteStreamAuthError, RemoteStreamCarrierError, RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
 import { mountProbe } from '../support/generated-probe.ts'
 import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
   REMOTE_STREAM_RETRY_BASE_MS,
+  REMOTE_STREAM_STABLE_CARRIER_MIN_MS,
 } from '../../src/client/remote-retry-policy.ts'
 // P3: the opening deadline and the teardown floor are table values now (the fork
 // copies were retired with their G-G lockstep entries).
@@ -108,6 +109,12 @@ class FakeSocket {
   dieNow(): void {
     this.readyState = FakeSocket.CLOSED
     this.#dispatch('close')
+  }
+
+  /** Test helper: the upstream rejected auth on an already-open socket. */
+  closeWithCode(code: number): void {
+    this.readyState = FakeSocket.CLOSED
+    this.#dispatch('close', { code })
   }
 
   /** Test helper: the socket fails BEFORE opening. */
@@ -1110,6 +1117,176 @@ test('an open frame is refused when the socket was replaced before the send', as
   await client.close()
 })
 
+/* ---------------------------------------------------------------------------
+ * P1-4: the self-heal cadence resets only on recovery EVIDENCE. A bare open (a
+ * listener that accepts and immediately drops) or a lane-driven replacement is
+ * not evidence; a delivered frame or a socket that outlives the stability window
+ * is. These tests drive the REAL mux on a virtual clock and pin the exact rungs,
+ * so removing either evidence arm makes them red (the negative control used while
+ * implementing P1-4 removed the gate and watched the first test fail here).
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Drive the mux to "two failed attempts behind it, third socket OPEN and
+ * frame-less": the cadence has doubled to 2 s, so a reset is observable.
+ * @param t - test context owning the virtual clock.
+ * @returns the live client and the third (open) socket.
+ */
+async function openThirdAttemptWithWidenedCadence(
+  t: TestContext,
+): Promise<{ client: RemoteStreamMuxClient; socket: FakeSocket }> {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
+  client.start()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
+  // A frame-less OPEN that dies at once: no reset, the heal rung is the base 1 s.
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  FakeSocket.instances[0].dieNow()
+  await flushMicrotasks()
+  t.mock.timers.tick(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2)
+  // One genuine pre-open failure doubles the rung to 2 s.
+  FakeSocket.instances[1].failNow()
+  await flushMicrotasks()
+  t.mock.timers.tick(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS * 2)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3)
+  return { client, socket: FakeSocket.instances[2] }
+}
+
+test('an open socket that never delivered a frame does not reset the self-heal cadence', async (t) => {
+  const { client, socket } = await openThirdAttemptWithWidenedCadence(t)
+  t.after(() => t.mock.timers.reset())
+  // An accept-then-drop path completes the handshake and dies with zero frames. That is
+  // exactly the flapping shape the widening exists for: resetting here would reconnect at
+  // the 1 s floor forever (the regression this gate removes).
+  socket.openNow()
+  await flushMicrotasks()
+  socket.dieNow()
+  await flushMicrotasks()
+  t.mock.timers.tick(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS * 2 - 1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3, 'a frame-less open must NOT reset the widened cadence')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 4, 'the doubled rung stays the retry pace')
+  await client.close()
+})
+
+test('a delivered frame on the new socket resets the self-heal cadence', async (t) => {
+  const { client, socket } = await openThirdAttemptWithWidenedCadence(t)
+  t.after(() => t.mock.timers.reset())
+  // One frame on ANY logical stream proves the socket is serving this page.
+  socket.openNow()
+  await flushMicrotasks()
+  socket.deliverNow()
+  await flushMicrotasks()
+  socket.dieNow()
+  await flushMicrotasks()
+  t.mock.timers.tick(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS - 1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 3, 'the next attempt must wait the base rung')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 4, 'a frame is recovery evidence: the cadence is back to base')
+  await client.close()
+})
+
+test('a socket that outlives the stability window resets the cadence when it is lost', async (t) => {
+  const { client, socket } = await openThirdAttemptWithWidenedCadence(t)
+  t.after(() => t.mock.timers.reset())
+  // No frame at all: the sole evidence is the OPEN socket living past the window.
+  socket.openNow()
+  await flushMicrotasks()
+  t.mock.timers.tick(REMOTE_STREAM_STABLE_CARRIER_MIN_MS)
+  await flushMicrotasks()
+  socket.dieNow()
+  await flushMicrotasks()
+  // The rung was reset to 1 s AND 30 s have elapsed since the attempt started, so the
+  // replacement starts at once; the NEXT failure proves which rung survived.
+  assert.equal(FakeSocket.instances.length, 4, 'the stable socket is replaced immediately')
+  FakeSocket.instances[3].failNow()
+  await flushMicrotasks()
+  t.mock.timers.tick(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS * 2 - 1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 4, 'with the lifetime reset the failure doubles 1 s -> 2 s')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 5, 'without the reset this retry would have waited 4 s')
+  await client.close()
+})
+
+test('one carrier failure spreads the first reopens by the injected per-stream jitter', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  // ONE lane replacement fails BOTH logical streams in the same tick. Attempt 1 has no
+  // backoff, so without the per-stream spread both would re-issue together; the injected
+  // draws (0.2 / 0.8 of the 250 ms bound) put them at 50 ms and 200 ms.
+  const draws = [0.2, 0.8]
+  const client = new RemoteStreamMuxClient({
+    waitForReconnect: true,
+    random: () => draws.shift() ?? 0,
+  })
+  client.start()
+  await flushMicrotasks()
+  const original = FakeSocket.instances[0]
+  assert.ok(original !== undefined)
+  original.openNow()
+  await flushMicrotasks()
+
+  const connection = { generation: { getSnapshot: () => ({ id: 1 }), subscribe: () => () => {} } }
+  const createStream = (): RemoteStream<unknown> => new RemoteStream(connection as never, {
+    name: 'session/follow',
+    open: signal => client.open('session/follow', { args: {} }, signal),
+    ended: () => new Error('ended'),
+  })
+  const streamA = createStream()
+  const streamB = createStream()
+  const first = streamA[Symbol.asyncIterator]()
+  const second = streamB[Symbol.asyncIterator]()
+  void first.next().catch(() => undefined)
+  void second.next().catch(() => undefined)
+  await flushMicrotasks()
+  const opensOn = (socket: FakeSocket): number =>
+    socket.sent.filter(frame => frame.includes('"type":"open"')).length
+  assert.equal(opensOn(original), 2, 'both logical streams opened on the original socket')
+
+  client.reconnect()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the lane replacement starts a fresh attempt at once')
+  const replacement = FakeSocket.instances[1]
+  assert.ok(replacement !== undefined)
+  replacement.openNow()
+  await flushMicrotasks()
+
+  // The carrier FAILURE was delivered synchronously (both streams are in their retry
+  // wait); only the reopen is spread.
+  assert.equal(opensOn(replacement), 0)
+  t.mock.timers.tick(49)
+  await flushMicrotasks()
+  assert.equal(opensOn(replacement), 0, 'no reopen before the first stream\'s spread')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(opensOn(replacement), 1, 'the first stream reopens at its own 50 ms')
+  t.mock.timers.tick(149)
+  await flushMicrotasks()
+  assert.equal(opensOn(replacement), 1, 'the second stream does not follow the first')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(opensOn(replacement), 2, 'the second stream reopens at its own 200 ms')
+
+  // Dispose through RemoteStream (its lifetime abort releases the generation); calling
+  // return() on the outer iterator directly would queue behind the pending source read.
+  await streamA.dispose()
+  await streamB.dispose()
+  await client.close()
+})
+
 test('consecutive genuine failures double the self-heal cadence up to its cap', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
@@ -1211,12 +1388,87 @@ test('a live generation paces the reopen with the episode backoff', async (t) =>
   await flushMicrotasks()
   assert.equal(opens, 2, 'the first failure reopens immediately')
   // The second failure is paced by the base backoff — the live-generation
-  // branch, so the no-generation bound plays no part here.
-  t.mock.timers.tick(REMOTE_STREAM_RETRY_BASE_MS - 1)
+  // branch, so the no-generation bound plays no part here. P1-4 adds half-jitter, so
+  // the reopen is bounded by [half, full] of the base instead of an exact instant:
+  // nothing may fire before the floor, and the ceiling guarantees it has fired.
+  t.mock.timers.tick(REMOTE_STREAM_RETRY_BASE_MS / 2 - 1)
   await flushMicrotasks()
-  assert.equal(opens, 2, 'no reopen before the backoff elapses')
-  t.mock.timers.tick(1)
+  assert.equal(opens, 2, 'no reopen before the jitter floor (half the backoff)')
+  t.mock.timers.tick(REMOTE_STREAM_RETRY_BASE_MS / 2)
   await flushMicrotasks()
-  assert.equal(opens, 3, 'the live-generation lane keeps its paced reopen')
+  assert.equal(opens, 3, 'the paced reopen happens within the base backoff')
   await stream.dispose()
+})
+
+test('an auth close on an OPEN mux rejects with RemoteStreamAuthError and does not reopen (R1-C BLOCKER)', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true, random: () => 0.5 })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const controller = new AbortController()
+  const iterator = client.open('events', { args: {} }, controller.signal)[Symbol.asyncIterator]()
+  const opening = iterator.next()
+  await flushMicrotasks()
+  const streamId = FakeSocket.instances[0].openStreamId()
+  FakeSocket.instances[0].answerNow(streamId)
+  await opening
+  const next = iterator.next()
+  await flushMicrotasks()
+  FakeSocket.instances[0].closeWithCode(4401)
+  await assert.rejects(next, (error: unknown) => {
+    assert.ok(error instanceof RemoteStreamAuthError, 'auth identity must survive the fan-out')
+    assert.equal(error.closeCode, 4401)
+    return true
+  })
+  assert.equal(FakeSocket.instances.length, 1, 'auth must not schedule a reopen')
+  const later = client.open('session/list', { args: {} }, new AbortController().signal)
+  await assert.rejects(later[Symbol.asyncIterator]().next(), (error: unknown) => {
+    assert.ok(error instanceof RemoteStreamAuthError, 'later streams see the same terminal auth failure')
+    return true
+  })
+  assert.equal(FakeSocket.instances.length, 1, 'a later open must not start a new socket')
+  controller.abort()
+  await client.close()
+})
+
+test('RemoteStream maps a pre-open auth rejection to terminal gateway/auth exactly once (R4 C-m3)', async () => {
+  let opens = 0
+  const stream = new RemoteStream({ generation: 0 } as never, {
+    name: 'auth-close',
+    open: async function* () {
+      opens += 1
+      throw new RemoteStreamAuthError('authentication required', 4401)
+    },
+    ended: () => new Error('ended'),
+  })
+  const iterator = stream[Symbol.asyncIterator]()
+  await assert.rejects(iterator.next(), (error: unknown) => {
+    const mapped = error as { code?: string; details?: { closeCode?: number }; cause?: unknown }
+    assert.equal(mapped.code, 'gateway/auth')
+    assert.equal(mapped.details?.closeCode, 4401)
+    assert.ok(mapped.cause instanceof RemoteStreamAuthError)
+    return true
+  })
+  assert.equal(opens, 1, 'the mapping must not retry the same credential')
+  await stream.dispose()
+})
+
+
+test('a pre-open 4401 stops the mux self-heal ladder (R4 C-M1)', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => t.mock.timers.reset())
+  const client = new RemoteStreamMuxClient({ waitForReconnect: true })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].closeWithCode(4401)
+  await flushMicrotasks()
+  t.mock.timers.tick(30_000)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1, 'auth must not be retried on the 10s ladder')
+  await client.close()
 })

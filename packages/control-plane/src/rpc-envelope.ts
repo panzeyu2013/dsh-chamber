@@ -176,8 +176,12 @@ export function postClientRequest(options: {
    *  the owner must not keep a stale session rotation alive after the transport it
    *  was probing for is gone. Settles as a connection-level failure. */
   signal?: AbortSignal
+  /** POSIX ssh tunnel: dial this Unix socket instead of the URL's host:port. The
+   *  URL still supplies Host/authority and the path — a UDS tunnel is reachable
+   *  only through the socket, never through a local TCP port. */
+  socketPath?: string
 }): Promise<RawUnaryOutcome> {
-  const { url, envelope, timeoutMs, maxBodyBytes, signal } = options
+  const { url, envelope, timeoutMs, maxBodyBytes, signal, socketPath } = options
   return new Promise(resolve => {
     let settled = false
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -197,6 +201,7 @@ export function postClientRequest(options: {
     const req = httpRequest(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      ...(socketPath === undefined ? {} : { socketPath }),
     }, res => {
       // A premature close after our destroy must never escape as an uncaught error (main-process safety discipline).
       res.on('error', () => {})

@@ -14,7 +14,7 @@
  * dsh home as cwd — an in-place app update must never unlink the host's cwd.
  */
 
-import { createServer, type Server } from 'node:http'
+import type { Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { join, resolve } from 'node:path'
@@ -57,6 +57,8 @@ import {
 import { resolveLocalHostGraphOverlay, seedDshHomeDefaults } from './local-host-seeding.ts'
 import { withControlLogFile } from './log-file.ts'
 import type { Logger } from './types.ts'
+import { applyHttpServerLimits, createLimitedServer, HTTP_SERVER_LIMITS, installConnectionSoftCap, installHeaderDeadline, isSoftCapRefusedSocket, type HttpServerLimits } from './http-limits.ts'
+import { MAX_REQUEST_BODY_BYTES } from './proxy-forward.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
 /** Browser hardening shared by static, API, proxy and error responses.
@@ -157,6 +159,9 @@ export interface ControlPlaneOptions {
   safeMode?: boolean
   logger?: Logger
   corsOrigins?: string[]
+  /** Server-level limits (defaults in http-limits.ts). Tests/gateway may override;
+   *  requestTimeout must never be pushed back down to the historical 35s. */
+  httpLimits?: Partial<HttpServerLimits>
   /** Explicit request boundary for an authenticated external composer; its
    *  presence is also the opt-in permitting a non-loopback bind. */
   corsEvaluator?: ApiCorsEvaluator
@@ -800,6 +805,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   })
 
   let server: Server | null = null
+  let disposeHeaderDeadline: (() => void) | null = null
+  let disposeConnectionSoftCap: (() => void) | null = null
   let serverPort: number | null = null
   let startPromise: Promise<void> | null = null
   let stopPromise: Promise<void> | null = null
@@ -818,6 +825,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   /** Close one candidate/active server without letting long-lived proxy streams strand stop(). */
   async function closeHttpServer(srv: Server, closeProxyStreams: boolean): Promise<void> {
+    disposeHeaderDeadline?.()
+    disposeHeaderDeadline = null
+    disposeConnectionSoftCap?.()
+    disposeConnectionSoftCap = null
     if (closeProxyStreams) instanceProxy.closeAllStreams()
     // 页面级通道的 socket 逃出 HTTP server 的连接跟踪，**任何** server 收尾都要显式以 1012
     // 关掉：包括启动被取消的候选 server——那时升级过的 socket 既不在 server 里，也不会再
@@ -914,7 +925,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             res.end(JSON.stringify({ error: 'not_found', code: 'not_found' }))
           }
 
-          candidate = createServer((req, res) => {
+          const httpLimits: HttpServerLimits = { ...HTTP_SERVER_LIMITS, expectContinueMaxBytes: MAX_REQUEST_BODY_BYTES, ...options.httpLimits }
+          candidate = createLimitedServer((req, res) => {
             for (const [name, value] of Object.entries(CONTROL_PLANE_SECURITY_HEADERS)) {
               res.setHeader(name, value)
             }
@@ -958,17 +970,19 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               return
             }
             dispatchRest(req as ApiRequest, res as ApiResponse, url)
-          })
+          }, httpLimits)
           const listeningServer = candidate
-          listeningServer.headersTimeout = 10_000
-          listeningServer.requestTimeout = 35_000
-          listeningServer.keepAliveTimeout = 5_000
-          listeningServer.maxRequestsPerSocket = 1_000
-          listeningServer.maxConnections = 192
+          applyHttpServerLimits(listeningServer, httpLimits)
+          disposeHeaderDeadline = installHeaderDeadline(listeningServer, httpLimits.headerDeadlineMs)
+          // App-level soft cap: Node's maxConnections drop is silent, so a socket
+          // above the cap must receive an explicit 503 before it is closed.
+          disposeConnectionSoftCap = installConnectionSoftCap(listeningServer, httpLimits.connectionSoftCap)
 
           function defaultUpgrade(req: ApiRequest, socket: Duplex, head: Buffer): void {
+            if (isSoftCapRefusedSocket(socket)) { socket.destroy(); return }
             if (!accepting) { socket.destroy(); return }
             if (!api.getCorsHeaders(req).allowed) {
+              socket.on('error', () => {})
               socket.end(
                 'HTTP/1.1 403 Forbidden\r\n'
                 + 'Content-Type: application/json\r\n'
@@ -997,9 +1011,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           }
 
           listeningServer.on('upgrade', (req, socket, head) => {
+            if (isSoftCapRefusedSocket(socket)) { socket.destroy(); return }
             const rawTarget = req.url ?? '/'
             if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
               || rawTarget.includes('\\') || rawTarget.includes('#')) {
+              socket.on('error', () => {})
               socket.end(
                 'HTTP/1.1 400 Bad Request\r\n'
                 + 'Content-Type: application/json\r\n'

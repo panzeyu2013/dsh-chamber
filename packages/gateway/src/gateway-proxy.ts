@@ -128,6 +128,9 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     agents,
     id: 'local',
     logPrefix: 'gateway-proxy',
+    // Same dsh as /api/i/local; >8MiB root uploads must not pin the shared
+    // processBufferedRequestBytes budget (R6 C-M1).
+    streamRequestBody: true,
     upstreamTimeoutMs: deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
     ...(deps.longRpcUpstreamTimeoutMs === undefined ? {} : { longRpcUpstreamTimeoutMs: deps.longRpcUpstreamTimeoutMs }),
     ...(deps.longRpcPaths === undefined ? {} : { longRpcPaths: deps.longRpcPaths }),

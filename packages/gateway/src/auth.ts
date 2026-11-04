@@ -1,7 +1,8 @@
 /**
  * Gateway authentication: the pluggable AuthProvider seam over the persisted
- * credential store — `none` (loopback-only trust), `token` (shared bearer; only
- * a salted scrypt hash persists), `password` (scrypt → HS256 JWT session cookie).
+ * credential store — `none` (loopback-only trust), `token` (shared bearer;
+ * persisted as an O(1) HMAC verifier, with legacy scrypt records upgraded in
+ * place on first success), `password` (scrypt → HS256 JWT session cookie).
  *
  * Credentials are SERVER STATE: config seeds the store only while the persisted
  * source is 'config'; 'runtime' credentials are authoritative. Kind and
@@ -14,7 +15,7 @@
 
 import { createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
 import type { CredentialSource, GatewayStore, GatewayStoreLogger } from './store.ts'
-import { hashCredential, verifyCredential } from './store.ts'
+import { hashCredential, hashToken, verifyCredential, verifyToken } from './store.ts'
 import {
   MAX_GATEWAY_PASSWORD_CHARS,
   MAX_GATEWAY_TOKEN_CHARS,
@@ -59,7 +60,8 @@ export interface AuthProvider {
   verify(req: AuthRequest): Promise<AuthPrincipal | null>
   /** Login endpoint (password providers only); `req` supplies the rate-limit key. */
   login?(body: unknown, req: AuthRequest): Promise<{ setCookie?: string; token?: string }>
-  /** Unforgeable generation-bound proof; dispatch reuses it instead of repeating bearer scrypt. */
+  /** Unforgeable generation-bound proof; dispatch reuses it instead of repeating
+   * the bearer verifier (hmac MAC or legacy scrypt). */
   captureChangeProof?(principal: AuthPrincipal): AuthChangeProof | null
   /** Runtime password change (wire errors on the module); `remove:true` deletes it. */
   changePassword?(input: ChangePasswordInput, req: AuthRequest, proof?: AuthChangeProof): Promise<ChangePasswordResult>
@@ -74,7 +76,9 @@ export interface AuthProvider {
   }
 }
 
-/** Crypto seam; production callers use the bounded asynchronous scrypt verifier. */
+/** Scrypt crypto seam (password verifier and LEGACY scrypt token verifier);
+ * production callers use the bounded asynchronous verifier, tests inject spies.
+ * hmac`$…` token verifiers never reach this seam. */
 export interface AuthDeps {
   verifyCredentialAsync?: (plain: string, stored: string | null) => Promise<boolean>
 }
@@ -295,6 +299,15 @@ function verifyCredentialAsync(plain: string, stored: string | null): Promise<bo
 const SILENT_LOGGER = { log() {}, warn() {}, error() {} }
 
 
+/** Compare a config/plaintext token against the persisted verifier using the
+ * verifier's OWN shape: hmac through the token key, legacy scrypt through the
+ * bounded scrypt verifier. Any other shape is false (fail-closed). */
+function tokenVerifierMatches(plain: string, verifier: string, store: GatewayStore): boolean {
+  return verifier.startsWith('hmac$')
+    ? verifyToken(plain, verifier, store.getTokenKey())
+    : verifyCredential(plain, verifier)
+}
+
 /**
  * Seed the persisted credentials from deployment config; the persisted `source`
  * decides whether config is asserted:
@@ -332,8 +345,12 @@ export function seedCredentialsFromConfig(config: AuthConfig, store: GatewayStor
   const tokenRecord = store.getTokenCredential()
   if (configToken !== null) {
     if (tokenRecord === null || tokenRecord.source === 'config') {
-      const unchanged = tokenRecord !== null && verifyCredential(configToken, tokenRecord.verifier)
-      if (!unchanged) store.setTokenHash(hashCredential(configToken), 'config')
+      // SHAPE-AWARE comparison: an hmac verifier is proven with the token key, a
+      // legacy scrypt verifier with scrypt. Comparing an hmac record through the
+      // scrypt path always fails, which used to rewrite scrypt on every boot and
+      // silently undo the O(1) fast path (design 17 §7.2).
+      const unchanged = tokenRecord !== null && tokenVerifierMatches(configToken, tokenRecord.verifier, store)
+      if (!unchanged) store.setTokenHash(hashToken(configToken, store.ensureTokenKey()), 'config')
     } else {
       logger.warn(
         `gateway-auth: config token IGNORED — a runtime-set token is active `
@@ -347,16 +364,38 @@ export function seedCredentialsFromConfig(config: AuthConfig, store: GatewayStor
 }
 
 
-/** `token` leaf: shared bearer. Only a salted scrypt hash is persisted. Verify is
- * constant-time, work-gated, and re-reads the CURRENT hash every request; the
- * wire bounds check runs BEFORE the hash read so malformed input reaches zero
- * hash reads. */
+/** `token` leaf: shared bearer. The persisted verifier is the `hmac$…` shape
+ * (O(1) verify) or a legacy `scrypt$…` record, which stays readable and is
+ * upgraded in place on the first successful verification. Verify re-reads the
+ * CURRENT record every request; the wire bounds check runs BEFORE the record
+ * read so malformed input reaches zero disk reads. */
 function createTokenProvider(
   store: GatewayStore,
   verifyAsync: (plain: string, stored: string | null) => Promise<boolean>,
   generation: () => number,
+  logger: GatewayStoreLogger,
 ): AuthProvider {
   const verifyBounded = createPasswordWorkGate()
+  // One migration attempt per legacy verifier per process. The write itself is
+  // synchronous and compare-and-swap guarded, so concurrent successful verifies
+  // can never produce a second write (nor overwrite a rotation that landed
+  // while the scrypt work was queued).
+  const attemptedUpgrades = new Set<string>()
+  function upgradeLegacyToken(candidate: string, verified: string): void {
+    if (attemptedUpgrades.has(verified)) return
+    attemptedUpgrades.add(verified)
+    try {
+      const current = store.getTokenCredential()
+      if (current === null || current.verifier !== verified) return
+      // source is preserved: the migration changes the verifier SHAPE, never
+      // provenance — a 'runtime' token must stay authoritative over config.
+      store.setTokenHash(hashToken(candidate, store.ensureTokenKey()), current.source)
+    } catch (error) {
+      // A failed migration must never deny an otherwise valid login: the legacy
+      // verifier stays in force and the next boot retries.
+      logger.warn(`gateway-auth: token verifier upgrade failed; the legacy scrypt verifier stays in force: ${String(error)}`)
+    }
+  }
   return {
     kind: 'token',
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
@@ -372,12 +411,22 @@ function createTokenProvider(
       const candidate = value.slice(prefix.length)
       if (!GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN.test(candidate)) return null
       const admittedGeneration = generation()
-      const stored = store.getTokenHash()
-      if (stored === null) return null
-      const ok = await verifyBounded(() => verifyAsync(candidate, stored))
+      const record = store.getTokenCredential()
+      if (record === null) return null
+      const stored = record.verifier
+      const legacyScrypt = !stored.startsWith('hmac$')
+      // hmac: one MAC + constant-time compare, never the scrypt work gate (an
+      // O(1) path must not be queueable into auth_busy or spend CPU per guess).
+      // legacy scrypt: the bounded gate, then a single-flight in-place upgrade.
+      const ok = legacyScrypt
+        ? await verifyBounded(() => verifyAsync(candidate, stored))
+        : verifyToken(candidate, stored, store.getTokenKey())
       // A verifier captured before a token rotation is not a live verdict, even
       // when its deferred scrypt work eventually matches the old hash.
       if (!ok || admittedGeneration !== generation()) return null
+      // No generation bump: the same plaintext still authenticates, so the
+      // triggering request (and every live principal) stays admitted.
+      if (legacyScrypt) upgradeLegacyToken(candidate, stored)
       return { kind: 'token', id: 'shared-token', issuedAt: Date.now(), generation: admittedGeneration }
     },
   }
@@ -445,7 +494,12 @@ function createPasswordProvider(
 /** Dynamic AuthProvider facade: effective kind and verify/login dispatch share
  * the current generation-bound presence snapshot; mutations are serialized and
  * reject stale proofs. */
-function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore, deps: AuthDeps = {}): AuthProvider {
+function createDynamicAuthProvider(
+  config: AuthConfig,
+  store: GatewayStore,
+  deps: AuthDeps = {},
+  logger: GatewayStoreLogger = SILENT_LOGGER,
+): AuthProvider {
   const rateLimit = createLoginRateLimiter()
   const verifyBounded = createPasswordWorkGate()
   const verifyAsync = deps.verifyCredentialAsync ?? verifyCredentialAsync
@@ -465,7 +519,7 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore, deps
   const passwordLeaf = createPasswordProvider(
     store, rateLimit, verifyBounded, rateKey, verifyAsync, () => credentialGeneration,
   )
-  const tokenLeaf = createTokenProvider(store, verifyAsync, () => credentialGeneration)
+  const tokenLeaf = createTokenProvider(store, verifyAsync, () => credentialGeneration, logger)
 
   // Cached presence for verify dispatch: updated on success, reconciled from the
   // affected file after a failed mutation (a rename may precede a failing parent
@@ -646,10 +700,11 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore, deps
 
       // Fence before publication for the same rename-then-fsync ambiguity: a
       // failed attempt may force one reconnect, but never preserves old streams
-      // after the token namespace actually changed.
+      // after the token namespace actually changed. The token key is ensured
+      // BEFORE the fence: a key failure must not bump the generation.
       const nextHash = remove
-        ? (revertToConfig ? hashCredential(configToken!) : null)
-        : hashCredential(tokenValue!)
+        ? (revertToConfig ? hashToken(configToken!, store.ensureTokenKey()) : null)
+        : hashToken(tokenValue!, store.ensureTokenKey())
       credentialGeneration += 1
       let durabilityUnknown = false
       try {
@@ -752,5 +807,5 @@ export function createAuth(
     throw new TypeError(`gateway token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
   }
   seedCredentialsFromConfig(config, store, logger)
-  return createDynamicAuthProvider(config, store, deps)
+  return createDynamicAuthProvider(config, store, deps, logger)
 }

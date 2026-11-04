@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { buildRemoteExecArgv, configureSshPasswordStore, purgeSshAuth, resolveWriteTarget, setSshPassword, sshProvider, RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES } from '../../ssh-provider.ts'
+import { sshTrustPins } from '../../host-key.ts'
 import type { SpawnedProcess, TransportExecDeps } from '../../transport-provider.ts'
 import { CHILD_LINE_MAX_CHARS } from '../../bounded-lines.ts'
 import { runDeps, spec, specWithHome } from '../support/ssh-provider-run-deps.ts'
@@ -500,4 +501,27 @@ test('run: private material in stderr is redacted from the failure detail', asyn
     assert.ok(!result.error.includes('/Users/alice/.ssh'), 'the key path never rides the error')
     assert.match(result.error, /\[ssh material redacted\]/)
   }
+})
+
+test('exec/run ssh children carry the app known-host pin (R1-B M1)', async () => {
+  const argsSeen: string[][] = []
+  const deps = runDeps((_command, args) => {
+    argsSeen.push([...args])
+    const child = new FakeRunChild()
+    setImmediate(() => child.simulateExit(0))
+    return child
+  })
+  deps.knownHosts = { knownHostsFile: '/u/kh', globalKnownHostsFile: '/dev/null' }
+  const result = await sshProvider.exec!(spec('trust-exec'), 'run', deps, {
+    op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json'],
+  })
+  assert.equal(result.ok, true)
+  const args = argsSeen[0]!
+  assert.ok(args.includes('StrictHostKeyChecking=yes'))
+  assert.ok(args.includes('UserKnownHostsFile=/u/kh'))
+  assert.ok(args.includes('GlobalKnownHostsFile=/dev/null'))
+  assert.ok(args.includes('HostKeyAlias=h.example.com'))
+  assert.ok(args.includes('ControlMaster=no'))
+  assert.ok(args.includes('ControlPath=none'))
+  for (const pin of sshTrustPins()) assert.ok(args.includes(pin), pin)
 })

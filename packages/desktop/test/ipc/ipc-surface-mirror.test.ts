@@ -487,7 +487,7 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
   // method is genuinely removed; a synchronized three-way deletion otherwise
   // stays green in the pairwise comparison above).
   const golden = [
-    'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_sync', 'instances_get',
+    'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_sync', 'host_key_probe', 'host_key_trust', 'instances_get',
     'instances_health', 'is_active', 'local_plugin_list',
     'logs', 'logs_clear', 'onInstancesChanged',
     'onStatusChanged', 'plugin_list', 'restart_service', 'reverify', 'seed_host_graph',
@@ -1054,7 +1054,7 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
   }
 })
 
-test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 65/65 恰用一次由事实变断言)', () => {
+test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 67/67 恰用一次由事实变断言)', () => {
   // 每个 channel 常量必须在 MAIN_SIDE_FILES 的代码引用中各恰用一次：
   // 0 次 = 死 channel（注册/发送丢失），>1 次 = 意外双引用（镜像集合
   // 相等看不见）。计数只认 `IPC_CHANNELS.<KEY>` 拼写，注释剥离用下方单趟状态机

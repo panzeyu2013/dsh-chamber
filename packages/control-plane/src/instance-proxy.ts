@@ -25,10 +25,16 @@ import {
 import { isLoopbackHostname, isLoopbackUpstreamBaseUrl } from './loopback.ts'
 import {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
+  LOCAL_HTTP_RESERVED_SLOTS,
+  LONG_RPC_PATHS,
   MAX_BUFFERED_REQUEST_BYTES,
   MAX_CONCURRENT_HTTP_REQUESTS,
+  MAX_CONCURRENT_HTTP_REQUESTS_PER_CONNECTION,
+  MAX_CONCURRENT_LONG_RPC_REQUESTS,
   MAX_CONCURRENT_WS_STREAMS,
+  MAX_CONCURRENT_WS_STREAMS_PER_CONNECTION,
   MAX_PENDING_WS_HANDSHAKES,
+  MAX_PENDING_WS_HANDSHAKES_PER_CONNECTION,
   UPSTREAM_TIMEOUT_MS,
   WS_PING_INTERVAL_MS,
   WS_PING_MISSES_BEFORE_TEARDOWN,
@@ -37,6 +43,7 @@ import {
   createProxyAgentPair,
   forwardHttp,
   forwardUpgrade,
+  matchesLongRpcPath,
   rejectUpgrade,
   SPKI_PIN_PATTERN,
   UPSTREAM_BODY_FINISHED,
@@ -69,12 +76,18 @@ export interface InstanceProxyDiagnostics {
   failures: number
   activeStreams: number
   activeHttpRequests: number
+  /** Ordinary HTTP quota is a separate pool from the long-RPC one; this is the
+   *  long-RPC pool's current occupancy (never counted in activeHttpRequests). */
+  activeLongRpcRequests: number
   pendingUpgrades: number
   bufferedRequestBytes: number
   /** Requests that took the long-RPC window, and hits of the insurance fuse (LONG_RPC_PATHS). */
   longRpcRequests: number
   longRpcTimeouts: number
   transports: number
+  /** WS close codes by leg, keyed `down:<code>` / `up:<code>` (1006 = no close
+   *  frame observed before the socket ended). */
+  wsCloseCodes: Record<string, number>
 }
 
 /** createInstanceProxy deps. */
@@ -110,7 +123,32 @@ export interface InstanceProxyDeps {
   maxConcurrentHttpRequests?: number
   maxConcurrentWsStreams?: number
   maxPendingWsHandshakes?: number
+  /** Fair share of the owner-wide HTTP ceiling for ONE connectionId (default
+   *  MAX_CONCURRENT_HTTP_REQUESTS_PER_CONNECTION; the local instance is included). */
+  maxConcurrentHttpRequestsPerConnection?: number
+  /** Fair share of the owner-wide live-WS ceiling for ONE connectionId (default
+   *  MAX_CONCURRENT_WS_STREAMS_PER_CONNECTION; live + pending counted together). */
+  maxConcurrentWsStreamsPerConnection?: number
+  /** In-flight handshakes for ONE connectionId (default
+   *  MAX_PENDING_WS_HANDSHAKES_PER_CONNECTION). */
+  maxPendingWsHandshakesPerConnection?: number
+  /** Global slots ordinary HTTP admission must leave for the local instance
+   *  (default LOCAL_HTTP_RESERVED_SLOTS). Long-RPC requests never use this pool. */
+  localReservedHttpSlots?: number
+  /** Owner-wide long-RPC pool (default MAX_CONCURRENT_LONG_RPC_REQUESTS). */
+  maxConcurrentLongRpcRequests?: number
   maxBufferedRequestBytes?: number
+  /** Stream request bodies whose DECLARED Content-Length exceeds
+   *  streamThresholdBytes (plan P1-1). Production default: ON, opt-out through
+   *  DSH_CHAMBER_PROXY_STREAM_BODY=0 (`streamRequestBodyEnabled`); an explicit
+   *  value always wins, which is what tests use. */
+  streamRequestBody?: boolean
+  /** Declared length above which a body streams (default 8MiB, test seam). */
+  streamThresholdBytes?: number
+  /** Whole-transfer budget override for streaming (test seam). */
+  streamBudgetMs?: number
+  /** Optional SSE downlink idle window (default off; test/ops opt-in only). */
+  sseIdleTimeoutMs?: number
   /** Downlink activity window that keeps the link "busy" (default 2s; tests that
    *  must not sleep 2s override it). */
   busyActivityWindowMs?: number
@@ -151,7 +189,7 @@ export interface InstanceProxy {
    *  revokeTransportTraffic receives ('dsh:<id>' / 'gateway:<id>' / legacy
    *  'ssh:<id>'); it is absent for `local`, which is never registered as a transport
    *  and therefore never revoked. */
-  resolveTargetFor(instanceId: string): { baseUrl: string; connectionId?: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string; health?: InstanceTransportHealth } | null
+  resolveTargetFor(instanceId: string): { baseUrl: string; connectionId?: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string; socketPath?: string; health?: InstanceTransportHealth } | null
   /** Transport replacement/removal notification. Traffic that lives OUTSIDE the
    *  proxy's own tracking (the page channel opens one http.request per subscription)
    *  is invisible to revokeTransportTraffic, so an owner such as the page channel
@@ -172,6 +210,11 @@ export interface InstanceTransportRegistrationOptions {
   transport?: 'ssh' | 'http'
   tls?: { spkiPin?: string }
   authority?: string
+  /** POSIX ssh tunnel only: the tunnel's Unix-domain socket. When set the proxy
+   *  dials this path instead of baseUrl's host:port — the URL still supplies
+   *  Host/authority and the request path. Never valid for a direct http endpoint
+   *  and never for https. */
+  socketPath?: string
   /** Initial ready-state health; omitted = healthy (old registrations). */
   health?: InstanceTransportHealth
 }
@@ -252,6 +295,20 @@ function targetsChamberNamespace(rawPath: string): boolean {
   return false
 }
 
+/** Streaming request-body opt-out for the production default. */
+export const STREAM_REQUEST_BODY_ENV = 'DSH_CHAMBER_PROXY_STREAM_BODY'
+
+/**
+ * The production default for streaming request bodies (plan P1-1): ON, because a
+ * large upload must not be buffered whole before the upstream sees a byte. Only
+ * the exact literal '0' turns it off — the opt-out exists so a release can fall
+ * back to the P0-1 buffered path without a code change; anything else (including
+ * unset) keeps streaming.
+ */
+export function streamRequestBodyEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[STREAM_REQUEST_BODY_ENV] !== '0'
+}
+
 /** Create the instance proxy; returns the handle/registry surface. */
 export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const { logger, getLocalState, getLocalDshPort } = deps
@@ -262,7 +319,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const maxConcurrentHttpRequests = deps.maxConcurrentHttpRequests ?? MAX_CONCURRENT_HTTP_REQUESTS
   const maxConcurrentWsStreams = deps.maxConcurrentWsStreams ?? MAX_CONCURRENT_WS_STREAMS
   const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
+  const maxConcurrentHttpRequestsPerConnection = deps.maxConcurrentHttpRequestsPerConnection ?? MAX_CONCURRENT_HTTP_REQUESTS_PER_CONNECTION
+  const maxConcurrentWsStreamsPerConnection = deps.maxConcurrentWsStreamsPerConnection ?? MAX_CONCURRENT_WS_STREAMS_PER_CONNECTION
+  const maxPendingWsHandshakesPerConnection = deps.maxPendingWsHandshakesPerConnection ?? MAX_PENDING_WS_HANDSHAKES_PER_CONNECTION
+  const localReservedHttpSlots = deps.localReservedHttpSlots ?? LOCAL_HTTP_RESERVED_SLOTS
+  const maxConcurrentLongRpcRequests = deps.maxConcurrentLongRpcRequests ?? MAX_CONCURRENT_LONG_RPC_REQUESTS
+  /** The owner-wide long-RPC window selected once so admission and forwarding agree. */
+  const longRpcPaths = deps.longRpcPaths ?? LONG_RPC_PATHS
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
+  /** ONE resolution per owner, so every forward call agrees (and a test that sets
+   *  the env var cannot be bypassed by a later re-read). */
+  const streamRequestBody = deps.streamRequestBody ?? streamRequestBodyEnabled()
   /** connectionId ('dsh:<id>' / 'gateway:<id>'; 'ssh:<id>' legacy alias) → target record.
    *  Local is never registered (its baseUrl derives from the managed dshPort). A gateway
    *  record carries the bounded extra headers injected at forward time and the optional
@@ -272,16 +339,89 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     headers?: Record<string, string>
     tls?: { spkiPin?: string }
     authority?: string
+    /** POSIX ssh tunnel listener; absent = dial baseUrl's host:port. */
+    socketPath?: string
     health: InstanceTransportHealth
   }
   const transports = new Map<string, TransportRecord>()
   const counters: ProxyForwardCounters = { requests: 0, failures: 0, activeStreams: 0, bufferedRequestBytes: 0, longRpcRequests: 0, longRpcTimeouts: 0 }
+  const wsCloseCodes: Record<string, number> = {}
   let activeHttpRequests = 0
+  /** The long-RPC pool is deliberately NOT part of activeHttpRequests: a 30min
+   *  /api/commands/execute must never occupy an ordinary unary slot. */
+  let activeLongRpcRequests = 0
+  /** Ordinary HTTP occupancy keyed by quota owner: the connectionId, or
+   *  LOCAL_QUOTA_KEY for the unregistered local instance (connectionId === null). */
+  const activeHttpByQuotaKey = new Map<string, number>()
+  const LOCAL_QUOTA_KEY = 'local'
   const pendingUpgrades = createPendingUpgradeTracker()
   /** Live spliced WS streams tracked so stop() can force-close them: an upgraded
    *  socket leaves the HTTP server's connection tracking, so a lingering half-open
    *  downlink would hang server.close() forever. */
   const liveStreams = new Set<ProxyLiveStream>()
+
+  /** Live spliced WS streams belonging to ONE quota owner (null = local).
+   *  Read from liveStreams instead of a parallel counter: teardown already removes
+   *  the entry, so revocation can never leave a phantom occupancy behind. */
+  function liveStreamsForConnection(connectionId: string | null): number {
+    let count = 0
+    for (const stream of liveStreams) {
+      if ((stream.ownerId ?? null) === connectionId) count += 1
+    }
+    return count
+  }
+
+  /** The HTTP admission verdict for one request (null = admitted). Per-connection
+   *  fairness is checked BEFORE the owner-wide ceiling so a saturated instance is
+   *  blamed precisely, and the local reserve is applied to remote transports only. */
+  function httpQuotaFailure(
+    quotaKey: string,
+    isLocal: boolean,
+    longRpc: boolean,
+  ): { kind: 'http' | 'long-rpc'; scope: 'connection' | 'global' } | null {
+    if (longRpc) {
+      // One slot is reserved for the local instance: a remote target must not
+      // starve local long commands (ordinary HTTP already has that reserve).
+      const cap = isLocal ? maxConcurrentLongRpcRequests : Math.max(0, maxConcurrentLongRpcRequests - 1)
+      return activeLongRpcRequests >= cap
+        ? { kind: 'long-rpc', scope: 'global' }
+        : null
+    }
+    if ((activeHttpByQuotaKey.get(quotaKey) ?? 0) >= maxConcurrentHttpRequestsPerConnection) {
+      return { kind: 'http', scope: 'connection' }
+    }
+    const globalCap = isLocal
+      ? maxConcurrentHttpRequests
+      : Math.max(0, maxConcurrentHttpRequests - Math.max(0, localReservedHttpSlots))
+    if (activeHttpRequests >= globalCap) return { kind: 'http', scope: 'global' }
+    return null
+  }
+
+  /** The upgrade admission verdict for one WS handshake (null = admitted).
+   *  Live streams and in-flight handshakes are counted TOGETHER against the
+   *  connection's live share: a burst of pending conversions must not overshoot
+   *  the per-connection ceiling; the pending pool then bounds the handshake spike. */
+  function upgradeQuotaFailure(
+    connectionId: string | null,
+    isLocal: boolean,
+  ): { kind: 'ws' | 'ws-pending'; scope: 'connection' | 'global' } | null {
+    const pendingForConnection = pendingUpgrades.countForOwner(connectionId ?? undefined)
+    if (liveStreamsForConnection(connectionId) + pendingForConnection >= maxConcurrentWsStreamsPerConnection) {
+      return { kind: 'ws', scope: 'connection' }
+    }
+    if (pendingForConnection >= maxPendingWsHandshakesPerConnection) {
+      return { kind: 'ws-pending', scope: 'connection' }
+    }
+    const globalCap = isLocal ? maxConcurrentWsStreams : Math.max(0, maxConcurrentWsStreams - 1)
+    if (counters.activeStreams + pendingUpgrades.size >= globalCap) {
+      return { kind: 'ws', scope: 'global' }
+    }
+    if (pendingUpgrades.size >= maxPendingWsHandshakes) {
+      return { kind: 'ws-pending', scope: 'global' }
+    }
+    return null
+  }
+
   /** In-flight HTTP/SSE keyed by transport. Pending WS ownership is kept by the shared
    *  pendingUpgrades tracker, established WS ownership on ProxyLiveStream. Revocation must
    *  terminate traffic already authenticated with the old transport/token. */
@@ -325,6 +465,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    * activity window).
    */
   const transportGenerations = new Map<string, number>()
+  // Monotonic across registrations: a late callback from a removed incarnation
+  // must never equal the NEXT same-id incarnation (R4 A-M3 ABA).
+  let incarnationSeq = 0
   function generationOf(connectionId: string | null): number {
     return connectionId === null ? 0 : (transportGenerations.get(connectionId) ?? 0)
   }
@@ -463,8 +606,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     logPrefix: 'instance-proxy',
     httpRequest: deps.httpRequest,
     upstreamTimeoutMs,
+    ...(deps.sseIdleTimeoutMs === undefined ? {} : { sseIdleTimeoutMs: deps.sseIdleTimeoutMs }),
     ...(deps.longRpcUpstreamTimeoutMs === undefined ? {} : { longRpcUpstreamTimeoutMs: deps.longRpcUpstreamTimeoutMs }),
-    ...(deps.longRpcPaths === undefined ? {} : { longRpcPaths: deps.longRpcPaths }),
+    longRpcPaths,
     clientBodyIdleTimeoutMs,
     ...(deps.uploadIdleTimeoutMs === undefined ? {} : { uploadIdleTimeoutMs: deps.uploadIdleTimeoutMs }),
     ...(deps.uploadMinBytesPerSec === undefined ? {} : { uploadMinBytesPerSec: deps.uploadMinBytesPerSec }),
@@ -472,6 +616,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     wsPingIntervalMs,
     wsPingMissesBeforeTeardown,
     maxBufferedRequestBytes,
+    streamRequestBody,
+    ...(deps.streamThresholdBytes === undefined ? {} : { streamThresholdBytes: deps.streamThresholdBytes }),
+    ...(deps.streamBudgetMs === undefined ? {} : { streamBudgetMs: deps.streamBudgetMs }),
     liveStreams,
   }
 
@@ -526,6 +673,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       ...(record.headers === undefined ? {} : { headers: { ...record.headers } }),
       ...(record.tls === undefined ? {} : { tls: { ...record.tls } }),
       ...(record.authority === undefined ? {} : { authority: record.authority }),
+      ...(record.socketPath === undefined ? {} : { socketPath: record.socketPath }),
     }
   }
 
@@ -554,11 +702,6 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         writeError(res, 404, 'capability_not_found', 'the dsh target does not expose gateway capabilities', logger)
         return
       }
-      if (activeHttpRequests >= maxConcurrentHttpRequests) {
-        counters.failures += 1
-        writeError(res, 503, 'resource_exhausted', 'too many concurrent proxy requests', logger)
-        return
-      }
       const target = resolveTarget(parsed.id, res)
       if (target === null) {
         counters.failures += 1
@@ -571,8 +714,46 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         writeError(res, 503, 'instance_unavailable', 'the instance link is down', logger)
         return
       }
-      activeHttpRequests += 1
+      // Resolve the target BEFORE admission: the long-RPC pool is selected by the
+      // RESOLVED pathname, exactly the pathname forwardHttp's own exemption reads.
+      let forwardTarget: URL
+      try {
+        forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
+      } catch (error) {
+        counters.failures += 1
+        logger.warn(`instance-proxy: request setup failed: ${String(error)}`)
+        if (!res.headersSent) writeError(res, 502, 'upstream_failed', 'upstream request failed', logger)
+        else res.destroy()
+        return
+      }
       const connectionId = connectionIdForInstance(parsed.id)
+      const method = typeof req.method === 'string' && req.method !== '' ? req.method : 'GET'
+      // Long-RPC requests take their own owner-wide pool. The same resolved list
+      // drives admission here and the timeout window inside forwardHttp, so the
+      // two can never disagree about which requests left the ordinary pool.
+      const longRpc = matchesLongRpcPath(method, forwardTarget.pathname, longRpcPaths)
+      const quotaKey = connectionId ?? LOCAL_QUOTA_KEY
+      const quotaFailure = httpQuotaFailure(quotaKey, connectionId === null, longRpc)
+      if (quotaFailure !== null) {
+        counters.failures += 1
+        writeError(
+          res,
+          503,
+          'resource_exhausted',
+          longRpc ? 'too many concurrent long-RPC proxy requests' : 'too many concurrent proxy requests',
+          logger,
+          quotaFailure,
+        )
+        return
+      }
+      // Take the slot synchronously, before any await: two concurrent handler
+      // invocations must never both observe the last free slot.
+      if (longRpc) {
+        activeLongRpcRequests += 1
+      } else {
+        activeHttpRequests += 1
+        activeHttpByQuotaKey.set(quotaKey, (activeHttpByQuotaKey.get(quotaKey) ?? 0) + 1)
+      }
       // Captured at dispatch: late progress/failure callbacks of this request must not
       // be attributed to a replacement incarnation of the same connectionId.
       const generation = generationOf(connectionId)
@@ -581,14 +762,24 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       const releaseRequest = () => {
         if (released) return
         released = true
+        if (longRpc) {
+          activeLongRpcRequests = Math.max(0, activeLongRpcRequests - 1)
+          return
+        }
         activeHttpRequests = Math.max(0, activeHttpRequests - 1)
+        const next = Math.max(0, (activeHttpByQuotaKey.get(quotaKey) ?? 0) - 1)
+        if (next === 0) activeHttpByQuotaKey.delete(quotaKey)
+        else activeHttpByQuotaKey.set(quotaKey, next)
       }
       try {
-        const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
         // browser-auth cookie: inject the control plane's spawn-time cookie into proxied
         // requests. Registered transport extraHeaders never coexist with it; when both
         // exist the local browser-auth cookie wins (the local instance is the only entry).
-        const authCookie = authCookieFor(target.baseUrl)
+        // Only the LOCAL instance owns the launch-token browser-auth cookie. A
+        // remote UDS target synthesizes `http://127.0.0.1:<remotePort>`, which can
+        // collide with the local instance's baseUrl; injecting it would leak the
+        // local cookie over SSH (R6 A-MAJOR-1).
+        const authCookie = parsed.id === 'local' ? authCookieFor(target.baseUrl) : undefined
         const extraHeaders = authCookie === undefined
           ? target.headers
           : { ...(target.headers ?? {}), cookie: authCookie }
@@ -603,7 +794,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
             onResponseProgress: (bytes: number) => trackDownlink(connectionId, generation, bytes),
             onUpstreamFailure: () => notifyUpstreamFailure(connectionId, generation),
           }),
-        }, extraHeaders, target.tls, target.authority)
+        }, extraHeaders, target.tls, target.authority, target.socketPath)
       } catch (error) {
         releaseRequest()
         counters.failures += 1
@@ -633,9 +824,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         return
       }
       counters.requests += 1
-      if (counters.activeStreams >= maxConcurrentWsStreams || pendingUpgrades.size >= maxPendingWsHandshakes) {
+      const connectionId = connectionIdForInstance(parsed.id)
+      const quotaFailure = upgradeQuotaFailure(connectionId, parsed.id === 'local')
+      if (quotaFailure !== null) {
         counters.failures += 1
-        rejectUpgrade(socket, 503, 'resource_exhausted', 'too many active proxy streams', logger)
+        rejectUpgrade(socket, 503, 'resource_exhausted', 'too many active proxy streams', logger, quotaFailure)
         return
       }
       const target = resolveTarget(parsed.id, null)
@@ -649,13 +842,16 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         rejectUpgrade(socket, 503, 'instance_unavailable', 'the instance link is down', logger)
         return
       }
-      const connectionId = connectionIdForInstance(parsed.id)
       const generation = generationOf(connectionId)
       const releaseHandshake = pendingUpgrades.acquire(socket, connectionId ?? undefined)
       try {
         const forwardTarget = new URL(`${target.baseUrl}${parsed.rest}${parsed.search}`)
         // browser-auth cookie on the mux upgrade — the stream gate authenticates like unary.
-        const authCookie = authCookieFor(target.baseUrl)
+        // Only the LOCAL instance owns the launch-token browser-auth cookie. A
+        // remote UDS target synthesizes `http://127.0.0.1:<remotePort>`, which can
+        // collide with the local instance's baseUrl; injecting it would leak the
+        // local cookie over SSH (R6 A-MAJOR-1).
+        const authCookie = parsed.id === 'local' ? authCookieFor(target.baseUrl) : undefined
         const extraHeaders = authCookie === undefined
           ? target.headers
           : { ...(target.headers ?? {}), cookie: authCookie }
@@ -673,7 +869,15 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
             onUpstreamFailure: () => notifyUpstreamFailure(connectionId, generation),
             onResponseProgress: (bytes: number) => trackDownlink(connectionId, generation, bytes),
           }),
-        }, extraHeaders, target.tls, target.authority)
+          onWsClosed: event => {
+            const bump = (leg: 'down' | 'up', code: number | undefined): void => {
+              const key = `${leg}:${String(code ?? 1006)}`
+              wsCloseCodes[key] = (wsCloseCodes[key] ?? 0) + 1
+            }
+            bump('down', event.downstreamCode)
+            bump('up', event.upstreamCode)
+          },
+        }, extraHeaders, target.tls, target.authority, target.socketPath)
       } catch (error) {
         releaseHandshake()
         counters.failures += 1
@@ -820,9 +1024,22 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           throw new TypeError('registerInstanceTransport: an ssh gateway authority must be remote 127.0.0.1:<port>')
         }
       }
-      // A same-id registration is a NEW incarnation: bump before the record so every
-      // in-flight request of the old generation becomes stale for the trackers.
-      transportGenerations.set(connectionId, (transportGenerations.get(connectionId) ?? 0) + 1)
+      // POSIX ssh tunnel UDS: only a TUNNEL listener can be a socket and only plain
+      // http rides it (a UDS has no TLS layer). The path must be absolute; the URL
+      // keeps its remote-loopback-authority role for Host/policy semantics.
+      const socketPath = opts?.socketPath
+      if (socketPath !== undefined) {
+        if (transport === 'http') {
+          throw new TypeError('registerInstanceTransport: a direct http transport cannot use a Unix socket')
+        }
+        if (typeof socketPath !== 'string' || !socketPath.startsWith('/')
+          || socketPath.includes('\u0000') || socketPath.length > 200) {
+          throw new TypeError('registerInstanceTransport: socketPath must be an absolute filesystem path')
+        }
+        if (target.protocol !== 'http:') {
+          throw new TypeError('registerInstanceTransport: a Unix socket transport must use a plain http baseUrl')
+        }
+      }
       // Clone the sanctioned headers so caller mutation cannot alter a live transport after validation.
       if (transports.has(connectionId)) {
         revokeTransportTraffic(connectionId)
@@ -830,12 +1047,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         // was just revoked; their loopback origin can never be reused.
         releaseConnectionPool(connectionId)
       }
+      // A same-id registration is a NEW incarnation: bump AFTER releaseConnectionPool,
+      // which deletes the old entry; bumping before it would leave the new incarnation
+      // at 0 and re-open the ABA window on the second replacement (R5 A-M1).
+      transportGenerations.set(connectionId, ++incarnationSeq)
       transports.set(connectionId, {
         baseUrl,
         health: opts?.health ?? 'healthy',
         ...(extraHeaders !== undefined ? { headers: { ...extraHeaders } } : {}),
         ...(tlsSpkiPin === undefined ? {} : { tls: { spkiPin: tlsSpkiPin } }),
         ...(authority === undefined ? {} : { authority }),
+        ...(socketPath === undefined ? {} : { socketPath }),
       })
       logger.log(`instance-proxy: transport registered ${connectionId}`)
     },
@@ -880,11 +1102,13 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         failures: counters.failures,
         activeStreams: counters.activeStreams,
         activeHttpRequests,
+        activeLongRpcRequests,
         pendingUpgrades: pendingUpgrades.size,
         bufferedRequestBytes: counters.bufferedRequestBytes,
         longRpcRequests: counters.longRpcRequests,
         longRpcTimeouts: counters.longRpcTimeouts,
         transports: transports.size,
+        wsCloseCodes: { ...wsCloseCodes },
       }
     },
 

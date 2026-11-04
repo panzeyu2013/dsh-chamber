@@ -7,7 +7,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   HTTP_BUDGET_LIMITS,
+  MAX_UNARY_LEASE_MS,
   HttpBudgetUnscheduledError,
+  httpBudgetLeaseFor,
   acquireHttpBudget,
   httpBudgetLaneFor,
   remainingDispatchBudgetMs,
@@ -571,4 +573,10 @@ test('a leaked slot is reclaimed by the watchdog lease', async () => {
     resetHttpBudgetForTests()
     restore()
   }
+})
+
+test('a page-level lease is capped at MAX_UNARY_LEASE_MS even for a 30min mutation', () => {
+  assert.equal(httpBudgetLeaseFor(0), HTTP_BUDGET_LIMITS.defaultLeaseMs)
+  assert.equal(httpBudgetLeaseFor(10 * 60_000), MAX_UNARY_LEASE_MS)
+  assert.equal(httpBudgetLeaseFor(MAX_UNARY_LEASE_MS), MAX_UNARY_LEASE_MS)
 })

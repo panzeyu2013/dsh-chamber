@@ -49,12 +49,24 @@ export type BoundedBodyOutcome =
  * bytes drop on the first settle (no memory pinning, no double settle); the kernel
  * never destroys the request — routes write 413 BEFORE destroying it.
  */
-export function readBoundedBody(req: ApiRequest, maxBytes: number): Promise<BoundedBodyOutcome> {
+export function readBoundedBody(
+  req: ApiRequest,
+  maxBytes: number,
+  deadlineMs = 60_000,
+): Promise<BoundedBodyOutcome> {
   return new Promise(resolve => {
     const chunks: Buffer[] = []
     let size = 0
     let settled = false
+    const deadline = setTimeout(() => {
+      // A completed header + a byte every <idle window can otherwise hold the
+      // global 31min dead-man; non-proxy readers keep their own total budget.
+      settle({ kind: 'aborted' })
+      req.destroy?.()
+    }, deadlineMs)
+    deadline.unref?.()
     const cleanup = (): void => {
+      clearTimeout(deadline)
       req.removeListener('data', onData)
       req.removeListener('end', onEnd)
       req.removeListener('error', onError)

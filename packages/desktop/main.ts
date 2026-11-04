@@ -62,6 +62,7 @@ import { resolveDshPortBase } from './dsh-port-base.ts';
 import { describeFatalError } from './describe-error.ts';
 import { ConsoleRing, pushConsoleMessage, recordFatalReport } from './fatal-report.ts';
 import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_BLOCK_RTT_MS } from './renderer-frame-watchdog.ts';
+import type { SshCredentialCryptoAdapter } from './ssh-credentials.ts';
 
 // Last-resort crash boundary: an unknown uncaught exception means the
 // privileged main process may be inconsistent and must fail closed rather than
@@ -1308,22 +1309,19 @@ if (!gotTheLock) {
       // 不打扰（无窗/已销毁 = 未聚焦）。
       isWindowFocused: () => mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isFocused(),
     });
-    // Gateway credentials store：token + password 镜像到 gateway-secrets.json
-    // (schemaVersion 3, 0600, atomic write)，safeStorage 可用时加密（Keychain /
-    // DPAPI / libsecret），否则走记录的 0600 明文回退。Never logged, never
-    // returned to/prefilled in the renderer；无 credential-domain binding 的 legacy
-    // 文件只保留为 unbound evidence 并禁用至重录。
-    const gatewaySecretsCrypto = safeStorage.isEncryptionAvailable()
-      ? {
-        isAvailable: () => safeStorage.isEncryptionAvailable(),
-        encrypt: (plain: string) => safeStorage.encryptString(plain).toString('base64'),
-        decrypt: (blob: string) => safeStorage.decryptString(Buffer.from(blob, 'base64')),
-      }
-      : undefined;
-    // On Windows DPAPI is available in every interactive session; an unavailable
-    // keychain must NEVER silently fall back to a plaintext mirror (0600 cannot
-    // be expressed there). The store is memory-only (file null), so credentials
-    // last for the session and re-entry is required per connect.
+    // Credential mirrors (gateway-secrets.json schemaVersion 3 + ssh-passwords.json, both 0600
+    // atomic writes): ONE shell adapter, safeStorage-encrypted when the OS keychain answers
+    // (Keychain / DPAPI / libsecret). Never logged, never returned to/prefilled in the renderer;
+    // legacy files without a credential-domain binding stay unbound evidence until re-entry.
+    // Passed UNCONDITIONALLY so an unavailable keychain is an explicit per-store policy decision:
+    // gateway keeps its documented 0600 plaintext fallback, while a NEW SSH password is refused
+    // (legacy plaintext stays readable) instead of silently written in the clear. On Windows an
+    // unavailable DPAPI keeps the gateway store memory-only (0600 cannot be expressed there).
+    const credentialCrypto: SshCredentialCryptoAdapter = {
+      isAvailable: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (plain: string) => safeStorage.encryptString(plain).toString('base64'),
+      decrypt: (blob: string) => safeStorage.decryptString(Buffer.from(blob, 'base64')),
+    };
     // Host package sources for the remote seed: packaged builds carry copies
     // under dist/; dev reads the same source dirs the local control-plane seed uses.
     const moduleASourceDir = app.isPackaged
@@ -1391,7 +1389,7 @@ if (!gotTheLock) {
       isQuitting: () => quitRequested,
       markQuitting: () => { quitRequested = true; },
       hostFacts: { flavor: 'electron', trayPresent: () => tray !== null },
-      gatewaySecretsCrypto,
+      credentialCrypto,
       hostPackageSourceDirs: chamberHostSourceDirs,
       pnpmEntry,
       updateController: updater,

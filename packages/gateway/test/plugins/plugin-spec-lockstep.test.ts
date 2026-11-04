@@ -59,8 +59,8 @@ test('ssh-provider.ts consumes the content bounds through the control-plane-modu
   const source = sshProviderSource()
   assert.match(source, /import \{ RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES \} from '\.\/control-plane-module\.ts'/,
     'ssh-provider.ts must consume the content bounds through the dual-path facade')
-  assert.match(source, /export \{ RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES \}/,
-    'ssh-provider.ts must keep re-exporting the content bounds')
+  assert.match(source, /export \{ MAX_SSH_PASSWORD_CHARS, RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES \}/,
+    'ssh-provider.ts must keep the exact content-bound re-export set')
 })
 
 test('plugin-sync.ts keeps re-exporting the shared spec/name patterns (no ssh-provider middleman)', () => {

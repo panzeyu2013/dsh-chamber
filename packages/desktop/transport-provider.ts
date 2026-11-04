@@ -136,7 +136,13 @@ export interface TransportStatusProjection {
   /** transport='http': true = plaintext origin — the 明文 badge stays visible after configuring. Non-secret. */
   insecureHttp: boolean
   phase: TransportPhase
+  /** The loopback TCP listener port of a TUNNEL transport; null for a direct
+   *  endpoint AND for a POSIX UDS tunnel (see `transportSocket`). */
   localPort: number | null
+  /** The LOCAL transport listener shape: `tcp` = 127.0.0.1:<localPort> (or a
+   *  direct endpoint), `unix` = the ssh `-L` Unix socket (POSIX). Non-secret;
+   *  the socket PATH itself never rides the projection. */
+  transportSocket: 'unix' | 'tcp'
   sshPort: number | null
   remotePort: number
   retryAttempt: number
@@ -151,7 +157,13 @@ export interface TransportStatusProjection {
    *   auth hint would be a lie.
    * null whenever requiresUserAction is false.
    */
-  userActionKind: 'auth' | 'endpoint' | null
+  userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null
+  /**
+   * Last non-secret host-key probe projection (P0-3): what the ssh self-proof saw for this
+   * target versus the app-owned known_hosts. Present only after a host-key probe; absent for
+   * every other failure class (and for older producers). Public key material only.
+   */
+  hostKey?: HostKeyProjection
   /** Last known remote-service activation state (ssh: systemd); null = no serviceName, or
    *  start/stop/is-active not run yet (on-demand writes only — no polling). */
   serviceActive: boolean | null
@@ -164,6 +176,28 @@ export interface TransportStatusProjection {
    */
   link?: TransportLinkProjection
   logSummary: string
+}
+
+/**
+ * Non-secret host-key trust projection (P0-3): the last ssh self-proof probe compared with the
+ * app-owned known_hosts. Fingerprints are SHA256:… of public key blobs — never secret material.
+ */
+export interface HostKeyProjection {
+  /** unknown = no stored key for the target; known = the presented key is trusted;
+   *  changed = the target has a DIFFERENT key on file; unavailable = the probe could not run. */
+  state: 'unknown' | 'known' | 'changed' | 'unavailable'
+  /** SHA256:… fingerprints of the key the host presented (empty when unavailable). */
+  fingerprints: string[]
+  /** True when the host presented a key that differs from the trusted one. */
+  changed?: boolean
+  /** Previously trusted fingerprints for the same target (changed state only). */
+  previousFingerprints?: string[]
+}
+
+/** The app-owned ssh known_hosts paths every tunnel argv must pin (P0-3). */
+export interface TransportKnownHostsArgs {
+  knownHostsFile: string
+  globalKnownHostsFile: string
 }
 
 /**
@@ -187,7 +221,16 @@ export interface TransportLogEntry {
 
 /** Spawn-result surface the runtime needs — satisfied by the real ChildProcess and the tests' fake. */
 export interface SpawnedProcess {
-  stdin: { write(chunk: string | Buffer): unknown; end(): unknown } | null
+  /** OS pid when the real child exposes one (ChildProcess.pid). Used ONLY for the
+   *  crash-orphan ledger (ssh-orphan.ts); absent/null in minimal test fakes. */
+  pid?: number | null
+  /** stdin is a real Writable in production; the event seam is optional so minimal fakes (no
+   *  stdin payload) stay valid. The bounded ssh child attaches error/close BEFORE writing. */
+  stdin: {
+    write(chunk: string | Buffer): unknown
+    end(): unknown
+    on?(event: string, listener: (payload?: unknown) => void): unknown
+  } | null
   stdout: { on(event: 'data', listener: (chunk: Buffer) => void): unknown } | null
   stderr: { on(event: 'data', listener: (chunk: Buffer) => void): unknown } | null
   on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
@@ -202,10 +245,16 @@ export interface TransportLinkProjection {
   linkEpoch: number
 }
 
-/** The endpoint a transport exposes to probes (always the local tunnel listener 127.0.0.1:<localPort>). */
+/** The endpoint a transport exposes to probes: the local tunnel listener
+ *  127.0.0.1:<localPort>, or — POSIX UDS tunnels — a filesystem socket. For a
+ *  socket endpoint `host`/`port` still name the REMOTE loopback destination:
+ *  they are the HTTP Host/authority the probe and proxy must present, never a
+ *  local TCP dial target. */
 export interface TransportProbeEndpoint {
   host: string
   port: number
+  /** Present = dial this Unix socket instead of host:port (POSIX ssh tunnels). */
+  socketPath?: string
 }
 
 /** One-shot endpoint identity verification outcome. */
@@ -243,6 +292,10 @@ export interface StderrClassification {
   log: string
   /** True = terminal auth/host-key failure: never auto-retried, requiresUserAction. */
   terminalAuth: boolean
+  /** True = the failure is a HOST-KEY failure (unknown/changed key) rather than a credential
+   *  failure. The runtime probes the host key and projects it as the 'hostkey' action class;
+   *  credential failures must never set this bit. Absent = not a host-key failure. */
+  hostKey?: boolean
   /**
    * True = the RAW line is an "absent file" signal (remote `cat` ENOENT), classified on the
    * UNREDACTED text — redaction can replace the whole line (a `.ssh*`-named remote home path) and
@@ -295,6 +348,10 @@ export interface TransportExecDeps {
   /** Independent timeout for the `run` channel (pnpm add hits the registry; default 120s). */
   runTimeoutMs?: number
   disconnectGraceMs: number
+  /** P0-3/P2-1: app-owned known_hosts pin for short-lived exec/run ssh children
+   *  (the tunnel already carries it; omitting it let accept-new write the user's
+   *  file and made app-only hosts fail). Undefined = legacy pure caller. */
+  knownHosts?: TransportKnownHostsArgs
   log(level: TransportLogEntry['level'], message: string): void
   /** Write one provider-owned projection field (ssh: serviceActive) and broadcast. */
   setProjection(id: string, key: 'serviceActive', value: boolean | null): void
@@ -331,8 +388,21 @@ export interface TransportProvider {
   validateSpec(input: unknown): TransportInstanceSpec | null
   /** argv of the transport process for one start (direct-endpoint providers omit it). CONTRACT:
    *  display-safe — the runtime may log it into a renderer-visible summary (host/user/ports only,
-   *  never credentials or tokens). */
-  buildStartArgs?(spec: TransportInstanceSpec, localPort: number): readonly string[]
+   *  never credentials or tokens). knownHosts is the app-owned trust store (ssh only); providers
+   *  without known_hosts semantics ignore it. `localPort` is null exactly when
+   *  `transportSocketPath` returned a path (the socket replaces the TCP listener).
+   *  `socketPath`: the runtime's resolved listener mode — a path = UDS, null =
+   *  TCP, undefined = a pure caller (derive from the platform). Providers must use
+   *  exactly this value so argv, probe and registration can never disagree. */
+  buildStartArgs?(spec: TransportInstanceSpec, localPort: number | null, knownHosts?: TransportKnownHostsArgs, socketPath?: string | null): readonly string[]
+  /**
+   * Optional POSIX UDS tunnel listener for one instance (ssh on non-win32). The
+   * runtime resolves this BEFORE allocating a local port: a non-null path means
+   * no TCP listener exists, so the ready URL, status projection, probes and
+   * proxy registration all ride the socket. Throws = the attempt is refused
+   * loudly (e.g. the path exceeds the sockaddr_un budget). Null/absent = TCP.
+   */
+  transportSocketPath?(spec: TransportInstanceSpec): string | null
   /**
    * Optional leased extra environment for the transport process (merged over process.env):
    * per-instance non-argv material such as SSH_ASKPASS. The runtime releases the lease only after
@@ -348,7 +418,7 @@ export interface TransportProvider {
    *  disconnect. Absent = disposeAuth already covers removal. */
   purgeAuth?(spec: TransportInstanceSpec): void
   /** Probe target for DIRECT ENDPOINT providers (ignored in tunnel mode). */
-  probeTarget?(spec: TransportInstanceSpec): { host: string; port: number }
+  probeTarget?(spec: TransportInstanceSpec): TransportProbeEndpoint
   /** Ready URL for DIRECT ENDPOINT providers (ignored in tunnel mode). */
   endpointUrl?(spec: TransportInstanceSpec): string | null
   /** Classify one COMPLETE stderr line of the transport process. */

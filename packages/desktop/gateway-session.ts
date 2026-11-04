@@ -5,8 +5,10 @@
  * header of a gateway-kind transport, and it only ever reaches its own origin.
  *
  * Password and cookie never enter logs or any file — main-process memory only,
- * keyed by origin/Host plus a stable connection-and-target scope, never seen by
- * the renderer. The 3xx set-cookie answer is handled MANUALLY; an https
+ * keyed by scheme + Host authority + a stable connection-and-target scope (never
+ * by the network baseUrl: an ssh tunnel re-allocates its loopback port on every
+ * reconnect while the same target's gateway session remains valid), never seen
+ * by the renderer. The 3xx set-cookie answer is handled MANUALLY; an https
  * `spkiPin` pins the login like the identity probe, a mismatch being terminal
  * `other`, never transient `network`.
  */
@@ -47,9 +49,16 @@ export interface GatewaySessionOrigin {
    *  and the cache key both carry it, so the minted cookie is exactly the one
    *  later probe/registration reuse. Absent = the URL's own authority. */
   authority?: string
+  /** POSIX ssh tunnel only: the tunnel's Unix socket. The login POST dials this
+   *  socket while the URL/Host keep their authority semantics; absent = TCP.
+   *  Deliberately NOT part of the cache key (the socket path is per instance id,
+   *  not per target identity; the key must survive reconnects). */
+  socketPath?: string
   /** Stable connection/target generation scope used ONLY in the in-memory cache
-   *  key (never an HTTP header). Tunnel origins require it: local-port reuse and
-   *  the shared remote loopback authority must not leak a cookie across hosts. */
+   *  key (never an HTTP header). Every gateway origin carries it: it must be stable
+   *  across reconnects (the tunnel's local port is not identity) while local-port
+   *  reuse and the shared remote loopback authority never leak a cookie across
+   *  hosts/connections. */
   scope: string
 }
 
@@ -66,6 +75,7 @@ export function buildGatewaySessionOrigin(input: {
   scope: string
   spkiPin?: string | null
   authority?: string | undefined
+  socketPath?: string | undefined
 }): GatewaySessionOrigin {
   return {
     baseUrl: input.baseUrl,
@@ -73,7 +83,23 @@ export function buildGatewaySessionOrigin(input: {
     scope: input.scope,
     ...(input.spkiPin === undefined || input.spkiPin === null ? {} : { spkiPin: input.spkiPin }),
     ...(input.authority === undefined ? {} : { authority: input.authority }),
+    ...(input.socketPath === undefined ? {} : { socketPath: input.socketPath }),
   }
+}
+
+/**
+ * THE in-memory session key, shared by every construction point (direct verifyUp,
+ * ssh-tunnel verifyUp, refresh, ready registration and the invalidation paths):
+ * the exact connection-target scope is the identity, the scheme and the optional
+ * Host authority qualify it. The network baseUrl is deliberately absent — an ssh
+ * tunnel allocates a NEW loopback port on every reconnect, yet the same target's
+ * gateway session must survive it; for a direct endpoint the scope digest already
+ * binds host+port. The key ends with `|scope:<scope>` so invalidateScope can
+ * still clear every historical generation by suffix.
+ */
+export function gatewaySessionKeyFor(origin: GatewaySessionOrigin, protocol: 'http:' | 'https:'): string {
+  const authorityPart = origin.authority === undefined ? '' : `|host:${origin.authority}`
+  return `${protocol}//${authorityPart}|scope:${origin.scope}`
 }
 
 /** Stable, non-secret session ownership scope: the id distinguishes parallel
@@ -263,12 +289,26 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
       || origin.scope.length > 160 || !/^[a-zA-Z0-9._:-]+$/.test(origin.scope)) {
       throw new TypeError('gateway session scope must be a bounded identifier')
     }
-    // The key includes network origin/Host and the exact connection scope, so
-    // direct same-origin sharing and tunnel local-port/authority reuse cannot
-    // cross ids or SSH targets.
-    const authorityPart = origin.authority === undefined ? '' : `|host:${origin.authority}`
-    const scopePart = `|scope:${origin.scope}`
-    return { key: `${parsed.origin}${authorityPart}${scopePart}`, url: new URL('/auth/login', parsed) }
+    if (origin.socketPath !== undefined) {
+      // POSIX ssh-tunnel login target: an absolute filesystem path, no NUL, and
+      // only for the plain-http origin a UDS tunnel always is (https over UDS is
+      // not a shape this transport produces).
+      if (typeof origin.socketPath !== 'string' || !origin.socketPath.startsWith('/')
+        || origin.socketPath.includes('\0') || origin.socketPath.length > 200) {
+        throw new TypeError('gateway session socketPath must be an absolute filesystem path')
+      }
+      if (parsed.protocol !== 'http:') {
+        throw new TypeError('gateway session socketPath requires an http origin')
+      }
+    }
+    // ONE key constructor for every caller (verifyUp/refresh/registration/
+    // invalidation): scheme + Host authority + exact connection-target scope. The
+    // network origin is the LOGIN target above, never the identity — a reconnected
+    // tunnel presents a new local port for the same session.
+    return {
+      key: gatewaySessionKeyFor(origin, parsed.protocol as 'http:' | 'https:'),
+      url: new URL('/auth/login', parsed),
+    }
   }
 
   /** Extract the header-ready `dsh_gateway_session=<value>` cookie from the
@@ -417,6 +457,8 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
         // agent:false (a fresh socket, so secureConnect always fires); inert for
         // http and pin-less https origins, exactly the probe's guard.
         ...(origin.insecureHttp || origin.spkiPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
+        // POSIX ssh tunnel: the login is reachable only through the UDS listener.
+        ...(origin.socketPath === undefined ? {} : { socketPath: origin.socketPath }),
       }, onResponse)
       const dispatch = (): void => { req!.end(body) }
       // The body and its password are not written until the fresh TLS peer key

@@ -301,14 +301,16 @@ export abstract class RemoteJournalStream<
     return closing
   }
 
-  /** chamber patch: publish one change and mark live progress for the watchdog
-   *  (opening windows, appends, prepends and notifications all count). */
+  /** chamber patch: publish one change and mark live progress for the watchdog.
+   *  EVERY published value is delivery evidence: the opening/replacement window, live
+   *  appends, prepends and cursorless notifications all arrive over the live generation,
+   *  so a notification-only assistant stream must not be judged silent at the 45 s probe
+   *  window while its Host keeps producing (the field comment always said so; the code
+   *  used to gate on replace/append only). */
   private publish(change: RemoteJournalChange<Page, Entry, Notification>): void {
     if (this.disposed) return
-    if (change.type === 'replace' || change.type === 'append') {
-      this.lastProgressAt = elapsedClock()
-      this.quietProbes = 0
-    }
+    this.lastProgressAt = elapsedClock()
+    this.quietProbes = 0
     this.options.publish(change)
     // AFTER the pinned progress/delivery body: every published page advances the
     // applied assistant revision (replace/prepend carry a page; append does not).

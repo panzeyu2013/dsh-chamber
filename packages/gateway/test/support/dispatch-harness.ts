@@ -55,11 +55,14 @@ export function setup(
   return { dispatch, get httpProxyCalls() { return httpProxyCalls }, get upgradeProxyCalls() { return upgradeProxyCalls } }
 }
 
-/** Real-store auth facade on a temp stateDir (with an optional audit file). */
+/** Real-store auth facade on a temp stateDir (with an optional audit file).
+ * `seed` runs on the fresh store BEFORE `createAuth`, so a suite can pin a
+ * legacy verifier fixture that config seeding would otherwise replace. */
 export function realAuth(options: {
   config: Parameters<typeof createAuth>[0]
   auditFile?: boolean
   deps?: Parameters<typeof createAuth>[3]
+  seed?: (store: GatewayStore) => void
 }): {
   auth: AuthProvider
   store: GatewayStore
@@ -69,6 +72,7 @@ export function realAuth(options: {
 } {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-dispatch-'))
   const store = createGatewayStore(dir, silentLogger)
+  options.seed?.(store)
   const auth = createAuth(options.config, store, silentLogger, options.deps)
   const auditFile = join(dir, 'audit.log')
   return {

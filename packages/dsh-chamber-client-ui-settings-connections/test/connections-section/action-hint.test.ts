@@ -21,7 +21,7 @@ function spec(overrides: Partial<SshInstanceSpec> = {}): SshInstanceSpec {
 function status(overrides: Partial<SshStatusProjection> = {}): SshStatusProjection {
   return {
     kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'error',
-    localPort: null, sshPort: null, remotePort: 30800, retryAttempt: 0,
+    localPort: null, transportSocket: 'tcp', sshPort: null, remotePort: 30800, retryAttempt: 0,
     requiresUserAction: true, userActionKind: 'endpoint', serviceActive: null, remoteDshHome: null,
     logSummary: 'the destination answered HTTP 404 to the dsh identity probe', ...overrides,
   }
@@ -60,6 +60,25 @@ test('dsh over SSH: an auth-class failure keeps the SSH auth hint', () => {
   // auth hint — the previous behavior.
   const legacy = status({ userActionKind: null })
   assert.equal(actionHintKey(spec(), legacy, 'error'), 'authActionHint')
+})
+
+test('a spawn-environment failure shows PATH/permission guidance, not an auth hint', () => {
+  const s = status({ userActionKind: 'environment' })
+  assert.equal(actionHintKey(spec(), s, 'error'), 'environmentActionHint')
+  assert.notEqual(actionHintKey(spec(), s, 'error'), 'authActionHint')
+})
+
+test('P0-3: a hostkey-class failure shows the fingerprint hint — even on gateway targets', () => {
+  const s = status({ userActionKind: 'hostkey', hostKey: { state: 'unknown', fingerprints: ['SHA256:abc'] } })
+  assert.equal(actionHintKey(spec(), s, 'error'), 'hostKeyActionHint')
+  // The credential repair hint would be a lie: the tunnel never trusted the host key.
+  assert.notEqual(actionHintKey(spec(), s, 'error'), 'authActionHint')
+  const gatewaySsh = spec({ kind: 'gateway', transport: 'ssh' })
+  assert.equal(
+    actionHintKey(gatewaySsh, status({ kind: 'gateway', transport: 'ssh', userActionKind: 'hostkey' }), 'error'),
+    'hostKeyActionHint',
+    'a gateway over ssh must not be told to re-enter its token for a host-key failure',
+  )
 })
 
 test('http direct and gateway targets keep their own hints regardless of the class', () => {

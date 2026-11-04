@@ -13,6 +13,7 @@ import type { GatewaySessionManager } from './gateway-session.ts';
 import type { NotificationSourceToken } from './notifications.ts';
 import type { ChamberHostPackageSeed, ExactOwnershipRegistry, ExecFn, RemoteSpec } from './plugin-sync.ts';
 import type { ProjectedRegistryInstance } from './registry-projection.ts';
+import type { HostKeyGuard } from './host-key.ts'
 import type { TransportManager } from './transport-manager.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
 import type { UpdateController } from './updater.ts';
@@ -172,6 +173,10 @@ export interface ShellAssemblyCtx {
    *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非
    *  秘密事实，凭据值绝不入日志）。 */
   audit(event: AuditEvent): void
+  /** SSH 主机密钥信任守卫（P0-3）：app 自有 known_hosts（<userData>/ssh/known_hosts）+
+   *  失败触发的 ssh 自证探测。与 transport manager 的 pre-spawn 门是同一实例
+   *  （装配侧创建一次注入两处）；probe/trust IPC 只经它读写，绝不自行拼路径。 */
+  hostKey: HostKeyGuard
   /** gateway 密码会话管理器（design 17 §7.1/§9.3——主进程内存持有；C 组注册体
    *  invalidation 的直接面）。装配侧传模块级 `gatewaySessions` 的**装配期取
    *  值**：该 let 仅在 will-quit 清理置 null（届时窗口已关、IPC 处理器不可

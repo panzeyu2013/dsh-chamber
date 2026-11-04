@@ -72,6 +72,35 @@ class ScriptedJournal extends RemoteJournalStream<unknown, { readonly seq: numbe
   repairRequest(request: unknown): unknown { return request }
 }
 
+/**
+ * A journal whose live generation carries notification frames (the
+ * SessionAssistantStreamFrame shape: a top-level revision). The sibling follow only
+ * serves probes, exactly like ScriptedJournal.
+ */
+interface TestNotification { readonly revision: number }
+
+class NotificationJournal extends RemoteJournalStream<unknown, { readonly seq: number }, number, TestNotification> {
+  probeCount = 0
+
+  constructor(remote: unknown, options: unknown) {
+    super(remote as never, options as never)
+  }
+
+  async *follow(_request: unknown, signal: AbortSignal): AsyncIterable<OpenedFrame> {
+    this.probeCount += 1
+    yield { type: 'opened', cursor: -1, page: { entries: [] } }
+    await new Promise<void>((resolve) => {
+      signal.addEventListener('abort', () => { resolve() }, { once: true })
+    })
+  }
+
+  async readPage(): Promise<unknown> {
+    throw new Error('readPage is not used by these scenarios')
+  }
+
+  repairRequest(request: unknown): unknown { return request }
+}
+
 /** A sibling follow whose return() never settles (a transport ignoring the abort). */
 class StubbornJournal extends ScriptedJournal {
   override follow(): AsyncIterable<OpenedFrame> {
@@ -149,6 +178,43 @@ function silentLogicalStream() {
   }
 }
 
+/** One logical stream: its opening frame, then a timed notification train, then silence. */
+function notifyingLogicalStream(notificationCount: number, intervalMs: number) {
+  const controller = new AbortController()
+  const calls = { restarts: 0, disposed: 0 }
+  const iterator = (async function* () {
+    yield {
+      generation: 1,
+      value: { type: 'opened', cursor: 5, page: { entries: [{ seq: 5 }] } },
+      signal: controller.signal,
+      accept: (): void => {},
+    }
+    for (let index = 0; index < notificationCount; index++) {
+      await sleep(intervalMs)
+      if (controller.signal.aborted) return
+      yield {
+        generation: 1,
+        value: { type: 'notification', notification: { revision: 10 + index } },
+        signal: controller.signal,
+        accept: (): void => {},
+      }
+    }
+    await new Promise<void>((resolve) => {
+      controller.signal.addEventListener('abort', () => { resolve() }, { once: true })
+    })
+  })()
+  return {
+    calls,
+    get signal(): AbortSignal { return controller.signal },
+    restart(): void { calls.restarts += 1 },
+    async dispose(): Promise<void> {
+      calls.disposed += 1
+      controller.abort(new Error('disposed'))
+    },
+    [Symbol.asyncIterator]: () => iterator,
+  }
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
 
 /** Poll a predicate with a deadline: the watchdog cadence is real-time, so wait for
@@ -198,6 +264,45 @@ test('a probe that finds no Host advance never restarts the generation', async (
   await journalStream.open({ maxMessages: 10 })
   assert.ok(await pollUntil(() => journalStream.probeCount >= 2, 1_000), 'the watchdog must keep probing while the stream is silent')
   assert.equal(stream.calls.restarts, 0, 'legal silence must never churn the subscription')
+  await journalStream.dispose()
+})
+
+test('a notification-only flow is never probed as silent (progress, not replace/append, is delivery)', async () => {
+  // P1-4: the field comment claimed every published value is progress while the code
+  // only marked replace/append, so a stream whose assistant output arrives as cursorless
+  // notifications looked silent and was probed at the 45 s window. This suite compresses
+  // that window (30 ms) and drives REAL notification frames: under the old gate the
+  // watchdog probes while the train is still arriving.
+  const timing = {
+    tickMs: 5,
+    probeAfterMs: 30,
+    probeIntervalMs: 30,
+    probeTimeoutMs: 100,
+    restartCooldownMs: 30,
+    readDeadlineMs: 50,
+  }
+  const stream = notifyingLogicalStream(10, 7)
+  const published: string[] = []
+  const journalStream = new NotificationJournal(
+    { $stream: () => stream },
+    { ...journalOptions(published), stall: timing },
+  )
+  await journalStream.open({ maxMessages: 10 })
+  assert.ok(
+    await pollUntil(() => published.filter(type => type === 'notification').length >= 3, 1_000),
+    'the notification train must start',
+  )
+  // The train is still arriving here (t < 10 * 7 ms), and the advanced window has
+  // already passed since the last notification would have been the only progress.
+  await sleep(timing.probeAfterMs + 10)
+  assert.equal(journalStream.probeCount, 0, 'a producing notification stream must not probe the Host')
+  assert.equal(stream.calls.restarts, 0, 'a probe (had it run) must not have restarted anything')
+  // The arm is not disabled: legal silence AFTER the train still probes.
+  assert.ok(
+    await pollUntil(() => journalStream.probeCount >= 1, 2_000),
+    'silence after the notification train must still reach the probe window',
+  )
+  assert.equal(stream.calls.restarts, 0, 'a no-advance probe never churns the generation')
   await journalStream.dispose()
 })
 

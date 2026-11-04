@@ -19,7 +19,7 @@ export function specWithHome(id: string, remoteDshHome: string): TransportInstan
 
 export function runDeps(spawnFn: TransportExecDeps['spawnFn']): TransportExecDeps {
   const projection: TransportStatusProjection = {
-    kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'idle', localPort: null, sshPort: null, remotePort: 3080,
+    kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'idle', localPort: null, transportSocket: 'tcp', sshPort: null, remotePort: 3080,
     retryAttempt: 0, requiresUserAction: false, userActionKind: null, serviceActive: null, remoteDshHome: null,
     logSummary: '',
   }

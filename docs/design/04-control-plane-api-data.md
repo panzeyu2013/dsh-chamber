@@ -174,8 +174,8 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 |---|---|
 | Origin 非当前 Host 精确同源且不在显式 allowlist（包括 `null` 或其他回环端口） | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
 | 实例不可服务（无隧道；本地连接状态 ∉ `{ready, degraded}`） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
-| 请求体上传超时 | 408 `{error, code:'request_timeout'}` |
-| 请求体预算耗尽（进程级并发缓冲上限） | 503 `{error, code:'resource_exhausted'}` |
+| 请求体上传超时（buffered：30s 空闲或体总预算到期；streaming：首字节窗/总预算到期；应用层判定，不是 Node 的 `requestTimeout`） | 408 `{error, code:'request_timeout'}` |
+| 请求体预算耗尽 / 并发准入拒绝 | 503 `{error, code:'resource_exhausted'}`；准入拒绝另带 `details:{kind,scope}`（`http` / `long-rpc` / `ws` / `ws-pending` / `connection` × `connection` / `global`；缓冲预算那条不带） |
 | 上游连接拒绝 / 请求失败 | 502 `{error, code:'upstream_failed'}`（脱敏） |
 | 上游空闲超时（默认 45s；长 RPC 豁免 30 分钟，见 03 §3.4） | 504 `{error, code:'upstream_timeout'}` |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
@@ -191,6 +191,14 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 > 该字段只有 HTTP 503 携带——WS upgrade 的 503 reject 帧没有 details 通道，WS 侧不得依赖它。
 > 同一张表也约束幂等启动与页面自动启动：`degraded` 的本地连接不得被 `start()` 拆掉重建，
 > 页面不得因 `degraded` 触发 `createLocal`，本地 page-channel link 也不得因此停放订阅。
+>
+> **`details.kind`**：`resource_exhausted` 的并发准入拒绝带 `kind`（`http`/`long-rpc`/`ws`/
+> `ws-pending`/`connection`）与 `scope`（`connection`/`global`）；请求体缓冲预算耗尽那条不带
+> `details`。
+>
+> **after-body 语义不变**：body 已完整发出后上游超时/失败仍返回 504/502 +
+> `details.phase='after-body'`（mutation 归 unknown，27 §3.3/§3.5）；本轮错误码/预算改动
+> 不改变它。
 
 **Rejected alternatives（degraded 服务化）**：
 
@@ -215,16 +223,28 @@ upgrade：/api/page-channel      精确路径匹配，不属于 /api/i/* 面
 
 - **I-1**：页面侧长活 HTTP 流 = 0、属于 HTTP 池的长连接 = 0，这条 WS 是页面唯一的长活连接；
   升级后的 WS 不占池、不计入（每实例 Remote mux 仍在 §4.1 白名单内，随来源数增长）。
-- 订阅级失败以 **error 帧**表达（`instance_unavailable` / `capability_not_found` / `upstream_failed` /
-  `upstream_timeout`），不是 HTTP 状态码；宿主不具备通道条件（无 `WebSocket` / 无页面 origin）时客户端
-  上报 `channel_unavailable` 并走 unary 兜底。
+- 订阅级失败以 **error 帧**表达，不是 HTTP 状态码；永久/瞬态判定见下表（wire
+  `PageChannelErrorCode` + `isPageChannelPermanentErrorCode` 单源；未知码按瞬态重试，老客户端
+  不因新码静默放弃）。宿主不具备通道条件（无 `WebSocket` / 无页面 origin）时客户端上报
+  `channel_unavailable` 并走 unary 兜底。
+
+| error 帧 code | 分类 | 条件 |
+|---|---|---|
+| `instance_unavailable` | 瞬态 | 无 transport、link down 或传输化身被替换 |
+| `capability_not_found` | 永久 | 目标不具备该流能力（如 non-gateway 的 sessionFacts） |
+| `upstream_rejected` | 永久 | 上游 4xx（除 401/403/408/425/429）：请求本身被拒 |
+| `upstream_failed` | 瞬态 | 5xx、401/403/408/425/429、3xx/未分类、超帧、非 SSE 200 |
+| `upstream_timeout` | 瞬态 | 响应头期限内未收到头 |
+
+> 旧宿主 404 的客户端行为随之改变：此前按瞬态重试，现在按永久 `upstream_rejected` 不重试。
+
 - **gateway 形态不挂载该端点**（26 §2）：gateway 的 upgrade 面只认 `/api/remote.mux` 与 `/api/i/*`，
   该路径被明确拒绝；将来若移动端要用这三族，须在 gateway 升级分发注册同一端点（17 §9）。
 
 ### 4.3 响应头白名单
 
 `content-type`、`content-encoding`、`content-language`、`content-range`、
-`content-disposition`、`accept-ranges`、`cache-control`、`etag`、`expires`、
+`content-disposition`、`accept-ranges`、`cache-control`、`etag`、`expires`、`retry-after`、
 `last-modified`、`location`、`vary`、`x-next-cursor`、`x-ratelimit-limit`、
 `x-ratelimit-remaining`、`x-ratelimit-reset`。`location` 解析后仍指向同一上游
 origin 的相对或绝对重定向重写到实例反代前缀；`vary` 与控制面 CORS `Origin` 收敛

@@ -18,6 +18,7 @@
     "src/client/remote-events.ts",
     "src/client/remote-retry-policy.ts",
     "src/client/remote-stream.ts",
+    "src/client/stream-auth.ts",
     "src/client/stream-carrier-fact.ts",
     "src/client/snapshot-stream.ts",
     "src/client/stream-client.ts",

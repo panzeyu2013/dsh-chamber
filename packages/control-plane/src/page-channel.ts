@@ -23,14 +23,23 @@
  * `data` 的 UTF-8 字节数记账，两侧必须同一口径。
  *
  * 失败语义：单条订阅失败只产生该 `id` 的 error/end 帧，通道本身继续可用；错误码
- * instance_unavailable / capability_not_found / upstream_failed / upstream_timeout
- * 是**本模块发出的冻结词表**（wire 只有帧形状，码以字符串跨过它；客户端按字符串
- * 比对，只有 capability_not_found 不再重试）。客户端对未知码按订阅重连阶梯持续重试，
- * 所以词表只能收窄、绝不新增「等一下就会好」的临时码。本通道
+ * instance_unavailable / capability_not_found / upstream_rejected / upstream_failed /
+ * upstream_timeout 是**冻结词表**，单源在 wire 的 PageChannelErrorCode（类型面，
+ * 本模块的 failSubscription 只能发词表里的码）与 isPageChannelPermanentErrorCode
+ * （永久判定；码以字符串跨过 wire，永久码 capability_not_found / upstream_rejected
+ * 不再重试）。上游非 200 的分类是永久/瞬态判定的落点：**4xx（除 401/403/408/425/429）=
+ * 上游拒绝了请求本身 ⇒ upstream_rejected（永久）**；5xx、401/403/408/425/429、3xx 与其它
+ * 未分类状态 ⇒ upstream_failed（瞬态），响应头超时 ⇒ upstream_timeout（瞬态）。
+ * 客户端对未知码按订阅重连阶梯持续重试，所以词表只能收窄、绝不新增「等一下就会好」
+ * 的临时码。本通道
  * **没有订阅数上限**：一条订阅对应页面的一条流，控制面的上游数 = O(活动订阅数)，
  * 这正是 design 26 D5 的设计，不设容量旋钮。error/end 与
  * unsubscribe、socket 关闭、控制面 stop() 都必须销毁该订阅的上游 request+response、
  * 摘掉监听器、退订原生生产者，绝不能把半条上游留给下一个订阅或下一次启动。
+ *
+ * 诊断消费面：stats()（只读计数）由本模块自己消费——每个 statsIntervalMs 一行
+ * `page-channel: stats …`（无活动 socket 时静默）；closeAll() 在仍有活动 socket 时
+ * 再留一行拆除前的现场。不新增 HTTP 端点（本工作包不引入第二个读面）。
  */
 
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http'
@@ -51,6 +60,7 @@ import {
   pageChannelReadyFrame,
   parsePageChannelClientMessage,
   type PageChannelClientMessage,
+  type PageChannelErrorCode,
   type PageChannelFamily,
 } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import { authCookieFor } from './browser-auth-cookie.ts'
@@ -83,6 +93,32 @@ const SESSION_FACTS_SSE_PATH = SESSION_STATE_STREAM_PATH
 /** RFC 6455 close code 1012 = service restart（控制面 stop() 的关闭语义）。 */
 const PAGE_CHANNEL_RESTART_CLOSE_CODE = 1012
 
+/**
+ * 诊断消费面：把只读计数写一行日志的周期。60s 是「一个用户能忍受的静默上限」与
+ * 「日志不被周期性行淹没」之间的取值：控制面日志按行落盘，一分钟一行在有页面连接时
+ * 也只占 1.4k 行/天。**不是容量旋钮**，测试可注入更短的周期（statsIntervalMs）。
+ */
+const PAGE_CHANNEL_STATS_INTERVAL_MS = 60_000
+
+/**
+ * 4xx 里「这次不行、等会儿可能行」的状态：401/403 的 Authorization 是传输层
+ * 注入的，token 刷新/轮换后同一条请求会成功（review R1-C：把 401/403 判永久会让
+ * 认证刷新后的订阅永远不复活）；408/425/429 是时间/限流。其余 4xx 是上游对
+ * **请求本身**的拒绝（缺路由/不存在/已删除），重发只会得到同一个拒绝。
+ */
+const RETRYABLE_CLIENT_ERROR_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 425, 429])
+
+/**
+ * 上游非 200 的分类：4xx（除 401/403/408/425/429）= 永久拒绝（`upstream_rejected`），
+ * 其它一律瞬态（`upstream_failed`）。3xx 留在瞬态一侧：Node 在这里不跟随重定向，
+ * 而一个我们没推理过的状态类不该仅凭类名变成永久判定。
+ * @param status - 上游 HTTP 状态码（0 = 没有状态码）。
+ * @returns true 表示重发同一条请求会得到同一个拒绝。
+ */
+function isPermanentUpstreamStatus(status: number): boolean {
+  return status >= 400 && status < 500 && !RETRYABLE_CLIENT_ERROR_STATUSES.has(status)
+}
+
 /** 控制面原生 health 生产者推送的快照；与 /api/host/health-events 同一投影。 */
 export interface PageChannelHealthSnapshot {
   status: string
@@ -103,6 +139,10 @@ export interface PageChannelTarget {
   headers?: Record<string, string>
   tls?: { spkiPin?: string }
   authority?: string
+  /** POSIX ssh tunnel only: dial this UDS listener instead of baseUrl's host:port.
+   *  Host/authority and path semantics stay exactly as they are (same shape the
+   *  instance proxy consumes). */
+  socketPath?: string
 }
 
 /** createPageChannel 的依赖面。 */
@@ -134,9 +174,13 @@ export interface PageChannelDeps {
   wsPingIntervalMs?: number
   /** 测试注入面：心跳未回应几拍后终止 socket（默认 WS_PING_MISSES_BEFORE_TEARDOWN = 1）。 */
   wsPingMissesBeforeTeardown?: number
+  /** 测试注入面：诊断 stats 行的周期（默认 PAGE_CHANNEL_STATS_INTERVAL_MS = 60s；
+   *  0 关闭周期行，closeAll 的拆除行仍在）。生产中不传。 */
+  statsIntervalMs?: number
 }
 
-/** 通道的只读计数（会计可见性；绝不是一个容量旋钮）。 */
+/** 通道的只读计数（会计可见性；绝不是一个容量旋钮）。消费面是本模块自己的
+ *  周期性日志行 + closeAll 的拆除行：spec 明确不新增第二个读面（HTTP 端点）。 */
 export interface PageChannelStats {
   /** 活动页面 socket 数。 */
   sockets: number
@@ -414,6 +458,7 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
   const headersTimeoutMs = deps.upstreamHeadersTimeoutMs ?? UPSTREAM_TIMEOUT_MS
   const wsPingIntervalMs = deps.wsPingIntervalMs ?? WS_PING_INTERVAL_MS
   const wsPingMissesBeforeTeardown = deps.wsPingMissesBeforeTeardown ?? WS_PING_MISSES_BEFORE_TEARDOWN
+  const statsIntervalMs = deps.statsIntervalMs ?? PAGE_CHANNEL_STATS_INTERVAL_MS
   const liveSockets = new Set<PageSocketState>()
   // maxPayload：客户端帧只有 subscribe/unsubscribe/ack（几十字节），用**客户端帧上限**
   // 做传输层边界；超过时 ws 直接以 1009 关闭，超大/畸形帧不进解析器（wire 的
@@ -489,8 +534,9 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     }
   }
 
-  /** 订阅级失败：先给该 id 发 error 帧，再彻底收尾；通道与别的订阅不受影响。 */
-  function failSubscription(sub: SubscriptionState, code: string, message: string): void {
+  /** 订阅级失败：先给该 id 发 error 帧，再彻底收尾；通道与别的订阅不受影响。
+   *  `code` 的类型是 wire 的冻结词表（PageChannelErrorCode）：本模块只能发词表里的码。 */
+  function failSubscription(sub: SubscriptionState, code: PageChannelErrorCode, message: string): void {
     if (sub.closed) return
     try {
       logger.warn(`page-channel: subscription ${sub.id} (${sub.family}) failed: ${code}: ${message}`)
@@ -629,7 +675,9 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
         headers[lower] = value
       }
     }
-    const cookie = authCookieFor(target.baseUrl)
+    // Local-only: a remote UDS target's synthetic 127.0.0.1:<remotePort> can equal
+    // the local baseUrl; never leak the local launch-token cookie over SSH.
+    const cookie = target.connectionId === undefined ? authCookieFor(target.baseUrl) : undefined
     if (cookie !== undefined) headers.cookie = cookie
     return headers
   }
@@ -672,6 +720,8 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
       request = requestFactory(url, {
         method: 'GET',
         headers: upstreamHeadersFor(url, target),
+        // POSIX ssh 隧道：上游只能经 UDS 监听器到达，Host/authority 不变。
+        ...(target.socketPath === undefined ? {} : { socketPath: target.socketPath }),
         // 固定 pin 时由 pin 取代 CA 信任，且必须 agent:false 让 secureConnect 每次触发。
         ...(tlsPin === undefined ? {} : { rejectUnauthorized: false, agent: false }),
       })
@@ -708,8 +758,12 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
       }
       const status = response.statusCode ?? 0
       if (status !== 200) {
+        // 非 200 分两类：4xx（除 401/403/408/425/429）是上游对**请求本身**的拒绝，重发同一条
+        // 请求只会得到同一个拒绝 ⇒ 永久 upstream_rejected（客户端不再重试）；5xx、
+        // 401/403/408/425/429、3xx 与无状态码是瞬态 ⇒ upstream_failed（维持既有阶梯）。
         destroyQuietly(response)
-        failSubscription(sub, 'upstream_failed', `upstream answered ${String(status)} instead of 200`)
+        failSubscription(sub, isPermanentUpstreamStatus(status) ? 'upstream_rejected' : 'upstream_failed',
+          `upstream answered ${String(status)} instead of 200`)
         return
       }
       // 200 不等于 SSE：SPA fallback / 网关错误页也会回答 200 text/html。只认状态码的
@@ -988,6 +1042,42 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     }
   }
 
+  /** 只读计数（stats() 与诊断行共用同一实现：两个读面绝不能漂移）。 */
+  function collectStats(): PageChannelStats {
+    let subscriptions = 0
+    let upstreams = 0
+    for (const state of liveSockets) {
+      subscriptions += state.subscriptions.size
+      for (const sub of state.subscriptions.values()) {
+        if (sub.family !== 'health') upstreams += 1
+      }
+    }
+    return { sockets: liveSockets.size, subscriptions, upstreams }
+  }
+
+  /** 一行诊断（sockets/subscriptions/upstreams）；日志绝不打断流（logger 已包 try/catch）。 */
+  function logStats(label: string): void {
+    try {
+      const stats = collectStats()
+      logger.log('page-channel: ' + label + ' sockets=' + String(stats.sockets)
+        + ' subscriptions=' + String(stats.subscriptions)
+        + ' upstreams=' + String(stats.upstreams))
+    } catch { /* diagnostics must never break a socket or stop() */ }
+  }
+
+  // 周期诊断：空闲（没有活动页面 socket）时不写 0/0/0——控制面可能在用户的桌面上跑几周，
+  // 每分钟一行零只会把真正的事件挤出日志。计时器 unref，绝不拖住进程退出。
+  let statsTimer: ReturnType<typeof setInterval> | null = null
+  const armStats = (): void => {
+    if (statsIntervalMs <= 0 || statsTimer !== null) return
+    statsTimer = setInterval(() => {
+      if (liveSockets.size === 0) return
+      logStats('stats')
+    }, statsIntervalMs)
+    statsTimer.unref?.()
+  }
+  armStats()
+
   return {
     /** 测试注入面：把一条**已经是 ws 形状**的 socket 直接挂进通道（生产路径只有
      *  handleUpgrade：真实握手 + 真实 ws）。幽灵条目这类只在非标准宿主上出现的时序
@@ -996,7 +1086,10 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
 
     handleUpgrade(req: ApiRequest, socket: Duplex, head: Buffer): void {
       try {
-        wss.handleUpgrade(req as never, socket as never, head, (ws: WebSocket) => { attachSocket(ws) })
+        wss.handleUpgrade(req as never, socket as never, head, (ws: WebSocket) => {
+          attachSocket(ws)
+          armStats()
+        })
       } catch (error) {
         logger.warn(`page-channel: upgrade failed: ${errorMessage(error)}`)
         try {
@@ -1008,18 +1101,17 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     revokeConnection,
 
     stats(): PageChannelStats {
-      let subscriptions = 0
-      let upstreams = 0
-      for (const state of liveSockets) {
-        subscriptions += state.subscriptions.size
-        for (const sub of state.subscriptions.values()) {
-          if (sub.family !== 'health') upstreams += 1
-        }
-      }
-      return { sockets: liveSockets.size, subscriptions, upstreams }
+      return collectStats()
     },
 
     closeAll(): void {
+      if (statsTimer !== null) {
+        clearInterval(statsTimer)
+        statsTimer = null
+      }
+      // 拆除前的现场行（stop 时的消费面）：拆除之后计数立即归零，那一刻的
+      // sockets/subscriptions/upstreams 只在这里留下证据。没有活动 socket 时不写。
+      if (liveSockets.size > 0) logStats('shutdown stats')
       for (const state of [...liveSockets]) {
         try {
           state.ws.close(PAGE_CHANNEL_RESTART_CLOSE_CODE, 'control plane shutting down')

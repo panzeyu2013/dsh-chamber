@@ -349,12 +349,49 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 
 ### 7.2 Bearer token
 
-- token 只以 salted hash 存在于 Gateway state；常量时间校验；
+- token verifier 是**联合形状** `scrypt$salt$hash | hmac$<64hex>`：新写入一律
+  HMAC-SHA256（`hmac$<64hex>`），key 是 state 内 `<stateDir>/auth/token-key`
+  （32 CSPRNG 字节的 hex，0600，原子写 + 读回）；校验是一次 MAC +
+  `timingSafeEqual`（O(1)，不进 scrypt work gate）。legacy `scrypt$` token 记录仍可读，
+  首次校验成功后**就地懒迁移**为 hmac（每进程每个 verifier 至多一次、写前比较当前
+  verifier 防轮换覆盖、source 不变、不提升 generation），迁移失败保留 legacy 并下次
+  启动重试。
+- 启动播种按 verifier **自身形状**比较（hmac 走 token-key、scrypt 走 scrypt），
+  否则每次启动都会把 hmac 覆盖回 scrypt。token 必须由 CSPRNG 生成
+  （`randomBytes(32).toString('base64url')`）；API 显式 `newToken` 是操作者输入面，
+  只校验 32–4096 visible ASCII 形状，不证明随机性，面板/文档要求操作者用 CSPRNG 生成。
+- `token-key` 的校验路径从不创建/重写 key 内容（至多按私有文件纪律收紧 0600）：
+  缺失或损坏时 hmac token 全部 fail-closed（每进程告警一次）；写路径（播种/变更/迁移）
+  `ensureTokenKey` 才新建 32 字节 key。key 丢失/损坏 ⇒ 既有 hmac verifier 全部失效；
+  runtime 来源**没有带内恢复**（`change-token` 本身在认证门后），唯一安全路径是停服、
+  `gateway auth clear` 清除 runtime verifier，再以 config token 重新部署/播种后才恢复对外；
+  config 来源可在重启播种时按新 key 重写。恢复前不得把服务暴露到公网。
+- **威胁模型（key 与 verifier 同树）**：两文件都在 state 树内；备份/支持包/整目录
+  泄露会同时拿到 verifier 与 key，此时 HMAC 对离线穷举约等于无盐 SHA256（这是已知
+  取舍，不是复用 plain sha256 的理由：单独泄露 verifier 时仍是 keyed MAC）。部署必须
+  把 `auth/token-key` 与 verifier **一起**备份（或把整目录视同 token 泄露）；只恢复
+  verifier 而丢了 key 会落进上面的锁死路径，必须 clear 后重设 token。本版没有 key 轮换
+  命令，轮换需删除 token-key 并重设全部 token（旧 hmac 全部 fail-closed）。
+- **降级注意**：hmac verifier 对旧版（≤main）store 是 `corrupt-v2`；把构建回滚到旧版前必须
+  先 `gateway auth clear` 或以 config token 重新播种/重设 scrypt，否则 runtime token 会被读成
+  未配置，`--no-auth` 的 loopback 部署会退化为匿名（仅一行 SECURITY WARNING）。发布说明必须
+  写明这条前置。
+- **bearer 失败没有速率限制**：hmac 校验是 O(1)（不再被 scrypt 的 CPU 自然限速），安全性依赖 32–4096 字符 token 的 CSPRNG 熵与 `MIN_GATEWAY_TOKEN_CHARS=32`；legacy scrypt 记录仍受进程 work gate，但没有按 IP/时间窗的尝试上限。公网部署必须用 CSPRNG token，不能把可猜口令当 token。
+- token 校验在等待 scrypt 前捕获 credential generation，完成后 generation 已变则
+  拒绝（旧 verifier 的迟到结果不得放行）；仅形状迁移不提升 generation。token 更新、
+  清除、kind 切换或 transport unregister 仍会关闭该 transport 已建立的 HTTP/SSE/WS
+  流，旧凭据不能继续读取数据。
 - 只接受一个 `Authorization: Bearer …`；token wire 值须为 32–4096 visible ASCII，
-  重复/数组/31/4097/控制字符在读取 hash 或进入高成本认证前拒绝；
-- Desktop renderer 永远看不到 token；token 由主进程注入到注册 transport 的请求；
-- token 更新、清除、kind 切换或 transport unregister 会关闭该 transport 已建立的
-  HTTP/SSE/WS 流，旧凭据不能继续读取数据。
+  重复/数组/31/4097/控制字符在读取 hash 或进入高成本认证前拒绝。
+- Desktop renderer 永远看不到 token；token 由主进程注入到注册 transport 的请求。
+
+**Rejected alternatives（token verifier）**：
+- **plain `sha256(token)`**：无 key、无 salt 的摘要给离线爆破低熵 token 的入口，
+  且 token 文件泄露无法通过删 key 整体失效；选用 state-local keyed HMAC（O(1) +
+  key 丢失即全失效）。
+- **进程内缓存 verifier 或校验结果**：运行期轮换/删除后缓存仍放行旧 token，与
+  generation 撤销和长连接关闭语义冲突；每次请求重读持久化记录，key 也只在写路径
+  read-or-create。
 
 ### 7.3 入口失败语义（含桌面客户端三态）
 
@@ -596,15 +633,16 @@ dsh ready detach，故 blocked/applying/restart 窗口仍可注册反代、打�
 dsh 目标仍用统一身份握手（`session/canOpenWorkspacePath`，与本地就绪同
 契约），两层健康不得混为一个 ready 位。
 
-**gateway 密码会话 ownership**：`gateway-session.ts` 的 key 由三部分构成：网络 origin、
-HTTP `Host` authority、稳定的 connection-target scope。scope = connection id + 目标摘要
-（SSH：transport/host/user/sshPort/remotePort；direct：http transport/host/remotePort），
-刻意不含易变的 tunnel localPort；故不同 direct id 即使同 origin 也不共享 Cookie，同一
-localPort/远端 loopback authority 被不同 SSH 主机或 id 复用也不串会话，同 id retarget 进入
-新 scope。authority 只负责路由，不代表 ownership：SSH 固定为远端真实监听 `127.0.0.1:<remotePort>`，
-`spec.host` 只是 SSH destination（可为 ssh-config alias/DNS 名），绝不能触发 gateway Host
-policy 421。隧道重连的新 origin 会重新登录；scope invalidation 覆盖该连接目标的全部历史
-localPort/origin。
+**gateway 密码会话 ownership**：`gateway-session.ts` 的 key 由三部分构成：scheme
+（http/https）、可选的 remote `Host` authority（隧道覆盖；direct 无覆盖，host/端口由 scope
+摘要绑定）、稳定的 connection-target scope。scope = connection id
++ 目标摘要（SSH：transport/host/user/sshPort/remotePort；direct：http transport/host/remotePort），
+刻意不含易变的 tunnel localPort，网络 baseUrl 也不在键里；故**同一目标重连换 localPort 复用
+同一会话**，不同 direct id 即使同 origin 也不共享 Cookie，同一 localPort/远端 loopback
+authority 被不同 SSH 主机或 id 复用也不串会话，同 id retarget 进入新 scope。authority 只负责
+路由，不代表 ownership：SSH 固定为远端真实监听 `127.0.0.1:<remotePort>`，`spec.host` 只是 SSH
+destination（可为 ssh-config alias/DNS 名），绝不能触发 gateway Host policy 421。只有 scope、
+authority 或 scheme 变化才重新登录；scope invalidation 覆盖该连接目标的全部历史 localPort/origin。
 
 ### 9.3 反代注册规则（instance-proxy）
 
@@ -1085,7 +1123,8 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 
 ```text
 <stateDir>/
-├─ tokens.json                 # v2 信封 {schemaVersion:2, source, updatedAt, hash}, 0600
+├─ tokens.json                 # v2 信封 {schemaVersion:2, source, updatedAt, hash}, 0600；hash = scrypt$… | hmac$<64hex>
+├─ auth/token-key              # 32 CSPRNG bytes hex（64 字符），0600，auth/ 0700
 ├─ jwt-secret                  # 0600
 ├─ password-credential         # v2 信封 {schemaVersion:2, source, updatedAt, verifier}, 0600
 ├─ owner.json # state 根租约 v2 {schemaVersion,pid,startedAt,token,scope,flavor,
@@ -1116,9 +1155,13 @@ legacy secret 到 `0600`，而 `gateway auth status` 只验证不改权限。sec
 `{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>, verifier|hash}`（0600 原子写，
 无 tmp 残留）；`source` 记录部署播种还是运行时变更（播种策略见 §7.4）。legacy v1（密码裸
 `scrypt$salt$hash` 字符串、token `{"hash":…}`）读为 `source:'config'`（updatedAt = 文件 mtime），
-下次写入自动迁移 v2。v2 的 verifier/hash 必须匹配 `scrypt$salt$hash` 规范形状
-（`/^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i`）——形状合法但内容垃圾按 corrupt v2 处理（**每进程告警
-一次**，按未配置处理），杜绝「垃圾 verifier 静默废认证」。
+下次写入自动迁移 v2。`password-credential` 的 verifier 必须匹配 `PASSWORD_VERIFIER_RE`
+（`scrypt$salt$hash`）；`tokens.json` 的 hash 必须匹配 `TOKEN_VERIFIER_RE`（`scrypt$…` 或
+`hmac$<64hex>` 的联合）——形状合法但内容垃圾按 corrupt v2 处理（**每进程告警一次**，按未配置
+处理），杜绝「垃圾 verifier 静默废认证」。`hmac$` 的校验 key 是 `<stateDir>/auth/token-key`
+（32 CSPRNG 字节 hex，0600；`auth/` 0700；校验不创建/重写 key 内容、至多收紧 0600，
+缺失或损坏 ⇒ 所有 hmac token fail-closed，需重置 token）。`setTokenHash` 写前按联合正则自校验、写后经同一 parser 读回；
+readback 不一致直接报错，绝不发布模块自己读不出的 verifier。
 
 **state 根租约（`<stateRoot>/owner.json`）**：`createGateway`（gateway 形态）或 `createControlPlane`（desktop/cli，取锁严格在首次 store 写之前）经 `acquireStateRootLease` 以 **no-follow O_EXCL** 创建
 `{schemaVersion:2,pid,startedAt,token,scope,flavor,identity{host,machineId,bootId,pidNamespace,procStartTicks}}`（0600，stateRoot 0700 内）+ **回读终验**持有该根：**身份核实为活持有者**的租约**响亮拒绝启动**

@@ -18,13 +18,17 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane'
 import type { ChamberSettings } from './chamber-settings.ts'
 import { writeSettingsFile } from './chamber-settings.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
-import {auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, localDshHomeDir, ownsNotificationSource, projectNotificationSourceInstances, proxyTransport, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, syncNotificationSourceRegistry, type HostMessageOptions, type NotificationSourceToken, type ShellAssemblyCtx} from './shell-core.ts'
+import {auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, localDshHomeDir, ownsNotificationSource, projectNotificationSourceInstances, proxyTransport, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, stateRootDir, syncNotificationSourceRegistry, type HostMessageOptions, type NotificationSourceToken, type ShellAssemblyCtx} from './shell-core.ts'
 import {attemptCommittedRegistryPush, createTransportManager, type TransportManager} from './transport-manager.ts'
 import { createHostExit } from './host-exit.ts'
 import { createRegistryTransition } from './host-registry-transition.ts'
 import { reconnectStaleTransports } from './transport-reconnect.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
-import { cleanupStaleAskpassHelpers, configureSshPasswordStore, probeChamberHostLive, sshProvider } from './ssh-provider.ts'
+import { configureSshPasswordStore, probeChamberHostLive, sshProvider } from './ssh-provider.ts'
+import { cleanupStaleAskpassHelpers } from './ssh-askpass.ts'
+import { sweepSshOrphans } from './ssh-orphan.ts'
+import { createHostKeyGuard, defaultUserKnownHostsPath, knownHostsPathFor } from './host-key.ts'
+import { configureSshSocketNamespace } from './ssh-socket.ts'
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins, type LocalChamberHostPackage, type SecretCryptoAdapter } from './gateway-provider.ts'
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection, type GatewayRegistrationAuthProof } from './gateway-session.ts'
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority, type GatewaySessionRefresh } from './gateway-session-refresh.ts'
@@ -78,8 +82,8 @@ export interface HostAssemblyDeps {
   markQuitting(): void
   /** hostFacts 的 flavor 字段（controlPlaneUrl 由 flavor 在控制面起来后回填）。 */
   hostFacts: { flavor: ShellAssemblyCtx['hostFacts']['flavor']; trayPresent(): boolean }
-  /** gateway secret store 加密适配器（Electron safeStorage；Swift 无 = undefined → 0600 plaintext 诚实 loud 回退）。 */
-  gatewaySecretsCrypto?: SecretCryptoAdapter
+  /** 凭据镜像加密适配器（Electron safeStorage；gateway 与 SSH 密码共用；Swift 无 = undefined → 文档化明文回退）。 */
+  credentialCrypto?: SecretCryptoAdapter
   /** host 包源目录映射（key = 注册表包名；flavor 解析 app.isPackaged/repoRoot 或 --host-*-dir/moduleDir）。 */
   hostPackageSourceDirs: Record<string, string>
   /** runtime 安装器/sidecar 的 pnpm 入口（flavor 经 pnpm-launcher 解析后注入）。 */
@@ -226,21 +230,32 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   const askpassNotice = cleanupStaleAskpassHelpers()
   if (askpassNotice !== null) console.error(`${logTag} ${askpassNotice}`)
 
+  // ssh 隧道崩溃清扫（P2-1，POSIX）：回收上次崩溃遗留的 ssh 子进程；sweep 的
+  // pid+startedAt 双判据保证不会误杀 PID 复用的进程。**不按 uid 目录清 socket**：
+  // 同一用户可能并行跑另一个 chamber root，其上活着的 ssh 仍持有 socket；按目录 rm
+  // 会静默切断那个实例的转发。本实例的陈旧 socket 由下次 spawn 的
+  // StreamLocalBindUnlink=yes 原路径替换，不需要启动期扫描。
+  // Windows 两者均为 no-op（无 UDS 隧道、TCP 监听由内核随进程回收）。
+  configureSshSocketNamespace(runtimeBaseDir)
+  const stateRoot = stateRootDir(runtimeBaseDir)
+  const orphanSweep = sweepSshOrphans({ stateDir: stateRoot, log: message => console.warn(`${logTag} ${message}`) })
+  if (orphanSweep.killed > 0 || orphanSweep.removed > 0 || orphanSweep.kept > 0) {
+    console.warn(`${logTag} ssh orphan sweep: reclaimed ${String(orphanSweep.killed)}, stale records ${String(orphanSweep.removed)}, unverifiable ${String(orphanSweep.kept)}`)
+  }
+
   // registry 现实例先占位：凭据存储配置期只持有惰性解析器（transportManager 赋值后按引用共享）。
   let transportManager: TransportManager | null = null
   const resolveCredentialSpec = (id: string): TransportInstanceSpec | null =>
     transportManager?.listInstances().find(instance => instance.id === id) ?? null
 
-  // SSH password store（0600/原子写/损坏 loud 保留）：<userData>/ssh-passwords.json。
-  // 凭据值绝不进 registry/日志/渲染器（write-only、绝不回读）。
-  const passwordNotice = configureSshPasswordStore(sshPasswordsFilePath(runtimeBaseDir), resolveCredentialSpec)
+  // SSH password store（0600 原子写；safeStorage 加密，旧明文读时迁移；无 keyring 拒绝新保存、旧明文可读；损坏 loud 保留）。v1 无 keyboard-interactive（2FA）→ 用密钥。
+  const passwordNotice = configureSshPasswordStore(sshPasswordsFilePath(runtimeBaseDir), resolveCredentialSpec, deps.credentialCrypto)
   if (passwordNotice !== null) console.error(`${logTag} ssh password store: ${passwordNotice}`)
 
-  // Gateway credentials store（schema v3, 0600, 原子写）：Electron 经 safeStorage 适配器
-  // 加密镜像；Swift 无 safeStorage → 非 win32 = 0600 plaintext 诚实 loud 回退（renderer 可见
-  // secretStorage:'plaintext'），win32 = memory-only（file null）拒绝明文。
-  const windowsRefusePlaintext = process.platform === 'win32' && deps.gatewaySecretsCrypto === undefined
-  if (deps.gatewaySecretsCrypto === undefined) {
+  // Gateway credentials store（schema v3, 0600, 原子写）：Electron 经 safeStorage 加密镜像；Swift 无
+  // safeStorage → 非 win32 = 0600 plaintext loud 回退（renderer 见 secretStorage:'plaintext'），win32 = memory-only 拒绝明文。
+  const windowsRefusePlaintext = process.platform === 'win32' && deps.credentialCrypto?.isAvailable() !== true
+  if (deps.credentialCrypto?.isAvailable() !== true) {
     if (windowsRefusePlaintext) {
       // win32 无 DPAPI：loud 拒绝而非 plaintext 回退；gateway 凭据仅本次会话内存驻留。
       console.error(`${logTag} Windows safeStorage (DPAPI) 不可用 — 拒绝明文镜像回退 (design 21 C16)；gateway 凭据仅本次会话内存驻留，每次连接需重录`)
@@ -252,13 +267,22 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   }
   const gatewaySecretNotice = configureGatewaySecretStore(
     windowsRefusePlaintext ? null : gatewaySecretsFilePath(runtimeBaseDir),
-    deps.gatewaySecretsCrypto,
+    deps.credentialCrypto,
     resolveCredentialSpec,
   )
   if (gatewaySecretNotice !== null) console.error(`${logTag} gateway secrets store: ${gatewaySecretNotice}`)
 
   // Gateway password-session manager（纯主进程内存；注册体的 invalidation 直接面）：
   // configureGatewaySessionProvider 六钩子全量接线（ssh 隧道与 http 直连双形态共用）。
+  // P0-3 host-key policy: the APP-OWNED known_hosts (first-use copy of ~/.ssh/known_hosts) gates
+  // every tunnel before spawn, and the failure-triggered ssh self-proof feeds the fingerprint
+  // projection. ONE guard instance serves both the transport manager and the host-key IPC
+  // handlers (probe registry + file mutex in one process).
+  const hostKeyGuard = createHostKeyGuard({
+    knownHostsFile: knownHostsPathFor(runtimeBaseDir),
+    userKnownHostsFile: defaultUserKnownHostsPath(),
+    log: (level, message) => (level === 'error' ? console.error : console.warn)(`[host-key] ${message}`),
+  })
   const gatewaySessions = createGatewaySessionManager()
   configureGatewaySessionProvider({
     ensureSession: (origin, password) => gatewaySessions.ensureSession(origin, password),
@@ -278,6 +302,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   const created = createTransportManager({
     provider: sshProvider,
     providers: { ssh: sshProvider, http: gatewayProvider },
+    hostKey: hostKeyGuard,
+    sshOrphanStateDir: stateRoot,
     instancesFile: instancesFilePath(runtimeBaseDir),
     logger: {
       log: (...args) => console.log('[transport-manager]', ...args),
@@ -350,6 +376,10 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     passwordFor: id => getGatewayPassword(id),
     tokenFor: id => getGatewayToken(id),
     readyUrlFor: id => sm.readyUrl(id),
+    // POSIX ssh tunnels are reachable only through their UDS listener: the refresh
+    // login must dial it exactly like verifyUp, or a password gateway silently stops
+    // re-authenticating after the transport switches shape.
+    socketPathFor: id => sm.readySocketPath(id),
     tlsPinFor: id => sm.listInstances().find(instance => instance.id === id)?.spkiPin ?? null,
     // Tunnel Host override：ssh 隧道 gateway 目标以远端 LOOPBACK 权威重注册——Host 头/
     // 稳定 connection-target scope/网络 origin 与 verifyUp-minted session key 同构。
@@ -369,10 +399,12 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       const livePlane = plane()
       const registered = sm.listInstances().find(instance => instance.id === id)
       const liveStatus = sm.status(id)
+      const liveSocketPath = sm.readySocketPath(id)
       if (livePlane !== null) livePlane.registerInstanceTransport(connectionIdForRawInstance(id, 'gateway'), url, headers, {
         ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
         ...(tls === undefined ? {} : tls),
         ...(authority === undefined ? {} : { authority }),
+        ...(liveSocketPath === null ? {} : { socketPath: liveSocketPath }),
         ...(liveStatus?.link === undefined ? {} : { health: liveStatus.link.state }),
       })
       // A successful (re-)registration ends any pending auth recovery: a deferred
@@ -390,6 +422,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
         headers: sanitized,
         spkiPin: tls?.tls.spkiPin,
         authority,
+        socketPath: liveSocketPath ?? undefined,
       }))
     },
     // Bounded dead-cookie recovery：disconnect（idle → 控制面注销 + disarm）→ connect
@@ -462,7 +495,12 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       const parsed = new URL(url)
       const port = parsed.port === '' ? null : Number(parsed.port)
       if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return null
-      const result = await probeChamberHostLive({ host: parsed.hostname, port }, descriptor.probe.method, descriptor.probe.args)
+      const socketPath = sm.readySocketPath(id)
+      const result = await probeChamberHostLive(
+        { host: parsed.hostname, port, ...(socketPath === null ? {} : { socketPath }) },
+        descriptor.probe.method,
+        descriptor.probe.args,
+      )
       return result === 'live' ? true : result === 'not-live' ? false : null
     } catch {
       return null
@@ -564,11 +602,14 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
         )
       }
     }
+    const socketPath = sm.readySocketPath(id)
     return syncGatewayChamberPlugins({
       // Sync through the REGISTERED transport origin (the ready URL)：ssh 隧道 = 用户
       // 验证过的 loopback 端点，绝非远端 host:port；authority 覆盖呈现远端 gateway。
+      // POSIX UDS 隧道：真正的拨号目标是 socket，URL 只承担 authority/path 语义。
       origin: url,
       authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
+      ...(socketPath === null ? {} : { socketPath }),
       headers,
       spkiPin,
       packages,
@@ -690,6 +731,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     if (cp !== null) {
       if (status.phase === 'ready') {
         const url = sm.readyUrl(id)
+        const socketPath = sm.readySocketPath(id)
         if (url !== null) {
           if (status.kind === 'gateway') {
             const registered = sm.listInstances().find(instance => instance.id === id)
@@ -716,6 +758,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
               headers,
               spkiPin: facts.spkiPin,
               authority: facts.tunnelAuthority,
+              socketPath: socketPath ?? undefined,
             })
             applyTransportRegistration(registeredTargetKeys.get(connectionId), nextKey, {
               // Health-only projection change: do NOT re-register (it revokes
@@ -730,6 +773,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
                     transport: proxyTransport(status.transport),
                     ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
                     ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
+                    ...(socketPath === null ? {} : { socketPath }),
                     ...(status.link === undefined ? {} : { health: status.link.state }),
                   },
                 )
@@ -749,12 +793,13 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
             })
           } else {
             const connectionId = connectionIdForRawInstance(id, status.kind)
-            const nextKey = registrationKey({ url, transport: status.transport })
+            const nextKey = registrationKey({ url, transport: status.transport, socketPath: socketPath ?? undefined })
             applyTransportRegistration(registeredTargetKeys.get(connectionId), nextKey, {
               setHealth: () => cp.setInstanceTransportHealth(connectionId, status.link?.state ?? 'healthy'),
               register: () => {
                 cp.registerInstanceTransport(connectionId, url, undefined, {
                   transport: proxyTransport(status.transport),
+                  ...(socketPath === null ? {} : { socketPath }),
                   ...(status.link === undefined ? {} : { health: status.link.state }),
                 })
                 registeredTargetKeys.set(connectionId, nextKey)
@@ -827,6 +872,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     const current = sm.status(id)
     if (cp === null || current === null || current.phase !== 'ready' || current.kind !== 'gateway') return
     const url = sm.readyUrl(id)
+    const socketPath = sm.readySocketPath(id)
     const registered = sm.listInstances().find(instance => instance.id === id)
     if (url === null || registered === undefined || registered.kind !== 'gateway') return
     const facts = currentGatewayAuth(id, url, registered)
@@ -846,6 +892,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
         transport: proxyTransport(registered.transport),
         ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
         ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
+        ...(socketPath === null ? {} : { socketPath }),
         health: 'healthy',
       },
     )
@@ -856,6 +903,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       headers,
       spkiPin: facts.spkiPin,
       authority: facts.tunnelAuthority,
+      socketPath: socketPath ?? undefined,
     }))
     // Same rule as the ready registration: a session re-established by the probe
     // ends any deferred auth recovery (it would otherwise disconnect a healthy link).
@@ -969,6 +1017,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     isQuitting: () => deps.isQuitting(),
     transportManager: sm,
     audit,
+    hostKey: hostKeyGuard,
     gatewaySessions,
     publishRegistryTransition,
     confirmRegistryOriginSwitch: async (currentOrigin, nextOrigin) => {
@@ -1154,6 +1203,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       deps.isQuitting,
       (message, error) => console.warn(message, error),
       logTag,
+      { staggerMs: 120 },
     ),
     reverifyAllTransports: () => {
       if (deps.isQuitting()) return

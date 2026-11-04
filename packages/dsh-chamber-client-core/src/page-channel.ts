@@ -17,11 +17,15 @@
  *
  * 失败语义：订阅级失败只通知该订阅（`onError`），通道自己按有界阶梯重连并重新
  * 订阅；消费方据此把该来源标脏，而不是各自再排一条重连阶梯（禁止重连风暴）。
+ * **永久码不重试**：capability_not_found（能力错配）与 upstream_rejected（上游以 4xx
+ * 拒绝了请求本身）由 wire 的 isPageChannelPermanentErrorCode 判定——重试只会把同一件
+ * 不可能的事按 30s 一拍重复，消费方应据此进入降级路径。未知码按瞬态处理。
  * 每次socket 关闭都带 close code 落日志，并写进证据账本（`page-channel`）。
  */
 
 import {
   PAGE_CHANNEL_PATH,
+  isPageChannelPermanentErrorCode,
   pageChannelAckFrame,
   pageChannelByteLength,
   pageChannelSubscribeFrame,
@@ -320,7 +324,7 @@ function scheduleSubReconnect(record: SubscriptionRecord): void {
 /**
  * 组一组订阅帧。`health` 是控制面级、不带实例；其余族缺 instanceId 是调用方错误——
  * 这种订阅**永远无法成立**，所以按不可用如实通知一次（记 capability_not_found，即
- * 本协议唯一的永久性错配语义），绝不把半成品帧发给控制面换一个必然的拒绝。
+ * 本协议两个永久码之一），绝不把半成品帧发给控制面换一个必然的拒绝。
  */
 function subscribeFrameOf(record: SubscriptionRecord): boolean {
   const { family, instanceId } = record.options
@@ -444,7 +448,20 @@ function handleMessage(text: string): void {
   if (message.type === 'error') {
     noteSubscriptionFailure(record)
     notifyError(record, message.code, message.message)
-    if (message.code === 'capability_not_found') return
+    // 永久码不重试：capability_not_found（能力错配，例如对 non-gateway 目标订阅
+    // sessionFacts）与 upstream_rejected（上游以 4xx 拒绝了请求本身，重发同一条请求
+    // 只会得到同一个拒绝）。永久/瞬态的唯一判据在 wire（未知码按瞬态），本模块不维护
+    // 第二份码表。
+    if (isPageChannelPermanentErrorCode(message.code)) {
+      // 终态：连已排的阶梯一起撤掉。这是**防御性**的——当前事件序下不可达（服务端失败
+      // 一条订阅就拆掉它，不会在同一条订阅上再发第二个 error），但「永久 = 不再有任何
+      // 重试」不该依赖那个时序。
+      if (record.retryTimer !== undefined) {
+        deps.clearTimeout(record.retryTimer)
+        record.retryTimer = undefined
+      }
+      return
+    }
     if (message.code === 'instance_unavailable' && channelLink !== undefined) {
       const sourceId = record.options.instanceId
       if (sourceId !== undefined && !channelLink.ready(sourceId)) {
@@ -459,8 +476,7 @@ function handleMessage(text: string): void {
         return
       }
     }
-    // capability_not_found 是永久性错配（例如对 non-gateway 目标订阅 sessionFacts）：
-    // 重试只会把同一件不可能的事重复 30s 一次；其余错误码都按瞬态重试。
+    // 其余错误码都按瞬态重试（含未知码：本构建不认识它，不等于它永远好不了）。
     scheduleSubReconnect(record)
     return
   }

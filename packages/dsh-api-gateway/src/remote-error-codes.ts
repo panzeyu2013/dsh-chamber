@@ -4,6 +4,11 @@
  * module so both programs see the same map entries.
  */
 
+/** Auth-close details: the WS close code the proxy used (4401/4403). */
+export interface TypertGatewayAuthDetails {
+  readonly closeCode: number
+}
+
 /** Wire details every Gateway infrastructure failure carries. */
 export interface TypertGatewayFaultDetails {
   /** Canonical `<namespace>/<method>` endpoint. */
@@ -14,6 +19,7 @@ export interface TypertGatewayFaultDetails {
 
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
+    'gateway/auth': TypertGatewayAuthDetails
     'gateway/ambiguous-endpoint': TypertGatewayFaultDetails
     'gateway/arguments-invalid': TypertGatewayFaultDetails
     'gateway/binding-invalid': TypertGatewayFaultDetails

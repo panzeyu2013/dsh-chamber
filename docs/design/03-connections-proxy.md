@@ -210,8 +210,9 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
 - 反代不改写上游内容；**认证头按 kind 白名单注入（17 §9.3）**：**dsh 目标禁注入**——实例信任栅栏
   由 loopback + trusted-host 满足（02 §2.1），Host 头保持实例自身 `127.0.0.1:<port>`（与
   `--trusted-host` 一致）；**gateway 目标 0..2 个**可注入头（`Authorization` Bearer / `Cookie`
-  `dsh_gateway_session`），白名单逐项校验、绝不允许其他头；Cookie 按网络 origin + `Host` authority
-  + stable connection-target scope 隔离，authority 只负责路由；session generation 与 current
+  `dsh_gateway_session`），白名单逐项校验、绝不允许其他头；Cookie 按 scheme + 可选 remote
+  `Host` authority + stable connection-target scope 隔离（不含隧道 localPort / 网络 baseUrl，见 05 §8），
+  authority 只负责路由；session generation 与 current
   `cookie|bearer` auth proof + refresh epoch 阻止 invalidate/retarget/delete 后的迟到注册。密码型
   gateway 若 Cookie/proof 消失且无已验证 Bearer fallback，注册 fail closed 重连，绝不静默变成
   headerless；provider session hooks 必须 all-or-none；上游 Host 改写为目标 origin（ssh 隧道 =
@@ -239,22 +240,39 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
 
 - **响应头白名单**（收敛上游头，防 hop-by-hop / 凭据泄露）：完整列表见 **04 §4.3**
   （WS upgrade 101 所需头除外）。
-- **体积上限**：带可信 `Content-Length` 的请求体 ≤ 300MiB；未知长度/chunked 请求体 ≤ 32MiB
-  （避免 chunks + concat 双份峰值）；响应体 ≤ 300MiB（与上游 dsh 的 300MiB 请求体上限 /
+- **体积上限与请求体两形态**：带可信 `Content-Length` 的请求体 ≤ 300MiB；未知长度/chunked
+  请求体 ≤ 32MiB（避免 chunks + concat 双份峰值）；响应体 ≤ 300MiB（与上游 dsh 的 300MiB 请求体上限 /
   200MiB 图片准入对齐，见 pinned vendor `client/connection/http-bridge.ts`：200MiB 图片 base64 膨胀
   ~267.7MiB 后仍留余量；沿用 v2 runtime-proxy 语义；超限 → 413 / 取消上游流，显式而非截断静默）；
-  请求体分片空闲超过 30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
+  **声明长度 >8MiB 的请求体走 streaming**（生产默认开，`DSH_CHAMBER_PROXY_STREAM_BODY=0` 回退；
+  阈值 8MiB 可注入）：不预留缓冲、`content-length` 原样透传、上游头窗在 `finish` 后才启动；
+  ≤8MiB 声明与 chunked/无声明体仍整体缓冲。buffered 请求体的分片空闲超过 30s → 408 并取消
+  底层请求 iterator，不能用慢速上传长期占用代理槽位；缓冲路径另有 size-derived 的**体总预算**
+  `proxyInboundBudgetMs(bytes) = clamp(max(60s, bytes/128KiB/s), 60s, 30min)`，streaming
+  用首字节窗 + 单笔总预算（派发前上游静默为 504 `upstream_timeout`，已派发后的体窗到期
+  为 408）。
+- **入站头窗与 Node 兜底**：Node `headersTimeout`/`requestTimeout` 均为 31min，只作死手
+  （有效死线 = `max(headersTimeout, requestTimeout)`，扫描周期取构造期
+  `connectionsCheckingInterval`=5s）；真实 10s 头窗由应用层连接计时器执行（upgrade 清除、
+  keep-alive 响应 `finish` 后重臂）。
 - **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端 `content-length`
-  与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节重建 `content-length`。
+  与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节重建 `content-length`（streaming
+  路径例外：原样透传声明值，见上）。
   **压缩协商边界（修订原「压缩协商不跨代理」）**：请求侧只对两类必须 identity 的请求
   剥离 `accept-encoding` —— HTML 文档导航（`proxy-forward.ts` `isHtmlDocumentNavigation`；S0 注入
   前提）与 `Accept: text/event-stream` 的 SSE 请求（`acceptsEventStream`；传输层保险），判定入口
   `requiresIdentityUpstreamEncoding`，取舍见设计 17 §8；其余请求把协商交给上游 gzip 中间件
   （响应白名单放行 `content-encoding` ——压缩标签必须随行，浏览器才能正确解码；反代不经手压缩字节）。
 - **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、所有 proxy owner
-  共享的进程级缓冲请求体预算 ≤ 300MiB。超额统一 503 `resource_exhausted`，
-  计数在断连/超时/错误/完成时幂等释放；HTTP server 在路由前另设 10s header、35s request、
-  5s keep-alive 与 192 连接上限。
+  共享的进程级缓冲请求体预算 ≤ 300MiB。超额统一 503 `resource_exhausted`（并发准入拒绝
+  另带 additive `details:{kind,scope}`：`http|long-rpc`、`ws|ws-pending`、连接软上限
+  `connection`；请求体缓冲预算那条不带 details），计数在断连/超时/错误/完成时幂等释放；
+  每连接另有 HTTP 16 / WS 16 / 待完成握手 4 的准入，local 全局保留 1 槽，long-RPC 池 8；
+  这些值按 owner/连接隔离，避免单连接占满进程预算（取舍：更高并发需要拆连接或抬池）。
+  连接数在应用层设 192 软上限（超出即写 byte-exact raw 503 + `Connection: close`，
+  `details:{kind:'connection',scope:'global'}`，已拒绝 socket 上的流水线请求不再派发），
+  Node `maxConnections=256` 只作静默硬帽死手；HTTP server 在路由前另设应用层 10s 头窗与
+  31min Node 死手、5s keep-alive。
 - 非 SSE 上游响应使用 45s **空闲**超时（每数据块重新计时；chamber Git mutation 预算 30s，更短窗会在
   host 已提交后截断慢速 `git worktree remove` 为 504，见设计 08 §5 与 STATUS）；SSE/已升级 WS 保持
   长连接语义。

@@ -12,21 +12,34 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { acquireSshAuthLease, buildAskpassScript, chmodAskpassDirOwnerOnly, configureSshPasswordStore, cleanupStaleAskpassHelpers, createAskpassHelper, disposeSshAuth, purgeSshAuth, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider, MAX_SSH_PASSWORD_CHARS } from '../../ssh-provider.ts'
+import { acquireSshAuthLease, AUTH_FAILURE_PATTERNS, configureSshPasswordStore, disposeSshAuth, purgeSshAuth, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider, MAX_SSH_PASSWORD_CHARS } from '../../ssh-provider.ts'
+import { buildAskpassScript, chmodAskpassDirOwnerOnly, cleanupStaleAskpassHelpers, createAskpassHelper } from '../../ssh-askpass.ts'
 import type { TransportInstanceSpec } from '../../transport-provider.ts'
 import { sshCredentialBinding } from '../../credential-binding.ts'
 import { runDeps, spec } from '../support/ssh-provider-run-deps.ts'
-test('buildAskpassScript escapes single quotes and keeps password/passphrase prompts apart from host-key confirmations', () => {
+test('auth patterns: the real password prompt matches, mid-line password: text does not', () => {
+  const matches = (line: string): boolean => AUTH_FAILURE_PATTERNS.some(pattern => pattern.test(line))
+  assert.equal(matches("user@h.example.com's password:"), true)
+  assert.equal(matches('Password:'), true)
+  // The publickey denial still latches through the broad permission-denied arm.
+  assert.equal(matches('Permission denied (publickey,password).'), true)
+  // Banner / ProxyCommand text that merely contains the word is not a credential prompt.
+  assert.equal(matches('Welcome to h.example.com; password: rotate quarterly'), false)
+  assert.equal(matches('policy: password: must be rotated'), false)
+})
+
+test('buildAskpassScript escapes single quotes and NEVER auto-answers a host-key prompt (P0-3)', () => {
   const script = buildAskpassScript("it's-a-pass'word")
   // The password must be embedded sh-safely: every ' becomes '\'' so the
   // literal value survives the shell.
   assert.ok(script.includes(`printf '%s\\n' 'it'\\''s-a-pass'\\''word'`), 'single quotes are escaped for sh')
-  // The host-key confirmation branch must answer yes, never the password.
-  assert.ok(script.includes('*"yes/no"*'), 'host-key yes/no prompts are matched')
-  assert.ok(script.includes('echo yes'), 'host-key prompts answer yes')
-  assert.ok(!script.includes("it's-a-pass"), 'the raw password never appears in the host-key branch')
+  // P0-3: the app never auto-accepts a host key — no yes/no branch exists at all, so an unknown
+  // host falls through to the fail-closed branch and the tunnel fails loudly.
+  assert.ok(!script.includes('echo yes'), 'no host-key prompt is ever answered with yes')
+  assert.ok(!script.includes('*"continue connecting"*'), 'the continue-connecting pattern is gone')
+  assert.ok(!script.includes("it's-a-pass"), 'the raw password never appears in the script')
 })
-test('the askpass helper answers host-key prompts with yes and password prompts with the password', () => {
+test('the askpass helper refuses host-key prompts and answers password prompts with the password', () => {
   // A restrictive umask must not strip the execute bit OpenSSH requires.
   const previousUmask = process.umask(0o177)
   let path: string
@@ -36,9 +49,13 @@ test('the askpass helper answers host-key prompts with yes and password prompts 
     process.umask(previousUmask)
   }
   try {
+    // P0-3: a host-key prompt receives NO answer (fail-closed) — the app-owned known_hosts is
+    // the only place a host key can become trusted, never an askpass shortcut.
     const hostKey = spawnSync(path, ['Are you sure you want to continue connecting (yes/no/[fingerprint])?'], { encoding: 'utf8' })
     assert.equal(hostKey.status, 0)
-    assert.equal(hostKey.stdout.trim(), 'yes', 'host-key confirmation is accepted (first connect)')
+    assert.equal(hostKey.stdout, '', 'host-key confirmation is never auto-accepted')
+    const hostKeyChanged = spawnSync(path, ['WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!'], { encoding: 'utf8' })
+    assert.equal(hostKeyChanged.stdout, '', 'a changed host key is never auto-answered either')
     const password = spawnSync(path, ["user@h.example.com's password:"], { encoding: 'utf8' })
     assert.equal(password.status, 0)
     assert.equal(password.stdout, "s3cr't\n", 'password prompt answers the stored password (line-terminated)')
@@ -104,6 +121,27 @@ test('startup cleanup preserves helpers owned by this live process', () => {
     assert.equal(existsSync(path), true)
   } finally {
     rmSync(path, { force: true })
+  }
+})
+
+test('startup cleanup never reclaims a live process leaf or a socket-shaped leaf', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-askpass-cleanup-'))
+  const live = join(root, 'dsh-chamber-ssh-' + String(process.pid) + '-live01')
+  const dead = join(root, 'dsh-chamber-ssh-99999998-dead01')
+  const socket = join(root, 'dsh-chamber-ssh-0')
+  const namespaced = join(root, 'dsh-chamber-ssh-99999997-abcd1234')
+  try {
+    mkdirSync(live, { mode: 0o700 })
+    mkdirSync(dead, { mode: 0o700 })
+    mkdirSync(socket, { mode: 0o700 })
+    mkdirSync(namespaced, { mode: 0o700 })
+    assert.equal(cleanupStaleAskpassHelpers(root), null)
+    assert.equal(existsSync(live), true, 'a live owner leaf is never removed, even while empty')
+    assert.equal(existsSync(dead), false, 'a dead owner leaf is reclaimed')
+    assert.equal(existsSync(socket), true, 'plain socket leaves are outside askpass cleanup')
+    assert.equal(existsSync(namespaced), true, 'namespaced socket leaves are outside askpass cleanup')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 test('askpass directory gate tightens an owned directory and fails closed on an untrusted path', () => {
@@ -272,10 +310,12 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
     assert.equal(statSync(file).mode & 0o777, 0o600, 'password file is 0600')
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as {
       schemaVersion: number
+      storage: string
       passwords: Record<string, string>
       bindings: Record<string, string>
     }
-    assert.equal(parsed.schemaVersion, 2)
+    assert.equal(parsed.schemaVersion, 3)
+    assert.equal(parsed.storage, 'plaintext', 'no adapter = the documented plaintext fallback, tagged explicitly')
     assert.equal(parsed.passwords['t-file-1'], 'pw-1')
     assert.equal(parsed.passwords['t-file-2'], 'pw-2')
     assert.equal(parsed.bindings['t-file-1'], sshCredentialBinding(firstOwner))

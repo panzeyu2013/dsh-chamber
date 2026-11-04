@@ -57,6 +57,8 @@ const GROUPS = {
     'test/connections-section/clear-credential.test.ts',
     'test/connections-section/action-hint.test.ts',
     'test/connections-section/writer-diagnosis.test.ts',
+    // P0-3：hostkey 终态的指纹面板投影 + probe → trust 顺序（纯 Node，桥为 fake）。
+    'test/connections-section/host-key-trust.test.ts',
     // The secretStorageUnreadable settings-page hint (zh + en); the local card
     // must show why the instance could not start.
   ],

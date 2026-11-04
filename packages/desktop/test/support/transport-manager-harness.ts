@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
 import { createTransportManager } from '../../transport-manager.ts'
 import type { TransportManagerOptions } from '../../transport-manager.ts'
+import type { HostKeyGuard } from '../../host-key.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from '../../transport-provider.ts'
 import { sshProvider } from '../../ssh-provider.ts'
 
@@ -27,6 +28,8 @@ export type StatusWithNoUrlLeak = TransportStatusProjection & { localUrl?: unkno
 
 /** A fake child_process handle: emits exit/error, records kill calls. */
 export class FakeChild extends EventEmitter implements SpawnedProcess {
+  /** Optional OS pid the crash-ledger tests assign; null = a minimal fake. */
+  pid: number | null = null
   stdout: EventEmitter
   stderr: EventEmitter
   stdin: { write(chunk: string | Buffer): unknown; end(): unknown } | null
@@ -80,6 +83,8 @@ export function makeManager(t: TestContext, overrides: {
   allocatePort?: () => Promise<number>
   logger?: { log?(message: string): void; warn?(message: string): void; error?(message: string): void }
   spawnFn?: (command: string, args: readonly string[], options: SpawnOptions) => SpawnedProcess
+  /** SSH host-key guard (P0-3); absent = no pre-spawn gate / no argv pinning (legacy tests). */
+  hostKey?: HostKeyGuard
   includeDefault?: boolean
 } = {}) {
   const spawnCalls: Array<{ command: string; args: readonly string[]; options: SpawnOptions; child: FakeChild }> = []
@@ -87,7 +92,10 @@ export function makeManager(t: TestContext, overrides: {
   const spawnTimes: number[] = []
   let probeOk = false
   const instancesFile = join(tempDir(t), 'ssh-instances.json')
-  const providerBase = overrides.provider ?? sshProvider
+  // Default fixture keeps the TCP tunnel shape (a null socket path), so the
+  // historical argv/localPort assertions stay meaningful on POSIX too. UDS is
+  // exercised by transport-uds.test.ts with the real provider and a temp socket.
+  const providerBase = overrides.provider ?? { ...sshProvider, transportSocketPath: () => null }
   const provider = overrides.probeBudgetMs === undefined
     ? providerBase
     : { ...providerBase, verifyUpBudgetMs: overrides.probeBudgetMs }
@@ -113,6 +121,7 @@ export function makeManager(t: TestContext, overrides: {
         : undefined),
     allocatePort: overrides.allocatePort ?? (async () => 43123),
     random: overrides.random,
+    hostKey: overrides.hostKey,
     options: {
       readyTimeoutMs: 100,
       probeIntervalMs: 5,

@@ -53,8 +53,22 @@ export const GROUPS = {
     'test/transport/transport-spec-binding.test.ts',
     'test/transport/connection-save.test.ts',
     'test/transport/ssh-provider.test.ts',
+    // P2-1：POSIX UDS 隧道（路径/0700/长度/清理 + argv 形状 + manager 真实 UDS 就绪与
+    // 崩溃账本 + orphan sweep 矩阵）。
+    'test/transport/ssh-socket.test.ts',
+    'test/transport/ssh-provider-socket.test.ts',
+    'test/transport/transport-uds.test.ts',
+    'test/transport/ssh-orphan.test.ts',
+    // P2-5：SSH 密码镜像的 safeStorage 加密/迁移/不可用拒绝 + askpass FIFO 传递路径。
+    'test/transport/ssh-credentials.test.ts',
     'test/transport/ssh-provider-exec.test.ts',
     'test/transport/ssh-provider-endpoint-auth.test.ts',
+    // P0-2: ssh stdin lifecycle (EPIPE/early close never crash; exit > timeout > stdin priority).
+    'test/transport/ssh-stdin.test.ts',
+    // P0-3: app-owned known_hosts + the ssh self-proof probe (pure + injected-spawn paths).
+    'test/transport/host-key.test.ts',
+    // P0-3: transport-manager pre-spawn gate / hostkey action class / ssh argv pin.
+    'test/transport/host-key-manager.test.ts',
     'test/transport/ssh-config.test.ts',
     'test/transport/free-port.test.ts',
   ],
@@ -122,6 +136,8 @@ export const GROUPS = {
     'test/ipc/cross-package-contract.test.ts',
     'test/ipc/local-plugin-list-redaction.test.ts',
     'test/ipc/ipc-surface-mirror.test.ts',
+    // P0-3：host-key probe/trust IPC 的载荷形状与准入（注入 guard，不跑真实 ssh）。
+    'test/ipc/host-key-ipc.test.ts',
     // design 11 §4：更新确认的**执行级** fail-closed/revision 护栏（伪 ctx 驱动真实注册体）。
     'test/ipc/shell-ipc-update.test.ts',
     // swift-side electron-free core seam gate + the Swift-flavor sidecar/B-bridge

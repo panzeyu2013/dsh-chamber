@@ -76,6 +76,7 @@ import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
 import type { PluginDiagnostic, ServerBootGap } from './plugin-diagnostic.ts'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 import { actionHintKey } from './action-hint.ts'
+import { HostKeyTrust } from './HostKeyTrust.tsx'
 import {
   draftFromSpec,
   draftToInput,
@@ -1291,6 +1292,15 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       : null}
                     {status?.logSummary !== '' ? <p className={css.hint}>{status?.logSummary}</p> : null}
                     {hintKey !== null ? <p className={css.hint}>{t(hintKey)}</p> : null}
+                    {/* P0-3 最小入口：hostkey 终态显示指纹 +「信任并连接」（probe → trust → 重连）。 */}
+                    <HostKeyTrust
+                      spec={spec}
+                      status={status}
+                      t={t}
+                      busy={specBusy || phase === 'connecting'}
+                      bridge={ssh()}
+                      onTrusted={() => { void runTunnelOp(spec.id, 'connect') }}
+                    />
                     {opError[spec.id] !== undefined ? <p className={css.error} role="alert">{opError[spec.id]}</p> : null}
                     {restartNote !== undefined && restartNote !== null
                       ? restartNote.tone === 'error'

@@ -19,8 +19,8 @@
  * 断言面（生成物 == 提交物绿 + 通道数守恒）：
  *   ① 重生成 JSON == 提交物 packages/desktop/bridge-manifest.json（文本级）；
  *   ② 重生成 Swift == 提交物 macos/Sources/DSHChamber/Generated/BridgeManifest.swift；
- *   ③ 通道数守恒：counts {invoke:56, push:9, total:65} 与两列表长度自洽；
- *   ④ 无死键：manifest 键集 == ipc-events.ts IPC_CHANNELS 表键集（65 全覆盖、
+ *   ③ 通道数守恒：counts {invoke:58, push:9, total:67} 与两列表长度自洽；
+ *   ④ 无死键：manifest 键集 == ipc-events.ts IPC_CHANNELS 表键集（67 全覆盖、
  *      键/通道无重复、invoke/push 无交集 —— 生成器内部同样校验并 loud
  *      失败，此处以测试侧复刻解析把该事实变成可见断言）；
  *   ⑤ 方向抽查：dsh-chamber:info / desktop_ssh_instances_get 属 invoke，
@@ -126,20 +126,20 @@ test('② 重生成 Swift 与提交物 BridgeManifest.swift 逐字节一致', ()
   )
 })
 
-test('③ 通道数守恒：counts {invoke:56, push:9, total:65} 与两列表长度自洽', () => {
+test('③ 通道数守恒：counts {invoke:58, push:9, total:67} 与两列表长度自洽', () => {
   const { manifest } = regenerated()
-  // 当前仓库事实（65 = 56 + 9，与 ipc-surface-mirror.test.ts 的集合断言
-  // 同一批事实；56 = 54 个命名空间 invoke 成员 + info + native-theme-set）；
+  // 当前仓库事实（67 = 58 + 9，与 ipc-surface-mirror.test.ts 的集合断言
+  // 同一批事实；58 = 56 个命名空间 invoke 成员 + info + native-theme-set）；
   // 通道增删时须与两提交物同步更新。
-  assert.deepEqual(manifest.counts, { invoke: 56, push: 9, total: 65 })
+  assert.deepEqual(manifest.counts, { invoke: 58, push: 9, total: 67 })
   assert.equal(manifest.invoke.length, manifest.counts.invoke)
   assert.equal(manifest.push.length, manifest.counts.push)
   assert.equal(manifest.invoke.length + manifest.push.length, manifest.counts.total)
 })
 
-test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（65 全覆盖、无重复、无交集）', () => {
+test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（67 全覆盖、无重复、无交集）', () => {
   const table = ipcChannelTable()
-  assert.equal(table.length, 65, 'IPC_CHANNELS 应恰为 65 键（当前事实）')
+  assert.equal(table.length, 67, 'IPC_CHANNELS 应恰为 67 键（当前事实）')
   const { manifest } = regenerated()
   const covered = [...manifest.invoke, ...manifest.push]
   assert.equal(covered.length, table.length, '两向条目总数必须 == 常量表键数（无死键/无幻影键）')

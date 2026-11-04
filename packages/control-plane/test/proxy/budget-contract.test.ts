@@ -14,6 +14,8 @@ import assert from 'node:assert/strict'
 import {
   NET_BUDGET,
   mutationCallBudgetMs,
+  proxyInboundBudgetMs,
+  proxyTotalWorstCaseMs,
   proxyUploadBudgetMs,
   proxyWorstCaseMs,
 } from '@dsh-chamber/dsh-chamber-wire'
@@ -29,16 +31,23 @@ test('the proxy header window IS the wire table (one source, not two literals)',
   assert.equal(LONG_RPC_UPSTREAM_TIMEOUT_MS, 30 * 60_000, 'the long-RPC fuse is a separate, deliberate value')
 })
 
-test('the client mutation budget always outlives the proxy worst case by the cushion', () => {
+test('the client mutation budget always outlives the proxy total worst case by the cushion', () => {
   for (const bytes of SIZES) {
-    const proxyWorst = proxyWorstCaseMs(bytes)
+    const proxyWorst = proxyTotalWorstCaseMs(bytes)
     assert.equal(mutationCallBudgetMs(bytes), proxyWorst + NET_BUDGET.outcomeCushionMs, `bytes=${String(bytes)}`)
     assert.ok(mutationCallBudgetMs(bytes) > proxyWorst, `bytes=${String(bytes)}: the client must never abort first`)
   }
-  // Concrete pins, not just an internal identity: 20MiB is 160s flush + 45s window,
-  // 300MiB is capped at 30min + 45s; the client adds the 5s cushion to both.
-  assert.equal(mutationCallBudgetMs(20 * 1024 * 1024), 160_000 + 45_000 + 5_000)
-  assert.equal(mutationCallBudgetMs(300 * 1024 * 1024), NET_BUDGET.uploadMaxMs + 45_000 + NET_BUDGET.outcomeCushionMs)
+  // Concrete pins: buffered pays inbound + flush + header; 20MiB is 160s + 160s +
+  // 45s, 300MiB is 30min + 30min + 45s; the client adds the 5s cushion to both.
+  assert.equal(mutationCallBudgetMs(20 * 1024 * 1024), 160_000 + 160_000 + 45_000 + 5_000)
+  assert.equal(mutationCallBudgetMs(300 * 1024 * 1024), NET_BUDGET.uploadMaxMs + NET_BUDGET.uploadMaxMs + 45_000 + NET_BUDGET.outcomeCushionMs)
+  // Streaming overlaps the two legs and only charges the larger one.
+  assert.equal(proxyTotalWorstCaseMs(20 * 1024 * 1024, {}, 'streaming'), 160_000 + 45_000)
+  assert.equal(mutationCallBudgetMs(20 * 1024 * 1024, 'streaming'), 160_000 + 45_000 + 5_000)
+})
+
+test('the inbound budget shares the floor/rate/cap with the upstream flush', () => {
+  for (const bytes of SIZES) assert.equal(proxyInboundBudgetMs(bytes), proxyUploadBudgetMs(bytes), `bytes=${String(bytes)}`)
 })
 
 test('the upload budget floors at 60s, scales with the body and caps at 30min', () => {

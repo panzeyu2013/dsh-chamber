@@ -464,22 +464,29 @@ test('服务端非法帧被忽略，socket 仍然可用', async () => {
   }
 })
 
-test('capability_not_found 不重试；瞬时错误按阶梯重订阅', async () => {
+test('永久码（capability_not_found / upstream_rejected）不重试；瞬时错误按阶梯重订阅', async () => {
   installFakeWebSocket()
   try {
     const mod = await loadPageChannel()
-    const sub = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-x', onItem: () => undefined })
+    const capability = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-x', onItem: () => undefined })
+    const rejected = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-y', onItem: () => undefined })
     const socket = FakeWebSocket.latest()
     socket.open()
     socket.message(JSON.stringify({ type: 'error', id: '1', code: 'capability_not_found', message: 'non-gateway' }))
+    // upstream_rejected 是另一侧的永久码：上游以 4xx 拒绝了请求本身（P2-2 的分类）。
+    socket.message(JSON.stringify({ type: 'error', id: '2', code: 'upstream_rejected', message: 'upstream answered 404 instead of 200' }))
     // 缺席窗必须显著长于「阶梯第一档 3s + ≤25% 抖动」= 3.75s：3.4s 时坏实现只有约
     // 一半概率被抓到（审计实测 5 次 3 红 2 绿），回归检出不能靠掷硬币。
     await new Promise(resolve => { setTimeout(resolve, 5_600) })
-    const subscribes = () => socket.frames().filter(frame => frame.type === 'subscribe').length
-    assert.equal(subscribes(), 1, '永久性错配不得每 30s 重试一次')
+    const subscribes = (id: string) => socket.frames().filter(frame => frame.type === 'subscribe' && frame.id === id).length
+    assert.equal(subscribes('1'), 1, '能力错配不得每 30s 重试一次')
+    assert.equal(subscribes('2'), 1, 'upstream_rejected 同样是永久码：重试只会重复同一个拒绝')
     socket.message(JSON.stringify({ type: 'error', id: '1', code: 'upstream_failed', message: 'boom' }))
-    await waitFor(() => subscribes() === 2, '瞬时错误重订阅', 4_500)
-    sub.close()
+    // 未知码必须按瞬态（版本兼容）：更新的宿主可能新增一个码，本构建不能因此永久放弃。
+    socket.message(JSON.stringify({ type: 'error', id: '2', code: 'some_future_code', message: 'new host code' }))
+    await waitFor(() => subscribes('1') === 2 && subscribes('2') === 2, '瞬时/未知码按阶梯重订阅', 4_500)
+    capability.close()
+    rejected.close()
   } finally {
     restoreHost()
   }

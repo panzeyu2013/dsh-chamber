@@ -14,7 +14,11 @@ import {
   REMOTE_STREAM_RETRY_FIRST_MS,
   REMOTE_STREAM_RETRY_MAX_MS,
   remoteStreamRetryDelayMs,
+  REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  REMOTE_STREAM_REOPEN_JITTER_MAX_MS,
+  REMOTE_STREAM_STABLE_CARRIER_MIN_MS,
+  remoteStreamReopenJitterMs,
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
 import { DEFAULT_STREAM_STALL_TIMING } from '../../src/client/stream-stall-policy.ts'
@@ -43,7 +47,19 @@ test('the opening ladder is the shared table, and this module no longer re-deriv
 test('the first carrier failure of an episode reopens immediately', () => {
   assert.equal(REMOTE_STREAM_RETRY_FIRST_MS, 0)
   assert.equal(remoteStreamRetryDelayMs(1), 0)
+  // The immediate first attempt is a contract, not an RNG draw: a broken injectable
+  // RNG must not turn the first reopen into a wait.
+  assert.equal(remoteStreamRetryDelayMs(1, () => 0), 0)
+  assert.equal(remoteStreamRetryDelayMs(1, () => { throw new Error('rng unavailable') }), 0)
 })
+
+/** The capped exponential a later attempt would use WITHOUT jitter. */
+function effectiveBackoff(attempt: number): number {
+  return Math.min(
+    REMOTE_STREAM_RETRY_BASE_MS * 2 ** Math.min(Math.floor(attempt) - 2, 16),
+    REMOTE_STREAM_RETRY_MAX_MS,
+  )
+}
 
 test('the wait for a live generation is bounded (a parked lane cannot park a stream forever)', () => {
   // Above the retry ceiling: one reopen per ceiling is the slowest useful pace,
@@ -55,29 +71,116 @@ test('the wait for a live generation is bounded (a parked lane cannot park a str
   assert.ok(REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS > 0)
 })
 
-test('later failures double from the base', () => {
-  assert.equal(remoteStreamRetryDelayMs(2), REMOTE_STREAM_RETRY_BASE_MS)
-  assert.equal(remoteStreamRetryDelayMs(3), REMOTE_STREAM_RETRY_BASE_MS * 2)
-  assert.equal(remoteStreamRetryDelayMs(4), REMOTE_STREAM_RETRY_BASE_MS * 4)
-  assert.equal(remoteStreamRetryDelayMs(5), REMOTE_STREAM_RETRY_BASE_MS * 8)
+test('later failures keep at least half of the doubling backoff and jitter the rest', () => {
+  // half-jitter over the CAPPED exponential: [0.5x, 1x] of the effective backoff.
+  const cases: ReadonlyArray<readonly [attempt: number, sample: number, expected: number]> = [
+    [2, 0, 125],
+    [2, 0.5, 187],
+    [2, 1, 250],
+    [3, 0, 250],
+    [3, 0.5, 375],
+    [3, 1, 500],
+    [4, 0.25, 625],
+    [4, 1, 1_000],
+    [5, 0, 1_000],
+    [5, 1, 2_000],
+  ]
+  for (const [attempt, sample, expected] of cases) {
+    assert.equal(remoteStreamRetryDelayMs(attempt, () => sample), expected,
+      'attempt ' + String(attempt) + ' with random()=' + String(sample))
+  }
+})
+
+test('every jittered delay stays inside its half-open band and is whole milliseconds', () => {
+  const samples = [0, 0.001, 0.25, 0.5, 0.75, 0.999, 1]
+  for (let attempt = 2; attempt <= 40; attempt++) {
+    const effective = effectiveBackoff(attempt)
+    for (const sample of samples) {
+      const delay = remoteStreamRetryDelayMs(attempt, () => sample)
+      assert.ok(Number.isInteger(delay), 'attempt ' + String(attempt) + ' must be whole milliseconds')
+      assert.ok(delay >= Math.floor(effective * 0.5),
+        'attempt ' + String(attempt) + ' must keep at least half the backoff (got ' + String(delay) + ')')
+      assert.ok(delay <= effective,
+        'attempt ' + String(attempt) + ' must never exceed the effective backoff (got ' + String(delay) + ')')
+    }
+  }
 })
 
 test('the backoff is capped, so a persistent fault settles into one reopen per ceiling', () => {
-  assert.ok(remoteStreamRetryDelayMs(8) === REMOTE_STREAM_RETRY_MAX_MS, 'attempt 8 reaches the ceiling')
-  assert.equal(remoteStreamRetryDelayMs(9), REMOTE_STREAM_RETRY_MAX_MS)
-  assert.equal(remoteStreamRetryDelayMs(64), REMOTE_STREAM_RETRY_MAX_MS)
-  assert.equal(remoteStreamRetryDelayMs(1_000_000), REMOTE_STREAM_RETRY_MAX_MS)
+  for (const attempt of [8, 9, 64, 1_000_000]) {
+    // The effective (un-jittered) value has reached the ceiling; jitter may only lower
+    // it to half, never above it.
+    assert.equal(effectiveBackoff(attempt), REMOTE_STREAM_RETRY_MAX_MS, String(attempt))
+    assert.equal(remoteStreamRetryDelayMs(attempt, () => 1), REMOTE_STREAM_RETRY_MAX_MS)
+    assert.equal(remoteStreamRetryDelayMs(attempt, () => 0), REMOTE_STREAM_RETRY_MAX_MS / 2)
+    assert.ok(remoteStreamRetryDelayMs(attempt) <= REMOTE_STREAM_RETRY_MAX_MS)
+  }
 })
 
-test('the delay is monotone non-decreasing and never exceeds the ceiling', () => {
+test('the upper envelope is monotone non-decreasing (jitter never changes the pace)', () => {
+  // Per-draw monotonicity is NOT a contract once a random sample is involved; what must
+  // stay monotone is the un-jittered ceiling each attempt is drawn under.
   let previous = -1
   for (let attempt = 1; attempt <= 40; attempt++) {
-    const delay = remoteStreamRetryDelayMs(attempt)
-    assert.ok(delay >= previous, 'attempt ' + attempt + ' must not shrink the delay')
-    assert.ok(delay <= REMOTE_STREAM_RETRY_MAX_MS, 'attempt ' + attempt + ' must stay capped')
-    assert.ok(Number.isInteger(delay), 'attempt ' + attempt + ' must be whole milliseconds')
-    previous = delay
+    const upper = remoteStreamRetryDelayMs(attempt, () => 1)
+    assert.ok(upper >= previous, 'attempt ' + String(attempt) + ' must not shrink the envelope')
+    assert.ok(upper <= REMOTE_STREAM_RETRY_MAX_MS, 'attempt ' + String(attempt) + ' must stay capped')
+    previous = upper
   }
+})
+
+test('jitter spreads concurrent reopens instead of collapsing them onto one instant', () => {
+  // A seeded LCG keeps the distribution assertion deterministic (Math.random() is not
+  // injectable in CI). 200 independent reopens of one attempt must land on many
+  // distinct millisecond values, all inside the half-jitter band.
+  let state = 0x2545f491
+  const random = (): number => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0
+    return state / 0x1_0000_0000
+  }
+  const effective = effectiveBackoff(2)
+  const seen = new Set<number>()
+  let sum = 0
+  for (let index = 0; index < 200; index++) {
+    const delay = remoteStreamRetryDelayMs(2, random)
+    seen.add(delay)
+    sum += delay
+    assert.ok(delay >= Math.floor(effective * 0.5) && delay <= effective, String(delay))
+  }
+  assert.ok(seen.size >= 20, 'jitter must spread the herd (distinct delays: ' + String(seen.size) + ')')
+  const mean = sum / 200
+  assert.ok(mean > effective * 0.6 && mean < effective * 0.9,
+    'the mean must sit near the middle of the half-jitter band (got ' + mean.toFixed(1) + ')')
+})
+
+test('the fan-out first-reopen spread is bounded and fails safe', () => {
+  // The mux attaches one draw per logical stream so a single socket death does not make
+  // the whole fan-out re-issue in lockstep; the spread is at most a quarter second.
+  assert.equal(REMOTE_STREAM_REOPEN_JITTER_MAX_MS, 250)
+  assert.equal(remoteStreamReopenJitterMs(() => 0), 0)
+  assert.equal(remoteStreamReopenJitterMs(() => 0.5), 125)
+  assert.equal(remoteStreamReopenJitterMs(() => 1), 250)
+  // A broken RNG must not throw into the retry lane, and it fails safe to "no extra wait".
+  assert.equal(remoteStreamReopenJitterMs(() => { throw new Error('rng rejected') }), 0)
+  for (const sample of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.equal(remoteStreamReopenJitterMs(() => sample), 0, String(sample))
+  }
+  assert.equal(remoteStreamReopenJitterMs(() => -1), 0, 'out-of-range samples clamp')
+  assert.equal(remoteStreamReopenJitterMs(() => 2), REMOTE_STREAM_REOPEN_JITTER_MAX_MS)
+})
+
+test('a broken or out-of-range injected RNG cannot break pacing', () => {
+  const attempt = 3
+  const effective = effectiveBackoff(attempt)
+  // A throwing RNG must not let a retry become a terminal error: fall back to full backoff.
+  assert.equal(remoteStreamRetryDelayMs(attempt, () => { throw new Error('rng rejected') }), effective)
+  // Non-finite samples fall back to the un-jittered backoff too.
+  for (const sample of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.equal(remoteStreamRetryDelayMs(attempt, () => sample), effective, String(sample))
+  }
+  // Out-of-range samples clamp into [0, 1] instead of leaving the band.
+  assert.equal(remoteStreamRetryDelayMs(attempt, () => -5), effective / 2)
+  assert.equal(remoteStreamRetryDelayMs(attempt, () => 2), effective)
 })
 
 test('the backoff wait resolves once the delay elapses', async () => {
@@ -107,6 +210,7 @@ test('an already-aborted signal never waits at all', async () => {
 test('degenerate attempt counts fail safe to the immediate branch', () => {
   for (const attempt of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     assert.equal(remoteStreamRetryDelayMs(attempt), 0, String(attempt))
+    assert.equal(remoteStreamRetryDelayMs(attempt, () => 0.5), 0, String(attempt))
   }
 })
 
@@ -139,6 +243,16 @@ test('an unencodable payload still yields a usable key instead of throwing', () 
 test('the mux self-heal throttle stays a second-scale bound', () => {
   assert.ok(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS >= 250, 'a flapping network must not hot-loop')
   assert.ok(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS <= 10_000, 'self-heal must stay useful while the lane is parked')
+})
+
+test('only recovery evidence after a real stability window resets the mux cadence', () => {
+  // The reset is gated on evidence, so the window has to OUTLIVE every backoff rung:
+  // a socket that merely survived one interval is not proof the path recovered, while
+  // one that survived a whole flapping cycle is.
+  assert.equal(REMOTE_STREAM_STABLE_CARRIER_MIN_MS, 30_000)
+  assert.ok(REMOTE_STREAM_STABLE_CARRIER_MIN_MS > REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS)
+  assert.ok(REMOTE_STREAM_STABLE_CARRIER_MIN_MS >= 2 * REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
+    'the window must outlive the widest cadence rung, not just match it')
 })
 
 

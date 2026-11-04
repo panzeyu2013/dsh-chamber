@@ -35,6 +35,7 @@ const projection = (phase: SshStatusProjection['phase']): SshStatusProjection =>
   insecureHttp: false,
   phase,
   localPort: null,
+  transportSocket: 'tcp',
   sshPort: null,
   remotePort: 22,
   remoteDshHome: null,

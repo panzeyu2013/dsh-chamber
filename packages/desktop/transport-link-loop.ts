@@ -25,7 +25,7 @@ export interface LinkLoopDeps {
   bus: { listeners: (event: string) => Function[] }
   isDisposed: () => boolean
   isCurrentState: (id: string, state: InstanceState) => boolean
-  failTerminal: (id: string, state: InstanceState, message: string, requiresUserAction?: boolean, userActionKind?: 'auth' | 'endpoint' | null) => void
+  failTerminal: (id: string, state: InstanceState, message: string, requiresUserAction?: boolean, userActionKind?: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null) => void
   scheduleReconnect: (id: string, state: InstanceState, reason: string) => void
   appendLogInternal: (state: InstanceState, level: 'info' | 'warn' | 'error', message: string) => void
   resolveProvider: (entry: { kind?: unknown; transport?: unknown }) => any

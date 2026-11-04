@@ -103,6 +103,28 @@ export interface SshInstancesHealth {
   droppedCount?: number
 }
 
+/** One app-owned host-key probe (P0-3). Public key material only: never a credential. */
+export interface SshHostKeyProbe {
+  state: 'unknown' | 'known' | 'changed' | 'unavailable'
+  /** The key algorithm ssh recorded (null when the probe was unavailable). */
+  type: string | null
+  /** The base64 public key blob ssh recorded (null when unavailable). */
+  blob: string | null
+  /** SHA256:… fingerprint(s) of the presented key. */
+  fingerprints: string[]
+  /** Trusted fingerprints already on file for the target (changed state). */
+  previousFingerprints: string[]
+  changed: boolean
+  probedAt: number
+  reason?: string
+}
+
+export type SshHostKeyProbeResult = { ok: true; hostKey: SshHostKeyProbe } | { ok: false; error: string }
+
+export type SshHostKeyTrustResult =
+  | { ok: true; replaced: boolean; status: SshStatusProjection | null }
+  | { ok: false; error: string }
+
 /**
  * The window.dshChamber bridge contract (design 05 §7.4) — the typed
  * surface the renderer consumes. Its returns/events/projections are non-secret:
@@ -166,6 +188,12 @@ export interface DesktopSshSurface {
   local_plugin_list(): Promise<SshLocalPluginListResult>
   /** Seed module A onto a remote instance (design 13 §3, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
+  /** SSH host-key self-proof probe (P0-3): runs one bounded ssh KEX against the real target
+   *  config and reports the presented key + fingerprint (never a credential). */
+  host_key_probe(id: string): Promise<SshHostKeyProbeResult>
+  /** Trust the MOST RECENTLY probed key (server-side 5-minute TTL). A changed key replaces the
+   *  target's rows in the app-owned known_hosts; the user's ~/.ssh file is never touched. */
+  host_key_trust(id: string, type: string, blob: string): Promise<SshHostKeyTrustResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed via the main-owned save/delete transaction. The
    * synchronous delta retires exact source generations before async re-pull. */
@@ -729,6 +757,8 @@ function desktopSshApi(): DesktopSshSurface {
     plugin_list: id => ipcRenderer.invoke('desktop_ssh_plugin_list', { id }),
     local_plugin_list: () => ipcRenderer.invoke('desktop_local_plugin_list'),
     seed_host_graph: id => ipcRenderer.invoke('desktop_ssh_seed_host_graph', { id }),
+    host_key_probe: id => ipcRenderer.invoke('desktop_ssh_host_key_probe', { id }),
+    host_key_trust: (id, type, blob) => ipcRenderer.invoke('desktop_ssh_host_key_trust', { id, type, blob }),
     onStatusChanged: callback => {
       if (typeof callback !== 'function') return () => {};
       const listener = (_event: IpcRendererEvent, payload: SshStatusChangedPayload) => callback(payload);

@@ -144,6 +144,22 @@ test('local mapping forwards the 0.1.2 browser-auth cookie when bootstrapped', a
   }
 })
 
+test('a remote target with the local synthetic origin never receives the local auth cookie (R6 A-MAJOR-1)', async () => {
+  const host = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
+  const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
+  try {
+    registerAuthCookie(host, 'dsh_browser_auth=LOCAL-SECRET')
+    proxy.registerTransport('dsh:remote', host, undefined, { transport: 'http' })
+    const res = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/i/dsh-remote/api/session/list', 'GET'), res)
+    assert.equal(res.status, 200)
+    const headers = upstream.calls[0].options.headers as Record<string, string>
+    assert.equal(headers.cookie, undefined, 'the local launch-token cookie must not cross the wire')
+  } finally {
+    clearAuthCookie(host)
+  }
+})
+
 test('local mapping: prefix stripped, forwarded to the derived baseUrl with the instance Host', async () => {
   const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
   const res = fakeResponse()

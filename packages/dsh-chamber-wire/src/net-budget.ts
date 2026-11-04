@@ -52,11 +52,28 @@ export function proxyWorstCaseMs(bytes: number, options: ProxyUploadBudgetOption
   return proxyUploadBudgetMs(bytes, options) + NET_BUDGET.upstreamHeaderWindowMs
 }
 
+/** Inbound (page → proxy) read budget for one body. Same floor/rate/cap as the
+ *  upstream flush budget: two legs of one transfer, one table. */
+export function proxyInboundBudgetMs(bytes: number, options: ProxyUploadBudgetOptions = {}): number {
+  return proxyUploadBudgetMs(bytes, options)
+}
+
+/** How long the proxy may legitimately take for one request, including the
+ *  inbound read. Buffered transfers pay inbound + flush; streaming overlaps
+ *  them, so only the larger leg plus the header window is charged. */
+export type ProxyBudgetMode = 'buffered' | 'streaming'
+export function proxyTotalWorstCaseMs(bytes: number, options: ProxyUploadBudgetOptions = {}, mode: ProxyBudgetMode = 'buffered'): number {
+  const inbound = proxyInboundBudgetMs(bytes, options)
+  const flush = proxyUploadBudgetMs(bytes, options)
+  const header = NET_BUDGET.upstreamHeaderWindowMs
+  return (mode === 'streaming' ? Math.max(inbound, flush) : inbound + flush) + header
+}
+
 /**
  * The page client's per-call budget for a mutation that carries this body. It
  * must outlive `proxyWorstCaseMs` so the proxy's after-body classification wins
  * the race; the cap is the proxy's own cap plus the cushion.
  */
-export function mutationCallBudgetMs(bytes: number): number {
-  return proxyWorstCaseMs(bytes) + NET_BUDGET.outcomeCushionMs
+export function mutationCallBudgetMs(bytes: number, mode: ProxyBudgetMode = 'buffered'): number {
+  return proxyTotalWorstCaseMs(bytes, {}, mode) + NET_BUDGET.outcomeCushionMs
 }

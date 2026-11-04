@@ -661,6 +661,9 @@ export interface GatewayIdentityProbeOptions {
    *  request settles as a network failure instead of finishing after the transport
    *  it was probing for is gone. */
   signal?: AbortSignal
+  /** POSIX ssh tunnel only: dial the tunnel's Unix socket instead of host:port;
+   *  the URL-built Host/authority semantics above stay exactly as they are. */
+  socketPath?: string
 }
 
 /** The single gateway runtime-identity probe core shared by the direct-http provider
@@ -693,6 +696,7 @@ export async function verifyGatewayRuntimeIdentity(
     readBodyForStatus: status => status === 200,
     // A probe never reused a keep-alive socket: destroy the request once settled.
     destroyOnSettle: true,
+    ...(options.socketPath === undefined ? {} : { socketPath: options.socketPath }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
   if (outcome.kind === 'oversize') {
@@ -803,11 +807,13 @@ function isValidGatewayInstance(instance: unknown): instance is TransportInstanc
         && record.insecureHttp !== true && record.kind === 'gateway'))
 }
 
-/** The gateway-session origin for a spec — the http(s) origin the transport proxies to,
- *  used as the session manager's per-origin cache key (scheme from `insecureHttp`,
- *  explicit port so it matches the registration baseUrl). The spec's SPKI pin (S23) rides
- *  the origin so password LOGIN is pinned exactly like the identity probe. */
-function gatewaySessionOriginFor(spec: TransportInstanceSpec): GatewaySessionOrigin {
+/** The direct-endpoint gateway-session origin for a spec — the http(s) origin the
+ *  transport proxies to, shared by verifyUp and every invalidation path so the two can
+ *  never derive different session identities. The session manager keys it by scheme +
+ *  scope (see gateway-session.ts), so the explicit port only shapes the LOGIN URL /
+ *  legacy cache identity. The spec's SPKI pin (S23) rides the origin so password LOGIN
+ *  is pinned exactly like the identity probe. */
+export function gatewaySessionOriginFor(spec: TransportInstanceSpec): GatewaySessionOrigin {
   return buildGatewaySessionOrigin({
     baseUrl: `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}`,
     insecureHttp: spec.insecureHttp,
@@ -1107,6 +1113,8 @@ async function gatewayJsonRequest(
     insecure: boolean
     spkiPin: string | null
     timeoutMs: number
+    /** POSIX ssh tunnel: dial the tunnel's UDS listener (Host override unchanged). */
+    socketPath?: string
   },
 ): Promise<{ status: number; payload: unknown }> {
   const outcome = await boundedGatewayRequest(url, {
@@ -1122,6 +1130,7 @@ async function gatewayJsonRequest(
     timeoutMs: options.timeoutMs,
     maxBodyBytes: GATEWAY_PLUGIN_RESPONSE_MAX_BODY_BYTES,
     timeoutMessage: 'gateway plugin sync timed out',
+    ...(options.socketPath === undefined ? {} : { socketPath: options.socketPath }),
   })
   if (outcome.kind === 'response') return { status: outcome.status, payload: outcome.payload }
   throw outcome.kind === 'oversize'
@@ -1144,6 +1153,9 @@ export async function syncGatewayChamberPlugins(options: {
   packages: LocalChamberHostPackage[]
   logger: { warn(message: string): void; log(message: string): void }
   timeoutMs?: number
+  /** POSIX ssh tunnel: the tunnel's UDS listener (the ready URL's port is the
+   *  remote authority, never a local TCP dial target). */
+  socketPath?: string
 }): Promise<GatewayPluginSyncResult> {
   const timeoutMs = options.timeoutMs ?? 10_000
   if (options.packages.length === 0) return { uploaded: false, skipped: true }
@@ -1162,6 +1174,7 @@ export async function syncGatewayChamberPlugins(options: {
       insecure,
       spkiPin: options.spkiPin,
       timeoutMs,
+      ...(options.socketPath === undefined ? {} : { socketPath: options.socketPath }),
     })
     if (status.status !== 200) {
       options.logger.warn(`[dsh-chamber] gateway plugin sync: status projection failed (HTTP ${status.status}); skipped`)
@@ -1194,6 +1207,7 @@ export async function syncGatewayChamberPlugins(options: {
         insecure,
         spkiPin: options.spkiPin,
         timeoutMs,
+        ...(options.socketPath === undefined ? {} : { socketPath: options.socketPath }),
       })
       if (put.status !== 200) {
         // Carry the gateway's own refusal reason when it sent one (a bare "HTTP 400"

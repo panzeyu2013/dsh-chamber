@@ -16,6 +16,7 @@ import {
   isHtmlDocumentNavigation,
   MAX_BUFFERED_REQUEST_BYTES,
   MAX_REQUEST_BODY_BYTES,
+  MAX_RESPONSE_BODY_BYTES,
   requiresIdentityUpstreamEncoding,
 } from '../../src/proxy-forward.ts'
 import type { ProxyForwardCounters, ProxyForwardDeps } from '../../src/proxy-forward.ts'
@@ -486,5 +487,72 @@ test('upstream connect failure answers 502 upstream_failed (masked)', async () =
   assert.equal(JSON.parse(res.body).code, 'upstream_failed')
   // Masked: the upstream host:port never rides the wire.
   assert.ok(!res.body.includes(String(DEFAULT_DSH_START_PORT)))
+})
+
+
+test('HEAD with a huge declared Content-Length is not rejected by the response cap', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: {
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream', 'content-length': String(MAX_RESPONSE_BODY_BYTES + 1) },
+      body: '',
+    },
+  }))
+  const proxy = proxyFor(upstream.fn)
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/big-file', 'HEAD'), res)
+  assert.equal(res.status, 200, 'a HEAD advertises a length it never sends; the cap must not reject it')
+})
+
+
+test('convergeLocation rewrites the remote authority behind an ssh tunnel', () => {
+  const target = new URL('http://127.0.0.1:45000')
+  // The gateway names its own listen authority; the tunnel names a different loopback port.
+  assert.equal(
+    convergeLocation('http://127.0.0.1:30801/login', target, '/api/i/gw', '127.0.0.1:30801'),
+    '/api/i/gw/login',
+  )
+  // A different authority is still left alone.
+  assert.equal(
+    convergeLocation('http://127.0.0.1:30802/login', target, '/api/i/gw', '127.0.0.1:30801'),
+    'http://127.0.0.1:30802/login',
+  )
+  // No authority override keeps the historical target-origin-only rule.
+  assert.equal(
+    convergeLocation('http://127.0.0.1:30801/login', target, '/api/i/gw'),
+    'http://127.0.0.1:30801/login',
+  )
+})
+
+
+test('a reset while reading the client body answers 400, not 413', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'application/json' }, body: '{}' },
+  }))
+  const proxy = proxyFor(upstream.fn)
+  const req = fakeRequest('/api/i/local/api/session/list', 'POST', { 'content-length': '4' })
+  ;(req as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] = async function* () {
+    throw Object.assign(new Error('client reset'), { code: 'ECONNRESET' })
+  }
+  const res = fakeResponse()
+  await proxy.handleHttp(req, res)
+  assert.equal(res.status, 400)
+  assert.equal(JSON.parse(res.body).code, 'bad_request')
+})
+
+
+test('an opt-in SSE idle window tears a silent stream down and feeds the failure probe', async () => {
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'text/event-stream' }, body: undefined },
+  }))
+  const proxy = proxyFor(upstream.fn, { sseIdleTimeoutMs: 30 })
+  proxy.registerTransport('dsh:sse-idle', 'http://127.0.0.1:9')
+  let failures = 0
+  proxy.onUpstreamFailure(() => { failures += 1 })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/dsh-sse-idle/api/sse', 'GET'), res)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(res.destroyed, true, 'a silent SSE body must be torn down')
+  assert.equal(failures, 1)
 })
 

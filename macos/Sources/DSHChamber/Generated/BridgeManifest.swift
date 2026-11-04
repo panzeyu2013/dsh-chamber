@@ -1,7 +1,7 @@
 // BridgeManifest.swift — GENERATED, do not edit.
 //
 // 通道 manifest（design 25 §4.4.3）：Swift 侧 IPC 白名单单源
-// （65 通道 = 56 invoke + 9 push）。
+// （67 通道 = 58 invoke + 9 push）。
 // 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs
 // 落位：macos/Sources/DSHChamber/Generated/ —— target 内随编译接线
 // （bridge-manifest.test.ts 守重生成 == 提交物）。
@@ -11,7 +11,7 @@
 
 /// IPC 通道 manifest —— 生成物，勿手改；增删通道请先改 IPC_CHANNELS 并重新生成。
 enum BridgeManifest {
-    /// invoke 通道：renderer invoke → main 的 handle 注册面（ipcMain|deps.ipc），共 56 条。
+    /// invoke 通道：renderer invoke → main 的 handle 注册面（ipcMain|deps.ipc），共 58 条。
     static let invokeChannels: Set<String> = [
         "dsh-chamber:info",
         "dsh-chamber:settings-get",
@@ -54,6 +54,8 @@ enum BridgeManifest {
         "desktop_ssh_stop_service",
         "desktop_ssh_is_active",
         "desktop_ssh_restart_service",
+        "desktop_ssh_host_key_probe",
+        "desktop_ssh_host_key_trust",
         "desktop_ssh_plugin_list",
         "desktop_local_plugin_list",
         "desktop_ssh_seed_host_graph",

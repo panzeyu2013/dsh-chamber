@@ -13,7 +13,7 @@ import {
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
 } from './remote-retry-policy.ts'
-import { RemoteStreamCarrierError, RemoteStreamGenerationRestart } from './stream-client.ts'
+import { RemoteStreamAuthError, RemoteStreamCarrierError, RemoteStreamGenerationRestart } from './stream-client.ts'
 import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
 /** Real clock, injected: the bound's SCHEDULING lives in the primitive; its VALUE stays local. */
@@ -160,12 +160,23 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
         } catch (error) {
           if (isAborted(this.lifetime.signal)) return
           if (revision !== this.revision) continue
+          if (error instanceof RemoteStreamAuthError) {
+            throw new RemoteError('gateway/auth', error.message, { closeCode: error.closeCode }, { cause: error })
+          }
           if (!(error instanceof RemoteStreamCarrierError)) throw terminalStreamFailure(error)
           this.options.carrierFailed?.(error)
           if (revision !== this.revision) continue
           attempt++
           try {
-            const retryOutcome = await waitForRemoteStreamRetry(this.connection, attempt, signal)
+            // P1-4: the mux spreads the FIRST reopen of a failure fan-out so the retry
+            // lanes do not stampede one replacement socket; later attempts use the
+            // jittered exponential backoff.
+            const retryOutcome = await waitForRemoteStreamRetry(
+              this.connection,
+              attempt,
+              signal,
+              attempt === 1 ? reopenJitterOf(error) : 0,
+            )
             // The wait for a live generation is bounded; on expiry the reopen below
             // IS the recovery attempt, published on the same seam a carrier loss uses
             // so the page fact sees "waiting with no progress", not an error-less stall.
@@ -219,6 +230,12 @@ async function sourceNextOrAbort<Item>(
   }
 }
 
+/** The mux's per-stream first-reopen spread; absent on failures it did not fan out. */
+function reopenJitterOf(error: unknown): number {
+  const jitter = (error as { reopenJitterMs?: unknown }).reopenJitterMs
+  return typeof jitter === 'number' && Number.isFinite(jitter) && jitter > 0 ? jitter : 0
+}
+
 /** Abort was already signalled by the owner. A cooperative source drains fully;
  * a stuck return() cannot hold the replacement generation or Session.resync(). */
 async function closeRemoteSource<Item>(source: AsyncIterator<Item>): Promise<void> {
@@ -252,10 +269,15 @@ async function waitForRemoteStreamRetry(
   connection: Pick<ConnectionHandle, 'generation'>,
   attempt: number,
   signal: AbortSignal,
+  firstReopenJitterMs = 0,
 ): Promise<RemoteStreamRetryOutcome> {
   signal.throwIfAborted()
   if (connection.generation.getSnapshot() !== undefined) {
-    const delayMs = remoteStreamRetryDelayMs(attempt)
+    // Attempt 1 has no backoff; a failure fan-out still must not reopen every stream in
+    // one tick, so the mux's per-stream spread is the only wait there.
+    const delayMs = attempt === 1 && firstReopenJitterMs > 0
+      ? firstReopenJitterMs
+      : remoteStreamRetryDelayMs(attempt)
     if (delayMs > 0) await delayRemoteStreamRetry(delayMs, signal)
     return 'generation'
   }

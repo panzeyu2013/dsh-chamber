@@ -49,6 +49,9 @@ export interface BoundedGatewayRequestOptions {
   /** Owner cancellation (disconnect/retarget or the outer probe deadline): settles
    *  as a network outcome so the caller's classification stays transient. */
   signal?: AbortSignal
+  /** POSIX ssh tunnel only (http): dial this Unix socket instead of the URL's
+   *  local TCP host:port. The URL still supplies Host/authority and the path. */
+  socketPath?: string
 }
 
 export function boundedGatewayRequest(
@@ -71,6 +74,7 @@ export function boundedGatewayRequest(
     const req = request(url, {
       method: options.method,
       headers: options.headers,
+      ...(options.socketPath === undefined ? {} : { socketPath: options.socketPath }),
       // With a configured pin the request opens a FRESH https connection whose
       // trust anchor is the pin (rejectUnauthorized false — the internal-CA
       // case); dispatch stays gated until the peer key matches, so credential

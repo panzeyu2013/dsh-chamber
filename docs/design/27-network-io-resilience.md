@@ -141,15 +141,38 @@ url/transport/auth 指纹/pin/authority 变化时触发 re-register（键与指�
 （每次重连都是新 loopback 端口）的空闲 socket 永久滞留，还可能把半开 socket
 交给下一个化身。gateway-proxy 自持一份并在 `closeAllStreams` 销毁。
 
-### 3.4 上传
+### 3.4 上传（buffered / streaming 双形态）
 
-- 请求体仍整体缓冲（v1 不改流式）；
-- 体传输使用 `proxyUploadBudgetMs(bytes) = clamp(max(60s, bytes/128KiB/s), 60s, 30min)`
-  + `uploadIdleMs=30s`（按 socket write/drain 进度重置）；
-- header/idle 计时在 `finish` 之后才启动；
-- 预算推导的**唯一来源**是 `dsh-chamber-wire/src/net-budget.ts`：代理用
-  `proxyUploadBudgetMs`，页面客户端用 `mutationCallBudgetMs = proxyWorstCaseMs + 5s`，
-  一条 wire 用例按体积网格钉住「客户端 ≥ 代理最坏 + 余量」；
+- **两种形态**：声明 `Content-Length` >8MiB 的请求体走 streaming（生产默认开，
+  `DSH_CHAMBER_PROXY_STREAM_BODY=0` 回退；阈值 `STREAM_REQUEST_BODY_THRESHOLD_BYTES=8MiB`，
+  测试可注入；>300MiB 仍先 413）。≤8MiB 的声明与 chunked/无声明体仍走 buffered。
+- **buffered**：整段读入内存，按声明长度预留（无声明按 32MiB 上限）并计入 per-owner
+  与进程级缓冲预算；`readBody` 用与 flush 同表的**入站总预算**
+  `proxyInboundBudgetMs(bytes) = clamp(max(60s, bytes/128KiB/s), 60s, 30min)` 加 30s
+  体空闲。上游 flush 用 `proxyUploadBudgetMs` + `uploadIdleMs=30s`（按 socket
+  write/drain 进度重置）；`content-length` 由实际接收字节重建；上游响应的 header/idle
+  计时在 flush `finish` 之后才启动。
+- **streaming**：不预留、不调用 `readBody`；`content-length` 原样透传客户端声明值
+  （不按已收字节重算）。客户端腿与上游腿是一次重叠传输：首字节窗
+  `clientBodyIdleTimeoutMs=30s`（上游请求尚未派发时按 504 `upstream_timeout` 结束，
+  派发后才按 408 体上传超时），随后**一个** size-derived 预算从第一个体字节起算（wire
+  `proxyTotalWorstCaseMs(...,'streaming')` 只计 `max(inbound, flush)`）；计数 Transform
+  拒绝超过声明 framing 的字节；pin 目标在
+  `secureConnect` 验完 key 前 `pause`，零体字节前置；upstream `finish` 后才 arm
+  头窗；任一 teardown（完成/客户端 abort/超限/预算/上游失败）只结算一次。
+- **预算不等式**：唯一推导仍是 `dsh-chamber-wire/src/net-budget.ts`。buffered 的
+  mutation 客户端预算 = `inbound + flush + header + 5s cushion`；streaming =
+  `max(inbound, flush) + header + 5s`；代理最坏值用 `proxyTotalWorstCaseMs`
+  （header 窗口 = `NET_BUDGET.upstreamHeaderWindowMs`，与代理
+  `UPSTREAM_TIMEOUT_MS` 同表 lockstep 断言）。一条 wire 用例按体积网格钉住
+  「客户端 ≥ 代理最坏 + 余量」，并覆盖 buffered/streaming 两形态。**生产客户端
+  当前一律取 buffered 公式**（客户端不知道服务端是否开启 streaming，取两种形态的
+  超集上界，方向安全）；streaming 公式用于代理侧预算与契约测试，未来若要精确收敛
+  需先有服务端能力投影。
+- `Expect: 100-continue`：声明长度超过 300MiB 时在 `checkContinue` 阶段直接 413，
+  不先发 100（避免让客户端开始发送注定被拒的体）；小体照常 100 后走请求路径。
+- SSE 下行可选 idle 窗（`sseIdleTimeoutMs`，默认关）：开启后静默超过窗口的 SSE
+  体被 destroy 并计入失败驱动探针；默认关是因为长事件流可以合法长时间无数据。
 - `x-chamber-rpc-budget-ms` 不进 v1；长路径继续走 `LONG_RPC_PATHS`。
 
 ### 3.5 Mutation unknown
@@ -194,6 +217,10 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
   逻辑流重开满足，真实载波故障各有自己的证据腿重新入队。排期它会把“每窗口最多一次重建”
   的上限变成 60s 排期：延迟替换杀掉新 socket 上活着的代际 → lane 在窗口内再次被拒 → 再排期，
   形成健康载波上永久的一分钟一次重建（`mux-self-heal` 有 300s 虚拟时钟回归用例）。
+- **WS 上游认证拒绝**：代理在上游 401/403 时完成本地 101 并 close `4401/4403`
+  （浏览器拿不到失败升级的 HTTP 状态）；客户端 `RemoteStreamAuthError` 先于
+  `withReopenSpread` 原样透传（auth 不需要 reopen 抖动），`RemoteStream` 映射为终态
+  `gateway/auth`，不再进入阶梯或静默悬挂。
 
 ## 4. 模块落点
 
@@ -209,7 +236,8 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 | `packages/desktop/host-assembly` | registration key；health-only `setInstanceTransportHealth`；不 re-register |
 | `packages/desktop/transport-registration` | 纯 registration key/fingerprint/decision 单测，锁住 health-only 边沿 |
 | `packages/control-plane/instance-proxy` | health 记录/快速失败；`setInstanceTransportHealth`；每连接 keep-alive 池与生命周期销毁；`isLinkBusy`（≥256KiB 上传窗口 + 2s 下游字节窗口）；上游失败缝（connectionId） |
-| `packages/control-plane/proxy-forward` | 上传总预算/IDLE（预算取值来自 wire 契约）、每 owner agent 池、body-transfer 信号、after-body details（只对真正发过体的请求） |
+| `packages/control-plane/http-limits` | Node 31min 死手/5s 检查周期、应用层 10s 头窗、192 软上限 raw 503/256 硬帽 |
+| `packages/control-plane/proxy-forward` | 上传总预算/IDLE（预算取值来自 wire 契约）、buffered/streaming 双形态（8MiB 声明阈值）、每 owner agent 池、body-transfer 信号、after-body details（只对真正发过体的请求） |
 | `packages/dsh-chamber-wire/net-budget` | 上传/头窗/mutation 预算的唯一推导 + 排序不变量 |
 | `packages/dsh-chamber-client-core` | page-channel link selector/epoch 唤醒/等待/错峰释放；`link-projection`（ready/epoch 投影的唯一解读）；`MutationOutcomeUnknownError`/`ResponseLostError` |
 | `packages/dsh-client-connection`（vendor fork） | `[patch-mod]`：502/504 + after-body 的官方 unary 分类文案 |
@@ -241,10 +269,10 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 5. 宿主 mux 2s×2 心跳可能误杀；可 vendor patch 调宽，不在代理代答 pong。
 6. gateway 移动入口不消费 page-channel link；本设计为 desktop 形态。
 7. 大 session list 仍受 page-channel 4MiB 单帧/256KiB 信用窗约束；需另案分片。
-8. 入站地板是 30s 的 client-body idle，不是 35s `requestTimeout`：loopback 实测（Node 24）连续 49s 上传与 40s 中途停顿都不触发 35s 上限，故慢上传的真风险只在「读请求体超时」。打包态 Electron 主进程未复测。
+8. 入站死线不靠 Node 的 `requestTimeout`：Node 的有效死线是 `max(headersTimeout, requestTimeout)`，扫描周期取**构造期** `connectionsCheckingInterval`；两个字段都设为 31min 只作死手（5s 扫描粒度），真实窗口在用户态——连接级 10s 头计时器（upgrade 清除、keep-alive 响应 `finish` 后重臂）与 `readBody` 的体总预算（含 30s 空闲）。慢上传的真风险因此只在应用层头窗/体预算；打包态 Electron 主进程仍未复测。
 9. down grace 默认 30s；超过该窗的在途仍会被 reconnect revoke（不是无限期保护）。确认窗到期时若有在途探针，最多顺延一个 provider 预算。
 10. “尚未判 down 的半开”仍无服务端 idle watchdog（pluginGraph 无 keepalive 契约），只能靠探针/重订阅收敛；down 边沿不再失败已建立订阅，半开 SSE 在确认窗内保持安静。
-11. mutation 客户端预算 = 代理最坏（上传预算 + 45s 头窗）+ 5s 余量（下限 110s、上限 30min50s），由 wire 契约唯一推导；上传 flush 慢于 128KiB/s 假设时客户端仍可能先 abort（客户端侧已把该传输丢失归为 unknown）。
+11. mutation 客户端预算 = 代理总最坏（buffered：inbound + flush + 45s 头窗；streaming：`max(inbound, flush)` + 45s 头窗）+ 5s 余量（buffered 下限 170s、上限 60min50s；streaming 下限 110s、上限 30min50s），由 wire 契约唯一推导；上传 flush 慢于 128KiB/s 假设时客户端仍可能先 abort（客户端侧已把该传输丢失归为 unknown）。
 12. `reverifyAll` 已按 120ms/实例错峰、心跳两档（30s/10s 观察窗）都加 ±10% jitter；仍未对连接尝试本身做全局配额。
 13. `linkEpoch` 有两处递增点（进入 ready 的新化身、ready 期内的 down→healthy）；suspect→healthy 不 bump。down 恢复仍会让页面通道立即重置，这是“恢复即唤醒”与“30s 稳定窗防抖”的取舍。
 14. manager 的兜底分类会从 detail 的 `HTTP nnn` 取 statusCode；shipped provider 的普通失败都显式声明 `failureKind`（gateway 口令 401 的终态走 `terminal:true`，不声明 failureKind），该兜底只对旧/自定义 provider 生效（防御性双写）。
@@ -268,7 +296,7 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 - **只许下调 `target`、不许上调**：会把「已登记为有意保留的边界」逼回一个永远达不到的目标，读者继续按目标找行数，反而失真。
 - **由门禁自动推导 `target`**：`target` 是评审判定（拆到哪一层为止），机器推不出来；门禁只能校验形状（`lines` 不升、ceiling 的 target > lines）。
 
-选：`lines` 仍只降不升，`target` 上调必须在 `note` 写出理由（本轮 38 条里只有 App 与 host-assembly 两行上调，其余下行或不动）。
+选：`lines` **默认只降**（`--update-budget` 只允许下调）；`target` 上调必须在 `note` 写出理由。当前 44 条中本批 8 行因 host-key/askpass/UDS/传输生命周期新增而显式上调，已在各行 `note` 逐项写明并在合并说明逐行追认——这是显式例外，不是自动棘轮放宽；后续新增仍默认只降。
 
 ## 7. 测试与门禁
 
@@ -276,7 +304,7 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 - `desktop`：suspect 不累积可达失败、两次 down + 确认窗（测试用短窗 override；生产 30s 由 LINK_POLICY 字面量钉住）、resume/online 复验、reverifyAll 与 online 波次 120ms 错峰、**bind 重分配**（stderr 命中 → 换端口、retryAttempt 不增、第 4 次回退阶梯）、探针复合预算（ready 与 connect 两处 + provider 35s/5s 断言）、**失败驱动强制探针**（节流/仅 healthy/避开 busy/非 ready no-op）、**心跳两级**（ready 后 10s 观察窗 → 稳定档；相邻两拍 180–700ms 判别两档）、**探针取消与链续接**（期限到点的 abort 发生在相位仍 ready 时；in-flight tick 之后心跳链继续）、grace 重开、busy 抑制、linkEpoch 三点、SSH argv、registration key 对象签名/health-only 决策/分隔符碰撞、auth 恢复决策（纯函数）、驱动器（注入时钟的节流/延迟/取消）与恢复守卫（五轴 fail-closed）、口令会话 proof 在瞬时失败后恢复。
   代理注册层的「单次失败不 unregister」**没有组装态用例**（host-assembly 无 fake plane+sm 测试）：manager 层的 status 单测只能证明失败只到 suspect；proof 恢复把该路径在 provider 层钉住（见 §6.15）。
 - `dsh-stream-state`：流表/Swift parity 保持不变（本设计不改其表）；本设计新增的 `REBUILD_REASON_KIND` + `isEvidenceBackedRebuild`（§4）由 `test/carrier/carrier-lifecycle.test.ts` 的逐 reason 分类用例与 tsc 的穷尽 Record 双重钉住。
-- `control-plane`：suspect 转发（含 suspect 下新订阅可成立）/down 503 与既有同形/health 不 revoke、body-less 与未完成体都不带 after-body、上传 idle 与预算、wire 预算排序不变量、bulk 上传的 busy 事实（≥256KiB 置位、小体不置位、结束即清）、**上游失败缝**（socket 错误、mid-body RST 与“头已到但体停流”通知一次；完整 HTTP 应答与客户端 abort 从不通知）、**下游字节的 busy 窗口**（流中为真、窗口到期为假）、**每连接池真实 socket 复用/销毁**、**page-channel 下行并入同一窗口**（每 chunk 一次、带 connectionId）。
+- `control-plane`：suspect 转发（含 suspect 下新订阅可成立）/down 503 与既有同形/health 不 revoke、body-less 与未完成体都不带 after-body、上传 idle 与预算（含 streaming 的声明长度透传、首 chunk 早于 end、`finish` 后才 arm 头窗、abort 清理）、wire 预算排序不变量（buffered/streaming 两形态）、bulk 上传的 busy 事实（≥256KiB 置位、小体不置位、结束即清）、**上游失败缝**（socket 错误、mid-body RST 与“头已到但体停流”通知一次；完整 HTTP 应答与客户端 abort 从不通知）、**下游字节的 busy 窗口**（流中为真、窗口到期为假）、**每连接池真实 socket 复用/销毁**、**page-channel 下行并入同一窗口**（每 chunk 一次、带 connectionId）。
 - `renderer`：page-channel 既有阶梯/握手/信用测试 + link epoch/初始 park/错峰释放（含 18 条 > 16 槽的轮转与“epoch 不清阶梯”）。
 - `dsh-client-connection`（vendor fork）：502/504 + after-body ⇒「可能已生效」分类文案；无 mark/非 JSON/超长体（边读边判 4KiB 上限）保持原 transport 文案。
 - `desktop/transport-identity`：raw id ⇄ connectionId 的换算 + 两个 seam 适配器（manager ⇄ plane 双向，含连字符 id 与畸形 id）。
@@ -286,7 +314,15 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 
 ## 8. Rejected alternatives
 
-- **只调大超时**：长期占槽、恢复更慢、掩盖故障；拒绝。
+- **只调大链路探针超时**：长期占槽、恢复更慢、掩盖故障；拒绝。
+- **只调大 `requestTimeout` 来表达长上传**：Node 的有效死线是
+  `max(headersTimeout, requestTimeout)`，调大 request 同时放长头窗（慢头占用随之变长）；
+  且没有应用层窗口可分别表达「短头窗 + 长体预算」。拒绝。
+- **`requestTimeout=0` 关掉 Node 兜底**：应用层仍有 idle/总预算，但失去最后一道
+  死手；保留 31min 的 Node 高值成本极低。拒绝。
+- **全局流式**：chunked/无声明体没有可提前判定的长度，阈值/预检与 32MiB 上限都要
+  重做；小体、HTML 注入与错误前置路径的语义风险与双路径成本不成比例。只对 >8MiB
+  声明长度开流式，未知长度保留 buffered 的 32MiB 上限。拒绝。
 - **新建 dsh-network-policy 包 / 复制流表**：双源且 Swift parity 需跟着改；拒绝，
   链路阈值留在 desktop-only `transport-health.ts`。
 - **完整 SourceLinkStore/第四套重试**：重复现有 owner；拒绝，选择器 + epoch。

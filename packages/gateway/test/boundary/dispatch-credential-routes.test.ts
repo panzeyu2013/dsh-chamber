@@ -537,6 +537,10 @@ test('credential change reuses the generation-bound gate proof: one bearer verif
   let verifierCalls = 0
   const state = realAuth({
     config: { kind: 'token', token: TOKEN },
+    // The injected verifier is the legacy scrypt seam; an hmac record verifies
+    // O(1) and would never call it. Seed the legacy shape so "one bearer
+    // verifier total" still measures the request path.
+    seed: store => store.setTokenHash(hashCredential(TOKEN), 'config'),
     deps: {
       verifyCredentialAsync: async plain => {
         verifierCalls += 1

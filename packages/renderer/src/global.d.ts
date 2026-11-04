@@ -140,6 +140,9 @@ export interface SshStatusProjection {
   insecureHttp: boolean
   phase: SshPhase
   localPort: number | null
+  /** Local listener shape: 'unix' = POSIX ssh tunnel UDS (localPort is null),
+   *  'tcp' = loopback port or a direct endpoint. Mirrors transport-provider.ts. */
+  transportSocket: 'unix' | 'tcp'
   sshPort: number | null
   remotePort: number
   /** Configured remote dsh home ($DSH_HOME); gateway always reports null. */
@@ -157,7 +160,17 @@ export interface SshStatusProjection {
    * auth rejection such as gateway 401/403). The SSH tunnel itself is fine
    * and the UI must never show an SSH auth hint for it.
    */
-  userActionKind: 'auth' | 'endpoint' | null
+  userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null
+  /**
+   * P0-3 host-key trust projection (present only after a host-key probe): the ssh self-proof's
+   * view of the target versus the app-owned known_hosts. Public key material only.
+   */
+  hostKey?: {
+    state: 'unknown' | 'known' | 'changed' | 'unavailable'
+    fingerprints: string[]
+    changed?: boolean
+    previousFingerprints?: string[]
+  }
   /**
    * Last known systemd activation state; null = no serviceName configured
    * for the instance, or isActive/start/stop has not run yet (on-demand
@@ -352,10 +365,32 @@ export interface DesktopSshSurface {
   local_plugin_list(): Promise<{ ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }>
   /** Seed module A onto a remote instance (design 13 §3, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
+  /** SSH host-key self-proof probe (P0-3): the presented key + fingerprint, never a credential. */
+  host_key_probe(id: string): Promise<SshHostKeyProbeResult>
+  /** Trust the most recently probed key (server-side 5-minute TTL). */
+  host_key_trust(id: string, type: string, blob: string): Promise<SshHostKeyTrustResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed: retire trusted lifecycle deltas before re-pulling the roster. */
   onInstancesChanged(callback: (payload: SshInstancesChangedPayload) => void): () => void
 }
+
+/** One app-owned host-key probe (P0-3). Public key material only: never a credential. */
+export interface SshHostKeyProbe {
+  state: 'unknown' | 'known' | 'changed' | 'unavailable'
+  type: string | null
+  blob: string | null
+  fingerprints: string[]
+  previousFingerprints: string[]
+  changed: boolean
+  probedAt: number
+  reason?: string
+}
+
+export type SshHostKeyProbeResult = { ok: true; hostKey: SshHostKeyProbe } | { ok: false; error: string }
+
+export type SshHostKeyTrustResult =
+  | { ok: true; replaced: boolean; status: SshStatusProjection | null }
+  | { ok: false; error: string }
 
 /** One discovered ~/.ssh/config host — non-secret projection only. */
 export interface SshConfigHost {

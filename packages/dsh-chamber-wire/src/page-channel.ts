@@ -129,6 +129,62 @@ export interface PageChannelItem {
   readonly data: string
 }
 
+/**
+ * The FROZEN host->client error vocabulary (design 26 failure semantics). The
+ * frame carries the code as a plain string — an older client must not drop a
+ * frame carrying a code it does not know (dropping it would leave the
+ * subscription waiting for an error that already arrived) — so this union is the
+ * COMPILE-TIME contract the host emits against, while
+ * {@link isPageChannelPermanentErrorCode} is the runtime retry classification
+ * both halves read.
+ *
+ * The list may only NARROW — a code can move from transient to permanent, and a
+ * new PERMANENT code may be added. Never add a transient "it may resolve later"
+ * code: every client retries an unknown code on its bounded ladder, so a
+ * permanent answer dressed as a transient one is retried forever.
+ *
+ * - `instance_unavailable` — transient: no transport for the instance, the link
+ *   is down, or the transport incarnation was replaced. The client waits for the
+ *   source-link epoch and resubscribes.
+ * - `capability_not_found` — PERMANENT: the target does not expose this stream
+ *   at all (sessionFacts against a non-gateway dsh).
+ * - `upstream_rejected` — PERMANENT: the upstream refused the request itself
+ *   (4xx except 401/403/408/425/429); a retry repeats the same refusal.
+ * - `upstream_failed` — transient: 5xx, 401/403/408/425/429, an SSE body that violates
+ *   the contract (frame cap / content-type), or a transport error.
+ * - `upstream_timeout` — transient: no response headers within the deadline.
+ */
+export type PageChannelErrorCode =
+  | 'instance_unavailable'
+  | 'capability_not_found'
+  | 'upstream_rejected'
+  | 'upstream_failed'
+  | 'upstream_timeout'
+
+/**
+ * The codes a consumer must NOT retry: retrying repeats a verdict that cannot
+ * change. Typed against the vocabulary above so a misspelt or retired code fails
+ * typecheck instead of silently classifying nothing.
+ */
+const PAGE_CHANNEL_PERMANENT_ERROR_CODES: readonly PageChannelErrorCode[] = [
+  'capability_not_found',
+  'upstream_rejected',
+]
+
+const PERMANENT_ERROR_CODE_SET: ReadonlySet<string> = new Set(PAGE_CHANNEL_PERMANENT_ERROR_CODES)
+
+/**
+ * Classify one error-frame code as permanent (stop retrying) or transient (keep
+ * the bounded ladder). Unknown codes are TRANSIENT: a code this build does not
+ * know is not evidence that the stream can never work, and the page must not
+ * silently give up on a subscription because a newer host added a code.
+ * @param code - the `code` of one error frame.
+ * @returns true when the consumer must stop retrying this subscription.
+ */
+export function isPageChannelPermanentErrorCode(code: string): boolean {
+  return PERMANENT_ERROR_CODE_SET.has(code)
+}
+
 /** Host -> client: this subscription failed; the channel itself stays usable. */
 export interface PageChannelError {
   readonly type: 'error'

@@ -371,13 +371,14 @@ test('upstream_timeout: no response headers within the per-subscription deadline
   assert.equal(requests[0].destroyed, true, 'the timed-out upstream request is destroyed')
 })
 
-test('upstream headers: host/rewritten origin/accept, no accept-encoding, transport headers last, cookie only from authCookieFor', async (t) => {
+test('upstream headers: host/rewritten origin/accept, no accept-encoding, transport headers last, local-only auth cookie', async (t) => {
   const upstream = fakeSseUpstream()
   const baseUrl = 'http://127.0.0.1:41000'
   const harness = await startChannel({
     httpRequest: upstream.fn,
-    resolveTargetFor: () => ({
+    resolveTargetFor: (instanceId) => ({
       baseUrl,
+      ...(instanceId === 'local' ? {} : { connectionId: instanceId }),
       headers: { authorization: 'Bearer transport-token', cookie: 'gw=1' },
     }),
   })
@@ -388,7 +389,7 @@ test('upstream headers: host/rewritten origin/accept, no accept-encoding, transp
   registerAuthCookie(baseUrl, 'auth=1')
   t.after(() => clearAuthCookie(baseUrl))
 
-  client.send({ type: 'subscribe', id: 'pg-headers', family: 'pluginGraph', instanceId: 'gateway-x' })
+  client.send({ type: 'subscribe', id: 'pg-headers', family: 'pluginGraph', instanceId: 'local' })
   await client.waitForType('ready', 'pg-headers')
   const headers = upstream.calls[0].options.headers
   assert.equal(upstream.calls[0].url.href, `${baseUrl}/plugins/events`)
@@ -397,13 +398,15 @@ test('upstream headers: host/rewritten origin/accept, no accept-encoding, transp
   assert.equal(headers.accept, 'text/event-stream')
   assert.equal(headers['accept-encoding'], undefined, 'a long-lived SSE leg never negotiates compression')
   assert.equal(headers.authorization, 'Bearer transport-token', 'per-transport headers ride last')
-  assert.equal(headers.cookie, 'auth=1', 'the browser-auth cookie is the only cookie source and wins, as in instance-proxy')
+  assert.equal(headers.cookie, 'auth=1', 'the LOCAL instance gets the browser-auth cookie')
 
   client.send({ type: 'unsubscribe', id: 'pg-headers' })
-  clearAuthCookie(baseUrl)
+  // A remote gateway with the SAME baseUrl (UDS synthetic origin) must never see
+  // the local launch-token cookie; its own transport cookie is all that rides.
   client.send({ type: 'subscribe', id: 'pg-headers-2', family: 'pluginGraph', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-headers-2')
-  assert.equal(upstream.calls[1].options.headers.cookie, 'gw=1', 'without a browser-auth cookie the transport cookie is all that rides')
+  assert.equal(upstream.calls[1].options.headers.cookie, 'gw=1', 'a remote target never inherits the local auth cookie')
+  clearAuthCookie(baseUrl)
 })
 
 test('transport headers cannot override the SSE identity/host discipline (only authorization/cookie pass)', async (t) => {
@@ -710,5 +713,31 @@ test('noteDownlink feeds the same busy window as a proxy response body', async (
   await sleep(80)
   assert.equal(proxy.isLinkBusy('dsh:page'), false, 'the window expires')
   proxy.unregisterTransport('dsh:page')
+})
+
+test('a POSIX ssh tunnel target hands its socketPath to the upstream http.request', async (t) => {
+  const upstream = fakeSseUpstream()
+  const socketPath = '/tmp/dsh-page-channel-socket-path.sock'
+  const targets: Record<string, { baseUrl: string; socketPath?: string; authority?: string }> = {
+    'dsh-uds': { baseUrl: 'http://127.0.0.1:41000', socketPath, authority: '127.0.0.1:4444' },
+    'dsh-tcp': { baseUrl: 'http://127.0.0.1:41001' },
+  }
+  const harness = await startChannel({
+    httpRequest: upstream.fn,
+    resolveTargetFor: instanceId => targets[instanceId] ?? null,
+  })
+  t.after(() => harness.close())
+  const client = await harness.connect()
+  t.after(() => client.ws.close())
+
+  client.send({ type: 'subscribe', id: 'pg-uds', family: 'pluginGraph', instanceId: 'dsh-uds' })
+  await client.waitForType('ready', 'pg-uds')
+  assert.equal(upstream.calls[0].options.socketPath, socketPath, 'the UDS listener rides the subscription request')
+  assert.equal((upstream.calls[0].options.headers as Record<string, string>).host, '127.0.0.1:4444',
+    'the Host/authority override is unchanged by the socket transport')
+
+  client.send({ type: 'subscribe', id: 'pg-tcp', family: 'pluginGraph', instanceId: 'dsh-tcp' })
+  await client.waitForType('ready', 'pg-tcp')
+  assert.equal(upstream.calls[1].options.socketPath, undefined, 'a TCP target never gains a socket option')
 })
 

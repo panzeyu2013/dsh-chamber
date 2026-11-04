@@ -151,6 +151,7 @@ test('same-id re-add starts with fresh status, service projection, and logs', as
     insecureHttp: false,
     phase: 'idle',
     localPort: null,
+    transportSocket: 'tcp',
     sshPort: null,
     remotePort: 3080,
     retryAttempt: 0,
@@ -235,19 +236,22 @@ test('connecting → ready on tunnel-up, with the documented ssh args and a loca
   assert.equal(connecting.phase, 'connecting')
   await waitFor(() => spawnCalls.length === 1)
   assert.equal(spawnCalls[0].command, 'ssh')
-  assert.deepEqual(spawnCalls[0].args.slice(0, 9), [
+  assert.deepEqual(spawnCalls[0].args.slice(0, 13), [
     '-N',
     '-o', 'ConnectTimeout=8',
     '-o', 'ExitOnForwardFailure=yes',
     '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`,
     '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`,
+    // ControlMaster is disabled on EVERY spawn (a user config must not turn -L into a no-op).
+    '-o', 'ControlMaster=no',
+    '-o', 'ControlPath=none',
   ])
-  assert.equal(spawnCalls[0].args[9], '-L')
-  const forward = spawnCalls[0].args[10]
+  assert.equal(spawnCalls[0].args[13], '-L')
+  const forward = spawnCalls[0].args[14]
   assert.match(forward, /^\d+:127\.0\.0\.1:2222$/)
   const localPort = Number(forward.split(':')[0])
   assert.ok(Number.isInteger(localPort) && localPort >= 1 && localPort <= 65535)
-  assert.equal(spawnCalls[0].args[11], 'alice@home.example.com')
+  assert.equal(spawnCalls[0].args[15], 'alice@home.example.com')
   setProbe(true)
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
   const status = manager.status('s1')! as StatusWithNoUrlLeak
@@ -271,13 +275,15 @@ test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`'
   manager.connect('s3')
   await waitFor(() => manager.status('s3')!.phase === 'ready')
   assert.equal(spawnCalls.length, 1)
-  const forward = spawnCalls[0].args[12]
+  const forward = spawnCalls[0].args[16]
   assert.deepEqual(spawnCalls[0].args, [
     '-N',
     '-o', 'ConnectTimeout=8',
     '-o', 'ExitOnForwardFailure=yes',
     '-o', `ServerAliveInterval=${SERVER_ALIVE_INTERVAL_SECONDS}`,
     '-o', `ServerAliveCountMax=${SERVER_ALIVE_COUNT_MAX}`,
+    '-o', 'ControlMaster=no',
+    '-o', 'ControlPath=none',
     '-p', '2202',
     '-L', forward,
     'carol@box.example.com',
@@ -743,4 +749,19 @@ test('a pre-v2 input without kind/transport is refused, never defaulted', () => 
   )
   // The same fixture with the current pair is accepted.
   assert.equal(saveCompleted(manager, [{ id: 'legacy', label: 'legacy', host: 'h.example.com', remotePort: 3080 }]).length, 1)
+})
+
+test('a missing/unexecutable ssh binary is an environment action, not auth (P2-6)', async (t) => {
+  const { manager } = makeManager(t, {
+    spawnFn: () => {
+      const error = new Error('spawn ssh ENOENT') as NodeJS.ErrnoException
+      error.code = 'ENOENT'
+      throw error
+    },
+  })
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')?.phase === 'error', 3000, 'spawn failure terminal')
+  const status = manager.status('s1')!
+  assert.equal(status.requiresUserAction, true)
+  assert.equal(status.userActionKind, 'environment')
 })

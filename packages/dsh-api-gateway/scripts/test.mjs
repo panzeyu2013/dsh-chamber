@@ -49,6 +49,12 @@ const GROUPS = {
       file: 'test/behavior/mux-self-heal.test.ts',
       nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
     },
+    // P1-4 cross-cutting retry-jitter acceptance. Dependency-free ON PURPOSE: it
+    // imports only the pure pacing module (plus source text), so the plan's plain
+    // `node <file>` command works even in a checkout without the vendor tree.
+    'test/behavior/retry-jitter.test.ts',
+    // P1-3 auth-close vocabulary: dependency-free leaf predicate (4401/4403).
+    'test/behavior/stream-auth-close.test.ts',
   ],
   // retry-policy: chamber carrier-retry pacing (design 14 §D4).
   'retry-policy': [

@@ -20,6 +20,8 @@ import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  REMOTE_STREAM_STABLE_CARRIER_MIN_MS,
+  remoteStreamReopenJitterMs,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
 // The opening deadline, silent-teardown floor and opening-stall rule are the
@@ -68,11 +70,39 @@ const DEADLINE_SCHEDULER = {
 
 const INTERNAL_BASE = 'http://dsh.internal'
 
+import { isRemoteStreamAuthCloseCode } from './stream-auth.ts'
+
+export { isRemoteStreamAuthCloseCode, REMOTE_STREAM_AUTH_CLOSE_CODES } from './stream-auth.ts'
+
 /** Physical Remote stream socket failure that may be retried by a domain transport. */
 export class RemoteStreamCarrierError extends Error {
+  /**
+   * P1-4: per-stream spread (0–250 ms) the mux attaches when ONE carrier failure fans
+   * out to every logical stream. RemoteStream waits this long before its FIRST reopen
+   * so the retry lanes do not stampede the replacement socket; the failure itself is
+   * delivered synchronously, so teardown ordering is unchanged.
+   */
+  reopenJitterMs?: number
+
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
     this.name = 'RemoteStreamCarrierError'
+  }
+}
+
+/**
+ * A physical socket died because the upstream rejected authentication. It is a
+ * carrier error by type (so the mux teardown path accepts it) but the domain
+ * stream checks it FIRST and turns it into a terminal `gateway/auth` error: a
+ * stale credential will fail identically forever, so the retry ladder must not
+ * run.
+ */
+export class RemoteStreamAuthError extends RemoteStreamCarrierError {
+  readonly closeCode: number
+  constructor(message: string, closeCode: number, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'RemoteStreamAuthError'
+    this.closeCode = closeCode
   }
 }
 
@@ -126,6 +156,8 @@ export class RemoteStreamMuxClient {
   private readonly openSocket: (path: string) => ConnectionWebSocket
   /** Answering Clients wait for Connection to replace a lost socket; passive Clients fail later opens immediately. */
   private readonly waitForReconnect: boolean
+  /** Injectable RNG for the per-stream first-reopen spread (tests pass a fixed sequence). */
+  private readonly random: () => number
   private socket: ConnectionWebSocket | undefined
   private cancelCandidate: ((error: Error) => void) | undefined
   private keepAlive: Promise<void> | undefined
@@ -150,6 +182,10 @@ export class RemoteStreamMuxClient {
    *  while attempts fail), and the single pending timer. */
   private lastMaintainAt = 0
   private maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
+  /** When the CURRENT socket opened, or undefined before the first open. The cadence
+   *  reset needs recovery EVIDENCE (a delivered frame, or this lifetime crossing the
+   *  stability window), never a bare handshake. */
+  private socketOpenedAt: number | undefined
   private healTimer: ReturnType<typeof setTimeout> | undefined
   /** A denied EVIDENCE-BACKED physical rebuild is retried once, at the reducer's
    *  earliest legal time. A denied LANE request is not: it is a heuristic and its retry
@@ -172,18 +208,21 @@ export class RemoteStreamMuxClient {
    * @param options.forensics - optional bounded lifecycle reporter.
    * @param options.openSocket - selected authenticated carrier; omission uses the browser socket.
    * @param options.waitForReconnect - answering Clients wait for Connection to replace a lost socket; passive Clients fail later opens immediately.
+   * @param options.random - injectable RNG for the per-stream first-reopen spread; defaults to Math.random.
    */
   constructor(options: {
     basePath?: string
     forensics?: StreamForensicsReporter
     openSocket?: (path: string) => ConnectionWebSocket
     waitForReconnect?: boolean
+    random?: () => number
   } = {}) {
     const normalized = (options.basePath ?? '').replace(/\/+$/, '')
     this.basePath = normalized === '' || normalized === '/api' ? '' : normalized
     this.forensics = options.forensics
     this.openSocket = options.openSocket ?? (() => new WebSocket(this.remoteStreamUrl()))
     this.waitForReconnect = options.waitForReconnect ?? false
+    this.random = options.random ?? Math.random
   }
 
 
@@ -400,8 +439,10 @@ export class RemoteStreamMuxClient {
     this.throttleRetried = false
     const pending = this.keepAlive
     this.revision++
-    // A deliberate replacement restarts from the base cadence (the reconnect is the attempt).
-    this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
+    // chamber patch: a lane-driven replacement is NOT recovery evidence. Resetting the
+    // self-heal cadence here let a listener that accepts and immediately drops reset the
+    // widening on every replacement, reconnecting at the 1 s floor forever. The new
+    // socket earns the reset itself (a delivered frame or 30 s of open life).
     // The replacement is a fresh decision: a latched attempt failure must not outlive it.
     this.failure = undefined
     this.cancelCandidate?.(failure)
@@ -409,6 +450,7 @@ export class RemoteStreamMuxClient {
     if (socket !== undefined) {
       this.socket = undefined
       this.socketFrames = 0
+      this.socketOpenedAt = undefined
       this.failAll(failure)
       socket.close(4000, closeReason)
     }
@@ -759,6 +801,7 @@ export class RemoteStreamMuxClient {
       // Disposing the client ends every episode, so the reducer state resets with it.
       this.carrierState = initialCarrierState()
       this.socketFrames = 0
+      this.socketOpenedAt = undefined
       this.cancelCandidate?.(error)
       const socket = this.socket
       this.socket = undefined
@@ -800,8 +843,10 @@ export class RemoteStreamMuxClient {
       const opened = (): void => {
         settled = true
         this.cancelCandidate = undefined
-        // chamber patch: an established socket resets the self-heal cadence.
-        this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
+        // chamber patch: an open socket starts the stability clock, it does not reset
+        // the self-heal cadence. Only a delivered frame or the clock crossing
+        // REMOTE_STREAM_STABLE_CARRIER_MIN_MS is recovery evidence (see noteStableCarrier).
+        this.socketOpenedAt = Date.now()
         this.stopHealTimer()
         this.clearThrottleTimer()
         this.throttleRetried = false
@@ -822,17 +867,24 @@ export class RemoteStreamMuxClient {
         this.lost(socket, error)
         if (socket.readyState < 2) socket.close()
       }
-      const closed = (): void => {
+      const closed = (event: { readonly code?: number }): void => {
         socket.removeEventListener('open', opened)
         socket.removeEventListener('error', failed)
         socket.removeEventListener('message', received)
+        const closeCode = typeof event.code === 'number' ? event.code : 0
+        const auth = isRemoteStreamAuthCloseCode(closeCode)
+          ? new RemoteStreamAuthError(
+            `api gateway: Remote stream WebSocket rejected authentication (close ${String(closeCode)})`,
+            closeCode,
+          )
+          : null
         if (!settled) {
-          rejectCandidate(new RemoteStreamCarrierError(
+          rejectCandidate(auth ?? new RemoteStreamCarrierError(
             'api gateway: Remote stream WebSocket closed before opening',
           ))
           return
         }
-        this.lost(socket)
+        this.lost(socket, auth ?? undefined)
       }
       const received = (event: { readonly data: unknown }): void => { this.receive(socket, event.data) }
       this.cancelCandidate = rejectCandidate
@@ -909,6 +961,9 @@ export class RemoteStreamMuxClient {
       // chamber patch: one liveness count per delivered frame — the silent-socket
       // escalation keys on it, never on the frame's content.
       this.socketFrames += 1
+      // The first delivered frame is the self-heal cadence's recovery evidence: the
+      // socket is actually serving this page, not merely completing handshakes.
+      if (this.socketFrames === 1 && socket.readyState === 1) this.noteStableCarrier()
       this.observeCarrier({ kind: 'streamFrame', at: Date.now() })
       const stream = this.streams.get(frame.streamId)
       if (stream === undefined) return
@@ -932,12 +987,32 @@ export class RemoteStreamMuxClient {
     if (this.socket !== socket) return
     this.socket = undefined
     this.socketFrames = 0
+    // chamber patch: a socket that stayed OPEN for the whole stability window is
+    // recovery evidence even without a frame — the path carried a connection long
+    // enough that the flapping streak is over, so the next episode starts at the base
+    // pace. This is checked at LOSS because the cadence is only read then (an open
+    // socket schedules nothing); arming a 30 s timer per socket would add no consumer.
+    if (this.socketOpenedAt !== undefined
+      && Date.now() - this.socketOpenedAt >= REMOTE_STREAM_STABLE_CARRIER_MIN_MS) {
+      this.noteStableCarrier()
+    }
+    this.socketOpenedAt = undefined
     this.observeCarrier({ kind: 'carrierClosed', at: Date.now() })
     this.forensics?.('socket-lost', error.message)
     if (!this.waitForReconnect) this.failure = error
     this.failAll(error)
     if (!this.waitForReconnect) {
       for (const waiter of [...this.waiters]) waiter.reject(error)
+    }
+    // A rejected credential is not a transport failure: self-heal would retry the
+    // same 401 forever. The domain stream surfaces a terminal gateway/auth error;
+    // a later explicit reconnect (transport replacement) starts a fresh mux. The
+    // failure MUST also be visible to waiters opened AFTER this close, or their
+    // waitForSocket parks with no deadline (R5 C-M1).
+    if (error instanceof RemoteStreamAuthError) {
+      this.failure = error
+      for (const waiter of [...this.waiters]) waiter.reject(error)
+      return
     }
     // chamber patch: the lane's generation source is the $events stream ON THIS MUX, so
     // waiting for the lane to notice a lost socket is circular whenever the loop is parked
@@ -984,6 +1059,17 @@ export class RemoteStreamMuxClient {
     this.healTimer = undefined
   }
 
+  /**
+   * chamber patch: the ONE place the self-heal cadence returns to its base.
+   * Called only with recovery evidence — a frame delivered on the current socket, or
+   * an open socket that outlived {@link REMOTE_STREAM_STABLE_CARRIER_MIN_MS}. Neither
+   * a bare handshake nor a lane-driven replacement is evidence, or a path that accepts
+   * and immediately drops would reset the widening on every attempt.
+   */
+  private noteStableCarrier(): void {
+    this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
+  }
+
   private maintain(): void {
     if (!this.running || this.disposed) return
     if (this.socket?.readyState === 1 || this.keepAlive !== undefined) return
@@ -994,6 +1080,17 @@ export class RemoteStreamMuxClient {
       () => undefined,
       (error: unknown) => {
         if (!this.running) return
+        if (error instanceof RemoteStreamAuthError) {
+          // A rejected credential is terminal even when it lands before 'open':
+          // retrying the same handshake on the 10s ladder would never succeed.
+          if (this.revision === revision) this.failure = error
+          for (const waiter of [...this.waiters]) {
+            if (waiter.revision <= revision) waiter.reject(error)
+          }
+          if (this.keepAlive === task) this.keepAlive = undefined
+          this.forensics?.('socket-attempt-failed', 'auth rejection; recovery stopped')
+          return
+        }
         const failure = error instanceof RemoteStreamCarrierError ? error
           : new RemoteStreamCarrierError('api gateway: Remote stream WebSocket failed to open', { cause: error })
         if (this.revision === revision) this.failure = failure
@@ -1025,12 +1122,32 @@ export class RemoteStreamMuxClient {
   }
 
   /** Fail every live logical stream: carrier-initiated, so an unanswered opening keeps
-   *  its streak across the replacement instead of restarting its count. */
+   *  its streak across the replacement instead of restarting its count. A CARRIER
+   *  failure also carries a per-stream 0–250 ms first-reopen spread: one socket death
+   *  fails the whole fan-out in the same tick and attempt 1 has no backoff, so without
+   *  the spread every retry lane re-issues in lockstep on the replacement. */
   private failAll(error: unknown): void {
     for (const stream of this.streams.values()) {
-      stream.inbox.fail(error, true)
+      stream.inbox.fail(this.withReopenSpread(error), true)
       stream.pump?.stop()
     }
+  }
+
+  /** Attach the per-stream first-reopen spread to one carrier failure. The failure is
+   *  still delivered synchronously (teardown ordering is unchanged); disposal and other
+   *  non-carrier failures keep their identity because they are never retried. */
+  private withReopenSpread(error: unknown): unknown {
+    // Auth is a carrier SUBTYPE but not a retryable one: wrapping it in a plain
+    // carrier error would erase the only signal RemoteStream uses to terminate
+    // with gateway/auth, and would reintroduce a reopen loop for a stale
+    // credential. Auth never reopens, so it needs no fan-out spread.
+    if (error instanceof RemoteStreamAuthError) return error
+    if (!(error instanceof RemoteStreamCarrierError)) return error
+    const spread = remoteStreamReopenJitterMs(this.random)
+    if (spread <= 0) return error
+    const jittered = new RemoteStreamCarrierError(error.message, { cause: error })
+    jittered.reopenJitterMs = spread
+    return jittered
   }
 
   private send(socket: ConnectionWebSocket, message: RemoteStreamClientMessage): void {
