@@ -28,6 +28,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 - **Package assets of remote plugins resolve through the carrier** - the web fork's refusing bootstrap require gains asset(reference), and BootSeams carries both loadBundle and resolveAsset (explicit seams first, then __DSH_TRANSPORT__), so a plugin package asset no longer falls back to the identity reference in the worker tunnel.
 - **Sidebar session rows gain accessible names and the upstream geometry tokens** - AnimatedRows takes caller-supplied role/label (the browse tree passes role="tree" and its name), and the sidebar publishes the three --dsh-sidebar-* geometry variables the bundled upstream stylesheets read; an undefined variable invalidates their calc()/gap declarations.
 - **The plugin-manager nav cell no longer keeps a hover tint on touch screens** - the cell follows the upstream @media (hover: hover) gate, so a sticky hover state no longer tints the whole cell on touch devices.
+- **Closing the narrow-window drawer returns focus to its opener** - the `shell.leading` toggle never carried `data-sidebar-opener`, so the close path's focus return was a no-op; it now mirrors the upstream header control and all three close paths (Escape, mask, shortcut) hand focus back to that button.
 
 ## [0.4.4-beta.1] - 2026-11-03
 

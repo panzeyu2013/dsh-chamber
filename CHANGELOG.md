@@ -28,6 +28,7 @@
 - **远程实例插件的包内资产经 carrier 解析** —— web fork 的 refusing bootstrap require 补上 `asset(reference)`，`BootSeams` 同时携带 `loadBundle` 与 `resolveAsset`（显式 seam 优先，其次 `__DSH_TRANSPORT__`），worker 隧道下插件包资产不再回退成身份引用。
 - **侧栏会话行补齐可访问名与上游几何 token** —— `AnimatedRows` 改为调用方传入 role/label（浏览树显式 `role="tree"` 与名称），并发布上游样式表读取的三个 `--dsh-sidebar-*` 几何变量；未定义变量会让对应 `calc()`/`gap` 失效。
 - **触屏上插件管理导航不再残留 hover 底色** —— 导航格沿用上游 `@media (hover: hover)` 门，粘滞 hover 状态不再整格染色。
+- **窄窗 drawer 关闭后焦点回到打开它的按钮** —— 折叠成抽屉时 `shell.leading` 的开关此前没有 `data-sidebar-opener` 标记，关窗路径的焦点归还恒为空操作；现在与上游头部控件同形，Escape／遮罩／快捷键三条关闭路径都把焦点交回该按钮。
 
 ## [0.4.4-beta.1] - 2026-11-03
 
