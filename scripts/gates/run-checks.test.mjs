@@ -823,7 +823,7 @@ test('G35: the fault-injection matrix runs on the push path too, not only from c
 })
 
 // ---- untracked build artifacts: ensure-artifacts + the run-checks pre-step.
-// The seed/runtime/mobile artifacts are untracked, so every check mode must
+// The seed/runtime artifacts are untracked, so every check mode must
 // either self-bootstrap or fail loudly; a mode that silently skips a gate
 // because an artifact is absent must fail these tests.
 test('ensure-artifacts: an empty fixture root reports every manifest entry and names the build command', () => {

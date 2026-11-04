@@ -470,11 +470,11 @@ function printFullBatteryNotice() {
   pnpm run test:sidebar && pnpm run test:layout
   pnpm run test:settings-bridge && pnpm run test:connections
   pnpm run test:client-web && pnpm run test:connection
-  pnpm run test:open-in && pnpm run test:mobile && pnpm run test:cli
+  pnpm run test:open-in && pnpm run test:cli
   pnpm run typecheck && pnpm run typecheck:runtime
   pnpm run typecheck:sidebar && pnpm run typecheck:layout
   pnpm run typecheck:connections && pnpm run typecheck:settings-bridge
-  pnpm run typecheck:git && pnpm run typecheck:open-in && pnpm run typecheck:mobile
+  pnpm run typecheck:git && pnpm run typecheck:open-in
   pnpm run typecheck:client-web && pnpm run typecheck:connection
   pnpm run typecheck:api-gateway && pnpm run typecheck:host-graph
   pnpm run typecheck:host-git && pnpm run typecheck:host-archive-cleanup

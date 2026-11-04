@@ -282,8 +282,8 @@ export function missingHostPackageInserts(
 /**
  * Files seeded from each chamber host package (its complete runtime surface) — the
  * SINGLE SOURCE for every side that names that file set (local profile seed, desktop
- * remote seed writer + install probes, gateway upload payload, gateway sync cache +
- * packaged mobile seed). Hand-copying the pair would let a third seed file be written
+ * remote seed writer + install probes, gateway upload payload, gateway sync cache).
+ * Hand-copying the pair would let a third seed file be written
  * locally while the desktop→gateway PUT carries two keys and the gateway still answers
  * 200/changed:true. ORDER IS PART OF THE CONTRACT: manifest first, built entry second.
  */

@@ -146,8 +146,8 @@ function readSessionResyncFace(
 export function sessionOpenInFlight(sessions: SessionsLoose | undefined, sessionId: string): boolean | undefined {
   const session = readCurrentSession(sessions, sessionId)
   if (session === undefined) return undefined
-  // The tri-state read is single-sourced in client-core; the mobile ladder reads
-  // the same function, so the fail-closed rules cannot drift between tiers.
+  // The tri-state read is single-sourced in client-core; the open-in ladder
+  // reads the same function, so the fail-closed rules cannot drift.
   return sessionOpenPromiseInFlight(session)
 }
 
@@ -226,8 +226,8 @@ export function resyncSessionStream(sessions: SessionsLoose | undefined, targetI
 }
 
 /**
- * The durable-shape read shared with the mobile stall observer: is a
- * conversation actually presented on a visible page? `[data-chat-flow]` is the
+ * The durable-shape read for stream-health probes: is a conversation actually
+ * presented on a visible page? `[data-chat-flow]` is the
  * official ChatView column; without it no chat surface is on screen and every
  * clock must stay at zero. KNOWN APPROXIMATION: document existence is not
  * "visible to the user" and the query is document-wide, but both only make

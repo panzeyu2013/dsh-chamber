@@ -105,24 +105,12 @@ export const DEVICE_FACTS_EXPRESSION = `(() => {
     pointerFine: mq('(pointer: fine)'),
     hoverNone: mq('(hover: none)'),
     anyPointerCoarse: mq('(any-pointer: coarse)'),
-    // 与插件源码同源的档位查询（composer.ts TOUCH_TIER_QUERY / PHONE_TIER_QUERY）
+    // Upstream breakpoints the walkthrough drives: the drawer/phone layout is
+    // strictly below 768px (max-width: 767px), the auto-collapsed rail sits
+    // below 1024px (max-width: 1023px).
     touchTier: mq('(max-width: 1023px) and (pointer: coarse)'),
-    phoneTier: mq('(max-width: 768px) and (pointer: coarse)'),
+    phoneTier: mq('(max-width: 767px) and (pointer: coarse)'),
     rootSlots: document.querySelectorAll('[data-slot="root"]').length,
-    mobileFrames: document.querySelectorAll('[data-mobile-frame]').length,
-    mobileRoles: [...document.querySelectorAll('[data-mobile-role]')].map(el => el.getAttribute('data-mobile-role')),
-    pluginStyle: document.querySelector('style[data-plugin="dsh-chamber-client-ui-mobile"]') !== null,
-    // 键盘守卫（composer.ts installComposerVisibilityGuard）的诊断面：M-4 的
-    // 激活证据不止「frame 打了标」：已生效的 data-mobile-kbd 帧、state
-    // 取值（armed | idle | no-seat | no-frame | still-covered）与 spacer 高度
-    // 决定「插件激活了但键盘面没有生效」能不能被看见。
-    mobileKbdFrames: document.querySelectorAll('[data-mobile-frame][data-mobile-kbd]').length,
-    // 状态面在 frame 与 <html> 上各镜像一份：按载体分别收集，否则同一状态恒出现
-    // 两次，走查证据会被读成「两个 frame / 两个载体」。
-    mobileKbdStates: [...document.querySelectorAll('[data-mobile-kbd-state]')]
-      .map(el => (el.tagName === 'HTML' ? 'html:' : 'frame:') + el.getAttribute('data-mobile-kbd-state')),
-    mobileKbdSpacers: [...document.querySelectorAll('[data-mobile-kbd-spacer]')]
-      .map(el => Math.round(el.getBoundingClientRect().height)),
   }
 })()`
 
@@ -145,11 +133,11 @@ export const DEVICE_FACTS_EXPRESSION = `(() => {
 export const HEADER_FACTS_EXPRESSION = `(() => {
   const OUTLET = '[data-slot="conversation.session.header"]'
   const SEAT_PREFIX = '[data-slot^="conversation.session.header"]'
-  // 锚点形状（design 17 §18.4.3）：outlet 是槽出口包装，\`<header>\` 是它的**祖先**
+  // 锚点形状：outlet 是槽出口包装，\`<header>\` 是它的**祖先**
   // （上游 ConversationHeader 渲染 header，会话头槽挂在它的 children 里）——所以
   // \`outlet.closest('header')\` 与上游形状同义。旧式 \`outlet > header\` 假设 header 是
-  // outlet 的直接子节点，已列入锚点门的 FORBIDDEN_PATTERNS：它匹配不到真实 DOM 时
-  // hasHeader=false，判定层会硬失败（"锚点形状失效"），不再静默 INFO。
+  // outlet 的直接子节点：它匹配不到真实 DOM 时 hasHeader=false，判定层会硬失败
+  // （"锚点形状失效"），不再静默 INFO。
   const outlet = document.querySelector(OUTLET)
   const header = outlet === null ? null : outlet.closest('header')
   const rect = el => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top), left: Math.round(r.left) } }
@@ -252,13 +240,13 @@ export function deviceEmulationVerdict(facts, device = MOBILE_DEVICE) {
   if (facts.screenWidth !== device.width || facts.screenHeight !== device.height) {
     problems.push(`screen=${facts.screenWidth}×${facts.screenHeight} != 请求设备 ${device.width}×${device.height}（setDeviceMetricsOverride 的 screenWidth/screenHeight 未落地或步骤漏传）`)
   }
-  // 档位蕴含（插件 composer.ts 的查询就是这两条）：请求宽落在哪一档，对应档位
-  // 媒体查询就必须为真；否则插件样式会按另一档渲染，走查结论没有意义。
+  // 档位蕴含（与上游 breakpoint 同一语义）：请求宽落在哪一档，对应档位媒体查询
+  // 就必须为真；否则走查会在另一档布局上判几何，结论没有意义。
   if (device.width <= 1023 && facts.touchTier !== true) {
     problems.push(`请求宽 ${device.width} <= 1023 但 touchTier(≤1023&coarse)=${facts.touchTier} 未成立`)
   }
-  if (device.width <= 768 && facts.phoneTier !== true) {
-    problems.push(`请求宽 ${device.width} <= 768 但 phoneTier(≤768&coarse)=${facts.phoneTier} 未成立`)
+  if (device.width < 768 && facts.phoneTier !== true) {
+    problems.push(`请求宽 ${device.width} < 768 但 phoneTier(≤767&coarse)=${facts.phoneTier} 未成立`)
   }
   // screen.* 是落地信号（与 dpr/maxTouchPoints/ontouchstart 同级参与 problems）。
   const screenNote = facts.screenWidth === device.width && facts.screenHeight === device.height
@@ -268,7 +256,7 @@ export function deviceEmulationVerdict(facts, device = MOBILE_DEVICE) {
     `请求 ${device.width}×${device.height} @${device.deviceScaleFactor}x mobile=${device.mobile} maxTouchPoints=${device.maxTouchPoints}`,
     `实测 innerWidth=${facts.innerWidth} clientWidth=${facts.clientWidth} dpr=${facts.dpr} maxTouchPoints=${facts.maxTouchPoints} ontouchstart=${facts.ontouchstart}`,
     `媒体特性 pointer:coarse=${facts.pointerCoarse} pointer:fine=${facts.pointerFine} hover:none=${facts.hoverNone} any-pointer:coarse=${facts.anyPointerCoarse}`,
-    `档位 touchTier(≤1023&coarse)=${facts.touchTier} phoneTier(≤768&coarse)=${facts.phoneTier}（请求宽蕴含：touchTier=${device.width <= 1023 ? '必须' : '不要求'} phoneTier=${device.width <= 768 ? '必须' : '不要求'}）`,
+    `档位 touchTier(≤1023&coarse)=${facts.touchTier} phoneTier(≤767&coarse)=${facts.phoneTier}（请求宽蕴含：touchTier=${device.width <= 1023 ? '必须' : '不要求'} phoneTier=${device.width < 768 ? '必须' : '不要求'}）`,
     screenNote,
     mediaOk ? '' : 'CDP 限制：pointer/hover 媒体特性只能靠 Emulation.setTouchEmulationEnabled 翻转（setEmulatedMedia 的 pointer/hover 特性被忽略，实测）',
     problems.length > 0 ? '失败项：' + problems.join('；') : '',
@@ -544,31 +532,6 @@ export function overlayProbeVerdict(facts) {
     return judge(null, evidence + '\n判定 INFO（扫描截断）：命中数到达上限 40，未命中元素未检查——「已扫描的部分没有越界项」不是「全页没有越界项」')
   }
   return { ok: true, evidence }
-}
-
-/**
- * 插件激活判定：模拟成立后，本插件是否真的把 frame 打标了（**判**：打了就是
- * PASS），并把守卫自己的键盘诊断面一并读出来（data-mobile-kbd 帧、state、
- * spacer 高度）。
- *
- * 未打标仍是 INFO 而不是硬 FAIL —— 可能本实例根本没装移动插件（对着别的实例
- * 走查）。但这条腿走 `addGated`/`applyRequireRun`：走查一旦用
- * `--require-run` 声明「插件必须在场」，INFO 就被改判 FAIL，不再靠人工注意。
- */
-export function pluginActivationVerdict(facts) {
-  const stamped = facts.mobileFrames > 0
-  const kbdFrames = facts.mobileKbdFrames ?? 0
-  const kbdStates = facts.mobileKbdStates ?? []
-  const kbdSpacers = facts.mobileKbdSpacers ?? []
-  const evidence = [
-    `[data-slot="root"]=${facts.rootSlots} [data-mobile-frame]=${facts.mobileFrames} data-mobile-role=${JSON.stringify(facts.mobileRoles)}`,
-    `插件 <style> 注入=${facts.pluginStyle}`,
-    `键盘面诊断：[data-mobile-frame][data-mobile-kbd]=${kbdFrames} data-mobile-kbd-state=${JSON.stringify(kbdStates)} spacer 高度=${JSON.stringify(kbdSpacers)}`,
-    stamped
-      ? '已打标：插件在本次模拟下激活；键盘面诊断字段为空说明本次走查没有 active 会话/键盘面（不是激活失败）'
-      : '未打标：要么本实例未装 dsh-chamber-client-ui-mobile，要么插件在本次模拟下未激活——需要人工确认（--require-run 下判 FAIL）',
-  ].filter(Boolean).join('\n')
-  return { ok: stamped ? true : null, evidence }
 }
 
 /**

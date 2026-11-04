@@ -46,7 +46,7 @@ import {
 } from '../../src/warmup.ts'
 
 const SECRET = 'test-jwt-secret-DO-NOT-LOG'
-const BUNDLE = '/plugins/??@dsh-chamber/dsh-client-ui-mobile/client.js,@scope/pkg/client.js&rev=abc123'
+const BUNDLE = '/plugins/??@dsh-chamber/dsh-chamber-client-ui-sidebar/client.js,@scope/pkg/client.js&rev=abc123'
 const SINGLE_BUNDLE = '/plugins/dsh-chamber-mcp/client.js'
 const NOW = 1_700_000_000
 const CLIENT = '203.0.113.8'

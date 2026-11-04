@@ -93,8 +93,8 @@ export const GROUPS = {
     // 绝对 releaseAtMonoMs，planVeilTimer 拒绝为 held 帧装 0 ms 定时器。
     'test/presentation/presentation-arbiter.test.ts',
   ],
-  // ladder: the unified recovery-ladder engine that all four ladders
-  // (liveness / reconcile / stream-health / mobile stall) become instances of.
+  // ladder: the unified recovery-ladder engine that all three ladders
+  // (liveness / reconcile / stream-health) become instances of.
   ladder: [
     'test/ladder/ladder-engine.test.ts',
   ],

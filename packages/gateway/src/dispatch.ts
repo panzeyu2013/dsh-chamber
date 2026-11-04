@@ -6,8 +6,8 @@
  * Public: /health, /auth/login (password deployments only). Pre-gate claim:
  * /plugins/** pre-warm (GET/HEAD + valid capability cookie). Behind the gate:
  * /auth credential routes, /chamber/runtime/* (not ready-gated), /chamber/* and
- * the opt-in mobile-UA 302 (a deprecated compatibility surface: the mobile
- * client plugin is injected on every device); everything else → management API
+ * the opt-in mobile-UA 302 (a deprecated compatibility surface: mobile layout
+ * is upstream-native); everything else → management API
  * or proxy.
  * Every auth-boundary rejection (HTTP and WS) appends one non-secret `auth_rejected`
  * event (code + client + path CATEGORY); identical refusals in a window collapse.
@@ -102,9 +102,9 @@ function shouldRedirectToLogin(
   if (!(headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')) return false
   // Protocol/API surfaces even when a client advertises HTML: /api, /plugins,
   // /auth, and /chamber/<subpath>. Document navigations (/, /chamber, /chamber/)
-  // reach the form. The configured mobile entry is a DOCUMENT too — it is the
-  // always-injected plugin's gateway-side surface, so an unauthenticated HTML
-  // navigation reaches the login page instead of a bare 401 JSON.
+  // reach the form. The configured mobile entry is a DOCUMENT too — it is a
+  // deprecated compatibility surface, so an unauthenticated HTML navigation
+  // reaches the login page instead of a bare 401 JSON.
   return pathname !== '/api' && !pathname.startsWith('/api/')
     && pathname !== '/plugins' && !pathname.startsWith('/plugins/')
     && !pathname.startsWith('/auth/')
@@ -273,7 +273,7 @@ export function createGatewayDispatch(
   requestPolicy: GatewayRequestPolicy,
   auditFile?: string | null,
   /** UA experience shunting; default OFF (deprecated compatibility surface —
-   * the mobile client plugin is injected on every device). */
+   * the mobile layout is upstream-native). */
   mobileUaRedirect = false,
   mobileEntryPath = DEFAULT_MOBILE_ENTRY_PATH,
   /** Auth-rejection debounce seam; defaults are production behavior. */
@@ -842,8 +842,8 @@ export function createGatewayDispatch(
       return true
     }
     // 4.5 Mobile UA shunting (default off, DEPRECATED compatibility surface:
-    // the mobile client plugin is injected on every device, so this path is
-    // kept only for deployments that still rely on the sniff). An authenticated
+    // mobile layout is upstream-native, so this path is kept only for
+    // deployments that still rely on the sniff). An authenticated
     // mobile-browser GET/HEAD of the root is a 302 to the mobile entry. UA
     // sniffing is forgeable and carries NO security semantics — the shunting
     // sits AFTER the gate and keeps the fallthrough staleness guard. It ignores

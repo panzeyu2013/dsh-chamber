@@ -44,7 +44,6 @@ export const LIFECYCLE_MODULES = [
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-seat.ts',
-  'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
   'packages/renderer/src/components/InstanceView.tsx',
 ]
 
@@ -68,7 +67,6 @@ export const DEPENDENCY_ROOTS = [
   'packages/renderer/src',
   'packages/dsh-chamber-client-ui-open-in/src',
   'packages/dsh-chamber-client-core/src',
-  'packages/dsh-chamber-client-ui-mobile/src',
   'packages/dsh-chamber-client-ui-layout/src',
 ]
 

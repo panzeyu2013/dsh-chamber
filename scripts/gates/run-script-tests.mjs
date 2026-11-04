@@ -49,9 +49,8 @@ export const GROUPS = {
     // The generated workflow block: renderer quoting rules + freshness controls.
     'scripts/gates/gate-workflow-views.test.mjs',
     'scripts/gates/run-checks.test.mjs',
-    // Artifact freshness: the canonComment negative control (a template-literal
-    // content line must NOT be normalized away, or a stale bundle slips through)
-    // plus the gate's own --self-test, which had no automated caller before.
+    // Artifact freshness: the canonRungs negative control (code strings must NOT
+    // be normalized, or a stale bundle slips through) plus the gate's own --self-test.
     'scripts/gates/verify-artifact-freshness.test.mjs',
     // Bilingual sidecar discovery: indented en:/zh: records and the 40-hex git
     // blob form are parsed and verified (the empty-corpus blind spot).
@@ -104,7 +103,6 @@ export const GROUPS = {
     'scripts/upstream/check-anchors.test.mjs',
     'scripts/upstream/plugin-protection-gate.test.mjs',
     'scripts/upstream/lockfile-store-path-mappings.test.mjs',
-    'scripts/upstream/verify-mobile-anchors.test.mjs',
     'scripts/upstream/roster-parity.test.mjs',
     'scripts/upstream/workspace-range-ratchet.test.mjs',
   ],

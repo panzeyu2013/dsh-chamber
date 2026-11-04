@@ -13,7 +13,7 @@
 > 交互锚点 = chamber 侧边栏**服务器分组头行（server 行）hover 操作簇**；
 > 执行层 = **新增 chamber 宿主域插件**（实例进程内、宿主权威状态执行删除）；
 > 本需求对 chamber 桌面与 gateway 部署的所有来源形态（local / gateway-managed /
-> 远程 dsh）统一生效。范围声明：移动端（ui-mobile，无 hover 表面）与侧边栏
+> 远程 dsh）统一生效。范围声明：移动端（gateway 移动入口，无 hover 表面）与侧边栏
 > rail/窄栏形态**不在 v1 范围**（§6）；未来需要移动端入口则另行设计（触屏确认流与
 > 桌面 hover 不同形）。
 
@@ -746,13 +746,13 @@ C 的派生实现；测试数组（feature-lifecycle / chamber-installed / runti
 fixture 需答第 7 端点 / plugin-spec-lockstep：新包名是否受保护改由**注册表派生**
 （design 21 §6.11：`S` = `CHAMBER_HOST_PACKAGES` 名集，C13 三面一致门守住）——新增种子
 包**必须同时进注册表**才受保护；「`@dsh-chamber/*` 前缀自动覆盖」的旧口径已废止）。
-gateway build.mjs **不改**（宿主包已不在 gateway 内嵌，mobile 是唯一打包例外）。
+gateway build.mjs 不再打包任何客户端插件（也不再产出 `host-packages/`）。
 
 **F. settings-connections**：PluginDialog 内建组件表**不新增 archive-cleanup 三态行**
 （v1 取舍）：v1 仅做**常量级归类修正**——`plugin-inventory-text.ts` 的
 `classifyInventoryEntry`/`chamberKindOf` 加第三包，否则该包在 gateway 插件清单
 （Loader inventory 驱动）里会以 **third-party** 误标显示（现只认
-client-graph/git-worktree/mobile）。域状态诊断 = 侧边栏 404 文案 + 插件清单归类。三态行
+client-graph/git-worktree/archive-cleanup/open-in）。域状态诊断 = 侧边栏 404 文案 + 插件清单归类。三态行
 代价清单（后续可选增强，未排期）：(a) `plugin-sync.ts` `ChamberInjectionState` chamber
 块第三键 + `localPluginList`/`probeRemoteChamber` 实时探针 + 主进程
 `LOCAL_PLUGIN_LIST`/`SSH_PLUGIN_LIST` live adapter；(b) IPC 类型镜像三处：renderer /

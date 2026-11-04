@@ -15,7 +15,6 @@ import {
   ARCHIVE_CLEANUP_PACKAGE,
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
-  MOBILE_PACKAGE,
   OPEN_IN_PACKAGE,
   chamberSeedDrift,
   classifyChamberClientPlugin,
@@ -224,10 +223,11 @@ test('gateway: the remote badge comes from the Loader inventory when it is avail
 
 /* ---- P2.7: inventory-derived chamber CLIENT rows (no hardcoded package) ---- */
 
+const CHAMBER_CLIENT = '@dsh-chamber/dsh-chamber-client-ui-sidebar'
+
 test('classifyChamberClientPlugin: the chamber client scope is classified by name, not by a literal list', () => {
-  assert.equal(classifyChamberClientPlugin(MOBILE_PACKAGE), 'chamber-mobile')
-  assert.equal(classifyChamberClientPlugin(`cordis:include ${MOBILE_PACKAGE}`), 'chamber-mobile')
-  assert.equal(classifyChamberClientPlugin('@dsh-chamber/dsh-client-ui-sidebar'), 'chamber-client')
+  assert.equal(classifyChamberClientPlugin(CHAMBER_CLIENT), 'chamber-client')
+  assert.equal(classifyChamberClientPlugin(`cordis:include ${CHAMBER_CLIENT}`), 'chamber-client')
   assert.equal(classifyChamberClientPlugin(HOST_GRAPH_PACKAGE), null)
   assert.equal(classifyChamberClientPlugin('@dsh-chamber/user-tool'), null)
   assert.equal(classifyChamberClientPlugin('my-third-party-plugin'), null)
@@ -237,65 +237,38 @@ test('gateway: client rows are derived from the inventory, never from a hardcode
   const rows = gatewayRows({
     inventory: {
       entries: [
-        // The gateway reports its packaged client entry under the raw
-        // cordis patch-insert syntax (plan 24 D7-A).
-        { moduleName: `cordis:include ${MOBILE_PACKAGE}`, enabled: true, fiberPhase: 'active' },
+        // The gateway reports client entries under the raw cordis patch-insert syntax.
+        { moduleName: `cordis:include ${CHAMBER_CLIENT}`, enabled: true, fiberPhase: 'active' },
         { moduleName: '@dsh-chamber/user-tool', enabled: true, fiberPhase: 'active' },
         // A duplicate report of the same package (plain form) collapses.
-        { moduleName: MOBILE_PACKAGE, enabled: false, fiberPhase: 'failed' },
+        { moduleName: CHAMBER_CLIENT, enabled: false, fiberPhase: 'failed' },
       ],
     },
   })
-  const clientRows = rows.filter(row => row.nameLabelKey !== null)
+  const clientRows = rows.filter(row => row.key.startsWith('chamber-client:'))
   assert.equal(clientRows.length, 1, 'one row per chamber client package')
-  const mobile = clientRows[0]!
-  assert.equal(mobile.name, MOBILE_PACKAGE, 'the name comes from the inventory entry')
-  assert.equal(mobile.key, `chamber-client:${MOBILE_PACKAGE}`)
-  assert.equal(mobile.nameLabelKey, 'chamberMobileRow')
-  assert.equal(mobile.versionHintKey, 'chamberMobileHint')
-  assert.equal(mobile.versionText, null)
-  assert.equal(mobile.localBadge, null, 'a gateway client row has no local column')
-  assert.deepEqual(mobile.remoteBadge, { labelKey: 'chamberBadgeLive', tone: 'ok' },
+  const client = clientRows[0]!
+  assert.equal(client.name, CHAMBER_CLIENT, 'the name comes from the inventory entry')
+  assert.equal(client.key, `chamber-client:${CHAMBER_CLIENT}`)
+  assert.equal(client.nameLabelKey, null, 'no dedicated copy survives the mobile package retirement')
+  assert.equal(client.versionHintKey, null)
+  assert.equal(client.versionText, null)
+  assert.equal(client.localBadge, null, 'a gateway client row has no local column')
+  assert.deepEqual(client.remoteBadge, { labelKey: 'chamberBadgeLive', tone: 'ok' },
     'the first (enabled + active) report decides; a duplicate does not flip it to failed')
   assert.equal(rows.some(row => row.name === '@dsh-chamber/user-tool'), false,
     'third-party entries are never chamber rows')
 })
 
-test('gateway: a generic chamber client plugin is a chamber row with no invented label', () => {
-  const rows = gatewayRows({
-    inventory: { entries: [{ moduleName: '@dsh-chamber/dsh-client-ui-sidebar', enabled: true, fiberPhase: 'active' }] },
-  })
-  const clientRows = rows.filter(row => row.nameLabelKey !== null || row.name?.startsWith('@dsh-chamber/dsh-client-ui-') === true)
-  assert.equal(clientRows.length, 1)
-  assert.equal(clientRows[0]!.name, '@dsh-chamber/dsh-client-ui-sidebar')
-  assert.equal(clientRows[0]!.nameLabelKey, null, 'only the packaged mobile entry has dedicated copy')
-  assert.equal(clientRows[0]!.versionHintKey, null)
-})
-
-test('gateway: an unavailable inventory renders ONE unknown-state client row, never a hardcoded name', () => {
-  const rows = gatewayRows({ inventory: null })
-  const unknown = rows.filter(row => row.name === null)
-  assert.equal(unknown.length, 1)
-  assert.equal(unknown[0]!.key, 'chamber-client-unknown')
-  assert.equal(unknown[0]!.nameLabelKey, 'chamberMobileRow')
-  assert.deepEqual(unknown[0]!.remoteBadge, { labelKey: 'chamberBadgeUnknown', tone: 'muted' })
-  assert.equal(rows.some(row => row.name === MOBILE_PACKAGE), false,
-    'the literal package name must never appear without an inventory fact')
-})
-
-test('gateway: a readable inventory with NO chamber client entry renders ONE muted 未注入 row', () => {
-  // This state renders 未注入 as one muted row: rendering NOTHING at all
-  // would let a dropped/disabled client package look like "no such row
-  // exists". Still never a hardcoded package name.
-  const rows = gatewayRows({ inventory: { entries: [] } })
-  const clientRows = rows.filter(row => row.nameLabelKey !== null)
-  assert.equal(clientRows.length, 1, 'one absent-state client row, never zero')
-  assert.equal(clientRows[0]!.key, 'chamber-client-absent')
-  assert.equal(clientRows[0]!.name, null, 'an absent row never names a package')
-  assert.equal(clientRows[0]!.nameLabelKey, 'chamberMobileRow')
-  assert.deepEqual(clientRows[0]!.remoteBadge, { labelKey: 'chamberBadgeNotInjected', tone: 'muted' })
-  assert.equal(rows.some(row => row.name === MOBILE_PACKAGE), false,
-    'the literal package name must never appear without an inventory fact')
+test('gateway: no packaged client plugin means no client row', () => {
+  // The gateway shipped one packaged mobile client entry; it is retired. An
+  // unavailable inventory and an inventory with no chamber-client entry must
+  // both render zero client rows — never a stale "mobile entry" placeholder.
+  for (const inventory of [null, { entries: [] }]) {
+    const rows = gatewayRows({ inventory })
+    assert.equal(rows.filter(row => row.key.startsWith('chamber-client:')).length, 0)
+    assert.equal(rows.filter(row => row.name === null).length, 0)
+  }
 })
 
 /* ---- http: read-only Loader view, no cache and no client rows ---- */
@@ -321,9 +294,9 @@ test('every target: an empty expected list yields no REGISTRY rows', () => {
     const rows = deriveChamberRows({ target, expected: [], localManifestChamber: [], remoteChamber: null,
       inventory: null, seedCache: null, localSideFailed: false })
     assert.deepEqual(rows.filter(row => row.name !== null), [], `${target} with an empty expected list`)
-    // The gateway's inventory-derived client row is independent of the
-    // registry list: with no inventory it is the single unknown-state row.
-    assert.equal(rows.filter(row => row.name === null).length, target === 'gateway' ? 1 : 0)
+    // The packaged client plugin retired: an empty registry list renders no
+    // client row on any target, including the gateway with no inventory.
+    assert.equal(rows.filter(row => row.name === null).length, 0)
   }
 })
 
@@ -393,7 +366,7 @@ test('gateway: the omitted localOnly row is outside the cache accounting too', (
 /* ---- package-name lockstep: the client constants are hand-mirrored, so a host
  * rename must fail here instead of silently classifying a chamber row as
  * third-party. The control-plane registry is the authoritative declaration. ---- */
-test('chamber package constants mirror the control-plane registry and the packaged mobile manifest', () => {
+test('chamber package constants mirror the control-plane registry', () => {
   const seed = readFileSync(join(import.meta.dirname, '../../../control-plane/src/host-graph-seed.ts'), 'utf8')
   const declared = [...seed.matchAll(/export const HOST_[A-Z_]+_PACKAGE_NAME = '([^']+)'/gu)].map(match => match[1]!)
   assert.deepEqual(
@@ -405,8 +378,4 @@ test('chamber package constants mirror the control-plane registry and the packag
     assert.notEqual(classifyInventoryEntry(name), 'third-party',
       `registry host package ${name} must classify as a chamber row, or a non-local target would list it as third-party`)
   }
-  const manifest = JSON.parse(
-    readFileSync(join(import.meta.dirname, '../../../dsh-chamber-client-ui-mobile/package.json'), 'utf8'),
-  ) as { name?: unknown }
-  assert.equal(manifest.name, MOBILE_PACKAGE, 'the packaged mobile manifest name and the client constant must stay in lockstep')
 })

@@ -19,8 +19,8 @@ import { fileURLToPath } from 'node:url'
 const CSS = fileURLToPath(new URL('../../src/client/EmbeddedPluginManagerPage.module.css', import.meta.url))
 
 /**
- * CSS-only 注释剥离（与 packages/dsh-chamber-client-ui-mobile/test/behavior/composer-guard.test.ts
- * 同形）：注释掉的规则不得把消费面锁喂饱。不复用 JS 版 stripComments：它把 / 按表达式位置
+ * CSS-only 注释剥离（与其余 CSS-only 注释剥离判据同形）：注释掉的规则不得把消费面锁喂饱。
+ * 不复用 JS 版 stripComments：它把 / 按表达式位置
  * 判正则，而 CSS 值里仍有 /（百分比/比例）等除号形态，剥注释的边界会随写法漂移。
  */
 const stripCssComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//gu, '')

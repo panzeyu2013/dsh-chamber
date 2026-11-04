@@ -144,7 +144,6 @@ export const RUNTIME_LOADED_PACKAGES = {
   'dsh-chamber-seed-open-in': 'host-graph insert row: the dsh loader imports dist/index.js by package name and reads the default-exported gateway',
   'dsh-chamber-client-ui-git': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-layout': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
-  'dsh-chamber-client-ui-mobile': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-open-in': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-settings-bridge': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-settings-connections': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',

@@ -16,9 +16,8 @@ build/
 !scripts/release/**
 *.tgz
 # 构建期生成；clean checkout 用 pnpm run build:artifacts 自举。dsh-runtime /
-# 四个 seed / mobile 的 dist+lib 曾在全局 dist/ 规则下用反选行 tracked 进仓，
+# 四个 seed 的 dist 曾在全局 dist/ 规则下用反选行 tracked 进仓，
 # 2026-12「产物移出 git」后不再反选（C8 仍按 src 重建-比对它们的新鲜度）。
-packages/dsh-chamber-client-ui-mobile/lib/
 
 # Local runtime state (control-plane data, audit log, dsh host state)
 data/
@@ -100,10 +99,6 @@ Thumbs.db
 
 *.local
 *.swp
-# Gateway build output: host packages are copied in by scripts/build.mjs
-# (the seed sources' dist artifacts are build-time generated (pnpm run build:artifacts)).
-packages/gateway/host-packages/
-
 # Primary-runtime (python) payload: downloaded at build time, never committed
 packages/desktop/resources/primary-runtime/**
 !packages/desktop/resources/primary-runtime/README.md

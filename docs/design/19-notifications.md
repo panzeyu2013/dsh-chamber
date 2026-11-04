@@ -945,7 +945,7 @@ interface ChamberSettings {
     退避归零，30s 对账继续作为后备。**Rejected alternatives（基线失败恢复）**：只等下一次 30s
     对账会把一次瞬态 fetch 超时放大成长期事实降级；无退避的立即重试又会在持续拥塞时叠加完整
     `session/list` 请求并进一步挤压同源载体。
-  - **浏览器/mobile（gateway web 直连）**只服务 mobile 插件，无 chamber sidebar/renderer
+  - **浏览器/gateway 移动入口（官方 web 直连）**不加载 chamber sidebar/renderer
     ⇒ 不存在 goal 压制/通知面；而 **chamber renderer 被浏览器/dev 直开**是另一形态：
     渲染器与 durable 剪枝门都在（无桥按 §3.2.4 F11 视同已结算放行），只是没有远程来源、
     压制面为空。两者分述，不得合并成「浏览器一律没有渲染器」。

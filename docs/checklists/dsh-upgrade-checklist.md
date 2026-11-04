@@ -75,5 +75,5 @@
 
 - [ ] 迁移叙述（pin、fork rebase面、适配面、验证结论）写 `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节——**发版时才写**（升级提交本身不动 CHANGELOG），随后 `node scripts/gates/verify-i18n.mjs --write` 刷新 i18n 记录。
 - [ ] 触点结构变更走registry：`registry.json` → `registry-views.mjs --write` → `verify-registry.mjs` 绿。
-- [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop/mobile README、本目录）更新版本号，历史叙述保留；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
+- [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop README、本目录）更新版本号，历史叙述保留；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
 - [ ] 未落地的实机门禁与遗留偏差登记进 `docs/progress/STATUS.md`（只写仍open的项，不留已完成台账）；下次升级复用本清单复验。版本值不写进checklist。

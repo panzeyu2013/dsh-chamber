@@ -250,7 +250,7 @@ const KERNEL_ADOPTED_IDS: readonly string[] = [
  *  - the composite's FIRST-SCREEN factories (`COVERED_FACTORIES`), and
  *  - the kernel-adopted ids above.
  * Everything else covered is permanently unresolvable: the deliberate skips
- * (hmr / mobile / directory-picker-native) are never loaded; the deferred families
+ * (hmr / directory-picker-native) are never loaded; the deferred families
  * (the desktop account family among them, its onboarding overlay gated off at build
  * time) are mounted with `ctx.plugin` but never register a module-table factory;
  * page-own and replaced official rows register nothing either.

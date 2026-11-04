@@ -1,7 +1,7 @@
 /**
  * Unified ladder engine - behavior contract.
  *
- * These are the properties the four ladders each implement separately. The
+ * These are the properties the three ladders each implement separately. The
  * point of the engine is that they live in ONE file: a later edit to
  * any ladder must keep these tests green, and the ladders' own values stay inputs.
  */
@@ -13,7 +13,6 @@ import {
   sessionAuthorityEscalationLadder,
   sessionAuthorityProbeLadder,
   streamHealthLadder,
-  mobileStallLadder,
 } from '../../src/ladder.ts'
 import { LADDER_TABLES } from '../../src/tables.ts'
 import type { Ladder, LadderObservation } from '../../src/ladder.ts'
@@ -193,14 +192,4 @@ test('the instantiated ladders keep their owners values', () => {
   assert.equal(health.tiers[0]?.cooldownMs, LADDER_TABLES.streamHealth.healCooldownMs)
   assert.equal(health.tiers[0]?.quota, LADDER_TABLES.streamHealth.healBudgetMax)
   assert.equal(health.quotaWindowMs, LADDER_TABLES.streamHealth.healBudgetWindowMs)
-  const mobile = mobileStallLadder({
-    thresholdMs: LADDER_TABLES.mobile.thresholdMs,
-    cooldownMs: LADDER_TABLES.mobile.resyncCooldownMs,
-    windowMs: LADDER_TABLES.mobile.resyncWindowMs,
-    max: LADDER_TABLES.mobile.resyncMax,
-  })
-  assert.deepEqual(mobile.tiers.map((tier) => tier.name), ['resync'])
-  assert.equal(mobile.tiers[0]?.afterMs, LADDER_TABLES.mobile.thresholdMs, 'the mobile copy reads the shared table')
-  assert.equal(mobile.quotaWindowMs, LADDER_TABLES.mobile.resyncWindowMs)
-  assert.equal(mobile.tiers[0]?.requiresStuckEvidence, true, 'the concrete loading/no-open evidence is the tier gate')
 })
