@@ -11,6 +11,24 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
 
+## [0.4.4-beta.2] - 2026-11-04
+
+### Added
+- **Bundled dsh baseline moves to 0.2.2-alpha.3 (05b1cae8db)** - against the rc.3 shipped in 0.4.3, the source line, the runtime bundle and the three fork copies move together; the official frontend brings an eight-language UI (chamber-authored copy stays zh/en with en as the fallback outside zh, and the layout shortcut labels mirror upstream), fileDrag image dragging with the text-selection floating bar, new client rows for action cards, creation recommendations, plugin recommendations, message quotes and CUA, plugin-extensible right-click menus (the new `ui-context-menu` service hub is needed on the first screen, so it enters chamber's covered set), and a sidebar drawer below 768 px (the chamber layout and sidebar forks follow that breakpoint, its modal layer and the focus return).
+
+### Changed
+- **The settings header strip no longer repeats cross-instance plugin conflicts** - it projects only actionable plugin facts (restart-required, bundle-load-failed); cross-instance bundle drift is a boot fact with no in-place fix, so it stays on the connections page's per-instance diagnostic line and in the plugin dialog instead of reappearing on every settings open.
+- **Gateway install and update require Node >=24.9** - the installer checks major.minor before any write and reports the version it saw (Node 22/23 and 24.0-24.8 are refused); update also rewrites the local launcher's absolute node path, so an upgrade cannot leave the service running the node captured at install time.
+- **Deterministic gateway startup failures are no longer restarted** - the systemd unit lists both 2 (configuration/usage error) and 3 (state-root lease conflict) in RestartPreventExitStatus, and the start limit is documented as a 60 s / 5-start rate cap; container deployments should use --restart=on-failure:N.
+
+### Fixed
+- **A healthy carrier is no longer rebuilt once a minute** - a lane reconnect refused by the 60 s rebuild window is no longer re-armed at the window edge (the old shape produced a 60 s rebuild metronome on a healthy carrier and replaced sockets that were still delivering frames); only evidence-backed refusals (opening deadline with no frame, silent teardown) keep one window-edge replacement, and a half-open carrier is covered by the 30 s opening deadline (worst case about 28 s later).
+- **Lease conflicts name the holder category** - StateRootLeaseError gains live / unverified / foreign-machine / foreign-namespace; gateway auth reset-password and the CLI no longer describe a foreign-machine, foreign-namespace or unverifiable record as "gateway is running (pid N)" and instead surface the verdict and the escape hatch; printable text fields such as the record's flavor are narrowed to printable ASCII so a tampered record cannot forge a journal line.
+- **A desktop login failure no longer claims the tunnel is up** - on ECONNREFUSED through an SSH tunnel the copy now says the login connection was refused and points at both the gateway service and the tunnel/forward; a local -L forward refuses locally when it is gone and resets when the remote port is closed, so the socket code cannot tell which side failed.
+- **Package assets of remote plugins resolve through the carrier** - the web fork's refusing bootstrap require gains asset(reference), and BootSeams carries both loadBundle and resolveAsset (explicit seams first, then __DSH_TRANSPORT__), so a plugin package asset no longer falls back to the identity reference in the worker tunnel.
+- **Sidebar session rows gain accessible names and the upstream geometry tokens** - AnimatedRows takes caller-supplied role/label (the browse tree passes role="tree" and its name), and the sidebar publishes the three --dsh-sidebar-* geometry variables the bundled upstream stylesheets read; an undefined variable invalidates their calc()/gap declarations.
+- **The plugin-manager nav cell no longer keeps a hover tint on touch screens** - the cell follows the upstream @media (hover: hover) gate, so a sticky hover state no longer tints the whole cell on touch devices.
+
 ## [0.4.4-beta.1] - 2026-11-03
 
 ### Added
