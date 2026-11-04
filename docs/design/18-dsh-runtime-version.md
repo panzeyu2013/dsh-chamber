@@ -582,6 +582,12 @@ chamber-settings.json，非秘密）：
   模块），不搬 bundle-swap 的目录 rename 交换**（该模型已否决）；仅 §3.7 DSH_HOME
   两阶段恢复借鉴
   dest→backup→new→cleanup 模式。
+  **`docs/` 下的 Markdown 是运行时内容**：dsh 0.2.2-alpha.3 起，插件管理器的
+  bundle 详情页在运行期读取 locale `meta.detail` 指名的文档，随安装分发的 bundle
+  都把它放在 `docs/DETAIL*.md`——prune 因此保留 `docs/` 下全部 Markdown（实测
+  34 个文件 / 约 8 KiB），其余 Markdown（README/CHANGELOG/技能 assets 等）照旧
+  裁剪；`bundle-dsh` 在 prune 前后比对 `collectDeclaredDetailFiles` 记录的声明
+  目标，删掉即封装失败，规则漂移不进入安装包。取舍见 §4.1。
 - **供应链信任声明**：运行期安装执行白名单内依赖构建脚本；信任模型 = npm registry
   （钉源后）+ 精确版本 + integrity + 白名单 fail-safe，用户选择安装即显式接受。
   koffi optional dep 瞬时下载失败 fallback 到 cmake 源码构建、无 toolchain 时硬
@@ -611,6 +617,28 @@ chamber-settings.json，非秘密）：
 - **integrity 粒度（诚实声明）**：顶层 tarball 字节由 source-bound SRI 钉死；
   传递依赖由 pnpm 按同一 registry metadata 的各自 integrity 校验，再由关键文件
   摘要、冒烟与激活探针兜底。
+
+### 4.1 已否决的替代方案——裁剪与运行时 Markdown
+
+- **只保留 locale `meta.detail` 指名的文件**：实测两者在本版 dsh 上成本相同
+  （声明目标 34 个，`docs/` 顶层 Markdown 也是 34 个，差集为空），却引入 locale
+  JSON 解析、路径校验与上游元数据耦合——上游改一次文档约定就要再改规则。取
+  「保留 `docs/` 全部 Markdown」这个超集。
+- **删掉 `*.md` 裁剪规则**：约 +1429 个文件 / 10.5 MiB（估算自 npm 安装树，占
+  hoisted 树文件数约 4%），正确性最好但直接顶掉 Windows 逐文件解压目标；在拿到
+  真实 pnpm hoisted 树与 Windows 安装实测前不采纳。
+- **改上游 `readPackageDocument`：`meta.detail` 缺失时回退 README**：上游明确要求
+  fail loudly（打包错误必须暴露），且不解决同一规则对技能资产的误裁。否决。
+- **保留包根 README 作为详情回退**：`README.zh.md` 不匹配上游 readme 名规则，
+  只有英文 `README.md` 有效；随安装分发的 optional bundle 中只有
+  `dsh-experimental-liveshare` 依赖回退，本版接受其无详情区。
+- **核对只在封装期做**：声明目标的 prune 前后比对只在 `bundle-dsh`（chamber 自己
+  发布的运行树）执行；运行期安装器复用同一 prune 实现但不二次断言——详情文档是
+  展示内容，宁可降级也不阻断用户安装/切换 dsh 版本，drift 由发版前的封装失败暴露。
+- **已知边界**：包内技能资产（`assets/**`、`skills/**` 下的 Markdown，例如 sdk
+  profile 的 office 技能）仍被裁掉。chamber 托管 web profile（`skill-filesystem`
+  由 preset 各自挂载、office 技能只随 sdk-app 挂载），本版不扩大保留面；若将来
+  chamber 托管其它 profile，需按运行时读者清单重新评估。
 
 ## 5. 数据流与 UX
 

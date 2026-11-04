@@ -6,3 +6,6 @@
  * public exports.
  */
 export function pruneRuntimeArtifacts(root: string): { removedFiles: number; removedDirs: number }
+
+/** The declared bundle detail documents (`locale/*.json` `meta.detail`) that exist in `root`. */
+export function collectDeclaredDetailFiles(root: string): string[]
