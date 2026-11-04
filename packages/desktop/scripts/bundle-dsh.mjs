@@ -71,7 +71,13 @@ if (recovery === 'restored') console.warn('[bundle-dsh] 已恢复上次中断交
  *  silently, so the lockfile is the single source of truth for
  *  the no-env path. The lockfile path is resolved HERE (sourceLockfile is
  *  declared later in the module — a TDZ reference from this call site would
- *  silently fall back to the pin). */
+ *  silently fall back to the pin).
+ *
+ *  The literal in the catch branch is runtime-line anchor 1/6, not an unchecked
+ *  copy: verify-upstream-touchpoints.mjs (C10, ci.yml + release.yml) lists this file
+ *  as a REQUIRED anchor and fails when the value it finds differs from the bundled
+ *  lockfile — live-literal scan in the default pass, raw text in the pre-install
+ *  pass — so the twin cannot drift unobserved. */
 function lockfileDshVersion() {
   try {
     const text = readFileSync(path.join(pkgDir, 'vendor', 'dsh', 'pnpm-lock.yaml'), 'utf8');
