@@ -258,6 +258,8 @@ export interface ForwardSource {
   readonly remotePort: number | null
   /** Stable digest of the persisted connection identity (host/user/sshPort/remotePort). */
   readonly identity: string
+  /** Registry label for human-facing confirmation copy (never renderer input). */
+  readonly label?: string
   /** Legacy whole-source grant (custom test seams / pre-v2 rows). */
   readonly browserEnabled: boolean
   /** Persisted per-namespace:port confirmations (`<browserNamespace>:<targetPort>`). */
@@ -625,12 +627,9 @@ export class RemoteForwardManager {
    * alias (the tombstone is never reused). Returns what actually happened.
    */
   async retireSource(sourceId: string): Promise<ForwardRetireResult> {
-    let released = 0
-    for (const record of [...this.#records.values()]) {
-      if (record.sourceId !== sourceId) continue
-      await this.#releaseRecord(record.id)
-      released += 1
-    }
+    const ids = [...this.#records.values()].filter(record => record.sourceId === sourceId).map(record => record.id)
+    await Promise.all(ids.map(id => this.#releaseRecord(id).catch(() => undefined)))
+    const released = ids.length
     let namespaceRetired = false
     try {
       namespaceRetired = await this.#namespaces.retire(sourceId)
@@ -694,9 +693,9 @@ export class RemoteForwardManager {
 
     const authorized = await this.#authorizeSource(source, args.port, assignment.namespace)
     if (authorized !== null) {
-      if (authorized.code === 'confirmation_late') {
-        await this.#namespaces.retire(source.sourceId).catch(() => false)
-      }
+      // A late confirmation creates no child. Do NOT burn the just-assigned
+      // lifetime alias for a per-process fingerprint change; a real retarget is
+      // already retired by the transport-registry source-retirement hook.
       return { ok: false, error: authorized }
     }
 
@@ -792,12 +791,11 @@ export class RemoteForwardManager {
 
   /** Close records that belong to a previous connection identity of this source. */
   async #retireIdentityMismatches(source: ForwardSource): Promise<void> {
-    for (const record of [...this.#records.values()]) {
-      if (record.sourceId !== source.sourceId) continue
-      const internal = this.#internals.get(record.id)
-      if (internal !== undefined && internal.identity === source.identity) continue
-      await this.#releaseRecord(record.id)
-    }
+    const stale = [...this.#records.values()].filter(record => {
+      if (record.sourceId !== source.sourceId) return false
+      return this.#internals.get(record.id)?.identity !== source.identity
+    })
+    await Promise.all(stale.map(record => this.#releaseRecord(record.id).catch(() => undefined)))
   }
 
   #findActive(sourceId: string, targetPort: number): ForwardRecord | null {
@@ -951,7 +949,7 @@ export class RemoteForwardManager {
       void child.exit.then(exit => this.#onChildExit(id, internal, launchToken, exit))
       const outcome = await this.#awaitBound(internal, record.aliasHost, record.localPort)
       if (!this.#alive(internal)) return
-      if (outcome === 'bound') {
+      if (outcome === 'bound' && internal.exit === null) {
         this.#patch(id, { state: 'bound', stale: false, error: null, boundAt: this.#now() })
         this.#authFailures.delete(source.sourceId)
         this.#authCooldownUntil.delete(source.sourceId)
@@ -1163,13 +1161,12 @@ export class RemoteForwardManager {
         this.#spawnWindows.set(sourceId, window)
         return true
       }
-      const wait = window[0] + this.#spawnWindowMs - now
-      if (wait > 0) {
-        // Use the window length rather than the injected clock for the wait:
-        // tests can hold a fixed clock and still observe deterministic spacing.
-        await this.#delay(this.#spawnWindowMs)
-        this.#spawnWindows.delete(sourceId)
-      }
+      // Use the window length rather than the injected clock for the wait:
+      // tests can hold a fixed clock and still observe deterministic spacing.
+      await this.#delay(this.#spawnWindowMs)
+      // Consume the new slot; do not wipe the window (that let every subsequent
+      // request bypass the 1/2s throttle).
+      this.#spawnWindows.set(sourceId, [this.#now()])
     }
   }
 

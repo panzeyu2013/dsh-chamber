@@ -148,8 +148,8 @@ export function apply(ctx: ClientContext): void {
 /**
  * Resolve the forward bridge.
  *
- * TODO(S1/pin): the real carrier is the trusted preload `chamberForward`
- * namespace (ForwardManager IPC). Until that lands, probe the ctx service and
+ * The renderer adapter installs the trusted `chamberForward` service before
+ * deferred rows mount. Probe the ctx service (direct property + ctx.get) and
  * then the document-global fallback; both are validated structurally so a
  * partial object disables the remote section instead of throwing at render.
  */

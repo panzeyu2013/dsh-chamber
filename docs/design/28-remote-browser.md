@@ -61,7 +61,7 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 | D6 | **v1 不做 pin / retry / subscribe**：生命周期归 source，launcher 轮询 `list`（1–2s） | v3 的 pin/retry/subscribe 无 API/无行为（A/B B4）；去掉即减少一条 push 通道与一整组计数 |
 | D7 | 显式关闭才回收：关闭 forward、source delete、app exit；关 launcher/tab 不杀 | 系统浏览器里的 tab 不可观测（B I1），只能降级为“列表 stale + 重开” |
 | D8 | **无共享 `127.0.0.1` 回退**：Host 被拒 = 报错，不做降级 | C B2：远端可控信号触发安全降级不可接受；“清除站点数据”本应用做不到 |
-| D9 | 确认 = main 原生确认；键 = `browserNamespace + targetPort`；首次确认即启用该 source（持久）；默认取消 | 现有 `HostEdges` 消息腿，无新 Swift UI；文案由 main 拼（C I6） |
+| D9 | 确认 = main 原生确认；键 = `browserNamespace + targetPort`；首次确认只启用该端口（持久）；默认取消 | 现有 `HostEdges` 消息腿，无新 Swift UI；文案由 main 拼（C I6） |
 | D10 | 远端 https **透传 scheme** + 预期证书拦截提示；`[::1]`/`0.0.0.0`/RFC1918/远端主机名**拒绝**为 forward 目标 | v3 的 `openInBrowser` 写死 `http://` 会静默降级（A/B B2/B3） |
 | D11 | 2FA/OTP 主机 **明确不支持**；每条 forward 一条独立 ssh（无 ControlMaster） | `ssh-provider` 的 askpass 对 OTP fail-closed；复用之会改 transport 形态（A I2） |
 | D12 | 上限 8/source、32 全局；spawn 1/2s/source；确认/打开各有独立预算 | 防认证放大与本机 listener 泛滥（C B3/I3） |

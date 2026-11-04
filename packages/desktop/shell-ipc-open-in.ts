@@ -64,6 +64,7 @@ export async function disposeForwardService(): Promise<void> {
   const service = forwardService
   if (service === null) return
   forwardService = null
+  forwardServiceCreated = false
   try {
     await service.dispose()
   } catch (error) {

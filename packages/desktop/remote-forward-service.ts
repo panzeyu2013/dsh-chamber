@@ -527,6 +527,7 @@ function createSourceResolver(
       return {
         sourceId,
         fingerprint,
+        label: instance.label,
         kind: instance.kind,
         transport: instance.transport,
         ssh: { host: instance.host, user: instance.user, sshPort: instance.sshPort },
@@ -542,12 +543,14 @@ function createSourceResolver(
 /** The confirm dialog's non-secret copy (the launcher never sees these facts). */
 function authorizeOptions(source: ForwardSource, targetPort: number, sshPort: number | null): HostMessageOptions {
   const destination = source.ssh.user === null ? source.ssh.host : source.ssh.user + '@' + source.ssh.host
+  const subject = source.label === undefined ? source.sourceId : source.label + '（' + source.sourceId + '）'
   return {
     type: 'question',
     title: '远程浏览器访问确认',
-    message: '允许 ' + source.sourceId + ' 在本机浏览器打开远端端口 ' + String(targetPort) + ' 吗？',
+    message: '允许 ' + subject + ' 在本机浏览器打开远端端口 ' + String(targetPort) + ' 吗？',
     detail: '将通过 SSH（' + destination + '，端口 ' + String(sshPort ?? 22) + '）把远端 127.0.0.1:' + String(targetPort)
       + ' 转发到本机的专用回环地址，并用“系统浏览器”打开。注意：在关闭该转发前，本机任何进程都可以访问这个地址。'
+      + '证书/站点数据由系统浏览器管理；本应用无法清除其 cookie。'
       + '此确认只记住该端口的浏览器访问许可；连接目标或端口变更后会重新询问。',
     buttons: ['打开系统浏览器', '取消'],
     // Cancel is the default AND the escape action: Enter/Esc never grant access.
