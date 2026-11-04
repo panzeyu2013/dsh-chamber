@@ -59,10 +59,12 @@ export const FAMILY_FORBIDDEN = RUNTIME_FAMILY_FORBIDDEN
 /** 官方 opt-in 段：只允许登记白名单内的名字（同源）。 */
 export const FAMILY_OPT_IN_ALLOWED = RUNTIME_FAMILY_OPT_IN_ALLOWED
 
-/** 平台分包：允许「闭包有、本平台树无」——`node-addon-system-*`（原生插件）、
- *  `libreoffice-kit-*`（office-to-pdf 带的办公套件运行时，含一个 `-wasm` 包），
- *  以及 `experimental-cua-macos`（package.json `os: ["darwin"]`：linux/win 安装树按平台跳过它）。 */
-const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-|dsh-experimental-cua-macos(?:$|-))/u
+/** 平台分包：允许「闭包有、本平台树无」——`node-addon-system-*`（原生插件）与
+ *  `libreoffice-kit-*`（office-to-pdf 带的办公套件运行时，含一个 `-wasm` 包）。
+ *  一个名字只有在**仍在闭包里**时才需要这条豁免。树里多出来的名字不靠这条挡（extra 臂
+ *  从不看白名单）；风险在反方向：名字回到闭包而本平台树缺它时，留着的白名单会静默放行。
+ *  故离开闭包的包必须同步从这里删掉，回到闭包时再显式加回。 */
+const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-)/u
 
 /** 闭包解析的健全性下限：解析坏了必须响亮（真实规模由 C11 的族集合与锁文件断言，这里只兜「明显不完整」）。 */
 const MIN_FAMILY_SIZE = 200

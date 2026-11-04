@@ -43,7 +43,7 @@
  *       官方 opt-in（`dsh-experimental-*`）按**登记白名单**放行（运行时根包自己声明
  *       的 opt-in 依赖确实属于 F）：未登记名字红（取错来源/上游新提升），已登记名字
  *       不再出现也红（上游移除/改名）。实例树物化时另做等价性交叉校验（允许差集 =
- *       其他平台 `node-addon-system-*` / `libreoffice-kit-*` / `dsh-experimental-cua-macos`）
+ *       其他平台 `node-addon-system-*` / `libreoffice-kit-*`；离开闭包的名字不再豁免）
  *   C12 profile 契约锚（硬失败）：上游源码仍以 `dsh.profile.bundles` 承载层列表、
  *       以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
  *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。四个锚点文件
