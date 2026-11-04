@@ -11,6 +11,7 @@ import {
   acquireHttpBudget,
   httpBudgetLaneFor,
   remainingDispatchBudgetMs,
+  configureHttpBudgetClockForTests,
   configureHttpBudgetForTests,
   evictHttpBudgetSource,
   readHttpBudgetStats,
@@ -403,12 +404,15 @@ test('remoteRuntimeControl: budgeted, self-bounded, and refusal/timeout are data
 })
 
 test('stats sample positive waits only; zero-wait is counted as GRANTS, never as refusals', async () => {
+  // A pinned clock keeps every grant a TRUE zero-wait: the wall clock can tick a
+  // millisecond between enqueue and grant and turn one into a positive sample.
+  const restoreClock = configureHttpBudgetClockForTests(() => 1_000)
   const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, perSourceQueueMax: 0 })
   try {
     const instant = granted(await acquireHttpBudget(request('a')))
     instant.slot.release()
     const holder = granted(await acquireHttpBudget(request('b')))
-    const refused = await acquireHttpBudget(request('b', 'foreground', { queueDeadlineAt: Date.now() + 60_000 }))
+    const refused = await acquireHttpBudget(request('b', 'foreground', { queueDeadlineAt: 1_060_000 }))
     assert.equal(refused.kind, 'unscheduled')
     const stats = readHttpBudgetStats()
     // Two grants happened (the instant one and the holder); the refusal is not a grant.
@@ -419,33 +423,68 @@ test('stats sample positive waits only; zero-wait is counted as GRANTS, never as
   } finally {
     resetHttpBudgetForTests()
     restore()
+    restoreClock()
   }
 })
 
 test('stats percentiles read the positive queue wait, not the zero-wait grants around it', async () => {
+  // Deterministic wait: the pinned clock advances exactly 20 ms between the waiter's
+  // enqueue and its grant, so the sample is 20 and every instant grant is a true 0
+  // (design 14 §D4 calibration).
+  let clock = 500
+  const restoreClock = configureHttpBudgetClockForTests(() => clock)
   const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
   try {
     const holder = granted(await acquireHttpBudget(request('slow')))
-    const deadline = new Promise<void>((resolve) => setTimeout(resolve, 40))
-    const refused = acquireHttpBudget(request('slow', 'foreground', { queueDeadlineAt: Date.now() + 30 }))
-    await Promise.all([deadline, refused])
-    // Free the slot BEFORE the instant grants: leaving the holder in place made the
-    // first grant wait for the 60s lease to be reclaimed by the watchdog, so this one
-    // test took ~65s and crossed the runner's per-file cap whenever the pool was
-    // loaded. The percentile claim is unchanged.
+    const waiting = acquireHttpBudget(request('slow', 'foreground', { queueDeadlineAt: clock + 60_000 }))
+    clock = 520
     holder.slot.release()
+    const queued = granted(await waiting)
+    // The granted waiter holds the only slot: leaving it held makes the first instant
+    // grant wait out the lease (the 65 s overload this test used to carry).
+    queued.slot.release()
     for (let index = 0; index < 20; index += 1) {
       const slot = granted(await acquireHttpBudget(request('fast')))
       slot.slot.release()
     }
     const stats = readHttpBudgetStats()
-    assert.ok(stats.queueMsP50 >= 15, 'p50 is the real wait (' + String(stats.queueMsP50) + 'ms)')
-    assert.ok(stats.queueMsP95 >= 15, 'p95 is not diluted by the 20 instant grants')
-    assert.ok(stats.queueMsMax >= 15)
+    assert.equal(queued.queuedMs, 20, 'the held caller waited the pinned 20 ms')
+    assert.equal(stats.queueMsMax, 20, 'the held caller is the largest sample')
+    // Had the 20 zero-wait grants joined the sample set, the median would read 0 while
+    // the maximum stayed positive — that gap is the dilution this pins.
+    assert.equal(stats.queueMsP50, 20, 'the median reads the real wait')
+    assert.equal(stats.queueMsP95, 20, 'p95 is not diluted by the instant grants')
     assert.equal(stats.zeroWaitGrants, 21, 'the holder plus the 20 instant grants are all zero-wait')
   } finally {
     resetHttpBudgetForTests()
     restore()
+    restoreClock()
+  }
+})
+
+test('a queue-deadline refusal contributes the wait it actually served', async () => {
+  // The deadline timer only decides WHEN to settle; the wait it reports comes from the
+  // pinned clock, so advancing the clock 25 ms before the timer fires makes the sample exact.
+  let clock = 1_000
+  const restoreClock = configureHttpBudgetClockForTests(() => clock)
+  const restore = configureHttpBudgetForTests({ totalMax: 1, localReserve: 0, queueMax: 8 })
+  try {
+    const holder = granted(await acquireHttpBudget(request('slow')))
+    const pending = acquireHttpBudget(request('slow', 'foreground', { queueDeadlineAt: clock + 25 }))
+    clock = 1_025
+    const refused = await pending
+    holder.slot.release()
+    assert.equal(refused.kind, 'unscheduled')
+    assert.equal(refused.kind === 'unscheduled' ? refused.reason : '', 'queue-deadline')
+    assert.equal(refused.kind === 'unscheduled' ? refused.queuedMs : -1, 25, 'the refusal reports the wait it served')
+    const stats = readHttpBudgetStats()
+    assert.equal(stats.granted, 1, 'the refused request is not a grant')
+    assert.equal(stats.queueMsP50, 25, 'the dominant refusal path is not blind to the percentiles')
+    assert.equal(stats.queueMsMax, 25)
+  } finally {
+    resetHttpBudgetForTests()
+    restore()
+    restoreClock()
   }
 })
 

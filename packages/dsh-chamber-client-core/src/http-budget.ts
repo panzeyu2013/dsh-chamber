@@ -192,8 +192,13 @@ const counters = {
   unscheduled: { 'queue-deadline': 0, 'queue-full': 0, aborted: 0, 'source-retired': 0 } as Record<HttpBudgetUnscheduledReason, number>,
 }
 
+/** Monotonic source for every queue-wait measurement. A seam exists only for
+ *  tests: the percentile assertions compare an exact millisecond value, and the
+ *  wall clock can tick between enqueue and grant even on an idle machine. */
+let clock: () => number = () => Date.now()
+
 function now(): number {
-  return Date.now()
+  return clock()
 }
 
 function budgetDisabled(): boolean {
@@ -586,6 +591,20 @@ export function configureHttpBudgetForTests(partial: Partial<HttpBudgetLimits>):
   return () => { limits = previous }
 }
 
+/**
+ * Test-only: pin the clock every queue-wait measurement reads, returning the
+ * restore function. Deterministic waits need this: the real clock can advance a
+ * millisecond between enqueue and grant, which turns a zero-wait grant into a
+ * one-millisecond sample (the assertion that flaked on CI).
+ * @param next - the clock to read while pinned.
+ * @returns a function that restores the previous clock.
+ */
+export function configureHttpBudgetClockForTests(next: () => number): () => void {
+  const previous = clock
+  clock = next
+  return () => { clock = previous }
+}
+
 /** Test-only：清空队列、在飞、计时器与计数。 */
 export function resetHttpBudgetForTests(): void {
   for (const entry of [...queue]) {
@@ -612,6 +631,7 @@ export function resetHttpBudgetForTests(): void {
   counters.bypass = 0
   counters.evicted = 0
   counters.unscheduled = { 'queue-deadline': 0, 'queue-full': 0, aborted: 0, 'source-retired': 0 }
+  clock = () => Date.now()
   limits = HTTP_BUDGET_LIMITS
 }
 
