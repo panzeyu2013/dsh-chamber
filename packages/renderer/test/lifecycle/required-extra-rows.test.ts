@@ -94,6 +94,11 @@ test('requiredServiceProbeMessage names each service, its injectors, the deadlin
   assert.equal(KNOWN_SERVICE_PROVIDERS.sidebarRightTabs, '@deepseek-ai/dsh-client-ui-sidebar-right',
     'the sidebarRightTabs registry row maps to the same provider, so the probe names it instead of printing provider row unknown')
   assert.ok(
+    requiredServiceProbeMessage([{ service: 'contextMenus', injectedBy: ['@deepseek-ai/dsh-client-ui-workspace'] }])
+      .includes('provider row @deepseek-ai/dsh-client-ui-context-menu'),
+    'the alpha.3 context-menu hub is named as the provider of the service ui-workspace injects',
+  )
+  assert.ok(
     requiredServiceProbeMessage([{ service: 'someUnknownService', injectedBy: ['p'] }]).includes('provider row unknown'),
     'a service with no known provider says so explicitly instead of silently omitting the provider half')
   assert.ok(withInstance.includes('still unprovided after'), 'the deadline phrasing is kept')

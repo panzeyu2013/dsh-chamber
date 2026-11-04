@@ -251,6 +251,9 @@ export const KNOWN_SERVICE_PROVIDERS: Readonly<Record<string, string>> = {
   // gets the service. A probe hit here therefore means the composite factory never ran — not a missing
   // extra host-graph row; the diagnostic below names both possibilities for that reason.
   fileDrag: '@deepseek-ai/dsh-client-ui-file-drag',
+  // 0.2.2-alpha.3: ui-workspace injects `contextMenus`; the provider is the context-menu hub, another
+  // covered first-screen factory — a probe hit means the composite factory never ran, not a missing row.
+  contextMenus: '@deepseek-ai/dsh-client-ui-context-menu',
 }
 
 /**
@@ -276,7 +279,7 @@ export function requiredServiceProbeMessage(
   return chamberEntryDiagnosticMessage(
     `composite service(s) still unprovided after ${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms: ${detail} — `
     + 'every registered plugin injecting them stays PENDING, so the surfaces those fibers mount never register '
-    + '(a missing provider here is an extra host-graph row or a kernel service that never activated); '
+    + '(a missing provider here is an extra host-graph row, a covered first-screen factory that never ran, or a kernel service that never activated); '
     + 'the boot is NOT blocked',
     instanceId,
   )
