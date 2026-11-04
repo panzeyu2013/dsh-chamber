@@ -214,8 +214,10 @@ test('the inert official open-in probes stay a recorded, unpatched site', { skip
     [
       'FileRouteAction.tsx: fetch(@1',
       'OpenTargetButton.tsx: src=@1',
-      // 0.2.2-alpha.3: menu app icons ride the same document-relative icon route as the
-      // existing OpenTargetButton probe; inert under the N-ctx shell (broken image, no action).
+      // 0.2.2-alpha.3: the menu's app icon reads the same host application payload as the
+      // OpenTargetButton probe. This census pins the producer token only — the file branch
+      // resolves through remote.session (per-entry base) and the icon is a data: URL, so the
+      // line says nothing about URL relativity (design 20 §2.2).
       'context-menus.tsx: src=@1',
       'controller.ts: fetch(@1',
     ],
