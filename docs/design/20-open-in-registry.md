@@ -87,6 +87,17 @@
   per-entry 前缀，design 09 §3.6）；header 席位因 document-relative 路由落在控制面 SPA origin 而 inert，
   故 `chamber-covered.ts` 不再登记为 page-own；
   目录打开入口仍是 chamber `open-in`（同座、同 order、异 id，允许并存）。
+- **右键菜单里的官方 open-in 面（0.2.2-alpha.3）：文件分支真能落地，workspace 分支 inert**——
+  covered 的 `ui-context-menu` 带来官方的 `ui-open-in-app` 菜单贡献，两条分支落地形态不同：
+  文件/图片分支走 `remote.session`（`canOpenWorkspacePath` / `workspacePathApplications` /
+  `openWorkspacePath`，`open-path.ts`），本壳的 `remote` 已按 `chamberBasePath=/api/i/<id>` 发
+  per-entry 前缀，故它在 N-ctx 里**真能落到实例宿主**——与 chamber 自有 open-in 入口同能力、异 id、
+  允许并存；app 图标是宿主给的 `data:image/(png|svg+xml);base64` 串（`NativeFileApplication.icon`），
+  与控制面 `img-src 'self' data: blob:` 相容，不涉及 base 前缀。真正 inert 的只有 **workspace 分支**：
+  它经 `open-in-app/apps` 的 document-relative 读取（`controller.ts` 的 `directories.load()`），
+  在壳里恒落控制面 SPA origin ⇒ 恒 disabled，与本节上一条「document-relative 路由」同因。
+  producer 表面锁定在 `packages/renderer/test/lifecycle/vendor-file-route-base-contract.test.ts` 的
+  `context-menus.tsx: src=@1` 普查行（新增 producer 即红）；该行锁的是 token 普查，不锁 URL 相对性。
 
 ## 3. 形态与分层
 

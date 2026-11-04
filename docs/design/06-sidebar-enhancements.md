@@ -1000,11 +1000,19 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **窄窗 drawer（0.2.2-alpha.3）：采用上游帧的声明/交互语义最小面，不做产品化**——帧宽 <768px 时 vendor
   `AppFrame` 把侧栏改为覆盖层（`data-sidebar-drawer`/`drawerMask`、center/rightbar `inert`、`shell.leading`
   重新挂载）；侧栏 fork 接收 `drawer` 并补齐模态语义（`useModalLayer` 关闭路径、`role=dialog`/`aria-modal`/
-  `data-shortcut-modal=sidebar`、关闭后焦点回 opener），快捷键 `modals:['sidebar']` 放行其它模态。被否方案：
-  ①CSS 反向覆盖回旧的内联侧栏——与 vendor frame 的 inert/mask 相冲，窄窗会留下「主区已 inert、侧栏却内联」
-  的死区；②完整产品化（重设布局/宽度记忆/移动端入口）——超出 pin 升级范围；③只接 `drawer` 属性不做模态层——
-  窄窗没有 Escape/外点关闭路径，只能靠快捷键退出。残余：drawer 内 `newSession` 的 darwin 填充未镜像上游
-  `:where(.root:not([role='dialog']))` 门控（Swift 锁步要求带 vibrancy 的裸选择器）＝纯视觉差异（STATUS）。
+  `data-shortcut-modal=sidebar`、关闭后焦点回 opener），快捷键 `modals:['sidebar']` 放行其它模态。
+  被否方案（判据 = 是否与 vendor frame 的 inert/mask 语义相容、是否超出 pin 升级范围）：①CSS 反向覆盖回旧的内联侧栏——与 vendor frame 的 inert/mask 相冲，窄窗会留下
+  「主区已 inert、侧栏却内联」的死区；②完整产品化（重设布局/宽度记忆/移动端入口）——超出 pin 升级范围；
+  ③只接 `drawer` 属性不做模态层——窄窗没有 Escape/外点关闭路径，只能靠快捷键退出。
+  残余：①drawer 内 `newSession` 的 darwin 填充未镜像上游 `:where(.root:not([role='dialog']))` 门控
+  （Swift 锁步要求带 vibrancy 的裸选择器）＝纯视觉差异（STATUS）；②**关闭态内容不保活**——vendor 让
+  关闭的 drawer 继续持有展开内容（`wide = drawer || …`），本 fork 的 collapse settle 会卸载宽内容改渲 rail，
+  故每次重开 drawer，浏览区局部状态（滚动位置）重置；要保活只需把 collapse 的宽判据补上 drawer
+  （vendor 是 `wide = drawer || …`，本 fork 是 `wide = !collapsed || !settled`），代价是窄窗常驻宽子树——
+  本轮不取，登记为残余而不是产品化改造；③store 的两处窄窗分支（`selectPanel` 在 <768 清零 `narrowExpanded`、
+  `setViewportWidth` 同时看 768 与 1024 两个断点）是 chamber 侧镜像，行为用例见
+  `packages/dsh-chamber-client-ui-layout/test/layout-store.test.ts`；④导航座席文案在本壳里改写为
+  「侧边栏」/`Sidebar`（vendor 为「导航」/`Navigation`）——该座席在本壳承载整个侧栏而不只是导航列表。
 - **置顶（pin）：渲染分区已落地（Phase 4 选项 1），残余 = 块内拖拽 + 跨块守卫 + 账号写入**——
   pin/unpin 写入口、静息标记、两个行入口与**置顶分区**都已按上游形态落地（§7）：置顶行在其所属
   分组、树节点与 flat 列表里领跑（上游 `sectionMembers` 的 blank → pinned → 其余三段语义，
