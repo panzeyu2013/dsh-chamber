@@ -20,8 +20,13 @@
  *   除缩减体积外，这直接关系 Windows 安装体验：NSIS 安装器要**逐文件**解压
  *   这些内容（Windows Defender 实时扫描每个新建文件会把安装拖到"看起来
  *   卡死"，且文件被锁时安装器会进入"重解压→再拷贝"的重试循环，进度条来回
- *   反复）——文件数越少，安装越快、被锁触发循环的概率越低；`docs/` 的
- *   Markdown 合计约 8 KiB / 30 余个文件，对文件数目标无实质影响。
+ *   反复）——文件数越少，安装越快、被锁触发循环的概率越低。保留面本身：
+ *   钉版声明目标 34 个（约 4 KiB），按目录还会留下第三方包自带的 `docs/`
+ *   文档（同钉版 `undici@8.11.2` 一家 46 个 / 约 405 KiB），整树约 80 个 /
+ *   0.4 MiB，约为 hoisted 树文件数的 0.25%。**已知例外**：附属物目录名
+ *   （{@link PRUNE_DIR_NAMES}）在 `docs/` 内仍整目录删除（`docs/test/**`
+ *   等是测试素材而不是文档）——声明的详情文档若落在那里，`bundle-dsh` 的
+ *   核对会让封装失败，不会静默发出去（design 18 §3.7）。
  * - 全树 *.d.ts / *.d.cts / *.d.mts / *.map（类型声明与源码映射，运行期零使用）
  *
  * 版本无关：包级特化规则（node-pty/mistralai/openai）同时覆盖 hoisted
@@ -37,7 +42,9 @@ import { join } from 'node:path'
  * 只收"语义明确为附属物"的名字：yaml 的 `dist/doc/` 是 Document 模型的
  * 运行时代码（目录名 doc 但实际是代码），因此 `doc`/`docs` 不进此表，文档
  * 文件由 PRUNE_FILE_PATTERNS 的 *.md 规则单独清理（`docs/` 下的 Markdown
- * 是详情页运行时内容，见 {@link RUNTIME_DOCUMENT_DIR}）。 */
+ * 是详情页运行时内容，见 {@link RUNTIME_DOCUMENT_DIR}）。整目录删除先于
+ * 文件规则，所以 `docs/` 内的同名目录照样整体删除（design 18 §3.7 的已知
+ * 例外）。 */
 const PRUNE_DIR_NAMES = new Set([
   'test', 'tests', '__tests__', '__snapshots__', 'fixtures', 'test-fixtures',
   'examples', 'example', 'benchmark', 'bench', 'perf', 'coverage',
@@ -47,9 +54,20 @@ const PRUNE_DIR_NAMES = new Set([
 /**
  * 运行期文档目录：其中的 Markdown 是插件管理器 bundle 详情页的运行时内容
  * （locale `meta.detail` 指名），任何深度都保留；目录本身不整体删，目录内
- * 其它文件模式照旧。
+ * 其它文件模式照旧。名字按大小写不敏感匹配——macOS/Windows 宿主上 `Docs/`
+ * 与 `docs/` 是同一个目录，规则不该因打包容器的文件系统而分叉。
  */
 const RUNTIME_DOCUMENT_DIR = 'docs'
+
+/** @param name - 目录名。 */
+const isRuntimeDocumentDir = (name) => name.toLowerCase() === RUNTIME_DOCUMENT_DIR
+
+/**
+ * 裁剪规则集版本：保留面或删除面一变就递增。`bundle-dsh` 把它写进封装
+ * manifest 的 `dsh.pruneRevision`，幂等跳过据此判定——否则同版本同平台的旧
+ * 树会被直接复用，规则变更永远进不了安装包。
+ */
+export const PRUNE_RULES_REVISION = 1
 
 /** Markdown 文件：除 `docs/` 下以外运行期零使用。 */
 const MARKDOWN_FILE = /\.md$/i
@@ -135,7 +153,7 @@ export function pruneRuntimeArtifacts(root) {
           rmSync(full, { recursive: true, force: true })
           continue
         }
-        walk(full, inDocumentDir || entry.name === RUNTIME_DOCUMENT_DIR)
+        walk(full, inDocumentDir || isRuntimeDocumentDir(entry.name))
       } else if (
         !(inDocumentDir && MARKDOWN_FILE.test(entry.name))
         && (

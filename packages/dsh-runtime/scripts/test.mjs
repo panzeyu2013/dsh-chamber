@@ -81,6 +81,7 @@ const GROUPS = {
   install: [
     'test/install/runtime-installer.test.ts',
     'test/install/allow-builds.test.ts',
+    'test/install/prune-runtime.test.ts',
     'test/install/dist-sync.test.ts',
   ],
   // host: 宿主入口 / 锚点版本解析的共享单一来源（pnpm 入口、dsh CLI 入口、内建版本）

@@ -9,3 +9,6 @@ export function pruneRuntimeArtifacts(root: string): { removedFiles: number; rem
 
 /** The declared bundle detail documents (`locale/*.json` `meta.detail`) that exist in `root`. */
 export function collectDeclaredDetailFiles(root: string): string[]
+
+/** Revision of the prune rule set; recorded in the bundle manifest so a rule change re-bundles. */
+export const PRUNE_RULES_REVISION: number

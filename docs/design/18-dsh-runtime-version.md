@@ -584,10 +584,17 @@ chamber-settings.json，非秘密）：
   dest→backup→new→cleanup 模式。
   **`docs/` 下的 Markdown 是运行时内容**：dsh 0.2.2-alpha.3 起，插件管理器的
   bundle 详情页在运行期读取 locale `meta.detail` 指名的文档，随安装分发的 bundle
-  都把它放在 `docs/DETAIL*.md`——prune 因此保留 `docs/` 下全部 Markdown（实测
-  34 个文件 / 约 8 KiB），其余 Markdown（README/CHANGELOG/技能 assets 等）照旧
-  裁剪；`bundle-dsh` 在 prune 前后比对 `collectDeclaredDetailFiles` 记录的声明
-  目标，删掉即封装失败，规则漂移不进入安装包。取舍见 §4.1。
+  都把它放在 `docs/DETAIL*.md`——prune 因此保留 `docs/` 下（任意深度、目录名
+  大小写不敏感）的 Markdown，其余 Markdown（README/CHANGELOG/技能 assets 等）
+  照旧裁剪。保留面：钉版声明目标 34 个（约 4 KiB），按目录还会留下第三方包自带
+  的 `docs/` 文档（同钉版 `undici@8.11.2` 一家 46 个 / 约 405 KiB），整树约
+  80 个 / 0.4 MiB，约为 hoisted 树文件数的 0.25%。已知例外：附属物目录名
+  （`PRUNE_DIR_NAMES`）即使位于 `docs/` 内仍整目录删除（`docs/test/**` 是测试
+  素材而非文档）——声明目标落在那里即封装失败，不会静默发出去。`bundle-dsh`
+  在 prune 前后比对 `collectDeclaredDetailFiles` 记录的声明目标，删掉即封装
+  失败，规则漂移不进入安装包；规则集版本 `PRUNE_RULES_REVISION` 写进封装
+  manifest 的 `dsh.pruneRevision`，幂等跳过的键因此包含裁剪规则，旧规则裁出的
+  树不会被当成已完成。取舍见 §4.1。
 - **供应链信任声明**：运行期安装执行白名单内依赖构建脚本；信任模型 = npm registry
   （钉源后）+ 精确版本 + integrity + 白名单 fail-safe，用户选择安装即显式接受。
   koffi optional dep 瞬时下载失败 fallback 到 cmake 源码构建、无 toolchain 时硬
@@ -620,10 +627,12 @@ chamber-settings.json，非秘密）：
 
 ### 4.1 已否决的替代方案——裁剪与运行时 Markdown
 
-- **只保留 locale `meta.detail` 指名的文件**：实测两者在本版 dsh 上成本相同
-  （声明目标 34 个，`docs/` 顶层 Markdown 也是 34 个，差集为空），却引入 locale
-  JSON 解析、路径校验与上游元数据耦合——上游改一次文档约定就要再改规则。取
-  「保留 `docs/` 全部 Markdown」这个超集。
+- **只保留 locale `meta.detail` 指名的文件**：成本更低（本钉版少留 `undici` 的
+  46 个 `docs/docs/**` 文档，约 405 KiB），但要让 prune 依赖 locale JSON 解析、
+  路径校验与上游元数据耦合——上游改一次文档约定就得再改规则。取「保留 `docs/`
+  的 Markdown」这个超集：规则只看目录，不跟随 `meta.detail` 的形态；多留的第三方
+  `docs/` 文档约 0.4 MiB，对文件数目标无实质影响，`bundle-dsh` 的核对仍然只对
+  声明的详情文档负责。
 - **删掉 `*.md` 裁剪规则**：约 +1429 个文件 / 10.5 MiB（估算自 npm 安装树，占
   hoisted 树文件数约 4%），正确性最好但直接顶掉 Windows 逐文件解压目标；在拿到
   真实 pnpm hoisted 树与 Windows 安装实测前不采纳。
@@ -636,9 +645,11 @@ chamber-settings.json，非秘密）：
   发布的运行树）执行；运行期安装器复用同一 prune 实现但不二次断言——详情文档是
   展示内容，宁可降级也不阻断用户安装/切换 dsh 版本，drift 由发版前的封装失败暴露。
 - **已知边界**：包内技能资产（`assets/**`、`skills/**` 下的 Markdown，例如 sdk
-  profile 的 office 技能）仍被裁掉。chamber 托管 web profile（`skill-filesystem`
-  由 preset 各自挂载、office 技能只随 sdk-app 挂载），本版不扩大保留面；若将来
-  chamber 托管其它 profile，需按运行时读者清单重新评估。
+  profile 的 office 技能）仍被裁掉；`docs/` 内名为 `test`/`examples`/`fixtures`
+  等附属物的目录整体删除，其中的 Markdown 也不保留（声明目标落在那里即封装
+  失败）。chamber 托管 web profile（`skill-filesystem` 由 preset 各自挂载、
+  office 技能只随 sdk-app 挂载），本版不扩大保留面；若将来 chamber 托管其它
+  profile，需按运行时读者清单重新评估。
 
 ## 5. 数据流与 UX
 
