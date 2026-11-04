@@ -15,14 +15,20 @@
  *  - headCssRaw：dist/index.html 中全部 render-blocking 样式表合计——warn。
  *
  * 校准基线（raw bytes，最新实测见 dist/web/perf-sizes.json，随上游 dsh 版本
- * 与合并内容合法漂移）。alpha.3 重基线（上游新增 zod/@tanstack/react-virtual
- * 平台词与新首屏 client 行；alpha.2 快照为 mainGraph 1,434,814）：
- * mainGraph 1,908,997（App 拆分后的新实测：warn 1,950,000 = 实测 +2.2%，
- * fail 2,060,000 = 实测 +7.9%）；chamberEntry 7,751,254（warn 门 = 实测 + ~1% = 7,829,000——该项**有意
- * 只有 warn、不设硬门**：体积随上游 dsh 版本合法漂移，硬门会误伤升级，超限
- * 只提示评估拆分/懒化，不阻断构建）；headCss 301,241（warn 门 = 实测 + ~1% = 304,300，
- * 同为 warn-only）。阈值不是历史账本：结构改动落地后按新实测值
- * 回填阈值并更新本注释，防止它变成下一份过期注释。
+ * 与合并内容合法漂移）。0.2.2-alpha.3 代实测（0.2.1-alpha.2 代快照为
+ * mainGraph 1,434,814）：mainGraph 1,914,607（App 拆分后的新实测：warn 1,950,000
+ * = 实测 +1.8%，fail 2,060,000 = 实测 +7.6%）；chamberEntry 8,443,546（warn 门 = 实测 + ~1%
+ * = 8,528,000——该项**有意只有 warn、不设硬门**：体积随上游 dsh 版本合法漂移，
+ * 硬门会误伤升级，超限只提示评估拆分/懒化，不阻断构建）；headCss 326,261
+ * （warn 门 = 实测 + ~1% = 329,500，同为 warn-only）。阈值不是历史账本：结构改动
+ * 落地后按新实测值回填阈值并更新本注释，防止它变成下一份过期注释。
+ *
+ * 上一版阈值（chamberEntry 7,829,000 / headCss 304,300）量自 0.2.1-alpha.3 代
+ * （实测 7,751,254 / 301,241），此后跨 0.2.1-rc.3、0.2.2-alpha.2、0.2.2-alpha.3 三代
+ * pin 未再回填：0.2.2-alpha.2 代构建已到 8,182,347 / 320,696（当时代只 warn 未回填），
+ * 0.2.2-alpha.3 到 8,443,546 / 326,261。同一跨度内共享图只 +0.3%（1,908,997 →
+ * 1,914,607），增长落在复合入口与首屏样式（covered 行逐代累加，末段是
+ * `ui-context-menu` 与其语言表）——故只按实测回填这两个 warn 项，不动 mainGraph 硬门。
  *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite
@@ -42,8 +48,8 @@ const SIZES_OUT = fileURLToPath(new URL('../../desktop/dist/web/perf-sizes.json'
 /** 阈值（raw bytes）。校准基线见文件头注释。 */
 const THRESHOLDS = {
   mainGraphRaw: { warn: 1_950_000, fail: 2_060_000 },
-  chamberEntryRaw: { warn: 7_829_000 },
-  headCssRaw: { warn: 304_300 },
+  chamberEntryRaw: { warn: 8_528_000 },
+  headCssRaw: { warn: 329_500 },
 }
 
 function fail(message) {
