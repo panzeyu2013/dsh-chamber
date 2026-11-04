@@ -5,14 +5,16 @@
  * never provide a Git command. This module validates the small business vocabulary,
  * derives every argv array itself, invokes Git with shell: false, and caps time and
  * output. The allowlist exposes no network verb, disables credential prompts/lazy fetch
- * and disables hooks. Repository-configured clean/smudge/process filters may still run;
- * that repo config and its subprocesses are inside the dsh OS user's trusted boundary.
+ * and disables hooks. Repository-configured clean/smudge/process filters are DISABLED on
+ * the create checkout (forge-parity two-step: enumerate + GIT_CONFIG_* reset with LFS
+ * smudging skipped) and may still run on status/remove; that repo config and its
+ * subprocesses stay inside the dsh OS user's trusted boundary.
  * This is a host plugin, never a desktop/SSH command relay.
  */
 
 
-import { createHash, randomUUID } from 'node:crypto'
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import {
   DISCOVERY_TTL_MS,
@@ -69,7 +71,6 @@ import {
   isNotARepositoryError,
   parseBranchLine,
   parseWorktreePorcelain,
-  resolveDshHome,
   worktreeGitDir,
 } from './core-parse.ts'
 import type {
@@ -85,8 +86,6 @@ import type {
   PreviewCreateResult,
   RemoveInput,
   RemoveResult,
-  RollbackCreateInput,
-  RollbackCreateResult,
   SnapshotError,
   SnapshotRepository,
   SnapshotResult,
@@ -118,6 +117,8 @@ export type {
   CreateBranch,
   CreateInput,
   CreateResult,
+  EnterInput,
+  EnterResult,
   GitAttentionReason,
   GitChildProcess,
   GitCommandRequest,
@@ -132,8 +133,6 @@ export type {
   PreviewCreateResult,
   RemoveInput,
   RemoveResult,
-  RollbackCreateInput,
-  RollbackCreateResult,
   SnapshotRepository,
   SnapshotResult,
   SnapshotWorktree,
@@ -168,6 +167,16 @@ const PROVEN_PRE_MUTATION_CODES: ReadonlySet<string> = new Set([
   'running-agent-cwd-unavailable',
 ])
 
+/**
+ * The `agent-not-ready` refusal (retryable): a just-created session may not be published
+ * by the agent registry yet, so the client re-tries `enter` after open. Kept here (the
+ * lockstep-scanned core source) so the client's classification table and this host code
+ * vocabulary are reviewed side by side.
+ */
+export function agentNotReady(sessionId: string): GitWorktreeError {
+  return new GitWorktreeError('agent-not-ready', `session '${sessionId}' is not loaded yet`, { retryable: true })
+}
+
 /** Host-independent lifecycle implementation; tests inject both Git and state. */
 export class GitWorktreeCore {
   private readonly source: WorktreeStateSource
@@ -177,7 +186,6 @@ export class GitWorktreeCore {
   private readonly nextToken: () => string
   private readonly operationCapacity: number
   private readonly snapshotWallTimeoutMs: number
-  private readonly worktreesRoot: string
   private readonly mutex = new KeyedMutex()
   private readonly previews = new Map<string, PreviewRecord>()
   private readonly createOperations = new Map<string, CreateOperationRecord>()
@@ -205,11 +213,6 @@ export class GitWorktreeCore {
       fail('invalid-core-option', `operationCapacity must be between 1 and ${MAX_OPERATIONS}`)
     }
     this.snapshotWallTimeoutMs = options.snapshotWallTimeoutMs ?? SNAPSHOT_WALL_TIMEOUT_MS
-    const worktreesRoot = options.worktreesRoot ?? join(resolveDshHome(), 'worktrees')
-    if (!isAbsolute(worktreesRoot)) {
-      fail('invalid-config', 'worktreesRoot must be an absolute path')
-    }
-    this.worktreesRoot = worktreesRoot
     if (!Number.isSafeInteger(this.snapshotWallTimeoutMs)
       || this.snapshotWallTimeoutMs < 1
       || this.snapshotWallTimeoutMs > SNAPSHOT_WALL_TIMEOUT_MS) {
@@ -222,17 +225,16 @@ export class GitWorktreeCore {
       now: this.now,
       operationCapacity: this.operationCapacity,
       previews: this.previews,
-      worktreesRoot: this.worktreesRoot,
-      anyWorkspaceOwnsPath: this.anyWorkspaceOwnsPath.bind(this),
       assertBranchFormat: this.assertBranchFormat.bind(this),
-      assertNoRunningAtPath: this.assertNoRunningAtPath.bind(this),
+      assertCreatableSource: this.assertCreatableSource.bind(this),
       assertPathAbsent: this.assertPathAbsent.bind(this),
+      assertSourceShape: this.assertSourceShape.bind(this),
       clearDiscoveryCaches: this.clearDiscoveryCaches.bind(this),
+      completeCheckout: this.completeCheckout.bind(this),
       discover: this.discover.bind(this),
       ensureWorktreeRoot: this.ensureWorktreeRoot.bind(this),
       existingPath: this.existingPath.bind(this),
       gitChecked: this.gitChecked.bind(this),
-      isDirty: this.isDirty.bind(this),
       localBranchHead: this.localBranchHead.bind(this),
       pruneCaches: this.pruneCaches.bind(this),
       readSource: this.readSource.bind(this),
@@ -476,21 +478,31 @@ export class GitWorktreeCore {
 
         const boundedRaw = raw.slice(0, allowedWorktrees)
         remainingWorktrees -= boundedRaw.length
+        // POOL CONTAINMENT (design 08/11 §6.6): only checkouts under the in-repo pool are
+        // reported. The main checkout is always reported, REGISTERED workspaces keep their
+        // row wherever they live (missing/registered semantics unchanged), and an
+        // UNREGISTERED row outside the pool - the legacy `$DSH_HOME/worktrees` root, its
+        // stale missing admin records included - produces no row and no diagnostic at all.
+        const mainRawPath = resolve(boundedRaw[0]!.path)
+        let poolRoots: readonly string[] = []
         for (let index = 0; index < boundedRaw.length; index += 1) {
           const entry = boundedRaw[index]!
           let path = resolve(entry.path)
           let pathAvailable = false
+          let pathError: SnapshotError | undefined
           if (this.now() < deadline) {
             try {
               path = await this.existingPath(entry.path)
               pathAvailable = true
             } catch (error) {
-              errors.push({
+              // Deferred: an out-of-pool unregistered row is dropped silently below, so an
+              // old-root leftover must not surface even as a diagnostic.
+              pathError = {
                 code: error instanceof GitWorktreeError ? error.code : 'worktree-path-failed',
                 operation: 'list',
                 message: safeErrorMessage(error),
                 path: entry.path,
-              })
+              }
             }
           } else if (!statusDeadlineReported) {
             statusDeadlineReported = true
@@ -522,6 +534,20 @@ export class GitWorktreeCore {
             // workspace row instead of showing twice (as orphan AND as unregistered row).
             workspace = state.workspaces.find(candidate => candidate.path === entry.path)
           }
+          if (index === 0) {
+            // Canonical and raw main paths both count: a missing child records its RAW
+            // path, which may differ from the canonical main path under a symlinked root.
+            poolRoots = [...new Set([
+              resolve(join(mainRawPath, '.agents', 'worktrees')),
+              resolve(join(path, '.agents', 'worktrees')),
+            ])]
+          }
+          const inPool = (candidate: string): boolean => {
+            const normalized = resolve(candidate)
+            return poolRoots.some(pool => normalized !== pool && this.containsPath(pool, normalized))
+          }
+          if (index > 0 && workspace === undefined && !inPool(path) && !inPool(entry.path)) continue
+          if (pathError !== undefined) errors.push(pathError)
           if (workspace !== undefined) associated.add(workspace.workspaceId)
 
           let dirty: boolean | null = null
@@ -672,8 +698,74 @@ export class GitWorktreeCore {
     return await this.createOps.create(untrusted)
   }
 
-  async rollbackCreate(untrusted: RollbackCreateInput): Promise<RollbackCreateResult> {
-    return await this.createOps.rollbackCreate(untrusted)
+  /**
+   * Enter-target validation (the thin `enter` contract, design 08 §4.2): the claimed
+   * checkout path must exist, be an exact root listed by the repository's authoritative
+   * Git topology, and sit under the session's IMMUTABLE header root (its sandbox root).
+   *
+   * Deliberately NO common-dir check: a pool checkout registered as a dsh workspace is a
+   * legitimate enter target, and a worktree's common dir may sit at the repository root
+   * (outside that narrow source root) while the checkout itself is inside it. The Git
+   * facts plus the containment check are the whole gate.
+   *
+   * The working-directory SERVICE is not touched here (the host gateway owns it), so the
+   * validation stays testable without a Cordis context.
+   */
+  async enterTarget(headerCwd: string, requestedPath: string): Promise<string> {
+    let root: string
+    try {
+      root = await this.existingPath(headerCwd)
+    } catch (error) {
+      if (error instanceof GitWorktreeError
+        && (error.code === 'path-unavailable' || error.code === 'unsafe-path')) {
+        throw new GitWorktreeError(
+          'not-a-repo',
+          `session root '${headerCwd}' is not an existing directory`,
+          { retryable: false },
+        )
+      }
+      throw error
+    }
+    let topology: WorktreeTopology
+    try {
+      topology = await this.topology(root)
+    } catch (error) {
+      if (isNotARepositoryError(error)) {
+        throw new GitWorktreeError('not-a-repo', `session root '${root}' is not a Git repository`, { retryable: false })
+      }
+      throw error
+    }
+
+    let target: string
+    try {
+      target = await this.existingPath(requestedPath)
+    } catch (error) {
+      if (error instanceof GitWorktreeError
+        && (error.code === 'path-unavailable' || error.code === 'unsafe-path')) {
+        throw new GitWorktreeError(
+          'worktree-not-listed',
+          `'${requestedPath}' is not an existing checkout`,
+          { retryable: false },
+        )
+      }
+      throw error
+    }
+    const listed = topology.worktrees.find(worktree => worktree.path === target && worktree.missing !== true)
+    if (listed === undefined) {
+      throw new GitWorktreeError(
+        'worktree-not-listed',
+        `'${target}' is not a worktree root of '${topology.mainPath}'`,
+        { retryable: false },
+      )
+    }
+    if (!this.containsPath(root, target)) {
+      throw new GitWorktreeError(
+        'outside-writable-root',
+        `'${target}' is outside the session root '${root}'`,
+        { retryable: false },
+      )
+    }
+    return target
   }
 
   async remove(untrusted: RemoveInput): Promise<RemoveResult> {
@@ -1056,8 +1148,7 @@ export class GitWorktreeCore {
    *  discovered from the absent path, so it is located from registered workspaces, and every
    *  surviving guard applies before anything is mutated.
    *
-   *  Single main/locked/branch/head precondition shared by every removal entry; the rollback
-   *  path keeps its own wording. */
+   *  Single main/locked/branch/head precondition shared by every removal entry. */
   private assertRemovableTarget(
     isMain: boolean,
     locked: boolean,
@@ -1431,21 +1522,166 @@ export class GitWorktreeCore {
     }
   }
 
-  /** Repo-specific worktree subdirectory: `<root>/<repo-name>-<hash12>`, keyed by repository
-   *  identity so same-named repositories never block each other and git status stays clean. */
-  private worktreeRootFor(mainPath: string, commonDir: string): string {
-    const repoName = basename(mainPath) || 'repo'
-    const digest = createHash('sha256').update(commonDir).digest('hex').slice(0, 12)
-    return join(this.worktreesRoot, `${repoName}-${digest}`)
+  /** The in-repo pool: every checkout lives at `<main>/.agents/worktrees/<name>`, inside the
+   *  source checkout and shared byte-for-byte with the forge worktree service. */
+  private worktreeRootFor(mainPath: string): string {
+    return join(mainPath, '.agents', 'worktrees')
   }
 
-  /** Ensure the unified worktree root exists before `git worktree add` (recursive + idempotent). */
+  /** Ensure the pool exists and SELF-IGNORES before `git worktree add`.
+   *
+   *  Writes `<pool>/.gitignore` with `*\n` only when it does not exist yet (a create-only
+   *  write; an existing file is never modified - the repository's own .gitignore is never
+   *  touched). A pool that cannot be created or marked unavailable-for-tracking fails
+   *  closed with `ignore-unavailable`: a checkout inside the working tree that shows up
+   *  as untracked would contaminate every later commit. */
   private async ensureWorktreeRoot(root: string): Promise<void> {
     try {
       await this.fs.mkdir(root)
-    } catch {
-      // mkdir failure surfaces at the git add; recursive mkdir is idempotent.
+    } catch (error) {
+      throw new GitWorktreeError(
+        'ignore-unavailable',
+        `cannot create the worktree pool '${root}': ${safeErrorMessage(error)}`,
+        { retryable: false },
+      )
     }
+    if (this.fs.writeFile === undefined) {
+      throw new GitWorktreeError(
+        'ignore-unavailable',
+        `the filesystem adapter cannot write the pool self-ignore under '${root}'`,
+        { retryable: false },
+      )
+    }
+    try {
+      await this.fs.writeFile(join(root, '.gitignore'), '*\n')
+    } catch (error) {
+      if (this.isAlreadyExists(error)) return
+      throw new GitWorktreeError(
+        'ignore-unavailable',
+        `cannot write the pool self-ignore '${join(root, '.gitignore')}': ${safeErrorMessage(error)}`,
+        { retryable: false },
+      )
+    }
+  }
+
+  /**
+   * Shape preflight that must run BEFORE `topology()` (design 08 §2.3, both call sites).
+   *
+   * A submodule's checkout is NOT what `git worktree list` reports: Git prints the
+   * submodule's own git dir (`<super>/.git/modules/<name>`), so the topology walk would
+   * fail with a misleading (and retryable) `git-protocol-error` before the containment
+   * gate could answer deterministically. The discriminator is free: a submodule's
+   * per-checkout `--git-dir` IS its `--git-common-dir`, while a linked worktree has a
+   * per-worktree git dir under the shared common dir.
+   *
+   *  - `topLevel !== canonicalSource` (a subdirectory source) is refused immediately;
+   *  - a submodule (or any source whose only git dir escapes the source root) is refused
+   *    with `outside-writable-root`: its admin files would live outside the sandbox root
+   *    and `workspace-write` could not commit.
+   *
+   * @returns the canonical source path every containment comparison must use.
+   */
+  private async assertSourceShape(workspacePath: string): Promise<string> {
+    const canonicalSource = await this.existingPath(workspacePath)
+    const [topLevelResult, commonResult, gitDirResult] = await Promise.all([
+      this.gitChecked(canonicalSource, ['rev-parse', '--show-toplevel']),
+      this.gitChecked(canonicalSource, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+      this.gitChecked(canonicalSource, ['rev-parse', '--path-format=absolute', '--git-dir']),
+    ])
+    const topLevel = await this.existingPath(this.singleLine(topLevelResult.stdout, 'worktree root'))
+    const commonDir = await this.existingPath(this.singleLine(commonResult.stdout, 'Git common directory'))
+    const rawGitDir = this.singleLine(gitDirResult.stdout, 'Git directory')
+    let gitDir: string
+    try {
+      gitDir = await this.existingPath(rawGitDir)
+    } catch {
+      // Reported-but-unresolvable git dir: compare the normalized claim (the equality
+      // test below is the discriminator, not a filesystem capability).
+      gitDir = resolve(rawGitDir)
+    }
+    if (topLevel !== canonicalSource) {
+      throw new GitWorktreeError(
+        'source-not-main-checkout',
+        `'${canonicalSource}' is inside the repository rooted at '${topLevel}', not its main checkout`,
+        { retryable: false },
+      )
+    }
+    if (gitDir === commonDir && !this.containsPath(canonicalSource, commonDir)) {
+      throw new GitWorktreeError(
+        'outside-writable-root',
+        `the Git directory '${commonDir}' of '${canonicalSource}' is outside the source checkout`,
+        { retryable: false },
+      )
+    }
+    return canonicalSource
+  }
+
+  /**
+   * The topology-based half of the create/preview source gate: the canonical source must
+   * be the repository's MAIN checkout (`existingPath(workspace.path) === topology.mainPath`),
+   * otherwise a linked-worktree source is refused with `source-not-main-checkout`; the Git
+   * directory must be contained by the source (anything that escaped the shape preflight).
+   */
+  private async assertCreatableSource(canonicalSource: string, topology: WorktreeTopology): Promise<void> {
+    if (canonicalSource !== topology.mainPath) {
+      throw new GitWorktreeError(
+        'source-not-main-checkout',
+        `'${canonicalSource}' is not the repository's main checkout '${topology.mainPath}'`,
+        { retryable: false },
+      )
+    }
+    if (!this.containsPath(canonicalSource, topology.commonDir)) {
+      throw new GitWorktreeError(
+        'outside-writable-root',
+        `Git directory '${topology.commonDir}' is outside the source checkout '${canonicalSource}'`,
+        { retryable: false },
+      )
+    }
+  }
+
+  /** Populate the fresh `--no-checkout` worktree with every configured filter driver
+   *  disabled (forge parity, design 08 §2.3): enumerate `filter.*` from the target's own
+   *  config, then `reset --hard` with command-scoped `GIT_CONFIG_*` overrides
+   *  (clean/smudge/process empty, required=false) plus `GIT_LFS_SKIP_SMUDGE=1` from the
+   *  runner's policy environment. */
+  private async completeCheckout(targetPath: string): Promise<void> {
+    const drivers = await this.listFilterDrivers(targetPath)
+    // `HEAD` (never a pinned object id): for an EXISTING branch the reset must populate the
+    // checkout without ever moving that branch's ref - a pinned older id would rewind it if
+    // the branch advanced between the pre-add verification and this step.
+    await this.gitChecked(
+      targetPath,
+      ['reset', '--hard', '--no-recurse-submodules', 'HEAD'],
+      true,
+      filterConfigOverrides(drivers),
+    )
+  }
+
+  /** Read-only `filter.*` key enumeration. Git exits 1 when no key matches, which is the
+   *  ordinary no-filters case, not a failure. */
+  private async listFilterDrivers(path: string): Promise<ReadonlySet<string>> {
+    const result = await this.gitCommand(path, ['config', '--null', '--name-only', '--get-regexp', '^filter\\.'])
+    if (result.exitCode === 1) return new Set()
+    if (result.exitCode !== 0) this.gitExitError(result, 'config')
+    const drivers = new Set<string>()
+    for (const key of result.stdout.split('\0')) {
+      if (!key.startsWith('filter.')) continue
+      const separator = key.lastIndexOf('.')
+      const attribute = key.slice(separator + 1)
+      if (separator <= 'filter.'.length) continue
+      if (attribute !== 'clean' && attribute !== 'smudge' && attribute !== 'process' && attribute !== 'required') continue
+      const driver = key.slice('filter.'.length, separator)
+      // Environment key names are derived from the repository's own config; a driver name
+      // outside the portable identifier shape is skipped rather than handed to the runner.
+      if (!/^[A-Za-z0-9_.-]{1,256}$/u.test(driver)) continue
+      drivers.add(driver)
+    }
+    return drivers
+  }
+
+  private isAlreadyExists(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && 'code' in error
+      && (error as { code?: unknown }).code === 'EEXIST'
   }
 
   private clearDiscoveryCaches(): void {
@@ -1757,23 +1993,6 @@ export class GitWorktreeCore {
     return suffix === '' || (!isAbsolute(suffix) && suffix !== '..' && !suffix.startsWith(`..${sep}`))
   }
 
-  private async anyWorkspaceOwnsPath(state: SourceSnapshot, target: string): Promise<boolean> {
-    for (const workspace of state.workspaces) {
-      if (this.containsPath(target, resolve(workspace.path))) return true
-      let canonical: string
-      try {
-        canonical = await this.existingPath(workspace.path)
-      } catch (error) {
-        fail(
-          'workspace-path-unavailable',
-          `cannot prove workspace '${workspace.workspaceId}' is unrelated to rollback target: ${safeErrorMessage(error)}`,
-        )
-      }
-      if (this.containsPath(target, canonical)) return true
-    }
-    return false
-  }
-
   private async assertNoOtherWorkspaceWithin(
     state: SourceSnapshot,
     target: string,
@@ -1930,8 +2149,13 @@ export class GitWorktreeCore {
     }
   }
 
-  private async gitChecked(cwd: string, args: readonly string[], mutation = false): Promise<GitCommandResult> {
-    const result = await this.gitCommand(cwd, args, mutation)
+  private async gitChecked(
+    cwd: string,
+    args: readonly string[],
+    mutation = false,
+    env?: Readonly<Record<string, string>>,
+  ): Promise<GitCommandResult> {
+    const result = await this.gitCommand(cwd, args, mutation, READ_TIMEOUT_MS, env)
     if (result.exitCode !== 0) this.gitExitError(result, args[0] ?? 'unknown')
     return result
   }
@@ -2003,6 +2227,7 @@ export class GitWorktreeCore {
     args: readonly string[],
     mutation = false,
     readTimeoutMs = READ_TIMEOUT_MS,
+    env?: Readonly<Record<string, string>>,
   ): Promise<GitCommandResult> {
     if (!isAbsolute(cwd)) fail('unsafe-git-cwd', 'Git cwd must be absolute')
     assertSafeGitArgv(args)
@@ -2012,6 +2237,7 @@ export class GitWorktreeCore {
       args: [...args],
       timeoutMs: mutation ? MUTATION_TIMEOUT_MS : readTimeoutMs,
       maxOutputBytes,
+      ...(env === undefined ? {} : { env: { ...env } }),
     })
     if (!Number.isInteger(result.exitCode) || typeof result.stdout !== 'string' || typeof result.stderr !== 'string') {
       fail('git-runner-invalid', 'Git runner returned an invalid result')
@@ -2050,9 +2276,7 @@ export class GitWorktreeCore {
     }
     const terminalCutoff = now - OPERATION_TTL_MS
     for (const [id, record] of this.createOperations) {
-      if (record.state !== 'creating'
-        && record.state !== 'rolling-back'
-        && record.updatedAt <= terminalCutoff) {
+      if (record.state !== 'creating' && record.updatedAt <= terminalCutoff) {
         this.createOperations.delete(id)
       }
     }
@@ -2062,5 +2286,28 @@ export class GitWorktreeCore {
       }
     }
   }
+}
+
+/** The four per-driver keys the forge worktree service neutralizes on its reset step. */
+const FILTER_ATTRIBUTES = ['clean', 'smudge', 'process', 'required'] as const
+
+/**
+ * Command-scoped `GIT_CONFIG_*` overrides that disable every configured filter driver:
+ * clean/smudge/process become the empty command (no filter runs) and `required=false`
+ * stops Git from failing when a driver is missing. Mirrors the forge worktree service
+ * (design 08 §2.3); the accepted LFS/clean-smudge degradation (pointer files) is
+ * documented for release, with a manual `git lfs pull` as the recovery.
+ */
+function filterConfigOverrides(drivers: ReadonlySet<string>): Readonly<Record<string, string>> {
+  const overrides: Record<string, string> = { GIT_CONFIG_COUNT: String(drivers.size * FILTER_ATTRIBUTES.length) }
+  let index = 0
+  for (const driver of drivers) {
+    for (const attribute of FILTER_ATTRIBUTES) {
+      overrides[`GIT_CONFIG_KEY_${index}`] = `filter.${driver}.${attribute}`
+      overrides[`GIT_CONFIG_VALUE_${index}`] = attribute === 'required' ? 'false' : ''
+      index += 1
+    }
+  }
+  return overrides
 }
 

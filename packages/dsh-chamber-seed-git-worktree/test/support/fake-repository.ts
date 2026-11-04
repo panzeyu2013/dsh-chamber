@@ -3,7 +3,6 @@
  * FakeRepository, and the setup/preview/mutation/leftover-record helpers. Never a test entry point.
  */
 
-import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import {
   basename,
@@ -25,8 +24,10 @@ import {
 export const MAIN = '/repos/project'
 export const COMMON = '/repos/project/.git'
 export const LINKED = '/repos/feature'
-/** worktreeRootFor key: `<basename>-<sha256(commonDir) 12 hex>`. */
-export const WORKTREES_KEY = `project-${createHash('sha256').update(COMMON).digest('hex').slice(0, 12)}`
+/** The in-repo pool shared with the forge worktree service. */
+export const WORKTREES_ROOT = `${MAIN}/.agents/worktrees`
+/** The pool's create-only self-ignore file. */
+export const POOL_IGNORE = `${WORKTREES_ROOT}/.gitignore`
 export const MAIN_HEAD = '1111111111111111111111111111111111111111'
 export const FEATURE_HEAD = '2222222222222222222222222222222222222222'
 
@@ -51,10 +52,25 @@ export class MissingPathError extends Error {
   readonly code = 'ENOENT'
 }
 
+export class ExistingFileError extends Error {
+  readonly code = 'EEXIST'
+}
+
 export class FakeRepository {
   readonly existing = new Set<string>([MAIN, COMMON])
   readonly aliases = new Map<string, string>()
   readonly realpathCalls = new Map<string, number>()
+  /** Create-only writes (the pool self-ignore). */
+  readonly written = new Map<string, string>()
+  /** When set, the next writeFile rejects with this error (unwritable-pool coverage). */
+  writeFileError?: Error
+  /** Configured `filter.*` drivers the enumeration step reports. */
+  readonly filterDrivers = new Set<string>()
+  /** When set, the next reset rejects with this error (two-step failure coverage). */
+  resetFailure?: GitWorktreeError
+  /** Submodule-shaped fixtures: source path -> its own top-level/common-dir/git-dir answers.
+   *  A submodule's git dir IS its common dir (the superproject's `.git/modules/<name>`). */
+  readonly discoveryOverrides = new Map<string, { topLevel: string; commonDir: string; gitDir?: string }>()
   readonly branches = new Map<string, string>([['main', MAIN_HEAD]])
   readonly worktrees: FakeWorktree[] = [{ path: MAIN, branch: 'main', head: MAIN_HEAD }]
   readonly calls: GitCommandRequest[] = []
@@ -116,6 +132,11 @@ export class FakeRepository {
       if (gitDir !== undefined && basename(path) === '.git') return `gitdir: ${gitDir}`
       throw new MissingPathError(path)
     },
+    writeFile: async (path, content) => {
+      if (this.writeFileError !== undefined) throw this.writeFileError
+      if (this.written.has(path) || this.existing.has(path)) throw new ExistingFileError(path)
+      this.written.set(path, content)
+    },
   }
 
   readonly runner: GitRunner = async request => {
@@ -130,14 +151,29 @@ export class FakeRepository {
       if (args.includes('--git-common-dir')) return this.result(0, `${COMMON}\n`)
       return this.result(128, '', 'fatal: this operation must be run in a work tree')
     }
+    // Submodule-shaped fixtures answer from their own (superproject-owned) Git directory.
+    const discovery = this.discoveryOverrides.get(request.cwd)
+    if (discovery !== undefined && args[0] === 'rev-parse') {
+      if (args.includes('--git-dir')) return this.result(0, `${discovery.gitDir ?? discovery.commonDir}\n`)
+      return args.includes('--git-common-dir')
+        ? this.result(0, `${discovery.commonDir}\n`)
+        : this.result(0, `${discovery.topLevel}\n`)
+    }
     if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
       const root = this.worktreeFor(request.cwd)?.path
       return root === undefined ? this.result(128, '', 'not a git repository') : this.result(0, `${root}\n`)
     }
     if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute') {
-      return this.worktreeFor(request.cwd) === undefined
-        ? this.result(128, '', 'not a git repository')
-        : this.result(0, `${COMMON}\n`)
+      const top = this.worktreeFor(request.cwd)?.path
+      if (top === undefined) return this.result(128, '', 'not a git repository')
+      if (args.includes('--git-dir')) {
+        // A linked worktree's own gitdir lives under the shared common dir; the main
+        // checkout's git dir IS the common dir.
+        const gitDir = this.gitDirs.get(top)
+          ?? (top === MAIN ? COMMON : `${COMMON}/worktrees/${basename(top)}`)
+        return this.result(0, `${gitDir}\n`)
+      }
+      return this.result(0, `${COMMON}\n`)
     }
     if (args[0] === 'worktree' && args[1] === 'list') {
       this.onWorktreeList?.()
@@ -192,6 +228,20 @@ export class FakeRepository {
       const head = this.branches.get(name)
       return head === undefined ? this.result(1) : this.result(0, `${head}\n`)
     }
+    if (args[0] === 'config' && args[1] === '--null') {
+      // Faithful to `git config --get-regexp`: exit 1 when nothing matches.
+      if (this.filterDrivers.size === 0) return this.result(1)
+      return this.result(0, `${[...this.filterDrivers].map(driver => `filter.${driver}.clean`).join('\0')}\0`)
+    }
+    if (args[0] === 'reset' && args[1] === '--hard') {
+      if (this.resetFailure !== undefined) {
+        const error = this.resetFailure
+        this.resetFailure = undefined
+        throw error
+      }
+      const worktree = this.worktrees.find(candidate => candidate.path === request.cwd)
+      return worktree === undefined ? this.result(128, '', 'not a work tree') : this.result(0)
+    }
     if (args[0] === 'worktree' && args[1] === 'add') {
       if (this.throwBeforeAdd !== undefined) {
         const error = this.throwBeforeAdd
@@ -200,9 +250,12 @@ export class FakeRepository {
       }
       await this.enterMutation()
       try {
-        if (args[2] === '--') {
-          const path = args[3]!
-          const branch = args[4]!
+        // The create path is always the forge-parity two-step form: add --no-checkout.
+        if (args[2] !== '--no-checkout') return this.result(129, '', 'unsupported add grammar')
+        if (args[3] === '--') {
+          if (args[5] === undefined) return this.result(129, '', 'unsupported add grammar')
+          const path = args[4]!
+          const branch = args[5]!
           const head = this.branches.get(branch)
           if (head === undefined || this.existing.has(path)) return this.result(128, '', 'cannot add')
           this.existing.add(path)
@@ -215,9 +268,10 @@ export class FakeRepository {
           }
           return this.result(0)
         }
-        const branch = args[3]!
-        const path = args[5]!
-        const head = args[6]!
+        if (args[5] !== '--') return this.result(129, '', 'unsupported add grammar')
+        const branch = args[4]!
+        const path = args[6]!
+        const head = args[7]!
         if (this.branches.has(branch) || this.existing.has(path)) return this.result(128, '', 'cannot add')
         this.branches.set(branch, head)
         this.existing.add(path)
@@ -322,7 +376,7 @@ export class FakeRepository {
   }
 }
 
-export function setup(options: { linked?: boolean; operationCapacity?: number; worktreesRoot?: string | null } = {}) {
+export function setup(options: { linked?: boolean; operationCapacity?: number } = {}) {
   const repo = new FakeRepository()
   if (options.linked) repo.addLinked()
   const workspaces: WorkspaceFact[] = [{ workspaceId: 'ws-main', path: MAIN, sessionIds: [] }]
@@ -346,9 +400,6 @@ export function setup(options: { linked?: boolean; operationCapacity?: number; w
     fs: repo.fs,
     now: () => clock,
     token: () => `token-${++token}`,
-    // `null` OMITS the option, so the constructor resolves the harness home
-    // itself (the `$DSH_HOME` coverage below).
-    ...(options.worktreesRoot === null ? {} : { worktreesRoot: options.worktreesRoot ?? '/worktrees' }),
     ...(options.operationCapacity === undefined ? {} : { operationCapacity: options.operationCapacity }),
   })
   return {
@@ -380,7 +431,9 @@ export function mutationCalls(repo: FakeRepository, verb: 'add' | 'remove') {
   return repo.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === verb)
 }
 
-export const STALE = '/repos/stale-missing'
+/** A stale admin record for a checkout in the pool whose directory is gone: the missing
+ *  semantics the snapshot must keep reporting (unlike a legacy root outside the pool). */
+export const STALE = `${WORKTREES_ROOT}/stale-missing`
 
 export function addStaleRecord(repo: FakeRepository): void {
   repo.addLinked({ path: STALE, branch: 'stale', head: FEATURE_HEAD })
@@ -390,8 +443,10 @@ export function addStaleRecord(repo: FakeRepository): void {
 
 /**
  * Snapshot the first repository and resolve one row by path, with the wire
- * identity object every removal call needs. The missing-row lookup is a test
- * bug: fixtures must register the path they target.
+ * identity object every removal call needs. The row must be VISIBLE: a path is
+ * either registered as a workspace or an unregistered checkout inside the
+ * in-repo pool (`<main>/.agents/worktrees`); the snapshot hides every other
+ * unregistered worktree, so a fixture that targets one is a test bug.
  */
 export async function targetOf(core: GitWorktreeCore, path: string = LINKED) {
   const snapshot = await core.snapshot()
@@ -426,6 +481,7 @@ export function pathSetFs(paths: ReadonlySet<string>): WorktreeFileSystem {
     exists: async path => paths.has(path),
     mkdir: async () => {},
     readFile: async () => { throw new MissingPathError('.git') },
+    writeFile: async path => { if (paths.has(path)) throw new ExistingFileError(path) },
   }
 }
 

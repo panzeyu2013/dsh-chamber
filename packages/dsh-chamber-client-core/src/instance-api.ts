@@ -14,7 +14,7 @@ import { DirectoryBrowseError } from './directory-browse-error.ts'
 // module builds unary rows, derive.ts resolves mounted-store titles, and the
 // two must share one rule without value-importing each other (every remaining
 // edge between instance-api/derive/aggregate-store is type-only).
-import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
+import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle, workingDirectoryOf } from './session-display.ts'
 import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
 } from './instance-mutation-values.ts'
@@ -660,6 +660,10 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient, signal?: 
     const title = titleOf(summary)
     if (title !== undefined) row.title = title
     if (typeof summary.cwd === 'string' && summary.cwd !== '') row.cwd = summary.cwd
+    // Effective working directory (alpha.2 projection): the SAME sparse rule as
+    // the mounted-store producer — placement reads `workingDirectory ?? cwd`.
+    const workingDirectory = workingDirectoryOf(summary?.projections?.values)
+    if (workingDirectory !== undefined) row.workingDirectory = workingDirectory
     // Official display label: the unary wire has no `displayTitle`, so the
     // ladder is applied here (title → directory name → session id).
     row.displayTitle = sessionDisplayTitle({

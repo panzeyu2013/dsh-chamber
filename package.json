@@ -91,6 +91,7 @@
     "typecheck:browser": "node node_modules/typescript/bin/tsc -p packages/dsh-chamber-client-ui-browser/tsconfig.json --noEmit",
     "test:api-gateway": "pnpm --filter @deepseek-ai/dsh-api-gateway run test",
     "test:stream-state": "pnpm --filter @dsh-chamber/dsh-stream-state run test",
+    "test:client-core": "pnpm --filter @dsh-chamber/dsh-chamber-client-core run test",
     "test:control-plane": "pnpm --filter @dsh-chamber/control-plane run test",
     "typecheck:gateway": "tsc -p packages/gateway/tsconfig.json --noEmit",
     "test:desktop": "pnpm --filter @dsh-chamber/desktop run test",

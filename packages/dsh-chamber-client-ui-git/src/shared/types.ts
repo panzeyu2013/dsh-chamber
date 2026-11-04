@@ -105,21 +105,21 @@ export interface CreateWorktreeResult {
   branch: string
   head: string
   branchCreated: boolean
-  /** Only a positively observed `git worktree add` exit 0 authorizes compensation. */
-  rollbackAuthorized: boolean
 }
 
-export interface RollbackCreateResult {
-  operationId: string
-  removed: true
-  replayed: boolean
-  repoId: string
-  worktreeId: string
-  commonDir: string
+/** Ask the host to move an existing session's working directory into a checkout
+ *  (the ONLY chamber write that sends a session into a checkout; design 08 PR1). */
+export interface EnterWorktreeInput {
+  sessionId: string
+  /** Snapshot-canonical checkout path; the host re-canonicalizes and matches it
+   *  against the authoritative worktree topology. */
   path: string
-  branch: string
-  head: string
-  branchPreserved: true
+}
+
+/** Enter result correlation: both values must echo the request. */
+export interface EnterWorktreeResult {
+  sessionId: string
+  path: string
 }
 
 export interface RemoveWorktreeResult {
@@ -142,6 +142,7 @@ export interface RemoveWorktreeResult {
 
 export interface UnregisteredWorktreeInfo {
   name: string
+  /** The host-minted opaque worktree id — copied verbatim (never reconstructed). */
   worktreeId: string
   branch: string | null
   status: 'ready' | 'missing' | 'invalid' | 'not-a-repo'
@@ -149,9 +150,14 @@ export interface UnregisteredWorktreeInfo {
   attention: string[]
   dirty: boolean | null
   head: string
+  /** Snapshot-canonical checkout path: the placement/identity key of the derived
+   *  `kind:'checkout'` row and the path-based removal target (design 08 PR2). */
+  path: string
+  /** `git worktree lock` state — a locked checkout cannot be removed. */
+  locked: boolean
 }
 
-export type GitBusyKind = 'preview' | 'create' | 'remove' | 'recovery' | 'adopt-session'
+export type GitBusyKind = 'preview' | 'create' | 'remove' | 'recovery' | 'session-enter'
 
 export interface GitBusyState {
   kind: GitBusyKind
@@ -162,63 +168,16 @@ export type GitRecovery =
   | {
       /** Host create may have committed but its response was not trustworthy. */
       kind: 'git-create'
-      /** Full preview facts are retained so a same-id replay is correlated before adoption. */
+      /** Full preview facts are retained so a same-id replay re-runs the SAME
+       *  correlated host create (PR1: the create saga has no workspace/session legs). */
       preview: PreviewCreateResult
       operationId: string
-      sessionId: string
-      message: string
-      /** Whether the original create committed a session (the dialog creates
-       *  worktrees WITHOUT sessions; a retry must not then open one). */
-      createSession: boolean
-      /** The main-checkout workspace to position the new worktree after (best-effort replay). */
-      sourceWorkspaceId?: string
-    }
-  | {
-      kind: 'rollback-create'
-      operationId: string
-      /** Host workspace id the saga already learned (placement void key when its echo upgraded the intent). */
-      workspaceId?: string
-      /** Exact create facts required to correlate a replayed rollback response. */
-      repoId: string
-      worktreeId: string
-      commonDir: string
-      path: string
-      branch: string
-      head: string
-      /** Preallocated before the saga, reused if ownership resolves to adopted. */
-      sessionId: string
-      message: string
-    }
-  | {
-      /** The worktree exists, but its creation provenance does not authorize rollback. */
-      kind: 'workspace-adopt'
-      operationId: string
-      /** Host workspace id the saga already learned (placement void key when its echo upgraded the intent). */
-      workspaceId?: string
-      path: string
-      sessionId: string
-      message: string
-    }
-  | {
-      kind: 'session-create'
-      workspaceId: string
-      path: string
-      sessionId: string
-      message: string
-    }
-  | {
-      /** Session-only adoption of an existing worktree; no Git mutation ran. */
-      kind: 'session-adopt'
-      path: string
-      sessionId: string
       message: string
     }
   | {
       /** Host remove may have committed; retry the same opaque expectation/id. */
       kind: 'git-remove'
       operationId: string
-      /** Absent for an UNREGISTERED worktree removal. */
-      workspaceId?: string
       expected: {
         repoId: string
         worktreeId: string
@@ -231,26 +190,6 @@ export type GitRecovery =
       deleteBranch?: string
       /** Original authorization to discard uncommitted state — the replay input MUST
        *  be byte-identical (the host fingerprints it), so a force retry re-sends it. */
-      discardChanges?: boolean
-    }
-  | {
-      kind: 'workspace-delete'
-      /** Replayed through the host before every registry-delete retry. */
-      operationId: string
-      workspaceId: string
-      expected: {
-        repoId: string
-        worktreeId: string
-        branch: string | null
-        head: string
-      }
-      path: string
-      message: string
-      /** The original removal's branch deletion — the replay input MUST match the
-       *  original byte-for-byte (host fingerprints it), or recovery is stuck. */
-      deleteBranch?: string
-      /** Same byte-identity requirement for a force removal (design 08 §5.3
-       *  amendment): the terminal replay re-sends the original flag. */
       discardChanges?: boolean
     }
 

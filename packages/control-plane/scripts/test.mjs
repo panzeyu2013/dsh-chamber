@@ -141,6 +141,11 @@ const GROUPS = {
     // 是 throw（不再 filter/warn）。
     'test/plugins/host-domain-wiring-lockstep.test.ts',
     'test/plugins/cordis-inserts.test.ts',
+    // P5b-0：为 bundle 层行（含 group 内行）发 id-targeted disabled 的判定面。
+    // 未启用 bundle = 跳过 + 诊断（幂等，不让 host 启动失败）；已启用 bundle 但行 id
+    // 拼错 / 绑定到别的包 / 补丁读不到 = fail-closed；外加生产读取器（profile →
+    // dsh 安装锚，与 dsh-app-boot 同序）。纯模块 + mkdtemp 夹具。
+    'test/plugins/bundle-row-disables.test.ts',
     // 受保护集合 / 代耦合 / 装后复验的完整判定面（design 21 §6.11，决策 19）。
     // §6.11 的全部 pin 与 familyNamesFromLockfileClosure（C11 同源解析器）是
     // 「官方 opt-in 层可装可卸」这条契约唯一的单测锚点。

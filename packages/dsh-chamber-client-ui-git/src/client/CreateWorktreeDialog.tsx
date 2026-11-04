@@ -3,7 +3,8 @@
  * (design 08 §4.2): New Branch / Existing Branch tabs, an auto-suggested branch
  * name, a worktree directory auto-synced until edited, the source branch as an
  * informative line, and the host's preview as the security step. Creating NEVER
- * opens a session (the empty worktree workspace appears immediately).
+ * opens a session and never registers a workspace: the checkout appears as an
+ * unregistered row from the refreshed facts (design 08 PR1).
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, IconChevronRightOutlineRegular, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -282,8 +283,10 @@ export function CreateWorktreeDialog({
         branch: { kind: mode, name: cleanBranch },
         ...(mode === 'new' && startRef !== '' ? { startRef } : {}),
       })
-      // createSession: false — creating a worktree NEVER commits a session.
-      await createFromPreview(sourceId, preview, { createSession: false, sourceWorkspaceId })
+      // PR1: the create saga is host create + refresh ONLY — no workspace is
+      // registered and no session is committed (the checkout becomes an
+      // unregistered row on the next facts refresh).
+      await createFromPreview(sourceId, preview)
       onClose()
     } catch (error) {
       // The code→copy resolver: user-reachable refusals render localized copy;

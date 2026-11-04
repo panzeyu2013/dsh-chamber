@@ -6,9 +6,11 @@
  *   - the `insert` bundle, mounting new rows (renderCordisInserts);
  *   - the id-targeted non-insert row, configuring or disabling a row an earlier layer
  *     mounted (renderCordisDisablePatches / renderCordisOverlay).
- * Consumers: control-plane host-graph-seed.ts (local overlay) and desktop plugin-sync.ts
- * (remote cordis.patch.yml merge); only render/parse/conflict classification is centralized
- * here, message wording and fold semantics stay there.
+ * Consumers: control-plane host-graph-seed.ts (local overlay), local-host-seeding.ts /
+ * bundle-row-disables.ts (verifying an id a BUNDLE layer mounts before an id-targeted
+ * disable) and desktop plugin-sync.ts (remote cordis.patch.yml merge); only
+ * render/parse/conflict classification is centralized here, message wording and fold
+ * semantics stay there.
  *
  * Invariants: renderCordisInserts output is the canonical wire bytes, byte-identical across
  * consumers (id-targeted shapes are ADDITIVE); it is the single validation point (syntax
@@ -117,16 +119,21 @@ export function renderCordisOverlay(
   return (inserts.length > 0 ? renderCordisInserts(inserts) : '') + renderCordisDisablePatches(disables)
 }
 
+/** Drop YAML comments (full-line and trailing) before a line scanner reads a patch. */
+function stripPatchComments(existing: string): string {
+  return existing.split('\n')
+    .filter(line => !line.trimStart().startsWith('#'))
+    .map(line => line.replace(/\s+#.*$/u, ''))
+    .join('\n')
+}
+
 /**
  * Count an exact loader scalar while ignoring YAML comments. Loader ids and package names
  * are global within the composed Cordis config, so an exact scalar anywhere counts toward
  * the conflict decision.
  */
 export function fieldCount(existing: string, field: 'id' | 'name', value: string): number {
-  const searchable = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
+  const searchable = stripPatchComments(existing)
   const escaped = escapeRegExp(value)
   const trailing = field === 'id' ? '[a-zA-Z0-9_.-]' : '[a-zA-Z0-9_.@/-]'
   const pattern = new RegExp(`\\b${field}:\\s*(?:'${escaped}'|"${escaped}"|${escaped})(?!${trailing})`, 'gu')
@@ -236,11 +243,7 @@ function inlineInsertRows(text: string): ParsedInsertRow[] {
  * being mistaken for an exact loader identity.
  */
 export function parseLoaderRows(existing: string): ParsedInsertRow[] {
-  const text = existing.split('\n')
-    .filter(line => !line.trimStart().startsWith('#'))
-    .map(line => line.replace(/\s+#.*$/u, ''))
-    .join('\n')
-  const lines = text.split('\n')
+  const lines = stripPatchComments(existing).split('\n')
   const rows: ParsedInsertRow[] = []
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!
@@ -281,6 +284,61 @@ export function parseLoaderRows(existing: string): ParsedInsertRow[] {
       }
       rows.push(row)
     }
+  }
+  return rows
+}
+
+/** One loader row a patch mounts anywhere a loader entry can live (top level or a
+ *  group entry's config children), with the package names bound to it. */
+export interface ParsedLoaderRow {
+  readonly id: string
+  readonly names: readonly string[]
+}
+
+/** Every loader row a patch file mounts, in file order — the id-targeted lookup space of
+ *  the dsh loader (applyEntryPatches indexes ids at every depth, including a group
+ *  entry's config children). A row is a YAML sequence item whose mapping carries an id
+ *  and its sibling name scalar(s); a row without exactly one id is not addressable and
+ *  is omitted. Deliberately shape-driven, never a full YAML parse: a caller that must
+ *  reject invalid patch syntax still goes through the strict renderers above. */
+export function parsePatchRows(existing: string): ParsedLoaderRow[] {
+  const lines = stripPatchComments(existing).split('\n')
+  const rows: ParsedLoaderRow[] = []
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!
+    const item = line.match(/^(\s*)-\s*(.*)$/u)
+    if (item === null) {
+      // A group's config may be an inline array of flow mappings on a plain mapping line
+      // (config: [{ id, name }]); the insert parser's direct-element scan covers it.
+      if (line.includes('[') && line.includes('{')) {
+        for (const flow of inlineInsertRows(line)) {
+          if (flow.ids.length === 1) rows.push({ id: flow.ids[0]!, names: flow.names })
+        }
+      }
+      continue
+    }
+    const itemIndent = item[1]!.length
+    const first = item[2]!.trim()
+    if (first.startsWith('{')) {
+      const flow = flowLoaderRow(first)
+      if (flow.ids.length === 1) rows.push({ id: flow.ids[0]!, names: flow.names })
+      continue
+    }
+    const row: ParsedInsertRow = { ids: [], names: [] }
+    if (first !== '') addLoaderField(row, first)
+    // Only the row's own field block (the shallowest indentation deeper than the item)
+    // may contribute id/name scalars: a nested config/insert list starts deeper and
+    // becomes its own item iterations.
+    let fieldIndent: number | undefined
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const candidate = lines[cursor]!
+      if (candidate.trim() === '') continue
+      const candidateIndent = candidate.match(/^\s*/u)![0].length
+      if (candidateIndent <= itemIndent) break
+      if (fieldIndent === undefined) fieldIndent = candidateIndent
+      if (candidateIndent === fieldIndent) addLoaderField(row, candidate.trim())
+    }
+    if (row.ids.length === 1) rows.push({ id: row.ids[0]!, names: row.names })
   }
   return rows
 }

@@ -11,7 +11,7 @@ import { indexSubagentDescendants } from '@dsh-chamber/dsh-chamber-client-core/s
 // a source fact.
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
 import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
-import type { SidebarRootInjected } from './contract/slots.ts'
+import type { SidebarRootInjected, SidebarWorkspaceGitContext } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { SidebarLeadingControls } from './SidebarLeadingControls.tsx'
 import { resolveInstanceListFace } from './instance-list-face.ts'
@@ -64,7 +64,7 @@ import {
 export type {
   SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
   SidebarPanelIconOwnerProps, SidebarPanelMetadata, SidebarRootComponentProps, SidebarRootInjected,
-  SidebarSettingsOwnerProps, SidebarWorkspaceGitOwnerProps,
+  SidebarSettingsOwnerProps, SidebarWorkspaceGitContext, SidebarWorkspaceGitOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
 
@@ -175,10 +175,12 @@ export function apply(ctx: ClientContext): void {
           scope: 'root',
           inject: {
             hooks: {
+              // 声明侧与壳侧同一 occurrence identity（含派生 checkout 行的 display 身份）：
+              // 工厂只把 sidebar 传进来的 context 原样闭包，自身与 Git 无关。
               workspaceGitContext: (
                 _standard: object,
-                context: { sourceId: string; workspaceId: string; repoKey?: string },
-              ) => () => ({ sourceId: context.sourceId, workspaceId: context.workspaceId, repoKey: context.repoKey }),
+                context: SidebarWorkspaceGitContext,
+              ) => () => context,
             },
           },
         },

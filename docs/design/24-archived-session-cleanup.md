@@ -1147,7 +1147,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.2.2-alpha.3 05b1c
     2.5.8」重新登记**：本表的行删除钮与侧栏/git 的 16/18/20px 图标钮回到"命中区 = 视觉盒"
     （回退命中盒 pass `33238ffe` 的 rims 与它加宽的两处 gap）；机制、实测数据与
     "缓解而非根治"的边界见 `sidebar-chamber.module.css` 的 `.actionIcon` 注释块（唯一权威
-    处）、design 06 §7 与 design 08 §3.4。**取舍**：24px 目标尺寸让位于悬停可用性（
+    处）、design 06 §7 与 design 08 §3.2。**取舍**：24px 目标尺寸让位于悬停可用性（
     「按照 v0.2.4 恢复」），本次回退不触及本表行删除钮的 20px 视觉盒与 30px 内容撑高。残余
     照旧）：武装期行 dim 0.6 × trash .42 ≈ 0.25 复合（token 对比度仍 ≥ AA）；9% wash 强度与
     深浅主题可读性；风险条 SR 播报顺序（NVDA/VO）；窄卡换行与矮视口裁剪（<~480-540px）；

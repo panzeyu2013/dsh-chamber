@@ -3,8 +3,8 @@ import {
   getInstanceClient, InstanceDomainMissingError, type UnaryResult,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
-  CreateWorktreeResult, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult,
-  RemoveWorktreeResult, RollbackCreateResult,
+  CreateWorktreeResult, EnterWorktreeInput, EnterWorktreeResult, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult,
+  RemoveWorktreeResult,
 } from './types.ts'
 import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
@@ -52,10 +52,11 @@ export function isAmbiguousGitRpcFailure(error: unknown): boolean {
  * (`packages/dsh-chamber-seed-git-worktree/src/core.ts`) except for
  * {@link DETERMINISTIC_HOST_RETRYABLE_OVERRIDES}, and cover every code the host
  * refuses WITHOUT an explicit `retryable` flag. A code that carries an explicit
- * `retryable: false` is proven pre-mutation per OPERATION and is cleared by that
- * flag (saga `isProvenPreMutationRefusal`), so it must not be added here: the same
- * code (`git-command-failed`) also surfaces from post-mutation ambiguity. The
- * cross-package lockstep test fails on any other divergence.
+ * `retryable: false` is proven pre-mutation per OPERATION: the saga wraps it
+ * WITHOUT a recovery entry (so a pending replay is cleared), and it must not be
+ * added here because the same code (`git-command-failed`) also surfaces from
+ * post-mutation ambiguity. The cross-package lockstep test fails on any other
+ * divergence.
  */
 export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
   'invalid-input',
@@ -75,6 +76,12 @@ export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
   'worktree-invalid',
   'branch-exists',
   'branch-not-found',
+  // PR1 checkout create / enter pre-mutation refusals (11-final-design §5.5/§5.4):
+  'source-not-main-checkout',
+  'not-a-repo',
+  'worktree-not-listed',
+  'outside-writable-root',
+  'ignore-unavailable',
 ])
 
 /**
@@ -101,6 +108,13 @@ export function isDeterministicGitRejection(error: unknown): boolean {
   return DETERMINISTIC_GIT_REJECTION_CODES.has(error.code)
 }
 
+/** The ONE retryable enter refusal: the agent may not be loaded the instant
+ *  `session.create` answers (design 08 PR1, P0-1). The host marks it
+ *  `retryable: true`, so it must stay OUT of the deterministic set. */
+export function isAgentNotReady(error: unknown): boolean {
+  return error instanceof GitWorktreeRpcError && error.code === 'agent-not-ready'
+}
+
 export interface CreateWorktreeInput {
   previewToken: string
   operationId: string
@@ -119,11 +133,6 @@ export interface RemoveWorktreeInput {
    *  the host then removes a dirty worktree with `git worktree remove --force`. */
   discardChanges?: boolean
 }
-
-export type RollbackCreateExpectation = Pick<
-  CreateWorktreeResult,
-  'repoId' | 'worktreeId' | 'commonDir' | 'path' | 'branch' | 'head'
->
 
 const REPO_ID = /^repo_[0-9a-f]{64}$/u
 const WORKTREE_ID = /^worktree_[0-9a-f]{64}$/u
@@ -212,7 +221,8 @@ export function decodePreviewCreateValue(
   return result
 }
 
-/** Decode and correlate every durable create fact before workspace adoption. */
+/** Decode and correlate every durable create fact before the refresh publishes
+ *  the checkout row (the create never registers a workspace). */
 export function decodeCreateValue(
   value: unknown,
   input: CreateWorktreeInput,
@@ -231,7 +241,6 @@ export function decodeCreateValue(
     branch: stringField(value, 'branch', method),
     head: oidField(value, 'head', method),
     branchCreated: booleanField(value, 'branchCreated', method),
-    rollbackAuthorized: booleanField(value, 'rollbackAuthorized', method),
   }
   assertEqual(method, 'operationId', result.operationId, input.operationId)
   assertEqual(method, 'repoId', result.repoId, preview.repoId)
@@ -242,36 +251,18 @@ export function decodeCreateValue(
   return result
 }
 
-export function decodeRollbackCreateValue(
+export function decodeEnterValue(
   value: unknown,
-  input: { operationId: string },
-  expected: RollbackCreateExpectation,
-): RollbackCreateResult {
-  const method = 'rollbackCreate'
+  input: EnterWorktreeInput,
+): EnterWorktreeResult {
+  const method = 'enter'
   if (!isRecord(value)) invalidValue(method, 'result must be an object')
-  const result: RollbackCreateResult = {
-    operationId: stringField(value, 'operationId', method),
-    removed: value.removed === true ? true : invalidValue(method, 'removed must be true'),
-    replayed: booleanField(value, 'replayed', method),
-    repoId: repoIdField(value, method),
-    worktreeId: worktreeIdField(value, method),
-    commonDir: stringField(value, 'commonDir', method),
+  const result: EnterWorktreeResult = {
+    sessionId: stringField(value, 'sessionId', method),
     path: stringField(value, 'path', method),
-    branch: stringField(value, 'branch', method),
-    head: oidField(value, 'head', method),
-    branchPreserved: value.branchPreserved === true
-      ? true
-      : invalidValue(method, 'branchPreserved must be true'),
-    ...(value.branchDeleted === true ? { branchDeleted: true } : {}),
-    ...(value.branchDeleteFailed === true ? { branchDeleteFailed: true } : {}),
   }
-  assertEqual(method, 'operationId', result.operationId, input.operationId)
-  assertEqual(method, 'repoId', result.repoId, expected.repoId)
-  assertEqual(method, 'worktreeId', result.worktreeId, expected.worktreeId)
-  assertEqual(method, 'commonDir', result.commonDir, expected.commonDir)
-  assertEqual(method, 'path', result.path, expected.path)
-  assertEqual(method, 'branch', result.branch, expected.branch)
-  assertEqual(method, 'head', result.head, expected.head)
+  assertEqual(method, 'sessionId', result.sessionId, input.sessionId)
+  assertEqual(method, 'path', result.path, input.path)
   return result
 }
 
@@ -330,7 +321,7 @@ export function decodeRemoveValue(
  *  classifies a lost answer as "outcome unknown" for an opted-in mutation, and
  *  this host domain lives outside its endpoint table; `previewCreate` plans a
  *  creation without applying it, so it stays a read. */
-const GIT_MUTATION_METHODS: ReadonlySet<string> = new Set(['create', 'rollbackCreate', 'remove'])
+const GIT_MUTATION_METHODS: ReadonlySet<string> = new Set(['create', 'remove', 'enter'])
 
 async function callGitRemote(sourceId: string, method: string, input?: unknown): Promise<unknown> {
   const endpoint = `gitWorktree/${method}`
@@ -424,14 +415,10 @@ export const gitWorktreeApi = {
   ): Promise<CreateWorktreeResult> {
     return decodeCreateValue(await callGitRemote(sourceId, 'create', input), input, preview)
   },
-  async rollbackCreate(
-    sourceId: string,
-    input: { operationId: string },
-    expected: RollbackCreateExpectation,
-  ): Promise<RollbackCreateResult> {
-    return decodeRollbackCreateValue(await callGitRemote(sourceId, 'rollbackCreate', input), input, expected)
-  },
   async remove(sourceId: string, input: RemoveWorktreeInput, expectedPath: string): Promise<RemoveWorktreeResult> {
     return decodeRemoveValue(await callGitRemote(sourceId, 'remove', input), input, expectedPath)
+  },
+  async enter(sourceId: string, input: EnterWorktreeInput): Promise<EnterWorktreeResult> {
+    return decodeEnterValue(await callGitRemote(sourceId, 'enter', input), input)
   },
 }

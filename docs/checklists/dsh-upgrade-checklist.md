@@ -26,6 +26,7 @@
 - [ ] 上游 Release body 的四节（新增功能/体验优化/问题修复/其他变更）与 `docs/upgrade-guide/<tag>/` 逐条过一遍（该目录**可能整代缺席**，缺席不等于无破坏变更）：落在 chamber 托管面（profile patch/bundles、chamber 注入的 settings、chamber 读的 session 日志、chamber 渲染的官方客户端面）的破坏写进 design/STATUS；不落本仓的记「无消费者」一句。
 - [ ] SlotMap 座席键差集：对 `packages/client/**/src` 抽取 `SlotMap` 声明键与各洞的占用者（注册方），与上一代逐键对比；新增/改名/删除的键与新增占用者逐条列出——**侧栏（`sidebar.*`）与 `sidebar.right.*` 的新内容一律上报用户裁决**，其余新座席也登记，不静默跟随（与 §7 第 5 步同一纪律）。
 
+- [ ] **P5b forge 面（升级即复验）**：目标 pin 仍提供 `@deepseek-ai/dsh-experimental-forge-bundle` 与六个依赖包（worktree/tool-worktree/forge/forge-github/forge-session/client-ui-forge）；`cordis.patch.yml` 的顶层五行 + `optional-forge-panel` 组（`isolate:{worktrees:true}`）形状未变；bundle 仍默认 OPTIONAL/EXPERIMENTAL 且未预置启用。P5b-0 的 `bundle-row-disables` 用例须绿：未启用 bundle = 幂等跳过 + 诊断；已启用但 id 缺失/绑错包/patch 不可读/重复 = fail-closed。若上游改了行 id 或组形状，先改 overlay 与单测，不得放行实例启动。
 - [ ] vendor 补丁退休评估（drift I-7）：C9 现在三分——锚点命中 = 绿；锚点缺失且某条 `retireCheck` 命中 = `retire-candidate`（**仍 release-blocking**），remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker，并同步 design 09 §3.6/§3 与触点表；锚点缺失且 `retireCheck` 未命中 = drift，按新 pin 重导补丁。`noRetireForm` 条目以登记理由为准。新增/重放补丁按 design 09 §3.6 的四类准入裁决；第四类（多实例正确性）只在页面级事实无法由 chamber 包重新 scoped 时准入：scope 取 per-entry `chamberBasePath`（页面级事实），或取监听器所属挂载自己的 DOM 子树祖先（document 级事件注册表，per-mount；禁页面全局事实与 URL 猜测，且每个 document 级副作用都要同一判定）；上游自带 scope 后删除。
 
 ## 2. 双线 pin 一致性
@@ -45,7 +46,7 @@
 - [ ] 其余适配面：控制面代理限额、`spawn-dsh` 的pin注释、desktop/renderer注释基线等与上游对齐。
 - [ ] 上游行为变化逐项裁决：限额与代理上限冲突、事件改名是否被消费、新包是否要动作、新wire是否改变例外边界。
 - [ ] api-gateway 生成式调用契约（G43）：descriptor 带 uplink 半边必须返回 `ClientStreamHandle`——`send`/`end` 经 `ClientUplinkQueue` 到达所选载波，`dispose` 发 `cancel`（终止帧已到时除外）；上游 `terminal/attach` 取 `invocation.uplink()`、官方客户端用 `handle.send(...)`，故不得退回 fail-loud。unary 结果必须经过 `descriptor.result.decode`，abort 与成功/错误答复竞态仍报 `gateway/cancelled`。升级重放时运行 `packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts`、`packages/dsh-api-gateway/test/behavior/client-unary-result.test.ts` 与 `packages/dsh-api-gateway/test/behavior/mux-self-heal.test.ts`；实机 attach/重连验收见 `docs/progress/STATUS.md`（G43）。
-- [ ] 逐面验证：`test:connection`、`test:client-web`、`typecheck:client-web`、`typecheck:connection`、`test:control-plane`、`test:api-gateway`、`typecheck:api-gateway`。
+- [ ] 逐面验证：`test:connection`、`test:client-web`、`typecheck:client-web`、`typecheck:connection`、`test:control-plane`、`test:api-gateway`、`typecheck:api-gateway`；并复跑 P5b 相关 `test:git`、`test:host-git`、`typecheck:git`、`typecheck:host-git`（filters 两步/enter/path-based remove/lockstep）。
 - [ ] 自建物重放（layout/sidebar fork、covered factory、vendor补丁锚点）逐项裁决：采纳或保留偏差并登记（口径见 `upstream-touchpoints.md` §1–§3）；layout fork 已登记为 chamber-named 副本（registry `seed.dsh-chamber-client-ui-layout`，§2.6），其 client index/store 副本面随 C2 报告 + 预检 vendor-seam 重放；并重审 design 09 §3.5 有意跳过名单（每条 skip 是否仍必须跳过、上游门是否已修好）。**侧栏新增内容必须提请用户裁决，不得默认拒绝**：上游若在侧栏（`sidebar.*` 任一键）新增声明、新增占用者，或把内容注册进「已声明但本壳未渲染」的键，逐条列出并交用户裁决采纳/跳过/替换，默认处置只有「上报待裁」；差集取法与登记落点见 `upstream-touchpoints.md` §7 第 5 步。
 - [ ] **内部依赖 range 按上游政策归位**（`workspace:*`，拒 caret——执行面 = 本行棘轮门 `scripts/upstream/workspace-range-ratchet.test.mjs`；原始政策记录 `.agents/notes/…` 属本地约定，不在本仓版本控制内）：改动 `package.json` 后必须 `pnpm install --lockfile-only` 同步 lockfile；棘轮门 `scripts/upstream/workspace-range-ratchet.test.mjs`（覆盖 registry 的 fork/seed 集合）。
 
@@ -74,6 +75,7 @@
 ## 7. 文档与记录
 
 - [ ] 迁移叙述（pin、fork rebase面、适配面、验证结论）写 `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节——**发版时才写**（升级提交本身不动 CHANGELOG），随后 `node scripts/gates/verify-i18n.mjs --write` 刷新 i18n 记录。
+- [ ] 若升级跨越 P5b 工作树切换：发布说明必须带**旧池清空前提**（逐树 `workspace.delete` + `git worktree remove/prune`，不是删目录）、filters/LFS 降级（手动 `git lfs pull`）、P5b opt-in/重启、Swift 保留；本清单不重复写发布叙述。
 - [ ] 触点结构变更走registry：`registry.json` → `registry-views.mjs --write` → `verify-registry.mjs` 绿。
 - [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop README、本目录）更新版本号，历史叙述保留；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
 - [ ] 未落地的实机门禁与遗留偏差登记进 `docs/progress/STATUS.md`（只写仍open的项，不留已完成台账）；下次升级复用本清单复验。版本值不写进checklist。

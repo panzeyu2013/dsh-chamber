@@ -32,6 +32,28 @@ export function hasActiveScheduleOf(
 }
 
 /**
+ * Effective working-directory projection of one session — the alpha.2
+ * `workingDirectory` value carried inside the row's projection bag.
+ *
+ * SPARSE by contract: only a non-empty string is a fact. Absent / null /
+ * non-string / '' all mean "not projected", and the checkout placement then
+ * falls back to the header `cwd` (a cold summary without the projection must
+ * never be moved into a checkout it was not observed in). Lives in this
+ * zero-import leaf because BOTH producers need the ONE rule as a VALUE:
+ * instance-api builds unary rows from `projections.values` and derive projects
+ * the mounted store rows from `projectionValues` — neither may value-import the
+ * other.
+ * @param projectionValues - the row's projection bag (mounted store) or `projections.values` (unary wire), or undefined.
+ * @returns the projected working directory, or undefined when absent.
+ */
+export function workingDirectoryOf(
+  projectionValues: Readonly<Record<string, unknown>> | undefined,
+): string | undefined {
+  const value = projectionValues?.workingDirectory
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/**
  * Trailing path segment ('' for root); the cwd-derived group title.
  *
  * Lives in this zero-import leaf because BOTH sides need it as a VALUE:

@@ -686,6 +686,9 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         ...(workspaceId === undefined ? {} : { workspaceId }),
         ...(path === undefined || path === '' ? {} : { path }),
         ...(fact.title === undefined ? {} : { title: fact.title }),
+        // Echo placement (design 08 PR2 §5.3): a checkout creation carries the
+        // path, so the derived row lands in its checkout immediately.
+        ...(fact.workingDirectory === undefined ? {} : { workingDirectory: fact.workingDirectory }),
         blank: fact.blank,
       }, now)
       updateSessionEcho(ledger)

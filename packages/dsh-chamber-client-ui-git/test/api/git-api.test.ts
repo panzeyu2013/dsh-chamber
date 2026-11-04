@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  decodeCreateValue, decodeRemoveValue, decodeRollbackCreateValue, GitWorktreeRpcError, gitWorktreeApi,
-  isAmbiguousGitRpcFailure, isDeterministicGitRejection,
+  decodeCreateValue, decodeEnterValue, decodeRemoveValue, GitWorktreeRpcError, gitWorktreeApi,
+  isAgentNotReady, isAmbiguousGitRpcFailure, isDeterministicGitRejection,
 } from '../../src/shared/git-api.ts'
 import type { PreviewCreateResult } from '../../src/shared/types.ts'
 import { NOT_DISPATCHED_CODE } from '../../src/shared/not-dispatched.ts'
@@ -204,13 +204,50 @@ test('worktree-submodules is a deterministic pre-mutation rejection; git refusal
   )
 })
 
+test('enter is an opted-in mutation and its result correlates sessionId + path', async () => {
+  // Budget/timeout/unknown-outcome semantics ride the mutation opt-in (11-final-design §5.6).
+  const source = readFileSync(new URL('../../src/shared/git-api.ts', import.meta.url), 'utf8')
+  assert.match(source, /new Set\(\['create', 'remove', 'enter'\]\)/u,
+    'enter must be a mutation: a lost answer may have moved the session\'s working directory')
+  const input = { sessionId: 's-1', path: '/repo/.agents/worktrees/feature' }
+  assert.deepEqual(decodeEnterValue({ sessionId: input.sessionId, path: input.path }, input), input)
+  for (const drifted of [
+    { sessionId: 'another-session', path: input.path },
+    { sessionId: input.sessionId, path: '/repo/elsewhere' },
+  ]) {
+    assert.throws(
+      () => decodeEnterValue(drifted, input),
+      (error: unknown) => error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-value',
+    )
+  }
+})
+
+test('PR1 create/enter refusals are deterministic; agent-not-ready stays retryable and ambiguous', () => {
+  // Enter's pre-mutation refusals (design 08 §5.4) and the create source guard
+  // (§5.5) can never have committed anything: they surface as dismissible errors,
+  // never as a replayable recovery.
+  for (const code of ['not-a-repo', 'worktree-not-listed', 'outside-writable-root', 'source-not-main-checkout', 'ignore-unavailable']) {
+    const error = new GitWorktreeRpcError(code, 'refused')
+    assert.equal(isDeterministicGitRejection(error), true, code + ' must be deterministic')
+    assert.equal(isAmbiguousGitRpcFailure(error), false, code + ' must not mint an unknown-outcome recovery')
+  }
+  // agent-not-ready is the ONE explicitly-retryable enter refusal: the session
+  // exists, the agent is still loading; a retry may succeed, so it must stay out
+  // of the deterministic set.
+  const notReady = new GitWorktreeRpcError('agent-not-ready', 'starting', undefined, true)
+  assert.equal(isAgentNotReady(notReady), true)
+  assert.equal(isAgentNotReady(new GitWorktreeRpcError('not-a-repo', 'refused')), false)
+  assert.equal(isDeterministicGitRejection(notReady), false)
+  assert.equal(isAmbiguousGitRpcFailure(notReady), true)
+})
+
 test('create decoder requires full preview correlation and treats malformed success as ambiguous', () => {
   const input = { previewToken: PREVIEW.previewToken, operationId: 'op-create' }
   const raw = {
     operationId: input.operationId, created: true, replayed: false,
     repoId: REPO_ID, worktreeId: WORKTREE_ID, commonDir: PREVIEW.commonDir,
     path: '/wrong-target', branch: PREVIEW.branch, head: PREVIEW.baseHead,
-    branchCreated: true, rollbackAuthorized: true,
+    branchCreated: true,
   }
   assert.throws(
     () => decodeCreateValue(raw, input, PREVIEW),
@@ -242,19 +279,6 @@ test('remove decoder requires exact opaque expectation and a concrete membership
     () => decodeRemoveValue({ ...base, path: '/different', sessionIds: [] }, input, '/feature'),
     (error: unknown) => error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-value',
   )
-})
-
-test('rollback decoder correlates the complete locally retained create facts', () => {
-  const expected = {
-    repoId: REPO_ID, worktreeId: WORKTREE_ID, commonDir: '/repo/.git',
-    path: '/feature', branch: 'feature', head: HEAD,
-  }
-  assert.throws(() => decodeRollbackCreateValue({
-    operationId: 'op-create', removed: true, replayed: false,
-    ...expected, path: '/different', branchPreserved: true,
-  }, { operationId: 'op-create' }, expected), (error: unknown) => (
-    error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-value'
-  ))
 })
 
 test('the git transport is the shared carrier: no self-made fetch envelope remains', () => {

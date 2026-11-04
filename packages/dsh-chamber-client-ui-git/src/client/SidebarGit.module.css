@@ -1,5 +1,5 @@
-/* Styles for the per-workspace Git occupant and its create/remove dialogs
-   (design 08 §3.2 / §4 / §5). */
+/* Styles for the per-workspace Git occupant and its create dialog
+   (design 08 §3.2 / §4). */
 
 /* OpenChamber-style entry: the create button reveals with the row's cluster. */
 
@@ -24,74 +24,11 @@
   max-width: 45%;
 }
 
-/* Plan A: the repository's UNREGISTERED worktrees block (rendered after the
-   repo's last registered workspace). Rows match the workspace-row visual
-   language (branch glyph + name), with hover actions. */
-.unregisteredSection {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 4px;
-}
-
-.unregisteredHeading {
-  padding: 4px 4px 2px;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.unregisteredRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  /* Derived-workspace row geometry (design 08 §3.4 — these rows match the
-     derived workspace row): 26px row, 8px corners. The 2px rhythm is owned by
-     .unregisteredSection's flex gap, not by a row margin — flex margins do not
-     collapse, and a 2px margin on top of the 2px gap would double the spacing
-     the nav rows use. */
-  box-sizing: border-box;
-  height: 26px;
-  margin: 0;
-  padding: 3px 4px;
-  border-radius: 8px;
-}
-
-.unregisteredRow:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.unregisteredIcon {
-  flex: none;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.unregisteredName {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  /* Same type step as a derived workspace title (design 08 §3.2「图标与字体
-     层级」: workspace 标题 14px/600 主色、派生 workspace 降级次级色): 14/18,
-     600, demoted to secondary ink because the workspace is not registered. */
-  color: var(--dsw-alias-label-secondary);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 18px;
-}
-
-/* Placement of the row's status capsule only. The capsule itself is the
-   official `Tag` primitive (11px/17px, tonal palette), which documents that a
-   render site may still position a tag with its own class. A hand-rolled
-   capsule must not replace it: a neutral fill equal to the row's own hover fill
-   would vanish under the pointer. */
-.unregisteredStatus {
-  flex: none;
-}
-
-.unregisteredSpacer {
+/* The derived checkout row's dirty/locked capsule, rendered by the Git occupant
+   because those two facts are the occupant's own (design 06 §1.2: redrawn from
+   its snapshot, they never enter an aggregate signature). The row's PATH health
+   stays the sidebar's row-state surface — deliberately not duplicated here. */
+.checkoutStatus {
   flex: none;
 }
 
@@ -105,87 +42,12 @@
    every other in-row action uses. WCAG 2.2 2.5.8 target size is a registered
    deviation (design 08 §3.4, design 24 §13 item 17). */
 
-.unregisteredAction {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  /* Sidebar icon-button language: the 20px box / --dsw-radius-xs (4px) corner
-     every other in-row action uses. */
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--dsw-radius-xs);
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-
-.unregisteredAction:not(:disabled):hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
-.unregisteredActionDanger:not(:disabled):hover {
-  background: var(--dsw-alias-interactive-bg-hover-danger);
-  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
-}
-
-.unregisteredAction:disabled {
-  opacity: .42;
-  cursor: not-allowed;
-}
-
-/* Retry affordance inside the session-facts error row. */
-.factsRetry {
-  margin-left: 8px;
-  padding: 1px 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-}
-
-.factsRetry:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
 /* Directory-collision precheck note under the directory field. */
 .directoryConflict {
   margin: 0;
   color: var(--dsw-alias-state-warn-primary);
   font-size: 11px;
 }
-
-/* Direct-session title list in the remove dialog. */
-.sessionTitles {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  min-width: 0;
-}
-
-.sessionTitles li {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 11px;
-}
-
-.sessionTitlesMore {
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* Tiny inline status badges inside the branch chip: uncommitted dot,
-   local ahead/behind, path health, in-progress git operation. */
 
 /* OpenChamber-style row actions: hidden at rest; revealed together with the
    row's own "+"/kebab cluster when the whole workspace row is hovered (the
@@ -275,82 +137,6 @@
   margin: 0;
   color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
   overflow-wrap: anywhere;
-}
-
-.danger {
-}
-
-.dialog .danger {
-  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
-}
-
-.removeFacts {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.removeFacts code {
-  font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  overflow-wrap: anywhere;
-}
-
-.removeFacts span {
-  color: var(--dsw-alias-label-secondary);
-}
-
-.removeFacts code {
-  /* The worktree path must stay readable: never a near-invisible translucent
-     ink. */
-  color: var(--dsw-alias-label-primary);
-}
-
-.removeSessions {
-  color: var(--dsw-alias-label-primary);
-  font-weight: 500;
-}
-
-.archiveToggle {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 2px;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-/* The checked archive checkbox's consequence line: the host stops the archived
-   sessions' still-running work (stopActivity) instead of refusing the removal. */
-.archiveNote {
-  margin: 2px 0 0 21px;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-/* Dirty-worktree removal authorization (design 08 §6 amendment):
-   the discard checkbox must visually stand out against the ordinary
-   archive/branch toggles. */
-.dirtyWarning {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 2px;
-  padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-warn-primary);
-  border-radius: 8px;
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.dirtyWarning > span {
-  color: var(--dsw-alias-label-primary);
-  font-weight: 500;
 }
 
 .wsSourceAlert {

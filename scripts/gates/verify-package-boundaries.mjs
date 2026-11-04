@@ -152,6 +152,7 @@ export const EXPORTS_ALLOWLIST = Object.freeze({
     './aggregate-store',
     './authority-log-store',
     './boot-gap-shape',
+    './checkout-placement',
     './client-plugin-loader',
     './derive',
     './flat-account',

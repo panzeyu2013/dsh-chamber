@@ -77,9 +77,12 @@ test('the instrument publishes once and stays a live view (functions, not a snap
 })
 
 test('every create call site declares an origin, and the bridge records with the fact default', () => {
-  // 调用点必须表态（用户点「+」/worktree saga 都是 user；boot/预热留给 App 层）。
+  // 调用点必须表态（用户点「+」/worktree 新建会话都是 user；boot/预热留给 App 层）。
   assert.match(SIDEBAR, /createSessionForSource\(server\.id, workspaceId, \{ origin: 'user' \}\)/)
-  assert.equal((GIT.match(/origin: 'user'/g) ?? []).length, 5, 'every worktree create site is labelled')
+  // PR1: the Git plugin keeps exactly ONE user-labelled create site —
+  // createSessionHere (source-rooted session, then enter). The create saga no
+  // longer commits a session, and the rollback/adopt recovery branches are gone.
+  assert.equal((GIT.match(/origin: 'user'/g) ?? []).length, 1, 'the single checkout session create is labelled')
   // 桥在**没有订阅者**时也记账：I10 的账本不是渲染的副产物。
   assert.match(BRIDGE, /sessionCreationLedger\.record\(\{/)
   assert.match(BRIDGE, /publishSessionCreationInstrument\(\)/)

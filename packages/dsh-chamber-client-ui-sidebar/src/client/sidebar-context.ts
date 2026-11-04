@@ -6,13 +6,14 @@
  * and rebuilds the value.
  */
 import { createContext, useContext, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react'
-import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { sourceAccentColor, type ArchivedFilter, type SessionGroupBy, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import type { WorkspaceDropEnv } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import { getWorkspaceGitFlag, hiddenByMainWorkspaceFold } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
+import { insertCheckoutRows, isCheckoutRow, isRealWorkspaceRow } from './checkout-row.ts'
 import type {
-  PanelSelectorHook, ShortcutsHook, SidebarPanelMetadata, SidebarRootComponentProps,
+  PanelSelectorHook, ShortcutsHook, SidebarPanelMetadata, SidebarRootComponentProps, SidebarWorkspaceGitContext,
 } from './contract/slots.ts'
 import type { SourceNoticeKind } from './sidebar-notices-model.ts'
 import type { SourceNotices } from './sidebar-root-notices.ts'
@@ -27,6 +28,17 @@ export interface RenameTarget {
 export interface SessionDragState {
   /** Source the drag started in — cross-source drops are structurally impossible. */
   sourceId: string
+  /** The row the drag started in (placement identity). Two rows can hold sessions
+   *  of the SAME account (a source row and its derived checkout row), so the
+   *  drop marker and the commit gate on this, never on the account alone. */
+  placementId: string
+  /** Present only when the drag started inside a derived checkout row. The
+   *  placement is a rendering of the source membership: a drop can reorder
+   *  inside this row, and a cross-row drop is a no-op (moving between rows
+   *  would be a workingDirectory change, not a membership one). */
+  checkoutPath?: string
+  /** The SOURCE workspace account the sessions belong to (`familyMainId` for a
+   *  checkout row, the row's own id otherwise) — the only legal wire target. */
   accountKey: string
   /** 合成 ungrouped 桶标记：提交时按 id + flag 解析账目，避免真实工作区
    *  的 wire id 恰好等于 UNGROUPED_WORKSPACE_ID 时劫持桶拖拽的锚点。 */
@@ -44,6 +56,24 @@ export interface SessionDragState {
 export interface WorkspaceDragState {
   sourceId: string
   workspaceId: string
+  over: { id: string; half: 'before' | 'after' } | null
+}
+
+/**
+ * A drag of one DERIVED checkout row. Checkout rows are not host workspaces, so
+ * they never ride the family drag resolver: the drop only reorders the family's
+ * checkout sub-order (persisted in view-prefs `checkoutOrder`), is blocked
+ * outside its own family, and writes no wire. The main row's drag still moves
+ * the whole family (checkout rows ride the family block).
+ */
+export interface CheckoutDragState {
+  sourceId: string
+  /** The derived row id (`__checkout__:<canonicalPath>`). */
+  rowId: string
+  /** Canonical checkout path — the persisted order value. */
+  path: string
+  /** The family main workspace id: a drag may never leave this family. */
+  mainId: string
   over: { id: string; half: 'before' | 'after' } | null
 }
 
@@ -96,6 +126,31 @@ export function orderWithOverride<T>(
 }
 
 /**
+ * One source's rendered workspace order, shared by the section render, the flat
+ * account and the session-drag anchor math. Real rows follow the transient drag
+ * override (`orderWithOverride`: an id it does not know is PREPENDED, mirroring
+ * the host's create); the derived checkout rows are then re-anchored to their
+ * family's main row — they are display-only members of the family block and
+ * must never float above it when an override is in flight. The checkout
+ * sub-order (`checkoutOrder`) applies inside each family.
+ */
+export function orderWorkspaceRows(
+  sourceId: string,
+  rows: readonly ChamberServerWorkspace[],
+  override: readonly string[] | undefined,
+  storedCheckoutOrder: Readonly<Record<string, string[]>> | undefined,
+): ChamberServerWorkspace[] {
+  const realRows = rows.filter(row => isRealWorkspaceRow(row))
+  const checkoutRows = rows.filter(row => isCheckoutRow(row))
+  return insertCheckoutRows(
+    sourceId,
+    orderWithOverride(realRows, override, row => row.id),
+    checkoutRows,
+    storedCheckoutOrder,
+  )
+}
+
+/**
  * Resolver env for one source's workspace drag: display order comes from
  * `orderWithOverride` (the transient drag override describes the rows that
  * existed when the drag started; rows created meanwhile keep their original
@@ -137,7 +192,7 @@ export interface SidebarSectionContextValue {
   renderWorkspaceGit: (
     key: 'sidebar.workspace.git',
     owner: { wide: boolean },
-    opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
+    opts: { hookContext: SidebarWorkspaceGitContext },
   ) => ReactNode
   /** chamber patch 13: the two session-row seats this shell declares (the leading
    *  status seat and the hover-card seat) rendered with the official occurrence
@@ -178,16 +233,20 @@ export interface SidebarSectionContextValue {
   setSessionDrag: Dispatch<SetStateAction<SessionDragState | null>>
   workspaceDrag: WorkspaceDragState | null
   setWorkspaceDrag: Dispatch<SetStateAction<WorkspaceDragState | null>>
+  checkoutDrag: CheckoutDragState | null
+  setCheckoutDrag: Dispatch<SetStateAction<CheckoutDragState | null>>
   serverDrag: ServerDragState | null
   setServerDrag: Dispatch<SetStateAction<ServerDragState | null>>
   commitSessionDrag: (server: ChamberServerAggregate, drag: SessionDragState, over: DropOver) => void
   commitWorkspaceDrag: (server: ChamberServerAggregate, drag: WorkspaceDragState, over: DropOver) => void
+  commitCheckoutDrag: (server: ChamberServerAggregate, drag: CheckoutDragState, over: DropOver) => void
   commitServerDrag: (drag: ServerDragState, over: DropOver) => void
   /** Drag-end trailing-click suppression + drag-initiation guards (shared refs). */
   suppressClickRef: MutableRefObject<boolean>
   dragPressOnButtonRef: MutableRefObject<boolean>
   sessionDropCommitted: MutableRefObject<boolean>
   workspaceDropCommitted: MutableRefObject<boolean>
+  checkoutDropCommitted: MutableRefObject<boolean>
   serverDropCommitted: MutableRefObject<boolean>
   ghostExpiry: MutableRefObject<Map<string, number>>
   armBlankGhostForClick: () => void

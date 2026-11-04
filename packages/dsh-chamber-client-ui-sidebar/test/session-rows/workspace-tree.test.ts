@@ -76,8 +76,11 @@ test('the section renders tree mode from the pure projection (source lock)', () 
     'tree mode is a per-source groupBy state, computed in one memoized projection')
   assert.ok(SECTION.includes('workspaceTreeDepths(workspaceTreeParents('),
     'the render consumes the pure parents/depths projection')
-  assert.ok(SECTION.includes('id => getWorkspaceGitFlag(server.id, id)?.mainWorkspaceId'),
-    'family priority is fed from the git plugin flags (absent = pure prefix)')
+  // PR2: a DERIVED checkout row carries its own family anchor (the flags store
+  // publishes real workspaces only), so the anchor lookup reads the row first and
+  // the flag store second — the same family-priority rule, one extra source.
+  assert.ok(SECTION.includes('checkoutFamilyMainOf(row) ?? workspaceFlagOf(server.id, row)?.mainWorkspaceId'),
+    'family priority is fed from the row (derived checkout) then the git plugin flags (absent = pure prefix)')
   assert.ok(SECTION.includes('treeDepth > 0 && cc.workspaceTreeNested'))
   assert.ok(SECTION.includes("'--chamber-tree-depth': String(treeDepth)"))
   assert.ok(SECTION.includes('data-chamber-tree-depth={treeDepth > 0 ? treeDepth : undefined}'))

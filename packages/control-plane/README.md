@@ -13,11 +13,12 @@
 ## 主要模块
 
 - `index.ts` — `createControlPlane()`：服务器装配、REST 分发、reaper/闩锁接线、安全头与 CSP。
-- `spawn-dsh.ts` — `dsh --profile web` 的 spawn、端口递增重试、pid 记录、`resolveNodeExecutable`。
+- `spawn-dsh.ts` — `dsh --profile web` 的 spawn、端口递增重试、pid 记录、`resolveNodeExecutable` 与 P5b-0 的 string-only `resolvePlainNodeExecutable`。
 - `local-connection.ts` — 健康/重启状态机（30s 探测、1s→60s 退避、窗口内重启上限）。
 - `proxy-forward.ts` — 与 gateway 共用的转发核心：上限、白名单、长 RPC 豁免、WS 心跳。
 - `page-channel.ts` — 页面级多路复用通道（design 26）：页面唯一的长活 WS，health/pluginGraph/sessionFacts 三族逻辑订阅按 `instanceId` 定址、每订阅信用窗口与上游拆除。
 - `host-logs.ts` / `catalog.ts` / `json-store.ts` / `private-file.ts` — 滚动日志、连接目录、原子 JSON、私有文件原语。
+- `pnpm-shim.ts` / `local-host-seeding.ts` / `bundle-row-disables.ts` — 托管宿主的 PATH 供给（随包 pnpm + P5b-0 的 `node` wrapper：默认 `nodeCommand: 'node'` 可解析，绝不写机器路径）与 per-spawn `--patch` overlay；overlay 支持给 bundle 层行（含 group 内行）发 id-targeted `disabled`：未启用 bundle = 跳过 + 诊断（幂等），已启用但行 id 不可证 = fail-closed。
 
 ## 测试
 

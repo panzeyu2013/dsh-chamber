@@ -1,11 +1,10 @@
 /**
  * 孤儿 workspace（路径已消失）行的删除入口：常驻清理钮 + 徽标。
  *
- * 为什么锁这条：worktree 行没有 kebab（design 08 §3.2），而 Git occupant 只在快照
- * 里存在该 worktree 行时才挂载（git 插件的 SidebarWorkspaceGitLine.tsx 在
- * gitFactsForWorkspace 为空时整块
- * 不渲染）——因此「目录被外部删除、Git 记录也已被 prune」的行**没有任何 Git 侧删除
- * 控件**，此前的唯一出口是「已消失」状态徽标。清理钮把出口显式化、常驻化，并与徽标
+ * 为什么锁这条：worktree 行没有 kebab（design 08 §3.2），而 PR3 之后已注册 worktree
+ * 的 Git occupant 不渲染任何动作（registered remove 已删除），目录被外部删除、Git
+ * 记录也被 prune 的行**没有任何 Git 侧删除控件**，此前的唯一出口是「已消失」状态徽标。
+ * 清理钮把出口显式化、常驻化，并与徽标
  * 共用 onDeleteWorkspace（同一 orphan 确认文案、同一层 Modal 门、同一条拖拽尾随 click 门）。
  *
  * 本包测试跑在 plain node 下、没有 DOM/React 渲染环境，因此用源码文本锁 +

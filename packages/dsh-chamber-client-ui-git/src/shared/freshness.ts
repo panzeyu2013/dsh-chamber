@@ -5,8 +5,8 @@
  * the refresh rejecting: a page-dispatch-budget refusal deliberately keeps the
  * last snapshot and RESOLVES with the previous state (coordinator's
  * not-dispatched branch). That is the right polling behaviour and the wrong
- * action behaviour — a silent old state would let a removal/adopt run on facts up
- * to `ceil(N/2) × 30s` stale.
+ * action behaviour — a silent old state would let a removal or a checkout session
+ * entry run on facts up to `ceil(N/2) × 30s` stale.
  *
  * The only reliable proof that THIS pull produced facts is the state's own
  * timestamp: a completed pull bumps `updatedAt` (coordinator success path), a

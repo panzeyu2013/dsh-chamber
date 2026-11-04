@@ -4,13 +4,18 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { nextServerOrder, orderServersForDisplay, reconciledSessionOrder } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { checkoutOrderKey } from '@dsh-chamber/dsh-chamber-client-core/checkout-placement'
 import { getInstanceClient, insertSessionBefore, insertWorkspaceBefore } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { flatAccountKey } from '@dsh-chamber/dsh-chamber-client-core/flat-account'
 import { flushScheduledActivityWrites, getViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import {
-  orderWithOverride, workspaceDropEnv, type ServerDragState, type SessionDragState, type WorkspaceDragState,
+  orderWorkspaceRows, workspaceDropEnv,
+  type CheckoutDragState, type ServerDragState, type SessionDragState, type WorkspaceDragState,
 } from './sidebar-context.ts'
+import {
+  checkoutFamilyMainOf, checkoutPathOf, isCheckoutRow, isRealWorkspaceRow, sessionFullOrder,
+} from './checkout-row.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
 /**
@@ -48,10 +53,13 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
   // target handler is gated on the drag's sourceId matching the hovered group).
   const [sessionDrag, setSessionDrag] = useState<SessionDragState | null>(null)
   const [workspaceDrag, setWorkspaceDrag] = useState<WorkspaceDragState | null>(null)
+  // Derived checkout-row drag state (in-family sub-order only; view-prefs, no wire).
+  const [checkoutDrag, setCheckoutDrag] = useState<CheckoutDragState | null>(null)
   // Server-group drag state (display-order preference only; commit writes view-prefs, no wire).
   const [serverDrag, setServerDrag] = useState<ServerDragState | null>(null)
   const sessionDropCommitted = useRef(false)
   const workspaceDropCommitted = useRef(false)
+  const checkoutDropCommitted = useRef(false)
   const serverDropCommitted = useRef(false)
   /** Per-source tail of workspace ORDER commits: overlapping family-block moves
    *  must not interleave their per-member wire inserts on the host. */
@@ -64,7 +72,7 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
   // recorded on pointerdown — a gesture begun on a button must never initiate a
   // header drag (a >4px micro-drag on the fold toggle would swallow its click).
   const dragPressOnButtonRef = useRef(false)
-  useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null || serverDrag !== null)
+  useNativeDragAcceptance(sessionDrag !== null || workspaceDrag !== null || checkoutDrag !== null || serverDrag !== null)
 
   // 看门狗：拖拽期间源从投影消失 / 断连（行卸载、外部归档、来源停机）时，dragend 可能落在
   // 已卸载的源节点上而不达 React 的根代理处理器——拖拽态与 suppressClickRef 会永久悬留，
@@ -82,15 +90,23 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
       sourceAlive(drag.sourceId)
       && (servers.find(server => server.id === drag.sourceId)?.workspaces
         .some(workspace => workspace.id === drag.workspaceId) ?? false)
+    // A derived checkout row is re-synthesized every projection: it counts as
+    // alive while a row with its id still renders (path identity).
+    const checkoutAlive = (drag: CheckoutDragState): boolean =>
+      sourceAlive(drag.sourceId)
+      && (servers.find(server => server.id === drag.sourceId)?.workspaces
+        .some(workspace => workspace.id === drag.rowId) ?? false)
     const lost = (sessionDrag !== null && !sessionAlive(sessionDrag))
       || (workspaceDrag !== null && !workspaceAlive(workspaceDrag))
+      || (checkoutDrag !== null && !checkoutAlive(checkoutDrag))
       || (serverDrag !== null && !sourceAlive(serverDrag.sourceId))
     if (!lost) return
     suppressClickRef.current = false
     setSessionDrag(null)
     setWorkspaceDrag(null)
+    setCheckoutDrag(null)
     setServerDrag(null)
-  }, [servers, sessionDrag, workspaceDrag, serverDrag])
+  }, [servers, sessionDrag, workspaceDrag, checkoutDrag, serverDrag])
 
   // While a SERVER drag is active, a pointer outside every source section clears
   // the marker — releasing outside cancels instead of committing the last one.
@@ -129,6 +145,17 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     // blank 落点半边归一（上游：blank 目标一律 after）。
     const half: 'before' | 'after' = targetSession?.blank === true ? 'after' : over.half
     const overTarget = { id: over.id, half }
+    // 放置门（派生 checkout 行）：一个账号可以渲染成两行（源行 + 它的 checkout 行），
+    // checkout 行只持有**已放置**的子序列。跨行 drop 若按渲染序换算锚点，会把会话
+    // 静默追加到源序尾部——那不是一次 membership 重排。只允许同行内重排：
+    // 源的放置身份（placementId）必须与目标行的放置身份一致，否则落空且不画 marker。
+    const rowOfSession = (sessionId: string): string | undefined => {
+      for (const candidate of server.workspaces) {
+        if (candidate.sessions.some(session => session.id === sessionId)) return candidate.id
+      }
+      return undefined
+    }
+    if (rowOfSession(over.id) !== activeDrag.placementId) return
     sessionDropCommitted.current = true
     setSessionDrag(null)
     // 单列表账号：没有 workspace 行可解析；顺序只落本地账号（manual → flatOrder，
@@ -139,8 +166,15 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
       // 工作区序 override 时锚点会算在不同列表上，持久化错误的平铺序（第四轮 F3）。
       const realWorkspaces = server.workspaces.filter(workspace => workspace.ungrouped !== true)
       const ungroupedWorkspace = server.workspaces.find(workspace => workspace.ungrouped === true)
+      // 与渲染侧同一成员序（override-aware，派生 checkout 行随家族块）：否则平铺账号
+      // 与 flat 列表各按一套序算锚点，拖完落盘的就是错的基线。
       const flatWorkspaces = [
-        ...orderWithOverride(realWorkspaces, workspaceOrderOverride[server.id], workspace => workspace.id),
+        ...orderWorkspaceRows(
+          server.id,
+          realWorkspaces,
+          workspaceOrderOverride[server.id],
+          viewPrefs.checkoutOrder,
+        ),
         ...(ungroupedWorkspace === undefined ? [] : [ungroupedWorkspace]),
       ]
       const memberIds = flatWorkspaces.flatMap(workspace => workspace.sessions.map(session => session.id))
@@ -164,7 +198,10 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
       candidate.id === activeDrag.accountKey && (candidate.ungrouped === true) === activeDrag.ungrouped)
     if (workspace === undefined) return
     const orderBy = viewPrefs.orderBy?.[server.id] ?? 'manual'
-    const wireIds = workspace.sessions.map(session => session.id)
+    // 锚点空间 = **源的完整成员序**（derive 的 allSessionIds，放置前）：checkout 行只
+    // 渲染已放置子集，按渲染序换算会把会话 append 到源序尾部；源行同一条规则（无 checkout
+    // 家族时 allSessionIds 缺席，回落行内成员序 = 原行为）。design 08 §3.2-§3.3「会话拖动细节」。
+    const orderBasis = sessionFullOrder(workspace)
     const accountKey = `${server.id}/${workspace.id}`
     // Updated branch reads the LIVE store (not this render's snapshot): a
     // promotion can land between render and drop, and stale anchor math would
@@ -172,10 +209,10 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     // 会用 tick 前派生的旧 order 覆盖本次提交（静默回退且不自愈）。
     if (orderBy === 'updated') flushScheduledActivityWrites()
     const renderedOrder = orderBy === 'updated'
-      ? reconciledSessionOrder(getViewPrefs().updatedOrder?.[accountKey] ?? [], wireIds)
+      ? reconciledSessionOrder(getViewPrefs().updatedOrder?.[accountKey] ?? [], orderBasis)
       : workspace.ungrouped === true
-        ? reconciledSessionOrder(viewPrefs.ungroupedOrder[server.id] ?? [], wireIds)
-        : sessionOrderOverride[accountKey] ?? wireIds
+        ? reconciledSessionOrder(viewPrefs.ungroupedOrder[server.id] ?? [], orderBasis)
+        : sessionOrderOverride[accountKey] ?? orderBasis
     // Same pure drop resolver as the server-group drag: null = no-op (vanished rows / already in place).
     const nextOrder = nextServerOrder(renderedOrder, activeDrag.sessionId, overTarget)
     if (nextOrder === null) return
@@ -223,9 +260,12 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     if (workspaceDropCommitted.current) return
     workspaceDropCommitted.current = true
     setWorkspaceDrag(null)
-    // Synthetic cwd-derived groups (`__cwd__:` ids) are neither draggable nor a target.
+    // Synthetic cwd-derived groups (`__cwd__:` ids) and derived checkout rows are
+    // neither draggable nor a target on the WIRE: a checkout row has no host
+    // workspace id (insertWorkspaceBefore would 404), and it reorders through its
+    // own family sub-order (commitCheckoutDrag → view-prefs).
     const realWorkspaceIds = server.workspaces
-      .filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
+      .filter(isRealWorkspaceRow)
       .map(workspace => workspace.id)
     const env = workspaceDropEnv(server.id, realWorkspaceIds, workspaceOrderOverride[server.id], viewPrefs.folded)
     const verdict = resolveWorkspaceDrop(env, activeDrag.workspaceId, over)
@@ -269,6 +309,44 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     })
   }
 
+  // Derived checkout-row drag commit: a DISPLAY sub-order under its family's main
+  // row, persisted in the shared view-prefs (`checkoutOrder`, value = canonical
+  // paths; key = `__checkout__:<sourceId>/<canonicalMainPath>`). No wire: the row
+  // has no host identity, and the family's real rows keep their own order. A drop
+  // outside the row's own family (another family, another repository, a real row)
+  // is blocked by construction — the marker is never drawn there and this commit
+  // returns untouched.
+  const commitCheckoutDrag = (
+    server: ChamberServerAggregate,
+    activeDrag: CheckoutDragState,
+    over: NonNullable<CheckoutDragState['over']>,
+  ): void => {
+    if (checkoutDropCommitted.current) return
+    checkoutDropCommitted.current = true
+    setCheckoutDrag(null)
+    const target = server.workspaces.find(row => row.id === over.id)
+    if (target === undefined || !isCheckoutRow(target)) return
+    if (checkoutFamilyMainOf(target) !== activeDrag.mainId) return
+    const targetPath = checkoutPathOf(target)
+    if (targetPath === undefined) return
+    const main = server.workspaces.find(row => row.id === activeDrag.mainId)
+    if (main === undefined || main.path === undefined) return
+    // 当前显示序 = 存储子序对家族 checkout 行集对账后的序；锚点必须算在**渲染序**上。
+    const displayedPaths = server.workspaces.flatMap(row => {
+      if (!isCheckoutRow(row) || checkoutFamilyMainOf(row) !== activeDrag.mainId) return []
+      const path = checkoutPathOf(row)
+      return path === undefined ? [] : [path]
+    })
+    const key = checkoutOrderKey(server.id, main.path)
+    const renderedOrder = reconciledSessionOrder(viewPrefs.checkoutOrder?.[key] ?? [], displayedPaths)
+    const nextOrder = nextServerOrder(renderedOrder, activeDrag.path, { id: targetPath, half: over.half })
+    if (nextOrder === null) return
+    updateViewPrefs(prev => ({
+      ...prev,
+      checkoutOrder: { ...prev.checkoutOrder, [key]: nextOrder },
+    }))
+  }
+
   // Server-group drag commit: a pure DISPLAY preference persisted into the shared
   // `serverOrder` view pref (cross-ctx live sync), NO wire and no N-ctx/registry
   // change (navigation is id-keyed). `null` from `nextServerOrder` = no-op, so
@@ -289,9 +367,10 @@ export function useSidebarDrags({ servers, viewPrefs, sessionOrderOverride, setS
     })
   }
   return {
-    sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
-    commitSessionDrag, commitWorkspaceDrag, commitServerDrag,
-    sessionDropCommitted, workspaceDropCommitted, serverDropCommitted,
+    sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag,
+    checkoutDrag, setCheckoutDrag, serverDrag, setServerDrag,
+    commitSessionDrag, commitWorkspaceDrag, commitCheckoutDrag, commitServerDrag,
+    sessionDropCommitted, workspaceDropCommitted, checkoutDropCommitted, serverDropCommitted,
     suppressClickRef, dragPressOnButtonRef,
   }
 }

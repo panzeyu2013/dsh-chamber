@@ -1,6 +1,6 @@
 # 09 · dsh 客户端插件运行时加载（方案 A：每实例合并宿主 boot 图）
 
-> **方案 A：chamber 自有 host 行暴露宿主 boot 图，前端按实例合并加载**——本文是客户端插件运行时加载的权威行为契约：官方 `dsh.client` 链路与 chamber 消费点、每实例图合并与去重、N-ctx 生命周期、失败降级与诊断分类、vendor 补丁集与信任边界；未完成门禁见 `docs/progress/STATUS.md`。与设计 08（git worktree 插件，**构建期强制打包**）互补：08 走编译期打包，本文走**运行期加载**（第三方/自研 `dsh.client` 包，装进 profile 后前端按实例加载，不重建 chamber 前端）。
+> **方案 A：chamber 自有 host 行暴露宿主 boot 图，前端按实例合并加载**——本文是客户端插件运行时加载的权威行为契约：官方 `dsh.client` 链路与 chamber 消费点、每实例图合并与去重、N-ctx 生命周期、失败降级与诊断分类、vendor 补丁集与信任边界；未完成门禁见 `docs/progress/STATUS.md`。与设计 08（git worktree，**chamber 客户端插件构建期强制打包**）互补：08 的 chamber 侧走编译期打包，本文走**运行期加载**（第三方/自研 `dsh.client` 包，装进 profile 后前端按实例加载，不重建 chamber 前端）。P5b 的官方 `forge-bundle` 属后者的上游 bundle：启用后其客户端行（`client-ui-forge` 等）经同一每实例宿主图加载，chamber 不为它加覆盖行。
 
 ## 1. 背景：官方机制与 chamber 的消费点
 
@@ -58,7 +58,11 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   本地 profile seed 该行（`--patch` overlay，模块 B；先例 `seedDshHomeDefaults` 已 seed
   `settings.yaml`）。本文模块 A 为单包；同 seed 机制的 chamber 宿主包现为四个（+git-worktree（设计 08）、
   +archive-cleanup（设计 24）、+open-in（设计 20 §6，`localOnly`）），机制同构、清单以 05 §6/02 §2.6
-  为权威。**包分发契约**：seed 时控制面把模块 A 包（package.json + dist/index.js；产物构建期生成、不提交，clean checkout 由 `pnpm run build:artifacts` 自举，取舍见 design 05 §6）裸包拷贝进
+  为权威。**P5b 官方 bundle（opt-in）不在 seed 清单内**：forge-bundle 由用户在实例前端 Plugins → More
+  启用，chamber 只经本地 `--patch` overlay 对其 `forge-github` 行注入 id-targeted `disabled`
+  （未启用 bundle = 幂等跳过；已启用但 id 不成立 = fail-closed）；启用/关闭需重启，`client-ui-forge`
+  等客户端行由宿主图 as-is 加载、不进 `CHAMBER_COVERED_IDS`。
+  **包分发契约**：seed 时控制面把模块 A 包（package.json + dist/index.js；产物构建期生成、不提交，clean checkout 由 `pnpm run build:artifacts` 自举，取舍见 design 05 §6）裸包拷贝进
   `profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/`（免 pnpm，行内注释记录），
   `--patch` 行经 profile node_modules 锚点解析。
 - **方案 B（备选，未采用）：前端提取宿主注入的图**。`GET /api/i/<id>/` 反代到宿主根路径，宿主返回官方
@@ -262,7 +266,9 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   `chamber-covered.ts` 条目注释；官方桌面账户家族 alpha.3 起迁出该名单（见下「有意跳过名单」③）。独立成
   叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
-  （执行期断言）。alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。rc.2 同理：新徽标行 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`（官方 web-app 行，占 `conversation.input.model.label` 单槽，chamber 无同槽占用者）不进覆盖集、由宿主图加载；其 create-time require 只有 `react/jsx-runtime` 与 ui-primitives（后者由复合 factory 应答），不需要 factory 或 disable 行。pin 0.2.2-alpha.2 同样按此判定：闭包新增的 `dsh-client-ui-action-cards` / `dsh-client-ui-creation-recommendations` / `dsh-client-ui-plugin-recommendations` / `dsh-message-quotes` / `dsh-cua` 都由宿主图 extra row 载入、不进覆盖集；该代的唯一例外是 `dsh-client-ui-file-drag`——`ui-chat` 根 inject 与 `ui-attachment` 的 `inject = ['slots', 'fileDrag']` 直接依赖它，缺行会让会话链停在 PENDING，故按 shortcuts/remoteAccess 先例升为**首屏 covered factory**。判定规则：一行是否升 covered 只看「是否被首屏根 inject 强制依赖」，不看它有没有自己的产品面。
+  （执行期断言）。**P5b 的 forge 客户端行同理不进覆盖集**：`@deepseek-ai/dsh-experimental-client-ui-forge`
+（`forge-panel`）由启用后的宿主图 extra row 加载；`forge-github` 行被本地 overlay disabled 后不产生
+该行的客户端 entry（以 P5b 壳内 P0 实测为准）。alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。rc.2 同理：新徽标行 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`（官方 web-app 行，占 `conversation.input.model.label` 单槽，chamber 无同槽占用者）不进覆盖集、由宿主图加载；其 create-time require 只有 `react/jsx-runtime` 与 ui-primitives（后者由复合 factory 应答），不需要 factory 或 disable 行。pin 0.2.2-alpha.2 同样按此判定：闭包新增的 `dsh-client-ui-action-cards` / `dsh-client-ui-creation-recommendations` / `dsh-client-ui-plugin-recommendations` / `dsh-message-quotes` / `dsh-cua` 都由宿主图 extra row 载入、不进覆盖集；该代的唯一例外是 `dsh-client-ui-file-drag`——`ui-chat` 根 inject 与 `ui-attachment` 的 `inject = ['slots', 'fileDrag']` 直接依赖它，缺行会让会话链停在 PENDING，故按 shortcuts/remoteAccess 先例升为**首屏 covered factory**。判定规则：一行是否升 covered 只看「是否被首屏根 inject 强制依赖」，不看它有没有自己的产品面。
   **pin 0.2.2-alpha.3 的 roster 裁决与 Rejected alternatives**：`dsh-client-ui-context-menu` 升首屏 covered——它经
   `provideRoot` 提供 `useContextMenu` 根标准 prop、并以 `ctx.provide('contextMenus')` 提供 cordis 服务；被覆盖的
   `ui-chat`/`ui-deliverables` 在渲染期直接解构该 prop，`ui-workspace`/`ui-sidebar-right`/`ui-open-in-app` 的 inject
@@ -747,6 +753,11 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 
 ## 5. 风险与开放问题
 
+- **P5b forge bundle 仍是 EXPERIMENTAL（开放项）**：六个包的 patch 行 id/组形状随上游 pin 漂移；
+  `forge-github` 的 id-targeted disable 以字符串寻址，升级时须由 `test:control-plane` 的 bundle-row-disables
+  用例与壳内 P0 复核（未启用 = 跳过、已启用但 id/包名不成立 = fail-closed）。node 走 control-plane 的
+  PATH shim / string-only 解析（不写 `process.execPath`），Swift 用 sidecar node——两者都属于 P5b 的
+  双形态验收，不是本方案的加载面回退。filters 的两步 parity 与 LFS 降级见 design 08 §2.3。
 - **插件生态成熟度**：当前第三方 `dsh.client` 包尚少，本方案是"机制先备"。
 - **远程实例部署说明（开放项）**：远端 seed 的机械编排已接线（§3.5），并入 design 02 §3.9 远端部署说明仍待做。
 - **上游端点属主（开放项）**：`/plugins/events` 的属主是上游 HMR 宿主行（cordis.patch.yml 原文

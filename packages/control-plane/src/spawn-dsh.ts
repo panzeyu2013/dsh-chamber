@@ -30,7 +30,7 @@ import {
 import { createHostLogWriter } from './host-logs.ts'
 import { ensurePrivateDirectoryNoFollow, isExecutableFile } from './private-file.ts'
 import { removePidRecord, writePidRecord } from './pid-record.ts'
-import { withPnpmShim } from './pnpm-shim.ts'
+import { withNodePath, withPnpmShim } from './pnpm-shim.ts'
 import type { Logger } from './types.ts'
 import { ensureInstanceId, isValidInstanceId } from './instance-id.ts'
 import { cimPidLiveness, hasWindowsResidualTree, treeKillWindows } from './win-probes.ts'
@@ -478,18 +478,66 @@ export function resolveNodeExecutable(): { file: string; args: string[]; env: Re
   return { file: 'node', args: [], env: {} }
 }
 
-/** Locate a `node` executable by scanning PATH (first match wins). */
-function searchPathForNode(): string | null {
-  const isWin = process.platform === 'win32'
+/** Locate a `node` executable by scanning PATH (first match wins). Injectable so the
+ *  string-only resolver below can pin a PATH/platform in a unit test without touching the
+ *  process globals. */
+function searchPathForNode(
+  pathValue: string | undefined = process.env.PATH,
+  platform: NodeJS.Platform = process.platform,
+  isExecutable: (file: string) => boolean = isExecutableFile,
+): string | null {
+  const isWin = platform === 'win32'
   const names = isWin ? ['node.exe'] : ['node']
-  for (const dir of (process.env.PATH ?? '').split(process.platform === 'win32' ? ';' : ':')) {
+  for (const dir of (pathValue ?? '').split(isWin ? ';' : ':')) {
     if (dir === '') continue
     for (const name of names) {
       const candidate = join(dir, name)
-      if (isExecutableFile(candidate)) return candidate
+      if (isExecutable(candidate)) return candidate
     }
   }
   return null
+}
+
+/** Test seam for {@link resolvePlainNodeExecutable}: every ambient fact it reads. */
+export interface PlainNodeSearch {
+  /** Default `process.versions.electron`; ANY value means this process runs as an app. */
+  readonly electron?: string
+  /** Default `process.execPath` (the app binary under Electron). */
+  readonly execPath?: string
+  readonly platform?: NodeJS.Platform
+  readonly env?: NodeJS.ProcessEnv
+  /** Default `homedir()`; only the nvm/version-manager roots derive from it. */
+  readonly home?: string
+  readonly isExecutable?: (file: string) => boolean
+  /** Overrides the well-known install roots (tests pass an empty list for a bare host). */
+  readonly knownLocations?: readonly string[]
+}
+
+/**
+ * String-only resolver for a REAL node executable (P5b-0).
+ *
+ * Deliberately different from {@link resolveNodeExecutable}: it NEVER takes the Electron
+ * branch. The upstream worktree service's `nodeCommand` is a single string with no args or
+ * env channel, so handing it the Electron binary would launch the app (or fail obscurely)
+ * instead of running a script — the failure must be `node-unavailable`, not "forge broke".
+ * Order: a process whose own basename IS node (or a bundled node) returns itself, then a
+ * PATH lookup, then the well-known install roots; null when no real node exists anywhere.
+ */
+export function resolvePlainNodeExecutable(search: PlainNodeSearch = {}): string | null {
+  const platform = search.platform ?? process.platform
+  const env = search.env ?? process.env
+  const execPath = search.execPath ?? process.execPath
+  const isExecutable = search.isExecutable ?? isExecutableFile
+  // `'electron' in search` lets a test pin the non-Electron shape even on a host whose
+  // runtime is Electron; production never passes the field and reads its own runtime.
+  const electron = 'electron' in search ? search.electron : process.versions.electron
+  if (electron === undefined && BUNDLED_NODE_BASENAMES.has(basename(execPath).toLowerCase())) {
+    return execPath
+  }
+  const fromPath = searchPathForNode(env.PATH, platform, isExecutable)
+  if (fromPath !== null) return fromPath
+  const known = search.knownLocations ?? knownNodeLocations(search.home ?? homedir())
+  return known.find(candidate => isExecutable(candidate)) ?? null
 }
 
 /** Compare nvm version dir names (v24.20.0) numerically, descending — readdir order must never decide the version. */
@@ -533,8 +581,7 @@ function nvmNodeCandidates(home: string): string[] {
 
 /** Well-known node install roots used when PATH has no node, platform-adapted;
  *  the nvm layout is identical on darwin and linux. */
-function knownNodeLocations(): string[] {
-  const home = homedir()
+function knownNodeLocations(home: string = homedir()): string[] {
   const nvmBins = nvmNodeCandidates(home)
   const systemBins = ['/usr/local/bin/node', '/usr/bin/node']
   const versionManagers = [
@@ -615,7 +662,7 @@ async function spawnAttempt({
   // the packaged pnpm artifact is a node script no PATH lookup can find; the bundled
   // launcher is made reachable here — only when the host PATH resolves no pnpm of its
   // own, and never fatally (design 02 §3.1).
-  const childEnv = withPnpmShim(hostEnv, {
+  const withPnpm = withPnpmShim(hostEnv, {
     stateDir,
     pnpmEntry,
     nodeFile: nodeExec.file,
@@ -625,6 +672,26 @@ async function spawnAttempt({
     cwd: spawnCwd,
     log,
   })
+  // P5b-0: the upstream worktree service spawns its configured `nodeCommand` — a single
+  // string, defaulting to the literal `node` — inside this child's PATH. Make that string
+  // resolve: the host's own node wins, then the generated node wrapper, then a plain (never
+  // Electron) node's directory, and otherwise a loud node-unavailable diagnostic. The
+  // control plane's own executable is never written anywhere as the command.
+  const nodePath = withNodePath(withPnpm, {
+    stateDir,
+    nodeFile: nodeExec.file,
+    nodeArgs: nodeExec.args,
+    nodeEnv: nodeExec.env,
+    cwd: spawnCwd,
+    log,
+    resolvePlainNode: resolvePlainNodeExecutable,
+  })
+  if (nodePath.source === 'unavailable') {
+    // Diagnostics only (P5b-0 fail-fast diagnosis): a managed host does not itself need node,
+    // so a broken environment is surfaced loudly instead of turning every start into an error.
+    logger.warn(`[dsh:${port}] ${nodePath.diagnostic}`)
+  }
+  const childEnv = nodePath.env
   const child = spawn(nodeExec.file, [...nodeExec.args, ...entry.args], {
     cwd: spawnCwd,
     env: childEnv,

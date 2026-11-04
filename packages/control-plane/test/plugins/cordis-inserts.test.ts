@@ -26,6 +26,7 @@ import {
   hasExactInsert,
   insertConflict,
   parseLoaderRows,
+  parsePatchRows,
   renderCordisDisablePatches,
   renderCordisInserts,
   renderCordisOverlay,
@@ -210,6 +211,77 @@ test('fieldCount counts exact scalars with boundary checks and ignores comments'
   assert.equal(fieldCount(patch, 'id', 'client-graph'), 1, 'client-graph-foo must not count as client-graph')
   assert.equal(fieldCount(patch, 'id', 'client-graph-foo'), 1)
   assert.equal(fieldCount(patch, 'name', '@dsh-chamber/dsh-chamber-seed-client-graph'), 1)
+})
+
+// ---------------------------------------------------------------------------
+// parsePatchRows — the id-targeted lookup space of a patch an EARLIER layer
+// mounts (a bundle's own cordis.patch.yml): ids at every depth, including a
+// group entry's config children, which is what a P5b-0 disable addresses.
+// ---------------------------------------------------------------------------
+
+test('parsePatchRows reads every top-level insert row of a bundle patch', () => {
+  const patch = `- insert:
+    - id: worktree
+      name: '@deepseek-ai/dsh-experimental-worktree'
+    - id: forge-github
+      name: '@deepseek-ai/dsh-experimental-forge-github'
+    - id: forge-session
+      name: '@deepseek-ai/dsh-experimental-forge-session'
+`
+  assert.deepEqual(parsePatchRows(patch).map(row => row.id), ['worktree', 'forge-github', 'forge-session'])
+  assert.deepEqual(parsePatchRows(patch)[1]!.names, ['@deepseek-ai/dsh-experimental-forge-github'])
+})
+
+test('parsePatchRows finds rows nested in a group entry, in block insert and config shapes', () => {
+  // The forge bundle's group row mounts its panel rows one level deeper; an id-targeted
+  // patch still addresses them by id, so the verification lookup must see them.
+  const blockInsert = `- insert:
+    - id: optional-forge-panel
+      group: true
+      isolate:
+        worktrees: true
+      insert:
+        - id: forge-worktree
+          name: '@deepseek-ai/dsh-experimental-worktree'
+        - id: forge-panel
+          name: '@deepseek-ai/dsh-experimental-client-ui-forge'
+`
+  const rows = parsePatchRows(blockInsert)
+  assert.deepEqual(rows.map(row => row.id), ['optional-forge-panel', 'forge-worktree', 'forge-panel'])
+  assert.deepEqual(rows[0]!.names, [], 'the group row itself carries no name')
+  assert.deepEqual(rows[2]!.names, ['@deepseek-ai/dsh-experimental-client-ui-forge'])
+
+  const blockConfig = `- insert:
+    - id: optional-forge-panel
+      group: true
+      config:
+        - id: forge-worktree
+          name: '@deepseek-ai/dsh-experimental-worktree'
+`
+  assert.deepEqual(parsePatchRows(blockConfig).map(row => row.id), ['optional-forge-panel', 'forge-worktree'])
+  assert.deepEqual(parsePatchRows(blockConfig)[1]!.names, ['@deepseek-ai/dsh-experimental-worktree'])
+
+  const flowConfig = `- insert:
+    - id: optional-forge-panel
+      group: true
+      config: [{ id: forge-worktree, name: '@deepseek-ai/dsh-experimental-worktree' }]
+`
+  assert.deepEqual(parsePatchRows(flowConfig).map(row => row.id), ['optional-forge-panel', 'forge-worktree'])
+})
+
+test('parsePatchRows ignores comments, config keys and rows without exactly one id', () => {
+  const patch = `# bundle patch
+- insert:
+    # a nested comment
+    - id: forge-github
+      name: '@deepseek-ai/dsh-experimental-forge-github' # trailing
+    - group: true
+      config:
+        nested: true
+`
+  const rows = parsePatchRows(patch)
+  assert.deepEqual(rows.map(row => row.id), ['forge-github'], 'a row without an id is not addressable')
+  assert.deepEqual(rows[0]!.names, ['@deepseek-ai/dsh-experimental-forge-github'])
 })
 
 // ---------------------------------------------------------------------------

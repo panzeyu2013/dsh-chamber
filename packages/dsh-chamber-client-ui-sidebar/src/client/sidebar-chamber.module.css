@@ -991,6 +991,47 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* Derived checkout row (design 08 §3.2-§3.3): the row header has no fold button —
+   folding is the main row's gesture — so this is a STATIC branch glyph in the
+   same gutter (same 16px box, same 4px gap) and must not read as clickable. */
+.checkoutGlyph {
+  cursor: default;
+}
+
+/* Checkout row health hint (design 06 §1.2-1.3): a small muted chip next to the
+   branch label; it only renders for a non-ready status (missing / invalid /
+   not-a-repo / unknown), so a healthy row is unchanged geometry. */
+.checkoutHealth {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Checkout row empty state: the row stays a row (0..N sessions is legal), so the
+   hint sits under its header at the session rows' inset instead of replacing the
+   row with the source-level empty box. */
+.checkoutEmpty {
+  padding: 3px 4px 3px 26px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* Session-row branch glyph of a placed session (design 06 §1.6): the parent row
+   is a derived checkout row, so the session renders a 13px branch mark before its
+   title. flex:none keeps the title's ellipsis contract; the mark is a status
+   image, never a control. */
+.checkoutSessionGlyph {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .sessionRow {
   display: flex;
   align-items: center;

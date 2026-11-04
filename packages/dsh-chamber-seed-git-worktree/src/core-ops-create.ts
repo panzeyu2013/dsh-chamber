@@ -1,5 +1,5 @@
 /**
- * The GitWorktreeCore create/rollback family.
+ * The GitWorktreeCore create family.
  *
  * Deps injection instead of class surgery: the factory receives exactly the fields and
  * cross-family callbacks this path uses, so no private member of GitWorktreeCore is
@@ -10,9 +10,9 @@ import { resolve, sep } from 'node:path'
 
 import { MAX_PREVIEWS, PREVIEW_TTL_MS } from './core-constants.ts'
 import { GitWorktreeError } from './core-errors.ts'
-import type { CreateOperationRecord, CreatedFacts, PreviewRecord, SourceSnapshot, WorktreeTopology } from './core-internals.ts'
-import type { CreateInput, CreateResult, GitCommandResult, PreviewCreateInput, PreviewCreateResult, RollbackCreateInput, RollbackCreateResult, WorkspaceFact } from './core-types.ts'
-import { fail, opaqueId, parseCreateInput, parsePreviewInput, parseRollbackInput, previewToken } from './core-validation.ts'
+import type { CreateOperationRecord, PreviewRecord, SourceSnapshot, WorktreeTopology } from './core-internals.ts'
+import type { CreateInput, CreateResult, GitCommandResult, PreviewCreateInput, PreviewCreateResult, WorkspaceFact } from './core-types.ts'
+import { fail, opaqueId, parseCreateInput, parsePreviewInput, previewToken } from './core-validation.ts'
 
 /** Narrow host surface the create path needs; GitWorktreeCore satisfies it. */
 export interface CreateOpsDeps {
@@ -22,33 +22,39 @@ export interface CreateOpsDeps {
   readonly now: () => number
   readonly operationCapacity: number
   readonly previews: Map<string, PreviewRecord>
-  readonly worktreesRoot: string
-  readonly anyWorkspaceOwnsPath: (state: SourceSnapshot, target: string) => Promise<boolean>
   readonly assertBranchFormat: (cwd: string, branch: string) => Promise<void>
-  readonly assertNoRunningAtPath: (target: string, state: SourceSnapshot) => Promise<void>
+  /** The topology-based main-checkout + Git-directory containment gate. */
+  readonly assertCreatableSource: (canonicalSource: string, topology: WorktreeTopology) => Promise<void>
+  /** Pre-topology shape gate (subdirectory / submodule refusals); returns the canonical
+   *  source path every containment comparison is measured against. */
+  readonly assertSourceShape: (workspacePath: string) => Promise<string>
   readonly assertPathAbsent: (path: string) => Promise<void>
   readonly clearDiscoveryCaches: () => void
+  /** Populate the `--no-checkout` worktree (filter enumeration + reset to HEAD). */
+  readonly completeCheckout: (targetPath: string) => Promise<void>
   readonly discover: (cwd: string) => Promise<{ commonDir: string; topLevel: string }>
   readonly ensureWorktreeRoot: (root: string) => Promise<void>
   readonly existingPath: (path: string) => Promise<string>
-  readonly gitChecked: (cwd: string, args: readonly string[], mutation?: boolean) => Promise<GitCommandResult>
-  readonly isDirty: (path: string) => Promise<boolean>
+  readonly gitChecked: (
+    cwd: string,
+    args: readonly string[],
+    mutation?: boolean,
+    env?: Readonly<Record<string, string>>,
+  ) => Promise<GitCommandResult>
   readonly localBranchHead: (cwd: string, branch: string) => Promise<string | null>
   readonly pruneCaches: () => void
   readonly readSource: () => Promise<SourceSnapshot>
   readonly topology: (cwd: string) => Promise<WorktreeTopology>
   readonly workspace: (state: SourceSnapshot, id: string) => WorkspaceFact
-  readonly worktreeRootFor: (mainPath: string, commonDir: string) => string
+  readonly worktreeRootFor: (mainPath: string) => string
 }
 
 /** The create family as returned by the factory (also used by the facade). */
 export interface CreateOps {
   previewCreate(untrusted: PreviewCreateInput): Promise<PreviewCreateResult>
   create(untrusted: CreateInput): Promise<CreateResult>
-  rollbackCreate(untrusted: RollbackCreateInput): Promise<RollbackCreateResult>
   verifyCreatedReplay(record: CreateOperationRecord): Promise<CreateResult>
   performCreate(id: string, preview: PreviewRecord, operation: CreateOperationRecord, replayed: boolean,): Promise<CreateResult>
-  performRollback(id: string, facts: CreatedFacts, operation: CreateOperationRecord, replayed: boolean,): Promise<RollbackCreateResult>
   uniquePreviewToken(): string
   publicPreview(preview: PreviewRecord): PreviewCreateResult
   evictOldestCreateOperationIfFull(): void
@@ -64,16 +70,23 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
     return await deps.mutex.run(discovered.commonDir, async () => {
       const state = await deps.readSource()
       const workspace = deps.workspace(state, input.sourceWorkspaceId)
+      const canonicalSource = await deps.assertSourceShape(workspace.path)
       const topology = await deps.topology(workspace.path)
       if (topology.commonDir !== discovered.commonDir) {
         fail('repository-changed', 'the source workspace changed repositories during preview')
       }
       const main = topology.worktrees[0]!
       if (main.bare) fail('bare-repository', 'bare repositories cannot own linked worktrees')
+      await deps.assertCreatableSource(canonicalSource, topology)
 
-      const targetRoot = deps.worktreeRootFor(topology.mainPath, topology.commonDir)
+      const targetRoot = deps.worktreeRootFor(topology.mainPath)
       const targetPath = resolve(targetRoot, input.basename)
-      if (!targetPath.startsWith(`${targetRoot}${sep}`)) fail('unsafe-path', 'target escaped the unified worktree root')
+      // Measured against the CANONICAL SOURCE, never against the pool root itself (a
+      // `resolve(targetRoot, basename)` comparison against targetRoot is tautological):
+      // the checkout must stay inside the session's sandbox root.
+      if (!targetPath.startsWith(`${canonicalSource}${sep}`)) {
+        fail('unsafe-path', 'target escaped the source checkout')
+      }
       await deps.assertPathAbsent(targetPath)
       await deps.assertBranchFormat(topology.mainPath, input.branch.name)
 
@@ -139,11 +152,6 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
         return { ...result, replayed: true }
       }
       if (existing.state === 'created') return await ops.verifyCreatedReplay(existing)
-      if (existing.state === 'rolling-back'
-        || existing.state === 'rollback-uncertain'
-        || existing.state === 'rolled-back') {
-        fail('operation-rolled-back', 'the create operation has already been rolled back')
-      }
     } else {
       const candidate = deps.previews.get(input.previewToken)
       if (candidate === undefined) fail('preview-not-found', 'preview token is unknown or expired')
@@ -164,7 +172,7 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
       updatedAt: deps.now(),
       attemptedCreate: false,
       gitAccepted: false,
-      attemptedRollback: false,
+      checkoutCompleted: false,
     }
     deps.createOperations.set(input.operationId, record)
     record.state = 'creating'
@@ -176,18 +184,6 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
       record.state = 'created'
       record.updatedAt = deps.now()
       record.createResult = result
-      if (result.rollbackAuthorized) {
-        record.facts = {
-          repoId: result.repoId,
-          worktreeId: result.worktreeId,
-          commonDir: result.commonDir,
-          mainPath: preview.mainPath,
-          path: result.path,
-          branch: result.branch,
-          head: result.head,
-          branchCreated: result.branchCreated,
-        }
-      }
       return result
     } catch (error) {
       // Once a mutation was admitted, timeout/output overflow/non-zero exit and
@@ -199,53 +195,9 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
     }
   }
 
-/**
- * Compensate only a worktree proven to have been created by this operation; no force and
- * no branch deletion are ever available.
- */
-
-  async function rollbackCreate(untrusted: RollbackCreateInput): Promise<RollbackCreateResult> {
-    const input = parseRollbackInput(untrusted)
-    deps.clearDiscoveryCaches()
-    deps.pruneCaches()
-    const record = deps.createOperations.get(input.operationId)
-    if (record === undefined) fail('operation-not-found', 'no create operation can authorize this rollback')
-    if (record.state === 'creating') fail('operation-busy', 'create operation is still running')
-    if (record.state === 'ready') fail('operation-not-created', 'create operation did not create a worktree')
-    if (record.state === 'rolling-back') {
-      const result = await record.rollbackPromise!
-      return { ...result, replayed: true }
-    }
-    if (record.state === 'rolled-back') return { ...record.rollbackResult!, replayed: true }
-    if (!record.gitAccepted || record.facts === undefined) {
-      fail('rollback-not-authorized', 'Git add success was not observed; automatic rollback has no provenance')
-    }
-
-    const stateBeforeRollback = record.state
-    record.state = 'rolling-back'
-    record.updatedAt = deps.now()
-    const promise = ops.performRollback(
-      input.operationId,
-      record.facts,
-      record,
-      stateBeforeRollback === 'rollback-uncertain',
-    )
-    record.rollbackPromise = promise
-    try {
-      const result = await promise
-      record.state = 'rolled-back'
-      record.updatedAt = deps.now()
-      record.rollbackResult = result
-      return result
-    } catch (error) {
-      record.state = record.attemptedRollback ? 'rollback-uncertain' : stateBeforeRollback
-      record.updatedAt = deps.now()
-      record.rollbackPromise = undefined
-      throw error
-    }
-  }
-
-  /** Git-first removal; the durable workspace registration remains for the caller's next step. */
+  /** Terminal replay revalidates the Git receipt AND the live registry: a terminal result
+   *  is a receipt, never a substitute for current facts. The source re-read proves the
+   *  previewed workspace still resolves to the same MAIN checkout (design 08 §2.3). */
 
   async function verifyCreatedReplay(record: CreateOperationRecord): Promise<CreateResult> {
     const result = record.createResult
@@ -257,6 +209,12 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
         || topology.mainPath !== record.preview.mainPath
         || opaqueId('repo', topology.commonDir) !== result.repoId) {
         fail('operation-conflict', 'created operation repository changed before terminal replay')
+      }
+      const state = await deps.readSource()
+      const sourceWorkspace = deps.workspace(state, record.preview.sourceWorkspaceId)
+      const canonicalSource = await deps.existingPath(sourceWorkspace.path)
+      if (canonicalSource !== record.preview.mainPath) {
+        fail('operation-conflict', 'source workspace changed before terminal replay')
       }
       const target = topology.worktrees.find(worktree => worktree.path === result.path)
       if (target === undefined
@@ -285,13 +243,15 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
     return await deps.mutex.run(preview.commonDir, async () => {
       const state = await deps.readSource()
       const workspace = deps.workspace(state, preview.sourceWorkspaceId)
+      const canonicalSource = await deps.assertSourceShape(workspace.path)
       const topology = await deps.topology(workspace.path)
       if (topology.commonDir !== preview.commonDir || topology.mainPath !== preview.mainPath) {
         fail('preview-stale', 'repository identity changed after preview')
       }
-      const targetRoot = deps.worktreeRootFor(topology.mainPath, topology.commonDir)
+      await deps.assertCreatableSource(canonicalSource, topology)
+      const targetRoot = deps.worktreeRootFor(topology.mainPath)
       const targetPath = resolve(targetRoot, preview.basename)
-      if (targetPath !== preview.targetPath || !targetPath.startsWith(`${deps.worktreesRoot}${sep}`)) {
+      if (targetPath !== preview.targetPath || !targetPath.startsWith(`${canonicalSource}${sep}`)) {
         fail('preview-stale', 'target identity changed after preview')
       }
 
@@ -305,29 +265,23 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
           || reconciled.head !== preview.baseHead) {
           fail('operation-conflict', 'operation target exists with a different branch or HEAD')
         }
-        const facts: CreatedFacts = {
-          repoId: opaqueId('repo', topology.commonDir),
-          worktreeId: opaqueId('worktree', topology.commonDir, reconciled.path),
-          commonDir: topology.commonDir,
-          mainPath: topology.mainPath,
-          path: reconciled.path,
-          branch: preview.branch,
-          head: reconciled.head,
-          branchCreated: preview.branchMode === 'new' && operation.gitAccepted,
+        // The add may have committed while its response failed: complete the untouched
+        // `--no-checkout` worktree before adopting it as a finished create.
+        if (!operation.checkoutCompleted) {
+          await deps.completeCheckout(targetPath)
+          operation.checkoutCompleted = true
         }
-        if (operation.gitAccepted) operation.facts = facts
         return {
           operationId: id,
           created: true,
           replayed: true,
-          repoId: facts.repoId,
-          worktreeId: facts.worktreeId,
-          commonDir: facts.commonDir,
-          path: facts.path,
-          branch: facts.branch,
-          head: facts.head,
-          rollbackAuthorized: operation.gitAccepted,
-          branchCreated: facts.branchCreated,
+          repoId: opaqueId('repo', topology.commonDir),
+          worktreeId: opaqueId('worktree', topology.commonDir, reconciled.path),
+          commonDir: topology.commonDir,
+          path: reconciled.path,
+          branch: preview.branch,
+          head: reconciled.head,
+          branchCreated: preview.branchMode === 'new' && operation.gitAccepted,
         }
       }
 
@@ -359,38 +313,33 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
       // Re-read the registry immediately before mutation; this closes ordinary UI races.
       const latest = await deps.readSource()
       const latestWorkspace = deps.workspace(latest, preview.sourceWorkspaceId)
-      if (await deps.existingPath(latestWorkspace.path) !== await deps.existingPath(workspace.path)) {
+      if (await deps.existingPath(latestWorkspace.path) !== canonicalSource) {
         fail('preview-stale', 'source workspace path changed after preview')
       }
 
-      const expectedFacts: CreatedFacts = {
-        repoId: opaqueId('repo', topology.commonDir),
-        worktreeId: opaqueId('worktree', topology.commonDir, targetPath),
-        commonDir: topology.commonDir,
-        mainPath: topology.mainPath,
-        path: targetPath,
-        branch: preview.branch,
-        head: preview.baseHead,
-        branchCreated: preview.branchMode === 'new',
-      }
-      operation.attemptedCreate = true
-
+      // Pool creation is still pre-mutation: an `ignore-unavailable` refusal must leave
+      // the operation record `ready` (nothing was attempted), not `uncertain`.
       await deps.ensureWorktreeRoot(targetRoot)
+      operation.attemptedCreate = true
+      // Step 1 of the forge-parity two-step checkout: write the admin record only.
       const args = preview.branchMode === 'existing'
-        ? ['worktree', 'add', '--', targetPath, preview.branch]
-        : ['worktree', 'add', '-b', preview.branch, '--', targetPath, preview.baseHead]
+        ? ['worktree', 'add', '--no-checkout', '--', targetPath, preview.branch]
+        : ['worktree', 'add', '--no-checkout', '-b', preview.branch, '--', targetPath, preview.baseHead]
       try {
         await deps.gitChecked(topology.mainPath, args, true)
       } catch (error) {
         // A spawn failure proves Git never accepted the operation; timeout/output/non-zero
-        // exit remain ambiguous and reconciled by identity, never granting rollback provenance.
+        // exit remain ambiguous and reconciled by identity, never report branch provenance.
         if (error instanceof GitWorktreeError && error.code === 'git-spawn-failed') {
           operation.attemptedCreate = false
         }
         throw error
       }
       operation.gitAccepted = true
-      operation.facts = expectedFacts
+      // Step 2: enumerate the fresh checkout's filter drivers and populate the worktree with
+      // every clean/smudge/process driver disabled (GIT_CONFIG_* + LFS skip in the runner).
+      await deps.completeCheckout(targetPath)
+      operation.checkoutCompleted = true
 
       const after = await deps.topology(topology.mainPath)
       const created = after.worktrees.find(worktree => worktree.path === targetPath)
@@ -411,102 +360,7 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
         path: created.path,
         branch: preview.branch,
         head: created.head,
-        rollbackAuthorized: true,
         branchCreated: preview.branchMode === 'new',
-      }
-    })
-  }
-
-  async function performRollback(
-    id: string,
-    facts: CreatedFacts,
-    operation: CreateOperationRecord,
-    replayed: boolean,
-  ): Promise<RollbackCreateResult> {
-    return await deps.mutex.run(facts.commonDir, async () => {
-      const state = await deps.readSource()
-      if (await deps.anyWorkspaceOwnsPath(state, facts.path)) {
-        fail('rollback-has-workspace', 'rollback is forbidden after a workspace registration exists')
-      }
-      await deps.assertNoRunningAtPath(facts.path, state)
-      const topology = await deps.topology(facts.mainPath)
-      if (topology.commonDir !== facts.commonDir) fail('repository-changed', 'created repository identity changed')
-      const target = topology.worktrees.find(worktree => worktree.path === facts.path)
-      if (target === undefined) {
-        // A prior rollback may have committed before its response failed; proven create
-        // ownership plus authoritative absence is the idempotent success condition.
-        return {
-          operationId: id,
-          removed: true,
-          replayed: true,
-          repoId: facts.repoId,
-          worktreeId: facts.worktreeId,
-          commonDir: facts.commonDir,
-          path: facts.path,
-          branch: facts.branch,
-          head: facts.head,
-          branchPreserved: true,
-        }
-      }
-      if (target === topology.worktrees[0]) fail('main-worktree', 'the main checkout can never be rolled back')
-      if (target.locked) fail('worktree-locked', 'locked worktrees cannot be rolled back')
-      if (target.branch !== facts.branch) fail('worktree-changed', 'the operation-created worktree changed branch')
-      if (target.head !== facts.head) fail('worktree-changed', 'the operation-created worktree changed HEAD')
-      // A MISSING target (directory externally deleted, admin record survives) has no
-      // content to protect; rollback converges by clearing the leftover record.
-      if (target.missing !== true && await deps.isDirty(target.path)) fail('worktree-dirty', 'dirty worktrees cannot be rolled back')
-
-      // Fresh workspace check immediately before Git removal. Never force.
-      const latest = await deps.readSource()
-      if (await deps.anyWorkspaceOwnsPath(latest, facts.path)) {
-        fail('rollback-has-workspace', 'workspace registration appeared during rollback')
-      }
-      await deps.assertNoRunningAtPath(facts.path, latest)
-      const finalTopology = await deps.topology(facts.mainPath)
-      if (finalTopology.commonDir !== facts.commonDir || finalTopology.mainPath !== facts.mainPath) {
-        fail('repository-changed', 'created repository identity changed immediately before rollback')
-      }
-      const finalTarget = finalTopology.worktrees.find(worktree => worktree.path === facts.path)
-      if (finalTarget === undefined) {
-        return {
-          operationId: id,
-          removed: true,
-          replayed: true,
-          repoId: facts.repoId,
-          worktreeId: facts.worktreeId,
-          commonDir: facts.commonDir,
-          path: facts.path,
-          branch: facts.branch,
-          head: facts.head,
-          branchPreserved: true,
-        }
-      }
-      if (finalTarget === finalTopology.worktrees[0]
-        || finalTarget.locked
-        || finalTarget.branch !== facts.branch
-        || finalTarget.head !== facts.head) {
-        fail('worktree-changed', 'operation-created worktree identity changed immediately before rollback')
-      }
-      if (finalTarget.missing !== true && await deps.isDirty(finalTarget.path)) {
-        fail('worktree-dirty', 'worktree became dirty immediately before rollback')
-      }
-      operation.attemptedRollback = true
-      await deps.gitChecked(finalTopology.mainPath, ['worktree', 'remove', '--', facts.path], true)
-      const after = await deps.topology(finalTopology.mainPath)
-      if (after.worktrees.some(worktree => worktree.path === facts.path)) {
-        fail('postcondition-failed', 'Git still reports the rolled-back worktree')
-      }
-      return {
-        operationId: id,
-        removed: true,
-        replayed,
-        repoId: facts.repoId,
-        worktreeId: facts.worktreeId,
-        commonDir: facts.commonDir,
-        path: facts.path,
-        branch: facts.branch,
-        head: target.head,
-        branchPreserved: true,
       }
     })
   }
@@ -537,13 +391,10 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
     let oldest: { id: string; updatedAt: number } | undefined
     for (const [id, record] of deps.createOperations) {
       // Capacity pressure may discard only a proven no-admission failure: an uncertain/
-      // created/rolled-back record is an idempotency tombstone or rollback provenance.
+      // created record is an idempotency tombstone.
       if (record.state !== 'ready'
         || record.attemptedCreate
-        || record.attemptedRollback
-        || record.facts !== undefined
-        || record.createResult !== undefined
-        || record.rollbackResult !== undefined) continue
+        || record.createResult !== undefined) continue
       if (oldest === undefined || record.updatedAt < oldest.updatedAt) {
         oldest = { id, updatedAt: record.updatedAt }
       }
@@ -554,10 +405,8 @@ export function createWorktreeCreateOps(deps: CreateOpsDeps): CreateOps {
   const ops: CreateOps = {
     previewCreate,
     create,
-    rollbackCreate,
     verifyCreatedReplay,
     performCreate,
-    performRollback,
     uniquePreviewToken,
     publicPreview,
     evictOldestCreateOperationIfFull,

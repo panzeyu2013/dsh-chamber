@@ -23,12 +23,26 @@ test('the per-workspace Git seat is declared in the SlotMap, declared in the sid
   const gitIndex = source('../../src/client/index.ts')
   const gitLine = source('../../src/client/SidebarWorkspaceGitLine.tsx')
 
-  // SlotMap: hookContext + slot-inject factory type.
-  assert.match(slots, /'sidebar\.workspace\.git':\s*\{[\s\S]*?hookContext:\s*\{\s*sourceId:\s*string;\s*workspaceId:\s*string(?:;\s*repoKey\?:\s*string)?\s*\}/)
+  // SlotMap: the occurrence context (a named interface since PR2) + the slot-inject
+  // factory type. The context must carry the frozen reachable identities: the
+  // source, the row (workspace id; `''` for source scope), the repository key and
+  // the DERIVED checkout occurrence of a `kind:'checkout'` row.
+  assert.match(slots, /'sidebar\.workspace\.git':\s*\{[\s\S]*?hookContext:\s*SidebarWorkspaceGitContext/)
   assert.match(slots, /inject:\s*\{\s*hooks:\s*\{\s*workspaceGitContext:/)
+  const contextStart = slots.indexOf('export interface SidebarWorkspaceGitContext {')
+  assert.notEqual(contextStart, -1, 'the sidebar declares the occurrence context interface')
+  const contextType = slots.slice(contextStart)
+  assert.match(contextType, /sourceId:\s*string/)
+  assert.match(contextType, /workspaceId:\s*string/)
+  assert.match(contextType, /repoKey\?:\s*string/)
+  assert.match(contextType, /checkout\?:\s*\{\s*path:\s*string;\s*branch:\s*string(?:\s*\|\s*null)?;\s*title:\s*string\s*\}/,
+    'a derived checkout row carries { path, branch, title }')
   // The sidebar's runtime children table must declare the seat (a missing
   // declaration silently stops the plugin's inject from ever registering).
-  assert.match(sidebarIndex, /'sidebar\.workspace\.git':\s*\{\s*kind:\s*'single',\s*scope:\s*'root',\s*inject:\s*\{\s*hooks:\s*\{\s*workspaceGitContext:/)
+  assert.match(sidebarIndex, /'sidebar\.workspace\.git':\s*\{\s*kind:\s*'single',\s*scope:\s*'root',\s*inject:\s*\{\s*hooks:/)
+  // The hook factory must hand the SAME occurrence context back (identity, not a
+  // rebuilt subset) — that is what carries the derived checkout fields through.
+  assert.match(sidebarIndex, /workspaceGitContext:\s*\(\s*_standard:\s*object,\s*context:\s*SidebarWorkspaceGitContext,?\s*\)\s*=>\s*\(\)\s*=>\s*context/)
   // Render sites (SidebarRoot or ServerSection): source-level
   // alert (workspaceId '') + per-workspace occupant rendered INSIDE the
   // workspace header row (before rowActions — OpenChamber-style, the row
@@ -37,8 +51,8 @@ test('the per-workspace Git seat is declared in the SlotMap, declared in the sid
   assert.match(mountCombined, /renderWorkspaceGit\('sidebar\.workspace\.git', \{ wide \}, \{\s*hookContext:\s*\{\s*sourceId:\s*server\.id,\s*workspaceId:\s*workspace\.id/)
   // The per-workspace occupant (workspaceId: workspace.id) must sit after
   // the workspace title and before (left of) the row actions cluster. The
-  // repo-scoped unregistered mounts render LATER (after the list) — locate
-  // the workspace-scoped call specifically, in whichever file owns it.
+  // legacy repo-scoped unregistered mounts are gone (PR3) — locate the
+  // workspace-scoped call specifically, in whichever file owns it.
   const workspaceMount = mountSources.find(mount =>
     mount.includes('hookContext: { sourceId: server.id, workspaceId: workspace.id },'))
   assert.ok(workspaceMount !== undefined, 'the per-workspace occupant render exists')

@@ -14,7 +14,7 @@ import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
-  // api: the RPC value decoders and the create/remove/adopt saga state machines.
+  // api: the RPC value decoders and the create/remove saga state machines.
   api: [
     'test/api/git-api.test.ts',
     'test/api/saga.test.ts',
@@ -28,16 +28,19 @@ const GROUPS = {
   // shared: the pure shared modules behind the dialog gates and the polling seam.
   shared: [
     'test/shared/action-error.test.ts',
-    'test/shared/discard-gate.test.ts',
+    'test/shared/checkout.test.ts',
     'test/shared/freshness.test.ts',
-    'test/shared/placement.test.ts',
+    'test/shared/i18n.test.ts',
+    'test/shared/layout.test.ts',
     'test/shared/poll-wave.test.ts',
     'test/shared/retry-budget.test.ts',
+    'test/shared/remove-input.test.ts',
     'test/shared/remove-notes.test.ts',
     'test/shared/visibility-gate.test.ts',
   ],
   // locks: source-text locks over the client sources and the cross-package contracts.
   locks: [
+    'test/locks/checkout-occupant.test.ts',
     'test/locks/slot-contract.test.ts',
   ],
 }

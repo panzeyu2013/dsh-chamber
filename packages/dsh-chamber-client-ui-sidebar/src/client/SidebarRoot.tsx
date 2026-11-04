@@ -16,7 +16,7 @@ import {
   BrandWordmark, FishLogo, IconNewChatOutlineMedium, IconNewChatOutlineRegular, IconPanelLeftOutlineRegular,
   ShortcutKeys, Tooltip, focusWithoutRing, isBehindModal, isDarwinDesktop, useModalLayer,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ShortcutsHook, SidebarRootComponentProps } from './contract/slots.ts'
+import type { ShortcutsHook, SidebarRootComponentProps, SidebarWorkspaceGitContext } from './contract/slots.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { getInstanceClient, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { setSearchFetcher } from '@dsh-chamber/dsh-chamber-client-core/search-state'
@@ -92,7 +92,7 @@ export function SidebarRoot({
   const renderWorkspaceGit = renderSlot as (
     key: 'sidebar.workspace.git',
     owner: { wide: boolean },
-    opts: { hookContext: { sourceId: string; workspaceId: string; repoKey?: string } },
+    opts: { hookContext: SidebarWorkspaceGitContext },
   ) => ReactNode
   // 同一次 cast 的第二个面：会话行两座席（补丁 13 转由本壳声明）。
   const renderSessionSeat = renderSlot as (
@@ -127,9 +127,10 @@ export function SidebarRoot({
   // per-shell 瞬态。servers 参与：断连来源的警示与其计时器一并清除（TTL 内重连不得弹回）。
   const { notices, showNotice } = useSidebarNotices(servers)
   const {
-    sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
-    commitSessionDrag, commitWorkspaceDrag, commitServerDrag,
-    sessionDropCommitted, workspaceDropCommitted, serverDropCommitted,
+    sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag,
+    checkoutDrag, setCheckoutDrag, serverDrag, setServerDrag,
+    commitSessionDrag, commitWorkspaceDrag, commitCheckoutDrag, commitServerDrag,
+    sessionDropCommitted, workspaceDropCommitted, checkoutDropCommitted, serverDropCommitted,
     suppressClickRef, dragPressOnButtonRef,
   } = useSidebarDrags({
     servers, viewPrefs, sessionOrderOverride, setSessionOrderOverride,
@@ -179,6 +180,7 @@ export function SidebarRoot({
     setArchivedFilter,
     commitSessionDrag,
     commitWorkspaceDrag,
+    commitCheckoutDrag,
     commitServerDrag,
     armBlankGhostForClick,
     toggleMenu,
@@ -212,12 +214,15 @@ export function SidebarRoot({
     setSessionDrag,
     workspaceDrag,
     setWorkspaceDrag,
+    checkoutDrag,
+    setCheckoutDrag,
     serverDrag,
     setServerDrag,
     suppressClickRef,
     dragPressOnButtonRef,
     sessionDropCommitted,
     workspaceDropCommitted,
+    checkoutDropCommitted,
     serverDropCommitted,
     ghostExpiry,
     rowErrors,
@@ -233,9 +238,10 @@ export function SidebarRoot({
     wide, t, chamberInstanceId, useShortcuts, renderWorkspaceGit, renderSessionSeat, panels, selectPanel,
     usePanelInfo, renderSlot, viewPrefs, actions,
     sessionOrderOverride, workspaceOrderOverride,
-    sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag, serverDrag, setServerDrag,
+    sessionDrag, setSessionDrag, workspaceDrag, setWorkspaceDrag,
+    checkoutDrag, setCheckoutDrag, serverDrag, setServerDrag,
     suppressClickRef,
-    dragPressOnButtonRef, sessionDropCommitted, workspaceDropCommitted, serverDropCommitted,
+    dragPressOnButtonRef, sessionDropCommitted, workspaceDropCommitted, checkoutDropCommitted, serverDropCommitted,
     ghostExpiry, rowErrors, menuOpen, sortMenuOpen, setSortMenuOpen, renaming, setRenaming,
     openSession, notices, showNotice,
   ])

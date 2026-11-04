@@ -584,6 +584,20 @@
       }
     },
     {
+      "id": "tests.client-core",
+      "title": "Package tests: client-core",
+      "command": "test:client-core",
+      "modes": [
+        "tests"
+      ],
+      "tier": "test",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
       "id": "tests.control-plane",
       "title": "Package tests: control-plane",
       "command": "test:control-plane",

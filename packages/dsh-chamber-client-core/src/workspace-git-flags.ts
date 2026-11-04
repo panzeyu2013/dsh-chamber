@@ -20,13 +20,24 @@ export interface WorkspaceGitFlag {
 
 /** One UNREGISTERED worktree of a repository (no dsh workspace). */
 export interface UnregisteredWorktreeInfo {
+  /** Directory name (basename) — the fallback checkout-row title. */
   name: string
+  /** Host-minted opaque identity. Never reconstruct this from `path`. */
   worktreeId: string
+  /**
+   * The checkout's CANONICAL path (host-canonical, as the Git host resolved it).
+   * THIS is the checkout row's placement key, dedupe key and `path` fact; the
+   * row identity itself is derived (`__checkout__:<canonicalPath>`), never the
+   * opaque worktreeId.
+   */
+  path: string
   branch: string | null
   status: 'ready' | 'missing' | 'invalid' | 'not-a-repo'
   headState: 'branch' | 'detached' | 'unborn'
   attention: string[]
   dirty: boolean | null
+  /** Git's own `locked` worktree flag: a locked checkout is never removable. */
+  locked: boolean
   head: string
 }
 
@@ -143,10 +154,42 @@ export function retainSourceWorkspaceFlags(sourceId: string, keep: ReadonlySet<s
   if (changed) bump()
 }
 
-/** Publish the source's full repo layout (Plan A): replaces the previous. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Structural equality of two JSON-shaped layout values. The layout dedupe MUST
+ * compare every field — including each unregistered worktree's `path` and
+ * `locked` facts — or a refresh whose only change is one of them is dropped
+ * before the store/version moves (the sidebar never sees it). Key order must
+ * not matter: the publisher may build the same rows in a different order, so a
+ * substring/JSON.stringify comparison would both miss fields (if scoped) and
+ * churn on ordering. Recursive on purpose.
+ */
+function sameLayoutValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => sameLayoutValue(value, right[index]))
+  }
+  if (!isPlainRecord(left) || !isPlainRecord(right)) return false
+  const leftKeys = Object.keys(left)
+  if (leftKeys.length !== Object.keys(right).length) return false
+  return leftKeys.every(key => Object.hasOwn(right, key) && sameLayoutValue(left[key], right[key]))
+}
+
+/**
+ * Publish the source's full repo layout (Plan A): replaces the previous.
+ *
+ * CHECKOUT rows are driven by the DERIVED row fields (`kind/repoKey/
+ * familyMainId/path`), never by a synthetic flag published here:
+ * {@link retainSourceWorkspaceFlags} prunes every key that is not a registered
+ * workspace, so a checkout flag would be dropped on the next refresh anyway.
+ */
 export function setSourceRepoLayouts(sourceId: string, layouts: RepoGitLayout[]): void {
   const existing = repoLayouts.get(sourceId)
-  if (existing !== undefined && JSON.stringify(existing) === JSON.stringify(layouts)) return
+  if (existing !== undefined && sameLayoutValue(existing, layouts)) return
   repoLayouts.set(sourceId, layouts)
   bump()
 }

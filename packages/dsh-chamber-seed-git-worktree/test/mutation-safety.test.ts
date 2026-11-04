@@ -16,6 +16,7 @@ import {
   COMMON,
   LINKED,
   FEATURE_HEAD,
+  WORKTREES_ROOT,
   FakeRepository,
   setup,
   targetOf,
@@ -32,7 +33,7 @@ test('remove refuses a submodule-hosting worktree unless discardChanges authoriz
     const { core, repo } = setup({ linked: true })
     // The worktree's admin git dir hosts a submodule `modules` dir — the same
     // criterion git's own removal guard checks (builtin/worktree.c validate_no_submodules).
-    const target = mode === 'registered' ? LINKED : '/repos/ext-sub'
+    const target = mode === 'registered' ? LINKED : `${WORKTREES_ROOT}/ext-sub`
     const modulesDir = `${COMMON}/worktrees/${mode === 'registered' ? 'feature' : 'ext-sub'}`
     if (mode === 'unregistered') repo.addLinked({ path: target, branch: 'ext-sub', head: FEATURE_HEAD })
     repo.gitDirs.set(target, modulesDir)

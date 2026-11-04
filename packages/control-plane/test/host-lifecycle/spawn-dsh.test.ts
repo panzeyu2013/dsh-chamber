@@ -23,6 +23,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
   probePortBusy,
+  resolvePlainNodeExecutable,
   resolveSpawnCwd,
   spawnDsh,
   DEFAULT_DSH_START_PORT,
@@ -534,7 +535,7 @@ test('spawnDsh: a host PATH without pnpm reaches the child with the bundled laun
     spawned = await withProcessPath(emptyBin, () =>
       spawnHost(stateDir, dshWorkspacePath, controller.signal, { pnpmEntry: entry }))
     const shimDir = join(stateDir, 'pnpm-shim')
-    assert.equal(readFileSync(pathMarker, 'utf8'), shimDir + delimiter + emptyBin)
+    assert.equal(readFileSync(pathMarker, 'utf8'), join(stateDir, 'node-shim') + delimiter + shimDir + delimiter + emptyBin)
     const shim = join(shimDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')
     assert.equal(readFileSync(shim, 'utf8').includes(entry), true, 'the wrapper targets the resolved entry')
     await reapSpawned(spawned)
@@ -546,7 +547,135 @@ test('spawnDsh: a host PATH without pnpm reaches the child with the bundled laun
   }
 })
 
-test('spawnDsh: a host PATH that already resolves pnpm is handed to the child untouched', async () => {
+test('spawnDsh: a host PATH without node reaches the child with the node wrapper prepended (P5b-0)', async () => {
+  // The worktree service spawns the literal `node` out of the host env (single string, no
+  // args/env channel), and a Finder-launched app has no node on PATH: the shim makes the
+  // default nodeCommand resolve without any machine path entering a profile or the overlay.
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const { pathMarker } = writePathRecordingHost(stateDir, dshWorkspacePath)
+  const emptyBin = join(stateDir, 'empty-bin')
+  mkdirSync(emptyBin)
+  const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
+  try {
+    // No pnpmEntry: the node provision is the only PATH writer in this case.
+    spawned = await withProcessPath(emptyBin, () => spawnHost(stateDir, dshWorkspacePath, controller.signal))
+    const shimDir = join(stateDir, 'node-shim')
+    assert.equal(readFileSync(pathMarker, 'utf8'), shimDir + delimiter + emptyBin)
+    const wrapper = join(shimDir, process.platform === 'win32' ? 'node.cmd' : 'node')
+    assert.equal(readFileSync(wrapper, 'utf8').includes(process.execPath), true,
+      'the wrapper targets the resolved node (under Electron the app binary + ELECTRON_RUN_AS_NODE)')
+    await reapSpawned(spawned)
+  } finally {
+    controller.abort()
+    spawned?.child.kill()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: a host PATH that already resolves node is handed to the child untouched', async () => {
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const { pathMarker } = writePathRecordingHost(stateDir, dshWorkspacePath)
+  const userBin = join(stateDir, 'user-bin')
+  mkdirSync(userBin)
+  writeFileSync(join(userBin, process.platform === 'win32' ? 'node.cmd' : 'node'), '#!/bin/sh\n', { mode: 0o755 })
+  const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
+  try {
+    spawned = await withProcessPath(userBin, () => spawnHost(stateDir, dshWorkspacePath, controller.signal))
+    assert.equal(readFileSync(pathMarker, 'utf8'), userBin, 'the user toolchain is never shadowed')
+    assert.equal(existsSync(join(stateDir, 'pnpm-shim')), false, 'nothing is materialized for a satisfied host')
+    await reapSpawned(spawned)
+  } finally {
+    controller.abort()
+    spawned?.child.kill()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// resolvePlainNodeExecutable (P5b-0): the string-only fallback. It must never
+// hand the Electron binary back as a node — the worktree config has no channel
+// for ELECTRON_RUN_AS_NODE — and null is the node-unavailable source.
+// ---------------------------------------------------------------------------
+
+/** A directory holding one executable file named `name`. */
+function writeExecutable(dir: string, name: string): string {
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, name)
+  writeFileSync(file, '#!/bin/sh\n', { mode: 0o755 })
+  return file
+}
+
+test('resolvePlainNodeExecutable: an Electron host never returns process.execPath', () => {
+  const root = tempDir()
+  const execPath = '/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber'
+  const bindir = join(root, 'bin')
+  const node = writeExecutable(bindir, 'node')
+  const found = resolvePlainNodeExecutable({
+    electron: '30.0.0',
+    execPath,
+    platform: 'darwin',
+    env: { PATH: bindir },
+    knownLocations: [],
+    home: root,
+  })
+  assert.equal(found, node, 'the real node on PATH wins')
+  assert.notEqual(found, execPath, 'the Electron binary is not a node and is never returned')
+})
+
+test('resolvePlainNodeExecutable: null when no real node exists anywhere (node-unavailable)', () => {
+  const root = tempDir()
+  const emptyBin = join(root, 'empty')
+  mkdirSync(emptyBin)
+  assert.equal(resolvePlainNodeExecutable({
+    electron: '30.0.0',
+    execPath: '/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber',
+    platform: 'darwin',
+    env: { PATH: emptyBin },
+    knownLocations: [],
+    home: root,
+  }), null)
+})
+
+test('resolvePlainNodeExecutable: the well-known install roots are the last anchor', () => {
+  const root = tempDir()
+  const known = writeExecutable(join(root, 'known', 'bin'), 'node')
+  assert.equal(resolvePlainNodeExecutable({
+    electron: '30.0.0',
+    execPath: '/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber',
+    platform: 'darwin',
+    env: { PATH: join(root, 'empty') },
+    knownLocations: [join(root, 'absent', 'node'), known],
+    home: root,
+  }), known)
+})
+
+test('resolvePlainNodeExecutable: a non-Electron process whose own basename IS node returns itself', () => {
+  const root = tempDir()
+  assert.equal(resolvePlainNodeExecutable({
+    electron: undefined,
+    execPath: '/opt/sidecar/dsh-chamber-helper',
+    platform: 'linux',
+    env: { PATH: join(root, 'empty') },
+    knownLocations: [],
+    home: root,
+  }), '/opt/sidecar/dsh-chamber-helper', 'the bundled sidecar node is a real node (Swift flavour)')
+  assert.equal(resolvePlainNodeExecutable({
+    electron: undefined,
+    execPath: '/usr/bin/node',
+    platform: 'linux',
+    env: { PATH: join(root, 'empty') },
+    knownLocations: [],
+    home: root,
+  }), '/usr/bin/node')
+})
+
+test('spawnDsh: a host PATH that already resolves pnpm and node is handed to the child untouched', async () => {
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   const { pathMarker, entry } = writePathRecordingHost(stateDir, dshWorkspacePath)
@@ -554,6 +683,12 @@ test('spawnDsh: a host PATH that already resolves pnpm is handed to the child un
   mkdirSync(userBin)
   writeFileSync(
     join(userBin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'),
+    process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n',
+    { mode: 0o755 },
+  )
+  // The node provision (P5b-0) is satisfied too, so NOTHING is materialized for this host.
+  writeFileSync(
+    join(userBin, process.platform === 'win32' ? 'node.cmd' : 'node'),
     process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n',
     { mode: 0o755 },
   )

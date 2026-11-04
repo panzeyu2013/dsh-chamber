@@ -36,7 +36,7 @@
 - **事实健康环**：仅无壳 mux 快照、无 in-app 读面；收口 = gateway 采样 + 只读环。
 - **归档清理/管理器（design 24）**：打包版目检、探针 fail-closed、>65,536 不清扫、gateway/远程实机；两段式与恢复路径实机未跑；残余 = 上游 wire no-op、维护期 force、保护边界；缺陷 = `errors` 通道混用；清理残留 = projcache 4KB、迁移代际窗口；tombstone 由孤儿清扫收敛。
 - **工作区删除意图（design 05 §2.2.1）**：列表中部删除不滑尾、最后一行无位移、确定性拒绝不闪回（限单次删除）；四类已登记例外与两类派生窄窗（见设计）；上游 order/remove 原子化后退役（§2.3）。
-- **侧栏收敛四项 + 整源降级**：会话创建/fork/归档、打开意图/工作区回声（`early-open.ts` 去留）、新 worktree 首帧五项（位置/淡入/确认层/tooltip 裁剪/`data-hover-gate`，判据见 design 06 §7）、会话待办区 10 项。
+- **侧栏收敛四项 + 整源降级**：会话创建/fork/归档、打开意图/工作区回声（`early-open.ts` 去留）、新 checkout 首帧五项（位置/淡入/确认层/tooltip 裁剪/`data-hover-gate`，判据见 design 06 §7）、会话待办区 10 项。
 - **双帧 status**：需宿主轮次键/可信 host 尾时间；无壳观察者 follow 已走 remote.mux，须真实宿主核对。
 - **受管日志取证**：真机未验；隐私代价（含会话内容）；仅本地 spawn。
 - **会话列表标签**：title→cwd basename→id；无额外实机门禁。
@@ -52,7 +52,7 @@
 - **N-ctx 主题/语言**：打包态目检；冷启动变化 ≤1、预热/收割 0，另验同帧性。
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载；打包态冒烟。
 - **rc.3 More 行依赖延迟设置行**：`entry-customization` 的 `pluginNavigation` 只由延迟的 settings-plugin-manager 提供，宿主行停在 PENDING ⇒ 会话头/右栏 More 缺席。延迟簇的 `Promise.all`（`registerDeferred`，`packages/renderer/src/chamber-entry.ts`）无 deadline：chunk **reject** 时按行 id 上报、只该延迟行失败（延迟簇其余行照常挂载）；chunk **悬挂**时整簇不挂载且零报告。判据 = 延迟 chunk 失败 drill + 悬挂 drill + 目检；座席存在但读取在处置窗口抛错时 `openPending` 无自动 flush（再次点击恢复），同 drill 覆盖。
-- **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create/rollback 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §5.3/§6.2。
+- **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §6.2。
 - **未接入的上游服务面**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges`、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；接入点 = design 09 §3.5/§3.6 的复合入口与 seam，需要时按同一注册表接入。
 - **远端浏览器（design 28）**：W0/S1/S2 实现面；开放验收 = ①真实 pin vendor 下 renderer composite typecheck/build 与官方 `ui-sidebar-browser` 在 web profile 的启停证据；②S2 真实 boot；③S3 Swift/app 打包与签名；④真实 SSH askpass（密码主机）、macOS/Windows 实机（alias 可达/secure context/Host、win32 taskkill/CIM、reaper 身份）、全量 `test:desktop`；⑤完整 sidecar 发布需 vendor/dsh + python。判据 = design 28 §11/§12；验收程序 = `docs/checklists/remote-browser-acceptance.md`；打包名单 = packaging closure。
 
@@ -81,10 +81,11 @@
 - rc.2（仅该来源）：①Web 搜索开关（默认关、三命名空间字段与凭据、sendOriginalQuestion 128 字符、下次搜索生效、回退前先关）；②模型徽标三处（112px 回归已修，菜单/模型行待目检）；③web-deepseek-api 凭据/available；④日志 body.thinking 可选 log-only。
 - 0.2.1 整页插件/自动化：窄屏布局已由上游前端负责；待真机 = 安全区/横屏、iOS/Android 键盘、真实插件动作与保存；判据 = 目检 + `acceptance:mobile` 路由步。
 
-**open-in/Git/深链/只读镜像**：open-in S3=复制路径（工作区已落、会话行待补或裁决；S4/复制 ssh/深链不做）；VS Code 深链 8 项；Git worktree 远程 3 + 实机 3 + 孤儿清理 1；只读会话镜像（无 CDP 阻断、gateway/SSH 事实、404 自愈、DOM、性能）。
+**open-in/Git/深链/只读镜像**：open-in S3=复制路径（工作区已落、会话行待补或裁决；S4/复制 ssh/深链不做）；VS Code 深链 8 项；Git worktree 真机（池内创建/enter/path-based 删除/旧池清空）；只读会话镜像（无 CDP 阻断、gateway/SSH 事实、404 自愈、DOM、性能）。
 
 ### 1.5 平台、发布与外部凭据
 
+- **P5b 工作树统一（发布前开放门）**：forge bundle + 六个依赖包（七个 package.json）载荷（Electron `resources/vendor/dsh` 与 Swift sidecar 的 `vendor/dsh` 都要有 worktree / tool-worktree / forge / forge-github / forge-session / client-ui-forge）、实例前端 opt-in 开关与重启、node PATH shim / string-only 解析（打包态 + Finder 启动，远程只做诊断）、旧 `$DSH_HOME/worktrees` 池清空、filters/LFS 发布说明、Swift + Electron 双形态 P0（四项 UI/同池三条/node 实际创建）；任一缺失按发布阻断处理。判据 = release-checklist §0/§4、packaging-closure §3.2、design 08 §7.5；V1–V6/V16 合并门（dev Electron）与 V7–V21 发布门尚未逐项跑，未跑项按 design 08 §7.5 开账。
 - **gateway**：Linux unit 登录环境；ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
 - **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；客户端只能拿到 socket 级的归因文案（已按 ECONNREFUSED/ECONNRESET/EPIPE 分类并指向 gateway 服务与隧道，`packages/desktop/gateway-session.ts` 的登录传输分类），看不到持有者类别与拒绝依据，把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
 - **租约身份的跨平台残差**：`bootId`/`procStartTicks`/`pidNamespace`/`machineId` 只有 Linux 提供（`packages/control-plane/src/process-identity.ts`）；macOS/Windows 的 v2 记录仍只有启动代际推断（依赖墙钟，步进超过 5 分钟余量时可能误判陈旧），同一启动内的 pid 复用保守锁定（宁锁不双写）。跨机护栏要求记录与本机都读得到 machineId，缺失时按「属主私有、单机」契约处理（design 17 §12）。
@@ -181,7 +182,8 @@
 - **运行时/桌面**：Electron 二进制惰性安装；内建版本行引导；dsh 设置面偏差（registry/https-only/周期检查/prune/`RUNTIME_RESTART`）；apply-now 纯投影门；探针契约残余；0.1.2 线降级（硬阻断/芯片隐藏/cookie 30 天/帧校验/`agentPresets`/unary 兜底/首屏整源降级/gateway ready 不蕴含托管就绪）；代理 300MiB；C3 composite 代际；C4 settings 簇；plugin localOnly 不检测；prune 保留 `docs/` 运行时文档（任意深度；`docs/` 内附属物目录与包内技能 Markdown 仍被裁，design 18 §3.7/§4.1）。
 - **视觉/交互**：标题墨色不照官方；动作簇 4px；会话行键盘不可达；命中盒 <24px；`gap: 4px`；漏事件补丁未落；动作簇键盘入口/roving tabindex 待裁。
 - **会话投影**：标签 + `hasActiveSchedule` 跨代际保留（0.6–0.8s；`updatedAt` 前进即停）。
-- **上游并存**：experimental worktree 默认关、其产物由 design 08 接管、不复用 create；cua 不接入。
+- **P5b 工作树统一（开放取舍）**：①**Swift 保留**原生壳与 sidecar，node 分 flavor（Swift = sidecar node；Electron = PATH shim / string-only，绝不写 `process.execPath`），不做 sidecar 移除或回退形态；②forge bundle **opt-in**（默认关、启用/关闭需重启，GitHub provider disabled），不预置进 profile；③旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**，升级前逐树 `workspace.delete`（归档需保留的会话）+ `git worktree remove/prune` 是发布前提；④filters 与 forge 两步 parity，接受 LFS/clean-smudge 降级（checkout 为指针文件，需手动 `git lfs pull`）；⑤restore 仅 forge record（seed 树无 restore）；⑥`checkoutOrder` 只在本机 localStorage 持久化、不跨实例同步；⑦同一 checkout 允许 0..N 会话共享 HEAD/index（无默认提示、无硬锁）；⑧只发布池内 checkout，池外手工树不可见。判据 = design 08 §3/§5/§7。
+- **上游并存**：experimental worktree 默认关**仍真**（P5b 为 opt-in，需在实例插件页开启并重启）；旧裁决“其产物由 design 08 接管、不复用 create”已被 P5b 反转——forge 与 seed 共用 `<repo>/.agents/worktrees` 池，checkout 由 design 08 的派生行呈现，官方 `create_worktree` 工具与 composer 都复用同一池；GitHub provider 由 overlay disabled；cua 不接入。
 - **设置/账户**：设置壳自绘 chrome/源壳必须挂载/离线占位/body portal；上游对齐轮偏差（首启门、`sectionsEmpty`、失败屏深引、`Switch` 属性、业务蓝、schedule 事实、状态标记/Dock/通知）；桌面账户登录不可闭环（`/oauth/callback` 未反代；裁决 D2 见 [TODO.md](TODO.md) C§1）；`__dshChamberAccountOverlay` 与安全网互搏（待裁）。
 - **跨实例 rev 冲突 = 静默复用 + 连接页提示**（design 09 §3.5）：跨实例一律沿用页面已有 factory（`reuseForeignBuilds`），实例 boot 不因该冲突失败；代价 = 跨发布构建可能与宿主预期不一致（缺块/行为异常），由连接页诊断点名两侧发布版本与收口，且 local 无图降级时构建来源可能反转（design 09 §3.5 残余风险）；复验 = `packages/renderer/test/lifecycle/host-graph.test.ts` 冲突用例 + 连接页目检。
 - **远端浏览器（design 28）**：无共享 `127.0.0.1` 回退（Host 被拒/421 = 可读错误，不降级；远端未配 `127.0.0.n` 的服务打不开）、OTP/2FA 主机不支持（每条 forward 独立 ssh）、`kill -9` 后 listener 存活到下次启动、被转发页面可无预检访问本机 loopback（PNA 残余，design 28 §9.7）——均登记为已知取舍，不是待修缺陷。

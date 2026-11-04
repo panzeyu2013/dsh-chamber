@@ -46,8 +46,17 @@ import { normalizeGitSnapshot } from '../../src/shared/snapshot.ts'
 const MAIN = '/repos/project'
 const COMMON = '/repos/project/.git'
 const LINKED = '/repos/feature'
-const UNREGISTERED = '/repos/unregistered'
-const DETACHED = '/repos/detached'
+/** The in-repo pool (design 08/11 §6.6): the host snapshot reports ONLY
+ *  unregistered checkouts under it, plus the main checkout and REGISTERED
+ *  workspaces (wherever they live). An out-of-pool unregistered row — the legacy
+ *  `$DSH_HOME/worktrees` root included — is dropped silently: no row, no diagnostic. */
+const POOL = MAIN + '/.agents/worktrees'
+const UNREGISTERED = POOL + '/unregistered'
+const DETACHED = POOL + '/detached'
+/** A row whose directory is gone: kept (it is in the pool) with status missing. */
+const VANISHED = POOL + '/vanished'
+/** A legacy out-of-pool unregistered row: the host must not surface it at all. */
+const OUTSIDE_POOL = '/repos/legacy-unregistered'
 const MAIN_HEAD = '1'.repeat(40)
 const FEATURE_HEAD = '2'.repeat(40)
 const UNREGISTERED_HEAD = '3'.repeat(40)
@@ -93,6 +102,8 @@ interface FakeRow {
 class FakeHost {
   readonly rows: FakeRow[] = [
     { path: MAIN, branch: 'main', head: MAIN_HEAD },
+    // REGISTERED out-of-pool worktree: keeps its workspace row (the pool filter
+    // only drops UNREGISTERED rows outside the pool).
     { path: LINKED, branch: 'feature', head: FEATURE_HEAD, dirty: true, upstream: 'origin/feature', ahead: 2, behind: 1 },
     { path: UNREGISTERED, branch: 'unreg', head: UNREGISTERED_HEAD },
     { path: DETACHED, branch: null, head: DETACHED_HEAD },
@@ -140,6 +151,9 @@ class FakeHost {
       if (gitDir !== undefined && basename(path) === '.git') return `gitdir: ${gitDir}`
       throw new MissingPathError(path)
     },
+    // The in-repo pool writes its self-ignore file create-only; the snapshot path
+    // never writes, but the interface is shared with create.
+    writeFile: async () => {},
   }
 
   readonly runner: GitRunner = async request => {
@@ -191,15 +205,14 @@ async function hostSnapshot(host: FakeHost): Promise<SnapshotResult> {
     },
     git: host.runner,
     fs: host.fs,
-    worktreesRoot: '/worktrees',
   })
   return await core.snapshot()
 }
 
 test('the REAL host snapshot decodes with ZERO client errors: every row field is in lockstep', async () => {
   const snapshot = await hostSnapshot(new FakeHost())
-  // The host source itself is healthy in this scenario — no sourceError, and
-  // the only diagnostic is the unregistered row's absent workspace.
+  // The host source itself is healthy in this scenario: no sourceError and no
+  // diagnostics — an in-pool unregistered checkout is a normal row, not an error.
   assert.equal(snapshot.sourceError, undefined)
   assert.deepEqual(snapshot.errors, [])
   assert.equal(snapshot.repos.length, 1)
@@ -257,10 +270,12 @@ test('the REAL host snapshot decodes with ZERO client errors: every row field is
 
 test('every host snapshot diagnostic decodes verbatim (the per-row drift codes included)', async () => {
   const host = new FakeHost()
-  // A vanished worktree row (host `path-unavailable`) plus the two per-row
-  // agent drifts (core.ts readSource) — the client must pass all three through
-  // instead of rejecting the snapshot or inventing codes.
-  host.rows.push({ path: '/repos/vanished', branch: 'gone', head: '5'.repeat(40) })
+  // A vanished IN-POOL worktree row (host `path-unavailable`), a legacy
+  // out-of-pool row (must vanish without a diagnostic), plus the two per-row
+  // agent drifts (core.ts readSource) — the client must pass the real diagnostics
+  // through instead of rejecting the snapshot or inventing codes.
+  host.rows.push({ path: VANISHED, branch: 'gone', head: '5'.repeat(40) })
+  host.rows.push({ path: OUTSIDE_POOL, branch: 'legacy', head: '6'.repeat(40) })
   host.agents.push({ sessionId: 's-status', status: 'paused' as unknown as 'running', cwd: MAIN })
   host.agents.push({ sessionId: 's-cwd', status: 'running', cwd: 'relative/worktree' })
 
@@ -270,6 +285,18 @@ test('every host snapshot diagnostic decodes verbatim (the per-row drift codes i
   assert.ok(codes.includes('path-unavailable'), `the vanished row is a loud per-row diagnostic: ${codes.join(', ')}`)
   assert.ok(codes.includes('agent-status-unknown'), `the status drift is reported: ${codes.join(', ')}`)
   assert.ok(codes.includes('agent-cwd-unknown'), `the cwd drift is reported: ${codes.join(', ')}`)
+  // POOL CONTAINMENT (design 08/11 §6.6): the legacy root is neither a row nor a
+  // diagnostic — the fixture no longer depends on any out-of-pool unregistered path.
+  assert.equal(
+    snapshot.repos[0]!.worktrees.some(row => row.path === OUTSIDE_POOL),
+    false,
+    'an out-of-pool unregistered checkout must produce no row',
+  )
+  assert.equal(
+    snapshot.errors.some(error => error.path === OUTSIDE_POOL),
+    false,
+    'an out-of-pool unregistered checkout must produce no diagnostic either',
+  )
 
   const normalized = normalizeGitSnapshot(snapshot)
   assert.deepEqual(
@@ -283,10 +310,10 @@ test('every host snapshot diagnostic decodes verbatim (the per-row drift codes i
     'the vanished row still decodes (status missing), so the row set is unchanged',
   )
   assert.equal(
-    normalized.repos[0]!.worktrees.find(row => row.path === '/repos/vanished')!.status,
+    normalized.repos[0]!.worktrees.find(row => row.path === VANISHED)!.status,
     'missing',
   )
-  const vanished = snapshot.repos[0]!.worktrees.find(row => row.path === '/repos/vanished')!
+  const vanished = snapshot.repos[0]!.worktrees.find(row => row.path === VANISHED)!
   assert.equal(vanished.workspaceId, null)
 })
 
@@ -337,6 +364,26 @@ test('error-code lockstep: the client deterministic set covers every host classi
       `host-proven pre-mutation refusal '${code}' must be a client deterministic rejection`,
     )
   }
+})
+
+test('PR1 create/enter refusals exist in the host vocabulary; agent-not-ready stays retryable', () => {
+  // New lockstep surface (11-final-design §5.4/§5.5): the client classifies these
+  // as deterministic pre-mutation refusals, so the host source must actually name
+  // them. A rename on either side fails here instead of silently disabling the
+  // classification (source-not-main-checkout is the create guard, the other three
+  // are enter guards).
+  const hostSourceCodes = new Set(
+    Array.from(HOST_CORE_SOURCE.matchAll(/'([a-z][a-z0-9]*(?:[-/][a-z0-9]+)*)'/gu), match => match[1]!),
+  )
+  for (const code of ['not-a-repo', 'worktree-not-listed', 'outside-writable-root', 'source-not-main-checkout', 'ignore-unavailable']) {
+    assert.ok(hostSourceCodes.has(code), `client-deterministic '${code}' does not exist in the host core source`)
+    assert.ok(DETERMINISTIC_GIT_REJECTION_CODES.has(code), `'${code}' must be a client deterministic rejection`)
+  }
+  // agent-not-ready is the one EXPLICITLY retryable enter refusal: it may never be
+  // treated as a deterministic rejection (the agent is still loading).
+  const notReady = new GitWorktreeRpcError('agent-not-ready', 'agent is still loading', undefined, true)
+  assert.equal(isDeterministicGitRejection(notReady), false)
+  assert.equal(isAmbiguousGitRpcFailure(notReady), true)
 })
 
 test('host flag-only pre-mutation proofs stay outside the static deterministic set', () => {

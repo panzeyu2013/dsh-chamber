@@ -6,8 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resolve, join } from 'node:path'
-import { homedir } from 'node:os'
+import { resolve } from 'node:path'
 import {
   GitWorktreeCore,
   GitWorktreeError,
@@ -18,7 +17,9 @@ import {
   MAX_REPOSITORIES,
   PREVIEW_TTL_MS,
   SNAPSHOT_DEADLINE_MS,
+  agentNotReady,
   assertSafeGitArgv,
+  domainResult,
   createLocalGitRunner,
   parseBranchLine,
   type GitRunner,
@@ -32,7 +33,8 @@ import {
   LINKED,
   MAIN_HEAD,
   FEATURE_HEAD,
-  WORKTREES_KEY,
+  WORKTREES_ROOT,
+  POOL_IGNORE,
   FakeGitChild,
   FakeRepository,
   setup,
@@ -90,12 +92,56 @@ test('snapshot classifies missing, non-git and failing rows', async () => {
 
 test('snapshot classifies branch, detached and unborn heads', async () => {
   const { core, repo } = setup({ linked: true })
-  repo.addLinked({ path: '/repos/unborn', branch: 'unborn', head: '0'.repeat(40) })
-  repo.addLinked({ path: '/repos/detached', branch: null, head: FEATURE_HEAD })
+  const unborn = `${WORKTREES_ROOT}/unborn`
+  const detached = `${WORKTREES_ROOT}/detached`
+  repo.addLinked({ path: unborn, branch: 'unborn', head: '0'.repeat(40) })
+  repo.addLinked({ path: detached, branch: null, head: FEATURE_HEAD })
   const rows = (await core.snapshot()).repos[0]!.worktrees
   assert.equal(rows.find(row => row.path === MAIN)!.headState, 'branch')
-  assert.equal(rows.find(row => row.path === '/repos/unborn')!.headState, 'unborn')
-  assert.equal(rows.find(row => row.path === '/repos/detached')!.headState, 'detached')
+  assert.equal(rows.find(row => row.path === unborn)!.headState, 'unborn')
+  assert.equal(rows.find(row => row.path === detached)!.headState, 'detached')
+})
+
+test('snapshot reports only in-repo pool checkouts for unregistered rows', async () => {
+  const { core, repo } = setup({ linked: true }) // ws-feature is registered at LINKED (outside the pool)
+  const pooled = repo.addLinked({ path: `${WORKTREES_ROOT}/visible`, branch: 'visible', head: FEATURE_HEAD })
+  const outside = repo.addLinked({ path: '/repos/legacy-root/task', branch: 'legacy', head: FEATURE_HEAD })
+  // A stale `$DSH_HOME/worktrees` admin record whose directory is gone: never a row and
+  // never even a path diagnostic (the old root is invisible by design).
+  const oldMissing = '/home/user/.dsh/worktrees/project-dead/task'
+  repo.worktrees.push({ path: oldMissing, branch: 'dead', head: FEATURE_HEAD })
+
+  const snapshot = await core.snapshot()
+  const rows = snapshot.repos[0]!.worktrees
+  const pooledRow = rows.find(row => row.path === pooled.path)
+  assert.ok(pooledRow !== undefined, 'an unregistered checkout in the pool is visible')
+  assert.equal(pooledRow.workspaceId, null)
+  assert.equal(rows.some(row => row.path === outside.path), false, 'an unregistered outside-pool checkout is not a row')
+  assert.equal(rows.some(row => row.path === oldMissing), false, 'an old-root missing record is not a row')
+  assert.equal(
+    snapshot.errors.some(error => error.path === oldMissing),
+    false,
+    'an old-root leftover does not surface even as a diagnostic',
+  )
+  assert.equal(
+    repo.calls.some(call => call.args[0] === 'status' && call.cwd === outside.path),
+    false,
+    'a dropped row never pays for a status probe',
+  )
+  // REGISTERED semantics are untouched: a registered workspace outside the pool keeps
+  // its row (the sidebar renders it as a workspace, not as a checkout).
+  assert.equal(rows.find(row => row.path === LINKED)!.workspaceId, 'ws-feature')
+})
+
+test('a missing pool record stays a row while an old-root missing record is invisible', async () => {
+  const pooled = setup({ linked: true })
+  const missing = `${WORKTREES_ROOT}/stale-missing`
+  pooled.repo.addLinked({ path: missing, branch: 'stale', head: FEATURE_HEAD })
+  pooled.repo.existing.delete(missing)
+  const pooledRow = (await pooled.core.snapshot()).repos[0]!.worktrees.find(row => row.path === missing)
+  assert.ok(pooledRow !== undefined, 'missing semantics are preserved inside the pool')
+  assert.equal(pooledRow.status, 'missing')
+  assert.equal(pooledRow.workspaceId, null)
 })
 
 test('snapshot maps git-dir state files and relative, malformed or unresolvable pointers to attention', async () => {
@@ -218,49 +264,53 @@ test('snapshot fails loud before Git when workspace structure or memberships exc
 
 test('snapshot caps worktree rows, canonicalizes each running cwd once and enforces one total budget', async () => {
   const bounded = setup()
+  const boundedAt = (index: number): string => `${WORKTREES_ROOT}/bounded-${index}`
   for (let index = 0; index < MAX_WORKTREES_PER_REPOSITORY + 8; index += 1) {
-    const path = `/repos/bounded-${index}`
+    const path = boundedAt(index)
     const branch = `bounded-${index}`
     bounded.repo.existing.add(path)
     bounded.repo.branches.set(branch, FEATURE_HEAD)
     bounded.repo.worktrees.push({ path, branch, head: FEATURE_HEAD })
   }
   const alias = '/aliases/running-agent'
-  bounded.repo.existing.add('/repos/bounded-0/nested')
-  bounded.repo.aliases.set(alias, '/repos/bounded-0/nested')
+  bounded.repo.existing.add(`${boundedAt(0)}/nested`)
+  bounded.repo.aliases.set(alias, `${boundedAt(0)}/nested`)
   bounded.agents.push({ sessionId: 'bounded-agent', status: 'running', cwd: alias })
   const boundedSnapshot = await bounded.core.snapshot()
   assert.equal(boundedSnapshot.repos[0]!.worktrees.length, MAX_WORKTREES_PER_REPOSITORY)
   assert.equal(boundedSnapshot.sourceError?.code, 'snapshot-capacity')
   assert.equal(boundedSnapshot.errors.some(error => error.code === 'snapshot-worktree-limit'), true)
-  const owner = boundedSnapshot.repos[0]!.worktrees.find(worktree => worktree.path === '/repos/bounded-0')!
+  const owner = boundedSnapshot.repos[0]!.worktrees.find(worktree => worktree.path === boundedAt(0))!
   assert.deepEqual(owner.runningSessionIds, ['bounded-agent'])
   assert.equal(bounded.repo.realpathCalls.get(alias), 1)
 
   const repositoryCount = 3
   const paths = new Set<string>()
   const workspaces: WorkspaceFact[] = []
+  const linkedAt = (repository: number, row: number): string =>
+    `/multi/${repository}/main/.agents/worktrees/linked-${row}`
   for (let repository = 0; repository < repositoryCount; repository += 1) {
     const main = `/multi/${repository}/main`
     paths.add(main)
     paths.add(`${main}/.git`)
     workspaces.push({ workspaceId: `multi-${repository}`, path: main, sessionIds: [] })
-    for (let row = 1; row < MAX_WORKTREES_PER_REPOSITORY; row += 1) paths.add(`/multi/${repository}/linked-${row}`)
+    for (let row = 1; row < MAX_WORKTREES_PER_REPOSITORY; row += 1) paths.add(linkedAt(repository, row))
   }
   const runner: GitRunner = async request => {
     const match = /^\/multi\/(\d+)\//u.exec(request.cwd)
     assert.ok(match)
     const repository = Number(match[1])
     const main = `/multi/${repository}/main`
+    const pool = `${main}/.agents/worktrees`
     if (request.args[0] === 'rev-parse' && request.args[1] === '--show-toplevel') {
-      const top = request.cwd === main || request.cwd.startsWith(`/multi/${repository}/linked-`) ? request.cwd : main
+      const top = request.cwd === main || request.cwd.startsWith(`${pool}/`) ? request.cwd : main
       return { exitCode: 0, stdout: `${top}\n`, stderr: '' }
     }
     if (request.args[0] === 'rev-parse') return { exitCode: 0, stdout: `${main}/.git\n`, stderr: '' }
     if (request.args[0] === 'worktree') {
       const fields: string[] = []
       for (let row = 0; row < MAX_WORKTREES_PER_REPOSITORY; row += 1) {
-        const path = row === 0 ? main : `/multi/${repository}/linked-${row}`
+        const path = row === 0 ? main : linkedAt(repository, row)
         fields.push(`worktree ${path}`, `HEAD ${MAIN_HEAD}`, `branch refs/heads/r-${repository}-${row}`, '')
       }
       return { exitCode: 0, stdout: `${fields.join('\0')}\0`, stderr: '' }
@@ -301,9 +351,10 @@ test('snapshot caps worktree rows, canonicalizes each running cwd once and enfor
 
 test('snapshot deadline stops launching status and filesystem association work', async () => {
   const { core, repo, advanceTime } = setup()
+  const deadlineAt = (index: number): string => `${WORKTREES_ROOT}/deadline-${index}`
   for (let index = 0; index < 24; index += 1) {
-    repo.existing.add(`/repos/deadline-${index}`)
-    repo.worktrees.push({ path: `/repos/deadline-${index}`, branch: `deadline-${index}`, head: FEATURE_HEAD })
+    repo.existing.add(deadlineAt(index))
+    repo.worktrees.push({ path: deadlineAt(index), branch: `deadline-${index}`, head: FEATURE_HEAD })
   }
   const perStatusElapsed = 2_500
   repo.onStatus = () => advanceTime(perStatusElapsed)
@@ -312,7 +363,7 @@ test('snapshot deadline stops launching status and filesystem association work',
   assert.ok(statusCalls <= Math.ceil(SNAPSHOT_DEADLINE_MS / perStatusElapsed))
   assert.equal(snapshot.sourceError?.code, 'snapshot-deadline')
   assert.equal(snapshot.errors.some(error => error.code === 'snapshot-deadline'), true)
-  assert.equal(repo.realpathCalls.has('/repos/deadline-23'), false)
+  assert.equal(repo.realpathCalls.has(deadlineAt(23)), false)
   assert.equal(snapshot.repos[0]!.worktrees.at(-1)!.dirty, null)
 })
 
@@ -401,18 +452,6 @@ test('duplicate workspace paths surface explicitly and never duplicate ownership
     .filter((id): id is string => id !== null)
   assert.equal(workspaceIds.filter(id => id === 'ws-main').length, 1)
   assert.equal(workspaceIds.includes('ws-dupe'), false)
-})
-
-test('rollback refuses a worktree that now hosts a running agent cwd', async () => {
-  const { core, agents } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'op-rollback-running' })
-  assert.equal(created.rollbackAuthorized, true)
-  agents.push({ sessionId: 's-inside', status: 'running', cwd: created.path })
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'op-rollback-running' }),
-    error => error instanceof GitWorktreeError && error.code === 'running-agent',
-  )
 })
 
 test('local runner bounds time and output and settles only after the child closes', async () => {
@@ -570,36 +609,6 @@ test('a non-zero show-ref --hash exit (the git 128 missing-ref quirk) reads as b
   assert.equal(created.branch, 'rapid-meadow')
 })
 
-test('a blank or whitespace-only $DSH_HOME is UNSET: the worktrees root follows upstream resolveDshHome', async () => {
-  const previousDshHome = process.env.DSH_HOME
-  try {
-    for (const blank of ['', '   ']) {
-      process.env.DSH_HOME = blank
-      const preview = await previewNew(setup({ worktreesRoot: null }).core)
-      assert.equal(
-        preview.targetPath,
-        join(homedir(), '.dsh', 'worktrees', WORKTREES_KEY, 'new-worktree'),
-        `DSH_HOME=${JSON.stringify(blank)} must fall back to ~/.dsh`,
-      )
-    }
-    process.env.DSH_HOME = '/opt/dsh-home'
-    assert.equal(
-      (await previewNew(setup({ worktreesRoot: null }).core)).targetPath,
-      `/opt/dsh-home/worktrees/${WORKTREES_KEY}/new-worktree`,
-      'an absolute $DSH_HOME is the resolved harness home',
-    )
-    process.env.DSH_HOME = '~/elsewhere'
-    assert.equal(
-      (await previewNew(setup({ worktreesRoot: null }).core)).targetPath,
-      join(homedir(), 'elsewhere', 'worktrees', WORKTREES_KEY, 'new-worktree'),
-      'a ~-prefixed $DSH_HOME expands against the OS home (upstream expandHomePath)',
-    )
-  } finally {
-    if (previousDshHome === undefined) delete process.env.DSH_HOME
-    else process.env.DSH_HOME = previousDshHome
-  }
-})
-
 test('parseBranchLine extracts upstream/ahead/behind facts', () => {
   assert.deepEqual(parseBranchLine('## main...origin/main [ahead 2, behind 1]\u0000'), { upstream: 'origin/main', ahead: 2, behind: 1 })
   assert.deepEqual(parseBranchLine('## feature...origin/feature [ahead 3]'), { upstream: 'origin/feature', ahead: 3, behind: 0 })
@@ -658,4 +667,170 @@ test('readProjectedWorkingDirectory reads through the optional registry and degr
     'an empty projection is the absent case')
   assert.equal(readProjectedWorkingDirectory({ stateOf: () => { throw new Error('collapsed') } }, session), undefined,
     'a throwing projection must not darken the whole source')
+})
+
+test('create writes the in-repo pool self-ignore exactly once and fails closed when it cannot', async () => {
+  const { core, repo } = setup()
+  const preview = await previewNew(core, 'first', 'topic-first')
+  assert.equal(preview.targetPath, `${WORKTREES_ROOT}/first`)
+  const created = await core.create({ previewToken: preview.previewToken, operationId: 'ignore-1' })
+  assert.equal(created.path, `${WORKTREES_ROOT}/first`)
+  assert.equal(repo.written.get(POOL_IGNORE), '*\n', 'the pool self-ignores with a single * line')
+
+  // A second create in the same repository keeps the existing ignore file (create-only).
+  const second = await previewNew(core, 'second', 'topic-second')
+  await core.create({ previewToken: second.previewToken, operationId: 'ignore-2' })
+  assert.equal(repo.written.get(POOL_IGNORE), '*\n')
+
+  // An unwritable pool is a fail-closed refusal: no worktree mutation is attempted.
+  const blocked = setup()
+  blocked.repo.writeFileError = new Error('read-only pool')
+  const blockedPreview = await previewNew(blocked.core, 'blocked', 'topic-blocked')
+  await assert.rejects(
+    blocked.core.create({ previewToken: blockedPreview.previewToken, operationId: 'ignore-blocked' }),
+    error => error instanceof GitWorktreeError && error.code === 'ignore-unavailable' && error.retryable === false,
+  )
+  assert.equal(blocked.repo.calls.some(call => call.args[0] === 'worktree' && call.args[1] === 'add'), false)
+})
+
+test('preview and create both refuse a source that is not the repository main checkout', async () => {
+  const linked = setup({ linked: true })
+  await assert.rejects(
+    linked.core.previewCreate({ sourceWorkspaceId: 'ws-feature', basename: 'x', branch: { kind: 'new', name: 'topic' } }),
+    error => error instanceof GitWorktreeError
+      && error.code === 'source-not-main-checkout'
+      && error.retryable === false,
+  )
+
+  const subdirectory = setup()
+  subdirectory.repo.existing.add(`${MAIN}/sub`)
+  subdirectory.workspaces.push({ workspaceId: 'ws-sub', path: `${MAIN}/sub`, sessionIds: [] })
+  await assert.rejects(
+    subdirectory.core.previewCreate({ sourceWorkspaceId: 'ws-sub', basename: 'x', branch: { kind: 'new', name: 'topic' } }),
+    error => error instanceof GitWorktreeError && error.code === 'source-not-main-checkout',
+  )
+
+  // The create leg re-asserts it after the registry re-read (preview itself was valid).
+  const moved = setup({ linked: true })
+  const preview = await previewNew(moved.core, 'moved', 'topic-moved')
+  moved.workspaces[0] = { ...moved.workspaces[0]!, path: LINKED }
+  await assert.rejects(
+    moved.core.create({ previewToken: preview.previewToken, operationId: 'moved-create' }),
+    error => error instanceof GitWorktreeError && error.code === 'source-not-main-checkout',
+  )
+  assert.equal(moved.repo.calls.some(call => call.args[0] === 'worktree' && call.args[1] === 'add'), false)
+})
+
+test('a submodule-shaped source is refused because its Git directory escapes the source root', async () => {
+  const submodule = setup()
+  const root = `${MAIN}/super-sub`
+  const gitDir = `${MAIN}/super/.git/modules/sub`
+  submodule.repo.existing.add(root)
+  submodule.repo.existing.add(gitDir)
+  // Faithful Git shape: inside a submodule `worktree list` reports the git dir, not the
+  // checkout; the shape preflight must refuse before that misleading topology read.
+  submodule.repo.discoveryOverrides.set(root, { topLevel: root, commonDir: gitDir, gitDir })
+  submodule.repo.worktrees[0] = { path: gitDir, branch: 'sub', head: MAIN_HEAD }
+  submodule.workspaces[0] = { workspaceId: 'ws-main', path: root, sessionIds: [] }
+  await assert.rejects(
+    submodule.core.previewCreate({ sourceWorkspaceId: 'ws-main', basename: 'x', branch: { kind: 'new', name: 'topic' } }),
+    error => error instanceof GitWorktreeError
+      && error.code === 'outside-writable-root'
+      && error.retryable === false,
+  )
+})
+
+test('enterTarget accepts listed checkouts and the main checkout, and refuses every other shape', async () => {
+  const { core, repo } = setup()
+  const checkout = `${WORKTREES_ROOT}/entered`
+  repo.addLinked({ path: checkout, branch: 'entered', head: FEATURE_HEAD })
+  assert.equal(await core.enterTarget(MAIN, checkout), checkout)
+  assert.equal(await core.enterTarget(MAIN, MAIN), MAIN, 'returning to the main checkout is a legitimate enter')
+
+  // Existing but not a worktree root (the authoritative Git facts are the gate).
+  repo.existing.add(`${MAIN}/not-a-checkout`)
+  await assert.rejects(
+    core.enterTarget(MAIN, `${MAIN}/not-a-checkout`),
+    error => error instanceof GitWorktreeError && error.code === 'worktree-not-listed' && error.retryable === false,
+  )
+  // Vanished target directory.
+  await assert.rejects(
+    core.enterTarget(MAIN, `${MAIN}/gone`),
+    error => error instanceof GitWorktreeError && error.code === 'worktree-not-listed',
+  )
+  // A session root that is not a repository.
+  repo.existing.add('/repos/plain')
+  await assert.rejects(
+    core.enterTarget('/repos/plain', '/repos/plain'),
+    error => error instanceof GitWorktreeError && error.code === 'not-a-repo' && error.retryable === false,
+  )
+})
+
+test('enterTarget refuses a listed checkout outside the session root and never checks commonDir', async () => {
+  const { core, repo } = setup({ linked: true })
+  repo.existing.add(`${MAIN}/sub`)
+  await assert.rejects(
+    core.enterTarget(`${MAIN}/sub`, LINKED),
+    error => error instanceof GitWorktreeError
+      && error.code === 'outside-writable-root'
+      && error.retryable === false,
+  )
+  // The listed main checkout, whose common dir is <main>/.git, is enterable from the root.
+  assert.equal(await core.enterTarget(MAIN, MAIN), MAIN)
+})
+
+test('agent-not-ready is an explicit retryable refusal from the host error table', async () => {
+  const error = agentNotReady('s-new')
+  assert.equal(error.code, 'agent-not-ready')
+  assert.equal(error.retryable, true, 'the client may retry enter after open')
+  assert.match(error.message, /s-new/)
+  const wire = await domainResult(async () => { throw agentNotReady('s-new') })
+  assert.equal(wire.ok, false)
+  assert.deepEqual(wire.ok ? undefined : wire.error, {
+    code: 'agent-not-ready',
+    message: "session 's-new' is not loaded yet",
+    retryable: true,
+  })
+})
+
+test('the filters two-step grammar is allowlisted and the old one-step add grammar is gone', () => {
+  assertSafeGitArgv(['worktree', 'add', '--no-checkout', '--', '/safe/path', 'topic'])
+  assertSafeGitArgv(['worktree', 'add', '--no-checkout', '-b', 'topic', '--', '/safe/path', MAIN_HEAD])
+  assertSafeGitArgv(['config', '--null', '--name-only', '--get-regexp', '^filter\\.'])
+  assertSafeGitArgv(['reset', '--hard', '--no-recurse-submodules', 'HEAD'])
+  assert.throws(() => assertSafeGitArgv(['worktree', 'add', '--', '/safe/path', 'topic']), /outside the worktree allowlist/)
+  assert.throws(() => assertSafeGitArgv(['config', '--global', 'user.name', 'x']), /outside the worktree allowlist/)
+  assert.throws(() => assertSafeGitArgv(['reset', '--hard', MAIN_HEAD]), /outside the worktree allowlist/)
+})
+
+test('the local runner merges request GIT_CONFIG_* overrides and always skips LFS smudging', async () => {
+  const child = new FakeGitChild()
+  let captured: NodeJS.ProcessEnv | undefined
+  const runner = createLocalGitRunner((_command, _args, options) => {
+    captured = options.env
+    return child
+  })
+  const pending = runner({
+    cwd: MAIN,
+    args: ['reset', '--hard', '--no-recurse-submodules', 'HEAD'],
+    timeoutMs: 1_000,
+    maxOutputBytes: 1_024,
+    env: { GIT_CONFIG_COUNT: '0' },
+  })
+  child.emit('close', 0)
+  await pending
+  assert.equal(captured!.GIT_LFS_SKIP_SMUDGE, '1')
+  assert.equal(captured!.GIT_CONFIG_COUNT, '0', 'request overrides are applied after the fixed policy env')
+
+  const rejecting = createLocalGitRunner(() => new FakeGitChild())
+  await assert.rejects(
+    rejecting({
+      cwd: MAIN,
+      args: ['reset', '--hard', '--no-recurse-submodules', 'HEAD'],
+      timeoutMs: 1_000,
+      maxOutputBytes: 1_024,
+      env: { 'GIT_CONFIG_COUNT': '0\0' },
+    }),
+    error => error instanceof GitWorktreeError && error.code === 'unsafe-git-argv',
+  )
 })

@@ -3,8 +3,9 @@
  *
  * A page-dispatch-budget refusal RESOLVES with the previous state instead of
  * rejecting (the polling path's deliberate behaviour), so an action that demands
- * "refresh first" must read the pull's own timestamp — otherwise a removal/adopt
- * would run on facts up to ceil(N/2) x 30s stale while every gate looks passed.
+ * "refresh first" must read the pull's own timestamp — otherwise a removal or a
+ * checkout session entry would run on facts up to ceil(N/2) x 30s stale while
+ * every gate looks passed.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,15 +27,15 @@ test('refreshedSince: only a pull that bumped updatedAt at/after startedAt is fr
 test('lock: every action preflight applies the freshness gate, and a refusal never bumps updatedAt', async () => {
   const source = stripComments(await readFile(COORDINATOR, 'utf8'))
   assert.equal(
-    (source.match(/refreshedSince\(/g) ?? []).length, 3,
-    'the three action preflights (remove / remove-unregistered / adopt) must each call refreshedSince',
+    (source.match(/refreshedSince\(/g) ?? []).length, 2,
+    'the two action preflights (remove-checkout / create-session-here) must each call refreshedSince',
   )
   assert.match(source, /import \{ NOT_DISPATCHED_CODE \} from '.\/not-dispatched.ts'/,
     'the polling special-case compares the shared literal, not a re-typed string')
   // The stamp must be taken BEFORE the await, otherwise a pull that completes
   // inside the same millisecond could look older than the action.
-  assert.equal((source.match(/const refreshStartedAt = Date\.now\(\)\n\s+const fresh = await refreshSource\(sourceId, true\)/g) ?? []).length, 3,
-    'all three action preflights stamp the start time before awaiting the pull')
+  assert.equal((source.match(/const refreshStartedAt = Date\.now\(\)\n\s+const fresh = await refreshSource\(sourceId, true\)/g) ?? []).length, 2,
+    'both action preflights stamp the start time before awaiting the pull')
   // Between the refusal branch opening and the next closing brace, the coordinator
   // must not touch updatedAt: a deferred pull has to stay visibly old so the gates
   // above reject it (a "helpful" bump would silently defeat them).

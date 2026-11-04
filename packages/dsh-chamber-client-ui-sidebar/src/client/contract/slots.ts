@@ -55,13 +55,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       kind: 'single',
       scope: 'root',
       owner: SidebarWorkspaceGitOwnerProps,
-      hookContext: { sourceId: string; workspaceId: string; repoKey?: string },
+      hookContext: SidebarWorkspaceGitContext,
       inject: {
         hooks: {
           workspaceGitContext: (
             _standard: object,
-            context: { sourceId: string; workspaceId: string; repoKey?: string },
-          ) => () => ({ sourceId: string; workspaceId: string; repoKey?: string }),
+            context: SidebarWorkspaceGitContext,
+          ) => () => SidebarWorkspaceGitContext,
         },
       },
     }
@@ -72,6 +72,27 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      *  column state. */
     'sidebar.footer.action': { kind: 'list'; scope: 'root'; owner: SidebarFooterActionOwnerProps }
   }
+}
+
+/**
+ * The occurrence identity of one `sidebar.workspace.git` mount. It rides the
+ * slot's `hookContext` because only the shell knows which row it is rendering:
+ *
+ * - source scope: `workspaceId === ''` (the source-level alert strip);
+ * - a host workspace row: the row's own id (the occupant renders only the MAIN
+ *   checkout's create-worktree entry; a registered worktree renders nothing);
+ * - a DERIVED checkout row (design 08/11 §4): `workspaceId` stays the SOURCE
+ *   main workspace id (the only host workspace its sessions belong to) and
+ *   `checkout` carries the display identity the occupant renders and acts on
+ *   (new session inside the worktree, delete, copy path). `repoKey` stays the
+ *   repository identity, unchanged from the workspace-row form.
+ */
+export interface SidebarWorkspaceGitContext {
+  sourceId: string
+  workspaceId: string
+  repoKey?: string
+  /** Present only for a derived checkout row (never for a host workspace). */
+  checkout?: { path: string; branch: string; title: string }
 }
 
 export interface SidebarBrandMarkOwnerProps {

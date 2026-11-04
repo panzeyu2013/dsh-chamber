@@ -403,7 +403,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 ### 8.1 公网 / 本机 URL：既有链接腿
 
 - launcher 渲染 `<a target="_blank" rel="noreferrer">`：点击触发 Electron 的
-  `setWindowOpenHandler`（`packages/desktop/main.ts:939`），`isExternalLinkUrl(url, rendererOrigin)` 为真时
+  `setWindowOpenHandler`（`packages/desktop/main.ts#=literal:win.webContents.setWindowOpenHandler(({ url }) => {`），`isExternalLinkUrl(url, rendererOrigin)` 为真时
   交给系统浏览器并拒绝新建窗口；Swift 对偶走 `TrustGuard` + `ExternalOpenBudget`。**不新增 IPC**。
 - 该腿共用既有全局预算（8 次/10s + 30s 冷却，`shell-core.ts` 的 `openExternally`）：超预算时**静默丢弃**，
   UI 只能显示“已在本机打开”`notice.publicOpened`；若被限流就是“点击后无反应”，v1 不伪造一个

@@ -43,6 +43,30 @@ export interface ChamberServerWorkspace {
    * workspace-scoped mutation on them (ungrouped-bucket parity).
    */
   synthetic?: boolean
+  /**
+   * Row discriminator: absent = a host-registered workspace; `'checkout'` = a
+   * DERIVED Git checkout row (unregistered worktree of a registered main). The
+   * row is display-only for workspace mutations but deliberately NOT
+   * `synthetic` — the sidebar keys its identity/actions (and the Git occupant)
+   * off this discriminator plus `repoKey/familyMainId/path`.
+   */
+  kind?: 'checkout'
+  /** Repository opaque identity (repoKey) shared by the family's main and checkouts. */
+  repoKey?: string
+  /**
+   * A checkout row's MAIN checkout workspace id: the fold anchor, the tree
+   * level (the checkout renders at its main's level) and the checkoutOrder key
+   * component. Absent on host workspace rows.
+   */
+  familyMainId?: string
+  /**
+   * SOURCE ROW ONLY (never rendered, never a membership substitute): the main
+   * workspace's host membership order BEFORE checkout placement — the stable
+   * anchor space for session drags inside the family. Present only when the row
+   * actually has derived checkout rows; `sessionIds` stays the rendered
+   * (post-placement) subset. Participates in the publish signature.
+   */
+  allSessionIds?: string[]
   sessions: {
     id: string
     /** Durable title projection — '' when the session has none. Rename/fork copy uses THIS. */

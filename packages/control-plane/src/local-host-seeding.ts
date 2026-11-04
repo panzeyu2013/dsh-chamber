@@ -6,6 +6,7 @@
 
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { parsePluginManifest } from '@dsh-chamber/dsh-chamber-wire/plugin-manifest'
 import {
   buildPatchOverlay,
   ensureSeedPackage,
@@ -15,6 +16,11 @@ import {
   OFFICIAL_OPEN_IN_DISABLE,
   type SeedEntry,
 } from './host-graph-seed.ts'
+import {
+  profileBundlePatchReader,
+  resolveBundleRowDisables,
+  type BundleRowDisableTarget,
+} from './bundle-row-disables.ts'
 import { planHostLogBridge } from './host-log-bridge.ts'
 import { isSafeModeEnabled } from './safe-mode.ts'
 import {
@@ -61,6 +67,17 @@ export interface LocalHostGraphOverlayInput {
   readonly stateDir: string
   /** The managed dsh home (the profile's own patch layer is read from under it). */
   readonly dshHome: string
+  /**
+   * The dsh workspace/install root: the installation anchor an enabled profile BUNDLE is
+   * resolved from (the profile anchor is always probed too). Optional so a synthetic caller
+   * without a runtime tree can still resolve the profile-only anchors.
+   */
+  readonly dshWorkspacePath?: string | null
+  /**
+   * Id-targeted disables for rows a profile BUNDLE mounts (P5b-0); defaults to the canonical
+   * registry in bundle-row-disables.ts. Tests pass their own list to pin the semantics.
+   */
+  readonly bundleRowDisables?: readonly BundleRowDisableTarget[]
   /** The resolved seed registry entries (the four base host packages + extras). */
   readonly entries: readonly SeedEntry[]
   /** Informational sink (the plane's logger in production). */
@@ -90,6 +107,30 @@ export interface LocalHostGraphOverlayInput {
 }
 
 /**
+ * The managed web profile's `dsh.profile.bundles` layer — the enabled bundle list the local
+ * overlay resolves bundle-mounted rows against ([] when no manifest exists yet).
+ *
+ * A present-but-unreadable or unparseable manifest is fail-closed: treating it as "no
+ * bundles known" would silently leave a forge-enabled row (notably the GitHub provider)
+ * enabled. An absent manifest means no profile yet and is legitimately empty.
+ */
+function profileBundleLayer(dshHome: string): string[] {
+  const manifestPath = join(dshHome, 'profiles', 'web', 'package.json')
+  if (!existsSync(manifestPath)) return []
+  let text: string
+  try {
+    text = readFileSync(manifestPath, 'utf8')
+  } catch (error) {
+    throw new Error(`bundle enablement: cannot read ${manifestPath} (${error instanceof Error ? error.message : String(error)}); refusing to start with an unknown bundle layer`)
+  }
+  const parsed = parsePluginManifest(text)
+  if (!parsed.ok) {
+    throw new Error(`bundle enablement: the local web profile manifest is unusable (${parsed.fault}); refusing to start with an unknown bundle layer`)
+  }
+  return parsed.bundles
+}
+
+/**
  * Resolve one local spawn's `--patch` overlay, or null when that spawn passes none.
  *
  * The overlay carries ONLY the rows the profile's own `cordis.patch.yml` does not already
@@ -98,8 +139,10 @@ export interface LocalHostGraphOverlayInput {
  * this spawn must apply above every layer — currently the official open-in HOST half's
  * disable when chamber's own open-in host package is seeded (the renderer page-own-skips the
  * official CLIENT row, so its webServer routes would be a second live wire face with no
- * caller). That disable is NOT an insert identity and is emitted even when the profile patch
- * owns every chamber row.
+ * caller) and a P5b-0 id-targeted disable for a row an enabled profile BUNDLE mounts (see
+ * bundle-row-disables.ts: an unenabled bundle is an idempotent skip, an enabled one whose row
+ * cannot be proven is fail-closed). Those disables are NOT insert identities and are emitted
+ * even when the profile patch owns every chamber row.
  *
  * The no-overlay paths REMOVE a leftover overlay file, keeping the desktop probe's invariant:
  * the file exists exactly when the spawn about to run passes it.
@@ -161,7 +204,18 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   // The callback fires on the empty set too, so a previously seeded plane resets instead of keeping a stale domain list.
   input.onSeededProbeDomains?.(available.flatMap(entry => entry.probeDomains))
 
-  if (available.length === 0) {
+  // P5b-0: resolve the bundle-row disables BEFORE any profile write and BEFORE the
+  // no-seed-entries early return. A disable-only overlay is valid; skipping the
+  // resolution when every chamber seed row is absent would leave a forge-enabled
+  // GitHub provider enabled. An enabled bundle whose row identity cannot be proven
+  // is fail-closed here, so a misspelled id never leaves a half-refreshed profile.
+  const bundleDisables = resolveBundleRowDisables({
+    enabledBundles: profileBundleLayer(dshHome),
+    readBundlePatches: profileBundlePatchReader({ dshHome, dshWorkspacePath: input.dshWorkspacePath }),
+    targets: input.bundleRowDisables,
+    log,
+  })
+  if (available.length === 0 && bundleDisables.length === 0) {
     clearHostGraphPatchOverlay(stateDir)
     return null
   }
@@ -190,9 +244,10 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   // row, so its webServer routes would be a second live wire face). The disable rides the SAME
   // overlay, which composes after every bundle and user layer, so a user layer that re-enabled
   // the row is superseded too. The condition is the SEEDED set, not the registry.
-  const disables = available.some(entry => entry.insert.id === HOST_OPEN_IN_INSERT_ID)
-    ? [OFFICIAL_OPEN_IN_DISABLE]
-    : []
+  const disables = [
+    ...(available.some(entry => entry.insert.id === HOST_OPEN_IN_INSERT_ID) ? [OFFICIAL_OPEN_IN_DISABLE] : []),
+    ...bundleDisables,
+  ]
   if (overlayInserts.length === 0 && disables.length === 0) {
     clearHostGraphPatchOverlay(stateDir)
     return null

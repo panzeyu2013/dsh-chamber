@@ -114,9 +114,12 @@ test('the renderer projection wires the per-source filter as a projection input 
   assert.ok(APP.includes('subscribeViewPrefs'), 'App subscribes to the shared view-prefs store')
   assert.ok(APP.includes("JSON.stringify(getViewPrefs().archivedFilter ?? {})"),
     'only the filter map signature is subscribed (other prefs writes must not re-render the App)')
-  assert.ok(APP.includes('echoes.placement, archivedFilters, echoes.removal)'),
-    'the map rides the deriveServers call (and the removal ledger is appended after it — parameter order is a wiring contract)')
-  assert.ok(APP.includes('projectionCaches, archivedFilters]'), 'the map is a memo dependency')
+  assert.ok(APP.includes('echoes.placement, archivedFilters, echoes.removal, gitFlagsVersion)'),
+    'the map rides the deriveServers call (and the removal ledger + the Git layout version are appended after it — parameter order is a wiring contract)')
+  assert.ok(APP.includes('projectionCaches, archivedFilters, gitFlagsVersion]'),
+    'the map is a memo dependency (the Git layout version joins it, PR2)')
+  assert.ok(SERVERS.includes('      repoLayoutSignature,'),
+    'the per-source layout signature invalidates exactly the sources whose Git layouts changed')
 
   const DERIVE = read('../../../../packages/dsh-chamber-client-core/src/derive.ts')
   assert.ok(DERIVE.includes('archived: x.archived === true,'),

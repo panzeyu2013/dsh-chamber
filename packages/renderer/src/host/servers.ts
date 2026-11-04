@@ -30,6 +30,7 @@ import {
   type WorkspacePlacementLedger,
   type WorkspaceRemovalLedger,
 } from '@dsh-chamber/dsh-chamber-client-core'
+import { getSourceRepoLayouts, type RepoGitLayout } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { ConnectionSummary, HealthResponse } from '../api.ts'
 import { isFactsUsable, type SessionFactsRow, type SessionFactsSnapshot } from '../session-facts-source.ts'
 import { sourceSessionFactsMode } from '../session-facts-mode.ts'
@@ -174,6 +175,10 @@ export function deriveServers(
   // 在权威 store 的 unranked-sink 帧把被删行从投影里摘掉。与 workspacePlacements 同理追加在
   // 参数表末尾（既有接线锁按文本锚点钉 current 投影，不重排既有参数）。
   workspaceRemovals?: WorkspaceRemovalLedger,
+  // Git 布局通道的**变更令牌**（design 08 §3.2-§3.3）：Git 插件发布仓库布局后，派生 checkout
+  // 行只在这里重算——入参是每来源的布局（读 store）与这个版本；刻意追加在参数表末尾
+  // （同 workspacePlacements/archivedFilters 的理由）。
+  gitFlagsVersion?: number,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const liveIds = new Set<string>()
@@ -229,9 +234,28 @@ export function deriveServers(
       remoteStatus,
       statusKey,
     )
+    // Git 布局通道是投影输入（design 08 §3.2-§3.3）：派生 checkout 行只由它出现/消失。
+    // 缓存失效用**本来源**的布局签名而不是全局版本：别的来源刷新 flags 不该让这一条重算
+    // （derive 仍收 gitFlagsVersion，作为入参表上的变更令牌）。
+    const repoLayouts: readonly RepoGitLayout[] = gitFlagsVersion === undefined ? [] : getSourceRepoLayouts(id)
+    // Only placement/title inputs belong in the cache key: dirty/locked/status/attention
+    // are occupant facts, and invalidating the whole projection on a status poll would
+    // re-derive every checkout row for no output change.
+    const repoLayoutSignature = gitFlagsVersion === undefined ? '' : JSON.stringify(
+      repoLayouts.map(layout => ({
+        repoKey: layout.repoKey,
+        mainWorkspaceId: layout.mainWorkspaceId,
+        unregistered: layout.unregistered.map(entry => ({
+          path: entry.path,
+          name: entry.name,
+          branch: entry.branch,
+        })),
+      })),
+    )
     // 命中即复用上次条目（引用稳定：下游 memo 与签名片段缓存都靠它）。键覆盖本条目的全部输入。
     const cacheKey: readonly unknown[] = [
       kind, transport, id, label, sourceFingerprint, rawId ?? null, statusKind ?? null,
+      repoLayoutSignature,
       transportPhase, managedDown, managedTransient, connected,
       aggregate ?? null,
       archivedFilter,
@@ -275,7 +299,8 @@ export function deriveServers(
         openIntents[id],
       )
       // Positional contract of deriveServerWorkspaces (derive.ts): (snapshot,
-      // serverId, ungroupedTitle, currentSessionId?, now?). `current` must ride
+      // serverId, ungroupedTitle, currentSessionId?, now?, archivedFilter?,
+      // layouts?, layoutVersion?). `current` must ride
       // the currentSessionId slot so the
       // blank-row currentness branch (and the sidebar ghost-key arming on the
       // REAL source id) actually fires; the ungrouped bucket title is
@@ -310,6 +335,8 @@ export function deriveServers(
         current,
         undefined,
         archivedFilter,
+        repoLayouts,
+        gitFlagsVersion,
       )
       // Archive-manager metadata (design 24 revision): archived rows
       // of this source's snapshot ride the same aggregate; the manager UI

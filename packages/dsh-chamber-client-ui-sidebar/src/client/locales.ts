@@ -232,6 +232,13 @@ export const zh = {
   'time.ago': '{t}前',
   'workspace.expand': '展开',
   'workspace.collapse': '收起',
+  // 派生 checkout 行（design 08 §3.2-§3.3 / 06 §1.2-1.3）：行标题是分支名；健康提示 fail-closed——
+  // 布局事实未到也是「状态未知」，绝不假装健康；0 会话的行仍有明确空态文案。
+  'checkout.missing': '目录不存在',
+  'checkout.invalid': '工作树异常',
+  'checkout.notARepo': '不是 Git 仓库',
+  'checkout.statusUnknown': '状态未知',
+  'checkout.empty': '该工作树暂无会话',
   // 会话行窗口的展开条：双向 disclosure，文案取自上游 ui-workspace locales.ts sessions.expand / sessions.collapse。
   'sessions.expand': '展开其余 {n} 个会话',
   'sessions.collapse': '收起',
@@ -427,6 +434,11 @@ export const en = {
   'time.ago': '{t} ago',
   'workspace.expand': 'Expand',
   'workspace.collapse': 'Collapse',
+  'checkout.missing': 'Directory missing',
+  'checkout.invalid': 'Worktree invalid',
+  'checkout.notARepo': 'Not a Git repository',
+  'checkout.statusUnknown': 'Status unknown',
+  'checkout.empty': 'No sessions in this worktree',
   'sessions.expand': 'Show {n} more sessions',
   'sessions.collapse': 'Show less',
   'server.expand': 'Expand all workspaces',

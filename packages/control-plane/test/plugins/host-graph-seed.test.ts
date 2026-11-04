@@ -12,7 +12,11 @@
  *     spawn, which is what self-heals a pruned seed);
  *   - createControlPlane.start(): the seed orchestration gate — dist present
  *     → package + overlay materialized; dist absent → v4 baseline (no seed,
- *     no overlay).
+ *     no overlay);
+ *   - resolveLocalHostGraphOverlay + P5b-0 bundle-row disables: a row an ENABLED
+ *     profile bundle mounts (forge-github, and a group-inner id) gets a verified
+ *     id-targeted disable; a NOT-enabled bundle skips it with a diagnostic
+ *     (idempotent boot); a misspelled id in an enabled bundle is fail-closed.
  * Run directly: node packages/control-plane/test/plugins/host-graph-seed.test.ts
  */
 
@@ -602,6 +606,159 @@ test('resolveLocalHostGraphOverlay: a user-owned open-in row still gets the offi
   })
   assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME), 'the disable still needs a --patch file')
   assert.equal(readFileSync(overlay as string, 'utf8'), OFFICIAL_OPEN_IN_DISABLE_ROW)
+})
+
+// ---------------------------------------------------------------------------
+// resolveLocalHostGraphOverlay + the P5b-0 bundle-row disable: a row the forge
+// BUNDLE mounts (forge-github) is force-disabled only when the bundle is
+// enabled, verified against the bundle's own patch, and an enabled bundle whose
+// row cannot be proven is fail-closed.
+// ---------------------------------------------------------------------------
+
+const FORGE_BUNDLE_NAME = '@deepseek-ai/dsh-experimental-forge-bundle'
+const FORGE_GITHUB_ROW = {
+  bundle: FORGE_BUNDLE_NAME,
+  id: 'forge-github',
+  name: '@deepseek-ai/dsh-experimental-forge-github',
+}
+const FORGE_GITHUB_DISABLE_ROW = `- id: forge-github
+  name: '@deepseek-ai/dsh-experimental-forge-github'
+  disabled: true
+`
+const FORGE_PATCH = `- insert:
+    - id: worktree
+      name: '@deepseek-ai/dsh-experimental-worktree'
+    - id: forge-github
+      name: '@deepseek-ai/dsh-experimental-forge-github'
+    - id: optional-forge-panel
+      group: true
+      isolate:
+        worktrees: true
+      insert:
+        - id: forge-worktree
+          name: '@deepseek-ai/dsh-experimental-worktree'
+        - id: forge-panel
+          name: '@deepseek-ai/dsh-experimental-client-ui-forge'
+`
+
+/** Enable the forge bundle in the managed profile (manifest layer + installed package). */
+function enableForgeBundle(dshHome: string, patch: string = FORGE_PATCH): void {
+  const profileDir = join(dshHome, 'profiles', 'web')
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+    name: 'dsh-profile-web',
+    private: true,
+    dependencies: {},
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', FORGE_BUNDLE_NAME] } },
+  }))
+  const packageDir = join(profileDir, 'node_modules', FORGE_BUNDLE_NAME)
+  mkdirSync(packageDir, { recursive: true })
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+    name: FORGE_BUNDLE_NAME,
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  }))
+  writeFileSync(join(packageDir, 'cordis.patch.yml'), patch)
+}
+
+test('resolveLocalHostGraphOverlay: an ENABLED forge bundle gets the verified forge-github disable', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  enableForgeBundle(dshHome)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(
+    readFileSync(overlay as string, 'utf8'),
+    EXPECTED_OVERLAY + FORGE_GITHUB_DISABLE_ROW,
+    'the disable rides the same --patch overlay, after every insert row and above every bundle layer',
+  )
+})
+
+test('resolveLocalHostGraphOverlay: a NOT-enabled forge bundle skips the disable with a diagnostic (idempotent)', t => {
+  const dir = tempDir(t)
+  // The default fixture (base + web-app) has forge off: the opt-in state must boot normally.
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const logs: string[] = []
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    log: message => { logs.push(message) },
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(readFileSync(overlay as string, 'utf8'), EXPECTED_OVERLAY,
+    'the overlay bytes are unchanged while the bundle is off')
+  assert.ok(logs.some(message => message.includes(FORGE_BUNDLE_NAME) && message.includes('skipped')),
+    `the skip must be diagnosed: ${logs.join(' | ')}`)
+})
+
+test('resolveLocalHostGraphOverlay: a misspelled row id in an ENABLED bundle is fail-closed', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  enableForgeBundle(dshHome)
+  assert.throws(
+    () => resolveLocalHostGraphOverlay({
+      stateDir: dir,
+      dshHome,
+      entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+      bundleRowDisables: [{ ...FORGE_GITHUB_ROW, id: 'forge-githb' }],
+      log() {},
+      warn() {},
+    }),
+    /mounts no row with id 'forge-githb'.*fail-closed/,
+  )
+})
+
+test('resolveLocalHostGraphOverlay: a group-inner row id is addressable (the panel worktree row)', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  enableForgeBundle(dshHome)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    bundleRowDisables: [{
+      bundle: FORGE_BUNDLE_NAME,
+      id: 'forge-worktree',
+      name: '@deepseek-ai/dsh-experimental-worktree',
+    }],
+    log() {},
+    warn() {},
+  })
+  assert.equal(
+    readFileSync(overlay as string, 'utf8'),
+    EXPECTED_OVERLAY + `- id: forge-worktree
+  name: '@deepseek-ai/dsh-experimental-worktree'
+  disabled: true
+`,
+  )
+})
+
+test('resolveLocalHostGraphOverlay: an enabled bundle disable rides a disable-only overlay when the user patch owns the insert', t => {
+  const dir = tempDir(t)
+  // The user's own layer mounts the chamber row already: there is nothing to insert, but the
+  // bundle-row disable is not an insert identity and must still ride a --patch file.
+  const dshHome = writeLocalProfileFixture(dir, EXPECTED_OVERLAY)
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  enableForgeBundle(dshHome)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(readFileSync(overlay as string, 'utf8'), FORGE_GITHUB_DISABLE_ROW)
 })
 
 test('resolveLocalHostGraphOverlay: a row already owned by the profile patch yields no overlay AND clears the leftover file', t => {

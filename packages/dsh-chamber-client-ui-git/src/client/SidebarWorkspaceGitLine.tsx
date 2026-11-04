@@ -1,44 +1,62 @@
 /**
- * Per-workspace Git occupant (design 08 §3.2, workspace-centric discovery). The
- * sidebar renders this seat twice per source:
+ * Per-workspace Git occupant (design 08 §3.2). The sidebar mounts this seat per
+ * occurrence:
  *  - `workspaceId === ''` (source scope): the source-level alert strip —
  *    recovery (retry clears it; a pending recovery blocks every git action on
  *    the source) and action errors. Snapshot/install errors are NOT shown here;
- *  - once per workspace group, INSIDE the header row: a worktree shows its
- *    branch chip, every git workspace the create-worktree action, worktree
- *    workspaces a delete action; non-git workspaces render nothing.
+ *  - once per REGISTERED workspace header: only the repository MAIN checkout
+ *    renders the create-worktree entry; a registered worktree (or a non-git
+ *    workspace) renders nothing;
+ *  - once per DERIVED `kind:'checkout'` row: the occurrence carries `checkout`
+ *    while `workspaceId` keeps naming the SOURCE main workspace (session root,
+ *    I1). A checkout row is not a dsh workspace, so it offers only its own three
+ *    actions — new session, path-based removal, copy path — and NEVER a
+ *    workspace-management entry.
+ *
+ * PR3 retired the legacy repo-scope unregistered block and the registered removal
+ * path (the old managed pool is a release precondition, not a UI state).
  */
-import { useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import {
   IconBranchOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular,
-  RiskConfirmation, Tag,
+  RiskConfirmation, Tag, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { basenameOf, chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
+import { IconCopyOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives/src/icons/index.tsx'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
 import {
-  clearActionError, createSessionHere, currentSessionIsBlank, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
+  clearActionError, createSessionHere, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
 import { gitActionErrorTextFor } from '../shared/action-error.ts'
 import { unregisteredRemoveOptions } from '../shared/remove-input.ts'
-import { gitFactsForWorkspace, removeBlockReason } from '../shared/git-facts.ts'
-import { removeRunningNotes } from '../shared/remove-notes.ts'
+import { gitFactsForWorkspace } from '../shared/git-facts.ts'
+import { checkoutDisplayLabel, checkoutRemoveBlockReason, findCheckout } from '../shared/checkout.ts'
 import type { GitBusyKind, GitRecovery, GitWorktreeInfo } from '../shared/types.ts'
 import type { GitSidebarKey } from '../locales.ts'
 import { CreateWorktreeDialog } from './CreateWorktreeDialog.tsx'
-import { RemoveWorktreeDialog, type RemoveViewTarget } from './RemoveWorktreeDialog.tsx'
 import css from './SidebarGit.module.css'
 
-/** Occurrence context: source scope when workspaceId === '' (with an optional
- *  repoKey for the repository's UNREGISTERED worktree block — Plan A). */
+/** Copy-feedback dwell: how long the checkout row's affordance says "copied". */
+const COPY_FEEDBACK_MS = 1000
+
+/** Occurrence context: source scope when workspaceId === '', a registered
+ *  workspace header, or a DERIVED checkout row when `checkout` is present
+ *  (`workspaceId` stays the SOURCE main workspace id; `repoKey` the repository's
+ *  opaque identity). */
 export interface WorkspaceGitContext {
   sourceId: string
   workspaceId: string
   repoKey?: string
+  /** Derived `kind:'checkout'` occurrence. Its `title` is the row's derived
+   *  label (branch, or the directory name when detached); the facts are resolved
+   *  by `path` because the checkout has no workspace identity. */
+  checkout?: { path: string; branch: string | null; title: string }
 }
 
-/** One unregistered worktree row awaiting removal authorization; the destructive
- *  action rides the in-app `RiskConfirmation` (a native prompt cannot use alias tokens). */
-interface UnregisteredRemoveTarget {
+/** One derived checkout row awaiting removal authorization; the destructive
+ *  action rides the in-app `RiskConfirmation` (a native prompt cannot use alias
+ *  tokens). */
+interface RowRemoveTarget {
   repoId: string
   worktreeId: string
   path: string
@@ -54,6 +72,28 @@ interface UnregisteredRemoveTarget {
   dirty: boolean
 }
 
+/** The copy affordance's transient acknowledgement, with the timer owned by the
+ *  mount (a copy that lands after unmount must not schedule a state write). */
+function useCopyFeedback(): { copied: boolean; copy: (text: string) => Promise<void> } {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (timer.current !== null) clearTimeout(timer.current)
+  }, [])
+  const copy = useCallback(async (text: string): Promise<void> => {
+    // A refused write (permission/hostile surface) paints no success: the
+    // affordance keeps its plain label instead of lying.
+    if (!(await writeClipboard(text))) return
+    setCopied(true)
+    if (timer.current !== null) clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      timer.current = null
+      setCopied(false)
+    }, COPY_FEEDBACK_MS)
+  }, [])
+  return { copied, copy }
+}
+
 export interface SidebarWorkspaceGitInjected {
   t: (key: GitSidebarKey) => string
 }
@@ -65,42 +105,52 @@ export type SidebarWorkspaceGitLineProps = SidebarWorkspaceGitInjected & {
 }
 
 function recoveryLabel(recovery: GitRecovery, t: SidebarWorkspaceGitInjected['t']): string {
-  if (recovery.kind === 'git-create') return t('recoveryGitCreate')
-  if (recovery.kind === 'rollback-create') return t('recoveryRollback')
-  if (recovery.kind === 'workspace-adopt') return t('recoveryWorkspaceAdopt')
-  if (recovery.kind === 'session-adopt') return t('recoverySessionAdopt')
-  if (recovery.kind === 'session-create') return t('recoverySession')
-  if (recovery.kind === 'git-remove') return t('recoveryGitRemove')
-  return t('recoveryWorkspaceDelete')
+  return recovery.kind === 'git-create' ? t('recoveryGitCreate') : t('recoveryGitRemove')
 }
 
 function busyLabel(kind: GitBusyKind, t: SidebarWorkspaceGitInjected['t']): string {
   if (kind === 'preview') return t('busyPreview')
   if (kind === 'create') return t('busyCreate')
   if (kind === 'remove') return t('busyRemove')
-  if (kind === 'adopt-session') return t('busyAdoptSession')
+  if (kind === 'session-enter') return t('busySessionEnter')
   return t('busyRecovery')
 }
 
-/** Localized copy for a hard-blocked remove action. `'running'` is deliberately
- *  ABSENT: both call sites pre-filter it into the dedicated running title, so a
+/** Localized copy for a hard-blocked checkout removal. `'running'` is deliberately
+ *  ABSENT: the caller pre-filters it into the dedicated running title, so a
  *  `'running'` argument would fall through to `undefined` (no dead copy key). */
 function blockLabel(
-  reason: ReturnType<typeof removeBlockReason>,
-  status: GitWorktreeInfo['status'],
+  reason: ReturnType<typeof checkoutRemoveBlockReason>,
   t: SidebarWorkspaceGitInjected['t'],
 ): string | undefined {
   if (reason === 'current') return t('currentBlocked')
-  if (reason === 'runtime-unknown') return t('runtimeUnknownBlocked')
   if (reason === 'locked') return t('lockedBlocked')
-  if (reason === 'unhealthy') {
-    // Actionable guidance instead of a dead end: a MISSING path has an in-app
-    // registration-only exit; a present-but-broken path needs repair/prune first.
-    return status === 'missing' ? t('unhealthyMissingBlocked') : t('unhealthyInvalidBlocked')
-  }
+  // A MISSING path is not blocked by the checkout guard; it is the leftover-record
+  // cleanup and the caller renders that copy before reaching this table. Any other
+  // unhealthy state needs repair/prune first.
+  if (reason === 'unhealthy') return t('unhealthyInvalidBlocked')
   if (reason === 'dirty') return t('dirtyBlocked')
   if (reason === 'status-unknown') return t('dirtyUnknownBlocked')
   return undefined
+}
+
+/** The removal affordance's tooltip for a DERIVED checkout row: the reason while
+ *  blocked, the cleanup/discard wording while allowed, the plain label otherwise.
+ *  A checkout's only 'current' case is a RUNNING viewed session (an idle one is
+ *  removable by design), so the running copy is the honest one there too. */
+function checkoutRemoveTitle(
+  worktree: GitWorktreeInfo | undefined,
+  blocked: ReturnType<typeof checkoutRemoveBlockReason>,
+  t: SidebarWorkspaceGitInjected['t'],
+): string {
+  if (worktree === undefined) return t('worktreeNotFound')
+  if (worktree.status === 'missing') return t('unregisteredMissingRemoveTitle')
+  if (blocked === 'dirty') return t('unregisteredDirtyRemoveTitle')
+  if (blocked === 'running' || blocked === 'current') {
+    return worktree.blockingRunningSessionIds === undefined ? t('runningRemoveLegacyTitle') : t('runningRemoveTitle')
+  }
+  if (blocked === 'main') return t('mainWorktreeBlocked')
+  return blockLabel(blocked, t) ?? t('remove')
 }
 
 export function SidebarWorkspaceGitLine({
@@ -109,14 +159,16 @@ export function SidebarWorkspaceGitLine({
   useSyncExternalStore(gitCoordinator.subscribe, gitCoordinator.getVersion, gitCoordinator.getVersion)
   const context = useWorkspaceGitContext()
   const [createOpen, setCreateOpen] = useState(false)
-  const [removeTarget, setRemoveTarget] = useState<RemoveViewTarget | null>(null)
-  // The unregistered row's authorization is per pending target and reset on every
+  // The path-based removal's authorization is per pending target and reset on every
   // close, so a second removal can never inherit a previous consent.
-  const [unregisteredRemove, setUnregisteredRemove] = useState<UnregisteredRemoveTarget | null>(null)
-  const [unregisteredAcknowledged, setUnregisteredAcknowledged] = useState(false)
+  const [rowRemove, setRowRemove] = useState<RowRemoveTarget | null>(null)
+  const [rowAcknowledged, setRowAcknowledged] = useState(false)
+  // Copy-path feedback for the derived checkout row (a refused clipboard write
+  // paints nothing — see useCopyFeedback).
+  const { copied: checkoutCopied, copy: copyCheckoutPath } = useCopyFeedback()
 
-  // The current session is per-SOURCE. The runtime channel doubles as the
-  // fail-closed presence flag: absent ⇒ UNKNOWN, not "none".
+  // The current session is per-SOURCE. A RUNNING session in the checkout blocks its
+  // removal; an idle one is removable by design (ensure() falls back to the source).
   const runtime = useSyncExternalStore(
     chamberBridge.subscribe,
     () => context === undefined
@@ -125,142 +177,168 @@ export function SidebarWorkspaceGitLine({
     () => undefined,
   )
   const currentSessionId = runtime?.current
-  const runtimeKnown = runtime !== undefined
 
   if (!wide || context === undefined) return null
   const source = gitCoordinator.getSource(context.sourceId)
 
-  // ---- Source-scope mount: alert strip. Repo-scope mount (Plan A): the repo's
-  // UNREGISTERED worktrees, rendered after its last registered workspace. ----
-  if (context.workspaceId === '' && context.repoKey !== undefined) {
-    if (source.sourceError !== undefined) return null
-    const repo = source.snapshot?.repos.find(candidate => candidate.repoId === context.repoKey)
-    // The MAIN checkout is never unregistered.
-    const unregistered = repo?.worktrees
-      .filter(worktree => worktree.workspaceId === null && !worktree.isMain) ?? []
-    if (repo === undefined || unregistered.length === 0) return null
-    const busy = source.busy !== undefined
+  // The path-based destructive confirmation of the derived checkout row. One
+  // surface, one wire input and one consent reset; a second implementation could
+  // only drift.
+  const pathRemoveConfirmation = (
+    <RiskConfirmation
+      open={rowRemove !== null}
+      title={t('removeTitle')}
+      description={rowRemove === null
+        ? ''
+        : (rowRemove.missing
+          ? t('unregisteredMissingRemoveConfirm')
+          : rowRemove.dirty
+            ? t('unregisteredDirtyRemoveConfirm')
+            : t('unregisteredRemoveConfirm')).replace('{name}', rowRemove.name)}
+      acknowledgeLabel={rowRemove?.dirty === true
+        ? t('unregisteredDirtyDiscardAck')
+        : t('unregisteredRemoveAck')}
+      cancelLabel={t('cancel')}
+      closeLabel={t('close')}
+      confirmLabel={t('removeConfirm')}
+      acknowledged={rowAcknowledged}
+      disabled={source.busy !== undefined || source.recovery !== undefined}
+      onAcknowledgedChange={setRowAcknowledged}
+      onCancel={() => {
+        setRowRemove(null)
+        setRowAcknowledged(false)
+      }}
+      onConfirm={() => {
+        const target = rowRemove
+        setRowRemove(null)
+        setRowAcknowledged(false)
+        if (target === null) return
+        void removeUnregisteredWorktree(context.sourceId, {
+          repoId: target.repoId,
+          worktreeId: target.worktreeId,
+          path: target.path,
+          branch: target.branch,
+          head: target.head,
+        }, unregisteredRemoveOptions(target.dirty)).catch(() => {})
+      }}
+    />
+  )
+
+  // ---- Derived checkout-row mount (design 08 PR2). The row is NOT a dsh
+  // workspace (I3): `workspaceId` keeps naming the SOURCE main workspace (the
+  // session root, I1) and `repoKey` the repository, while `checkout` carries the
+  // derived identity — so facts are resolved by PATH, never by workspace id.
+  // Only the three checkout actions live here: new session (directly, no prompt),
+  // path-based removal (the host's locked/dirty/running guards re-check fresh
+  // facts) and copy path. Workspace management (create worktree, registered
+  // removal, rename/kebab/fold) belongs to the sidebar and never appears on this
+  // row. Health/title/branch surface through these affordances: the tooltip names
+  // the blocking state, the confirmation names the row's derived title.
+  const checkout = context.checkout
+  if (checkout !== undefined) {
+    const snapshot = source.snapshot
+    // A source-level snapshot failure hides the possibly-stale facts: every action
+    // except copy path then fails closed with "facts unavailable".
+    const target = snapshot === undefined || source.sourceError !== undefined
+      ? undefined
+      : findCheckout(snapshot, checkout.path, context.repoKey)
+    const worktree = target?.worktree
+    // I9: the session root is the repository MAIN checkout; an unregistered main
+    // checkout has no source workspace to create the session in.
+    const mainWorkspaceId = target?.repo.worktrees.find(candidate => candidate.isMain)?.workspaceId ?? null
+    const actionLocked = source.busy !== undefined || source.recovery !== undefined
+    const blocked = worktree === undefined
+      ? undefined
+      : checkoutRemoveBlockReason(worktree, currentSessionId)
+    // A DIRTY checkout stays actionable: its confirmation collects the discard
+    // acknowledgement (`discardChanges`) before the host may force-remove it.
+    const canRemove = worktree !== undefined && !actionLocked && (blocked === undefined || blocked === 'dirty')
+    const createBlocked = worktree === undefined
+      ? t('checkoutFactsUnavailable')
+      : worktree.status !== 'ready'
+        ? t('unhealthyTarget')
+        : mainWorkspaceId === null ? t('checkoutNoMain') : undefined
+    // The row's display identity: the branch when it has one (a detached checkout
+    // derives the directory name as its title). The confirmation speaks it, the
+    // copy affordance shows the canonical path, and the action group names it so
+    // the checkout row's identity does not depend on the sidebar's title text.
+    const checkoutName = checkoutDisplayLabel(checkout.branch, checkout.title, checkout.path)
+    const checkoutLabel = t('title') + ': ' + checkoutName
+    const copyLabel = checkoutCopied ? t('checkoutCopied') : t('checkoutCopyPath')
+    // Dirty/lock are OCCUPANT facts (design 06 §1.2: they are redrawn from the
+    // occupant's own snapshot and never enter an aggregate signature). PATH health
+    // (missing/invalid/not-a-repo/unknown) and the branch/HEAD label belong to the
+    // sidebar's row-state contract, so they are deliberately NOT duplicated here.
+    // Precedence: a locked checkout is the actionable state for removal.
+    const checkoutBadge = worktree === undefined || worktree.status !== 'ready'
+      ? undefined
+      : worktree.locked
+        ? t('checkoutLockedBadge')
+        : worktree.dirty === true
+          ? t('checkoutDirtyBadge')
+          : worktree.dirty === null ? t('checkoutStatusUnknownBadge') : undefined
     return (
-      <div className={css.unregisteredSection} role="group" aria-label={t('unregisteredTitle')}>
-        <span className={css.unregisteredHeading}>{t('unregisteredTitle')}</span>
-        {unregistered.map((worktree) => {
-          // Mirrors removeBlockReason: main/locked/unhealthy reject at the host.
-          // A dirty row is NOT blocked: its confirmation carries the discard
-          // acknowledgement and the request then sends `discardChanges`. A MISSING
-          // path is the deliberate exception — its directory is gone, so removal is
-          // a leftover-record cleanup.
-          const status = worktree.status
-          const missing = status === 'missing'
-          const blockedReason: ReturnType<typeof removeBlockReason> = worktree.isMain
-            ? 'main'
-            : worktree.locked
-              ? 'locked'
-              : missing
-                ? undefined
-                : status !== 'ready'
-                  ? 'unhealthy'
-                  : undefined
-          const rowName = basenameOf(worktree.path)
-          return (
-            <div className={css.unregisteredRow} key={worktree.worktreeId} role="group">
-              <IconBranchOutlineRegular size={14} className={css.unregisteredIcon} />
-              <span className={css.unregisteredName} title={worktree.path}>
-                {worktree.branch ?? basenameOf(worktree.path)}
-              </span>
-              {worktree.status !== 'ready' && (
-                // Upstream `Tag` instead of a hand-rolled capsule whose neutral
-                // fill would equal the row's hover fill and vanish under the pointer.
-                <Tag tone="warning" className={css.unregisteredStatus}>
-                  {worktree.status === 'not-a-repo' ? t('notARepo') : t(worktree.status)}
-                </Tag>
-              )}
-              <span className={css.unregisteredSpacer} />
-              <button
-                type="button"
-                className={css.unregisteredAction}
-                disabled={busy || source.recovery !== undefined
-                  // A vanished/missing path cannot host a session.
-                  || worktree.status !== 'ready'}
-                title={worktree.status === 'ready' ? t('unregisteredAdoptTitle') : t('unhealthyTarget')}
-                aria-label={t('unregisteredAdopt')}
-                onClick={() => { void createSessionHere(context.sourceId, worktree.path).catch(() => {}) }}
-              >
-                <IconPlusOutlineRegular size={14} />
-              </button>
-              <button
-                type="button"
-                className={`${css.unregisteredAction} ${css.unregisteredActionDanger}`}
-                disabled={busy || source.recovery !== undefined || blockedReason !== undefined}
-                title={blockedReason === undefined
-                  // A missing row's removal IS the cleanup the blocked copy would point at.
-                  ? (missing
-                    ? t('unregisteredMissingRemoveTitle')
-                    : worktree.dirty === true ? t('unregisteredDirtyRemoveTitle') : t('remove'))
-                  : (blockLabel(blockedReason, status, t) ?? t('remove'))}
-                aria-label={t('remove')}
-                onClick={() => {
-                  // Collected by the in-app RiskConfirmation below, never a native prompt.
-                  setUnregisteredAcknowledged(false)
-                  setUnregisteredRemove({
-                    repoId: repo.repoId,
-                    worktreeId: worktree.worktreeId,
-                    path: worktree.path,
-                    branch: worktree.branch,
-                    head: worktree.head,
-                    name: rowName,
-                    missing,
-                    dirty: worktree.dirty === true,
-                  })
-                }}
-              >
-                <IconTrashOutlineRegular size={14} />
-              </button>
-            </div>
-          )
-        })}
-        {/* Destructive and irreversible: runs only behind the official risk
-            acknowledgement (primary action unavailable until the box is checked). */}
-        <RiskConfirmation
-          open={unregisteredRemove !== null}
-          title={t('removeTitle')}
-          description={unregisteredRemove === null
-            ? ''
-            : (unregisteredRemove.missing
-              ? t('unregisteredMissingRemoveConfirm')
-              : unregisteredRemove.dirty
-                ? t('unregisteredDirtyRemoveConfirm')
-                : t('unregisteredRemoveConfirm')).replace('{name}', unregisteredRemove.name)}
-          acknowledgeLabel={unregisteredRemove?.dirty === true
-            ? t('unregisteredDirtyDiscardAck')
-            : t('unregisteredRemoveAck')}
-          cancelLabel={t('cancel')}
-          closeLabel={t('close')}
-          confirmLabel={t('removeConfirm')}
-          acknowledged={unregisteredAcknowledged}
-          disabled={busy || source.recovery !== undefined}
-          onAcknowledgedChange={setUnregisteredAcknowledged}
-          onCancel={() => {
-            setUnregisteredRemove(null)
-            setUnregisteredAcknowledged(false)
-          }}
-          onConfirm={() => {
-            const target = unregisteredRemove
-            setUnregisteredRemove(null)
-            setUnregisteredAcknowledged(false)
-            if (target === null) return
-            void removeUnregisteredWorktree(context.sourceId, {
-              repoId: target.repoId,
-              worktreeId: target.worktreeId,
-              path: target.path,
-              branch: target.branch,
-              head: target.head,
-            }, unregisteredRemoveOptions(target.dirty)).catch(() => {})
-          }}
-        />
-      </div>
+      <>
+        <span className={css.headerGit} data-git-occupant="" role="group" aria-label={checkoutLabel}>
+          {checkoutBadge !== undefined && (
+            // Upstream `Tag`: a hand-rolled capsule with a neutral fill would
+            // vanish into the row's hover fill.
+            <Tag tone="warning" className={css.checkoutStatus}>{checkoutBadge}</Tag>
+          )}
+          <button
+            type="button"
+            className={css.headerGitAction}
+            data-git-action=""
+            disabled={actionLocked || source.connected !== true || createBlocked !== undefined}
+            aria-label={t('checkoutNewSession')}
+            title={createBlocked ?? t('checkoutNewSessionTitle')}
+            onClick={() => { void createSessionHere(context.sourceId, checkout.path).catch(() => {}) }}
+          >
+            <IconPlusOutlineRegular size={16} />
+          </button>
+          <button
+            type="button"
+            className={css.headerGitAction}
+            data-git-action=""
+            disabled={!canRemove}
+            aria-label={t('remove')}
+            title={checkoutRemoveTitle(worktree, blocked, t)}
+            onClick={() => {
+              if (target === undefined) return
+              setRowAcknowledged(false)
+              setRowRemove({
+                repoId: target.repo.repoId,
+                worktreeId: target.worktree.worktreeId,
+                path: target.worktree.path,
+                branch: target.worktree.branch,
+                head: target.worktree.head,
+                name: checkoutName,
+                missing: target.worktree.status === 'missing',
+                dirty: target.worktree.dirty === true,
+              })
+            }}
+          >
+            <IconTrashOutlineRegular size={16} />
+          </button>
+          <button
+            type="button"
+            className={css.headerGitAction}
+            data-git-action=""
+            aria-label={copyLabel}
+            title={checkoutCopied ? copyLabel : copyLabel + ': ' + checkout.path}
+            onClick={() => { void copyCheckoutPath(checkout.path) }}
+          >
+            <IconCopyOutlineRegular size={16} />
+          </button>
+        </span>
+        {pathRemoveConfirmation}
+      </>
     )
   }
 
+  // ---- Source-scope mount: alert strip. The legacy repo-scope unregistered
+  // block is gone (PR3): unregistered checkouts are DERIVED checkout rows now,
+  // so this seat never renders a second, registered-workspace-shaped list.
   if (context.workspaceId === '') {
     const recovery = source.recovery
     const actionError = source.actionError
@@ -302,32 +380,17 @@ export function SidebarWorkspaceGitLine({
     )
   }
 
-  // ---- Workspace-scope mount. A source-level snapshot failure hides the
-  // possibly-stale rows: the source degrades to an ordinary no-worktree view. ----
+  // ---- Registered-workspace mount: the MAIN checkout's create entry only.
+  // A source-level snapshot failure hides the possibly-stale row, and a REGISTERED
+  // worktree (or a non-git workspace) renders nothing: the registered removal path
+  // is gone (PR3), and a checkout's own row carries its delete action. ----
   const snapshot = source.snapshot
   const rows = snapshot === undefined || source.sourceError !== undefined
     ? []
     : gitFactsForWorkspace(snapshot, context.workspaceId)
-  if (rows.length === 0) return null
-
-  const primary = rows[0]!.worktree
-  const busy = source.busy !== undefined
-  const actionLocked = busy || source.recovery !== undefined
-  const blocked = removeBlockReason(primary, currentSessionId, currentSessionIsBlank(context.sourceId, currentSessionId), runtimeKnown)
-  /** The running title must not claim archivedness on an OLD host (neutral copy is
-   *  the honest one); derived through the SAME pure helper the dialog uses. */
-  const runningNotes = removeRunningNotes({
-    runningSessionIds: primary.runningSessionIds,
-    ...(primary.blockingRunningSessionIds === undefined
-      ? {}
-      : { blockingRunningSessionIds: primary.blockingRunningSessionIds }),
-  })
-  const runningTitle = runningNotes.kind === 'legacy'
-    ? t('runningRemoveLegacyTitle')
-    : t('runningRemoveTitle')
-  // Only worktree workspaces (not the main checkout) can be removed as worktrees.
-  const canOfferRemove = !primary.isMain && primary.workspaceId !== null
-  const createDisabled = actionLocked || source.connected !== true
+  const primary = rows[0]?.worktree
+  if (primary === undefined || !primary.isMain) return null
+  const createDisabled = source.busy !== undefined || source.recovery !== undefined || source.connected !== true
 
   return (
     <>
@@ -349,60 +412,20 @@ export function SidebarWorkspaceGitLine({
           flip could not even fire — and Blink's Tab navigation would not reach it
           anyway. The sidebar is this repo's only host and declares both states. */}
       <span className={css.headerGit} data-git-occupant="" role="group" aria-label={t('title')}>
-        {primary.isMain && (
-          // No second-level derivation: worktrees are created only from the MAIN checkout.
-          <button
-            type="button"
-            className={css.headerGitAction}
-            // The hover-reveal hook is a `data-*` attribute, never a literal class:
-            // styling hooks are attributes (no second styling vocabulary).
-            data-git-action=""
-            disabled={createDisabled}
-            aria-label={t('createBranchWorktree')}
-            title={t('createBranchWorktree')}
-            onClick={() => setCreateOpen(true)}
-          >
-            <IconBranchOutlineRegular size={16} />
-          </button>
-        )}
-        {!primary.isMain && canOfferRemove && (
-          <button
-            type="button"
-            className={css.headerGitAction}
-            data-git-action=""
-            // A dirty worktree is NOT disabled (the dialog collects the discard
-            // checkbox); a running one is not either — there is no wire flag to opt
-            // out of the host's RUNNING guard, so the row stays clickable and the
-            // dialog explains. Every other block stays a hard disable; current and
-            // runtime-unknown are evaluated BEFORE running, so a stale running fact
-            // cannot shadow them.
-            disabled={actionLocked || (blocked !== undefined && blocked !== 'dirty' && blocked !== 'running')}
-            aria-label={blocked === 'dirty'
-              ? t('dirtyRemoveTitle')
-              : blocked === 'running'
-                ? runningTitle
-                : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
-            title={blocked === 'dirty'
-              ? t('dirtyRemoveTitle')
-              : blocked === 'running'
-                ? runningTitle
-                : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
-            onClick={() => setRemoveTarget({
-              repoId: rows[0]!.repoId,
-              worktreeId: primary.worktreeId,
-              path: primary.path,
-              branch: primary.branch,
-              sessionIds: primary.sessionIds,
-              dirty: primary.dirty === true,
-              runningSessionIds: [...primary.runningSessionIds],
-              ...(primary.blockingRunningSessionIds === undefined
-                ? {}
-                : { blockingRunningSessionIds: [...primary.blockingRunningSessionIds] }),
-            })}
-          >
-            <IconTrashOutlineRegular size={16} />
-          </button>
-        )}
+        {/* Worktrees are created only from the MAIN checkout (design 08 I1). */}
+        <button
+          type="button"
+          className={css.headerGitAction}
+          // The hover-reveal hook is a `data-*` attribute, never a literal class:
+          // styling hooks are attributes (no second styling vocabulary).
+          data-git-action=""
+          disabled={createDisabled}
+          aria-label={t('createBranchWorktree')}
+          title={t('createBranchWorktree')}
+          onClick={() => setCreateOpen(true)}
+        >
+          <IconBranchOutlineRegular size={16} />
+        </button>
       </span>
       <CreateWorktreeDialog
         open={createOpen}
@@ -410,14 +433,6 @@ export function SidebarWorkspaceGitLine({
         sourceId={context.sourceId}
         initialWorkspaceId={context.workspaceId}
         initialRepoId={rows[0]!.repoId}
-        t={t}
-      />
-      <RemoveWorktreeDialog
-        open={removeTarget !== null}
-        onClose={() => setRemoveTarget(null)}
-        sourceId={context.sourceId}
-        target={removeTarget}
-        runtimeKnown={runtimeKnown}
         t={t}
       />
     </>

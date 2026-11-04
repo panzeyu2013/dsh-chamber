@@ -21,7 +21,6 @@ const COORDINATOR_SOURCE = readFileSync(new URL('../../src/shared/coordinator.ts
 const API_SOURCE = readFileSync(new URL('../../src/shared/git-api.ts', import.meta.url), 'utf8')
 const SAGA_SOURCE = readFileSync(new URL('../../src/shared/saga.ts', import.meta.url), 'utf8')
 const SNAPSHOT_SOURCE = readFileSync(new URL('../../src/shared/snapshot.ts', import.meta.url), 'utf8')
-const REMOVE_DIALOG_SOURCE = readFileSync(new URL('../../src/client/RemoveWorktreeDialog.tsx', import.meta.url), 'utf8')
 const CREATE_DIALOG_SOURCE = readFileSync(new URL('../../src/client/CreateWorktreeDialog.tsx', import.meta.url), 'utf8')
 const ROW_SOURCE = readFileSync(new URL('../../src/client/SidebarWorkspaceGitLine.tsx', import.meta.url), 'utf8')
 
@@ -68,7 +67,7 @@ test('every local GitActionError code has copy in BOTH dictionaries (and en is n
 test('every GitActionError thrown by the coordinator is a declared code with copy', () => {
   const codes = new Set(localCodes())
   const thrown = [...COORDINATOR_SOURCE.matchAll(/new GitActionError\('([a-z-]+)'/g)].map(match => match[1]!)
-  assert.ok(thrown.length >= 10, 'the coordinator must mint structured codes')
+  assert.ok(thrown.length >= 5, 'the coordinator must mint structured codes')
   for (const code of thrown) {
     assert.ok(codes.has(code), 'coordinator throws undeclared code ' + code)
     assert.notEqual(removeFailureCopyKey(code), undefined, code + ' lacks localized copy')
@@ -118,12 +117,9 @@ test('no user-facing string literal in the git logic layer carries Chinese', () 
 })
 
 test('the presentation layer resolves codes instead of rendering raw messages', () => {
-  assert.match(REMOVE_DIALOG_SOURCE, /gitActionErrorText\(error, t\)/, 'the remove dialog must localize failures')
-  assert.doesNotMatch(REMOVE_DIALOG_SOURCE, /setRemoveError\(error\.message/, 'no raw message path may remain')
-  assert.match(REMOVE_DIALOG_SOURCE, /gitActionErrorCode\(error\) === 'worktree-dirty'/, 'the host dirty refusal must arm the discard gate')
   assert.match(CREATE_DIALOG_SOURCE, /gitActionErrorText\(error, t\)/, 'the create dialog must localize failures')
   assert.match(ROW_SOURCE, /gitActionErrorTextFor\(source\.actionErrorCode, actionError, t\)/, 'the source strip must localize the stored code')
-  // The dirty marker carries the shared code (same situation, same copy).
-  assert.match(COORDINATOR_SOURCE, /class WorktreeDirtyError extends GitActionError/)
-  assert.match(COORDINATOR_SOURCE, /super\('worktree-dirty'/)
+  // PR3: the registered-removal machinery is gone, so no workspace lifecycle or
+  // its raw-message dialog can reappear here.
+  assert.doesNotMatch(COORDINATOR_SOURCE, /removeWorktree\(|deleteWorkspaceForSource|archiveSessionForSource/)
 })

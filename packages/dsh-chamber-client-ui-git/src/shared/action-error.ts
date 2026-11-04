@@ -16,30 +16,27 @@ import { describeThrown } from '@dsh-chamber/dsh-chamber-client-core'
 import { removeFailureCode, removeFailureCopyKey } from './remove-notes.ts'
 
 /**
- * User-reachable Git action failures with dedicated localized copy. The union is
- * EXACTLY the code set removeFailureCopyKey answers for, so a new member without
- * copy fails the action-error test instead of rendering a raw message.
+ * User-reachable Git action failures with dedicated localized copy. Every member
+ * must answer through removeFailureCopyKey (the action-error test rejects a code
+ * without copy instead of rendering a raw message); the table additionally
+ * localizes host-only refusals that never become a GitActionError.
  */
 export type GitActionErrorCode =
   | 'action-in-progress'
   | 'recovery-pending'
   | 'fresh-facts-unavailable'
   | 'worktree-not-found'
-  | 'main-worktree'
-  /** The row carries no dsh workspace (the unregistered path is required). */
-  | 'worktree-unregistered'
-  /** The worktree holds the session currently on screen (blank exception aside). */
-  | 'worktree-current'
-  /** The per-source runtime channel is absent, so the current session is unknown. */
-  | 'worktree-runtime-unknown'
-  | 'worktree-locked'
-  | 'worktree-unhealthy'
-  | 'worktree-dirty'
-  /** Cleanliness could not be determined (dirty === null). */
-  | 'worktree-status-unknown'
-  /** A session cannot target an unhealthy worktree (adopt preflight). */
+  /** A session cannot target an unhealthy worktree. */
   | 'unhealthy-target'
-  | 'archive-failed'
+  /** The repository's main checkout is not a registered workspace, so a
+   *  source-rooted session cannot be created for this checkout (design 08 I9). */
+  | 'source-workspace-missing'
+  /** Host refusals with dedicated copy (they arrive as GitWorktreeRpcError). */
+  | 'main-worktree'
+  | 'worktree-locked'
+  | 'worktree-dirty'
+  | 'running-agent'
+  | 'worktree-invalid'
   /** The instance does not serve the gitWorktree Remote (404). */
   | 'git-host-not-loaded'
   /** The shared carrier answered a business-level refusal (`rpc-failed`); its
@@ -47,9 +44,6 @@ export type GitActionErrorCode =
   | 'rpc-failed'
   /** The page dispatch queue refused the request before it left the page. */
   | typeof NOT_DISPATCHED_CODE
-  /** Host refusals with dedicated copy (they arrive as GitWorktreeRpcError). */
-  | 'running-agent'
-  | 'worktree-invalid'
 
 /** A user-facing Git action failure carrying its localizable code. */
 export class GitActionError extends Error {

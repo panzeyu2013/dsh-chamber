@@ -1,40 +1,66 @@
 /**
- * Git worktree core — preview/create replay, rollback authority and operation capacity.
+ * Git worktree core — preview/create replay, the two-step filter-parity checkout,
+ * terminal replay guards and operation capacity.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { basename } from 'node:path'
 import { GitWorktreeError, OPERATION_TTL_MS } from '../src/core.ts'
 import {
-  LINKED,
-  WORKTREES_KEY,
   MAIN_HEAD,
   FEATURE_HEAD,
+  LINKED,
+  WORKTREES_ROOT,
+  POOL_IGNORE,
   setup,
   targetOf,
   previewNew,
   mutationCalls,
 } from './support/fake-repository.ts'
 
-test('preview and create a new branch with bounded fixed argv and idempotent replay', async () => {
+test('preview and create a new branch with the two-step filter-parity checkout and idempotent replay', async () => {
   const { core, repo } = setup()
+  repo.filterDrivers.add('lfs')
   const preview = await previewNew(core)
-  assert.equal(preview.targetPath, `/worktrees/${WORKTREES_KEY}/new-worktree`)
+  assert.equal(preview.targetPath, `${WORKTREES_ROOT}/new-worktree`)
   assert.equal(preview.baseHead, MAIN_HEAD)
   assert.match(preview.repoId, /^repo_[0-9a-f]{64}$/)
 
   const created = await core.create({ previewToken: preview.previewToken, operationId: 'create-1' })
   assert.equal(created.created, true)
   assert.equal(created.replayed, false)
-  assert.equal(created.rollbackAuthorized, true)
   assert.equal(created.branchCreated, true)
   assert.match(created.worktreeId, /^worktree_[0-9a-f]{64}$/)
-  assert.deepEqual(mutationCalls(repo, 'add')[0]!.args, [
-    'worktree', 'add', '-b', 'topic', '--', `/worktrees/${WORKTREES_KEY}/new-worktree`, MAIN_HEAD,
+
+  // Step 1: add --no-checkout writes only the admin record.
+  const add = mutationCalls(repo, 'add')[0]!
+  assert.deepEqual(add.args, [
+    'worktree', 'add', '--no-checkout', '-b', 'topic', '--', `${WORKTREES_ROOT}/new-worktree`, MAIN_HEAD,
   ])
-  assert.equal(mutationCalls(repo, 'add')[0]!.timeoutMs, 30_000)
-  assert.equal(mutationCalls(repo, 'add')[0]!.maxOutputBytes, 256 * 1024)
+  assert.equal(add.timeoutMs, 30_000)
+  assert.equal(add.maxOutputBytes, 256 * 1024)
+
+  // Step 2: enumerate filter.* in the TARGET checkout, then reset with command-scoped
+  // GIT_CONFIG_* overrides (clean/smudge/process empty, required=false).
+  const stepVerbs = repo.calls
+    .filter(call => call.args[0] === 'config' || call.args[0] === 'reset'
+      || (call.args[0] === 'worktree' && call.args[1] === 'add'))
+    .map(call => call.args[0])
+  assert.deepEqual(stepVerbs, ['worktree', 'config', 'reset'])
+  const enumeration = repo.calls.find(call => call.args[0] === 'config')!
+  assert.deepEqual(enumeration.args, ['config', '--null', '--name-only', '--get-regexp', '^filter\\.'])
+  assert.equal(enumeration.cwd, preview.targetPath)
+  const reset = repo.calls.find(call => call.args[0] === 'reset')!
+  assert.deepEqual(reset.args, ['reset', '--hard', '--no-recurse-submodules', 'HEAD'])
+  assert.equal(reset.cwd, preview.targetPath)
+  assert.equal(reset.env!.GIT_CONFIG_COUNT, '4')
+  assert.equal(reset.env!.GIT_CONFIG_KEY_0, 'filter.lfs.clean')
+  assert.equal(reset.env!.GIT_CONFIG_VALUE_0, '')
+  assert.equal(reset.env!.GIT_CONFIG_KEY_3, 'filter.lfs.required')
+  assert.equal(reset.env!.GIT_CONFIG_VALUE_3, 'false')
+
+  // The pool self-ignore landed before the add (create-only write).
+  assert.equal(repo.written.get(POOL_IGNORE), '*\n')
 
   const replay = await core.create({ previewToken: preview.previewToken, operationId: 'create-1' })
   assert.equal(replay.replayed, true)
@@ -58,7 +84,7 @@ test('create revalidates an existing branch and rejects a moved preview', async 
   assert.equal(mutationCalls(repo, 'add').length, 0)
 })
 
-test('a zero-exit add remains rollback-authorized when postcondition reading fails', async () => {
+test('a zero-exit add remains reconcilable when the postcondition read fails', async () => {
   const { core, repo } = setup()
   const preview = await previewNew(core)
   repo.failListAfterAdd = true
@@ -66,14 +92,10 @@ test('a zero-exit add remains rollback-authorized when postcondition reading fai
   assert.equal(repo.worktrees.some(worktree => worktree.path === preview.targetPath), true)
   const reconciled = await core.create({ previewToken: preview.previewToken, operationId: 'uncertain-create' })
   assert.equal(reconciled.replayed, true)
-  assert.equal(reconciled.rollbackAuthorized, true)
   assert.equal(mutationCalls(repo, 'add').length, 1)
-  const rollback = await core.rollbackCreate({ operationId: 'uncertain-create' })
-  assert.equal(rollback.removed, true)
-  assert.equal(repo.worktrees.some(worktree => worktree.path === preview.targetPath), false)
 })
 
-test('timeout reconciliation can advance but never grants rollback provenance', async () => {
+test('timeout reconciliation can advance but never reports branch provenance', async () => {
   const { core, repo } = setup()
   const preview = await previewNew(core)
   repo.throwAfterAdd = new GitWorktreeError('git-timeout', 'simulated timeout')
@@ -81,20 +103,17 @@ test('timeout reconciliation can advance but never grants rollback provenance', 
     core.create({ previewToken: preview.previewToken, operationId: 'timeout-create' }),
     error => error instanceof GitWorktreeError && error.code === 'git-timeout',
   )
+  // The add succeeded but its reset never ran: reconciliation COMPLETES the checkout
+  // instead of adopting an empty --no-checkout worktree.
   const reconciled = await core.create({ previewToken: preview.previewToken, operationId: 'timeout-create' })
   assert.equal(reconciled.created, true)
   assert.equal(reconciled.replayed, true)
-  assert.equal(reconciled.rollbackAuthorized, false)
   assert.equal(reconciled.branchCreated, false)
   assert.equal(mutationCalls(repo, 'add').length, 1)
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'timeout-create' }),
-    error => error instanceof GitWorktreeError && error.code === 'rollback-not-authorized',
-  )
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
+  assert.equal(repo.calls.filter(call => call.args[0] === 'reset').length, 1)
 })
 
-test('spawn failure cannot adopt or roll back an external exact-identity worktree', async () => {
+test('spawn failure cannot adopt an external exact-identity worktree', async () => {
   const { core, repo } = setup()
   const preview = await previewNew(core)
   repo.throwBeforeAdd = new GitWorktreeError('git-spawn-failed', 'simulated ENOENT')
@@ -109,14 +128,10 @@ test('spawn failure cannot adopt or roll back an external exact-identity worktre
     core.create({ previewToken: preview.previewToken, operationId: 'spawn-create' }),
     error => error instanceof GitWorktreeError && error.code === 'target-exists',
   )
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'spawn-create' }),
-    error => error instanceof GitWorktreeError && error.code === 'operation-not-created',
-  )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
 
-test('created terminal replay rejects a deleted or replaced worktree instead of returning cached authority', async () => {
+test('created terminal replay rejects a deleted, replaced or moved-source checkout', async () => {
   for (const change of ['deleted', 'replaced'] as const) {
     const { core, repo } = setup()
     const preview = await previewNew(core, `terminal-${change}`, `terminal-branch-${change}`)
@@ -138,6 +153,17 @@ test('created terminal replay rejects a deleted or replaced worktree instead of 
     )
     assert.equal(mutationCalls(repo, 'add').length, 1)
   }
+
+  // The replay also re-reads the registry: a source that moved off the main checkout
+  // invalidates the receipt instead of returning cached authority.
+  const moved = setup({ linked: true })
+  const movedPreview = await previewNew(moved.core, 'terminal-moved', 'terminal-branch-moved')
+  await moved.core.create({ previewToken: movedPreview.previewToken, operationId: 'terminal-moved' })
+  moved.workspaces[0] = { ...moved.workspaces[0]!, path: LINKED }
+  await assert.rejects(
+    moved.core.create({ previewToken: movedPreview.previewToken, operationId: 'terminal-moved' }),
+    error => error instanceof GitWorktreeError && error.code === 'operation-conflict',
+  )
 })
 
 test('same repository worktree mutations are serialized by absolute common directory', async () => {
@@ -157,12 +183,11 @@ test('terminal operation ids expire after the bounded replay TTL', async () => {
   const { core, advanceTime } = setup()
   const first = await previewNew(core, 'ttl-first', 'ttl-branch-first')
   await core.create({ previewToken: first.previewToken, operationId: 'ttl-operation' })
-  await core.rollbackCreate({ operationId: 'ttl-operation' })
   advanceTime(OPERATION_TTL_MS + 1)
 
   const second = await previewNew(core, 'ttl-second', 'ttl-branch-second')
   const reused = await core.create({ previewToken: second.previewToken, operationId: 'ttl-operation' })
-  assert.equal(reused.path, `/worktrees/${WORKTREES_KEY}/ttl-second`)
+  assert.equal(reused.path, `${WORKTREES_ROOT}/ttl-second`)
   assert.equal(reused.replayed, false)
 })
 
@@ -210,103 +235,3 @@ test('operation capacity evicts only safe pre-admission records and retains tomb
   assert.equal(mutationCalls(aba.repo, 'remove').length, 1)
   assert.equal(aba.repo.worktrees.some(worktree => worktree.path === LINKED), true)
 })
-
-test('rollback is operation-bound, refuses a workspace, then removes clean without force', async () => {
-  const { core, repo, workspaces } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'rollback-1' })
-  workspaces.push({ workspaceId: 'ws-new', path: created.path, sessionIds: [] })
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'rollback-1' }),
-    error => error instanceof GitWorktreeError && error.code === 'rollback-has-workspace',
-  )
-  workspaces.pop()
-  // A symlink ALIAS of the created path canonicalizes to the same owner.
-  repo.aliases.set('/aliases/created', created.path)
-  workspaces.push({ workspaceId: 'ws-alias', path: '/aliases/created', sessionIds: [] })
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'rollback-1' }),
-    error => error instanceof GitWorktreeError && error.code === 'rollback-has-workspace',
-  )
-  workspaces.pop()
-  const rolledBack = await core.rollbackCreate({ operationId: 'rollback-1' })
-  assert.equal(rolledBack.removed, true)
-  assert.equal(rolledBack.branchPreserved, true)
-  assert.deepEqual(mutationCalls(repo, 'remove')[0]!.args, ['worktree', 'remove', '--', created.path])
-  assert.equal(repo.branches.has('topic'), true)
-  const replay = await core.rollbackCreate({ operationId: 'rollback-1' })
-  assert.equal(replay.replayed, true)
-  assert.equal(mutationCalls(repo, 'remove').length, 1)
-})
-
-test('rollback reconciles authoritative absence after a failed postcondition read or an external deletion', async () => {
-  const { core, repo } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'rollback-reconcile' })
-  repo.failListAfterRemove = true
-  await assert.rejects(core.rollbackCreate({ operationId: 'rollback-reconcile' }))
-  assert.equal(repo.worktrees.some(worktree => worktree.path === created.path), false)
-  const reconciled = await core.rollbackCreate({ operationId: 'rollback-reconcile' })
-  assert.equal(reconciled.removed, true)
-  assert.equal(reconciled.replayed, true)
-  assert.equal(mutationCalls(repo, 'remove').length, 1)
-
-  // External `rm -rf` (directory only, admin record survives): the rollback keeps
-  // every identity guard, skips the impossible dirty probe and clears the record
-  // with a plain remove — never --force.
-  const vanished = setup()
-  const vanishedPreview = await previewNew(vanished.core)
-  const vanishedCreated = await vanished.core.create({ previewToken: vanishedPreview.previewToken, operationId: 'rollback-vanished' })
-  vanished.repo.existing.delete(vanishedCreated.path)
-  const rolledBack = await vanished.core.rollbackCreate({ operationId: 'rollback-vanished' })
-  assert.equal(rolledBack.removed, true)
-  assert.equal(rolledBack.path, vanishedCreated.path)
-  assert.equal(rolledBack.branchPreserved, true)
-  assert.equal(vanished.repo.worktrees.some(worktree => worktree.path === vanishedCreated.path), false)
-  assert.equal(vanished.repo.branches.has('topic'), true)
-  assert.deepEqual(mutationCalls(vanished.repo, 'remove')[0]!.args, ['worktree', 'remove', '--', vanishedCreated.path])
-  const replay = await vanished.core.rollbackCreate({ operationId: 'rollback-vanished' })
-  assert.equal(replay.replayed, true)
-  assert.equal(mutationCalls(vanished.repo, 'remove').length, 1)
-})
-
-test('rollback refuses dirty operation-created worktrees and clean ones whose HEAD changed', async () => {
-  const { core, repo } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'guard-rollback' })
-  const row = (): { dirty?: boolean; head: string } => repo.worktrees.find(worktree => worktree.path === created.path)!
-  row().dirty = true
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'guard-rollback' }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
-  )
-  row().dirty = false
-  row().head = '4444444444444444444444444444444444444444'
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'guard-rollback' }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-changed',
-  )
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
-})
-
-
-
-test('rollback repeats Git identity checks after the final registry and agent scan', async () => {
-  const { core, repo, setSourceReadHook } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'rollback-final-check' })
-  let reads = 0
-  setSourceReadHook(() => {
-    reads += 1
-    if (reads === 2) {
-      repo.worktrees.find(worktree => worktree.path === created.path)!.head =
-        '5555555555555555555555555555555555555555'
-    }
-  })
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'rollback-final-check' }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-changed',
-  )
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
-})
-

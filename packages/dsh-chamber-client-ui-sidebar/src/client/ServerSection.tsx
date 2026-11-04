@@ -33,14 +33,17 @@ import { FLAT_ACCOUNT_KEY, flatAccountKey } from '@dsh-chamber/dsh-chamber-clien
 import { partitionPinnedSessions } from '@dsh-chamber/dsh-chamber-client-core/pin-partition'
 import { createPrewarmIntent, type PrewarmIntent } from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
-import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
+import { getWorkspaceGitFlagsVersion, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import { resolveWorkspaceDrop } from '@dsh-chamber/dsh-chamber-client-core/workspace-drag-order'
 import { workspaceTreeDepths, workspaceTreeParents } from '@dsh-chamber/dsh-chamber-client-core/workspace-tree'
+import {
+  checkoutFamilyMainOf, checkoutPathOf, checkoutRowFacts, isCheckoutRow, isRealWorkspaceRow, workspaceFlagOf,
+} from './checkout-row.ts'
 import {
   sessionRowDisclosure, sessionRowWindow, sessionRowWindowMotionKey, SESSION_ROWS_ATTENTION_AUTO_MAX,
   SESSION_ROWS_VISIBLE_FIRST,
 } from '@dsh-chamber/dsh-chamber-client-core/session-row-window'
-import { orderWithOverride, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
+import { orderWorkspaceRows, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import { ServerSectionHeader } from './ServerSectionHeader.tsx'
 import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
 import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
@@ -69,13 +72,17 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
     sessionDrag,
     workspaceDrag,
     setWorkspaceDrag,
+    checkoutDrag,
+    setCheckoutDrag,
     serverDrag,
     setServerDrag,
     commitServerDrag,
     commitWorkspaceDrag,
+    commitCheckoutDrag,
     suppressClickRef,
     dragPressOnButtonRef,
     workspaceDropCommitted,
+    checkoutDropCommitted,
     rowErrors,
     menuOpen,
     toggleMenu,
@@ -105,6 +112,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
   )
   // 「按工作区树」：父级/深度一次算好（家族优先；无家族信息 = 上游纯前缀），与渲染解耦。
   // 依赖 = 工作区集合 / 轴 / git flags 版本（flags 变化必须重算家族锚点）；非树态零成本。
+  // 树家族锚点：真实 workspace 读 git flag；**派生 checkout 行**带自己的 familyMainId
+  // （flags store 不发布合成行），先查行、后查 flag——让 checkout 行与 main 同层级（§4「树」）。
   const treeDepths = useMemo(
     () => groupByMode !== 'workspace-tree' ? undefined : workspaceTreeDepths(workspaceTreeParents(
       server.workspaces.map(workspace => ({
@@ -113,7 +122,10 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
         ...(workspace.synthetic === true ? { synthetic: true } : {}),
         ...(workspace.ungrouped === true ? { ungrouped: true } : {}),
       })),
-      id => getWorkspaceGitFlag(server.id, id)?.mainWorkspaceId,
+      id => {
+        const row = server.workspaces.find(candidate => candidate.id === id)
+        return row === undefined ? undefined : (checkoutFamilyMainOf(row) ?? workspaceFlagOf(server.id, row)?.mainWorkspaceId)
+      },
     )),
     [server.workspaces, server.id, groupByMode, gitFlagsVersion],
   )
@@ -319,10 +331,11 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               const orderedWorkspaces = (() => {
                 const real = server.workspaces.filter(workspace => workspace.ungrouped !== true)
                 const ungrouped = server.workspaces.find(workspace => workspace.ungrouped === true)
-                // 顺序规则与 drop 环境同源（sidebar-context 的 orderWithOverride）：
-                // 覆盖表外的新建行按宿主 PREPEND 语义前置，渲染序与拖拽锚点才看同一个头。
-                const ordered: ChamberServerWorkspace[] = orderWithOverride(
-                  real, workspaceOrderOverride[server.id], workspace => workspace.id,
+                // 顺序规则与 drop 环境/平铺账号/会话锚点同源（sidebar-context 的
+                // orderWorkspaceRows）：覆盖表外的新建行按宿主 PREPEND 语义前置；派生
+                // checkout 行不参与覆盖置换，按 checkoutOrder 贴回各自 main 行之后。
+                const ordered: ChamberServerWorkspace[] = orderWorkspaceRows(
+                  server.id, real, workspaceOrderOverride[server.id], viewPrefs.checkoutOrder,
                 )
                 return ungrouped === undefined ? ordered : [...ordered, ungrouped]
               })()
@@ -339,7 +352,9 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                 const liveWorkspaceIds = new Set(server.workspaces.map(row => row.id))
                 return orderedWorkspaces.filter(workspace => {
                   if (workspace.ungrouped === true || workspace.synthetic === true) return true
-                  const flag = getWorkspaceGitFlag(server.id, workspace.id)
+                  // 派生 checkout 行的 git flag 由行自身合成（flags store 不发布合成行），
+                  // 主行折叠据此一并隐藏同族 checkout 行（design 08 §3.2-§3.3「折叠」）。
+                  const flag = workspaceFlagOf(server.id, workspace)
                   const mainId = flag?.mainWorkspaceId
                   if (mainId === undefined) return true
                   const foldedMain = viewPrefs.folded[`${server.id}/${mainId}`] === true
@@ -358,7 +373,9 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                 ? workspaceDropEnv(
                   server.id,
                   server.workspaces
-                    .filter(workspace => workspace.ungrouped !== true && workspace.synthetic !== true)
+                    // 派生 checkout 行不是宿主 workspace：它不参与族 resolver 的
+                    // 成员集合（自己的子序由 commitCheckoutDrag 落 view-prefs）。
+                    .filter(workspace => isRealWorkspaceRow(workspace))
                     .map(workspace => workspace.id),
                   workspaceOrderOverride[server.id],
                   viewPrefs.folded,
@@ -383,10 +400,27 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               const workspaceDragMarker = (workspace: ChamberServerWorkspace): 'before' | 'after' | null => {
                 if (workspace.ungrouped === true || workspace.synthetic === true || workspaceDrag === null
                   || workspaceDrag.sourceId !== server.id || workspaceDrag.over === null) return null
+                // Derived checkout rows never take a family-drop marker: they are not
+                // members of the host order the resolver permutes.
+                if (isCheckoutRow(workspace)) return null
                 if (workspaceDrag.over.id !== workspace.id) return null
                 if (workspaceDropAtListStart && workspace.id === firstDropRow) return null
                 if (workspaceDropBlocked(workspace.id, workspaceDrag.over.half)) return null
                 return workspaceDrag.over.half
+              }
+              // Derived checkout-row drag: the drop may only land INSIDE the same family's
+              // checkout sub-order. Every other target (other families/repos, real rows, the
+              // main row) is blocked before a marker is drawn — no resolver, no wire order.
+              const checkoutDragLive = checkoutDrag !== null && checkoutDrag.sourceId === server.id
+              const checkoutDropHere = (workspace: ChamberServerWorkspace): boolean =>
+                isCheckoutRow(workspace)
+                && checkoutFamilyMainOf(workspace) === checkoutDrag?.mainId
+                && checkoutPathOf(workspace) !== checkoutDrag?.path
+              const checkoutDragMarker = (workspace: ChamberServerWorkspace): 'before' | 'after' | null => {
+                if (!checkoutDragLive || checkoutDrag.over === null) return null
+                if (checkoutDrag.over.id !== workspace.id) return null
+                if (!checkoutDropHere(workspace)) return null
+                return checkoutDrag.over.half
               }
               // Ordering is a view key too: the motion resetKey below settles an
               // order swap instead of gliding every row (hoisted out of sessionsOf
@@ -405,19 +439,22 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
               }
               const sessionsInOrder = (workspace: ChamberServerWorkspace): ChamberServerWorkspace['sessions'] => {
                 const wire = workspace.sessions
+                // 派生 checkout 行的会话属于**源 workspace** 的账号（放置只是渲染分组）：
+                // 账号序读源 id，行内显示即为源序的子序列，与行内拖拽的锚点空间一致。
+                const accountId = checkoutFamilyMainOf(workspace) ?? workspace.id
                 // updated = 手动序 + 活动置顶：渲染序取共享的 updated-order account
                 // （推导 effect 已写回 seeding/recency sort/promotion），account 不存在
                 // 时（切换后首帧、effect 尚未落盘）回退 wire 序。**重入 updated** 时
                 // 首帧保留旧 account 序，下一帧才整列重排（render-then-sort，菜单关闭
                 // 动画内不可感知）。manual 模式：未分组桶用存储序，工作区 override 优先。
                 if (orderBy === 'updated') {
-                  const stored = viewPrefs.updatedOrder?.[`${server.id}/${workspace.id}`]
+                  const stored = viewPrefs.updatedOrder?.[`${server.id}/${accountId}`]
                   return stored === undefined ? wire : orderUngroupedSessions(wire, stored)
                 }
                 if (workspace.ungrouped === true) {
                   return orderUngroupedSessions(wire, viewPrefs.ungroupedOrder[server.id])
                 }
-                const override = sessionOrderOverride[`${server.id}/${workspace.id}`]
+                const override = sessionOrderOverride[`${server.id}/${accountId}`]
                 return override === undefined ? wire : orderUngroupedSessions(wire, override)
               }
               // 置顶分区叠加在模式自身的序之上（上游 sectionMembers 的位置）：manual 的块内
@@ -522,8 +559,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                   />
                 )}
                 {server.connected ? (() => {
-                  // Per-repo layouts drive the unregistered-worktree blocks and the orphan badge.
-                  const repoLayouts = getSourceRepoLayouts(server.id)
+                  // Derived checkout rows read the layout store through the row facts;
+                  // the orphan badge reads the per-workspace git flag.
                   const notice = notices[server.id]
                   return (
                   <>
@@ -645,7 +682,10 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           // （与 data-row-key/rowKeys 同一套）。
                           const accountStateKey = flatAccount ? flatAccountKey(server.id) : workspaceKey
                           liveWorkspaceKeys.current.add(workspaceKey)
-                          const folded = viewPrefs.folded[accountStateKey] === true
+                          // 派生 checkout 行（design 08 §3.2-§3.3）：不独立折叠（折叠只从主行发起），
+                          // 无 kebab/rename，动作全在 Git 座席；会话按放置结果渲染。
+                          const checkout = isCheckoutRow(workspace)
+                          const folded = !checkout && viewPrefs.folded[accountStateKey] === true
                           // While THIS workspace's inline rename is active the header row
                           // hosts the edit form in place (no added list row); the flag
                           // gates form embedding, drag-off, double-click re-entry,
@@ -654,8 +694,10 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                             && renaming.sourceId === server.id
                             && renaming.kind === 'workspace' && renaming.id === workspace.id
                           // Derived (worktree) workspaces drop the kebab and rename (only
-                          // delete + new-session remain) and seed the icon accent.
-                          const gitFlag = getWorkspaceGitFlag(server.id, workspace.id)
+                          // delete + new-session remain) and seed the icon accent. A derived
+                          // checkout row carries its own flag (the flags store publishes real
+                          // workspaces only) — one lookup, no half-populated store.
+                          const gitFlag = workspaceFlagOf(server.id, workspace)
                           // The accent waits for the source's git identity to be RESOLVED
                           // (first snapshot): until then a git workspace would flash an
                           // independent hue before flipping to its family hue, so default
@@ -663,7 +705,12 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           const workspaceAccent = isSourceGitFlagsLoaded(server.id)
                             ? workspaceAccentStyle(server.id, workspace.id, gitFlag)
                             : undefined
-                          const isWorktree = gitFlag?.isWorktree === true
+                          const isWorktree = gitFlag?.isWorktree === true && !checkout
+                          // 行健康（fail-closed）：布局快照未到 = status-unknown，绝不宣称健康；
+                          // 分支/路径/健康同时进 Git 座席的 occurrence context 与行 tooltip。
+                          const checkoutFacts = checkout
+                            ? checkoutRowFacts(server.id, workspace, workspace.title)
+                            : undefined
                           // flat 直接用已对账+已分区的 flatSessions，不再走 sessionsOf（否则同一
                           // 账号在本渲染里被 reconcile+partition 第二遍，见性能修订）。
                           const sessions = flatAccount ? flatSessions : sessionsOf(workspace)
@@ -731,10 +778,12 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                             : Math.max(0, visibleSessionCount - sessions
                               .slice(0, disclosureWindow.renderCount)
                               .reduce((count, session) => count + (isGhostSession(session) ? 0 : 1), 0))
-                          const marker = workspaceDragMarker(workspace)
+                          const marker = workspaceDragMarker(workspace) ?? checkoutDragMarker(workspace)
+                          // 会话拖拽的**放置**身份：一个账号可以渲染成两行（源行 + 它的
+                          // checkout 行），marker 与提交都按行判定，不按 accountKey。
                           const activeSessionDrag = sessionDrag !== null
                             && sessionDrag.sourceId === server.id
-                            && sessionDrag.accountKey === workspace.id
+                            && sessionDrag.placementId === workspace.id
                           const sessionMarker = (sessionId: string): 'before' | 'after' | null =>
                             activeSessionDrag && sessionDrag.over !== null && sessionDrag.over.id === sessionId
                               ? sessionDrag.over.half
@@ -760,6 +809,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           if (!flatAccount) rowKeys.push(`workspace:${workspace.id}`)
                           if (workspaceError !== undefined) rowKeys.push(`error:workspace:${workspace.id}`)
                           if (workspaceDragError !== undefined) rowKeys.push(`error:workspace-drag:${workspace.id}`)
+                          // checkout 行的空态提示不占动键位：它是静态文案，不进 AnimatedRows 的
+                          // rowKeys↔data-row-key 契约（该契约只服务会位移的行）。
                           for (const session of hoistedOpenErrors) rowKeys.push(`error:open:${session.id}`)
                           if (!folded) {
                             for (const session of visibleSessions) rowKeys.push(`session:${session.id}`)
@@ -781,8 +832,14 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               style={workspaceAccent}
                               data-chamber-row={workspaceKey}
                               data-row-key={`workspace:${workspace.id}`}
+                              // 派生 checkout 行头：不折叠（折叠只从主行发起），无 kebab/rename；
+                              // 动作全在 Git 座席，故行头自己是键盘入口（Tab 进入 → 揭示座席），
+                              // 与主行 fold 按钮的键盘揭示路径一致。
+                              data-checkout-row={checkout ? '' : undefined}
+                              data-chamber-checkout-health={checkoutFacts?.healthKey}
                               role="treeitem"
-                              aria-expanded={!folded}
+                              tabIndex={checkout ? 0 : undefined}
+                              aria-expanded={checkout ? undefined : !folded}
                               draggable={!renamingThisWorkspace
                                 && workspace.ungrouped !== true && workspace.synthetic !== true}
                               // The git occupant (create/remove) cannot reach
@@ -801,8 +858,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 // the text being typed).
                                 if (renamingThisWorkspace) return
                                 if (menuOpen[workspaceKey] === true || workspace.ungrouped === true
-                                  || workspace.synthetic === true) return
-                                if (getWorkspaceGitFlag(server.id, workspace.id)?.isWorktree === true) return
+                                  || workspace.synthetic === true || checkout) return
+                                if (isWorktree) return
                                 if (event.target instanceof HTMLElement && event.target.closest('button') !== null) return
                                 setRenaming({
                                   sourceId: server.id,
@@ -851,24 +908,62 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   // ending over the guarded controls (fold/+/kebab) must not
                                   // fire a spurious toggle/menu.
                                   suppressClickRef.current = true
+                                  // 派生 checkout 行：族内子序拖拽（view-prefs），不走族 resolver。
+                                  if (checkout) {
+                                    const checkoutTarget = checkoutPathOf(workspace)
+                                    const familyMainId = checkoutFamilyMainOf(workspace)
+                                    if (checkoutTarget === undefined || familyMainId === undefined) {
+                                      event.preventDefault()
+                                      return
+                                    }
+                                    checkoutDropCommitted.current = false
+                                    setCheckoutDrag({
+                                      sourceId: server.id,
+                                      rowId: workspace.id,
+                                      path: checkoutTarget,
+                                      mainId: familyMainId,
+                                      over: null,
+                                    })
+                                    return
+                                  }
                                   workspaceDropCommitted.current = false
                                   setWorkspaceDrag({ sourceId: server.id, workspaceId: workspace.id, over: null })
                                 }}
                               onDragEnd={workspace.ungrouped === true
                                 ? undefined
                                 : () => {
-                                  if (workspaceDrag !== null && workspaceDrag.over !== null) {
-                                    commitWorkspaceDrag(server, workspaceDrag, workspaceDrag.over)
+                                  if (checkout) {
+                                    if (checkoutDrag !== null && checkoutDrag.over !== null) {
+                                      commitCheckoutDrag(server, checkoutDrag, checkoutDrag.over)
+                                    } else {
+                                      setCheckoutDrag(null)
+                                    }
+                                    checkoutDropCommitted.current = false
                                   } else {
-                                    setWorkspaceDrag(null)
+                                    if (workspaceDrag !== null && workspaceDrag.over !== null) {
+                                      commitWorkspaceDrag(server, workspaceDrag, workspaceDrag.over)
+                                    } else {
+                                      setWorkspaceDrag(null)
+                                    }
+                                    workspaceDropCommitted.current = false
                                   }
-                                  workspaceDropCommitted.current = false
                                   // 镜像会话行复位：拖拽结束后一个 tick 清除抑制位，
                                   // 否则尾随 click 会短路来源切换/排序/加工作区/搜索/
                                   // 折叠/新建/kebab/归档/会话打开。
                                   window.setTimeout(() => { suppressClickRef.current = false }, 0)
                                 }}
                             >
+                              {checkout ? (
+                                // 派生 checkout 行头**不折叠**（design 08 §3.2-§3.3：折叠只从主行发起）：
+                                // 这里是与 worktree 行同形的静息分支字形，只是没有折叠钮语义。
+                                <span
+                                  className={clsx(cc.foldToggle, cc.foldToggleGit, cc.checkoutGlyph)}
+                                  data-chamber-checkout-glyph=""
+                                  aria-hidden="true"
+                                >
+                                  <IconBranchOutlineRegular size={14} className={cc.foldBranch} />
+                                </span>
+                              ) : (
                               <button
                                 type="button"
                                 className={clsx(
@@ -907,6 +1002,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                     : <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />
                                 )}
                               </button>
+                              )}
                               {renamingThisWorkspace ? (
                                 // In-place rename: the form replaces the header's trailing
                                 // content INSIDE the row — fold toggle + gutter stay, so the
@@ -914,9 +1010,26 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 <ServerSectionRenameForm placeholder={workspace.title} mode="workspaceHeader" />
                               ) : (
                                 <>
-                                  <span className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}>
+                                  <span
+                                    className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}
+                                    // 分支/路径 tooltip（design 06 §1.2）：checkout 行没有创建时间，
+                                    // 因此没有悬停卡，tooltip 是它唯一的路径可见面。
+                                    title={checkoutFacts === undefined
+                                      ? undefined
+                                      : [checkoutFacts.branch, checkoutFacts.path ?? ''].filter(part => part !== '').join(' · ')}
+                                  >
                                     {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
                                   </span>
+                                  {/* 行健康（fail-closed）：非 ready 才出提示，unknown 也出——
+                                      绝不用缺席的 facts 假装健康（design 06 §1.3）。 */}
+                                  {checkoutFacts?.healthKey !== undefined && (
+                                    <span
+                                      className={cc.checkoutHealth}
+                                      data-chamber-checkout-health={checkoutFacts.healthKey}
+                                    >
+                                      {t(checkoutFacts.healthKey)}
+                                    </span>
+                                  )}
                                   {gitFlag?.orphaned === true && (
                                     // The workspace's path no longer exists (externally
                                     // deleted worktree left a ghost). The badge is the
@@ -968,7 +1081,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   {visibleSessionCount > 0 && (
                                     <span className={cc.workspaceCount}>{visibleSessionCount}</span>
                                   )}
-                                  {workspace.ungrouped !== true && workspace.synthetic !== true && (
+                                  {!checkout && workspace.ungrouped !== true && workspace.synthetic !== true && (
                                     // The per-workspace Git occupant sits INSIDE the header row
                                     // as the `.rowActions` cluster's SIBLING right before it (the
                                     // worktree/branch surface is the row itself): the mount renders
@@ -982,7 +1095,37 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                       hookContext: { sourceId: server.id, workspaceId: workspace.id },
                                     })
                                   )}
-                                  {!workspace.ungrouped && !workspace.synthetic && (
+                                  {checkout && checkoutFacts?.path !== undefined && (
+                                    // 派生 checkout 行：workspaceId 仍是**源 main workspace** id（行内动作
+                                    // 都落在它上面），checkout 只带 display 身份（path/branch/title）。没有
+                                    // path 的派生行不挂座席——绝不让它退化成又一份 workspace 座席。
+                                    renderWorkspaceGit('sidebar.workspace.git', { wide }, {
+                                      hookContext: {
+                                        sourceId: server.id,
+                                        workspaceId: workspace.familyMainId ?? workspace.id,
+                                        ...(workspace.repoKey === undefined ? {} : { repoKey: workspace.repoKey }),
+                                        checkout: {
+                                          path: checkoutFacts.path,
+                                          branch: checkoutFacts.branch,
+                                          title: checkoutFacts.title,
+                                        },
+                                      },
+                                    })
+                                  )}
+                                  {checkout && (
+                                    // 该行没有 kebab（动作全在 Git 座席）：这个空簇复用同一条键盘揭示路径
+                                    // ——行头 Tab 进入 → `.rowActionsVisible` → `:has(...)` 揭示座席
+                                    // （座席 rest 态 display:none，否则键盘永远进不去；design 08 §3.2）。
+                                    <span
+                                      className={clsx(
+                                        cc.rowActions,
+                                        (menuOpen[workspaceKey] === true || keyboardFocusKey === workspaceKey)
+                                          && cc.rowActionsVisible,
+                                      )}
+                                      aria-hidden="true"
+                                    />
+                                  )}
+                                  {!checkout && !workspace.ungrouped && !workspace.synthetic && (
                                     <span
                                       className={clsx(
                                         cc.rowActions,
@@ -1106,7 +1249,17 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               data-chamber-tree-depth={treeDepth > 0 ? treeDepth : undefined}
                               role="group"
                               onDragOver={flatAccount || workspace.ungrouped === true || workspace.synthetic === true
-                                || workspaceDrag === null
+                                ? undefined
+                                : checkoutDragLive
+                                  // 派生 checkout 行拖拽：落点只接受**同族**的 checkout 行；
+                                  // 其它任何位置都不成为目标（跨族/跨库/真实行一律 blocked）。
+                                  ? (event) => {
+                                    event.preventDefault()
+                                    event.dataTransfer.dropEffect = 'move'
+                                    if (!checkoutDropHere(workspace)) return
+                                    setCheckoutDrag(current => dragOverState(current, workspace.id, rowHalf(event)))
+                                  }
+                                  : workspaceDrag === null
                                 || workspaceDrag.sourceId !== server.id
                                 ? undefined
                                 : (event) => {
@@ -1120,7 +1273,14 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   setWorkspaceDrag(current => dragOverState(current, workspace.id, half))
                                 }}
                               onDrop={flatAccount || workspace.ungrouped === true || workspace.synthetic === true
-                                || workspaceDrag === null
+                                ? undefined
+                                : checkoutDragLive
+                                  ? (event) => {
+                                    event.preventDefault()
+                                    if (checkoutDrag === null || !checkoutDropHere(workspace)) return
+                                    commitCheckoutDrag(server, checkoutDrag, { id: workspace.id, half: rowHalf(event) })
+                                  }
+                                  : workspaceDrag === null
                                 || workspaceDrag.sourceId !== server.id
                                 ? undefined
                                 : (event) => {
@@ -1189,7 +1349,21 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 activeSessionDrag={activeSessionDrag}
                                 isGhostSession={isGhostSession}
                                 flat={flatAccount}
+                                // 拖动提交的 account（源 workspace id）与放置身份（本行 id）：
+                                // 一个账号可渲染成两行，锚点空间与 no-op 门都按行判定。
+                                dragAccountKey={checkout ? (workspace.familyMainId ?? workspace.id) : workspace.id}
+                                dragPlacementId={workspace.id}
+                                dragCheckoutPath={checkoutFacts?.path}
+                                checkoutParent={checkoutFacts === undefined
+                                  ? undefined
+                                  : { title: checkoutFacts.branch, ...(checkoutFacts.path === undefined ? {} : { path: checkoutFacts.path }) }}
                               />
+                              {checkout && visibleSessionCount === 0 && (
+                                // checkout 行空态（design 06 §1.3）：行仍成立，只是没有会话（非整源空态）。
+                                <div className={cc.checkoutEmpty}>
+                                  {t('checkout.empty')}
+                                </div>
+                              )}
                               {hiddenVisibleCount > 0 && (
                                 <button
                                   type="button"
@@ -1213,22 +1387,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           </Fragment>
                           )
                           })
-                        })()}
-                        {(() => {
-                          // ALL unregistered worktrees render at the very end of the list,
-                          // one block per repository. The block must NOT beat the workspace
-                          // list: git facts arrive before the aggregate, so gate on the
-                          // aggregate having landed.
-                          if (server.aggregateReady !== true) return []
-                          return repoLayouts
-                            .filter(layout => layout.unregistered.length > 0)
-                            .map(layout => (
-                              <Fragment key={layout.repoKey}>
-                                {renderWorkspaceGit('sidebar.workspace.git', { wide }, {
-                                  hookContext: { sourceId: server.id, workspaceId: '', repoKey: layout.repoKey },
-                                })}
-                              </Fragment>
-                            ))
                         })()}
                         {(flatGroupBy ? flatSessions.length === 0 : server.workspaces.length === 0) && (
                           // 空态键在**渲染行数**上（上游同规则）：flat 模式下工作区可能都在、

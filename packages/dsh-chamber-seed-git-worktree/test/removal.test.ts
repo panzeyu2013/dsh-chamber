@@ -21,6 +21,7 @@ import {
   COMMON,
   LINKED,
   FEATURE_HEAD,
+  WORKTREES_ROOT,
   FakeRepository,
   setup,
   targetOf,
@@ -573,7 +574,7 @@ test('unrecognized agent status and a non-absolute running cwd are per-row, loud
   assert.equal(mutationCalls(status.repo, 'remove').length, 0)
 
   const cwd = setup({ linked: true })
-  const extra = cwd.repo.addLinked({ path: '/repos/unregistered', branch: 'unreg', head: FEATURE_HEAD })
+  const extra = cwd.repo.addLinked({ path: `${WORKTREES_ROOT}/unregistered`, branch: 'unreg', head: FEATURE_HEAD })
   cwd.agents.push({ sessionId: 's-cwd', status: 'running', cwd: 'relative/worktree' })
   const cwdSnapshot = await cwd.core.snapshot()
   assert.equal(cwdSnapshot.sourceError, undefined, 'one drifted cwd must NOT erase the whole domain')
@@ -624,7 +625,6 @@ test('a throwing or malformed archivedSessionIds source fails snapshot AND remov
       },
       git: repo.runner,
       fs: repo.fs,
-      worktreesRoot: '/worktrees',
     })
     const healthy = await core.snapshot()
     const linked = healthy.repos[0]!.worktrees.find(worktree => worktree.path === LINKED)!
@@ -689,15 +689,16 @@ test('discardChanges force-removes dirty targets and reconciles a committed time
   await assert.rejects(registered.core.remove({ operationId: 'force-op', workspaceId: 'ws-feature', expected }), refuses('operation-conflict'))
 
   const external = setup({ linked: true })
-  external.repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD }).dirty = true
-  const externalExpected = (await targetOf(external.core, '/repos/external')).expected
-  await assert.rejects(external.core.remove({ operationId: 'unreg-dirty', expected: externalExpected, path: '/repos/external' }), refuses('worktree-dirty'))
-  const externalRemoved = await external.core.remove({ operationId: 'unreg-dirty-force', expected: externalExpected, path: '/repos/external', discardChanges: true })
+  const externalPath = `${WORKTREES_ROOT}/external`
+  external.repo.addLinked({ path: externalPath, branch: 'ext', head: FEATURE_HEAD }).dirty = true
+  const externalExpected = (await targetOf(external.core, externalPath)).expected
+  await assert.rejects(external.core.remove({ operationId: 'unreg-dirty', expected: externalExpected, path: externalPath }), refuses('worktree-dirty'))
+  const externalRemoved = await external.core.remove({ operationId: 'unreg-dirty-force', expected: externalExpected, path: externalPath, discardChanges: true })
   assert.equal(externalRemoved.removed, true)
   assert.equal(externalRemoved.next, 'none')
   assert.equal(externalRemoved.workspaceId, undefined)
   assert.equal(external.repo.branches.has('ext'), true)
-  assert.deepEqual(mutationCalls(external.repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', '/repos/external'])
+  assert.deepEqual(mutationCalls(external.repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', externalPath])
 
   const timeout = setup({ linked: true })
   timeout.repo.worktrees[1]!.dirty = true
@@ -741,7 +742,7 @@ test('every removal leg re-reads the archived set: unarchiving refuses the repla
 
   // Uncertain-outcome reconcile, UNREGISTERED path leg.
   const unreg = setup()
-  const extra = unreg.repo.addLinked({ path: '/repos/unregistered', branch: 'unreg', head: FEATURE_HEAD })
+  const extra = unreg.repo.addLinked({ path: `${WORKTREES_ROOT}/unregistered`, branch: 'unreg', head: FEATURE_HEAD })
   const unregTarget = await targetOf(unreg.core, extra.path)
   const unregInput = { operationId: 'reconcile-unregistered-unarchive', expected: unregTarget.expected, path: extra.path }
   unreg.agents.push({ sessionId: 's-live', status: 'running', cwd: `${extra.path}/sub` })
@@ -913,7 +914,7 @@ test('remove final absent convergence rechecks membership and liveness receipts'
 
 test('unregistered removal is git-first with the dirty/path guards and idempotent replay', async () => {
   const { core, repo, agents, archived } = setup({ linked: true })
-  const ext = repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  const ext = repo.addLinked({ path: `${WORKTREES_ROOT}/external`, branch: 'ext', head: FEATURE_HEAD })
   const { expected } = await targetOf(core, ext.path)
   ext.dirty = true
   await assert.rejects(core.remove({ operationId: 'op-unreg-dirty', expected, path: ext.path }), refuses('worktree-dirty'))
@@ -1032,7 +1033,7 @@ test('missing leftover removal keeps locked/ghost/identity guards, matches detac
   assert.equal((await detached.core.snapshot()).repos[0]!.worktrees.some(row => row.path === STALE), false)
 })
 
-const VANISH = '/repos/vanish-target'
+const VANISH = `${WORKTREES_ROOT}/vanish-target`
 
 function statusProbes(repo: FakeRepository, cwd: string): GitCommandRequest[] {
   // Only the removal dirty probes (isDirty, no --branch); snapshot status reads are not removal probes.

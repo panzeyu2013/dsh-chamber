@@ -73,7 +73,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 05 | [05-connection-manager.md](05-connection-manager.md) | 现行（表面/架构，v1 权威） | 多来源会话统一导航、侧边栏插件、桥接层、N-ctx、控制面/桌面契约（§7）、安全不变量（§8） |
 | 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（含视图选项三轴 per-source） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化（分组/排序/归档筛选三轴）/ 运行时事实通道 |
 | 07 | [07-models-params.md](07-models-params.md) | 推迟（设计定稿，待上游解锁） | 模型额外参数 + 默认推理等级：链路事实、上游阻塞点、更新复查清单、实现蓝本 |
-| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行 | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 安全创建/无归档删除 saga |
+| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（P5b：seed rail + 官方 forge 同池；opt-in） | git worktree 统一模型：实例内 seed host Remote（snapshot/create/enter/remove）+ 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 派生 `kind:'checkout'` 行；官方 `forge-bundle`（opt-in）与 seed 共用 `<repo>/.agents/worktrees` 池、GitHub provider 关闭；path-based 删除、无 workspace/session 生命周期 |
 | 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行 | dsh 客户端插件运行时加载：每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 活实例装/卸热同步（design 09 §3.7，无需窗口重载）+ 信任边界 |
 | 10 | —（契约并入 [05](05-connection-manager.md) §2.3/§3） | 现行 | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）；不改上游 dsh |
 | 11 | [11-auto-update.md](11-auto-update.md) | 现行 | 桌面端更新提示（无弹窗、低打扰）：settings chamber「更新」块 + 静默检查、确认后下载、退出时安装（win/mac/linux，mac 需 Developer ID）、beta → stable 通道 |
@@ -90,7 +90,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
 | 23 | [23-windows-support.md](23-windows-support.md) | Windows 11 x64 支持契约（代码面可用；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
 | 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{probe,purge}`（purge 带可选子集过滤 / `force` / 保护集 `protectSessionIds`；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover「查看已归档内容」打开——查看 / 恢复 / 逐条删除，整集删除只能显式全选后删选中、无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
-| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、65 通道 manifest 锁步（56 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留 |
+| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、65 通道 manifest 锁步（56 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留；P5b 起 sidecar 继续作为 Swift flavor 的 node 来源 |
 | 26 | [26-page-channel.md](26-page-channel.md) | 现行 | 页面级多路复用通道：一条同源 WS 承载全部长活流（health / pluginGraph / sessionFacts），实例在通道内以 instanceId 定址、容量归控制面（O(活跃订阅)）；每订阅信用窗口流控；通道独占重连与重订阅；不变量 I-1（页面长活 HTTP 流 = 0）配静态与运行期断言；健康 SSE 端点退役；§D7 页面级同源 HTTP 派发预算（有界队列、local 保留槽、`dispatched` 证据、fetch 唯一所有权 allowlist） |
 | 27 | [27-network-io-resilience.md](27-network-io-resilience.md) | v1 代码面完成（实机/组装态门禁见 STATUS） | WAN 网络 IO 韧性：transport link health 子态（healthy/suspect/down）、两次网络失败才 down、suspect 放行/down 复用 503、注册边沿、上传总预算、页面通道 link epoch、载波 closed 逃生、mutation unknown 分类；不新增包/phase/503 码 |
 | 28 | [28-remote-browser.md](28-remote-browser.md) | 现行（W0/S1/S2 实现面；S3/真机验收未完成，开放项见 STATUS） | 远端浏览器启动器：右栏 Browser = 地址栏 + 每来源 SSH loopback forward 列表，经系统浏览器打开；`dsh` + `ssh` 才有入口，per-source `127.0.0.n` alias、永不复用、无共享 `127.0.0.1` 回退；不内嵌页面/不做 gateway 隧道。**§4 有界例外**，不是 web 预览回归 |
@@ -110,7 +110,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
 | walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）**；「web 预览」的裁决见下（design 28 是有界例外，不是回归） | 宿主原生覆盖，控制面只接入/服务 |
 | 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步；移动适配包已退役，design 17 §10/§18）+ **只读插件投影**（`GET …/installed`；install/remove/materialize/tasks 写面已于 2026-09 退役，读契约见 design 21 §6.2/§6.3） |
-| git/GitHub | **插件化** | design 08 实例内插件是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；gateway 服务器侧 worktree 记录已随编排面剥离 |
+| git/GitHub | **插件化** | design 08 的 seed Git Remote 是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；P5b 的官方 `forge-bundle` 是实例内**官方工作树 UI 面**（opt-in；GitHub provider 由 overlay 关闭；仅 worktree UI/本地 diff，不新增 chamber 执行面）；gateway 服务器侧 worktree 记录已随编排面剥离 |
 
 > **有界例外（与 AGENTS.md 同列：designs 08 / 17 / 19 / 20 / 24 / 28）**：design 08 实例内
 > Git 插件、design 17 独立 gateway、design 19 桌面原生边沿通知投影、design 20 可信
@@ -144,6 +144,21 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 
 宿主已覆盖的“通知中心”UI/历史/管理域属移出面；设计 19 的桌面原生边沿通知只投影
 renderer 已有的每实例运行时事实，不建立控制面通知消费者/历史/中心，不属该移出域。
+
+> **P5b 工作树统一（有界边界）**：design 08 把工作树从“workspace + session 生命周期”收成
+> **仓库内 checkout**：checkout 落在 `<repo>/.agents/worktrees/<name>`（自忽略），会话仍以源
+> 主 checkout 为根，经 `gitWorktree/enter` 切 workingDirectory；侧栏行由 App 从 Git layout
+> 派生（`kind:'checkout'`），不是注册 workspace；行拖动用本机 `checkoutOrder` 子序（不写宿主
+> order）。官方 `forge-bundle`（bundle + 六个依赖包，七个 package.json：worktree /
+> tool-worktree / forge / forge-github / forge-session / client-ui-forge）**opt-in**，与 seed 共用
+> 同一池，GitHub provider 由 overlay 的 id-targeted `disabled` 关闭；node 分 flavor（Electron
+> 用 PATH shim / string-only 解析、绝不写 `process.execPath`；Swift 用 sidecar 自带 node；
+> 远程用部署方 PATH），不做回退形态。seed create 与 forge 的 filters 为两步 parity（`--no-checkout`
+> → 枚举 `filter.*` → `reset --hard` 带 `GIT_CONFIG_*`），接受 LFS/clean-smudge 降级（指针
+> 文件，需手动 `git lfs pull`）。旧 `$DSH_HOME/worktrees` 池不迁移、不检测、不提示：升级前
+> 逐树 `workspace.delete`（归档需保留的会话）+ `git worktree remove/prune` 是发布前提
+> （release-checklist ❌，见 design 08 §7.4）。Swift 原生壳与 sidecar 保留；P5b 在 Swift 与
+> Electron 两壳内验收。
 
 ---
 

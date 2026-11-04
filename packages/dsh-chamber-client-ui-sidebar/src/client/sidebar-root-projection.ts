@@ -15,6 +15,7 @@ import {
   subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
 } from '@dsh-chamber/dsh-chamber-client-core/view-prefs'
 import { getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
+import { isCheckoutRow, sessionFullOrder } from './checkout-row.ts'
 
 export function useSidebarProjection() {
   // chamber: the multi-source projection, published by the App layer on its
@@ -152,7 +153,9 @@ export function useSidebarProjection() {
         const workspace = server === undefined
           ? undefined
           : server.workspaces.find(candidate => candidate.id === key.slice(slash + 1))
-        const wireIds = workspace === undefined ? undefined : workspace.sessions.map(session => session.id)
+        // 账号序 = 源的完整成员序（放置前的 allSessionIds）：派生 checkout 行与源行共用
+        // 同一个账号序，checkout 行内拖拽写回的也是这一份（源行按子序列渲染）。
+        const wireIds = workspace === undefined ? undefined : sessionFullOrder(workspace)
         // Hygiene: an override left over from a source since switched to
         // updated is dropped — updated renders the account order, never this map.
         if (server !== undefined && (viewPrefs.orderBy?.[server.id] ?? 'manual') === 'updated') {
@@ -244,15 +247,26 @@ export function useSidebarProjection() {
     }
     for (const server of servers) {
       if (current.orderBy?.[server.id] !== 'updated') continue
+      // ONE session lookup per source: a family's PLACED sessions live on its derived
+      // checkout rows while the account order covers the source's full membership.
+      const serverSessions = new Map(server.workspaces.flatMap(row => row.sessions).map(row => [row.id, row] as const))
       for (const workspace of server.workspaces) {
-        const sessionIds = workspace.sessions.map(session => session.id)
+        // A derived checkout row owns NO account: its placed sessions render in the
+        // SOURCE workspace's updated order (one account per host workspace), so writing
+        // a second per-derived-id account would be dead weight — and worse, an extra
+        // debounced write + cross-shell notification every tick.
+        if (isCheckoutRow(workspace)) continue
+        // The account's membership is the PRE-placement order when the family has
+        // checkouts (the source row then renders the unplaced subsequence and the
+        // checkout rows the placed one) — the same space the drag anchors use.
+        const sessionIds = sessionFullOrder(workspace)
         if (sessionIds.length === 0) continue
         const accountKey = `${server.id}/${workspace.id}`
         const next = nextUpdatedOrder({
           sessionIds,
           stored: current.updatedOrder?.[accountKey],
           previousUpdatedAt: current.sessionUpdatedAtByAccount?.[accountKey],
-          byId: new Map(workspace.sessions.map(session => [session.id, session])),
+          byId: serverSessions,
         })
         const planned = planUpdatedCommit(accountKey, next, server.archivedSessions)
         if (planned === undefined) continue

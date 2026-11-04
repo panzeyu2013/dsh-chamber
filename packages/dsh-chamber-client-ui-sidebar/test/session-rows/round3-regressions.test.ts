@@ -61,7 +61,9 @@ test('a lost dragend cannot leave the click-suppress flag stuck', () => {
     && DRAG.includes('!sessionAlive(sessionDrag))'), 'the dragged session itself must be alive, not only its source')
   assert.ok(DRAG.includes('const workspaceAlive = (drag: WorkspaceDragState): boolean =>')
     && DRAG.includes('!workspaceAlive(workspaceDrag))'), 'the dragged workspace itself must be alive')
-  assert.ok(DRAG.includes('}, [servers, sessionDrag, workspaceDrag, serverDrag])'))
+  // PR2 adds the derived checkout-row drag to the same watchdog (a vanished
+  // derived row must drop the suppression flag exactly like a vanished workspace).
+  assert.ok(DRAG.includes('}, [servers, sessionDrag, workspaceDrag, checkoutDrag, serverDrag])'))
 })
 
 test('archived rows are unopenable, not merely styled', () => {
@@ -110,7 +112,10 @@ test('the workspace prune only runs on an authoritative, unfolded, unfiltered pr
 })
 
 test('the flat drag baseline is the rendered (override-aware) order, not raw wire order (F3)', () => {
-  assert.ok(DRAG.includes('orderWithOverride(realWorkspaces, workspaceOrderOverride[server.id], workspace => workspace.id)'))
+  // PR2: the flat baseline reads the SAME ordering helper as the section render
+  // (orderWorkspaceRows: override-aware real rows + family-anchored checkout rows),
+  // so the flat account and the flat list cannot drift apart.
+  assert.ok(DRAG.includes('orderWorkspaceRows(') && DRAG.includes('workspaceOrderOverride[server.id]'))
   assert.ok(DRAG.includes('const flatWorkspaces = ['))
 })
 

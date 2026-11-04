@@ -536,6 +536,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     return resolveLocalHostGraphOverlay({
       stateDir,
       dshHome,
+      // The installation anchor for resolving an ENABLED profile bundle's patch (the
+      // profile anchor is probed too) — P5b-0's id-targeted disable verification.
+      dshWorkspacePath: getDshWorkspacePath(),
       entries: seedEntries(),
       log: message => logger.log(message),
       warn: message => logger.warn(message),

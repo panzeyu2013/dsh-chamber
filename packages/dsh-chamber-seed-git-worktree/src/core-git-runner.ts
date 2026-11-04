@@ -27,6 +27,16 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
         fail('unsafe-git-limit', 'Git output cap is outside the supported range')
       }
       assertSafeGitArgv(request.args)
+      if (request.env !== undefined) {
+        // The ONLY command-scoped environment the core may inject is the filter reset's
+        // `GIT_CONFIG_*` table; nothing else (PATH, GIT_DIR, ...) can pass through here.
+        for (const [key, value] of Object.entries(request.env)) {
+          if (typeof value !== 'string' || value.length > 1_024 || value.includes('\0')
+            || !/^GIT_CONFIG_(COUNT|KEY_[0-9]+|VALUE_[0-9]+)$/u.test(key)) {
+            fail('unsafe-git-argv', 'Git environment override is outside the supported shape')
+          }
+        }
+      }
     } catch (error) {
       rejectPromise(error)
       return
@@ -41,14 +51,23 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
     }
     Object.assign(environment, {
       GIT_TERMINAL_PROMPT: '0',
+      // Forge parity: filters must never smudge LFS content into a fresh checkout.
+      // The publish note documents that a user needs a manual `git lfs pull`.
+      GIT_LFS_SKIP_SMUDGE: '1',
       GIT_NO_LAZY_FETCH: '1',
       GIT_OPTIONAL_LOCKS: '0',
-      // Hook suppression is injected via the argv -c core.hooksPath guard (HOOK_GUARD),
-      // not GIT_CONFIG_* env (lowest priority, overridden by a repo's own core.hooksPath).
-      // Filters intentionally remain inside the trusted repository-config boundary.
+      // Hook suppression is injected via the argv -c core.hooksPath guard (HOOK_GUARD)
+      // rather than GIT_CONFIG_* env, because the guard is explicit in the argv every
+      // caller can audit. There is no priority difference: GIT_CONFIG_COUNT/KEY/VALUE
+      // entries are COMMAND-SCOPE like `-c` (they beat repo/system config); the reset
+      // step's filter overrides rely on exactly that. Status/remove may still run
+      // repository-configured filters inside the trusted repo-config boundary.
       GCM_INTERACTIVE: 'never',
       LC_ALL: 'C',
     })
+    // Request-scoped overrides (the filter reset) come LAST so they can only narrow
+    // behavior inside the already-locked-down environment above.
+    if (request.env !== undefined) Object.assign(environment, request.env)
 
     let child: GitChildProcess
     try {

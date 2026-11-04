@@ -1,7 +1,7 @@
 /**
  * Internal record/topology types and the per-common-dir mutex.
  */
-import type { AgentFact, CreateBranch, CreateResult, PreviewCreateResult, RemoveResult, RollbackCreateResult, WorkspaceFact } from './core-types.ts'
+import type { AgentFact, CreateBranch, CreateResult, PreviewCreateResult, RemoveResult, WorkspaceFact } from './core-types.ts'
 
 export interface AgentRowDrift {
   readonly sessionId: string
@@ -72,32 +72,20 @@ export interface PreviewRecord extends PreviewCreateResult {
   readonly createdAt: number
 }
 
-export interface CreatedFacts {
-  readonly repoId: string
-  readonly worktreeId: string
-  readonly commonDir: string
-  readonly mainPath: string
-  readonly path: string
-  readonly branch: string
-  readonly head: string
-  readonly branchCreated: boolean
-}
-
 export interface CreateOperationRecord {
   readonly previewToken: string
   readonly preview: PreviewRecord
   state: 'ready' | 'creating' | 'uncertain' | 'created'
-    | 'rolling-back' | 'rollback-uncertain' | 'rolled-back'
   updatedAt: number
   attemptedCreate: boolean
-  /** Provenance boundary: only an observed zero exit may authorize rollback. */
+  /** Provenance boundary: only an observed zero exit of the ADD step may report a
+   *  newly created branch on a reconciled replay. */
   gitAccepted: boolean
-  attemptedRollback: boolean
+  /** True once the second (reset) step populated the `--no-checkout` worktree; a
+   *  reconciled replay completes an interrupted checkout exactly once. */
+  checkoutCompleted: boolean
   createPromise?: Promise<CreateResult>
   createResult?: CreateResult
-  facts?: CreatedFacts
-  rollbackPromise?: Promise<RollbackCreateResult>
-  rollbackResult?: RollbackCreateResult
 }
 
 export interface RemoveIntent {

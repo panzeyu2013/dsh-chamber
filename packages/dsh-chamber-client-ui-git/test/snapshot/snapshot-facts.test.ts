@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  canTargetSession, collectSessionClosure, createSourceOptions, findWorktree,
-  gitFactsForWorkspace, removeBlockReason, sourceBranchChoices,
+  canTargetSession, createSourceOptions,
+  gitFactsForWorkspace, sourceBranchChoices,
 } from '../../src/shared/git-facts.ts'
 import { GitActionLedger } from '../../src/shared/action-ledger.ts'
 import { SerializedRefreshes } from '../../src/shared/refresh-flight.ts'
@@ -75,11 +75,19 @@ test('snapshot never turns missing collections or malformed membership into heal
   assert.deepEqual(snapshot.errors.map(error => error.code), ['invalid-error', 'invalid-worktree'])
 })
 
-test('topology helpers select and find by opaque identity, never display paths', () => {
-  const snapshot: GitWorktreeSnapshot = normalize([repo([worktree()], { commonDir: '/same' })])
+test('create sources select the registered main checkout by opaque identity', () => {
+  const snapshot: GitWorktreeSnapshot = normalize([repo([worktree({ isMain: true })], { commonDir: '/same' })])
   assert.deepEqual(createSourceOptions(snapshot), [{ workspaceId: 'ws-1', repoId: REPO_ID, label: 'repo' }])
-  assert.equal(findWorktree(snapshot, REPO_ID, WORKTREE_ID)?.worktree.path, '/repo')
-  assert.equal(findWorktree(snapshot, '/same', '/repo'), undefined)
+  assert.deepEqual(createSourceOptions(normalize([repo([worktree({ isMain: true, workspaceId: null })])])), [])
+})
+
+test('create sources are main checkouts only (V6): a linked workspace is never a fallback', () => {
+  // A linked worktree with a registered workspace must NOT become the source:
+  // the host refuses it (source-not-main-checkout) and the session root would be
+  // wrong (design 08 I1).
+  assert.deepEqual(createSourceOptions(normalize([repo([worktree()])])), [])
+  // An unregistered main checkout offers no create source at all (I9).
+  assert.deepEqual(createSourceOptions(normalize([repo([worktree({ isMain: true, workspaceId: null })])])), [])
 })
 
 test('source-branch choices keep the main checkout branch selectable and never empty for a real repo', () => {
@@ -108,73 +116,12 @@ test('the create dialog never filters the main checkout branch out of the source
     'the source-branch picker must never filter the main checkout branch out')
 })
 
-test('safe-remove guard covers main/registration/live/current/fs safety and allows detached clean rows', () => {  assert.equal(removeBlockReason(worktree({ isMain: true })), 'main')
-  assert.equal(removeBlockReason(worktree({ workspaceId: null })), 'unregistered')
-  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running')
-  // ARCHIVED-AWARE: the blocking field names the running
-  // sessions that actually gate removal. An archived running session is inert
-  // (present in runningSessionIds, absent from the blocking list) and does not
-  // block; the OLD-HOST fallback (field absent) stays conservative.
-  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'], blockingRunningSessionIds: [] })), undefined,
-    'an archived running session is inert')
-  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'], blockingRunningSessionIds: ['s'] })), 'running',
-    'a non-archived running session still blocks')
-  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s', 't'], blockingRunningSessionIds: ['t'] })), 'running',
-    'one blocking session is enough')
-  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running',
-    'an old host without the field stays conservative')
-  assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's'), 'current')
-  // A BLANK current session carries no content and must not block removal.
-  assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's', true), undefined)
-  assert.equal(removeBlockReason(worktree({ locked: true })), 'locked')
-  assert.equal(removeBlockReason(worktree({ status: 'missing' })), 'unhealthy')
-  assert.equal(removeBlockReason(worktree({ status: 'invalid' })), 'unhealthy')
-  assert.equal(removeBlockReason(worktree({ status: 'not-a-repo' })), 'unhealthy')
-  assert.equal(removeBlockReason(worktree({ dirty: true })), 'dirty')
-  assert.equal(removeBlockReason(worktree({ dirty: null })), 'status-unknown')
-  assert.equal(removeBlockReason(worktree({ branch: null })), undefined)
-  // Fail-closed: the runtime channel is absent — the current
-  // session is UNKNOWN, so a worktree accounting sessions must block removal.
-  assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), undefined, false, false), 'runtime-unknown')
-  assert.equal(removeBlockReason(worktree({ sessionIds: [] }), undefined, false, false), undefined)
-  // A known blank current still does not block (blankness is only lenient
-  // when the channel is present).
-  assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's', true, false), 'runtime-unknown')
-  // PRECEDENCE: current/runtime-unknown are evaluated BEFORE
-  // running. The running reason is NOT a hard client block (the row keeps the
-  // delete control enabled for it and the host re-checks), so letting it win
-  // would bypass both fail-closed refusals whenever a STALE or archived-only
-  // running fact is present.
-  assert.equal(
-    removeBlockReason(worktree({ sessionIds: ['s'], runningSessionIds: ['r'] }), 's'),
-    'current',
-    'the current-session guard outranks a running fact',
-  )
-  assert.equal(
-    removeBlockReason(worktree({ sessionIds: ['s'], runningSessionIds: ['r'] }), undefined, false, false),
-    'runtime-unknown',
-    'the runtime-absent fail-closed guard outranks a running fact',
-  )
-  assert.equal(
-    removeBlockReason(worktree({ sessionIds: ['s'], runningSessionIds: ['r'], blockingRunningSessionIds: [] }), 'other', false, false),
-    'runtime-unknown',
-    'an archived-only (inert) running fact cannot bypass the runtime-absent guard either',
-  )
-  // With the channel present and no current match, the running fact still wins
-  // over the file-safety reasons.
-  assert.equal(
-    removeBlockReason(worktree({ runningSessionIds: ['r'], locked: true })),
-    'running',
-    'running still outranks locked/unhealthy/dirty once the fail-closed guards pass',
-  )
-})
-
 test('session targeting requires a healthy worktree', () => {
   assert.equal(canTargetSession(worktree()), true)
   assert.equal(canTargetSession(worktree({ status: 'missing' })), false)
   assert.equal(canTargetSession(worktree({ status: 'invalid' })), false)
   assert.equal(canTargetSession(worktree({ status: 'not-a-repo' })), false)
-  // Unregistered worktrees are adoptable: workspace.create registers them.
+  // An unregistered checkout is a session target (path-based enter, no registration).
   assert.equal(canTargetSession(worktree({ workspaceId: null })), true)
 })
 
@@ -235,25 +182,6 @@ test('concurrent forced refresh waiters coalesce into one serialized successor',
   assert.deepEqual(await Promise.all([forcedA, forcedB]), ['fresh', 'fresh'])
   assert.equal(fetches, 2)
   assert.deepEqual(writes, ['old', 'fresh'])
-})
-
-test('session closure enumerates direct + transitive subsessions, cycle-safe and excluding unrelated sessions', () => {
-  const sessions = [
-    { sessionId: 'root-a' },
-    { sessionId: 'sub-a1', parentSessionId: 'root-a' },
-    { sessionId: 'sub-a2', parentSessionId: 'sub-a1' },
-    { sessionId: 'root-b' },
-    { sessionId: 'sub-b1', parentSessionId: 'root-b' },
-    { sessionId: 'unrelated' },
-    // Cycle: c1 <-> c2 must terminate.
-    { sessionId: 'c1', parentSessionId: 'c2' },
-    { sessionId: 'c2', parentSessionId: 'c1' },
-  ]
-  const closure = collectSessionClosure(sessions, ['root-a', 'c1'])
-  assert.deepEqual(closure, ['root-a', 'c1', 'sub-a1', 'c2', 'sub-a2'])
-  assert.equal(collectSessionClosure(sessions, ['root-b']).length, 2)
-  assert.equal(collectSessionClosure(sessions, ['missing-root']).length, 1)
-  assert.equal(collectSessionClosure([], ['root-a']).length, 1)
 })
 
 test('snapshot passes through unknown sourceError codes while keeping partial facts', () => {

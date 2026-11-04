@@ -378,6 +378,15 @@ export interface SessionCreatedFact {
   /** Display-title hint (fork intent); absent = the official id ladder. */
   title?: string
   /**
+   * Effective working-directory projection this creation INTENDS (design 08
+   * PR2 §5.3): a session created FOR a checkout is echoed with the checkout
+   * path so the derived row places it immediately, instead of flashing in the
+   * source row until `session/list` projects `workingDirectory`. Absent =
+   * ordinary creation in the source workspace; the host projection always wins
+   * once it arrives.
+   */
+  workingDirectory?: string
+  /**
    * Official provisional-row fact: true for `session.create` (blank until the
    * first turn, so navigation surfaces it only while it is that source's
    * CURRENT session — upstream semantics, deliberately not overridden by the

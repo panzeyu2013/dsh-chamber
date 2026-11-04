@@ -43,6 +43,10 @@ export interface GitCommandRequest {
   readonly args: readonly string[]
   readonly timeoutMs: number
   readonly maxOutputBytes: number
+  /** Command-scoped environment additions (the filters reset step's `GIT_CONFIG_*`
+   *  overrides). Applied after the runner's fixed Git policy environment, so an
+   *  override can never redirect the operation away from the validated cwd. */
+  readonly env?: Readonly<Record<string, string>>
 }
 
 export interface GitCommandResult {
@@ -76,12 +80,17 @@ export type GitSpawner = (
 export interface WorktreeFileSystem {
   realpath(path: string): Promise<string>
   lstat(path: string): Promise<{ isDirectory(): boolean }>
-  /** Recursive directory creation (the unified worktree root). */
+  /** Recursive directory creation (the in-repo worktree pool). */
   mkdir(path: string): Promise<void>
   /** True when `path` exists as a file or directory (git-dir state probes). */
   exists(path: string): Promise<boolean>
   /** Read a small UTF-8 file (the worktree `.git` pointer). Rejects when absent/unreadable. */
   readFile(path: string): Promise<string>
+  /** CREATE-ONLY UTF-8 write (the pool self-ignore file): an existing file is never
+   *  overwritten and rejects with `EEXIST`, which the caller treats as "already there".
+   *  Optional for injected test/filesystem adapters; a missing capability fails closed
+   *  at pool creation with `ignore-unavailable`. */
+  writeFile?(path: string, content: string): Promise<void>
 }
 
 export interface GitWorktreeCoreOptions {
@@ -94,9 +103,6 @@ export interface GitWorktreeCoreOptions {
   readonly operationCapacity?: number
   /** Test seam for the non-cancelling snapshot response deadline. */
   readonly snapshotWallTimeoutMs?: number
-  /** Unified worktree root: all chamber checkouts live under the dsh home
-   *  (`$DSH_HOME/worktrees`, one subdirectory per repository), outside any working tree. */
-  readonly worktreesRoot?: string
 }
 
 export type CreateBranch =
@@ -138,26 +144,21 @@ export interface CreateResult {
   readonly path: string
   readonly branch: string
   readonly head: string
-  /** True only after this process observed `git worktree add` exit zero. */
-  readonly rollbackAuthorized: boolean
+  /** True only when a NEW branch was created by an `add` this process observed exit zero. */
   readonly branchCreated: boolean
 }
 
-export interface RollbackCreateInput {
-  readonly operationId: string
+export interface EnterInput {
+  readonly sessionId: string
+  /** The client's canonical checkout-path claim; the host canonicalizes it again and
+   *  checks it against the authoritative Git topology. */
+  readonly path: string
 }
 
-export interface RollbackCreateResult {
-  readonly operationId: string
-  readonly removed: true
-  readonly replayed: boolean
-  readonly repoId: string
-  readonly worktreeId: string
-  readonly commonDir: string
+export interface EnterResult {
+  readonly sessionId: string
+  /** Host-canonical checkout path; the client must compare it with its request. */
   readonly path: string
-  readonly branch: string
-  readonly head: string
-  readonly branchPreserved: true
 }
 
 export interface RemoveInput {

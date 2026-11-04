@@ -309,16 +309,20 @@ test('wiring: the intent is published before the wire, withdrawn on failure, app
   // The deriveServers call lives in the projection hook after the App decomposition:
   // the lock follows the wiring, not a file name.
   const app = read('../../../renderer/src/App.tsx') + ' ' + read('../../../renderer/src/app-hooks/use-projection-publish.ts')
-  assert.match(app, /sessionFacts, projectionCaches\.servers, echoes\.placement, archivedFilters, echoes\.removal\)/,
+  // PR2 appends the Git layout version after the removal ledger (parameter order stays
+  // a wiring contract; the cache + ledger half is unchanged).
+  assert.match(app, /sessionFacts, projectionCaches\.servers, echoes\.placement, archivedFilters, echoes\.removal, gitFlagsVersion\)/,
     'the SAME deriveServers call carries BOTH the per-source cache (the sink evidence lives on its entry) and the removal ledger — dropping either silently degrades the correction to the old flicker; the cache parameter is the load-bearing half')
   assert.match(app, /updateRemoval\(sweepPendingRemovals\(echoStore\.getSnapshot\(\)\.removal, Date\.now\(\)\)\)/,
     'the removal ledger rides the shared TTL clock (a convergence that never arrives must still expire)')
   assert.match(app, /forgetPendingRemovals\(/, 'source retirement drops the previous generation\'s intents')
-  // Git 插件的三个删除点没有类型面约束（saga 的 workspaceDelete 是注入回调）：任一处改回裸 unary
-  // wrapper 会静默丢掉删除意图、重新引入尾滑，而 saga 测试全绿——这里照抄 sidebar 的文本锁。
+  // PR3 retired every Git-plugin workspace-delete site: registered removal, the
+  // unregistered handoff and the workspace-delete recovery are gone, so the Git
+  // plugin no longer touches a workspace registry row. A future Git removal must
+  // never reintroduce a bare unary delete (no intent, no convergence).
   const coordinator = read('../../../dsh-chamber-client-ui-git/src/shared/coordinator.ts')
-  assert.equal((coordinator.match(/deleteWorkspaceForSource\(/gu) ?? []).length, 3,
-    'the three injected workspaceDelete callbacks (registered remove, unregistered remove, workspace-delete recovery) all route through the funnel')
-  assert.doesNotMatch(coordinator, /deleteWorkspace\(getInstanceClient\(/,
-    'no Git-plugin site calls the raw unary wrapper and silently drops the removal intent')
+  assert.doesNotMatch(coordinator, /deleteWorkspaceForSource|deleteWorkspace\(getInstanceClient\(/,
+    'the Git plugin owns no workspace.delete path after PR3')
+  assert.doesNotMatch(coordinator, /archiveSessionForSource|runPreRemoveArchive/,
+    'the archive prerequisite is retired with the registered removal path')
 })

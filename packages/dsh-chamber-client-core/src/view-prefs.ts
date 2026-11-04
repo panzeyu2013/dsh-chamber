@@ -6,11 +6,13 @@
  * failures never throw. The default storage is resolved lazily inside the call
  * (never in a default-argument), so a throwing accessor degrades to defaults.
  */
-import { chamberBridge } from './aggregate-store.ts'
+import { chamberBridge, type ChamberServerAggregate } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
 import { isRecord } from './wire-common.ts'
-import { UNGROUPED_WORKSPACE_ID, type ArchivedFilter, type SessionGroupBy, type SessionOrderBy } from './derive.ts'
+import { canonicalPathKey, UNGROUPED_WORKSPACE_ID, type ArchivedFilter, type SessionGroupBy, type SessionOrderBy } from './derive.ts'
 import { flatAccountKey } from './flat-account.ts'
+import { checkoutOrderKey, checkoutPathKey, parseCheckoutOrderKey } from './checkout-placement.ts'
+import { isSourceGitFlagsLoaded } from './workspace-git-flags.ts'
 
 assertSingletonModule('view-prefs')
 
@@ -56,6 +58,20 @@ export interface ChamberSidebarViewPrefs {
    * OPTIONAL; pruned by the same safe source-vanished rule.
    */
   updatedOrder?: Record<string, string[]>
+  /**
+   * Per-repo CHECKOUT-row sub-order (design 08 PR2): key =
+   * `__checkout__:<sourceId>/<canonicalMainPath>` (the checkout-placement leaf's
+   * `checkoutOrderKey`), value = the family's canonical checkout paths in
+   * display order. Only the derived checkout rows move INSIDE their family; the
+   * family block itself keeps moving through the workspace/server order
+   * (resolveWorkspaceDrop/commitWorkspaceDrag are unchanged). Values are
+   * canonical paths (trailing separators stripped, duplicates dropped).
+   * OPTIONAL — old persisted payloads stay valid without a version bump (v
+   * stays 1). Keys are pruned by the NESTED key rule: a vanished source, or a
+   * source whose authoritative layout projection no longer has the main
+   * workspace (the whole family disappeared).
+   */
+  checkoutOrder?: Record<string, string[]>
   /**
    * Per-source FLAT order account (the chamber twin of the official
    * FLAT_SESSION_ORDER_KEY): key = sourceId, value = member ids in display
@@ -147,6 +163,31 @@ function stringArrayRecord(raw: unknown): Record<string, string[]> {
   return out
 }
 
+/**
+ * checkoutOrder 的宽松校验：键必须是 `__checkout__:<sourceId>/<canonicalMainPath>`
+ * 形状（重建为 canonical 键，尾分隔符归一），值只保留字符串条目并按 canonical path
+ * 去重（首个位置胜出）。非法条目整条丢弃；键序不影响语义。
+ */
+function checkoutOrderRecord(raw: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  if (!isRecord(raw)) return out
+  for (const [key, value] of Object.entries(raw)) {
+    const parsed = parseCheckoutOrderKey(key)
+    if (parsed === undefined || !Array.isArray(value)) continue
+    const paths: string[] = []
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string') continue
+      const pathKey = checkoutPathKey(entry)
+      if (pathKey === '' || seen.has(pathKey)) continue
+      seen.add(pathKey)
+      paths.push(pathKey)
+    }
+    out[checkoutOrderKey(parsed.sourceId, parsed.mainPath)] = paths
+  }
+  return out
+}
+
 function enumRecord<T extends string>(raw: unknown, allowed: readonly T[]): Record<string, T> {
   const out: Record<string, T> = {}
   if (!isRecord(raw)) return out
@@ -195,6 +236,9 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
   const updatedOrder = stringArrayRecord(raw.updatedOrder)
   // flatOrder：sourceId 键 → string[]，逐条校验同 ungroupedOrder。
   const flatOrder = stringArrayRecord(raw.flatOrder)
+  // checkoutOrder：嵌套键（checkoutOrderKey）→ canonical path[]；字段缺失时不产出该键。
+  const hasCheckoutOrder = isRecord(raw.checkoutOrder)
+  const checkoutOrder = checkoutOrderRecord(raw.checkoutOrder)
   // sessionUpdatedAtByAccount：嵌套逐层校验。
   const sessionUpdatedAtByAccount: Record<string, Record<string, number>> = {}
   if (isRecord(raw.sessionUpdatedAtByAccount)) {
@@ -237,6 +281,7 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
     updatedOrder,
     flatOrder,
     sessionUpdatedAtByAccount,
+    ...(hasCheckoutOrder ? { checkoutOrder } : {}),
     ...(hasSourceFolded ? { sourceFolded } : {}),
     ...(serverOrder !== undefined ? { serverOrder } : {}),
     ...(sidebarWidth !== undefined ? { sidebarWidth } : {}),
@@ -343,6 +388,7 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   const updatedOrder = { ...prefs.updatedOrder }
   const flatOrder = { ...prefs.flatOrder }
   const sessionUpdatedAtByAccount = { ...prefs.sessionUpdatedAtByAccount }
+  const checkoutOrder = prefs.checkoutOrder === undefined ? undefined : { ...prefs.checkoutOrder }
   // sourceFolded / serverOrder 同为可选字段：undefined 保持 undefined（绝不把缺失变成空对象写回）。
   const sourceFolded = prefs.sourceFolded === undefined ? undefined : { ...prefs.sourceFolded }
   let serverOrder = prefs.serverOrder === undefined ? undefined : [...prefs.serverOrder]
@@ -387,6 +433,38 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   }
   changed = pruneKeys(updatedOrder, workspaceAccountGone) || changed
   changed = pruneKeys(sessionUpdatedAtByAccount, workspaceAccountGone) || changed
+  // checkoutOrder（嵌套键）：键 = `__checkout__:<sourceId>/<canonicalMainPath>`。只裁
+  // **有证据**的条目：来源已消失；或该来源的投影权威（已挂载、归档集已知、未筛选、无合成行）
+  // 且 Git 布局已加载时，主行已不存在（主 checkout 删除 → 整族行消失）。族内 values 只在
+  // 「该族确有派生 checkout 行」时按 canonical path 过滤——布局已发布但 App 尚未重派生时
+  // 行可能暂时为空，这里绝不在启动/重连窗口清掉用户序。
+  if (checkoutOrder !== undefined) {
+    const authoritativeWorkspaces = new Map<string, ChamberServerAggregate['workspaces']>()
+    for (const server of servers) {
+      if (server.aggregateReady !== true || server.archiveSetKnown !== true) continue
+      if ((prefs.archivedFilter?.[server.id] ?? 'default') !== 'default') continue
+      if (server.workspaces.some(workspace => workspace.synthetic === true)) continue
+      if (!isSourceGitFlagsLoaded(server.id)) continue
+      authoritativeWorkspaces.set(server.id, server.workspaces)
+    }
+    const mainWorkspaceOf = (workspaces: ChamberServerAggregate['workspaces'], mainPath: string) => {
+      const mainKey = canonicalPathKey(mainPath)
+      return workspaces.find(workspace => workspace.kind !== 'checkout' && workspace.path !== undefined
+        && canonicalPathKey(workspace.path) === mainKey)
+    }
+    changed = pruneKeys(checkoutOrder, key => {
+      const parsed = parseCheckoutOrderKey(key)
+      if (parsed === undefined) return true
+      if (knownGone(parsed.sourceId)) return true
+      const live = authoritativeWorkspaces.get(parsed.sourceId)
+      // No authoritative layout-backed projection yet: keep the user's order.
+      if (live === undefined) return false
+      return mainWorkspaceOf(live, parsed.mainPath) === undefined
+    }) || changed
+    // Values are deliberately NOT pruned against the current checkout rows: a partial
+    // layout round is not deletion evidence, and orderCheckoutRows ignores unknown paths.
+    // Dropping a value here would permanently lose the user's sub-order on one hiccup.
+  }
   // sourceFolded 同 orderBy：只裁见过且已消失的来源。
   if (sourceFolded !== undefined) changed = pruneKeys(sourceFolded, id => knownGone(id)) || changed
   // serverOrder：裁掉见过且已消失的 id，其余保持相对顺序。
@@ -403,6 +481,7 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   // 重建自固定字段表——显式携带 sidebarWidth 等可选字段，裁剪写入不得丢掉宽度偏好。
   return {
     v: 1, folded, ungroupedOrder, orderBy, groupBy, archivedFilter, updatedOrder, flatOrder, sessionUpdatedAtByAccount,
+    ...(checkoutOrder === undefined ? {} : { checkoutOrder }),
     ...(sourceFolded !== undefined ? { sourceFolded } : {}),
     ...(serverOrder !== undefined ? { serverOrder } : {}),
     sidebarWidth: prefs.sidebarWidth, seenSources: seen,

@@ -34,13 +34,20 @@ export function useServerProjectionCaches(): ServerProjectionCaches {
 export function usePublishServerProjection(
   servers: ChamberServerAggregate[],
   caches: ServerProjectionCaches,
+  // Git 布局版本（design 08 §3.2-§3.3）：派生 checkout 行的来源通道推进时必须走一次发布
+  // 流程，即使内容签名巧合未变。订阅侧的等值闸仍用**纯内容签名**（见下），所以多一次
+  // 发布不会造成多一次渲染。
+  gitFlagsVersion = 0,
 ): void {
-  const lastSignatureRef = useRef('')
+  const lastGateRef = useRef('')
   useEffect(() => {
     const signature = cachedServersProjectionSignature(servers, caches.signature)
-    if (signature === lastSignatureRef.current) return
-    lastSignatureRef.current = signature
+    const gate = `${gitFlagsVersion}\u0000${signature}`
+    if (gate === lastGateRef.current) return
+    lastGateRef.current = gate
+    // 记住的是**内容签名**：订阅闸（sidebar-root-projection）拿同一个数组再比签名要拿到
+    // 同一个值，带上版本前缀会让两侧永远不相等。
     rememberServersProjectionSignature(servers, signature)
     chamberBridge.publish(servers)
-  }, [servers, caches])
+  }, [servers, caches, gitFlagsVersion])
 }

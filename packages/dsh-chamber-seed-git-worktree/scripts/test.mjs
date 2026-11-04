@@ -17,11 +17,12 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
   // core: the Git worktree domain core - snapshot topology/classification,
-  // preview/create + rollback, removal (running guard, replay/reconcile,
-  // unregistered/missing-record legs), and mutation safety.
+  // preview/create (two-step filter-parity checkout), enter-target validation,
+  // removal (running guard, replay/reconcile, unregistered/missing-record legs),
+  // and mutation safety.
   core: [
     'test/core.test.ts',
-    'test/create-rollback.test.ts',
+    'test/create.test.ts',
     'test/removal.test.ts',
     'test/mutation-safety.test.ts',
   ],

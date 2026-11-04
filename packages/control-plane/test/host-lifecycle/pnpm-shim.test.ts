@@ -1,8 +1,9 @@
 /**
- * Bundled-pnpm PATH provision (design 02 §3.1): the wrapper's script shape on both
- * platforms, the host-PATH probe (which mirrors the child's own command lookup),
- * idempotent materialization, and the decision `withPnpmShim` makes for one managed
- * host env. The end-to-end proof that the provision reaches a real child lives in
+ * Managed-host PATH provision: the bundled pnpm (design 02 §3.1) and the `node` command
+ * a worktree service spawns (P5b-0). Covers the wrapper script shape on both platforms,
+ * the host-PATH probe (which mirrors the child's own command lookup), idempotent
+ * materialization, and the decisions `withPnpmShim` / `withNodePath` make for one
+ * managed host env. The end-to-end proof that the provisions reach a real child lives in
  * spawn-dsh.test.ts.
  */
 import assert from 'node:assert/strict'
@@ -12,11 +13,16 @@ import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import {
+  NODE_COMMAND,
+  NODE_SHIM_DIR,
   PNPM_SHIM_DIR,
+  ensureNodeShim,
   ensurePnpmShim,
+  nodeShimScript,
   pathProvidesPnpm,
   pnpmShimScript,
   posixQuote,
+  withNodePath,
   withPnpmShim,
 } from '../../src/pnpm-shim.ts'
 
@@ -313,4 +319,206 @@ test('withPnpmShim: no opted-in entry is a silent no-op (standalone and plain-no
   assert.equal(withPnpmShim(before, { stateDir: join(root, 'state'), pnpmEntry: null, nodeFile: process.execPath }), before)
   assert.equal(withPnpmShim(before, { stateDir: join(root, 'state'), pnpmEntry: undefined, nodeFile: process.execPath }), before)
   assert.equal(existsSync(join(root, 'state', PNPM_SHIM_DIR)), false)
+})
+
+// ---------------------------------------------------------------------------
+// P5b-0: the managed-host `node` provision
+//
+// The upstream worktree service's nodeCommand is ONE string (bundle default 'node'),
+// with no args/env channel. Handing it the control plane's own executable is wrong under
+// Electron (that is the app binary, not a node), so the shim makes the literal string
+// resolve instead — and the config never carries a machine path.
+// ---------------------------------------------------------------------------
+
+test('nodeShimScript: POSIX wrapper exports the node env and forwards every argument', () => {
+  const script = nodeShimScript({
+    platform: 'darwin',
+    nodeFile: '/Applications/dsh chamber.app/Contents/MacOS/dsh-chamber',
+    nodeArgs: ['--expose-internals'],
+    nodeEnv: { ELECTRON_RUN_AS_NODE: '1' },
+  })
+  const lines = script.split('\n')
+  assert.equal(lines[0], '#!/bin/sh')
+  assert.equal(lines.includes("export ELECTRON_RUN_AS_NODE='1'"), true,
+    'Electron mode is what turns the app binary into a node')
+  assert.equal(
+    lines.includes(`exec '/Applications/dsh chamber.app/Contents/MacOS/dsh-chamber' '--expose-internals' "$@"`),
+    true,
+    'no script operand: argv is forwarded verbatim (the worktree service passes -e …)',
+  )
+})
+
+test('nodeShimScript: the Windows wrapper forwards %* and escapes percent signs', () => {
+  const script = nodeShimScript({
+    platform: 'win32',
+    nodeFile: 'C:\\Apps\\dsh-chamber.exe',
+    nodeEnv: { ELECTRON_RUN_AS_NODE: '1' },
+  })
+  const lines = script.split('\r\n')
+  assert.equal(lines[0], '@echo off')
+  assert.equal(lines.includes('set "ELECTRON_RUN_AS_NODE=1"'), true)
+  assert.equal(lines.includes('"C:\\Apps\\dsh-chamber.exe" %*'), true)
+})
+
+test('ensureNodeShim: materializes in its own directory, idempotently (content + mode pinned)', t => {
+  const root = tempDir(t)
+  const dir = ensureNodeShim({ root, nodeFile: '/opt/runtime/node' })
+  assert.equal(dir, join(root, NODE_SHIM_DIR))
+  const file = join(dir, process.platform === 'win32' ? 'node.cmd' : 'node')
+  assert.equal(readFileSync(file, 'utf8').includes('/opt/runtime/node'), true)
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(file).mode & 0o777, 0o755)
+    const pinned = new Date(2001, 0, 1)
+    utimesSync(file, pinned, pinned)
+    ensureNodeShim({ root, nodeFile: '/opt/runtime/node' })
+    assert.equal(statSync(file).mtimeMs, pinned.getTime(), 'identical content+mode is not rewritten')
+    chmodSync(file, 0o644)
+    ensureNodeShim({ root, nodeFile: '/opt/runtime/node' })
+    assert.equal(statSync(file).mode & 0o777, 0o755, 'a drifted mode is repaired')
+  }
+  // The two wrappers coexist: node provisioning never removes the pnpm wrapper.
+  ensurePnpmShim({ root, pnpmEntry: writeFakePnpmEntry(root), nodeFile: process.execPath })
+  assert.equal(existsSync(join(dir, process.platform === 'win32' ? 'node.cmd' : 'node')), true)
+})
+
+test('withNodePath: a host PATH without node gets the wrapper prepended, and it executes', t => {
+  const root = tempDir(t)
+  const stateDir = join(root, 'state')
+  const logs: string[] = []
+  const provision = withNodePath({ PATH: '/usr/bin:/bin', DSH_HOME: root }, {
+    stateDir, nodeFile: process.execPath, log: line => logs.push(line),
+  })
+  const dir = join(stateDir, NODE_SHIM_DIR)
+  assert.equal(provision.source, 'path-shim')
+  assert.equal(provision.nodeCommand, NODE_COMMAND, 'the config keeps the command NAME, never a path')
+  assert.equal(provision.env.PATH, dir + delimiter + '/usr/bin:/bin')
+  assert.equal(provision.env.DSH_HOME, root, 'unrelated env entries survive')
+  assert.match(logs[0] ?? '', /node wrapper/u)
+  if (process.platform !== 'win32') {
+    // The wrapper is real: it runs the resolved node and forwards argv.
+    const output = execFileSync(join(dir, 'node'), ['--version'], { env: provision.env, encoding: 'utf8' })
+    assert.match(output.trim(), /^v\d+/u)
+  }
+})
+
+test('withNodePath: a host PATH that already resolves node is left byte-identical', t => {
+  const root = tempDir(t)
+  const bindir = join(root, 'user-bin')
+  mkdirSync(bindir)
+  writeFileSync(join(bindir, process.platform === 'win32' ? 'node.cmd' : 'node'), '#!/bin/sh\n', { mode: 0o755 })
+  const before = { PATH: bindir }
+  const logs: string[] = []
+  const provision = withNodePath(before, {
+    stateDir: join(root, 'state'), nodeFile: process.execPath, log: line => logs.push(line),
+  })
+  assert.equal(provision.env, before, 'the caller env object is returned untouched')
+  assert.equal(provision.source, 'host-path')
+  assert.match(logs[0] ?? '', /already provides/u)
+  assert.equal(existsSync(join(root, 'state', PNPM_SHIM_DIR)), false, 'nothing is materialized for a satisfied host')
+})
+
+test('withNodePath: an already-prepended shim directory is not duplicated', t => {
+  const root = tempDir(t)
+  const stateDir = join(root, 'state')
+  const dir = join(stateDir, NODE_SHIM_DIR)
+  const before = { PATH: dir + delimiter + '/usr/bin' }
+  const provision = withNodePath(before, { stateDir, nodeFile: process.execPath })
+  assert.equal(provision.source, 'path-shim')
+  assert.equal(provision.env, before, 'the node shim directory may already be first')
+})
+
+test('withNodePath: an impossible shim falls back to a plain node DIRECTORY, never a command path', t => {
+  const root = tempDir(t)
+  const bindir = join(root, 'plain-bin')
+  mkdirSync(bindir)
+  const plain = join(bindir, 'node')
+  writeFileSync(plain, '#!/bin/sh\n', { mode: 0o755 })
+  const provision = withNodePath({ PATH: '/usr/bin' }, {
+    stateDir: join(root, 'state'),
+    nodeFile: process.execPath,
+    resolvePlainNode: () => plain,
+    ensureShim: () => { throw new Error('read-only state root') },
+  })
+  assert.equal(provision.source, 'plain-node-directory')
+  assert.equal(provision.nodeCommand, NODE_COMMAND)
+  assert.equal(provision.executable, plain)
+  assert.equal(provision.env.PATH, bindir + delimiter + '/usr/bin', 'the plain node directory joins PATH')
+  assert.ok(!provision.diagnostic.includes(`nodeCommand '${plain}'`), 'the plain path never becomes the command name')
+})
+
+test('withNodePath: no real node yields the loud node-unavailable diagnostic and leaves PATH alone', t => {
+  const root = tempDir(t)
+  const before = { PATH: '/usr/bin' }
+  const logs: string[] = []
+  const provision = withNodePath(before, {
+    stateDir: join(root, 'state'),
+    nodeFile: process.execPath,
+    resolvePlainNode: () => null,
+    ensureShim: () => { throw new Error('read-only state root') },
+    log: line => logs.push(line),
+  })
+  assert.equal(provision.source, 'unavailable')
+  assert.equal(provision.env, before)
+  assert.equal(provision.nodeCommand, NODE_COMMAND)
+  assert.match(provision.diagnostic, /^node-unavailable: /u)
+  assert.equal(provision.diagnostic.includes('\n'), false, 'one log line, not a stack trace')
+  assert.ok(logs.includes(provision.diagnostic), 'the diagnostic is not a silent return value')
+})
+
+test('withNodePath: an unusable resolved node file skips the wrapper write and stays diagnosable', t => {
+  const root = tempDir(t)
+  let writes = 0
+  const before = { PATH: '/usr/bin' }
+  const provision = withNodePath(before, {
+    stateDir: join(root, 'state'),
+    nodeFile: join(root, 'absent-node'),
+    resolvePlainNode: () => null,
+    ensureShim: input => { writes += 1; return ensureNodeShim(input) },
+  })
+  assert.equal(writes, 0, 'a non-file node never reaches the wrapper writer')
+  assert.equal(provision.source, 'unavailable')
+  assert.equal(provision.env, before)
+})
+
+test('withNodePath: keeps the Windows PATH key spelling and its delimiter', t => {
+  const root = tempDir(t)
+  const entry = join(root, 'state', NODE_SHIM_DIR)
+  const provision = withNodePath({ Path: 'C:\\Windows' }, {
+    stateDir: join(root, 'state'), nodeFile: process.execPath, platform: 'win32', log: quiet,
+  })
+  assert.equal(provision.source, 'path-shim')
+  assert.equal(provision.env.PATH, undefined, 'no second PATH key is invented')
+  assert.equal(provision.env.Path, entry + ';C:\\Windows')
+  assert.equal(existsSync(join(entry, 'node.cmd')), true)
+})
+
+test('withNodePath: a throwing log sink cannot fail the spawn', t => {
+  const root = tempDir(t)
+  const provision = withNodePath({ PATH: '/usr/bin' }, {
+    stateDir: join(root, 'state'), nodeFile: process.execPath,
+    log: () => { throw new Error('sink exploded') },
+  })
+  assert.equal(provision.source, 'path-shim', 'the provision itself is unaffected by the sink')
+  assert.equal(
+    existsSync(join(root, 'state', NODE_SHIM_DIR, process.platform === 'win32' ? 'node.cmd' : 'node')),
+    true,
+  )
+})
+
+test('withNodePath: a stale wrapper inside the node shim dir is rewritten, not accepted as the user toolchain', t => {
+  const root = tempDir(t)
+  const stateDir = join(root, 'state')
+  const nodeDir = join(stateDir, NODE_SHIM_DIR)
+  withNodePath({ PATH: '/usr/bin' }, { stateDir, nodeFile: process.execPath })
+  // A later spawn sees the same node shim directory on PATH. The probe excludes that
+  // directory, so a moved app / changed runtime rewrites the absolute path.
+  const newNode = join(root, 'runtime-2', 'node')
+  mkdirSync(join(root, 'runtime-2'), { recursive: true })
+  writeFileSync(newNode, '#!/bin/sh\n', { mode: 0o755 })
+  const withStale = { PATH: nodeDir + delimiter + '/usr/bin' }
+  const node = withNodePath(withStale, { stateDir, nodeFile: newNode })
+  const nodeWrapper = join(nodeDir, process.platform === 'win32' ? 'node.cmd' : 'node')
+  assert.equal(readFileSync(nodeWrapper, 'utf8').includes(newNode), true, 'the stale node wrapper is rewritten')
+  assert.equal(node.source, 'path-shim')
+  assert.equal(node.env.PATH, withStale.PATH, 'the node shim entry is not duplicated when it is already first')
 })

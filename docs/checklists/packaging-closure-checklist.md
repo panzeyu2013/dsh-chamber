@@ -33,15 +33,23 @@
 
 ### 3.1 原生壳（`macos/`）专属检查
 
-- [ ] `build:sidecar` 载荷完整：`dsh-chamber-helper`（官方tar + SHA校验；基名单源 `scripts/lib/sidecar-assembly.mjs`，改名前的 `node` 会 fail-closed）、`dist/web`、四个host包、`vendor/dsh`、内嵌 `pnpm` 全部就位（缺项fail-closed；`--skip-*` 只用于本地试跑）。
+- [ ] `build:sidecar` 载荷完整：`dsh-chamber-helper`（官方tar + SHA校验；基名单源 `scripts/lib/sidecar-assembly.mjs`，改名前的 `node` 会 fail-closed）、`dist/web`、四个host包、`vendor/dsh`、内嵌 `pnpm` 全部就位（缺项fail-closed；`--skip-*` 只用于本地试跑）。**P5b 不删 sidecar**：它仍是 Swift flavor 的 control-plane/node 来源。
 - [ ] `build:swift-app` 装配：`Contents/Resources/sidecar`、`Sparkle.framework` 嵌入 `Contents/Frameworks`、rpath指向 `@executable_path/../Frameworks`、bundle内无逃逸符号链接、`codesign --verify --deep --strict` 通过；资源包形态随后端（native 扁平 / swiftbuild `Contents/Resources`）由装配归一为扁平，缺 `bridge-shim.js` 即 loud；`--dry-run` 必须能报出解析后的路径/feed/产物名计划。
 - [ ] 产物命名与形态：`dsh-chamber-<ver>-macos-arm64.{dmg,zip}` 与Electron产物共存不覆盖；两侧release腿按精确产物名验证/上传（不再 `find|head` 或glob），避免复用输出目录带入旧版本。
 - [ ] 更新腿装配：`CFBundleShortVersionString`/`CFBundleVersion` 与tag一致，且beta与同基版本正式号不同、单调；`SUFeedURL` 按通道注入；`SUPublicEDKey` 与appcast签发私钥**必须成对**（公钥在而私钥缺、私钥在而公钥缺都是发布 FAIL；只有两把都缺才是 loud 降级「更新腿关闭」）；beta appcast的beta条目enclosure指向滚动release上真实存在的zip与`*.delta`（先传归档后传appcast），合并进来的final条目在beta腿指向版本固定的`releases/download/v<正式版tag>/`（不用会被后续正式版移走的`releases/latest`），stable刷新后则改指滚动前缀（两条路径不同）；滚动appcast同时带当前beta与最新final条目（没有keyed final时loud降级）。
 - [ ] `LSMinimumSystemVersion` 与Electron `build.mac.minimumSystemVersion`、`Package.swift` 平台声明三处同源一致（数值由 `scripts/release/release-workflow-policy.test.mjs` 钉住；SwiftPM只能写major平台，精确下限由 `Info.plist.template` 承担——本清单不记版本数值）。
 - [ ] 打包态启动冒烟（原生腿）：双击 `.app` → sidecar spawn → 页面加载 → 关窗仅隐藏 → 退出回收sidecar（本机/CI任一环境执行并记录证据；CI目前不启动打包产物）。
+
 - [ ] 视口越界策略实机目检：滚到端点 / 停在不可滚动chrome上滚动，确认整页不平移（无自动化探针，判据见design 25 §5.2）。
 - [ ] DMG与zip均公证 + `stapler staple` + `stapler validate`（DMG卷本身也要装订）。
 - [ ] DMG拖拽引导：卷内 `.background/background.tiff` 存在、`/Applications` 是指向 /Applications的软链；背景资产保持electron-builder同款双rep TIFF（540×380@72dpi + 1080×760@144dpi，Retina清晰）；`macos/scripts/dmg.mjs` 产完即**内容级**自校验——只读挂载成品读 `.DS_Store`：`backgroundType=2`、非空且指向卷内背景图的别名、`iconSize`、窗口尺寸、两条图标坐标（`.DS_Store`/`.background` 的存在性只是前置；失败loud，不发无提示卷）；实机目检一次：打开卷 = 背景箭头 + 两个图标就位。
+
+### 3.2 P5b 工作树 payload 与 node
+
+- [ ] **forge bundle + 六个依赖包（七个 package.json）**：启用 opt-in 前也随 `vendor/dsh` 出厂——`@deepseek-ai/dsh-experimental-forge-bundle` 及其依赖 `dsh-experimental-worktree` / `dsh-experimental-tool-worktree` / `dsh-experimental-forge` / `dsh-experimental-forge-github` / `dsh-experimental-forge-session` / `dsh-experimental-client-ui-forge` 的 `package.json` 在 Electron `resources/vendor/dsh/node_modules/@deepseek-ai/` 与 Swift `Contents/Resources/sidecar/vendor/dsh/node_modules/@deepseek-ai/` **两侧都要存在**（同 tag；缺包时 P5b 启用才在运行期失败，打包门必须提前红）。
+- [ ] **patch 与 overlay**：`dsh-experimental-forge-bundle/cordis.patch.yml` 的顶层 `worktree`/`tool-worktree`/`forge`/`forge-github`/`forge-session` 与 `optional-forge-panel` 组（`isolate:{worktrees:true}` 内的 `forge-worktree`+`client-ui-forge`）形状与 pin 一致；本地 `--patch` 只在实例已启用该 bundle 时带 `forge-github disabled`（未启用 = 幂等跳过，不产出宿主启动失败）。
+- [ ] **node PATH shim（Electron）**：打包态 + Finder 启动下 `withNodePath` 在 control-plane 私有 state 的 shim 目录物化可执行 `node`（或 host PATH 已解析真实 node），诊断无 `node-unavailable`；overlay/profile 内**没有** `process.execPath` 或本机 node 绝对路径；远程部署不携带本机路径（bundle 默认 `node` + 部署方 PATH）。
+- [ ] **Swift node**：sidecar 自带 node 可直接跑通 `create_worktree` 实际创建；P5b 在 Swift 与 Electron 两壳内各跑一次四项 UI/同池三条/node 创建（design 08 §7.3）。
 
 ## 4. 快速清单速查（`build.files` 复核用）
 

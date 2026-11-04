@@ -58,6 +58,9 @@ export const GROUPS = {
     'test/session-rows/round3-regressions.test.ts',
     // 孤儿 workspace 行的注册清理入口：常驻清理钮 + 徽标共用 opener（源码文本 + 字典值锁）。
     'test/session-rows/workspace-orphan-cleanup.test.ts',
+    // PR2 派生 checkout 行（design 08 §3.2-§3.3）：derive 行形状/放置/家族锚点/折叠/树/
+    // 子序排序 + 行渲染/座席/拖动/扁平的源码与行为锁。
+    'test/session-rows/checkout-row.test.ts',
     // (facts 身份, running, stale) → 单槽记忆化的纯行为测（9-12 次读数 → 1 次派生）。
     'test/session-rows/row-state-cache.test.ts',
     // goal 三值事实：解析/最后已知/activation 合并/身份签名（design 19 §3.2.1）。

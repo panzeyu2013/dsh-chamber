@@ -42,6 +42,15 @@ export interface ServerSectionSessionRowsProps {
   isGhostSession: (session: ChamberServerWorkspace['sessions'][number]) => boolean
   /** 本组是否 flat 伪账号（显式传入，见 SessionRowProps.flat）。 */
   flat: boolean
+  /** 提交账号：会话所属的**源 workspace** id（checkout 行内即 familyMainId）。 */
+  dragAccountKey: string
+  /** 放置身份：本行的 id（marker 与跨行 no-op 门按它判定，一个账号可有两行）。 */
+  dragPlacementId: string
+  /** 本行是派生 checkout 行时带上它的 canonical path（跨行 drop 一律 no-op）。 */
+  dragCheckoutPath?: string
+  /** 本行是派生 checkout 行时，会话行的分支 glyph（design 06 §1.6）：父行 kind 即判据，
+   *  不新增 session 字段，也不声明 trailing 座席。 */
+  checkoutParent?: { title: string; path?: string }
 }
 
 type SidebarSession = ChamberServerWorkspace['sessions'][number]
@@ -63,10 +72,20 @@ interface SessionRowProps {
   renamingRow: boolean
   sessionDragError: string | undefined
   sessionActionError: string | undefined
-  /** Owning account (workspace) facts the row writes into the drag envelope. */
+  /** The SOURCE workspace account the sessions belong to (wire commit target). */
   accountKey: string
+  /** The rendered row's identity (placement): the drop marker and the cross-row
+   *  no-op gate compare THIS, because one account can render as two rows.
+   *  (A source row and its derived checkout row both hold sessions of the same
+   *  workspace; the checkout row holds only the placed subset.) */
+  placementId: string
+  /** Present only inside a derived checkout row: canonical path, the
+   *  no-cross-row-drop identity. */
+  checkoutPath?: string
   synthetic: boolean
   ungrouped: boolean
+  /** 父行是派生 checkout 行时的分支 glyph 事实（tooltip = 分支 / 路径尾段）。 */
+  checkoutParent?: { title: string; path?: string }
   /** 单列表伪账号标记：由调用侧显式传入（不得从 accountKey 反推——真实工作区 id
    *  恰好等于 FLAT_ACCOUNT_KEY 时会被误判为 flat）。 */
   flat: boolean
@@ -74,7 +93,8 @@ interface SessionRowProps {
 
 const SessionRow = memo(function SessionRow({
   server, session, current, ghost, marker, activeSessionDrag, menuOpenRow, renamingRow,
-  sessionDragError, sessionActionError, accountKey, synthetic, ungrouped, flat,
+  sessionDragError, sessionActionError, accountKey, placementId, checkoutPath, synthetic, ungrouped,
+  checkoutParent, flat,
 }: SessionRowProps) {
   const {
     t,
@@ -210,6 +230,8 @@ const SessionRow = memo(function SessionRow({
           setSessionDrag({
             sourceId: server.id,
             accountKey,
+            placementId,
+            ...(checkoutPath === undefined ? {} : { checkoutPath }),
             ungrouped,
             flat,
             pinned: session.pinned === true,
@@ -311,6 +333,20 @@ const SessionRow = memo(function SessionRow({
           : session.hasActiveSchedule === true
             ? <SessionScheduleIndicator label={t('schedule.active')} />
             : null)}
+      {checkoutParent !== undefined && !session.blank && (
+        // 会话行分支 glyph（design 06 §1.6 / 07-glyph）：父行 kind === 'checkout' 时在标题前
+        // 画 13px 分支字形，tooltip = 分支 / 路径尾段。非 checkout 行不渲染，几何不变；
+        // trailing 座席保持未声明（侧栏自绘，design 09 §2.3 选项 1）。
+        <span
+          className={cc.checkoutSessionGlyph}
+          role="img"
+          data-chamber-checkout-session-glyph=""
+          aria-label={[checkoutParent.title, checkoutParent.path ?? ''].filter(part => part !== '').join(' · ')}
+          title={[checkoutParent.title, checkoutParent.path ?? ''].filter(part => part !== '').join(' · ')}
+        >
+          <IconBranchOutlineRegular size={13} />
+        </span>
+      )}
       <span ref={titleRef} className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
       {/* 空白（新建）行是临时占位：kebab（含 fork/归档）作用于不存在的内容，整簇隐藏。 */}
       {session.blank !== true && (
@@ -510,7 +546,10 @@ const SessionRow = memo(function SessionRow({
   )
 })
 
-export function ServerSectionSessionRows({ server, workspace, sessions, currentId, sessionMarker, activeSessionDrag, isGhostSession, flat }: ServerSectionSessionRowsProps) {
+export function ServerSectionSessionRows({
+  server, workspace, sessions, currentId, sessionMarker, activeSessionDrag, isGhostSession, flat,
+  dragAccountKey, dragPlacementId, dragCheckoutPath, checkoutParent,
+}: ServerSectionSessionRowsProps) {
   const { rowErrors, menuOpen, renaming, ghostExpiry } = useSidebarSection()
   // 空账本不查表：绝大多数渲染没有任何行失败（提到 map 外：一次，而不是每行一次）。
   const hasRowErrors = Object.keys(rowErrors).length > 0
@@ -549,7 +588,10 @@ export function ServerSectionSessionRows({ server, workspace, sessions, currentI
               && renaming.kind === 'session' && renaming.id === session.id}
             sessionDragError={sessionDragError}
             sessionActionError={sessionActionError}
-            accountKey={workspace.id}
+            accountKey={dragAccountKey}
+            placementId={dragPlacementId}
+            {...(dragCheckoutPath === undefined ? {} : { checkoutPath: dragCheckoutPath })}
+            {...(checkoutParent === undefined ? {} : { checkoutParent })}
             synthetic={workspace.synthetic === true}
             ungrouped={workspace.ungrouped === true}
             flat={flat}

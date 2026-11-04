@@ -45,6 +45,13 @@ export interface PendingSession {
   /** Display-title hint (fork children); absent = the id ladder. */
   title?: string
   /**
+   * Effective working directory this creation intends (design 08 PR2 §5.3):
+   * the checkout path for a session created there, so the echo row is placed in
+   * its derived checkout row immediately instead of the source row. Absent =
+   * the source workspace's own directory.
+   */
+  workingDirectory?: string
+  /**
    * Whether the session is still the host's provisional blank row (a created
    * session is blank until its first turn; a fork carries content). The official
    * visibility rule is preserved: blank rows render only while they are the
@@ -77,6 +84,8 @@ interface SessionCreationRecord {
   path?: string
   /** Display-title hint (fork intent). */
   title?: string
+  /** Effective working directory the echo should place the row in (design 08 PR2 §5.3). */
+  workingDirectory?: string
   /** Parent session id (fork), used by the App to resolve the child's workspace. */
   parentSessionId?: string
   /** Official provisional-row fact (see {@link PendingSession.blank}). */
@@ -101,6 +110,9 @@ export function sessionEchoRow(pending: PendingSession): SessionRow {
     }),
     ...(pending.title === undefined ? {} : { title: pending.title }),
     ...(pending.path === undefined ? {} : { cwd: pending.path }),
+    // Placement fact (design 08 PR2 §5.3): without it the new session would
+    // render in the source row until the host projects workingDirectory.
+    ...(pending.workingDirectory === undefined ? {} : { workingDirectory: pending.workingDirectory }),
   }
 }
 
@@ -121,6 +133,7 @@ export function recordPendingSession(
     ...(created.workspaceId === undefined ? {} : { workspaceId: created.workspaceId }),
     ...(created.path === undefined ? {} : { path: created.path }),
     ...(created.title === undefined ? {} : { title: created.title }),
+    ...(created.workingDirectory === undefined ? {} : { workingDirectory: created.workingDirectory }),
     blank: created.blank === true,
     at: now,
   }

@@ -1,6 +1,5 @@
-/** Pure two-domain saga policy. Transport adapters live in coordinator.ts. */
+/** Pure saga policy for the checkout lifecycle. Transport adapters live in coordinator.ts. */
 import { errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-core'
-import { collectSessionClosure } from './git-facts.ts'
 import { GitWorktreeRpcError } from './git-api.ts'
 import type {
   CreateWorktreeResult, GitRecovery, PreviewCreateResult, RemoveWorktreeResult,
@@ -35,45 +34,32 @@ export class GitSagaError extends Error {
  *  serializes explicit `retryable: false` only after proving the target still
  *  exists and nothing was removed, so a pending git-remove recovery replaying this
  *  same removal may be CLEARED instead of retried forever (design 08 §6.2 bounded
- *  exception). Saga-minted recoveries (e.g. workspace-delete, which exists only
- *  after a git-removal receipt) are excluded by the `recovery === undefined` guard
- *  — a future host path must never emit `retryable: false` from a mutated path. */
-
+ *  exception). */
 export function isProvenPreMutationRefusal(error: GitSagaError): boolean {
   return error.recovery === undefined
     && error.original instanceof GitWorktreeRpcError
     && error.original.retryable === false
 }
 
-/** The recovery to keep after a saga failure. A host-proven pre-mutation refusal
- *  resolves a pending replay as "not removed", so the entry is cleared instead of
- *  retrying the same doomed operationId (design 08 §6.2). This is the single
- *  decision point the coordinator applies; everything else preserves the previous
- *  unknown state. */
+/** The recovery to keep after a remove failure. A host-proven pre-mutation
+ *  refusal resolves a pending replay as "not removed", so the entry is cleared
+ *  instead of retrying the same doomed operationId; everything else preserves the
+ *  previous unknown state with the new message. */
 export function recoveryAfterSagaFailure(
   error: GitSagaError,
   previous?: GitRecovery,
 ): GitRecovery | undefined {
-  // Only a pending git-REMOVE replay is resolved by the proof: any other recovery
-  // (workspace-delete exists only after a removal receipt) keeps its own policy.
   if (previous?.kind === 'git-remove' && isProvenPreMutationRefusal(error)) return undefined
   return recoveryForFailure(error, previous)
 }
 
 export interface CreateSagaDeps {
   hostCreate(input: { previewToken: string; operationId: string }): Promise<CreateWorktreeResult>
-  hostRollback(
-    input: { operationId: string },
-    expected: Pick<CreateWorktreeResult, 'repoId' | 'worktreeId' | 'commonDir' | 'path' | 'branch' | 'head'>,
-  ): Promise<unknown>
-  workspaceCreate(path: string): Promise<{ workspaceId: string; path: string; created: boolean }>
-  sessionCreate(workspaceId: string, sessionId: string): Promise<string>
   isAmbiguousHostFailure(error: unknown): boolean
 }
 
 export interface CreateSagaIds {
   operationId: string
-  sessionId: string
 }
 
 function assertCreateCorrelation(
@@ -85,7 +71,6 @@ function assertCreateCorrelation(
     created.created !== true
     || typeof created.replayed !== 'boolean'
     || typeof created.branchCreated !== 'boolean'
-    || typeof created.rollbackAuthorized !== 'boolean'
     || created.operationId !== operationId
     || created.repoId !== preview.repoId
     || created.commonDir !== preview.commonDir
@@ -95,42 +80,20 @@ function assertCreateCorrelation(
   ) throw new Error('gitWorktree/create result does not match the preview')
 }
 
-/** Structural correlation of a workspace.create response. NOTE: the returned
- *  `path` is NOT compared against the requested path — the registry canonicalizes
- *  through `fs.realpath` (dsh-workspace paths.ts) while the caller's path may be
- *  lexical (symlinked $DSH_HOME, browser-picked dir). The host guarantees the
- *  returned entity IS the workspace at the requested path; validation stays
- *  structural: non-empty workspaceId + created boolean. */
-function assertWorkspaceCorrelation(
-  workspace: { workspaceId: string; path: string; created: boolean },
-): void {
-  if (
-    typeof workspace.workspaceId !== 'string'
-    || workspace.workspaceId === ''
-    || typeof workspace.created !== 'boolean'
-  ) throw new Error('workspace.create result does not match the request')
-}
-
-async function createExactSession(
-  create: (workspaceId: string, sessionId: string) => Promise<string>,
-  workspaceId: string,
-  sessionId: string,
-): Promise<void> {
-  const publishedId = await create(workspaceId, sessionId)
-  if (publishedId !== sessionId) throw new Error('session.create returned a different preallocated session id')
-}
-
 /**
- * Create policy boundary: workspace adoption failure may rollback only this host
- * operation; once session.create is attempted no durable entity is compensated;
- * the caller opens the committed session separately (opening has no ack).
+ * Create policy boundary (PR1): the create saga is the host `create` ALONE.
+ * The checkout is not a dsh workspace and no session is committed here — the
+ * follow-up refresh publishes the derived checkout row, and a session is created
+ * by `createSessionHere` (source-workspace session + `enter`). There is therefore
+ * no workspace/session/rollback leg to compensate: an ambiguous response retains
+ * exactly the preview + operation id for one same-id replay, and a correlated
+ * success ends the saga.
  */
 export async function runCreateSaga(
   deps: CreateSagaDeps,
   preview: PreviewCreateResult,
   ids: CreateSagaIds,
-  options: { createSession?: boolean; sourceWorkspaceId?: string } = {},
-): Promise<{ sessionId: string; workspaceId: string; path: string }> {
+): Promise<CreateWorktreeResult> {
   let created: CreateWorktreeResult
   try {
     created = await deps.hostCreate({ previewToken: preview.previewToken, operationId: ids.operationId })
@@ -141,257 +104,25 @@ export async function runCreateSaga(
         kind: 'git-create',
         preview,
         operationId: ids.operationId,
-        sessionId: ids.sessionId,
         message: errorText(createError),
-        createSession: options.createSession !== false,
-        ...(options.sourceWorkspaceId === undefined ? {} : { sourceWorkspaceId: options.sourceWorkspaceId }),
       }, true)
     }
     throw new GitSagaError(createError)
   }
-  let workspace: { workspaceId: string; path: string; created: boolean }
-  // 已学到的宿主 id：workspace 步返回后即算"已知"，即便随后的相关性断言失败也要带给调用方——
-  // 位置意图的作废事实否则只能按请求路径作键，退不掉已被回声升级成宿主 realpath 的 id 键条目。
-  let learnedWorkspaceId: string | undefined
-  try {
-    workspace = await deps.workspaceCreate(created.path)
-    learnedWorkspaceId = workspace.workspaceId
-    assertWorkspaceCorrelation(workspace)
-  } catch (workspaceError) {
-    if (!created.rollbackAuthorized) {
-      throw new GitSagaError(workspaceError, {
-        kind: 'workspace-adopt',
-        operationId: ids.operationId,
-        ...(learnedWorkspaceId === undefined ? {} : { workspaceId: learnedWorkspaceId }),
-        path: created.path,
-        sessionId: ids.sessionId,
-        message: errorText(workspaceError),
-      }, true)
-    }
-    try {
-      await deps.hostRollback({ operationId: ids.operationId }, created)
-    } catch (rollbackError) {
-      throw new GitSagaError(workspaceError, {
-        kind: 'rollback-create',
-        operationId: ids.operationId,
-        ...(learnedWorkspaceId === undefined ? {} : { workspaceId: learnedWorkspaceId }),
-        repoId: created.repoId,
-        worktreeId: created.worktreeId,
-        commonDir: created.commonDir,
-        path: created.path,
-        branch: created.branch,
-        head: created.head,
-        sessionId: ids.sessionId,
-        message: `${errorText(workspaceError)}; rollback also failed: ${errorText(rollbackError)}`,
-      }, true)
-    }
-    // Rollback succeeded: both mutations still require an immediate fresh read.
-    throw new GitSagaError(workspaceError, undefined, true, false)
-  }
-
-  // OpenChamber-aligned create (design 08 §4.2): an ordinary create registers the
-  // workspace WITHOUT committing a session; `createSession: false` skips the
-  // session step and the preallocated id is unused. The session step, when taken,
-  // keeps its never-compensate boundary.
-  if (options.createSession !== false) {
-    try {
-      await createExactSession(deps.sessionCreate, workspace.workspaceId, ids.sessionId)
-    } catch (sessionError) {
-      throw new GitSagaError(sessionError, {
-        kind: 'session-create',
-        workspaceId: workspace.workspaceId,
-        path: workspace.path,
-        sessionId: ids.sessionId,
-        message: errorText(sessionError),
-      }, true)
-    }
-  }
-  return { sessionId: ids.sessionId, workspaceId: workspace.workspaceId, path: workspace.path }
-}
-
-export interface RollbackRecoveryDeps {
-  hostRollback(
-    operationId: string,
-    expected: Pick<CreateWorktreeResult, 'repoId' | 'worktreeId' | 'commonDir' | 'path' | 'branch' | 'head'>,
-  ): Promise<unknown>
-  workspaceCreate(path: string): Promise<{ workspaceId: string; path: string; created: boolean }>
-  sessionCreate(workspaceId: string, sessionId: string): Promise<string>
-  isWorkspaceOwnershipConflict(error: unknown): boolean
-}
-
-/**
- * Resolve a failed pre-session compensation: if rollback says a workspace already
- * adopted the path, reacquire that idempotent workspace and finish the original
- * session commit with the same preallocated id.
- */
-export async function runRollbackRecovery(
-  deps: RollbackRecoveryDeps,
-  recovery: Extract<GitRecovery, { kind: 'rollback-create' }>,
-): Promise<{ committed: false } | { committed: true; sessionId: string }> {
-  try {
-    await deps.hostRollback(recovery.operationId, recovery)
-    return { committed: false }
-  } catch (rollbackError) {
-    if (!deps.isWorkspaceOwnershipConflict(rollbackError)) {
-      throw new GitSagaError(rollbackError, { ...recovery, message: errorText(rollbackError) }, true)
-    }
-  }
-
-  let workspace: { workspaceId: string; path: string; created: boolean }
-  try {
-    workspace = await deps.workspaceCreate(recovery.path)
-    assertWorkspaceCorrelation(workspace)
-  } catch (workspaceError) {
-    throw new GitSagaError(workspaceError, { ...recovery, message: errorText(workspaceError) }, true)
-  }
-  try {
-    await createExactSession(deps.sessionCreate, workspace.workspaceId, recovery.sessionId)
-  } catch (sessionError) {
-    throw new GitSagaError(sessionError, {
-      kind: 'session-create',
-      workspaceId: workspace.workspaceId,
-      path: workspace.path,
-      sessionId: recovery.sessionId,
-      message: errorText(sessionError),
-    }, true)
-  }
-  return { committed: true, sessionId: recovery.sessionId }
-}
-
-export interface WorkspaceAdoptRecoveryDeps {
-  workspaceCreate(path: string): Promise<{ workspaceId: string; path: string; created: boolean }>
-  sessionCreate(workspaceId: string, sessionId: string): Promise<string>
-}
-
-/** Forward-only recovery when Git provenance cannot safely authorize rollback. */
-export async function runWorkspaceAdoptRecovery(
-  deps: WorkspaceAdoptRecoveryDeps,
-  recovery: Extract<GitRecovery, { kind: 'workspace-adopt' | 'session-adopt' }>,
-): Promise<{ sessionId: string }> {
-  let workspace: { workspaceId: string; path: string; created: boolean }
-  try {
-    workspace = await deps.workspaceCreate(recovery.path)
-    assertWorkspaceCorrelation(workspace)
-  } catch (workspaceError) {
-    throw new GitSagaError(workspaceError, { ...recovery, message: errorText(workspaceError) }, true)
-  }
-  try {
-    await createExactSession(deps.sessionCreate, workspace.workspaceId, recovery.sessionId)
-  } catch (sessionError) {
-    throw new GitSagaError(sessionError, {
-      kind: 'session-create',
-      workspaceId: workspace.workspaceId,
-      path: workspace.path,
-      sessionId: recovery.sessionId,
-      message: errorText(sessionError),
-    }, true)
-  }
-  return { sessionId: recovery.sessionId }
-}
-
-export interface AdoptSessionSagaDeps {
-  workspaceCreate(path: string): Promise<{ workspaceId: string; path: string; created: boolean }>
-  sessionCreate(workspaceId: string, sessionId: string): Promise<string>
-}
-
-/**
- * Session-only adoption of an EXISTING worktree (no Git mutation): register or
- * reuse the workspace at `path`, then commit a preallocated session. Once
- * session.create is attempted nothing is compensated; the caller retries with the
- * same preallocated id.
- */
-export async function runAdoptSessionSaga(
-  deps: AdoptSessionSagaDeps,
-  path: string,
-  sessionId: string,
-): Promise<{ sessionId: string; workspaceId: string; path: string }> {
-  let workspace: { workspaceId: string; path: string; created: boolean }
-  try {
-    workspace = await deps.workspaceCreate(path)
-    assertWorkspaceCorrelation(workspace)
-  } catch (workspaceError) {
-    throw new GitSagaError(workspaceError, {
-      kind: 'session-adopt',
-      path,
-      sessionId,
-      message: errorText(workspaceError),
-    }, true)
-  }
-  try {
-    await createExactSession(deps.sessionCreate, workspace.workspaceId, sessionId)
-  } catch (sessionError) {
-    throw new GitSagaError(sessionError, {
-      kind: 'session-create',
-      workspaceId: workspace.workspaceId,
-      path: workspace.path,
-      sessionId,
-      message: errorText(sessionError),
-    }, true)
-  }
-  return { sessionId, workspaceId: workspace.workspaceId, path: workspace.path }
+  return created
 }
 
 export interface RemoveSagaDeps {
   hostRemove(): Promise<RemoveWorktreeResult>
-  /** Same operation replay: freshly verifies absence + registry identity/liveness. */
-  verifyTerminalRemove(): Promise<RemoveWorktreeResult>
-  workspaceDelete(workspaceId: string): Promise<void>
-  /** The original removal's optional branch deletion — echoed onto the
-   *  workspace-delete recovery so a replay fingerprint matches. */
-  deleteBranch?: string
-  /** The original removal's discard-changes authorization — echoed onto the
-   *  workspace-delete recovery so a force-removal replay stays byte-identical. */
-  discardChanges?: boolean
   ambiguousRecovery(error: unknown): Extract<GitRecovery, { kind: 'git-remove' }> | undefined
 }
 
-export interface PreRemoveArchiveDeps {
-  fetchSessions(): Promise<{
-    sessions: ReadonlyArray<{ readonly sessionId: string; readonly parentSessionId?: string }>
-    /** Sessions already archived; excluded from the archive pass (retry-safe). */
-    archivedSessionIds?: ReadonlyArray<string>
-  }>
-  /** `stopActivity: true` is part of the contract: see runPreRemoveArchive. */
-  archiveSession(sessionId: string, options: { stopActivity: true }): Promise<void>
-}
-
 /**
- * Optional soft-archive of the whole session tree BEFORE any Git mutation.
- * Returns the archived closure (roots + transitive subsessions via
- * parentSessionId, minus already-archived ids); a failure throws with nothing
- * removed, while earlier archives in the same run are already committed.
- *
- * Every call carries `stopActivity: true`: the checkbox authorizes the
- * removal, and archive admission would otherwise refuse any member whose work
- * is still running in a way the blocking-running fact cannot see (background
- * jobs, schedules, subagent descendants, a turn started since the guard). The
- * host's own providers stop that work — this saga runs no cancel loop.
+ * Path-based (unregistered checkout) removal: Git-first, no registry lifecycle.
+ * The host answers `next: 'none'`; a `delete-workspace` receipt would mean the
+ * target is still a REGISTERED workspace, a state PR3 retired from the client —
+ * the saga refuses closed instead of deleting a host registry row.
  */
-export async function runPreRemoveArchive(
-  deps: PreRemoveArchiveDeps,
-  roots: ReadonlyArray<string>,
-): Promise<string[]> {
-  const { sessions, archivedSessionIds = [] } = await deps.fetchSessions()
-  const archived = new Set(archivedSessionIds)
-  const closure = collectSessionClosure(sessions, roots)
-  const toArchive = closure.filter(sessionId => !archived.has(sessionId))
-  for (const sessionId of toArchive) {
-    await deps.archiveSession(sessionId, { stopActivity: true })
-  }
-  return toArchive
-}
-
-/**
- * NO CLIENT-SIDE STOP LOOP HERE (design 08 §5.2): the removal itself never
- * stops, cancels or deletes a session — what blocks is the host's archived-aware
- * running fact (an archived session, or one under an archived ancestor, is
- * inert), so the git plugin needs no cancel loop. The one session mutation is
- * the explicit archive pass above, and its stop is the host's archive-time stop
- * (`stopActivity`), not a chamber compensation leg. The cancel/wait loop of
- * `stopSessionsForPurge` remains the archive manager's alone (design 24 §5).
- */
-
-/** Git-first removal. A registry failure is retry-only; Git is never recreated. */
 export async function runRemoveSaga(deps: RemoveSagaDeps): Promise<RemoveWorktreeResult> {
   let removed: RemoveWorktreeResult
   try {
@@ -400,58 +131,15 @@ export async function runRemoveSaga(deps: RemoveSagaDeps): Promise<RemoveWorktre
     const recovery = deps.ambiguousRecovery(removeError)
     throw new GitSagaError(removeError, recovery, recovery !== undefined)
   }
-  if (removed.next === 'none') return removed
-  const deleteRecovery: Extract<GitRecovery, { kind: 'workspace-delete' }> = {
-    kind: 'workspace-delete',
-    operationId: removed.operationId,
-    // next === 'delete-workspace' here (early-returned on 'none' above).
-    workspaceId: removed.workspaceId!,
-    ...(deps.deleteBranch === undefined ? {} : { deleteBranch: deps.deleteBranch }),
-    ...(deps.discardChanges === true ? { discardChanges: true } : {}),
-    expected: {
-      repoId: removed.repoId,
-      worktreeId: removed.worktreeId,
-      branch: removed.branch,
-      head: removed.head,
-    },
-    path: removed.path,
-    message: '',
-  }
-  try {
-    // The mutation receipt is not authority to delete a registry row: replay it
-    // once more so the host can reject a reappeared target or drifted identity.
-    await deps.verifyTerminalRemove()
-  } catch (verifyError) {
-    throw new GitSagaError(verifyError, {
-      ...deleteRecovery,
-      message: errorText(verifyError),
-    }, true)
-  }
-  try {
-    await deps.workspaceDelete(removed.workspaceId!)
-  } catch (workspaceError) {
-    throw new GitSagaError(workspaceError, {
-      ...deleteRecovery,
-      message: errorText(workspaceError),
-    }, true)
+  if (removed.next !== 'none') {
+    // The worktree WAS removed (the receipt proves it); only the retired registry
+    // leg is refused, so the failure is final — never keep a replay entry alive.
+    throw new GitSagaError(
+      new Error('the host reported a registered workspace; the checkout removal never deletes a workspace'),
+      undefined,
+      true,
+      false,
+    )
   }
   return removed
-}
-
-/** Idempotent registry-delete retry: not-found proves the first delete committed. */
-export async function runWorkspaceDeleteRecovery(
-  verifyTerminalRemove: () => Promise<RemoveWorktreeResult>,
-  removeWorkspace: () => Promise<void>,
-  isAlreadyDeleted: (error: unknown) => boolean,
-): Promise<'deleted' | 'already-deleted'> {
-  // A prior Git receipt is not enough authority to mutate the registry: the host
-  // must freshly prove the target absent and the identity/membership undrifted.
-  await verifyTerminalRemove()
-  try {
-    await removeWorkspace()
-    return 'deleted'
-  } catch (error) {
-    if (isAlreadyDeleted(error)) return 'already-deleted'
-    throw error
-  }
 }

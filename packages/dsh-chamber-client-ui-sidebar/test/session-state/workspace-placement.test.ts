@@ -203,35 +203,20 @@ test('an empty authoritative list is not evidence that the anchor is gone', () =
   assert.deepEqual(reconcilePendingPlacements(ledger, 's1', [row('a', '/a')]).s1, undefined)
 })
 
-test('a failed reposition voids the intent from the failure side only', () => {
-  // 失败侧由 Git 插件发布作废事实（宿主序即最终序）；成功侧不发——位置判据收敛在位置已正确的
-  // 那一帧，发 settle 反而会与权威 push 抢时序、把行先放回头部。
+test('PR1: the Git plugin publishes no workspace placement (checkout create has no workspace positioning)', () => {
+  // The worktree create/adopt flow used to be the placement failure-side producer:
+  // it repositioned the adopted workspace after its main checkout and voided the
+  // intent when insertBefore failed. PR1 removes that whole leg (a checkout is not
+  // a workspace), so the intent/void ledger now belongs to the sidebar's own
+  // workspace-create path only.
   const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\s+/g, ' ')
   const coordinator = read('../../../dsh-chamber-client-ui-git/src/shared/coordinator.ts')
-  const failures = coordinator.match(/chamberBridge\.reportWorkspacePlacementFailed\(\{\s*sourceId, workspaceId: result\.workspaceId, path: result\.path,? \}\)/gu) ?? []
-  assert.equal(failures.length, 2, 'create + adopt reposition catch blocks void the intent')
-  const afterLog = coordinator.split('reposition failed (best-effort):')
-  assert.equal(afterLog.length - 1, 2, 'exactly the two best-effort catch logs')
-  for (const tail of afterLog.slice(1)) {
-    assert.match(tail.slice(0, 240), /reportWorkspacePlacementFailed\(\{/u,
-      'each failure log voids the intent right there (the success path has no such log)')
-  }
-  // 第三处 = create saga 的重排之前中止（create 可能没提交 ⇒ 请求路径是基本键；恢复记录带得出宿主 id 时一并带上，否则回声升级成宿主 realpath 后拼写分歧退不掉）。它也必须在 saga 的失败处理之前、且只在失败侧。
-  // 在 saga 的失败处理之前、且只在失败侧。
-  assert.match(coordinator,
-    /reportWorkspacePlacementFailed\(\{ sourceId, path: preview\.targetPath, \.\.\.\(workspaceId === undefined.{0,160}?if \(error instanceof GitSagaError\)/u,
-    'the saga abort voids the intent before the recovery bookkeeping')
-  // 第四处 = adopt saga 的中止 catch（workspace 已建、session.create 失败，重排不会再来）：
-  // 恢复记录只有 session-create 变体带宿主 id，其它情况按请求路径作键。
-  assert.match(coordinator,
-    /reportWorkspacePlacementFailed\(\{ sourceId, path, \.\.\.\(workspaceId === undefined/u,
-    'the adopt saga abort voids the intent too')
-  assert.match(coordinator, /function placementVoidWorkspaceId\(error: unknown\): string \| undefined/u,
-    'both saga aborts resolve the host id through one helper (recovery-record kinds, not a single kind)')
-  assert.equal(coordinator.match(/placementVoidWorkspaceId\(error\)/gu)?.length, 2,
-    'create 与 adopt 两个中止 catch 都经它取宿主 id（只按请求路径会退不掉已升级的 id 键条目）')
-  assert.equal(coordinator.match(/reportWorkspacePlacementFailed\(/gu)?.length, 4,
-    'exactly the four failure-side sites publish it — the success path never does')
+  assert.doesNotMatch(coordinator, /reportWorkspacePlacementFailed/u,
+    'the Git plugin no longer produces placement-void facts (PR1)')
+  assert.doesNotMatch(coordinator, /insertWorkspaceBefore/u,
+    'the Git plugin no longer repositions workspaces (PR1)')
+  // The App-side consumption of the remaining producer (createWorkspaceForSource)
+  // is unchanged: a failed reposition still voids the intent through one combinator.
   const subscriptions = read('../../../renderer/src/app-hooks/use-bridge-subscriptions.ts')
   assert.match(subscriptions, /chamberBridge\.onWorkspacePlacementFailed\(/, 'the App voids the entry')
   assert.match(subscriptions, /removePendingPlacement\(/, 'through the ledger withdrawal combinator')

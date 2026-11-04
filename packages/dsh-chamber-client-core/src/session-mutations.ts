@@ -26,6 +26,12 @@ interface SessionCreationOptions {
   title?: string
   /** 归因：这次创建的**触发路径**；每个调用点都必须表态（'unknown' 是仪表覆盖缺口的信号）。 */
   origin?: SessionCreationOrigin
+  /**
+   * 该次创建**意图**生效的工作目录（design 08 PR2 §5.3）：在 checkout 内新建会话时
+   * 传 checkout path，回声行立即被派生到对应 checkout 行，而不是先在源行闪一下。
+   * 缺省 = 源 workspace 自身目录；宿主投影到达后以宿主为准。
+   */
+  workingDirectory?: string
 }
 
 /** 对 `sourceId` 执行 session.create，并发布创建回声事实（blank = 官方临时行）。 */
@@ -43,6 +49,7 @@ export async function createSessionForSource(
     // 标签是加法字段——未表态的调用方**不发**该键（事实形状逐字节不变），桥按 'unknown' 记账。
     ...(options.origin === undefined ? {} : { origin: options.origin }),
     ...(options.title === undefined ? {} : { title: options.title }),
+    ...(options.workingDirectory === undefined ? {} : { workingDirectory: options.workingDirectory }),
   })
   return sessionId
 }

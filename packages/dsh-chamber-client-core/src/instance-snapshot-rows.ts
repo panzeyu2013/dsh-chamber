@@ -22,6 +22,21 @@ export interface WorkspaceRow {
    * those affordances (ungrouped-bucket parity).
    */
   synthetic?: boolean
+  /**
+   * Row discriminator. Absent = a host-registered workspace row; `'checkout'` =
+   * a DERIVED Git checkout row synthesized from the repo layout (design 08 PR2).
+   * A checkout row is display-only for workspace-scoped mutations, but it is
+   * deliberately NOT `synthetic`: its identity/actions are driven by the derived
+   * `kind/repoKey/familyMainId/path` fields, not by the fallback marker.
+   */
+  kind?: 'checkout'
+  /** Repository opaque identity (repoKey) this row belongs to (checkout rows). */
+  repoKey?: string
+  /**
+   * For a checkout row: the MAIN checkout workspace id of the same repository —
+   * the row's family anchor (fold source, tree level, checkoutOrder key).
+   */
+  familyMainId?: string
 }
 
 /** One session row (SessionSummary wire shape; title rides projections.values.title). */
@@ -64,6 +79,15 @@ export interface SessionRow {
   /** Coarse durable origin (wire: absent or 'subagent'); subagent rows never surface in navigation. */
   origin?: 'subagent'
   cwd?: string
+  /**
+   * Effective working directory projection (the alpha.2 `workingDirectory`
+   * value inside the row's projection bag), SPARSE: present only when the host
+   * projected a non-empty string. Placement reads
+   * `workingDirectory ?? cwd`, so a session sent into a checkout through
+   * `gitWorktree/enter` moves to that row while an ordinary session keeps its
+   * header cwd.
+   */
+  workingDirectory?: string
   title?: string
   parentSessionId?: string
 }

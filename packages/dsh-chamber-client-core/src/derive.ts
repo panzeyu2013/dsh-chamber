@@ -23,8 +23,12 @@ import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeRep
 import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
 import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
-import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
+import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle, workingDirectoryOf } from './session-display.ts'
 import type { ProjectionSessionBaseline, ProjectionWorkspaceBaseline } from './instance-projection-input.ts'
+// Checkout row synthesis (design 08 PR2) is a pure leaf; derive owns visibility
+// and the ONE session-row builder, the leaf owns placement/identity.
+import { checkoutWorkspaceOf, planCheckoutPlacements } from './checkout-placement.ts'
+import type { RepoGitLayout } from './workspace-git-flags.ts'
 
 export { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
 export type { ArchivedSessionMetaRow } from './aggregate-types.ts'
@@ -707,8 +711,12 @@ export function projectInstanceSnapshot(
       const row = byId[id]
       if (row === undefined || row.origin === 'subagent') return []
       const sessionId = String(row.id)
+      // Placement fact (design 08 PR2): the projected working directory rides
+      // the snapshot row SPARSELY; derive reads `workingDirectory ?? cwd`.
+      const workingDirectory = workingDirectoryOf(row.projectionValues)
       return [{
         sessionId,
+        ...(workingDirectory === undefined ? {} : { workingDirectory }),
         ...(typeof row.updatedAt === 'number' ? { updatedAt: row.updatedAt } : {}),
         running: resolveSessionRunning(statusRunning, sessionId, row.running),
         blank: row.blank === true,
@@ -906,6 +914,10 @@ export function instanceSnapshotSignature(
       updatedAt: w.updatedAt,
       s: w.sessionIds,
       y: w.synthetic === true,
+      // Derived-row identity (checkout rows are normally synthesized AFTER the
+      // snapshot, but a producer that carries them must not be frozen).
+      k: w.kind,
+      rk: w.repoKey,
     })),
     s: snapshot.sessions.map(row => ({
       id: row.sessionId,
@@ -924,6 +936,9 @@ export function instanceSnapshotSignature(
       o: row.origin,
       t: row.title,
       c: row.cwd,
+      // The PLACEMENT input (design 08 PR2): a working-directory move alone must
+      // republish, or the App's dedupe freezes the session in its old row.
+      wd: row.workingDirectory,
       p: row.parentSessionId,
     })),
     a: snapshot.archivedSessionIds,
@@ -1127,6 +1142,15 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
         ungrouped: w.ungrouped === true,
         // Synthetic rows disable their mutation affordances in the sidebar.
         synthetic: w.synthetic === true,
+        // Checkout row identity/placement (design 08 PR2): the discriminator,
+        // the family anchor and the drag-anchor space are RENDERED/DECIDED by
+        // the sidebar, so they move the publish gate. `dirty`/`locked` stay out
+        // on purpose: the Git occupant reads them from its own layout facts, and
+        // a status flip must never republish the whole projection.
+        kind: w.kind ?? null,
+        repoKey: w.repoKey ?? null,
+        familyMainId: w.familyMainId ?? null,
+        allSessionIds: w.allSessionIds ?? null,
         // The workspace hover card RENDERS both facts (official
         // WorkspaceHoverContent), so a path/creation change alone must
         // republish; non-sparse on purpose — this is a change detector, never
@@ -1633,13 +1657,52 @@ export function findReusableBlankSession(
 ): string | undefined {
   for (const session of sessions) {
     if (session.blank !== true) continue
-    if (session.cwd !== workspace.path) continue
+    // Effective directory (design 08 PR2): a blank session the user sent into a
+    // checkout is NOT the main directory's blank, so "+" on the source row must
+    // create instead of reopening a row that now lives in a checkout.
+    if ((session.workingDirectory ?? session.cwd) !== workspace.path) continue
     if (session.origin === 'subagent' || session.parentSessionId !== undefined) continue
     if (!workspace.sessionIds.includes(session.sessionId)) continue
     if (archived.has(session.sessionId)) continue
     return session.sessionId
   }
   return undefined
+}
+
+/**
+ * ONE rendered session row, shared by workspace-member, checkout and stray
+ * groups. The row shape must not drift by parent (the sidebar renders the same
+ * component): display label, blank/schedule/archived/pinned facts are computed
+ * here for every caller.
+ */
+function sessionProjectionRow(
+  session: SessionRow,
+  archivedIds: ReadonlySet<string>,
+  pinnedIds: ReadonlySet<string>,
+  pinSetKnown: boolean,
+): ChamberServerWorkspace['sessions'][number] {
+  return {
+    id: session.sessionId,
+    title: session.title ?? '',
+    // Official display label: project directory name when no title.
+    displayTitle: sessionDisplayTitle({
+      displayTitle: session.displayTitle,
+      title: session.title,
+      ...(session.cwd === undefined ? {} : { cwdBasename: basenameOf(session.cwd) }),
+      sessionId: session.sessionId,
+    }),
+    running: session.running,
+    updatedAt: session.updatedAt,
+    // Sparse: only blank (provisional new-session) rows carry it, so the
+    // sidebar can render the localized New Session label.
+    ...(session.blank ? { blank: true } : {}),
+    // The active-Schedule fact rides into the row the sidebar renders (sparse).
+    ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
+    // 归档行在 show/only 下进入投影（default 已被 sessionVisible 滤掉）；稀疏标记，
+    // 行形态与动作（置灰/不可开/归档钮翻转为恢复）由侧栏消费（design 06 §3.4）。
+    ...(archivedIds.has(session.sessionId) ? { archived: true as const } : {}),
+    ...(pinSetKnown && pinnedIds.has(session.sessionId) && !archivedIds.has(session.sessionId) ? { pinned: true as const } : {}),
+  }
 }
 
 /**
@@ -1655,8 +1718,18 @@ export function findReusableBlankSession(
  * lands. Archived rows follow `archivedFilter` (upstream ArchivedFilter): hidden
  * by default, mixed back into their accounting slot on `show`, and the only
  * visible rows on `only` (a workspace without a visible archived member is
- * dropped there). @returns real workspaces in wire order, plus one synthetic
- * trailing ungrouped group when visible strays exist; [] for an empty snapshot.
+ * dropped there).
+ *
+ * `layouts` (workspace-git-flags `RepoGitLayout[]`) adds the DERIVED Git
+ * checkout rows (design 08 PR2): each family main keeps its host membership and
+ * rows, while sessions observed at `workingDirectory ?? cwd` inside one of its
+ * checkouts move into that checkout row (placement). The main row carries
+ * `allSessionIds` (the pre-placement order) whenever it has checkout rows.
+ * Without layouts (unmounted/unary source) the projection is byte-identical to
+ * the PR1 derive. `_layoutVersion` is the caller's memo key only.
+ *
+ * @returns real workspaces in wire order, plus one synthetic trailing ungrouped
+ * group when visible strays exist; [] for an empty snapshot.
  */
 export function deriveServerWorkspaces(
   snapshot: InstanceSnapshot,
@@ -1665,6 +1738,13 @@ export function deriveServerWorkspaces(
   currentSessionId?: string,
   now = Date.now(),
   archivedFilter: ArchivedFilter = 'default',
+  layouts?: readonly RepoGitLayout[],
+  /**
+   * The layout store's monotonic version. POSITIONAL contract only: the App
+   * rebinds its projection memo on it, while this pure derive reads `layouts`
+   * by value (the version adds no fact to the output).
+   */
+  _layoutVersion?: number,
 ): ChamberServerWorkspace[] {
   const sessionsById = new Map(snapshot.sessions.map(session => [session.sessionId, session]))
   const archivedIds = new Set(snapshot.archivedSessionIds)
@@ -1672,39 +1752,41 @@ export function deriveServerWorkspaces(
   const pinnedIds = new Set(snapshot.pinnedSessionIds ?? [])
   const pinSetKnown = snapshot.pinSetKnown === true
   const accounted = new Set<string>()
+  // Checkout rows/placement (design 08 PR2). No layouts = an unmounted source
+  // (the unary fallback carries none): the PR1 projection is unchanged.
+  const checkoutPlacements = layouts === undefined || layouts.length === 0
+    ? undefined
+    : planCheckoutPlacements({ workspaces: snapshot.workspaces, sessions: snapshot.sessions, layouts })
+  const placedSessionIds = checkoutPlacements?.placedSessionIds
+  // The checkout row's own visibility pass: ONE row rule (sessionProjectionRow)
+  // and ONE visibility rule (sessionVisible), never a second copy.
+  const visibleSessionRow = (sessionId: string): ChamberServerWorkspace['sessions'][number] | undefined => {
+    const session = sessionsById.get(sessionId)
+    if (session === undefined) return undefined
+    if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now, archivedFilter)) return undefined
+    return sessionProjectionRow(session, archivedIds, pinnedIds, pinSetKnown)
+  }
   const workspaces: ChamberServerWorkspace[] = []
   for (const workspace of snapshot.workspaces) {
     const sessions: ChamberServerWorkspace['sessions'] = []
+    // Family continuity: a main row whose only visible members were PLACED must
+    // not vanish under `only` — its checkout rows would lose their anchor.
+    let hasVisibleMember = false
     for (const sessionId of workspace.sessionIds) {
       const session = sessionsById.get(sessionId)
       if (session === undefined) continue
       accounted.add(sessionId)
       if (!sessionVisible(serverId, session, currentSessionId, archivedIds, now, archivedFilter)) continue
-      sessions.push({
-        id: sessionId,
-        title: session.title ?? '',
-        // Official display label: project directory name when no title.
-        displayTitle: sessionDisplayTitle({
-          displayTitle: session.displayTitle,
-          title: session.title,
-          ...(session.cwd === undefined ? {} : { cwdBasename: basenameOf(session.cwd) }),
-          sessionId,
-        }),
-        running: session.running,
-        updatedAt: session.updatedAt,
-        // Sparse: only blank (provisional new-session) rows carry it, so the
-        // sidebar can render the localized New Session label.
-        ...(session.blank ? { blank: true } : {}),
-        // The active-Schedule fact rides into the row the sidebar renders (sparse).
-        ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
-        // 归档行在 show/only 下进入投影（default 已被 sessionVisible 滤掉）；稀疏标记，
-        // 行形态与动作（置灰/不可开/归档钮翻转为恢复）由侧栏消费（design 06 §3.4）。
-        ...(archivedIds.has(sessionId) ? { archived: true as const } : {}),
-        ...(pinSetKnown && pinnedIds.has(sessionId) && !archivedIds.has(sessionId) ? { pinned: true as const } : {}),
-      })
+      hasVisibleMember = true
+      // Placed sessions render in their checkout row, not here. The host
+      // `sessionIds` are NOT rewritten (I3).
+      if (placedSessionIds?.has(sessionId) === true) continue
+      sessions.push(sessionProjectionRow(session, archivedIds, pinnedIds, pinSetKnown))
     }
-    // only：无可见成员的 workspace 不渲染（上游 groupByWorkspace 同规则）。
-    if (archivedFilter === 'only' && sessions.length === 0) continue
+    // only：无可见成员的 workspace 不渲染（上游 groupByWorkspace 同规则）；放置到
+    // checkout 的可见成员同样算「本族有可见成员」。
+    if (archivedFilter === 'only' && !hasVisibleMember) continue
+    const checkoutRows = checkoutPlacements?.rowsByMainWorkspaceId.get(workspace.workspaceId)
     // Requires an AUTHORITATIVE archive set: with the unary fallback's unknown
     // set an archived blank row would look reusable, so degrade to create.
     const reusableBlankSessionId = snapshot.archiveSetKnown === true && workspace.synthetic !== true
@@ -1728,7 +1810,17 @@ export function deriveServerWorkspaces(
       // Display-only cwd-derived fallback groups keep their marker, so the
       // sidebar disables their mutation affordances.
       ...(workspace.synthetic === true ? { synthetic: true as const } : {}),
+      // Session-drag anchors (design 08 PR2 §4): the PRE-placement host order.
+      // Never rendered; the sidebar uses it to resolve before/after anchors for
+      // a session drag inside the family while `sessionIds` stays the rendered
+      // subset. Present only when this family actually has derived rows.
+      ...(checkoutRows === undefined ? {} : { allSessionIds: [...workspace.sessionIds] }),
     })
+    // Checkout rows follow their MAIN row (same family block, same tree level);
+    // they are display-only and deliberately never `synthetic`.
+    if (checkoutRows !== undefined) {
+      for (const placement of checkoutRows) workspaces.push(checkoutWorkspaceOf(placement, visibleSessionRow))
+    }
   }
   const forkCandidates = new Set<string>()
   const stray = snapshot.sessions.filter(session => {
@@ -1755,24 +1847,8 @@ export function deriveServerWorkspaces(
       id: UNGROUPED_WORKSPACE_ID,
       title: ungroupedTitle,
       ungrouped: true,
-      sessions: stray.map(session => ({
-        id: session.sessionId,
-        title: session.title ?? '',
-        // Same official display-label rule as the workspace-member rows above.
-        displayTitle: sessionDisplayTitle({
-          displayTitle: session.displayTitle,
-          title: session.title,
-          ...(session.cwd === undefined ? {} : { cwdBasename: basenameOf(session.cwd) }),
-          sessionId: session.sessionId,
-        }),
-        running: session.running,
-        updatedAt: session.updatedAt,
-        ...(session.blank ? { blank: true } : {}),
-        // Same sparse active-Schedule carry as the workspace-member rows above.
-        ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
-        ...(archivedIds.has(session.sessionId) ? { archived: true as const } : {}),
-        ...(pinSetKnown && pinnedIds.has(session.sessionId) && !archivedIds.has(session.sessionId) ? { pinned: true as const } : {}),
-      })),
+      // Same row rule as every other parent (one builder, no drift).
+      sessions: stray.map(session => sessionProjectionRow(session, archivedIds, pinnedIds, pinSetKnown)),
     })
   }
   return workspaces

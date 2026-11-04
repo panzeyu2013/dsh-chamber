@@ -230,6 +230,7 @@
     groupBy?: Record<sourceId, 'workspace' | 'workspace-tree' | 'flat'>,
     archivedFilter?: Record<sourceId, 'default' | 'show' | 'only'>,
     flatOrder?: Record<sourceId, string[]>,
+    checkoutOrder?: Record<string, string[]>,   // key = `__checkout__:<sourceId>/<canonicalMainPath>`，value = canonical checkout path 数组
     updatedOrder: Record<`${sourceId}/${workspaceId}`, string[]>,
     sessionUpdatedAtByAccount: Record<`${sourceId}/${workspaceId}`, Record<sessionId, number>>,
     sidebarWidth: number,
@@ -244,6 +245,12 @@
   `${sourceId}/${workspaceId}`（未分组桶 workspaceId 即
   `UNGROUPED_WORKSPACE_ID`），剪裁同 folded；manual 模式不读；v 保持 1，旧数据
   无字段即从未进入 updated。
+- **checkoutOrder（P5b，本地子序）**：派生 checkout 行的**族内**拖动序，键 =
+  `__checkout__:<sourceId>/<canonicalMainPath>`（主 checkout 的 canonical path），值 = canonical
+  checkout path 数组；未知名渲染侧跳过、新行按派生序追加（与 `ungroupedOrder` 同款 reconcile）。
+  **只在本机 localStorage 持久化**，不写宿主、不跨实例同步；裁剪随来源/主路径消失；回滚清理
+  `__checkout__` 前缀键与 `checkoutOrder` 本身。checkout 行不写 `folded`（折叠跟随主行，
+  design 08 §3.3）。
 - **sidebarWidth（ui-layout fork）**：`packages/dsh-chamber-client-ui-layout`
   （官方 ui-layout 壳的 chamber fork，仅替换 layout store）把侧栏宽度经本 store
   播种/回写——`init` 从 `getViewPrefs().sidebarWidth` 播种（钳位 vendor
@@ -307,7 +314,7 @@
   （上游带 14px 归档图标与 `.hoverArchived` 行类）；carry 只保留仍在归档集的隐藏 id，故 `only`→`default`
   时被隐藏的**非归档**行仍可能被当作首次观测提升一次（渲染侧拿不到未过滤成员集，无法与"已删除"区分）。
 
-- `packages/dsh-chamber-client-core/src/view-prefs.ts` + `packages/dsh-chamber-client-core/src/index.ts` 再导出；`SidebarRoot.tsx`
+- `packages/dsh-chamber-client-core/src/view-prefs.ts` 同时承载 `checkoutOrder` 的 schema/parse/write/prune（P5b；键 = `__checkout__:<sourceId>/<canonicalMainPath>`，值 = canonical path 数组）；`packages/dsh-chamber-client-core/src/index.ts` 再导出；`SidebarRoot.tsx`
   经 `getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs` 读写；
   `test/session-state/view-prefs.test.ts` 覆盖存储单例/通知/裁剪（node:test 风格）。
 
@@ -351,10 +358,15 @@
   元素内分支，不新增 AnimatedRows 键位）。
 - **按工作区树**（上游 `tree.ts owningParentFolder` 的行为镜像，`client-core/workspace-tree.ts`）：
   仅**已注册**工作区可作父节点、最近前缀胜出、大小写敏感、Windows 拼写按 `/` 比较、POSIX 反斜杠
-  是字面字符；**家族优先**：派生 worktree 的显示父级取它 main 的父级（worktree 建在
-  `$DSH_HOME/worktrees`，纯前缀会把家族拆开，design 08 §3.3），无 git 家族信息退化为纯前缀；
+  是字面字符；**家族优先**：派生 checkout 行的显示父级取它 main 的父级（P5b 的 checkout 建在
+  `<repo>/.agents/worktrees`，但派生行不是注册 workspace；纯前缀仍会把家族拆开，design 08 §3.3），无 git 家族信息退化为纯前缀；
   `synthetic` / 未分组桶不参与。树只改缩进（`--chamber-tree-depth`）不解序：同级顺序仍由 wire
   序与家族约束决定，父组折叠只隐藏自己的会话行。
+- **派生 checkout 行（P5b）**：App derive 从 Git layout 生成 `kind:'checkout'` 行（design 08 §3.2），
+  带 `path/repoKey/familyMainId`、不带 `synthetic`/`createdAt`；随主行折叠、按 familyMain 归树、
+  族内用本地 `checkoutOrder` 子序；flat 不渲染、窄栏无 Git 动作。侧栏只读 layout/flags 的中性形状，
+  不依赖 Git 类型。**键盘与 aria**：checkout 行的动作与主行共用 `.rowActionsVisible` 揭示路径，
+  Tab 可达；拖动有非拖动替代；分支/路径/健康/动作有 aria 名称（验收 V16/V17）。
 - **flat 单列表**（上游 `FLAT_SESSION_ORDER_KEY` 的 per-source 对应物，
   `client-core/flat-account.ts` 的 `FLAT_ACCOUNT_KEY`）：该来源一条平铺列表、伪账号替换分组
   列表（不渲染工作区表头/hover 卡、不接工作区拖拽）；manual 顺序 = `flatOrder[sourceId]`
@@ -1038,7 +1050,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **flat 单列表已落地（per-source）**：该来源一条平铺列表（伪账号替换分组列表，不渲染工作区表头），
   manual 走 `flatOrder[sourceId]`、updated 走 `flatAccountKey(sourceId)` 哨兵账号；会话拖拽只写本地账号、
   不发 wire（上游 flat 账号同规则）。**不做跨来源平铺**（拒绝项见 §12）。
-- **按工作区树已落地（家族优先）**：上游 `owningParentFolder` 的已注册父目录前缀嵌套；派生 worktree 的
+- **按工作区树已落地（家族优先）**：上游 `owningParentFolder` 的已注册父目录前缀嵌套；派生 checkout 行的
   显示父级取它 main 的父级，家族不被拆开（design 08 §3.3 连续家族不变式）；无 git 家族信息时退化为
   纯前缀。树只改缩进不改序：同级顺序仍由 wire 序与家族约束决定，父组折叠只隐藏自己的会话行。
 - 跨实例 `dsh.sessions.current` localStorage 共享键（last-writer-wins）：
@@ -1223,7 +1235,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   「关不掉/异常打开」。它缓解排名第一的触发（从动作簇离开该行）；无指针位移触发与「极快甩动跨过
   ≈3px 带」仍在，根治需不依赖 React 合成的投递通道（**未实现**，见下方悬停卡片条与
   `dsh-chamber-client-core/src/hover-intent.ts`）。代价：24px 目标尺寸重新成为本模块偏差
-  （design 24 §13 第 17 条、design 08 §3.4）。**簇间距**：`.rowActions` 4px 与 footer 4px 保留；
+  （design 24 §13 第 17 条、design 08 §3.2）。**簇间距**：`.rowActions` 4px 与 footer 4px 保留；
   `.sourceActions` 与 `.headerGit` 回到 2px。**rail**：只回退该 pass 加宽的 `gap`（16→12px），点按钮
   自带 `margin: -4px 0` 保留 ⇒ 20px 点距 / 12px 可见间隙；**不要只删 margin 不改 gap**（点距会松成
   28px/20px）。该几何以 `sidebar-chamber.module.css` 的注释块为唯一权威处；**不要再加回 rim**。小图标钮圆角 = `--dsw-radius-xs`
@@ -1345,9 +1357,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `error:open:` / `session:` / `more:`，空列表初始化 `empty`），与元素上的 `data-row-key` 一一对应
   ——例外有三类（都不是本轮引入）：过期 ghost 行与内联重命名的会话行**有键无可见元素**（ghost 只 `visibility:hidden`，
   仍占位、仍参与 FLIP），列表顶部拖拽指示 `listTopDropIndicator` **有元素无键**；尾部还有
-  「未注册 worktree 的 git 块」与「添加工作区错误」不带 key（上游同批也不动插件渲染内容）：它们**自身**的位置跳变
-  不可见，但上方行被删时 keyed 行会向上滑过它们已就位的新位置，存在 100–200ms 交叠——仅在存在未注册 worktree
-  （git 块可见）时可感知；要消除得给插件内容加 keyed wrapper 并纳入 `rowKeys`，本轮按上游口径不做。另一处按
+  「添加工作区错误」不带 key：它**自身**的位置跳变不可见，但上方行被删时 keyed 行会向上滑过它已就位的
+  新位置，存在 100–200ms 交叠。P5b 的派生 checkout 行已是真实行（`workspace:` 键），不再有未注册
+  worktree 的 git 块；旧的 keyed-wrapper 消除项随之作废。另一处按
   上游口径接受的退化：上游以 list 自身 rect 做视口裁剪，本仓 `.workspaceList` 不是滚动容器（滚动在 `.chamberList`）
   ⇒ 裁剪退化为「全部相交」，屏外被删行同样克隆 + 动画（`finish` 即回收，无残留）。同类边界：**行集与 key 集来自不同判据**
   ——过期 ghost 行（键仍在、`visibility:hidden` 仍占位）与自动窗口上限外的行（键仍在、组件不渲染）都不会触发退出淡出，
@@ -1568,6 +1580,9 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 
 ## 11. Rejected alternatives（孤儿 workspace 的删除入口）
 
+> P5b 起新 checkout 不再注册 workspace；本节只覆盖**旧 registered worktree / 普通 workspace** 的历史
+> 形态。旧 `$DSH_HOME/worktrees` 池按发布前提清空（design 08 §7.4），不产生新的孤儿行。
+
 背景（2026-09 用户报告）：注册 workspace 的路径消失后，行显示 `orphaned` 的「已消失」徽标。若该
 工作树的 Git 记录也已被外部 prune，快照里没有对应 worktree 行，**Git occupant 整块不渲染**
 （`SidebarWorkspaceGitLine.tsx` 读到 `gitFactsForWorkspace` 为空即 `return null`）——行上没有任何 Git 侧删除
@@ -1604,8 +1619,8 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 2. **在 sidebar 侧后处理插入归档行**（不改进 derive）：归档行的原槽位与行形态在 renderer 投影里已被
    过滤，后处理拿不到「记账槽位」；改为把 `archivedFilter` 作为**投影输入**（renderer `deriveServers`
    参数 + 按来源缓存键 + 发布签名 `archived` 位）。
-3. **树模式纯前缀（完全上游）**：会把 git 家族拆开（worktree 建在 `$DSH_HOME/worktrees`，与主 checkout
-   不同父）；改**家族优先**（design 08 §3.3）。
+3. **树模式纯前缀（完全上游）**：会把 git 家族拆开（P5b 的 checkout 建在 `<repo>/.agents/worktrees`，
+   而派生行不是注册 workspace，父子关系仍只能由 familyMain 给出）；改**家族优先**（design 08 §3.3）。
 4. **全局 flat（跨来源一条列表）**：需要跨来源排序权威与跨来源拖拽（后者本就是 v1 不做项），与
    per-source 实例化原则冲突；改**每来源平铺**。
 5. **降级时清掉筛选存储值**：把瞬时可用性问题固化成偏好改写；改禁用三项 + 按默认渲染 + 保留存储值

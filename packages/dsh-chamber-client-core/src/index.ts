@@ -26,6 +26,11 @@ export type * from './settings-shell.ts'
 export { SETTINGS_SHELL_ENTRY_ID, SETTINGS_SHELL_SHADOW_PRIORITY, classifySettingsSeatOccupant, settingsSeatTakeoverMessage } from './settings-shell.ts'
 export type * from './derive.ts'
 export { BLANK_GHOST_GRACE_MS, SEARCH_QUERY_MAX_CODE_UNITS, armBlankGhost, basenameOf, canonicalPathKey, deriveArchivedSessions, deriveLocalSearchMatches, deriveServerWorkspaces, gapSignature, groupArchivedRows, hasActiveScheduleOf, increasedForkTitle, instanceSnapshotSignature, mergeRuntimeFacts, mergeSearchResults, nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, projectInstanceSnapshot, projectRuntimeFacts, reconciledSessionOrder, relativeTimeBucket, runningRingVisible, runtimeReportSignature, sanitizeSearchQuery, serversProjectionSignature, sessionDisplayTitle, sourceAccentColor, workspaceAccentStyle } from './derive.ts'
+// Checkout-row placement leaf (design 08 PR2): derive owns visibility, this leaf
+// owns identity/placement. `orderCheckoutRows`/`checkoutRowId` stay on the
+// ./checkout-placement subpath (the sidebar drag consumes them there).
+export type * from './checkout-placement.ts'
+export { checkoutOrderKey, checkoutPathKey, checkoutWorkspaceOf, parseCheckoutOrderKey, planCheckoutPlacements } from './checkout-placement.ts'
 export { cachedServersProjectionSignature, createChamberProjectionSignatureCache, rememberServersProjectionSignature, type ChamberProjectionSignatureCache } from './projection-signature-cache.ts'
 export type * from './projection-signature-cache.ts'
 export type * from './completion-arm.ts'

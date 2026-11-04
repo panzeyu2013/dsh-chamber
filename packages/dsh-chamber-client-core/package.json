@@ -12,6 +12,7 @@
     "./aggregate-store": "./src/aggregate-store.ts",
     "./authority-log-store": "./src/authority-log-store.ts",
     "./boot-gap-shape": "./src/boot-gap-shape.ts",
+    "./checkout-placement": "./src/checkout-placement.ts",
     "./client-plugin-loader": "./src/client-plugin-loader.ts",
     "./derive": "./src/derive.ts",
     "./hover-intent": "./src/hover-intent.ts",
@@ -54,6 +55,9 @@
     "./runtime-management": "./src/runtime-management.ts",
     "./svg-resource-scope": "./src/svg-resource-scope.ts",
     "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node ./scripts/test.mjs"
   },
   "license": "MIT",
   "dependencies": {

@@ -34,6 +34,9 @@ export class GitWorktreeError extends Error {
  * mirror this set; codes added or renamed on either side must be mirrored on the other.
  */
 export const RETRYABLE_CODES = new Set([
+  // enter: the agent registry may not have published a just-created session yet; the
+  // client retries enter after open (design 08 §4.2).
+  'agent-not-ready',
   'git-timeout',
   'git-output-limit',
   'git-spawn-failed',

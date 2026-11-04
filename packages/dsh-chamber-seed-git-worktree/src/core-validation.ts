@@ -3,9 +3,9 @@
  */
 import { GitWorktreeError } from './core-errors.ts'
 import { GIT_DIR_POINTER_MAX_BYTES } from './core-constants.ts'
-import type { CreateInput, PreviewCreateInput, RemoveInput, RollbackCreateInput, WorktreeFileSystem } from './core-types.ts'
+import type { CreateInput, PreviewCreateInput, RemoveInput, WorktreeFileSystem } from './core-types.ts'
 import { createHash } from 'node:crypto'
-import { access, lstat, mkdir, open, realpath } from 'node:fs/promises'
+import { access, lstat, mkdir, open, realpath, writeFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 
 export const nodeFileSystem: WorktreeFileSystem = {
@@ -32,6 +32,9 @@ export const nodeFileSystem: WorktreeFileSystem = {
       await handle.close()
     }
   },
+  // CREATE-ONLY: `wx` fails with EEXIST instead of truncating, so an existing pool ignore
+  // file (or any pre-existing path) is never rewritten.
+  writeFile: async (path, content) => { await writeFile(path, content, { encoding: 'utf8', flag: 'wx' }) },
 }
 
 export function fail(code: string, message: string): never {
@@ -162,12 +165,6 @@ export function parseCreateInput(value: CreateInput): CreateInput {
   return { previewToken: previewToken(value.previewToken), operationId: operationId(value.operationId) }
 }
 
-export function parseRollbackInput(value: RollbackCreateInput): RollbackCreateInput {
-  assertRecord(value, 'input')
-  assertExactKeys(value, ['operationId'], 'input')
-  return { operationId: operationId(value.operationId) }
-}
-
 export function parseRemoveInput(value: RemoveInput): RemoveInput {
   assertRecord(value, 'input')
   // deleteBranch / discardChanges are OPTIONAL: allowed set + required subset checked inline.
@@ -233,7 +230,11 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   if (!allStrings) fail('unsafe-git-argv', 'Git argv contains a non-string or NUL')
 
   const exact = (...expected: string[]) => sameArray(rest, expected)
-  if (verb === 'rev-parse' && (exact('--show-toplevel') || exact('--path-format=absolute', '--git-common-dir'))) return
+  // The `--git-dir` probe distinguishes a submodule (its own git dir IS its common dir)
+  // from a linked worktree (a per-worktree gitdir under the shared common dir).
+  if (verb === 'rev-parse' && (exact('--show-toplevel')
+    || exact('--path-format=absolute', '--git-common-dir')
+    || exact('--path-format=absolute', '--git-dir'))) return
   if (verb === 'check-ref-format' && rest.length === 2 && rest[0] === '--branch' && !rest[1]!.startsWith('-')) return
   if (verb === 'show-ref' && rest.length === 3 && rest[0] === '--hash' && rest[1] === '--verify'
     && rest[2]!.startsWith('refs/heads/') && !rest[2]!.slice('refs/heads/'.length).startsWith('-')) return
@@ -248,17 +249,27 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   if (verb === 'worktree' && exact('list', '--porcelain', '-z')) return
   // Newline-delimited --porcelain fallback (Git < 2.47, which predates `-z`).
   if (verb === 'worktree' && exact('list', '--porcelain')) return
-  if (verb === 'worktree' && rest.length === 4 && rest[0] === 'add' && rest[1] === '--'
-    && isAbsolute(rest[2]!) && !rest[3]!.startsWith('-')) return
-  if (verb === 'worktree' && rest.length === 6 && rest[0] === 'add' && rest[1] === '-b'
-    && !rest[2]!.startsWith('-') && rest[3] === '--' && isAbsolute(rest[4]!)
-    && /^[0-9a-fA-F]{40,64}$/u.test(rest[5]!)) return
+  // Two-step checkout, parity with the forge worktree service: `add --no-checkout`
+  // writes only the admin record, then the filter-enumerating reset below populates
+  // the worktree with every configured clean/smudge/process driver disabled.
+  if (verb === 'worktree' && rest.length === 5 && rest[0] === 'add' && rest[1] === '--no-checkout'
+    && rest[2] === '--' && isAbsolute(rest[3]!) && !rest[4]!.startsWith('-')) return
+  if (verb === 'worktree' && rest.length === 7 && rest[0] === 'add' && rest[1] === '--no-checkout'
+    && rest[2] === '-b' && !rest[3]!.startsWith('-') && rest[4] === '--' && isAbsolute(rest[5]!)
+    && /^[0-9a-fA-F]{40,64}$/u.test(rest[6]!)) return
   if (verb === 'worktree' && rest.length === 3 && rest[0] === 'remove' && rest[1] === '--'
     && isAbsolute(rest[2]!)) return
   // Explicit discard: `worktree remove --force` is authorized only by the
   // `discardChanges` flag - this fixed grammar is the last line of defense.
   if (verb === 'worktree' && rest.length === 4 && rest[0] === 'remove' && rest[1] === '--force'
     && rest[2] === '--' && isAbsolute(rest[3]!)) return
+  // Read-only filter-driver enumeration inside the fresh checkout (forge parity).
+  if (verb === 'config' && exact('--null', '--name-only', '--get-regexp', '^filter\\.')) return
+  // Populate the --no-checkout worktree from its own HEAD: fixed flags only. `HEAD` is
+  // deliberate (an existing branch must never be rewound by a pinned older id); the filter
+  // overrides travel through GIT_CONFIG_* env, never through argv.
+  if (verb === 'reset' && rest.length === 3 && rest[0] === '--hard'
+    && rest[1] === '--no-recurse-submodules' && rest[2] === 'HEAD') return
 
   fail('unsafe-git-argv', `Git command '${verb ?? '<empty>'}' is outside the worktree allowlist`)
 }

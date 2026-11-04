@@ -1,5 +1,6 @@
 /**
- * Bundled-pnpm provisioning for the managed host (design 02 §3.1).
+ * Managed-host PATH provisioning for the bundled toolchain: pnpm (design 02 §3.1) and
+ * the `node` command a worktree service spawns (P5b-0).
  *
  * The packaged app ships the pinned pnpm as an execute-by-node script
  * (`pnpm/bin/pnpm.cjs`: mode 0644, shebang `#!/usr/bin/env node`) and a
@@ -21,6 +22,18 @@
  *  - Provisioning never fails a spawn: a wrapper that cannot be prepared is logged
  *    loud and the host keeps its own PATH (upstream's ENOENT stays honest).
  *
+ * The same wrapper mechanism carries `node` for P5b-0. The upstream worktree service
+ * spawns its configured `nodeCommand` — a single STRING, with no args/env channel — and
+ * the bundle default is the literal `node`. Writing the control plane's own executable
+ * there is wrong (under Electron that is the app binary, not a node), and a Finder-launched
+ * app has no node on PATH, so this module materializes a `node` wrapper in the SAME shim
+ * directory: it execs the resolved node (under Electron: the app binary PLUS
+ * ELECTRON_RUN_AS_NODE=1, which is exactly what makes it a node) and forwards every
+ * argument. The config therefore keeps the string `node`; no machine path is ever written
+ * into a profile or the overlay. {@link withNodePath} decides one host's provision: the
+ * host's own PATH wins, then the wrapper, then a plain (non-Electron) node's directory,
+ * and otherwise a loud `node-unavailable` diagnostic.
+ *
  * The probe mirrors the resolver the child itself uses (execa → which-command):
  * PATH order, PATHEXT on Windows, entries resolved against the CHILD cwd (an empty
  * entry means the cwd, an unset PATH contributes nothing), quoted Windows entries
@@ -30,15 +43,18 @@
  */
 
 import { lstatSync, readFileSync, statSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import {
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   isExecutableFile,
 } from './private-file.ts'
 
-/** The wrapper directory under the control plane's state root. */
+/** The pnpm wrapper directory under the control plane's state root. */
 export const PNPM_SHIM_DIR = 'pnpm-shim'
+
+/** The node wrapper directory; kept separate so one PATH entry can never shadow the other. */
+export const NODE_SHIM_DIR = 'node-shim'
 
 /** The wrapper's mode: owner-executable; pnpm itself must be spawnable by the host user. */
 const PNPM_SHIM_MODE = 0o755
@@ -144,13 +160,44 @@ function isWindowsAliasCandidate(candidate: string): boolean {
   }
 }
 
-/** Candidate names a PATH lookup tries on Windows (PATHEXT order, pnpm stem). */
-function windowsPnpmNames(pathExt: string | undefined): string[] {
+/** Candidate names a PATH lookup tries on Windows (PATHEXT order, command stem). */
+function windowsCommandNames(stem: string, pathExt: string | undefined): string[] {
   const extensions = (pathExt ?? '.COM;.EXE;.BAT;.CMD')
     .split(';')
     .map(extension => extension.trim())
     .filter(extension => extension !== '')
-  return extensions.map(extension => `pnpm${extension}`)
+  return extensions.map(extension => `${stem}${extension}`)
+}
+
+/**
+ * First candidate command the managed child's own lookup resolves, or null: PATH
+ * directories in order, the given candidate names per directory, each entry resolved
+ * against `cwd` (an empty entry is the cwd), an unset PATH contributing nothing.
+ */
+function pathProvidesCommand(
+  pathValue: string | undefined,
+  platform: NodeJS.Platform,
+  names: readonly string[],
+  isExecutable: (file: string) => boolean,
+  options: { cwd?: string; excludeDirectory?: string } = {},
+): string | null {
+  if (pathValue === undefined) return null
+  const cwd = options.cwd ?? process.cwd()
+  // The managed shim directory is OUR OWN wrapper, not the user's toolchain: a probe that
+  // counted it would accept a stale wrapper from an earlier spawn (the app moved / the
+  // runtime changed) and never rewrite it. Both provisions therefore exclude it.
+  const excluded = options.excludeDirectory === undefined ? null : resolve(cwd, options.excludeDirectory)
+  for (const raw of pathValue.split(pathDelimiter(platform))) {
+    const dir = resolve(cwd, stripSurroundingQuotes(raw))
+    if (excluded !== null && dir === excluded) continue
+    for (const name of names) {
+      const candidate = join(dir, name)
+      if (isExecutable(candidate) || (platform === 'win32' && isWindowsAliasCandidate(candidate))) {
+        return candidate
+      }
+    }
+  }
+  return null
 }
 
 /**
@@ -162,21 +209,13 @@ export function pathProvidesPnpm(
   pathValue: string | undefined,
   platform: NodeJS.Platform,
   isExecutable: (file: string) => boolean,
-  options: { pathExt?: string; cwd?: string } = {},
+  options: { pathExt?: string; cwd?: string; excludeDirectory?: string } = {},
 ): string | null {
-  if (pathValue === undefined) return null
-  const names = platform === 'win32' ? windowsPnpmNames(options.pathExt) : ['pnpm']
-  const cwd = options.cwd ?? process.cwd()
-  for (const raw of pathValue.split(pathDelimiter(platform))) {
-    const dir = resolve(cwd, stripSurroundingQuotes(raw))
-    for (const name of names) {
-      const candidate = join(dir, name)
-      if (isExecutable(candidate) || (platform === 'win32' && isWindowsAliasCandidate(candidate))) {
-        return candidate
-      }
-    }
-  }
-  return null
+  const names = platform === 'win32' ? windowsCommandNames('pnpm', options.pathExt) : ['pnpm']
+  return pathProvidesCommand(pathValue, platform, names, isExecutable, {
+    cwd: options.cwd,
+    excludeDirectory: options.excludeDirectory,
+  })
 }
 
 /** Read the existing wrapper, or null when absent/unsafe/not a regular file. */
@@ -221,6 +260,205 @@ export function ensurePnpmShim(input: {
     atomicWritePrivateFileNoFollow(file, script, { mode: PNPM_SHIM_MODE })
   }
   return dir
+}
+
+/** The command name the worktree bundle defaults to. The shims exist so this literal
+ *  string keeps resolving inside the managed host: no machine path is ever written into a
+ *  profile or the overlay (under Electron the control plane's own executable is the app
+ *  binary, not a node). */
+export const NODE_COMMAND = 'node'
+
+/** The wrapper file name inside {@link PNPM_SHIM_DIR} for one command and platform. */
+function shimFileName(command: string, platform: NodeJS.Platform): string {
+  return platform === 'win32' ? `${command}.cmd` : command
+}
+
+/**
+ * The `node` wrapper text: run the resolved node (plus its own args/env — under Electron
+ * that is `ELECTRON_RUN_AS_NODE=1`, which is what makes the app binary a node) and forward
+ * every argument unchanged. Generated, never hand-edited; rewritten per spawn when the
+ * resolved pair changes.
+ */
+export function nodeShimScript(input: {
+  platform: NodeJS.Platform
+  nodeFile: string
+  nodeArgs?: readonly string[]
+  nodeEnv?: Readonly<Record<string, string>>
+}): string {
+  const nodeArgs = input.nodeArgs ?? []
+  const nodeEnv = input.nodeEnv ?? {}
+  if (input.platform === 'win32') {
+    const assignments = Object.entries(nodeEnv)
+      .map(([name, value]) => `set "${name}=${escapeBatch(value)}"`)
+    const command = [input.nodeFile, ...nodeArgs].map(value => `"${escapeBatch(value)}"`).join(' ')
+    return [
+      '@echo off',
+      'rem Generated by dsh-chamber for the managed host node (P5b-0) - do not edit; rewritten per spawn.',
+      ...assignments,
+      `${command} %*`,
+      '',
+    ].join('\r\n')
+  }
+  const assignments = Object.entries(nodeEnv).map(([name, value]) => `export ${name}=${posixQuote(value)}`)
+  const command = [input.nodeFile, ...nodeArgs].map(posixQuote).join(' ')
+  return [
+    '#!/bin/sh',
+    '# Generated by dsh-chamber for the managed host node (P5b-0) - do not edit; rewritten per spawn.',
+    ...assignments,
+    `exec ${command} "$@"`,
+    '',
+  ].join('\n')
+}
+
+/**
+ * Materialize the `node` wrapper in the SAME private shim directory as the pnpm wrapper
+ * and return that directory. Content and mode are pinned like the pnpm wrapper: an older
+ * run's wrapper with the same content but a wrong mode is repaired, not accepted.
+ */
+export function ensureNodeShim(input: {
+  root: string
+  nodeFile: string
+  nodeArgs?: readonly string[]
+  nodeEnv?: Readonly<Record<string, string>>
+  platform?: NodeJS.Platform
+}): string {
+  const platform = input.platform ?? process.platform
+  const dir = join(input.root, NODE_SHIM_DIR)
+  ensurePrivateDirectoryNoFollow(dir, 0o700)
+  const file = join(dir, shimFileName(NODE_COMMAND, platform))
+  const script = nodeShimScript({
+    platform,
+    nodeFile: input.nodeFile,
+    nodeArgs: input.nodeArgs,
+    nodeEnv: input.nodeEnv,
+  })
+  const existing = readExistingShim(file, platform)
+  if (existing === null || existing.content !== script || !existing.modeOk) {
+    atomicWritePrivateFileNoFollow(file, script, { mode: PNPM_SHIM_MODE })
+  }
+  return dir
+}
+
+/** How a managed host will resolve the `node` command. */
+export type NodePathSource =
+  /** The host PATH already resolves a node; nothing is injected. */
+  | 'host-path'
+  /** The generated wrapper directory was prepended (or already is a PATH entry). */
+  | 'path-shim'
+  /** The wrapper was impossible; a plain node's directory was prepended instead. */
+  | 'plain-node-directory'
+  /** No real node could be provided — the `node-unavailable` diagnostic case. */
+  | 'unavailable'
+
+/** One host's node provision: the env to spawn with plus its honest diagnosis. */
+export interface NodePathProvision {
+  readonly env: NodeJS.ProcessEnv
+  readonly source: NodePathSource
+  /** Always {@link NODE_COMMAND}: the config keeps a command NAME, never a machine path. */
+  readonly nodeCommand: typeof NODE_COMMAND
+  /** The executable the provision points at, when known (diagnostics only). */
+  readonly executable: string | null
+  /** One-line diagnosis for the plane log (never a secret, never an ENOENT trace). */
+  readonly diagnostic: string
+}
+
+interface NodePathOptions {
+  /** The control plane's state root; the wrapper lives at `<stateDir>/pnpm-shim`. */
+  stateDir: string
+  /** The node that runs the managed host (resolveNodeExecutable). */
+  nodeFile: string
+  nodeArgs?: readonly string[]
+  nodeEnv?: Readonly<Record<string, string>>
+  /** The cwd the managed host will run in; empty/relative PATH entries resolve there. */
+  cwd?: string
+  platform?: NodeJS.Platform
+  log?: (line: string) => void
+  /** String-only fallback resolver (spawn-dsh's resolvePlainNodeExecutable): a REAL
+   *  node, never the Electron binary; null means 'no node available'. */
+  resolvePlainNode?: () => string | null
+  /** Test seam for the wrapper writer. */
+  ensureShim?: typeof ensureNodeShim
+}
+
+/** Prepend one PATH entry unless an identical entry is already present (no duplicates when
+ *  the pnpm wrapper already prepended this very directory). */
+function prependPathEntry(env: NodeJS.ProcessEnv, pathKey: string | null, entry: string, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+  const key = pathKey ?? 'PATH'
+  const current = env[key]
+  const delimiter = pathDelimiter(platform)
+  const normalize = (value: string): string => (platform === 'win32' ? value.toLowerCase() : value)
+  const segments = current === undefined || current === '' ? [] : current.split(delimiter)
+  if (segments.some(segment => normalize(segment) === normalize(entry))) return env
+  return { ...env, [key]: current === undefined || current === '' ? entry : `${entry}${delimiter}${current}` }
+}
+
+/**
+ * Decide one managed host's node provision (P5b-0).
+ *
+ * Order: the host's own PATH wins (never shadow the user's toolchain); otherwise the
+ * generated `node` wrapper in the shim directory; if that cannot be prepared, a plain
+ * (non-Electron) node executable's directory; otherwise the loud `node-unavailable`
+ * diagnostic with the env untouched. Never fails a spawn and never writes a machine path
+ * anywhere: the only command the config ever names is the literal `node`.
+ */
+export function withNodePath(env: NodeJS.ProcessEnv, options: NodePathOptions): NodePathProvision {
+  const platform = options.platform ?? process.platform
+  // Diagnostics only: a throwing sink must never fail a spawn.
+  const emit = (line: string): void => {
+    try {
+      options.log?.(line)
+    } catch {
+      /* see above */
+    }
+  }
+  const pathKey = pathKeyOf(env, platform)
+  const provided = pathProvidesCommand(
+    pathKey === null ? undefined : env[pathKey],
+    platform,
+    platform === 'win32' ? windowsCommandNames(NODE_COMMAND, envValue(env, 'PATHEXT', platform)) : [NODE_COMMAND],
+    isExecutableFile,
+    {
+      cwd: options.cwd ?? process.cwd(),
+      // A wrapper this module wrote is not "the host's own node": excluding it keeps the
+      // per-spawn rewrite (a moved app / changed runtime never leaves a stale absolute path).
+      excludeDirectory: join(options.stateDir, NODE_SHIM_DIR),
+    },
+  )
+  if (provided !== null) {
+    const diagnostic = `node: managed host PATH already provides ${provided}; the worktree nodeCommand stays '${NODE_COMMAND}'`
+    emit(diagnostic)
+    return { env, source: 'host-path', nodeCommand: NODE_COMMAND, executable: provided, diagnostic }
+  }
+  if (isAbsolute(options.nodeFile) && isRegularFile(options.nodeFile)) {
+    try {
+      const write = options.ensureShim ?? ensureNodeShim
+      const dir = write({
+        root: options.stateDir,
+        nodeFile: options.nodeFile,
+        nodeArgs: options.nodeArgs,
+        nodeEnv: options.nodeEnv,
+        platform,
+      })
+      const executable = join(dir, shimFileName(NODE_COMMAND, platform))
+      const diagnostic = `node: prepended the managed PATH shim to the node wrapper (${executable}); the worktree nodeCommand '${NODE_COMMAND}' resolves through it`
+      emit(diagnostic)
+      return { env: prependPathEntry(env, pathKey, dir, platform), source: 'path-shim', nodeCommand: NODE_COMMAND, executable, diagnostic }
+    } catch (error) {
+      emit(`node: the PATH shim could not be prepared (${error instanceof Error ? error.message : String(error)}); falling back to a plain node executable`)
+    }
+  } else {
+    emit(`node: the resolved host node ${options.nodeFile} is not a usable file; the PATH shim is not written`)
+  }
+  const plain = options.resolvePlainNode?.() ?? null
+  if (plain !== null) {
+    const directory = dirname(plain)
+    const diagnostic = `node: the PATH shim is unavailable; prepended the plain node's directory (${directory}; ${plain}) so the worktree nodeCommand '${NODE_COMMAND}' resolves`
+    emit(diagnostic)
+    return { env: prependPathEntry(env, pathKey, directory, platform), source: 'plain-node-directory', nodeCommand: NODE_COMMAND, executable: plain, diagnostic }
+  }
+  const diagnostic = `node-unavailable: no real node executable could be provided to the managed host; the worktree nodeCommand '${NODE_COMMAND}' would fail (P5b-0 fail-fast diagnosis — this environment is broken, not a fallback)`
+  emit(diagnostic)
+  return { env, source: 'unavailable', nodeCommand: NODE_COMMAND, executable: null, diagnostic }
 }
 
 interface PnpmShimOptions {
@@ -273,6 +511,7 @@ export function withPnpmShim(env: NodeJS.ProcessEnv, options: PnpmShimOptions): 
     {
       pathExt: platform === 'win32' ? envValue(env, 'PATHEXT', platform) : undefined,
       cwd: options.cwd ?? process.cwd(),
+      excludeDirectory: join(options.stateDir, PNPM_SHIM_DIR),
     },
   )
   if (provided !== null) {
@@ -294,11 +533,8 @@ export function withPnpmShim(env: NodeJS.ProcessEnv, options: PnpmShimOptions): 
     emit(`pnpm: managed host PATH has no pnpm and the bundled launcher could not be prepared (${reason}); PATH left unchanged`)
     return env
   }
-  const key = pathKey ?? 'PATH'
-  const current = env[key]
   emit(`pnpm: prepended the bundled launcher to the managed host PATH (${dir})`)
-  return {
-    ...env,
-    [key]: current === undefined || current === '' ? dir : `${dir}${pathDelimiter(platform)}${current}`,
-  }
+  // Shared with the node provision: an entry already on PATH is never duplicated (the
+  // node shim may have prepended this same directory earlier in the same spawn).
+  return prependPathEntry(env, pathKey, dir, platform)
 }

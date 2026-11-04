@@ -1,12 +1,11 @@
 /**
- * Git output parsing, attention probes and DSH_HOME resolution.
+ * Git output parsing and attention probes.
  */
 import { GIT_DIR_POINTER_MAX_BYTES, MAX_PATH_LENGTH } from './core-constants.ts'
 import { GitWorktreeError } from './core-errors.ts'
 import type { RawWorktree } from './core-internals.ts'
 import type { GitAttentionReason, WorktreeFileSystem } from './core-types.ts'
 import { fail } from './core-validation.ts'
-import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
 /** Parse the `--branch` status header; numbers come from LOCAL refs - honest, never fetched. */
@@ -137,29 +136,4 @@ export async function detectAttention(
     if (await fs.exists(join(gitDir, probe.name))) found.push(probe.reason)
   }
   return [...new Set(found)]
-}
-
-/** Environment variable naming the single DeepSeek Harness home. */
-export const DSH_HOME_ENV = 'DSH_HOME'
-
-/** The default harness home under the OS home (`~/.dsh`). */
-export function defaultDshHome(): string {
-  return join(homedir(), '.dsh')
-}
-
-/** Expand `~`, `~/` and `~\\` against the OS home; anything else is returned unchanged. */
-export function expandHomePath(path: string): string {
-  if (path === '~') return homedir()
-  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
-  return path
-}
-
-/** Local mirror of upstream `resolveDshHome` (it ships as one esbuild bundle, so this
- *  in-instance plugin cannot import it). Precedence: explicit `configured`, then
- *  `$DSH_HOME`, then `~/.dsh`; an empty/whitespace-only `$DSH_HOME` counts as UNSET.
- *  LOCKSTEP: keep this behavior identical to the upstream function. */
-export function resolveDshHome(configured?: string, env: NodeJS.ProcessEnv = process.env): string {
-  const fromEnv = env[DSH_HOME_ENV]
-  const selected = configured ?? (fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : defaultDshHome())
-  return resolve(expandHomePath(selected))
 }

@@ -117,6 +117,9 @@ export const GROUPS = {
     'test/aggregate/badge-count.test.ts',
     // 投影缓存（性能 A1/A2）：按来源复用 + 签名片段/记忆入口。
     'test/aggregate/servers-projection-cache.test.ts',
+    // PR2 Git 布局通道（design 08 §3.2-§3.3）：派生 checkout 行/放置/每来源布局签名失效 +
+    // 订阅/发布闸接线锁。
+    'test/aggregate/servers-checkout-projection.test.ts',
   ],
   // session-state: gateway session-state 事实源 + 通知三表落盘（旧 v4/v2 一次性迁移）+ 完成观测装配
   'session-state': [
