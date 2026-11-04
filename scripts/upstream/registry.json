@@ -584,7 +584,7 @@
       ],
       "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验",
       "status": "accepted",
-      "rationale": "goal wire 无自动化 vendor 源锁步：语义漂移只会保持 unknown（不误报），但白名单字段必须重锚；接受人工复验而非新增 C 编号门。最近一代 pin 的边界：session/control 与 session/observeProjections 的帧由每键一帧改为每事件一帧 changes[]；chamber 只读 unary session/list 与 $events、不解析这两条 $stream，将来接 adapter 必须按该 tag 的 upgrade-guide/projection-event-frames 迁移（版本值不写进本文件）"
+      "rationale": "goal wire 无自动化 vendor 源锁步：语义漂移只会保持 unknown（不误报），但白名单字段必须重锚；接受人工复验而非新增 C 编号门。边界事实（判据在 vendor 的 session-controller types.ts 的 one-update-per-event 注释，随 pin 移动而非随本句漂移）：session/control 与 session/observeProjections 的帧由每键一帧改为每事件一帧 changes[]；chamber 只读 unary session/list 与 $events、不解析这两条 $stream，将来接 adapter 必须按「引入该帧形态的那一代」upgrade-guide/projection-event-frames 迁移（当前 pin 可能整代缺席该目录；帧类型见 SessionProjectionUpdate）（版本值不写进本文件）"
     },
     {
       "id": "mirror.dsh-session-status-write-face",
