@@ -1165,8 +1165,7 @@
   display: inline-flex;
 }
 
-/* 样式钩子用 data 属性（本仓 mobile 包记录的规则，
-   packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20，design 08 §3.2
+/* 样式钩子用 data 属性（原 mobile 覆盖层记录的规则，该包已退役；design 08 §3.2
    描述的就是这条 hover/`.rowActionsVisible` 揭示——键盘焦点同样落在该 JS 状态上），
    属性选择器不被 CSS Modules 哈希，
    所以跨包选择器只在属性形式上成立。 */

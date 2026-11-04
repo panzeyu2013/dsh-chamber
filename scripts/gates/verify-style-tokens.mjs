@@ -8,8 +8,7 @@
  * scrollbar specs). chamber's packages sit outside that scan. This gate
  * applies the same rules across EVERY chamber package and every file kind that
  * can carry CSS (`.css`, `.ts`, `.tsx`, `.html` — the gateway login page and
- * the mobile plugin both carry stylesheets as strings, which a CSS-only scan
- * never sees).
+ * client packages carry stylesheets as strings, which a CSS-only scan never sees).
  *
  *   S1  no `var(--dsw-*)` / `var(--dsh-*)` reference to a name the upstream
  *       tree does not declare. A misspelled alias does NOT fail loudly in the
@@ -291,8 +290,8 @@ const NEUTRAL_BORDER_DECL = /border(?:-(?:top|right|bottom|left))?\s*:\s*(?!0(?:
 
 /**
  * The CSS contexts inside a file. A stylesheet is all context; in `.ts`/`.tsx`
- * the CSS lives in backtick template literals (the gateway login page and the
- * mobile plugin both keep whole stylesheets there) and in `<style>` blocks.
+ * the CSS lives in backtick template literals (the gateway login page and
+ * client packages keep whole stylesheets there) and in `<style>` blocks.
  * Ordinary TypeScript — object keys, CLI switch labels — is therefore never
  * read as CSS.
  * @param {string} file - absolute path (the extension decides the strategy).

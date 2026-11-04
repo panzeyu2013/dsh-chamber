@@ -62,7 +62,7 @@ const NON_GATE_STEPS = {
     'Type check (tsc + chamber host packages + gateway)',
     'Assert lockfile not rewritten',
     'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)',
-    'Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)',
+    'Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in)',
   ],
   'test-windows': [
     'Assert lockfile not rewritten',

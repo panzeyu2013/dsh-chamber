@@ -1051,7 +1051,7 @@ const PATCHED_BUNDLED_DEPENDENCY_IDS = Object.freeze(['@deepseek-ai/dsh-util-val
 
 /**
  * Covered ids the composite never loads, so a patch on one could never apply: the
- * deliberate skips `chamber-covered.ts` documents in its header (hmr / mobile /
+ * deliberate skips `chamber-covered.ts` documents in its header (hmr /
  * directory-picker-native) — page-own rows the composite replaces
  * plus host rows the shell drops on purpose. Without this subtraction the covered
  * check below would vouch for a package no module of which reaches the build — the
@@ -1060,7 +1060,6 @@ const PATCHED_BUNDLED_DEPENDENCY_IDS = Object.freeze(['@deepseek-ai/dsh-util-val
  */
 const COVERED_BUT_NEVER_LOADED_IDS = Object.freeze([
   '@deepseek-ai/dsh-client-hmr',
-  '@dsh-chamber/dsh-client-ui-mobile',
   '@deepseek-ai/dsh-client-ui-directory-picker-native',
 ])
 

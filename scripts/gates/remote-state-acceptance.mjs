@@ -107,11 +107,6 @@ const GROUPS = [
       'packages/desktop/test/ipc/ipc-surface-mirror.test.ts',
     ]),
   ] },
-  { id: 'mobile-guards', cwd: 'packages/dsh-chamber-client-ui-mobile', files: [
-    ...requiredEntries('mobile-guards', [
-      'packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs',
-    ]),
-  ] },
   { id: 'instruments', cwd: '.', files: [], self: [
     { label: 'budget-check --self-test', args: ['scripts/perf/budget-check.mjs', '--self-test'] },
     { label: 'switch-frame-probe CLI fails loud on an unknown flag', args: ['scripts/perf/switch-frame-probe.mjs', '--definitely-not-a-flag'], expectExit: 'nonzero', marker: 'unknown argument' },

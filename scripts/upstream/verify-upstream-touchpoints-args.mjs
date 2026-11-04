@@ -5,7 +5,7 @@
  * imported by a test).
  *
  * WHY THIS EXISTS: the gate runs C1/C3–C16 on EVERY invocation, and its default
- * (non-`--no-artifact-rebuild`) mode rebuilds the build-time host/mobile bundles
+ * (non-`--no-artifact-rebuild`) mode rebuilds the build-time host/runtime bundles
  * IN PLACE and then restores them. Any argument the script does not recognize
  * (`--no-artifact-rebuid` — one missing letter, a `--tag`
  * typo, an editor's `--`) must be a LOUD usage error, never silently ignored:
@@ -39,7 +39,7 @@ export const VERIFY_USAGE = `verify-upstream-touchpoints — 上游触点保鲜�
   --help, -h              打印本用法并 exit 0（不跑任何门、不写盘）。
 
 默认模式（无参数）：跑 C1/C3–C16，其中 C8 会**就地重建并原样还原**构建期生成物
-（host dist ×4 + dsh-runtime dist + mobile dist/lib 四件）——这是唯一会写盘的路径。
+（host dist ×4 + dsh-runtime dist，共 5 组）——这是唯一会写盘的路径。
 
 退出码：
   0  全部通过（或 --help）

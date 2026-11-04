@@ -8,16 +8,15 @@
  * `packages/desktop/dist/web/assets/*.js`. This guard is the only automated
  * check that the BUILD did not drop or tree-shake the scoper out of the page.
  *
- * Usage: node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs [assetsDir]
+ * Usage: node scripts/gates/assert-scoper-artifact.mjs [assetsDir]
  * Exits 0 when some built page chunk carries the scoper markers, 1 otherwise.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SCOPER_MARKERS, missingScoperMarkers } from './lib/scoper-markers.mjs'
+import { SCOPER_MARKERS, missingScoperMarkers } from '../lib/scoper-markers.mjs'
 
-const packageDir = join(dirname(fileURLToPath(import.meta.url)), '..')
-const repoRoot = resolve(packageDir, '..', '..')
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const assetsDir = resolve(process.argv[2] ?? join(repoRoot, 'packages', 'desktop', 'dist', 'web', 'assets'))
 
 if (!existsSync(assetsDir)) {

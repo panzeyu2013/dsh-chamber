@@ -8,7 +8,7 @@
  * PLATFORM_MODULES words the composite answers.
  *
  * The deliberate extra ids — covered but never loaded — are the skips: hmr /
- * mobile / directory-picker-native. They are page-own rows the composite replaces
+ * directory-picker-native. They are page-own rows the composite replaces
  * plus host rows the shell drops on purpose; each carries its own reason below,
  * and design 09 §3.5 有意跳过名单 owns their re-review. (settings-account left that
  * list in alpha.3: covered DEFERRED row, desktop overlay gated off by the
@@ -105,12 +105,9 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // URL that 404s under the N-ctx shell.
   '@deepseek-ai/dsh-session-log-export',
   // chamber skips (covered, no factory, never loaded into the chamber shell):
-  // page-own rows plus the host rows the shell deliberately drops. mobile is the
-  // GATEWAY deployment's single-shell surface (its own header says its
-  // document-level effects are single-shell by design); the `native`
+  // page-own rows plus the host rows the shell deliberately drops. The `native`
   // directory-picker face can never win because the host's picker interaction is
   // pinned to `browse`.
-  '@dsh-chamber/dsh-client-ui-mobile',
   '@deepseek-ai/dsh-client-ui-directory-picker-native',
   // The official desktop account family is NOT skipped any more (alpha.3): the build-time
   // vendor patch gates its desktop-onboarding shell.overlay seat off (the overlay took

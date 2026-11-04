@@ -40,18 +40,12 @@
  *                                                       # DSH_TEST_JOBS, default
  *                                                       # min(8, cores))
  *
- * Artifact pre-step: the untracked build artifacts
- * (dsh-runtime / the four seed packages / the mobile dist+lib) are ensured
- * before a mode runs. tests/typecheck/full build the missing ones
+ * Artifact pre-step: the untracked build artifacts (dsh-runtime / the four seed
+ * packages) are ensured before a mode runs. tests/typecheck/full build the missing ones
  * (`pnpm run build:artifacts`); static is read-only and fails loudly with that
  * command instead — a clean checkout bootstraps itself, and no mode silently
  * skips a gate because an artifact was absent.
- *
- * full additionally sets DSH_ARTIFACT_FRESHNESS_MOBILE_REBUILD=1: the artifact
- * freshness gate then re-runs the mobile package's own build.mjs in a temp
- * copy and byte-compares lib/client.js. tests mode has NO mobile byte compare of
- * its own; CI covers it with the separate C8 step (verify-upstream-touchpoints.mjs
- * rebuilds in place), and the gate prints a NOTE instead of pretending it ran.
+
  *
  * Exit status is 1 when any step fails (or when a mode resolves to no steps: a
  * mode that runs nothing has not passed).
@@ -492,10 +486,6 @@ export async function runMode(mode, options = {}) {
   const stepEnv = {
     ...env,
     PATH: resolve(REPO_ROOT, 'node_modules', '.bin') + delimiter + (env.PATH ?? ''),
-    // full 档启用更重的移动包 src↔lib 重建比对（tests 档本身没有移动产物字节比对，
-    // CI 由独立的 C8 step 覆盖；这里在临时副本里重跑包的 build.mjs，不写工作树）。
-    // tests 档不设，门会打 NOTE——不静默当通过。
-    ...(mode === 'full' ? { DSH_ARTIFACT_FRESHNESS_MOBILE_REBUILD: '1' } : {}),
   }
   const recordFailures = (pool) => {
     for (const record of pool.failures) {

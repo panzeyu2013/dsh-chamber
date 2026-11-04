@@ -22,10 +22,6 @@ export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-chamber-seed-archive-cl
  *  claim for a package that can never be seeded there. */
 export const OPEN_IN_PACKAGE = '@dsh-chamber/dsh-chamber-seed-open-in'
 
-/** The gateway-packaged mobile client entry (the single packaged exception —
- *  mobile access is bound to the gateway and has no desktop in the chain). */
-export const MOBILE_PACKAGE = '@dsh-chamber/dsh-client-ui-mobile'
-
 /** Official (built-in) package scope: never a third-party row. */
 const OFFICIAL_SCOPE = '@deepseek-ai/'
 
@@ -34,13 +30,12 @@ const OFFICIAL_SCOPE = '@deepseek-ai/'
 const CORDIS_INCLUDE_PREFIX = 'cordis:include '
 
 /** One inventory entry's package class. `chamber-client` = a chamber CLIENT plugin
- *  that is not the packaged mobile entry: still a chamber row, with no dedicated copy. */
+ *  row with no dedicated local copy (its package name is the label). */
 export type InventoryEntryKind =
   | 'chamber-host-graph'
   | 'chamber-git-worktree'
   | 'chamber-archive-cleanup'
   | 'chamber-open-in'
-  | 'chamber-mobile'
   | 'chamber-client'
   | 'official'
   | 'third-party'
@@ -54,18 +49,14 @@ function stripCordisInclude(moduleName: string): string {
 
 /** Chamber CLIENT plugin scope: classification is scope-based — never a literal
  *  list — so a future chamber client plugin is a chamber row automatically. */
-const CHAMBER_CLIENT_PREFIX = '@dsh-chamber/dsh-client-ui-'
-
-/** Classification of a chamber CLIENT plugin: 'chamber-mobile' is the packaged
- *  gateway exception (dedicated localized copy), 'chamber-client' any other. */
-export type ChamberClientKind = 'chamber-mobile' | 'chamber-client'
+const CHAMBER_CLIENT_PREFIX = '@dsh-chamber/dsh-chamber-client-ui-'
 
 /** Classify a module specifier as a chamber CLIENT plugin (patch-insert prefix
  *  stripped first) — the single source of truth for "is this a chamber client row". */
-export function classifyChamberClientPlugin(moduleName: string): ChamberClientKind | null {
+export function classifyChamberClientPlugin(moduleName: string): 'chamber-client' | null {
   const name = stripCordisInclude(moduleName)
   if (!name.startsWith(CHAMBER_CLIENT_PREFIX)) return null
-  return name === MOBILE_PACKAGE ? 'chamber-mobile' : 'chamber-client'
+  return 'chamber-client'
 }
 
 /**
@@ -135,8 +126,9 @@ export function chamberRemoteKey(
   entries: readonly { moduleName: string; enabled: boolean; fiberPhase: PluginFiberPhase }[],
   packageName: string,
 ): SettingsConnectionsKey {
-  // Classification-aware match: gateway patch-insert rows (the mobile entry) are
-  // reported under the raw 'cordis:include <name>' prefix; non-chamber names keep exact-name equality.
+  // Classification-aware match: gateway patch-insert rows (client-kind entries)
+  // are reported under the raw 'cordis:include <name>' prefix; non-chamber names
+  // keep exact-name equality.
   const kind = chamberKindOf(packageName)
   const entry = kind === 'third-party'
     ? entries.find(candidate => candidate.moduleName === packageName)
@@ -367,41 +359,15 @@ function chamberEntryBadge(entry: ChamberInventoryEntry): ChamberBadge {
   return { labelKey: 'chamberBadgeInjected', tone: 'muted' }
 }
 
-/** The localized copy of a derived client row, keyed by classification: only the
- *  packaged mobile entry has dedicated keys; any other renders its package name. */
-function chamberClientCopy(kind: ChamberClientKind): {
-  labelKey: SettingsConnectionsKey | null
-  hintKey: SettingsConnectionsKey | null
-} {
-  return kind === 'chamber-mobile'
-    ? { labelKey: 'chamberMobileRow', hintKey: 'chamberMobileHint' }
-    : { labelKey: null, hintKey: null }
-}
-
 /**
  * Gateway client-plugin rows, derived from the Loader inventory: every entry whose
  * moduleName classifies as a chamber CLIENT plugin, deduplicated by package name.
- * Never a hardcoded package name. Two honest fallbacks keep the row present:
- *  - inventory UNAVAILABLE (null) → ONE unknown-state row;
- *  - inventory readable but no chamber-client entry → ONE muted 未注入 row (rendering
- *    nothing would let a dropped/disabled client package look like "no such row exists").
+ * Never a hardcoded package name. No packaged client plugin ships with the gateway
+ * any more, so an empty inventory produces no row — a stale mobile row would claim
+ * a package that no longer exists.
  */
 function chamberClientRows(entries: readonly ChamberInventoryEntry[] | null): ChamberRowDescriptor[] {
-  if (entries === null) {
-    return [{
-      key: 'chamber-client-unknown',
-      name: null,
-      nameLabelKey: 'chamberMobileRow',
-      localBadge: null,
-      remoteBadge: { labelKey: 'chamberBadgeUnknown', tone: 'muted' },
-      versionText: null,
-      versionHintKey: 'chamberMobileHint',
-      cacheVersionText: null,
-      cacheNotSynced: false,
-      cacheAbsent: false,
-      driftState: null,
-    }]
-  }
+  if (entries === null) return []
   const seen = new Set<string>()
   const rows: ChamberRowDescriptor[] = []
   for (const entry of entries) {
@@ -410,35 +376,19 @@ function chamberClientRows(entries: readonly ChamberInventoryEntry[] | null): Ch
     const name = stripCordisInclude(entry.moduleName)
     if (seen.has(name)) continue
     seen.add(name)
-    const copy = chamberClientCopy(kind)
     rows.push({
       key: `chamber-client:${name}`,
       name,
-      nameLabelKey: copy.labelKey,
+      nameLabelKey: null,
       localBadge: null,
       remoteBadge: chamberEntryBadge(entry),
       versionText: null,
-      versionHintKey: copy.hintKey,
+      versionHintKey: null,
       cacheVersionText: null,
       cacheNotSynced: false,
       cacheAbsent: false,
       driftState: null,
     })
-  }
-  if (rows.length === 0) {
-    return [{
-      key: 'chamber-client-absent',
-      name: null,
-      nameLabelKey: 'chamberMobileRow',
-      localBadge: null,
-      remoteBadge: { labelKey: 'chamberBadgeNotInjected', tone: 'muted' },
-      versionText: null,
-      versionHintKey: 'chamberMobileHint',
-      cacheVersionText: null,
-      cacheNotSynced: false,
-      cacheAbsent: false,
-      driftState: null,
-    }]
   }
   return rows
 }

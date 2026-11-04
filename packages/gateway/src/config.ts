@@ -47,9 +47,9 @@ export interface GatewayConfig {
   tls?: { cert: string; key: string }
   /** Explicit operator opt-in to bind externally with NO auth (default false; CLI --no-auth). */
   allowAnonymousExternal?: boolean
-  /** UA experience shunting (default OFF; DEPRECATED — the mobile client plugin
-   * is injected on every device now, so this remains only as a compatibility
-   * surface): authenticated mobile-browser GET/HEAD of `/` answers 302 →
+  /** UA experience shunting (default OFF; DEPRECATED — mobile layout is
+   * upstream-native now, so this remains only as a compatibility surface):
+   * authenticated mobile-browser GET/HEAD of `/` answers 302 →
    * mobileEntryPath; UA sniffing is not security. Explicitly enabling it prints
    * a one-time deprecation warning (never an error). */
   mobileUaRedirect?: boolean
@@ -100,16 +100,16 @@ export class GatewayConfigError extends Error {
  * the warning at most once. */
 let mobileUaRedirectDeprecationWarned = false
 
-/** The UA shunting is a compatibility surface only after the mobile client
- * plugin became an always-injected packaged plugin: an explicit opt-in warns —
- * never throws. Latching keeps repeated parses silent. */
+/** The UA shunting is a compatibility surface only after upstream dsh made the
+ * mobile layout native: an explicit opt-in warns — never throws. Latching keeps
+ * repeated parses silent. */
 function warnMobileUaRedirectDeprecated(): void {
   if (mobileUaRedirectDeprecationWarned) return
   mobileUaRedirectDeprecationWarned = true
   console.warn(
     'gateway: --mobile-ua-redirect / DSH_GATEWAY_MOBILE_UA_REDIRECT is deprecated; '
-    + 'the mobile client plugin is injected on every device, so UA shunting remains only as a compatibility surface. '
-    + 'Serve / directly instead — the plugin is already injected into every managed instance.',
+    + 'mobile layout is provided by the upstream dsh frontend, so UA shunting remains only as a compatibility surface. '
+    + 'Serve / directly instead.',
   )
 }
 

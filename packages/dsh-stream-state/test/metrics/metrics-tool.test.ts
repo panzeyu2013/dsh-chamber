@@ -24,7 +24,7 @@ import {
 } from '../../../../scripts/refactor/stream-state-metrics.mjs'
 
 test('the tool measures a non-empty, named scope', () => {
-  assert.ok(LIFECYCLE_MODULES.length >= 11, 'the audit list must stay in scope')
+  assert.ok(LIFECYCLE_MODULES.length >= 10, 'the audit list must stay in scope')
   assert.ok(THRESHOLD_SCOPE.includes('packages/dsh-stream-state/src'), 'the new package must be counted')
   assert.ok(THRESHOLD_SCOPE.includes('packages/dsh-stream-state/tables.json'), 'the shared table must be counted')
 })

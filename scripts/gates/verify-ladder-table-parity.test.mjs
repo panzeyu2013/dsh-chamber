@@ -43,7 +43,7 @@ test('the real lockstep list has no mismatch today', () => {
   const verdict = compareLockstep(LOCKSTEP, RESOLVE)
   assert.deepEqual(verdict.lines, [])
   assert.equal(verdict.failures, 0)
-  assert.ok(LOCKSTEP.length >= 6, 'the guard list keeps the retired mobile copies: ' + String(LOCKSTEP.length))
+  assert.ok(LOCKSTEP.length >= 4, 'the guard list keeps the remaining desk-bound copies: ' + String(LOCKSTEP.length))
   assert.equal(verdict.checked + verdict.retired, LOCKSTEP.length, 'every guard entry resolves as found or retired')
 })
 

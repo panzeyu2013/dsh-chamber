@@ -81,8 +81,8 @@
  * close it (an upstream keepalive, or the carrier-retry policy patch) — never a
  * blind timeout here.
  *
- * CLOCK DISCIPLINE (mirrors the authority ladder and the mobile stall
- * observer): every hold is "zero whenever the predicate breaks" and the whole
+ * CLOCK DISCIPLINE (mirrors the authority ladder): every hold is "zero whenever
+ * the predicate breaks" and the whole
  * ladder is fail-closed — an observation that cannot be made produces no
  * action. A hidden surface produces no notice and no heal, and its hold does
  * not accumulate; the settle clock is the deliberate exception, because it

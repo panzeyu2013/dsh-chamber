@@ -6,12 +6,10 @@
  * mount through the control-plane's middleware hooks.
  */
 
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   CHAMBER_HOST_PACKAGES,
-  HOST_PACKAGE_SEED_FILES,
   acquireStateRootLease,
   authCookieFor,
   createControlPlane,
@@ -179,7 +177,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     }
     const requestPolicy = createGatewayRequestPolicy(options.config)
     const channels = createChannelRegistry()
-    // Desktop-synced host-package seed cache: chamber host packages come from a connecting desktop's upload; the mobile slot stays packaged.
+    // Desktop-synced host-package seed cache: chamber host packages come from a connecting desktop's upload; the gateway ships no packaged client plugin.
     const plugins = createChamberPlugins(options.config.plane.stateDir, logger)
     // Managed-profile plugin read projection: readManifest over
     // <stateDir>/dsh-home/profiles/web/package.json (bounded no-follow read;
@@ -250,12 +248,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         logger,
       },
     )
-    // Chamber seed registry: the syncable host packages are DESKTOP-SYNCED (cache
-    // filled via PUT /chamber/plugins); until the first sync the seed skips every
-    // entry and the probe uses the reduced base set. The mobile slot stays PACKAGED
-    // — no desktop in the chain — so its seed MUST ship here, its client half served
-    // at /plugins/<pkg>/client.js; overlay + seed re-run each spawn.
-    const gatewayHostPackagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'host-packages')
+    // Chamber seed registry: every remaining entry is a DESKTOP-SYNCED host
+    // package (cache filled via PUT /chamber/plugins); until the first sync the
+    // seed skips every entry and the probe uses the reduced base set. The packaged
+    // mobile client-plugin slot was retired with the upstream mobile frontend.
     createdPlane = (options.deps?.createPlane ?? createControlPlane)({
       host: options.config.plane.host,
       port: options.config.plane.port,
@@ -278,16 +274,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           sourceDir: syncedSourceDir(options.config.plane.stateDir, descriptor.insert.name),
           probeDomains: [descriptor.probe.method],
         })),
-        {
-          insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
-          kind: 'client',
-          source: 'packaged',
-          sourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-client-ui-mobile'),
-          // The base set is the SHARED seed tuple (control-plane
-          // HOST_PACKAGE_SEED_FILES, the same set the desktop PUTs into the sync
-          // cache); only the client half's extra files are declared here.
-          seedFiles: [...HOST_PACKAGE_SEED_FILES, 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
-        },
       ],
       getDshWorkspacePath: () => {
         if (runtimeManager === null) return options.config.plane.dshWorkspacePath

@@ -77,15 +77,6 @@ export const ARTIFACT_GROUPS = [
     outputs: ['dist/index.js'],
     reason: 'design 20 §6: the open-in host domain (fork of upstream open-in-app) is seeded like the other host bundles; its built bundle must equal a fresh rebuild',
   },
-  {
-    name: 'mobile',
-    idPrefix: 'mobile',
-    packageDir: 'packages/dsh-chamber-client-ui-mobile',
-    script: 'packages/dsh-chamber-client-ui-mobile/scripts/build.mjs',
-    build: 'pnpm run build:mobile',
-    outputs: ['dist/index.js', 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
-    reason: 'the mobile browser half is a build-time artifact (package.json exports ./client -> lib/client.js) and the gateway seeds it byte for byte; lib/index.js is the mirrored host half',
-  },
 ]
 
 /**

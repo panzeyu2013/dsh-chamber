@@ -160,26 +160,6 @@
       "note": "Anchor probe: registry symbol anchors resolvable + the legacy file:line budget ratcheted (only down)."
     },
     {
-      "id": "upstream.mobile-anchors",
-      "title": "Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)",
-      "command": "verify:mobile-anchors",
-      "modes": [
-        "static"
-      ],
-      "tier": "upstream",
-      "surfaces": {
-        "local": true,
-        "ci": true,
-        "release": true
-      },
-      "workflow": {
-        "ciJob": "test",
-        "releaseJob": "validation",
-        "order": "post"
-      },
-      "note": "Fail-soft by design: this checkout has no anchor root, so only the local criteria judge; the strict run is the upgrade flow (--require-anchor-root)."
-    },
-    {
       "id": "arch.import-cycles",
       "title": "Architecture import cycles",
       "command": "verify:import-cycles",
@@ -576,20 +556,6 @@
       }
     },
     {
-      "id": "typecheck.mobile",
-      "title": "Type check (mobile)",
-      "command": "typecheck:mobile",
-      "modes": [
-        "typecheck"
-      ],
-      "tier": "typecheck",
-      "surfaces": {
-        "local": true,
-        "ci": true,
-        "release": true
-      }
-    },
-    {
       "id": "tests.runtime",
       "title": "Package tests: dsh-runtime",
       "command": "test:runtime",
@@ -845,20 +811,6 @@
       "id": "tests.open-in",
       "title": "Package tests: open-in",
       "command": "test:open-in",
-      "modes": [
-        "tests"
-      ],
-      "tier": "test",
-      "surfaces": {
-        "local": true,
-        "ci": true,
-        "release": true
-      }
-    },
-    {
-      "id": "tests.mobile",
-      "title": "Package tests: mobile",
-      "command": "test:mobile",
       "modes": [
         "tests"
       ],

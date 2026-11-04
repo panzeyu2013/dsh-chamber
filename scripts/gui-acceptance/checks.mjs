@@ -498,11 +498,8 @@ export function hoverDismissVerdict({ cardable = false, blur = null, hidden = nu
  *
  * WHY IT IS NOT `button[aria-expanded]`: the official toggle — and this repo's
  * sidebar fork with it — carries NO `aria-expanded`; its only own handle is a
- * label that flips between `toggle.collapse` / `toggle.open`. The mobile
- * substitute states the reason explicitly (`MobileNavToggle.tsx`): the official
- * control "carries that label alone, because it sits inside the sidebar it
- * collapses", so the OUT-OF-CANVAS substitute had to add the disclosure state
- * itself. Selecting "the first `aria-expanded` control in the left half" could
+ * label that flips between `toggle.collapse` / `toggle.open`. Selecting "the
+ * first `aria-expanded` control in the left half" could
  * therefore never take this control — it took the SOURCE-SECTION fold switch
  * (`ServerSection.tsx`, design 06 §2.4) instead, and the leg passed while the
  * sidebar never moved.
@@ -650,8 +647,8 @@ export function viewPrefsDelta(before, after) {
  * element's own attribute.
  *
  * Judged effects (`DOM_FACTS`): the official frame attribute
- * `[data-sidebar-collapsed]` (the contract the mobile plugin already consumes,
- * `layout-facts.ts`) must APPEAR on the collapse click and DISAPPEAR on the
+ * `[data-sidebar-collapsed]` (the official frame attribute) must APPEAR on the
+ * collapse click and DISAPPEAR on the
  * restore click, and the sidebar's `[data-chamber-section]` population is
  * reported alongside. A click that leaves the attribute untouched is a FAIL —
  * that is exactly how the old leg's silent mis-target (source-section fold)

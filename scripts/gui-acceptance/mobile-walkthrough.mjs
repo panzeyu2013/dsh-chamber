@@ -20,7 +20,6 @@
  *   M-1 壳挂载成功（30s 内出现挂载标记；默认 INFO，--require-run 时 FAIL）
  *   M-2 设备模拟生效（含 pointer:coarse / hover:none / 手机档媒体查询；标题跟随 --width/--height/--dpr）
  *   M-3 无横向溢出（设备宽基准 + task 的 innerWidth 断言；收缩适配时明确标注）
- *   M-4 插件激活（[data-mobile-frame] 打标 + 键盘守卫诊断面；打标 PASS、无打标 INFO、--require-run 时 FAIL）
  *   M-5 会话头首行高度 ≤ 48px（无会话 ⇒ INFO；--require-run 时 FAIL）
  *   M-6 会话头内无「单字换行」（行盒数 + 高度启发式，纵向 padding 非零的叶子只按行盒数判；
  *       无会话 ⇒ INFO、--require-run 时 FAIL；带文本元素超过 80 个证据上限而截断时同样 INFO——没扫完不算通过）
@@ -76,7 +75,7 @@ import {
 import {
   DEVICE_FACTS_EXPRESSION, HEADER_FACTS_EXPRESSION, MOBILE_DEVICE, OVERLAY_FACTS_EXPRESSION, applyRequireRun,
   deviceEmulationSteps, deviceEmulationVerdict, headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict,
-  overflowVerdict, overlayProbeVerdict, pluginActivationVerdict, redactSecrets, summarizeWebSocketFrames,
+  overflowVerdict, overlayProbeVerdict, redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
 
 const ROOT_MOUNTED = `document.querySelector('#root') !== null && document.querySelector('#root').children.length > 0`
@@ -338,13 +337,6 @@ export async function runMobileWalkthrough({
     rec.add('M-2', `设备模拟生效（${device.width}×${device.height}@${device.deviceScaleFactor}x + 触控 ⇒ pointer:coarse / hover:none）`, emulation.ok, emulation.evidence)
 
     addGated('M-3', '无横向溢出（设备宽基准；task 的 innerWidth 断言一并报告）', overflowVerdict(deviceFacts, device))
-
-    // M-4 is GATED: stamped = PASS with the keyboard
-    // guard's diagnosis surface in the evidence; unstamped stays INFO for a
-    // walkthrough of a page that simply lacks the plugin, but --require-run
-    // (the "this leg must really execute" mode) turns it into a FAIL.
-    addGated('M-4', '移动插件激活（[data-mobile-frame] 打标 + 键盘守卫诊断面）',
-      pluginActivationVerdict(deviceFacts))
 
     // ---- 会话头几何（无会话 ⇒ INFO；--require-run 下「没有会话」正是它要拦的
     //      情形，USAGE 承诺过 ⇒ applyRequireRun 把它改判 FAIL） ----

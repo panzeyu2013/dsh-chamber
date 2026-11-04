@@ -232,7 +232,7 @@ Git 事实不加进 App 的 session aggregate，v1 徽标只在 Git 区内；普
   `:has(:focus-visible)`（揭示前没有东西能先聚焦），也不会被 Blink 的 Tab 导航认到——揭示一律由
   宿主提供（本仓唯一宿主 = 侧栏，design 06 §7）。
   **不用字面量类名**：属性选择器不被 CSS Modules 哈希，跨包模块才能匹配同一钩子（本仓既有
-  规则见 `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts` 头注的 CROSS-PACKAGE RULE；原 `git-ws-action` 全局类名已退役）。它与**折叠字形交换**（workspace
+  规则见 design 05 §2 的 CROSS-PACKAGE RULE；原 `git-ws-action` 全局类名已退役）。它与**折叠字形交换**（workspace
   folder/branch ↔ chevron、source monitor ↔ chevron、rename 期抑制）同触发：
   **绝不 `:focus-within`**——Chromium 在 mousedown
   时聚焦被点按钮，点击折叠钮后焦点留在行内 → `:focus-within` 持续

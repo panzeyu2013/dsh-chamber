@@ -45,8 +45,7 @@ function fakeSession() {
         visualViewport: { width: 390, height: 844, scale: 1 },
         dpr: 3, screenWidth: 390, screenHeight: 844, maxTouchPoints: 5, ontouchstart: true,
         pointerCoarse: true, pointerFine: false, hoverNone: true, anyPointerCoarse: true,
-        touchTier: true, phoneTier: true, rootSlots: 1, mobileFrames: 1,
-        mobileRoles: ['main'], pluginStyle: true,
+        touchTier: true, phoneTier: true, rootSlots: 1,
         hasOutlet: false, hasHeader: false, headerBox: null, firstRowBox: null,
         headerChildren: [], tabs: [], buttons: [], lineage: null, texts: [],
         sessionHeaderPresent: false, rootPhase: null,
@@ -190,8 +189,8 @@ test('--require-run turns an unmounted page into FAIL (M-1 and the geometry legs
         // Unmeasurable overflow (`overflowVerdict` returns ok:null): only the --require-run gate turns M-3 into a FAIL.
         scrollWidth: null, scrollHeight: null, visualViewport: { width: 390, height: 844, scale: 1 }, dpr: 3,
         screenWidth: 390, screenHeight: 844, maxTouchPoints: 5, ontouchstart: true, pointerCoarse: true, pointerFine: false,
-        hoverNone: true, anyPointerCoarse: true, touchTier: true, phoneTier: true, rootSlots: 0, mobileFrames: 0,
-        mobileRoles: [], pluginStyle: true, hasOutlet: false, hasHeader: false, headerBox: null, firstRowBox: null,
+        hoverNone: true, anyPointerCoarse: true, touchTier: true, phoneTier: true, rootSlots: 0,
+        hasOutlet: false, hasHeader: false, headerBox: null, firstRowBox: null,
         headerChildren: [], tabs: [], buttons: [], lineage: null, texts: [], sessionHeaderPresent: false, rootPhase: null })
   const { value: result } = await captureConsole(() => runMobileWalkthrough({
     outDir, requireRun: true,
@@ -284,7 +283,7 @@ test('M-10：容忍表命中的请求/日志不判红；干净页面判 PASS', a
 test('报告编号顺序与文件头一致：M-8 在 M-9 之前，M-10 收尾', async t => {
   const { result } = await runCase(t, {})
   const ids = result.results.map(row => row.id)
-  assert.deepEqual(ids, ['M-1', 'M-2', 'M-3', 'M-4', 'M-5', 'M-6', 'M-7', 'M-8', 'M-9', 'M-10'], ids.join(','))
+  assert.deepEqual(ids, ['M-1', 'M-2', 'M-3', 'M-5', 'M-6', 'M-7', 'M-8', 'M-9', 'M-10'], ids.join(','))
 })
 
 test('connect 失败：写 fail-soft 报告并返回，不抛异常；--require-run 下记 FAIL', async t => {
