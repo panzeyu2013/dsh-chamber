@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
 import { bundlePnpmLaunch } from './bundle-pnpm-launcher.mjs';
-import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
+import { collectDeclaredDetailFiles, renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
 /**
@@ -229,8 +229,18 @@ run(
   [...pnpmCommand, 'install', '--frozen-lockfile', '--config.node-linker=hoisted'],
   `按冻结 lockfile 安装 @deepseek-ai/dsh@${VERSION}（hoisted 布局）…`,
 );
+// 详情页在运行期读取 bundle 的 locale meta.detail 文档（docs/ 下，prune 规则保留）：
+// 先记录安装树里实际存在的声明目标，裁剪后逐个核对——规则若漂移（上游把文档移出
+// docs/），这里失败而不是让封装出的应用显示「插件声明的详细介绍文件无效」。
+const declaredDetailFiles = collectDeclaredDetailFiles(work);
 const pruned = pruneRuntimeArtifacts(work);
-console.log(`[bundle-dsh] 清理运行期不需要内容：${pruned.removedFiles} 个文件（含 ${pruned.removedDirs} 个整目录）+ node-pty/mistralai/openai 构建产物`);
+const removedDetailFiles = declaredDetailFiles.filter((file) => !existsSync(file));
+if (removedDetailFiles.length > 0) {
+  console.error(`[bundle-dsh] 裁剪删除了 ${removedDetailFiles.length} 个 locale meta.detail 声明的运行时文档，封装未完成：`);
+  for (const file of removedDetailFiles.slice(0, 5)) console.error(`  ${path.relative(work, file)}`);
+  process.exit(1);
+}
+console.log(`[bundle-dsh] 清理运行期不需要内容：${pruned.removedFiles} 个文件（含 ${pruned.removedDirs} 个整目录）+ node-pty/mistralai/openai 构建产物；保留 ${declaredDetailFiles.length} 个 bundle 详情文档`);
 
 const binPath = path.join(work, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 if (!existsSync(binPath)) {

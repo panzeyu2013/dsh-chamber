@@ -352,5 +352,6 @@ export {
   renderAllowBuildsBlock,
 } from './allow-builds.mjs'
 export {
+  collectDeclaredDetailFiles,
   pruneRuntimeArtifacts,
 } from './prune-runtime.mjs'
