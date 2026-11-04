@@ -17,7 +17,6 @@ import {
   ARCHIVE_CLEANUP_PACKAGE,
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
-  MOBILE_PACKAGE,
   OPEN_IN_PACKAGE,
   applicableChamberPackages,
   classifyInventoryEntry,
@@ -44,19 +43,21 @@ test('entryLiveness: the ONE Loader-liveness decision every projection reads', (
   assert.equal(entryLiveness({ enabled: false, fiberPhase: 'failed' }), 'disabled')
 })
 
+const CHAMBER_CLIENT = '@dsh-chamber/dsh-chamber-client-ui-sidebar'
+
 test('classifyInventoryEntry: plain module names map to their package class', () => {
   assert.equal(classifyInventoryEntry(HOST_GRAPH_PACKAGE), 'chamber-host-graph')
   assert.equal(classifyInventoryEntry(GIT_WORKTREE_PACKAGE), 'chamber-git-worktree')
   assert.equal(classifyInventoryEntry(ARCHIVE_CLEANUP_PACKAGE), 'chamber-archive-cleanup')
   assert.equal(classifyInventoryEntry(OPEN_IN_PACKAGE), 'chamber-open-in')
-  assert.equal(classifyInventoryEntry(MOBILE_PACKAGE), 'chamber-mobile')
+  assert.equal(classifyInventoryEntry(CHAMBER_CLIENT), 'chamber-client')
   assert.equal(classifyInventoryEntry('@deepseek-ai/dsh-demo'), 'official')
   assert.equal(classifyInventoryEntry('@dsh-chamber/user-tool'), 'third-party')
   assert.equal(classifyInventoryEntry('my-third-party-plugin'), 'third-party')
 })
 
 test('classifyInventoryEntry: the raw cordis patch-insert prefix is stripped before matching', () => {
-  assert.equal(classifyInventoryEntry(`cordis:include ${MOBILE_PACKAGE}`), 'chamber-mobile')
+  assert.equal(classifyInventoryEntry(`cordis:include ${CHAMBER_CLIENT}`), 'chamber-client')
   assert.equal(classifyInventoryEntry(`cordis:include ${HOST_GRAPH_PACKAGE}`), 'chamber-host-graph')
   assert.equal(classifyInventoryEntry(`cordis:include ${GIT_WORKTREE_PACKAGE}`), 'chamber-git-worktree')
   assert.equal(classifyInventoryEntry(`cordis:include ${ARCHIVE_CLEANUP_PACKAGE}`), 'chamber-archive-cleanup')
@@ -68,13 +69,13 @@ test('classifyInventoryEntry: the raw cordis patch-insert prefix is stripped bef
   assert.equal(classifyInventoryEntry('cordis:include'), 'third-party')
 })
 
-test('thirdPartyEntries: the chamber host packages and the mobile entry are excluded in both their raw patch-syntax and plain forms', () => {
+test('thirdPartyEntries: chamber host and chamber client entries are excluded in both their raw patch-syntax and plain forms', () => {
   const snapshot: PluginInventorySnapshot = {
     entries: [
       { entryId: 'p1', moduleName: HOST_GRAPH_PACKAGE, enabled: true, fiberPhase: 'active' },
       { entryId: 'p2', moduleName: GIT_WORKTREE_PACKAGE, enabled: true, fiberPhase: 'active' },
-      { entryId: 'p3', moduleName: `cordis:include ${MOBILE_PACKAGE}`, enabled: true, fiberPhase: 'active' },
-      { entryId: 'p4', moduleName: MOBILE_PACKAGE, enabled: true, fiberPhase: 'active' },
+      { entryId: 'p3', moduleName: `cordis:include ${CHAMBER_CLIENT}`, enabled: true, fiberPhase: 'active' },
+      { entryId: 'p4', moduleName: CHAMBER_CLIENT, enabled: true, fiberPhase: 'active' },
       { entryId: 'p5', moduleName: 'cordis:include @deepseek-ai/dsh-demo', enabled: true, fiberPhase: 'active' },
       { entryId: 'p6', moduleName: '@dsh-chamber/user-tool', enabled: true, fiberPhase: 'loading' },
       { entryId: 'p7', moduleName: 'my-third-party-plugin', enabled: false, fiberPhase: 'failed' },
@@ -130,7 +131,7 @@ test('remoteChamberBadge: the live Loader state derives the badge, never a const
   const entries = [
     { moduleName: HOST_GRAPH_PACKAGE, enabled: true, fiberPhase: 'active' as const },
     { moduleName: GIT_WORKTREE_PACKAGE, enabled: true, fiberPhase: 'failed' as const },
-    { moduleName: MOBILE_PACKAGE, enabled: true, fiberPhase: 'loading' as const },
+    { moduleName: CHAMBER_CLIENT, enabled: true, fiberPhase: 'loading' as const },
     { moduleName: '@dsh-chamber/off', enabled: false, fiberPhase: 'active' as const },
   ]
   // Present + enabled + active → live (ok); failed → danger; present but
@@ -139,20 +140,20 @@ test('remoteChamberBadge: the live Loader state derives the badge, never a const
   // injected (muted).
   assert.deepEqual(remoteChamberBadge(entries, HOST_GRAPH_PACKAGE), { labelKey: 'chamberBadgeLive', tone: 'ok' })
   assert.deepEqual(remoteChamberBadge(entries, GIT_WORKTREE_PACKAGE), { labelKey: 'chamberBadgeFailed', tone: 'danger' })
-  assert.deepEqual(remoteChamberBadge(entries, MOBILE_PACKAGE), { labelKey: 'chamberBadgeInjected', tone: 'muted' })
+  assert.deepEqual(remoteChamberBadge(entries, CHAMBER_CLIENT), { labelKey: 'chamberBadgeInjected', tone: 'muted' })
   assert.deepEqual(remoteChamberBadge(entries, '@dsh-chamber/off'), { labelKey: 'chamberBadgeInjected', tone: 'muted' })
   assert.deepEqual(remoteChamberBadge(entries, '@dsh-chamber/never-installed'), { labelKey: 'chamberBadgeNotInjected', tone: 'muted' })
 })
 
 test('remoteChamberBadge: the raw cordis patch-insert report of a chamber row still resolves its live badge', () => {
-  // The gateway's mobile entry arrives as 'cordis:include <name>' — the
-  // classification-aware match must light up its badge instead of a
+  // A gateway patch-inserted client row arrives as 'cordis:include <name>' —
+  // the classification-aware match must light up its badge instead of a
   // constant "not injected" (plan 24 D7-A fix).
   const entries = [
-    { moduleName: `cordis:include ${MOBILE_PACKAGE}`, enabled: true, fiberPhase: 'active' as const },
+    { moduleName: `cordis:include ${CHAMBER_CLIENT}`, enabled: true, fiberPhase: 'active' as const },
     { moduleName: `cordis:include ${GIT_WORKTREE_PACKAGE}`, enabled: true, fiberPhase: 'failed' as const },
   ]
-  assert.deepEqual(remoteChamberBadge(entries, MOBILE_PACKAGE), { labelKey: 'chamberBadgeLive', tone: 'ok' })
+  assert.deepEqual(remoteChamberBadge(entries, CHAMBER_CLIENT), { labelKey: 'chamberBadgeLive', tone: 'ok' })
   assert.deepEqual(remoteChamberBadge(entries, GIT_WORKTREE_PACKAGE), { labelKey: 'chamberBadgeFailed', tone: 'danger' })
 })
 

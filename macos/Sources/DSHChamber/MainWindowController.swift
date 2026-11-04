@@ -160,10 +160,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 直到一次**真正成功的加载**（`didFinish`）把它复位，闸门才重新武装。
     private var recoveryGaveUp = false
     /// 崩溃归因：上次「加载完成」时刻、本次加载窗口内的崩溃次数、以及当前这次
-    /// 加载是否由崩溃恢复触发。**归因是 JSC tier-up 引擎缺陷（WebKit 22625），不是
-    /// boot 窗口**：16 份报告入口链 16/16 为 WebSocket 消息派发；load-relative 样本
-    /// 21.0 / 30.4 / 33.9 / 962 / 6094 / 53876 s 只是「刚加载」与「稳定后」的分布，
-    /// 既未证实也未推翻 boot 窗口（见 RendererCrashAttribution 类型注释）。
+    /// 加载是否由崩溃恢复触发。load-relative 只是「刚加载」与「稳定后」的分布，
+    /// 不能由进程寿命反推，也不构成病因（见 RendererCrashAttribution 类型注释）。
     /// 没有这三个量就无法把"应用自己回到载入历史"归因到渲染进程重启。
     private var lastLoadFinishedAt: Date?
     private var crashesSinceLoad = 0
@@ -2188,7 +2186,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// JS 求值确认事件循环能应答，rAF 计数确认可见页面仍在调度帧。
     /// 静态 DOM 也会驱动这个主动 rAF 心跳；每帧后延迟约 1s 再申请下一帧，
-    /// 避免在与既有 JSC 崩溃相关的 rAF 路径上常驻高频循环。
+    /// 避免在 rAF 路径上常驻高频循环。
     /// 隐藏页面不作为故障证据：注入时隐藏直接返回 null（主进程 reset，不累计
     /// strike）；心跳链在隐藏期被丢弃、可见后的下一次注入经 arm() 重新武装
     /// （与 Electron flavor 的 RENDERER_FRAME_PROGRESS_SCRIPT 同一语义）。
@@ -2377,7 +2375,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         lastCrashAt = now
         recoveringFromCrash = true
         // 归因行：距上次加载完成的秒数 + 本窗口第几次崩溃。它记录**窗口事实**，
-        // 不是病因（病因在 JSC tier-up 机件；boot 窗口既未证实也未推翻）。
+        // 不是病因（boot 窗口只是描述，不承担因果含义）。
         shellLog("[shell] Web 内容进程终止（webViewWebContentProcessDidTerminate）——"
                  + RendererCrashAttribution.describe(secondsSinceLoad: sinceLoad, ordinal: crashesSinceLoad))
         // 退出中：不重载、不上报（Electron render-process-gone 在 quitRequested

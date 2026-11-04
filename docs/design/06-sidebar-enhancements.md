@@ -1056,7 +1056,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     解除语义也只存在于挂载 ctx）；但本轮加了受控的**判定侧读回退**——facts-only provenance 的
     来源由修正臂按逐行 host 运行边沿补蓝点、facts 候选补完成通知（§4.1/§4.2、
     design 19 §3.2/§3.5），只在**无 ctx 上报**时生效。
-  - **手机读不再清桌面**：跨端读回执（mobile `read-watermark` + gateway
+  - **手机读不再清桌面**：跨端读回执（原 mobile 端 `read-watermark` + gateway
     `POST /chamber/session-state/read|read-all`）随权威切换整体退役；桌面点/角标
     只由本端阅读解除。
   - **「全部已读」入口消失**：来源级批量已读（桥/菜单/文案）整体删除。

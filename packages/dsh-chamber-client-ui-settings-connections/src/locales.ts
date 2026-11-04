@@ -223,9 +223,6 @@ export const zh = {
   chamberSeeding: '注入中…',
   chamberSeedFailed: '注入失败：',
   chamberRestartFailed: '重启失败：',
-  // 移动端入口行（design 21 §6.2 唯一打包例外）：仅 gateway 源显示，网关随发行物注入。
-  chamberMobileRow: '移动端入口',
-  chamberMobileHint: '网关随发行物注入',
   pluginsColName: '包名',
   pluginsColCategory: '类别',
   // 第三方已安装行的「生效状态」列头（Loader 快照派生）。
@@ -515,9 +512,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberSeeding: 'Injecting…',
   chamberSeedFailed: 'Inject failed: ',
   chamberRestartFailed: 'Restart failed: ',
-  // Mobile entry row (design 21 §6.2, the single packaged exception): gateway sources only, injected with the gateway release.
-  chamberMobileRow: 'Mobile entry',
-  chamberMobileHint: 'Injected with the gateway release',
   pluginsColName: 'Name',
   pluginsColCategory: 'Category',
   // Live-state column header for the third-party installed lists (Loader-derived).

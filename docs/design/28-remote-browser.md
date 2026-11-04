@@ -1,9 +1,9 @@
 # 28 · 远端浏览器启动器（右栏 Browser → 系统浏览器） - 设计
 
-> 状态：**设计冻结；W0/S1/S2 已落地，S3/真机验收未完成**。本文冻结 Remote Browser v4 的定位、契约与边界。
+> 状态：**设计冻结；W0/S1/S2 实现面，S3/真机验收未完成**。本文冻结 Remote Browser v4 的定位、契约与边界。
 > **取证边界（是证据，不是结论）**：本工作树已装 `node_modules` 并跑过 targeted tests/typecheck/build；
 > `vendor/harness-checkout` 仍为空，pin 为 **0.2.2-alpha.3**（`packages/desktop/vendor/dsh/pnpm-lock.yaml`），
-> 本机 anchor 是 **0.2.1-rc.2**（仅作 API 形状参考）。凡签名/行号/计数以 `TODO(W0)` 标记的，
+> 本机 anchor 是 **0.2.1-rc.2**（仅作 API 形状参考）。凡签名/行号/计数以 `TODO(pin-vendor)` 标记的，
 > 必须在真实 pin 源复核后才算契约。未验证项一律显式列出（§15）。
 
 ---
@@ -88,7 +88,7 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 | 远端 2FA/OTP 主机 | 第二条起的 forward 必然认证失败 → `auth-failed`（诚实报错） | 不做 ControlMaster |
 | Windows + 仅密码主机 | 支持（askpass），但**不做** key-only 升级；Job Object 不引入 | 无原生 addon（C I4）；进程组回收用 `taskkill /T` |
 | N-ctx（同 source 两个 Session） | 两个 launcher 视图共享 per-source forward 列表 | per-session UI over per-source forwards |
-| 无 Session / 右栏收起 | **无 surface**（不渲染 launcher），不是错误 | 上游 `ui-sidebar-right` 的既有语义（TODO(W0) 复核 README） |
+| 无 Session / 右栏收起 | **无 surface**（不渲染 launcher），不是错误 | 上游 `ui-sidebar-right` 的既有语义（TODO(pin-vendor) 复核 README） |
 
 ---
 
@@ -151,7 +151,7 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 - `required-extra-rows.test.ts` 按包布局解析 `src/client/index.ts`，故不需要改审计；**不需要 seed**：
   它是 renderer workspace client 包，由 composite 加载并打进控制面前端；seed 只服务宿主包
   （client-graph/git/open-in/archive-cleanup）。远端实例不需要安装它。
-- 官方 `ui-sidebar-browser` 行：**TODO(W0)** 从 pin 的 `bundle/web-app/cordis.patch.yml` 给启停证据。
+- 官方 `ui-sidebar-browser` 行：**TODO(pin-vendor)** 从 pin 的 `bundle/web-app/cordis.patch.yml` 给启停证据。
   现状证据只有文档断言（`upstream-touchpoints.md` 把 `browser-guests.ts`/`preload-browser.ts` 记
   not-applicable），`CHAMBER_COVERED_IDS` 里**没有**该行。若 pin 的 web profile 会加载它：
   (a) 在 `chamber-covered.ts` 加“有意跳过”条目（家族③，理由：右栏浏览器由 chamber 接管）；
@@ -176,7 +176,7 @@ export const inject = ['slots', 'locale'] as const
   `ctx.get('sidebarRightTabs')` 探测，缺服务时安静地不注册（与 `ui-sidebar-right` 的 provider 顺序解耦）。
   design 09 §3.2 记录同一形态；§14 保留“进导出 inject”作为被否方案。若 pin 源证明该服务对所有 kind
   恒在，重新评估探针点名，但不在本版改变。
-- 注册面（**TODO(W0)** 对 pin 复核签名，anchor rc.2 形状参考）：
+- 注册面（**TODO(pin-vendor)** 对 pin 复核签名，anchor rc.2 形状参考）：
   ```ts
   ctx.sidebarRightTabs.register({
     id: '@dsh-chamber/remote-browser', kind: 'chamber-remote-browser', multiple: false,
@@ -488,7 +488,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 ### 9.6 ssh argv 纪律
 
 - 单源：`remote-forward-args.ts`；共享选项与 `ssh-provider.buildStartArgs` 用**锁步测试**对齐（两条 argv 的
-  共享 `-o` 集合必须相等；若 `buildStartArgs` 不可导出则退回源文本锁）。**TODO(W0)** 复核可导出性。
+  共享 `-o` 集合必须相等；若 `buildStartArgs` 不可导出则退回源文本锁）。**TODO(pin-vendor)** 复核可导出性。
 - 断言完整 argv 数组（golden），并断言 localHost 来自策略常量（不是 renderer 值）。
 
 ### 9.7 被转发页面本身是 loopback-origin（残余风险）
@@ -647,7 +647,7 @@ S3 依赖 S1+S2 产物。
 8. **`127.0.0.1` 与控制面同端口**：v1 按 app-origin 拒绝，不给“仍按远端打开”旁路（开放项：是否加二次确认）。
 9. **系统代理**：用户浏览器未绕过 `127.0.0.0/8` 时 URL 可能进代理（外泄 + 打开失败）；P0 记录浏览器矩阵，
    不做应用侧代理配置。
-10. **官方 `ui-sidebar-browser` 行**：是否在 pin 的 web profile 加载未证（TODO(W0)）；若加载则进 skip。
+10. **官方 `ui-sidebar-browser` 行**：是否在 pin 的 web profile 加载未证（TODO(pin-vendor)）；若加载则进 skip。
 11. **Swift 侧**：只复用既有 `showNativeMessage` 与 `openExternal` 边，不新增 Swift UI；
     `BridgeManifestConsistencyTests` 已按 **56/9** 断言；`build:swift-app` 无 Swift 工具链，未跑。
 12. **`sidebarRightTabs` API 形状**（`get`/`register`/`guide`/`slots` 席位名）按 anchor rc.2 实现并通过

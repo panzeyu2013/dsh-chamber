@@ -8,7 +8,7 @@
  * contents (empty cache = reduced base set, not a hostDomains flag).
  * Security: whitelisted registry-derived names only; package.json must parse
  * with a matching `name`; atomic 0600 no-follow writes under 0700 stateDir.
- * The mobile plugin slot ships with the gateway and is never synced.
+ * The gateway ships no packaged client plugin; only desktop-synced host packages.
  */
 
 import { existsSync, mkdirSync } from 'node:fs'

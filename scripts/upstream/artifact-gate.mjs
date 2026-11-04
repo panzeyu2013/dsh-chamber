@@ -103,8 +103,7 @@ export function artifactGateVerdict({ stale, skipped }) {
     return {
       ok: false,
       message: `C8 构建期生成物与 src 不一致（重建后字节不同）: ${stale.join(', ')}`
-        + ' — 跑 pnpm run build:host-packages / pnpm run build:dsh-runtime / '
-        + 'node packages/dsh-chamber-client-ui-mobile/scripts/build.mjs 重建工作树产物',
+        + ' — 跑 pnpm run build:host-packages / pnpm run build:dsh-runtime 重建工作树产物',
     }
   }
   return { ok: true }

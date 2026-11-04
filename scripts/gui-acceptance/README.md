@@ -28,10 +28,9 @@
 `pointer`/`hover` 被 Chromium 忽略、`mobile:true` 的收缩适配让
 `scrollWidth <= innerWidth` 恒真、iOS/WebKit 语义造不出来）。
 
-`mobile-checks.mjs` 的探测表达式与插件源码常量锁步（`DEVICE_FACTS_EXPRESSION` 必须
-逐字包含 `markup.ts` 的 `ROOT_SLOT_SELECTOR`/`MOBILE_FRAME_ATTR`/`MOBILE_ROLE_ATTR` 与
-`composer.ts` 的 `TOUCH_TIER_QUERY`/`PHONE_TIER_QUERY`/`MOBILE_KBD_*`；由
-`mobile-checks.test.mjs` 直接读源文件断言）。M-9 只枚举 `position:fixed|absolute` 且
+`mobile-checks.mjs` 的探测表达式锚定**上游**布局事实，不再读已删除的插件源码：
+`[data-slot="root"]`、上游媒体查询 `(max-width: 1023px)` / `(max-width: 767px)` 与
+`pointer: coarse`。M-9 只枚举 `position:fixed|absolute` 且
 z-index≥40 的可见覆盖层，报告 rect 超出**布局视口**（`documentElement.clientWidth/Height`）的项
 ——不点击任何控件；visual viewport 尺寸仍采集，但只作证据（Safari 地址栏/IME 只收缩
 visual 视口，拿它当基准会把合法的全屏 fixed 层误报成溢出）。`fixed` 且无
@@ -171,8 +170,7 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
   气泡或残留卡片都能满足它）；可悬停行只认 `[data-chamber-hovercard-anchor]` 之内的行，所以未分组桶头
   不会被误选。
 - **选控件与判效果分开，且判的是"效果"**：`W-4`（侧栏 rail 折叠）的控件**不带 `aria-expanded`**——上游与
-  本仓 fork 都只给它一个会翻转的 `aria-label`（移动档替代品为何"自行"补 `aria-expanded`，见
-  `MobileNavToggle.tsx` 头注：它不在它所折叠的侧栏内部）。因此这条腿**不按属性选控件**：页面只 dump
+  本仓 fork 都只给它一个会翻转的 `aria-label`。因此这条腿**不按属性选控件**：页面只 dump
   按钮描述符，纯函数 `pickRailToggle`（`checks.mjs`）在侧栏头部**结构定位**（候选为空或并列即 FAIL，
   绝不"取第一个"），判据是官方 frame 属性 `[data-sidebar-collapsed]` 的出现/消失 + 复原。**点错控件
   ⇒ 属性不动 ⇒ FAIL**。曾经的写法是 document 级"左半屏第一个 `button[aria-expanded]`"：它打到了

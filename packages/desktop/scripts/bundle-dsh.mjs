@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
 import { bundlePnpmLaunch } from './bundle-pnpm-launcher.mjs';
-import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
+import { PRUNE_RULES_REVISION, collectDeclaredDetailFiles, renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
 /**
@@ -101,11 +101,13 @@ if (!EXACT_SEMVER.test(VERSION)) {
 const installed = path.join(dest, 'node_modules', '@deepseek-ai', 'dsh');
 // 平台感知的幂等跳过：node_modules 内含平台原生二进制（node-pty/sharp/ripgrep），
 // 跨平台复用会把错误平台的运行时打进包（如 linux 产物用于 mac 打包）。
+// 裁剪规则版本同样进跳过键：只比版本/平台会把旧规则裁出的树当成已完成，
+// 规则变更（例如 docs 运行时文档的保留面）就永远到不了安装包。
 const platform = `${process.platform}-${process.arch}`;
 if (existsSync(installed) && !force) {
   const recorded = JSON.parse(readFileSync(path.join(dest, 'package.json'), 'utf8'));
   const recordedVersion = recorded.dependencies?.['@deepseek-ai/dsh'];
-  if (recorded.dsh?.platform === platform && recordedVersion === VERSION) {
+  if (recorded.dsh?.platform === platform && recorded.dsh?.pruneRevision === PRUNE_RULES_REVISION && recordedVersion === VERSION) {
     // 同版本同平台不足以跳过：普通 build 不重生成锁，补丁通道可能在版本不变的情况下变化，
     // 故跳过前逐字节比较现有 workspace 与本次会渲染出的内容（§17-C）。
     const staged = renderRuntimeWorkspace(renderAllowBuildsBlock(), upstreamPatchedDependencies());
@@ -121,7 +123,7 @@ if (existsSync(installed) && !force) {
     console.warn('[bundle-dsh] 现有封装的 patch 通道与当前渲染不一致（同版本补丁集/字节变化），重新封装。');
   }
   console.warn(
-    `[bundle-dsh] 现有封装 ${recordedVersion ?? '未知版本'} / ${recorded.dsh?.platform ?? '未知平台'} 与要求 ${VERSION} / ${platform} 不符，重新封装。`,
+    `[bundle-dsh] 现有封装 ${recordedVersion ?? '未知版本'} / ${recorded.dsh?.platform ?? '未知平台'} / 裁剪规则 v${recorded.dsh?.pruneRevision ?? '未记录'} 与要求 ${VERSION} / ${platform} / v${PRUNE_RULES_REVISION} 不符，重新封装。`,
   );
 }
 
@@ -229,8 +231,18 @@ run(
   [...pnpmCommand, 'install', '--frozen-lockfile', '--config.node-linker=hoisted'],
   `按冻结 lockfile 安装 @deepseek-ai/dsh@${VERSION}（hoisted 布局）…`,
 );
+// 详情页在运行期读取 bundle 的 locale meta.detail 文档（docs/ 下，prune 规则保留）：
+// 先记录安装树里实际存在的声明目标，裁剪后逐个核对——规则若漂移（上游把文档移出
+// docs/），这里失败而不是让封装出的应用显示「插件声明的详细介绍文件无效」。
+const declaredDetailFiles = collectDeclaredDetailFiles(work);
 const pruned = pruneRuntimeArtifacts(work);
-console.log(`[bundle-dsh] 清理运行期不需要内容：${pruned.removedFiles} 个文件（含 ${pruned.removedDirs} 个整目录）+ node-pty/mistralai/openai 构建产物`);
+const removedDetailFiles = declaredDetailFiles.filter((file) => !existsSync(file));
+if (removedDetailFiles.length > 0) {
+  console.error(`[bundle-dsh] 裁剪删除了 ${removedDetailFiles.length} 个 locale meta.detail 声明的运行时文档，封装未完成：`);
+  for (const file of removedDetailFiles.slice(0, 5)) console.error(`  ${path.relative(work, file)}`);
+  process.exit(1);
+}
+console.log(`[bundle-dsh] 清理运行期不需要内容：${pruned.removedFiles} 个文件（含 ${pruned.removedDirs} 个整目录）+ node-pty/mistralai/openai 构建产物；保留 ${declaredDetailFiles.length} 个 bundle 详情文档`);
 
 const binPath = path.join(work, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 if (!existsSync(binPath)) {
@@ -248,7 +260,7 @@ if (smoke.status !== 0) {
   process.exit(1);
 }
 
-// 记录实际解析到的精确版本 + 封装平台，供可复现重建与排查。
+// 记录实际解析到的精确版本 + 封装平台 + 裁剪规则版本，供可复现重建、排查与幂等跳过。
 const resolvedVersion = JSON.parse(readFileSync(path.join(work, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8')).version;
 if (resolvedVersion !== VERSION) {
   console.error(`[bundle-dsh] 解析版本不匹配：要求 ${VERSION}，实际 ${resolvedVersion}`);
@@ -256,7 +268,7 @@ if (resolvedVersion !== VERSION) {
 }
 const manifest = JSON.parse(readFileSync(path.join(work, 'package.json'), 'utf8'));
 manifest.dependencies = { '@deepseek-ai/dsh': resolvedVersion };
-manifest.dsh = { platform };
+manifest.dsh = { platform, pruneRevision: PRUNE_RULES_REVISION };
 writeFileSync(path.join(work, 'package.json'), `${JSON.stringify(manifest, undefined, 2)}\n`);
 
 commitBundleSwap(work, dest, backup);

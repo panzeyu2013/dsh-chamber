@@ -862,32 +862,32 @@ test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js i
 test('createControlPlane.startLocal() merges extra seed entries (client plugin) into the overlay and seeds them', async t => {
   // Seed registry: an extra kind 'client' entry rides the same
   // artifact gate, profile seed and overlay as the host packages — the
-  // gateway mobile slot's mechanism (the loader row is id/name only; kind is
+  // client-plugin seed mechanism (the loader row is id/name only; kind is
   // metadata).
   const dir = tempDir(t)
   const graphSource = stageSource(t, 'export const graph = 1\n')
-  const mobileSource = tempDir(t)
-  mkdirSync(join(mobileSource, 'dist'), { recursive: true })
-  writeFileSync(join(mobileSource, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-client-ui-mobile', version: '0.0.0', main: 'dist/index.js' }) + '\n')
-  writeFileSync(join(mobileSource, 'dist', 'index.js'), 'export const mobile = 1\n')
+  const clientSource = tempDir(t)
+  mkdirSync(join(clientSource, 'dist'), { recursive: true })
+  writeFileSync(join(clientSource, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-chamber-client-ui-test', version: '0.0.0', main: 'dist/index.js' }) + '\n')
+  writeFileSync(join(clientSource, 'dist', 'index.js'), 'export const client = 1\n')
   const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: graphSource,
     extraSeedEntries: [{
-      insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+      insert: { id: 'test-client', name: '@dsh-chamber/dsh-chamber-client-ui-test' },
       kind: 'client',
       source: 'packaged',
-      sourceDir: mobileSource,
+      sourceDir: clientSource,
     }],
   })
   try {
     await plane.start()
     await plane.startLocal()
     const overlay = readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8')
-    assert.match(overlay, /- id: mobile/)
-    assert.match(overlay, /name: '@dsh-chamber\/dsh-client-ui-mobile'/)
+    assert.match(overlay, /- id: test-client/)
+    assert.match(overlay, /name: '@dsh-chamber\/dsh-chamber-client-ui-test'/)
     assert.equal(
-      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', '@dsh-chamber', 'dsh-client-ui-mobile', 'dist', 'index.js'), 'utf8'),
-      'export const mobile = 1\n',
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', '@dsh-chamber', 'dsh-chamber-client-ui-test', 'dist', 'index.js'), 'utf8'),
+      'export const client = 1\n',
     )
   } finally {
     await plane.stop()
@@ -895,7 +895,7 @@ test('createControlPlane.startLocal() merges extra seed entries (client plugin) 
 })
 
 test('createControlPlane.startLocal() skips an absent extra seed entry (stub) with a warn and no overlay row', async t => {
-  // Seed registry: the gateway mobile slot ships on the mobile branch;
+  // Seed registry: a packaged client seed entry can be absent on a branch;
   // until then an absent packaged source is a warned stub skip — the rest of
   // the seed (host packages) proceeds untouched, never a failure.
   const dir = tempDir(t)
@@ -904,10 +904,10 @@ test('createControlPlane.startLocal() skips an absent extra seed entry (stub) wi
   const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: source,
     extraSeedEntries: [{
-      insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+      insert: { id: 'test-client', name: '@dsh-chamber/dsh-chamber-client-ui-test' },
       kind: 'client',
       source: 'packaged',
-      sourceDir: join(dir, 'no-mobile-package'),
+      sourceDir: join(dir, 'no-test-client-package'),
     }],
     logger: { log() {}, warn: (message: unknown) => { warns.push(String(message)) }, error() {} },
   })
@@ -916,7 +916,7 @@ test('createControlPlane.startLocal() skips an absent extra seed entry (stub) wi
     await plane.startLocal()
     assert.equal(readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8'), EXPECTED_OVERLAY,
       'the absent stub row must not enter the overlay')
-    assert.ok(warns.some(message => message.includes('mobile') && message.includes('stub')),
+    assert.ok(warns.some(message => message.includes('test-client') && message.includes('stub')),
       'the absent stub entry is warned as a skipped stub')
   } finally {
     await plane.stop()
@@ -1059,10 +1059,10 @@ test('assertHostSeedInsertNaming pins the canonical dsh-chamber-seed-<loader-id>
   )
 })
 
-test('assertHostSeedEntryNaming binds kind host only — the client mobile slot is exempt', () => {
+test('assertHostSeedEntryNaming binds kind host only — the client plugin seed is exempt', () => {
   const host = { insert: HOST_GRAPH_INSERT, kind: 'host' as const, source: 'packaged' as const, sourceDir: null }
   const client = {
-    insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+    insert: { id: 'test-client', name: '@dsh-chamber/dsh-chamber-client-ui-test' },
     kind: 'client' as const,
     source: 'packaged' as const,
     sourceDir: null,

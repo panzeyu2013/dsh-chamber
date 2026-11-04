@@ -25,7 +25,7 @@
  *   C7  种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 ==
  *       dsh-runtime HOST_DOMAIN_PROBE_NAMES 列表（文本双门；运行时已有 fail-loud）
  *   C8  构建期生成物 == src（确定性重建-比对，硬失败）：host dist ×4 +
- *       dsh-runtime dist + mobile dist/lib 四件；重建后字节不同 = 产物陈旧。
+ *       dsh-runtime dist（5 组）；重建后字节不同 = 产物陈旧。
  *       写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory（fresh checkout
  *       会误报）
  *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
@@ -825,7 +825,6 @@ for (const fork of FORKS) {
     const IGNORED_LOCAL_ROOTS = [
       'packages/desktop/release/', // electron-builder output (packaged app)
       'packages/desktop/.dev-user-data/', // dev-mode isolated app data (dsh-home worktrees, caches)
-      'packages/gateway/host-packages/', // gateway build output (copied seed entries)
       'packages/renderer/.cache/', // renderer tooling cache (generated tsconfig)
     ]
     /** repo-relative ignored paths ('dir/' entries included), or null when git is unavailable. */

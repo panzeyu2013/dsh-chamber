@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -42,40 +42,9 @@ if (!existsSync(indexOut) || !existsSync(cliOut)) {
 }
 chmodSync(cliOut, 0o755)
 
-// Ship the packaged chamber seed entries inside the gateway package.
-// The host packages (dsh-chamber-seed-client-graph / git-worktree /
-// archive-cleanup) are DESKTOP-SYNCED (PUT /chamber/plugins →
-// chamber-plugins cache) and do not ship here; only packaged entries ride
-// this directory. The packaged entry is the mobile client-plugin slot
-// (dsh-chamber-client-ui-mobile, kind 'client', design 17 §18): mobile
-// access is bound to the gateway and has no desktop in
-// the chain, so its seed MUST ship inside this package. Every entry carries
-// package.json + dist/index.js; a client plugin additionally declares
-// extraFiles — the browser half the host ClientModuleRegistry serves at
-// /plugins/<pkg>/client.js (lib/client.js + devtools source map), plus
-// lib/index.js: the package `main`/exports["."] target, which the cordis
-// loader resolves when it imports the overlay row by package name (omitting
-// it makes the managed dsh boot fail with ERR_MODULE_NOT_FOUND).
-const hostPackagesOut = join(packageDir, 'host-packages')
-rmSync(hostPackagesOut, { recursive: true, force: true })
-const HOST_PACKAGES = [
-  {
-    name: 'dsh-chamber-client-ui-mobile',
-    source: join(packageDir, '..', 'dsh-chamber-client-ui-mobile'),
-    extraFiles: ['lib/index.js', 'lib/client.js', 'lib/client.js.map'],
-  },
-]
-for (const { name, source, extraFiles = [] } of HOST_PACKAGES) {
-  const out = join(hostPackagesOut, name)
-  mkdirSync(join(out, 'dist'), { recursive: true })
-  cpSync(join(source, 'package.json'), join(out, 'package.json'))
-  cpSync(join(source, 'dist', 'index.js'), join(out, 'dist', 'index.js'))
-  for (const file of extraFiles) {
-    mkdirSync(dirname(join(out, file)), { recursive: true })
-    cpSync(join(source, file), join(out, file))
-  }
-}
-console.log(`[build-gateway] packaged seed entries -> ${hostPackagesOut}`)
+// The gateway ships no packaged client plugin: the mobile adaptation layer was
+// retired once upstream dsh made mobile a first-class frontend. Host packages
+// are desktop-synced into the chamber-plugins cache, never copied here.
 
 // Bundle the pinned pnpm next to the esbuild outputs (design 18 §9.2 D1).
 // The installer's local (default) path unpacks the gateway tarball and NEVER

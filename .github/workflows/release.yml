@@ -316,7 +316,7 @@ jobs:
       # GENERATED:gates:release.validation.pre:end
       - run: pnpm install --frozen-lockfile
       # 构建期产物不入 git：C8 默认模式先快照再就地重建-比对，clean checkout
-      # 必须在它之前自举这 9 个构建期产物（缺席会被判成 stale）。
+      # 必须在它之前自举这 5 组构建期产物（缺席会被判成 stale）。
       - name: Bootstrap untracked build-time artifacts (C8 input)
         run: pnpm run ensure:artifacts
       # C8 deterministic artifact gate (see the step above): rebuilds the
@@ -333,9 +333,6 @@ jobs:
       # Anchor probe: registry symbol anchors resolvable + the legacy file:line budget ratcheted (only down).
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
-      # Fail-soft by design: this checkout has no anchor root, so only the local criteria judge; the strict run is the upgrade flow (--require-anchor-root).
-      - name: Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)
-        run: pnpm run verify:mobile-anchors
       - name: Architecture import cycles
         run: pnpm run verify:import-cycles
       - name: Architecture file budgets
@@ -395,6 +392,10 @@ jobs:
         run: |
           pnpm run build:renderer
           pnpm run build:host-packages
+      # The page bundle exists only after this build; keep the scoper gate on the
+      # release validation path instead of deferring it to the macOS packaging lane.
+      - name: Renderer page bundle carries the SVG scope code
+        run: node scripts/gates/assert-scoper-artifact.mjs
       # Desktop packaging sub-steps — ci.yml's "Desktop build sub-steps" gate:
       # a release must not be the first place a broken
       # control-plane/preload/host-package build surfaces.
@@ -1116,7 +1117,7 @@ jobs:
           pnpm run build:renderer
           # scoper 标记门：没有它「构建把 scoper 摇掉」的产物可以一路装配进正式 .app
           # （源产物先断一次）。
-          node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs
+          node scripts/gates/assert-scoper-artifact.mjs
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           wait "$SWIFT_BUILD_PID" || { echo "::error::parallel lane failed: swift build -c release"; LANE_FAILURES=1; }
           wait "$BUNDLE_DSH_PID" || { echo "::error::parallel lane failed: bundle:dsh"; LANE_FAILURES=1; }
@@ -1698,7 +1699,7 @@ jobs:
           test -f "$APP/Contents/Resources/dist/web/index.html"
           # 只断 index.html 会把「空壳 .app」放行——切源白屏
           # 的修复必须出现在**真正装进 .app 的字节**里（与装配脚本内部的同一道门呼应）。
-          node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs \
+          node scripts/gates/assert-scoper-artifact.mjs \
             "$APP/Contents/Resources/dist/web/assets"
           # 打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/package.json"

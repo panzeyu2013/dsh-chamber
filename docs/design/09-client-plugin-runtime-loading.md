@@ -101,7 +101,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   提供：`healPending`/`retryToken`）。
   **W3 边界**：② 覆盖**除 `not-injected` 之外的所有通道失败**（503 预算耗尽、502/504、
   网络错误、图形非法），边界判定在叶模块 `renderer/src/source-readiness.ts` 的
-  `graphGapKindFor`；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile
+  `graphGapKindFor`；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway
   的合法无图形态，不是降级。该事实**并有用户面**：形状与呈现裁决在叶模块
   `renderer/src/boot-gap.ts`（`Record<kind, …>` 强制每个 kind 带文案与 retryable 裁决），App 在活动
   视图渲染非阻断横幅，并作为**独立字段** `ChamberServerAggregate.bootGap` 过既有投影通道给侧栏来源行
@@ -258,7 +258,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   `ui-layout`/`ui-renderer`/`ui-plugin-manager`/`hmr`（注册被替换或有意跳过）与
   `@deepseek-ai/dsh-client-modules`（shell 内核收编该 entry，二次 provide `modules` 冲突）——完整名单与
   逐条理由见 `chamber-covered.ts` 注释；
-  ③ **有意跳过的宿主行**（covered、无 factory、永不加载）：mobile / directory-picker-native——理由见
+  ③ **有意跳过的宿主行**（covered、无 factory、永不加载）：directory-picker-native——理由见
   `chamber-covered.ts` 条目注释；官方桌面账户家族 alpha.3 起迁出该名单（见下「有意跳过名单」③）。独立成
   叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
@@ -274,9 +274,9 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   path/sessionId 的 image 目标」。被否方案：①整行跳过——该行是新增的官方面，跳过等于删掉一个可工作的功能；
   ②covered + 构建期补丁——运行期 bundle 的模块不在复合构建图里，登记补丁会被 §3.6 的「patch never applied」
   覆盖门硬失败，且要为 `remote.workspaceFiles` 再造覆盖前提。
-  **TODO(W0) 官方 `ui-sidebar-browser` 行**：pin 的 web profile 是否加载它**仍无证据**；
+  **TODO(pin-vendor) 官方 `ui-sidebar-browser` 行**：pin 的 web profile 是否加载它**仍无证据**；
   `docs/checklists/upstream-touchpoints.md` 对 `browser-guests.ts`/`preload-browser.ts` 的
-  not-applicable 只是上游桌面文件分类，不是 profile 启停证据。W0 必须用真实 vendor 复核；若加载，
+  not-applicable 只是上游桌面文件分类，不是 profile 启停证据。pin-vendor 必须用真实 vendor 复核；若加载，
   把该行加进本族③与「有意跳过名单」并配一条负例（宿主图含该行时仍只有一个浏览器页签）。
   若加载的是另一 kind，也**不能替代 skip**：重复入口不是注册冲突。
 
@@ -385,7 +385,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   产物写入 chamber-owned `renderer/src/generated/typert/`，Vite 的通用 `/remote` resolver 只消费这些产物。
   当前 27 个 contribution（`EXPECTED_MOUNT_PACKAGES` 挂载序表 + import 选择集合，含 file/session/workspace reference）由独立锁步测试
   固定，避免手抄包表滞后到 Rollup 才报缺模块；vendor 始终只读。
-- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态。**取消不是来源事实**：`AbortError` 与 WebKit 的 `Fetch is aborted`（被取代的挂载、我们自己的拆除、页面被系统节流）不落任何缺口判定——同一预算内重试，预算走完仍只有取消则无图 boot + 命名诊断，重挂交给既有的图回归探测（判定归 `packages/dsh-stream-state` 的 `classifyObservation` 单一所有者；真实通道失败仍照旧上浮，取消不得掩掉它）。**自愈臂是事实、不是时刻**：结算时相位未到 ready 也把臂留成 pending，由随后第一个 ready 世代偿还（`dsh-stream-state` 的 `healPending`），每个 ready 世代至多一次。**Rejected alternatives（取消分类与自愈臂）**：把取消一律读成通道失败（缺口粘在来源上，实机形态就是「只剩空壳、只有重载能救」）；把取消读成成功（404 的 `not-injected` 与「从未得到回答」不再可分）；只在结算当刻相位已 ready 才 arm（冷启动/重连竞赛里永久丢失臂）；无上限按 ready 世代重挂（把一次瞬态缺口放大成重挂循环）。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**重建/替换竞态恢复（一轮有界恢复）**：上游 rev 是文件元数据派生的构建标识（推导与根治见 §5「vendor 侧根治」；**重建/替换**该文件才变，纯重启不变）⇒ 取图与加载之间被改写（dev 重建/重装）的行在旧 URL 上 404，一般瞬时 404 同样落此；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧 rev URL 已失效，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`artifactRevision` 改为对 bundle 字节求内容哈希即可让同内容跨安装/跨宿主的 rev 一致、假 `instance-version-conflict` 整类消失（§5，提案 §10）；恢复轮只覆盖「文件被改写与取图的竞态」。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
+- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway 移动入口的合法无图形态。**取消不是来源事实**：`AbortError` 与 WebKit 的 `Fetch is aborted`（被取代的挂载、我们自己的拆除、页面被系统节流）不落任何缺口判定——同一预算内重试，预算走完仍只有取消则无图 boot + 命名诊断，重挂交给既有的图回归探测（判定归 `packages/dsh-stream-state` 的 `classifyObservation` 单一所有者；真实通道失败仍照旧上浮，取消不得掩掉它）。**自愈臂是事实、不是时刻**：结算时相位未到 ready 也把臂留成 pending，由随后第一个 ready 世代偿还（`dsh-stream-state` 的 `healPending`），每个 ready 世代至多一次。**Rejected alternatives（取消分类与自愈臂）**：把取消一律读成通道失败（缺口粘在来源上，实机形态就是「只剩空壳、只有重载能救」）；把取消读成成功（404 的 `not-injected` 与「从未得到回答」不再可分）；只在结算当刻相位已 ready 才 arm（冷启动/重连竞赛里永久丢失臂）；无上限按 ready 世代重挂（把一次瞬态缺口放大成重挂循环）。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**重建/替换竞态恢复（一轮有界恢复）**：上游 rev 是文件元数据派生的构建标识（推导与根治见 §5「vendor 侧根治」；**重建/替换**该文件才变，纯重启不变）⇒ 取图与加载之间被改写（dev 重建/重装）的行在旧 URL 上 404，一般瞬时 404 同样落此；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧 rev URL 已失效，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`artifactRevision` 改为对 bundle 字节求内容哈希即可让同内容跨安装/跨宿主的 rev 一致、假 `instance-version-conflict` 整类消失（§5，提案 §10）；恢复轮只覆盖「文件被改写与取图的竞态」。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
 - **额外行 apply 失败降级（模块 D）**：额外行**加载成功但 entry 未能 apply**（materialize 出非插件对象——如壳种子词表把某包静态注册、后端新增其 client half 后 seed 遮蔽 factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务）→ **降级不致命**：
   console.error + status 'failed'，shell 照常 boot（boot.ts 对 extraRows 逐行容错 + sweep 排除）。理由：复合
   bundle 固定一个 dsh client 版本，"后端 dsh 版本 ≠ 壳版本"时新/旧核心行与壳不兼容是**正常条件**（特性缺席），
@@ -583,7 +583,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - **机会性契约**：通道拿不到帧 ≠ 降级。boot 是通道不可用时的回退权威（通道正常时由 graph 帧热同步增删，§3.7）；live pass 失败/不可用一律 no-op，
   绝不影响 boot、其它行或实例状态。arm 判词三态：**answered（含空图）→ arm**；`not-injected` → 不 arm，
   但该 boot 以 `ShellState.graphAnswered === false` 把「取过图且没答」交给 App 的**图回归**政策（下一条；
-  这是 gateway/mobile 的合法形态）；boot 图请求失败 → 不 arm（等 App 的 ready 世代自愈重 boot）；
+  这是 gateway 移动入口的合法形态）；boot 图请求失败 → 不 arm（等 App 的 ready 世代自愈重 boot）；
   用户面急停 = safe mode（不 arm）；另有页面级 devtools/测试开关
   （`__DSH_CHAMBER_LIVE_PLUGIN_SYNC__ === false`，arm 时读取、无缓存）、宿主不提供页面通道订阅
   （`pageChannelSubscribe === null`，只看测试/非浏览器宿主）同样不 arm。

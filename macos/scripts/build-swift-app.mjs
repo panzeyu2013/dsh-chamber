@@ -80,9 +80,9 @@ import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts
 // 两处各写一份必然漂移，实现与背景资产都收敛在 macos/scripts/dmg.mjs。
 import { createStyledDmg } from './dmg.mjs'
 // **装配内门**：.app 里已拷入的字节就是最终发布字节，
-// 因此标记载体只在**一处**定义（mobile 包的 scoper-markers.mjs，跨包相对导入同
+// 因此标记载体只在**一处**定义（scripts/lib/scoper-markers.mjs，跨包相对导入同
 // build-sidecar 的 seam 先例）——绝不在装配脚本里再写一套标记。
-import { missingScoperMarkers } from '../../packages/dsh-chamber-client-ui-mobile/scripts/lib/scoper-markers.mjs'
+import { missingScoperMarkers } from '../../scripts/lib/scoper-markers.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const macosDir = path.resolve(here, '..')

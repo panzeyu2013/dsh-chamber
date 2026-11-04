@@ -77,12 +77,12 @@ export const CARRIER_ENV = {
 } as const
 
 /**
- * The FOUR recovery ladders' thresholds, recorded here as the single table.
+ * The THREE recovery ladders' thresholds, recorded here as the single table.
  *
- * Every ladder READS this table instead of declaring its own literals: the mobile
- * stall machine (dsh-chamber-client-ui-mobile), the sidebar's authority probe (the
- * former fact-reconcile receipt chain), the renderer's authority escalation (the
- * former liveness guard) and the open-in stream-health chip.
+ * Every ladder READS this table instead of declaring its own literals: the
+ * sidebar's authority probe (the former fact-reconcile receipt chain), the
+ * renderer's authority escalation (the former liveness guard) and the open-in
+ * stream-health chip.
  * `scripts/gates/verify-ladder-table-parity.mjs` keeps the collection honest in both
  * directions: each retired declaration/leaf literal must stay absent from its module
  * (the table is the authority), and every named consumer must reference
@@ -93,15 +93,6 @@ export const CARRIER_ENV = {
  * here. Changing a value is a BEHAVIOR_CHANGES entry, never a free parameter.
  */
 export const LADDER_TABLES = {
-  /** The phone's stall ladder. */
-  mobile: {
-    thresholdMs: 45_000,
-    pollMs: 3_000,
-    resyncCooldownMs: 120_000,
-    resyncWindowMs: 600_000,
-    resyncMax: 3,
-    failedMs: 90_000,
-  },
   /**
    * The session-fact authority:
    * ONE set of numbers for two hosts of the same engine - the sidebar executor's

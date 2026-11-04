@@ -6,13 +6,11 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import {
-  DEVICE_FACTS_EXPRESSION, HEADER_FACTS_EXPRESSION, HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE,
+  HEADER_FACTS_EXPRESSION, HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE,
   OVERLAY_FACTS_EXPRESSION, applyRequireRun, deviceEmulationSteps, deviceEmulationVerdict,
   headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict, overflowVerdict, overlayProbeVerdict,
-  pluginActivationVerdict, redactSecrets, summarizeWebSocketFrames,
+  redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
 /** 一台「模拟成功 + 390 宽 + 无溢出」的设备事实。 */
 const deviceFacts = (over = {}) => ({
@@ -21,8 +19,7 @@ const deviceFacts = (over = {}) => ({
   dpr: 3, screenWidth: 390, screenHeight: 844, maxTouchPoints: 5, ontouchstart: true,
   pointerCoarse: true, pointerFine: false, hoverNone: true, anyPointerCoarse: true,
   touchTier: true, phoneTier: true,
-  rootSlots: 1, mobileFrames: 1, mobileRoles: ['sidebar', 'conversation', 'details'], pluginStyle: true,
-  mobileKbdFrames: 0, mobileKbdStates: [], mobileKbdSpacers: [],
+  rootSlots: 1,
   ...over,
 })
 /** 一条会话头文本事实。 */
@@ -151,41 +148,6 @@ test('命中盒：任一轴 < 44px 即红；无可见 button INFO；隐藏按钮
   assert.equal(hitBoxVerdict(headerFacts({ buttons: [] })).ok, null)
   assert.equal(hitBoxVerdict(headerFacts({ buttons: [{ label: 'x', visible: false, box: { w: 1, h: 1, top: 0, left: 0 } }] })).ok, null)
   assert.equal(hitBoxVerdict(headerFacts({ hasOutlet: false })).ok, null)
-})
-
-test('插件激活：打标即 PASS，未打标是 INFO 且 --require-run 下改判 FAIL（F9）', () => {
-  const activated = pluginActivationVerdict(deviceFacts())
-  assert.equal(activated.ok, true)
-  assert.equal(activated.evidence.includes('未打标'), false)
-  assert.match(activated.evidence, /键盘面诊断/)
-  const unstamped = pluginActivationVerdict(deviceFacts({ mobileFrames: 0, mobileRoles: [] }))
-  assert.equal(unstamped.ok, null)
-  assert.match(unstamped.evidence, /未打标/)
-  // 走查声明「该腿必须真实执行」时，INFO 不再是免责通道。
-  assert.equal(applyRequireRun(unstamped, true).ok, false)
-})
-
-test('插件激活证据读出键盘守卫的诊断面（kbd 帧 / state / spacer 高度）', () => {
-  const verdict = pluginActivationVerdict(deviceFacts({
-    mobileKbdFrames: 1,
-    // 载体前缀：状态在 frame 与 <html> 各镜像一份。
-    mobileKbdStates: ['frame:still-covered', 'html:still-covered'],
-    mobileKbdSpacers: [352],
-  }))
-  assert.equal(verdict.ok, true)
-  assert.match(verdict.evidence, /\[data-mobile-frame\]\[data-mobile-kbd\]=1/)
-  assert.match(verdict.evidence, /still-covered/)
-  assert.match(verdict.evidence, /spacer 高度=\[352\]/)
-})
-
-test('DEVICE_FACTS_EXPRESSION 采集键盘守卫诊断面（M-4 证据的页面来源）', () => {
-  // 证据字段不采集 = 人永远看不到；三个锚点各自钉一次。
-  for (const anchor of ['[data-mobile-frame][data-mobile-kbd]', '[data-mobile-kbd-state]', '[data-mobile-kbd-spacer]']) {
-    assert.ok(DEVICE_FACTS_EXPRESSION.includes(anchor), `DEVICE_FACTS_EXPRESSION must read ${anchor}`)
-  }
-  for (const field of ['mobileKbdFrames', 'mobileKbdStates', 'mobileKbdSpacers']) {
-    assert.ok(DEVICE_FACTS_EXPRESSION.includes(field), `DEVICE_FACTS_EXPRESSION must expose ${field}`)
-  }
 })
 
 test('WS 帧摘要：有上行无下行 = 停滞形态；计数与 URL 去参数', () => {
@@ -323,7 +285,7 @@ test('设备模拟：落地信号（maxTouchPoints/ontouchstart/dpr）与档位�
   const lowDpr = deviceEmulationVerdict(deviceFacts({ dpr: 2 }))
   assert.equal(lowDpr.ok, false)
   assert.match(lowDpr.evidence, /devicePixelRatio=2/)
-  // 请求宽 <=768 ⇒ phoneTier 必须为真；<=1023 ⇒ touchTier 必须为真（否则插件按另一档渲染）。
+  // 请求宽 <768 ⇒ phoneTier 必须为真；<=1023 ⇒ touchTier 必须为真（否则走查会在另一档布局上判几何）。
   const noPhone = deviceEmulationVerdict(deviceFacts({ phoneTier: false }))
   assert.equal(noPhone.ok, false)
   assert.match(noPhone.evidence, /phoneTier/)
@@ -334,6 +296,11 @@ test('设备模拟：落地信号（maxTouchPoints/ontouchstart/dpr）与档位�
   assert.equal(deviceEmulationVerdict(tabletFacts({ phoneTier: false, touchTier: false }), tablet).ok, false)
   assert.equal(deviceEmulationVerdict(tabletFacts({ phoneTier: false, touchTier: true }), tablet).ok, true,
     '1000 宽不要求 phoneTier，只要求 touchTier')
+  // 768 是上游 drawer 的排他边界（<768 才进手机档）；此处 phoneTier=false 也必须过。
+  const boundary = { ...MOBILE_DEVICE, width: 768 }
+  const boundaryFacts = over => deviceFacts({ innerWidth: 768, clientWidth: 768, scrollWidth: 768, screenWidth: 768, ...over })
+  assert.equal(deviceEmulationVerdict(boundaryFacts({ phoneTier: false }), boundary).ok, true,
+    '768 宽不要求 phoneTier（上游 max-width:767 才进手机档）')
   assert.equal(deviceEmulationVerdict(deviceFacts({ phoneTier: false, touchTier: true }), tablet).ok, false,
     '屏幕事实没跟着请求设备走（390 vs 1000）就是模拟未落地，不再只标注')
   // screen.* 与 dpr/maxTouchPoints/ontouchstart 同级的落地断言：不符即 FAIL。
@@ -466,32 +433,7 @@ test('覆盖层探查：扫描在上限 40 处截断 ⇒ INFO，证据不得写�
   assert.match(found.evidence, /判定 FAIL/)
 })
 
-test('锁步：探测表达式与插件源码常量同值（markup.ts / composer.ts）', () => {
-  const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
-  const readConst = (rel, name) => {
-    const source = readFileSync(repoRoot + rel, 'utf8')
-    const match = new RegExp('\\b' + name + '\\s*=\\s*').exec(source)
-    assert.ok(match !== null, name + ' must be declared in ' + rel)
-    const rest = source.slice(match.index + match[0].length)
-    const quote = rest[0]
-    assert.ok(quote === "'" || quote === '"', name + ' must be assigned a string literal in ' + rel)
-    const end = rest.indexOf(quote, 1)
-    return rest.slice(1, end)
-  }
-  const locked = [
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/markup.ts', 'ROOT_SLOT_SELECTOR'),
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/markup.ts', 'MOBILE_FRAME_ATTR'),
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/markup.ts', 'MOBILE_ROLE_ATTR'),
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'TOUCH_TIER_QUERY'),
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'PHONE_TIER_QUERY'),
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'MOBILE_KBD_ATTR'),
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'MOBILE_KBD_STATE_ATTR'),
-    readConst('packages/dsh-chamber-client-ui-mobile/src/client/composer.ts', 'MOBILE_KBD_SPACER_ATTR'),
-  ]
-  for (const value of locked) {
-    assert.ok(DEVICE_FACTS_EXPRESSION.includes(value), 'DEVICE_FACTS_EXPRESSION must carry the plugin constant ' + JSON.stringify(value))
-  }
-  // 探测表达式不得使用被锚点门禁止的旧 header 直接子选择器（形状失效时它只回 null）。
+test('探测表达式形状：header 用 nearest header，overlay 读取 zIndex', () => {
   assert.ok(!HEADER_FACTS_EXPRESSION.includes('[data-slot="conversation.session.header"] > header'))
   assert.ok(HEADER_FACTS_EXPRESSION.includes("outlet.closest('header')"))
   assert.ok(OVERLAY_FACTS_EXPRESSION.includes('zIndex'))

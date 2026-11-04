@@ -84,12 +84,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
       # 构建期产物不入 git：C8 默认模式先快照再就地重建-比对，clean checkout
-      # 必须在它之前自举这 9 个构建期产物（缺席会被判成 stale）。
+      # 必须在它之前自举这 5 组构建期产物（缺席会被判成 stale）。
       - name: Bootstrap untracked build-time artifacts (C8 input)
         if: steps.classify.outputs.code == 'true'
         run: pnpm run ensure:artifacts
       # C8 deterministic artifact gate: rebuilds the untracked build-time
-      # host/mobile bundles in place, byte-compares, restores. A skipped build
+      # host/runtime bundles in place, byte-compares, restores. A skipped build
       # (missing esbuild) is a loud warning, never a silent pass.
       - name: Build-time artifacts match sources (C8 rebuild gate)
         if: steps.classify.outputs.code == 'true'
@@ -108,9 +108,6 @@ jobs:
       # Anchor probe: registry symbol anchors resolvable + the legacy file:line budget ratcheted (only down).
       - name: Upstream anchor probe (symbol anchors + legacy budget)
         run: pnpm run verify:anchors
-      # Fail-soft by design: this checkout has no anchor root, so only the local criteria judge; the strict run is the upgrade flow (--require-anchor-root).
-      - name: Mobile anchor freshness (fail-soft; strict runs in the upgrade flow)
-        run: pnpm run verify:mobile-anchors
       - name: Architecture import cycles
         run: pnpm run verify:import-cycles
       - name: Architecture file budgets
@@ -164,7 +161,7 @@ jobs:
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
       # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
-      - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
+      - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/run-checks.mjs typecheck
       # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
@@ -209,7 +206,7 @@ jobs:
       # resource scoper code survived the build here, where the artifact exists.
       - name: Renderer page bundle carries the SVG scope code
         if: steps.classify.outputs.code == 'true'
-        run: node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs
+        run: node scripts/gates/assert-scoper-artifact.mjs
       # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
       # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup /
       # dsh-chamber-seed-open-in — dist/index.js): their esbuild entry/external

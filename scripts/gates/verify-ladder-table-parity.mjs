@@ -1,7 +1,7 @@
 /**
  * Ladder-table parity gate.
  *
- * The target is "four ladders -> one reducer + ONE TABLE". The gate covers both
+ * The target is "three ladders -> one reducer + ONE TABLE". The gate covers both
  * halves:
  *
  *  1. LOCKSTEP - the values are recorded in `packages/dsh-stream-state/tables.json`,
@@ -17,7 +17,7 @@
  *     would be a comment: a green "0 locked + N retired" line with a ladder never
  *     collected at all.
  *
- * WHY A GATE AND NOT A UNIT TEST: the modules live in four different packages, and the
+ * WHY A GATE AND NOT A UNIT TEST: the modules live in three different packages, and the
  * dependency direction is "modules import the package", so a package test cannot read
  * them. This script reads their source declarations (the values are literal constants)
  * and compares. Plain constants are read by name; the config-object defaults are read
@@ -50,36 +50,6 @@ const TABLES = join(REPO_ROOT, 'packages', 'dsh-stream-state', 'tables.json')
  * the field name when `object` names the exported config object holding it.
  */
 export const LOCKSTEP = [
-  {
-    table: 'tables.ladders.mobile.thresholdMs',
-    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
-    name: 'STALL_THRESHOLD_MS',
-  },
-  {
-    table: 'tables.ladders.mobile.pollMs',
-    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
-    name: 'STALL_POLL_MS',
-  },
-  {
-    table: 'tables.ladders.mobile.resyncCooldownMs',
-    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
-    name: 'STALL_RESYNC_COOLDOWN_MS',
-  },
-  {
-    table: 'tables.ladders.mobile.resyncWindowMs',
-    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
-    name: 'STALL_RESYNC_WINDOW_MS',
-  },
-  {
-    table: 'tables.ladders.mobile.resyncMax',
-    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
-    name: 'STALL_RESYNC_MAX',
-  },
-  {
-    table: 'tables.ladders.mobile.failedMs',
-    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
-    name: 'STALL_FAILED_MS',
-  },
   // The Electron frame watchdog cannot import the table (packages/desktop has no
   // dependency edge to dsh-stream-state), so its constants stay locked to the same
   // delivery.scheduleProbe leaves the Swift watchdog is locked to.
@@ -104,8 +74,8 @@ export const LOCKSTEP = [
     name: 'RENDERER_INPUT_BLOCK_RTT_MS',
   },
   // The last surviving copies are retired: the authority probe ladder reads
-  // LADDER_TABLES.authority directly, mobile reads LADDER_TABLES.mobile, and open-in
-  // reads LADDER_TABLES.streamHealth. The list stays as the guard for any future
+  // LADDER_TABLES.authority directly, and open-in reads LADDER_TABLES.streamHealth.
+  // The list stays as the guard for any future
   // module that declares a local copy again (a found constant with a different value
   // is a failure; a missing one is the retirement working).
 ]
@@ -125,19 +95,6 @@ export const LOCKSTEP = [
  *    copy takes.
  */
 export const CONSUMERS = [
-  {
-    table: 'tables.ladders.mobile',
-    source: 'packages/dsh-chamber-client-ui-mobile/src/client/session-stall.ts',
-    reference: 'LADDER_TABLES.mobile',
-    retiredNames: [
-      'STALL_THRESHOLD_MS',
-      'STALL_POLL_MS',
-      'STALL_RESYNC_COOLDOWN_MS',
-      'STALL_RESYNC_WINDOW_MS',
-      'STALL_RESYNC_MAX',
-      'STALL_FAILED_MS',
-    ],
-  },
   {
     // The client-core executor's probe cadence (the sidebar shared module moved
     // into the shared client core); the authority ladder replaced the 190 s

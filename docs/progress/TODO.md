@@ -86,7 +86,7 @@
 - 代码图标族已改 `useId`；仍写死文档级 id 的只剩 `BrandWordmark` 的 whale/badge clip 与附件
   `dshDropOverlayClip`。N-ctx 同文档重复定义，WKWebView 首次绘制可能整块失绘并缓存。
 - 改法：两族也用 `useId()` 前缀，或 clip/mask 只依赖 viewBox/路径。chamber 侧 `svg-resource-scope.ts` 已改名
-  自定∩自用 id；gateway/mobile 独立壳未覆盖。
+  自定∩自用 id；gateway 移动单壳不再安装 scoper（mobile 适配包已退役）。
 - 退出：上游两族私有化后删 scope 缓解。
 
 ### 6. 会话状态的只读观察者与未读事实
@@ -177,7 +177,7 @@ selection scope、I-12 谱系压制）；剩余 = 打包态/真机各跑一次�
   种子词提供；缺失即红（rc.2 `shortcuts` 事故）。阻塞 = 无「包名→client 入口」映射、worktree 无 vendor 树；前置 =
   在已物化 pin 上写只读探针 + 负例（`test:upgrade-tools`）。
 - **P3 侧栏声明−渲染差集**：上游 `sidebar.*` 声明 − 本仓声明/渲染，逐条「已渲染/有意不渲染（带理由）/待裁」；
-  按 `verify-mobile-anchors.mjs` 的 fail-soft + `--require-anchor-root` 落地。阻塞同 P4。
+  按 registry 声明表 + 实际渲染点 grep 落地；原 `verify-mobile-anchors.mjs` 已随移动适配包退役。阻塞同 P4。
 - 关闭：两条在某个已物化 pin 各跑通一次（含严格模式），负例覆盖「新增键被吞」与「改名假阳性」。
 
 ### 15. UI 对齐：待裁面与维持差异
@@ -640,14 +640,13 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
   `./client/**` 不受判；已知零消费者导出 `isFixedSectionId`、`transportTargetChangedSpec`
   （`sourceFingerprintIsCurrent`/`staleOwnedSessionIds`/`orderApplyOps`/`BATCH_FAILURE_POLICY` 已随实现消失，
   勿再寻找）。
-- **真实第二实现**：`openPromise` 三态证据在 mobile `session-stall.ts` 与 open-in
-  `session-stream-health-probe.ts` 仍是两份；`safeStorage` 访问器 5 份（gateway-provider / host-assembly /
+- **第二实现复核**：`openPromise` 三态证据原在 mobile `session-stall.ts` 与 open-in
+  `session-stream-health-probe.ts` 各一份；mobile 包退役后只剩 open-in 一份；`safeStorage` 访问器 5 份（gateway-provider / host-assembly /
   main / registry-projection / sidecar-ctx）；spec 分类的客户端对照文件（原 `plugin-diff.ts`）已不存在——
   下一轮先重新取证再收口。
 - **client/seed god 文件与形态**：`PluginDialog.tsx`（约 32 个 useState）、`ConnectionsSection.tsx`、
   `ServerSection.tsx`（JSX 内派生状态残留）等已在棘轮内；`packages/dsh-chamber-seed-git-worktree/src/core.ts`、
-  `packages/dsh-chamber-seed-archive-cleanup/src/core.ts`、`packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`、
-  `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts`、`packages/renderer/src/live-graph.ts` 待下一轮裁决是否纳入棘轮。
+  `packages/dsh-chamber-seed-archive-cleanup/src/core.ts`、`packages/renderer/src/live-graph.ts` 待下一轮裁决是否纳入棘轮。
 
 #### 1.6 跨包逐字重复复核（口径与结论）
 
@@ -673,10 +672,10 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 ### 2. 产物新鲜度守卫（G2/G3/G5/G7/G8；未排期）
 
 > `desktop/dist/control-plane/**`（标记守卫）、`gateway/dist/**`（标记守卫）、
-> `gateway/host-packages/dsh-chamber-client-ui-mobile/**`、`desktop/dist/preload.cjs`、
-> `renderer/src/generated/**` 与 `gateway/dist/index.js`（用包自身 build.mjs 重建-比对）已有「陈旧/缺失 ⇒ 红」的
+> `desktop/dist/preload.cjs`、`renderer/src/generated/**` 与 `gateway/dist/index.js`
+> （用包自身 build.mjs 重建-比对）已有「陈旧/缺失 ⇒ 红」的
 > 比对门（`scripts/gates/verify-artifact-freshness.mjs` 的 tests/full，经 `ci.yml` 进 CI）；seed `dist/index.js` ×4 +
-> `dsh-runtime/dist/index.js` + mobile `dist`/`lib` 的新鲜度归 C8（`scripts/upstream/verify-upstream-touchpoints.mjs`
+> `dsh-runtime/dist/index.js` 的新鲜度归 C8（`scripts/upstream/verify-upstream-touchpoints.mjs`
 > 重建-比对，清单单一来源 `scripts/lib/build-artifacts.mjs`）；`scripts/gates/verify-electron-artifacts.mjs`
 > 的 macOS 腿/CI 另执行编译产物冒烟。G1=`verify:test-wiring`、G4/G6 同属该门。本节只留仍无守卫的产物与最小
 > 守卫建议；开放状态见 STATUS「产物新鲜度」条，design 21 §7 登记。
@@ -689,7 +688,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 |`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`scripts/build-host-graph-package.mjs`（各 seed 包 `dist` cpSync）|忽略|只有行序/outDir 断言（`scripts/release/packaging-manifest-lockstep.test.mjs`）|打包 seed 旧宿主包|
 |vendor `allowBuilds` 锁步（根 `pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）|人工同步|提交|无|新增原生依赖漏登或漏 deny 会静默漂移|
 
-`dist/` 整族在 `.gitignore`：干净 checkout 的「缺失」是正常态——首批 host/dsh-runtime/mobile 产物须先由
+`dist/` 整族在 `.gitignore`：干净 checkout 的「缺失」是正常态——首批 host/dsh-runtime 产物须先由
 `pnpm run build:artifacts` 自举，其余按需构建；要防的是本地/打包态的「存在但陈旧」——CI 每次全新构建，
 看不到这一类。上表 `scripts/*` 指 `packages/desktop/scripts/*`（Electron 构建脚本；gateway 侧
 `packages/gateway/scripts/*`），非仓库根 `scripts/`。

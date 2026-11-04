@@ -840,21 +840,21 @@ ${DASHBOARD_SEMVER_JS}
 `
 
 /** The mobile light surface — a DEPRECATED landing page kept as the shunting
- * compatibility target: the mobile client plugin is now injected on every
- * device, so the document immediately hands the browser back to the desktop
- * entry through a meta refresh. The manual link below stays as the fallback
- * (a refresh-less engine, or the operator reading the page source). */
+ * compatibility target: mobile layout is now upstream-native, so the document
+ * immediately hands the browser back to the desktop entry through a meta
+ * refresh. The manual link below stays as the fallback (a refresh-less engine,
+ * or the operator reading the page source). */
 export const MOBILE_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- The plugin is always injected now: hand the browser back to the desktop
-     entry. The visible link below is the no-refresh fallback. -->
+<!-- Mobile layout is upstream-native now: hand the browser back to the
+     desktop entry. The visible link below is the no-refresh fallback. -->
 <meta http-equiv="refresh" content="0;url=/?desktop=1">
 <title>dsh gateway</title>
 <style>body{font-family:system-ui;background:#0b0f14;color:#e6edf3;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}</style>
 <main style="text-align:center;padding:2rem">
   <h1>dsh gateway</h1>
-  <p>This compatibility entry forwards to the mobile view (design 17 §18.3).</p>
+  <p>This compatibility entry forwards to the desktop entry (design 17 §18.3).</p>
   <!-- The ?desktop=1 escape hatch is the shunting loop exit (dispatch.ts
        4.5): without it a mobile UA would be redirected right back here. -->
   <p><a href="/?desktop=1" style="color:#58a6ff">Open the full dsh frontend →</a></p>

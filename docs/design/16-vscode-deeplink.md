@@ -241,8 +241,8 @@ detectVscodeAvailability(platform): { available: boolean }
   `stroke-width 1.8`、`r5`，颜色继承所在槽）——chamber 不再有任何自造 mark；
 - **`shell.overlay` 槽保留在 layout fork 中**（`AppFrame.tsx` 渲染
   `<div data-shell-overlay>`，层 `position:absolute; inset:0; z-index:20`，
-  `.overlayLayer > * { pointer-events: auto }`），现由 mobile 客户端插件的抽屉开关
-  等使用——本设计不再用它承载头部按钮。
+  `.overlayLayer > * { pointer-events: auto }`），现由其余 overlay 座席使用；mobile
+  适配包退役后不再有抽屉开关——本设计不再用它承载头部按钮。
 
 ### 6.2 coordinator（单例，git 插件同款模式）
 

@@ -239,7 +239,7 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 3. 浏览器 6 槽池仍全局；快速失败只缩短占槽，不增加并发。
 4. Pinned gateway 仍每请求 TLS；>10% pin 请求占比再评估 per-socket pin agent。
 5. 宿主 mux 2s×2 心跳可能误杀；可 vendor patch 调宽，不在代理代答 pong。
-6. gateway/mobile 不消费 page-channel link；本设计为 desktop 形态。
+6. gateway 移动入口不消费 page-channel link；本设计为 desktop 形态。
 7. 大 session list 仍受 page-channel 4MiB 单帧/256KiB 信用窗约束；需另案分片。
 8. 入站地板是 30s 的 client-body idle，不是 35s `requestTimeout`：loopback 实测（Node 24）连续 49s 上传与 40s 中途停顿都不触发 35s 上限，故慢上传的真风险只在「读请求体超时」。打包态 Electron 主进程未复测。
 9. down grace 默认 30s；超过该窗的在途仍会被 reconnect revoke（不是无限期保护）。确认窗到期时若有在途探针，最多顺延一个 provider 预算。

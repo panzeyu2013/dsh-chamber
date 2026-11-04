@@ -12,7 +12,7 @@
 > `plugin_apply` / `ssh_plugin_undo` / materialize / npm search / local add-remove 同步退役。
 > **保留**：`GET /chamber/plugins`（seed-cache 读）、`PUT /chamber/plugins`（桌面同步
 > chamber 宿主包的供给面）、`GET /chamber/plugins/installed`（服务端 protected 行投影）、
-> `/chamber/runtime/*` 控制器与移动端/PWA 面。§2.2/§2.3/§2.5/§6.2-§6.6/§6.11.3 中描述
+> `/chamber/runtime/*` 控制器与已弃用的移动兼容入口（gateway 不服务 manifest/SW）。§2.2/§2.3/§2.5/§6.2-§6.6/§6.11.3 中描述
 > install/remove/undo/tasks/materialize 的段落为历史契约，不再有实现；§6.11.5 读面投影、
 > §2.4 seed 与 §6.11 的播种豁免仍有效。
 
@@ -59,13 +59,13 @@ remove 先于 add、可 defer 重启；write-file 上限 50 MiB；spec/name 白�
 ### 2.3 插件管理 UI（写面按钮/对话框已退役，只读行保留）
 四个来源（本地 / ssh+dsh / gateway / http 直连）共用 `PluginDialog`（`PluginDialog.tsx`，§6.6；旧 `PluginSyncModal`/`PluginInventoryView` 已删），卡片按 `target.kind` 把数据源喂给同一对话框；gateway/http 直连区**非只读**：含已安装行/移除/撤销/restart 面板/tasks 投影/sync 状态（http 直连无可执行后端，只读）。`plugin-diff.ts` 纯函数族（missing/update/extra/materialize/unsyncable/consistent——**无 scope 逻辑**；受保护行过滤在**输入侧**，见 §6.11：`computePluginDiff` 只吃第三方/materialize 行）、plugin-inventory-text/plugin-diagnostic 纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 注册表包（含 archive-cleanup），并排除调用方传入的注册表派生 expected 名单（仅 Loader 已加载事实层）——**这两个前缀分类器是 Loader 清单的展示分类，不是安装门，随 §6.11 落地后继续保留**）。测试 = connections 纯模块文件，**无组件级测试**。「chamber 内置（注入）」表行集不写死包名，由控制面 `CHAMBER_HOST_PACKAGES` 经 desktop IPC 投影（`chamber.packages[]`）驱动，UI 逐行映射；`remoteNeedsSeed`/重启提示/seed-cache 漂移/同步包表同样逐包派生（design 13 §6）。行派生收敛为纯函数 `deriveChamberRows`
 （plugin-inventory-text.ts，只回 label KEY 与版本 STRING，组件只做 descriptor→JSX 映射），
-由 `test/plugin-inventory/chamber-rows.test.ts` 表驱动测试覆盖（含 LOCAL 目标读自身清单、空 expected 不谎报 seed-cache、gateway 客户端行由 Loader inventory 分类派生、inventory 不可用时 unknown 行而非写死包名）。
+由 `test/plugin-inventory/chamber-rows.test.ts` 表驱动测试覆盖（含 LOCAL 目标读自身清单、空 expected 不谎报 seed-cache、gateway 客户端行由 Loader inventory 分类派生（无 packaged client plugin 时为零行）、不写死包名）。
 
 ### 2.4 chamber 宿主包同步与 seed
 桌面 ready 自动 `syncGatewayChamberPlugins`（gateway-provider.ts；main.ts 装配）；gateway `PUT/GET /chamber/plugins` 白名单三包缓存（`dsh-chamber-seed-client-graph`、`dsh-chamber-seed-git-worktree`、`dsh-chamber-seed-archive-cleanup`（design 24）；plugins.ts 白名单 + 大小上限；0700/0600/原子 no-follow；上传读体 8 MiB 上限在 routes.ts `readUploadJsonBody`，非 plugins.ts）；seed = extraneous + patch overlay（不进 package.json，control-plane/index.ts），每次 spawn（`start`/`restart` + 健康自动重启）前 seed thunk 重求值自愈（02 §2.6）；激活探针期望集按实际同步包
 逐包派生（`syncedHostDomainProbeNames` → `activationProbeNamesForDomains`；无二元
 `hasSyncedHostSeed` gate——空缓存 = 基础缩减集，部分同步 = 已挂载域）；
-移动端 `dsh-chamber-client-ui-mobile` = 唯一随 gateway 发行物打包 seed 的 chamber 客户端插件（17 §3/§10.2）。
+移动适配包已退役：gateway 不再随发行物打包任何 chamber 客户端插件，移动布局由上游 dsh 前端提供（17 §3/§10.2/§18）。
 
 ### 2.5 gateway 运行时受控重启
 `POST /chamber/runtime/restart`（dispatch 无条件挂载、非 ready-gated；**仅 ready/degraded 可重启**；202 + status 轮询 restart running/ok/failed + operationError，resolve≠success，18 §9.3）；单飞 = manager 标志 + route 409 + restartLocal 与健康重启共用串行化（local-connection.ts）；**激活事务**（startup/apply-now/restore-builtin/回退路径）快照/回退覆盖整棵 dsh-home（runtime-manager.ts `snapshotDshHome` 全树拷贝；`/restart` 本身 = restartLocal 受控 spawn、**无快照**）；settings dsh-runtime 段 gateway 分支经 renderer fetch + `pollGatewayReady`。停机/错误/restart-exhausted 的恢复原语是 `/chamber/runtime/start`（决策 12，§6.2）；`restartLocal` 本身拒绝 stopped/error/restart-exhausted。
@@ -203,8 +203,8 @@ ssh 后端动词映射到既有 IPC（readManifest=plugin_list、apply=plugin_ap
 chamber 内建表（registry 驱动的宿主包行——注册表现有四行 client-graph / git-worktree / archive-cleanup /
 open-in，其中 open-in 标 `localOnly`：**该行只列在本地目标**，非本地目标的行集 = 该目标适用行
 （`applicableChamberPackages` ⇒ local 4 行、ssh/gateway/http 3 行；退役
-「非本地目标渲染『本地形态专用』」的 badge 方案；状态列本身仍按 badge 渲染），
-移动客户端行 mobile 仅 gateway 源显示、标注网关随发行物注入）→ 第三方区（已安装 + 逐行卸载 + 添加：
+「非本地目标渲染『本地形态专用』」的 badge 方案；状态列本身仍按 badge 渲染；
+移动客户端行已随 mobile 适配包退役，gateway 源不再有该行）→ 第三方区（已安装 + 逐行卸载 + 添加：
 spec 输入 + npm 搜索 + 本地导入）→ 恢复/动作行；
 http 直连只读。
 - 区域语义：chamber 区（状态源 = 后端 chamberProvision/loadedFacts；
@@ -410,9 +410,9 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样进入实例树（�
 - **产物新鲜度的守卫覆盖面**（§6.11 漂移暴露）：`packages/desktop/dist/control-plane/**` 与
   `packages/gateway/dist/**` 有"**存在但缺当前标记 ⇒ 失败**"的标记守卫（缺失才按需构建，绝不静默自愈）；
   `scripts/gates/verify-artifact-freshness.mjs`（`run-checks tests/full`，经 `ci.yml:179` 进 CI）覆盖
- `gateway/host-packages/**`、`dist/preload.cjs`、`renderer/src/generated/**` 与 `gateway/dist/index.js`（包自身
+ `dist/preload.cjs`、`renderer/src/generated/**` 与 `gateway/dist/index.js`（包自身
  `scripts/build.mjs` 临时副本重建后逐字节比对）的「重跑/重建比对」；seed `dist/index.js` ×4 +
- `dsh-runtime/dist/index.js` + mobile `dist`/`lib` 的新鲜度由 C8（`scripts/upstream/verify-upstream-touchpoints.mjs`，
+ `dsh-runtime/dist/index.js` 的新鲜度由 C8（`scripts/upstream/verify-upstream-touchpoints.mjs`，
  清单单一来源 `scripts/lib/build-artifacts.mjs`）独占，
   `verify-electron-artifacts.mjs`（macOS 腿/CI）执行编译产物冒烟。仍无守卫：`dist/web/**`、`dist/host-*-package/**`、
   vendor `allowBuilds` 锁步；CI 也从未真跑出 `SMOKE PASS`（smoke 恒 SKIP）。仍未落地的最小守卫建议（G2/G3/G5/G7/G8；

@@ -197,8 +197,8 @@ export interface ControlPlaneOptions {
   hostOpenInPackageSourceDir?: string
   /**
    * Seed registry: additional chamber seed entries beyond the four base host
-   * packages — the seam for browser-side client plugins in hosted frontends (e.g.
-   * the gateway mobile slot). Every entry rides the same built-artifact gate,
+   * packages — the seam for browser-side client plugins in hosted frontends. No
+   * production caller uses kind 'client' today. Every entry rides the same built-artifact gate,
    * profile seed lifecycle and `--patch` overlay as the host packages; kind 'client'
    * entries carry no probe coupling, and an absent sourceDir is a warned stub skip,
    * never an error.

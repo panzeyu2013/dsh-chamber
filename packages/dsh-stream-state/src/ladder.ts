@@ -280,20 +280,3 @@ export function streamHealthLadder(config: {
     ],
   }
 }
-
-export function mobileStallLadder(config: {
-  readonly thresholdMs: number
-  readonly cooldownMs: number
-  readonly windowMs: number
-  readonly max: number
-}): Ladder {
-  return {
-    name: 'mobile-session-stall',
-    quotaWindowMs: config.windowMs,
-    tiers: [
-      // Fires only on PROVEN loading-with-no-open; an unknown liveness bit or a session
-      // with nothing in flight fails closed here instead of in a host-private gate.
-      { name: 'resync', afterMs: config.thresholdMs, cooldownMs: config.cooldownMs, quota: config.max, requiresStuckEvidence: true },
-    ],
-  }
-}

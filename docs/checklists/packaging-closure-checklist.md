@@ -20,6 +20,7 @@
 - [ ] `build:renderer`：`dist/assets/*` 与 `manifest.json` entries一一对应（`__DSH_BOOT__` 指向真实bundle）。
 - [ ] host包：四个 `dsh-chamber-seed-*` 的 `dist/index.js` 与 `host-graph-seed.ts` 的seed源路径一致、`files` 含dist；前三个随 `build:host-graph-package` 拷进 `desktop/dist/host-*-package`（远端seed与gateway上传同源）；**open-in的 `dist/host-open-in-package` 只供本地控制面seed**（`chamberHostSourceDirs` 刻意不含该行，registry `localOnly`，design 20 §6）——打包后确认远端/网关目标收不到它。
 - [ ] `build:desktop` 完整链在electron-builder前生成全部上述产物。
+- [ ] `bundle-dsh` 的 prune 日志出现「保留 N 个 bundle 详情文档」；出现「裁剪删除了 … 个 locale meta.detail 声明的运行时文档」即封装失败——`docs/` 下的运行时 Markdown 不得被裁剪（design 18 §3.7）。日志之前应看到「裁剪规则 v… 不符，重新封装」或直接重封：封装 manifest 的 `dsh.pruneRevision` 与当前规则不符时不会复用旧树。
 
 ## 3. 打包态冒烟
 

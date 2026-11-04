@@ -5,7 +5,8 @@
 > CLI，并做 chamber 宿主包的 ready-time 分发；此前散落于 05 §7.4/§7.6、03 §2.2 与 STATUS 的契约
 > 实体在此补全）；模型与双后端契约的收敛权威在 design 21 §3，未完成门禁见 docs/progress/STATUS.md。
 > **范围（连接模型 v2，17 §2/§9.1）**：只服务 `{kind:'dsh', transport:'ssh'}` 目标——gateway
-> 目标（http/ssh）的插件与编排面走 gateway 自身编排面（17 §10），不经本 exec 通道。只做
+> 目标（http/ssh）没有插件写面；只保留桌面同步的 seed cache 与 `/chamber/plugins/installed`
+> 读投影，不经本 exec 通道。只做
 > **编排**（远端 dsh plugin CLI 经 exec 通道驱动），不重造 dsh 宿主插件系统本身；设计 08
 > 增加的 Git 执行仍在远端 dsh 实例内，本设计只把 chamber 自带的 host package 分发过去，绝不
 > 增加 `ssh ... git ...`。
@@ -166,9 +167,8 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
   矩阵是契约**：LOCAL 目标的 expected 与本地列都读它自己的 profile 清单（`localList.chamber`），
   gateway/http/ssh 读桌面本机清单投影（ssh 一份来自 `loadSync` 已取的本地清单，gateway/http 一份来自
   专用的本地清单读取；此前 ssh 的本地列恒为「未知」、探测失败还会清空表格），ssh 在远端
-  探测成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。gateway 的**客户端插件
-  行**（移动端入口）由 Loader inventory 中 `classifyChamberClientPlugin` 的分类派生
-  （`@dsh-chamber/dsh-client-ui-*` 前缀，不是包名字面量）；inventory 不可用时渲染 unknown 行，绝不
+  探测成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。gateway 不再有
+  packaged client plugin（mobile 适配包已退役），因此客户端插件行为零；不渲染 unknown 行，也绝不
   显示写死的包名。
 - 远端同步视图 + 本地列表视图；`plugin-diff` 一键应用本地清单。
 - chamber 内建注入可见化：`@dsh-chamber/dsh-chamber-seed-client-graph` 行显示 installed/patched 状态 +

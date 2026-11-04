@@ -192,8 +192,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 >    absent/unknown 走 2s 兜底、未 settle 过了反馈窗给可操作面（P2：删除「越界后 0ms 重臂仍不出租客」的旧形态；`unknown` 不再折进 hero）。**Rejected alternatives（遮罩定时器形状）**：曾保留数值哨兵表达"不挂"（`0`=非 held、`Infinity`=坏钟）——`0` 是有限数，调用方的 `!Number.isFinite` 守卫放它过去并挂出 0ms 定时器，在"每次渲染读钟 + tick 是本 effect 自身依赖"的形状下自激（实测 3.4e4 次/秒安装、等量清理、主线程 48% 在 WebKit 定时器堆），且两个哨兵是同一操作语义的两种写法；故改为 `number | null` 单义出口，由类型系统强制调用方处理"不挂"。
 > ④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账
 > （B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；
-> ⑤ **阈值**：四条阶梯的值集中于 `tables.json` 的 `ladders`（`mobile` / `authority` / `streamHealth`），
->    消费方直接读表（producer probe、App escalation、mobile、open-in）；`scripts/gates/verify-ladder-table-parity.mjs`
+> ⑤ **阈值**：三条阶梯的值集中于 `tables.json` 的 `ladders`（`authority` / `streamHealth` / `delivery`），
+>    消费方直接读表（producer probe、App escalation、open-in）；`scripts/gates/verify-ladder-table-parity.mjs`
 >    保留为「未来本地声明」的漂移守卫（自测见同目录 `.test.mjs`）。阶梯**调度半**（tier/cooldown/配额/窗口/证据门）由
 >    包内 `planLadder` 单源持有；**边界**：open-in 的具象 `resync()`、producer 权威执行端的 I/O 仍在宿主，
 >    引擎只持调度（字段级注记见 `ladder.ts` 的工厂）。
@@ -244,9 +244,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 |---|---|
 | 保留各执行器的分散判定，只在其上加锁 | 锁只能串行化同一进程内的调用；被否是因为它锁不住**跨模块不变量**（同一时限两份记账、同一阈值两处取值、同一载波两个所有者）——本轮三类症状都出自这类不变量 |
 | Swift 与 TS 各写一份载波契据、各自维护 | 漂移无法机器检出；载波阈值由纯 TS 包所有，Swift 的 `CarrierDecision` 只镜像所需决策，由 `scripts/gates/verify-stream-state-swift-parity.mjs` 与 `verify-ladder-table-parity.mjs` 钉住。Swift 窗口恢复由原生 `RendererHangWatchdog` 和 `RendererRecoveryPolicy` 所有。 |
-| 把 DOM 适配与提示运行壳也收进纯包 | 纯包必须零 import（`packages/dsh-stream-state/scripts/test.mjs` 会红）；DOM 面是各宿主特有的、与「单一所有者」判据无关——mobile 的约 9 成行数正由此构成 |
+| 把 DOM 适配与提示运行壳也收进纯包 | 纯包必须零 import（`packages/dsh-stream-state/scripts/test.mjs` 会红）；DOM 面是各宿主特有的、与「单一所有者」判据无关——已退役的 mobile 适配包约 9 成行数正由此构成 |
 | 把所有等待形状都换成原语 | `host-graph` 的异步探测重试环表达不了（`waitForCondition` 的谓词是同步的），`journal-stream` 的 `AbortSignal.timeout` 已是标准原语；故逐站记录「不迁」而非硬套 |
-| 用「mobile 主模块 ≤150 行」作为阶梯单源的验收 | 原定值以「mobile 只保留薄适配」为前提，实测该模块约 9 成为 DOM 与运行壳；被否的理由是**压行只能靠把代码搬到兄弟文件（总行数不变）**——那正是本次重构要消除的自欺。改以「阈值与规则单源 + 决策核心无本地阈值」为判据 |
 
 **Swift 载入状态所有权**：原先的 `LoadState` TS/Swift 镜像从未接入 Swift 生产恢复链，现已退役；原生探针、重载预算和失败页面的所有者是 `RendererHangWatchdog` 与 `RendererRecoveryPolicy`。保留 `CarrierDecision` 的跨语言锁步，因为载波阈值仍由 TS 表提供。**Rejected alternatives**：把 `LoadState` 再接到 Swift 恢复链会形成两套探针计数、重载预算和失败判定；只保留镜像与测试则继续让未执行的模型看似覆盖了原生行为。
 
@@ -328,7 +327,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   `heartbeat lost after N unanswered ping(s)`——整行可被
   `closed \(([^)]*), (\d+)ms\)` 解析）。代理自身心跳以外的拆链此前无日志，
   **实例侧** 2s 心跳判死在 gateway 侧完全无痕——该日志让「实例判死」与
-  「客户端主动重连」在 journal 中可区分，是 design 17 §18 连接稳定性取证的
+  「客户端主动重连」在 journal 中可区分，是 design 17 §8 / design 27 §6 连接稳定性取证的
   第一手证据来源；行为（拆链顺序/计数/销毁）与之无关，且 logger 抛异常不会
   锁死拆链。**归因边界**：cause 记录的是「先观察到哪条腿结束」——
   代理**主动**撤销（`closeAllStreams`/revoke）也会记成 `upstream close`，
@@ -384,8 +383,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
      同 tick 去重集合 + 跨 tick 的 60s 账本；账单在 App，producer 用 `escalationBlocked`
      避免被丢弃的派遣吃掉 ladder 配额）；**local 刻意不排除**（本次缺陷现场就是本地实例）。
   **③ notice（App 升级 ladder）**：症状 310s（= reconnect 190s + 原 120s 宽限）、仍有 stuck
-     证据 ⇒ 顶部非模态横幅（重连 / 重载应用页面 / 忽略），**绝不自动重载**（与 mobile
-     `session-stall.ts` 同纪律）；`progressStamp` 前进（一次健康裁决）即撤销。
+     证据 ⇒ 顶部非模态横幅（重连 / 重载应用页面 / 忽略），**绝不自动重载**；`progressStamp` 前进（一次健康裁决）即撤销。
   **核心取舍**：升级的唯一依据是「拿不到权威结论」，不是「沉默很久」——长工具/长推理
   的合法静默与真卡死在 App 层不可区分，误升级（每次 reconnect 重放全部会话 baseline）
   会引入比原缺陷更糟的风暴；probe 只是读（+ 可能的写回），因此可以按配额廉价重复。
@@ -413,9 +411,9 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
      seed 宿主包本可监听 `agent/status` 并周期性再断言——不改上游即可让**所有**客户端（含
      官方 UI）免于丢帧。暂缓原因：只覆盖 chamber 能 seed 的实例、需重启生效，且与 design 13
      的保护集合/注入流程耦合；登记为后续根治选项，不阻塞本次仓内修复。
-   - **把运行位权威下放进各宿主自己的停滞阶梯**：mobile/desktop/Swift 各有自己的停滞面；
+   - **把运行位权威下放进各宿主自己的停滞阶梯**：desktop/Swift 各有自己的停滞面；
      权威只允许一个所有者（纯包 reducer + producer 执行端），各宿主的阶梯只调度自己的面
-     （mobile 的 DOM 停滞、open-in 的对话流健康），不复制 running 位判定。
+     （open-in 的对话流健康），不复制 running 位判定。
    - **只做 ③ 横幅、不做 probe**：`running` 位不会收敛，用户唯一出路是整页重载
      （丢页面状态），而真正的收敛动作其实只是（最多）两次独立 `session.list`（N=2 确认后可能写回一次）。
    - **用 disconnected/close 事件驱动升级**：本次缺陷本体是「carrier 静态半死、socket
@@ -531,8 +529,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
     的 patch overlay 增一行 config 调宽 `websocketHeartbeatIntervalMs`（宿主侧 schema 有该键，
     `api-gateway` 插件 `Config.websocketHeartbeatIntervalMs`，默认 2s；调宽它只动宿主自己的判死容错（~4–6s ⇒ 例如 30s×2），不注入任何字节。代理下行腿自己的心跳仍是 30s 周期、回答后才重新计时，最坏约 60s 才 onDead（`ws-heartbeat.ts`）。
   - **拒绝替代**：整页**无界**自动重载（丢页面状态；页面级 delivery 阶梯里那条
-    `document-reload` 是有界、记账、预算内的独立档，不在本条之列——本节与移动端
-    `session-stall.ts` 同纪律地不做无界重载）；`session/follow` 盲空闲超时（合法长静默：实测 TTFT 75s
+    `document-reload` 是有界、记账、预算内的独立档，不在本条之列——本节同纪律地不做无界重载）；`session/follow` 盲空闲超时（合法长静默：实测 TTFT 75s
     起、工具可数分钟，必然误报）；fork `ui-chat` 改错误行（82 文件，design 09 已拒）；
     代理注入合成 `end`/未知帧逼客户端重试（未知帧会让客户端 `failAll` 并关 socket，且空闲
     会话被周期性重放）；代理透明重放客户端流开帧（新宿主 socket 无流上下文，重放会触发
@@ -658,21 +655,18 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
     判据与阈值仍是原样；`carrier-churn` 提示按同批裁决整体退役，见上条），退役只删控制；行为锁在
     `test/session-health/*` 与 `test/ui-lock/instance-view-guard.test.ts`（后者同时锁「没有按钮」
     与「自动档仍在」）。
-  - **未闭合**：① 90 s 失败阈值、20 s 停滞阈值与 `open-stall` 触发阈值未经真机校准（误报代价 = 一次自动重建）；② **宿主永不回答**（socket 正常、宿主侧 `session/follow` 卡死）仍只能落到显式失败提示（手动重建已退役；页面级阶梯的自动档是仅剩的动作面，且只对有打开证据的形态有效，见上条 (f) 的覆盖缺口），根治在上游（首帧期限 + `doOpen` 必须写 `error`，见上游提案 §4.3/§4.7）；③ 移动端 `session-stall.ts` 已接同一证据门自动臂（：`sessionStallFace` 读具象 `openPromise`，`false` 才自动调 pinned `resync()`，共用同类 cooldown/预算账本，`STALL_FAILED_MS` 后文案转「会话内容未能载入」），呈现读取经 `presentedSessionId()`（只认 `byId` 里 `retainedBy.mainView>0`），但触屏档跑的是实例自带客户端栈、**没有 chamber fork** ⇒ 载波层（开帧校验/首帧期限/静默 socket 升级）在该档不存在，其恢复面只有该自动臂 + 手动重载（移动档另行处理，本轮退役只动桌面 chip/失败遮罩）；阈值同样未经真机校准。**注（评审 B4）**：`openPromise` 恒非空（在途 open：载波静默 / 宿主不答）时 `open-stall` 为假、自动臂按设计**不可达**，该形态只能靠载波层的静默升级（~20 s）与传输层看门狗 —— 真机验收不要指望页面自动臂兜住静默载波。
+  - **未闭合**：① 90 s 失败阈值、20 s 停滞阈值与 `open-stall` 触发阈值未经真机校准（误报代价 = 一次自动重建）；② **宿主永不回答**（socket 正常、宿主侧 `session/follow` 卡死）仍只能落到显式失败提示（手动重建已退役；页面级阶梯的自动档是仅剩的动作面，且只对有打开证据的形态有效，见上条 (f) 的覆盖缺口），根治在上游（首帧期限 + `doOpen` 必须写 `error`，见上游提案 §4.3/§4.7）；③ 原移动端 `session-stall.ts` 的自动臂已随 mobile 适配包退役；触屏档若复现会话打开停滞，按 design 17 §18.4 在 host/session 层加首帧期限/重建，不恢复 mobile 包。桌面档的 90s/20s 阈值仍未真机校准。
 
-- **第三次排查（渲染进程崩溃归因轮）：两条新事实 + 三处收敛**
-    1. **渲染进程在 JavaScriptCore 里崩溃，并被静默重载**（Apple 崩溃报告硬证据）：`~/Library/Logs/DiagnosticReports` 报告族经 2026-09-30 全量复核（**16 份 `responsibleProc=dsh-chamber`**，统计见本条末的复核更正），符号化栈为 `WTFCrashWithInfoImpl ← CodeBlock::setOptimizationThresholdBasedOnCompilationResult ← …JITWorklist::completeAllReadyPlansForVM ← llint_entry_osr_function_for_call ← JSRequestAnimationFrameCallback::invoke`（2026-09-30 逐份复核：入口恒为 WebSocket 消息任务派发，全库无 rAF 帧）；更早构建 9 份同族，走 `ScriptExecutable::newReplacementCodeBlockFor`（空指针 far=0x78）；**入口按 2026-09-30 复核为 WebSocket 消息任务（16/16）**，原记的「嵌套 async generator 驱动链」不再作入口判据。崩溃后 WebKit 秒级重启 WebContent 并**整页重载**：页面重新 boot 全部 shell 与会话，这段窗口就是用户看到的「载入历史…」+ 20 s 后健康 chip；该「留痕比例」在 shell.log 可核窗口内不可复现（3/3 均留有 `crashed` 痕迹），「完全静默」只适用于无该日志行的旧构建——这是「有概率一直加载历史」的第二个独立机制，也是前几轮流层兜底**修不到**的原因。**2026-09-30 复核更正（16 份报告）**：崩溃**不是** boot 窗口现象——进程存活 4.5 min–17.6 h（中位 3.4 h，速率 ≈0.29 次/小时页面存续）；**16/16 入口链相同**（事件监听器返回 → `MicrotaskQueue::performMicrotaskCheckpoint` → 微任务排空 → 热函数 OSR/FTL 层升级 → JSC 机件崩溃），而异步源各不相同（WS 消息 / 队列任务 / 定时器 / rAF），故应用侧没有可堵的入口；两种模式 = `ScriptExecutable::newReplacementCodeBlockFor` 空指针（+0x78 ×9、+0x48 ×1）与 `CodeBlock::setOptimizationThresholdBasedOnCompilationResult` RELEASE_ASSERT（6 次，指令字节 6/6 相同）。
-    2. **落地（客户端热路径收敛 + 载波等待有界 + 壳侧归因）**：
+- **第三次排查（渲染进程崩溃归因轮）：三处收敛**
+    1. **落地（客户端热路径收敛 + 载波等待有界 + 壳侧归因）**：
        - `remote-stream.ts`：`waitForRemoteStreamRetry` 的「无活跃 generation」等待**加上界**（`REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS = 30_000`，纯策略常量）；到期**以 `'expired'` 正常 resolve**（不是终局 error），调用方随即重开——实测"车道报无世代时，mux 开流本身仍然可用"，所以重开是真正能恢复的动作；同一次到期还经既有 `carrierFailed` seam 落一条事实，把"无进展的等待"从不可见变成可见。**这推翻了上一轮 ②③ 的"拒"**：旧理由（"只会把永久 loading 换成永久 error"）针对的是抛错，而这里是 resolve+重开，且保留本集退避，不可恢复的车道退化为每上限一次尝试而不是热循环。
        - `sidebar-scroll-sync.ts`：容器未就位时的**帧内重试链加上界**（`FRAME_TIGHT_BUDGET_MS = 200`，之后回 80 ms 定时器节奏；boot 窗口里原本每帧一次 DOM 走访），并把锚行定位从"全量遍历行"改为一次属性选择器（`CSS.escape`，无 `CSS` 环境回落原扫描）。
-       - `components/InstanceView.tsx` + 新纯模块 `frame-coalescer.ts`：相位采样的"每次变更排一帧"改为**合并采样**（首帧一次 + 间隔合并 + 尾部必采，`SURFACE_SAMPLE_MIN_INTERVAL_MS = 100`）——boot 窗口里原本等于每帧一次 React 同步 commit（正是崩溃栈的入口形态），语义不变（遮罩判定只依赖最终相位）。
+       - `components/InstanceView.tsx` + 新纯模块 `frame-coalescer.ts`：相位采样的"每次变更排一帧"改为**合并采样**（首帧一次 + 间隔合并 + 尾部必采，`SURFACE_SAMPLE_MIN_INTERVAL_MS = 100`）——boot 窗口里原本等于每帧一次 React 同步 commit，语义不变（遮罩判定只依赖最终相位）。
        - Swift 壳：`RendererCrashAttribution`（纯值）+ `MainWindowController` 接线——崩溃行现在带「距上次加载完成 X.XXs（boot 窗口内/已稳定）+ 本窗口第 N 次崩溃」，恢复落地再记一条「崩溃后 X.XXs 重载完成」。归因量是静默崩溃唯一能被事后判定的依据。
-    3. **仍未闭合**：JSC 崩溃本身是引擎缺陷（WebKit 22625），仓内只能降低触发概率与把状态可见化，不能消除；vendor 侧自身的 rAF 循环（chat/conversation/layout/trajectory）仍在同一批次里；页面事实的持久消费面仍是 STATUS「会话打开停滞」残余项；10:19 那次没有崩溃报告的流层卡死现归因于本 D4 开头的引擎判定补丁（普通 TypeError，不留崩溃报告）；JSC 崩溃与静默重载仍是独立故障（2026-09-28 15:28:33 的新报告与同族同源：主线程微任务路径 `operationOptimize → newReplacementCodeBlockFor`，`far=0x78`）。
 
 - **仍开放的实机验收与 soak（独立于上述已落地修复）**：① Swift 壳流式中点开 ×20（真机走查页面侧卡死是否复现）；
-  ② soak 采集 mux churn 与 JSC 崩溃率基线——`~/Library/Logs/DiagnosticReports` 的 WebContent 报告、`control-plane.log` 的
-  `browser close` 频率、`dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实；③ 载波/静默 socket 与
-  JSC 崩溃/静默重载（第三次排查）的兜底**未清理**，属独立故障。
+  ② soak 采集 mux churn——`control-plane.log` 的 `browser close` 频率、
+  `dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实。
 
 - **第四次排查（页面调度证据层）：把「我没被调度」从来源事实里分出去**
   1. **现场证据（2026-09-28 打包态实机）**：服务端同时刻全绿——壳外同源探针 30/30 轮
@@ -682,9 +676,7 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
      `session/list: timeout after 5000ms` / `Load failed` / `read deadline exceeded`，
      且 probe 都发生在窗口刚获得焦点那一秒、5 s 后窗口已失焦。机制：失焦/遮挡的 WKWebView
      会被 WebKit 节流甚至挂起，而 `document.visibilityState` 仍是 `visible` ⇒ 墙钟 deadline
-     先到期，页面却从没拿到运行机会。同批取证的另两条独立故障：WebContent 在 JSC
-     `operationOptimize → newReplacementCodeBlockFor` 的 async-generator 微任务路径崩溃
-     （`far=0x78`，15:28:33）⇒ 静默整页重载清空全部页面内事实；启动期
+     先到期，页面却从没拿到运行机会。同批取证的另一个独立故障：启动期
      `页面 emit 失败 dsh-chamber:runtime-state-changed …发生了JavaScript异常`（每次启动数条）
      让本地卡片的运行时行缺省为「未知 / 端口：—」。
   2. **单一所有者**：`packages/dsh-stream-state/src/evidence.ts` 是观测有效性的唯一分类器

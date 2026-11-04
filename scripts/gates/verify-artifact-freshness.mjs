@@ -2,23 +2,19 @@
  * verify-artifact-freshness.mjs —— 已提交/打包产物的「陈旧即红」守卫
  * （design 21 §7 G2–G8）。
  *
- * 为什么需要：以下四类产物不是 C8（seed dist ×4 + dsh-runtime dist + mobile
- * dist+lib）的覆盖对象——C8 独占 seed/runtime/mobile 的新鲜度判定，产物清单的
- * 单一来源 = scripts/lib/build-artifacts.mjs；这四类也没有各自的 freshness
- * 测试，因此「改了 src 没重建产物」可以一路绿到用户手里：
- *   1. packages/gateway/host-packages/<name>/ —— build:gateway 拷贝进发布包的
- *      mobile 插件（dist/index.js + lib/* 直接决定 /plugins 能否挂载）；
- *   2. packages/desktop/dist/preload.cjs —— tsc 编译产物，与 preload.cts 的
+ * 为什么需要：以下三类产物不是 C8（seed dist ×4 + dsh-runtime dist）的覆盖
+ * 对象——C8 独占 seed/runtime 的新鲜度判定，产物清单的单一来源 =
+ * scripts/lib/build-artifacts.mjs；这三类也没有各自的 freshness 测试，因此
+ * 「改了 src 没重建产物」可以一路绿到用户手里：
+ *   1. packages/desktop/dist/preload.cjs —— tsc 编译产物，与 preload.cts 的
  *      编译结果逐字节比对（成员面另有 G4 的锁步检查；本门比内容）；
- *   3. packages/renderer/src/generated/typert/<remote>/ —— gen-typert-remotes 的
+ *   2. packages/renderer/src/generated/typert/<remote>/ —— gen-typert-remotes 的
  *      生成产物，remote 装配契约（C4）读的就是它；生成器 emit 前清空输出树，
  *      本门按「重跑前后相对补集为空 + 目录键集 == C4 roster」判集合，再逐字节
  *      比对同名文件——单看交集内容会漏掉旧 remote 留下的孤儿产物；
- *   4. packages/gateway/dist/index.js —— build:gateway 的 esbuild 产物（包 exports
+ *   3. packages/gateway/dist/index.js —— build:gateway 的 esbuild 产物（包 exports
  *      的落点）；用包自己的 build.mjs 在临时副本里重建后逐字节比对（模块路径按
- *      packages/gateway cwd 归一），dist 不在场时 loud SKIP；
- *   5. packages/dsh-chamber-client-ui-mobile/src/** ↔ lib/client.js —— 同一个包的
- *      build.mjs 在临时副本里重建后比对（full 模式或 --mobile-rebuild 启用）。
+ *      packages/gateway cwd 归一），dist 不在场时 loud SKIP。
  *
  * 语义（与 control-plane-freshness / build-smoke 同款豁免）：
  *   - 输入缺失（clean checkout、未 build 的环境）⇒ **loud SKIP**，不判红；
@@ -52,75 +48,16 @@ const sameBytes = (a, b) => {
 }
 
 /**
- * One line of an esbuild bundle as a **module comment**: `// <relative path>`
- * ending in a real source extension. esbuild writes exactly this shape for every
- * inlined module; anything else that starts with `// ` is bundle CONTENT (a line
- * inside a template literal, a string, a license banner, …) and must survive the
- * canonicalization untouched.
- *
- * The extension gate alone is NOT enough: a template-literal content line may
- * itself end in `.ts` (`// ../packages/keep.ts`). The load-bearing test is that
- * the path part RESOLVES to a real file — `<root>/packages/<tail>` under one of
- * the given roots, or the raw path resolved against one of them. A line that
- * names no real module is returned verbatim, so a genuine staged-vs-in-place
- * byte difference stays visible. `--self-test` / the freshness test drive this
- * function directly (a negative control that a content line is NOT rewritten).
+ * The shape esbuild writes for an inlined module comment: `// <relative path>`
+ * ending in a source extension. `canonRungs` uses this shape only to decide
+ * which lines may have their `../` runs collapsed; it does not probe the
+ * filesystem (the gateway compare runs the in-place and staged builds from the
+ * same source tree, so the path tail is the only unstable part). A line that is
+ * ordinary bundle content is left alone unless it happens to match the same
+ * shape; the previous stricter per-file canonicalizer was only needed by the
+ * retired mobile bundle check.
  */
-// The staged build renders module comments with the temp tree's absolute path,
-// and real worktree paths may contain spaces (this repo lives under
-// "Application Support"): the existence test is the discriminator against
-// template-literal content lines, so the path itself may contain anything.
-export const MODULE_COMMENT_LINE = /^\/\/ (.+\.(?:ts|tsx|js|jsx|mjs|cjs|css))$/
-
-/**
- * The normalized tail of one module comment path: the segment after the last
- * `packages/` anchor, or the path itself with its leading `../` rungs stripped
- * (the staged tree reaches the workspace through temp directories, so the rung
- * count differs).
- * @param {string} path - the matched module comment path.
- * @returns {string} the canonical tail.
- */
-function moduleCommentTail(path) {
-  const anchor = path.lastIndexOf('packages/')
-  const tail = anchor >= 0 ? path.slice(anchor + 'packages/'.length) : path
-  return tail.replace(/^(?:\.\.\/)+/, '')
-}
-
-/**
- * Does one module comment path point at a real file? Either its `packages/` tail
- * exists under one of the roots' `packages/` trees, or the raw path resolves
- * from one of the build cwds.
- * @param {string} path - the matched module comment path.
- * @param {string} tail - {@link moduleCommentTail} of the same path.
- * @param {readonly string[]} roots - repository/package roots to test.
- * @returns {boolean}
- */
-function moduleCommentResolves(path, tail, roots) {
-  if (tail !== '' && roots.some((root) => existsSync(join(root, 'packages', tail)))) return true
-  return roots.some((root) => existsSync(resolve(root, path)))
-}
-
-/**
- * Canonicalize one bundle line for the staged-vs-in-place byte compare: a line
- * that IS a module comment whose target really exists is re-based to the tail
- * after the last `packages/` segment and stripped of leading `../` rungs.
- * Everything else — `//# sourceMappingURL`, template-literal content, prose that
- * merely looks like a path — is returned verbatim.
- * @param {string} line
- * @param {{ roots?: readonly string[] }} [options] - build cwd roots (the
- *   in-place package dir and the staged copy) used by the existence test;
- *   defaults to the repo root, where `<root>/packages/<tail>` is enough for
- *   in-repo modules.
- * @returns {string}
- */
-export function canonComment(line, { roots = [ROOT] } = {}) {
-  const match = MODULE_COMMENT_LINE.exec(line)
-  if (match === null) return line
-  const path = match[1]
-  const tail = moduleCommentTail(path)
-  if (!moduleCommentResolves(path, tail, roots)) return line
-  return '// ' + tail
-}
+const MODULE_COMMENT_LINE = /^\/\/ (.+\.(?:ts|tsx|js|jsx|mjs|cjs|css))$/
 
 /**
  * Line-wise rung canonicalization for the gateway bundle compare. The staged
@@ -136,32 +73,6 @@ export function canonComment(line, { roots = [ROOT] } = {}) {
 export function canonRungs(line) {
   if (!MODULE_COMMENT_LINE.test(line)) return line
   return line.replace(/(?:\.\.\/)+/gu, '@up@/')
-}
-
-/** 1. gateway/host-packages 逐文件字节比对（拷贝，不重建）。 */
-function checkHostPackages() {
-  const copies = [{
-    name: 'dsh-chamber-client-ui-mobile',
-    files: ['package.json', 'dist/index.js', 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
-  }]
-  const stale = []
-  let compared = 0
-  for (const copy of copies) {
-    const outDir = join(ROOT, 'packages', 'gateway', 'host-packages', copy.name)
-    const srcDir = join(ROOT, 'packages', copy.name)
-    if (!existsSync(outDir) || !existsSync(srcDir)) continue
-    for (const file of copy.files) {
-      const out = join(outDir, file)
-      const src = join(srcDir, file)
-      if (!existsSync(src)) continue
-      if (!existsSync(out)) { stale.push(copy.name + '/' + file + ' (missing)'); continue }
-      compared += 1
-      if (!sameBytes(src, out)) stale.push(copy.name + '/' + file)
-    }
-  }
-  if (compared === 0) note('gateway/host-packages', 'skip', '未构建或未安装（无产物可查）')
-  else if (stale.length > 0) note('gateway/host-packages', 'stale', '与源不一致：' + stale.join(', ') + '（重建：pnpm run build:gateway）')
-  else note('gateway/host-packages', 'ok', compared + ' 文件与源逐字节一致')
 }
 
 /** 2. preload.cjs：tsc -p tsconfig.preload.build.json --outDir <tmp> 后比对。 */
@@ -260,12 +171,9 @@ function checkGatewayDist() {
   const dist = join(ROOT, 'packages', 'gateway', 'dist', 'index.js')
   if (!existsSync(dist)) { note('gateway/dist/index.js', 'skip', '未构建（无 dist/index.js）（重建：pnpm run build:gateway）'); return }
   const pkgDir = join(ROOT, 'packages', 'gateway')
-  const mobileDir = join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile')
   const prerequisites = [
     join(pkgDir, 'node_modules', 'pnpm', 'package.json'),
     join(pkgDir, 'node_modules', 'esbuild', 'package.json'),
-    join(mobileDir, 'dist', 'index.js'),
-    join(mobileDir, 'lib', 'client.js'),
   ]
   const missingPrerequisite = prerequisites.find((path) => !existsSync(path))
   if (missingPrerequisite !== undefined) {
@@ -275,9 +183,8 @@ function checkGatewayDist() {
   // Stage a copy of the package so the package's OWN build script (single
   // source of the build recipe) runs unmodified but writes into the temp tree.
   // build.mjs derives packageDir from its own location, so package.json,
-  // scripts/build.mjs and src are copied while node_modules and the sibling
-  // mobile package are symlinked. The pnpm/host-package copies the script makes
-  // stay in temp; the working tree is never written.
+  // scripts/build.mjs and src are copied while node_modules is symlinked. The
+  // pnpm copy the script makes stays in temp; the working tree is never written.
   const work = mkdtempSync(join(tmpdir(), 'dsh-gateway-fresh-'))
   try {
     const stage = join(work, 'gateway')
@@ -287,7 +194,6 @@ function checkGatewayDist() {
     cpSync(join(pkgDir, 'scripts', 'build.mjs'), join(stage, 'scripts', 'build.mjs'))
     cpSync(join(pkgDir, 'src'), join(stage, 'src'), { recursive: true })
     symlinkSync(join(pkgDir, 'node_modules'), join(stage, 'node_modules'), linkType)
-    symlinkSync(mobileDir, join(work, 'dsh-chamber-client-ui-mobile'), linkType)
     const result = spawnSync(process.execPath, [join(stage, 'scripts', 'build.mjs')], { cwd: stage, stdio: 'pipe' })
     if (result.status !== 0) {
       const lines = String(result.stderr ?? '').trim().split('\n')
@@ -326,79 +232,16 @@ function checkGatewayDist() {
   }
 }
 
-/**
- * 5. packages/dsh-chamber-client-ui-mobile 的 `src/**` ↔ `lib/client.js`：
- *    在**临时副本**里跑包自己的 build.mjs（同一份构建配方，不重抄），再逐字节
- *    比对 `lib/client.js`。不写工作树（避免与并发的测试读取/其他构建互相踩），
- *    因此 esbuild 的模块注释里上跳层级与就地构建不同，两侧都先把 `../` 连续段
- *    归一化（与 gateway 重建同一个手法）；代码/模块列表/每个被引用的文件仍逐字节比。
- *
- *    只在 full 模式（或显式 --mobile-rebuild）启用：CI 由**独立的 C8 step**
- *    （verify-upstream-touchpoints.mjs 的就地重建比对）覆盖移动产物；tests 模式
- *    本身没有移动产物的字节比对，这里是 full 档更重的同题复核；未启用时打一行
- *    NOTE，不静默当通过。
- */
-function checkMobileClientBundle() {
-  const pkgDir = join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile')
-  const client = join(pkgDir, 'lib', 'client.js')
-  if (!existsSync(client)) { note('mobile/lib/client.js', 'skip', '未构建（无 lib/client.js）（重建：pnpm run build:mobile）'); return }
-  const work = mkdtempSync(join(tmpdir(), 'dsh-mobile-fresh-'))
-  try {
-    // Same repo depth (work/packages/<pkg>) so the package tsconfig's
-    // "extends ../../tsconfig.json" resolves: without that chain esbuild's
-    // auto-discovered tsconfig silently disappears and the staged build stops
-    // reproducing the in-place bytes (probe: no "use strict" prologue).
-    mkdirSync(join(work, 'packages'), { recursive: true })
-    cpSync(join(ROOT, 'tsconfig.json'), join(work, 'tsconfig.json'))
-    const stage = join(work, 'packages', 'dsh-chamber-client-ui-mobile')
-    mkdirSync(join(stage, 'scripts'), { recursive: true })
-    cpSync(join(pkgDir, 'package.json'), join(stage, 'package.json'))
-    cpSync(join(pkgDir, 'tsconfig.json'), join(stage, 'tsconfig.json'))
-    cpSync(join(pkgDir, 'scripts', 'build.mjs'), join(stage, 'scripts', 'build.mjs'))
-    cpSync(join(pkgDir, 'src'), join(stage, 'src'), { recursive: true })
-    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
-    symlinkSync(join(pkgDir, 'node_modules'), join(stage, 'node_modules'), linkType)
-    const result = spawnSync(process.execPath, [join(stage, 'scripts', 'build.mjs')], { cwd: stage, stdio: 'pipe' })
-    if (result.status !== 0) {
-      const lines = String(result.stderr ?? '').trim().split('\n')
-      note('mobile/lib/client.js', 'skip', '重建不可用：' + (lines[lines.length - 1] || ('exit ' + String(result.status))))
-      return
-    }
-    const rebuilt = join(stage, 'lib', 'client.js')
-    if (!existsSync(rebuilt)) { note('mobile/lib/client.js', 'skip', '重建未产出 lib/client.js'); return }
-    // Existence roots: the repo root (its packages/ tree is the canonical
-    // spelling of every in-repo module) plus both build cwds — the in-place
-    // package dir and the staged copy. A module comment is normalized only when
-    // it names a real file (a template-literal content line ending in .ts stays
-    // raw, so the byte difference it carries is not erased).
-    const canonical = (source) => source.split('\n')
-      .map((line) => canonComment(line, { roots: [ROOT, pkgDir, stage] }))
-      .join('\n')
-    const rebuiltText = canonical(readFileSync(rebuilt, 'utf8'))
-    const onDiskText = canonical(readFileSync(client, 'utf8'))
-    if (rebuiltText !== onDiskText) {
-      note('mobile/lib/client.js', 'stale', '与 src/** 重建结果不一致（重建：pnpm run build:mobile）')
-    } else {
-      note('mobile/lib/client.js', 'ok', '与 src/** 重建逐字节一致（临时副本重建，未写工作树）')
-    }
-  } catch (error) {
-    note('mobile/lib/client.js', 'skip', '重建不可用：' + String(error.message ?? error).split('\n')[0])
-  } finally {
-    rmSync(work, { recursive: true, force: true })
-  }
-}
-
 /** 用法（--help 与未知参数都打印它）。 */
 const USAGE = [
-  '用法: node scripts/gates/verify-artifact-freshness.mjs [--mobile-rebuild] [--require-compare] [--self-test]',
+  '用法: node scripts/gates/verify-artifact-freshness.mjs [--require-compare] [--self-test]',
   '',
-  '  无参数           比对已构建的 host-packages / preload / typert / gateway dist。',
-  '  --mobile-rebuild  追加 mobile src/** ↔ lib/client.js 的临时副本重建比对（full 档同款）。',
+  '  无参数           比对已构建的 preload / typert / gateway dist。',
   '  --require-compare 严格档：一类产物都比不了（全 SKIP，例如 clean checkout）即红；',
   '                    用于必须证明「比过」的场合；默认档下 SKIP 只 loud 打印、不判红。',
   '  --self-test       负控：证明比对能抓到人为差异，exit 0/1。',
   '  --help            打印本用法，exit 0。',
-  '未知参数 = exit 2（拼错的 --mobil-rebuild 绝不能静默退化成普通检查）。',
+  '未知参数 = exit 2（拼错的参数绝不能静默退化成普通检查）。',
 ].join('\n')
 
 /**
@@ -422,7 +265,7 @@ function main(argv) {
     console.log(USAGE)
     return
   }
-  const unknown = argv.filter((argument) => !['--mobile-rebuild', '--require-compare', '--self-test'].includes(argument))
+  const unknown = argv.filter((argument) => !['--require-compare', '--self-test'].includes(argument))
   if (unknown.length > 0) {
     console.error('artifact-freshness: 未知参数 ' + unknown.join(' '))
     console.error(USAGE)
@@ -462,12 +305,7 @@ function main(argv) {
       : 'FAIL'))
     process.exit(selfTestOk ? 0 : 1)
   }
-  const mobileRebuild = argv.includes('--mobile-rebuild')
-    || process.env.DSH_ARTIFACT_FRESHNESS_MOBILE_REBUILD === '1'
-  checkHostPackages()
   checkPreload()
-  if (mobileRebuild) checkMobileClientBundle()
-  else console.log('  NOTE  mobile src/** ↔ lib/client.js 重建比对未启用（full 模式或 --mobile-rebuild 启用；CI 由独立的 C8 step（verify-upstream-touchpoints.mjs 就地重建）覆盖，tests 档本身没有移动产物字节比对）')
   checkGenerated()
   checkGatewayDist()
   for (const result of results) {

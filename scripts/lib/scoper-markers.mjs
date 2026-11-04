@@ -1,7 +1,7 @@
 /**
- * SVG resource scoper artifact markers — single source for the mobile build-time
- * bundle guard (`artifact-scope-marker.test.mjs`) and the post-build page guard
- * (`assert-scoper-artifact.mjs`).
+ * SVG resource scoper artifact markers — the single source for the renderer
+ * page-bundle guards (the macOS app assembly gate and the CI/release
+ * assert-scoper-artifact step).
  *
  * The three facts the markers are made of:
  *   1. the attribute the installer stamps on every processed <svg>;
@@ -17,17 +17,14 @@
  *     **模式**判定：属性名出现，且右侧确实是一次调用（把右侧换成 `null` 即失配 ⇒ 负控仍成立）。
  */
 
-/** The bundle wrapper the mobile loader installs (proves the file is the client bundle). */
-export const CLIENT_BUNDLE_MARKER = 'window.__ModuleLoader__.load'
-
 /** Marker ①/②: plain string literals that survive minification. */
-export const SCOPER_LITERAL_MARKERS = [
+const SCOPER_LITERAL_MARKERS = [
   'data-chamber-svg-scope',
   'chamber-csvg',
 ]
 
 /** The anchored-assignment property name (marker ③'s anchor). */
-export const SCOPER_CALL_MARKER_NAME = '__chamberSvgScopeInstalled'
+const SCOPER_CALL_MARKER_NAME = '__chamberSvgScopeInstalled'
 
 /** Marker ③'s human label (what callers print when it is missing). */
 const CALL_MARKER_LABEL = SCOPER_CALL_MARKER_NAME + '=<call>'
@@ -40,14 +37,14 @@ export const SCOPER_MARKERS = [
 
 /**
  * Marker ③: the anchored property is assigned a **call** (whitespace-agnostic, so
- * both the minified page chunk and the pretty-printed mobile bundle match).
+ * both the minified page chunk and the pretty-printed source match).
  */
 const CALL_ASSIGNMENT_PATTERN = new RegExp(
   SCOPER_CALL_MARKER_NAME + '\\s*=\\s*[A-Za-z_$][\\w$]*(?:\\.[\\w$]+)*\\s*[(<]',
 )
 
 /** True when `source` shows the entry assigning the anchored install call. */
-export function hasScoperCallMarker(source) {
+function hasScoperCallMarker(source) {
   return CALL_ASSIGNMENT_PATTERN.test(source)
 }
 
