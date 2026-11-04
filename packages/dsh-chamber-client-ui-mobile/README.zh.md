@@ -487,7 +487,7 @@ pnpm run test:mobile
 
 官方 dsh DOM 实测（CDP 审计在 **v0.1.5-alpha.2** 完成，并在 **v0.1.5-rc.2**
 重锚）——下列锚点在 rc.2 树中曾全部成立（本节 rc.1/rc.2 均指 v0.1.5 世系，
-当前 pin 一律写全 0.2.2-alpha.2）；当前 pin（v0.2.2-alpha.2）下严格锚点门解析全部
+当前 pin 一律写全 0.2.2-alpha.3）；当前 pin（v0.2.2-alpha.3）下严格锚点门解析全部
 声明锚点（共 68 条，其中 60 条为上游锚点；最小断言集 29 项 = 26 项声明侧 + 3 项
 external），含属性/role/slot 锚点、
 插件侧 local-name 类名锚点、external 发射钉（`_crumbSeg`，以及 rc.3 折叠视图容器
@@ -525,7 +525,7 @@ rc.3 产物重锚，零命中现为**硬失败**（见下）；alpha.2 → rc.1 
 `createPortal(…, document.body)`），抽屉的 transform 不再会把它裁进去；
 抽屉打开态仍刻意用 `transform: none`。
 
-当前 vendored 基线为 **v0.2.2-alpha.2**（harness pin `f3803c96`；单一来源
+当前 vendored 基线为 **v0.2.2-alpha.3**（harness pin `05b1cae8db`；单一来源
 `harness.commit`）。历史审计记录：上述锚点已对 alpha.2 源码复核（2026-09 重锚），
 并在 v0.1.5-rc.2 上复验成立（rc.1 → rc.2 的客户端改动见上，
 不触及这些锚点与本插件的叠层对位），复核同时确认：composer seat 是

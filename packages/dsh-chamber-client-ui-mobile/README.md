@@ -679,8 +679,8 @@ pnpm run test:mobile
 Official dsh DOM, empirically audited via CDP at **v0.1.5-alpha.2** and re-anchored
 at **v0.1.5-rc.2** — every anchor below resolved in the rc.2 tree (rc.1/rc.2 in this
 section mean the v0.1.5 lineage; the current pin is always written in full as
-v0.2.2-alpha.2). Under the current
-pin (v0.2.2-alpha.2) the strict anchor gate resolves the declared set (68 declared
+v0.2.2-alpha.3). Under the current
+pin (v0.2.2-alpha.3) the strict anchor gate resolves the declared set (68 declared
 anchors, 60 of them upstream; 29 minimal assertions = 26 declared-side + 3
 external) including the attribute/role/
 slot anchors, the plugin local-name class anchors, the external emission pins
@@ -730,7 +730,7 @@ dialog is body-portaled by upstream (rc.2 `SettingsPanel` uses
 `createPortal(…, document.body)`), so the drawer's transform no longer traps
 it; the drawer open state still uses `transform: none` deliberately.
 
-The vendored base is now **v0.2.2-alpha.2** (harness pin `f3803c96`; single source
+The vendored base is now **v0.2.2-alpha.3** (harness pin `05b1cae8db`; single source
 `harness.commit`). Historical audit record: the anchors above were re-verified
 against the alpha.2 source (2026-09 re-anchor) and held at v0.1.5-rc.2 (whose
 client deltas are listed above and left those anchors, and the
