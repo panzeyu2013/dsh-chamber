@@ -27,11 +27,13 @@ function status(overrides: Partial<SshStatusProjection> = {}): SshStatusProjecti
   }
 }
 
-test('isUserActionPhase admits only the terminal card phases', () => {
-  for (const phase of ['error', 'degraded'] as SshPhase[]) {
+test('isUserActionPhase admits the terminal card phases plus a terminal re-check', () => {
+  // connecting is admitted because a provider-declared retryable terminal verdict
+  // re-probes in that phase while keeping requiresUserAction true.
+  for (const phase of ['error', 'degraded', 'connecting'] as SshPhase[]) {
     assert.equal(isUserActionPhase(phase), true, `${phase} is a user-action phase`)
   }
-  for (const phase of ['idle', 'connecting', 'ready'] as SshPhase[]) {
+  for (const phase of ['idle', 'ready'] as SshPhase[]) {
     assert.equal(isUserActionPhase(phase), false, `${phase} is not a user-action phase`)
   }
   assert.equal(isUserActionPhase(undefined), false)
@@ -39,9 +41,16 @@ test('isUserActionPhase admits only the terminal card phases', () => {
 
 test('no hint without requiresUserAction or on a non-terminal phase', () => {
   assert.equal(actionHintKey(spec(), status({ requiresUserAction: false }), 'error'), null)
-  assert.equal(actionHintKey(spec(), status(), 'connecting'), null)
+  assert.equal(actionHintKey(spec(), status(), 'idle'), null)
   assert.equal(actionHintKey(spec(), status(), undefined), null)
   assert.equal(actionHintKey(spec(), undefined, 'error'), null)
+})
+
+test('a terminal re-check in connecting keeps the repair hint', () => {
+  // The background re-probe runs in connecting; requiresUserAction stays true so
+  // the user still sees what to fix while the probe is in flight.
+  assert.equal(actionHintKey(spec(), status(), 'connecting'), 'endpointActionHint')
+  assert.equal(actionHintKey(spec({ kind: 'gateway' }), status({ kind: 'gateway', userActionKind: 'endpoint' }), 'connecting'), 'gatewayAuthActionHint')
 })
 
 test('dsh over SSH: an endpoint-class failure shows the instance hint, never the SSH auth hint', () => {

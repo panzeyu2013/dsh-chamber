@@ -957,6 +957,12 @@ export type SeedRemoteHostPackagesResult =
   | { ok: true; wrote: boolean; patched: boolean; packages: ChamberHostPackageSeedState[] }
   | { ok: false; error: string }
 
+/** Caps for the batched hash-skip read: the whole seed set must fit one bounded
+ *  stdout capture and one remote shell command line, otherwise the per-file
+ *  probes take over. */
+const SEED_BATCH_MAX_FILES = 32
+const SEED_BATCH_MAX_BYTES = 4 * 1024 * 1024
+
 /**
  * Seed all built chamber host packages onto a remote instance: ensure cordis.patch.yml
  * carries their exact inserts, then write package.json + dist/index.js into the
@@ -1042,18 +1048,50 @@ export async function seedRemoteChamberHostPackages(
   if ('error' in update) return { ok: false, error: update.error }
 
   // Probe every remote byte before the first write, so a failure on package two
-  // cannot leave package one partially updated.
-  for (const file of staged) {
-    const catRes = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [file.remotePath], quiet: true })
-    if (catRes.ok) {
-      // Hash-skip: a cat read-back whose bytes match skips the write — the comparison is
-      // byte-domain (`stdoutBytes`), so binary files never false-mismatch through the
-      // lossy UTF-8 view; a mismatch still falls through to the write. ENOENT =
-      if (sha256hex(catRes.stdoutBytes ?? Buffer.from(catRes.stdout ?? '', 'utf8')) === file.sha256) file.write = false
-    } else if (!ENOENT_PATTERN.test(catRes.error)) {
-      // genuinely absent → write; ANY other ssh failure is loud, since a write that
-      // would also fail masks the real cause. Probe cats are quiet (ENOENT by design).
-      return { ok: false, error: `${file.seed.label} seed read ${file.relative} failed: ${catRes.error}` }
+  // cannot leave package one partially updated. The COMMON unchanged case is one
+  // batched cat for the whole seed set (patch probe + batch = 2 spawns instead of
+  // 2N+1); the batch is accepted only when the captured length splits exactly at
+  // the LOCAL byte lengths. A missing/changed/short read falls back to per-file
+  // probes, which keep the ENOENT classification and the per-file write decision.
+  const batchTotal = staged.reduce((total, file) => total + file.bytes.length, 0)
+  let batched = false
+  if (staged.length > 1 && staged.length <= SEED_BATCH_MAX_FILES && batchTotal <= SEED_BATCH_MAX_BYTES) {
+    const batchRes = await exec(id, 'run', {
+      op: 'exec', command: 'cat', argv: staged.map(file => file.remotePath), quiet: true,
+    })
+    const bytes = batchRes.ok ? batchRes.stdoutBytes : undefined
+    if (bytes !== undefined && bytes.length === batchTotal) {
+      // All-or-nothing: accept the batch only when EVERY local-length segment
+      // matches. A single mismatch falls back to per-file probes, so a remote
+      // file that changed length cannot shift the split boundary and let a
+      // different file's bytes masquerade as an unchanged one.
+      let offset = 0
+      let identical = true
+      for (const file of staged) {
+        const segment = bytes.subarray(offset, offset + file.bytes.length)
+        offset += file.bytes.length
+        // Byte-domain comparison (binary dist files never go through UTF-8).
+        if (sha256hex(segment) !== file.sha256) identical = false
+      }
+      if (identical) {
+        for (const file of staged) file.write = false
+        batched = true
+      }
+    }
+  }
+  if (!batched) {
+    for (const file of staged) {
+      const catRes = await exec(id, 'run', { op: 'exec', command: 'cat', argv: [file.remotePath], quiet: true })
+      if (catRes.ok) {
+        // Hash-skip: a cat read-back whose bytes match skips the write — the comparison is
+        // byte-domain (`stdoutBytes`), so binary files never false-mismatch through the
+        // lossy UTF-8 view; a mismatch still falls through to the write. ENOENT =
+        if (sha256hex(catRes.stdoutBytes ?? Buffer.from(catRes.stdout ?? '', 'utf8')) === file.sha256) file.write = false
+      } else if (!ENOENT_PATTERN.test(catRes.error)) {
+        // genuinely absent → write; ANY other ssh failure is loud, since a write that
+        // would also fail masks the real cause. Probe cats are quiet (ENOENT by design).
+        return { ok: false, error: `${file.seed.label} seed read ${file.relative} failed: ${catRes.error}` }
+      }
     }
   }
 

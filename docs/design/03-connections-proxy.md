@@ -158,9 +158,9 @@
   signature 路径回退 legacy `session/list` 识别（"check or upgrade"）；与本地实例就绪判据同源，
   02 §3.2；**按 `spec.kind` 决定是否带认证头**——dsh 目标无认证头、gateway 目标可选认证头，探针认证
   矩阵见 17 §9.2）验证远端真是目标——目标端口跑非 dsh 服务时显式报错/降级，**绝不呈现已连接**（拒绝
-  假连接）。**确定性失败免重试**：目标**应答了**探测但证明不是（兼容的）目标
+  假连接）。**确定性失败默认免重试**：目标**应答了**探测但证明不是（兼容的）目标
   （HTTP 非 200 / 错误信封 / 版本过老）→ 验证结果带 `terminal` 标记，第一次失败即落 error 终态
-  （重试无法改变应答）；仅连接错误/超时等瞬时失败走重连。**UI 类别区分**：终态投影的 `userActionKind`
+  （重试无法改变应答；唯一例外见下）。**例外：provider 显式声明 `terminalRetryable`**（仅“远端 dsh 版本/身份不匹配”的滚动升级窗口）→ 仍落 error + 修复提示，按 5m→15m→45m→60m 上限慢重探自愈；凭据/配置拒绝（gateway 401/403/421、口令拒绝、非 dsh 应答）永不设该位。复探期 `phase=connecting` 但 `requiresUserAction`/`userActionKind` 保持，连接页提示不闪断。**UI 类别区分**：终态投影的 `userActionKind`
   区分失败类别——`'auth'`（传输层认证/主机密钥/spawn）提示修复 SSH 凭据；`'endpoint'`（实例层确定性
   探测失败）展示「请检查或升级远端 dsh」，绝不展示 SSH 认证失败提示。
 - **SPKI pin 的 pre-write 门**：gateway+HTTPS 配置 pin 时，桌面登录/探针与控制面
@@ -168,11 +168,13 @@
   `write/end`、不发送 HTTP/WS handshake/header/credential/body 等任何应用层字节；
   mismatch 显式失败，目标服务看不到请求。无 pin 的标准 CA 路径不改变。
 - **两段式重连**：瞬时失败先走**快速有界突发**（半开 jitter 指数退避，1s→30s，至多 N=5 次），突发
-  耗尽落 error（诚实红态）**但不停摆**——进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限）：
+  耗尽落 error（诚实红态）**但不停摆**——进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限；延迟带 ±20% 对称抖动，避免多实例同步）：
   瞬时故障是**时变**的（网络恢复、远端重启、服务拉起）；error 终态只属于终态失败（认证 / spawn /
-  确定性验证——failTerminal，绝不自动重试）。
+  确定性验证——failTerminal，默认不自动重试；仅 `terminalRetryable` 的升级窗口例外）。**就绪窗口一次性延展**：到 ready 期限时 ssh 子进程仍存活且无认证/主机密钥失败（post-KEX 认证/LDAP/转发建立；ConnectTimeout 只覆盖建连、banner 与初始 KEX）→ 允许再延一个窗口后再判失败；TCP/KEX 黑洞通常由 ConnectTimeout 结束（不延展），DNS/配置求值等不受其约束的挂起可能吃一次延展。
   手动 connect/disconnect 取消在途慢速重探；成功即 ready 并清零计数。UI 侧点击来源（侧边栏激活 /
   打开会话）对 error/degraded 来源即时再试一次（renderer ensureRemoteConnected），慢速重探是自动兜底。
+
+- **被否方案（终态自愈）**：永久闩锁（升级窗口只能手动恢复）；对全部终态每 5min 复探（会向 gateway 401/403/421、口令拒绝等确定性拒绝重发凭据）；按 `failureKind==='protocol'` 判可重试（403 与 404 同类、口令拒绝也是 protocol+terminal）。取 provider 显式 `terminalRetryable` + 5m→15m→45m→60m 上限；凭据/配置拒绝永不设位。
 
 ### 2.3 两形态对照
 

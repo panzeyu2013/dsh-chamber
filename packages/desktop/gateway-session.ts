@@ -206,6 +206,16 @@ export const GATEWAY_LOGIN_TIMEOUT_MS = 10_000
  *  hammers /auth/login. The server limiter remains the real authority — this is
  *  a bounded courtesy, not a bypass. */
 export const GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000
+/** Lower/upper clamp for a server-provided 429 Retry-After. The lower bound is a
+ *  courtesy floor: verifyUp re-enters the login leg, and the gateway limiter locks
+ *  a client out after 10 attempts/5min (LOCK 15min), so honoring a 1s hint would
+ *  burn the burst budget faster than the server can recover. */
+export const GATEWAY_LOGIN_RETRY_AFTER_MIN_MS = 30_000
+export const GATEWAY_LOGIN_RETRY_AFTER_MAX_MS = 15 * 60 * 1000
+/** RFC 7231 IMF-fixdate only. Date.parse() accepts loose strings ("1.5", "-5"),
+ *  which would silently become a 2001 timestamp; a non-date must fall back to the
+ *  local 5min courtesy window instead. */
+const GATEWAY_RETRY_AFTER_HTTP_DATE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/
 /** The session cookie name — shared wire-protocol single source with the gateway
  *  server and the proxy injection gate. */
 export const GATEWAY_SESSION_COOKIE_NAME = PROTO_SESSION_COOKIE_NAME
@@ -311,6 +321,30 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
     }
   }
 
+  /** Parse a 429 Retry-After (delta-seconds or IMF-fixdate) into a clamped delay.
+   *  Missing/invalid values return null so the caller keeps the local 5min fallback. */
+  function parseRetryAfterMs(value: string | string[] | undefined, at: number): number | null {
+    const raw = Array.isArray(value) ? value[0] : value
+    if (typeof raw !== 'string') return null
+    const trimmed = raw.trim()
+    if (trimmed === '') return null
+    let ms: number
+    if (/^\d+$/.test(trimmed)) {
+      ms = Number(trimmed) * 1000
+      // An absurd delta overflows to Infinity: clamp to the ceiling rather than
+      // silently falling back to the shorter local 5min window.
+      if (!Number.isFinite(ms)) return GATEWAY_LOGIN_RETRY_AFTER_MAX_MS
+    } else if (GATEWAY_RETRY_AFTER_HTTP_DATE.test(trimmed)) {
+      const parsed = Date.parse(trimmed)
+      if (!Number.isFinite(parsed)) return null
+      ms = parsed - at
+    } else {
+      return null
+    }
+    if (!Number.isFinite(ms)) return null
+    return Math.min(GATEWAY_LOGIN_RETRY_AFTER_MAX_MS, Math.max(GATEWAY_LOGIN_RETRY_AFTER_MIN_MS, ms))
+  }
+
   /** Extract the header-ready `dsh_gateway_session=<value>` cookie from the
    *  response's set-cookie headers, stripping the `;` attributes; null when
    *  absent, empty, or oversized. */
@@ -399,6 +433,8 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
       let settled = false
       let timer: ReturnType<typeof setTimeout> | null = null
       let req: ClientRequest | null = null
+      /** Server-provided 429 hint for THIS attempt (never shared across generations). */
+      let retryAfterMs: number | null = null
       const done = (result: GatewaySessionResult): void => {
         if (settled) return
         settled = true
@@ -410,7 +446,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
           cache.set(key, { cookie: result.cookie, expiresAt: now() + GATEWAY_SESSION_TTL_MS - GATEWAY_SESSION_EXPIRY_SKEW_MS })
           throttledUntil.delete(key)
         } else if (!result.ok && mayMutateSharedState && result.code === 'rate_limited') {
-          throttledUntil.set(key, now() + GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS)
+          throttledUntil.set(key, now() + (retryAfterMs ?? GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS))
         } else if (!result.ok && mayMutateSharedState && result.code === 'invalid_credentials') {
           // A rejected password is deterministic — no backoff, no retry.
           throttledUntil.delete(key)
@@ -430,6 +466,7 @@ export function createGatewaySessionManager(deps: GatewaySessionDeps = {}): Gate
           done({ ok: false, code: 'network', error: 'the gateway login response was interrupted (network error)' })
           return
         }
+        if (status === 429) retryAfterMs = parseRetryAfterMs(res.headers['retry-after'], now())
         if (status >= 300 && status < 400) {
           // Manual redirect handling: the 3xx carries the session cookie — never followed.
           const cookie = parseSessionCookie(res.headers['set-cookie'])

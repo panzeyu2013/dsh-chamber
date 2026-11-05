@@ -4,7 +4,9 @@
  * lifecycle: atomic persisted registry, phase machine (idle/connecting/ready/
  * degraded/error), readiness (TCP + provider verifyUp), and injectable
  * provider/spawn/probe/allocator/RNG seams. The transport URL never leaves raw.
- * - terminal failures set requiresUserAction and are never auto-retried.
+ * - terminal failures set requiresUserAction and are not auto-retried by default;
+ *   the sole exception is a provider-declared terminalRetryable verdict, which gets
+ *   the bounded terminal re-check cadence (see armTerminalRetry).
  */
 
 import { createTransportRegistry, type SaveInstancesProvenance } from './transport-registry.ts'
@@ -106,7 +108,8 @@ export const RETRY_MAX_MS = 30_000
  * Slow re-probe cadence after the fast burst is exhausted: the machine lands on
  * error (honest red state) but keeps ONE fresh attempt per slowRetryMs
  * indefinitely. Transient conditions are time-dependent, so "gave up" is never
- * permanent; terminal failures never reach this path, and a manual
+ * permanent; ORDINARY terminal failures never reach this path (a provider-declared
+ * retryable terminal uses armTerminalRetry's own cadence), and a manual
  * connect()/disconnect() cancels the probe.
  */
 export const SLOW_RETRY_MS = 60_000
@@ -120,7 +123,50 @@ export const READY_VERIFY_MIN_INTERVAL_MS = 10_000
  *  backoff and jitter the rest, so N-ctx tunnels and post-sleep/wake storms
  *  desynchronize instead of thundering-herding. */
 export function jitteredBackoffMs(backoffMs: number, random: () => number = Math.random): number {
-  return Math.floor(backoffMs * (0.5 + random() * 0.5))
+  const safeBase = Number.isFinite(backoffMs) && backoffMs > 0 ? backoffMs : 1
+  try {
+    const delay = Math.floor(safeBase * (0.5 + random() * 0.5))
+    return Number.isFinite(delay) && delay > 0 ? delay : safeBase
+  } catch {
+    return safeBase
+  }
+}
+
+/** First terminal re-probe delay; each subsequent attempt backs off x3. */
+export const TERMINAL_RETRY_BASE_MS = 300_000
+/** Terminal re-probe ceiling (one hour). */
+export const TERMINAL_RETRY_MAX_MS = 3_600_000
+
+/** Symmetric ±20% jitter for the slow re-probe: mean == base, never below 0.8x.
+ *  A hostile/NaN RNG (or a non-finite base) must never become setTimeout(0). */
+export function slowRetryDelayMs(base: number, random: () => number = Math.random): number {
+  const safeBase = Number.isFinite(base) && base > 0 ? base : 1
+  try {
+    const delay = Math.floor(safeBase * (0.8 + random() * 0.4))
+    return Number.isFinite(delay) && delay > 0 ? delay : safeBase
+  } catch {
+    return safeBase
+  }
+}
+
+/** Bounded terminal re-probe delay: 5m, 15m, 45m, then the 60m ceiling. */
+export function terminalRetryDelayMs(
+  attempt: number,
+  base: number = TERMINAL_RETRY_BASE_MS,
+  max: number = TERMINAL_RETRY_MAX_MS,
+  random: () => number = Math.random,
+): number {
+  const safeAttempt = Number.isFinite(attempt) ? Math.max(1, Math.floor(attempt)) : 1
+  const safeBase = Number.isFinite(base) && base > 0 ? base : TERMINAL_RETRY_BASE_MS
+  const safeMax = Number.isFinite(max) && max > 0 ? Math.max(max, safeBase) : safeBase
+  const raw = Math.min(safeBase * 3 ** (safeAttempt - 1), safeMax)
+  try {
+    const delay = Math.floor(raw * (0.9 + random() * 0.2))
+    // The jitter must never push an attempt past the declared ceiling.
+    return Math.min(safeMax, Number.isFinite(delay) && delay > 0 ? delay : raw)
+  } catch {
+    return raw
+  }
 }
 
 /** SIGTERM → SIGKILL grace when stopping a child. Kept short so app quit is
@@ -147,6 +193,13 @@ export interface TransportManagerOptions {
   /** Slow re-probe cadence after the fast burst (default SLOW_RETRY_MS): one
    *  fresh attempt per interval, indefinite — only terminal failures stop. */
   slowRetryMs?: number
+  /** Provider-declared retryable terminal verdicts: first re-probe delay and ceiling. */
+  terminalRetryBaseMs?: number
+  terminalRetryMaxMs?: number
+  /** One-shot readiness-window extension for a still-starting ssh child (post-KEX auth /
+   *  forward setup). Omitted = ONE readyTimeoutMs window (the extension always runs once
+   *  for a live child; set 0 to disable it). */
+  readyExtensionMs?: number
   disconnectGraceMs?: number
   ringBufferLimit?: number
   /** Provider exec timeout (ssh: systemctl; default 15s). */
@@ -468,6 +521,9 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS
   const retryMaxMs = options.retryMaxMs ?? RETRY_MAX_MS
   const slowRetryMs = options.slowRetryMs ?? SLOW_RETRY_MS
+  const terminalRetryBaseMs = options.terminalRetryBaseMs ?? TERMINAL_RETRY_BASE_MS
+  const terminalRetryMaxMs = options.terminalRetryMaxMs ?? TERMINAL_RETRY_MAX_MS
+  const readyExtensionMs = options.readyExtensionMs ?? readyTimeoutMs
   const disconnectGraceMs = options.disconnectGraceMs ?? DISCONNECT_GRACE_MS
   const ringBufferLimit = options.ringBufferLimit ?? RING_BUFFER_LIMIT
   const execTimeoutMs = options.execTimeoutMs ?? 15_000
@@ -540,6 +596,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
   const instances = new Map<string, TransportInstanceSpec>()
   /** instanceId → runtime state (phase machine + logs; never persisted). */
   const states = new Map<string, InstanceState>()
+  /** Per-incarnation terminal re-probe attempt count (kept out of InstanceState). */
+  const terminalRetryAttempts = new WeakMap<InstanceState, number>()
+  /** States currently running a terminal re-check: a transient failure restores the red projection. */
+  const terminalRechecks = new WeakSet<InstanceState>()
   /** In-flight provider exec children, SIGTERMed by dispose() (app quit). */
   const execChildren = new Set<SpawnedProcess>()
   /** Teardown gate: after dispose starts, no path may create a new child. */
@@ -738,6 +798,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     message: string,
     requiresUserAction = true,
     userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null = 'auth',
+    retryableTerminal = false,
   ) {
     if (!isCurrentState(id, state)) return
     if (state.phase === 'error') return
@@ -756,8 +817,42 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.retryAttempt = 0
     state.requiresUserAction = requiresUserAction
     state.userActionKind = requiresUserAction ? userActionKind : null
+    terminalRechecks.delete(state)
     transition(id, 'error', message, state)
     appendLogInternal(state, 'error', message)
+    if (requiresUserAction && retryableTerminal) armTerminalRetry(id, state)
+    else terminalRetryAttempts.delete(state)
+  }
+
+  /** Arm the bounded terminal re-check CADENCE for a provider-declared retryable
+   *  terminal verdict (identity/version mismatch): ONE attempt per delay, re-armed
+   *  after each retryable failure. The red projection stays honest: phase error +
+   *  requiresUserAction + userActionKind + the next-check summary. While the
+   *  re-check runs it keeps the repair hint (terminalRecheck mode in startTransport);
+   *  only a ready edge or a non-retryable answer ends the loop. */
+  function armTerminalRetry(id: string, state: InstanceState): void {
+    if (disposed || !isCurrentState(id, state)) return
+    if (state.reconnectTimer !== null) {
+      clearTimeout(state.reconnectTimer)
+      state.reconnectTimer = null
+    }
+    const attempt = (terminalRetryAttempts.get(state) ?? 0) + 1
+    terminalRetryAttempts.set(state, attempt)
+    const delay = terminalRetryDelayMs(attempt, terminalRetryBaseMs, terminalRetryMaxMs, doRandom)
+    const summary = state.logSummary.replace(/\s*\[auto re-check \d+ in \d+ms\]$/, '')
+    state.logSummary = `${summary}${summary === '' ? '' : ' '}[auto re-check ${attempt} in ${delay}ms]`
+    appendLogInternal(state, 'warn', `terminal re-check scheduled in ${delay}ms (attempt ${attempt})`)
+    emitStatus(id, state)
+    state.reconnectTimer = setTimeout(() => {
+      state.reconnectTimer = null
+      if (disposed || !isCurrentState(id, state)) return
+      // A manual connect/disconnect or a different phase/action class moved on.
+      if (state.phase !== 'error' || !state.requiresUserAction) return
+      terminalRechecks.add(state)
+      void startTransport(id, { terminalRecheck: true })
+        .catch(error => warn(`transport-manager: terminal re-check rejected: ${describeTransportError(error)}`))
+    }, delay)
+    state.reconnectTimer.unref?.()
   }
 
   /** A missing/unexecutable ssh binary is an environment problem, not a credential
@@ -818,6 +913,31 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    */
   function scheduleReconnect(id: string, state: InstanceState, reason: string) {
     if (!isCurrentState(id, state)) return
+    if (terminalRechecks.has(state)) {
+      // A terminal re-check that failed TRANSIENTLY restores the red projection
+      // (the repair hint and its class) and keeps the terminal cadence. Falling
+      // into the fast burst would clear requiresUserAction and lose the user's
+      // repair surface for a condition that is still the same terminal class.
+      terminalRechecks.delete(state)
+      clearDownGrace(state)
+      stopReadyLoop(state)
+      if (state.reconnectTimer !== null) {
+        clearTimeout(state.reconnectTimer)
+        state.reconnectTimer = null
+      }
+      if (state.child !== null) {
+        signalChild(state.child, 'SIGTERM')
+        armKillEscalation(state.child)
+      }
+      state.child = null
+      state.localPort = null
+      state.socketPath = null
+      state.retryAttempt = 0
+      transition(id, 'error', undefined, state)
+      appendLogInternal(state, 'warn', `terminal re-check failed transiently (${reason}); keeping the repair hint and retrying later`)
+      armTerminalRetry(id, state)
+      return
+    }
     clearDownGrace(state)
     if (state.reconnectTimer !== null) return
     if (state.retryAttempt >= maxRetryAttempts) {
@@ -831,8 +951,9 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       state.child = null
       state.localPort = null
       state.socketPath = null
+      const slowDelay = slowRetryDelayMs(slowRetryMs, doRandom)
       transition(id, 'error', `transport failed: max retry attempts exceeded (${reason}); retrying periodically`, state)
-      appendLogInternal(state, 'error', `max retry attempts exceeded (${reason}); slow re-probe in ${slowRetryMs}ms`)
+      appendLogInternal(state, 'error', `max retry attempts exceeded (${reason}); slow re-probe in ${slowDelay}ms`)
       // The phase stays error (honest red state — the probe is background
       // recovery): each fire runs ONE fresh attempt, success lands ready and
       // resets counters, and requiresUserAction stays false.
@@ -840,7 +961,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         state.reconnectTimer = null
         if (!isCurrentState(id, state)) return
         void startTransport(id).catch(error => warn(`transport-manager: slow re-probe rejected: ${describeTransportError(error)}`))
-      }, slowRetryMs)
+      }, slowDelay)
       state.reconnectTimer.unref?.()
       return
     }
@@ -922,6 +1043,22 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.childExited = true
     log(`transport-manager: ${id} transport process exited (${code ?? signal})`)
     appendLogInternal(state, 'warn', `transport process exited (${code ?? signal})`)
+    if (terminalRechecks.has(state)) {
+      // A re-check that PROVED a credential or host-key failure must switch to the
+      // real terminal class and stop the re-probe loop: keeping the endpoint class
+      // would replay the stored password every 5m..60m and hide the fingerprint
+      // repair surface. Only an answer-less exit stays on the terminal cadence.
+      if (state.hostKeyFailed) {
+        void failHostKey(id, state)
+        return
+      }
+      if (state.authFailed) {
+        failTerminal(id, state, 'authentication failed — requires user action')
+        return
+      }
+      scheduleReconnect(id, state, `terminal re-check transport exited (${code ?? signal})`)
+      return
+    }
     if (state.portBindFailed && state.phase === 'connecting' && state.portBindRetries < 3) {
       // The OS gave our probe port away between bind-and-release and ssh -L. This
       // is not a transport attempt failure: re-allocate and retry without charging
@@ -953,7 +1090,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
 
   /** Start one transport attempt and drive it to ready/degraded/error: poll the
    *  tunnel up to readyTimeoutMs; TCP accept + verification is the honest up signal. */
-  async function startTransport(id: string) {
+  async function startTransport(id: string, mode: { terminalRecheck?: boolean } = {}) {
     if (disposed) return
     const spec = instances.get(id)
     if (spec === undefined) return
@@ -961,6 +1098,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // an ssh instance → sshProvider.
     const providerForSpec = resolveProvider(spec)
     const state = ensureState(id)
+    const terminalRecheck = mode.terminalRecheck === true
     // A ready transport is not re-started; an already-connecting invocation is
     // idempotent (connect() refuses while connecting/ready).
     if (state.phase === 'ready') return
@@ -979,8 +1117,10 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.hostKeyFailed = false
     state.hostKeyProbing = false
     state.hostKey = null
-    state.requiresUserAction = false
-    state.userActionKind = null
+    if (!terminalRecheck) {
+      state.requiresUserAction = false
+      state.userActionKind = null
+    }
     // This invocation IS the transport attempt: bump the epoch so an in-flight
     // invocation of a previous attempt aborts at its guard instead of stealing it.
     state.tunnelEpoch += 1
@@ -996,7 +1136,16 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.link = { ...INITIAL_LINK_HEALTH }
     clearDownGrace(state)
     // Entered here so the post-await guards and readiness loop have a stable anchor.
-    transition(id, 'connecting', 'starting transport', state)
+    // A terminal re-check keeps the previous logSummary (the repair reason) and only
+    // changes the phase; the projection carries connecting + requiresUserAction. The
+    // old [auto re-check ...] countdown is retired while the probe runs.
+    if (terminalRecheck) {
+      state.logSummary = state.logSummary.replace(/\s*\[auto re-check \d+ in \d+ms\]$/, '')
+    }
+    transition(id, 'connecting', terminalRecheck ? undefined : 'starting transport', state)
+    if (terminalRecheck) {
+      appendLogInternal(state, 'info', `terminal re-check attempt ${terminalRetryAttempts.get(state) ?? 1}: probing whether the terminal verdict changed`)
+    }
 
     // P0-3 pre-spawn host-key gate: an ssh target with no key in the APP-OWNED known_hosts is
     // never handed to ssh (the argv pins StrictHostKeyChecking=yes; auto-accept is unreachable).
@@ -1041,15 +1190,27 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         // never arm recovery for a machine that moved on.
         if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
         const detail = describeTransportError(allocateError)
+        if (terminalRecheck) {
+          // A terminal re-check stopped on a local resource error: keep the red
+          // projection and the repair hint, and return to the terminal cadence.
+          // The normal slow-probe path would run a non-recheck attempt that clears
+          // requiresUserAction and can lose the repair surface on a transient miss.
+          terminalRechecks.delete(state)
+          transition(id, 'error', undefined, state)
+          appendLogInternal(state, 'warn', `terminal re-check could not allocate a local port: ${detail}; keeping the repair hint`)
+          armTerminalRetry(id, state)
+          return
+        }
+        const slowDelay = slowRetryDelayMs(slowRetryMs, doRandom)
         transition(id, 'error', `failed to allocate a local port: ${detail}`, state)
-        appendLogInternal(state, 'error', `port allocation failed: ${detail}`)
+        appendLogInternal(state, 'error', `port allocation failed: ${detail}; slow re-probe in ${slowDelay}ms`)
         // A transient allocation failure (port exhaustion) must not stick in error
         // forever: arm the slow periodic re-probe (same pattern as max-retry).
         state.reconnectTimer = setTimeout(() => {
           state.reconnectTimer = null
           if (!isCurrentState(id, state)) return
           void startTransport(id).catch(error => warn(`transport-manager: slow re-probe rejected: ${describeTransportError(error)}`))
-        }, slowRetryMs)
+        }, slowDelay)
         state.reconnectTimer.unref?.()
         return
       }
@@ -1153,7 +1314,9 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         return
       }
       state.child = child
-      transition(id, 'connecting', `spawning ${args![0]} ${args!.slice(1).join(' ')}`, state)
+      // A terminal re-check keeps the repair reason in logSummary; the spawn argv
+      // belongs to the ring log, not to the projection the user is reading.
+      transition(id, 'connecting', terminalRecheck ? undefined : `spawning ${args![0]} ${args!.slice(1).join(' ')}`, state)
       const outputOverflow = () => appendLogInternal(
         state,
         'error',
@@ -1195,6 +1358,9 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
         if (logLine === '') return
         appendLogInternal(state, 'info', logLine)
         if (terminalHostKey) {
+          // A ready transport already proved its host key: late chatter must not
+          // latch a hostkey verdict onto a healthy incarnation (same rule as auth).
+          if (state.phase === 'ready') return
           // Host-key failures have their own terminal class (P0-3): never booked as auth.
           state.hostKeyFailed = true
           appendLogInternal(state, 'error', 'host key verification failed (requires user action)')
@@ -1260,7 +1426,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // verification below is a separate phase with its own budget: a slow but
     // successful composite verify must never be judged by this 10s window, so the
     // total attempt deadline is this window + the verify budget by construction.
-    const deadline = Date.now() + readyTimeoutMs
+    let deadline = Date.now() + readyTimeoutMs
+    // One bounded extension for a child that is still STARTING (post-KEX auth,
+    // PAM/LDAP, forward setup). A TCP/KEX black hole normally exits via ConnectTimeout
+    // and never reaches this branch; DNS/Match-exec evaluation is NOT bounded by that
+    // timeout and may consume this one extension. The second deadline stays a hard bound.
+    let extended = false
     void (async () => {
       while (!controller.signal.aborted) {
         if (!isCurrentState(id, state) || state.phase !== 'connecting' || epoch !== state.tunnelEpoch) return
@@ -1311,7 +1482,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
               // burning the bounded reconnect cycle. Only transient failures enter the
               // reconnect path; the failure is INSTANCE-level — the transport worked —
               // so the UI shows an endpoint hint, never an SSH auth failure.
-              if (verification.terminal === true) return failTerminal(id, state, reason, true, 'endpoint')
+              if (verification.terminal === true) return failTerminal(id, state, reason, true, 'endpoint', verification.terminalRetryable === true)
               return scheduleReconnect(id, state, reason)
             }
           }
@@ -1320,10 +1491,16 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
             // that arrived while connecting can never latch a credential verdict onto a
             // transport that just proved its identity.
             state.authFailed = false
+            state.hostKeyFailed = false
+            state.hostKeyProbing = false
+            state.hostKey = null
             authLineStreak = 0
             sawAuthLine = false
             state.retryAttempt = 0
             state.requiresUserAction = false
+            state.userActionKind = null
+            terminalRetryAttempts.delete(state)
+            terminalRechecks.delete(state)
             // A fresh ready edge starts the watch window: the first heartbeats run
             // at the tight cadence while the new relay path is still unproven.
             state.lastLinkEventAt = Date.now()
@@ -1337,8 +1514,17 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
           if (state.hostKeyFailed) return void failHostKey(id, state)
           if (state.authFailed) return failTerminal(id, state, 'authentication failed — requires user action')
           if (state.childExited) return
-          appendLogInternal(state, 'warn', `transport did not come up within ${readyTimeoutMs}ms`)
-          return scheduleReconnect(id, state, 'transport did not come up in time')
+          if (!extended && state.child !== null) {
+            // The ssh child is alive but has not bound the listener yet: the
+            // post-KEX phase has no ConnectTimeout of its own. Extend once.
+            extended = true
+            deadline = Date.now() + readyExtensionMs
+            appendLogInternal(state, 'warn', `transport still starting after ${readyTimeoutMs}ms; extending the readiness window by ${readyExtensionMs}ms (post-KEX auth/forward)`)
+          } else {
+            const totalWindowMs = readyTimeoutMs + (extended ? readyExtensionMs : 0)
+            appendLogInternal(state, 'warn', `transport did not come up within ${totalWindowMs}ms`)
+            return scheduleReconnect(id, state, 'transport did not come up in time')
+          }
         }
         await sleep(probeIntervalMs)
       }
@@ -1475,6 +1661,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     state.retryAttempt = 0
     state.portBindRetries = 0
     state.requiresUserAction = false
+    terminalRetryAttempts.delete(state)
+    terminalRechecks.delete(state)
     transition(id, 'connecting', 'starting transport', state)
     void startTransport(id).catch(error => warn(`transport-manager: startTransport rejected: ${describeTransportError(error)}`))
     return status(id)
@@ -1490,6 +1678,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       clearTimeout(state.reconnectTimer)
       state.reconnectTimer = null
     }
+    terminalRetryAttempts.delete(state)
+    terminalRechecks.delete(state)
     // Revoke both generations FIRST: fences allocation/verification awaits and
     // every in-flight or between-child exec before a same-id replacement connects.
     state.tunnelEpoch += 1

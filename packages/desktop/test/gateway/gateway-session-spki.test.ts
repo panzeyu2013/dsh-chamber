@@ -241,6 +241,7 @@ test('verifyUp: a refused login is terminal, rate_limited stays transient (desig
     assert.equal(refused.ok, false)
     if (!refused.ok) {
       assert.equal(refused.terminal, true, 'a refused password is deterministic')
+      assert.equal('terminalRetryable' in refused, false, 'a refused password is never re-probed')
       assert.match(refused.detail ?? '', /rejected the password login \(HTTP 401\)/)
     }
     // Rate-limited login → transient (the bounded reconnect/backoff path

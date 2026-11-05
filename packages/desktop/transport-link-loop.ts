@@ -25,7 +25,7 @@ export interface LinkLoopDeps {
   bus: { listeners: (event: string) => Function[] }
   isDisposed: () => boolean
   isCurrentState: (id: string, state: InstanceState) => boolean
-  failTerminal: (id: string, state: InstanceState, message: string, requiresUserAction?: boolean, userActionKind?: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null) => void
+  failTerminal: (id: string, state: InstanceState, message: string, requiresUserAction?: boolean, userActionKind?: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null, retryableTerminal?: boolean) => void
   scheduleReconnect: (id: string, state: InstanceState, reason: string) => void
   appendLogInternal: (state: InstanceState, level: 'info' | 'warn' | 'error', message: string) => void
   resolveProvider: (entry: { kind?: unknown; transport?: unknown }) => any
@@ -252,7 +252,7 @@ export function createLinkLoop(deps: LinkLoopDeps) {
     })
     const failureClass: ProbeFailureClass = verification.failureKind ?? fallbackClass
     if (verification.terminal === true || failureClass === 'protocol') {
-      failTerminal(id, state, reason, true, 'endpoint')
+      failTerminal(id, state, reason, true, 'endpoint', verification.terminalRetryable === true)
       return
     }
     // Our own bulk upload owns the tunnel's single TCP: a probe timeout inside

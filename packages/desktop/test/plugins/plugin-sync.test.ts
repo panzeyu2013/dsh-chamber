@@ -793,3 +793,125 @@ test('seedRemoteChamberHostPackages: file pairs land before one merged patch and
   assert.equal(second.wrote, false, 'byte-identical seed files and a settled patch are skipped')
   assert.deepEqual(written, [])
 })
+
+test('seedRemoteChamberHostPackages batches an unchanged seed read into ONE cat (patch probe + batch)', async () => {
+  const root = tempDir()
+  const sourceDir = join(root, 'graph')
+  mkdirSync(join(sourceDir, 'dist'), { recursive: true })
+  const pkgBytes = Buffer.from('{"name":"x"}')
+  const distBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe])
+  writeFileSync(join(sourceDir, 'package.json'), pkgBytes)
+  writeFileSync(join(sourceDir, 'dist', 'index.js'), distBytes)
+  const seeds = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir, label: 'host-graph' }]
+  const base = '~/.dsh/profiles/node_modules/' + CLIENT_GRAPH_PACKAGE_NAME
+  const remote = new Map<string, Buffer>([
+    [base + '/package.json', pkgBytes],
+    [base + '/dist/index.js', distBytes],
+  ])
+  let batchCalls = 0
+  let singleCalls = 0
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const argv = payload.argv ?? []
+      if (argv.length > 1) {
+        batchCalls += 1
+        const parts = argv.map(path => remote.get(path))
+        if (parts.some(part => part === undefined)) return err('run command failed (exit 1): cat: no such file')
+        return okBytes(Buffer.concat(parts as Buffer[]))
+      }
+      singleCalls += 1
+      const path = argv[0] ?? ''
+      if (path.endsWith('/cordis.patch.yml')) return ok('[]')
+      const existing = remote.get(path)
+      return existing !== undefined ? okBytes(existing) : err('run command failed (exit 1): cat: no such file')
+    }
+    return ok()
+  }
+  const result = await seedRemoteChamberHostPackages(exec, SEED_SPEC, seeds)
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.wrote, false, 'byte-identical package files are skipped')
+  assert.equal(batchCalls, 1, 'one batched cat for the whole seed set')
+  assert.equal(singleCalls, 1, 'only the cordis.patch.yml probe stays single')
+})
+
+test('seedRemoteChamberHostPackages falls back to per-file probes when the batched length does not split', async () => {
+  const root = tempDir()
+  const sourceDir = join(root, 'graph')
+  mkdirSync(join(sourceDir, 'dist'), { recursive: true })
+  writeFileSync(join(sourceDir, 'package.json'), '{"name":"x"}')
+  writeFileSync(join(sourceDir, 'dist', 'index.js'), 'export const graph = 1')
+  const seeds = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir, label: 'host-graph' }]
+  const base = '~/.dsh/profiles/node_modules/' + CLIENT_GRAPH_PACKAGE_NAME
+  const remote = new Map<string, Buffer>([
+    [base + '/package.json', Buffer.from('{"name":"x"}')],
+    // dist is present but truncated: the batch length cannot split, so the
+    // per-file probes must decide the write.
+    [base + '/dist/index.js', Buffer.from('export const gra')],
+  ])
+  const written: string[] = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const argv = payload.argv ?? []
+      if (argv.length > 1) {
+        const parts = argv.map(path => remote.get(path))
+        if (parts.some(part => part === undefined)) return err('run command failed (exit 1): cat: no such file')
+        return okBytes(Buffer.concat(parts as Buffer[]))
+      }
+      const path = argv[0] ?? ''
+      if (path.endsWith('/cordis.patch.yml')) return ok('[]')
+      const existing = remote.get(path)
+      return existing !== undefined ? okBytes(existing) : err('run command failed (exit 1): cat: no such file')
+    }
+    if (action === 'run' && payload?.op === 'write-file') {
+      written.push(payload.path ?? '?')
+      return ok()
+    }
+    return ok()
+  }
+  const result = await seedRemoteChamberHostPackages(exec, SEED_SPEC, seeds)
+  assert.equal(result.ok, true)
+  assert.ok(written.some(path => path.endsWith('/dist/index.js')), 'the changed dist is rewritten after the fallback')
+})
+
+test('seed batch falls back per-file when one same-length segment differs', async () => {
+  const root = tempDir()
+  const sourceDir = join(root, 'graph')
+  mkdirSync(join(sourceDir, 'dist'), { recursive: true })
+  const pkg = '{"name":"x"}'
+  const dist = 'export const graph = 1'
+  writeFileSync(join(sourceDir, 'package.json'), pkg)
+  writeFileSync(join(sourceDir, 'dist', 'index.js'), dist)
+  const seeds = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir, label: 'host-graph' }]
+  const base = '~/.dsh/profiles/node_modules/' + CLIENT_GRAPH_PACKAGE_NAME
+  const remote = new Map<string, Buffer>([
+    [base + '/package.json', Buffer.from(pkg)],
+    // Same length as the local dist, different bytes: the total split still
+    // matches, so only the all-or-nothing comparison can reject the batch.
+    [base + '/dist/index.js', Buffer.from('export const graph = 2')],
+  ])
+  const written: string[] = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const argv = payload.argv ?? []
+      if (argv.length > 1) {
+        const parts = argv.map(path => remote.get(path))
+        if (parts.some(part => part === undefined)) return err('run command failed (exit 1): cat: no such file')
+        return okBytes(Buffer.concat(parts as Buffer[]))
+      }
+      const path = argv[0] ?? ''
+      if (path.endsWith('/cordis.patch.yml')) return ok('[]')
+      const existing = remote.get(path)
+      return existing !== undefined ? okBytes(existing) : err('run command failed (exit 1): cat: no such file')
+    }
+    if (action === 'run' && payload?.op === 'write-file') {
+      written.push(payload.path ?? '?')
+      return ok()
+    }
+    return ok()
+  }
+  const result = await seedRemoteChamberHostPackages(exec, SEED_SPEC, seeds)
+  assert.equal(result.ok, true)
+  assert.ok(written.some(path => path.endsWith('/dist/index.js')), 'the changed same-length dist is rewritten after the fallback')
+  assert.equal(written.some(path => path.endsWith('/package.json')), false, 'the unchanged package.json is still skipped')
+})

@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SpawnOptions } from 'node:child_process'
-import { AUTH_READY_TIMEOUT_MS, connectVerifyBudgetMs, createTransportManager, jitteredBackoffMs, READY_TIMEOUT_MS, RING_BUFFER_LIMIT, RING_LOG_MESSAGE_MAX_CHARS, VERIFY_BUDGET_CUSHION_MS } from '../../transport-manager.ts'
+import { AUTH_READY_TIMEOUT_MS, connectVerifyBudgetMs, createTransportManager, jitteredBackoffMs, READY_TIMEOUT_MS, RING_BUFFER_LIMIT, RING_LOG_MESSAGE_MAX_CHARS, slowRetryDelayMs, terminalRetryDelayMs, VERIFY_BUDGET_CUSHION_MS } from '../../transport-manager.ts'
 import { CHAMBER_HOST_PACKAGES } from '../../control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS } from '../../bounded-lines.ts'
 import { configureSshPasswordStore, probeChamberHostLive, purgeSshAuth, setSshPassword, sshProvider, VERIFY_UP_TIMEOUT_MS, verifyDshEndpoint } from '../../ssh-provider.ts'
@@ -440,7 +440,8 @@ test('verifyDshEndpoint rejects a wrong-shaped 200 answer and times out on a sil
   assert.equal(mismatched.ok, false, 'a non-dsh 200 body is rejected')
   if (!mismatched.ok) {
     assert.match(mismatched.detail ?? '', /does not appear to be a dsh/)
-    assert.equal(mismatched.terminal, true, 'a destination that ANSWERED is deterministic: retrying cannot change the answer')
+    assert.equal(mismatched.terminal, true, 'a destination that ANSWERED is deterministic')
+    assert.equal('terminalRetryable' in mismatched, false, 'a non-dsh answer never opts into the terminal re-probe')
   }
   const silentPort = await listen(t, () => { /* never answer */ })
   const timedOut = await verifyDshEndpoint({ host: '127.0.0.1', port: silentPort }, 50)
@@ -521,7 +522,8 @@ test('verifyDshEndpoint flags an old-version dsh destination (positive legacy si
   assert.equal(stale.ok, false)
   if (!stale.ok) {
     assert.match(stale.detail ?? '', /is a dsh instance/, 'a positive dsh signature wins over the generic not-dsh message')
-    assert.equal(stale.terminal, true, 'a destination that ANSWERED the signature probe is deterministic: retrying cannot change the answer')
+    assert.equal(stale.terminal, true, 'a destination that ANSWERED the signature probe is deterministic')
+    assert.equal(stale.terminalRetryable, true, 'the identity/version-mismatch arm is the one provider-declared retryable terminal')
   }
 })
 test('verifyDshEndpoint keeps the generic message when no dsh signature exists', async t => {
@@ -535,7 +537,8 @@ test('verifyDshEndpoint keeps the generic message when no dsh signature exists',
   if (!result.ok) {
     assert.match(result.detail ?? '', /does not appear to be a dsh/)
     assert.ok(!(result.detail ?? '').includes('is a dsh instance'), 'no positive dsh evidence → no dsh claim')
-    assert.equal(result.terminal, true, 'an HTTP answer that is not a dsh handshake is deterministic: retrying cannot change it')
+    assert.equal(result.terminal, true, 'an HTTP answer that is not a dsh handshake is deterministic')
+    assert.equal('terminalRetryable' in result, false, 'no dsh evidence never opts into the terminal re-probe')
   }
 })
 test('probeChamberHostLive classifies every registry host package the same way: live / not-live / unknown', async t => {
@@ -1698,6 +1701,11 @@ test('the shipped ready/verify budgets keep the gateway composite verify indepen
   const gatewayTotal = READY_TIMEOUT_MS + connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, GATEWAY_VERIFY_BUDGET_MS)
   assert.equal(gatewayTotal, 50_000, 'TCP window + composite verify budget')
   assert.ok(gatewayTotal > GATEWAY_VERIFY_BUDGET_MS, 'the total deadline is never earlier than the verify budget')
+  // The one-shot post-KEX extension adds ONE more readiness window to a worst-case
+  // attempt that is still starting: dsh 40s, gateway 60s (the sums above are the
+  // base attempt without an extension).
+  assert.equal(READY_TIMEOUT_MS * 2 + connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, VERIFY_UP_TIMEOUT_MS), 40_000, 'dsh worst case with the readiness extension')
+  assert.equal(READY_TIMEOUT_MS * 2 + connectVerifyBudgetMs(AUTH_READY_TIMEOUT_MS, GATEWAY_VERIFY_BUDGET_MS), 60_000, 'gateway worst case with the readiness extension')
 })
 
 test('a hanging connect-time verifier is bounded by the connect verify budget', async t => {
@@ -1916,3 +1924,259 @@ test('the failure-driven probe only fires on a HEALTHY link (suspect already has
   await waitFor(() => probes === atHealthy + 1, 1_000, 'a healthy link probes on the failure evidence')
 })
 
+
+test('slowRetryDelayMs is symmetric ±20% (mean == base, never below 0.8x)', () => {
+  assert.equal(slowRetryDelayMs(100, () => 0), 80)
+  assert.equal(slowRetryDelayMs(100, () => 1), 120)
+  assert.equal(slowRetryDelayMs(100, () => 0.5), 100)
+  assert.equal(slowRetryDelayMs(40, () => 0), 32)
+  assert.equal(slowRetryDelayMs(40, () => { throw new Error('rng') }), 40)
+})
+
+test('terminalRetryDelayMs backs off 5m -> 15m -> 45m -> 60m with ±10% jitter', () => {
+  assert.equal(terminalRetryDelayMs(1, 300_000, 3_600_000, () => 0.5), 300_000)
+  assert.equal(terminalRetryDelayMs(2, 300_000, 3_600_000, () => 0.5), 900_000)
+  assert.equal(terminalRetryDelayMs(3, 300_000, 3_600_000, () => 0.5), 2_700_000)
+  assert.equal(terminalRetryDelayMs(4, 300_000, 3_600_000, () => 0.5), 3_600_000)
+  assert.equal(terminalRetryDelayMs(4, 300_000, 3_600_000, () => 1), 3_600_000, 'jitter never exceeds the ceiling')
+})
+
+test('a provider-declared terminalRetryable verdict gets ONE bounded re-check and keeps the repair hint while probing', async t => {
+  let calls = 0
+  let sawHint = false
+  let managerRef: ReturnType<typeof makeManager> | undefined
+  const harness = makeManager(t, {
+    options: { terminalRetryBaseMs: 50, terminalRetryMaxMs: 100, readyTimeoutMs: 100, probeIntervalMs: 5 },
+    verifyProbe: async () => {
+      calls += 1
+      if (calls === 1) {
+        return { ok: false, terminal: true, terminalRetryable: true, failureKind: 'protocol', detail: 'the destination is a dsh instance, but it did not answer the dsh identity probe — check or upgrade the remote dsh' }
+      }
+      const status = managerRef!.manager.status('s1')!
+      sawHint = status.phase === 'connecting' && status.requiresUserAction === true && status.userActionKind === 'endpoint'
+      return { ok: true }
+    },
+  })
+  managerRef = harness
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'terminal error')
+  assert.equal(harness.manager.status('s1')!.requiresUserAction, true)
+  assert.equal(harness.manager.status('s1')!.userActionKind, 'endpoint')
+  assert.equal(harness.spawnCalls.length, 1)
+  await waitFor(() => harness.manager.status('s1')!.phase === 'ready', 3000, 'terminal re-check recovers')
+  assert.equal(sawHint, true, 'the re-check probes in connecting with the repair hint still set')
+  assert.equal(harness.manager.status('s1')!.requiresUserAction, false)
+  assert.equal(harness.manager.status('s1')!.userActionKind, null)
+  assert.equal(harness.spawnCalls.length, 2)
+  assert.ok(harness.manager.logs('s1').some(entry => entry.message.includes('terminal re-check')))
+})
+
+test('a terminal verdict without terminalRetryable never arms a re-check (401/403 safety)', async t => {
+  const harness = makeManager(t, {
+    options: { terminalRetryBaseMs: 20, readyTimeoutMs: 100, probeIntervalMs: 5 },
+    verifyProbe: async () => ({ ok: false, terminal: true, failureKind: 'protocol', detail: 'the gateway rejected the password authentication (401) — re-enter the password' }),
+  })
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'terminal error')
+  await sleep(80)
+  assert.equal(harness.spawnCalls.length, 1, 'no background probe for a credential/config refusal')
+  assert.equal(harness.manager.status('s1')!.phase, 'error')
+})
+
+test('a terminal re-check that fails transiently restores the red projection and retries on the terminal cadence', async t => {
+  let mode: 'terminal' | 'network' | 'ok' = 'terminal'
+  const harness = makeManager(t, {
+    options: { terminalRetryBaseMs: 50, terminalRetryMaxMs: 100, readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 5, maxRetryAttempts: 3 },
+    verifyProbe: async () => {
+      if (mode === 'terminal') return { ok: false, terminal: true, terminalRetryable: true, failureKind: 'protocol', detail: 'upgrade window' }
+      if (mode === 'network') return { ok: false, failureKind: 'network', detail: 'connection reset' }
+      return { ok: true }
+    },
+  })
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'terminal error')
+  mode = 'network'
+  await waitFor(() => harness.manager.logs('s1').some(entry => entry.message.includes('terminal re-check failed transiently')), 3000, 'transient re-check failure')
+  assert.equal(harness.manager.status('s1')!.phase, 'error', 'the red phase is restored, not degraded')
+  assert.equal(harness.manager.status('s1')!.requiresUserAction, true, 'the repair hint survives the transient failure')
+  assert.equal(harness.manager.status('s1')!.retryAttempt, 0, 'no fast-burst retry was charged')
+  assert.match(harness.manager.status('s1')!.logSummary, /auto re-check \d+ in \d+ms/, 'the next terminal check stays visible')
+  assert.match(harness.manager.status('s1')!.logSummary, /upgrade window/, 'the terminal reason is preserved during the re-check')
+  mode = 'ok'
+  await waitFor(() => harness.manager.status('s1')!.phase === 'ready', 3000, 'the next terminal re-check recovers')
+  assert.equal(harness.spawnCalls.length, 3, 'initial + first re-check + retried re-check')
+})
+
+test('a live still-starting child gets ONE readiness extension (post-KEX auth/forward)', async t => {
+  const harness = await noProbeManager(t, { options: { readyTimeoutMs: 40, readyExtensionMs: 40, probeIntervalMs: 5, retryBaseMs: 500, maxRetryAttempts: 1 } })
+  await waitFor(() => harness.manager.status('s1')!.phase === 'degraded', 3000, 'the extended window still expires')
+  const extensions = harness.manager.logs('s1').filter(entry => entry.message.includes('extending the readiness window'))
+  assert.equal(extensions.length, 1, 'the window is extended exactly once')
+  assert.ok(harness.manager.logs('s1').some(entry => entry.message.includes('did not come up within 80ms')), 'the log reports the total window')
+  assert.equal(harness.spawnCalls.length, 1)
+})
+
+test('an exiting child is never extended: only a live post-KEX handshake is', async t => {
+  const harness = await noProbeManager(t, { options: { readyTimeoutMs: 5_000, readyExtensionMs: 40, probeIntervalMs: 5, retryBaseMs: 500 } })
+  harness.children[0].simulateExit(1)
+  await waitFor(() => harness.manager.status('s1')!.phase === 'degraded', 3000, 'exit reconnects normally')
+  assert.equal(harness.manager.logs('s1').some(entry => entry.message.includes('extending the readiness window')), false)
+})
+
+test('the slow re-probe uses the jittered delay and logs the real value', async t => {
+  const maxRetryAttempts = 1
+  const harness = await noProbeManager(t, { options: { maxRetryAttempts, slowRetryMs: 40 }, random: () => 0 })
+  await exhaustBurst({ manager: harness.manager, children: harness.children, spawnCalls: harness.spawnCalls }, maxRetryAttempts)
+  assert.ok(harness.manager.logs('s1').some(entry => entry.message.includes('slow re-probe in 32ms')), 'the log carries the jittered delay')
+  await waitFor(() => harness.spawnCalls.length === maxRetryAttempts + 2, 3000, 'the jittered slow re-probe spawns')
+})
+
+test('a ready-state terminalRetryable verdict gets the bounded re-check (link-loop pass-through)', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  const harness = await readyOn(t, 's1', {
+    options: { readyVerifyIntervalMs: 20, readyVerifyMinIntervalMs: 5, terminalRetryBaseMs: 50, terminalRetryMaxMs: 100, readyTimeoutMs: 100, probeIntervalMs: 5 },
+    verifyProbe: async () => outcome,
+  })
+  outcome = { ok: false, terminal: true, terminalRetryable: true, failureKind: 'protocol', detail: 'upgrade window' }
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'heartbeat terminal')
+  assert.equal(harness.spawnCalls.length, 1)
+  outcome = { ok: true }
+  await waitFor(() => harness.spawnCalls.length === 2, 3000, 'terminal re-check spawn')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'ready', 3000, 're-check ready')
+})
+
+test('a terminal re-check that proves an auth failure switches to the auth class and stops the loop', async t => {
+  let calls = 0
+  const harness = makeManager(t, {
+    options: { terminalRetryBaseMs: 50, terminalRetryMaxMs: 100, readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 5 },
+    verifyProbe: async () => {
+      calls += 1
+      return calls === 1
+        ? { ok: false, terminal: true, terminalRetryable: true, failureKind: 'protocol', detail: 'upgrade window' }
+        : { ok: true }
+    },
+  })
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'terminal error')
+  harness.setProbe(false)
+  await waitFor(() => harness.spawnCalls.length === 2, 3000, 're-check spawn')
+  harness.children[1].stderrWrite('Permission denied (publickey).\n')
+  harness.children[1].stderrWrite('Permission denied (publickey).\n')
+  harness.children[1].simulateExit(255)
+  await waitFor(() => harness.manager.status('s1')!.userActionKind === 'auth', 3000, 'auth class wins')
+  assert.equal(harness.manager.status('s1')!.requiresUserAction, true)
+  await sleep(150)
+  assert.equal(harness.spawnCalls.length, 2, 'the re-check loop stopped instead of replaying the password')
+})
+
+test('a terminal re-check that proves a host-key failure switches to the hostkey class and stops the loop', async t => {
+  let calls = 0
+  const harness = makeManager(t, {
+    options: { terminalRetryBaseMs: 50, terminalRetryMaxMs: 100, readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 5 },
+    verifyProbe: async () => {
+      calls += 1
+      return calls === 1
+        ? { ok: false, terminal: true, terminalRetryable: true, failureKind: 'protocol', detail: 'upgrade window' }
+        : { ok: true }
+    },
+  })
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'terminal error')
+  harness.setProbe(false)
+  await waitFor(() => harness.spawnCalls.length === 2, 3000, 're-check spawn')
+  harness.children[1].stderrWrite('Host key verification failed.\n')
+  harness.children[1].simulateExit(255)
+  await waitFor(() => harness.manager.status('s1')!.userActionKind === 'hostkey', 3000, 'hostkey class wins')
+  assert.equal(harness.manager.status('s1')!.requiresUserAction, true)
+  await sleep(150)
+  assert.equal(harness.spawnCalls.length, 2, 'the re-check loop stopped instead of hiding the fingerprint surface')
+})
+
+test('disconnect cancels the terminal re-check cadence (zero spawns)', async t => {
+  let calls = 0
+  const harness = makeManager(t, {
+    options: { terminalRetryBaseMs: 50, terminalRetryMaxMs: 100, readyTimeoutMs: 100, probeIntervalMs: 5 },
+    verifyProbe: async () => {
+      calls += 1
+      return calls === 1
+        ? { ok: false, terminal: true, terminalRetryable: true, failureKind: 'protocol', detail: 'upgrade window' }
+        : { ok: true }
+    },
+  })
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'terminal error')
+  harness.manager.disconnect('s1')
+  assert.equal(harness.manager.status('s1')!.phase, 'idle')
+  await sleep(150)
+  assert.equal(harness.spawnCalls.length, 1, 'a manual disconnect ends the terminal cadence')
+})
+
+test('a direct endpoint never gets the post-KEX readiness extension', async t => {
+  const harness = makeManager(t, {
+    includeDefault: false,
+    instances: [{ id: 'g1', label: 'gw', kind: 'gateway', transport: 'http', host: '127.0.0.1', remotePort: 9 }],
+    provider: gatewayProvider,
+    options: { readyTimeoutMs: 40, readyExtensionMs: 40, probeIntervalMs: 5, maxRetryAttempts: 0, slowRetryMs: 1_000 },
+  })
+  harness.setProbe(false)
+  harness.manager.connect('g1')
+  await waitFor(() => harness.manager.status('g1')!.phase === 'error', 3000, 'direct endpoint times out')
+  assert.equal(harness.spawnCalls.length, 0, 'a direct endpoint has no child to extend')
+  assert.equal(harness.manager.logs('g1').some(entry => entry.message.includes('extending the readiness window')), false)
+})
+
+test('retry delay helpers never turn a hostile RNG into setTimeout(0)', () => {
+  assert.equal(slowRetryDelayMs(100, () => Number.NaN), 100)
+  assert.equal(terminalRetryDelayMs(1, 300_000, 3_600_000, () => Number.NaN), 300_000)
+  assert.equal(slowRetryDelayMs(Number.NaN, () => 0.5), 1)
+})
+
+test('a live child that comes up during the extension reaches ready without a reconnect', async t => {
+  const harness = await noProbeManager(t, { options: { readyTimeoutMs: 40, probeIntervalMs: 5, retryBaseMs: 500, maxRetryAttempts: 1 } })
+  await waitFor(() => harness.manager.logs('s1').some(entry => entry.message.includes('extending the readiness window by 40ms')), 3000, 'default extension derives from readyTimeoutMs')
+  harness.setProbe(true)
+  await waitFor(() => harness.manager.status('s1')!.phase === 'ready', 3000, 'ready inside the extension')
+  assert.equal(harness.spawnCalls.length, 1, 'no reconnect was needed')
+})
+
+test('a terminal re-check that cannot allocate a port keeps the red projection and retries on the terminal cadence', async t => {
+  let allocations = 0
+  const harness = makeManager(t, {
+    options: { terminalRetryBaseMs: 50, terminalRetryMaxMs: 100, readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 5 },
+    allocatePort: async () => {
+      allocations += 1
+      if (allocations === 1) return 43123
+      throw new Error('no free port')
+    },
+    verifyProbe: async () => ({ ok: false, terminal: true, terminalRetryable: true, failureKind: 'protocol', detail: 'upgrade window' }),
+  })
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'error', 3000, 'terminal error')
+  await waitFor(() => harness.manager.logs('s1').some(entry => entry.message.includes('terminal re-check could not allocate a local port')), 3000, 'alloc failure in the re-check')
+  assert.equal(harness.manager.status('s1')!.phase, 'error', 'the red phase is preserved')
+  assert.equal(harness.manager.status('s1')!.requiresUserAction, true, 'the repair hint is preserved')
+  assert.equal(harness.manager.status('s1')!.userActionKind, 'endpoint')
+  await sleep(150)
+  assert.ok(allocations >= 3, 'the terminal cadence keeps retrying instead of the normal slow probe')
+})
+
+test('jitteredBackoffMs also guards a hostile RNG', () => {
+  assert.equal(jitteredBackoffMs(100, () => Number.NaN), 100)
+  assert.equal(jitteredBackoffMs(Number.NaN, () => 0.5), 1)
+})
+
+test('a hostkey-shaped stderr line after ready never latches a hostkey verdict onto a healthy incarnation', async t => {
+  const harness = await readyManager(t)
+  harness.setProbe(false)
+  harness.children[0].stderrWrite('Host key verification failed.\n')
+  harness.children[0].simulateExit(1)
+  await waitFor(() => harness.manager.status('s1')!.phase === 'degraded', 3000, 'a normal drop reconnects')
+  assert.notEqual(harness.manager.status('s1')!.userActionKind, 'hostkey', 'late chatter never becomes a hostkey verdict')
+})

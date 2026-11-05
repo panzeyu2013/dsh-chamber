@@ -1249,7 +1249,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       <div className={css.cardHeadBadges}>
                         <span className={clsx(
                           css.badge,
-                          (phase === 'error' || phase === 'degraded') && css.badgeBad,
+                          (phase === 'error' || phase === 'degraded' || status?.requiresUserAction === true) && css.badgeBad,
                           phase === 'ready' && css.badgeOk,
                         )}>
                           {t(phaseKey(phase))}

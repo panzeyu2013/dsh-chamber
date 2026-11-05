@@ -34,14 +34,29 @@ test('buildRemoteExecArgv refuses every dsh argv (the user plugin write surface 
     )
   }
 })
-test('buildRemoteExecArgv allows only the two whitelisted cat paths (always under LC_ALL=C)', () => {
+test('buildRemoteExecArgv allows 1..32 whitelisted cat paths (single or batched, always under LC_ALL=C)', () => {
   // LC_ALL=C forces the REMOTE coreutils to English regardless of the remote
   // locale — the general fix for localized ENOENT messages (zh_CN 没有那个文件
   // 或目录, ja, fr, …), not a per-language whitelist.
   assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json'] }), ['LC_ALL=C', 'cat', '~/.dsh/profiles/web/package.json'])
   assert.deepEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/cordis.patch.yml'] }), ['LC_ALL=C', 'cat', '~/.dsh/profiles/web/cordis.patch.yml'])
   assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['/etc/passwd'] }), null, 'refuses arbitrary cat path')
-  assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json', 'extra'] }), null, 'refuses extra argv')
+  assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json', 'extra'] }), null, 'refuses an invalid extra argv')
+  const seedPkg = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
+  const seedDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js'
+  assert.deepEqual(
+    buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: [seedPkg, seedDist] }),
+    ['LC_ALL=C', 'cat', seedPkg, seedDist],
+    'batched seed hash-skip read: every path is whitelisted individually',
+  )
+  assert.equal(
+    buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: [seedPkg, '/etc/passwd'] }),
+    null,
+    'one invalid path refuses the whole batch',
+  )
+  const many = Array.from({ length: 33 }, (_, index) => `~/.dsh/profiles/node_modules/@dsh-chamber/p${index}/package.json`)
+  assert.notEqual(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: many.slice(0, 32) }), null, '32 paths are accepted')
+  assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: many }), null, '33 paths exceed MAX_CAT_PATHS')
 })
 test('resolveWriteTarget allows the seed + patch prefixes and rejects traversal', () => {
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json')

@@ -666,3 +666,160 @@ test('session refresh: arm fires one lead before expiry, re-registers the fresh 
   assert.equal(h.state.cancelled.length, 1, 'disarm cancels the pending timer')
   h.refresh.dispose()
 })
+
+test('429 honors a server Retry-After delta-seconds hint (900s) instead of the local 5min', async () => {
+  let nowMs = 1_000_000_000
+  let requests = 0
+  const gw = await startGateway((_req, res) => {
+    requests += 1
+    res.writeHead(429, { 'retry-after': '900' })
+    res.end()
+  })
+  const mgr = createGatewaySessionManager({ now: () => nowMs })
+  try {
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    assert.equal(requests, 1)
+    nowMs += 899_000
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    assert.equal(requests, 1, 'still throttled before the server hint expires')
+    nowMs += 2_000
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    assert.equal(requests, 2, 'the network is tried after the hint')
+  } finally {
+    mgr.dispose()
+    await gw.close()
+  }
+})
+
+test('429 Retry-After below the 30s floor is clamped up (no burst against the limiter)', async () => {
+  let nowMs = 1_000_000_000
+  let requests = 0
+  const gw = await startGateway((_req, res) => {
+    requests += 1
+    res.writeHead(429, { 'retry-after': '5' })
+    res.end()
+  })
+  const mgr = createGatewaySessionManager({ now: () => nowMs })
+  try {
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    nowMs += 29_000
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    assert.equal(requests, 1, 'a 5s hint is raised to the 30s courtesy floor')
+    nowMs += 2_000
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    assert.equal(requests, 2, 'the floor elapsed and the network is tried again')
+  } finally {
+    mgr.dispose()
+    await gw.close()
+  }
+})
+
+test('429 Retry-After HTTP-date is converted to a delay', async () => {
+  let nowMs = 1_000_000_000
+  let requests = 0
+  const gw = await startGateway((_req, res) => {
+    requests += 1
+    res.writeHead(429, { 'retry-after': new Date(nowMs + 120_000).toUTCString() })
+    res.end()
+  })
+  const mgr = createGatewaySessionManager({ now: () => nowMs })
+  try {
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    nowMs += 119_000
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    assert.equal(requests, 1, 'still throttled before the HTTP-date')
+    nowMs += 2_000
+    assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+    assert.equal(requests, 2, 'the HTTP-date elapsed and the network is tried again')
+  } finally {
+    mgr.dispose()
+    await gw.close()
+  }
+})
+
+test('a stale 429 (invalidated generation) never arms the shared backoff', async () => {
+  let nowMs = 1_000_000_000
+  let requests = 0
+  let respond: (() => void) | null = null
+  const gw = await startGateway((_req, res) => {
+    requests += 1
+    respond = () => {
+      res.writeHead(429, { 'retry-after': '900' })
+      res.end()
+    }
+  })
+  const mgr = createGatewaySessionManager({ now: () => nowMs })
+  try {
+    const pending = mgr.ensureSession(gw.origin, PASSWORD)
+    for (let index = 0; index < 200 && respond === null; index += 1) await new Promise(resolve => setTimeout(resolve, 5))
+    assert.ok(respond !== null, 'the login request reached the stub')
+    mgr.invalidate(gw.origin)
+    respond!()
+    const stale = await pending
+    assertFailure(stale, 'stale')
+    nowMs += 1_000
+    respond = null
+    const next = mgr.ensureSession(gw.origin, PASSWORD)
+    for (let index = 0; index < 200 && respond === null; index += 1) await new Promise(resolve => setTimeout(resolve, 5))
+    assert.ok(respond !== null, 'a non-invalidated generation still reaches the network')
+    respond!()
+    assertFailure(await next, 'rate_limited')
+    assert.equal(requests, 2, 'the stale 429 did not suppress the next generation')
+  } finally {
+    mgr.dispose()
+    await gw.close()
+  }
+})
+
+test('429 Retry-After invalid values fall back to the local 5min window', async () => {
+  for (const header of ['-5', '1.5', 'soon']) {
+    let nowMs = 1_000_000_000
+    let requests = 0
+    const gw = await startGateway((_req, res) => {
+      requests += 1
+      res.writeHead(429, { 'retry-after': header })
+      res.end()
+    })
+    const mgr = createGatewaySessionManager({ now: () => nowMs })
+    try {
+      assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+      nowMs += 60_000
+      assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+      assert.equal(requests, 1, header + ': still throttled at 60s (the local 5min window)')
+      nowMs += GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS - 60_000 + 1_000
+      assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+      assert.equal(requests, 2, header + ': the network is tried after the local window')
+    } finally {
+      mgr.dispose()
+      await gw.close()
+    }
+  }
+})
+
+test('429 Retry-After above the ceiling clamps to 900s; a past HTTP-date clamps to the 30s floor', async () => {
+  for (const scenario of [
+    { header: '9999', waitMs: 899_000, label: '9999 delta-seconds' },
+    { header: new Date(1_000_000_000 - 60_000).toUTCString(), waitMs: 29_000, label: 'past HTTP-date' },
+  ]) {
+    let nowMs = 1_000_000_000
+    let requests = 0
+    const gw = await startGateway((_req, res) => {
+      requests += 1
+      res.writeHead(429, { 'retry-after': scenario.header })
+      res.end()
+    })
+    const mgr = createGatewaySessionManager({ now: () => nowMs })
+    try {
+      assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+      nowMs += scenario.waitMs
+      assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+      assert.equal(requests, 1, scenario.label + ': still throttled inside the clamped window')
+      nowMs += 2_000
+      assertFailure(await mgr.ensureSession(gw.origin, PASSWORD), 'rate_limited')
+      assert.equal(requests, 2, scenario.label + ': the clamped window elapsed')
+    } finally {
+      mgr.dispose()
+      await gw.close()
+    }
+  }
+})

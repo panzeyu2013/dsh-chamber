@@ -270,6 +270,16 @@ export interface TransportVerifyResult {
    */
   terminal?: boolean
   /**
+   * Provider-declared eligibility for ONE bounded background re-probe of a
+   * terminal verdict. Set true ONLY when the answer is a time-dependent
+   * identity/version mismatch (a remote dsh mid-upgrade): retrying can change
+   * it later. Credential rejections and configuration denials (gateway
+   * 401/403/421, non-dsh answers) MUST leave it unset, so the runtime never
+   * sprays a credential at a deterministic refusal. The runtime does not infer
+   * this from `failureKind` or `userActionKind`; unset means "never re-probe".
+   */
+  terminalRetryable?: boolean
+  /**
    * Why a non-ok probe failed. The transport manager counts only `network` toward
    * the link-down streak; 5xx/408/425/429 (`server`) and a self-healed 401
    * (`auth`) prove the path is reachable and never count as link loss.

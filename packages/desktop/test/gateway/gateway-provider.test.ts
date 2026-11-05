@@ -662,6 +662,7 @@ test('gateway verifyUp probes WITHOUT auth when no token is configured (design 1
     assert.equal(noToken.ok, false)
     if (!noToken.ok) {
       assert.equal(noToken.terminal, true, 'a 401 answer is a deterministic three-state terminal failure — retrying cannot change it')
+      assert.equal('terminalRetryable' in noToken, false, 'gateway 401 never opts into the terminal re-probe')
       assert.match(noToken.detail ?? '', /requires authentication/, 'the guidance says to configure the token, not that a token was rejected')
     }
     // With a token configured, the probe carries the Bearer header.
@@ -669,7 +670,10 @@ test('gateway verifyUp probes WITHOUT auth when no token is configured (design 1
     const withToken = await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port })
     assert.equal(sawAuthorization, `Bearer ${TOKEN}`)
     assert.equal(withToken.ok, false)
-    if (!withToken.ok) assert.match(withToken.detail ?? '', /rejected the token/, 'a wrong/rejected token keeps the split guidance')
+    if (!withToken.ok) {
+      assert.match(withToken.detail ?? '', /rejected the token/, 'a wrong/rejected token keeps the split guidance')
+      assert.equal('terminalRetryable' in withToken, false, 'gateway 401 never opts into the terminal re-probe')
+    }
   } finally {
     setGatewayToken('probe-1', null)
     server.close()
@@ -744,6 +748,7 @@ test('verifyUp: 403/421 stay terminal and 5xx stays transient (design 17 §7.3 s
       assert.equal(result.ok, false)
       if (!result.ok) {
         assert.equal(result.terminal, terminal, `HTTP ${status} classified ${terminal ? 'terminal' : 'transient'}`)
+        assert.equal('terminalRetryable' in result, false, `gateway HTTP ${status} never opts into the terminal re-probe`)
         assert.match(result.detail ?? '', detailRe)
         // The direct-endpoint probe carries statusCode only on the raw 401
         // (the verifyUp re-login flow keys on it) — 403/421/5xx stay without

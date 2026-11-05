@@ -650,7 +650,9 @@ authority 或 scheme 变化才重新登录；scope invalidation 覆盖该连接�
   `Cookie` `dsh_gateway_session`），白名单逐项校验，绝不允许其他头；
 - gateway 目标登录会话：主进程 `POST /auth/login` → 捕获 `setCookie` → 仅内存持有 →
   仅注入本连接；401（12h 过期）→ 用存储密码自动重登一次（尊重 429 退避）→
-  仍失败才 terminal；应用重启后凭已存凭据重登；
+  仍失败才 terminal；应用重启后凭已存凭据重登；429 的 `Retry-After` 由桌面端按
+  `[30s, 900s]` 解释（30s 下限避免 5 次突发撞 10 次/5min 限流；接受 delta-seconds 或严格 IMF-fixdate（拒绝过时 HTTP-date 与松散串）；
+  非法回落 5min 本地退避），`invalidate` 会清本地 429 退避，新一代不被旧 429 压制；
 - delete/retarget/进入 gateway 生命周期会在任何 secret/metadata 提交前按 exact scope
   撤销所有历史 origin；每个观察过的 session key 都有单调 generation，invalidate 会同步
   提升 generation 并取消 active login。登录、Cookie 探针、Bearer fallback、401 重登在

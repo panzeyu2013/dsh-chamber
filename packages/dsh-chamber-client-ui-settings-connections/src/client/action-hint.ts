@@ -21,9 +21,14 @@
 import type { SshInstanceSpec, SshStatusProjection, SshPhase } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
 
-/** The card phases on which a terminal user-action hint is shown. */
+/**
+ * The card phases on which a terminal user-action hint is shown. `connecting`
+ * is included because a provider-declared retryable terminal verdict re-probes
+ * in that phase while deliberately keeping requiresUserAction true: the repair
+ * hint must not blink off for the duration of the background attempt.
+ */
 export function isUserActionPhase(phase: SshPhase | undefined): boolean {
-  return phase === 'error' || phase === 'degraded'
+  return phase === 'error' || phase === 'degraded' || phase === 'connecting'
 }
 
 /**

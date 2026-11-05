@@ -167,6 +167,7 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
     const result = await verifyDshEndpoint({ host: '127.0.0.1', port })
     assert.equal(result.ok, false)
     assert.equal(result.terminal, true)
+    assert.equal('terminalRetryable' in result, false, 'an unrecoverable browser-auth 401 is never re-probed')
     // The signature probe is gated the same way → the hedged 401 message.
     assert.match(result.detail ?? '', /answered HTTP 401/)
   })
@@ -458,6 +459,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 with the session cookie invalida
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.equal(result.terminal, true, 'a session rejected even after the one re-login is deterministic')
+      assert.equal('terminalRetryable' in result, false, 'a tunnel 401 after the one re-login is never re-probed')
       assert.match(result.detail ?? '', /rejected the password authentication \(401\) — re-enter the password/)
     }
     assert.equal(logins, 2, 'the 401 triggered exactly ONE automatic re-login (bounded, §9.3 重登一次)')

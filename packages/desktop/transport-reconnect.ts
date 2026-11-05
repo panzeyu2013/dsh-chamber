@@ -3,8 +3,10 @@
  * Swift sidecar assembly.
  *
  * Only transient failures are touched: phase error/degraded AND not terminal
- * (requiresUserAction === true is a deterministic auth/verifyUp failure that
- * must never auto-retry); never idle (manual disconnect semantics); connect()
+ * (requiresUserAction === true means "do not retry the RESUME wave"; a
+ * provider-declared terminalRetryable verdict has its own bounded cadence in
+ * armTerminalRetry and must not be shortcut here); never idle (manual
+ * disconnect semantics); connect()
  * is idempotent for connecting/ready. A quit in flight must not spawn new
  * transports (an orphan ssh child could outlive dispose); a missing manager is
  * a no-op. A per-instance throw stays loud without breaking the resume frame;

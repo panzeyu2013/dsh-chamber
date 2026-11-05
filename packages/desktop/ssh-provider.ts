@@ -274,7 +274,7 @@ export async function verifyDshEndpoint(
     }
     const signature = await probeDshSignature(endpoint, Math.min(VERIFY_UP_SIGNATURE_TIMEOUT_MS, remaining()), signal)
     if (signature !== 'none') {
-      return { ok: false, failureKind: 'protocol', detail: 'the destination is a dsh instance, but it did not answer the dsh identity probe — check or upgrade the remote dsh', terminal: true }
+      return { ok: false, failureKind: 'protocol', detail: 'the destination is a dsh instance, but it did not answer the dsh identity probe — check or upgrade the remote dsh', terminal: true, terminalRetryable: true }
     }
     return { ok: false, failureKind: 'protocol', detail: `the destination answered HTTP ${outcome.status ?? '?'} to the dsh identity probe — it does not appear to be a dsh instance`, terminal: true }
   }
@@ -1174,6 +1174,10 @@ function runExec(
   })
 }
 
+/** Upper bound of one batched whitelisted cat read (seed hash-skip): keeps the
+ *  remote shell command line and the captured-output buffer bounded. */
+const MAX_CAT_PATHS = 32
+
 /** Build the ssh argv (everything after `ssh`) for a `run` exec, or null when command/argv fail
  *  the whitelist (refused BEFORE spawn). ssh concatenates these into one string for the REMOTE
  *  shell, so every argument must be shell-safe. */
@@ -1184,21 +1188,27 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
   // The retired user plugin write surface was the only `dsh plugin` caller: no `dsh` argv is
   // ever whitelisted again (the seed/read faces use cat + write-file only).
   if (payload.command === 'cat') {
-    if (argv.length !== 1 || typeof argv[0] !== 'string') return null
+    // 1..N whitelisted paths: the seed hash-skip batches every staged file into
+    // ONE cat (one SSH spawn instead of one per file). Every path is validated
+    // individually below; a single invalid path refuses the whole argv.
+    if (argv.length < 1 || argv.length > MAX_CAT_PATHS) return null
     const home = spec.remoteDshHome ?? '~/.dsh'
     // Whitelisted cat targets: the profile manifest + patch file, plus the CONVERGED seed subtree
     // `<home>/profiles/node_modules/@dsh-chamber/<pkg>/<file>` — the same surface resolveWriteTarget
     // allows writes into, needed by the seed hash-skip read-back. No wildcards, no `.`/`..`
     // traversal (shared SEED_RELATIVE_PATTERN).
     const seedPrefix = `${home}/profiles/node_modules/@dsh-chamber/`
-    const isSeedRead = argv[0].startsWith(seedPrefix)
-      && argv[0].length > seedPrefix.length
-      && SEED_RELATIVE_PATTERN.test(argv[0].slice(seedPrefix.length))
-    if (argv[0] !== `${home}/profiles/web/package.json` && argv[0] !== `${home}/profiles/web/cordis.patch.yml` && !isSeedRead) return null
+    for (const path of argv) {
+      if (typeof path !== 'string') return null
+      const isSeedRead = path.startsWith(seedPrefix)
+        && path.length > seedPrefix.length
+        && SEED_RELATIVE_PATTERN.test(path.slice(seedPrefix.length))
+      if (path !== `${home}/profiles/web/package.json` && path !== `${home}/profiles/web/cordis.patch.yml` && !isSeedRead) return null
+    }
     // `LC_ALL=C` forces the REMOTE coreutils to emit English regardless of the remote locale (a
     // zh_CN host would otherwise print 没有那个文件或目录, which ENOENT classification would misread
     // as a loud ssh failure). Fixed literal env assignment; `DSH_HOME` rides the same prefix chain.
-    return [...prefix, 'LC_ALL=C', 'cat', argv[0]]
+    return [...prefix, 'LC_ALL=C', 'cat', ...argv]
   }
   return null
 }
