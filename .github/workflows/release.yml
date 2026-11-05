@@ -599,7 +599,7 @@ jobs:
           path: |
             ~/Library/Caches/electron-builder
             ~/Library/Caches/electron
-          key: electron-toolchain-macos-${ hashFiles('packages/desktop/package.json') }
+          key: electron-toolchain-macos-${{ hashFiles('packages/desktop/package.json') }}
           restore-keys: |
             electron-toolchain-macos-
       - name: Build and package macOS app (arm64)
@@ -861,7 +861,7 @@ jobs:
           path: |
             ~/AppData/Local/electron-builder/Cache
             ~/AppData/Local/electron/Cache
-          key: electron-toolchain-windows-${ hashFiles('packages/desktop/package.json') }
+          key: electron-toolchain-windows-${{ hashFiles('packages/desktop/package.json') }}
           restore-keys: |
             electron-toolchain-windows-
       - name: Build and package Windows app
@@ -1007,10 +1007,6 @@ jobs:
     # 影响 releases/latest 的稳定通道）。
     env:
       SPARKLE_BETA_ROLLING_TAG: appcast-swift-beta
-      # 为 delta 追加 staging 的本通道历史归档数（1..5，默认 2）。
-      # 每个旧版本 = 一次 ~83MB 归档下载 + 一次差分计算；没有旧归档时本次发布没有
-      # delta（feed 退回整包），不会失败（verify 只在 staged 过旧归档却无 delta 时红）。
-      SPARKLE_DELTA_SOURCES: '2'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -1036,7 +1032,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: macos/.build
-          key: swift-build-${ hashFiles('macos/Package.resolved') }
+          key: swift-build-${{ hashFiles('macos/Package.resolved') }}
           restore-keys: |
             swift-build-
       - name: Build sidecar assembly + native .app
@@ -1106,14 +1102,24 @@ jobs:
           SWIFT_BUILD_PID=$!
           # bundle:dsh below imports @dsh-chamber/dsh-runtime (dist), which the
           # build:sidecar line would only ensure later; bootstrap the untracked
-          # build-time artifacts first.
-          pnpm run ensure:artifacts
+          # build-time artifacts first. On a clean runner ensure:artifacts already
+          # built the host packages (build:artifacts includes build:host-packages),
+          # so the explicit rebuild is only needed when a reused workspace already
+          # had artifacts and ensure:artifacts therefore did nothing (saves ~16s).
+          NEED_HOST_BUILD=0
+          if node scripts/dev/ensure-artifacts.mjs --check >/dev/null 2>&1; then
+            NEED_HOST_BUILD=1
+          else
+            pnpm run ensure:artifacts
+          fi
           # 内置 dsh 工作区必须先物化（.gitignore 只提交 vendor/dsh/pnpm-lock.yaml，
           # package.json + node_modules 由 bundle-dsh.mjs 生成；否则 build-sidecar
           # 只 warn、下面 verify 的 test -f 直接失败）。
           pnpm --filter @dsh-chamber/desktop run bundle:dsh &
           BUNDLE_DSH_PID=$!
-          pnpm run build:host-packages
+          if [[ "$NEED_HOST_BUILD" == "1" ]]; then
+            pnpm run build:host-packages
+          fi
           pnpm run build:renderer
           # scoper 标记门：没有它「构建把 scoper 摇掉」的产物可以一路装配进正式 .app
           # （源产物先断一次）。
@@ -1185,7 +1191,7 @@ jobs:
           set -euo pipefail
           node packages/desktop/scripts/prepare-python-payload.mjs --verify \
             "macos/release/dsh-chamber.app/Contents/Resources/sidecar/primary-runtime"
-      - name: Notarize + staple native app and dmg (release only)
+      - name: Notarize + staple native app; start dmg notarization (release only)
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -1235,16 +1241,39 @@ jobs:
           fi
           test -f "${BASE}.zip"
           test -f "${BASE}.dmg"
-          xcrun notarytool submit "${BASE}.dmg" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait
-          xcrun stapler staple "${BASE}.dmg"
-          xcrun stapler validate "${BASE}.dmg"
+          # dmg 是第二次、也是最后一次公证往返：它的票据独立于 .app，但 dmg 必须
+          # 在 .app 装订后才能生成。这里把提交放到后台，让下一步的 Sparkle
+          # appcast（staging + delta 计算，通常 2–5 分钟）与 Apple 处理 dmg
+          # 重叠；verify 步轮询状态文件后再 staple + validate。这样两次公证的
+          # 等待不再串行相加，release 的构建尾段可缩短约 4 分钟。
+          # 保留逐字 submit 行：release-workflow-policy 以它计数「恰好两次提交」
+          # 并断言 staple 在其后。
+          DMG_NOTARY_STATUS="$RUNNER_TEMP/dsh-chamber-dmg-notary.status"
+          DMG_NOTARY_LOG="$RUNNER_TEMP/dsh-chamber-dmg-notary.log"
+          DMG_NOTARY_PIDFILE="$RUNNER_TEMP/dsh-chamber-dmg-notary.pid"
+          rm -f "$DMG_NOTARY_STATUS" "$DMG_NOTARY_LOG" "$DMG_NOTARY_PIDFILE"
+          umask 077
+          (
+            set +e
+            trap '' HUP
+            xcrun notarytool submit "${BASE}.dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            echo "$?" > "$DMG_NOTARY_STATUS.tmp"
+            mv "$DMG_NOTARY_STATUS.tmp" "$DMG_NOTARY_STATUS"
+          ) >"$DMG_NOTARY_LOG" 2>&1 &
+          DMG_NOTARY_PID=$!
+          echo "$DMG_NOTARY_PID" > "$DMG_NOTARY_PIDFILE"
+          # 不依赖 disown：macOS runner 的 bash 3.2 不接受 PID 作为 jobspec；
+          # 子 shell 已 trap HUP 且 stdout/stderr 全部重定向，step 结束后继续运行。
+          echo "dmg notarization started in background (pid $DMG_NOTARY_PID); the appcast step overlaps it"
           xcrun stapler validate "$APP"
 
       - name: Generate + sign the Sparkle appcast (release only)
+        # 本步与上一步留下的 dmg 公证后台进程重叠：generate_appcast 计算 delta 的
+        # 同时，Apple 正在处理 dmg；随后 verify 步会等待 dmg 状态再装订。
         # 原生壳的更新源是随 release 上传的
         # appcast（稳定通道 appcast-swift.xml；beta 通道 appcast-swift-beta.xml），
         # 由 Sparkle 的 generate_appcast 用 EdDSA 私钥签名（与 Developer ID 无关的
@@ -1300,7 +1329,9 @@ jobs:
             MAX_VERSIONS=1
           fi
           # delta 覆盖的旧版本数（generate_appcast --maximum-deltas）：每个旧版本都要
-          # 下载一份 ~83MB 归档并做一次差分计算，默认 2、上限 5（Sparkle 默认值）。
+          # 下载一份 ~83MB 归档并做一次差分计算（实测约 2m18s/基线）。
+          # 两个通道都保留 2 个基线（默认 2、上限 5，Sparkle 默认值）；beta 也要求
+          # 与 stable 相同的双版本增量覆盖。
           DELTA_SOURCES="${SPARKLE_DELTA_SOURCES:-2}"
           if ! [[ "$DELTA_SOURCES" =~ ^[1-5]$ ]]; then
             echo "::error::SPARKLE_DELTA_SOURCES must be 1..5 (got ${DELTA_SOURCES})"
@@ -1736,6 +1767,42 @@ jobs:
           [[ " $(lipo -archs "$ZIP_APP/Contents/Resources/sidecar/dsh-chamber-helper") " == *" arm64 "* ]] \
             || { echo "::error::zip 内捆绑 node 不是 arm64"; exit 1; }
           if [[ "$DRY_RUN" != "true" ]]; then
+            # 公证步把 dmg 提交留在后台，与 appcast 步重叠。上面的结构/zip 校验
+            # 已经跑完，这里才等待 dmg 状态文件（最多 15 分钟；实测 Apple 处理
+            # 约 4 分钟），然后装订 + 校验 dmg——verify 是 upload 之前最后一道门。
+            DMG_NOTARY_STATUS="$RUNNER_TEMP/dsh-chamber-dmg-notary.status"
+            DMG_NOTARY_LOG="$RUNNER_TEMP/dsh-chamber-dmg-notary.log"
+            DMG_NOTARY_PIDFILE="$RUNNER_TEMP/dsh-chamber-dmg-notary.pid"
+            WAITED=0
+            while [[ ! -f "$DMG_NOTARY_STATUS" && "$WAITED" -lt 900 ]]; do
+              # 后台进程若被 runner 回收/异常退出，不会写状态文件；不要白等
+              # 900s。给状态写入留 2s 宽限，再确认进程已消失才 fail-fast。
+              if [[ -f "$DMG_NOTARY_PIDFILE" ]]; then
+                DMG_NOTARY_PID="$(cat "$DMG_NOTARY_PIDFILE" 2>/dev/null || true)"
+                if [[ -n "$DMG_NOTARY_PID" ]] && ! kill -0 "$DMG_NOTARY_PID" 2>/dev/null; then
+                  sleep 2
+                  [[ -f "$DMG_NOTARY_STATUS" ]] && break
+                  echo "::error::dmg notarization process exited without writing a status"
+                  [[ -f "$DMG_NOTARY_LOG" ]] && tail -n 80 "$DMG_NOTARY_LOG" || true
+                  exit 1
+                fi
+              fi
+              sleep 5
+              WAITED=$((WAITED + 5))
+            done
+            if [[ ! -f "$DMG_NOTARY_STATUS" ]]; then
+              echo "::error::dmg notarization did not finish within 15 minutes"
+              [[ -f "$DMG_NOTARY_LOG" ]] && tail -n 80 "$DMG_NOTARY_LOG" || true
+              exit 1
+            fi
+            DMG_NOTARY_EXIT="$(cat "$DMG_NOTARY_STATUS")"
+            if [[ "$DMG_NOTARY_EXIT" != "0" ]]; then
+              echo "::error::dmg notarization failed (notarytool exit ${DMG_NOTARY_EXIT})"
+              cat "$DMG_NOTARY_LOG" || true
+              exit 1
+            fi
+            echo "dmg notarization completed (waited ${WAITED}s; overlapped with the appcast step)"
+            xcrun stapler staple "${BASE}.dmg"
             codesign -dv --verbose=4 "$ZIP_APP" 2>&1 | tee /tmp/swift-codesign-dv.txt
             grep -q 'Authority=Developer ID' /tmp/swift-codesign-dv.txt
             xcrun stapler validate "$ZIP_APP"
