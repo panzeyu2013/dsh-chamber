@@ -82,12 +82,13 @@ export const GROUPS = {
   // and the production assembly (forward-service = source resolver/stores/
   // launcher/authorize/openExternal + the shell-ipc-open-in singleton).
   // Every file is pure Node (injected adapters; no ssh, no fs, no Electron)
-  // except forward-real-ssh: it starts a throwaway sshd under a temporary HOME,
-  // so it registers its test unconditionally but skips unless the leg is
-  // Linux, root, and has sshd/ssh-keygen/ssh. That one entry opts into the
-  // shared runner's 'registered' guard: a leg without those prerequisites is a
-  // legitimate skip instead of a red run, while the file must still register a
-  // test and report a summary, so deleting the acceptance stays red.
+  // except two acceptances that register their test unconditionally and skip
+  // when their prerequisite is absent. Both opt into the shared runner's
+  // 'registered' guard, so a leg without the prerequisite is a legitimate skip
+  // instead of a red run, while each file must still register a test and report
+  // a summary (deleting an acceptance stays red):
+  //   - forward-real-ssh needs Linux + root + sshd/ssh-keygen/ssh;
+  //   - forward-storage-compiled needs the dist/control-plane build output.
   forward: [
     'test/forward/forward-wire.test.ts',
     'test/forward/ssh-forward-args.test.ts',
@@ -101,7 +102,9 @@ export const GROUPS = {
     'test/forward/forward-windows.test.ts',
     'test/forward/forward-spawn.test.ts',
     { file: 'test/forward/forward-real-ssh.test.ts', guard: 'registered' },
-    'test/forward/forward-storage-compiled.test.ts',
+    // dist/control-plane/index.js only exists after build:control-plane, which a
+    // plain `pnpm run test:desktop` on a clean checkout does not run.
+    { file: 'test/forward/forward-storage-compiled.test.ts', guard: 'registered' },
   ],
   // gateway: gateway provider/session and the manual gateway chamber seed sync path
   gateway: [
