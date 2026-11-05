@@ -98,7 +98,7 @@ openInBrowser({sourceId, sourceFingerprint, id, path?}) -> {ok} | {ok:false, cod
 
 ## W0 待核项 / TODO
 
-- pin（0.2.2-alpha.3）上重新核对：`sidebarRightTabs.register` 字段
+- pin（0.2.2-rc.1）上重新核对：`sidebarRightTabs.register` 字段
   （`title` 是否必填、guide 的 title/description 是函数还是字符串、`priority`
   默认 band、guide 点击是否仍 `openTab(entry.kind)`）；slot 名
   `sidebar.right.pane.tab` / `.title` 与 `key` 语义；`ctx.get` 可用性。

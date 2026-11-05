@@ -67,7 +67,7 @@
 **Swift 运行期**：首载按 `/health` 等 ready；首屏后无周期健康探测/重启入口；`didCommit` 后缺期限；宿主 cwd/安装根两条。
 
 **上游 pin 新面（无 GUI 未跑）**：
-- 基线：0.2.2-alpha.3 未复跑（其新面并入下方各行）；pin 三项（内置插件页、跨代 profile、gateway 就地升级）挂账（移动端改由上游前端负责，见 §1.3）。
+- 基线：0.2.2-rc.1 未复跑（相对 alpha.3 为纯版本串，依赖闭包 9 个 @deepseek-ai/* 包同批升稳定版；其新面并入下方各行）；pin 三项（内置插件页、跨代 profile、gateway 就地升级）挂账（移动端改由上游前端负责，见 §1.3）。
 - rc.3（仅该来源）：①会话头视图折叠 + More（Trajectory 行在延迟簇注册视图，默认出现）；②右栏 guide More；③「浏览」落到设置→插件管理（plugin-navigation 座席）；⑤New Session 全局按钮复用空白会话（复用保持创建时预设）。判据 = 含已打开会话的 More/浏览 走查 + 打包态真机（本次机械 live/走查未打开会话，不覆盖本行）；⑤ 另判：已有空白会话（含非默认预设）时点全局「新会话」→ 会话行数不增、落回同一 `[data-session-id]`、预设不变；杀宿主重启后按当前定义重判。侧栏 More 不采纳见 §4.2。
 - 0.2.2（仅该来源）：官方 8 语言界面（chamber 自撰文案仍 zh/en，layout 快捷键标签随上游镜像 8 语言）、`fileDrag` 图片拖拽与文字选区浮条、官方新 client 行（action-cards / creation-recommendations / plugin-recommendations / message-quotes / cua）在 N-ctx 目检；判据 = 打包态真机（机械 live/走查不覆盖本行）；风险 = 新行若成为首屏根 inject 的强制依赖须升 covered factory（design 09 §3.5）。
 - 0.2.2-alpha.3（仅该来源）：①右键上下文菜单（`ui-context-menu` 升 covered 首屏：`useContextMenu` root prop + `contextMenus` service）在 N-ctx 目检——文件/图片右键、键盘 ContextMenu/Shift+F10、Escape 关闭、焦点归还；②窄窗 drawer（帧宽 <768px，vendor AppFrame 覆盖层）走查——mask/Escape 关闭、`data-shortcut-modal=sidebar` 与 Cmd/Ctrl+B 放行、窄窗进出 store 分支（`SIDEBAR_DRAWER_BREAKPOINT`）与上游一致；③`ui-file-actions` 仍由宿主图加载（文件菜单走 `remote.workspaceFiles.readBytes`，per-entry base），图片目标在缺 `path`/`sessionId` 时回退 `target.url`——判据 = 远端实例右键图片的复制/下载实测（失败则按 design 09 §3.6 给 `ui-attachment` 补 base）；④桌面 `dshDesktop.fileActions` 座位未采纳（`canSaveAs=false`，下载走 blob），与 S-25/fileDrag 载体缺口同型；⑤drawer 内 `newSession` 的 darwin 填充未镜像上游 `:where(.root:not([role='dialog']))` 门控（Swift 锁步要求带 vibrancy 的裸选择器）＝纯视觉差异。判据 = 打包态真机 + 上述机器门（`test:layout`/`test:sidebar`/`build:renderer` 的 patch marker）。

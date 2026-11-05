@@ -2,7 +2,7 @@
 
 > 状态：**设计冻结；W0/S1/S2 实现面，S3/真机验收未完成**。本文冻结 Remote Browser v4 的定位、契约与边界。
 > **取证边界（是证据，不是结论）**：本工作树已装 `node_modules` 并跑过 targeted tests/typecheck/build；
-> `vendor/harness-checkout` 仍为空，pin 为 **0.2.2-alpha.3**（`packages/desktop/vendor/dsh/pnpm-lock.yaml`），
+> `vendor/harness-checkout` 在 clean checkout 中未物化，pin 为 **0.2.2-rc.1**（`packages/desktop/vendor/dsh/pnpm-lock.yaml`），
 > 本机 anchor 是 **0.2.1-rc.2**（仅作 API 形状参考）。凡签名/行号/计数以 `TODO(pin-vendor)` 标记的，
 > 必须在真实 pin 源复核后才算契约。未验证项一律显式列出（§15）。
 
@@ -651,10 +651,10 @@ S3 依赖 S1+S2 产物。
 11. **Swift 侧**：只复用既有 `showNativeMessage` 与 `openExternal` 边，不新增 Swift UI；
     `BridgeManifestConsistencyTests` 已按 **56/9** 断言；`build:swift-app` 无 Swift 工具链，未跑。
 12. **`sidebarRightTabs` API 形状**（`get`/`register`/`guide`/`slots` 席位名）按 anchor rc.2 实现并通过
-    新包 typecheck；pin 0.2.2-alpha.3 仍未核对，签名若不同只改 `src/client/index.ts` 的注册段。
+    新包 typecheck；pin 0.2.2-rc.1 仍未核对，签名若不同只改 `src/client/index.ts` 的注册段。
 13. **S1 与 S2 并行**依赖 §7 API 冻结；若 S2 先动而 API 变，launcher 的 code 映射要跟改（风险已记）。
 14. **`chamberInstanceId` 的 kind 前缀**：本地实现按 `dsh-`/`gateway-` 前缀判定并通过
-    source-gate 测试（legacy `ssh-` 拒绝，理由见 §5.2）；pin 0.2.2-alpha.3 的 boot 绑定仍未复核。若 pin 实际是 raw id，退路只有加
+    source-gate 测试（legacy `ssh-` 拒绝，理由见 §5.2）；pin 0.2.2-rc.1 的 boot 绑定仍未复核。若 pin 实际是 raw id，退路只有加
     `chamberTargetKind`（要动 `shell.ts`/`InstanceView`/`App.tsx` 棘轮 + 20 §facts）或让 client-core 提供
     `source-kind` 具名面（+allowlist）；在任何一条落地前，不得声称入口门已在 pin 上成立。
 15. **构建/真机**：renderer composite typecheck/build 仍缺真实 pin vendor（anchor 只有 lib/dist）；

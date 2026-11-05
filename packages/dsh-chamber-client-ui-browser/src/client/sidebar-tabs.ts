@@ -21,7 +21,7 @@
  * `definition.title(address)` when a tab is opened, so a type without a title
  * would throw at open time; this file includes it.
  *
- * TODO(W0/pin): confirm against 0.2.2-alpha.3:
+ * TODO(W0/pin): confirm against 0.2.2-rc.1:
  *   1. does `title` remain mandatory, and is it called with the page address?
  *   2. are guide `title`/`description` functions (rc.2) or plain strings?
  *   3. is `priority` still optional and does the default band remain 'extension'?

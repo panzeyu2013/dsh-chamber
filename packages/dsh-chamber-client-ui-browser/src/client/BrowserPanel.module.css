@@ -4,7 +4,7 @@
    adopts dsh's document tokens rather than drawing its own theme. Rules:
    - only tokens the pinned ui-theme declares (checked against 0.2.1-rc.2's
      --dsw-alias-* / --dsw-font-* / --dsw-radius-* set; TODO(W0/pin) re-run
-     verify:style-tokens against 0.2.2-alpha.3);
+     verify:style-tokens against 0.2.2-rc.1);
    - neutral borders stay 0.5px (the design system's hairline);
    - no elevation shadow beside a neutral border, no custom property declared
      here, no full-round radius (so no corner-shape pairing is needed). */

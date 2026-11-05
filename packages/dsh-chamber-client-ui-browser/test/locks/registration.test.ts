@@ -135,7 +135,7 @@ test('the stylesheet follows the token and hairline rules', () => {
   assert.equal(/border-radius:\s*(?:999|50%)/u.test(cssCode), false)
   // Named tokens are pinned to the set the pinned theme declares; an invented
   // name silently unthemes the surface instead of failing. TODO(W0/pin): the
-  // final gate is verify:style-tokens against 0.2.2-alpha.3.
+  // final gate is verify:style-tokens against 0.2.2-rc.1.
   const allowed = new Set([
     '--dsw-alias-label-primary',
     '--dsw-alias-label-secondary',

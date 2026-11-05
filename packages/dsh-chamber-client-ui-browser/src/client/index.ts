@@ -18,7 +18,7 @@
  *    `ui-sidebar-browser` type: `register({ id, kind, multiple, title, guide })`
  *    plus the keyed `sidebar.right.pane.tab` / `...title` seats with
  *    `key === type id`, and a zh/en locale namespace. TODO(W0/pin): re-check
- *    every field and slot name against 0.2.2-alpha.3 (see sidebar-tabs.ts).
+ *    every field and slot name against 0.2.2-rc.1 (see sidebar-tabs.ts).
  *
  * The panel itself never opens a page: a public URL goes through the existing
  * system-browser link leg, and a remote loopback target asks the trusted main
