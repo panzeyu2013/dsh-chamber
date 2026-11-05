@@ -9,7 +9,9 @@
  *   - a listed file that exits 0 without running any test (no node:test summary
  *     or "tests 0"), or that cannot be spawned. Such a file must be recorded in
  *     ZERO_TEST_ALLOWLIST with a justification.
- * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
+ * Entries: a path, { file, nodeArgs } when a loader (--import ...) is needed, or
+ * { file, guard: 'registered' } for an environment-gated file that must still
+ * enter node:test and report a summary on every leg.
  *
  * Platform split (same precedent as packages/control-plane/scripts/test.mjs):
  * `test` runs GROUPS below; `test:win32` runs WIN32_FILES via --win32 and
@@ -79,8 +81,13 @@ export const GROUPS = {
   // composition/path guard; forward-log-redaction = no payload echo/log path),
   // and the production assembly (forward-service = source resolver/stores/
   // launcher/authorize/openExternal + the shell-ipc-open-in singleton).
-  // Every file is pure Node (injected adapters; no ssh, no fs, no Electron), so
-  // the same set runs on every leg.
+  // Every file is pure Node (injected adapters; no ssh, no fs, no Electron)
+  // except forward-real-ssh: it starts a throwaway sshd under a temporary HOME,
+  // so it registers its test unconditionally but skips unless the leg is
+  // Linux, root, and has sshd/ssh-keygen/ssh. That one entry opts into the
+  // shared runner's 'registered' guard: a leg without those prerequisites is a
+  // legitimate skip instead of a red run, while the file must still register a
+  // test and report a summary, so deleting the acceptance stays red.
   forward: [
     'test/forward/forward-wire.test.ts',
     'test/forward/ssh-forward-args.test.ts',
@@ -93,7 +100,7 @@ export const GROUPS = {
     'test/forward/forward-service.test.ts',
     'test/forward/forward-windows.test.ts',
     'test/forward/forward-spawn.test.ts',
-    'test/forward/forward-real-ssh.test.ts',
+    { file: 'test/forward/forward-real-ssh.test.ts', guard: 'registered' },
     'test/forward/forward-storage-compiled.test.ts',
   ],
   // gateway: gateway provider/session and the manual gateway chamber seed sync path
