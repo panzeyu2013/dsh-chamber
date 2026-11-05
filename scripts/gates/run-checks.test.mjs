@@ -286,6 +286,28 @@ test('resolvePackageTestPlan: a dump expands to entries; a chain step stays one 
   assert.equal(plan.entries[1].preResult.stdout, 'chain transcript')
   assert.equal(plan.entries[1].label, 'test:chain')
 })
+test('resolvePackageTestPlan: an entry-level guard survives the dump→plan hop', async () => {
+  // The desktop manifest marks its root+sshd acceptance 'registered' because
+  // it can only run on a privileged Linux leg; the plan builder used to write
+  // the package default over every entry, which re-tightened that file on CI.
+  const dump = {
+    label: 'test:desktop', packageRoot: '/pkg', leg: null, guard: 'executed', timeoutMs: null,
+    requireNoSkips: false, zeroTestAllowlist: [],
+    entries: [
+      { group: 'forward', file: 'plain.test.ts', nodeArgs: [] },
+      { group: 'forward', file: 'gated.test.ts', nodeArgs: [], guard: 'registered' },
+    ],
+  }
+  const launch = async () => ({
+    status: 0, signal: null, stderr: '',
+    stdout: '__DSH_TEST_MANIFEST_DUMP__' + JSON.stringify(dump) + '\n',
+  })
+  const plan = await resolvePackageTestPlan(['test:desktop'], { launch, concurrency: 1 })
+  assert.equal(plan.entries[0].guard, 'executed', 'a plain entry keeps the package default')
+  assert.equal(plan.entries[1].guard, 'registered',
+    'the plan must not clobber an entry-level override with the package default')
+})
+
 test('resolvePackageTestPlan: a manifest step whose dump is missing fails loudly instead of skipping its files', async () => {
   const launch = async step => ({
     status: 0, signal: null, stderr: '', stdout: '',

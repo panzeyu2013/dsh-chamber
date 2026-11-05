@@ -290,7 +290,10 @@ export async function resolvePackageTestPlan(steps, { launch, concurrency = 8, k
           ...entry,
           label: step,
           packageRoot: dump.packageRoot,
-          guard: dump.guard,
+          // An entry-level override must survive the dump→plan hop (the
+          // desktop manifest marks its root+sshd acceptance 'registered');
+          // clobbering it here silently re-tightens the gate on that file.
+          guard: entry.guard ?? dump.guard,
           timeoutMs: dump.timeoutMs ?? undefined,
           zeroTestAllowlist: dump.zeroTestAllowlist,
           requireNoSkips: dump.requireNoSkips,
