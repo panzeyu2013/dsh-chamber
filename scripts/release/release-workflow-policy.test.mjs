@@ -56,6 +56,31 @@ assert.match(workflow, /release version must be canonical SemVer/)
 assert.doesNotMatch(workflow, /VERSION="\$\{\{[^\n]*outputs\.version/)
 assert.match(workflow, /group: release-publish/)
 assert.match(workflow, /cancel-in-progress: false/)
+// Cache keys are GitHub expressions. The shell-looking `${ hashFiles(...) }` is a
+// LITERAL key: every run collides on one stale cache and the cache is never
+// re-saved (the 2026-11-04 log literally shows "Cache hit for:
+// swift-build-${ hashFiles('macos/Package.resolved') }"). ci.yml already used the
+// correct form; release.yml must not regress it again.
+const cacheKeys = workflow.split('\n').filter((line) => /^\s*key:/.test(line)).join('\n')
+assert.doesNotMatch(cacheKeys, /\$\{ hashFiles\(/,
+  'cache keys must use ${{ hashFiles(...) }}, not the literal ${ hashFiles(...) }')
+assert.match(cacheKeys, /key: swift-build-\$\{\{ hashFiles\('macos\/Package\.resolved'\) \}\}/,
+  'the Swift build cache key must hash Package.resolved')
+assert.match(cacheKeys, /key: electron-toolchain-macos-\$\{\{ hashFiles\('packages\/desktop\/package\.json'\) \}\}/,
+  'the macOS electron-toolchain cache key must hash desktop package.json')
+assert.match(cacheKeys, /key: electron-toolchain-windows-\$\{\{ hashFiles\('packages\/desktop\/package\.json'\) \}\}/,
+  'the Windows electron-toolchain cache key must hash desktop package.json')
+// ensure:artifacts already runs build:artifacts (which includes
+// build:host-packages) on a clean runner; the explicit host rebuild is only for
+// a reused workspace and must stay conditional (~16s saved per release).
+assert.match(swiftBuild, /NEED_HOST_BUILD=0/,
+  'the release leg must not rebuild host packages after ensure:artifacts already built them')
+assert.match(swiftBuild, /if node scripts\/dev\/ensure-artifacts\.mjs --check[\s\S]*?else\n\s+pnpm run ensure:artifacts\n\s+fi/,
+  'the missing-artifacts arm must run ensure:artifacts (which builds the host packages)')
+assert.match(swiftBuild, /if \[\[ "\$NEED_HOST_BUILD" == "1" \]\]; then\n\s+pnpm run build:host-packages\n\s+fi/,
+  'the explicit host rebuild must be guarded by NEED_HOST_BUILD=1')
+assert.equal(swiftBuild.split('pnpm run build:host-packages').length - 1, 1,
+  'build:host-packages must appear exactly once (inside the NEED_HOST_BUILD guard)')
 // The draft release needs only the fast metadata job; the heavy suite is
 // required by finalize-release instead, so the pack legs run in parallel with it
 // while publishing still cannot happen without a green validation.
@@ -151,6 +176,30 @@ assert.ok(dmgSubmit > dmgCreate, 'the dmg notarization must follow its creation'
 assert.ok(dmgStaple > dmgSubmit, 'the dmg staple must follow its own notarization')
 assert.equal(swiftBuild.split('xcrun notarytool submit').length - 1, 2,
   'exactly two notarytool submissions: the .app and the .dmg')
+// 两次公证必须与 appcast 重叠，而不是串行相加：dmg 提交留在后台、verify 步
+// 有界轮询状态后再装订。去掉后台会静默恢复「4 分钟尾段」。
+assert.ok(swiftBuild.includes(') >"$DMG_NOTARY_LOG" 2>&1 &'),
+  'the dmg notary submission must run in the background so the appcast step can overlap it')
+assert.ok(swiftBuild.includes('echo "$?" > "$DMG_NOTARY_STATUS.tmp"')
+  && swiftBuild.includes('mv "$DMG_NOTARY_STATUS.tmp" "$DMG_NOTARY_STATUS"'),
+  'the background notary must publish its exit status atomically')
+assert.ok(swiftBuild.includes('dmg notarization did not finish within 15 minutes')
+  && swiftBuild.includes('dmg notarization failed (notarytool exit'),
+  'the verify wait must fail closed on timeout and on a non-zero notary status')
+assert.ok(swiftBuild.includes('DMG_NOTARY_PIDFILE=')
+  && swiftBuild.includes('kill -0 "$DMG_NOTARY_PID"')
+  && swiftBuild.includes('dmg notarization process exited without writing a status'),
+  'a dead background notary must fail fast instead of burning the 900s timeout')
+assert.ok(swiftBuild.includes('while [[ ! -f "$DMG_NOTARY_STATUS" && "$WAITED" -lt 900 ]]'),
+  'the verify step must wait for the background dmg notarization with a bounded timeout')
+const dmgValidate = swiftBuild.indexOf('xcrun stapler validate "${BASE}.dmg"')
+assert.ok(dmgValidate > dmgStaple,
+  'the dmg validate must follow the dmg staple')
+const verifyStepMarker = swiftBuild.indexOf('Verify native app + uploaded archives')
+assert.ok(verifyStepMarker !== -1 && dmgStaple > verifyStepMarker,
+  'the dmg staple must live in the verify step, after the background wait')
+assert.doesNotMatch(swiftBuild, /wait "\$DMG_NOTARY_PID"/,
+  'the notarize step must not block on the background dmg process (that would restore the serial tail)')
 // 卷内容断言锚共享模块（workflow 不内联 staging）。
 assert.doesNotMatch(swiftBuild, /hdiutil create/,
   'the workflow must not inline hdiutil staging — single implementation lives in macos/scripts/dmg.mjs')
@@ -318,7 +367,9 @@ assert.ok(appcastStep.includes('--maximum-versions "$MAX_VERSIONS"')
   'stable feed 只保留当前条目（MAX_VERSIONS=1），beta 保留最近 3 条')
 assert.ok(appcastStep.includes('--maximum-deltas "$DELTA_SOURCES"')
   && appcastStep.includes('DELTA_SOURCES="${SPARKLE_DELTA_SOURCES:-2}"'),
-  'delta 覆盖的历史版本数由 SPARKLE_DELTA_SOURCES 控制（默认 2）')
+  'both channels must keep the default of 2 delta baselines')
+assert.doesNotMatch(appcastStep, /DEFAULT_DELTA_SOURCES|vars\.SPARKLE_DELTA_SOURCES/,
+  'beta must not get a channel-specific delta default or repository-variable override')
 assert.match(appcastStep, /\[\[ "\$DELTA_SOURCES" =~ \^\[1-5\]\$ \]\]/,
   'delta 源数量必须被夹在 1..5（generate_appcast --maximum-deltas 上限）')
 assert.ok(appcastStep.includes('gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases'),

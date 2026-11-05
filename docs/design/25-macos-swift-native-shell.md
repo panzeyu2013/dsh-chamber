@@ -1022,8 +1022,9 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
     「带签名 appcast 却检查不到更新」的包，而且它的 zip 之后会被当成产不出 delta 的基线），两钥匙都缺才是
     loud 降级（照常出包、自动更新关闭）。**stable 与 beta 的收件目录/feed 上传面完全分开**（`/tmp/appcast-in-stable` /
     `/tmp/appcast-in-beta`）：generate_appcast 按归档内嵌 `SUFeedURL` 的文件名分组，两通道归档同目录 + `-o`
-    会直接失败 `multiple appcasts found`。每通道 stage 本通道前 K 个历史 zip（`SPARKLE_DELTA_SOURCES`，默认 2、
-    上限 5；两个通道都要求基线**自带与当前发布公钥一致的非空 `SUPublicEDKey`**、且与当前 app **同分支**
+    会直接失败 `multiple appcasts found`。每通道 stage 本通道前 K 个历史 zip（`SPARKLE_DELTA_SOURCES`，
+    默认 2、上限 5；两个通道都保留双版本增量覆盖。
+    两个通道都要求基线**自带与当前发布公钥一致的非空 `SUPublicEDKey`**、且与当前 app **同分支**
     （同 `LSMinimumSystemVersion`；解包主 app 的 `Info.plist` 判定，stable 侧再要求那次 release 带过
     `appcast-swift.xml` 作廉价预筛）——没有公钥的旧 app，Sparkle 既不产 delta 也不写放弃标记；空 key/密钥轮换
     后的旧 key 会产出「任何公钥都验不过」的 delta；跨分支的历史包会让 feed 出现第二个条目。这些都只降覆盖率、
@@ -1055,9 +1056,18 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
     计数」精确复现 Sparkle 的 7/8 体积规则并硬 FAIL——合法的大改版会误红正式发布，改为标记存在即 loud 降级、
     无标记才 FAIL（签名失败另行硬失败）；④ 把 delta 期望逐条绑到每个基线——`--maximum-deltas` 与 branch point
     会让合法放弃变成红，改为「最新基线精确 + 条数 ≥ 剩余基线数 + 账目守恒」；⑤ stable 保留多条历史条目——
-    历史条目会引用 `releases/latest/download/<旧 zip>` 死链，改为 `--maximum-versions 1`。
+    历史条目会引用 `releases/latest/download/<旧 zip>` 死链，改为 `--maximum-versions 1`；⑥ beta 降为 1 个
+    delta 基线——可省约 1m11s job 墙钟，但本次要求 beta 与 stable 一样保留双版本增量覆盖，不采纳，保留 2；
+    ⑦ 让 dmg 公证继续阻塞（原状）——3m47s 与 appcast 串行相加；让 app/dmg 两个提交真正并发——dmg 必须在
+    app 装订前生成，装订后重做 dmg 会使票据失效；把 dmg 拆独立 job——再付一次 runner 排队与产物传输。
+    均否决，改为「dmg 后台提交 + verify 有界等待」。
     **同版本重跑**：滚动 release 是公开面，重跑时先比对同名 zip 的字节——一致才允许覆盖（幂等重跑），
     不一致直接 FAIL 并提示提升 beta 号（否则已发布 feed 的签名指向的字节变了，客户端先验签失败）。
+    **公证重叠**：.app 与 .dmg 各自需要 Apple 票据，但 dmg 提交在 .app 装订、zip/dmg 生成之后转入后台，
+    与随后的 appcast 生成（staging + delta）重叠；verify 步轮询状态文件（**900s 上限**；PID 消失且无状态即
+    fail-fast）后才 staple/validate dmg，超时或非零即 fail-closed。dmg 失败会在 appcast 之后、upload 之前才报出
+    （appcast 只落盘，不提前上传）。
+    这不是跳过 dmg 公证，也不改变「.app staple 先于最终归档」的顺序。
     **draft 面顺序**：appcast 在 zip/delta 之后才上传到 draft（S-36 的「归档先于 feed」不再依赖「draft 不可见」）。
 - **shell-flavor 判别字段（§0.1-E2）**：`dsh-chamber:info` 载荷带 `flavor`（`main.ts` 的 `hostFacts`；镜像面仍 4 标量），
   但**共享 renderer 至今无消费者**——UI 能力门（更新文案/重启安装按钮）实际由 `installBlockedReason` 与原生能力
