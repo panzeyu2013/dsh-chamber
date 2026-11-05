@@ -26,7 +26,7 @@ import { join } from 'node:path'
 import { AUDIT_TRAIL_MAX_BYTES, type ApiRequest, type ApiResponse, type AuditTrailEvent } from '@dsh-chamber/control-plane'
 import type { AuthProvider } from '../../src/auth.ts'
 import { appendAuditEvent } from '../../src/audit.ts'
-import { parseGatewayConfig, DEFAULT_MOBILE_ENTRY_PATH } from '../../src/config.ts'
+import { parseGatewayConfig } from '../../src/config.ts'
 import {
   AUTH_REJECTION_DEBOUNCE_MS,
   MAX_AUTH_REJECTION_WINDOWS,
@@ -235,8 +235,6 @@ function setup(auth: AuthProvider, auditFile: string, debounce: AuthRejectionDeb
     silentLogger,
     policy,
     auditFile,
-    false,
-    DEFAULT_MOBILE_ENTRY_PATH,
     debounce,
   )
   return { dispatch }

@@ -52,7 +52,6 @@ import { createChamberSurface } from '../../src/routes.ts'
 import { createSessionStateStore, featuresForMode } from '../../src/session-state.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
 import { baselineItem, scratch, sessionSurfaceFor, silentLogger } from './harness.ts'
-import { surfaceStubChannels } from '../support/chamber-surface-harness.ts'
 
 // ---------------------------------------------------------------------------
 // The frozen fixture (single source for this cell's expectations)
@@ -140,7 +139,6 @@ function gatewayFor(t: { after(fn: () => void): void }): GatewayHarness {
   const { surface: sessionState, store } = sessionSurfaceFor(t, { stateDir })
   const surface = createChamberSurface({
     logger: silentLogger,
-    channels: surfaceStubChannels,
     plugins: createChamberPlugins(stateDir, silentLogger),
     installed: createChamberInstalled(stateDir),
     sessionState,

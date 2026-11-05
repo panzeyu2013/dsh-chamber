@@ -180,7 +180,7 @@ test('zh error states keep the localized copy and the aria marking', () => {
   }
 })
 
-test('login helpers: lang detection, HTML negotiation and the desktop form action', () => {
+test('login helpers: lang detection and HTML negotiation', () => {
   assert.equal(detectLoginLang('zh-CN,zh;q=0.9,en;q=0.8'), 'zh')
   assert.equal(detectLoginLang('en-US,en;q=0.9'), 'en')
   assert.equal(detectLoginLang(undefined), 'en')
@@ -191,8 +191,6 @@ test('login helpers: lang detection, HTML negotiation and the desktop form actio
   assert.equal(wantsHtmlLoginResponse({ 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8', accept: 'text/html' }), true)
   assert.equal(wantsHtmlLoginResponse(form), false)
   assert.match(renderLoginPage({ lang: 'en', secure: true }), /action="\/auth\/login"/)
-  assert.match(renderLoginPage({ lang: 'en', secure: true, desktop: true }), /action="\/auth\/login\?desktop=1"/)
-  assert.match(renderLoginPage({ lang: 'en', secure: true, error: 'invalid', desktop: true }), /action="\/auth\/login\?desktop=1"/)
 })
 
 test('login controls keep 44px minimum touch targets', () => {

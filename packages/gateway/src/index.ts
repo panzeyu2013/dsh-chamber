@@ -17,13 +17,11 @@ import {
   type PlaneHandle,
 } from '@dsh-chamber/control-plane'
 import {
-  DEFAULT_MOBILE_ENTRY_PATH,
   GatewayConfigError,
   MAX_GATEWAY_PASSWORD_CHARS,
   MAX_GATEWAY_TOKEN_CHARS,
   MIN_GATEWAY_PASSWORD_CHARS,
   MIN_GATEWAY_TOKEN_CHARS,
-  normalizeMobileEntryPath,
   type GatewayConfig,
 } from './config.ts'
 import { createAuth, type AuthProvider } from './auth.ts'
@@ -35,7 +33,6 @@ import { createSessionStateService, type SessionStateService } from './session-s
 import { createChamberPlugins, syncedSourceDir } from './plugins.ts'
 import { createChamberInstalled } from './plugins-installed.ts'
 import { createGatewayStore, type GatewayStore } from './store.ts'
-import { createChannelRegistry } from './channels.ts'
 import { createGatewayRuntimeManager, type GatewayRuntimeManager } from './runtime-manager.ts'
 import { createRuntimeRoutes } from './runtime-routes.ts'
 import { createPluginWriteCheckpoint } from './spawn-checkpoint.ts'
@@ -103,13 +100,6 @@ function validateMaterializedConfig(config: GatewayConfig): void {
   if (config.tls !== undefined) {
     throw new GatewayConfigError('materialized TLS config is not implemented; terminate TLS at a trusted reverse proxy')
   }
-  // A forged mobile entry could turn UA shunting into an open redirect or a
-  // self-loop — the origin-form guard the parser applies to constructors. The
-  // NORMALIZED value is written back so a programmatic GatewayConfig behaves
-  // exactly like one built from argv: the dispatch compares the entry against
-  // request pathnames, which `URL` has already normalized, and the CLI parser
-  // validates the entry even when the shunting stays disabled.
-  config.mobileEntryPath = normalizeMobileEntryPath(config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
 }
 
 export function createGateway(options: GatewayOptions): GatewayHandle {
@@ -176,7 +166,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       }
     }
     const requestPolicy = createGatewayRequestPolicy(options.config)
-    const channels = createChannelRegistry()
     // Desktop-synced host-package seed cache: chamber host packages come from a connecting desktop's upload; the gateway ships no packaged client plugin.
     const plugins = createChamberPlugins(options.config.plane.stateDir, logger)
     // Managed-profile plugin read projection: readManifest over
@@ -204,12 +193,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
       otherMuxClientsConnected: () => (proxy?.getDiagnostics().activeStreams ?? 0) > 0,
     })
-    // The chamber surface: channels + dashboard assets + plugin-sync cache +
-    // the installed read projection + read-only session-state routes — no
-    // feature host, no readiness coupling; with auth.ts one of its two writers.
+    // The chamber surface: dashboard assets + plugin-sync cache + the installed
+    // read projection + read-only session-state routes — no feature host, no
+    // readiness coupling; with auth.ts one of its two writers.
     chamberSurface = (options.deps?.createChamberSurface ?? createChamberSurface)({
       logger,
-      channels,
       plugins,
       installed,
       sessionState: sessionState.surface,
@@ -229,9 +217,6 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       logger,
       requestPolicy,
       auditFile,
-      // UA shunting (default off; entry path validated by parseGatewayConfig).
-      options.config.mobileUaRedirect === true,
-      options.config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH,
       // Production debounce defaults (undefined = module constant + unref'd timer).
       undefined,
       // Login-phase pre-warm, ON by default (--no-warmup / DSH_GATEWAY_WARMUP=0 off); port/state dereference stays lazy, createdPlane coming later here.
@@ -250,8 +235,8 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     )
     // Chamber seed registry: every remaining entry is a DESKTOP-SYNCED host
     // package (cache filled via PUT /chamber/plugins); until the first sync the
-    // seed skips every entry and the probe uses the reduced base set. The packaged
-    // mobile client-plugin slot was retired with the upstream mobile frontend.
+    // seed skips every entry and the probe uses the reduced base set. No client
+    // plugin is packaged; the mobile layout is upstream-native.
     createdPlane = (options.deps?.createPlane ?? createControlPlane)({
       host: options.config.plane.host,
       port: options.config.plane.port,

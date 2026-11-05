@@ -2,7 +2,7 @@
  * Shared gateway test fakes — the canonical stand-ins for Node's
  * IncomingMessage / ServerResponse used by the dispatch-harness tests
  * (audit.test.ts, dispatch-composition.test.ts, runtime-routes.test.ts,
- * feature-lifecycle.test.ts, mobile-ua-redirect.test.ts). Single source of
+ * feature-lifecycle.test.ts). Single source of
  * truth for the request/response surface the gateway middleware drives; do
  * not re-declare these locally.
  *

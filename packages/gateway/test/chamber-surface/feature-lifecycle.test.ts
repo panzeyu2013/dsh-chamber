@@ -1,7 +1,7 @@
 /**
  * Chamber-surface tests (design 17 §10): the gateway's own `/chamber/*`
- * operations surface — channels projection + plugin-sync seed cache + browser
- * dashboard assets (Credentials + dsh runtime management only).
+ * operations surface — plugin-sync seed cache + browser dashboard assets
+ * (Credentials + dsh runtime management only).
  *
  * The dashboard's two credential-removal gates run in the page's own
  * confirmation dialog (no native confirm). The
@@ -27,23 +27,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { transformSync } from 'esbuild'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
-import type { AuthProvider } from '../../src/auth.ts'
-import { DEFAULT_MOBILE_ENTRY_PATH, parseGatewayConfig } from '../../src/config.ts'
-import { createGatewayDispatch } from '../../src/dispatch.ts'
-import { createGatewayRequestPolicy } from '../../src/middleware.ts'
 import { createChamberPlugins, SYNCED_ARTIFACT_MAX_BYTES, SYNCED_PACKAGE_MAX_BYTES } from '../../src/plugins.ts'
 import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
 import { createDashboardHarness, type DashboardHarness, type DashboardRequest } from '../support/dashboard-harness.ts'
 import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
-import { runHttp } from '../support/dispatch-harness.ts'
-import { FakeResponse, gatewayRequest } from '../support/utils.ts'
-import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger, surfaceStubChannels } from '../support/chamber-surface-harness.ts'
+import { FakeResponse } from '../support/utils.ts'
+import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger } from '../support/chamber-surface-harness.ts'
 
-// Shared harness: one logger, channel stub, surface factory and transport
-// runner for the chamber-surface suites.
+// Shared harness: one logger, surface factory and transport runner for the
+// chamber-surface suites.
 const logger = surfaceSilentLogger
-const channels = surfaceStubChannels
 
 class UploadRequest extends EventEmitter {
   method = 'PUT'
@@ -68,16 +62,6 @@ function surface(t?: { after(fn: () => void): void }) {
 }
 
 const handle = handleChamberSurface
-
-test('chamber channels projection is a read-only GET', async t => {
-  const host = surface(t)
-  const ok = await handle(host, 'GET', '/chamber/channels')
-  assert.equal(ok.status, 200)
-  assert.deepEqual(ok.json(), { items: [] })
-  const notAllowed = await handle(host, 'POST', '/chamber/channels')
-  assert.equal(notAllowed.status, 405)
-  assert.equal(notAllowed.json().code, 'method_not_allowed')
-})
 
 test('dashboard HTML carries only Credentials + runtime panels and a closed CSP', async t => {
   const host = surface(t)
@@ -574,110 +558,6 @@ test('the dialog keeps the page behind out of reach for its whole armed lifetime
     'a closed dialog no longer holds the keyboard')
 })
 
-test('mobile entry asset keeps serving while the PWA trio stays 404 and the page hands back to desktop', async t => {
-  const host = surface(t)
-  // The PWA trio (manifest.webmanifest / sw-register.js / sw.js) is deliberately
-  // NOT served — nothing references those URLs — and the mobile light surface is
-  // the one asset the (deprecated) mobile-UA shunting serves.
-  for (const path of ['/chamber/sw.js', '/chamber/sw-register.js', '/chamber/manifest.webmanifest']) {
-    const response = await handle(host, 'GET', path)
-    assert.equal(response.status, 404, path)
-    assert.deepEqual(response.json(), { error: 'not_found', code: 'not_found' }, path)
-  }
-  const response = await handle(host, 'GET', '/chamber/mobile.html')
-  assert.equal(response.status, 200)
-  assert.match(response.headers['content-type'] ?? '', /^text\/html/)
-  // The served mobile surface keeps its doctype and viewport meta, hands the
-  // browser back to the desktop entry (the plugin is always injected now), and
-  // keeps the manual link as the no-refresh fallback.
-  const mobileHtml = response.chunks.join('')
-  assert.match(mobileHtml, /^<!doctype html>/, 'the mobile surface keeps its doctype')
-  assert.match(mobileHtml, /name="viewport"/, 'the mobile surface keeps its viewport meta')
-  assert.match(mobileHtml, /<meta http-equiv="refresh" content="0;url=\/\?desktop=1">/,
-    'the deprecated surface redirects through the desktop escape marker')
-  assert.match(mobileHtml, /\/\?desktop=1/, 'the mobile escape hatch is preserved (dispatch.ts 4.5)')
-  assert.doesNotMatch(mobileHtml, /navigator\.serviceWorker/, 'no service-worker registration is injected')
-  assert.doesNotMatch(mobileHtml, /manifest\.webmanifest/, 'no manifest link is injected')
-  const notAllowed = await handle(host, 'POST', '/chamber/mobile.html')
-  assert.equal(notAllowed.status, 405)
-})
-
-// ---------------------------------------------------------------------------
-// Mobile entry: the dispatch-level login-forward contract
-// ---------------------------------------------------------------------------
-
-/** Denied password provider: verify() answers null, so the auth gate always
- *  reaches the login-forward decision. */
-const deniedPasswordAuth: AuthProvider = {
-  kind: 'password',
-  async verify() { return null },
-  async login() { return {} },
-}
-
-/** A no-listen dispatch over the public gateway origin with `entry` as the
- *  mobile entry. createGateway itself is deliberately NOT constructed here (it
- *  takes the state-root lease and boots the whole control plane); the
- *  constructor-level contract — that a hand-built GatewayConfig is normalized
- *  exactly like an argv-parsed one — is asserted where it takes effect:
- *  validateMaterializedConfig writes the normalized value back, and the
- *  dispatch boundary normalizes again, so this dispatch is built with a RAW
- *  entry on purpose. */
-function mobileEntryDispatch(entry: string) {
-  const config = parseGatewayConfig({
-    host: '0.0.0.0',
-    port: 3000,
-    uiPassword: 'correct-horse-battery',
-    publicOrigin: 'http://gateway.example:3000',
-  }, '/tmp/dsh-gateway-state', '/tmp/dsh')
-  return createGatewayDispatch(
-    deniedPasswordAuth,
-    () => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} }) as never,
-    () => ({ async handle() { return false } }) as never,
-    (() => ({ async handle() { return false } })) as never,
-    logger,
-    createGatewayRequestPolicy(config),
-    undefined,
-    false,
-    entry,
-  )
-}
-
-/** Unauthenticated HTML navigation to `target` under the given entry. */
-async function fetchEntry(entry: string, target: string): Promise<FakeResponse> {
-  return runHttp(mobileEntryDispatch(entry), gatewayRequest('GET', target, { accept: 'text/html' }))
-}
-
-test('the mobile-entry login-forward is an EXACT pathname match; near misses keep the 401 JSON', async () => {
-  // Positive control: the configured entry itself IS a document, so an
-  // unauthenticated HTML navigation reaches the login form.
-  const exact = await fetchEntry(DEFAULT_MOBILE_ENTRY_PATH, DEFAULT_MOBILE_ENTRY_PATH)
-  assert.equal(exact.status, 302)
-  assert.equal(exact.headers.location, '/auth/login')
-  // Trailing slash, case and percent-encoding are DIFFERENT pathnames. The
-  // redirect exemption is exact-string, so each answers the gate's JSON 401 —
-  // locked here so a future "helpful" prefix/case-insensitive match cannot
-  // silently widen the document exemption (or narrow the entry's).
-  for (const variant of ['/chamber/mobile.html/', '/chamber/MOBILE.HTML', '/chamber/mobile%2Ehtml']) {
-    const response = await fetchEntry(DEFAULT_MOBILE_ENTRY_PATH, variant)
-    assert.equal(response.status, 401, variant)
-    assert.deepEqual(response.json(), { error: 'unauthorized', code: 'unauthorized' }, variant)
-    assert.equal(response.headers.location, undefined, variant)
-  }
-})
-
-test('a dot-segment mobile entry is normalized at the dispatch boundary', async () => {
-  // A programmatic config may spell the entry '/chamber/./mobile.html'; without
-  // normalization the dispatch would compare it against the URL-normalized
-  // request pathname '/chamber/mobile.html' and answer a JSON 401 for the very
-  // entry the docs promise reaches the login page.
-  const normalizedTarget = await fetchEntry('/chamber/./mobile.html', '/chamber/mobile.html')
-  assert.equal(normalizedTarget.status, 302, 'the normalized entry must match the normalized request pathname')
-  assert.equal(normalizedTarget.headers.location, '/auth/login')
-  const rawSpelling = await fetchEntry('/chamber/./mobile.html', '/chamber/./mobile.html')
-  assert.equal(rawSpelling.status, 302, 'the raw spelling is URL-normalized on the request side too')
-  assert.equal(rawSpelling.headers.location, '/auth/login')
-})
-
 test('gateway surfaces keep 16px form text and 44px touch targets', async t => {
   const host = surface(t)
   const html = (await handle(host, 'GET', '/chamber/')).chunks.join('')
@@ -694,13 +574,16 @@ test('gateway surfaces keep 16px form text and 44px touch targets', async t => {
   assert.match(style, /button,a\.button\{[^}]*min-height:44px/)
 })
 
-test('unknown chamber paths are claimed with a stable 404', async t => {
+test('orchestration, retired surfaces and the PWA trio stay unclaimed', async t => {
   const host = surface(t)
-  // The orchestration routes stay unclaimed.
+  // Orchestration routes stay unclaimed; the retired mobile/channels surfaces and
+  // the PWA trio are deliberately not served (design 17 §18.3/§18.4).
   for (const path of [
     '/chamber/approvals', '/chamber/notifications', '/chamber/schedule',
     '/chamber/sessions', '/chamber/settings', '/chamber/git/worktrees',
-    '/chamber/git/worktrees/ws-1', '/chamber/unknown',
+    '/chamber/git/worktrees/ws-1', '/chamber/channels', '/chamber/mobile.html',
+    '/chamber/sw.js', '/chamber/sw-register.js', '/chamber/manifest.webmanifest',
+    '/chamber/unknown',
   ]) {
     const response = await handle(host, 'GET', path)
     assert.equal(response.status, 404, path)
@@ -812,7 +695,6 @@ test('chamber plugins upload maps persistence failures to a coded 500, not 400',
   }
   const host = createChamberSurface({
     logger,
-    channels,
     plugins: failing,
     installed: createChamberInstalled(stateDir),
   })
@@ -864,7 +746,7 @@ test('chamber plugins cache lands 0600 files under 0700 dirs and rejects symlink
 
 test('chamber surface asset method edges: HEAD on scripts and 405 on POST /chamber/', async t => {
   const host = surface(t)
-  for (const path of ['/chamber/app.js', '/chamber/mobile.html']) {
+  for (const path of ['/chamber/app.js']) {
     const head = await handle(host, 'HEAD', path)
     assert.equal(head.status, 200, path)
     assert.equal(head.chunks.join(''), '', path)

@@ -5,10 +5,8 @@
  *
  * Public: /health, /auth/login (password deployments only). Pre-gate claim:
  * /plugins/** pre-warm (GET/HEAD + valid capability cookie). Behind the gate:
- * /auth credential routes, /chamber/runtime/* (not ready-gated), /chamber/* and
- * the opt-in mobile-UA 302 (a deprecated compatibility surface: mobile layout
- * is upstream-native); everything else → management API
- * or proxy.
+ * /auth credential routes, /chamber/runtime/* (not ready-gated) and
+ * /chamber/*; everything else → management API or proxy.
  * Every auth-boundary rejection (HTTP and WS) appends one non-secret `auth_rejected`
  * event (code + client + path CATEGORY); identical refusals in a window collapse.
  */
@@ -23,7 +21,6 @@ import type { Duplex } from 'node:stream'
 import { PAGE_CHANNEL_PATH } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import type { AuthChangeProof, AuthPrincipal, AuthProvider, ChangePasswordInput, ChangeTokenInput } from './auth.ts'
 import { SESSION_COOKIE } from './auth.ts'
-import { DEFAULT_MOBILE_ENTRY_PATH, normalizeMobileEntryPath } from './config.ts'
 import type { GatewayProxy } from './gateway-proxy.ts'
 import type { ChamberSurface } from './routes.ts'
 import type { RuntimeRoutes } from './runtime-routes.ts'
@@ -48,10 +45,6 @@ function isPublicRequest(method: string | undefined, pathname: string): boolean 
   // 401/session verdict, never an unauthenticated fallthrough.
   return pathname === '/auth/login' && (method === 'GET' || method === 'HEAD' || method === 'POST')
 }
-
-/** Mobile-UA sniffing for the opt-in experience shunting. Deliberately broad
- * and forgeable — routing sugar only, never a security boundary. */
-const MOBILE_UA_PATTERN = /Mobile|Android|iPhone|iPad|iPod/i
 
 /** Path CATEGORY for audit details: a target may carry a capability token or a
  * session query, so only the coarse class is recorded — never path or query. */
@@ -95,20 +88,17 @@ function shouldRedirectToLogin(
   req: ApiRequest,
   pathname: string,
   auth: AuthProvider,
-  mobileEntryPath: string,
 ): boolean {
   if (auth.kind !== 'password' && auth.kind !== 'password+token') return false
   if (req.method !== 'GET' && req.method !== 'HEAD') return false
   if (!(headerValue(req.headers, 'accept') ?? '').toLowerCase().includes('text/html')) return false
   // Protocol/API surfaces even when a client advertises HTML: /api, /plugins,
   // /auth, and /chamber/<subpath>. Document navigations (/, /chamber, /chamber/)
-  // reach the form. The configured mobile entry is a DOCUMENT too — it is a
-  // deprecated compatibility surface, so an unauthenticated HTML navigation
-  // reaches the login page instead of a bare 401 JSON.
+  // reach the form.
   return pathname !== '/api' && !pathname.startsWith('/api/')
     && pathname !== '/plugins' && !pathname.startsWith('/plugins/')
     && !pathname.startsWith('/auth/')
-    && !(pathname.startsWith('/chamber/') && pathname !== '/chamber/' && pathname !== mobileEntryPath)
+    && !(pathname.startsWith('/chamber/') && pathname !== '/chamber/')
 }
 
 /**
@@ -275,10 +265,6 @@ export function createGatewayDispatch(
   logger: Logger,
   requestPolicy: GatewayRequestPolicy,
   auditFile?: string | null,
-  /** UA experience shunting; default OFF (deprecated compatibility surface —
-   * the mobile layout is upstream-native). */
-  mobileUaRedirect = false,
-  mobileEntryPath = DEFAULT_MOBILE_ENTRY_PATH,
   /** Auth-rejection debounce seam; defaults are production behavior. */
   rejectionDebounce: AuthRejectionDebounce = {},
   /** Login-phase pre-warm deps (default ON from config.warmup). null = the
@@ -286,12 +272,6 @@ export function createGatewayDispatch(
    * claim), so every /plugins target keeps its usual 401/session verdict. */
   warmupDeps: WarmupDeps | null = null,
 ): GatewayDispatch {
-  // Normalize at the comparison boundary too: the entry is matched against
-  // request pathnames, which `URL` has already normalized, so a directly
-  // constructed dispatch must never compare against a raw dot-segment value.
-  // The guard itself lives in one place (config.ts) — createGateway writes the
-  // same normalized value back into the materialized config.
-  mobileEntryPath = normalizeMobileEntryPath(mobileEntryPath)
   const warmup = warmupDeps === null ? null : createWarmupController(warmupDeps)
   /** warn-once latch for an unexpected warm-up links() rejection: links()
    *  fails soft by contract, so an exception here is a visible contract break. */
@@ -553,12 +533,10 @@ export function createGatewayDispatch(
         throw error
       }
       if (principal === null) {
-        if (shouldRedirectToLogin(req, pathname, auth, mobileEntryPath)) {
+        if (shouldRedirectToLogin(req, pathname, auth)) {
           // Invalid session cookie → the expired hint; a first visit stays plain.
           const hadSession = (headerValue(req.headers, 'cookie') ?? '').split(';').some(part => part.trim().startsWith(`${SESSION_COOKIE}=`))
-          // Carry the mobile-shunting escape marker through the login round-trip.
-          const desktopMarker = url.searchParams.has('desktop') ? (hadSession ? '&desktop=1' : '?desktop=1') : ''
-          res.writeHead(302, { location: `${hadSession ? '/auth/login?expired=1' : '/auth/login'}${desktopMarker}`, 'cache-control': 'no-store' })
+          res.writeHead(302, { location: `${hadSession ? '/auth/login?expired=1' : '/auth/login'}`, 'cache-control': 'no-store' })
           res.end()
           return true
         }
@@ -585,9 +563,6 @@ export function createGatewayDispatch(
     if (pathname === '/auth/login') {
       res.setHeader('content-security-policy', LOGIN_PAGE_CSP)
       const lang = detectLoginLang(headerValue(req.headers, 'accept-language'))
-      // Escape marker: kept through renders so the form action stays on
-      // /auth/login?desktop=1 and success lands on /?desktop=1.
-      const loginDesktop = url.searchParams.has('desktop')
       if (auth.kind !== 'password' && auth.kind !== 'password+token') {
         // Token-only / no-auth deployment: browsers get a minimal HTML page,
         // API clients keep the JSON 404; the copy varies by auth kind — a
@@ -613,9 +588,7 @@ export function createGatewayDispatch(
           const body = await readBody(req)
           const { setCookie } = await auth.login!(body, loginReq)
           if (setCookie !== undefined) res.setHeader('set-cookie', setCookie)
-          // The form action carries ?desktop=1 when the visitor escaped the
-          // shunting: land back on the desktop entry, not '/' (shunted again).
-          res.writeHead(302, { location: loginDesktop ? '/?desktop=1' : '/', 'cache-control': 'no-store' })
+          res.writeHead(302, { location: '/', 'cache-control': 'no-store' })
           res.end()
           if (auditFile !== undefined && auditFile !== null) {
             appendAuditEvent(auditFile, { ts: new Date().toISOString(), event: 'login_success', kind: 'gateway', detail: loginSource })
@@ -644,7 +617,7 @@ export function createGatewayDispatch(
             const retryAfterSec = Math.max(1, Math.ceil((retryAfterMs ?? 0) / 1000))
             if (html) {
               res.writeHead(429, { ...LOGIN_HTML_HEADERS, 'retry-after': String(retryAfterSec) })
-              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'rate_limited', retryAfterSec, desktop: loginDesktop }))
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'rate_limited', retryAfterSec }))
             } else {
               // jsonResponse() would overwrite retry-after via writeHead; set it first
               // (setHeader values are merged by writeHead in the real server).
@@ -655,7 +628,7 @@ export function createGatewayDispatch(
           else if (code === 'auth_busy') {
             if (html) {
               res.writeHead(503, LOGIN_HTML_HEADERS)
-              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'busy', desktop: loginDesktop }))
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'busy' }))
             } else {
               jsonResponse(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
             }
@@ -669,7 +642,7 @@ export function createGatewayDispatch(
           else {
             if (html) {
               res.writeHead(401, LOGIN_HTML_HEADERS)
-              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'invalid', desktop: loginDesktop }))
+              res.end(renderLoginPage({ lang, secure: decision.secure, error: 'invalid' }))
             } else {
               jsonResponse(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
             }
@@ -694,7 +667,7 @@ export function createGatewayDispatch(
           })
       if (warmupLinks.cookie !== undefined && warmupLinks.cookie !== '') res.setHeader('set-cookie', warmupLinks.cookie)
       res.writeHead(200, LOGIN_HTML_HEADERS)
-      res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null, desktop: loginDesktop, warmupUrls: warmupLinks.urls }))
+      res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null, warmupUrls: warmupLinks.urls }))
       return true
     }
     // 2.5 Runtime credential management: the two change endpoints + the
@@ -835,37 +808,13 @@ export function createGatewayDispatch(
       await getRuntime().handle(req, res, pathname)
       return true
     }
-    // 4. Chamber surface: the gateway's own operations surface — channels
-    // projection, dashboard assets, the plugin seed cache and the
-    // managed-profile plugin read/write routes (writes answer 202; quiesce/
-    // dispose accounting lives in index.ts). NOT ready-gated: stays pollable.
+    // 4. Chamber surface: the gateway's own operations surface — dashboard
+    // assets, the plugin seed cache and the managed-profile plugin READ route
+    // (user plugin writes were retired with the 2026-09 C layering ruling).
+    // NOT ready-gated: stays pollable.
     if (pathname.startsWith('/chamber/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       await getFeatures().handle(req, res, pathname)
-      return true
-    }
-    // 4.5 Mobile UA shunting (default off, DEPRECATED compatibility surface:
-    // mobile layout is upstream-native, so this path is kept only for
-    // deployments that still rely on the sniff). An authenticated
-    // mobile-browser GET/HEAD of the root is a 302 to the mobile entry. UA
-    // sniffing is forgeable and carries NO security semantics — the shunting
-    // sits AFTER the gate and keeps the fallthrough staleness guard. It ignores
-    // Accept (routing sugar, not negotiation); `?desktop=1` is the escape hatch
-    // back.
-    if (mobileUaRedirect === true
-      && (req.method === 'GET' || req.method === 'HEAD')
-      && pathname === '/'
-      && url.searchParams.get('desktop') === null
-      && MOBILE_UA_PATTERN.test(headerValue(req.headers, 'user-agent') ?? '')) {
-      if (rejectStaleHttp(res, authenticatedPrincipal)) return true
-      res.writeHead(302, {
-        location: mobileEntryPath,
-        'cache-control': 'no-store',
-        // The verdict is UA-dependent: without Vary a shared cache could replay
-        // the shunting 302 to a desktop browser.
-        vary: 'User-Agent',
-      })
-      res.end()
       return true
     }
     // 5. Everything else (/api/* rest, /plugins/*, / and assets) → gateway-proxy,
@@ -960,7 +909,7 @@ export function createGatewayDispatch(
     }
     // 3.5 The page-level multiplex channel is deliberately NOT mounted on the
     // gateway shape (design 26 §2): the page here is the control-plane origin, and
-    // the mobile client does not consume health/pluginGraph/sessionFacts. Falling
+    // the official dsh frontend does not consume health/pluginGraph/sessionFacts. Falling
     // through would let the control-plane shell's defaultUpgrade serve the whole
     // channel (health + pluginGraph upstreams) behind this boundary, so the WS
     // upgrade is claimed and answered with an explicit "not here" 404.

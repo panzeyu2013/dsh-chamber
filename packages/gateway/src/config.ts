@@ -20,8 +20,6 @@ export const MIN_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MIN_CHARS
 export const MAX_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MAX_CHARS
 export const MIN_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MIN_CHARS
 export const MAX_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MAX_CHARS
-/** Default target of the mobile UA shunting: the chamber mobile entry placeholder. */
-export const DEFAULT_MOBILE_ENTRY_PATH = '/chamber/mobile.html'
 
 export interface GatewayConfig {
   plane: {
@@ -47,14 +45,6 @@ export interface GatewayConfig {
   tls?: { cert: string; key: string }
   /** Explicit operator opt-in to bind externally with NO auth (default false; CLI --no-auth). */
   allowAnonymousExternal?: boolean
-  /** UA experience shunting (default OFF; DEPRECATED — mobile layout is
-   * upstream-native now, so this remains only as a compatibility surface):
-   * authenticated mobile-browser GET/HEAD of `/` answers 302 →
-   * mobileEntryPath; UA sniffing is not security. Explicitly enabling it prints
-   * a one-time deprecation warning (never an error). */
-  mobileUaRedirect?: boolean
-  /** Origin-form target of the mobile UA redirect (default '/chamber/mobile.html'; never absolute, never '/'). */
-  mobileEntryPath?: string
   /** Login-phase background pre-warm (default ON): the login page prefetches the
    * REAL /plugins bundle URLs behind a short-lived HttpOnly capability cookie, so
    * post-login boot comes from the HTTP cache; `false` (--no-warmup /
@@ -81,8 +71,6 @@ export interface GatewayConfigInput {
   publicOrigin?: string
   trustedProxies?: string[]
   allowAnonymousExternal?: boolean
-  mobileUaRedirect?: boolean
-  mobileEntryPath?: string
   warmup?: boolean
   sessionState?: boolean
 }
@@ -95,24 +83,6 @@ export class GatewayConfigError extends Error {
   }
 }
 
-/** One-shot latch for the mobile-UA shunting deprecation notice: the config is
- * parsed more than once in one process (tests, CLI re-entry), the operator sees
- * the warning at most once. */
-let mobileUaRedirectDeprecationWarned = false
-
-/** The UA shunting is a compatibility surface only after upstream dsh made the
- * mobile layout native: an explicit opt-in warns — never throws. Latching keeps
- * repeated parses silent. */
-function warnMobileUaRedirectDeprecated(): void {
-  if (mobileUaRedirectDeprecationWarned) return
-  mobileUaRedirectDeprecationWarned = true
-  console.warn(
-    'gateway: --mobile-ua-redirect / DSH_GATEWAY_MOBILE_UA_REDIRECT is deprecated; '
-    + 'mobile layout is provided by the upstream dsh frontend, so UA shunting remains only as a compatibility surface. '
-    + 'Serve / directly instead.',
-  )
-}
-
 function firstEnv(...names: string[]): string | undefined {
   for (const name of names) {
     const value = process.env[name]
@@ -121,8 +91,8 @@ function firstEnv(...names: string[]): string | undefined {
   return undefined
 }
 
-/** Lenient-but-loud env boolean (DSH_GATEWAY_MOBILE_UA_REDIRECT,
- * DSH_GATEWAY_WARMUP): an unrecognized value is a config error, never silent. */
+/** Lenient-but-loud env boolean (DSH_GATEWAY_WARMUP,
+ * DSH_GATEWAY_SESSION_STATE): an unrecognized value is a config error, never silent. */
 function envBoolean(name: string): boolean | undefined {
   const raw = firstEnv(name)
   if (raw === undefined) return undefined
@@ -130,53 +100,6 @@ function envBoolean(name: string): boolean | undefined {
   if (value === '1' || value === 'true') return true
   if (value === '0' || value === 'false') return false
   throw new GatewayConfigError(`${name} must be a boolean (1/true or 0/false), got ${JSON.stringify(raw)}`)
-}
-
-/** Origin-form path validation; a same-origin target only — starts with '/',
- * no '//' prefix, no backslash, never the bare root (which would loop the
- * shunting), and never a query/fragment (URL parsing would silently drop them
- * while the dispatch compares pathnames only). Control characters and
- * dot-segments that URL-normalize back to '/' are rejected (browsers would
- * re-enter the loop), and the auth surface is off-limits (shunting '/' to
- * /auth/login would bounce a fresh login straight back to the form). Returns
- * the NORMALIZED pathname: the dispatch compares it against request pathnames,
- * which `URL` has already normalized, so `/./x` must round-trip as `/x`. A
- * normalized pathname that starts with `//` (e.g. `/.//x`, `/%2e%2e//x`) is
- * rejected — resolving it would switch authority, turning the entry into an
- * off-origin redirect. */
-export function normalizeMobileEntryPath(value: string): string {
-  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || value === '/') {
-    throw new GatewayConfigError(`mobile entry path must be an origin-form path (starts with '/', no '//' prefix, no backslash, and not '/'), got ${JSON.stringify(value)}`)
-  }
-  // `new URL()` would move a query/fragment out of the pathname (the dispatch
-  // compares pathnames only), so a '?' or '#' is a typo that must fail loudly
-  // rather than silently truncate the configured entry.
-  if (value.includes('?') || value.includes('#')) {
-    throw new GatewayConfigError(`mobile entry path must not contain a query or fragment ('?' or '#'), got ${JSON.stringify(value)}`)
-  }
-  if (/[\u0000-\u001f\u007f]/.test(value)) {
-    throw new GatewayConfigError(`mobile entry path must contain no control characters, got ${JSON.stringify(value)}`)
-  }
-  let normalized = value
-  try {
-    normalized = new URL(value, 'http://chamber.invalid').pathname
-  } catch {
-    // Unreachable for origin-form input; fail closed on any parser surprise.
-    throw new GatewayConfigError(`mobile entry path cannot be parsed, got ${JSON.stringify(value)}`)
-  }
-  if (normalized === '/') {
-    throw new GatewayConfigError(`mobile entry path must not normalize to the root (shunting loop), got ${JSON.stringify(value)}`)
-  }
-  if (normalized.startsWith('//')) {
-    throw new GatewayConfigError(`mobile entry path must not normalize to a protocol-relative path (authority switch), got ${JSON.stringify(value)}`)
-  }
-  // Checked AFTER normalization so dot-segment spellings (`/auth/./login`) are
-  // caught too: the entry sits one hop before the login form, so pointing it at
-  // the auth surface would loop every fresh login back to /auth/login.
-  if (normalized === '/auth' || normalized.startsWith('/auth/')) {
-    throw new GatewayConfigError(`mobile entry path must not target the auth surface (login self-loop), got ${JSON.stringify(value)}`)
-  }
-  return normalized
 }
 
 function canonicalOrigin(value: string, label: string): string {
@@ -269,15 +192,6 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   const corsOrigins = [...new Set((input.corsOrigins ?? []).map(canonicalCorsOrigin))]
   const trustedProxies = trustedProxyList(input.trustedProxies)
   const allowAnonymousExternal = input.allowAnonymousExternal === true
-  // The entry path is validated even when the redirect stays disabled, so a
-  // mistyped --mobile-entry cannot surface later as a misdirecting 302.
-  // Explicit opt-in (input or env) prints the one-time deprecation warning.
-  const mobileUaRedirect = input.mobileUaRedirect ?? envBoolean('DSH_GATEWAY_MOBILE_UA_REDIRECT') ?? false
-  // Normalize (and validate) the entry BEFORE the notice: a bad --mobile-entry
-  // must surface as the config error, not behind a deprecation line. The latch
-  // stays process-level on purpose (one notice per process).
-  const mobileEntryPath = normalizeMobileEntryPath(input.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
-  if (mobileUaRedirect === true) warnMobileUaRedirectDeprecated()
   // Login-phase pre-warm ON by default; the kill switch exists for operators
   // who do not want the pre-auth route at all.
   const warmup = input.warmup ?? envBoolean('DSH_GATEWAY_WARMUP') ?? true
@@ -309,8 +223,6 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(tlsCert !== undefined && tlsKey !== undefined ? { tls: { cert: tlsCert, key: tlsKey } } : {}),
     allowAnonymousExternal,
-    mobileUaRedirect,
-    mobileEntryPath,
     warmup,
     sessionState,
   }

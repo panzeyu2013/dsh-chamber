@@ -20,7 +20,7 @@
 2. 在认证、Host/Origin 和资源边界后反代官方 Web 前端与 `/api`；
 3. 允许 Desktop 以 gateway 连接（http 或 https、可空认证）接入该入口；
 4. 在独立的 `/chamber/*` 面提供受限运维面：dsh 运行时管理（design 18 §9.3）、
-   凭据面板、插件同步种子缓存与通道投影（编排面剥离后仅剩这些）。
+   凭据面板与插件同步种子缓存（编排面剥离后仅剩这些；原通道投影已退役，见 §2.4）。
 
 它不是普通 control-plane 的公网开关：普通 Desktop control-plane 仍 loopback-only、匿名、
 只负责连接管理与同源反代，网络能力只在 `packages/gateway` 显式运行时存在。
@@ -46,7 +46,7 @@
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-四维全部正交、开放联合 + 注册表驱动；新增任一维取值只触碰对应槽位，核心运行时与反代零改动（槽位总表见 §14）。
+四维全部正交、开放联合 + 注册表驱动（channel 维度当前退役，见 §2.4；槽位保留为未来扩展）；新增任一维取值只触碰对应槽位，核心运行时与反代零改动（槽位总表见 §14）。
 
 ### 2.1 目标类型（kind）
 
@@ -85,15 +85,12 @@ kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/c
 - **槽位**：认证 = 可注入头白名单（现为 `Authorization` + `Cookie` 两项，逐项校验）+ 会话管理器接口；
   未来 passkey（服务器 auth.ts 联合已含）/OIDC/客户端证书 = 增加头项或会话实现，反代与 UI 机制不变。
 
-### 2.4 通道（服务器侧暴露面，channel）
+### 2.4 通道（服务器侧暴露面，channel）——已退役
 
-- `direct`（bind 0.0.0.0/127.0.0.1）与桌面 ssh 隧道**不是通道**，不进 ChannelKind；
-- `ChannelRegistry`（`packages/gateway/src/channels.ts`）已定型：
-  `ChannelKind = 'frp' | 'tailscale' | 'zerotier' | (string & {})`，
-  `ChannelProvider { start/stop/resolveEndpoint/probe }`；MVP 零实装，
-  `/chamber/channels` 恒空、活性永远来自 live probe（§2.4 / §10.1；design 01 §5 权威边界纪律）；
-- **发现流槽位**（未来）：桌面可经认证的 `/chamber/channels` 列通道、请求启动并解析端点、
-  自动填充连接表单——接口已定义，本期不实装。
+- `direct`（bind 0.0.0.0/127.0.0.1）与桌面 ssh 隧道**不是通道**，不属于已退役的 channel 槽位；
+- gateway **不再提供** `ChannelRegistry` / `/chamber/channels`（2026-11 退役：MVP 零实装、
+  无消费方）。未来 frp/tailscale/zerotier 真做时，按 provider + 发现流重新引入，届时再定义
+  类型与端点；不保留空壳路由。
 
 ## 3. 能力差异与设置挂载（gateway vs dsh 直连）
 
@@ -118,7 +115,7 @@ settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显
 | 跨会话调度 | 无 | 无 | **无（随编排面剥离**——dsh 没有定时能力，gateway 不添加） |
 | Git worktree 编排 | 有（design 08 实例内插件） | 有（同左） | **无服务器侧记录（随编排面剥离**；侧边栏走 design 08 实例内插件——托管 dsh 由网关 seed chamber 宿主包，本地/gateway 同一通道） |
 | chamber 宿主包 seed（client-graph / git-worktree / archive-cleanup；open-in 为 `localOnly`，桌面从不上传） | 远程 seed（design 13 插件同步） | **无**（seed 门控 `kind==='dsh' && transport==='ssh'`，http 直连无 ssh 通道） | **桌面同步**：`PUT /chamber/plugins` 上传 → 缓存 `<stateDir>/chamber-plugins/` → 每次 spawn 经控制面 seed 注入托管 profile；版本跟随连接的桌面 |
-| 移动适配（无打包客户端插件） | 不适用 | 不适用 | **无**：上游 0.2.2-alpha.2/alpha.3 已原生提供移动布局；gateway 只保留入口/认证/反代（§18） |
+| 移动适配（无打包客户端插件） | 不适用 | 不适用 | **无**：上游 0.2.2-alpha.2/alpha.3 已原生提供移动布局；gateway 只保留认证/反代，**不再保留移动入口页或 UA 分流**（§18.3） |
 
 装配规则（design 17 契约）：**gateway 连接** → 仅挂载 dsh-runtime 代理分节
 （design 18 §3.6/§9.3：`/chamber/runtime`，路径由 canonical `gateway-<id>` 派生为
@@ -169,7 +166,7 @@ Browser / Desktop
         │ HTTPS/HTTP（用户自建：TLS 反代 / tailscale / SSH 隧道 / frp）
         ▼
 Gateway request policy ── auth ── fixed route dispatch
-        │                         ├─ /chamber/* → gateway 自有面（channels/plugins/runtime/仪表盘）
+        │                         ├─ /chamber/* → gateway 自有面（plugins/runtime/仪表盘）
         │                         ├─ management → control-plane API
         │                         └─ dsh UI/API/WS → gateway proxy
         ▼
@@ -716,11 +713,13 @@ connection-target scope 所有的目标；
 > 由种子机制注入宿主包）、功能开关（`/chamber/settings`）与 feature host 全部移出
 > 范围——这些域在 gateway **没有任何管理 API 或 UI**（相关路由一律 404，§10.5）；
 > 重建它们等于把 dsh 宿主能力复制进控制面，违反 AGENTS.md 边界。存活的编排面
-> 只有四件事：
+> 只剩下面几节（10.1 是退役记录）：
 
-### 10.1 `/chamber/channels`
+### 10.1 `/chamber/channels`——已退役
 
-通道注册表只读投影（§2.4；MVP 空实现）。
+该路由与 `ChannelRegistry` 已于 2026-11 移除（§2.4：MVP 零实装、无消费方）。未知
+`/chamber/*` 继续由 surface 的 404 兜底，因此 `/chamber/channels` 现在与其他未知子路径
+一样回答 404。
 
 ### 10.2 `/chamber/plugins`（桌面同步的宿主包种子缓存）
 
@@ -840,8 +839,9 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
   浏览器管理员；桌面客户端仅经 settings-bridge 的 dsh-runtime 代理分节触达 `/chamber/runtime`
   （§10.3/design 18 §9.3）。**后果**：调度、worktree、settings 等编排域已整体删除，相关路由
   （`PUT /chamber/settings`、`POST/DELETE /chamber/schedule`、`DELETE /chamber/git/worktrees/…`）
-  一律 404；存活的 `/chamber/*` 面只有通道投影（`GET /chamber/channels`）、
-  插件同步缓存（`GET/PUT /chamber/plugins`）、runtime 控制器（`/chamber/runtime/*`）与仪表盘静态资源。
+  一律 404；存活的 `/chamber/*` 面只有插件同步缓存（`GET/PUT /chamber/plugins`）、
+  托管 profile 的只读插件投影（`GET /chamber/plugins/installed`）、runtime 控制器
+  （`/chamber/runtime/*`）、只读会话状态镜像（`/chamber/session-state*`）与仪表盘静态资源。
 
 ### 10.6 登录页阶段预热（pre-auth warm-up）
 
@@ -1317,7 +1317,7 @@ connection-target scope 所有的目标；重登有界（一次 + 429 退避）�
 | 目标类型 kind | `TransportKind` 开放联合 + source id 派生 | `dsh` / `gateway` | 新 provider + 类型槽，反代/渲染前缀自动派生 |
 | 传输方式 transport | transport 注册表 + UI schema 注册表 | `ssh` / `http` | 新 provider + 表单 schema + locales |
 | 认证 | 头注入白名单 + 会话管理器接口 | `Authorization` / `Cookie` | passkey/OIDC/客户端证书 = 新头项或会话实现 |
-| 通道 channel（服务器侧） | `ChannelRegistry` | direct（非通道） | frp/tailscale/zerotier provider 实现 + `/chamber/channels` 发现流 |
+| 通道 channel（服务器侧） | 已退役（原 `ChannelRegistry`） | — | 未来真做 frp/tailscale/zerotier 时重新引入 provider + 发现流 |
 | TLS 增强 | SPKI pin 字段（集成）；mTLS 槽位 | 无 | mTLS 客户端证书 + 代理 TLS 扩展 |
 | 网络策略 | 目标网段限制槽位 | host/端口/loopback 白名单 | 每连接网段限制字段 |
 | 审计 | 本地审计日志（集成轻量版） | 连接/认证事件 | 设置页只读入口（可选） |
@@ -1453,14 +1453,14 @@ dsh 0.2.2-alpha.2/alpha.3 把移动端作为正式产品面重做后，这层覆
 
 **裁决**：退役整个 `dsh-chamber-client-ui-mobile` 包及其 gateway 打包 seed。gateway
 不再随发行物分发任何 chamber 客户端插件；移动端布局、交互与主题由上游前端独占。
-保留的只有 gateway 自己的入口/认证/反代职责，以及既有移动入口兼容页。
+保留的只有 gateway 自己的认证/反代职责；移动入口兼容页与 UA 分流已退役（§18.3）。
 
 ### 18.2 职责边界
 
 | 域 | 归属 | chamber 侧纪律 |
 |---|---|---|
 | 移动布局、触控目标、safe-area、composer 键盘行为 | **上游 dsh 前端** | 不注入客户端插件、不覆盖官方 CSS、不改写 HTML；出现缺口时先向上游提案，或在 host/renderer 的正确层修复，不重建并行移动 UI |
-| 移动入口路径、登录回跳、反代 | **gateway** | `/chamber/mobile.html` 兼容页与 `--mobile-entry` 校验保留；见 §18.3 |
+| 反代 / 通用登录回跳 | **gateway** | 仅通用 `/auth/login` → `/`；移动端统一走 `/`，无移动入口路径、无 UA 分流、无 `?desktop=1`（2026-11 退役，见 §18.3） |
 | 认证、凭据、会话边界 | **gateway** | 移动端不引入新的认证面；UA 不是安全边界 |
 | 会话打开停滞、载波恢复 | **session/stream 层** | 不再由 mobile 包承担；若需要首帧期限，落在 host/session 或专用可靠性模块 |
 | PWA manifest/图标 | **上游 web 入口** | gateway 不服务 manifest/SW；不制造“假离线”承诺 |
@@ -1470,12 +1470,9 @@ dsh 0.2.2-alpha.2/alpha.3 把移动端作为正式产品面重做后，这层覆
 
 ### 18.3 入口与资产
 
-- `/chamber/mobile.html` 保留为**弃用兼容入口**：返回带 viewport meta 的页面并
-  meta-refresh 回 `/?desktop=1`；不注入 manifest、不注册 Service Worker。
-- `--mobile-entry` / `DSH_GATEWAY_MOBILE_ENTRY` 仍是 origin-form 路径，必须同源、无
-  query/fragment、不得指向 `/auth*`；非法输入启动即 `exit 2`。
-- UA 体验分流（`--mobile-ua-redirect`）默认关闭且已弃用；它只做体验分流，不承载
-  认证/授权语义。
+- **移动入口兼容页、`--mobile-ua-redirect` / `--mobile-entry` / `DSH_GATEWAY_MOBILE_UA_REDIRECT`
+  与 `?desktop=1` 登录回跳已于 2026-11 整体退役**：上游原生移动布局后，这层只是占位/兼容，
+  无消费方；移动端统一访问 `/`。
 - PWA 安装资产由上游 `apps/web` 的 `manifest.webmanifest` / `apple-touch-icon` 提供；
   gateway 侧不注册任何 SW/manifest 路由。
 
@@ -1509,7 +1506,7 @@ dsh 0.2.2-alpha.2/alpha.3 把移动端作为正式产品面重做后，这层覆
 ### 18.5 安全与边界
 
 - UA 不是安全边界：认证/授权仍由 gateway 的 password/token/cookie 与 dispatch 负责。
-- 移动入口不引入新的登录面；未认证访问仍走既有 `/auth/login` 流转。
+- 移动端访问不引入新的登录面；未认证访问仍走既有 `/auth/login` 流转。
 - gateway 不服务 SW/manifest，不缓存认证后响应，不制造离线承诺。
 - 插件注入信任模型不变：gateway 不再有 packaged client plugin，减少一个注入面。
 
@@ -1540,8 +1537,8 @@ dsh 0.2.2-alpha.2/alpha.3 把移动端作为正式产品面重做后，这层覆
   都要重锚。退役包是成本更低的正确 owner 选择。
 - **在 gateway 反代里改写 HTML/注入样式**：否决。违反“流式透传、无 HTML 改写”的
   边界；移动端由官方前端自己负责。
-- **继续用 UA 嗅探做移动入口**：否决。UA 可伪造且不承载安全语义；入口只保留显式
-  配置的兼容路径。
+- **继续用 UA 嗅探做移动入口**：否决。UA 可伪造且不承载安全语义；当时的显式兼容入口
+  也已于 §18.3 退役。
 
 ## 19. 相关文档
 
@@ -1563,6 +1560,12 @@ dsh 0.2.2-alpha.2/alpha.3 把移动端作为正式产品面重做后，这层覆
 0.2.2-alpha.2/alpha.3 已把移动作为产品面重做，覆盖层随之产生双 opener、锚点漂移与每次 pin 重锚
 成本，故整包退役。落选替代：保留并行移动 UI 包（上游已覆盖，维护成本更高）；在 gateway 反代里
 改写 HTML/注入样式（违反流式透传边界）；继续用 UA 嗅探做移动入口（UA 不是安全边界）。
+
+**移动入口兼容页退役**（§18.3，2026-11）：`/chamber/mobile.html`、`--mobile-ua-redirect` /
+`--mobile-entry`、`DSH_GATEWAY_MOBILE_UA_REDIRECT` 与 `?desktop=1` 登录回跳只是上游原生移动
+布局之前的占位/兼容层，无消费方且与官方壳重复，故整面移除。落选替代：保留一版 no-op 兼容
+flag（只延后删除，不产生功能价值；不保留配置兼容窗口，旧配置随升级改写）；
+在反代里继续保留 UA 嗅探（UA 不是安全边界）。
 
 - **只读会话状态镜像的实现形态**（§10.7 carve-out，`packages/gateway/src/session-state.ts`）：
   - 在 gateway 内 headless 运行官方客户端半（`dsh-client-connection` + 会话控制器 + ui-session 插件图）——**否决**：

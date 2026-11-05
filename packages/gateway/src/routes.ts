@@ -1,9 +1,9 @@
 /**
  * Gateway chamber surface: the gateway-owned `/chamber/*` routes behind the
- * auth gate (dispatch.ts) — channels projection, the desktop-synced
- * host-package seed cache, the managed-profile plugin READ projection
- * (installed), the read-only session-state watcher, the browser dashboard, and
- * the separately dispatched `/chamber/runtime/*` controller. The user plugin
+ * auth gate (dispatch.ts) — the desktop-synced host-package seed cache, the
+ * managed-profile plugin READ projection (installed), the read-only
+ * session-state watcher, the browser dashboard, and the separately dispatched
+ * `/chamber/runtime/*` controller. The user plugin
  * write surface (install / materialize / remove / undo / tasks) was retired
  * with the 2026-09 C layering ruling. Every route reads/writes gateway-owned
  * state; authoritative dsh facts stay on dsh.
@@ -15,18 +15,15 @@ import {
   type ApiResponse,
   type Logger,
 } from '@dsh-chamber/control-plane'
-import type { ChannelRegistry } from './channels.ts'
 import type { ChamberPlugins } from './plugins.ts'
 import type { ChamberInstalled } from './plugins-installed.ts'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
-import { CHAMBER_APP_HTML, CHAMBER_APP_JS, MOBILE_HTML } from './chamber-assets.ts'
+import { CHAMBER_APP_HTML, CHAMBER_APP_JS } from './chamber-assets.ts'
 import type { ChamberSessionState } from './session-state.ts'
 import { codedError, jsonResponse, readBoundedBody } from './http-utils.ts'
 
 export interface ChamberSurfaceDeps {
   logger: Logger
-  /** The channel registry (MVP empty). */
-  channels: ChannelRegistry
   /** The desktop-synced host-package seed cache. */
   plugins: ChamberPlugins
   /** The managed web-profile plugin read projection (read-only). */
@@ -90,27 +87,15 @@ function methodNotAllowed(res: ApiResponse): true {
   return true
 }
 
-
-
 /**
- * The gateway's own `/chamber/*` surface: channels projection + plugin-sync
- * seed cache (chamber provisioning, not a user plugin write face) + the
- * managed-profile plugin read projection + browser dashboard assets (GET/HEAD
- * reads) + the read-only session-state routes.
+ * The gateway's own `/chamber/*` surface: plugin-sync seed cache (chamber
+ * provisioning, not a user plugin write face) + the managed-profile plugin read
+ * projection + browser dashboard assets (GET/HEAD reads) + the read-only
+ * session-state routes.
  */
 export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
-  const { channels, logger } = deps
+  const { logger } = deps
   async function handleRoute(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
-    // /chamber/channels: the channel registry projection (MVP empty).
-    if (pathname === '/chamber/channels') {
-      if (req.method !== 'GET') {
-        jsonResponse(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
-        return true
-      }
-      jsonResponse(res, 200, { items: channels.list() })
-      return true
-    }
-
     // /chamber/plugins: the desktop-synced host-package seed cache. GET = the
     // non-secret projection (name + version); PUT = upload one syncable host
     // package (validated + atomically cached; the next dsh spawn re-seeds it,
@@ -203,7 +188,6 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-
     // Gateway-owned browser operations surface, already behind dispatch.ts's
     // mandatory auth gate. The document uses an external same-origin script so
     // the control-plane CSP can keep inline script closed; no credentials in URLs.
@@ -217,16 +201,6 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     if (pathname === '/chamber/app.js') {
       if (!isAssetMethod(req.method)) return methodNotAllowed(res)
       serveAsset(res, 'application/javascript; charset=utf-8', CHAMBER_APP_JS, req.method === 'HEAD')
-      return true
-    }
-
-    // Mobile light surface. The PWA trio (manifest.webmanifest /
-    // sw-register.js / sw.js) is deliberately NOT served: nothing references
-    // those URLs — the HTML link/registration injection is deferred
-    // (middleware.ts), so serving them would have no consumer.
-    if (pathname === '/chamber/mobile.html') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'text/html; charset=utf-8', MOBILE_HTML, req.method === 'HEAD')
       return true
     }
 

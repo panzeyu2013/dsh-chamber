@@ -37,10 +37,6 @@ function surfaceWithSessionState(stateDir: string, withSessionState: boolean): R
     : null
   return createChamberSurface({
     logger: silentLogger,
-    channels: {
-      register() {}, async start() {}, async stop() {}, resolve: () => null,
-      health: () => 'unknown' as const, list: () => [],
-    },
     plugins: createChamberPlugins(stateDir, silentLogger),
     installed: createChamberInstalled(stateDir),
     ...(service === null ? {} : { sessionState: service.surface }),

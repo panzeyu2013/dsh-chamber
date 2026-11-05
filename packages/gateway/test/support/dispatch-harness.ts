@@ -51,7 +51,7 @@ export function setup(
     start() {},
     stop() {},
   }
-  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, runtime as never, logger, policy, auditFile, false, undefined, undefined, warmup)
+  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, runtime as never, logger, policy, auditFile, undefined, warmup)
   return { dispatch, get httpProxyCalls() { return httpProxyCalls }, get upgradeProxyCalls() { return upgradeProxyCalls } }
 }
 

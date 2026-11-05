@@ -17,10 +17,6 @@ export interface LoginPageOptions {
   secure: boolean
   error?: 'invalid' | 'rate_limited' | 'busy' | 'expired' | null
   retryAfterSec?: number // whole seconds, already ceiling'd; only meaningful when error === 'rate_limited'
-  /** The mobile-UA shunting escape: arrived via /?desktop=1, carried through the
-   * login round-trip so the post-login redirect lands back on the desktop entry.
-   * Boolean marker only — no free-form return path (no open-redirect surface). */
-  desktop?: boolean
   /** Login-phase background pre-warm: the REAL discovered client-bundle URLs
    * (`/plugins/??…`), each rendered as one `<link rel="prefetch" as="script">`
    * in <head>. No token wrapper and no `?u=`: the URL must stay byte-identical
@@ -365,9 +361,7 @@ function errorBannerCopy(opts: LoginPageOptions, copy: LoginPageCopy): string {
 function loginForm(opts: LoginPageOptions, copy: LoginPageCopy): string {
   const showError = opts.error === 'invalid' || opts.error === 'rate_limited' || opts.error === 'busy'
   const invalidAttrs = showError ? ' aria-invalid="true" aria-describedby="login-error"' : ''
-  // The action carries the desktop marker; the dispatch success handler reads the POST query to redirect back to /?desktop=1.
-  const action = opts.desktop === true ? '/auth/login?desktop=1' : '/auth/login'
-  return '<form method="post" action="' + action + '">\n'
+  return '<form method="post" action="/auth/login">\n'
     + '  <label class="field" for="password">' + copy.passwordLabel + '</label>\n'
     + '  <input id="password" name="password" type="password" autocomplete="current-password"'
     + ' required maxlength="1024" autocapitalize="off" spellcheck="false" autocorrect="off"'

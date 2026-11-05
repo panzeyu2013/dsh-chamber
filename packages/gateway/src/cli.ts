@@ -48,14 +48,6 @@ Options:
                       reject unknown Host with 421)
   --trusted-proxy IP exact reverse-proxy peer allowed to supply X-Forwarded-* (repeatable)
   --cors-origin O     extra allowed origin (repeatable)
-  --mobile-ua-redirect
-                      redirect an authenticated mobile-browser GET/HEAD of / to
-                      --mobile-entry (design 17 §18 UA shunting; deprecated,
-                      removal in the next major; default off)
-  --mobile-entry PATH origin-form target of the mobile UA redirect
-                      (default /chamber/mobile.html); an unauthenticated HTML
-                      navigation visiting this entry answers 302 to
-                      /auth/login instead of a JSON 401
   --no-warmup
                       disable the login-phase bundle pre-warm (design 17 §10.6;
                       default ON — while a visitor is on the login page the
@@ -72,9 +64,6 @@ Options:
   -h, --help          show this help
 
 Environment:
-  DSH_GATEWAY_MOBILE_UA_REDIRECT
-                      1/true enables the deprecated mobile UA shunting
-                      (--mobile-ua-redirect); 0/false or unset keeps it OFF
   DSH_GATEWAY_WARMUP
                       0/false disables the login-phase bundle pre-warm
                       (design 17 §10.6); 1/true or unset keeps it ON
@@ -154,8 +143,6 @@ interface ParsedArgs {
   trustedProxies: string[]
   corsOrigins: string[]
   allowAnonymousExternal: boolean
-  mobileUaRedirect: boolean
-  mobileEntryPath?: string
   warmup: boolean
   sessionState: boolean
   // auth options
@@ -168,7 +155,7 @@ interface ParsedArgs {
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, mobileUaRedirect: false, warmup: true, sessionState: true, version: false, help: false }
+  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, warmup: true, sessionState: true, version: false, help: false }
   let positional = false // 'serve' seen
   let authMode = false
   let subcommandSeen = false
@@ -222,11 +209,6 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--public-origin': args.publicOrigin = takeValue(); break
       case '--trusted-proxy': args.trustedProxies.push(takeValue()); break
       case '--cors-origin': args.corsOrigins.push(takeValue()); break
-      case '--mobile-ua-redirect':
-        if (inlineValue !== undefined) throw new UsageError('--mobile-ua-redirect takes no value')
-        args.mobileUaRedirect = true
-        break
-      case '--mobile-entry': args.mobileEntryPath = takeValue(); break
       case '--no-warmup':
         if (inlineValue !== undefined) throw new UsageError('--no-warmup takes no value')
         args.warmup = false
@@ -356,13 +338,9 @@ async function main(): Promise<number | null> {
       trustedProxies: args.trustedProxies.length === 0 ? undefined : args.trustedProxies,
       corsOrigins: args.corsOrigins,
       allowAnonymousExternal: args.allowAnonymousExternal,
-      // `=== true ? true : undefined`: an absent flag must NOT pin the option to
-      // false, or the DSH_GATEWAY_MOBILE_UA_REDIRECT env fallback is unreachable.
-      mobileUaRedirect: args.mobileUaRedirect === true ? true : undefined,
-      mobileEntryPath: args.mobileEntryPath,
-      // Same undefined-pass-through: the default leaves DSH_GATEWAY_WARMUP reachable.
+      // Undefined pass-through: the default leaves DSH_GATEWAY_WARMUP reachable.
       warmup: args.warmup === true ? undefined : false,
-      // Same undefined-pass-through: the default leaves DSH_GATEWAY_SESSION_STATE reachable.
+      // Undefined pass-through: the default leaves DSH_GATEWAY_SESSION_STATE reachable.
       sessionState: args.sessionState === true ? undefined : false,
     }, stateDir, dshWorkspacePath)
   } catch (error) {

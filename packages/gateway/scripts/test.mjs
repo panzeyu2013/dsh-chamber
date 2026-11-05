@@ -29,7 +29,6 @@ const GROUPS = {
     'test/boundary/config.test.ts',
     'test/boundary/warmup.test.ts',
     'test/boundary/public-boundary.test.ts',
-    'test/boundary/mobile-ua-redirect.test.ts',
     'test/boundary/dispatch-composition.test.ts',
     'test/boundary/dispatch-credential-routes.test.ts',
     'test/boundary/boundary-login-page.test.ts',
