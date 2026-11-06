@@ -750,8 +750,16 @@ test('T3 entry：gateway auth reset-password 被活写者的短租约拒绝', as
     GATEWAY_CLI_ENTRY, 'auth', 'reset-password', '--new', 't3-new-password-123', '--state-dir', dir,
   ])
   assert.equal(run.code, 1, 'auth against a live writer is a runtime failure (exit 1): ' + run.stderr)
-  assert.match(run.stderr, new RegExp('gateway is running \\(pid ' + String(process.pid) + '\\)'),
-    'the localized running-gateway copy must reach the user: ' + run.stderr)
+  // The gateway-specific copy ("gateway is running (pid N)") is gated on a VERIFIED
+  // holder, and verification needs /proc start ticks (Linux); on other platforms the
+  // lease degrades to the generic "is owned by pid N" copy by design
+  // (process-identity.ts: identity is pid-only without /proc, so the lease stays
+  // conservatively locked and no consumer may claim a verified gateway).
+  const holderCopy = process.platform === 'linux'
+    ? new RegExp('gateway is running \\(pid ' + String(process.pid) + '\\)')
+    : new RegExp('is owned by pid ' + String(process.pid) + ' \\(gateway\\)')
+  assert.match(run.stderr, holderCopy,
+    'the localized holder copy must reach the user: ' + run.stderr)
   assert.equal(readFileSync(leaseFile(dir), 'utf8'), before, 'the refused auth run never touches the live lease record')
   assert.equal(existsSync(join(dir, 'password-credential')), false, 'no credential write happened')
   assert.equal(existsSync(join(dir, 'jwt-secret')), false, 'no session-secret rotation happened')
