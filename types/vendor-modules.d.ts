@@ -494,9 +494,10 @@ declare module '@dsh-chamber/dsh-chamber-client-ui-git/client' {
 declare module '@dsh-chamber/dsh-chamber-client-ui-open-in/client' {
   export const inject: string[]; export function apply(ctx: any): void
 }
-// design 28: the deferred remote-browser launcher (a dsh+ssh-only tab type; its
-// apply early-returns on every other source, so the exported inject face stays
-// slots/locale and never names sidebarRightTabs).
+// design 28: the deferred remote-browser launcher (a tab type on the local instance
+// AND every dsh/gateway+ssh source; a plain-http source early-returns). The exported
+// inject face stays slots/locale and never names sidebarRightTabs: that registry is
+// awaited with ctx.inject because its host-graph row can apply after this chunk.
 declare module '@dsh-chamber/dsh-chamber-client-ui-browser/client' {
   export const inject: string[]; export function apply(ctx: any): void
 }

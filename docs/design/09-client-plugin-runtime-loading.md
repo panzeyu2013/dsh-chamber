@@ -87,9 +87,11 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   消除（其 `./remote` 面由 typert 生成器的自挂载附加集产出：生成 roster 26 = 装配 25 + 自挂载 1；alpha.4 起装配表新增 `plugin-market` ⇒ roster 27 = 装配 26 + 自挂载 1；pin 0.2.2-alpha.2 起装配表新增 `dsh-client-ui-trajectory` ⇒ roster 28 = 装配 27 + 自挂载 1，见 §3.5）；
   渲染期 `useResource` 座 `resources` 因
   「非任何复合插件的 inject、且不可能单独缺失」不再登记）。**第二个运行期消费者（design 28）**：右栏
-  Browser 插件在 `apply` 里按来源早退后才 `ctx.get('sidebarRightTabs')` 探测，且**故意不**在导出的
-  `inject` 里点名它（否则 http 源会为一条本来就不该出现的页签报缺失服务）；缺行时页签诚实
-  缺席并 warn 一次。故本节的 inject 反向依赖仍只数 1 条，Browser 条不计入。宿主图通道降级（返回 `[]`）或该行 apply
+  Browser 插件在 `apply` 里按来源早退后才用 `ctx.inject(['sidebarRightTabs'], …)` **等**注册表出现
+  （不点名导出的 `inject`，否则 http 源会为一条本来就不该出现的页签报缺失服务）；服务缺席时页签
+  诚实缺席并在 5s 宽限后留一条诊断，present-but-malformed 立即 warn。**不能用一次性 `ctx.get` 探测**：宿主行在首个 boot 之后
+  晚于该 deferred chunk（chunk 已页面缓存），探测只在本地实例赢，远端来源永远注册不到页签。故本节的
+  inject 反向依赖仍只数 1 条，Browser 条不计入（`ctx.inject` 的等待纤维不是导出的 inject 面）。宿主图通道降级（返回 `[]`）或该行 apply
   失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过、会话视图不注册，而 boot 仍报成功。
   **两级自愈**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
   注入的 `waitForServing` 门**等来源就绪**再取一次（`host-graph.ts` 的 `MAX_SERVING_WAITS` /

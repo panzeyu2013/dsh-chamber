@@ -7,9 +7,10 @@
  * the sources that show it, while the required-service probe reads each
  * plugin's exported `inject` array. Naming `sidebarRightTabs` there would make
  * an http source report a missing service even though the entry is deliberately
- * absent there (review round-2 repo-process B1). The probe is
- * therefore done at apply time with `ctx.get('sidebarRightTabs')`, and the
- * service face is declared here instead of being imported.
+ * absent there (review round-2 repo-process B1). The service is therefore
+ * awaited at apply time with `ctx.inject(['sidebarRightTabs'], …)` (the provider
+ * is a host-graph row that can apply after this deferred chunk), and its face is
+ * declared here instead of being imported.
  *
  * Shape source (MUST be re-checked in W0 against the pinned tree):
  * `@deepseek-ai/dsh-client-ui-sidebar-browser/lib/client.js` (0.2.1-rc.2) —

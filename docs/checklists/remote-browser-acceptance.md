@@ -56,6 +56,9 @@ node scripts/gates/verify-md-links.mjs
 ## E. S2 GUI 走查
 
 1. 右栏指南/标签在 local、dsh+ssh、gateway+ssh 源出现；gateway+http 不出现；缺 `sidebarRightTabs` 时诚实缺席。
+   **必须覆盖非首个 boot 的来源**：页面打开后（首个 boot 通常是本地实例）切到另一个来源，再展开
+   右栏——入口必须同样出现。旧实现只在页面首个 boot 注册该页签，此步会失败（注册表是宿主图行，
+   晚于 deferred chunk；一次性探测只在首个 boot 赢）。
 2. 地址栏公网 URL → 系统浏览器；无 forward。
 3. 地址栏 `http://127.0.0.1:<port>/path` → ensure forward → 系统浏览器 alias URL；https 透传并给证书警告。
    local 源：同一地址直接在本机系统浏览器打开（面板无远端分区、不轮询 `list`）。

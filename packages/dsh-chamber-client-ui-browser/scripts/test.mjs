@@ -31,6 +31,10 @@ const GROUPS = {
   locks: [
     'test/locks/registration.test.ts',
   ],
+  // registration: the registry wait/install wiring (fake context, real timers).
+  registration: [
+    'test/registration/registry-wait.test.ts',
+  ],
 }
 
 runTestManifest({

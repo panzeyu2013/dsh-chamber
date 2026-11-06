@@ -40,14 +40,19 @@ http(s) 地址分成两条腿——公网地址走既有的系统浏览器 link 
    return。
 2. **fingerprint**：远端必须是 64 hex；本地实例是字面量 `local`（`shell.ts` 的 boot 事实）。
    远端缺指纹时警告并缺席（不注册一个必然被 main 拒绝的 tab）。
-3. **探测 `sidebarRightTabs`**：用 `ctx.get('sidebarRightTabs')`（**不**写进导出
-   `inject`）。缺该服务时只警告、不注册，也不报假入口。
-4. 注册 locale（zh/en）→ tab type → 两个 keyed slot 座位。
+3. 注册 locale（zh/en）——它不依赖右栏注册表，两个 keyed 座位都从这里取文案。
+4. **等待 `sidebarRightTabs`**：`registry-wait.ts` 用 `ctx.inject(['sidebarRightTabs'], …)`
+   （**不**写进导出 `inject`）。注册表由 `ui-sidebar-right` 宿主行提供，而该行在**页面首次
+   boot 之后**的每次 boot 都晚于本包的 deferred chunk（chunk 已被页面缓存，`import()` 一个
+   微任务就回来，宿主行还要创建并满足自己的 inject 面）。一次性 `ctx.get` 探测只会在首个
+   boot（本地实例）赢下这场竞速，后续来源永远看不到入口——这就是「选中别的服务器时右栏
+   没有浏览器按钮」的成因。inject 纤维在服务出现时注册、撤回时注销；服务缺席 5s（与
+   required-service probe 同窗）后只留一条诊断，不是每 boot 的噪声。
 
 `export const inject = ['slots', 'locale']` 是刻意的：required-service probe 读取导出
 inject，若把 `sidebarRightTabs` 放进去，http source 会被点名缺服务，而那里的入口本来
-就是「按设计缺席」。代价是 ssh 源且图里缺 sidebar-right 行时只有 console 警告、probe
-不点名——W0 需补一条等价探针测试（见集成文档）。
+就是「按设计缺席」。等服务的入口因此是 `ctx.inject`（不是导出 inject）：服务缺席 5s 后一条
+诊断（见上），present-but-malformed 立即一条 warning。
 
 无 shortcut、无 commandId：guide 点击由 ui-sidebar-right 自己的
 `openTab(entry.kind)` 完成。
@@ -94,8 +99,8 @@ openInBrowser({sourceId, sourceFingerprint, id, path?}) -> {ok} | {ok:false, cod
 ## 依赖
 
 - `ctx.slots`、`ctx.locale`（cordis 服务，声明在 `inject`）。
-- `ctx.sidebarRightTabs`（官方 ui-sidebar-right 提供；**不在** inject 里，apply 时
-  `ctx.get` 探测）。
+- `ctx.sidebarRightTabs`（官方 ui-sidebar-right 提供；**不在** inject 里，`registry-wait.ts`
+  用 `ctx.inject` 等它出现）。
 - `ctx.chamberInstanceId` / `chamberTransport` / `chamberSourceFingerprint`
   （chamber-entry 的 per-entry boot 事实）。
 - `chamberForward` 服务/预加载桥（结构性探测；缺则远端分区显示「当前环境未提供远端
@@ -106,7 +111,8 @@ openInBrowser({sourceId, sourceFingerprint, id, path?}) -> {ok} | {ok:false, cod
 - pin（0.2.2-rc.1）上重新核对：`sidebarRightTabs.register` 字段
   （`title` 是否必填、guide 的 title/description 是函数还是字符串、`priority`
   默认 band、guide 点击是否仍 `openTab(entry.kind)`）；slot 名
-  `sidebar.right.pane.tab` / `.title` 与 `key` 语义；`ctx.get` 可用性。
+  `sidebar.right.pane.tab` / `.title` 与 `key` 语义；`ctx.inject` 可用性（本包用它等
+  注册表出现，`ctx.get` 只做注入后的形状校验）。
 - 地址默认 http（官方 0.2.1-rc.2 默认 https）与 app-origin 环回别名拒绝是刻意差异，
   要写进 design 28。
 - renderer onboarding（依赖、alias、covered/deferred、chunk budget、lockfile、根
@@ -123,6 +129,9 @@ node test/address/address.test.ts               # 单文件也可直接 node 运
 
 - 纯函数：address / source / forward-bridge / launcher-model（真跑，Node 22 type
   stripping）。
+- 注册等待：`test/registration/registry-wait.test.ts` 用假 ctx + 真计时器锁住"必须
+  arm ctx.inject、不得在 apply 里同步安装、服务出现即安装、5s 缺席诊断只发一次、teardown
+  清计时器"——这是一次性探测回归的行为测试。
 - 组件：仓库没有 DOM 设施（无 jsdom/testing-library 依赖），因此组件只做源码静态锁
   （`test/locks/registration.test.ts`：inject 面、注册常量、slot key、错误/空态标记、
   link leg 的 anchor 属性、CSS token/0.5px 规则、无 value import 缺失模块）。
