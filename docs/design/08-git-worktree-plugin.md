@@ -288,16 +288,21 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与
 - **动作**：宽栏 hover 揭示（与主行同一 `data-git-action` 钩子、键盘焦点同一
   `.rowActionsVisible` 路径）；派生行动作 = 新建会话、复制路径、删除；**没有 kebab / rename**，
   但**有独立折叠钮**（与旧 worktree 行同形：branch 字形 ↔ chevron，`viewPrefs.folded` 按行
-  自己的 id）；主行折叠仍隐藏整族。状态词（`有改动/已锁定/状态未知`）是**静息态的行尾状态**
-  ——渲染在 occupant 容器**之外**、动作簇之前、计数徽标**左侧**（计数徽标仍是行尾，保每行共享
-  右列；容器静息零布局，见下），**不显示「无改动」
-  占位**；悬停/键盘揭示时它与计数徽标一起换出（design 06 §7 的 state-slot 交换），动作簇贴
-  右缘、不因状态词位移。**取舍**：①放进 hover 揭示簇（否决：dirty/locked 在静息态完全不可见，
-  状态必须悬停才出现——本轮反馈的缺陷）；②与动作簇同时在场（否决：动作簇换入时状态词被挤左
-  一个簇宽，悬停抖动）；③状态词连同 occupant 一起静息隐藏（否决：同①的不可见）。会话行
-  **不画** checkout 分支 glyph。命中盒=视觉盒（20px 动作钮的 24px 偏差与主行同一既有取舍）。
-  occupant 容器 rest 态零布局占用（`data-git-occupant`，只住三个揭示动作；**不得**再塞入状态
-  词或任何静息可见元素——那会破坏零占用或把该元素锁进 hover），与主行同一揭示规则；对话框是
+  自己的 id）；主行折叠仍隐藏整族。**行尾静息态只有中性信息**（用户裁决 B+C，对齐上游 dsh
+  的会话行形态）：中性分支字形 + 计数徽标，**不含状态词**；计数徽标仍是行尾（保每行共享
+  右列），**不显示「无改动」占位**。状态词（`有改动/已锁定/状态未知`）是**揭示簇内成员**
+  ——渲染在 occupant 容器（`data-git-occupant`）**内部**、三个动作**之前**（簇的 2px gap
+  就是全部间距），`data-git-checkout-status` 只留作 DOM/测试钩子：容器静息 `display:none`，
+  hover / 键盘焦点（`.rowActionsVisible`）揭示时 `inline-flex`，所以状态词静息不可见、随
+  `+`/复制/删除一起换入，揭示前后动作簇位置不变（design 06 §7）。删除阻断理由
+  （dirty/locked）仍由这条揭示面（状态词 + 删除钮 title）与删除对话框的 dirty 确认承载。
+  **取舍**：①静息文本胶囊（0.4.4 曾采纳，**已退役**：静息常驻噪声，用户裁决 hover-only；
+  上一轮「静息可读」的反馈记录保留在 git 历史里）；②状态词与动作簇分两处 state-slot 换出
+  （否决：同一行两套揭示路径，且静态计数徽标仍是行尾、机制重复）；③静息只留一个无文本
+  色点/图标（否决：又引入一个需 hover 才解释的符号；上游静息形态本身就是中性分支字形）。
+  会话行**不画** checkout 分支 glyph。命中盒=视觉盒（20px 动作钮的 24px 偏差与主行同一既有
+  取舍）。occupant 容器 rest 态零布局占用（`data-git-occupant`，只住揭示簇成员：状态词 +
+  三个动作；**不得**再塞入静息可见元素——那会破坏零占用），与主行同一揭示规则；对话框是
   body portal。
 - **可访问性**：动作有键盘等价入口（Tab 可达的揭示），拖动有非拖动替代（菜单移动），
   aria 名称/描述覆盖分支、路径、健康与动作。
@@ -385,16 +390,24 @@ workspace id → `session.create(sourceWorkspaceId, {sessionId, origin:'user', w
   **不查 commonDir**（池注册边界冲突，Git facts 已足够），不检查 idle/blank，无
   changed/session-busy/invalid-input。
 - 新会话的 echo 带可选 `workingDirectory`（放置意图），App merge 后 derive 立即放置，不先落源行再跳。
-  该意图的退休点是**权威放置事实**（该会话行自身投影出 `workingDirectory`），不是成员位——
-  `enter` 是第二次 unary，承载新成员位的 push 必然先带着源 cwd 到达；按成员位退休会让已渲染在
-  checkout 的行被抬回源行、`enter` 落地后再滑下来（入场动效从源组而不是 checkout 开始）。意图
-  存活期间投影只补**缺失**的 `workingDirectory`（宿主既有值永远优先）；`enter` 失败侧发
-  `reportSessionPlacementFailed` 立刻作废意图（会话已提交在源根，行立即跟随权威 cwd），成功侧
-  不发（权威事实即收敛点，抢先发 settle 会与那次 push 抢时序）；回声 TTL 只是丢事实时的泄漏兜底。
-  **取舍**：①按成员位退休（否决：即本条的「先落源行再跳」缺陷，动效从根组开始）；②按固定时间窗
-  持有（否决：`enter` 时长无客户端上界，辩护成本是把一次晚跳变成常驻错误位置；仓内 workspace
-  放置意图已有「失败事实 + TTL 兜底」的同一形态）；③`session.create` 直接带 `cwd` 建在 checkout
-  （否决：宿主 `cwd` 创建不挂 workspace 成员位，违反 I1「会话根 = 源主 checkout」且行会落未分组）。
+  **宿主事实**：`working-directory` 投影的 `init` 是 `header.cwd`（该 client-visible unit 默认进
+  session summary），所以会话行**从创建那一刻起**就带 `workingDirectory = 源主 workspace 路径`；
+  `gitWorkTree/enter` 只让这个值**偏离**创建种子。因此意图的退休点是「权威 `workingDirectory`
+  **已偏离创建种子**」——既不是成员位（`enter` 是第二次 unary），也不是「字段存在」（创建种子会让
+  意图在第一条 push 就被提前退休，正是本条要避免的「先落源行再跳」缺陷）。意图存活期间
+  `withSessionEcho` 只覆盖**缺失**或**仍等于创建种子**的 `workingDirectory`（其它宿主值永远优先，
+  按 canonical 路径比较）。`enter` 成功侧不直接发 settle（权威事实即收敛点）：由 create/enter
+  触发的官方 session-list 刷新把壳 summary 里陈旧的种子值换掉（design 05 §2.2.1——projection-only
+  的目录变化不会重发 `api-session/added`，故必须主动重读）；失败侧发
+  `reportSessionPlacementFailed` 立刻作废意图（会话已提交在源根，行立即跟随权威 cwd）；回声 TTL
+  只是丢事实时的泄漏兜底。
+  **取舍**：①按成员位退休（否决：即本条的「先落源行再跳」缺陷，动效从根组开始）；②按「字段存在」
+  退休（否决：宿主创建即投影源根种子，等于第一条 push 就退休，同一缺陷变形成「一条 push 后跳」）；
+  ③按固定时间窗持有（否决：`enter` 时长无客户端上界，辩护成本是把一次晚跳变成常驻错误位置；仓内
+  workspace 放置意图已有「失败事实 + TTL 兜底」的同一形态）；④`session.create` 直接带 `cwd` 建在
+  checkout（否决：宿主 `cwd` 创建不挂 workspace 成员位，违反 I1「会话根 = 源主 checkout」且行会落
+  未分组）。
+- **已知边界**：放置意图的退休依赖「观察到宿主值偏离创建 seed」；若用户在创建后、客户端首次观察到偏离之前又把会话目录切回源根（反向 cd），意图会把行暂留 checkout，直到下一次权威重读（create/enter 收敛臂或重连）或 10min TTL 生效——窗口极小，接受并登记。
 - 同一 checkout 可被多个会话进入；不引入宿主互斥，不做“一树一活跃会话”提示；计数被动。
 
 ### 4.3 forge composer、agent 工具与 restore（P5b）

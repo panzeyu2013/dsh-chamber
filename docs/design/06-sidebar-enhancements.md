@@ -660,8 +660,9 @@
   仍有活跃工作而拒绝时才弹「停止并归档」确认，design 24 §5）；来源头：连接状态 ↔ 簇首的每条已注册
   `sidebar.panellist` 紧凑入口（条件成员，见 §4.7）+ 排序菜单 + 搜索 + 添加工作区（官方
   project-add 字形，`IconProjectAddOutlineRegular`）+ 归档管理器（归档盒字形）；workspace：会话数徽标 ↔ `+`（新建
-  会话）+ kebab（重命名/删除）；派生 checkout 行的 `有改动/已锁定/状态未知` 胶囊同槽（静息
-  在计数徽标旁、揭示时一起换出，design 08 §3.2））。胶囊/菜单展开时操作簇保持显示
+  会话）+ kebab（重命名/删除）；派生 checkout 行的 `有改动/已锁定/状态未知` 状态词**在揭示簇内**
+  （静息不可见，揭示时与 `+`/复制/删除一起换入；静息行尾只有中性分支字形与计数徽标，
+  design 08 §3.2））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
   **键盘焦点（Tab）与 kebab 展开共用同一个 JS 揭示状态**：`ServerSection.tsx` /
   `ServerSectionHeader.tsx` 在头部行的 `onFocus`（React focusin）里按 `:focus-visible` 置位、
