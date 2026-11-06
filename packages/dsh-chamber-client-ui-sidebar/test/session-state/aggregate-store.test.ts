@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { chamberBridge, isValidProducerSourceFingerprint } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import type { InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 
@@ -155,6 +156,39 @@ test('session-list refresh requests broadcast to every subscriber with the sourc
   second()
   chamberBridge.requestSessionListRefresh('gateway-west')
   assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
+})
+
+test('session-list refresh requests carry the optional reason through unchanged (create/enter vs the reason-less tick)', () => {
+  // reason 是 create/enter 收敛臂的开关（design 05 §2.2.1）：缺省 = 30s tick / 归档 purge
+  // 旧路径，必须与此前行为一致；两个显式 reason 才允许挂载壳调用官方 refresh。
+  const received: string[] = []
+  const off = chamberBridge.onRequestSessionListRefresh((sourceId, reason) => {
+    received.push(`${sourceId}:${reason ?? 'none'}`)
+  })
+  chamberBridge.requestSessionListRefresh('local')
+  chamberBridge.requestSessionListRefresh('ssh-dev', 'create')
+  chamberBridge.requestSessionListRefresh('gateway-west', 'enter')
+  assert.deepEqual(received, ['local:none', 'ssh-dev:create', 'gateway-west:enter'])
+  off()
+})
+
+test('create/enter convergence arm: the sidebar handler forces the official refresh only for an explicit reason', () => {
+  // client/index.ts 是 cordis 插件体，node 测无法 import——这里锁源码接线（design 05
+  // §2.2.1）：两参 handler、create/enter 分支、create 一次官方 refresh、enter 一次 + 完成后
+  // 的有界重读一次；reason 缺席的 30s tick / purge 路径保留原有两条收敛动作。
+  const plugin = readFileSync(new URL('../../src/client/index.ts', import.meta.url), 'utf8')
+  assert.match(plugin, /onRequestSessionListRefresh\(\(sourceId, reason\) => \{/)
+  assert.match(plugin, /if \(reason === 'create' \|\| reason === 'enter'\) \{/)
+  assert.match(plugin, /const refreshed = officialSessionRefresh\(\)/)
+  assert.match(plugin, /const settled = refreshed\.catch\(warnRefresh\)/)
+  // enter 的有界重读：第一次读完成后再读一次，覆盖「搭上 enter 之前就在飞的基线」的窗口。
+  assert.match(plugin, /if \(reason === 'enter'\) \{\s*void settled\.then\(\(\) => \{/)
+  assert.match(plugin, /const second = officialSessionRefresh\(\)/)
+  assert.equal((plugin.match(/officialSessionRefresh\(\)/gu) ?? []).length, 2,
+    'create: one read; enter: one read plus its bounded re-read — no other caller')
+  // reason 缺席时行为逐字不变：purge 收敛与 L1 对账照旧（30s tick 走这条）。
+  assert.match(plugin, /if \(purgedRows\.suppressed\(\)\.size > 0\) purgedRows\.converge\(\)/)
+  assert.match(plugin, /sessionFacts\?\.request\(\)/)
 })
 
 test('workspace-created facts fan out with their host identity and unsubscribing stops delivery', () => {

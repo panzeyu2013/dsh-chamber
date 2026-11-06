@@ -461,6 +461,17 @@ export async function createSessionHere(sourceId: string, path: string): Promise
       // loading while the working directory moves (design 08 PR1 order).
       requestOpenSession(sourceId, created)
       await enterCheckout(sourceId, created, path)
+      // enter 的 workingDirectory 变化是 projection-only：宿主只在 session/agent 生命周期
+      // 事件上重发列表，enter 不会。挂载壳的 summary 因此仍带创建时的源根 cwd（App 在
+      // create 回声时已请求过一次官方刷新，那时壳读到的还是源根）。enter 成功后再请求一次
+      // （reason='enter'），让壳重读语料、把 checkout cwd 带进 summary，并使创建回声的放置
+      // 意图按「宿主值偏离创建 seed」退休（design 05 §2.2.1 / design 08 §4.2）。
+      // 非致命：刷新只是收敛加速臂，失败绝不能把已提交的 saga 变成失败。
+      try {
+        chamberBridge.requestSessionListRefresh(sourceId, 'enter')
+      } catch (error) {
+        console.warn('[dsh-chamber] Git checkout session entered but session-list refresh notification failed:', error)
+      }
       finishMutation(sourceId)
       return created
     } catch (error) {

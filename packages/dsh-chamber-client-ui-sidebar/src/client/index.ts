@@ -716,11 +716,35 @@ export function apply(ctx: ClientContext): void {
       warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
       onSettled: () => { sync() },
     })
-    const unsubscribeSessionListRefresh = chamberBridge.onRequestSessionListRefresh((sourceId) => {
+    const unsubscribeSessionListRefresh = chamberBridge.onRequestSessionListRefresh((sourceId, reason) => {
       if (sourceId !== chamberInstanceId) return
-      // 本通道现在是 App 的 30s tick（真实 cadence 由执行端 ladder 决定），故归档收敛只在
-      // 确有被抑制行时启动，否则每拍白跑一次官方 refresh（宿主 disk walk）；收缩自身的 converge
-      // 在 `observeArchive` 内启动，不受本闸影响，无抑制集时也没有可收敛对象。
+      // create/enter 收敛臂（design 05 §2.2.1）：App 收到会话创建回声、或 Git checkout 会话
+      // enter 成功后请求本壳**强制重跑**官方 session.list——新会话 id（open 的 dispatchOpen
+      // 在等它）与 projection-only 的 checkout workingDirectory 都只能由这次重读带进
+      // summaries。官方 refresh 单飞且会复用仍在飞的基线，所以 `enter` 臂在第一次读完成后再
+      // **有界重读一次**：第一次可能搭上 enter 之前就在飞的基线（读到创建 seed），第二次必然
+      // 是 enter 提交之后的新读。归档收敛的有界重试链由 purge tracker 自担；本臂只做加速，
+      // 失败只 warn、绝不拒绝，避免 unhandled rejection。
+      const warnRefresh = (error: unknown): void => {
+        console.warn(`[chamber] session list refresh for ${chamberInstanceId} failed:`,
+          error instanceof Error ? error.message : String(error))
+      }
+      if (reason === 'create' || reason === 'enter') {
+        const refreshed = officialSessionRefresh()
+        if (refreshed !== undefined) {
+          const settled = refreshed.catch(warnRefresh)
+          if (reason === 'enter') {
+            void settled.then(() => {
+              const second = officialSessionRefresh()
+              if (second !== undefined) void second.catch(warnRefresh)
+            })
+          }
+        }
+      }
+      // 本通道同时是 App 的 30s tick（真实 cadence 由执行端 ladder 决定）：reason 缺席的旧
+      // 路径逐字不变——归档收敛只在确有被抑制行时启动，否则每拍白跑一次官方 refresh（宿主
+      // disk walk）；收缩自身的 converge 在 `observeArchive` 内启动，不受本闸影响，无抑制集
+      // 时也没有可收敛对象。
       if (purgedRows.suppressed().size > 0) purgedRows.converge()
       // L1 对账复用同一条广播通道（App 看不到官方 store，只能请求重跑官方 session.list）。
       sessionFacts?.request()

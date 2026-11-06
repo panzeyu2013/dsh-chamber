@@ -379,11 +379,11 @@ export interface SessionCreatedFact {
   title?: string
   /**
    * Effective working-directory projection this creation INTENDS (design 08
-   * PR2 §5.3): a session created FOR a checkout is echoed with the checkout
-   * path so the derived row places it immediately, instead of flashing in the
-   * source row until `session/list` projects `workingDirectory`. Absent =
-   * ordinary creation in the source workspace; the host projection always wins
-   * once it arrives.
+   * PR2 §5.3): a session created FOR a checkout is echoed with the checkout path
+   * so the row places immediately instead of flashing in the source row until
+   * `gitWorkTree/enter` lands. Absent = ordinary creation. The host projects
+   * `workingDirectory = header.cwd` (SOURCE root) FROM creation — the intent
+   * OVERRIDES that seed and retires only when the host value DEPARTS from it.
    */
   workingDirectory?: string
   /**
@@ -417,8 +417,8 @@ export interface SessionRemovedFact {
  * The checkout session's `enter` will never land (design 08 §4.2) — voids the creation echo's
  * PLACEMENT intent ({@link reconcilePendingSessions}), so the committed row follows the
  * authoritative source cwd at once instead of staying parked in a checkout until the TTL.
- * Published by `createSessionHere`'s catch; the echo row itself is KEPT (only
- * `workingDirectory` is dropped — it may still be the session's only projection).
+ * Published by `createSessionHere`'s catch; the echo row is KEPT (only `workingDirectory` is
+ * dropped — it may still be its only projection). Success side is silent: the fresh `'enter'` read retires it.
  */
 export interface SessionPlacementFailedFact {
   sourceId: string
@@ -517,28 +517,28 @@ type OpenListener = (request: OpenSessionRequest) => void
 type IntentPrewarmListener = (request: { sourceId: string }) => void
 type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
+export type SessionListRefreshReason = 'create' | 'enter'
 /**
- * Per-source session-list refresh request (archive-cleanup convergence, design
- * 24 §12): a source's MOUNTED ctx session summaries are the official client's
- * in-memory rows, refreshed only on connection generations — content purged by
- * the chamber host domain never triggers an official event (documented no-op),
- * so the deleted rows linger in the summaries and resurface in the sidebar
- * once the host removes their ids from the archived set (no filter covers them
- * anymore; opening one fails with the official session/not-found). The mounted
- * ctx of that source must re-run its OFFICIAL session-list refresh
- * (`ctx.sessions.refresh()`), which reconciles the summaries against the
- * server corpus (a per-call disk walk) and drops the deleted rows. Subscribers
- * are the sidebar plugins of every mounted ctx; each plugin acts only when its
- * own chamberInstanceId matches the requested source. Fired by the App's
- * ghost-row convergence machine (planSessionListRefresh — every ready mounted
- * push whose removed-archived rows are still listed) and by the archive
- * manager after every purge settle — see design 24 §12 / App.tsx. Since §12
- * the PRODUCER also triggers the same verified chain directly from its own
- * archive-set shrink observation (the channel is a backstop, not the only
- * trigger), and the official refresh MUST be invoked as a method on the
- * service object (`ctx.sessions.refresh()` — a detached call loses `this`).
+ * Per-source session-list refresh request. One channel, three jobs:
+ * - archive-cleanup convergence (design 24 §12): a source's MOUNTED ctx session summaries
+ *   are the official client's in-memory rows, refreshed only on connection generations —
+ *   content purged by the chamber host domain never triggers an official event (documented
+ *   no-op), so the deleted rows linger in the summaries and resurface in the sidebar once the
+ *   host removes their ids from the archived set (opening one fails with session/not-found).
+ *   The mounted ctx must re-run its OFFICIAL session-list refresh (`ctx.sessions.refresh()`),
+ *   which reconciles the summaries against the server corpus (a per-call disk walk) and drops
+ *   the deleted rows. Fired by the App's ghost-row convergence machine (planSessionListRefresh)
+ *   and by the archive manager after every purge settle — see design 24 §12 / App.tsx. Since
+ *   §12 the PRODUCER also triggers the same verified chain from its own archive-set shrink
+ *   observation (the channel is a backstop, not the only trigger), and the official refresh
+ *   MUST stay a method call on the service object (a detached call loses `this`).
+ * - create/enter arm (design 05 §2.2.1; `reason` names it): absent = the 30s tick / purge
+ *   path (today's behaviour exactly — no extra OFFICIAL refresh, no host disk walk per
+ *   beat); 'create' = the App's creation echo must enter the mounted shell's summaries;
+ *   'enter' = a checkout workingDirectory move needs a read (+ a bounded second read for a stale baseline).
+ * Subscribers: the sidebar plugins of every mounted ctx (each acts only for its own id).
  */
-type SessionListRefreshListener = (sourceId: string) => void
+type SessionListRefreshListener = (sourceId: string, reason?: SessionListRefreshReason) => void
 /** One successful sidebar-issued workspace creation (see WorkspaceCreatedFact). */
 type WorkspaceCreatedListener = (fact: WorkspaceCreatedFact) => void
 /** One pre-create workspace placement intent (see WorkspacePlacementFact). */
@@ -722,13 +722,13 @@ export const chamberBridge = {
     return refreshChannel.subscribe(listener)
   },
 
-  /** Ask the MOUNTED ctx of `sourceId` to refresh its official session list
-   *  (only the plugin whose chamberInstanceId equals `sourceId` acts). See the
-   *  SessionListRefreshListener note. */
-  requestSessionListRefresh(sourceId: string): void {
+  /** Ask the MOUNTED ctx of `sourceId` to refresh its official session list (only the
+   *  matching plugin acts). `reason` gates the create/enter arm; absent keeps the 30s
+   *  tick / purge behaviour exactly. */
+  requestSessionListRefresh(sourceId: string, reason?: SessionListRefreshReason): void {
     // 逐监听器隔离（与 setActiveSource 同纪律）：这条广播同时驱动归档收敛链与
     // 运行位活性守卫的 L1，一个抛错的监听器不得中断整轮广播。
-    sessionListRefreshChannel.emit(sourceId)
+    sessionListRefreshChannel.emit(sourceId, reason)
   },
 
   /** Sidebar-plugin subscription to session-list refresh requests; returns the unsubscribe. */

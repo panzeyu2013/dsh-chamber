@@ -220,6 +220,13 @@ test('PR1 wiring lock: create is host-only and a new session is source workspace
   assert.match(coordinator, /chamberBridge\.reportSessionPlacementFailed\(\{ sourceId, sessionId: created \}\)/)
   assert.equal((coordinator.match(/reportSessionPlacementFailed/gu) ?? []).length, 1,
     'the failure side is the only publisher (the success path retires on the authority)')
+  // Enter success re-requests the OFFICIAL session list (reason='enter'): the working-directory
+  // move is projection-only (the host re-broadcasts list events only on session/agent
+  // lifecycle events), so the mounted shell summary keeps the creation seed until it re-reads
+  // the corpus (design 05 §2.2.1 / design 08 §4.2).
+  assert.match(coordinator, /chamberBridge\.requestSessionListRefresh\(sourceId, 'enter'\)/)
+  assert.doesNotMatch(coordinator, /requestSessionListRefresh\(sourceId\)/,
+    'the enter arm always carries its reason; the reason-less tick path lives in the App')
 })
 
 test('PR3 wiring lock: the registered removal, archive and workspace handoff are gone', () => {

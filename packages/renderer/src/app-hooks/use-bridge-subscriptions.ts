@@ -659,8 +659,8 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
    * （与打开意图同栅栏）。成员位解析 best-effort，全部来自 App 手里的权威聚合：
    * ①事实自带 workspaceId → 按宿主 id 找行取路径；②否则按父会话找到**归属**的
    * 工作区；③解析不到也照记（未分组好过缺行，TTL 有界）。记账后立刻请求挂载壳的
-   * 官方 session-list 刷新：unary 侧建出的会话进挂载壳 summaries 的唯一外源是宿主
-   * 的**异步**广播（竞态或丢帧都可能），未挂载来源则回声独自撑到下次基线收敛。
+   * 官方 session-list 刷新（reason='create'）：unary 侧建出的会话进挂载壳 summaries 原本只有宿主的**异步**广播
+   * 一条外源（竞态/丢帧都可能）——强制重读把新 id 直接带进壳、open 的 dispatch 门不必等它；未挂载来源则回声独自撑到下次基线收敛。
    */
   useEffect(() => {
     return chamberBridge.onSessionCreated((fact) => {
@@ -693,7 +693,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         blank: fact.blank,
       }, now)
       updateSessionEcho(ledger)
-      chamberBridge.requestSessionListRefresh(sourceId)
+      chamberBridge.requestSessionListRefresh(sourceId, 'create')
     })
   }, [updateSessionEcho])
   /**
