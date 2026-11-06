@@ -10,7 +10,8 @@
  *  - the checkout branch resolves facts by PATH and precedes the source/workspace
  *    lookup (a checkout row must never render the main workspace's actions);
  *  - its actions are exactly new session / path-based removal / copy path, all
- *    behind the host's reveal hooks;
+ *    behind the host's reveal hooks, and its dirty/locked/unknown status capsule
+ *    is a member of that same reveal cluster (never a rest row label);
  *  - PR3 is irreversible: the legacy unregistered block and the registered
  *    removal path are GONE, while the create dialog still only creates checkouts.
  */
@@ -77,20 +78,26 @@ test('the checkout row offers exactly its three actions behind the host reveal h
     'the occupant container carries the cross-package rest-footprint hook')
 })
 
-test('the status capsule is a REST row element, outside the hover-revealed occupant', () => {
+test('the status capsule is a reveal-cluster member, before the three actions', () => {
   const flatBranch = flat(checkoutBranch)
-  const capsuleAt = flatBranch.indexOf('className={css.checkoutStatus}')
   const occupantAt = flatBranch.indexOf('className={css.headerGit}')
+  const capsuleAt = flatBranch.indexOf('className={css.checkoutStatus}')
+  assert.notEqual(occupantAt, -1, 'the occupant container still renders')
   assert.notEqual(capsuleAt, -1, 'the dirty/locked/unknown capsule still renders')
-  assert.ok(capsuleAt < occupantAt, 'the status word precedes the action cluster (design 08 §3.2)')
+  assert.ok(occupantAt < capsuleAt,
+    'the status word is a member of the hover/keyboard-revealed occupant container (design 08 §3.2)')
+  // The container must not close between its opening and the capsule: that is
+  // nesting, not merely "renders after the container" (the retired 0.4.4 shape).
+  assert.ok(!flatBranch.slice(occupantAt, capsuleAt).includes('</span>'),
+    'the capsule is INSIDE the occupant container body')
   assert.match(flatBranch, /data-git-checkout-status=""/u,
-    'the capsule carries the cross-package swap hook (CSS modules hash the class)')
-  // The occupant container is rest-zero layout: a visible capsule nested inside it
-  // would either break that rule or be hover-only (the defect this placement fixes).
-  assert.equal(flatBranch.indexOf('css.checkoutStatus', occupantAt), -1,
-    'the only capsule declaration sits before the occupant container — none inside it')
-  assert.doesNotMatch(flatBranch.slice(capsuleAt, occupantAt), /data-git-occupant/u,
-    'the capsule is not inside the occupant container')
+    'the capsule keeps the cross-package data hook (CSS modules hash the class)')
+  const capsuleRefAt = flatBranch.indexOf('css.checkoutStatus', occupantAt)
+  assert.ok(capsuleRefAt >= capsuleAt, 'the capsule class usage follows the container opening')
+  assert.equal(flatBranch.indexOf('css.checkoutStatus', capsuleRefAt + 1), -1,
+    'exactly one capsule declaration, and it is the one inside the container')
+  assert.ok(flatBranch.indexOf('data-git-action', capsuleAt) > capsuleAt,
+    'the status word precedes the reveal actions (the leftmost cluster member)')
 })
 
 test('the checkout row never renders workspace management (no create dialog, no registered removal)', () => {

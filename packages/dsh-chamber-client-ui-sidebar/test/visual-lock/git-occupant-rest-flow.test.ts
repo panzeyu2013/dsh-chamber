@@ -20,7 +20,9 @@
  * change, never transparent-but-present); (3) its reveal selector set is the action
  * hook's own — hover plus the shared `.rowActionsVisible` class (kebab-open or keyboard
  * focus) — so the two can never disagree; (4) the hook crosses the package
- * boundary as an attribute alone, never through a hashed class name.
+ * boundary as an attribute alone, never through a hashed class name; (5) the
+ * checkout row's dirty/locked/unknown capsule is a member of that container, so its
+ * rest visibility comes from the container rule — no capsule swap rule exists.
  *
  * This is a MECHANISM lock, not a pixel lock: the repository has no browser harness, so
  * the pixel contract itself (the badge's 4px inset sharing the session state slots' /
@@ -66,40 +68,36 @@ const selectors = (rule: Rule): string[] => rule.selector.split(',').map(part =>
 const displayRules = (hook: string): Rule[] =>
   rules(sidebarCss).filter(rule => rule.selector.includes(hook) && /\bdisplay\s*:/u.test(rule.declarations))
 
-test('the checkout status capsule is rest-visible and swaps out on the same two reveal paths', () => {
-  // The capsule is rendered by the Git occupant's owner but OUTSIDE its rest-zero
-  // container (SidebarWorkspaceGitLine.tsx): a status nested in the hover reveal
-  // only exists while hovering. The sidebar swaps it out with the count badge.
+test('the checkout status capsule hides through the occupant container, never a rule of its own', () => {
+  // The capsule is a member of the occupant container now
+  // (SidebarWorkspaceGitLine.tsx): the container's rest display:none takes it out
+  // of the layout, and the same hover / .rowActionsVisible reveal brings it in with
+  // the actions. No sidebar rule may target the capsule again — a rule of its own
+  // would mean it had drifted back out to rest-visible.
   const STATUS = '[data-git-checkout-status]'
   const gitLine = flat(gitLineTsx)
-  const capsuleAt = gitLine.indexOf('data-git-checkout-status')
   const occupantAt = gitLine.indexOf('data-git-occupant')
-  assert.notEqual(capsuleAt, -1, 'the capsule carries the cross-package hook')
-  assert.ok(capsuleAt < occupantAt,
-    'the capsule renders before (outside) the occupant container — that container is rest-zero')
-  const hide = rules(sidebarCss).filter(rule =>
-    rule.selector.includes(STATUS) && /\bdisplay:\s*none;/u.test(rule.declarations))
-  assert.equal(hide.length, 1, 'exactly one swap-out rule for the capsule')
-  assert.deepEqual(
-    selectors(hide[0]!).filter(part => part.includes(STATUS)).sort(),
-    [
-      '.workspaceHeader:hover:not([data-hover-gate]) ' + STATUS,
-      '.workspaceHeader:has(.rowActionsVisible) ' + STATUS,
-    ].sort(),
-    'the same hover-gated / keyboard reveal paths as the count badge — never left visible with the cluster',
-  )
+  const capsuleAt = gitLine.indexOf('data-git-checkout-status')
+  assert.notEqual(occupantAt, -1, 'the occupant container carries the rest hook')
+  assert.notEqual(capsuleAt, -1, 'the capsule keeps its data hook')
+  assert.ok(capsuleAt > occupantAt,
+    'the capsule renders INSIDE the occupant container — the container owns its rest visibility')
+  const statusRules = rules(sidebarCss).filter(rule => rule.selector.includes(STATUS))
+  assert.equal(statusRules.length, 0,
+    'no sidebar rule targets the capsule: rest hiding is the container rule, not a capsule swap')
 })
 
-test('the checkout mount precedes the count badge (its rest status cannot push the shared right column)', () => {
-  // The checkout mount also renders the rest status capsule. The mount therefore
-  // sits BEFORE the count badge: the badge stays the row-end element on every row
-  // (one shared right column, the invariant this whole mechanism exists for), and
-  // the capsule lands to its left.
+test('the checkout mount precedes the count badge (the badge stays the rest row-end element)', () => {
+  // The checkout mount now renders the whole reveal cluster (the status capsule plus
+  // the three actions). It still sits BEFORE the count badge, so the badge is the
+  // row-end element at rest on every row (one shared right column, the invariant
+  // this whole mechanism exists for); the revealed cluster grows to its left and the
+  // sidebar swaps the badge out.
   const checkoutMount = serverSection.indexOf('workspaceId: workspace.familyMainId ?? workspace.id,')
   assert.notEqual(checkoutMount, -1, 'the checkout mount exists')
   assert.ok(
     checkoutMount < serverSection.indexOf('cc.workspaceCount'),
-    'the checkout mount (rest status included) renders before the count badge',
+    'the checkout mount (the whole reveal cluster) renders before the count badge',
   )
 })
 

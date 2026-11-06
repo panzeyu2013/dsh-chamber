@@ -8,10 +8,11 @@
   /* display: inline-flex is the REVEALED value. At rest the sidebar takes this
      container out of the layout entirely (`.workspaceHeader [data-git-occupant]`,
      0,2,0 — it beats this 0,1,0 rule): an in-flow zero-width flex item still
-     consumes the header's 4px gap, so a resting mount that renders no action is
-     invisible while its gap is not, and every git row parked its count badge 4px
-     off the shared right column (design 08 §3.2). The CONTAINER hook, not just
-     the action hook, is load-bearing for the row's right edge. */
+     consumes the header's 4px gap, so a resting mount is invisible while its gap
+     is not, and every git row parked its count badge 4px off the shared right
+     column (design 08 §3.2). The CONTAINER hook, not just the action hook, is
+     load-bearing for the row's right edge — and it is also what keeps the
+     checkout row's status capsule a reveal-only member. */
   display: inline-flex;
   align-items: center;
   /* 2px: the sidebar sheet's own gap value (the sidebar's comment owns the
@@ -20,9 +21,10 @@
   gap: 2px;
   /* NO width clamps: an earlier `min-width: 0; max-width: 45%` pair assumed "the
      span holds at most one 20px action" — it now holds the checkout row's THREE
-     reveal actions, so 45% of a narrow header clamped the cluster and let the
-     buttons overflow past the row's right edge (layout and hit-box both wrong).
-     The span sizes to its content; only the reveal actions live here. */
+     reveal actions plus its status capsule, so 45% of a narrow header clamped the
+     cluster and let the buttons overflow past the row's right edge (layout and
+     hit-box both wrong). The span sizes to its content; only reveal-cluster
+     members live here. */
 }
 
 /* The derived checkout row's dirty/locked/unknown capsule, rendered by the Git
@@ -30,10 +32,13 @@
    from its snapshot, they never enter an aggregate signature). The row's PATH
    health stays the sidebar's row-state surface — deliberately not duplicated
    here.
-   REST state, OUTSIDE the occupant container: the sidebar's hover swap hides it
-   together with the count badge (`[data-git-checkout-status]`) on exactly the
-   reveal paths, so the status is readable without hovering and revealing the
-   actions never shifts it. */
+   A REVEAL-CLUSTER member, INSIDE the `data-git-occupant` container (design 06
+   §7's hover swap, design 08 §3.2): the host keeps that container out of the
+   layout at rest and returns it on hover / `.rowActionsVisible`, so this capsule
+   is invisible at rest and appears WITH the three actions (B+C: the rest form
+   carries only the neutral branch glyph and the count badge). It brings no layout
+   of its own: `flex: none` + the container's 2px gap is the whole geometry — no
+   extra margin, so revealing the cluster cannot shift the buttons. */
 .checkoutStatus {
   flex: none;
   display: inline-flex;

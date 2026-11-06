@@ -1232,16 +1232,15 @@
   display: none;
 }
 
-/* The derived checkout row's dirty/locked/unknown capsule is a REST trailing
-   status rendered by the Git occupant's owner; the data attribute is the
-   cross-package hook (CSS modules hash its class). It swaps OUT together with the
-   count badge on the same two reveal paths, so the status is readable without
-   hovering and revealing the actions never shifts it (design 06 §7 state-slot
-   swap / design 08 §3.2). */
+/* The workspace header's count badge swaps OUT while the actions are in: on
+   hover, or while the cluster is visible (kebab menu open or keyboard focus,
+   `.rowActionsVisible`). The derived checkout row's dirty/locked/unknown capsule
+   needs no swap rule of its own: it is a member of the reveal cluster inside
+   `[data-git-occupant]`, so the container's rest `display: none` (and its reveal,
+   below) already covers it — the status word is invisible at rest and appears
+   with the actions (design 06 §7 / design 08 §3.2). */
 .workspaceHeader:hover:not([data-hover-gate]) .workspaceCount,
-.workspaceHeader:has(.rowActionsVisible) .workspaceCount,
-.workspaceHeader:hover:not([data-hover-gate]) [data-git-checkout-status],
-.workspaceHeader:has(.rowActionsVisible) [data-git-checkout-status] {
+.workspaceHeader:has(.rowActionsVisible) .workspaceCount {
   display: none;
 }
 

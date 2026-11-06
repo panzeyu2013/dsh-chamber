@@ -118,7 +118,10 @@ test('no stylesheet flips these hooks on :focus-visible again', () => {
   // part with an archive-manager part that legitimately keys on :has(:focus-visible).
   const selectors = [...sidebarCss.matchAll(/([^{}]+)\{/gu)]
     .flatMap(match => normalize(match[1] ?? '').split(',').map(part => part.trim()))
-  for (const hook of ['.rowActions', '.sourceActions', '[data-git-action]', '[data-git-occupant]', '.workspaceCount', '[data-git-checkout-status]']) {
+  // `[data-git-checkout-status]` is deliberately absent: the capsule is not a reveal
+  // hook of its own any more — it lives inside `[data-git-occupant]`, so its
+  // keyboard path is the JS `.rowActionsVisible` reveal this lock already covers.
+  for (const hook of ['.rowActions', '.sourceActions', '[data-git-action]', '[data-git-occupant]', '.workspaceCount']) {
     assert.ok(
       !selectors.some(selector => selector.includes(hook) && selector.includes(':focus-visible')),
       hook + ': a :focus-visible display flip is visible but NOT Tab-reachable (see the docstring)',

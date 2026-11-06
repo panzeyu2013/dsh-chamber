@@ -1069,7 +1069,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   {checkout && checkoutFacts?.path !== undefined && (
                                     // 派生 checkout 行：workspaceId 仍是**源 main workspace** id（动作落在它上面），
                                     // checkout 只带 display 身份；没有 path 的派生行不挂座席。位置在计数徽标**之前**
-                                    // （座席还渲染静息状态词，徽标须保持每行共享右列）——理由见 git-occupant-rest-flow。
+                                    // （揭示簇在计数徽标左侧、静息不可见；徽标保持每行共享右列）——理由见 git-occupant-rest-flow。
                                     renderWorkspaceGit('sidebar.workspace.git', { wide }, {
                                       hookContext: {
                                         sourceId: server.id,
