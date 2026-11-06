@@ -1004,16 +1004,6 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* Checkout row empty state: the row stays a row (0..N sessions is legal), so the
-   hint sits under its header at the session rows' inset instead of replacing the
-   row with the source-level empty box. */
-.checkoutEmpty {
-  padding: 3px 4px 3px 26px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
 .sessionRow {
   display: flex;
   align-items: center;
@@ -1242,8 +1232,16 @@
   display: none;
 }
 
+/* The derived checkout row's dirty/locked/unknown capsule is a REST trailing
+   status rendered by the Git occupant's owner; the data attribute is the
+   cross-package hook (CSS modules hash its class). It swaps OUT together with the
+   count badge on the same two reveal paths, so the status is readable without
+   hovering and revealing the actions never shifts it (design 06 §7 state-slot
+   swap / design 08 §3.2). */
 .workspaceHeader:hover:not([data-hover-gate]) .workspaceCount,
-.workspaceHeader:has(.rowActionsVisible) .workspaceCount {
+.workspaceHeader:has(.rowActionsVisible) .workspaceCount,
+.workspaceHeader:hover:not([data-hover-gate]) [data-git-checkout-status],
+.workspaceHeader:has(.rowActionsVisible) [data-git-checkout-status] {
   display: none;
 }
 

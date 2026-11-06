@@ -59,8 +59,22 @@ const realWorkspace = (workspaceId: string, path: string, sessionIds: string[] =
 const syntheticGroup = (path: string, sessionIds: string[] = []): WorkspaceRow =>
   ({ ...realWorkspace(`__cwd__:${path}`, path, sessionIds), synthetic: true })
 
-const pending = (sessionId: string, workspaceId?: string, path?: string, at = 0, blank = true): PendingSession =>
-  ({ sessionId, ...(workspaceId === undefined ? {} : { workspaceId }), ...(path === undefined ? {} : { path }), blank, at })
+const pending = (
+  sessionId: string,
+  workspaceId?: string,
+  path?: string,
+  at = 0,
+  blank = true,
+  workingDirectory?: string,
+): PendingSession =>
+  ({
+    sessionId,
+    ...(workspaceId === undefined ? {} : { workspaceId }),
+    ...(path === undefined ? {} : { path }),
+    ...(workingDirectory === undefined ? {} : { workingDirectory }),
+    blank,
+    at,
+  })
 
 // Projection helpers: one derive per call (membership graces are module state), source 'ssh-b'.
 const derive = (agg: InstanceAggregate, current?: string) => deriveServerWorkspaces(agg, 'ssh-b', '', current, 1000)
@@ -98,13 +112,40 @@ test('sweepPendingSessions: expires past the TTL, drops the emptied key, keeps i
 
 test('reconcilePendingSessions: only AUTHORITATIVE ACCOUNTING converges — a listed row keeps its echo', () => {
   const ledger = { 'ssh-b': [pending('s-1', 'w1'), pending('s-2', 'w1')] }
-  const partly = reconcilePendingSessions(ledger, 'ssh-b', [realWorkspace('w1', '/p/a', ['s-1'])])
+  const partly = reconcilePendingSessions(ledger, 'ssh-b', [realWorkspace('w1', '/p/a', ['s-1'])], [])
   assert.deepEqual(partly['ssh-b'], [pending('s-2', 'w1')],
     'only the ACCOUNTED id retires — the other echo stays (a membership that does not name it is no signal)')
-  assert.equal(reconcilePendingSessions(ledger, 'ssh-zzz', [realWorkspace('w1', '/p/a', ['s-1'])]), ledger,
+  assert.equal(reconcilePendingSessions(ledger, 'ssh-zzz', [realWorkspace('w1', '/p/a', ['s-1'])], []), ledger,
     'an unknown source changes nothing, by reference')
-  const accounted = reconcilePendingSessions(ledger, 'ssh-b', [realWorkspace('w1', '/p/a', ['s-1', 's-2'])])
+  const accounted = reconcilePendingSessions(ledger, 'ssh-b', [realWorkspace('w1', '/p/a', ['s-1', 's-2'])], [])
   assert.equal(accounted['ssh-b'], undefined, 'both accounted = the ledger entry is retired')
+})
+
+test('reconcilePendingSessions: a checkout placement intent outlives accounting until the host projects it', () => {
+  const ledger = { 'ssh-b': [pending('new', 'w1', '/p/a', 1000, true, '/p/a/.agents/worktrees/feat')] }
+  const accounted = [realWorkspace('w1', '/p/a', ['new'])]
+  assert.equal(
+    reconcilePendingSessions(ledger, 'ssh-b', accounted, [sessionRow('new', '/p/a', true)]), ledger,
+    'membership alone is no signal for a placement intent: enter is the second unary (design 08 §4.2)',
+  )
+  const placed = [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a/.agents/worktrees/feat' }]
+  assert.deepEqual(reconcilePendingSessions(ledger, 'ssh-b', accounted, placed), {},
+    'the host placement fact retires the intent')
+  const diverged = [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a/.agents/worktrees/other' }]
+  assert.deepEqual(reconcilePendingSessions(ledger, 'ssh-b', accounted, diverged), {},
+    'any host value retires it: the authority always wins')
+})
+
+test('withSessionEcho: a listed row without the placement fact renders the intent (no source-row flash)', () => {
+  const before = aggregate([realWorkspace('w1', '/p/a', ['new'])], [sessionRow('new', '/p/a', true)])
+  const after = withSessionEcho(before, [pending('new', 'w1', '/p/a', 900, true, '/p/a/.agents/worktrees/feat')])
+  assert.equal(after.sessions[0]?.workingDirectory, '/p/a/.agents/worktrees/feat',
+    'the enter window keeps the row in its checkout instead of the source row')
+  assert.equal(before.sessions[0]?.workingDirectory, undefined, 'the input aggregate is never mutated')
+  const placed = aggregate([realWorkspace('w1', '/p/a', ['new'])],
+    [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a/.agents/worktrees/feat' }])
+  assert.equal(withSessionEcho(placed, [pending('new', 'w1', '/p/a', 900, true, '/p/a/.agents/worktrees/feat')]),
+    placed, 'a present host value is never patched and the identity is preserved')
 })
 
 test('removePendingSession / forgetPendingSessions: the withdraw halves are identity-preserving', () => {
@@ -212,7 +253,7 @@ test('integration: authoritative accounting converges the echo and the row does 
   // The authoritative push now accounts the session — with the HOST's own order (attachSession prepends).
   const pushed: InstanceAggregate = aggregate([realWorkspace('w1', '/p/a', ['new', 'old'])],
     [sessionRow('old', '/p/a'), sessionRow('new', '/p/a', true)])
-  ledger = reconcilePendingSessions(ledger, 'ssh-b', pushed.workspaces)
+  ledger = reconcilePendingSessions(ledger, 'ssh-b', pushed.workspaces, pushed.sessions)
   assert.equal(ledger['ssh-b'], undefined, 'the echo retires on the authoritative membership')
   const after = derive(withSessionEcho(pushed, ledger['ssh-b']), 'new')
   assert.deepEqual(shape(after), [['w1', ['new', 'old']]],
@@ -233,7 +274,7 @@ test('integration: an unmounted source carries the new id in its cwd-derived gro
   const reconciled = reconcilePendingSessions(ledger, 'ssh-b', [
     syntheticGroup('/p/a', ['new']),
     syntheticGroup('/p/other', []),
-  ])
+  ], [sessionRow('new', '/p/a', true)])
   assert.equal(reconciled['ssh-b'], undefined)
 })
 

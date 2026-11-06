@@ -32,6 +32,7 @@ const ROOT = read('../../src/client/SidebarRoot.tsx')
 const CONTEXT = read('../../src/client/sidebar-context.ts')
 const CSS = read('../../src/client/sidebar-chamber.module.css')
 const CHECKOUT = read('../../src/client/checkout-row.ts')
+const LOCALES = read('../../src/client/locales.ts')
 
 const MAIN_PATH = '/repo/app'
 const CHECKOUT_A = `${MAIN_PATH}/.agents/worktrees/feat-a`
@@ -212,13 +213,19 @@ test('the checkout row renders as an action seat row, never as a workspace row',
     'no resident occupant rule: checkout rows reveal on hover like every workspace row')
 })
 
-test('the row renders branch title, health hint, count and its own empty state', () => {
+test('the row renders branch title, health hint, count and no empty-state placeholder', () => {
   assert.ok(SECTION.includes('checkoutRowFacts(server.id, workspace, workspace.title)'))
   assert.ok(SECTION.includes("checkoutFacts.branch, checkoutFacts.path ?? ''"),
     'the title carries a branch/path tooltip (a checkout row has no hover card)')
   assert.ok(SECTION.includes('data-chamber-checkout-health={checkoutFacts?.healthKey}'))
   assert.ok(SECTION.includes('{visibleSessionCount > 0 && ('), 'the session count badge is shared with host rows')
-  assert.ok(SECTION.includes("{t('checkout.empty')}"), 'a 0-session checkout row still says so')
+  // A 0-session checkout row keeps its header and renders nothing under it — the
+  // same shape a host workspace row has when it holds no sessions. No "no
+  // sessions" hint: the count badge already says 0..N is legal and the row's
+  // absence of sessions is not a fact worth a line of copy.
+  assert.equal(SECTION.includes("{t('checkout.empty')}"), false, 'no 0-session hint is printed under the row')
+  assert.equal(SECTION.includes('checkoutEmpty'), false, 'the empty-state element is gone')
+  assert.equal(LOCALES.includes("'checkout.empty'"), false, 'the locale key is retired (zh + en)')
   assert.equal(SECTION.includes('data-chamber-checkout-glyph'), false, 'the static (non-foldable) glyph is retired')
   assert.ok(SECTION.includes('gitRow\n                                    ? cc.foldToggleGit'),
     'the header gutter keeps the worktree/checkout branch glyph + chevron swap')

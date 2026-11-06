@@ -77,6 +77,22 @@ test('the checkout row offers exactly its three actions behind the host reveal h
     'the occupant container carries the cross-package rest-footprint hook')
 })
 
+test('the status capsule is a REST row element, outside the hover-revealed occupant', () => {
+  const flatBranch = flat(checkoutBranch)
+  const capsuleAt = flatBranch.indexOf('className={css.checkoutStatus}')
+  const occupantAt = flatBranch.indexOf('className={css.headerGit}')
+  assert.notEqual(capsuleAt, -1, 'the dirty/locked/unknown capsule still renders')
+  assert.ok(capsuleAt < occupantAt, 'the status word precedes the action cluster (design 08 §3.2)')
+  assert.match(flatBranch, /data-git-checkout-status=""/u,
+    'the capsule carries the cross-package swap hook (CSS modules hash the class)')
+  // The occupant container is rest-zero layout: a visible capsule nested inside it
+  // would either break that rule or be hover-only (the defect this placement fixes).
+  assert.equal(flatBranch.indexOf('css.checkoutStatus', occupantAt), -1,
+    'the only capsule declaration sits before the occupant container — none inside it')
+  assert.doesNotMatch(flatBranch.slice(capsuleAt, occupantAt), /data-git-occupant/u,
+    'the capsule is not inside the occupant container')
+})
+
 test('the checkout row never renders workspace management (no create dialog, no registered removal)', () => {
   for (const forbidden of ['CreateWorktreeDialog', 'setCreateOpen', 'RemoveWorktreeDialog', 'setRemoveTarget']) {
     assert.ok(!checkoutBranch.includes(forbidden), 'a checkout row must not render ' + forbidden)

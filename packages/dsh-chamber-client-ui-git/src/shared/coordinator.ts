@@ -467,7 +467,13 @@ export async function createSessionHere(sourceId: string, path: string): Promise
       // A committed session still needs the aggregate refresh. The create echo may
       // briefly place it in the checkout; the next authoritative refresh moves it
       // back to the source row when enter refused.
-      if (created !== undefined) finishMutation(sourceId)
+      if (created !== undefined) {
+        // The placement intent will never land: void it BEFORE the refresh, so the
+        // projection stops holding the row in the checkout and follows the host cwd
+        // at once instead of parking it there until the echo's TTL (design 08 §4.2).
+        chamberBridge.reportSessionPlacementFailed({ sourceId, sessionId: created })
+        finishMutation(sourceId)
+      }
       throw error
     }
   })

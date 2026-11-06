@@ -364,7 +364,8 @@
   序与家族约束决定，父组折叠只隐藏自己的会话行。
 - **派生 checkout 行（P5b）**：App derive 从 Git layout 生成 `kind:'checkout'` 行（design 08 §3.2），
   带 `path/repoKey/familyMainId`、不带 `synthetic`/`createdAt`；随主行折叠、按 familyMain 归树、
-  族内用本地 `checkoutOrder` 子序；flat 不渲染、窄栏无 Git 动作。侧栏只读 layout/flags 的中性形状，
+  族内用本地 `checkoutOrder` 子序；flat 不渲染、窄栏无 Git 动作；0 会话时不渲染占位文案
+  （行头即行，与宿主 workspace 行同形，design 08 §3.2）。侧栏只读 layout/flags 的中性形状，
   不依赖 Git 类型。**键盘与 aria**：checkout 行的动作与主行共用 `.rowActionsVisible` 揭示路径，
   Tab 可达；拖动有非拖动替代；分支/路径/健康/动作有 aria 名称（验收 V16/V17）。
 - **flat 单列表**（上游 `FLAT_SESSION_ORDER_KEY` 的 per-source 对应物，
@@ -654,7 +655,8 @@
   仍有活跃工作而拒绝时才弹「停止并归档」确认，design 24 §5）；来源头：连接状态 ↔ 簇首的每条已注册
   `sidebar.panellist` 紧凑入口（条件成员，见 §4.7）+ 排序菜单 + 搜索 + 添加工作区（官方
   project-add 字形，`IconProjectAddOutlineRegular`）+ 归档管理器（归档盒字形）；workspace：会话数徽标 ↔ `+`（新建
-  会话）+ kebab（重命名/删除））。胶囊/菜单展开时操作簇保持显示
+  会话）+ kebab（重命名/删除）；派生 checkout 行的 `有改动/已锁定/状态未知` 胶囊同槽（静息
+  在计数徽标旁、揭示时一起换出，design 08 §3.2））。胶囊/菜单展开时操作簇保持显示
   （`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出状态槽）。
   **键盘焦点（Tab）与 kebab 展开共用同一个 JS 揭示状态**：`ServerSection.tsx` /
   `ServerSectionHeader.tsx` 在头部行的 `onFocus`（React focusin）里按 `:focus-visible` 置位、

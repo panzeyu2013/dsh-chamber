@@ -414,6 +414,18 @@ export interface SessionRemovedFact {
 }
 
 /**
+ * The checkout session's `enter` will never land (design 08 §4.2) — voids the creation echo's
+ * PLACEMENT intent ({@link reconcilePendingSessions}), so the committed row follows the
+ * authoritative source cwd at once instead of staying parked in a checkout until the TTL.
+ * Published by `createSessionHere`'s catch; the echo row itself is KEPT (only
+ * `workingDirectory` is dropped — it may still be the session's only projection).
+ */
+export interface SessionPlacementFailedFact {
+  sourceId: string
+  sessionId: string
+}
+
+/**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin projects the source's session-list snapshot (minus the ids it has
@@ -545,6 +557,8 @@ type WorkspaceRenamedListener = (fact: WorkspaceRenamedFact) => void
 type SessionCreatedListener = (fact: SessionCreatedFact) => void
 /** One successful sidebar-issued session archive (the echo's withdraw half). */
 type SessionRemovedListener = (fact: SessionRemovedFact) => void
+/** One checkout placement whose `enter` will never land (see SessionPlacementFailedFact). */
+type SessionPlacementFailedListener = (fact: SessionPlacementFailedFact) => void
 type SourceListener = (sourceId: string) => void
 type SettingsTargetListener = (sourceId: string | undefined) => void
 /** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
@@ -608,6 +622,7 @@ const workspaceRemovedChannel = createChannel<Parameters<WorkspaceRemovedListene
 const workspaceRenamedChannel = createChannel<Parameters<WorkspaceRenamedListener>>(() => '[dsh-chamber] workspace-renamed listener threw')
 const sessionCreatedChannel = createChannel<Parameters<SessionCreatedListener>>(() => '[dsh-chamber] session-created listener threw')
 const sessionRemovedChannel = createChannel<Parameters<SessionRemovedListener>>(() => '[dsh-chamber] session-removed listener threw')
+const sessionPlacementFailedChannel = createChannel<Parameters<SessionPlacementFailedListener>>(() => '[dsh-chamber] session-placement-failed listener threw')
 const activateSourceChannel = createChannel<Parameters<SourceListener>>(() => '[dsh-chamber] activate-source listener threw')
 const settingsTargetChannel = createChannel<Parameters<SettingsTargetListener>>(() => '[dsh-chamber] settings-target listener threw')
 const activeSourceChannel = createChannel<Parameters<ActiveSourceListener>>(() => '[dsh-chamber] active-source subscriber threw')
@@ -873,6 +888,21 @@ export const chamberBridge = {
   /** App-layer subscription to session-removal (archive) facts; returns the unsubscribe. */
   onSessionRemoved(listener: SessionRemovedListener): () => void {
     return sessionRemovedChannel.subscribe(listener)
+  },
+
+  /**
+   * Call when the checkout session's `enter` failed after `session.create` committed (Git
+   * coordinator, its one failure catch): void the placement intent. FAILURE side only — on
+   * success the authoritative `workingDirectory` retires it, and a settle fact would race
+   * that push.
+   */
+  reportSessionPlacementFailed(fact: SessionPlacementFailedFact): void {
+    sessionPlacementFailedChannel.emit(fact)
+  },
+
+  /** App-layer subscription to voided session placement intents; returns the unsubscribe. */
+  onSessionPlacementFailed(listener: SessionPlacementFailedListener): () => void {
+    return sessionPlacementFailedChannel.subscribe(listener)
   },
 
   /** Sidebar call when the user clicks a source header: ask the App layer to switch the active view. */
