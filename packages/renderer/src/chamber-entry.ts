@@ -176,8 +176,10 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
   // Remote Browser launcher (design 28): a right-sidebar tab type over the
   // per-source SSH loopback forwards. The chunk loads on every source; its
   // apply() early-returns only for an http source (or a malformed boot fact),
-  // so local and every SSH source register the tab (and none names
-  // sidebarRightTabs in its probe).
+  // so local and every SSH source register the tab. It never names
+  // sidebarRightTabs in its exported inject: that registry is a host-graph row
+  // that can apply AFTER this chunk on every boot but the page's first, so the
+  // type arms ctx.inject and registers whenever the row lands.
   ['@dsh-chamber/dsh-chamber-client-ui-browser', () => import('@dsh-chamber/dsh-chamber-client-ui-browser/client')],
 ]
 

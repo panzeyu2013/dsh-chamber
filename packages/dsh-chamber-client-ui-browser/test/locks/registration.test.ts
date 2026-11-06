@@ -4,7 +4,7 @@
  * The node runner cannot import the .tsx/apply chain (no React/DOM, no vendor
  * tree in this worktree), so the wiring contract is pinned as text:
  *   - the exported inject face must stay `['slots', 'locale']` (no
- *     sidebarRightTabs) while apply probes the registry with ctx.get();
+ *     sidebarRightTabs) while apply arms the registry wait (registry-wait.ts);
  *   - the source gate must run before any registration;
  *   - the tab id/kind/guide/seat keys and the locale registration are exact;
  *   - no shortcut, no iframe/webview, no value import of a module this worktree
@@ -61,16 +61,36 @@ test('the exported inject face does not name sidebarRightTabs', () => {
   assert.equal(members.some((member) => member.includes('sidebarRight')), false)
 })
 
-test('apply probes sidebarRightTabs with ctx.get after the source gate', () => {
+test('apply arms the registry wait after the source gate (no one-shot probe)', () => {
   const gateAt = indexCode.indexOf('resolveBrowserEntry(')
-  const probeAt = indexCode.indexOf("ctx.get('sidebarRightTabs')")
   const localeAt = indexCode.indexOf('ctx.locale.register(NS')
-  const tabTypeAt = indexCode.indexOf('sidebarTabs.register(definition)')
+  const armAt = indexCode.indexOf('waitForSidebarTabs(')
+  const installAt = indexCode.indexOf('function installBrowserType(')
   assert.ok(gateAt >= 0, 'the source gate must exist')
-  assert.ok(probeAt > gateAt, 'the probe must run after the source gate')
-  assert.ok(localeAt > probeAt, 'copy may only be registered after the registry probe')
-  assert.ok(tabTypeAt > localeAt, 'the tab type registers after copy')
+  assert.ok(localeAt > gateAt, 'copy registers only after the source gate')
+  assert.ok(armAt > localeAt, 'the registry arm runs after copy')
+  assert.ok(installAt > 0, 'the registry-dependent half is one named installer')
+  // The provider is a host-graph row that can apply AFTER this page-cached deferred
+  // chunk: a one-shot probe registers the type only on the page's first boot (the
+  // local instance), which is exactly the missing-Browser-button failure. apply
+  // itself arms the wait; its only registry read is the installer's shape check,
+  // which runs after the waiter hands it the context.
+  const reads = indexCode.split("get('sidebarRightTabs')").length - 1
+  assert.equal(reads, 1, 'exactly one registry read in the entry')
+  assert.ok(indexCode.indexOf("get('sidebarRightTabs')") > installAt,
+    'the registry read belongs to installBrowserType, never to apply')
+  assert.match(indexCode, /waitForSidebarTabs\(ctx, \(host\) => \{/u)
   assert.match(indexCode, /if \(sidebarTabs === null\) \{[\s\S]*?return/u)
+})
+
+test('the waiter injects on the registry and reads it only in the post-grace diagnostic', () => {
+  const wait = stripComments(read('src/client/registry-wait.ts'))
+  const injectAt = wait.indexOf("ctx.inject(['sidebarRightTabs']")
+  const reads = wait.split("get('sidebarRightTabs')").length - 1
+  assert.ok(injectAt >= 0, 'the waiter must arm ctx.inject')
+  assert.equal(reads, 1, 'exactly one registry read')
+  assert.ok(wait.indexOf("get('sidebarRightTabs')") > injectAt,
+    'the read is the diagnostic, never an eager probe')
 })
 
 test('the tab type is the frozen id/kind/guide shape', () => {

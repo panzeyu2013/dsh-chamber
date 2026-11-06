@@ -11,9 +11,11 @@
  *  - The exported `inject` face deliberately does NOT name `sidebarRightTabs`.
  *    The required-service probe reads exported inject arrays, so naming it here
  *    would make an http source report a missing service for an entry that is
- *    intentionally absent. The registry is probed with
- *    `ctx.get('sidebarRightTabs')` AFTER the source gate; when it is absent the
- *    tab is honestly absent and one warning is logged.
+ *    intentionally absent. `apply` instead arms the registry wait
+ *    (registry-wait.ts) AFTER the source gate, so the type registers whenever that
+ *    host-graph row appears — later than this deferred chunk on every boot but the
+ *    page's FIRST (see installBrowserType). An absent registry stays an honest
+ *    absence, named once after a short grace.
  *  - No shortcut is registered (report v4: 无 shortcut). Clicking the guide
  *    entry is ui-sidebar-right's own `openTab(entry.kind)` path.
  *  - Registration shape mirrors the pinned official
@@ -32,6 +34,7 @@ import { en, zh, type BrowserKey, type BrowserTranslate } from '../locales.ts'
 import {
   parseBrowserSourceFingerprint,
   resolveBrowserEntry,
+  type BrowserSource,
 } from '../shared/source.ts'
 import {
   asBrowserForwardBridge,
@@ -41,6 +44,7 @@ import {
   asSidebarRightTabs,
   type SidebarRightTabDefinition,
 } from './sidebar-tabs.ts'
+import { waitForSidebarTabs } from './registry-wait.ts'
 import { BrowserPanel, type BrowserPanelInjected } from './BrowserPanel.tsx'
 import { BrowserTitle, type BrowserTitleInjected } from './BrowserTitle.tsx'
 
@@ -75,6 +79,10 @@ export const inject = ['slots', 'locale']
  * Register the Browser tab type, its guide entry, body, title and dictionaries
  * — for the local instance and every SSH source (http sources never apply).
  *
+ * The locale dictionaries land in apply itself (independent of the right
+ * sidebar); the registry-dependent half runs from installBrowserType once the
+ * tab-type registry exists.
+ *
  * @param ctx - the per-source client context (carries chamberInstanceId /
  *   chamberTransport / chamberSourceFingerprint).
  */
@@ -96,18 +104,51 @@ export function apply(ctx: ClientContext): void {
     return
   }
 
-  // 2. Probe the right-sidebar tab registry without naming it in `inject`.
-  //    ctx.get() returns undefined when no active provider exists (it never
-  //    throws), so a graph without the sidebar-right row is an honest absence.
-  const sidebarTabs = asSidebarRightTabs(ctx.get('sidebarRightTabs'))
-  if (sidebarTabs === null) {
-    console.warn('[chamber-browser] sidebarRightTabs is not provided by this frontend; the Browser tab stays absent')
-    return
-  }
-
-  // 3. Copy, then the tab type, then the keyed seats.
+  // 2. Copy first: it needs no registry, and both keyed seats resolve their
+  //    labels through this namespace.
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: remote browser dictionaries')
   const t = ctx.locale.bind(NS) as BrowserTranslate
+
+  // 3. Everything that needs the tab-type registry waits for it (registry-wait.ts
+  //    owns the race rationale and the never-arrived diagnostic). The exported
+  //    inject face stays ['slots', 'locale']: sidebarRightTabs is a host-graph
+  //    service this package can legitimately live without (an http source never
+  //    reads it), so it must not enter the required-service roster.
+  waitForSidebarTabs(ctx, (host) => {
+    installBrowserType(host, t, source, sourceFingerprint)
+  })
+}
+
+/**
+ * Register the tab type, its guide entry and both keyed seats on the context
+ * where the registry appeared.
+ *
+ * Only registry-wait.ts calls this, after the injected fiber fired: the wait and
+ * its race rationale live there (a one-shot probe loses on every source but the
+ * page's first boot). This function owns the definition, the shape check and the
+ * three keyed registrations.
+ *
+ * @param host - the context in which the registry appeared.
+ * @param t - the bound dictionary for this plugin namespace.
+ * @param source - the parsed boot source.
+ * @param sourceFingerprint - the immutable boot proof every forward call carries.
+ */
+function installBrowserType(
+  host: ClientContext,
+  t: BrowserTranslate,
+  source: BrowserSource,
+  sourceFingerprint: string,
+): void {
+  const raw = host.get('sidebarRightTabs')
+  const sidebarTabs = asSidebarRightTabs(raw)
+  if (sidebarTabs === null) {
+    // Undefined means the provider withdrew between the wait and this call — an
+    // honest absence; a present but unreadable shape is wiring drift worth naming.
+    if (raw !== undefined) {
+      console.warn('[chamber-browser] sidebarRightTabs has an unexpected shape; the Browser tab stays absent')
+    }
+    return
+  }
 
   const definition: SidebarRightTabDefinition = {
     id: TAB_ID,
@@ -126,20 +167,20 @@ export function apply(ctx: ClientContext): void {
       },
     ],
   }
-  ctx.effect(() => sidebarTabs.register(definition), 'dsh-chamber: remote browser tab type')
+  host.effect(() => sidebarTabs.register(definition), 'dsh-chamber: remote browser tab type')
 
-  const bridge = probeForwardBridge(ctx)
+  const bridge = probeForwardBridge(host)
   const panelInjected = (): BrowserPanelInjected => ({ t, source, sourceFingerprint, bridge })
   // Keyed by the TYPE ID (not the kind): ui-sidebar-right dispatches the body and
   // title through entryKey = definition.id, so the two must be byte-identical.
-  ctx.effect(() => ctx.slots.inject(PANE_SLOT, () => ctx.slots.register({
+  host.effect(() => host.slots.inject(PANE_SLOT, () => host.slots.register({
     name: PANE_SLOT,
     key: TAB_ID,
     locale: NS,
     inject: panelInjected,
   }, BrowserPanel)), 'dsh-chamber: remote browser pane')
 
-  ctx.effect(() => ctx.slots.inject(TITLE_SLOT, () => ctx.slots.register({
+  host.effect(() => host.slots.inject(TITLE_SLOT, () => host.slots.register({
     name: TITLE_SLOT,
     key: TAB_ID,
     locale: NS,

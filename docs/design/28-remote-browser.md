@@ -14,7 +14,8 @@
 
 右栏 `sidebar.right` 的一个页签：**地址栏 + 远端 loopback 的 SSH 端口转发器 + 系统浏览器启动器**。
 它把「远端实例所在机器的 `127.0.0.1:<port>` 服务」映射到本机一个**专用 alias 主机名**上，然后交给
-操作系统默认浏览器打开。本地实例没有远端可转，页签只保留地址栏：地址直接在本机系统浏览器打开。
+操作系统默认浏览器打开。本地实例没有远端可转，页签只保留地址栏（loopback 地址直接在本机
+系统浏览器打开）；地址栏下方不渲染解释性文案——上游 `ui-sidebar-browser` 没有同类说明，本版对齐。
 面板内**不渲染任何页面**，也不持有浏览上下文。
 
 一句话契约：**从右栏发起；远端 loopback 走 forward；其它 http(s) 走既有链接腿；两者都在系统浏览器落地。**
@@ -194,10 +195,15 @@ export const inject = ['slots', 'locale'] as const
   `ssh-x`/`http`），两侧各跑一次。
 - 指纹（`chamberSourceFingerprint`）跟随 boot 事实：本地实例是字面量 `local`（`shell.ts` 提供），远端是
   64-hex。远端缺指纹只记一条 warning 并缺席（不注册一个必然被 main 拒绝的 tab）；本地不需要指纹。
-- `sidebarRightTabs` **不进导出 inject**：它是本行可缺的服务，不是包启动的硬依赖；`apply` 在来源门之后用
-  `ctx.get('sidebarRightTabs')` 探测，缺服务时安静地不注册（与 `ui-sidebar-right` 的 provider 顺序解耦）。
-  design 09 §3.2 记录同一形态；§14 保留“进导出 inject”作为被否方案。若 pin 源证明该服务对所有 kind
-  恒在，重新评估探针点名，但不在本版改变。
+- `sidebarRightTabs` **不进导出 inject**：它是本行可缺的服务，不是包启动的硬依赖；`apply` 在来源门之后
+  交给 `registry-wait.ts` 的 `waitForSidebarTabs`，后者用 `ctx.inject(['sidebarRightTabs'], host => …)`
+  等它出现，出现即注册、撤回即注销。服务缺席（宿主前端没有 `ui-sidebar-right` 行）在 5s 宽限后只留
+  一条诊断，present-but-malformed 立即一条 warning——都不是每 boot 的噪声。
+  design 09 §3.2 记录同一形态；§14 保留“进导出 inject”与“一次性 `ctx.get` 探测”作为被否方案。
+  **为什么不能一次性探测**：注册表由 `ui-sidebar-right` 宿主行提供，而该行在页面首次 boot 之后的每次
+  boot 都晚于本包的 deferred chunk——chunk 已被页面缓存，`import()` 一个微任务就返回，宿主行还要创建
+  fiber 并满足自己的 inject 面。一次性 `ctx.get` 只在首个 boot（本地实例，付一次网络取 chunk）赢下竞速，
+  后续来源（每个远端）永远注册不到页签，右栏 guide 里就没有浏览器入口。
 - 注册面（**TODO(pin-vendor)** 对 pin 复核签名，anchor rc.2 形状参考）：
   ```ts
   ctx.sidebarRightTabs.register({
@@ -224,8 +230,8 @@ export const inject = ['slots', 'locale'] as const
 
 空态（无 forward）给一句“输入远端 127.0.0.1 端口或任意 http(s) URL”；地址栏 autofocus；进行中有
 单一 `role="status"` live region；错误按 §6.5 的 code 映射到一句文案 + 一个动作（重试/换端口/查看日志/
-去连接页重连）。local 源没有远端分区：只保留地址栏与一句“地址直接在本机系统浏览器打开”，且**
-不轮询`list`**（没有 forward 腿，轮询只会得到一条必然失败的源证明）。a11y 与 i18n 在 S2 收口。
+去连接页重连）。local 源没有远端分区：只保留地址栏，且**不轮询 `list`**（没有 forward 腿，轮询只会
+得到一条必然失败的源证明）。a11y 与 i18n 在 S2 收口。
 
 ---
 
@@ -537,7 +543,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 - 顶部：地址栏（Enter 提交）；两个按钮语义——“打开远端”（仅 remote-loopback 且来源有 SSH 隧道，
   即 dsh+ssh / gateway+ssh）与“在本机打开”（任何非 app-origin http(s)；local 源的 remote-loopback
   也归这里）。
-- local 源：没有“中部”的远端分区（面板只渲染地址栏、提示与反馈区）。
+- local 源：没有“中部”的远端分区（面板只渲染地址栏与反馈区；地址栏下不加解释性文案，上游无同类说明）。
 - 中部：**远端分区**（当前 source 的 forward 列表）：每行 = `<targetHost>:<targetPort>` → `<aliasHost>:<localPort>`、
   state、错误文案、动作（打开/关闭/重新打开）。v1 **不做**复制地址按钮，也不显示隐藏的全局
   “active listener N”；行本身就是可见事实。
@@ -594,7 +600,8 @@ S3 依赖 S1+S2 产物。
 | `.../test/source/source-gate.test.ts` | `{local,local}`/`{dsh,ssh}`/`{gateway,ssh}` 有入口；`{gateway,http}`/`{dsh,http}` 无入口；kind/transport 交叉错配与畸形 id 拒绝；`mayForward` 与指纹规则 |
 | `.../test/launcher/forward-bridge.test.ts` | 四方法守卫、失败封套、display URL 派生 |
 | `.../test/launcher/launcher-model.test.ts` | 空态/错误码映射/上限/stale/复制值 = 派生值；gateway 走 forward、local 的 loopback 走本机打开 |
-| `.../test/locks/registration.test.ts` | inject/注册常量/slot key/无缺失 import |
+| `.../test/locks/registration.test.ts` | inject/注册常量/slot key/无缺失 import；apply 只 arm 等待、注册表读取只发生在安装器内 |
+| `.../test/registration/registry-wait.test.ts` | 假 ctx + 真计时器：必须 arm `ctx.inject`、不得同步安装、服务出现即安装、5s 缺席诊断只发一次、teardown 清计时器 |
 
 ### 12.2 门禁与三组证据
 
@@ -653,7 +660,10 @@ S3 依赖 S1+S2 产物。
 - **renderer 内模块 + synthetic id**：`required-extra-rows` 审计按包布局解析，synthetic id 会抛
   `no client entry source found`；扩审计会削弱 package 源的 inject 面锁步。拒绝（选新包）。
 - **`sidebarRightTabs` 进导出 inject**：会把 provider 的装配顺序变成包启动的硬依赖，且它的缺失只应
-  取消这一行、不应阻止同包其它席位；改为 apply 内 `ctx.get` 探测。拒绝（§5.2）。
+  取消这一行、不应阻止同包其它席位；改为 apply 内 `ctx.inject` 等它出现。拒绝（§5.2）。
+- **一次性 `ctx.get('sidebarRightTabs')` 探测**：与宿主行赛跑——首个 boot（本地实例）付一次网络取
+  chunk，于是探测赢；之后的每个来源 chunk 已缓存，探测必输，页签永远不注册（现象 = 右栏没有浏览器
+  按钮）。改为 inject 纤维（§5.2）。拒绝。
 - **`chamberTargetKind` boot fact**：kind 已可由 source id 前缀与聚合行派生；新增事实要动 shell.ts/
   InstanceView/App.tsx（1839 棘轮）/20 §facts。拒绝。
 - **`openInBrowser` 复用全局外链预算**：远端插件可打满 8/10s 把应用自己的链接腿饿死 30s。拒绝，
@@ -706,7 +716,7 @@ S3 依赖 S1+S2 产物。
 |---|---|---|
 | 1. 地址栏 + 远端 loopback 分区 + 系统浏览器 | §1、§4 | 增加 https 透传与 `127.0.0.2–254`/`[::1]`/`app-origin` 的显式拒绝 |
 | 2. 仅 dsh+ssh；kind 派生；不加 `chamberTargetKind` | §1.4、§2 D2 | **本轮放宽**为“除 http 外全部来源”（local / dsh+ssh / gateway+ssh）；kind 仍派生，未加 boot fact |
-| 3. 新包 `dsh-chamber-client-ui-browser`（deferred row） | §5.1、§5.2 | 导出 inject 固定为 `slots`/`locale`；`sidebarRightTabs` 由 apply 内 `ctx.get` 探测 |
+| 3. 新包 `dsh-chamber-client-ui-browser`（deferred row） | §5.1、§5.2 | 导出 inject 固定为 `slots`/`locale`；`sidebarRightTabs` 由 apply 内 `ctx.inject` 等出现（一次性 `ctx.get` 与宿主行赛跑，被否） |
 | 4. browserNamespace + 127.0.0.2–254 + 永不 127.0.0.1 + 无共享回退 | §6.2、§6.3、§9.2 | 增加 alias `2..254` 的持久分配表与 tombstone（顺序无关） |
 | 5. 公网走链接腿；远端走 main 构造 URL 的 openInBrowser | §8.1、§8.2 | openInBrowser 返回 `ok/error`，独立 per-source 预算（5/60s） |
 | 6. 无 pin/retry/subscribe；source 拥有生命周期；轮询 list | §2 D6、§6.7、§7 | 增加 `confirmation_late` 的“迟到即 release”语义 |

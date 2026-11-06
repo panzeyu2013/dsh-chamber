@@ -65,8 +65,9 @@
       "@dsh-chamber/dsh-chamber-client-ui-open-in/client": [
         "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ],
-      // Remote Browser launcher (design 28): a deferred, dsh+ssh-only row; the root
-      // program consumes its registration face only (the package program owns the rest).
+      // Remote Browser launcher (design 28): a deferred row on every source except a
+      // plain-http one; the root program consumes its registration face only (the package
+      // program owns the rest).
       "@dsh-chamber/dsh-chamber-client-ui-browser/client": [
         "./packages/renderer/src/ambient/chamber-client-plugins.d.ts"
       ]
