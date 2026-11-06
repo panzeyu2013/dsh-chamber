@@ -446,6 +446,15 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期抛错，绝不静默发出未打补丁的
   bundle）。应用点 = renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件**零写入**；
   模块 id 并接受软链形式与 `realpathSync` 后的子模块形式（vite 实际给后者）。
+- **变换必须带 sourcemap**：`transform` 一次改写多行文本并插入函数体，行号会移动；只返回 `code` 时
+  rollup 记 `SOURCEMAP_BROKEN`（"Sourcemap is likely to be incorrect: a plugin
+  (dsh-chamber-deepseek-source) was used to transform files …"）并把该模块**整块**从产出的每个 `.map` 里摘掉
+  ——bundle 文本看不出区别，但补丁文件里的栈帧退化为压缩后的位置。`map: null`（rollup 对「未移动代码」的
+  逃生口）在这里不成立，故 `applyVendorPatches` 在应用锚点时记录改写段并自行生成真实映射：未改写段逐偏移
+  精确、改写段内按行 LCS 对齐（存活行保留自己的上游行，插入行归到上一匹配行）、`sourcesContent` = 上游
+  原文。产物侧栅栏 = `verify-vendor-patch-applied.mjs` 的 sourcemap 断言（每个注册文件必须在某个产出的
+  `.map` 里既有 `sourcesContent` 又有映射段），随 `build:renderer` 在 CI 执行，所以丢 map 是**失败**而
+  不是一条警告。
 - 落点（当前：18 个文件 / 47 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
   校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余 7 个文件属下三/四/五类：实测帧成本 1（`assembly.ts`）/ 逻辑缺陷 1（`use-chat-reading.ts`）/ 多实例正确性 3（`ui-workspace/navigation.ts` + `ui-attachment/drop-events.ts` + `ui-attachment/ComposerAttachments.tsx`）/ 座席所有权转移 1（`ui-workspace/index.ts`）/ chamber 壳行为门 1（`ui-settings-account/index.ts`，overlay + desktopOnboardingVisible 双门控））：① `ui-chat` 的
   `chat/AssistantMarkdown.tsx` 读取新增 root 标准

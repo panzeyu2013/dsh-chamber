@@ -97,7 +97,11 @@ function deepseekSource() {
       const patched = applyVendorPatches(id, code)
       if (patched === undefined) return undefined
       for (const vendorFile of patched.applied) patchedVendorFiles.add(vendorFile)
-      return { code: patched.code }
+      // The map is part of the contract, not an extra: code returned without one
+      // makes rollup log SOURCEMAP_BROKEN and drop the module from every emitted
+      // .map. The patch moves lines, so `map: null` ("did not move code") is not
+      // an option either — applyVendorPatches derives a real map (design 09 §3.6).
+      return { code: patched.code, map: patched.map }
     },
     /**
      * Coverage gate: every registered vendor file must have been patched into

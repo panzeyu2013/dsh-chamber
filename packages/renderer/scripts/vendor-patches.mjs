@@ -19,6 +19,11 @@
  * independently by `verify-upstream-touchpoints.mjs` C9 and by
  * `scripts/vendor-patches.test.mjs`.
  *
+ * The transform also returns a GENERATED sourcemap (see the "Patched-code
+ * sourcemap" section above `applyVendorPatches`): a code-only transform silently
+ * drops the module from every emitted chunk map, so the map is part of the
+ * contract, not an extra.
+ *
  * ADDING A PATCH: only for a same-origin absolute or document-relative URL (or
  * equally hard upstream assumption) that the N-ctx shell breaks and that cannot
  * be fixed in a chamber package. Register the file, the reason, and one or more
@@ -755,14 +760,426 @@ function normalizeId(id) {
   return String(id).split('?')[0].split('#')[0].replaceAll('\\', '/')
 }
 
+/* ------------------------------------------------------------------------- *
+ * Patched-code sourcemap
+ * ------------------------------------------------------------------------- *
+ * The transform is a text REWRITER: it moves lines. A transform that returns
+ * `{ code }` without a map makes rollup push a `missing` map into the module's
+ * chain, log SOURCEMAP_BROKEN ("Sourcemap is likely to be incorrect: a plugin
+ * (dsh-chamber-deepseek-source) was used to transform files …") and drop the
+ * module from EVERY emitted .map — a stack frame in a patched file then resolves
+ * to the minified bundle position instead of the pinned source. rollup's escape
+ * hatch `map: null` means "the transformation did not move code", which is false
+ * here, so the map is generated while the edits are applied:
+ *  - untouched spans map offset-for-offset (exact line AND column);
+ *  - inside a rewritten anchor the lines are aligned with an LCS, so an inserted
+ *    or deleted region keeps the surviving lines on their own lines and an
+ *    inserted line inherits the previous match;
+ *  - `sourcesContent` is the UNPATCHED source (what every position came from),
+ *    which is also what makes a patched module readable in devtools.
+ * The artifact side is fenced by verify-vendor-patch-applied.mjs: every
+ * registered vendor file must appear in an emitted .map with content and at
+ * least one mapping, so dropping the map fails `build:renderer` instead of only
+ * printing a SOURCEMAP_BROKEN warning per patched module. Design reference:
+ * 09 §3.6.
+ */
+
+/**
+ * A current-text span plus the original span it came from. An unchanged segment
+ * has equal lengths and maps offset-for-offset; a rewritten segment carries the
+ * anchor it replaced.
+ * @typedef {object} PatchSegment
+ * @property {number} curStart Offset in the rewritten text (inclusive).
+ * @property {number} curEnd Offset in the rewritten text (exclusive).
+ * @property {number} origStart Offset in the pinned source (inclusive).
+ * @property {number} origEnd Offset in the pinned source (exclusive).
+ * @property {boolean} changed Whether an edit rewrote this span.
+ */
+
+/** VLQ base64 alphabet of the sourcemap v3 specification. */
+const BASE64_VLQ = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+/**
+ * @param {number} value
+ * @returns {string} one base64-VLQ field.
+ */
+function encodeVlq(value) {
+  let rest = value < 0 ? (-value << 1) | 1 : value << 1
+  let encoded = ''
+  do {
+    let digit = rest & 31
+    rest >>>= 5
+    if (rest > 0) digit |= 32
+    encoded += BASE64_VLQ[digit]
+  } while (rest > 0)
+  return encoded
+}
+
+/**
+ * @param {string} text
+ * @returns {number[]} the offset of every line start.
+ */
+function lineStartOffsets(text) {
+  const starts = [0]
+  for (let offset = 0; offset < text.length; offset += 1) {
+    if (text.charCodeAt(offset) === 10) starts.push(offset + 1)
+  }
+  return starts
+}
+
+/**
+ * @param {number[]} starts
+ * @param {number} offset
+ * @returns {number} the line index containing the offset.
+ */
+function lineIndexOf(starts, offset) {
+  let low = 0
+  let high = starts.length - 1
+  while (low < high) {
+    const middle = (low + high + 1) >> 1
+    if (starts[middle] <= offset) low = middle
+    else high = middle - 1
+  }
+  return low
+}
+
+/**
+ * @param {string} text
+ * @param {number[]} starts
+ * @param {number} line
+ * @returns {string} the line text without its terminator.
+ */
+function lineText(text, starts, line) {
+  const end = line + 1 < starts.length ? starts[line + 1] - 1 : text.length
+  return text.slice(starts[line], end).replace(/\r$/u, '')
+}
+
+/**
+ * Split the segment list so the offset becomes a segment boundary. A rewritten
+ * span is split proportionally: its mapping is approximate by construction.
+ * @param {PatchSegment[]} segments
+ * @param {number} offset
+ * @returns {number} index of the segment that starts at the offset.
+ */
+function splitSegmentAt(segments, offset) {
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index]
+    if (offset === segment.curStart) return index
+    if (offset > segment.curStart && offset < segment.curEnd) {
+      const ratio = (offset - segment.curStart) / (segment.curEnd - segment.curStart)
+      const origSplit = segment.origStart + Math.round(ratio * (segment.origEnd - segment.origStart))
+      segments.splice(index, 1,
+        { ...segment, curEnd: offset, origEnd: origSplit },
+        { ...segment, curStart: offset, origStart: origSplit })
+      return index + 1
+    }
+  }
+  return segments.length
+}
+
+/**
+ * Record one applied edit: the span it replaced becomes a rewritten segment and
+ * every later segment shifts by the length delta.
+ * A span the edit's own anchor covers cannot be rewritten twice: no registered
+ * patch anchors into text an earlier edit of the same file produced, so the
+ * proportional split below is defensive (it keeps the map monotone and in range
+ * if that ever changes, at the cost of precision inside that span).
+ * @param {PatchSegment[]} segments
+ * @param {number} at Current-text offset of the anchor.
+ * @param {number} expectedLength Anchor length.
+ * @param {number} replacementLength Replacement length.
+ * @returns {PatchSegment[]}
+ */
+function replaceSegment(segments, at, expectedLength, replacementLength) {
+  const first = splitSegmentAt(segments, at)
+  const after = splitSegmentAt(segments, at + expectedLength)
+  const origStart = segments[first].origStart
+  const origEnd = segments[Math.max(first, after - 1)].origEnd
+  const delta = replacementLength - expectedLength
+  const tail = segments.slice(after).map((segment) => ({
+    ...segment,
+    curStart: segment.curStart + delta,
+    curEnd: segment.curEnd + delta,
+  }))
+  return [
+    ...segments.slice(0, first),
+    { curStart: at, curEnd: at + replacementLength, origStart, origEnd, changed: true },
+    ...tail,
+  ]
+}
+
+/**
+ * Align the lines of a rewritten span with the lines it came from: a surviving
+ * line keeps its own upstream line, an inserted line inherits the last match
+ * (never a line past the anchor).
+ * @param {string} original
+ * @param {string} patched
+ * @param {PatchSegment} segment
+ * @param {number[]} originalStarts
+ * @param {number[]} patchedStarts
+ * @returns {Map<number, number>} absolute generated line -> absolute upstream line.
+ */
+function alignRewrittenLines(original, patched, segment, originalStarts, patchedStarts) {
+  const generatedFirst = lineIndexOf(patchedStarts, segment.curStart)
+  const generatedLast = lineIndexOf(patchedStarts, Math.max(segment.curStart, segment.curEnd - 1))
+  const sourceFirst = lineIndexOf(originalStarts, segment.origStart)
+  const sourceLast = lineIndexOf(originalStarts, Math.max(segment.origStart, segment.origEnd - 1))
+  const generatedLines = []
+  for (let line = generatedFirst; line <= generatedLast; line += 1) {
+    generatedLines.push(lineText(patched, patchedStarts, line))
+  }
+  const sourceLines = []
+  for (let line = sourceFirst; line <= sourceLast; line += 1) {
+    sourceLines.push(lineText(original, originalStarts, line))
+  }
+  // Longest common subsequence over the two line lists. Spans are one anchor plus
+  // its replacement (tens of lines), so the quadratic table stays cheap.
+  const rows = sourceLines.length
+  const columns = generatedLines.length
+  const common = Array.from({ length: rows + 1 }, () => new Uint32Array(columns + 1))
+  for (let row = rows - 1; row >= 0; row -= 1) {
+    for (let column = columns - 1; column >= 0; column -= 1) {
+      common[row][column] = sourceLines[row] === generatedLines[column]
+        ? common[row + 1][column + 1] + 1
+        : Math.max(common[row + 1][column], common[row][column + 1])
+    }
+  }
+  const matched = new Array(columns).fill(-1)
+  for (let row = 0, column = 0; row < rows && column < columns;) {
+    if (sourceLines[row] === generatedLines[column]) {
+      matched[column] = row
+      row += 1
+      column += 1
+    } else if (common[row + 1][column] >= common[row][column + 1]) {
+      row += 1
+    } else {
+      column += 1
+    }
+  }
+  const aligned = new Map()
+  let sourceLine = sourceFirst
+  for (let index = 0; index < columns; index += 1) {
+    if (matched[index] !== -1) sourceLine = sourceFirst + matched[index]
+    aligned.set(generatedFirst + index, sourceLine)
+  }
+  return aligned
+}
+
+/**
+ * A v3 sourcemap with one source: the rewritten module.
+ * @typedef {object} PatchSourcemap
+ * @property {number} version
+ * @property {string[]} sources
+ * @property {string[]} sourcesContent
+ * @property {string[]} names
+ * @property {string} mappings
+ */
+
+/**
+ * Build the v3 sourcemap for a rewritten module: `sources[0]` is the module id
+ * (rollup resolves it against the module's own directory) and `sourcesContent[0]`
+ * is the pinned upstream source.
+ * @param {string} id Normalized module id.
+ * @param {string} original Pinned upstream source.
+ * @param {string} patched Rewritten source.
+ * @param {readonly PatchSegment[]} segments
+ * @returns {PatchSourcemap}
+ */
+function buildPatchSourcemap(id, original, patched, segments) {
+  const originalStarts = lineStartOffsets(original)
+  const patchedStarts = lineStartOffsets(patched)
+  /** @type {{ line: number, column: number, sourceLine: number, sourceColumn: number }[]} */
+  const mappings = []
+  /**
+   * @param {number} offset
+   * @param {number} sourceOffset
+   */
+  const add = (offset, sourceOffset) => {
+    const line = lineIndexOf(patchedStarts, offset)
+    const sourceLine = lineIndexOf(originalStarts, sourceOffset)
+    mappings.push({
+      line,
+      column: offset - patchedStarts[line],
+      sourceLine,
+      sourceColumn: sourceOffset - originalStarts[sourceLine],
+    })
+  }
+  for (const segment of segments) {
+    // A pure deletion has no generated text to map (the following segment maps
+    // the position that closed the gap).
+    if (segment.curEnd <= segment.curStart) continue
+    const firstLine = lineIndexOf(patchedStarts, segment.curStart) + 1
+    const lastLine = lineIndexOf(patchedStarts, segment.curEnd - 1)
+    if (segment.changed) {
+      const aligned = alignRewrittenLines(original, patched, segment, originalStarts, patchedStarts)
+      const fallback = lineIndexOf(originalStarts, segment.origStart)
+      add(segment.curStart, segment.origStart)
+      for (let line = firstLine; line <= lastLine; line += 1) {
+        add(patchedStarts[line], originalStarts[aligned.get(line) ?? fallback])
+      }
+      continue
+    }
+    add(segment.curStart, segment.origStart)
+    for (let line = firstLine; line <= lastLine; line += 1) {
+      add(patchedStarts[line], segment.origStart + (patchedStarts[line] - segment.curStart))
+    }
+  }
+  const encodedLines = []
+  let line = 0
+  let column = 0
+  let sourceLine = 0
+  let sourceColumn = 0
+  let current = []
+  for (const mapping of mappings) {
+    while (line < mapping.line) {
+      encodedLines.push(current.join(','))
+      current = []
+      line += 1
+      column = 0
+    }
+    current.push(
+      encodeVlq(mapping.column - column)
+      + encodeVlq(0)
+      + encodeVlq(mapping.sourceLine - sourceLine)
+      + encodeVlq(mapping.sourceColumn - sourceColumn),
+    )
+    column = mapping.column
+    sourceLine = mapping.sourceLine
+    sourceColumn = mapping.sourceColumn
+  }
+  encodedLines.push(current.join(','))
+  return {
+    version: 3,
+    sources: [id],
+    sourcesContent: [original],
+    names: [],
+    mappings: encodedLines.join(';'),
+  }
+}
+
+/**
+ * Decode a v3 sourcemap's encoded mappings into per-generated-line segments:
+ * `[generatedColumn]` or `[generatedColumn, sourceIndex, sourceLine, sourceColumn]`.
+ * @param {string} mappings
+ * @returns {number[][][]}
+ */
+export function decodeSourcemapMappings(mappings) {
+  const lines = []
+  let line = []
+  let offset = 0
+  let generatedColumn = 0
+  let sourceIndex = 0
+  let sourceLine = 0
+  let sourceColumn = 0
+  /** @returns {number} one VLQ field. */
+  const nextValue = () => {
+    let shift = 0
+    let value = 0
+    let digit
+    do {
+      digit = BASE64_VLQ.indexOf(mappings[offset])
+      offset += 1
+      if (digit === -1) throw new Error(`invalid sourcemap VLQ character: ${mappings[offset - 1]}`)
+      value += (digit & 31) << shift
+      shift += 5
+    } while (digit & 32)
+    const negative = (value & 1) === 1
+    value >>>= 1
+    return negative ? -value : value
+  }
+  while (offset < mappings.length) {
+    const character = mappings[offset]
+    if (character === ';') {
+      lines.push(line)
+      line = []
+      generatedColumn = 0
+      offset += 1
+      continue
+    }
+    if (character === ',') {
+      offset += 1
+      continue
+    }
+    generatedColumn += nextValue()
+    if (offset >= mappings.length || mappings[offset] === ',' || mappings[offset] === ';') {
+      line.push([generatedColumn])
+      continue
+    }
+    sourceIndex += nextValue()
+    sourceLine += nextValue()
+    sourceColumn += nextValue()
+    line.push([generatedColumn, sourceIndex, sourceLine, sourceColumn])
+    // An optional fifth field carries the name index (minifiers emit it); it is
+    // consumed so the next segment is not read out of phase, then dropped.
+    if (offset < mappings.length && mappings[offset] !== ',' && mappings[offset] !== ';') nextValue()
+  }
+  lines.push(line)
+  return lines
+}
+
+/**
+ * Count mappings per source index WITHOUT materialising the decoded lines: the
+ * artifact gate scans multi-megabyte bundle maps where a full decode is wasteful.
+ * @param {string} mappings
+ * @returns {Map<number, number>} source index -> number of mapping segments.
+ */
+export function countSourcemapSegments(mappings) {
+  const counts = new Map()
+  let offset = 0
+  let generatedColumn = 0
+  let sourceIndex = 0
+  let sourceLine = 0
+  let sourceColumn = 0
+  /** @returns {number} one VLQ field. */
+  const nextValue = () => {
+    let shift = 0
+    let value = 0
+    let digit
+    do {
+      digit = BASE64_VLQ.indexOf(mappings[offset])
+      offset += 1
+      if (digit === -1) throw new Error(`invalid sourcemap VLQ character: ${mappings[offset - 1]}`)
+      value += (digit & 31) << shift
+      shift += 5
+    } while (digit & 32)
+    const negative = (value & 1) === 1
+    value >>>= 1
+    return negative ? -value : value
+  }
+  while (offset < mappings.length) {
+    const character = mappings[offset]
+    if (character === ';') {
+      generatedColumn = 0
+      offset += 1
+      continue
+    }
+    if (character === ',') {
+      offset += 1
+      continue
+    }
+    generatedColumn += nextValue()
+    if (offset < mappings.length && mappings[offset] !== ',' && mappings[offset] !== ';') {
+      sourceIndex += nextValue()
+      sourceLine += nextValue()
+      sourceColumn += nextValue()
+      counts.set(sourceIndex, (counts.get(sourceIndex) ?? 0) + 1)
+      // Optional name field (see decodeSourcemapMappings): consumed, not counted.
+      if (offset < mappings.length && mappings[offset] !== ',' && mappings[offset] !== ';') nextValue()
+    }
+  }
+  return counts
+}
+
 /**
  * Apply every patch that selects this module id.
  * @param {string} id - the module id vite reports.
  * @param {string} code - the module source.
- * @returns {{ code: string, applied: string[] } | undefined} undefined when no patch matches.
+ * @returns {{ code: string, applied: string[], map: PatchSourcemap } | undefined} undefined when no patch matches.
  */
 export function applyVendorPatches(id, code) {
   const normalized = normalizeId(id)
+  /** @type {PatchSegment[]} */
+  let segments = [{ curStart: 0, curEnd: code.length, origStart: 0, origEnd: code.length, changed: false }]
   let next = code
   const applied = []
   for (const patch of VENDOR_PATCHES) {
@@ -776,11 +1193,14 @@ export function applyVendorPatches(id, code) {
           + `Anchor: ${JSON.stringify(edit.expect.slice(0, 160))}`,
         )
       }
-      next = next.replace(edit.expect, edit.replace)
+      const at = next.indexOf(edit.expect)
+      segments = replaceSegment(segments, at, edit.expect.length, edit.replace.length)
+      next = next.slice(0, at) + edit.replace + next.slice(at + edit.expect.length)
     }
     applied.push(patch.vendorFile)
   }
-  return applied.length === 0 ? undefined : { code: next, applied }
+  if (applied.length === 0) return undefined
+  return { code: next, applied, map: buildPatchSourcemap(normalized, code, next, segments) }
 }
 
 /** Read a probed vendor file once per check run (string, or { error }). */

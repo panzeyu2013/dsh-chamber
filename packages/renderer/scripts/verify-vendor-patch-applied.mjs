@@ -2,12 +2,16 @@
  * Build-time proof that the registered vendor patches landed in the emitted
  * chamber bundle (design 09 §3.6).
  *
- * TWO LAYERS, ONE JOB:
+ * THREE LAYERS, ONE JOB:
  *  - the renderer's vite plugin accumulates `applyVendorPatches`' `applied`
  *    coverage and fails the build when a registered vendor file was never
- *    patched (an id-form mistake is otherwise a silent no-op), and
+ *    patched (an id-form mistake is otherwise a silent no-op),
  *  - this artifact check proves each patch's marker SURVIVED into an asset the
- *    browser is served.
+ *    browser is served, and
+ *  - the sourcemap check proves every patched module still rides the emitted
+ *    chunk maps. A transform that returns code without a map only WARNS
+ *    (rollup SOURCEMAP_BROKEN) while silently dropping the module from every
+ *    .map, so the warning is turned into a failing build here (design 09 §3.6).
  *
  * Minimal by design: one present marker per registered vendor file, plus the
  * layout fork's root prop (the chamber half the ui-chat patch consumes). A
@@ -21,7 +25,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { VENDOR_PATCHES } from './vendor-patches.mjs'
+import { VENDOR_PATCHES, countSourcemapSegments } from './vendor-patches.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const WEB = join(ROOT, 'desktop', 'dist', 'web')
@@ -233,6 +237,72 @@ export function checkVendorPatchBundle(assets) {
   return failures
 }
 
+/** Every emitted chunk sourcemap under dist/web/assets (`build.sourcemap: true`). */
+function allSourcemaps() {
+  const assets = join(WEB, 'assets')
+  if (!existsSync(assets)) return []
+  return readdirSync(assets)
+    .filter((name) => name.endsWith('.js.map'))
+    .map((name) => join(assets, name))
+}
+
+/**
+ * Load the emitted chunk maps, counting mappings only for the maps that carry a
+ * registered vendor source: a multi-megabyte bundle map is not scanned for
+ * nothing, and the counts are what separates "in the map" from "mapped".
+ * @param {readonly string[]} files
+ * @returns {{ sources: readonly string[], sourcesContent: readonly (string | null | undefined)[], segmentCounts: Map<number, number> }[]}
+ */
+function loadSourcemaps(files) {
+  return files.map((file) => {
+    const map = JSON.parse(readFileSync(file, 'utf8'))
+    const sources = Array.isArray(map.sources) ? map.sources : []
+    const registered = sources.some((source) =>
+      VENDOR_PATCHES.some((patch) => patch.idSuffixes.some((suffix) => source.endsWith(suffix))))
+    return {
+      sources,
+      sourcesContent: Array.isArray(map.sourcesContent) ? map.sourcesContent : [],
+      segmentCounts: registered && typeof map.mappings === 'string'
+        ? countSourcemapSegments(map.mappings)
+        : new Map(),
+    }
+  })
+}
+
+/**
+ * Check the emitted sourcemap chain: every registered vendor file must appear as
+ * a source of some chunk map, with the pinned content and at least one mapping
+ * segment pointing at it. A missing/incomplete map is invisible in the bundle
+ * text and only fatal to a stack trace in patched code, which is why it is a
+ * gate rather than a warning.
+ * @param {readonly { sources: readonly string[], sourcesContent: readonly (string | null | undefined)[], segmentCounts: Map<number, number> }[]} maps
+ * @returns {{ vendorFile: string, reason: string }[]} failures, empty when every patched module is mapped.
+ */
+export function checkVendorPatchSourcemaps(maps) {
+  const failures = []
+  for (const patch of VENDOR_PATCHES) {
+    let reason = 'is not a source of any emitted chunk map'
+    let mapped = false
+    for (const map of maps) {
+      const index = map.sources.findIndex((source) => patch.idSuffixes.some((suffix) => source.endsWith(suffix)))
+      if (index === -1) continue
+      if ((map.segmentCounts.get(index) ?? 0) === 0) {
+        reason = 'is a source of a chunk map but no mapping points at it'
+        continue
+      }
+      const content = map.sourcesContent[index]
+      if (typeof content !== 'string' || content === '') {
+        reason = 'is mapped but its chunk map carries no sourcesContent'
+        continue
+      }
+      mapped = true
+      break
+    }
+    if (!mapped) failures.push({ vendorFile: patch.vendorFile, reason })
+  }
+  return failures
+}
+
 /** Every emitted JS and CSS asset under dist/web/assets. */
 function allAssets() {
   const assets = join(WEB, 'assets')
@@ -261,7 +331,27 @@ function main() {
     console.error('verify-vendor-patch-applied: a registered vendor patch did not reach the served bundle — check the vite transform id matching (design 09 §3.6)')
     return 1
   }
-  console.log(`✓ vendor patch markers survived into the emitted bundle (${VENDOR_PATCH_MARKERS.length} markers, ${VENDOR_PATCHES.length} registered files)`)
+  const sourcemapFiles = allSourcemaps()
+  if (sourcemapFiles.length === 0) {
+    console.error('verify-vendor-patch-applied: no emitted chunk sourcemaps under dist/web/assets — the renderer build must keep build.sourcemap on')
+    return 1
+  }
+  /** @type {{ vendorFile: string, reason: string }[]} */
+  let sourcemapFailures
+  try {
+    sourcemapFailures = checkVendorPatchSourcemaps(loadSourcemaps(sourcemapFiles))
+  } catch (error) {
+    console.error(`verify-vendor-patch-applied: unreadable chunk sourcemap under dist/web/assets — ${error.message}`)
+    return 1
+  }
+  for (const failure of sourcemapFailures) {
+    console.error(`✗ patched vendor module absent from the emitted sourcemap chain: ${failure.vendorFile} (${failure.reason})`)
+  }
+  if (sourcemapFailures.length > 0) {
+    console.error('verify-vendor-patch-applied: the patch transform must return a sourcemap, not only code — rollup drops an unmapped module from every chunk map (design 09 §3.6)')
+    return 1
+  }
+  console.log(`✓ vendor patch markers survived into the emitted bundle (${VENDOR_PATCH_MARKERS.length} markers, ${VENDOR_PATCHES.length} registered files) and every patched module rides the emitted sourcemaps`)
   return 0
 }
 
