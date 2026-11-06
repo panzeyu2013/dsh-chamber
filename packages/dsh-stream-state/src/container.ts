@@ -101,7 +101,7 @@ export function retainSourceIds(
 // Projections: each mirrors exactly one of the App's refs, reading the CURRENT
 // generation only - the registry cannot express another.
 
-/** App's hiddenSinceRef: source id -> hidden-window start (only hidden views appear). */
+/** Legacy hidden-window projection (retention retired; test-covered lifecycle contract, pending follow-up narrowing). */
 export function projectHiddenSince(registry: SourceRegistry): Record<string, number> {
   const out: Record<string, number> = {}
   for (const [sourceId, entry] of Object.entries(registry)) {

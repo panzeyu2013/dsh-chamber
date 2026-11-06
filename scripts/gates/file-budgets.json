@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 1839,
+      "lines": 1834,
       "target": 1600,
       "note": "App is the composition root: state containers + 28 named app-hooks + the view shell. Raised by 4 lines in the 2026-10-27 re-review to restore the missing withdrawSourceRef backfill (a text-locked INV-7 seam). Net 0 at the rebase onto the 0.4.3 line: +3 = the degraded-serviceability port (the isServiceableLocalStatus import and the note at the local link.ready arm, design 02 §3.5) −3 = the boot-effect docblock that no longer describes anything here became a two-line pointer (it moved with its hook). Target 1600 = after retireSources/refreshRemotes move; the JSX shell stays as the recorded boundary."
     },
@@ -199,9 +199,9 @@
     },
     {
       "path": "packages/renderer/src/app-hooks/use-view-scheduler.ts",
-      "lines": 400,
-      "target": 400,
-      "note": "View scheduler cluster (prewarm eligibility/harvest retention/reclaim/background phase)."
+      "lines": 369,
+      "target": 369,
+      "note": "View scheduler cluster (prewarm eligibility/harvest/conditional watchdog/background phase). Ratcheted by the N-ctx resident refactor D1: the hidden-shell idle-reclaim arm and its hidden-window ledger retired."
     },
     {
       "path": "packages/renderer/src/app-hooks/use-badge-count.ts",

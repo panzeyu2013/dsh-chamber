@@ -1,7 +1,7 @@
 /**
  * Chamber-global「客户端」section: the settings shell's `__general` content.
  * Groups are all chamber-GLOBAL (main-process chamber-settings.json, never an
- * instance's dsh home): 启动与关闭 / 运行 / 会话待办区 / 通知 / 更新
+ * instance's dsh home): 启动与关闭 / 运行 / 性能与内存 / 会话待办区 / 通知 / 更新
  * (UpdateSection). Notification sub-settings stay COLLAPSED while the master
  * switch is off (config unchanged, just hidden) in one bordered card, that switch
  * itself a borderless disclosure row. Mutations go through the settings IPC
@@ -20,6 +20,7 @@ import { testNotifyRejected, testNotifyResult, type TestNotifyResult } from './n
 import { sessionTodoOf, sessionTodoPatch } from './session-todo-settings.ts'
 import { SegmentedControl } from './SegmentedControl.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
+import { ResidentPanel } from './ResidentPanel.tsx'
 import { applyDisclosureAttributes } from './disclosure-attrs.ts'
 import css from './SettingsShell.module.css'
 
@@ -297,6 +298,11 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           />
         </div>
       </div>
+
+      {/* 性能与内存（D3）：只读常驻来源表 + 手动释放 + 系统/页面内存读数。独立组件
+          文件承载全部订阅/确认逻辑，GeneralView 只留一行挂载（真值表在
+          resident-panel-model 的单测里）。 */}
+      <ResidentPanel t={t} />
 
       {/* 会话待办区：主开关（默认开）是无边框披露行，开启后展开子设置（三类事件
           开关收入唯一一张卡片，与通知组同节奏）；默认全开，待办区仅在有条目时出现。 */}

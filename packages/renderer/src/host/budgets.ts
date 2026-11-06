@@ -15,8 +15,7 @@ import { BOOT_TIMEOUT_MS } from '../boot-budget.ts'
 export const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
 
 /** 空闲预热的挂载并发上限——同一时刻至多一个"用户没看但已在后台 boot 全量 UI"的壳；
- * 配合保留策略（retention.ts）把稳态壳数压到 local + 活动 + ≤1 隐藏 + ≤1 预热中，
- * 且仅前台推进。 */
+ * 用户意图壳常驻（keep-all，见 resident-policy.ts），后台投机槽仍只有一个，且仅前台推进。 */
 export const MAX_PREWARMED_REMOTE_VIEWS = 1
 
 /** gateway 托管 dsh 状态轮询周期（仅前台，见 managed-runtime.ts）。 */

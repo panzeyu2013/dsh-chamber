@@ -114,3 +114,7 @@ export { linkEpochOf, linkReady } from './link-projection.ts'
 // settings-bridge 的重试动作消费（fan-out 复用 aggregate-store 的 createChannel）。
 export type * from './plugin-refresh-requests.ts'
 export { onClientGraphResyncRequest, requestClientGraphResync } from './plugin-refresh-requests.ts'
+// 常驻壳页面级单例（N-ctx 壳常驻 v1.1）：常驻阀发布快照，设置面的性能与内存面板订阅并发出
+// 释放命令。只有一个运行时符号经桶导出；快照/事实/释放类型走同批的 `export type *` 面。
+export type * from './resident-store.ts'
+export { residentBridge } from './resident-store.ts'

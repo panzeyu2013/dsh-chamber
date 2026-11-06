@@ -188,9 +188,16 @@ export const GROUPS = {
     // 的 shell shim（本测试已加载真实 barrel）。
     { file: 'test/wiring/unread-prune-roster-gate.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-dsh-web-register.mjs'] },
   ],
-  // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
+  // warm: 常驻壳策略（N-ctx 壳常驻 v1.1）——硬上限/输入保护/压力分档的纯判定、快照纯构建器
+  // （含已释放行与隐藏事实门控），以及输入席位/常驻阀接线的源码锁（无 DOM 可跑的部分）。
+  warm: [
+    'test/warm/resident-policy.test.ts',
+    'test/warm/resident-snapshot.test.ts',
+    'test/warm/input-activity-wiring.test.ts',
+    'test/warm/resident-wiring.test.ts',
+  ],
+  // view-runtime: 视图运行时 —— 视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [
-    'test/view-runtime/retention.test.ts',
     'test/view-runtime/view-transition.test.ts',
     'test/view-runtime/frame-coalescer.test.ts',
     'test/view-runtime/sidebar-scroll-sync.test.ts',
@@ -207,7 +214,7 @@ export const GROUPS = {
     // 视图对单一 store（select/paint 单字段 + 退役回落同拍 + 两条 ref 镜像不得复活）。
     'test/view-runtime/view-store.test.ts',
   ],
-  // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
+  // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.4）
   'svg-resource': [
     'test/svg-resource/svg-resource-scope.test.ts',
   ],

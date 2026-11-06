@@ -24,7 +24,8 @@
 - **本地 facts 间歇降级**：待真机 fetch 排队测量（≥3 个 SSH 慢源时 in-flight 是否恒 6；`unscheduled booked=false` 与慢窗口同拍；单慢源阴性对照）。
 - **P2b 事实通道降级**：`$events` 有投递；一次定案为插件管理器长 RPC 撞 45s 保险丝（扩容 `LONG_RPC_PATHS` 待裁）；另一次十连败不可区分，出口 = 窗口期差分（Node 默认时序 + unary 探针）。
 - **完成身份/判读窗口**：无锚完成跨通道身份不同（最坏重复一条横幅）；`lastAnchoredSeq` 已有单调记账；消除需上游 `turn/end` 判别符。facts-only 源无 `beforeBaseline` 首见窗口、P2b 行 `identityConfirmed` 门、facts 不可判时读清/武装冻结。
-- **性能遗留（P0–P2）**：五条实机复测 + 全视图 DOM ≤13,000（实测 15,805 含壳 chrome）；已知取舍（蓝点/通知暂停、桥探测 30s 长尾、purged 孤儿键 K=2）；待真机 = 隐藏 ≥60s 唤醒、SVG scope 探针、风暴档发布速率。
+- **性能遗留（P0–P2）**：五条实机复测 + 全视图 DOM ≤13,000（实测 15,805 含壳 chrome）；已知取舍（桥探测 30s 长尾、purged 孤儿键 K=2；「蓝点/通知因壳回收暂停」的旧取舍已由 facts-only 判定侧读回退消除，design 06 §4.2 / 19 §3.2）；待真机 = 隐藏 ≥60s 唤醒、SVG scope 探针、风暴档发布速率、N-ctx 常驻定标（下条）。
+- **N-ctx 壳常驻（design 05 §4.1）**：①**实测定标**未做——N=3/5 的 DOM 节点数/帧时/流式开关壳 CPU/主进程内存曲线、稳态无 20s 回收 tick（>1 挂载时压力阀每 30s 采样是设计内唯一周期任务）与释放错峰（250ms）、面板关闭时快照不估读 DOM 节点；判据 = 外部采样 + 设置「性能与内存」面板读数。②**v1.1 压力阀平台矩阵**实机未跑——Linux `MemAvailable` / Windows `os.freemem` / macOS `vm_stat` 三臂与「失败 = unsupported」路径、8GB/16GB 二档、`constrained`/`critical` 按档位连续 2 次判定；判据 = 注入低内存下只释放可释放壳、活动/屏上壳不丢。③**侧边栏门控/单实例化评估**（触发 = 来源 ≥8 或实测 p95 劣化）：见 [TODO.md](TODO.md) D§4。④**进程隔离重评条件**：来源 >8 或「一个壳的长任务卡住整页」真机复现（design 05 §9）；重评前先取帧时/长任务证据。⑤**手动释放的草稿代价**见 §4.2；证据指针 = `packages/renderer/src/resident-policy.ts` / design 05 §4.1。
 - **Swift 壳性能 A/B**：启动/大载荷 p95/空闲 wakeups 待打包态；`[shell-fps]` 被 `!isPackaged` 编译掉；判据 = 空闲安装率 <200/s、静默 CPU <10%。
 - **页面侧残余**：流级预算表外 2s/8 两份未锁；forensics request/snapshot 半通道、carrier `openingAnswered` 无生产消费者；五条结构性重复/死分支。
 - **载波重建节拍（design 27 §3.6/§6.26/§6.27）**：①真机 soak 待跑——原判据「`carrier-throttled[laneReconnect]` → `carrier-throttle-expired` → `carrier-rebuild` 三连」在改动后**结构上不可能出现**（expired 只由证据型 arm 发出），恒真不可伪，改为三条可伪信号：(a) `control-plane.log` 的 `closed (cause, Nms)` 间隔与 socket 寿命不再聚在 60s（旧形态实测恒 60000ms）；(b) `carrier-throttle-expired` 的 cause 只允许证据型（`socketNoFrame`/`openingStall`/`teardownNoFrame`），lane 拒绝后不再排期；(c) 注入证据故障（半开/零帧）时证据型重建仍发生（恢复面未退化）。对齐面 = `control-plane.log` + 页面 `dsh-chamber:stream-forensics`（须 inspector 实时监听：环 cap 256、flush 清空、无持久消费面；代理日志不含 close code，要 code 需另加日志）；②15s/15s 边界赛跑（teardown 判定的差值 = `15000 − 握手时延`，首轮取决于定时器迟到）见 §6.27，收紧要动表值，未裁；③聚合看门狗的 **stale 臂**按 transport 每 120s(http)/300s(ssh)（replay 不刷新 `snapshotAt` 时退化 60s），**fallback 臂**是 60s 退避而非 120/300——两臂都会产生一次**合法**换代际 ⇒ 三处 UI 仍按其节奏闪；「同批处理 vs 接受并写明」未裁；④三条渲染臂的 caller tag 只在 inspector 在场时可见（warn 级不进 console 环）；OS 唤醒/`online`/长隐藏返回的 liveness 换代在 vendor 车道内部直接 `controller.reconnect()`（`packages/dsh-client-connection/src/client/index.ts`），不经该 seam、成功零日志 ⇒ 该臂只能靠「无前置 `[renderer]` tag 的 `socket-reconnect`」反向推断，或接受不可归因；⑤`CarrierPhase 'silent'` 是死词汇（全仓无写入者，`streamFrame` 只做 silent→open）：保留注释还是删成员（公开 union，需独立改动）未裁。
@@ -52,7 +53,8 @@
 - **登录 shell 环境（design 02 §3.1）**：Dock/Finder 启动下两 flavor 读到 PATH/代理/API key；失败可定位、不阻塞；`DSH_*` 不被覆盖；判据 = 1 测试 + 实机。
 - **移动端真机抽检（design 17 §18.6）**：移动适配包已退役，布局/触控/键盘由上游前端负责；待跑 = iPhone Safari（键盘/图标/tap）、Android Chrome、iPad 834（确认接受上游 56px rail）与 390/768/834 的 `acceptance:mobile` 走查。若复现硬缺口，按 design 17 §18.4 在上游或 host/renderer 层修复。
 - **N-ctx 主题/语言**：打包态目检；冷启动变化 ≤1、预热/收割 0，另验同帧性。
-- **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载；打包态冒烟。
+- **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载（常驻策略下关闭面板后该源成为普通常驻壳，design 05 §4.1）；打包态冒烟。
+- **「性能与内存」只读面板（design 15 §D5）**：新组 + 手动释放待打包态/真机目检（表项状态、隐藏时长、DOM 节点数、释放后转「已释放」且抑制生效）；`settings.get` 的 `system` 是**可选**字段——旧主进程（镜像早于本版）无该字段时面板必须读「不可得」而非猜数，三处类型镜像（desktop store / preload / renderer `global.d.ts`）与 `ipc-surface-mirror` lockstep 同批；页面 JS 堆仅 Electron 有（`performance.memory`），Swift 显示「不可得」。
 - **rc.3 More 行依赖延迟设置行**：`entry-customization` 的 `pluginNavigation` 只由延迟的 settings-plugin-manager 提供，宿主行停在 PENDING ⇒ 会话头/右栏 More 缺席。延迟簇的 `Promise.all`（`registerDeferred`，`packages/renderer/src/chamber-entry.ts`）无 deadline：chunk **reject** 时按行 id 上报、只该延迟行失败（延迟簇其余行照常挂载）；chunk **悬挂**时整簇不挂载且零报告。判据 = 延迟 chunk 失败 drill + 悬挂 drill + 目检；座席存在但读取在处置窗口抛错时 `openPending` 无自动 flush（再次点击恢复），同 drill 覆盖。
 - **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §6.2。
 - **未接入的上游服务面**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges`、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；接入点 = design 09 §3.5/§3.6 的复合入口与 seam，需要时按同一注册表接入。
@@ -102,6 +104,7 @@
 ### 1.6 一致性债务与门禁缺口
 
 - **导出/门禁**：type-only 导出不判；无入口叶子模块不判（方向 = 孤儿模块门）；`TEST_ONLY_EXPORT_ALLOWLIST` 已规则化；`run-checks tests` 零覆盖可过；`verify:styles` 不覆盖 docs token；`verify:anchors` 无 Windows 覆盖；`install-gateway.sh` 走 npm 绕单源；`test:gateway` 仍有 2 处真装器 spawn。
+- **resident 收窄后的 test-only 导出**：retention 退役后 `packages/dsh-stream-state/src/container.ts` 的 hidden 投影（`projectHiddenSince` 等）只剩测试消费者，临时进 `TEST_ONLY_EXPORT_ALLOWLIST`；收窄源状态机（删无生产者的 `mounted/unmounted/painted/userSelected/reclaimed/retryRequested/harvestStarted/harvestSatisfied` 事件）与撤 allowlist 同批，触发 = 本轮常驻改造收口（[TODO.md](TODO.md) D§4）。
 - **重构/测试**：renderer 外三处 state/ref 镜像、`ssh-<id>` 别名、跨包重复 0 组（[TODO.md](TODO.md) D§1）；god-file 预算现登记 44 条（含 13 个新文件；4 条 `kind:ceiling` 单列，`--report` 的缺口只按可减目标合计），但新模块仍需**人工**登记才受保护；CI 打包排练 CPU；Swift 串行 113s（并行会丢 XCTSkip 判据）；升级线残余 = fatal 恢复框键位走查、node-pty 补偿复核。
 - **隐私/平台**：`DSH_TELEMETRY_DISABLED` 不覆盖 `session-log-deepseek`，桌面是否默认 opt-out 未裁；`isMainFrame` 归属缺陷；docs 锚点过期（D15）；私有文件纪律三实现；`client-web` 未用 `ui-theme`；layout `ThemePresenter` 残留；wire A–F、sanitize/win-probes、dashboard 第三份 UI、A-U3/A-F16、dual-host。
 - **低优 UX**：hover-only、徽标窄窗、en 单数、aria-label、ssh done 态、PluginDialog DOM 测试、对账空态、versionsEpoch、30s 文案、内联 effect。
@@ -170,13 +173,14 @@
 - **移出项（P3）**：匿名 control-plane 认证/审计、薄壳会话面、统一索引、broker、通知中心、MCP 不得回流；design 17/18/19/08/20/24 例外不作他域先例。
 - **构建/注册**：构建产物移出 git（`build:artifacts` 自举）；注册表降级不剪不落盘（fail-closed）；上游纯镜像 README 死链跳过（C1）；sidebar/layout `lib` 目标与镜像 exports 有意保留。
 - **安全/发布**：`--no-auth` 有界例外；Gateway state 0700 + 属主；safeStorage 诚实回退；Windows 无 Authenticode、macOS 不出 x64；发布面临时收窄（三腿 `if:` 跳过，恢复删三处 + finalize）；state 根租约对越界拓扑（容器重建挂 volume、NFS 共享根）响亮拒绝，恢复 = 移走 `owner.json`（design 17 §12）。
-- **N-ctx**：单文档信任域；原生键盘单槽（全部 boot 实例 accept）；壳常驻（local 恒留/隐藏最多 1/超限回收）；文档主题/页面语言归 §1.3。
+- **N-ctx**：单文档信任域；原生键盘单槽（全部 boot 实例 accept）；壳常驻——local 恒留 + 用户意图壳常驻（keep-all，无常规空闲退役）；系统投机壳（空闲预热/收割）≤1 后台槽；唯一自动退役 = 硬上限（12）+ 平台化内存压力阀（v1.1）；手动释放 = 设置→通用「性能与内存」；释放写 `prewarmSuppressed`（选中/删源/设置目标清除）；契约见 design 05 §4.1，决策叶 `packages/renderer/src/resident-policy.ts`、页面级快照 `packages/dsh-chamber-client-core/src/resident-store.ts`；文档主题/页面语言归 §1.3。
 - **registry/元工程**：触点 registry 单一来源、无 Windows 覆盖；R10 文本锁未全量改 import 断言；settings-plugin-manager 无 typecheck 程序（其 vendor client 面未铺成独立 program），`ctx.get` 显式类型实参一类编译错误只有该包 wiring 测试的反向源锁兜底；R11 布局助手受 Swift 锚点；pnpm shim 待打包实机；state 根租约 legacy 一个 minor 后删；Windows 覆盖缺口 R2/R14；R15 ui-layout 分类表；host 域逐域手写有 lockstep；第三类 vendor 补丁（`use-chat-reading`）；ServerSection 预算 raise（1243→1273）；alpha.3 workspace 成员判定待复核；cua 不接入。
 
 ### 4.2 产品、界面与运行时取舍
 
+- **N-ctx 壳常驻（design 05 §4.1）**：①**每壳字节内存不可得**（N 壳共享一个 renderer JS 堆/渲染进程，Chromium/WKWebView 无按壳归属读数）——可得的是页面级事实（状态/隐藏时长/DOM 节点数）与整机系统内存（`settings.get` 可选 `system`）；②**critical 压力可丢草稿**（只在 `critical` 且非活动/屏上壳；活动壳永不释放，但后台壳内未提交草稿/未保存表单无法在释放前保存）；③**设置面板挂载的源常驻**（面板 hold 只保证打开期间不被释放；关闭后成为普通常驻壳，不再自动释放）；④系统内存是 30s 采样而非实时，`critical` 释放可能滞后一个窗口——宁滞后不误杀；⑤投机壳 ≤1 是唯一后台槽约束，硬上限 12 不随设置变化（无可配置档位）。
 - **通知边界**：P1 只覆盖有壳源；facts-only `beforeBaseline` 不可达；facts-only `subagentCount` 仅谱系已认证（watcher 无谱系保持 presence）；paused drop、complete 复用、schedule/job 不覆盖、侧栏无 goal 视觉。
-- **降级边界**：已覆盖四座；不覆盖未激活源/壳回收/单槽后报/侧栏无动作；租客 body portal 不受 stacking；连接页 tooltip 无 ARIA。
+- **降级边界**：已覆盖四座；不覆盖未激活源/已释放壳（manual/cap/valve 后）/单槽后报/侧栏无动作；租客 body portal 不受 stacking；连接页 tooltip 无 ARIA。
 - **插件**：管理页钉上游结构（`data-plugin-panel`/drag/slot）；重打包无活切换（`restart-required`）；模块表按 id 唯一、跨实例一律复用原 factory（`reuseForeignBuilds`；release/内容证明只决定连接页是否提示，≤8 次校验）；刷新控制面 string-key；pluginGraph 无静默看门狗；两条重载无仲裁；chunk-owner 撤销边界；`/plugins/events` 属上游 HMR。
 - **连接/来源**：open-in 官方页级 localStorage 槽（`dsh.open-in-app.choice`）待按 `chamberBasePath` 分键；N-ctx Markdown 预览仍 document-relative（A 保持降级/B 覆盖补丁待裁）；`chamberFileApiBase` 仅唯一来源断言；远程会话状态/切源白屏实现闭合（实机见 §1.4）、远端空白会话、ui-chat 老代整面失败、未挂载工作区集合仅回声+挂载 push 均按已知降级；`document.hasFocus()` 假设只驱动 `requireHidden`。v1 不做 = 单 store 真融合、控制面会话实时同步、远程实例管理 UI 外壳、跨来源平铺列表。
 - **UI 偏差**：B1–B10（默认 manual、unpin 回自然位、家族优先、树展开/拖拽约束、拖拽不切 orderBy、账号成员=可见行、搜索链、归档无 toast、行窗口配额、fork 落尾）；`sidebar.workspaces` 声明不渲染；菜单 `compact`；窗口标题冻结；轨道点裁切；hover 几何无指针腿；导轨无锚点/aria；Git 错误码重叠；折叠 folder 字形不补源码锁。

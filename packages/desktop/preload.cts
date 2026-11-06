@@ -393,10 +393,23 @@ export interface ChamberSessionTodoSettings {
   onRequest: boolean
 }
 
+/** 系统内存快照（D4；非秘密、只读投影）——与 desktop/chamber-settings.ts 的
+ *  ChamberSystemMemory（wire 镜像）及 system-memory.ts 的 SystemMemorySnapshot
+ *  （生产者）同形；三处命名接口由 ipc-surface-mirror 的字段签名比较守着。 */
+export interface ChamberSystemMemory {
+  totalBytes: number
+  availableBytes: number
+  source: 'proc-meminfo' | 'os-freemem' | 'vm-stat'
+  capturedAt: number
+}
+
 /** Non-secret status projection: current settings + platform capability gates. */
 export interface ChamberSettingsStatus {
   settings: ChamberSettings
   supported: ChamberSettingsSupported
+  /** 本机系统内存快照（D4）：**只**随 settings-get 响应携带（采样型事实，push 与
+   *  set 响应不带）；缺省 = 该平台无探测腿或本次探测失败 → 消费端读作「未知」。 */
+  system?: ChamberSystemMemory
   /** 调试模式实测回读（非秘密）：宿主是否真的处于可检查态。缺省 = 本进程尚未
    *  应用过（UI 呈现「未知」，绝不按 enabled 推断）。 */
   debugRuntime?: {

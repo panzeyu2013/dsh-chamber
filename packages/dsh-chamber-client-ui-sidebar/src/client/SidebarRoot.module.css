@@ -68,7 +68,7 @@
   transition: opacity 150ms var(--ds-ease-in-out);
 }
 
-/* 字标/座席空白的当前根因与修复见 design 05 §4.2（文档级重复 SVG 资源
+/* 字标/座席空白的当前根因与修复见 design 05 §4.4（文档级重复 SVG 资源
    id × 隐藏壳丢绘），本文件只负责动画面：必要内容不参与任何入场动画。
    入场动画都以 `opacity: 0` 为首帧（`wide-in` / `rail-in` / `rail-fade-in`），
    而 CSS 动画只在所属子树被渲染时推进：被隐藏的实例壳（`.instance-hidden` →

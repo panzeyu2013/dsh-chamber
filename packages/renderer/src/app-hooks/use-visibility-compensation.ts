@@ -2,7 +2,8 @@
  * Foreground-resume compensation: hidden -> visible immediately advances one aggregate
  * watchdog round, refreshes the connection rows and the registry, and - only after the
  * managed-runtime probe settles and one macrotask passes (React commits the probe's state
- * on the next macrotask) - drains the prewarm queue and reclaims hidden views. Skipped
+ * on the next macrotask) - drains the prewarm queue and runs the conditional hang/harvest
+ * sweep. Skipped
  * probes during hidden time would otherwise let the drain act on a stale projection.
  * Split out of App.tsx (B1-3g); all dependencies arrive as refs.
  */

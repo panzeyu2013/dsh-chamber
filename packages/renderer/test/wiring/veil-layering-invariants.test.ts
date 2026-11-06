@@ -200,8 +200,8 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
 /**
  * 可见性 = paintedView（屏上），选择 = activeView（意图）。这些锁各自对应一条
  * "改坏也不红"的接线（判定本体在 view-runtime/reveal-gate.test.ts，这里钉 App 的
- * 装配）：可见性绑定、揭示回调的重验守卫、保留/回收与 hiddenSince 跟随屏上、
- * 侧栏 current 高亮跟随屏上、退役回落、失败/控制面不可达强制释放持有。
+ * 装配）：可见性绑定、揭示回调的重验守卫、释放/回收跟随屏上、侧栏 current 高亮跟随
+ * 屏上、退役回落、失败/控制面不可达强制释放持有。
  * 阅读/蓝点武装（notify requireHidden / reconcile 的 readingCurrent / 清 current
  * 蓝点 effect）按同一语义也应当读 paintedView，但那三处位于 runtime-facts handler
  * 与完成修正臂 store 内；本工作流的写权限冻结在它们之外
@@ -244,24 +244,16 @@ test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
   )
 })
 
-test('P4/W3：保留 / 回收 / 计时 / 侧栏高亮 / 退役都跟随 paintedView', () => {
-  // 回收/隐藏计时/candidates 判定在 use-view-scheduler；投影本体已迁出 App 到
-  // host/servers.ts —— 本测试对三个落点取并集判 presence（App + scheduler +
-  // servers），无负断言，断言强度不变。
+test('P4/W3：回收 / 侧栏高亮 / 退役都跟随 paintedView', () => {
+  // 回收（唯一拆除入口）在 use-view-scheduler；投影本体已迁出 App 到 host/servers.ts
+  // —— 本测试对三个落点取并集判 presence（App + scheduler + servers），无负断言，
+  // 断言强度不变。隐藏窗计时/保留候选已随闲置回收策略退役（N-ctx 常驻重构 D1），
+  // 不再有"按 painted 起表/清表"的接线可钉。
   const app = read('../../src/App.tsx') + '\n' + read('../../src/app-hooks/use-view-scheduler.ts') + '\n' + read('../../src/host/servers.ts')
   assert.ok(
     app.includes('id === viewStore.getSnapshot().active || id === viewStore.getSnapshot().painted || id === pendingViewRef.current'),
     'reclaimView 守卫必须含 painted：屏上的壳永不被回收（唯一拆除入口）',
   )
-  assert.ok(
-    app.includes('activeViewId: viewStore.getSnapshot().painted'),
-    'decideReclaimCandidates 的 activeViewId 必须是 painted（否则持有窗内屏上壳被算成隐藏壳）',
-  )
-  assert.ok(
-    app.includes('if (instanceId === viewStore.getSnapshot().painted) delete hiddenSinceRef.current[instanceId]'),
-    'settle 起表必须按 painted：屏上壳不开始隐藏计时',
-  )
-  assert.ok(app.includes('}, [paintedView])'), 'hiddenSince 落地 effect 必须以 paintedView 为键')
   assert.ok(
     app.includes('correctionArms, paintedView, pluginDiagnostics'),
     'deriveServers 的 current 投影必须吃 paintedView（侧栏高亮跟随屏上来源）',

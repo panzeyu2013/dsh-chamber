@@ -210,7 +210,7 @@ function isPreservedId(lookup: PreservedIdLookup | undefined, id: string): boole
 /**
  * 纯函数：重命名计划 = 本 svg 内「定义 ∩ 引用」减去保留集。
  * `preservedIds` 是本 svg 的局部保留面；可选的 `preservedLookup` 是文档级保留面，
- * 按 id 现查、绝不物化（该集只增不减，见 design 05 §4.2 残余边界①）。
+ * 按 id 现查、绝不物化（该集只增不减，见 design 05 §4.4 残余边界①）。
  * 第 4 参调用形态与行为保持不变。
  */
 export function resourceRenamePlan(
@@ -450,7 +450,7 @@ function rescanSvgElement(svg: Element, token: string): number {
 function applyScopeToSvg(svg: Element, token: string): number {
   const { defined, referenced, preserved } = collectScopeFacts(svg)
   const localPreserved = new Set(preserved)
-  // 文档保留集只增不减（design 05 §4.2 残余边界①）：只按 id 现查，绝不为每个 svg 复制一份。
+  // 文档保留集只增不减（design 05 §4.4 残余边界①）：只按 id 现查，绝不为每个 svg 复制一份。
   const renames = resourceRenamePlan(defined, referenced, token, localPreserved, documentPreservedIds)
   if (renames.size > 0) {
     applyRenames(svg, renames)

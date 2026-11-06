@@ -82,10 +82,27 @@ export interface ChamberSettings {
   debug: ChamberDebugSettings
 }
 
+/** 系统内存快照（“resident” 阀门的输入，D4；非秘密、只读投影）。
+ *  数据面生产者 = `system-memory.ts` 的 SystemMemorySnapshot；这里是 wire 镜像
+ *  的**命名接口**：镜像守卫（test/ipc/ipc-surface-mirror.test.ts）比较命名接口的
+ *  字段签名，因此三处（本文件 / preload.cts / renderer global.d.ts）必须是同形结构
+ *  （同字段、同可选性）。刻意不用 alias：alias 在镜像守卫里不会展开成字段集，
+ *  漂移会变成静默的。 */
+export interface ChamberSystemMemory {
+  totalBytes: number
+  availableBytes: number
+  source: 'proc-meminfo' | 'os-freemem' | 'vm-stat'
+  capturedAt: number
+}
+
 /** Non-secret status projection: current settings + platform capability gates. */
 export interface ChamberSettingsStatus {
   settings: ChamberSettings
   supported: ChamberSettingsSupported
+  /** 本机系统内存快照（D4）：**只**随 settings-get 响应携带（采样型事实，push 不带）；
+   *  缺省 = 该平台无探测腿或本次探测失败——消费端必须把缺省读作「未知」，绝不按
+   *  0 / 100% 推断（探针的诚实语义见 system-memory.ts 头注）。 */
+  system?: ChamberSystemMemory
   /** 调试模式的实测回读（非秘密）：宿主是否真的处于可检查态。缺省 = 本次进程
    *  尚未应用过（UI 呈现「未知」，绝不按 enabled 推断）。嵌套字面量须与
    *  preload/renderer 两份镜像逐字同形（守卫见 ipc-surface-mirror 的

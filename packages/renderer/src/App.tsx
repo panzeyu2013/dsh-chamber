@@ -4,9 +4,10 @@
  * 本组件只负责数据层与 N-ctx 编排：控制面 /health 与 /api/connections 轮询；桌面 ssh 实例
  * 装载与状态投影订阅（隧道 URL 永不进 renderer）；每实例 workspace/session 聚合；本地实例
  * 自动启动、注册表远程实例自动连接。
- * N-ctx shell 挂载：local 常驻，其他来源按需挂载/空闲预热；隐藏壳不无限常驻——除 local 恒留
- * 外至多保留 RETAINED_HIDDEN_VIEWS 个，超限回收已 settle 且连续隐藏 ≥60s 的最久者
- * （retention.ts）；回收仅拆 UI 壳，实例进程/连接/后台任务不受影响，重开走冷 boot。
+ * N-ctx shell 挂载（keep-all）：local 恒留，其他来源按需挂载/空闲预热；用户意图壳 settle 后
+ * 常驻（不再有 idle 数量回收）。释放只有显式路径：删源/传输变更、boot 失败、135s 挂死、
+ * 遮罩放弃、收割让位、手动释放、硬上限/压力阀（resident-policy.ts）。释放仅拆 UI 壳，
+ * 实例进程/连接/后台任务不受影响，重开走冷 boot。
  * chamberBridge 投影发布（design 05）：轮询状态合并为 ChamberServerAggregate[] 供侧边栏消费；
  * onOpenSession 驱动 openSession 切 shell 并分发，打开终态经 reportOpenSessionOutcome 回报。
  */
@@ -128,7 +129,7 @@ import {
   sourceIdForRawInstance,
   sourceIdForTransport,
 } from './transport-source.ts'
-import {shouldRunBackgroundPhase} from './retention.ts'
+import {shouldRunBackgroundPhase} from './background-phase.ts'
 import { decideServingGate, shouldDeferBootForSource } from './source-readiness.ts'
 import { harvestSatisfied } from './baseline-harvest.ts'
 import InstanceView from './components/InstanceView.tsx'
@@ -146,6 +147,7 @@ import { useSshBridgeProbe } from './app-hooks/use-ssh-bridge-probe.ts'
 import { useNotifications } from './app-hooks/use-notifications.ts'
 import { useAbandonedViewsView, useDegradedRetriedView } from './app-hooks/use-source-ledger-views.ts'
 import { useViewScheduler } from './app-hooks/use-view-scheduler.ts'
+import { useResidentGuard } from './app-hooks/use-resident-guard.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
 /** 会话事实权威升级 ladder 的引擎实例；tick 与 reconnect/notice 执行端在
@@ -261,10 +263,9 @@ export default function App() {
     reportDeepLinkAckFailure, reportNotificationAckFailure,
   } = useDeliveryAcks()
   const remoteStatus = remotes.status
-  // 视图：'local' | '<kind>-<id>'。N-ctx 常驻语义就是保留策略（retention.ts）：local 恒留；
-  // 隐藏非 local 壳最多保留 RETAINED_HIDDEN_VIEWS 个，超限回收"已 settle + 连续隐藏 ≥60s"的
-  // 最久者（回收 = dispose shell + 卸载壳；实例进程/连接/后台任务不受影响，重开走冷 boot +
-  // entry 重放——见 reclaimView）。会话保活由实例侧承担，UI 壳不无限常驻。
+  // 视图：'local' | '<kind>-<id>'。N-ctx 常驻语义 = keep-all：local 恒留；用户意图壳一旦 settle
+  // 即常驻，释放只走显式路径（删源/失败/挂死/遮罩放弃/收割让位/手动释放/硬上限与压力阀，
+  // 见 resident-policy.ts 与 reclaimView）。实例进程/连接/后台任务不受影响，重开走冷 boot。
   // 视图对（active=选择 / painted=屏上）单一权威：host/view-store.ts。事件回调、
   // 微任务与保留/揭示守卫读 store 快照（旧的两条渲染期 ref 镜像删除）。
   const [viewStore] = useState(() => createViewStore(LOCAL_INSTANCE_ID))
@@ -275,23 +276,19 @@ export default function App() {
    * effect 在「目标首帧可用」时经 'view' 过渡键收敛。两者相等 = 稳态；不等 = 一次在途揭示（至多一个）。
    * 必须分离：View Transition 只有"新状态渲染就绪后"才开始，而冷 boot 的"新状态首帧"就是遮罩本身。
    * 驱动面（只有这些消费者读 painted，其余读选择语义的 activeView）：`InstanceView active=`、hover 卡
-   * 关闭、保留回收的"展示中"保护、`projectableCurrent` 高亮、hiddenSince 起表。
+   * 关闭、常驻释放的"展示中"保护、`projectableCurrent` 高亮、常驻阀的 lastActive 时钟。
    */
   const paintedView = view.painted
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
   // 来源生命周期账本 + 派发 + 四个 live view（预热抑制 / 收割 / 隐藏窗）：实现在
   // app-hooks/use-source-lifecycle.ts；hook 次序与内部声明次序不变。
   const {
-    sourceLedgerStoreRef, dispatchLifecycle, autoPrewarmedRef, prewarmSuppressedRef,
-    settingsTargetRef, harvestStateRef, harvestIntentRef, harvestCandidatesRef, hiddenSinceRef,
+    sourceLedgerStoreRef, dispatchLifecycle, forgetDegradedRetry, autoPrewarmedRef, prewarmSuppressedRef,
+    settingsTargetRef, harvestStateRef, harvestIntentRef, harvestCandidatesRef,
   } = useSourceLifecycle(sourceLifecyclesRef)
   // reclaimView 的 ref 镜像：定义在下方（依赖 mountedViews），而 handleShellState / onInstanceSnapshot
   // 是 [] 依赖的回调——它们只能经此拿到最新闭包（同 reclaimHiddenViewsRef 纪律）。
-  const reclaimViewRef = useRef<(id: string, reason?: 'retention' | 'harvest') => void>(() => undefined)
-  // 保留策略计时：每视图"连续隐藏"起点（ms epoch；**屏上视图无键**）。settle 完成或离开屏时置 now，
-  // 重新画上屏删除，随 mountedViews 收敛清理。previousActiveViewRef 供 paintedView 落地 effect 对比
-  // （起表/清表都按 painted）。The hidden-window ledger is a LIVE VIEW over ONE per-source object.
-  const previousActiveViewRef = useRef<string | null>(paintedView)
+  const reclaimViewRef = useRef<(id: string, reason?: 'release' | 'harvest') => void>(() => undefined)
   // chamber：每视图 shell 终态（InstanceView 经 onStateChange 上报）——活动视图 boot 失败时由 App
   // 渲染统一失败覆盖层（失败报告 + 重试 + 服务器切换）。retryTokens 递增驱动 InstanceView 重 boot。
   const [shellStates, setShellStates] = useState<Record<string, ShellState>>({})
@@ -1291,20 +1288,28 @@ export default function App() {
    * 意味着用户已点开的视图不占预热槽位。
    */
   const prewarmEligibleRef = useRef<Set<string>>(new Set())
-  // 视图调度簇（预热资格 / 收割保温 / 保留回收 / 后台相位）是命名 hook（use-view-scheduler.ts）；App 取回调用面接线。
+  // 视图调度簇（预热资格 / 收割保温 / 条件 watchdog / 后台相位）是命名 hook；App 取回调用面接线。
   const {
-    prewarmEligible, drainPrewarm, reclaimView, reclaimHiddenViews,
-    handleInstanceSettled, handleShellState, reclaimHiddenViewsRef, drainPrewarmRef,
+    prewarmEligible, drainPrewarm, reclaimView,
+    handleInstanceSettled, handleShellState, watchdogNeeded,
+    reclaimHiddenViewsRef, drainPrewarmRef,
   } = useViewScheduler({
     activeView, health, liveServerIds, managedRuntime,
     mountedViews, remoteInstances, remoteStatus, shellStates,
     setMountedViews, setRetryTokens, setShellStates, abandonedViewsRef,
-    viewStore, autoPrewarmedRef, deferredBootRef, degradedRetriedRef,
-    harvestCandidatesRef, harvestIntentRef, harvestStateRef, hiddenSinceRef,
+    viewStore, autoPrewarmedRef, forgetDegradedRetry,
+    harvestCandidatesRef, harvestIntentRef, harvestStateRef,
     intentBudgetRef, intentPriorityRef, localSettledRef,
     pendingViewRef, prewarmEligibleRef, prewarmInflightRef,
     prewarmQueueRef, prewarmSuppressedRef, reclaimViewRef, settingsTargetRef,
     viewBootStartedAtRef, MAX_PREWARMED_REMOTE_VIEWS,
+  })
+  // 常驻壳（keep-all）观察与策略：硬上限/压力阀释放、手动释放命令通道、设置面板快照发布。
+  useResidentGuard({
+    mountedViews, activeView, paintedView, viewStore,
+    pendingView: pendingViewRef, settingsTarget: settingsTargetRef,
+    shellStates, localId: LOCAL_INSTANCE_ID, autoPrewarmed: autoPrewarmedRef.current,
+    labels: serverLabels, reclaimView,
   })
 
   // 前台恢复补偿（hidden → visible）：实现在 app-hooks/use-visibility-compensation.ts（ref 注入）。
@@ -1397,25 +1402,15 @@ export default function App() {
     })
   }, [activeView, paintedView, shellStates, mountedViews, revealTick])
 
-  // **屏上视图**落地即重计隐藏窗（判据是 paintedView，不是 activeView）：离开屏的旧视图开始计时，
-  // 新屏上视图清计时；覆盖揭示落地、注册表删除回落等一切路径。持有窗内旧视图仍在屏上，不会因本
-  // effect 被计时——否则保留策略会把"用户正在看的温壳"当隐藏壳回收。
-  useEffect(() => {
-    if (previousActiveViewRef.current === paintedView) return
-    const previous = previousActiveViewRef.current
-    previousActiveViewRef.current = paintedView
-    delete hiddenSinceRef.current[paintedView]
-    if (previous !== null) hiddenSinceRef.current[previous] = Date.now()
-  }, [paintedView])
-
-  // 挂载视图的保持时钟（hiddenSince / boot 起表 / 周期回收 tick）是命名 hook；App 只注入 ref 与选择面。
+  // 挂载视图的 boot 计时 + 条件 watchdog（仅存在未 settle 挂载或待处理收割时建 20s tick；
+  // 稳态不建定时器）。隐藏壳常驻后不再有 idle 回收时钟。
   useMountedViewClocks({
-    mountedViews, deferredBootSignature, deferredBootRef, hiddenSinceRef, viewBootStartedAtRef,
-    viewStore, pendingViewRef, reclaimHiddenViews, reclaimHiddenViewsRef, drainPrewarmRef,
+    mountedViews, deferredBootSignature, deferredBootRef, viewBootStartedAtRef,
+    reclaimHiddenViewsRef, drainPrewarmRef, watchdogActive: watchdogNeeded,
   })
 
   // 温壳为收割让位：最后收割的壳留在温壳位省一次 boot，但它（autoPrewarmed + 隐藏）会占住唯一
-  // 后台槽且不被 retention 回收——新收割候选一出现就必须让位，否则后变 ready 的来源永远拿不到基线。
+  // 后台投机槽且不会被常规路径释放——新收割候选一出现就必须让位，否则后变 ready 的来源永远拿不到基线。
   useEffect(() => {
     if (!shouldRunBackgroundPhase(document.visibilityState)) return
     if (harvestCandidatesRef.current.size === 0) return

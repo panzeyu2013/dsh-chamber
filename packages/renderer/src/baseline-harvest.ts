@@ -45,8 +45,9 @@ export function harvestPending(record: HarvestRecord | undefined): boolean {
 
 /**
  * A source that EXHAUSTED its attempt budget without landing a baseline. It must not fall back to
- * ordinary warm prewarm: with one hidden shell retention never reclaims it, so no other source could
- * ever be prewarmed or harvested for the rest of the session.
+ * ordinary warm prewarm: hidden shells are no longer idle-reclaimed, so that warm shell would sit in
+ * the single background slot for the rest of the session — no other source could ever be prewarmed
+ * or harvested.
  */
 export function harvestParked(record: HarvestRecord | undefined): boolean {
   return record !== undefined && !record.satisfied && record.attempts >= HARVEST_MAX_ATTEMPTS
@@ -96,10 +97,10 @@ export function harvestParkedRecord(): HarvestRecord {
 
 /**
  * The eligible set for the single background slot: while ANY harvest candidate is pending the slot is
- * RESERVED for baseline recovery — a warm shell mounted instead would become `autoPrewarmed`, and with
- * exactly one hidden shell retention never reclaims it (`excess = 1 - RETAINED_HIDDEN_VIEWS = 0`), so
- * every remaining source would stay in the unary-fallback view. Idling the slot for one backoff window
- * is the bounded cost; warm prewarm resumes once no harvest is pending.
+ * RESERVED for baseline recovery — a warm shell mounted instead would become `autoPrewarmed` and sit
+ * in the single background slot (hidden shells are no longer idle-reclaimed), so every remaining
+ * source would stay in the unary-fallback view. Idling the slot for one backoff window is the bounded
+ * cost; warm prewarm resumes once no harvest is pending.
  */
 export function prewarmCandidates(
   harvestIds: readonly string[],
@@ -113,9 +114,9 @@ export function prewarmCandidates(
 
 /**
  * Whether a satisfied harvest shell must give up the single background slot: the kept shell is
- * `autoPrewarmed` and hidden, so retention never reclaims it (`excess = 1 - RETAINED_HIDDEN_VIEWS = 0`)
- * and a source that becomes ready later would never be harvested. Yield as soon as any other source
- * still needs a baseline.
+ * `autoPrewarmed` and hidden, and hidden shells are no longer idle-reclaimed, so it would hold the
+ * single slot and a source that becomes ready later would never be harvested. Yield as soon as any
+ * other source still needs a baseline.
  */
 export function shouldReclaimHarvestedShell(
   candidates: ReadonlySet<string>,

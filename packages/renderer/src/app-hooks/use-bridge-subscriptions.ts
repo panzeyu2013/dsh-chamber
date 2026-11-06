@@ -241,7 +241,7 @@ export interface BridgeSubscriptionsDeps {
   prewarmQueueRef: { current: string[] }
   prewarmSuppressedRef: { current: SetLedgerView }
   readyAggregateSourcesRef: { current: Set<string> }
-  reclaimViewRef: { current: (id: string, reason?: 'retention' | 'harvest') => void }
+  reclaimViewRef: { current: (id: string, reason?: 'release' | 'harvest') => void }
   remotesStore: RemotesStore
   isRosterSettled: () => boolean
   echoStore: EchoStore
@@ -337,7 +337,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       settingsTargetRef.current = sourceId
       if (sourceId === undefined) return
       if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      // 因闲置被回收而被抑制预热的来源，被面板显式选中 = 再次有使用意图。
+      // 因显式/策略释放而被抑制预热的来源，被面板显式选中 = 再次有使用意图。
       prewarmSuppressedRef.current.delete(sourceId)
       autoPrewarmedRef.current.delete(sourceId)
       setMountedViews(prev => (prev.includes(sourceId) ? prev : [...prev, sourceId]))

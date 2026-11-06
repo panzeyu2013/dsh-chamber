@@ -80,12 +80,12 @@ test('a source that spent its budget without a baseline is parked, never warm-pr
 })
 
 test('eligibility reserves the single slot for baseline recovery while any harvest is pending', () => {
-  // A warm shell mounted while a harvest is pending would become autoPrewarmed,
-  // and with exactly one hidden shell retention never reclaims it, so
-  // `remaining` would be 0 for the rest of the session and every remaining
-  // source would stay degraded — one failed source blocking all the others.
-  // So: harvest ids only, and ALL of them, so a due
-  // candidate behind a not-due head is reachable.
+  // A warm shell mounted while a harvest is pending would become autoPrewarmed
+  // and sit in the single background slot (hidden shells are no longer
+  // idle-reclaimed), so `remaining` would be 0 for the rest of the session and
+  // every remaining source would stay degraded — one failed source blocking all
+  // the others. So: harvest ids only, and ALL of them, so a due candidate behind
+  // a not-due head is reachable.
   assert.deepEqual(prewarmCandidates(['a'], ['b'], 1), ['a'])
   assert.deepEqual(prewarmCandidates(['a', 'b', 'c'], ['d'], 1), ['a', 'b', 'c'])
   assert.deepEqual(prewarmCandidates([], ['b'], 1), ['b'], 'warm prewarm resumes once no harvest is pending')
@@ -180,8 +180,8 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
     'the boot generation must reach the plugin ctx for the producer fence')
   assert.match(schedulerSource, /harvestStateRef\.current\[id\] = harvestParkedRecord\(\)/,
     'the harvest path must park the abandoned source')
-  assert.match(schedulerSource, /reclaimView\(id, wasHarvest \? 'harvest' : 'retention'\)/,
-    'the warm/user path must reclaim with suppression')
+  assert.match(schedulerSource, /reclaimView\(id, wasHarvest \? 'harvest' : 'release'\)/,
+    'the warm/user path must release with suppression')
   assert.match(schedulerSource, /markAbandonedShellFailed\(id\)/,
     'an unreclaimable (active/pending) abandoned shell must surface the failure overlay')
   assert.match(schedulerSource, /viewBootStartedAtRef\.current\[id\] = Date\.now\(\)/,
@@ -191,11 +191,11 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
     /if \(!state\.booted && state\.error === null\) viewBootStartedAtRef\.current\[instanceId\] = Date\.now\(\)/,
     're-entering booting must re-arm the window')
   // 回收一并作废，否则同一 ready 世代内新挂载永远不会再自动重挂（只剩手动重试）。
-  // 这条规则由容器承接——degradedRetriedRef 是容器视图，因此这次清位会
-  // 派发容器的 retryForgotten；纯规则与行为覆盖在
-  // test/lifecycle/degraded-retry-decision.test.ts（容器的真值表）。
-  // 这里仍钉 App 侧接线：必须真的清掉**这一个 id**，而不是整体替换。
-  assert.match(schedulerSource, /degradedRetriedRef\.current\[id\] = false/,
+  // 这条规则由容器承接——degradedRetried 是容器状态，因此这次清位必须派发容器的
+  // retryForgotten（由 App 注入的 forgetDegradedRetry 提供，调度器不再直接写视图）；
+  // 纯规则与行为覆盖在 test/lifecycle/degraded-retry-decision.test.ts（容器的真值表）。
+  // 这里仍钉调度器侧接线：必须真的清掉**这一个 id**，而不是整体替换。
+  assert.match(schedulerSource, /forgetDegradedRetry\(id\)/,
     'reclaiming the view must forget the epoch mark so a fresh mount can auto-retry again')
 })
 

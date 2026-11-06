@@ -43,7 +43,7 @@ import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core
 import type { HealthResponse } from '../api.ts'
 import type { SourceOwnershipRegistry } from '../deep-link-activation.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
-import { shouldRunBackgroundPhase } from '../retention.ts'
+import { shouldRunBackgroundPhase } from '../background-phase.ts'
 import { reconnectInstanceConnection } from '../shell.ts'
 import { errorMessage } from '../status.ts'
 import { instanceConnected, sourceIdForInstance } from '../transport-source.ts'

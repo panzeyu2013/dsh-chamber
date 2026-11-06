@@ -428,6 +428,58 @@ test('S-E settings-set：组合补丁里更早的叶失败 → 绝不触碰调�
     '「未知」不得被一次无关失败的回滚物化');
 });
 
+// ---------------------------------------------------------------------------
+// D4：settings-get 的系统内存快照面（采样事实只挂 GET；set/push 不带）。
+// ---------------------------------------------------------------------------
+
+interface SystemMemoryView {
+  totalBytes: number
+  availableBytes: number
+  source: string
+  capturedAt: number
+}
+
+/** GET 应答里的快照（缺省 = 该平台无探测腿/本次探测失败）。 */
+function systemOf(result: unknown): SystemMemoryView | undefined {
+  return (result as { system?: SystemMemoryView }).system;
+}
+
+test('D4 settings-get: 快照只随 GET 应答携带（本平台有探测腿 → 形状自洽；未知平台 → 缺省）', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async () => {},
+    setLoginItem: async () => ({ ok: true as const }),
+  });
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  const system = systemOf(get);
+  // 平台分腿（system-memory.ts 头注的三条只读臂）：linux 读 /proc、win32 走 os、
+  // darwin 起 vm_stat 子进程（失败按设计读作 null）；其余平台必须缺省（绝不伪造 0）。
+  const expectedSource: string | null = process.platform === 'linux'
+    ? 'proc-meminfo'
+    : process.platform === 'darwin'
+      ? 'vm-stat'
+      : process.platform === 'win32' ? 'os-freemem' : null;
+  if (system !== undefined) {
+    assert.notEqual(expectedSource, null, '没有探测腿的平台不得返回伪造快照');
+    assert.equal(system.source, expectedSource);
+    assert.ok(Number.isSafeInteger(system.totalBytes) && system.totalBytes > 0, 'totalBytes 必须为正整数');
+    assert.ok(Number.isSafeInteger(system.availableBytes) && system.availableBytes >= 0, 'availableBytes 必须为非负整数');
+    assert.ok(system.availableBytes <= system.totalBytes, 'available 不得超过 total（探针已 clamp）');
+    assert.ok(Number.isSafeInteger(system.capturedAt) && system.capturedAt > 0, 'capturedAt 是采样时刻');
+    assert.deepEqual(systemOf(await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null)), system, '模块级缓存：同一快照（不重复采样）');
+  } else {
+    // linux/win32 的探测是进程内确定性事实（一次同步/异步只读），缺省即接线断了；
+    // darwin 的 vm_stat 子进程失败按设计读作「未知」，允许缺省。
+    assert.ok(process.platform === 'darwin' || expectedSource === null,
+      'linux/win32 上 GET 必须携带本机内存快照（resident 阀门的输入）');
+  }
+  // SET 应答与 settings-changed push 都不携带采样事实（可选字段，避免每帧采样/推送）。
+  const set = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { keepAwake: true } });
+  assert.equal('system' in (set as Record<string, unknown>), false, 'SET 应答不得携带系统内存快照');
+  const pushed = harness.pushes.filter(push => push.channel === IPC_CHANNELS.SETTINGS_CHANGED);
+  assert.equal(pushed.length, 1, '成功保存推一次 settings-changed');
+  assert.equal('system' in (pushed[0]!.payload as Record<string, unknown>), false, 'push 载荷不得携带系统内存快照');
+});
+
 test('normalizeSettings: defaults for null / non-object', () => {
   assert.deepEqual(normalizeSettings(null), DEFAULT_CHAMBER_SETTINGS);
   assert.deepEqual(normalizeSettings('nope'), DEFAULT_CHAMBER_SETTINGS);

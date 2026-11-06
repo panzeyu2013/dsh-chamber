@@ -1,0 +1,86 @@
+/* 「性能与内存」只读组的几何：常驻来源表 + 两条内存读数。
+   沿用设置壳的词汇（12px/18px 辅助字、0.5px hairline、--dsw-alias-* token）；
+   不新增控件原语——释放动作是官方 Button，表格本身只承载只读事实。 */
+
+.residentTableWrap {
+  overflow-x: auto;
+}
+
+.residentTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.residentTable th,
+.residentTable td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.residentTable thead th {
+  font-weight: 600;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.residentTable tbody tr:last-child th,
+.residentTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.residentSourceCell {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.residentActionCell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.memoryTitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.memoryGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.memoryRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.memoryLabel {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.memoryValue {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.memoryNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}

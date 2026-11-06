@@ -455,7 +455,7 @@
   子 agent 存活时父回合已结束（running=false）、子 agent 仍在工作——没有这条
   计数，完成蓝点会在子 agent 干活时提前亮起。
 - **无壳来源的判定侧读回退（facts-only provenance，2026-12）**：没有任何官方 ctx 上报的
-  来源（被 retention 回收、或从未 boot）没有壳行可读，但 facts 通道与挂载无关（P2a 镜像 /
+  来源（被释放、或从未 boot）没有壳行可读，但 facts 通道与挂载无关（P2a 镜像 /
   P2b 观察者，§4.2）。App 在**两个判定读取点**（修正臂步进与通知 reconcile 的 shell 输入）
   用纯投影 `packages/renderer/src/virtual-runtime-report.ts` 把 `SessionFactsSnapshot`
   投影成壳上报的结构子集：`{ sessions: { running 必填, pending?（仅 approval/question）,
@@ -840,8 +840,8 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `body[data-ds-dark-theme]`（token 调色板）、`--dsh-content-font-size`、
   一个 `theme-color` meta——且 `dispose()` **无条件回收**它们。chamber 把 N 个
   实例壳挂同一份文档，每个挂载视图各跑自己的 ui-layout fiber ⇒ N 个 presenter 争夺
-  同一组全局量：隐藏视图（空闲预热）的 apply 重绘可见视图，其 teardown（retention
-  回收）**抹掉可见视图的投影**，把 dsh 浅色默认调色板（`design-platform.css` 的
+  同一组全局量：隐藏视图（空闲预热）的 apply 重绘可见视图，其 teardown（UI 壳
+  释放）**抹掉可见视图的投影**，把 dsh 浅色默认调色板（`design-platform.css` 的
   `body` 块，无属性即浅色）与 chamber 壳的 `:root{color-scheme}` 兜底拼在一起
   ——「浅色界面 + 深色原生 checkbox」到某次 theme/change 或重挂载才自愈（用户观察：
   点服务器/切主题后刷新才恢复）。
@@ -1345,7 +1345,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   + 渲染器隐藏壳门（design 05 §4）；设置壳按来源重放的 `contentFadeIn` 同批退役。类钩子 `css.wide`/`css.railIn`
   与 `everWide` 记账 ref 随动画同批删除（CSS Modules 对未定义的类返回 `undefined` ⇒ 幽灵引用；锁改为「不再出现」）。同一「切源后座席/
   字标空白」症状另有根因，本段只覆盖**入场动画特有**的失绘风险；当前根因（文档级重复 SVG 资源 id ×
-  隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.2。
+  隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.4。
 
 - **行位移动效（自持移植上游 `AnimatedRows`，与入场退役不矛盾）**：浏览树的行增删/换位由
   `src/client/rows/animated-rows.tsx`（上游 `dsh-client-ui-primitives/src/AnimatedRows.tsx` 逐字移植，含来源头注；

@@ -294,7 +294,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   横幅）由 `packages/renderer/test/wiring/session-authority-wiring.test.ts` 钉住。**取舍**：无法
   验证时保留断言等于陈述一个没有证据的事实，而清位 + 可见提示是「不知道」的诚实表达，且恢复路径
   无条件幂等；已知残余 = 宿主其实仍在跑、只是读路径坏掉时用户会暂时看不到运行环（由横幅的
-  「重新加载」收口；「重新连接」只对仍持有壳的来源有效——已回收来源的该出口是 no-op，见 STATUS ⑭）。
+  「重新加载」收口；「重新连接」只对仍持有壳的来源有效——已释放来源的该出口是 no-op，见 STATUS ⑭）。
 - **会话投影事实跨代际保留（标签 + 稀疏日程标记；2026-10 实机修复）**：连接代际变化（陈旧重连臂 / 权威 ladder / 宿主侧断开 /
   崩溃重载）都会让 pinned 客户端执行 `handleConnected()` 并 `clear()` 每个会话的投影 store；在
   `session/list` 回包重放 `title` 之前，生产端行缺 `title`，官方标签阶梯退到 cwd basename（实测
@@ -302,7 +302,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   兜底（`packages/renderer/src/aggregate-refresh.ts` 的 `retainSessionLabels`）：非空 incoming
   `title` 恒胜、无前值或前值无 title 则原样、行消失即回收；两处提交（推送提交
   `app-hooks/use-bridge-subscriptions.ts` + unary 提交 `app-hooks/use-aggregate-refresh.ts`）共用，
-  既覆盖代际清空窗口，也覆盖 unary 兜底行未带 title 的弱标签（已回收来源没有 producer 会来恢复）。
+  既覆盖代际清空窗口，也覆盖 unary 兜底行未带 title 的弱标签（已释放/未挂载来源没有 producer 会来恢复）。
   只丢了标签的降级推送与 current 逐字节相同，被签名去重门整条吃掉（不重渲染）；其它字段同时缺席时仍会提交一次
   重渲染，但标签保持正确。**同瞬时的 schedule 标记**：投影 store 清空会同时丢 `hasActiveSchedule`，该稀疏标记随同一次
   「title 缺席」一并携带——真正的 schedule 结束必带 title（命中「新 title 恒胜」的早退），因此绝不会被错保。**硬边界
@@ -313,8 +313,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   隐藏唤醒），治不了根；② 改 vendor session controller 不清 store——不在本仓 fork 面，须走 vendor 补丁/
   注册表/deviation 流程，面远大于收益；③ 只在 UI 行内记名——状态散在视图层，且搜索/待办/悬浮卡/
   归档管理器同吃一份投射；④ producer 侧记名（`retainGoalFacts` 式）——能省掉一次推送计算，但只覆盖已挂载来源，
-  已回收/未推送来源没有 producer，unary 弱标签会永久停留（「标签是唯一差异」时的零提交已由 App 层内容签名门等价拿回）。
-- **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：首启仅 local 挂载 + 1 个不轮转预热槽、被回收来源点击前禁预热 ⇒ N-1 个 ready 远程源稳态停留在 unary 兜底视图（合成 cwd 分组 + 空归档集），自愈臂均要求 `mounted===true`（至少推过一次快照）。收割把这类来源在同一后台预热槽挂一次，首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）后即回收，转入"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。纪律：收割候选优先于普通预热且不受"回收后禁预热"抑制；每源尝试上限 2 次、失败退避 120s、挂载后 `BOOT_TIMEOUT_MS+15s` 无推送且壳已 settle 判失败并释放槽位（截止值由 `boot-budget.ts` 的 boot 预算推导且高于它）；`HARVEST_ABANDON_MS`（截止值 + boot 预算）为绝对放弃上限：壳始终不 settle（挂死的 loader/fetch）时回收并停用该源（`harvestParked`）。语义边界：回收只拆**已注册**壳；从未注册的 boot 只能自行 settle 时拆除（页面生命周期内可残留），同 id 后续挂载不受影响（shell.ts 对"上一代 boot"的等待有 boot 预算上限）。同一上限也独立看管"在途挂载"（按挂载时刻、仅未 settle 的挂载，不依赖收割意图；已 settle 者仍走截止臂）。同 id boot 尾从不提前释放（generation 记录持有者，提前释放会致同号注册覆盖）；改由 shell.ts 对"等待上一代 boot"设绝对上限（前代起始 + 两个 boot 预算，后继共享同一截止）；producer 注册表按代际栅栏（`chamberBootGeneration` 经 ctx 注入），迟到的老 boot 注册作废，teardown 不能清空健康后继通道。活动/待开视图不可回收——标记失败，让既有失败覆盖层与「重试」出现；在途壳不计入 retention 隐藏壳数。存在任一收割候选时，候选集独占后台槽（`prewarmCandidates` 只返回收割候选且返回全部候选，含排在退避候选之后的"退避已满"者）；尝试耗尽且从未拿到基线的源（`harvestParked`）不得退回普通预热；托管 dsh 终态停机或瞬态 starting/restarting 的 gateway 源（投影事实 `managedRuntimeUnusable`）不预热/不收割（boot 必然 503）；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时账本同源收敛。稳态 ≤1 个后台壳（含预热）。**收割独立预算线**：温壳使普通预热槽位预算恒为 0（retention 只保 1 个隐藏壳），收割壳不受其约束；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。**代价与已知取舍**：首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链，最坏受 60s boot 预算约束）；最后收割的壳保留为温壳（不额外付预热 boot，挂载期状态事实 pending/完成点保持在线），但遇到新收割候选必须**让位**（`shouldReclaimHarvestedShell`）——否则它作为 `autoPrewarmed` 占住唯一槽位（`remaining` 恒 0）。
+  已释放/未推送来源没有 producer，unary 弱标签会永久停留（「标签是唯一差异」时的零提交已由 App 层内容签名门等价拿回）。
+- **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：首启仅 local 挂载 + 1 个不轮转预热槽、被释放来源点击前禁预热 ⇒ N-1 个 ready 远程源稳态停留在 unary 兜底视图（合成 cwd 分组 + 空归档集），自愈臂均要求 `mounted===true`（至少推过一次快照）。收割把这类来源在同一后台预热槽挂一次，首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）后即释放，转入「已释放来源」态（保留权威聚合，会话行由 30s unary merge 刷新）。纪律：收割候选优先于普通预热且不受"回收后禁预热"抑制；每源尝试上限 2 次、失败退避 120s、挂载后 `BOOT_TIMEOUT_MS+15s` 无推送且壳已 settle 判失败并释放槽位（截止值由 `boot-budget.ts` 的 boot 预算推导且高于它）；`HARVEST_ABANDON_MS`（截止值 + boot 预算）为绝对放弃上限：壳始终不 settle（挂死的 loader/fetch）时回收并停用该源（`harvestParked`）。语义边界：回收只拆**已注册**壳；从未注册的 boot 只能自行 settle 时拆除（页面生命周期内可残留），同 id 后续挂载不受影响（shell.ts 对"上一代 boot"的等待有 boot 预算上限）。同一上限也独立看管"在途挂载"（按挂载时刻、仅未 settle 的挂载，不依赖收割意图；已 settle 者仍走截止臂）。同 id boot 尾从不提前释放（generation 记录持有者，提前释放会致同号注册覆盖）；改由 shell.ts 对"等待上一代 boot"设绝对上限（前代起始 + 两个 boot 预算，后继共享同一截止）；producer 注册表按代际栅栏（`chamberBootGeneration` 经 ctx 注入），迟到的老 boot 注册作废，teardown 不能清空健康后继通道。活动/待开视图不可回收——标记失败，让既有失败覆盖层与「重试」出现；在途壳不计入后台槽数。存在任一收割候选时，候选集独占后台槽（`prewarmCandidates` 只返回收割候选且返回全部候选，含排在退避候选之后的"退避已满"者）；尝试耗尽且从未拿到基线的源（`harvestParked`）不得退回普通预热；托管 dsh 终态停机或瞬态 starting/restarting 的 gateway 源（投影事实 `managedRuntimeUnusable`）不预热/不收割（boot 必然 503）；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时账本同源收敛。稳态 ≤1 个后台壳（含预热）。**收割独立预算线**：存在收割候选时后台槽按收割候选独占（普通预热让位），收割壳不受普通预热预算约束；代价是最坏多一个后台壳（收割壳 + 一个普通预热壳）在收割窗口内共存。**代价与已知取舍**：首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链，最坏受 60s boot 预算约束）；最后收割的壳保留为温壳（不额外付预热 boot，挂载期状态事实 pending/完成点保持在线），但遇到新收割候选必须**让位**（`shouldReclaimHarvestedShell`）——否则它作为 `autoPrewarmed` 占住唯一后台槽（普通预热的 `remaining` 恒 0）。
 - **未挂载来源的 unary 兜底表达不了"空工作区"**（修订，§2.2.1）：`fetchInstanceSnapshot` 只调 `session.list`，工作区分组由会话 cwd 反推（`__cwd__:` 合成行），刚建好、无会话的工作区在结构上不可见；已推送来源更彻底：聚合保留 pushed 工作区集（mounted merge），`planAggregateRefreshes` 只刷新"刚 ready"或"从未推送过"的来源，对它连 unary 轮询都不再发生。根因是**读通道缺失**：权威工作区集合只存在于挂载壳的 `workspace/follow` 基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 补法是用户那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
 - **本修订的代码落点**：`packages/dsh-chamber-client-core/src/open-intent.ts`（意图槽 + 投影/揭示纯规则）、`packages/dsh-chamber-client-core/src/aggregate-store.ts`（桥接单例 + 回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、`packages/dsh-chamber-client-core/src/workspace-echo.ts`（回声账本 + union/去重/锚点插入纯规则）、`packages/dsh-chamber-client-core/src/workspace-placement.ts`（**pre-create 位置意图**账本：只搬权威行、只搬列表头部那一行、退场路径 + TTL；generic workspace create 使用，Git checkout 不进入）、`packages/renderer/src/host/servers.ts`（同一汇合点串 `withWorkspacePlacements`，投影缓存键覆盖该账本）、`packages/dsh-chamber-client-core/src/workspace-mutations.ts`（**唯一事实出口**：create/delete/rename 的 wire 调用与回声事实 第二入口收口）、`.../src/client/early-open.ts`（boot 期早开臂）、`.../src/client/index.ts`（每个 ctx 挂一次早开臂）、`.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git snapshot/create/enter/remove；不经 workspace echo/placement 链）、`packages/renderer/src/App.tsx`（arm/release、回声账本与退休含锚点、投影门、揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、`packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
 
@@ -498,24 +498,96 @@ export const chamberBridge: {
 
 ## 4. N-ctx 多实例与视图切换
 
-- **视图保留策略（chamber retention）**：除 local 恒留外，隐藏壳最多保留
-  `RETAINED_HIDDEN_VIEWS=1` 个（`src/retention.ts`），超限回收"已 settle +
-  连续隐藏 ≥60s"的最久者；回收 = dispose shell + 卸载 UI 壳（App 层
-  reclaimView，与注册表删除同原语），实例进程/隧道/后台任务不受影响，重开走
-  冷 boot + entry 重放；被回收源的侧栏聚合落到 30s unary 兜底（§2.3）。被回收只撤掉有壳路径的
-  runtime-facts；完成蓝点/通知边沿不依赖挂载——无壳（facts-only provenance）来源由判定侧读回退走
-  facts 通道（design 06 §4.1/§4.2、design 19 §3.2；预热/可见性门控与偏差登记见 STATUS.md 与
-  `scripts/perf/README.md`）。
+### 4.1 N-ctx 壳常驻（resident shells，v1.1 策略）
+
+- **策略 = keep-all（用户意图壳常驻）**：任何被用户打开过的来源壳（`mountedViews` 中的非 local
+  视图）在页面生命周期内常驻，**没有常规空闲退役**——旧「隐藏壳最多保留 1 个 + 连续隐藏 ≥60s
+  超限回收」的 chamber retention 机制整体删除（`RETAINED_HIDDEN_VIEWS`/`VIEW_RECLAIM_GRACE_MS`/
+  `VIEW_RECLAIM_TICK_MS`/`decideReclaimCandidates` 均不存在）。local 恒留。系统投机壳（空闲预热 /
+  首屏基线收割）仍受 **≤1 个后台槽**约束，不与用户意图壳混算。
+- **状态模型（每壳一个，页面级投影）**：`active`（选择集合中的活动视图）/ `resident`（已 settle
+  的后台常驻壳）/ `booting`（挂载中、未 settle）/ `failed`（boot 失败，失败覆盖层持有，壳已释放）/
+  `released`（壳已释放、视图已卸载，来源仍在注册表）。状态由渲染端从既有事实投影（`viewStore` 的
+  active/painted、`shellStates` 的 settled/error、挂载集合），**单一快照经页面级
+  `packages/dsh-chamber-client-core/src/resident-store.ts#residentBridge` 发布**（发布者 = 常驻阀
+  `packages/renderer/src/app-hooks/use-resident-guard.ts#useResidentGuard`，投影由零依赖纯模块
+  `packages/renderer/src/resident-snapshot.ts#buildResidentSnapshot` 构建；内存 store、无 wire、不落盘；
+  panel 契约见 design 15 §D5）。快照 `sources` = 挂载壳（挂载序，local 在列）+ 已释放但仍注册的来源
+  （`state === 'released'` 追加在末尾）——手动/自动释放后该行**转为「已释放」而不是消失**。
+- **唯一自动退役 = 硬上限 + 平台化内存压力阀**：硬上限
+  `packages/renderer/src/resident-policy.ts#RESIDENT_HARD_CAP`（=12），只在挂载数超过上限时由纯函数
+  `packages/renderer/src/resident-policy.ts#pickHardCapRelease` 选一个可释放壳（local 计入挂载数、但不在可释放池；先自动预热壳，再按最近活动时间 LRU）；v1.1 压力阀在文档可见且
+  挂载壳 >1（local 计入）时按 30s 采样整机内存（`packages/desktop/system-memory.ts#readSystemMemory` →
+  `settings.get()` 的只读 `system` 快照），按可用比分类（`packages/renderer/src/resident-policy.ts#classifyPressure`：**按档位**
+  连续 2 次 <15% 才 `constrained`、**按档位**连续 2 次 <8% 才 `critical`；档位交替（一次 12% 后一次 7%）
+  重置计数，单次瞬时低水位不释放全部壳；探针失败 = unsupported，不猜测），释放由
+  `packages/renderer/src/resident-policy.ts#pickPressureReleases` 选择——`constrained` 保留至多 1 个最近使用的常驻壳，`critical` 释放全部
+  可释放壳；**一次只释放一个（250ms 错峰）**，绝不与 View Transition / 切换同拍。
+- **释放路径全表**（release 一律走 App 唯一拆除入口，与注册表删除同原语）：
+
+  | 路径 | 触发 | 语义 |
+  |---|---|---|
+  | 来源退役 | 注册表删除 / `kind·host·user·sshPort·remotePort` 变更（权威 `retiredIds`） | 视图生命周期 = 注册代生命周期（`packages/renderer/src/shell.ts#disposeInstanceShell`） |
+  | boot 失败 | shell settle 为失败 | entry dispose（shell 侧拆除），失败覆盖层接管视图（视图不卸载） |
+  | 135s 挂死 | 未 settle 挂载超过 `HARVEST_ABANDON_MS` | 活动/待开 → 标记失败；隐藏 → 释放 |
+  | 遮罩放弃 | 遮罩「切换来源」落地后 | 释放被放弃视图（`reclaimView` 拒绝活动/待开） |
+  | 收割让位 | 最后收割的温壳遇到新收割候选 | 让出后台槽（`packages/renderer/src/baseline-harvest.ts#shouldReclaimHarvestedShell`） |
+  | 手动释放 | 设置 → 通用「性能与内存」表内「释放 UI」 | 用户控制面，写抑制；见 design 15 §D5 |
+  | 硬上限 / 压力阀 | 自动 | 纯函数选择（见上条）；不可释放者由保护规则跳过 |
+  释放 = dispose shell + 卸载 UI 壳，实例进程/隧道/后台任务不受影响；重开走冷 boot + entry 重放。
+  被释放源的侧栏聚合落到 30s unary 兜底（§2.3）；完成蓝点/通知边沿不依赖挂载——无壳（facts-only
+  provenance）来源由判定侧读回退走 facts 通道（design 06 §4.1/§4.2、design 19 §3.2）。
+- **抑制语义**：release 写 `prewarmSuppressed`（与旧回收同义）——后台预热不得立刻重 boot；用户选中
+  该来源、来源从注册表删除、或设置面板把它设为目标时清除。手动释放不写失败态、不写会话数据。
+- **条件 watchdog（稳态无 20s tick）**：135s 放弃臂与收割截止/放弃只在一个条件成立时武装——存在未
+  settle 的挂载壳，或存在待处理的收割意图（调度 hook 的 `watchdogNeeded`）；否则不创建 20s interval
+  （前台相位门仍由 `packages/renderer/src/background-phase.ts#shouldRunBackgroundPhase` 承担）。
+  压力阀的 30s 采样是**唯一**可能常驻的周期任务，只在「文档可见且挂载壳 >1（local 计入）」时武装；
+  **不新增 IPC 通道**（读 30s TTL 的 `settings.get` 缓存快照）。
+- **平台矩阵（v1.1 压力阀）**：Linux `/proc/meminfo` 的 `MemAvailable/MemTotal`；Windows
+  `os.freemem()/os.totalmem()`；macOS `vm_stat` 派生
+  `(free+inactive+speculative+purgeable)×pageSize` 对 `os.totalmem()`；其余平台或任一探针失败 =
+  **unsupported**（无阀门，只走硬上限），绝不把 0 或 100% 当事实。快照两 flavor 同源（Electron main
+  与 Swift sidecar 共用同一 Node 模块），30s TTL + 单飞；`capturedAt` 是采样时刻，采样不是实时读数。
+- **可见性契约（内存）**：**每壳字节不可得**——N 个壳共享同一个 renderer JS 堆与渲染进程，
+  Chromium/WKWebView 都不提供按壳归属的堆读数（单 renderer 架构的已知取舍，不是待修缺陷）。可得的是
+  页面级事实（`residentBridge` 快照：状态/隐藏时长/DOM 节点数/后台槽归属/设置面目标）与整机系统内存
+  （`settings.get` 的可选 `system`），由设置→通用「性能与内存」只读组呈现（design 15 §D5）。
+- **性能预算**：N=5 稳态 = **无 20s 回收 tick**（条件 watchdog 只在未 settle/待收割时武装；压力阀
+  30s 采样是 >1 挂载时的唯一周期任务）、**零新 IPC 通道**（resident 快照走页面级内存 store）；
+  `settings.get` 只在压力阀武装时按 30s TTL 缓存采样、面板打开时读一次；**零新渲染**（面板关闭时不渲染
+  额外 UI；快照发布不触发框架重渲染，除非面板订阅）、**DOM 计数只在面板订阅时采集**（`residentBridge`
+  的订阅计数决定是否估读各壳子树的节点数；面板打开时 `requestRefresh` 补一帧完整快照）、**每次相关提交
+  只发布一次**（单一 publish effect）。释放错峰（250ms）避免 teardown 长任务与帧抖动。面板打开期间另有
+  一个 1s 显示时钟（design 15 D5），只重算隐藏时长的格式化，不读任何数据面。
+- **不变量**：① local 恒留、永不被自动释放；② active/painted/pending/settings-target/booting 壳永不被
+  自动释放；③ 最近输入（`packages/renderer/src/resident-policy.ts#INPUT_GRACE_MS` = 10min）内的壳不被硬上限/压力阀释放；④ 释放只走唯一拆除
+  入口（dispose shell 撤 producer，随后清插件诊断与降级自愈事实）；⑤ 释放不改变来源注册表、不碰数据面键空间（会话事实
+  仍由 producer/30s unary 收敛）。
+- **已知取舍**：① 设置面板后台挂载的源在面板关闭后成为普通常驻壳（面板 hold 只保证打开期间不被释放，
+  之后不再自动释放）；② `critical` 压力下释放可能丢掉该壳内未提交的草稿/未保存表单（活动/屏上壳永不
+  在候选内，但后台壳的编辑态无法在释放前保存）；③ 系统内存是 30s 采样，critical 释放可能滞后一个
+  窗口——宁滞后不误杀。
+- **Rejected alternatives**：① 保留旧「1 槽 + 60s 超限回收」——用户已可感知的温壳被拆，与 keep-all
+  目标直接冲突；② 完整策略引擎/模式档（per-source pin / aggressive-conservative 档）——多一个需要实测
+  校准的旋钮，而硬上限 + 压力阀已覆盖内存风险；③ 长空闲丢弃（如 30min 未活动即拆）——与「用户意图壳
+  常驻」冲突，且无法与输入保护区分；④ 现在做侧边栏单实例化/每来源原生视图——见 §9 进程隔离；⑤ 每壳
+  字节内存读数——架构不提供（见可见性契约）；⑥ 进程/视图隔离（`WebContentsView` / 独立 WKWebView）——
+  见 §9；⑦ 把可配置档位（N/宽限/阈值）暴露为设置项——只读组 + 固定策略，避免把未实测定标的数字变成
+  用户契约；实测需要时再开（TODO D§4）。
+
+### 4.2 多实例挂载、boot 串行与切换（既有契约）
+
 - N 个 AppWebEntry（共享一份静态模块表，v1 允许各自创建）；每来源一个 shell，hide/show
   切换，会话保活。**视图生命周期 = 注册表来源代生命周期**：来源删除，或
   `kind/host/user/sshPort/remotePort` 任一传输身份字段变化，都通过权威 `retiredIds` 同步
   退役旧视图并 dispose shell（`disposeInstanceShell`，shell.ts）；label 编辑不触碰运行时。
   `serviceName`/`remoteDshHome` 编辑虽不轮换 renderer 的来源 proof、也不退役 shell，却属于
   live transport + exec generation 字段：必须按 §7.6 撤销旧 transport/exec 工作、清理子进程
-  并隔离迟到结果。连接失败/手动断开只是瞬时事实（投影为图标/徽标），不回收视图——设置页卡片
+  并隔离迟到结果。连接失败/手动断开只是瞬时事实（投影为图标/徽标），不释放视图——设置页卡片
   与侧边栏分组都锚定注册表，视图若随瞬时状态消失会造成三面不匹配（侧边栏分组头仍可激活一个
-  立即被回收的视图)。boot 排队/在途时被删除的实例在 settle 时拆掉新 entry
-  （cancelledBoots，绝不遗留僵尸 ctx）；被回收的视图若是当前视图则回落到 local（常驻）。
+  立即被释放的视图)。boot 排队/在途时被删除的实例在 settle 时拆掉新 entry
+  （cancelledBoots，绝不遗留僵尸 ctx）；被退役的视图若是当前视图则回落到 local（常驻）。
   插件图诊断同样受 boot generation 门控：已取消/已被重试取代的旧 boot 即使迟到完成 graph
   请求，也不能覆盖新一代的诊断。
 - **boot 串行与 teardown 纪律**：页面级模块物化仍由全局 boot
@@ -598,7 +670,7 @@ export const chamberBridge: {
   方案（同样无闪烁）（styles.css `.instance-view.instance-hidden`）。**追加纪律
   （「看不到但能点」的空白图标）**：CSS 动画/过渡只在子树被渲染时推进，隐藏壳里创建的入场动画
   被钉在首帧（`opacity: 0`）——元素仍可命中、除重挂载外不自愈（WKWebView 实测见 STATUS）。**更正**：动画退役后同一症状仍复现，当前根因（文档级重复 SVG 资源 id × 隐藏壳丢绘）与本条纪律的
-  关系见 §4.2；本段只覆盖入场动画特有的风险。故
+  关系见 §4.4；本段只覆盖入场动画特有的风险。故
   隐藏壳内**不得创建任何动画/过渡**（`packages/renderer/src/styles.css` 的
   `.instance-hidden/.instance-pending .instance-shell *` 门)，必要内容不得依赖入场动画才可见
   （侧栏/设置壳已整组退役，源文本锁在 `dsh-chamber-client-ui-sidebar/test/visual-lock/`）。
@@ -654,7 +726,7 @@ export const chamberBridge: {
   「实例会话导航服务不可用」；两服务就绪但会话始终未列出 →
   「等待超时」）。终态失败文案经 `reportOpenSessionOutcome` 回报侧边栏并在
   目标会话行内呈现（§2.2），不再 console-only——fail-fast 会让跨服务器
-  冷壳/回收重 boot 后的首次会话点击在视图已切换后瞬间失败，用户落在目标服务器
+  冷壳/释放后重 boot 的首次会话点击在视图已切换后瞬间失败，用户落在目标服务器
   UI 而未选中会话（呈现为该 workspace 的新对话输入框）。
 - **每 entry Context 私有注入**：`AppWebEntry` 提供 `configureContext(ctx)` seam；shell.ts
   创建 entry 时用闭包把该视图自己的 `chamberInstanceId`、`chamberBasePath` 与主进程签发的
@@ -676,7 +748,7 @@ export const chamberBridge: {
   browse 表面，样式与交互完全统一（上游 one-route 哲学：不做手敲路径
   表单——native picker note 与 one-route 简化均已否定手敲路径交互）。
 
-### 4.1 未 settle boot 的呈现与逃生（boot 死区收敛）
+### 4.3 未 settle boot 的呈现与逃生（boot 死区收敛）
 
 远程来源未就绪时点开会话，活动视图停在全屏遮罩上；导航（侧栏）在**壳内部**、
 App 级失败覆盖层只在已 settle 失败时出现——"boot 不 settle"窗口零导航，此前只
@@ -693,7 +765,7 @@ App 级失败覆盖层只在已 settle 失败时出现——"boot 不 settle"窗
   动作行 `role="status"` 播报一次；队列事实（见下条）不受反馈窗门约束，一成立
   即现。
 - **返回/切换的顺序（W4）**：「切换来源」只登记"用户放弃"意图并切视图，
-  **等切换落地**再由 App 回收（`reclaimView` 拒绝活动/待开视图；`selectView`
+  **等切换落地**再由 App 释放（`reclaimView` 拒绝活动/待开视图；`selectView`
   的 apply 经 View Transition 单槽队列可能延迟)。已知取舍：从未注册成功、永不
   settle 的 boot 其 ctx/容器仍等它自己 settle 才拆，本轮不改；被拆的是**视图**
   与挂载位。
@@ -708,13 +780,13 @@ App 级失败覆盖层只在已 settle 失败时出现——"boot 不 settle"窗
   `deriveServers` 的 `?? 'idle'` 折叠值会把投影延迟/状态拉取失败秒判成"未连接"
   （独立复核修正）。`idle`（手动断开）**不启动 boot**：遮罩给「未连接」
   +「连接」（显式意图，同设置页 Connect）；离开 idle 后按正常路径 boot。
-  **被推迟的视图从不参与放弃臂计时**，但**必须回收**：后台挂载（设置面板选来源）
-  不经 active 变化臂，故**挂载时刻**起隐藏计时，过保留宽限（60s）由推迟回收臂
-  拆（复核 F1）。裁决（`isDeferredReclaimDue`）：**只接管从未 settle 的推迟挂载**
-  （已 settle 的推迟壳是真壳，回 retention 候选窗），且
-  **设置面板正在编辑的来源绝不回收**（design 05 §5 面板 hold，缺守卫会钉死面板）；
-  活动/待开视图同样不回收。手动断开前已起过的在途 boot 仍由放弃臂看管（起表只
-  跳过、绝不删除)。
+  **被推迟的视图不启动 boot，也不进入任何自动释放路径**：推迟集合来自手动断开
+  （idle）相位的渲染期事实（`shouldDeferBootForSource`），后台挂载（设置面板选来源）
+  不经 active 变化臂——v1.1 没有常规空闲回收，故它只由「设置面板 hold + 显式手动
+  释放/硬上限/压力阀」处置（§4.1 释放路径表；`reclaimView` 的 active/painted/pending
+  保护对它同样成立）。**设置面板正在编辑的来源绝不被释放**（§5 面板 hold，缺守卫
+  会钉死面板）；活动/待开视图同样不被释放。手动断开前已起过的在途 boot 仍由放弃臂
+  看管（在途事实只跳过、绝不删除)。
 - **重试的诚实（W4）**：同 id 新 boot 先等同 id boot 尾（绝对上限两个 boot 预
   算，`INSTANCE_TAIL_WAIT_CAP_MS`)。遮罩只在**前一次尝试尚未 settle**（才真排
   队)时播报"排队 + 上限"——失败 settle 后同 id 尾已释放，按"第几次尝试"播报
@@ -745,7 +817,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
 逃生已覆盖用户面。
 
 
-### 4.2 文档级 SVG 资源 id 归属（N-ctx 失绘不变量）
+### 4.4 文档级 SVG 资源 id 归属（N-ctx 失绘不变量）
 
 - **缺陷**（用户三张截图：设置导航「通用设置/客户端」齿轮、侧栏字标 whale 与 HARNESS 反白字、侧栏「设置」座席）：上游图标组件把 Figma 导出 id **写死**在组件里（`IconSettingsOutlineRegular`/`-14`=`clip0_1450_63327`/`clip0_2580_121189`、`IconCordisPluginOutlineRegular`=`clip0_1840_45990`、`IconAgentPresetOutlineRegular`=`mask0_agent_preset_16`、`BrandWordmark`=`dsh-wordmark-whale-clip`/`-badge-clip`、附件拖拽浮层 `dshDropOverlayClip`），而 `url(#…)` 按**文档**解析；N-ctx 在同一文档里挂 N 个实例壳，同一 id 便被逐壳重复定义。装上 0.3.2-beta.4 真机（macOS WKWebView）单变量对照实测：文档内出现第二份带同名 id 的壳子树后，**新建**图标首次绘制若解析到未布局子树（`.instance-hidden` / `.instance-pending`）里的 clipper/mask，WebKit 会把该形状**整块丢绘并缓存结果**——属性回写、揭示壳、View Transition 都不自愈（只有重建元素自愈），于是同一 nav 里「通用设置/客户端」空白而「dsh 运行时」齿轮正常、同一张字标里直挂 `<path>`/`<rect>` 正常而两个 `<g clip-path>` 组空白。
 - **契约**：**文档级 SVG 资源 id 归 chamber 所有，不归上游组件**——每个 `<svg>` 必须能只靠自己解析自己的资源引用。实现是 `packages/dsh-chamber-client-core/src/svg-resource-scope.ts`，由 `main.tsx` 在建 React root **之前**安装：观察 `document.body` 的新增子树（实例壳与 portal 到 body 的浮层都覆盖），对每个新 `<svg>` 把它「**本 svg 内定义 ∩ 本 svg 内被 `url(#…)`/`href="#…"` 引用**」的 id 改名为文档唯一 token（`chamber-csvg<n>-<原 id>`），引用同步改写；若它引用的定义在**别的** svg 里，把那份定义（连同它内部再引用的定义做传递闭包）复制进本 svg；被样式表或 a11y 引用到的 id 一律保留原名。四道刻意的边界：① 改名面只认资源引用——资源属性（`clip-path`/`mask`/`filter`/`fill`/`stroke`/`marker-*`）、内联 `style` 值，以及**资源解析元素**（`<use>`/`<textPath>`/`<mpath>`/`<feImage>`/`<image>`/`pattern`/渐变/`filter`/`clipPath`/`mask`/`marker`）上的 `href`/`xlink:href="#…"`；`<a href="#dom-id">` 是文档链接、**不属**资源面（不改写也不复制）；命中即**保留原名**（不改写任何文本）的有三类：svg 内嵌 `<style>` 里的 `url(#…)`、`aria-labelledby`/`aria-describedby`/`for` 三个 a11y 属性引用的 id、以及文档级样式表引用的 id（其余 `aria-*` 不在本模块读写面内）；② 定义者**自己不用**该 id 时不动它，引用它的别的 svg 会**把那份定义复制进来**（消费侧自足化，副本用本 svg 的 token）⇒ 外部引用不悬空、定义者保持原样；③ 嵌套 `<svg>` 自成作用域（安装器会下钻收集内层 svg，各自拿独立 token）；已 scoped 的 svg 里**后补**新 id/引用（innerHTML 替换、插件追加）会触发该 svg 重扫；④ 每个 `<svg>` 打 `data-chamber-svg-scope` 标记，重复插入与 React 重排幂等。
@@ -771,7 +843,7 @@ settle 时拆除)，风险超窗，登记后续项；② 只下调 `HARVEST_ABAN
   - **渲染**（`bridge-outlet.tsx`）：面板按 `settings.section` 台账的 list/keyed 语义渲染条目：标准座 + `t`（该来源 locale face 的命名空间）+ `useStore`/`actions` + `renderSlot`（子座位）+ 条目 `inject` 面 + owner props。**座位来自该来源自己的渲染器绑定**，绝不伪造空桩：某个座缺席是那台服务器的事实，不是可补空 observable 的缺口。observable 管线用上游 `bindings.tsx` 导出的 `observableHook`（vendor `ui-renderer/src/client/bindings.tsx:57`；不再自带 per-source 选择器 hook 缓存），nav 行标签用上游 `resolveSlotLabel`（vendor `ui-slots/src/index.ts:620`；不再内联同一规则）。**槽锚点与单元派发照上游**：每个槽渲染点外恒有 `<div data-slot="<key>">`（`display:contents`，不占布局）——官方样式表寻址的稳定缝（如 `settings.general.item` 的 `> :last-child` 规则）；它挂在**出口**而非派发结果上，胜出条目、fallback、占用但无胜出者的**死单元**、未声明槽都在内渲染，锚点不随注册抖动闪断。死单元渲染可寻址的 `<div data-slot-error="<key>">`，与「该键从未注册」的 fallback 区分开（纯判定 `cell-dispatch.ts`）。
   - **归因不上面**：`StoredEntry.registrant`（cordis fiber-name 戳）**不渲染**——上游官方壳也只渲染 `navIcon(row.id)` + 分节标签，该戳在上游是纯诊断字段。本仓因此退役曾经的「插件」来源标记（用户拍板）：插件提供的分节与官方分节在 nav 上完全同形。
   - **来源必须在挂载中**：面板打开期间 App 层保证该来源
-    的壳**已挂载**——`chamberBridge.setSettingsTarget(sourceId)`（面板→App 单通道）未挂载则后台挂载（**不切 active view**），已挂载则**排除出一切回收路径**：保留策略候选、唯一拆除入口 `reclaimView` 与推迟回收臂都拒收该来源（否则隐藏 60s、135s 放弃臂、收割失败/放弃任一臂拆壳都会让正在编辑的设置面消失）；面板关闭即撤除。来源退役的卸载走注册表删除臂（不经 `reclaimView`），该 hold 不拦退役。未挂载时面板显示「正在启动该实例的前端」，离线来源显示既有不可达占位并给连接管理入口（不触发挂载）。
+    的壳**已挂载**——`chamberBridge.setSettingsTarget(sourceId)`（面板→App 单通道）未挂载则后台挂载（**不切 active view**），已挂载则**排除出一切释放路径**：唯一拆除入口 `reclaimView`、硬上限、压力阀与 135s 放弃臂都拒收该来源（否则任一臂拆壳都会让正在编辑的设置面消失）；面板关闭即撤除 hold（该壳随后是普通常驻壳，v1.1 不再自动释放它）。来源退役的卸载走注册表删除臂（不经 `reclaimView`），该 hold 不拦退役。未挂载时面板显示「正在启动该实例的前端」，离线来源显示既有不可达占位并给连接管理入口（不触发挂载）。
   - **来源化身守卫**：face 携带交付给该 ctx 的 `chamberSourceFingerprint`；面板只在它与权威 roster 的同一字段相等时渲染（同 id 替换/传输字段变更后的旧 face 绝不渲染一帧）。
   - **座位矩阵**：壳渲染 `settings.section` + `settings.action`（action 保持既有「仅本地来源」限定），子座位（`settings.general.item` / `plugins.tab` / keyed 卡片）随所属分节渲染；`trigger/header/close` 属**壳 chrome**，`settings.onboarding` 由壳**自己协调**（upstream-alignment，见下条）。壳 chrome 同批对齐上游：面板圆角 **32px**（上游 `SettingsRoot.module.css` 的 `.panel` 规则本体，此前抄的 r24 来自该规则的过时注释）、触发器行 **42px**（上游 `.triggerRow`/`.trigger`；chamber 只渲染按钮）、关闭后焦点还给触发器（上游 `wasOpen` effect）、头部**不再重复分节标题**（每个内容分支自己渲染 `<h2>`，壳只留「选中服务器」副行——chamber 的 N 来源补充）。chamber 全局入口从「通用」改名 **「客户端 / Desktop」**（`clientNav`）：官方分节 `general.nav` 就叫「通用设置 / General」，同名会让两个不同的面在 nav 上不可分辨；nav 单元与页面自己的 `<h2>` 共用这一个键。
   - **`settings.onboarding` 协调器（chamber 的 N 来源适配 upstream-alignment）**：上游 `SettingsRoot` 在**当前会话为 blank 或缺席**时挂载台账里**有序的第一个未完成步骤**，以步骤自己的 owner props（`stepId` / `complete` / `openSection`）渲染——步骤组件住在同一个 boot ctx 里，自带 ctx 读取、就绪门与对话框 chrome（`#root` inert 归它），壳不画任何自己的东西。chamber 壳**就是**该实例 ctx 的 `sidebar.settings` occupant，故只协调**自己 ctx** 的台账 + 自己 ctx 的 `useSessions` 座，并额外串一道 App 发布的**活动视图事实**（`chamberBridge.getActiveSource`，与 ui-layout 文档级主题投影同一道门）：一页挂多个实例壳而首启对话框是文档级的（portal 到 body + 持有 `#root` inert），不串门会把另一实例的首启弹到当前视图；未发布（undefined）读作关闭。**刻意不按"选中来源"协调**：跨 ctx 步骤只能靠跨 ctx hook 驱动，两个同选一源的壳还会重复挂载同一步骤。渲染走 `BridgeEntryBoundary containAll slotKey="settings.onboarding"`（外来步骤崩溃也不夺走 `sidebar.settings` 座位）。**两个坐标各管一半（review-fix F1）**：活动视图门只门**挂载**（`onboardingStage` 的 `step` = 两事实的合取），**完成集重置只跟 sessions 事实**（上游 `SettingsRoot` 的 reset effect 原文 `if (onboardingActive) return; setCompletedOnboarding(new Set())`，`onboardingActive` = sessions 选择器）；早先把活动视图门折进重置，一次普通**切视图**就抹掉全部确认。**残留（登记偏差）**：完成集是组件局部的，壳被**重新挂载**（App 回收该实例再挂起）仍从空集重跑；收口需要跨挂载存活的每实例状态（新的 chamberBridge/持久化通道），不在本轮范围。两个坐标各由**独立 hook 调用**读取（合取写成 `useOnboardingActive(...) && useActiveView(...)` 会在 sessions 事实为 false 时短路掉第二个 hook，是 React 拒绝的钩子序列）。
@@ -927,7 +999,7 @@ instanceId}` +
 - 不做（v1）：跨来源移动会话、单 store 真融合（fork runtime）、会话实时推送同步、远程实例管理 UI 外壳。
 - fork 会话**在范围内**：官方 conversation 回合尾 `forkAt` 常驻可用；侧边栏会话行 kebab 菜单亦提供行内 fork（wire `sessions.fork`，对齐官方 ui-workspace），两者并存（§2.2）。
 - **残余（本版不消除）**：租客 **body portal** 浮层（官方 ui-chat 4 处 `createPortal` + chamber 2 处，z-index ≤1100）渲染到文档 body，位于**任何 stacking 边界之外**——遮罩期内这类浮层仍可能可见；顶层幕布可压过它，但会覆盖全部视图与 chamber chrome（§4 已否）。登记而非修复。
-- **推迟**：每实例**进程 / 视图隔离**（Electron `WebContentsView` / 独立 WKWebView）——只有它能同时消除"一个壳的长任务卡住整页"；当前 N-ctx 规模下代价不成比例（实测整页渲染进程 ≈9.2MB vs 单视图进程基线数十 MB），仅在来源规模或隔离需求变化时再评估。
-- **推迟**：多壳常驻策略放宽（保留位 1 → 3 / 粘性常驻 + 压力淘汰）——渲染端内存实测不构成约束（整页 9.2MB / 峰值 40MB），约束在主线程与后台流；需先有帧时/权重预算的度量面，本版不做。
+- **推迟**：每实例**进程 / 视图隔离**（Electron `WebContentsView` / 独立 WKWebView）——只有它能同时消除"一个壳的长任务卡住整页"；当前 N-ctx 规模下代价不成比例（实测整页渲染进程 ≈9.2MB vs 单视图进程基线数十 MB）。**重评触发 = 来源 >8，或「一个壳的长任务卡住整页」在真机复现**（先取帧时/长任务取证，再评估）；在此之前每壳字节内存也无法按壳归因（见 §4.1 可见性契约）。
+- **已关闭（被 §4.1 取代）**：多壳常驻策略放宽（保留位 1 → 3 / 粘性常驻 + 压力淘汰）——v1.1 直接采用 keep-all（用户意图壳常驻、投机壳 ≤1 后台槽、硬上限 + 平台化压力阀），不再以保留槽位数为旋钮；原推迟理由（缺帧时/权重预算度量面）由硬上限与压力阀覆盖，实测定标列入 STATUS 开放项。
 - **残余（本版不消除）**：相位观察器的成本面——持有窗内用 `MutationObserver({subtree, childList, attributes, attributeFilter:[data-phase]})` + 一帧 rAF 节流；`characterData` 未开（流式 token 不产生记录），但虚拟列表插入/替换行仍会按帧产生 childList 记录，而窗口上界 70s。同仓已退役的移动适配包曾以"官方 DOM 在会话加载期产生上千次变更"为由改用 3s 轮询，是本设计的历史反证。判定 API 与观察器解耦（leaf 是纯函数），若实机长持有出现掉帧，第一刀是把采样降为 250ms 轮询（相位是粗状态，多 250ms 延迟无感）。失效判据：改成轮询后删除本条。
-- **残余（本版不消除）**："首访某个来源"的冷 boot 白屏（该来源从未挂载 ⇒ 必须付一次 boot + 遮罩）：不做启动时全量预挂载（启动风暴），只能由 P3 把遮罩压到"会话面绘制后一帧"、以及既有预热槽缓解。失效判据：若引入"全部来源常驻"策略，本残余随之消失，需同步删除本条。
+- **残余（本版不消除）**："首访某个来源"的冷 boot 白屏——**仅在该来源首次访问、被手动释放、或安全阀（硬上限/压力阀）释放后成立**（用户意图壳一经打开即常驻，design 05 §4.1）：不做启动时全量预挂载（启动风暴），只能由 P3 把遮罩压到"会话面绘制后一帧"、以及既有预热槽缓解。

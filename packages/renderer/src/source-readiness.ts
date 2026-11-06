@@ -4,9 +4,8 @@
  *  1. `shouldDeferBootForSource`：手动断开（idle）的来源不启动 boot（否则白烧一次 503 预算）。
  *  2. `decideServingGate`：相位感知就绪门——`error` 等终态在短宽限后立即判不可服务，
  *     `connecting`/`degraded`（恢复中）在预算内继续等。
- *  3. `isDeferredReclaimDue`：推迟挂载的回收裁决（只接管从未 settle 的挂载，绝不碰设置面板正在编辑的来源）。
- *  4. `graphGapKindFor`：图通道失败的上浮边界（非本地 `not-injected` 豁免，本地收敛为 `local-graph-not-injected`）。
- *  5. `planDegradedSelfHeal`：降级自愈的事实喂入——判定在 `dsh-stream-state` 容器里（`degradedSelfHeal`
+ *  3. `graphGapKindFor`：图通道失败的上浮边界（非本地 `not-injected` 豁免，本地收敛为 `local-graph-not-injected`）。
+ *  4. `planDegradedSelfHeal`：降级自愈的事实喂入——判定在 `dsh-stream-state` 容器里（`degradedSelfHeal`
  *     是它的 typed effect），本函数只按 **容器的真实时序** 派发（先相位、后降级结论）并读回该 effect。
  *
  * 叶子（零运行时 import，kind 为 `import type`）；只输出决策与结构化事实，文案走 locales.ts。
@@ -101,26 +100,6 @@ export type GraphGapKind = Extract<ShellDegradedKind, 'graph-unavailable' | 'loc
 export function graphGapKindFor(diagnosticState: string, instanceId: string): GraphGapKind | null {
   if (diagnosticState !== 'not-injected') return 'graph-unavailable'
   return instanceId === 'local' ? 'local-graph-not-injected' : null
-}
-
-/**
- * 推迟挂载的回收裁决：只接管"从未 settle"的推迟挂载（它不持有壳，也永远不会进入
- * retention 候选窗）。两道守卫缺一不可：`settingsTarget`（设置面板正在编辑的来源，
- * 拆壳会让面板消失）与 `busy`（展示中的壳绝不回收）。已 settle 的推迟壳回到
- * retention 的常规隐藏宽限与计数——它是真壳。
- */
-export function isDeferredReclaimDue(input: {
-  deferred: boolean
-  settled: boolean
-  busy: boolean
-  settingsTarget: boolean
-  hiddenSinceMs: number | undefined
-  nowMs: number
-  graceMs: number
-}): boolean {
-  if (!input.deferred || input.settled || input.busy || input.settingsTarget) return false
-  const since = input.hiddenSinceMs
-  return since !== undefined && input.nowMs - since >= input.graceMs
 }
 
 /**

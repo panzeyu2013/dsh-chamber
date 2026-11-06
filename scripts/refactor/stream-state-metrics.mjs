@@ -57,7 +57,7 @@ export const THRESHOLD_SCOPE = [
   'packages/renderer/src/session-surface.ts',
   'packages/renderer/src/source-readiness.ts',
   'packages/renderer/src/reveal-gate.ts',
-  'packages/renderer/src/retention.ts',
+  'packages/renderer/src/resident-policy.ts',
   'packages/dsh-chamber-client-ui-open-in/src/client',
   'packages/dsh-chamber-client-core/src/session-fact-reconcile.ts',
 ]
@@ -201,7 +201,7 @@ export function markerHits(file, markers) {
 
 const APP_MARKERS = [
   'degradedRetriedRef', 'prewarmSuppressedRef', 'autoPrewarmedRef', 'abandonedViewsRef',
-  'harvestIntent', 'hiddenSinceRef', 'retryTokens', 'deferredBootRef',
+  'harvestIntent', 'watchdogNeeded', 'retryTokens', 'deferredBootRef',
   'sourceLifecyclesRef', 'paintedView', 'revealHold',
 ]
 const MWC_MARKERS = ['recoveryReloadWorkItem', 'hangWatchdog', 'didStartLoading', 'recoveringFromCrash', 'scheduleRecoveryReload']

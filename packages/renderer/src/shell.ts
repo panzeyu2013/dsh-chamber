@@ -5,9 +5,9 @@
  * without page-global contamination. Same-id boots stay serialized through the
  * predecessor's settle and async teardown (capped by INSTANCE_TAIL_WAIT_CAP_MS); the
  * generation gate plus the boot-generation fence on producer registration keep a late
- * predecessor superseded (no double-root container survives). Booted shells stay mounted（hide/show 是纯 CSS）；保留策略例外：
- * retention.ts 可在空闲期回收超限隐藏壳，走与注册表删除相同的 disposeInstanceShell
- * 原语（generation cancel + 异步 teardown barrier），实例进程/连接不受影响。
+ * predecessor superseded (no double-root container survives). Booted shells stay mounted（hide/show 是纯 CSS）；
+ * 释放只走显式路径（手动/硬上限/压力阀/遮罩放弃/收割让位），复用与注册表删除相同的
+ * disposeInstanceShell 原语（generation cancel + 异步 teardown barrier），实例进程/连接不受影响。
  * 模块表与 bundle 注册表是页面级单例；bundle 通过 module-script 元素加载。
  */
 
@@ -528,7 +528,7 @@ export function __testLastRequestedSession(instanceId: string): string | undefin
   return lastRequestedSession.get(instanceId)
 }
 
-/** settle 事实的唯一判据：booted 或已失败；retention 候选、预热槽、推迟回收臂与
+/** settle 事实的唯一判据：booted 或已失败；常驻释放守卫、预热槽、挂死放弃臂与
  *  视图遮罩分类共用它，避免各处自写 `booted || error !== null` 漂移。 */
 export function isSettledShellState(state: ShellState | undefined): boolean {
   return state !== undefined && (state.booted || state.error !== null)
@@ -1300,7 +1300,7 @@ function disposeHolder(instanceId: string, holder: ShellHolder, reason: string):
 
 /**
  * Tear down ONE instance's shell (the source was REMOVED from the registry, or the
- * retention policy reaps an over-limit hidden view): dispose the AppWebEntry and drop the
+ * resident policy releases a shell: manual/hard-cap/pressure/abandon): dispose the AppWebEntry and drop the
  * entry and pending/active opens; async ctx teardown becomes an id-local barrier a re-added
  * source must await, and a queued/in-flight boot is cancelled on settle (cancelledBoots).
  * The container div is React's to remove. Connection state never reaps a shell.

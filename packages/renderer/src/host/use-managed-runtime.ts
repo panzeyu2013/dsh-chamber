@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchManagedRuntimeState } from '@dsh-chamber/dsh-chamber-client-core'
 import { withoutRemovedSourceKeys } from '../aggregate-refresh.ts'
-import { shouldRunBackgroundPhase } from '../retention.ts'
+import { shouldRunBackgroundPhase } from '../background-phase.ts'
 import { sourceIdForInstance } from '../transport-source.ts'
 import type { SshInstanceSpec } from '../global.d.ts'
 import { MANAGED_RUNTIME_POLL_MS, MANAGED_RUNTIME_PROBE_TIMEOUT_MS } from './budgets.ts'

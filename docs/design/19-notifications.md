@@ -889,7 +889,7 @@ interface ChamberSettings {
 - **goal 活性事实的覆盖边界（2026-12）**：压制与目标标题需要 goal 事实，通路按来源形态
   分三档——
   - **P1（有挂载壳的来源）**：插件从会话投影 `projectionValues.goal` 读三值，零新增
-    wire；被 retention/收割回收的源在 P1 下没有 goal 事实（无壳即无投影）⇒ P2a/P2b。
+    wire；被释放/收割释放的源在 P1 下没有 goal 事实（无壳即无投影）⇒ P2a/P2b。
   - **P2a（gateway 来源）**：只读 `/chamber/session-state` 镜像——`session/list` 投影的
     `projections.values.goal` 白名单（goalId/revision/phase/updatedAt；加上进程内
     activation）+ `$events` 的 `goal/activation-changed`；能力

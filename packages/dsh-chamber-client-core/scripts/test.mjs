@@ -29,6 +29,12 @@ const GROUPS = {
     'test/view-prefs-checkout.test.ts',
     'test/workspace-git-flags.test.ts',
   ],
+  // resident: the page-level resident-shell bridge (N-ctx resident v1.1) — the
+  // publish reference guard, listener isolation, the release-request channel and
+  // the frozen empty state the settings panel reads.
+  resident: [
+    'test/resident-store.test.ts',
+  ],
   // runtime: the unary producer's workingDirectory fact (unmounted/cold source).
   runtime: [
     'test/instance-api-working-directory.test.ts',

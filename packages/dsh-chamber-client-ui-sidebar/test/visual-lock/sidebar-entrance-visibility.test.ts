@@ -7,7 +7,7 @@
  *
  * The same symptom still reproduces after the animation retirement. This lock covers the
  * ANIMATION face only; the current root cause (document-level duplicate
- * SVG resource ids x hidden shells) and its fix live in design 05 §4.2.
+ * SVG resource ids x hidden shells) and its fix live in design 05 §4.4.
  */
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'

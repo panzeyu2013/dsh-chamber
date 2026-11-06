@@ -1,5 +1,5 @@
 /**
- * 真机验收探针：文档级 SVG 资源 id 失绘不变量（design 05 §4.2）。
+ * 真机验收探针：文档级 SVG 资源 id 失绘不变量（design 05 §4.4）。
  *
  * 为什么存在：文档级 SVG 资源 id 失绘的唯一权威证据是 macOS WKWebView 上的实际绘制行为 —— 单元测试只能钉住
  * DOM 变换契约。本脚本把**仓库里真实的** `packages/dsh-chamber-client-core/src/svg-resource-scope.ts`（类型

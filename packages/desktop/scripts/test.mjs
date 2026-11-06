@@ -213,6 +213,9 @@ export const GROUPS = {
   'local-state': [
     'test/local-state/audit-log.test.ts',
     'test/local-state/chamber-settings.test.ts',
+    // D4 系统内存快照：/proc/meminfo 与 vm_stat 的纯解析 + TTL/单飞（假探针/假时钟），
+    // 以及 settings-get 携带快照而 set/push 不携带的接线断言。
+    'test/local-state/system-memory.test.ts',
     'test/local-state/win-acl.test.ts',
     // 安装树上游 client-plugin 闭包抽样：纯函数 + 临时目录 fixture
     'test/local-state/runtime-tree-check.test.ts',

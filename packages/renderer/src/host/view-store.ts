@@ -2,7 +2,7 @@
  * The view pair as ONE authority: `active` = the committed selection,
  * `painted` = the view actually on screen. The reveal gate keeps them apart on
  * purpose (a switch paints only when the target's first frame is usable), and
- * every event callback, microtask and retention guard must read the latest pair
+ * every event callback, microtask and resident guard must read the latest pair
  * synchronously — they used to read render-time ref mirrors of two useStates.
  *
  * retire() is the load-bearing operation: an authoritative roster removal falls

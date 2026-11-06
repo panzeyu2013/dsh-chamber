@@ -14,7 +14,6 @@ import {
   projectAutoPrewarmed,
   projectDegradedRetried,
   projectHarvest,
-  projectHiddenSince,
   projectPrewarmSuppressed,
   type MapLedgerView,
   type SetLedgerView,
@@ -44,9 +43,9 @@ export function useAutoPrewarmedView(deps: SourceLedgerViewDeps): { current: Set
 }
 
 /**
- * 保留策略：被回收的源禁止自动预热，直到用户主动点开（selectView 清除）或来源从注册表删除
- * （retireSources 清除）——否则 prewarmEligible 会立刻把刚回收的源重新 boot，回收空转。
- * add/delete 都不请求 boot：重 boot 由 prewarm drain 决定，不是本账本。
+ * 释放抑制：被显式/策略释放的源禁止自动预热，直到用户主动点开（selectView 清除）或来源从
+ * 注册表删除（retireSources 清除）——否则 prewarmEligible 会立刻把刚释放的源重新 boot，
+ * 释放空转。add/delete 都不请求 boot：重 boot 由 prewarm drain 决定，不是本账本。
  */
 export function usePrewarmSuppressedView(deps: SourceLedgerViewDeps): { current: SetLedgerView } {
   const { readRegistry, dispatchLifecycle } = deps
@@ -77,39 +76,18 @@ export function useHarvestStateView(deps: SourceLedgerViewDeps): { current: Reco
   }), [dispatchLifecycle])
 }
 
-/** 保留策略计时：每视图「连续隐藏」起点的活视图；setter 把差异翻译成 hidden / windowReset 事件。 */
-export function useHiddenSinceView(deps: SourceLedgerViewDeps): { current: Record<string, number> } {
-  const { readRegistry, dispatchLifecycle } = deps
-  return useMemo(() => ({
-    get current(): Record<string, number> {
-      return projectHiddenSince(readRegistry())
-    },
-    set current(next: Record<string, number>) {
-      const previous = projectHiddenSince(readRegistry())
-      for (const [id, at] of Object.entries(next)) {
-        if (previous[id] !== at) dispatchLifecycle(id, { kind: 'hidden', at })
-      }
-      for (const id of Object.keys(previous)) {
-        if (next[id] === undefined) dispatchLifecycle(id, { kind: 'windowReset' })
-      }
-    },
-  }), [dispatchLifecycle])
-}
-
-/** 降级自愈的 once-per-ready-epoch 标记；clear（[id] = false）翻译成 retryForgotten，生命周期只有一个所有者。 */
+/**
+ * 降级自愈的 once-per-ready-epoch 标记（**只读**投影）：生命周期仍只有一个所有者（容器），
+ * 清位不再经本视图的 setter，而由调度器注入的 forgetDegradedRetry(id) 翻译成一条
+ * retryForgotten 事件（App 提供 dispatchLifecycle(id, { kind: 'retryForgotten' })）。
+ */
 export function useDegradedRetriedView(deps: SourceLedgerViewDeps): { current: Record<string, boolean> } {
-  const { readRegistry, dispatchLifecycle } = deps
+  const { readRegistry } = deps
   return useMemo(() => ({
     get current(): Record<string, boolean> {
       return projectDegradedRetried(readRegistry())
     },
-    set current(next: Record<string, boolean>) {
-      const previous = projectDegradedRetried(readRegistry())
-      for (const id of Object.keys(previous)) {
-        if (next[id] !== true) dispatchLifecycle(id, { kind: 'retryForgotten' })
-      }
-    },
-  }), [dispatchLifecycle])
+  }), [readRegistry])
 }
 
 /** 被放弃的视图账本（Map 视图）：只由遮罩的「切换来源」写入，selectView（用户点回）或落地回收删除。 */

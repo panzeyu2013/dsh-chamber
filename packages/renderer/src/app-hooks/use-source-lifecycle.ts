@@ -1,8 +1,8 @@
 /**
  * Source lifecycle ledger: the ONE owner of the per-source lifecycle registry, the
- * dispatch callback every lifecycle event goes through, and the four live views
- * derived from it (prewarm / suppression / harvest / hidden-since) plus the harvest
- * bookkeeping refs and the settings-panel target ref.
+ * dispatch callback every lifecycle event goes through, and the three live views
+ * derived from it (prewarm / suppression / harvest) plus the harvest bookkeeping refs
+ * and the settings-panel target ref.
  *
  * Extracted verbatim from App.tsx. The internal declaration order is preserved (the
  * dispatch callback closes over the ledger ref declared below it; legal because the
@@ -17,7 +17,7 @@ import {
 import { isRetryableBootGap, type ShellDegradedKind } from '../boot-gap.ts'
 import type { SourceOwnershipRegistry } from '../deep-link-activation.ts'
 import {
-  useAutoPrewarmedView, useHarvestStateView, useHiddenSinceView, usePrewarmSuppressedView,
+  useAutoPrewarmedView, useHarvestStateView, usePrewarmSuppressedView,
 } from './use-source-ledger-views.ts'
 
 /** Minimal structural view of the ownership ref (the frame creates the registry). */
@@ -41,6 +41,10 @@ export function useSourceLifecycle(sourceLifecyclesRef: OwnershipRef) {  // View
     }
     if (epoch === undefined) return undefined
     // `retryableGap` is passed as data from `isRetryableBootGap`: the registry owns the decision, the App the table.
+    // `reclaimGraceMs: 0` is deliberate: the hidden-window idle-reclaim policy retired with the N-ctx
+    // resident refactor (D1) and no caller dispatches 'reclaimed' any more, so the container's reclaim
+    // arm is unreachable by construction. `SourceEnv` still requires the field — keep it 0 (a positive
+    // grace would only be dead semantics) and never let the 60s hidden window come back from here.
     const reduction = dispatchSource(
       registry,
       viewId,
@@ -51,21 +55,25 @@ export function useSourceLifecycle(sourceLifecyclesRef: OwnershipRef) {  // View
     sourceLedgerStoreRef.current = reduction.registry
     return reduction.effects[0]?.effect
   }, [])
+  // 降级自愈 once-per-ready-epoch 标记的清除：显式事件（唯一的 live-view 元素级写退役）。
+  const forgetDegradedRetry = useCallback((id: string) => {
+    dispatchLifecycle(id, { kind: 'retryForgotten' })
+  }, [dispatchLifecycle])
   // A Set LEDGER view: reads project the container, add/delete become events (the Set shape is why
   // this is not the assignment-translating view the record ledgers use); sweeps iterate a snapshot.
   const autoPrewarmedRef = useAutoPrewarmedView({
     readRegistry: () => sourceLedgerStoreRef.current,
     dispatchLifecycle,
   })
-  // 保留策略：被回收（闲置隐藏壳超限回收）的源禁止自动预热，直到用户主动点开（selectView 清除）
-  // 或来源从注册表删除（retireSources 清除）——否则 prewarmEligible 会立刻把它重新 boot，回收空转。
+  // 释放抑制：被显式/策略释放的源禁止自动预热，直到用户主动点开（selectView 清除）或来源从
+  // 注册表删除（retireSources 清除）——否则 prewarmEligible 会立刻把它重新 boot，释放空转。
   const prewarmSuppressedRef = usePrewarmSuppressedView({
     readRegistry: () => sourceLedgerStoreRef.current,
     dispatchLifecycle,
   })
   // 设置面板目标来源：面板渲染的是**选中来源自己的 boot ctx 台账**，所以该来源的壳必须挂载着。
-  // 面板打开期间由 App 保证两件事——未挂载则后台挂载（不切 active view），已挂载则排除出保留策略
-  // 回收候选（否则隐藏 60s 后壳被拆，面板正在编辑的设置面随之消失）。关闭即撤除两条保证。
+  // 面板打开期间由 App 保证两件事——未挂载则后台挂载（不切 active view），已挂载则排除出释放
+  // 候选（否则壳被拆时面板正在编辑的设置面随之消失）。关闭即撤除两条保证。
   const settingsTargetRef = useRef<string | undefined>(undefined)
   // 首屏基线收割（baseline-harvest.ts）：ready 但从未挂载过的来源在后台预热槽里挂一次，拿到首个
   // 权威推送即回收——否则它稳态停留在 unary 兜底视图（合成分组 + 空归档集）直到用户点击。
@@ -79,15 +87,8 @@ export function useSourceLifecycle(sourceLifecyclesRef: OwnershipRef) {  // View
   // 仍需收割的来源（prewarmEligible 的渲染期镜像）：提交推送时据此决定"保留最后收割的壳当温壳"还是"回收让位给下一个候选"。
   const harvestCandidatesRef = useRef<Set<string>>(new Set())
   const sourceLedgerStoreRef = useRef<SourceRegistry>({})
-  // The incarnation fence uses the ownership registry's REAL fingerprint, so a re-registered source gets a
-  // fresh record; `undefined` falls back to the id. A LIVE VIEW, not a store: reads project the container
-  // (never a stale render) and direct writes translate back into reducer events — exactly one owner.
-  const hiddenSinceRef = useHiddenSinceView({
-    readRegistry: () => sourceLedgerStoreRef.current,
-    dispatchLifecycle,
-  })
   return {
-    sourceLedgerStoreRef, dispatchLifecycle, autoPrewarmedRef, prewarmSuppressedRef,
-    settingsTargetRef, harvestStateRef, harvestIntentRef, harvestCandidatesRef, hiddenSinceRef,
+    sourceLedgerStoreRef, dispatchLifecycle, forgetDegradedRetry, autoPrewarmedRef, prewarmSuppressedRef,
+    settingsTargetRef, harvestStateRef, harvestIntentRef, harvestCandidatesRef,
   }
 }

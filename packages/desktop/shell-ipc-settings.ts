@@ -4,6 +4,7 @@ import type { NotificationSettingsLike } from './notifications.ts'
 import { DEFAULT_CHAMBER_SETTINGS, validatePatch } from './chamber-settings.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { cpus, release as osRelease, totalmem } from 'node:os'
+import { readSystemMemory } from './system-memory.ts'
 import { adjudicateBadgeCount, validateBadgeRequest } from './badge.ts'
 import { MAX_SHOWN_NOTIFICATION_RECEIPTS, ShownNotificationReceipts, claimNotificationDetailed, decideNotification, releaseNotificationClaim, validateNotificationRequest } from './notifications.ts'
 
@@ -157,8 +158,15 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     return { ok: true };
   });
 
-  // Chamber settings 查询：非秘密投影（当前值 + 平台能力门控）。
-  deps.ipc.handle(IPC_CHANNELS.SETTINGS_GET, () => chamberSettingsStatus());
+  // Chamber settings 查询：非秘密投影（当前值 + 平台能力门控）。D4：GET 额外携带
+  // 一次系统内存快照（resident 阀门的输入；模块级 30s 缓存 + 单飞，见
+  // system-memory.ts）——它**只**挂在这条 invoke 上：settings-changed push 与
+  // settings-set 的应答都不带（采样型事实不进每帧推送；字段 optional）。
+  deps.ipc.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
+    const status = chamberSettingsStatus();
+    const system = await readSystemMemory();
+    return system === null ? status : { ...status, system };
+  });
 
   // Chamber settings 应用并持久化 + 变更推送。失败 loud {error}，绝不静默假成功。
   deps.ipc.handle(IPC_CHANNELS.SETTINGS_SET, async (payload: unknown) => {

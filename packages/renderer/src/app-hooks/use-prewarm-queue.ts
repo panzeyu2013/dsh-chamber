@@ -2,8 +2,9 @@
  * Prewarm queue replenishment: keep only still-eligible ids in the queue, drop intent-priority
  * keys that lost eligibility (opened/suppressed/retired/harvest-parked), append every eligible
  * remote that is not queued yet, then drain once. The activeView dependency is deliberate: a
- * pure activation frees the retention slot, and missing it would silently starve the next
- * speculative prewarm. Extracted from App.tsx (B1-3l).
+ * pure activation removes the shell from the auto-prewarmed set (selectView), which changes the
+ * background-slot budget, and missing it would silently starve the next speculative prewarm.
+ * Extracted from App.tsx (B1-3l).
  */
 import { useEffect } from 'react'
 import type { KindedInstance } from '../transport-source.ts'
@@ -39,9 +40,9 @@ export function usePrewarmQueue(inputs: PrewarmQueueInputs): void {
       if (!queue.includes(id)) queue.push(id)
     }
     drainPrewarm()
-    // activeView 依赖：保留槽可经「纯激活」释放——用户点开一个已挂载的隐藏温壳（mountedViews 不变、
-    // 无 settle/roster/可见性事件）。eligible 随 activeView 变化增长，而队列补种与 drain 都在此
-    // effect；缺该依赖会静默饿死下一次投机预热。
+    // activeView 依赖：纯激活会摘除 autoPrewarmed 标记（用户点开一个已挂载的隐藏温壳时
+    // mountedViews 不变、无 settle/roster/可见性事件）⇒ 后台槽预算随激活变化。队列补种与
+    // drain 都在此 effect；缺该依赖会静默饿死下一次投机预热。
   }, [remoteInstances, remoteStatus, mountedViews, activeView, drainPrewarm])
 
 }

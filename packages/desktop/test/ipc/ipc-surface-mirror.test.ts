@@ -888,7 +888,7 @@ test('the apply-result and notification/sessionTodo settings shapes are type-ide
   // (the supported capability gates): both were extracted from inline literals, which is
   // exactly when a '?' marker or a field can drift unseen — the nested field names used to
   // be swept as part of the enclosing literal, and are not any more.
-  for (const name of ['ChamberDebugSettings', 'ChamberSettingsSupported']) {
+  for (const name of ['ChamberDebugSettings', 'ChamberSettingsSupported', 'ChamberSystemMemory']) {
     const authoritative = interfaceFieldSignatures(preload, name)
     assert.deepEqual(interfaceFieldSignatures(renderer, name), authoritative,
       name + ' preload/renderer drifted (optional markers included)')
@@ -914,7 +914,7 @@ test('the desktop chamber-settings store mirrors preload\'s settings types (L3 �
   // but its flattened field names are compared below AND its nested debugRuntime member has a
   // dedicated test further down. */
   const store = readFileSync(join(ROOT, 'packages/desktop/chamber-settings.ts'), 'utf8')
-  for (const typeName of ['ChamberSettings', 'ChamberNotificationSettings', 'ChamberSessionTodoSettings', 'ChamberDebugSettings', 'ChamberSettingsSupported']) {
+  for (const typeName of ['ChamberSettings', 'ChamberNotificationSettings', 'ChamberSessionTodoSettings', 'ChamberDebugSettings', 'ChamberSettingsSupported', 'ChamberSystemMemory']) {
     assert.deepEqual(
       interfaceFieldSignatures(store, typeName),
       interfaceFieldSignatures(preload, typeName),
@@ -942,6 +942,29 @@ test('the nested debugRuntime read-back stays type-identical across all three mi
   assert.equal(preloadMember.length, 1, 'debugRuntime 成员必须恰好一条（过滤器写错会假绿）')
   assert.deepEqual(member(renderer), preloadMember, 'renderer debugRuntime drifted')
   assert.deepEqual(member(store), preloadMember, 'store debugRuntime drifted')
+})
+
+test('the nested system memory snapshot stays type-identical across all three mirrors', () => {
+  // D4：ChamberSettingsStatus.system 是**命名接口**（ChamberSystemMemory），不是内联字面量。
+  // 命名接口在字段签名比较里会被展开，因此「成员的类型名本身」也要一处改三处的守卫；
+  // 同时三份 ChamberSystemMemory 的字段（含 source 的三值联合）必须逐字同形——否则
+  // 只改 renderer 那份（删一个 source 值/漏 capturedAt）能全绿通过。
+  const store = readFileSync(join(ROOT, 'packages/desktop/chamber-settings.ts'), 'utf8')
+  const member = (source: string): string[] =>
+    blockFieldSignatures(source, interfaceBlock(source, 'ChamberSettingsStatus'))
+      .filter(signature => signature.startsWith('system'))
+  const preloadMember = member(preload)
+  assert.equal(preloadMember.length, 1, 'system 成员必须恰好一条（过滤器写错会假绿）')
+  assert.deepEqual(member(renderer), preloadMember, 'renderer system drifted')
+  assert.deepEqual(member(store), preloadMember, 'store system drifted')
+  const authoritativeSnapshot = interfaceFieldSignatures(preload, 'ChamberSystemMemory')
+  assert.deepEqual(
+    authoritativeSnapshot,
+    ['availableBytes:number', 'capturedAt:number', 'source:\'proc-meminfo\' | \'os-freemem\' | \'vm-stat\'', 'totalBytes:number'],
+    'ChamberSystemMemory 的字段集变了——三处镜像与 system-memory.ts 的 SystemMemorySnapshot 必须同批改',
+  )
+  assert.deepEqual(interfaceFieldSignatures(renderer, 'ChamberSystemMemory'), authoritativeSnapshot, 'renderer ChamberSystemMemory drifted')
+  assert.deepEqual(interfaceFieldSignatures(store, 'ChamberSystemMemory'), authoritativeSnapshot, 'store ChamberSystemMemory drifted')
 })
 
 test('settings-connections re-exports the whole IPC face from the renderer (single source of truth, L3)', () => {

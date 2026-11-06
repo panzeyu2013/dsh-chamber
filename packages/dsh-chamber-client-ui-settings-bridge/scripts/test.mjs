@@ -30,6 +30,8 @@ const GROUPS = {
     'test/settings/settings-groups.test.ts',
     // 调试模式行的呈现决策真值表（debug-mode-gate.ts）
     'test/settings/debug-mode-gate.test.ts',
+    // 「性能与内存」只读组（D3）：状态/格式化/禁用门/两击确认/内存可见性的纯投影 + 挂载锁
+    'test/settings/resident-panel-model.test.ts',
     // 测试通知失败原因映射（design 19 §3.3/§4）
     'test/settings/notify-test-result.test.ts',
   ],

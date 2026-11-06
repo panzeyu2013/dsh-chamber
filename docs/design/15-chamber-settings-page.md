@@ -3,7 +3,7 @@
 > **settings 壳平铺固定入口（v1 范围）**——chamber 全局设置与实例配置平面严格分离；
 > **统一 Chamber 设置页 / 两级分组导航推迟（不排期）**；未完成门禁见 `docs/progress/STATUS.md`。
 > 范围契约：固定入口只有 `__connections`（连接）与 `__general`（**客户端 / Desktop**；命名理据见 D1；含
-> 设计 11 的更新块、设计 14 的运行设置、通知与会话待办区控制组）；**移除 B 项**见 D2。
+> 设计 11 的更新块、设计 14 的运行设置、通知与会话待办区控制组、性能与内存只读组（D5））；**移除 B 项**见 D2。
 > 本文是 chamber 设置的**呈现面与权威边界**契约（数据权威见 D3；相关面来源见 §5）。
 
 ## 1. 壳形态（现状契约）
@@ -42,6 +42,9 @@
     运行中时确认，远程隧道不影响关闭，更新已下载时豁免，见设计 14 D2）；VS Code 新窗口
     （`vscodeOpenInNewWindow`，默认开——在 VS Code 新窗口打开会话目录，避免其运行中复用/替换最近活动窗口；
     见设计 16 §3.3）；
+  - **性能与内存**（只读 + 手动释放；契约见 D5）：常驻来源表（状态/隐藏时长/DOM 节点数）+「释放 UI」
+    两次点击确认 + 内存读数（`settings.get` 可选 `system`，缺失显示「不可得」）+ 固定「每壳内存不可得」
+    说明；不新增设置块、不持久化、不参与 `validatePatch`。
   - **会话待办区**（sidebar todo area，契约见 D4 与设计 06 §8）；
   - **通知**（设计 19 §3.4：主开关 + 通知时机 + 事件开关 + 发送测试通知）；
   - **更新**（设计 11，并入；组标题 + 导语 + 版本行 + 「检查更新」按钮 + 相位状态行 + **调试模式**
@@ -123,12 +126,65 @@ ChamberSettings.sessionTodo: {
 - 消费者：侧边栏经 `packages/dsh-chamber-client-core/src/todo-prefs.ts` 只读镜像（get + onChanged，未水合回落默认——本块默认值
   本身就是开，与「绝不假 off」占位纪律不冲突）。
 
+### D5 性能与内存（只读 + 手动释放）
+
+**契约**：`__general` 在「运行」组之后新增只读组「性能与内存」——只呈现运行时事实与一个显式动作
+（释放 UI），**它不是设置**：不新增 `chamber-settings.json` 区块、不持久化、不参与 `validatePatch`；
+组内唯一的写路径 = 手动释放意图（`residentBridge.requestRelease(id)`），由 App 用唯一拆除入口执行并写
+`prewarmSuppressed`（design 05 §4.1）。策略常量（硬上限/输入保护/压力阈值）**不暴露为设置项**，避免把
+未实测定标的数字变成用户契约。
+
+**呈现**：① 常驻来源表：label、状态（活动 / 后台常驻 / 启动中 / 失败 / 已释放）、**仅 resident 行**的
+隐藏时长（按 locale 格式化）、DOM 节点数（有则显示）、操作「释放 UI」；按钮禁用 = `state==='active'`、
+`state==='booting'`、`state==='released'`（壳已卸载，无界面可拆）、`settingsTarget`（设置面正在使用该源：
+显示提示而不是按钮）或该源释放请求在途。已释放行由快照
+`sources` 携带（见「数据」），释放后该行**转「已释放」而不是消失**。② 手动释放 = 两次点击的 in-place
+确认（首次 arm 显示「确认释放」，3s 内在位第二次生效），**不用 `window.confirm`/Modal**；活动/屏上壳的
+按钮禁用（不可执行释放动作）。③ 内存读数：
+面板打开时读一次 `settings.get()` 的只读 `status.system`（可选
+`{totalBytes, availableBytes, source, capturedAt}`），显示可用/总量 + 来源标注
+（`proc-meminfo`/`os-freemem`/`vm-stat`）；缺失/失败显示「不可得」，**绝不按 0 或 100% 呈现**。
+④ 页面 JS 堆：Electron 下 `performance.memory`（近似，标注「页面 JS 堆（近似）」），缺失显示「不可得」。
+⑤ 固定说明：「每壳内存不可得（单 renderer 架构）」——N 个壳共享同一 JS 堆与渲染进程（design 05 §4.1
+可见性契约）。⑥ **不轮询数据面**：面板打开时 `residentBridge.subscribe` + 一次 `requestRefresh`（DOM 节点数
+只在有订阅者时采集，发布端据订阅计数决定，故打开瞬间补一帧）+ 一次 `settings.get()`，卸载即取消订阅；
+整机内存本身在 `readSystemMemory` 的 30s TTL 内。面板打开期间另有一个 **1s 显示时钟**，只重算隐藏时长
+的格式化（`lastActiveAt + now`），不读 residentBridge/settings 数据面。⑦ 表下方一行 `role=status` 提示
+**最近一次释放**（来源标签 + 原因：手动 / 挂载数超硬上限 / 内存压力，来自快照 `lastRelease`；标签缺失回落 id）。
+
+**数据**：常驻事实的唯一来源是页面级 `residentBridge`
+（`packages/dsh-chamber-client-core/src/resident-store.ts#residentBridge`）：
+`ResidentSnapshot { sources: ResidentSourceFact[]; counts: {mounted, resident, active, released}; lastRelease? }`，
+`ResidentSourceFact { id, label, state, hiddenSinceMs?, domNodes?, autoPrewarmed?, lastActiveAt?, settingsTarget? }`，
+`ResidentShellState = 'active'|'resident'|'booting'|'failed'|'released'`；`sources` = 挂载壳（挂载序）
++ 已释放但仍注册的 `released` 行（末尾）；`hiddenSinceMs`/`lastActiveAt` 只在 `resident` 壳上携带（屏上/未
+settle/失败/已释放壳不带隐藏时长）；`settingsTarget` 只标设置面当前目标（该行显示提示、不提供释放按钮）。
+已释放行 = 曾挂载且已释放的来源（含系统首屏收割后的释放），重新挂载即回到挂载行，仅来源从注册表删除
+才彻底出表（标签缺失的跳过）。`publish` 同引用守卫、listener 抛错隔离、**不落盘、无 wire**（页面级
+内存 store，不新增 page-channel/HTTP 通道）。释放请求通道 `requestRelease`/`onReleaseRequest` 与页面内
+刷新通道 `requestRefresh`/`onRefresh`（面板打开补一帧）同样只在页面内；执行端仍是 App（唯一拆除入口）。
+能力差异：**系统内存
+快照两 flavor 同源**（D4 的 Node 实现由 Electron main 与 Swift sidecar 共用，经同一 `settings.get` 应答）；
+**页面 JS 堆/进程内存近似读数仅 Electron**（`performance.memory`），Swift 显示「不可得」；**每壳字节两
+flavor 皆不可得**（单 renderer 架构）。
+
+**验证**：`test:settings-bridge`（状态文案/时长与字节格式化/禁用条件/arm 逻辑/纯投影）、
+`test:client-core`（`residentBridge` 单例、同引用与订阅/刷新/释放监听的抛错隔离、订阅计数）、
+`test:renderer-shell`（`resident-policy` 压力按档位连续判定 + `resident-snapshot` 快照纯构建器
+（含 released/settingsTarget 行与隐藏事实门控）+ `resident-wiring` 源码接线锁（含面板目标提示/刷新/
+显示时钟接线））、`verify:i18n`（zh 键集权威 + en 同键集，
+命名 `generalResident*`）、`verify-md-links`；面板打开订阅/卸载取消、无轮询、无新 IPC 的源文本锁；手动
+释放后该项转「已释放」且后台槽不被立即重 boot（抑制事实）为组件级/真机判据。
+
 ## 3. 与既有设计的衔接
 
 - 设计 11（更新）：入口并入见 D1；「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默
   检查路径）。
 - 设计 09 §5（设置面装载边界）：完整桥接修订后设置面**不装载插件**，组装诊断块随之退役；**这不是「插件提级」**
   （§D2 仍推迟不排期），提级指把官方 `settings.section` 的 plugins 段抬成独立入口。
+- 设计 05 §4.1（N-ctx 壳常驻）：D5 是该策略的**可见性与手动控制面**——常驻事实经页面级
+  `residentBridge` 快照进入设置壳，释放意图回到 App 的唯一拆除入口；面板不持有策略（策略与纯决策在
+  `resident-policy`/App 守卫，design 05 §4.1）。
 - 设计 05 §5：连接页是设置壳的**固定 nav 入口**（`__connections`，分隔线之下、不占 ledger order），**不是**
   官方 `settings.section` 注册——id `connections` 的 host-ctx 注册已随完整桥接修订移除
   （`packages/dsh-chamber-client-ui-settings-connections/src/client/index.ts` 只提供分节组件与字典命名空间）；
@@ -148,14 +204,14 @@ ChamberSettings.sessionTodo: {
 
 ## 5. 关联
 
-- 设计 14（睡眠/后台常驻，`__general` 内容来源）、设计 11（自动更新，更新块并入 `__general`）；
+- 设计 14（睡眠/后台常驻，`__general` 内容来源）、设计 11（自动更新，更新块并入 `__general`）、设计 05 §4.1（N-ctx 壳常驻：D5 的来源与释放动作）；
 - 设计 06 §8（会话待办区交互/派生契约）、设计 19 §3.4（通知组并入通用的先例：事件类别 vocabulary 复用
   complete/ask/request）；
 - `docs/progress/STATUS.md`（进度唯一记录）。
 
 ## 6. 完整桥修订（2026-12）
 
-> 本节补写选中来源设置面的实现契约；权威分类仍以 §2（D1 固定入口 / D3 两组不交叉 / D4 会话待办区）为准，
+> 本节补写选中来源设置面的实现契约；权威分类仍以 §2（D1 固定入口 / D3 两组不交叉 / D4 会话待办区 / D5 性能与内存）为准，
 > §1 的壳形态描述保持。落点均在 `packages/dsh-chamber-client-ui-settings-bridge/src/client/`。
 
 - **单一权威数据源 = 所选来源自己 boot ctx 的 `settings.section` 台账**：面板不持有第二套设置模型——它读该来源自己的 cordis ctx（`AppWebEntry` 的 boot ctx）的注册表，`section-rows.ts` 只把台账投影成 nav 行（id/order/label，不渲染 `registrant`：第三方分节与官方分节同形），条目的组件、`store`、`inject` 与生命周期都归该来源自己；官方 settings 全族、该来源第三方 extra rows 分节与 chamber 在该 ctx 注册的「dsh 运行时」（order 31）同台。

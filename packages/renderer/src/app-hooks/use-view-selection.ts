@@ -92,7 +92,7 @@ export function useViewSelection(inputs: ViewSelectionInputs) {
    * view-transition.ts 直通模式接管（揭示即时落地，持有窗不变——持有是内容决策，不是动效）。注册表守卫
    * （视图生命周期 = 注册表条目生命周期）：来源已被删除时不挂载/不切换（点击时与提交时各查一次）。local 常驻。 */
   const selectView = useCallback((viewId: string, onApply?: (applied: boolean) => void): boolean => {
-    // 用户又选中这个视图 = 撤回"放弃"意图（否则它下一次离开会跳过保留宽限被立即回收）；切换来源的动作写在**另一个** id 上，不会被误删。
+    // 用户又选中这个视图 = 撤回"放弃"意图（否则它下一次离开会被遮罩切换的放弃臂立即释放）；切换来源的动作写在**另一个** id 上，不会被误删。
     abandonedViewsRef.current.delete(viewId)
     // 用户点击 = 意图使用该来源：ready 但会话/远端已死的来源立即探测一次（heartbeat 即时加速）。
     probeRemoteReady(viewId)
@@ -102,7 +102,7 @@ export function useViewSelection(inputs: ViewSelectionInputs) {
     // 此刻它仍在自动预热集合里 ⇒ 这次用户选中就是一次**命中**（删除之前判定）。
     if (autoPrewarmedRef.current.has(viewId)) recordPrewarm('hit', viewId)
     autoPrewarmedRef.current.delete(viewId)
-    // 用户主动点开 = 意图使用：解除"回收后不自动预热"抑制（此后闲置仍会被再次回收并再次抑制）。
+    // 用户主动点开 = 意图使用：解除"释放后不自动预热"抑制（此后若被硬上限/压力阀释放，会再次写抑制）。
     prewarmSuppressedRef.current.delete(viewId)
     // 收割中被点开 = 采用为用户视图：撤销收割意图（绝不回收用户正在看的壳），
     if (harvestIntentRef.current.delete(viewId)) {
@@ -125,8 +125,8 @@ export function useViewSelection(inputs: ViewSelectionInputs) {
     // 只是本次同步提交的意图槽，rapid click 由下一次 selectView 覆盖。
     pendingViewRef.current = null
     viewStore.select(viewId)
-    // 保留策略：被回收（不在 mountedViews）的 live 来源在此重新挂载——冷 boot + entry 重放
-    // （shell.ts 同 id 串行 barrier 保证与回收的异步 teardown 不交错）；hiddenSince 由 painted 落地 effect 清除。
+    // 释放路径（显式/策略）会把视图从 mountedViews 摘除；live 来源在此重新挂载——冷 boot +
+    // entry 重放（shell.ts 同 id 串行 barrier 保证与释放的异步 teardown 不交错）。
     setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
     if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
     onApply?.(true)
@@ -144,8 +144,8 @@ export function useViewSelection(inputs: ViewSelectionInputs) {
     if (targetId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(targetId)) return
     if (fromViewId !== LOCAL_INSTANCE_ID) abandonedViewsRef.current.set(fromViewId, targetId)
     // selectView 的"没落地"**不抛异常**（注册表竞态早退、apply 期目标被删除都只是 return），
-    // 所以用"落地即回调"的返回值收口：只有切换真的落地，放弃标记才保留，否则撤回（否则该视图
-    // 下一次离开会跳过 60s 保留宽限被立刻拆掉）。
+    // 所以用"落地即回调"的返回值收口：只有切换真的落地，放弃标记才保留，否则撤回
+    // （否则该视图下一次离开会被立即释放）。
     const revoke = (): void => { abandonedViewsRef.current.delete(fromViewId) }
     try {
       const accepted = selectView(targetId, applied => { if (!applied) revoke() })

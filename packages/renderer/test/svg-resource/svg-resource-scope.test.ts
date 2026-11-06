@@ -1,5 +1,5 @@
 /**
- * Document-level SVG resource-id scoping (design 05 §4.2「文档级 SVG 资源 id 归属」).
+ * Document-level SVG resource-id scoping (design 05 §4.4「文档级 SVG 资源 id 归属」).
  *
  * The risk this spec pins: upstream icon components hard-code their Figma
  * resource ids (`clip0_1450_63327`, `dsh-wordmark-*-clip`, the agent-preset mask),

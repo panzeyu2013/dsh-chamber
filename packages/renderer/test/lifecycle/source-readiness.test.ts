@@ -1,5 +1,5 @@
 /**
- * 来源就绪门 / 遮罩判定的**行为**契约（source-readiness.ts、retention.ts）。
+ * 来源就绪门 / 遮罩判定的**行为**契约（source-readiness.ts）。
  *
  * 本文件持有可执行的行为断言：App/InstanceView 的源码文本 wiring 锁（只证明 SHAPE）
  * 不在此处；但终态相位词表的三份手抄（renderer / client-core / sidebar）由本文件末尾的
@@ -12,7 +12,6 @@ import { stripComments } from '../../../../scripts/dev/test-support/source-text.
 import {
   SERVING_TERMINAL_GRACE_MS,
   decideServingGate,
-  isDeferredReclaimDue,
   isTerminalUnreadyPhase,
   servingGatePhase,
   shouldAnnounceRetryQueue,
@@ -20,13 +19,11 @@ import {
   graphGapKindFor,
 } from '../../src/source-readiness.ts'
 import { PRESENTATION_THRESHOLDS } from '@dsh-chamber/dsh-stream-state'
-import { VIEW_RECLAIM_GRACE_MS } from '../../src/retention.ts'
 
 test('the window and grace values carry the numbers the design promises', () => {
   // The feedback window is the shared table's presentation section (one owner since P2).
-  assert.equal(PRESENTATION_THRESHOLDS.veilActionsAfterMs, 10_000, 'design 05 §4.1: a 10s feedback window')
-  assert.equal(SERVING_TERMINAL_GRACE_MS, 1_500, 'design 05 §4.1: a 1.5s terminal grace')
-  assert.equal(VIEW_RECLAIM_GRACE_MS, 60_000, 'design 05 §4.1: deferred mounts reclaim on the 60s hidden grace')
+  assert.equal(PRESENTATION_THRESHOLDS.veilActionsAfterMs, 10_000, 'design 05 §4.3: a 10s feedback window')
+  assert.equal(SERVING_TERMINAL_GRACE_MS, 1_500, 'design 05 §4.3: a 1.5s terminal grace')
 })
 
 // ── 1. 纯决策 ──────────────────────────────────────────────────────────────
@@ -118,29 +115,6 @@ test('the retry queue note is honest: only an UNSETTLED predecessor queues a ret
   assert.equal(shouldAnnounceRetryQueue(true, false), true)
   assert.equal(shouldAnnounceRetryQueue(true, true), false, 'a settled view needs no queue note')
   assert.equal(shouldAnnounceRetryQueue(false, true), false)
-})
-
-test('the deferred reclaim decision only takes never-settled, unhidden, unheld mounts', () => {
-  const due = (over: Partial<Parameters<typeof isDeferredReclaimDue>[0]> = {}) => isDeferredReclaimDue({
-    deferred: true,
-    settled: false,
-    busy: false,
-    settingsTarget: false,
-    hiddenSinceMs: 1_000,
-    nowMs: 1_000 + VIEW_RECLAIM_GRACE_MS,
-    graceMs: VIEW_RECLAIM_GRACE_MS,
-    ...over,
-  })
-  assert.equal(due(), true, 'a never-settled deferred mount past the hidden grace is reclaimed')
-  assert.equal(due({ nowMs: 1_000 + VIEW_RECLAIM_GRACE_MS - 1 }), false, 'inside the grace nothing happens')
-  assert.equal(due({ hiddenSinceMs: undefined }), false, 'without a hidden clock it is invisible — never guess')
-  assert.equal(due({ deferred: false }), false, 'a normal view belongs to retention')
-  // 已 settle 的推迟壳是真壳：回 retention 常规候选窗，绝不在推迟臂被二次回收。
-  assert.equal(due({ settled: true }), false)
-  assert.equal(due({ busy: true }), false, 'a displayed/pending view is never reclaimed')
-  // 设置面板正在编辑的来源：拆壳 = 面板面消失（design 05 §5 的面板 hold）。
-  assert.equal(due({ settingsTarget: true }), false,
-    'without this guard the settings panel is pinned on "starting this instance" (review MAJOR)')
 })
 
 // ── 2. 源码文本契约（跨包终态词表 lockstep） ──────────────────────────────────

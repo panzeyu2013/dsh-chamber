@@ -120,8 +120,8 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   - 关闭节流的真实后果是 Electron **永久抑制隐藏态**（`disable_hidden_ = !backgroundThrottling_`，
     `shell/browser/api/electron_api_web_contents.cc`）：窗口隐藏后 rAF 仍 120/s、
     帧照画照交换、`document.visibilityState` 恒 `'visible'`、`visibilitychange` 0 次。
-    于是 `retention.ts` 的 `shouldRunBackgroundPhase` 六处门控在 Electron 上
-    **从不生效**，隐藏期 renderer CPU 最高 28.1%（上游常驻动画 19.0% + 发布 19.4%）。
+    于是 `packages/renderer/src/background-phase.ts#shouldRunBackgroundPhase` 的前台相位门控在
+    Electron 上 **从不生效**，隐藏期 renderer CPU 最高 28.1%（上游常驻动画 19.0% + 发布 19.4%）。
   - 恢复默认节流后同一测量台：隐藏期 rAF 0、CSS 动画暂停、`visibilitychange` 恢复，
     renderer CPU 0.0–0.1%；**网络流不受影响**（该轮实测的载体是页面 SSE；design 26 §D6 之后长活流走页面通道 WS，同为网络流、结论不变）（隐藏 9s 收 9/9 条、`maxGap`
     1005ms、0 错误），唤醒即时重连走 `powerMonitor.on('resume')` →
@@ -751,6 +751,11 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
 - **绝不进任何实例的 dsh home**（01 §2 P2：每实例配置平面权威，控制面只
   透传；chamber 设置是 app 级，与实例配置平面不相交）。
 - 不新增依赖：`powerMonitor` / `powerSaveBlocker` / `Tray` 均为 Electron 内置。
+- **运行时只读观测快照**：`settings.get` 应答里的 `ChamberSettingsStatus.system`
+  （`{totalBytes, availableBytes, source, capturedAt}`，`packages/desktop/system-memory.ts#readSystemMemory`）
+  是**观测快照，不是设置项**：不持久化、不写 `chamber-settings.json`、不参与
+  `validatePatch`/文件 schema/`DEFAULT_CHAMBER_SETTINGS`，也不进入 settings 变更 push（只随
+  `get` 应答返回；字段缺失 = 宿主早于本版/不支持，消费端读「不可得」，绝不按 0 或 100% 猜）。
 
 ## 4. 面与接线（契约）
 

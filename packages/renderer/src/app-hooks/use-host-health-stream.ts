@@ -9,7 +9,7 @@
 import { useEffect } from 'react'
 import { api, type HealthResponse } from '../api.ts'
 import { CONNECTIONS_POLL_MS } from '../host/budgets.ts'
-import { shouldRunBackgroundPhase } from '../retention.ts'
+import { shouldRunBackgroundPhase } from '../background-phase.ts'
 
 export interface HostHealthStreamInputs {
   refreshHealth: () => Promise<unknown>
