@@ -46,13 +46,24 @@ test('127.0.0.1 is the remote loopback target', () => {
   assert.equal(result.requestPath, '/app?debug=1')
 })
 
-test('localhost is normalised to 127.0.0.1 (bare host:port included)', () => {
+test('localhost keeps its typed spelling for the link leg but forwards to 127.0.0.1', () => {
   const result = parseBrowserAddress('localhost:5173')
   assert.equal(result.kind, 'remote-loopback')
   if (result.kind !== 'remote-loopback') return
   assert.equal(result.port, 5173)
-  assert.equal(result.url, 'http://127.0.0.1:5173/')
+  // A local service (or its certificate) may answer only as localhost — the
+  // system-browser URL keeps the typed host; the forward target is canonical.
+  assert.equal(result.url, 'http://localhost:5173/')
+  assert.equal(result.host, '127.0.0.1')
   assert.equal(result.requestPath, '/')
+})
+
+test('an https localhost URL keeps localhost for the link leg', () => {
+  const result = parseBrowserAddress('https://localhost:8443/secure')
+  assert.equal(result.kind, 'remote-loopback')
+  if (result.kind !== 'remote-loopback') return
+  assert.equal(result.url, 'https://localhost:8443/secure')
+  assert.equal(result.host, '127.0.0.1')
 })
 
 test('a trailing-dot loopback is still the remote target', () => {

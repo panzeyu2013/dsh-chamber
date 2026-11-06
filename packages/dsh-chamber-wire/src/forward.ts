@@ -85,9 +85,9 @@ export type ForwardState = (typeof FORWARD_STATES)[number]
 export const FORWARD_ERROR_CODES = [
   /** No such source, or the fingerprint no longer matches (retarget/remove). */
   'source_unknown',
-  /** The source is not a dsh target (gateway/local entries never get a browser). */
+  /** The registry kind is not a forwardable target (dsh and gateway are; local never asks). */
   'source_not_dsh',
-  /** The source does not ride SSH (http locals cannot be forwarded). */
+  /** The source does not ride SSH (the gateway-http form cannot be forwarded). */
   'transport_not_ssh',
   /** The source identity changed while a forward/confirm was in flight. */
   'source_changed',

@@ -22,6 +22,7 @@ import { en, zh, type BrowserKey } from '../../src/locales.ts'
 
 const DSH: BrowserSource = parseBrowserSource('dsh-alpha', 'ssh')!
 const GATEWAY: BrowserSource = parseBrowserSource('gateway-alpha', 'ssh')!
+const LOCAL: BrowserSource = parseBrowserSource('local', 'local')!
 const APP = 'http://127.0.0.1:30800'
 
 function plan(input: string, source: BrowserSource = DSH) {
@@ -86,8 +87,28 @@ test('remote https passes the scheme through and flags the certificate', () => {
   })
 })
 
-test('an ineligible source refuses the remote branch instead of opening another machine', () => {
-  assert.deepEqual(plan('127.0.0.1:5173', GATEWAY), { kind: 'reject', reason: 'source-ineligible' })
+test('a gateway source forwards like a dsh source (same ssh tunnel)', () => {
+  assert.deepEqual(plan('127.0.0.1:5173', GATEWAY), {
+    kind: 'forward',
+    port: 5173,
+    scheme: 'http',
+    path: '/',
+    requestPath: '/',
+    certificateWarning: false,
+  })
+})
+
+test('the local instance opens a loopback address on this machine, never a forward', () => {
+  assert.deepEqual(plan('127.0.0.1:5173/app?x=1', LOCAL), {
+    kind: 'system-browser',
+    url: 'http://127.0.0.1:5173/app?x=1',
+    reachability: 'local-machine',
+  })
+  assert.deepEqual(plan('localhost:3000', LOCAL), {
+    kind: 'system-browser',
+    url: 'http://localhost:3000/',
+    reachability: 'local-machine',
+  })
 })
 
 test('rows are ordered by remote port then id, with resolved state/action copy', () => {
@@ -142,7 +163,7 @@ test('the per-source forward cap is 8 and counts every record', () => {
 test('every address refusal reason has a locale key that exists in zh and en', () => {
   const reasons = [
     'empty', 'too-long', 'invalid', 'protocol', 'credentials', 'application-origin',
-    'ipv6-loopback', 'unspecified-host', 'alias-host', 'loopback-other', 'port', 'source-ineligible',
+    'ipv6-loopback', 'unspecified-host', 'alias-host', 'loopback-other', 'port',
   ] as const
   for (const reason of reasons) {
     const key: BrowserKey = addressErrorKey(reason)

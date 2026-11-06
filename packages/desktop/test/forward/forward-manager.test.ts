@@ -4,7 +4,7 @@
  * The manager is the security control point between a renderer payload and an
  * ssh child, so this suite drives the PUBLIC surface only (request/release/
  * list/openInBrowser/retireSource/stopAll) over injected fakes:
- *   - the rejection matrix (gateway/local/http, reserved port, invalid port,
+ *   - the rejection matrix (local/http, reserved port, invalid port,
  *     unknown source, disabled browser, per-source/global caps);
  *   - ownership: two sources may share the same port only on different alias
  *     hosts; a released (host,port) pair becomes reusable;
@@ -315,11 +315,34 @@ test('happy path: bound record, same-port allocation, argv, wire guards', async 
   assert.equal(list.limits.global, FORWARD_MAX_GLOBAL)
 })
 
-test('gate matrix: gateway/local/http/unknown/reserved/invalid ports never spawn', async () => {
+test('a gateway source forwards over its ssh tunnel (same manager path, gateway id)', async () => {
+  const h = harness()
+  const source = install(h, makeSource({ sourceId: 'gateway-gw-1', kind: 'gateway' }))
+  const result = await h.manager.request({
+    sourceId: 'gateway-gw-1',
+    sourceFingerprint: FINGERPRINT,
+    port: 5173,
+  })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.record.state, 'bound')
+  assert.equal(result.record.namespace, 0)
+  assert.equal(h.launcher.launches.length, 1)
+  assert.deepEqual(
+    [...h.launcher.launches[0].argv],
+    buildForwardArgs(source.ssh, '127.0.0.2', 5173, 5173),
+  )
+  const list = await h.manager.list({ sourceId: 'gateway-gw-1', sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.equal(list.records.length, 1)
+  assert.equal(list.records[0].sourceId, 'gateway-gw-1')
+})
+
+test('gate matrix: local/http/unknown/reserved/invalid ports never spawn', async () => {
   const cases: Array<{ name: string; source?: ForwardSource; port: number; code: string }> = [
     { name: 'unknown source', source: undefined, port: 5173, code: 'source_unknown' },
-    { name: 'gateway', source: makeSource({ kind: 'gateway' }), port: 5173, code: 'source_not_dsh' },
-    { name: 'local target', source: makeSource({ kind: 'local' }), port: 5173, code: 'source_not_dsh' },
+    { name: 'non-registry kind', source: makeSource({ kind: 'local' }), port: 5173, code: 'source_not_dsh' },
     { name: 'http transport', source: makeSource({ transport: 'http' }), port: 5173, code: 'transport_not_ssh' },
     { name: 'port 0', port: 0, code: 'target_port_invalid' },
     { name: 'port 65536', port: 65_536, code: 'target_port_invalid' },
@@ -340,7 +363,8 @@ test('gate matrix: gateway/local/http/unknown/reserved/invalid ports never spawn
 
 test('source gate helpers are pure and share the vector table', () => {
   assert.equal(evaluateForwardSourceGate(makeSource()), null)
-  assert.equal(evaluateForwardSourceGate(makeSource({ kind: 'gateway' }))?.code, 'source_not_dsh')
+  assert.equal(evaluateForwardSourceGate(makeSource({ kind: 'gateway' })), null, 'gateway+ssh forwards')
+  assert.equal(evaluateForwardSourceGate(makeSource({ kind: 'local' }))?.code, 'source_not_dsh')
   assert.equal(evaluateForwardSourceGate(makeSource({ transport: 'http' }))?.code, 'transport_not_ssh')
   assert.equal(evaluateForwardGate(makeSource(), 5173), null)
   assert.equal(evaluateForwardGate(makeSource(), 17_520)?.code, 'target_port_reserved')

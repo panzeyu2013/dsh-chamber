@@ -612,10 +612,27 @@ test('authorize: a source retarget during the dialog never grants access', async
 })
 
 // ---------------------------------------------------------------------------
-// 3. Gates: gateway / http / local / unknown / reserved ports never spawn
+// 3. Gates: http / local / unknown / reserved ports never spawn
 // ---------------------------------------------------------------------------
 
-test('gate: gateway, http, local, unknown and reserved ports never reach a child', async () => {
+test('a gateway ssh source resolves and forwards like a dsh source', async () => {
+  const h = new Harness()
+  h.probe.reachable = true
+  h.instances[0] = makeInstance({ id: 'gw-1', kind: 'gateway' })
+  h.addSource('gateway-gw-1', FINGERPRINT)
+  const service = h.create()
+  const result = await service.request({ sourceId: 'gateway-gw-1', sourceFingerprint: FINGERPRINT, port: 5173 })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.record.state, 'bound')
+  assert.equal(h.spawn.calls.length, 1)
+  const list = await service.list({ sourceId: 'gateway-gw-1', sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.equal(list.records.length, 1)
+})
+
+test('gate: http, local, unknown and reserved ports never reach a child', async () => {
   const cases: Array<{
     name: string
     instances?: TransportInstanceSpec[]
@@ -625,10 +642,10 @@ test('gate: gateway, http, local, unknown and reserved ports never reach a child
     code: string
   }> = [
     {
-      name: 'gateway kind',
-      instances: [makeInstance({ kind: 'gateway' })],
-      sourceId: 'gateway-web-1',
-      args: { sourceId: 'gateway-web-1', sourceFingerprint: FINGERPRINT, port: 5173 },
+      name: 'non-registry kind',
+      instances: [makeInstance({ kind: 'local', id: 'local-target' })],
+      sourceId: 'local-local-target',
+      args: { sourceId: 'local-local-target', sourceFingerprint: FINGERPRINT, port: 5173 },
       code: 'source_not_dsh',
     },
     { name: 'http transport', instances: [makeInstance({ transport: 'http' })], args: requestArgs(), code: 'transport_not_ssh' },

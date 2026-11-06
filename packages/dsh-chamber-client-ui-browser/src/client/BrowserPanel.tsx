@@ -1,6 +1,7 @@
 /**
- * Remote Browser launcher (design 28, W0 skeleton): address bar + per-source
- * remote-loopback forward list.
+ * Remote Browser launcher (design 28): address bar + per-source remote-loopback
+ * forward list; the local instance renders only the address bar (a loopback
+ * address is this machine, so it opens there instead of forwarding).
  *
  * What it does
  *  - parses the typed address with the pure host/scheme table
@@ -27,6 +28,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   parseBrowserAddress,
+  type AddressRefusalReason,
 } from '../shared/address.ts'
 import {
   FORWARD_POLL_INTERVAL_MS,
@@ -47,7 +49,6 @@ import {
   planAddressSubmit,
   sourceForwardLimitReached,
   type AddressPlan,
-  type AddressRejectReason,
   type RemoteRow,
 } from '../shared/launcher-model.ts'
 import type { BrowserKey, BrowserTranslate } from '../locales.ts'
@@ -71,7 +72,7 @@ interface Notice {
 
 export function BrowserPanel({ t, source, sourceFingerprint, bridge }: BrowserPanelProps) {
   const [draft, setDraft] = useState('')
-  const [addressError, setAddressError] = useState<AddressRejectReason | null>(null)
+  const [addressError, setAddressError] = useState<AddressRefusalReason | null>(null)
   const [actionError, setActionError] = useState<ForwardFailureCode | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [records, setRecords] = useState<ForwardRecord[]>([])
@@ -88,7 +89,9 @@ export function BrowserPanel({ t, source, sourceFingerprint, bridge }: BrowserPa
   const lastPaths = useRef(new Map<string, string>())
 
   useEffect(() => {
-    if (bridge === null) return
+    // The local instance has no forward leg: the panel never polls or renders
+    // the remote section for it (the address bar still opens on this machine).
+    if (!source.mayForward || bridge === null) return
     let disposed = false
     let inFlight = false
     const tick = async (): Promise<void> => {
@@ -121,7 +124,7 @@ export function BrowserPanel({ t, source, sourceFingerprint, bridge }: BrowserPa
       disposed = true
       clearInterval(timer)
     }
-  }, [bridge, source.sourceId, sourceFingerprint, reloadToken])
+  }, [bridge, source.mayForward, source.sourceId, sourceFingerprint, reloadToken])
 
   const rows = useMemo(() => buildRemoteRows(records), [records])
   const limitReached = sourceForwardLimitReached(records)
@@ -157,7 +160,7 @@ export function BrowserPanel({ t, source, sourceFingerprint, bridge }: BrowserPa
   }
 
   const runForward = async (plan: Extract<AddressPlan, { kind: 'forward' }>): Promise<void> => {
-    if (bridge === null) {
+    if (!source.mayForward || bridge === null) {
       setActionError('unavailable')
       return
     }
@@ -297,66 +300,68 @@ export function BrowserPanel({ t, source, sourceFingerprint, bridge }: BrowserPa
         </button>
       </form>
 
-      <p className={styles.hint}>{t('address.hint')}</p>
+      <p className={styles.hint}>{t(source.mayForward ? 'address.hint' : 'address.hintLocal')}</p>
 
       {errorKey !== null && <p className={styles.error} role="alert">{t(errorKey)}</p>}
       {notice !== null && <p className={styles.notice} role="status">{t(notice.key, notice.params)}</p>}
 
-      <section className={styles.section} aria-labelledby={`${addressId}-remote`}>
-        <h2 className={styles.sectionTitle} id={`${addressId}-remote`}>{t('remote.section')}</h2>
-        {bridge === null ? (
-          <p className={styles.empty}>{t('remote.noBridge')}</p>
-        ) : listPhase === 'error' ? (
-          <div className={styles.listError} role="alert">
-            <span>{t('remote.listFailed')}</span>
-            <span>{listError === null ? '' : t(forwardErrorKey(listError))}</span>
-            <button type="button" className={styles.linkButton} onClick={() => { setReloadToken((token) => token + 1) }}>
-              {t('remote.retry')}
-            </button>
-          </div>
-        ) : listPhase === 'loading' && rows.length === 0 ? (
-          <p className={styles.empty}>{t('remote.loading')}</p>
-        ) : rows.length === 0 ? (
-          <p className={styles.empty}>{t('remote.empty')}</p>
-        ) : (
-          <ul className={styles.list}>
-            {rows.map((row) => (
-              <li key={row.id} className={styles.row} data-state={row.state} data-stale={row.stale ? 'true' : 'false'}>
-                <div className={styles.rowMain}>
-                  <span className={styles.rowPort}>{t('remote.port', { port: row.remotePort })}</span>
-                  <code className={styles.rowUrl}>{row.displayUrl}</code>
-                  <span className={styles.rowState}>{t(row.stateKey)}</span>
-                </div>
-                {row.closable && (
-                  <div className={styles.rowActions}>
-                    {(row.openable || row.reissuable) && (
+      {source.mayForward && (
+        <section className={styles.section} aria-labelledby={`${addressId}-remote`}>
+          <h2 className={styles.sectionTitle} id={`${addressId}-remote`}>{t('remote.section')}</h2>
+          {bridge === null ? (
+            <p className={styles.empty}>{t('remote.noBridge')}</p>
+          ) : listPhase === 'error' ? (
+            <div className={styles.listError} role="alert">
+              <span>{t('remote.listFailed')}</span>
+              <span>{listError === null ? '' : t(forwardErrorKey(listError))}</span>
+              <button type="button" className={styles.linkButton} onClick={() => { setReloadToken((token) => token + 1) }}>
+                {t('remote.retry')}
+              </button>
+            </div>
+          ) : listPhase === 'loading' && rows.length === 0 ? (
+            <p className={styles.empty}>{t('remote.loading')}</p>
+          ) : rows.length === 0 ? (
+            <p className={styles.empty}>{t('remote.empty')}</p>
+          ) : (
+            <ul className={styles.list}>
+              {rows.map((row) => (
+                <li key={row.id} className={styles.row} data-state={row.state} data-stale={row.stale ? 'true' : 'false'}>
+                  <div className={styles.rowMain}>
+                    <span className={styles.rowPort}>{t('remote.port', { port: row.remotePort })}</span>
+                    <code className={styles.rowUrl}>{row.displayUrl}</code>
+                    <span className={styles.rowState}>{t(row.stateKey)}</span>
+                  </div>
+                  {row.closable && (
+                    <div className={styles.rowActions}>
+                      {(row.openable || row.reissuable) && (
+                        <button
+                          type="button"
+                          className={styles.rowAction}
+                          disabled={busy || busyRowId === row.id}
+                          onClick={() => { void (row.openable ? openRow(row) : reopenRow(row)) }}
+                        >
+                          {t(row.actionKey)}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={styles.rowAction}
                         disabled={busy || busyRowId === row.id}
-                        onClick={() => { void (row.openable ? openRow(row) : reopenRow(row)) }}
+                        onClick={() => { void closeRow(row) }}
                       >
-                        {t(row.actionKey)}
+                        {t('remote.close')}
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      className={styles.rowAction}
-                      disabled={busy || busyRowId === row.id}
-                      onClick={() => { void closeRow(row) }}
-                    >
-                      {t('remote.close')}
-                    </button>
-                  </div>
-                )}
-                {row.errorCode !== undefined && <p className={styles.rowError}><code>{row.errorCode}</code></p>}
-              </li>
-            ))}
-          </ul>
-        )}
-        {bridge !== null && rows.length > 0 && <p className={styles.hint}>{t('remote.sharedRisk')}</p>}
-        {limitReached && <p className={styles.warning}>{t('remote.limit', { limit: PER_SOURCE_FORWARD_LIMIT })}</p>}
-      </section>
+                    </div>
+                  )}
+                  {row.errorCode !== undefined && <p className={styles.rowError}><code>{row.errorCode}</code></p>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {bridge !== null && rows.length > 0 && <p className={styles.hint}>{t('remote.sharedRisk')}</p>}
+          {limitReached && <p className={styles.warning}>{t('remote.limit', { limit: PER_SOURCE_FORWARD_LIMIT })}</p>}
+        </section>
+      )}
     </div>
   )
 }

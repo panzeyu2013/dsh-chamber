@@ -14,7 +14,8 @@
 
 右栏 `sidebar.right` 的一个页签：**地址栏 + 远端 loopback 的 SSH 端口转发器 + 系统浏览器启动器**。
 它把「远端实例所在机器的 `127.0.0.1:<port>` 服务」映射到本机一个**专用 alias 主机名**上，然后交给
-操作系统默认浏览器打开。面板内**不渲染任何页面**，也不持有浏览上下文。
+操作系统默认浏览器打开。本地实例没有远端可转，页签只保留地址栏：地址直接在本机系统浏览器打开。
+面板内**不渲染任何页面**，也不持有浏览上下文。
 
 一句话契约：**从右栏发起；远端 loopback 走 forward；其它 http(s) 走既有链接腿；两者都在系统浏览器落地。**
 
@@ -26,7 +27,8 @@
   「把远端 loopback 端口交到本机系统浏览器」，不渲染、不代答、不注入，属**有界例外**（§13 登记）。
 - **不是第二套 URL 打开面**：不新增通用 URL IPC；公网 URL 一律走既有链接腿（`renderer-trust.ts` 的
   `isExternalLinkUrl` + 主进程 `will-navigate`/`setWindowOpenHandler` 腿，design 16/19 的既有裁决）。
-- **不是 gateway / 远端 LAN / 任意 target 的转发器**：target 恒为远端 `127.0.0.1`，gateway 源无入口。
+- **不是 gateway / 远端 LAN / 任意 target 的转发器**：target 恒为远端 `127.0.0.1`，不碰 gateway
+  的 HTTP 面；`gateway` + http 来源无入口（没有 SSH 隧道）。
 
 ### 1.3 非目标（明确不做）
 
@@ -37,15 +39,24 @@
 - 不支持 OTP/2FA 主机的多连接、不支持远端 IPv6 loopback、不做 key-only 强制。
 - 不 seed 远端、不改远端 profile、不引入新运行时依赖（`ws`/Electron 之外零新增）。
 
-### 1.4 入口门（硬门）
+### 1.4 入口门
 
-只有 `kind === 'dsh' && transport === 'ssh'` 的 source 出现入口。local / dsh+http / gateway / gateway+http
-不出现：这些形态要么本机直连（用户自己的浏览器就是对的），要么隧道语义由 gateway 自带，本方案不接管。
+除纯 HTTP 来源外，所有来源都出现入口：`local`（本机实例）、`dsh` + ssh、`gateway` + ssh。唯一不出现的是
+`gateway` + http（当前唯一可用的 http 形态）：它没有 SSH 隧道，远端 loopback 腿没有载体。
+
+两条腿按来源分相（`mayForward` 派生自这里，launcher 的地址计划与远端分区都读它）：
+
+| 来源 | 地址栏 | 远端 loopback 腿 | 理由 |
+|---|---|---|---|
+| `local` | 有 | **无**（`127.0.0.1:port` 直接在本机系统浏览器打开） | 本地实例的 loopback 就是本机，转发只会绕路 |
+| `dsh` + ssh | 有 | 有（forward） | 远端 loopback 需要 `-L` 映射到本机 alias |
+| `gateway` + ssh | 有 | 有（forward，复用同一条 SSH 隧道） | gateway 只是 dsh 宿主的认证前门；端口转发与 dsh+ssh 同形 |
+| `gateway` + http | **无入口** | — | 无 SSH 隧道；不新增 gateway 反代域（§1.2/§14） |
 
 kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/transport-source.ts` 的
-`dsh-`/`gateway-`），聚合行也带 `kind`/`transport`
+`dsh-`/`gateway-`；本地实例就是字面量 `local`），聚合行也带 `kind`/`transport`
 （`packages/dsh-chamber-client-core/src/aggregate-store.ts`）。本设计**不新增 boot fact**、不改
-`shell.ts`/`InstanceView.tsx`/`App.tsx`（后者是 1839/1600 行棘轮），第二轮 A/B/D 的三方结论一致。
+`shell.ts`/`InstanceView.tsx`/`App.tsx`（后者是 1839/1600 行棘轮）。
 
 ---
 
@@ -54,7 +65,7 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 | # | 决策 | 约束/理由 |
 |---|---|---|
 | D1 | 形态 = 地址栏 + 系统浏览器；面板零渲染 | 无 CSP/嵌套浏览上下文风险；与既有链接腿同源（design 16/19） |
-| D2 | 入口仅 `dsh + ssh`；kind 从 source id / 聚合行派生，**不加 boot fact** | 避免 App.tsx 棘轮与 6 处签名改动（A I1） |
+| D2 | 入口 = 除 http 外的全部来源（local / dsh+ssh / gateway+ssh）；kind 与 `mayForward` 从 source id / boot transport 派生，**不加 boot fact** | 窄门（仅 dsh+ssh）会让 gateway+ssh 与 local 这两个真实来源形态不可达；kind 仍只派生，避免 App.tsx 棘轮与 6 处签名改动（A I1，§14） |
 | D3 | 注册 = **新 chamber client 包** `@dsh-chamber/dsh-chamber-client-ui-browser` + deferred row | renderer 内模块 + synthetic id 与 deferred roster 审计冲突（A/B B1）；包布局是审计唯一支持形态 |
 | D4 | alias 身份 = 持久 **browserNamespace**；`127.0.0.2–254`；永不含 `127.0.0.1/0/255`；**永不复用** | C B1：sourceId 不随 retarget 变、fingerprint 每进程重铸，两者都不能当持久键 |
 | D5 | 两条打开腿：公网/本机 URL → 既有链接腿；远端 forward → main 构造 URL 的 `forward.openInBrowser` | 无通用 URL IPC；renderer 不传 URL（report-v4 §0.5） |
@@ -72,9 +83,10 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 
 | 输入 / 场景 | v1 行为 | 备注 |
 |---|---|---|
-| `http://127.0.0.1:port/path`（dsh+ssh 源） | forward → 系统浏览器打开 `http://<alias>:<localPort>/path` | 主路径 |
-| `http://localhost:port`（同上） | 规范化为 `127.0.0.1` 后同上 | Host 头是 alias，不是 localhost |
-| `https://127.0.0.1:port`（同上） | forward **透传 https** → `https://<alias>:<localPort>`；提示证书可能不匹配 | 系统浏览器会拦截，属预期 |
+| `http://127.0.0.1:port/path`（ssh 源：dsh / gateway） | forward → 系统浏览器打开 `http://<alias>:<localPort>/path` | 主路径 |
+| `http://127.0.0.1:port/path`（local 源） | 直接在本机系统浏览器打开该 URL（无 forward） | 本机 loopback 就是用户机器；转发是多余绕路 |
+| `http://localhost:port`（ssh 源） | 规范化为 `127.0.0.1` 后同上 | Host 头是 alias，不是 localhost |
+| `https://127.0.0.1:port`（ssh 源） | forward **透传 https** → `https://<alias>:<localPort>`；提示证书可能不匹配 | 系统浏览器会拦截，属预期 |
 | `[::1]:port` | **拒绝**（`ipv6-loopback`） | 只保证 IPv4 loopback；target 恒 `127.0.0.1` |
 | `127.0.0.2–254`（输入侧） | **拒绝为远端目标**（`alias-host`） | 这些是 chamber 自己的浏览器 alias，粘贴回来会绕过 source 隔离 |
 | RFC1918 / 远端 LAN / 主机名 / 公网 | 走既有链接腿（在本机网络打开），UI 标注“在本机打开” | 远端可达性不承诺；target 不能换成这些地址 |
@@ -114,7 +126,7 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 
 | host | 分类 | 腿 |
 |---|---|---|
-| `127.0.0.1`、`localhost` | remote-loopback | forward（仅 dsh+ssh 源） |
+| `127.0.0.1`、`localhost` | remote-loopback | forward（ssh 源）；local 源直接在本机系统浏览器打开 |
 | `127.0.0.2`–`127.0.0.254` | alias-host | reject（`alias-host`；不给“本地打开”，避免绕过 source 隔离） |
 | 其它 `127/8`（含 `127.0.0.0`、`127.0.0.255`） | loopback-other | reject（`loopback-other`） |
 | `0.0.0.0` | unspecified-host | reject |
@@ -126,11 +138,17 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 > 说明：`127.0.0.1` 在与控制面同端口时必须**先判 app-origin**（同 origin 根路径会被 `isTrustedRendererUrl`
 > 放行、导致整壳重载）；远端服务恰好也在 cpPort 时，v1 不给“强行按远端打开”的旁路，错误文案指向
 > 换端口（§15 开放项）。这是把“静默错机器”换成“可读拒绝”的取舍。
+>
+> 两个事实分开保存：`host` 恒为 `127.0.0.1`（forward 目标，main 只认它）；交给系统浏览器的 URL
+> **保留用户输入的 `localhost` 拼写**——本地服务或它的证书可能只认 `localhost`（含 IPv6 loopback），
+> 改写会静默换主机。远端分支从不读这个 URL（forward 只送 `requestPath`）。
 
 ### 4.3 两个动作
 
-- **打开远端**（remote-loopback 且 dsh+ssh）：`forward.request` → 确认 → `forward.openInBrowser`。
-- **在本机打开**（任何非 app-origin 的 http(s)）：走既有链接腿（`<a target="_blank" rel="noreferrer">`）。
+- **打开远端**（remote-loopback 且来源有 SSH 隧道，即 dsh+ssh / gateway+ssh）：
+  `forward.request` → 确认 → `forward.openInBrowser`。
+- **在本机打开**（local 源的 remote-loopback，或任何非 app-origin 的 http(s)）：走既有链接腿
+  （`<a target="_blank" rel="noreferrer">`）。local 源的 `127.0.0.1:port` 不需要转发，直接打开。
   launcher 自身不解析成 IPC URL；链接腿的失败/限流由既有全局预算（8/10s + 30s 冷却）决定，浏览器
   不回报失败，v1 只显示 `notice.publicOpened`（不伪造一个无法观测的错误码）。
 
@@ -151,11 +169,11 @@ kind 是**派生事实**：source id 已编码 kind（`packages/renderer/src/tra
 - `required-extra-rows.test.ts` 按包布局解析 `src/client/index.ts`，故不需要改审计；**不需要 seed**：
   它是 renderer workspace client 包，由 composite 加载并打进控制面前端；seed 只服务宿主包
   （client-graph/git/open-in/archive-cleanup）。远端实例不需要安装它。
-- 官方 `ui-sidebar-browser` 行：**TODO(pin-vendor)** 从 pin 的 `bundle/web-app/cordis.patch.yml` 给启停证据。
-  现状证据只有文档断言（`upstream-touchpoints.md` 把 `browser-guests.ts`/`preload-browser.ts` 记
-  not-applicable），`CHAMBER_COVERED_IDS` 里**没有**该行。若 pin 的 web profile 会加载它：
-  (a) 在 `chamber-covered.ts` 加“有意跳过”条目（家族③，理由：右栏浏览器由 chamber 接管）；
-  (b) design 09 §3.5 有意跳过名单登记；(c) 一条负例（宿主图含该行时仍只有一个浏览器页签）。
+- 官方 `ui-sidebar-browser` 行：**已核实（pin 0.2.2-rc.1）**——web profile 把它写成
+  `disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`（`dsh-web-app/cordis.patch.yml`），
+  而控制面固定以 `--profile web` 起宿主（`packages/control-plane/src/spawn-dsh.ts`）：web profile 永远
+  不加载该行，实测本地实例的 `clientGraph/graph` 里也没有它。因此 `CHAMBER_COVERED_IDS` **不需要** skip
+  条目；若未来 chamber 提供 desktop profile，再按“有意跳过 + design 09 §3.5 登记 + 负例”处理。
   **不同 kind 不能替代 skip**：重复入口不是注册冲突。
 
 ### 5.2 运行期门（apply 早退）
@@ -166,12 +184,16 @@ export const inject = ['slots', 'locale'] as const
 ```
 
 - `apply(ctx)` 第一行判定来源：`resolveBrowserEntry(chamberInstanceId, chamberTransport) === null`
-  → 直接 `return`（不注册页签、不注册 body、不订阅、不 throw）。缺事实按“非目标来源”处理，**fail-closed**。
-- `resolveBrowserEntry()` 是**新包自带的纯函数**（`src/shared/source.ts`）：解析 `dsh-`/`gateway-` 前缀与
-  非 `ssh-`（legacy 拼写在主进程 proveSource 的 `${kind}-${id}` 下会得到 `source_unknown`，因此入口直接
-  拒绝，不显示一个必然失败的 tab）。**不能** import `packages/renderer/src/transport-source.ts`——包边界禁生产面跨包相对
-  import，renderer 只导出 `./global.d.ts`。与 renderer 同构的保证 = 一张共享用例表（`dsh-x`/`gateway-x`/
-  `ssh-x`/`unknown`），两侧各跑一次。
+  → 直接 `return`（不注册页签、不注册 body、不订阅、不 throw）。只有 http 与畸形事实返回 null；
+  缺事实按“非目标来源”处理，**fail-closed**。
+- `resolveBrowserEntry()` 是**新包自带的纯函数**（`src/shared/source.ts`）：识别字面量 `local`（transport 必须是
+  `local`，`mayForward=false`）与 `dsh-`/`gateway-` 前缀（transport 必须是 `ssh`，`mayForward=true`）；
+  其它一律 null——legacy `ssh-` 拼写、畸形 id、`http` 与 kind/transport 交叉错配都在这里死掉。
+  **不能** import `packages/renderer/src/transport-source.ts`——包边界禁生产面跨包相对
+  import，renderer 只导出 `./global.d.ts`。与 renderer 同构的保证 = 一张共享用例表（`local`/`dsh-x`/`gateway-x`/
+  `ssh-x`/`http`），两侧各跑一次。
+- 指纹（`chamberSourceFingerprint`）跟随 boot 事实：本地实例是字面量 `local`（`shell.ts` 提供），远端是
+  64-hex。远端缺指纹只记一条 warning 并缺席（不注册一个必然被 main 拒绝的 tab）；本地不需要指纹。
 - `sidebarRightTabs` **不进导出 inject**：它是本行可缺的服务，不是包启动的硬依赖；`apply` 在来源门之后用
   `ctx.get('sidebarRightTabs')` 探测，缺服务时安静地不注册（与 `ui-sidebar-right` 的 provider 顺序解耦）。
   design 09 §3.2 记录同一形态；§14 保留“进导出 inject”作为被否方案。若 pin 源证明该服务对所有 kind
@@ -202,7 +224,8 @@ export const inject = ['slots', 'locale'] as const
 
 空态（无 forward）给一句“输入远端 127.0.0.1 端口或任意 http(s) URL”；地址栏 autofocus；进行中有
 单一 `role="status"` live region；错误按 §6.5 的 code 映射到一句文案 + 一个动作（重试/换端口/查看日志/
-去连接页重连）。a11y 与 i18n 在 S2 收口。
+去连接页重连）。local 源没有远端分区：只保留地址栏与一句“地址直接在本机系统浏览器打开”，且**
+不轮询`list`**（没有 forward 腿，轮询只会得到一条必然失败的源证明）。a11y 与 i18n 在 S2 收口。
 
 ---
 
@@ -298,6 +321,8 @@ forward_not_bound | forward_stale | invalid_path | rate_limited | open_failed`.
 
 - launcher 侧折叠为 3 states / 10 codes（`src/shared/forward-bridge.ts` + renderer adapter）；`confirmation_declined`
   映射为 `confirm-declined`，`confirmation_late` 映射为 `stale`。
+- 来源门：`dsh` 与 `gateway` 都过 kind 臂，`transport !== 'ssh'` 才是 `transport_not_ssh`；`source_not_dsh`
+  只留给注册表出现第三种 kind 的未来形态（local 根本不进主进程——launcher 不提供它的转发腿）。
 - v1 **不做**首次打开前的 5s HTTP 探测（没有 `remote_unreachable` / “仍然打开”分支）；`bound = 本地 listener
   接受 probe`，远端服务可达性由系统浏览器最终证明。
 
@@ -391,9 +416,11 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 - `scheme` 由 renderer 传（来自地址栏解析），但 main 复验 ∈ {http, https}；wire record 不携带 `localUrl`，实际打开 URL 由 main 在 `openInBrowser` 时用 aliasHost/localPort/path 构造，renderer 传的任何 URL 字段一律忽略（payload 只有 `path`）。
 - `path`：`new URL(path, 'http://127.0.0.1')` 解析后断言 origin 不变、pathname 不变（覆盖 `//`、
   `..%2f`、反斜杠、`%0d%0a`、非字符串 payload）；不接受绝对 URL 与 fragment。
-- 拒绝矩阵（单测逐条）：未知 source、local、dsh+http、gateway+ssh、gateway+http、`port` 自身、
+- 拒绝矩阵（单测逐条）：未知 source、`local`（主进程只接受 `${kind}-${id}`，本地实例不转发）、
+  `dsh`/`gateway` + http（`transport_not_ssh`）、第三种 kind（`source_not_dsh`）、`port` 自身、
   `port ∈ {0,1023,1024,65535,65536,NaN,1.5,'5173'}`、id 前缀与 kind 不符、未启用、非主 frame
-  （`ipc_sender_forbidden`）。
+  （`ipc_sender_forbidden`）。**正例**：`dsh` 与 `gateway` + ssh 走同一条 manager 路径（同 argv、同确认、
+  同 alias 分配；namespace 按 `kind` 入 digest，两者互不复用）。
 - **renderer 只看到 aliasHost/localPort/scheme 这类浏览器显示值，不持有 localUrl**；design 05 §7.4 的“传输 URL 永不进 renderer”指隧道目标 URL/私钥/凭据；实际浏览器地址由 main 构造。该偏离在 §13 登记。
 
 ---
@@ -461,7 +488,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 - ssh `-L` 的本地端**无认证**：本机任何进程都能访问该 listener，远端看到的是用户的 SSH 身份。
 - 缓解（v1 全做）：per-`browserNamespace:targetPort` 的 `confirmedPorts`（首次原生确认才写入、持久、
   retarget 失效）、确认文案第 2 条明示“本机所有进程可见”、上限 8/32、显式关闭。
-- 未确认的端口先弹原生确认；没有确认 seam（或非 dsh+ssh）时才返回 `browser_disabled`。
+- 未确认的端口先弹原生确认；没有确认 seam（或来源不带 SSH 隧道）时才返回 `browser_disabled`。
 
 ### 9.4 认证放大与 2FA/OTP
 
@@ -484,6 +511,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 | AC6 | retarget | 旧 forward 全关、alias 轮换、重新确认 |
 | AC7 | renderer 伪造 host/port/来源 | main 用 registry 事实拼文案与 URL，伪造被拒 |
 | AC8 | 从 `127.0.0.n` 的页面打控制面/dsh | 不得改变 chamber/dsh 状态（控制面 Host/Origin 栅栏 + 本机服务自身栅栏；见 §9.7 残余） |
+| AC9 | `gateway` + ssh 源的转发目标（gateway 宿主的 loopback，可能是基础设施管理面） | 与 dsh 源同一套 per-port 确认、默认取消与“可能是该机任意本机服务”文案；不新增授权面，也不给 gateway HTTP 面开旁路 |
 
 ### 9.6 ssh argv 纪律
 
@@ -506,8 +534,10 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 
 ## 10. Launcher UI（S2 契约）
 
-- 顶部：地址栏（Enter 提交）；两个按钮语义——“打开远端”（仅 remote-loopback 且 dsh+ssh 可用）与
-  “在本机打开”（任何非 app-origin http(s)）。
+- 顶部：地址栏（Enter 提交）；两个按钮语义——“打开远端”（仅 remote-loopback 且来源有 SSH 隧道，
+  即 dsh+ssh / gateway+ssh）与“在本机打开”（任何非 app-origin http(s)；local 源的 remote-loopback
+  也归这里）。
+- local 源：没有“中部”的远端分区（面板只渲染地址栏、提示与反馈区）。
 - 中部：**远端分区**（当前 source 的 forward 列表）：每行 = `<targetHost>:<targetPort>` → `<aliasHost>:<localPort>`、
   state、错误文案、动作（打开/关闭/重新打开）。v1 **不做**复制地址按钮，也不显示隐藏的全局
   “active listener N”；行本身就是可见事实。
@@ -561,9 +591,9 @@ S3 依赖 S1+S2 产物。
 | `macos/Tests/DSHChamberTests/BridgeManifestConsistencyTests.swift`（扩） | 56 / 9 |
 | `packages/renderer/test/lifecycle/required-extra-rows.test.ts` | 新包的包布局解析、inject 字面量、covered/deferred 三处锁步（本 PR 不改审计实现） |
 | `packages/dsh-chamber-client-ui-browser/test/address/address.test.ts` | §4 全表 + 负例（host/scheme/port/userinfo/fragment/app origin） |
-| `.../test/source/source-gate.test.ts` | `{dsh,ssh}` 有入口；`{local}`/`{dsh,http}`/`{gateway,ssh}` 无入口；kind 前缀派生 |
+| `.../test/source/source-gate.test.ts` | `{local,local}`/`{dsh,ssh}`/`{gateway,ssh}` 有入口；`{gateway,http}`/`{dsh,http}` 无入口；kind/transport 交叉错配与畸形 id 拒绝；`mayForward` 与指纹规则 |
 | `.../test/launcher/forward-bridge.test.ts` | 四方法守卫、失败封套、display URL 派生 |
-| `.../test/launcher/launcher-model.test.ts` | 空态/错误码映射/上限/stale/复制值 = 派生值 |
+| `.../test/launcher/launcher-model.test.ts` | 空态/错误码映射/上限/stale/复制值 = 派生值；gateway 走 forward、local 的 loopback 走本机打开 |
 | `.../test/locks/registration.test.ts` | inject/注册常量/slot key/无缺失 import |
 
 ### 12.2 门禁与三组证据
@@ -578,7 +608,7 @@ S3 依赖 S1+S2 产物。
 - **发布前**：`release-preflight` + packaging closure §1/§2/§4（根模块 95 复核）、CHANGELOG 分组（发布时写）。
 - 负例矩阵（S3）：https 远端、`[::1]`、RFC1918、app origin（根/子路径）、同端口、未确认、超预算、
   stale、Host 421（无回退）、远端 `AllowTcpForwarding no`。
-- **真机/特权验收**：`docs/checklists/remote-browser-acceptance.md`（askpass、Windows/macOS 实机、官方行 skip、构建/锁文件、S2 GUI 走查）。
+- **真机/特权验收**：`docs/checklists/remote-browser-acceptance.md`（askpass、Windows/macOS 实机、官方行证据、构建/锁文件、S2 GUI 走查）。
 
 ---
 
@@ -590,7 +620,7 @@ S3 依赖 S1+S2 产物。
 | 01 §4 移出项 | 在「web 预览」行加**有界例外**：仅右栏发起 + 远端 loopback forward + 系统浏览器；不渲染、不代答、无远端 LAN/任意 target |
 | AGENTS.md | Runtime Boundaries 增 `dsh-chamber-client-ui-browser` 一行；Hard Facts 的“有界例外（designs 08/17/19/20/24）”扩为 28 |
 | 05 §7.4/§7.6 | §7.4 增 `forward` 命名空间 4 通道；§7.6 注明 forward 不走 `TransportProvider`，独立 ssh child（零净增行） |
-| 09 §3.2/§3.5 | 新包计入覆盖集（家族①）；若官方 `ui-sidebar-browser` 需 skip，进家族③ + 有意跳过名单 |
+| 09 §3.2/§3.5 | 新包计入覆盖集（家族①）；官方 `ui-sidebar-browser` 在 web profile 恒禁用（§5.1），无需 skip 条目 |
 | 20 §facts | 不新增 boot fact（kind 派生）；若 W0 改判才动：33 行四事实表 |
 | 22 / 23 | 平台行：POSIX 进程组/kill(-pgid)、Windows `taskkill /T`、无 Job Object、key-only 不做 |
 | 25 | 五处计数：61→65、52→56（:29/:138/:302/:353/:388 按 W0 复核编号）、10 命名空间→11、50+9→54+9 |
@@ -610,6 +640,11 @@ S3 依赖 S1+S2 产物。
   耦合，Swift 侧要新 UI 与导航策略；收益是“面板内可见”，但本需求是“在系统浏览器打开”。拒绝。
 - **gateway 隧道（`/chamber/browser/<port>` 反代）**：把控制面变成任意远端端口的执行/转发面（新域），
   且 gateway 形态需要认证边界参与；与 P3 移出项冲突。拒绝。
+- **窄门（只对 `dsh` + ssh 开入口，report-v4 决策 2 的原样）**：真实部署形态是 gateway+ssh 与 local，
+  窄门让功能在这些来源上不可达；gateway+ssh 复用同一条 SSH 隧道即可转发，local 只保留链接腿，
+  没有新增转发域或认证面。改为“除 http 外全部来源”（§1.4/D2）。拒绝窄门。
+- **http 来源也给入口（只保留链接腿）**：`gateway` + http 没有隧道，远端 loopback 只能被拒绝，
+  页签会退化成第二个通用外链入口，与既有链接腿重复且误导。拒绝。
 - **共享 `127.0.0.1` 回退**：远端可控信号（Host 拒绝）触发安全降级；cookie jar 与用户本机服务同源；
   “清除站点数据”本应用做不到。v1 删除该臂；以后若做，必须 per-forward 显式 opt-in + 强制 ephemeral +
   接受记录。拒绝（本轮）。
@@ -647,19 +682,21 @@ S3 依赖 S1+S2 产物。
 8. **`127.0.0.1` 与控制面同端口**：v1 按 app-origin 拒绝，不给“仍按远端打开”旁路（开放项：是否加二次确认）。
 9. **系统代理**：用户浏览器未绕过 `127.0.0.0/8` 时 URL 可能进代理（外泄 + 打开失败）；P0 记录浏览器矩阵，
    不做应用侧代理配置。
-10. **官方 `ui-sidebar-browser` 行**：是否在 pin 的 web profile 加载未证（TODO(pin-vendor)）；若加载则进 skip。
+10. **官方 `ui-sidebar-browser` 行**：已核实 web profile 恒禁用（desktop-only 条件，§5.1）；无需 skip。
 11. **Swift 侧**：只复用既有 `showNativeMessage` 与 `openExternal` 边，不新增 Swift UI；
     `BridgeManifestConsistencyTests` 已按 **56/9** 断言；`build:swift-app` 无 Swift 工具链，未跑。
 12. **`sidebarRightTabs` API 形状**（`get`/`register`/`guide`/`slots` 席位名）按 anchor rc.2 实现并通过
     新包 typecheck；pin 0.2.2-rc.1 仍未核对，签名若不同只改 `src/client/index.ts` 的注册段。
 13. **S1 与 S2 并行**依赖 §7 API 冻结；若 S2 先动而 API 变，launcher 的 code 映射要跟改（风险已记）。
-14. **`chamberInstanceId` 的 kind 前缀**：本地实现按 `dsh-`/`gateway-` 前缀判定并通过
+14. **`chamberInstanceId` 的 kind 前缀**：本地实现按 `local` 字面量与 `dsh-`/`gateway-` 前缀判定并通过
     source-gate 测试（legacy `ssh-` 拒绝，理由见 §5.2）；pin 0.2.2-rc.1 的 boot 绑定仍未复核。若 pin 实际是 raw id，退路只有加
     `chamberTargetKind`（要动 `shell.ts`/`InstanceView`/`App.tsx` 棘轮 + 20 §facts）或让 client-core 提供
     `source-kind` 具名面（+allowlist）；在任何一条落地前，不得声称入口门已在 pin 上成立。
 15. **构建/真机**：renderer composite typecheck/build 仍缺真实 pin vendor（anchor 只有 lib/dist）；
-    `build:renderer` 未过；sidecar 只在 `--skip-vendor` 下通过；真实 askpass、macOS/Windows 实机、
-    官方 `ui-sidebar-browser` 行与 S2 真实 boot 未验。
+    `build:renderer` 未过；sidecar 只在 `--skip-vendor` 下通过；真实 askpass、macOS/Windows 实机与
+    S2 真实 boot 未验。
+16. **`gateway` + ssh 的转发目标是 gateway 宿主的 loopback**：那台机器上的管理面（pve 等）同样可被
+    per-port 确认后转发——不是新的授权面，但比 dsh 宿主的面更宽；AC9 是验收判据，默认取消与文案不变。
 
 ---
 
@@ -668,7 +705,7 @@ S3 依赖 S1+S2 产物。
 | report-v4 §0 锁定决策 | 本文落点 | 差异（如有） |
 |---|---|---|
 | 1. 地址栏 + 远端 loopback 分区 + 系统浏览器 | §1、§4 | 增加 https 透传与 `127.0.0.2–254`/`[::1]`/`app-origin` 的显式拒绝 |
-| 2. 仅 dsh+ssh；kind 派生；不加 `chamberTargetKind` | §1.4、§2 D2 | 无 |
+| 2. 仅 dsh+ssh；kind 派生；不加 `chamberTargetKind` | §1.4、§2 D2 | **本轮放宽**为“除 http 外全部来源”（local / dsh+ssh / gateway+ssh）；kind 仍派生，未加 boot fact |
 | 3. 新包 `dsh-chamber-client-ui-browser`（deferred row） | §5.1、§5.2 | 导出 inject 固定为 `slots`/`locale`；`sidebarRightTabs` 由 apply 内 `ctx.get` 探测 |
 | 4. browserNamespace + 127.0.0.2–254 + 永不 127.0.0.1 + 无共享回退 | §6.2、§6.3、§9.2 | 增加 alias `2..254` 的持久分配表与 tombstone（顺序无关） |
 | 5. 公网走链接腿；远端走 main 构造 URL 的 openInBrowser | §8.1、§8.2 | openInBrowser 返回 `ok/error`，独立 per-source 预算（5/60s） |

@@ -173,10 +173,11 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
   ['@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager/client')],
   ['@dsh-chamber/dsh-chamber-client-ui-settings-connections', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-connections/client')],
   ['@dsh-chamber/dsh-chamber-client-ui-settings-bridge', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client')],
-  // Remote Browser launcher (design 28): a dsh+ssh-only tab type over the
+  // Remote Browser launcher (design 28): a right-sidebar tab type over the
   // per-source SSH loopback forwards. The chunk loads on every source; its
-  // apply() early-returns unless the boot facts are dsh+ssh, so local/gateway
-  // sources register nothing (and never name sidebarRightTabs in their probe).
+  // apply() early-returns only for an http source (or a malformed boot fact),
+  // so local and every SSH source register the tab (and none names
+  // sidebarRightTabs in its probe).
   ['@dsh-chamber/dsh-chamber-client-ui-browser', () => import('@dsh-chamber/dsh-chamber-client-ui-browser/client')],
 ]
 

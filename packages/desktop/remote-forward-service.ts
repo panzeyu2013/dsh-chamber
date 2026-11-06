@@ -508,7 +508,8 @@ function forwardSourceIdentity(instance: TransportInstanceSpec): string | null {
  * The registry-backed source resolver. The fingerprint proof runs BEFORE the
  * registry lookup, so a forged source id never even walks the roster; the
  * manager's own gate then decides source_not_dsh / transport_not_ssh from the
- * real kind/transport instead of pretending the source is unknown.
+ * real kind/transport instead of pretending the source is unknown (both remote
+ * kinds pass the kind arm; an http transport is the one that never forwards).
  */
 function createSourceResolver(
   ctx: ShellIpcCtx,

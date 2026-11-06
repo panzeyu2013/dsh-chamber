@@ -18,12 +18,9 @@ import type { ForwardFailureCode, ForwardRecord, ForwardScheme, ForwardState } f
 import { PER_SOURCE_FORWARD_LIMIT, forwardDisplayUrl } from './forward-bridge.ts'
 import type { BrowserKey } from '../locales.ts'
 
-/** Refusal reasons the launcher can render (address table + the source gate). */
-export type AddressRejectReason = AddressRefusalReason | 'source-ineligible'
-
 /** What pressing "open" must do for one submitted address. */
 export type AddressPlan =
-  | { kind: 'reject'; reason: AddressRejectReason }
+  | { kind: 'reject'; reason: AddressRefusalReason }
   | { kind: 'system-browser'; url: string; reachability: PublicReachability }
   | {
     kind: 'forward'
@@ -39,12 +36,12 @@ export type AddressPlan =
  * Decide one submit against the source gate.
  *
  * A public URL always goes through the system-browser link leg (even from a
- * remote source), a remote loopback target only forwards on a dsh-kind source,
- * and an ineligible source refuses the forward rather than opening the wrong
- * machine.
+ * remote source). A remote loopback target forwards when the source has an SSH
+ * tunnel; on the local instance the same address IS this machine, so it opens
+ * directly in the system browser instead of being refused.
  *
  * @param result - the parsed address, or null for an empty input.
- * @param source - the launcher's source (already gated to dsh+ssh by apply()).
+ * @param source - the launcher's source (already gated by apply()).
  * @returns the action the panel executes.
  */
 export function planAddressSubmit(
@@ -56,7 +53,9 @@ export function planAddressSubmit(
   if (result.kind === 'public') {
     return { kind: 'system-browser', url: result.url, reachability: result.reachability }
   }
-  if (source.kind !== 'dsh') return { kind: 'reject', reason: 'source-ineligible' }
+  if (!source.mayForward) {
+    return { kind: 'system-browser', url: result.url, reachability: 'local-machine' }
+  }
   return {
     kind: 'forward',
     port: result.port,
@@ -178,7 +177,7 @@ export function sourceForwardLimitReached(
 }
 
 /** Copy key for an address refusal. */
-export function addressErrorKey(reason: AddressRejectReason): BrowserKey {
+export function addressErrorKey(reason: AddressRefusalReason): BrowserKey {
   switch (reason) {
     case 'empty': return 'error.address.empty'
     case 'too-long': return 'error.address.tooLong'
@@ -191,7 +190,6 @@ export function addressErrorKey(reason: AddressRejectReason): BrowserKey {
     case 'alias-host': return 'error.address.aliasHost'
     case 'loopback-other': return 'error.address.loopbackOther'
     case 'port': return 'error.address.port'
-    case 'source-ineligible': return 'error.address.sourceIneligible'
     default: return 'error.address.invalid'
   }
 }
