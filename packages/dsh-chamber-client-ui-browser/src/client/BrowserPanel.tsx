@@ -300,8 +300,6 @@ export function BrowserPanel({ t, source, sourceFingerprint, bridge }: BrowserPa
         </button>
       </form>
 
-      <p className={styles.hint}>{t(source.mayForward ? 'address.hint' : 'address.hintLocal')}</p>
-
       {errorKey !== null && <p className={styles.error} role="alert">{t(errorKey)}</p>}
       {notice !== null && <p className={styles.notice} role="status">{t(notice.key, notice.params)}</p>}
 

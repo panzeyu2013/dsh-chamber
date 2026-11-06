@@ -14,7 +14,8 @@
 
 右栏 `sidebar.right` 的一个页签：**地址栏 + 远端 loopback 的 SSH 端口转发器 + 系统浏览器启动器**。
 它把「远端实例所在机器的 `127.0.0.1:<port>` 服务」映射到本机一个**专用 alias 主机名**上，然后交给
-操作系统默认浏览器打开。本地实例没有远端可转，页签只保留地址栏：地址直接在本机系统浏览器打开。
+操作系统默认浏览器打开。本地实例没有远端可转，页签只保留地址栏（loopback 地址直接在本机
+系统浏览器打开）；地址栏下方不渲染解释性文案——上游 `ui-sidebar-browser` 没有同类说明，本版对齐。
 面板内**不渲染任何页面**，也不持有浏览上下文。
 
 一句话契约：**从右栏发起；远端 loopback 走 forward；其它 http(s) 走既有链接腿；两者都在系统浏览器落地。**
@@ -229,8 +230,8 @@ export const inject = ['slots', 'locale'] as const
 
 空态（无 forward）给一句“输入远端 127.0.0.1 端口或任意 http(s) URL”；地址栏 autofocus；进行中有
 单一 `role="status"` live region；错误按 §6.5 的 code 映射到一句文案 + 一个动作（重试/换端口/查看日志/
-去连接页重连）。local 源没有远端分区：只保留地址栏与一句“地址直接在本机系统浏览器打开”，且**
-不轮询`list`**（没有 forward 腿，轮询只会得到一条必然失败的源证明）。a11y 与 i18n 在 S2 收口。
+去连接页重连）。local 源没有远端分区：只保留地址栏，且**不轮询 `list`**（没有 forward 腿，轮询只会
+得到一条必然失败的源证明）。a11y 与 i18n 在 S2 收口。
 
 ---
 
@@ -542,7 +543,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 - 顶部：地址栏（Enter 提交）；两个按钮语义——“打开远端”（仅 remote-loopback 且来源有 SSH 隧道，
   即 dsh+ssh / gateway+ssh）与“在本机打开”（任何非 app-origin http(s)；local 源的 remote-loopback
   也归这里）。
-- local 源：没有“中部”的远端分区（面板只渲染地址栏、提示与反馈区）。
+- local 源：没有“中部”的远端分区（面板只渲染地址栏与反馈区；地址栏下不加解释性文案，上游无同类说明）。
 - 中部：**远端分区**（当前 source 的 forward 列表）：每行 = `<targetHost>:<targetPort>` → `<aliasHost>:<localPort>`、
   state、错误文案、动作（打开/关闭/重新打开）。v1 **不做**复制地址按钮，也不显示隐藏的全局
   “active listener N”；行本身就是可见事实。

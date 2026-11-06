@@ -3,8 +3,8 @@
 Remote Browser（design 28）：右侧边栏的「浏览器」launcher。它把用户输入的
 http(s) 地址分成两条腿——公网地址走既有的系统浏览器 link leg，远端 `127.0.0.1` /
 `localhost` 经 SSH 端口转发后由受信 main 进程打开——并在同一面板里显示该 source 的
-转发列表（轮询）。本地实例只保留地址栏：没有远端可转，loopback 地址直接在本机系统
-浏览器打开。
+转发列表（轮询）。本地实例没有远端可转，页签只保留地址栏（loopback 地址直接在本机
+系统浏览器打开，不渲染解释性文案）。
 
 > 状态：S1/S2 实现面。纯逻辑（地址表 / source 门 / launcher 模型 / forward 契约守卫）由
 > `node --test` 直接运行；组件只做静态锁（仓库没有 DOM 设施）。ForwardManager、preload/Swift
