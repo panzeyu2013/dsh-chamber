@@ -243,6 +243,13 @@ test('② Info.plist 渲染：只替换占位符', () => {
   assert.ok(!rendered.includes('__VERSION__'))
   // E13 深链注册仍在（模板契约）。
   assert.ok(rendered.includes('<string>dsh-chamber</string>'))
+  // v2（design 28 §16.8）：右栏 iframe 承载远端 loopback 页面（local 任意端口 +
+  // ssh per-source alias 127.0.0.2–254），ATS 只能按 host 例外，故用 Web 内容级
+  // 放行；进程级 NSAllowsArbitraryLoads 必须仍为 false（主文档 ATS 底线）。
+  assert.match(rendered, /<key>NSAllowsArbitraryLoadsInWebContent<\/key>\s*<true\/>/,
+    'Info.plist 模板必须携带 Web 内容级 ATS 放行（右栏 iframe 的 loopback 来源）')
+  assert.match(rendered, /<key>NSAllowsArbitraryLoads<\/key>\s*<false\/>/,
+    'Web 内容放行不得升级为进程级 NSAllowsArbitraryLoads')
 })
 
 test('②b CFBundleVersion：beta.N 与 final 同 base 不同且有序（S-23）', () => {
@@ -513,6 +520,12 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
     assert.ok(plist.includes('<key>NSAppTransportSecurity</key>'), 'ATS 字典必须存在')
     assert.match(plist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/,
       'http://localhost 控制面需要 ATS local networking 放行')
+    // v2（design 28 §16.8）：右栏 iframe 的远端 loopback 页面需要 Web 内容级
+    // ATS 放行；进程级 NSAllowsArbitraryLoads 必须仍为 false。
+    assert.match(plist, /<key>NSAllowsArbitraryLoadsInWebContent<\/key>\s*<true\/>/,
+      'v2：产物 plist 必须携带 Web 内容级 ATS 放行（右栏 iframe）')
+    assert.match(plist, /<key>NSAllowsArbitraryLoads<\/key>\s*<false\/>/,
+      'S-45：Web 内容放行不得升级为进程级 NSAllowsArbitraryLoads')
     // 放行的关键是**正确键名** NSExceptionAllowsInsecureHTTPLoads
     // （NSTemporary... 实测不生效）；localhost 是打包态导航 origin 的例外域，
     // 该键名不得出现在产物 plist 里。

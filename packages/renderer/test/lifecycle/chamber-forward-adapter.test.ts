@@ -5,8 +5,10 @@
  * The adapter under test is the ONLY page-level translation between the trusted
  * preload namespace (`window.dshChamber.forward`, wire vocabulary: `record` /
  * `records`, seven states, a closed snake_case error table, `{ok:false,
- * error:{code,detail}}`) and the remote-browser launcher (three states, ten
- * kebab-case codes, `{ok:false, code}`).
+ * error:{code,detail}}`) and the remote-browser launcher (three states, eleven
+ * kebab-case codes, `{ok:false, code}`). v2 additive fields are driven too:
+ * consumer/path passthrough, frameUrl projection, the embedding capability and
+ * the record frameError projection.
  *
  * Evidence shape:
  *  - behavioural: every wire state and error code is DRIVEN from the wire source
@@ -45,6 +47,14 @@ const ENTRY_SOURCE = readFileSync(
 const WIRE_STATES = quotedBlock(WIRE_SOURCE, 'export const FORWARD_STATES = \\[', '\\] as const')
 /** The wire error codes, read from the wire source (order preserved). */
 const WIRE_CODES = quotedBlock(WIRE_SOURCE, 'export const FORWARD_ERROR_CODES = \\[', '\\] as const')
+/** The wire frame-failure classifications, read from the wire source. */
+const WIRE_FRAME_ERRORS = quotedBlock(WIRE_SOURCE, 'export const FORWARD_FRAME_ERRORS = \\[', '\\] as const')
+/** The wire contract version, read from the wire source (v2 = design 28 §16). */
+const WIRE_VERSION = (() => {
+  const match = /export const FORWARD_WIRE_VERSION = (\d+)/u.exec(WIRE_SOURCE)
+  assert.ok(match !== null, 'the wire version literal moved; re-read the wire source')
+  return Number(match[1])
+})()
 
 /** The review-visible expected fold: every wire state → one launcher bucket. */
 const EXPECTED_STATE_FOLD: Readonly<Record<string, string>> = {
@@ -84,10 +94,11 @@ const EXPECTED_CODE_FOLD: Readonly<Record<string, string>> = {
   invalid_path: 'unknown',
   rate_limited: 'limit',
   open_failed: 'unavailable',
+  release_timeout: 'release-timeout',
 }
 
 /** Every wire field the adapter reads (the rest are main/manager facts). */
-const READ_WIRE_FIELDS = ['id', 'targetPort', 'localPort', 'scheme', 'aliasHost', 'state', 'stale', 'error']
+const READ_WIRE_FIELDS = ['id', 'targetPort', 'localPort', 'scheme', 'aliasHost', 'state', 'stale', 'error', 'frameError']
 
 /** The launcher's declared failure set, read from its source. */
 const LAUNCHER_CODES = quotedBlock(
@@ -172,12 +183,17 @@ function wireRecord(overrides: Record<string, unknown> = {}): Record<string, unk
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_100,
     boundAt: 1_700_000_000_050,
+    frameError: null,
     ...overrides,
   }
 }
 
 function listArgs(): { sourceId: string; sourceFingerprint: string } {
   return { sourceId: 'dsh-alpha', sourceFingerprint: 'a'.repeat(64) }
+}
+
+function limits(): Record<string, number> {
+  return { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 }
 }
 
 // ── Install / no-bridge ─────────────────────────────────────────────────────────
@@ -297,7 +313,7 @@ test('every mapped launcher code is accepted by the launcher guards', () => {
   for (const code of LAUNCHER_CODES) {
     assert.deepEqual(parseForwardAck({ ok: false, code }), { ok: false, code })
   }
-  assert.equal(LAUNCHER_CODES.length, 10)
+  assert.equal(LAUNCHER_CODES.length, 11)
 })
 
 test('an unknown / missing / hostile error code collapses to unknown (never a dropped list)', async () => {
@@ -422,12 +438,163 @@ test('records are de-duplicated by id (a repeated poll cannot double a row)', as
 })
 
 test('the projection reads exactly the wire record fields (rename lockstep)', () => {
-  const match = /isForwardRecord\(value: unknown\): value is ForwardRecord \{[\s\S]*?hasExactKeys\(value, \[\s*([\s\S]*?)\]\)/u.exec(WIRE_SOURCE)
+  const match = /isForwardRecord\(value: unknown\): value is ForwardRecord \{[\s\S]*?hasOnlyKeys\(value, \[[\s\S]*?\], \[([\s\S]*?)\]\)/u.exec(WIRE_SOURCE)
   assert.ok(match !== null, 'the wire record guard moved; re-read its key list')
-  const wireFields = [...match[1].matchAll(/'([A-Za-z]+)'/gu)].map((entry) => entry[1])
+  const required = /hasOnlyKeys\(value, \[([\s\S]*?)\],/u.exec(WIRE_SOURCE)
+  assert.ok(required !== null, 'the wire record required-key list moved')
+  const wireFields = [
+    ...[...required[1].matchAll(/'([A-Za-z]+)'/gu)].map((entry) => entry[1]),
+    ...[...match[1].matchAll(/'([A-Za-z]+)'/gu)].map((entry) => entry[1]),
+  ]
   for (const field of READ_WIRE_FIELDS) {
     assert.ok(wireFields.includes(field), 'the wire record no longer declares ' + field)
   }
+  assert.ok(wireFields.includes('frameError'), 'the v2 additive record field must stay in the wire guard')
+})
+
+// ── Wire v2 additive projection ────────────────────────────────────────────────
+
+test('the wire contract version is 2 (design 28 §16 additive batch)', () => {
+  assert.equal(WIRE_VERSION, 2, 'the wire bumped its version; re-review every additive field below')
+})
+
+test('every wire frame-failure classification projects unchanged into the launcher row', async () => {
+  assert.deepEqual([...WIRE_FRAME_ERRORS].sort(), ['blocked_by_response', 'certificate_error', 'load_failed', 'timeout'])
+  const state = mutableHost()
+  const { bridge } = installedBridge(state.host)
+  for (const frameError of WIRE_FRAME_ERRORS) {
+    state.next = { ok: true, records: [wireRecord({ frameError })], limits: limits() }
+    const result = await bridge.list(listArgs())
+    if (!result.ok) assert.fail('the translated list must be ok for ' + frameError)
+    assert.equal(result.records[0].frameError, frameError)
+    assert.deepEqual(parseForwardRecord(result.records[0]), result.records[0], 'the launcher guard accepts the projected row')
+  }
+  // An unknown future token is dropped, not a dropped row: forward compatibility.
+  state.next = { ok: true, records: [wireRecord({ frameError: 'future_classification' })], limits: limits() }
+  const future = await bridge.list(listArgs())
+  if (!future.ok) assert.fail('a future frameError must not drop the record')
+  assert.equal(future.records.length, 1)
+  assert.equal('frameError' in future.records[0], false)
+})
+
+test('request projects the main-composed frameUrl and drops a malformed one', async () => {
+  const state = mutableHost()
+  const { bridge } = installedBridge(state.host)
+  state.next = { ok: true, record: wireRecord(), frameUrl: 'http://127.0.0.2:41000/app?x=1' }
+  const attached = await bridge.request({ ...listArgs(), port: 5173 })
+  if (!attached.ok) assert.fail('the attach must translate')
+  assert.equal(attached.frameUrl, 'http://127.0.0.2:41000/app?x=1')
+  assert.equal(parseForwardRequestResult(attached).ok, true)
+
+  state.next = { ok: true, record: wireRecord(), frameUrl: 'javascript:alert(1)' }
+  const malformed = await bridge.request({ ...listArgs(), port: 5173 })
+  if (!malformed.ok) assert.fail('the record survives a malformed frameUrl')
+  assert.equal(malformed.frameUrl, undefined, 'a malformed frameUrl never enters the launcher')
+  assert.deepEqual(parseForwardRequestResult(malformed), malformed)
+})
+
+test('list carries the embedding capability; absent or malformed = absent (= enabled)', async () => {
+  const state = mutableHost()
+  const { bridge } = installedBridge(state.host)
+  state.next = { ok: true, records: [wireRecord()], limits: limits(), embedding: { enabled: false, reason: 'rollback' } }
+  const off = await bridge.list(listArgs())
+  if (!off.ok) assert.fail('the list must be ok')
+  assert.deepEqual(off.embedding, { enabled: false, reason: 'rollback' })
+  assert.deepEqual(parseForwardListResult(off), off)
+
+  state.next = { ok: true, records: [], limits: limits() }
+  const absent = await bridge.list(listArgs())
+  if (!absent.ok) assert.fail('the list must be ok')
+  assert.equal(absent.embedding, undefined)
+
+  state.next = { ok: true, records: [], limits: limits(), embedding: { enabled: 'yes' } }
+  const malformed = await bridge.list(listArgs())
+  if (!malformed.ok) assert.fail('a malformed embedding must not fail the list')
+  assert.equal(malformed.embedding, undefined)
+})
+
+test('v2 W-15: the local list answer projects frameErrors by origin and keeps the launcher guard', async () => {
+  const state = mutableHost()
+  const { bridge } = installedBridge(state.host)
+  state.next = {
+    ok: true,
+    records: [],
+    limits: limits(),
+    embedding: { enabled: true },
+    frameErrors: [
+      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
+      { origin: 'https://localhost:8443', code: 'certificate_error' },
+      // Malformed entries are dropped, never a list-wide failure.
+      { origin: 'http://127.0.0.1:44215/embed-xfo', code: 'load_failed' },
+      { origin: 'http://127.0.0.1:44215', code: 'future_code' },
+      { origin: 42, code: 'timeout' },
+      null,
+    ],
+  }
+  const result = await bridge.list({ sourceId: 'local', sourceFingerprint: 'local' })
+  if (!result.ok) assert.fail('the local list must translate')
+  assert.deepEqual(result.records, [])
+  assert.deepEqual(result.frameErrors, [
+    { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
+    { origin: 'https://localhost:8443', code: 'certificate_error' },
+  ])
+  assert.deepEqual(parseForwardListResult(result), result, 'the launcher own guard accepts the projection')
+
+  // Absent or empty frameErrors stay absent (no key churn across polls).
+  state.next = { ok: true, records: [], limits: limits(), frameErrors: [] }
+  const empty = await bridge.list({ sourceId: 'local', sourceFingerprint: 'local' })
+  assert.equal(empty.ok, true)
+  if (!empty.ok) return
+  assert.equal('frameErrors' in empty, false)
+})
+
+test('v2 W-15: the local identity crosses the bridge verbatim (payload keys unchanged)', async () => {
+  const calls: Array<{ method: string; input: unknown }> = []
+  const host = {
+    request: async () => ({ ok: true }),
+    release: async () => ({ ok: true }),
+    list: async (input: unknown) => {
+      calls.push({ method: 'list', input })
+      return { ok: true, records: [] }
+    },
+    openInBrowser: async () => ({ ok: true }),
+  }
+  const { bridge } = installedBridge(host)
+  await bridge.list({ sourceId: 'local', sourceFingerprint: 'local' })
+  assert.deepEqual(calls, [{ method: 'list', input: { sourceId: 'local', sourceFingerprint: 'local' } }])
+  // The wire declares the local list arm and the additive field; the adapter
+  // mirrors both shapes (the desktop registrar + browser face are driven above).
+  assert.ok(WIRE_SOURCE.includes('FORWARD_LOCAL_SOURCE_ID'))
+  assert.ok(WIRE_SOURCE.includes('readonly frameErrors?: readonly ForwardFrameErrorEntry[]'))
+  assert.ok(ADAPTER_SOURCE.includes('LauncherForwardFrameErrorEntry'))
+})
+
+test('the renderer-minted consumer and relative path cross the bridge verbatim', async () => {
+  const calls: { method: string; input: unknown }[] = []
+  const host = {
+    request: async (input: unknown) => {
+      calls.push({ method: 'request', input })
+      return { ok: true, record: wireRecord(), frameUrl: 'http://127.0.0.2:41000/' }
+    },
+    release: async (input: unknown) => {
+      calls.push({ method: 'release', input })
+      return { ok: true }
+    },
+    list: async () => ({ ok: true, records: [] }),
+    openInBrowser: async () => ({ ok: true }),
+  }
+  const { bridge } = installedBridge(host)
+  const args = { sourceId: 'dsh-alpha', sourceFingerprint: 'a'.repeat(64) }
+  await bridge.request({ ...args, port: 5173, scheme: 'http', consumer: 'consumer-0001', path: '/app?x=1' })
+  await bridge.release({ ...args, id: 'fwd-0123456789abcdef', consumer: 'consumer-0001' })
+  assert.deepEqual(calls[0], {
+    method: 'request',
+    input: { ...args, port: 5173, scheme: 'http', consumer: 'consumer-0001', path: '/app?x=1' },
+  })
+  assert.deepEqual(calls[1], {
+    method: 'release',
+    input: { ...args, id: 'fwd-0123456789abcdef', consumer: 'consumer-0001' },
+  })
 })
 
 // ── Composite wiring ─────────────────────────────────────────────────────────

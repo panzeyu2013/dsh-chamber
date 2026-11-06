@@ -46,8 +46,14 @@ test('the proxied frontend CSP keeps base-uri on self so the upstream <base href
     // same peer-source discipline the other lockstep tests use) and require the
     // two to differ in exactly `base-uri` and `script-src`.
     const shellSource = readFileSync(new URL('../../../control-plane/src/index.ts', import.meta.url), 'utf8')
-    const shellCsp: string | undefined = shellSource.match(/`(default-src 'self'; base-uri 'none';[^`]*?)`/)?.[1]
-    assert.ok(shellCsp !== undefined, 'the control-plane shell CSP template must stay greppable')
+    const shellCspTemplate: string | undefined = shellSource.match(/`(default-src 'self'; base-uri 'none';[^`]*?)`/)?.[1]
+    assert.ok(shellCspTemplate !== undefined, 'the control-plane shell CSP template must stay greppable')
+    // v2 (design 28 §16.3): the shell's frame-src is built from
+    // ControlPlaneOptions.frameSources via frameSrcDirective(). Normalize that
+    // single dynamic directive for the directive-set lockstep; the gateway keeps
+    // the v1 literal `frame-src blob:` (never widened).
+    assert.match(shellCspTemplate, /\$\{frameSrcDirective\(browserFrameSources\)\}/, 'the shell frame-src must stay resolver-driven')
+    const shellCsp = shellCspTemplate.replace(/\$\{frameSrcDirective\(browserFrameSources\)\}/g, 'frame-src blob:')
     const directives = (value: string): Map<string, string> => new Map(value.split(';').map(part => {
       const [name = '', ...rest] = part.trim().split(/\s+/)
       return [name, rest.join(' ')] as const

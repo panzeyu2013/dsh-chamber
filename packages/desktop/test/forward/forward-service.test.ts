@@ -22,6 +22,13 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createRemoteForwardService } from '../../remote-forward-service.ts'
+import {
+  clearLocalFrameErrors,
+  isLocalBrowserFrameUrl,
+  localFrameErrors,
+  noteLocalFrameError,
+  revokeForwardRenderer,
+} from '../../shell-ipc-open-in.ts'
 import type {
   ForwardServiceStorage,
   ForwardSpawn,
@@ -247,6 +254,8 @@ class Harness {
   readonly stopCalls: Array<{ pid: number; pgid: number | null }> = []
   readonly leases: RecordedLease[] = []
   sourceRetiredListener: ((sourceId: string) => void) | null = null
+  /** v2: when set the fake ctx exposes it as the app-owned host-key guard. */
+  hostKeyArgs: { knownHostsFile: string; globalKnownHostsFile: string } | null = null
   dialogResponse = 0
   dialogThrows = false
   onDialog: (() => void) | null = null
@@ -285,6 +294,9 @@ class Harness {
       },
       ctx: {
         localDshHome: this.localDshHome ?? undefined,
+        ...(this.hostKeyArgs === null ? {} : {
+          hostKey: { knownHostsArgs: () => this.hostKeyArgs as { knownHostsFile: string; globalKnownHostsFile: string } },
+        }),
         transportManager: {
           listInstances: () => this.instances,
           setSourceRetiredListener: (listener: ((sourceId: string) => void) | null): void => {
@@ -397,6 +409,7 @@ function assertTypedRefusal(result: { ok: boolean; error?: { code: string } }, c
 interface FreshRegistrar {
   getOrCreateForwardService(ctx: ShellIpcCtx, options?: RemoteForwardServiceOptions): RemoteForwardService | null
   registerOpenInHandlers(ctx: ShellIpcCtx): void
+  revokeForwardRenderer(event: 'did-start-loading' | 'did-finish-load' | 'crashed' | 'closed'): void
   disposeForwardService(): Promise<void>
 }
 
@@ -1040,4 +1053,152 @@ test('shell-ipc-open-in: one service per process, wired to the four channels', a
   const requested = await h.invoke(IPC_CHANNELS.FORWARD_REQUEST, requestArgs(5173))
   assert.equal(isForwardRequestResult(requested), true)
   assert.equal((requested as { ok: boolean }).ok, true)
+})
+
+// ---------------------------------------------------------------------------
+// v2: app-owned known_hosts, consumer revoke, frame-error projection
+// ---------------------------------------------------------------------------
+
+const CONSUMER_A = 'consumer-aaaaaaa1'
+
+test('v2: the forward child reads the app-owned known_hosts from the shell ctx', async () => {
+  const h = new Harness()
+  h.probe.reachable = true
+  h.hostKeyArgs = { knownHostsFile: '/fake-userdata/ssh/known_hosts', globalKnownHostsFile: '/dev/null' }
+  const service = h.create()
+  const result = await service.request(requestArgs(5173))
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  const sshCall = h.spawn.calls.find(call => call.command === 'ssh')
+  assert.ok(sshCall)
+  assert.deepEqual(
+    sshCall.args,
+    buildForwardArgs({ ...SSH_SPEC, knownHosts: h.hostKeyArgs }, '127.0.0.2', 5173, 5173),
+    'the argv carries the strict app trust store',
+  )
+  assert.ok(sshCall.args.includes('StrictHostKeyChecking=yes'))
+  assert.ok(sshCall.args.includes('HostKeyAlias=dev.example.com'))
+  await service.dispose()
+})
+
+test('v2: revokeAttached closes consumer-held records but leaves pinned ones', async () => {
+  const h = new Harness()
+  h.probe.reachable = true
+  const service = h.create()
+  const attached = await service.request({ ...requestArgs(5173), consumer: CONSUMER_A })
+  assert.equal(attached.ok, true)
+  const pinned = await service.request(requestArgs(8080))
+  assert.equal(pinned.ok, true)
+  if (!attached.ok || !pinned.ok) return
+
+  assert.equal(await service.revokeAttached(), 1)
+  const listed = await service.list(listArgs())
+  assert.equal(listed.ok, true)
+  if (!listed.ok) return
+  assert.deepEqual(listed.records.map(record => record.id), [pinned.record.id])
+  assert.equal(h.stopCalls.length, 1, 'only the attached child was stopped')
+  assert.equal(await service.revokeAttached(), 0, 'revoke is idempotent')
+  await service.dispose()
+})
+
+test('v2: noteFrameErrorForUrl projects into list and clears', async () => {
+  const h = new Harness()
+  h.probe.reachable = true
+  const service = h.create()
+  const created = await service.request({ ...requestArgs(5173), consumer: CONSUMER_A })
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  assert.equal(await service.noteFrameErrorForUrl('http://127.0.0.2:5173/app', 'certificate_error'), 1)
+  let listed = await service.list(listArgs())
+  assert.equal(listed.ok, true)
+  if (!listed.ok) return
+  assert.equal(listed.records[0].frameError, 'certificate_error')
+  assert.equal(await service.noteFrameErrorForUrl('http://127.0.0.2:5173/', null), 1)
+  listed = await service.list(listArgs())
+  assert.equal(listed.ok, true)
+  if (!listed.ok) return
+  assert.equal(listed.records[0].frameError, null)
+  await service.dispose()
+})
+
+test('v2 W-15: the bounded local-frame store is origin-scoped, capped and revoke-cleared', () => {
+  clearLocalFrameErrors()
+  for (const url of [
+    'http://127.0.0.1:44215/embed-xfo',
+    'https://localhost:8443/app',
+  ]) {
+    assert.equal(isLocalBrowserFrameUrl(url), true, url)
+  }
+  for (const url of [
+    'http://127.0.0.2:44215/',
+    'http://127.0.0.254:1/',
+    'https://example.com/',
+    'blob:http://127.0.0.1:1/uuid',
+    'about:blank',
+    'not a url',
+    '',
+  ]) {
+    assert.equal(isLocalBrowserFrameUrl(url), false, url)
+  }
+
+  // Alias/foreign URLs never enter the LOCAL store (their record path owns them).
+  noteLocalFrameError('http://127.0.0.2:44215/', 'blocked_by_response')
+  noteLocalFrameError('https://example.com/', 'load_failed')
+  noteLocalFrameError('http://127.0.0.1:44215/embed-xfo', 'blocked_by_response')
+  noteLocalFrameError('https://localhost:8443/app', 'certificate_error')
+  assert.deepEqual(localFrameErrors(), [
+    { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
+    { origin: 'https://localhost:8443', code: 'certificate_error' },
+  ])
+
+  // A refresh keeps one entry per origin (and re-orders it); null clears it.
+  noteLocalFrameError('http://127.0.0.1:44215/other-path', 'timeout')
+  assert.deepEqual(localFrameErrors(), [
+    { origin: 'https://localhost:8443', code: 'certificate_error' },
+    { origin: 'http://127.0.0.1:44215', code: 'timeout' },
+  ])
+  noteLocalFrameError('http://127.0.0.1:44215/', null)
+  assert.deepEqual(localFrameErrors(), [{ origin: 'https://localhost:8443', code: 'certificate_error' }])
+
+  // Bounded: the oldest origin is evicted once the cap is exceeded.
+  for (let index = 0; index < 10; index += 1) {
+    noteLocalFrameError('http://127.0.0.1:' + String(5000 + index) + '/', 'load_failed')
+  }
+  const bounded = localFrameErrors()
+  assert.equal(bounded.length, 8)
+  assert.equal(bounded[bounded.length - 1]?.origin, 'http://127.0.0.1:5009')
+
+  // Document restart (did-start-loading / crash / close) drops every entry.
+  revokeForwardRenderer('did-start-loading')
+  assert.deepEqual(localFrameErrors(), [])
+  noteLocalFrameError('http://127.0.0.1:44215/', 'blocked_by_response')
+  revokeForwardRenderer('crashed')
+  assert.deepEqual(localFrameErrors(), [])
+})
+
+test('v2: shell-ipc-open-in.revokeForwardRenderer revokes only on document restart events', async () => {
+  const fresh = await importFreshRegistrar('v2-revoke-funnel')
+  const h = new Harness()
+  h.probe.reachable = true
+  const service = fresh.getOrCreateForwardService(h.ctx(), h.options())
+  assert.notEqual(service, null)
+  const created = await service!.request({ ...requestArgs(5173), consumer: CONSUMER_A })
+  assert.equal(created.ok, true)
+
+  fresh.revokeForwardRenderer('did-finish-load')
+  await settle()
+  const untouched = await service!.list(listArgs())
+  assert.equal(untouched.ok, true)
+  if (!untouched.ok) return
+  assert.equal(untouched.records.length, 1, 'did-finish-load is not a revoke edge')
+
+  fresh.revokeForwardRenderer('crashed')
+  await settle()
+  const revoked = await service!.list(listArgs())
+  assert.equal(revoked.ok, true)
+  if (!revoked.ok) return
+  assert.deepEqual(revoked.records, [])
+  assert.equal(h.stopCalls.length, 1)
+  fresh.revokeForwardRenderer('did-start-loading')
+  await fresh.disposeForwardService()
 })

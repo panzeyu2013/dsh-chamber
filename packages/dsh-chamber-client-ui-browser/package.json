@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-browser",
-  "description": "Chamber remote-browser client plugin (design 28): the right-sidebar launcher over SSH loopback forwards — an address bar (http(s), path; remote 127.0.0.1/localhost) plus the per-source forward list. It never embeds a page, never opens a gateway tunnel and never re-implements the dsh host surface: a public URL goes through the existing system-browser link leg, and a remote loopback URL is opened by the trusted main process (openInBrowser), not by this package",
+  "description": "Chamber remote-browser fork (design 28 §16): a faithful source fork of the official @deepseek-ai/dsh-client-ui-sidebar-browser iframe path (pinned vendor edition). The right-sidebar Browser tab (address bar, sandbox switch, multi-tab, shortcut, guide, persisted navigation, failure/restore states) is the upstream implementation verbatim; the ONLY behavior difference is the SSH reverse proxy — a local target loads directly, while an SSH source's remote 127.0.0.1 target attaches the existing per-tab SSH forward lease and uses main's composed frameUrl (the forwarded page's external exit uses that alias; disabled while the lease resolves or fails), releasing the consumer when the target is left or the tab closes",
   "version": "0.4.4",
   "private": true,
   "type": "module",
@@ -31,12 +31,31 @@
   },
   "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-client-locale": "workspace:^",
-    "@deepseek-ai/dsh-client-ui-slots": "workspace:^",
+    "@deepseek-ai/cordis": "workspace:*",
+    "@deepseek-ai/dsh-api-workspace-controller": "workspace:*",
+    "@deepseek-ai/dsh-client-locale": "workspace:*",
+    "@deepseek-ai/dsh-client-shortcuts": "workspace:*",
+    "@deepseek-ai/dsh-client-store": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-dockkit": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-session": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
     "react": "^19.0.0"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:*",
+    "@deepseek-ai/dsh-api-workspace-controller": "workspace:*",
+    "@deepseek-ai/dsh-client-locale": "workspace:*",
+    "@deepseek-ai/dsh-client-shortcuts": "workspace:*",
+    "@deepseek-ai/dsh-client-store": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-dockkit": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-renderer": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-session": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-sidebar-right": "workspace:*",
+    "@deepseek-ai/dsh-client-ui-slots": "workspace:*",
     "@types/react": "^19.2.18",
     "react": "^19.0.0"
   }

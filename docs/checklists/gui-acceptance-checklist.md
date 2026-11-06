@@ -7,12 +7,12 @@
 |腿|何时用|命令|产物|
 |---|---|---|---|
 |机械A（只读探测）|每次改动控制面/反代/静态壳后；也可对安装态跑|`pnpm run acceptance:gui`|`.tmp/gui-acceptance/gui-live-report.md`|
-|机械B（界面走查）|每次改动renderer / 侧栏 / 设置面 / 布局后|`pnpm run acceptance:gui -- --attach`（已有dev实例）或 `-- --dev`（自起自关）|`gui-walkthrough-report.md` + `shots/*.png`|
+|机械B（界面走查）|每次改动renderer / 侧栏 / 设置面 / 布局后；**改动右栏浏览器/iframe/CSP 时**用 `--dev` 跑 W-13/W-14a/W-15/W-15b（local fixture；冷实例会先经既有 UI 建一次性工作区/会话），远端内嵌另用 `--attach --embed-port <port>`（真实 ssh 源）|`pnpm run acceptance:gui -- --attach`（已有dev实例）或 `-- --dev`（自起自关）；`--require-embed` 把内嵌腿的 INFO 改判 FAIL|`gui-walkthrough-report.md` + `shots/*.png`|
 |机械B-mobile（CDP 移动档走查）|每次改动移动相关验收判据或移动入口后；需一个带 `--remote-debugging-port` 的实例|`pnpm run acceptance:mobile`（`-- --cdp-port 9333`；认证 gateway 加 `--url` 与凭据环境变量；`-- --require-run` 把未执行的 INFO 改判 FAIL）|`gui-mobile-walkthrough-report.md` + `shots/*.png` + `mobile-ws-frames.json`|
 |目检|机械腿跑完后按 §3逐条看图|人|截图 + 一句结论|
 |打包态/真机|发布前，或涉及安装包、更新、深链、通知、运行时事务|见 §4 + STATUS|见 §4|
 
-前置：`--dev` 需先有构建产物；沙箱内需 `--electron-arg=--no-sandbox`；GUI 腿不整体进 CI：`ci.yml` 的 macOS job 与 `check:full` 的 macOS 腿只跑 native 机械档（`run.mjs --flavor native --require-assembly`），Electron 界面腿（`--attach`/`--dev`）与目检腿不进 CI；只读、不点变更控件。
+前置：`--dev` 需先有构建产物；沙箱内需 `--electron-arg=--no-sandbox`；GUI 腿不整体进 CI：`ci.yml` 的 macOS job 与 `check:full` 的 macOS 腿只跑 native 机械档（`run.mjs --flavor native --require-assembly`），Electron 界面腿（`--attach`/`--dev`）与目检腿不进 CI；只读、不点变更控件（点击白名单与 v2 内嵌腿的例外见工具箱 README）。`--live` 的 `SH-7` 是纯 HTTP 腿，不需要 GUI。
 
 ## 1. 机械 A：只读运行态（`--live`）
 
@@ -48,8 +48,17 @@
 |设置导航项存在、每个设置页渲染内容、页面切换真的换内容|`W-7`…`W-9`|design 05 §5|
 |真实Escape键关闭设置面|`W-10`|design 05 §5|
 |走查期间无未预期的 ≥400请求、无未预期的渲染层error|`W-11`、`W-12`|容忍清单见工具箱README（诚实性基线）|
+|上游同源静态锁：`packages/dsh-chamber-client-ui-browser` 的 BrowserNavigation/BrowserPage/BrowserPersistence/url/Presentation/BrowserTitle/CSS/locales(8 语言)/`src/index.ts` 与 vendor `ui-sidebar-browser` 逐字节相同（SHA-256 锁）；diff = ForwardFrameResolver、IframeImpl 异步 src/`forwards`/externalUrl、IframePresentation/pages、BrowserFrame.externalUrl/BrowserBody external 投影、definition id、client index/registry wait、type-only TabId；不成立即 FAIL（命令：`node packages/dsh-chamber-client-ui-browser/scripts/test.mjs`）|`UP-1`|design 28 §16.11|
+|右栏浏览器入口/BrowserBody 结构：**前置=先有可见 Session**（右栏 surface 按 Session 渲染；冷 `--dev` 实例走既有 UI：new-session 快捷控件 → 无工作区时 hero 工作区入口 → 浏览式目录对话框选本次 `--out` 下的 `workspace` → 生成空白会话；只写一次性实例状态，`--attach` 默认记 INFO；`--attach --attach-create-session` 仅用于一次性/打包态 smoke，显式允许后同样经 UI 建会话）；guide 入口按上游 `data-sidebar-right-guide-entry="browser"` 定位；上游 BrowserBody 恰一个可见（地址栏上游 placeholder、toolbar back/forward/reload/go/external、sandbox 开关 aria-pressed、content aria-busy 可读）；上游无自研 panel/phase/远端分区概念|`W-13`|design 28 §16.2、§16.4、§10|
+|local 内嵌真跑（上游 iframe 语义）：自起 127.0.0.1 fixture → 地址栏提交**显式 http**地址 → iframe 恰一、src 指向本次 fixture、`data-sidebar-browser-frame="iframe"`、sandbox 精确上游 token（含 allow-popups）、referrerpolicy=no-referrer、地址栏保持逻辑地址、收到 `postMessage`（跨源文档真的运行）；上游无 name/title/自研 phase 契约|`W-14a`|design 28 §16.4/§16.11；plan §5 L4|
+|remote 内嵌端到端：`--ssh-fixture` 或活动视图切到 dsh/gateway+ssh 源并给 `--embed-port` → 上游 BrowserBody 地址栏输入显式 `http://127.0.0.1:<port>/` → iframe src 是 per-source **alias**（127.0.0.2–254）+ 上游 sandbox/referrer 契约 + fixture postMessage，地址栏仍显示逻辑地址（上游 fork 已删除 attached 行 UI，租约由 alias+postMessage+关 tab 不可达证明）；前置缺失 loud SKIP（INFO），`--require-embed` 改判 FAIL|`W-14b`|design 28 §16.2、§16.5、§16.6|
+|系统浏览器出口（上游语义）：fixture `/embed-xfo`（XFO DENY）→ 上游**不承诺** XFO/TLS 失败探测（不要求 refusing/失败条）；external 按钮存在且可点、装载时**不自动开**、点击后 `window.open(逻辑地址或代理页 alias,'_blank','noopener,noreferrer')` 恰一次；代理页 external 用 `frame.externalUrl`（alias；解析中/attach 失败为 null 禁用），direct 用 target.url；观察到的上游失败条仅作证据|`W-15`|design 28 §16.7/§16.11|
+|关 tab 即释放：关页签后上游 BrowserBody/iframe 移除、无 pending（`aria-busy`/重建观察窗）；有 forward 时 alias 端口 ECONNREFUSED（未知不算已释放）；local 直连无 forward，不做 list 探针|`W-15b`|design 28 §16.5/§16.11|
+|壳 CSP frame-src 合同：desktop v2 精确源集（`blob:`+2 loopback+253 alias+裸 `http:`/`https:`，头≤8KB）PASS；v1 默认 `frame-src blob:` INFO（gateway 不放宽）；`'self'`/`*`/`data:`/通配/部分 alias/削弱 `frame-ancestors` FAIL|`SH-7`|design 28 §16.3/§16.11|
+|打包态 smoke：已构建 `release/<platform>-unpacked` 后运行 `packaged-ssh-smoke.mjs`（Xvfb 可）→ W-13…W-15b 真跑，含 W-14b 真实 SSH alias iframe；产物 report+shots；需要 display，不碰真实 userData/~/.ssh|`PKG-1`|design 28 §16.9/§16.11；scripts/gui-acceptance/README.md|
+|内嵌腿严格档：上述 `W-13`…`W-15b` 与 SH-7 的 v1 短头，未执行（INFO）一律改判 FAIL|`--require-embed`|plan §5 L4|
 
-`W-4` 控件**不带 `aria-expanded`**（上游只有会翻转的 `aria-label`）：按 `pickRailToggle`（`checks.mjs`）结构定位、用官方frame属性判效果；`W-4a` 判来源级整列表收拢（几何须可见），写偏好、只跑一次性实例。
+`W-4` 控件**不带 `aria-expanded`**（上游只有会翻转的 `aria-label`）：按 `pickRailToggle`（`checks.mjs`）结构定位、用官方frame属性判效果；`W-4a` 判来源级整列表收拢（几何须可见），写偏好、只跑一次性实例。v2 内嵌腿的写入边界同 `W-4a`（含 W-13 前置的“建一次性工作区/会话”，只在 `--dev`）：`--dev` 允许开/关右栏与页签（布局状态），`--attach` 默认不代开、记 INFO；`--attach --attach-create-session` 只用于一次性/打包态 smoke；`W-14b` 只在活动来源是 ssh 且给 `--embed-port` 时驱动（给出端口即授权其持久化页签逻辑目标）。`W-15` 的 witness 会拦截产品触发的 `a[target=_blank]` 点击，因此验收运行不会真的弹出系统浏览器。
 
 ## 3. 目检腿（机械腿不能替代的部分）
 
@@ -84,6 +93,7 @@
 |归档管理器与force清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§6、§13|
 |gateway形态（生产TLS、`/chamber/*`、移动端）|design 17、21 §9|
 |移动端Web面（**CDP 设备模拟半边**见 §0 的移动走查；真机触控档、安全区、键盘只能真机）|design 17 §18.6；机器侧 `pnpm run acceptance:mobile`|
+|v2 内嵌面（Electron 打包态 + Swift .app 各一次）：远端 dsh+ssh / gateway+ssh 的 loopback 页面内嵌与关 tab 释放、上游 iframe BrowserBody 的 system-browser 出口（上游不承诺 XFO/TLS 失败 UI）、https 证书错误不绕过、跨源 cookie/登录、弹窗/下载/键盘焦点、远端页面不能改 chamber 状态|design 28 §16.8/§16.9；Swift 真机矩阵 design 25 §8.5|
 |Linux桌面 / Windows首版|design 22 §7、23|
 
 ### 4.1 I-15 矩阵执行序（归并记录）
@@ -120,7 +130,9 @@
 **只能真机（工具箱不可替代）**：`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、
 C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、
 macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在
-design 25 §8 与 `docs/progress/TODO.md` B§1，本节只固定怎么跑与留什么。
+design 25 §8 与 `docs/progress/TODO.md` B§1，本节只固定怎么跑与留什么。**v2 内嵌另见 design 28 §16.8**：
+子 frame 导航白名单、`NSAllowsArbitraryLoadsInWebContent`（只放宽 Web 内容）与子 frame 下载 cancel 的
+plist/导航断言由该节规定，真机矩阵仍按 design 25 §8.5 执行（Swift 无 CDP，iframe 内键盘/焦点/证书错误只能真机判）。
 
 ## 5. 证据与记录纪律
 

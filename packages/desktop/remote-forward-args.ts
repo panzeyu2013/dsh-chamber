@@ -34,6 +34,7 @@
  * (design 28 records the temporary duplication; the keepalive lockstep test is
  * the retirement condition).
  */
+import { hostKeyAliasFor, sshOptionValue, sshTrustPins } from './host-key.ts'
 import {
   FORWARD_ALIAS_MAX_OCTET,
   FORWARD_ALIAS_MIN_OCTET,
@@ -64,6 +65,12 @@ export const FORWARD_SSH_FORBIDDEN_OPTION_NAMES = Object.freeze([
   'ProxyCommand',
 ] as const)
 
+/** The app-owned known_hosts store every forward child must read (v2). */
+export interface ForwardSshKnownHosts {
+  readonly knownHostsFile: string
+  readonly globalKnownHostsFile: string
+}
+
 /** Trusted SSH target fields (resolved from the registry, never from the renderer). */
 export interface ForwardSshSpec {
   /** SSH host or alias as stored in the registry. */
@@ -72,6 +79,13 @@ export interface ForwardSshSpec {
   readonly user: string | null
   /** null = ssh config/default port. */
   readonly sshPort: number | null
+  /**
+   * v2 host-key policy: the APP-OWNED known_hosts store. Present = the argv pins
+   * StrictHostKeyChecking=yes + UserKnownHostsFile/GlobalKnownHostsFile +
+   * HostKeyAlias + the shared trust pins (see host-key.ts). Absent = a pure
+   * caller (tests) that keeps the historical argv.
+   */
+  readonly knownHosts?: ForwardSshKnownHosts
 }
 
 const HOST_PATTERN = /^[A-Za-z0-9._-]{1,255}$/u
@@ -99,6 +113,29 @@ function assertUser(value: unknown): string | null {
     throw new TypeError('invalid ssh user')
   }
   return value
+}
+
+/**
+ * Validate one app-owned known_hosts path. The path is quoted through
+ * sshOptionValue (macOS userData contains a space) so only control bytes / NUL
+ * can never be legitimate; an empty/oversized value is refused.
+ */
+function assertKnownHostsPath(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096) {
+    throw new TypeError('invalid known_hosts path')
+  }
+  if (/[\u0000-\u001f\u007f]/u.test(value)) throw new TypeError('invalid known_hosts path')
+  return value
+}
+
+function assertKnownHosts(value: unknown): ForwardSshKnownHosts | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'object') throw new TypeError('invalid known_hosts store')
+  const record = value as Record<string, unknown>
+  return {
+    knownHostsFile: assertKnownHostsPath(record.knownHostsFile),
+    globalKnownHostsFile: assertKnownHostsPath(record.globalKnownHostsFile),
+  }
 }
 
 /**
@@ -132,16 +169,31 @@ export function buildForwardArgs(
   assertPortRange(localPort, 1024, 65535, 'local port')
   assertPortRange(targetPort, 1, 65535, 'target port')
 
+  const knownHosts = assertKnownHosts(spec.knownHosts)
   const target = user === null ? host : user + '@' + host
   const connectArgs = ['-o', 'ConnectTimeout=' + String(FORWARD_CONNECT_TIMEOUT_SECONDS), '-o', 'ExitOnForwardFailure=yes']
   const keepaliveArgs = [
     '-o', 'ServerAliveInterval=' + String(FORWARD_SERVER_ALIVE_INTERVAL_SECONDS),
     '-o', 'ServerAliveCountMax=' + String(FORWARD_SERVER_ALIVE_COUNT_MAX),
   ]
+  // v2: ControlMaster is OFF for every forward child (the user's ~/.ssh/config
+  // must not multiplex our -L onto a master that ignores a new forward).
+  const controlArgs = ['-o', 'ControlMaster=no', '-o', 'ControlPath=none']
+  // v2 host-key policy: the APP-OWNED known_hosts store + strict checking, the
+  // same option set ssh-provider.ts passes to the tunnel (lockstep test).
+  const hostKeyArgs = knownHosts === null
+    ? []
+    : [
+      '-o', 'StrictHostKeyChecking=yes',
+      '-o', 'UserKnownHostsFile=' + sshOptionValue(knownHosts.knownHostsFile),
+      '-o', 'GlobalKnownHostsFile=' + sshOptionValue(knownHosts.globalKnownHostsFile),
+      '-o', 'HostKeyAlias=' + hostKeyAliasFor({ host, sshPort, user }),
+      ...sshTrustPins(),
+    ]
   // -L bind part: the alias host is mandatory and the remote side is the fixed
   // loopback. The port pair uses one colon grammar, validated above.
   const bind = localHost + ':' + String(localPort) + ':' + FORWARD_TARGET_HOST + ':' + String(targetPort)
-  const args = ['-N', ...connectArgs, ...keepaliveArgs]
+  const args = ['-N', ...connectArgs, ...keepaliveArgs, ...controlArgs, ...hostKeyArgs]
   if (sshPort !== null) args.push('-p', String(sshPort))
   args.push('-L', bind, target)
   return args

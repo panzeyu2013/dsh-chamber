@@ -14,7 +14,7 @@
 | `upstream/` | 上游 pin 与触点 | pin 升级 `update-vendor.mjs`；升级前预检 `preflight-vendor-pin.mjs`（fork 面读 registry）；**触点单一来源** `registry.json` + 校验/序列化 `registry.mjs` + 生成视图 `registry-views.mjs` + 保鲜/覆盖面门 `verify-registry.mjs` + 符号锚与遗留锚预算门 `check-anchors.mjs` + 预算 `anchors-budget.json` + 判据 id 表 `touchpoint-criteria.mjs`；锁文件 vendor 记录恢复 `restore-lockfile-vendor-records.mjs` + `lockfile-store-path-mappings.test.mjs`；上游触点门 C1–C16 `verify-upstream-touchpoints{,-args,-hover,-vendor}.mjs`；插件受保护集合门 `plugin-protection-gate.mjs`；已提交产物门（C8）`artifact-gate.mjs`。 | **单一来源 `scripts/upstream/registry.json`**（机械事实；生成视图与判据散文见 `docs/checklists/upstream-touchpoints.md`）；升级流程 `docs/checklists/dsh-upgrade-checklist.md` |
 | `perf/` | 性能实测 | `boot/switch/eval-measure.mjs`、`measure-ui.mjs`、`disk-walk-baseline.mjs`、`cdp-lib.mjs` + `data/`（结果入库）。 | 方法与环境纪律见同目录 `README.md`（只做同环境 A/B） |
 | `acceptance/` | 需要特权/环境的验收 | `netem-link-health.mjs`——真实 tc netem + veth/netns + 真 transport manager/真代理的弱网链路验收（root + CAP_NET_ADMIN；`NETEM_BULK_UPLOAD=1` 追加 20MB@2Mbit 上传）。不入 CI，退出码 0/1，跑完自清理 veth/namespace。 | `pnpm run acceptance:netem`；判据见 design 27 §7 |
-| `gui-acceptance/` | GUI 验收 | `probe.mjs`（只读探测）、`walkthrough.mjs`、`mobile-walkthrough.mjs`、`checks.mjs` / `mobile-checks.mjs`（纯判据层）、`launch.mjs`、`cdp.mjs`、`run.mjs`。 | `pnpm run acceptance:gui`；流程见 `docs/checklists/gui-acceptance-checklist.md` |
+| `gui-acceptance/` | GUI 验收 | `probe.mjs`（只读探测）、`walkthrough.mjs`、`mobile-walkthrough.mjs`、`checks.mjs` / `mobile-checks.mjs`（纯判据层）、`fixture.mjs`（v2 内嵌 iframe 的 in-process loopback fixture）、`launch.mjs`、`cdp.mjs`、`run.mjs`。 | `pnpm run acceptance:gui`；流程见 `docs/checklists/gui-acceptance-checklist.md`；v2 内嵌腿见同目录 `README.md` |
 
 ## 分类规则
 

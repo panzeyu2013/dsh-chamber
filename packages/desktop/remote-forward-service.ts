@@ -58,6 +58,8 @@ import { promisify } from 'node:util'
 import { describeError } from './describe-error.ts'
 import type { HostMessageOptions } from './host-edges.ts'
 import { buildForwardArgs } from './remote-forward-args.ts'
+import type { ForwardSshKnownHosts } from './remote-forward-args.ts'
+import type { HostKeyGuard } from './host-key.ts'
 import { parseWindowsProcessJson, windowsProcessQueryArgs } from './remote-forward-windows.ts'
 import { ForwardChildLedger, reapForwardChildren, windowsTaskkillArgs } from './remote-forward-lifecycle.ts'
 import type {
@@ -72,6 +74,8 @@ import type {
   ForwardChild,
   ForwardChildExit,
   ForwardChildLauncher,
+  ForwardEmbeddingSnapshot,
+  ForwardFrameError,
   ForwardLaunchInput,
   ForwardListenerProbe,
   ForwardListArgs,
@@ -195,6 +199,10 @@ export interface RemoteForwardServiceOptions {
   /** Startup reaper over the durable ledger (default on; never kills unprovable records). */
   readonly reapOnStart?: boolean
   readonly browserEnabled?: ForwardBrowserEnablementStore
+  /** v2 host-key policy: app-owned known_hosts paths (default: ctx.deps.ctx.hostKey). */
+  readonly knownHosts?: () => ForwardSshKnownHosts | null
+  /** v2 embedding capability (default enabled; emergency rollback may disable it). */
+  readonly embedding?: ForwardEmbeddingSnapshot
   readonly platform?: NodeJS.Platform
   readonly now?: () => number
   readonly mintId?: () => string
@@ -214,6 +222,10 @@ export interface RemoteForwardServiceOptions {
 export interface RemoteForwardService extends ForwardIpcService {
   /** Delete/retarget teardown: close every forward and tombstone the alias. */
   retireSource(sourceId: string): Promise<ForwardRetireResult>
+  /** v2 renderer-lifecycle revoke: close every record a renderer consumer holds. */
+  revokeAttached(): Promise<number>
+  /** v2 iframe failure projection: patch records by alias origin (never page text). */
+  noteFrameErrorForUrl(url: string, frameError: ForwardFrameError | null): Promise<number>
   /** App exit / sidecar shutdown: close every child (best effort, never throws). */
   dispose(): Promise<void>
 }
@@ -505,6 +517,23 @@ function forwardSourceIdentity(instance: TransportInstanceSpec): string | null {
 }
 
 /**
+ * The app-owned host-key store every forward child must read (v2). The shell
+ * assembly injects ONE HostKeyGuard shared with the transport manager; a fake
+ * ctx without it (pure tests) keeps the historical argv with no trust pin.
+ */
+function defaultKnownHosts(ctx: ShellIpcCtx): ForwardSshKnownHosts | null {
+  const guard: HostKeyGuard | null | undefined = ctx.deps.ctx.hostKey as HostKeyGuard | null | undefined
+  if (guard === null || guard === undefined || typeof guard.knownHostsArgs !== 'function') return null
+  try {
+    const args = guard.knownHostsArgs()
+    if (args === null || typeof args !== 'object') return null
+    return { knownHostsFile: args.knownHostsFile, globalKnownHostsFile: args.globalKnownHostsFile }
+  } catch {
+    return null
+  }
+}
+
+/**
  * The registry-backed source resolver. The fingerprint proof runs BEFORE the
  * registry lookup, so a forged source id never even walks the roster; the
  * manager's own gate then decides source_not_dsh / transport_not_ssh from the
@@ -514,6 +543,7 @@ function forwardSourceIdentity(instance: TransportInstanceSpec): string | null {
 function createSourceResolver(
   ctx: ShellIpcCtx,
   enablement: ForwardBrowserEnablementStore,
+  knownHostsFor: () => ForwardSshKnownHosts | null,
 ): ForwardSourceResolver {
   return {
     resolve(sourceId: string, fingerprint: string): ForwardSource | null {
@@ -525,13 +555,19 @@ function createSourceResolver(
       if (instance === undefined) return null
       const identity = forwardSourceIdentity(instance)
       if (identity === null) return null
+      const knownHosts = knownHostsFor()
       return {
         sourceId,
         fingerprint,
         label: instance.label,
         kind: instance.kind,
         transport: instance.transport,
-        ssh: { host: instance.host, user: instance.user, sshPort: instance.sshPort },
+        ssh: {
+          host: instance.host,
+          user: instance.user,
+          sshPort: instance.sshPort,
+          ...(knownHosts === null ? {} : { knownHosts }),
+        },
         remotePort: instance.remotePort,
         identity,
         browserEnabled: enablement.isEnabled(sourceId, identity),
@@ -1010,6 +1046,21 @@ async function launchForwardChild(deps: ForwardLauncherDeps, input: ForwardLaunc
       /* already gone: the exit handler and the reaper own the rest */
     }
   }
+  // v2 release hardening: the manager escalates to an immediate SIGKILL when the
+  // graceful stop does not close the child inside the release budget. Idempotent
+  // and additive to stop(): an exited pid is never signalled again.
+  const forceKill = (): void => {
+    if (pid === null || exited) return
+    if (deps.platform === 'win32') {
+      try {
+        deps.stopProcess({ pid, pgid }, () => !exited)
+      } catch {
+        /* taskkill unavailable: the ledger/reaper owns the leftover */
+      }
+      return
+    }
+    signalForwardTree(pid, pgid, 'SIGKILL')
+  }
   if (pid === null) {
     try {
       proc.kill?.('SIGKILL')
@@ -1064,7 +1115,7 @@ async function launchForwardChild(deps: ForwardLauncherDeps, input: ForwardLaunc
     // A failed removal only leaves a tombstone for the next start's reaper.
     void deps.ledger.remove(input.forwardId).catch(() => undefined)
   })
-  return { exit, stop }
+  return { exit, stop, kill: forceKill }
 }
 
 /** The manager's launcher seam over launchForwardChild. */
@@ -1138,6 +1189,7 @@ export function createRemoteForwardService(
   const killer = options.killer ?? createDefaultKiller(platform)
   const dataDir = resolveDataDir(ctx, options)
   const openExternal = createOpenExternal(ctx)
+  const knownHostsFor = options.knownHosts ?? (() => defaultKnownHosts(ctx))
 
   let manager: RemoteForwardManager | null = null
   let failure: ForwardFailure | null = null
@@ -1149,7 +1201,7 @@ export function createRemoteForwardService(
         ? new InMemoryBrowserEnablement()
         : new FileBrowserEnablement(storage.enablement, now))
     if (enablement.load !== undefined) await enablement.load()
-    const sources = createSourceResolver(ctx, enablement)
+    const sources = createSourceResolver(ctx, enablement, knownHostsFor)
     const namespaces = new ForwardNamespaces({
       storage: storage.namespace,
       now,
@@ -1189,6 +1241,7 @@ export function createRemoteForwardService(
       ...(options.releaseTimeoutMs === undefined ? {} : { releaseTimeoutMs: options.releaseTimeoutMs }),
       ...(options.reconnect === undefined ? {} : { reconnect: options.reconnect }),
       ...(options.spawnWindowMs === undefined ? {} : { spawnWindowMs: options.spawnWindowMs }),
+      ...(options.embedding === undefined ? {} : { embedding: options.embedding }),
     })
   })().catch((error: unknown) => {
     manager = null
@@ -1228,6 +1281,16 @@ export function createRemoteForwardService(
       const current = await settled()
       if (current === null) return { released: 0, namespaceRetired: false }
       return await current.retireSource(sourceId)
+    },
+    async revokeAttached(): Promise<number> {
+      const current = await settled()
+      if (current === null) return 0
+      return await current.revokeAttached()
+    },
+    async noteFrameErrorForUrl(url: string, frameError: ForwardFrameError | null): Promise<number> {
+      const current = await settled()
+      if (current === null) return 0
+      return current.noteFrameErrorForUrl(url, frameError)
     },
     async dispose(): Promise<void> {
       await ready

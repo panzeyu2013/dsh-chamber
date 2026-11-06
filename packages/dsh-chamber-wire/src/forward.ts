@@ -40,8 +40,12 @@
  */
 import { isRecord, isWatermark } from './json-guards.ts'
 
-/** Wire version of this contract (a semantic change bumps it; additive only in 0.4.x). */
-export const FORWARD_WIRE_VERSION = 1
+/**
+ * Wire version of this contract (a semantic change bumps it; additive only in 0.4.x).
+ * v2 = design 28 §16: consumer attach/detach, frameUrl, embedding capability,
+ * frameError projection and release_timeout. All additions are optional fields.
+ */
+export const FORWARD_WIRE_VERSION = 2
 
 /** IPC/bridge namespace name reserved for this domain (not mounted by v1 S1). */
 export const FORWARD_DOMAIN = 'forward'
@@ -133,6 +137,8 @@ export const FORWARD_ERROR_CODES = [
   'rate_limited',
   /** The OS/browser refused to open the URL. */
   'open_failed',
+  /** Release escalation could not prove the ssh child exited; record kept, retryable. */
+  'release_timeout',
 ] as const
 
 /** Forward error codes as a TS union. */
@@ -140,6 +146,125 @@ export type ForwardErrorCode = (typeof FORWARD_ERROR_CODES)[number]
 
 /** One forward scheme. */
 export type ForwardScheme = (typeof FORWARD_SCHEMES)[number]
+
+/**
+ * Renderer-minted consumer id for one tab occurrence (v2 attach/detach).
+ * The id is never returned by `list`; it only proves "this caller still holds
+ * the record". It is not a security boundary (same-document remote plugins can
+ * mint their own), it is a lifetime/reference-count identity.
+ */
+export type ForwardConsumer = string
+
+/** Consumer grammar: URL-safe, bounded (crypto.randomUUID fits). */
+export const FORWARD_CONSUMER_PATTERN = /^[A-Za-z0-9_-]{8,64}$/u
+
+/** Narrow an untrusted value to a forward consumer id. */
+export function isForwardConsumer(value: unknown): value is ForwardConsumer {
+  return typeof value === 'string' && FORWARD_CONSUMER_PATTERN.test(value)
+}
+
+/**
+ * Best-effort iframe failure projection (v2): main observes a child-frame load
+ * failure for the record's alias origin and exposes the classification here.
+ * `null`/absent means unknown; it never carries page content or stderr text.
+ */
+export const FORWARD_FRAME_ERRORS = [
+  /** XFO / CSP frame-ancestors / blocked-by-response. */
+  'blocked_by_response',
+  /** TLS certificate rejected by the engine. */
+  'certificate_error',
+  /** Network/load failure. */
+  'load_failed',
+  /** Main-side bounded load deadline expired without a live frame. */
+  'timeout',
+] as const
+
+/** Frame-failure classification as a TS union. */
+export type ForwardFrameError = (typeof FORWARD_FRAME_ERRORS)[number]
+
+/** Narrow an untrusted value to a frame-failure classification. */
+export function isForwardFrameError(value: unknown): value is ForwardFrameError {
+  return typeof value === 'string' && (FORWARD_FRAME_ERRORS as readonly string[]).includes(value)
+}
+
+/**
+ * The LOCAL instance's source identity on the `list` poll face (design 28 §16.2):
+ * the local leg has no forward record, so its child-frame failures are carried by
+ * the additive `frameErrors` field instead of a record. Every other method still
+ * rejects `local` — a local address never forwards.
+ */
+export const FORWARD_LOCAL_SOURCE_ID = 'local'
+/** The local instance's boot fingerprint is the literal word (shell.ts provides it). */
+export const FORWARD_LOCAL_SOURCE_FINGERPRINT = 'local'
+
+/**
+ * One v2 local-frame failure projection entry (additive `forward.list` field):
+ * a browser child frame that main observed failing (XFO/frame-ancestors, TLS,
+ * network or the load deadline) at one http(s) loopback origin. The renderer maps
+ * it onto the CURRENT iframe origin, so a rejected local page can no longer reach
+ * `live` through its engine error page onload. It never carries page content,
+ * stderr text, or a path.
+ */
+export interface ForwardFrameErrorEntry {
+  /** Canonical origin (`scheme://host:port`; default ports omitted). */
+  readonly origin: string
+  readonly code: ForwardFrameError
+}
+
+/**
+ * Frame-origin predicate: canonical http(s) origin of a loopback browser frame —
+ * 127.0.0.1 / localhost (the local leg) or a 127.0.0.2..254 alias (defensive: the
+ * field is scoped to local frames today, but the same closed host table keeps a
+ * future alias projection from widening the IPC surface).
+ */
+export function isForwardFrameErrorOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  // Only the canonical origin spelling crosses IPC: no credentials/path/query and
+  // no non-canonical port spelling (URL.origin drops default ports).
+  if (url.username !== '' || url.password !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '') return false
+  if (url.origin !== value) return false
+  if (url.hostname === 'localhost') return true
+  const match = /^127\.0\.0\.(\d{1,3})$/u.exec(url.hostname)
+  if (match === null) return false
+  const octet = Number(match[1])
+  return octet === 1 || (octet >= FORWARD_ALIAS_OCTETS.min && octet <= FORWARD_ALIAS_OCTETS.max)
+}
+
+/** Narrow an untrusted value to one local-frame failure entry. */
+export function isForwardFrameErrorEntry(value: unknown): value is ForwardFrameErrorEntry {
+  if (!isRecord(value)) return false
+  if (!hasExactKeys(value, ['origin', 'code'])) return false
+  return isForwardFrameErrorOrigin(value.origin) && isForwardFrameError(value.code)
+}
+
+/**
+ * v2 embedding capability carried by `forward.list`: default enabled; a main-side
+ * emergency rollback (or an unsupported flavor) may disable it with a bounded
+ * machine reason. Absent = enabled (v1 bridge compatibility).
+ */
+export interface ForwardEmbeddingSnapshot {
+  readonly enabled: boolean
+  /** Bounded machine reason; never localized, never carries page/secret content. */
+  readonly reason?: string
+}
+
+/** Narrow an untrusted value to an embedding capability snapshot. */
+export function isForwardEmbeddingSnapshot(value: unknown): value is ForwardEmbeddingSnapshot {
+  if (!isRecord(value)) return false
+  const keys = Object.keys(value)
+  if (keys.some(key => key !== 'enabled' && key !== 'reason')) return false
+  if (typeof value.enabled !== 'boolean') return false
+  if (value.reason !== undefined
+    && (typeof value.reason !== 'string' || value.reason.length === 0 || value.reason.length > 128)) return false
+  return true
+}
 
 /** The fixed remote target of one forward. */
 export interface ForwardTarget {
@@ -186,6 +311,12 @@ export interface ForwardRecord {
   readonly updatedAt: number
   /** First successful local-listener probe, null until bound. */
   readonly boundAt: number | null
+  /**
+   * Best-effort iframe failure projection (v2): main observes a child-frame load
+   * failure for this record's alias origin (Electron did-fail-load); absent/null
+   * means unknown. Never carries page content or stderr text.
+   */
+  readonly frameError?: ForwardFrameError | null
 }
 
 /** Hard caps and port ranges, shared so the launcher can explain a refusal. */
@@ -220,12 +351,41 @@ export function isForwardAliasHost(value: unknown): value is string {
     && /^127\.0\.0\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/u.test(value)
 }
 
+/** Local loopback hosts embedded by the v2 browser (local source; no forward). */
+export const FORWARD_LOCAL_LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', 'localhost'] as const)
+
+/**
+ * Allowed `frame-src` host sources for the v2 embedded browser: `blob:` (document
+ * preview), the local loopback hosts, and every per-source alias host. The list
+ * is the ONE generator both flavors pass to the control plane; it deliberately
+ * contains no `'self'` and no bare `http:`/`https:` scheme source.
+ */
+export function forwardFrameSources(): readonly string[] {
+  const sources: string[] = ['blob:']
+  for (const host of FORWARD_LOCAL_LOOPBACK_HOSTS) sources.push('http://' + host + ':*')
+  for (let octet = FORWARD_ALIAS_OCTETS.min; octet <= FORWARD_ALIAS_OCTETS.max; octet += 1) {
+    sources.push('http://' + forwardAliasHost(octet) + ':*')
+  }
+  return Object.freeze(sources)
+}
+
+/** Narrow an untrusted value to one allowed frame source (blob: or loopback host). */
+export function isForwardFrameSource(value: unknown): value is string {
+  if (value === 'blob:') return true
+  if (typeof value !== 'string') return false
+  const match = /^http:\/\/(localhost|127\.0\.0\.(\d{1,3})):\*$/u.exec(value)
+  if (match === null) return false
+  if (match[1] === 'localhost') return true
+  const octet = Number(match[2])
+  return octet === 1 || (octet >= FORWARD_ALIAS_OCTETS.min && octet <= FORWARD_ALIAS_OCTETS.max)
+}
+
 /** Display origin of one record (no path, no credentials). */
 export function forwardLocalOrigin(record: Pick<ForwardRecord, 'scheme' | 'aliasHost' | 'localPort'>): string {
   return record.scheme + '://' + record.aliasHost + ':' + String(record.localPort)
 }
 
-/** `forward.request` arguments (idempotent on (sourceId, targetPort)). */
+/** `forward.request` arguments (idempotent on (sourceId, targetPort, scheme)). */
 export interface ForwardRequestArgs {
   readonly sourceId: string
   readonly sourceFingerprint: string
@@ -233,6 +393,13 @@ export interface ForwardRequestArgs {
   readonly port: number
   /** Defaults to http. */
   readonly scheme?: ForwardScheme
+  /**
+   * v2 tab-occurrence consumer. Present = attach/refresh this consumer; absent =
+   * v1 pinned request (system-browser leg). Never exposed in `list`.
+   */
+  readonly consumer?: ForwardConsumer
+  /** Same-origin relative path used to compose `frameUrl` (fragment dropped). */
+  readonly path?: string
 }
 
 /** `forward.release` arguments: closing one record the caller owns. */
@@ -240,6 +407,11 @@ export interface ForwardReleaseArgs {
   readonly sourceId: string
   readonly sourceFingerprint: string
   readonly id: string
+  /**
+   * v2: present = detach only this consumer (listener lives while others hold it);
+   * absent = force-close the record (v1 system-browser/pinned semantics).
+   */
+  readonly consumer?: ForwardConsumer
 }
 
 /** `forward.list` arguments: the per-source snapshot the launcher polls. */
@@ -258,7 +430,19 @@ export interface ForwardLimitsSnapshot {
 
 /** `forward.list` result: newest-last record order is the manager's contract. */
 export type ForwardListResult =
-  | { readonly ok: true; readonly records: readonly ForwardRecord[]; readonly limits: ForwardLimitsSnapshot }
+  | {
+    readonly ok: true
+    readonly records: readonly ForwardRecord[]
+    readonly limits: ForwardLimitsSnapshot
+    /** v2 embedding capability (default enabled; emergency rollback may disable). */
+    readonly embedding?: ForwardEmbeddingSnapshot
+    /**
+     * v2 local-frame failure projection (additive, local list only): bounded
+     * origin→classification entries for browser child frames that failed without
+     * a forward record (the direct local loopback leg).
+     */
+    readonly frameErrors?: readonly ForwardFrameErrorEntry[]
+  }
   | { readonly ok: false; readonly error: ForwardError }
 
 /**
@@ -269,7 +453,12 @@ export type ForwardListResult =
  * was created (gate, caps, authorization, allocation).
  */
 export type ForwardRequestResult =
-  | { readonly ok: true; readonly record: ForwardRecord }
+  | {
+    readonly ok: true
+    readonly record: ForwardRecord
+    /** v2: main-composed iframe URL; present only for an attached+bound record. */
+    readonly frameUrl?: string
+  }
   | { readonly ok: false; readonly error: ForwardError }
 
 /** `forward.release` result. */
@@ -361,6 +550,32 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return present.length === keys.length && keys.every(key => Object.hasOwn(value, key))
 }
 
+/** Required keys present and no key outside required ∪ optional (v2 additive fields). */
+function hasOnlyKeys(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {
+  const allowed = new Set(required.concat(optional))
+  return required.every(key => Object.hasOwn(value, key))
+    && Object.keys(value).every(key => allowed.has(key))
+}
+
+/** Bounded same-origin relative path argument (main normalizes the final URL). */
+function isForwardPathArgument(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 2048
+    && value.startsWith('/') && !value.startsWith('//')
+    && !/[\u0000-\u0020\u007f\\#]/u.test(value)
+}
+
+/** Main-composed iframe URL: http(s) absolute, bounded, no credentials/control bytes. */
+export function isForwardFrameUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length < 9 || value.length > 4096) return false
+  if (!/^https?:\/\//u.test(value) || /[\u0000-\u0020\u007f\\#]/u.test(value)) return false
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.username === '' && url.password === ''
+  } catch {
+    return false
+  }
+}
+
 function isNullableWatermark(value: unknown): value is number | null {
   return value === null || isWatermark(value)
 }
@@ -385,10 +600,10 @@ export function isForwardTarget(value: unknown): value is ForwardTarget {
 /** Narrow an untrusted value to a complete forward record. */
 export function isForwardRecord(value: unknown): value is ForwardRecord {
   if (!isRecord(value)) return false
-  if (!hasExactKeys(value, [
+  if (!hasOnlyKeys(value, [
     'id', 'sourceId', 'namespace', 'aliasHost', 'localPort', 'scheme', 'targetHost',
     'targetPort', 'state', 'stale', 'error', 'createdAt', 'updatedAt', 'boundAt',
-  ])) return false
+  ], ['frameError'])) return false
   if (!isForwardId(value.id) || !isForwardSourceId(value.sourceId)) return false
   if (typeof value.namespace !== 'number' || !Number.isSafeInteger(value.namespace)
     || value.namespace < 0 || value.namespace > 0xffff) return false
@@ -406,6 +621,7 @@ export function isForwardRecord(value: unknown): value is ForwardRecord {
   if (value.updatedAt < value.createdAt) return false
   if (value.boundAt !== null && (value.boundAt < value.createdAt || value.boundAt > value.updatedAt)) return false
   if ((value.state === 'error') !== (value.error !== null)) return false
+  if (value.frameError !== undefined && value.frameError !== null && !isForwardFrameError(value.frameError)) return false
   return true
 }
 
@@ -415,6 +631,8 @@ export function isForwardRequestArgs(value: unknown): value is ForwardRequestArg
   if (!isForwardSourceId(value.sourceId) || !isForwardFingerprint(value.sourceFingerprint)) return false
   if (!isForwardTargetPort(value.port)) return false
   if (value.scheme !== undefined && !isForwardScheme(value.scheme)) return false
+  if (value.consumer !== undefined && !isForwardConsumer(value.consumer)) return false
+  if (value.path !== undefined && !isForwardPathArgument(value.path)) return false
   return true
 }
 
@@ -424,11 +642,22 @@ export function isForwardReleaseArgs(value: unknown): value is ForwardReleaseArg
   return isForwardSourceId(value.sourceId)
     && isForwardFingerprint(value.sourceFingerprint)
     && isForwardId(value.id)
+    && (value.consumer === undefined || isForwardConsumer(value.consumer))
 }
 
-/** Narrow an untrusted value to `forward.list` arguments. */
+/**
+ * Narrow an untrusted value to `forward.list` arguments.
+ *
+ * The poll face is the ONE method that also accepts the local instance
+ * (`{sourceId:'local', sourceFingerprint:'local'}`): the local leg has no
+ * forward records, but its iframe failures are carried here so the panel can
+ * refuse honestly. request/release/openInBrowser keep rejecting `local`.
+ */
 export function isForwardListArgs(value: unknown): value is ForwardListArgs {
   if (!isRecord(value)) return false
+  if (value.sourceId === FORWARD_LOCAL_SOURCE_ID) {
+    return value.sourceFingerprint === FORWARD_LOCAL_SOURCE_FINGERPRINT
+  }
   return isForwardSourceId(value.sourceId) && isForwardFingerprint(value.sourceFingerprint)
 }
 
@@ -437,8 +666,7 @@ export function isForwardOpenArgs(value: unknown): value is ForwardOpenArgs {
   if (!isRecord(value)) return false
   if (!isForwardSourceId(value.sourceId) || !isForwardFingerprint(value.sourceFingerprint)) return false
   if (!isForwardId(value.id)) return false
-  if (value.path !== undefined
-    && (typeof value.path !== 'string' || value.path.length > 2048)) return false
+  if (value.path !== undefined && !isForwardPathArgument(value.path)) return false
   return true
 }
 
@@ -460,6 +688,9 @@ export function isForwardListResult(value: unknown): value is ForwardListResult 
   if (value.ok === true) {
     return Array.isArray(value.records) && value.records.every(isForwardRecord)
       && isForwardLimitsSnapshot(value.limits)
+      && (value.embedding === undefined || isForwardEmbeddingSnapshot(value.embedding))
+      && (value.frameErrors === undefined
+        || (Array.isArray(value.frameErrors) && value.frameErrors.every(isForwardFrameErrorEntry)))
   }
   if (value.ok === false) return isForwardError(value.error)
   return false
@@ -468,7 +699,10 @@ export function isForwardListResult(value: unknown): value is ForwardListResult 
 /** Narrow an untrusted value to a `forward.request` result. */
 export function isForwardRequestResult(value: unknown): value is ForwardRequestResult {
   if (!isRecord(value)) return false
-  if (value.ok === true) return isForwardRecord(value.record)
+  if (value.ok === true) {
+    return isForwardRecord(value.record)
+      && (value.frameUrl === undefined || isForwardFrameUrl(value.frameUrl))
+  }
   if (value.ok === false) return isForwardError(value.error)
   return false
 }

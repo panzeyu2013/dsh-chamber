@@ -148,6 +148,12 @@ export type ApiCorsEvaluator = (req: ApiRequest) => ApiCorsDecision
  * origins get neither and are rejected before routing.
  */
 function corsFor(req: ApiRequest, allowlist: string[]) {
+  // v2 embedded browser (design 28 §16.7): a remote page rendered in a cross-site
+  // iframe must not drive the control-plane API, even on an Origin-less GET. The
+  // same-origin shell reports `same-origin`; a 127.0.0.n frame is cross-site to the
+  // 127.0.0.1 shell, so this closes the residual Origin-less read/write path.
+  const secFetchSite = req.headers['sec-fetch-site']
+  if (typeof secFetchSite === 'string' && secFetchSite.toLowerCase() === 'cross-site') return { allowed: false }
   // Bind the browser-visible authority to this loopback service as well as the initiator
   // Origin. A DNS-rebound page is same-origin to the browser and may omit Origin on reads,
   // but its Host still names the attacker's domain and cannot be forged by page script.

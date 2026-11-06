@@ -43,6 +43,7 @@
 |S-53|壳级语言/主题跟随不同|Swift = 页面事实 + 进程级重启生效（菜单/托盘/对话框即时重建；`AppleLanguages` 仅在不同于系统时写；外观默认跟系统）；Electron = 英文默认菜单 + 硬编码中文对话框（从不 `setApplicationMenu`），与页面语言/主题无关联|E `main.ts#=literal:buttons: [copy.quitButton, copy.cancelButton],`、desktop 全树 `setApplicationMenu` 零命中 ↔ S `ShellPageFacts.swift#ShellPageFactsScript`、`AppDelegate.swift#=literal:private func installMainMenu()`、`AppDelegate.swift#=literal:static func applyLanguage(`|accepted（有意差异）；实机 = Sparkle 标准窗语言/外观、zh-Hans 匹配、切主题即时性|
 |S-54|原生快捷键服务输入源不同|Electron = 主进程 `before-input-event`（组合投递、`setIgnoreMenuShortcuts`、blur/导航复位；偏好 `keybindings.json` 0600）；Swift = documentStart DOM 桥（keydown/keyup 归一、revision；偏好仅会话内存）。Swift 边界：无 preventDefault/子 frame/原生菜单源/`closeWindow` A 桥通道|E `shortcuts-bridge.ts`、`preload.cts` ↔ S `bridge-shim.js`|open（accepted；可选加固：close 方法/偏好落盘/子 frame）|
 |S-56|Swift/WKWebView 取不到 DOM File 宿主路径|Swift = 拖拽板快照 × 事件批次相关性：目录按名（size=0 优先）、文件精确字节数、各消费一次、批次门 5s、目录快照无 TTL、上限 256、配不到即 ''；入稿归属 = vendor 补丁给 ui-attachment 加本壳 `[data-instance]` containment；两 flavor 共用 painted 门控。Electron = `webUtils.getPathForFile`，行为同上游|E `preload.cts`、`upstream-seats.test.ts` ↔ S `HostPathCatalog.swift`、`bridge-shim.js`、`host-path-scope.ts`、`bridge-shim-host-paths.test.ts`|open；残余 = 打包态实机（拖入/回形针/慢悬停/远端回退/浏览器文案）、painted 是协作标记非安全边界、Swift 不覆盖粘贴、同名歧义回退上传、远端文件夹整批作废、壳外 drop 不入稿、150ms 轮询隐藏态仍唤醒；判据见 design 25 §5.7|
+|S-57|右栏 iframe 内 XFO/frame-ancestors/TLS 失败不可可靠探测|与上游 `ui-sidebar-browser` iframe 路径一致：不在面板里造自研 refusing/失败投影；页面失败只表现为上游 failure 条（能观测时）或引擎错误页，系统浏览器出口 = 工具栏 external 按钮。W-15 判据 = external 存在/可点/装载时不自动开，不承诺失败 UI|E `packages/dsh-chamber-client-ui-browser/src/client/view/IframePresentation.ts`、`BrowserBody.tsx`（**FORK diff 文件，不在 SHA 锁内**；SHA 锁只覆盖 9 个 verbatim 文件，见包测试 `test/locks/registration.test.ts`）↔ S 同包同源；main 的 local/alias `frameErrors` 与 `list.embedding` 保留为契约/诊断但 v2 UI 不消费（生产恒 enabled）；验收 `scripts/gui-acceptance/checks.mjs#externalExitVerdict`|accepted（上游语义）；退役 = 上游提供可靠失败探测面，或 chamber 改回 webview/native 子视图（另案）|
 
 ## 2. 结构性 / 有意差异（T，非缺陷；除注明外均 accepted）
 
@@ -71,7 +72,7 @@
 |T-28|渲染引擎差异（Chromium 150 ↔ WKWebView/Safari 17.4）|corner-shape `@supports` 在 Safari 整块跳过（保持正圆角）；裸 `scrollbar-width:none` 无 `::-webkit` 兜底会露滚动条；`field-sizing`/`text-autospace` 被忽略。①corner-shape 待 vendor 单点裁决；②tooltip/appearance 待补；③④引擎降级登记；⑤发丝边框/字体光栅 accepted|E ui-theme `corner-shape.css:16-25`、`scrollbar.css:44-58` ↔ S 同包 `@supports` 跳过；U1 证据 0.3.1/native beta.2 CSS/JS 逐字节相同|open/accepted 混合；退役 = ①落 accepted 或 vendor 裁决，③④有兜底或随 14.4 退役|
 |T-29|发布命名后缀归属|Electron腿的app/DMG/zip/安装器名 = `dsh-chamber-electron`（`build.productName`；`release.yml`的`BASE`/`APP_DIR`同步）；Swift原生腿 = 裸名`dsh-chamber`（`--app-name`/`--artifact-basename`）|与更早的归属相反（旧：Electron裸名、Swift `dsh-chamber-native`）。不动的面：appId `com.dshchamber.desktop`、原生CFBundleIdentifier `com.dshchamber.native`、共享userData身份（顶层`name` = `@dsh-chamber/desktop`，见T-14）、目录锁路径、深链scheme `dsh-chamber`、Electron `latest*/beta*` feed名与Sparkle `appcast-swift*.xml`名。迁移面：旧 .app目录名不会自动改写（更新只替换当前bundle）；bundle id与用户数据路径不变，权限/凭据/共享锁不受影响，清爽目录名需重装。统一名称（T-17）：Swift壳可执行名由`DSHChamberPoc`改为`dsh-chamber`、模块/target改`DSHChamber`（资源包随之`DSHChamber_DSHChamber.bundle`），同样重装后生效|有意（用户指令）；证据 = `scripts/release/release-artifacts.mjs`单源 + `release-workflow-policy.test.mjs` + `build-swift-app.test.mjs` + `ShellIdentityTests`|
 |T-30|窗口拖拽实现|`-webkit-app-region` 由 Chromium 消费（`base.css:55-58`；标记行 = ui-theme CHROME_ROWS），页面零 JS；WKWebView 不认且 `mouseDownCanMoveWindow=false` ⇒ 壳注入 mousedown，命中 `[data-window-drag]` 且未命中控件时 preventDefault + 合成 leftMouseDown/performDrag；同一批标记与 INTERACTIVE_SELECTOR 锁步|E `base.css`、`upstream-seats.test.ts` ↔ S `ShellWindowDrag.swift`、`regions.ts`|accepted；退役 = WebKit 放出等价 API（届时只余几何盒序差异）|
-
+|T-31|右栏浏览器实现形态|上游官方 `ui-sidebar-browser` iframe 路径的 chamber fork：9 文件逐字节同源（SHA-256 锁），Behavior/DOM/CSS/8 语言/地址解析/历史/多标签/快捷键/标题/store 同源；diff = `ForwardFrameResolver`（SSH 反代：remote `127.0.0.1` → forward alias frameUrl；local/其它 host 直连）+ `IframeImpl` 异步 src seam 与 `forwards`/externalUrl 生命周期 + `IframePresentation.url`/pages 工厂 + `BrowserFrame.externalUrl`/`BrowserBody` external 按钮（代理页用 alias，解析中/失败为 null 禁用）+ 新增 `registry-wait.ts`/source gate/type-only TabId|同包同源（共享 client fork，两 flavor 都走 iframe 路径）|accepted；升级按 fork 重放（design 28 §16.11）；退役 = 上游提供可注入 frame URL resolver 或 chamber 改为直接加载官方包|
 ## 3. Swift leg 接入缺口 / 待裁（P）
 
 |#|现象 / 缺口|证据（E ↔ S）|可达性 / 状态 / 退役判据|
@@ -99,7 +100,7 @@
 
 - Electron默认菜单项集可由pinned上游`default-menu.ts`/`menu-item-roles.ts`核对（M4）；WKWebView右键菜单项集/禁用可行性属实机（S-11）；缩放 ± 步进语义（0.5 zoomLevel vs ±0.10 pageZoom）属纯像素比对（T-22 resolved）。
 - 文件拖拽（W3-2）的实机行为——S-25回形针/下载腿实现，拖拽是剩余摄入路径。
-- ATS loopback（S-45残余实机）：macOS 14+ 真机验证Swift首载HTTP loopback（双侧ATS逐键相同）；例外域不含`::1`——`DSH_CHAMBER_CP_URL`指IPv6环回时native落失败页、Electron正常（A3）。Electron safeStorage在目标机Keychain恒可用的假设（`main.ts:1509-1540`）。
+- ATS loopback（S-45残余实机）：macOS 14+ 真机验证 Swift 首载 HTTP loopback 与 **v2 iframe 的 Web 内容放行**；v2（design 28 §16.11，覆盖 §16.8）起 Swift 增 `NSAllowsArbitraryLoadsInWebContent=true`（右栏 iframe 可承载任意 http(s) 页面；Electron 无此键，Chromium 网络栈不受 ATS 管辖）——「双侧 ATS 逐键相同」的旧口径随 v2 退役，改为「主文档 ATS 底线相同 + Swift Web 内容单独放行」；例外域仍不含 `::1`——`DSH_CHAMBER_CP_URL` 指 IPv6 环回时 native 落失败页、Electron 正常（A3）。Electron safeStorage 在目标机 Keychain 恒可用的假设（`main.ts:1509-1540`）。
 - 隐藏/遮挡态（S-10的开放实机门）：最小化与完全遮挡（未最小化）两工况的rAF/定时器/`visibilityState`/App Nap语义、hide ≥30s的SSE/WS心跳、唤醒重连、隐藏期CPU（W6-3/design 25 §8.1 C1·§8.5 G5）。存储jar与登录态闭环（T-18：登录态不在渲染端jar，控制面自铸内存cookie；仅localStorage UI偏好不跨flavor）。
 - S-32（Dock/托盘恢复最小化窗口）、S-35（放行CSP后的blob文档预览渲染）、S-40（隐藏窗口二次启动的恢复）、S-42（首帧/首个已提交内容时序；打包态首载复验——宿主须不占用17500，否则先命中共享目录锁）、S-43（Return/小键盘Enter/Esc在真实退出确认框）各自的实机观察；S-23版本键映射、S-34 loadedOnce门由单测闭合。
 - 通知：S-44残余——Electron无授权预检/申请，实机看首次投递的弹框/拒绝面是否与Swift等价；授权重置后不主动重问（§5）、已拒绝时add的错误文案与`{shown:false,error}`复核、P-07多横幅淘汰。
@@ -115,7 +116,7 @@
 - 登录自启的替代路径：若`SMAppService`在ad-hoc/未签名分发下失败，launchd LaunchAgent是已知可行替代（无移植实机证据）；Electron read-back补齐（P-20 resolved），只剩打包态实机观察（§4）。
 - 打印/页内查找：两端皆无（`electron.d.ts:9653`无print/find role；macos grep printOperation/find = 0）；任一端将来加入口时Swift必须实现`printOperation(with:)`，否则成新缺口。
 - 许可文本随包：两端都不随任何顶层许可/第三方声明（Electron mac打包显式删LICENSE/LICENSES.chromium.html：`electronMac.js:219-221`；Swift只解bin/node：`build-sidecar.mjs`；THIRD_PARTY_NOTICES.md只在release校验）——共同缺口，需单独立项。
-- CSP frame-src（裁定）：补最窄`frame-src blob:`（`packages/control-plane/src/index.ts#createControlPlane` 的响应头组装处），HTML文档预览的blob: iframe具备渲染条件；Swift只放行非主frame（S-35）。真实渲染仍属实机（§4）。
+- CSP frame-src（裁定）：default/gateway/cli 维持 v1 最窄 `frame-src blob:`（HTML 文档预览）；desktop main/sidecar v2 显式追加 local loopback、253 个 per-source alias 与裸 `http:`/`https:`（上游 `ui-sidebar-browser` iframe 行为，design 28 §16.11），`frame-ancestors 'none'`/XFO/COOP-Corp 不变；renderer sandbox/属性非安全边界，main 子 frame 导航/下载/权限门才是（S-35）。真实渲染仍属实机（§4）。
 - test-windows腿的Windows用户路径缺口由`docs/progress/TODO.md` B§2.2 台账承载，不并入本表。
 
 ## 6. 可达性优先：纪律与盘点

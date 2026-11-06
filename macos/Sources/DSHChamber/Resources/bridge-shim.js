@@ -53,12 +53,15 @@
  *     open-notification-settings（无载荷）/ notifications-ready /
  *     notification-open-ack {deliveryId,attempt}；onOpen → notification-open
  *   badge（1 invoke）→ badge-count {count}
- *   forward（4 invoke、零订阅；design 28 §7）→ dsh-chamber:forward-request
- *     {sourceId,sourceFingerprint,port,scheme} / forward-release
- *     {sourceId,sourceFingerprint,id} / forward-list {sourceId,sourceFingerprint} /
- *     forward-open-in-browser {sourceId,sourceFingerprint,id,path}。main 侧
- *     shell-ipc-browser 做指纹/归属/path 校验并由 main 拼 URL；wire 保留的
- *     'forward:changed' 推送刻意不接（v1 轮询 list）。
+ *   forward（4 invoke、零订阅；design 28 §16.6）→ dsh-chamber:forward-request
+ *     {sourceId,sourceFingerprint,port,scheme,consumer,path} / forward-release
+ *     {sourceId,sourceFingerprint,id,consumer} / forward-list
+ *     {sourceId,sourceFingerprint} / forward-open-in-browser
+ *     {sourceId,sourceFingerprint,id,path}。main 侧 shell-ipc-browser 做指纹/
+ *     归属/consumer/path 校验并由 main 拼 URL（frameUrl）；wire 保留的
+ *     'forward:changed' 推送刻意不接（轮询 list）。consumer/path 恒写键
+ *     （可能 undefined）——verify:shim-payload 逐键比对 preload，条件展开会让
+ *     两侧键集不等而变红。
  *
  * 宿主侧差异注记（shim 层照常 invoke，错误如实上抛）：
  *   - update.download / update.restartAndInstall：sidecar 的 updateController
@@ -621,17 +624,19 @@
     set: function (count) { return invoke('dsh-chamber:badge-count', { count: count }) }
   }
 
-  /** forward — 远端 loopback SSH 端口转发（design 28 §7）：四个 invoke、零订阅
-   *  （v1 轮询 list；wire 保留的 'forward:changed' 推送刻意不接）。成员只做
-   *  传输、不做参数校验：指纹/归属/path 校验在 sidecar 的 shell-ipc-browser，
-   *  URL 由 main 构造（renderer 只传 id + 相对 path）。载荷键逐字 preload.cts
-   *  ——verify:shim-payload 比对调用位键集，条件展开会让两侧键集不等而变红。 */
+  /** forward — 远端 loopback SSH 端口转发（design 28 §16.6）：四个 invoke、零订阅
+   *  （轮询 list；wire 保留的 'forward:changed' 推送刻意不接）。成员只做
+   *  传输、不做参数校验：指纹/归属/consumer/path 校验在 sidecar 的
+   *  shell-ipc-browser，URL（frameUrl）由 main 构造（renderer 只传 id +
+   *  相对 path）。载荷键逐字 preload.cts ——verify:shim-payload 比对调用位
+   *  键集，条件展开会让两侧键集不等而变红；consumer/path 恒写键（undefined
+   *  时 Swift JSON 桥会丢键，main 按缺省语义读）。 */
   var forward = {
     request: function (input) {
-      return invoke('dsh-chamber:forward-request', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, port: input.port, scheme: input.scheme })
+      return invoke('dsh-chamber:forward-request', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, port: input.port, scheme: input.scheme, consumer: input.consumer, path: input.path })
     },
     release: function (input) {
-      return invoke('dsh-chamber:forward-release', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, id: input.id })
+      return invoke('dsh-chamber:forward-release', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, id: input.id, consumer: input.consumer })
     },
     list: function (input) {
       return invoke('dsh-chamber:forward-list', { sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint })

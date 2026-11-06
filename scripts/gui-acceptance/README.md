@@ -12,8 +12,10 @@
 | `run.mjs` | 单一入口：`--live` / `--attach` / `--dev`（`--flavor electron|native`） |
 | `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
 | `native.mjs` | `--flavor native`：驱动**原生壳 spawn 的 sidecar 装配**（ready/B 桥/控制面 HTTP），或 `--attach` 探测运行中的原生壳控制面；WKWebView UI 不可驱动（没有 CDP 端点）。`--require-assembly` 是机器门形态：装配缺失（以及 N-6 找不到 web dist）记 FAIL 而非 SKIP/INFO（ci.yml 的 native 装配启动门用它）。`--web-dist <dir>` 给出 N-6 要判的 renderer 产物目录（未给时探测 `sidecarDir/dist/web` → `sidecarDir/../dist/web`） |
-| `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡） |
+| `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡；v2 内嵌腿 `W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`（上游 ui-sidebar-browser iframe fork DOM/行为）：右栏 guide kind browser + BrowserBody 结构、local fixture 真跑 + postMessage、remote alias 端到端、系统浏览器出口（上游不承诺 XFO 探测）、关 tab 释放；`W-13` 前先经**既有 UI** 确保一个可见 Session：冷实例走 new-session 快捷控件，仍无工作区时走 hero 工作区入口 → 浏览式目录对话框，选中本次 `--out` 下的 `workspace` 目录（dsh 空态选工作区即生成空白会话）） |
+| `fixture.mjs` | v2 内嵌腿的 in-process HTTP fixture（127.0.0.1 随机端口）：`/` 标记页（`parent.postMessage` 证明跨源文档真的运行了）与 `/embed-xfo`（同页 + `X-Frame-Options: DENY`，`W-15` 的负例；上游不把该拒绝投影成失败 UI）；另含 `probeTcpReachable`（`W-15b` 的 alias 端口不可达判据，`node:net` 直连，ECONNREFUSED 才算已释放） |
 | `launch.mjs` | `--dev`：一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
+| `packaged-ssh-smoke.mjs` | 打包态（已构建 `release/<platform>-unpacked`）的 W-13…W-15b smoke：`startSshFixture` 预置一次性 userData/ssh-agent → 启动打包可执行 → 普通 CDP 走查（含 W-14b 真实 SSH alias iframe）；需要显示（Xvfb 即可），不碰真实 userData/~/.ssh |
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
 | `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
 | `checks.test.mjs` | `checks.mjs` 的单测（`pnpm run test:scripts:gui-acceptance`，CI 跑） |
@@ -49,6 +51,11 @@ pnpm run acceptance:gui -- --dev             # 自起 dev 实例 → 走查 → 
 # --dev 同时把 managed dsh 起始端口设为 cpPort+10（DSH_CHAMBER_DSH_PORT_BASE 可覆盖），
 # 因此在跑安装占用 17510..17514 时也能启动。
 pnpm run acceptance:gui -- --dev --require-hover   # 悬停腿必须真实执行：未执行（INFO）计为 FAIL
+pnpm run acceptance:gui -- --dev --electron-arg=--no-sandbox   # 一次性实例：W-13/W-14a/W-15/W-15b 真跑（local fixture）
+pnpm run acceptance:gui -- --attach --require-embed --embed-port 8080   # 远端真实 SSH 源：W-14b 端到端，且内嵌腿必须真实执行
+pnpm run acceptance:gui -- --attach --attach-create-session           # 一次性/打包态 smoke：显式允许经既有 UI 建工作区/会话后再跑 W-13…W-15b（默认 --attach 不写真实实例状态）
+xvfb-run -a node scripts/gui-acceptance/packaged-ssh-smoke.mjs \
+  --binary packages/desktop/release/linux-unpacked/dsh-chamber-electron   # 打包态 W-13…W-15b（含 W-14b 真实 SSH fixture）
 pnpm run acceptance:gui -- --live --sources gateway-a,gateway-b   # 显式指定要扫的远程来源
 pnpm run acceptance:gui -- --live --plane http://127.0.0.1:17540 --registry <isolated-userData>/ssh-instances.json  # MX 来源与该平面同源
 pnpm run acceptance:gui -- --flavor native   # 原生 flavor：自起 sidecar 装配 → 走查 → SIGTERM 关闭
@@ -94,6 +101,8 @@ Electron 那样驱动它的 DOM。`--flavor native` 因此驱动**打包 .app �
   `index.html`，`--require-assembly` 下记 **FAIL**（机器门不允许腿没跑却变绿）；
 - `N-7` SIGTERM 后干净退出（exit 0）；`--attach` 无生命周期时记 **INFO**。
 
+`--attach-create-session` 只用于**一次性/自起自关的打包态 smoke**（例如 `electron-builder --linux dir` 后手动启动、`--user-data-dir` 指向 `<out>`）：它复用 `--dev` 的“确保一个可见 Session”UI 路径，会写该一次性实例的 workspace/session；对真实用户实例仍应人工选中会话后普通 `--attach`，默认禁止写。
+
 `--attach` 原生档的 `N-1`/`N-7` 也是 **INFO**：没有 ready 帧可观测（未观测 ≠ PASS），也没有
 sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳）。收尾行分开报 pass/fail 与 INFO，
 "实际执行"只数真正判过的项。
@@ -136,8 +145,46 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
 | 遮罩可见但活动视图里没有任何可采样锚点（composer 座/输入区/会话流都不在 DOM） | `W-1b` 记 **INFO** 并写明未执行 | 同上：没有锚点就判不了；把"没判过"记成 PASS 才是问题 |
 | 命中文档级 body portal（z≤1100 的浮层，非租客壳内） | 只进 `W-1b` 的 evidence，**不判红** | design 05 §9：body portal 是已登记残余（任何 stacking 边界都管不到），不属于本门判据 |
 | `W-1b` 的 PASS 有两种强弱：**持有态**（活动视图带 `.instance-veil-held`，租客被 `visibility:hidden` 移出命中测试）只证明「遮罩盖住锚点」，**不单独**断言 P0（isolation）或 P1（持有期隐藏）任一条；**boot 段**（`!settled`）里租客仍参与命中测试，才有完整判别力 | 不重新判级（PASS 仍是 PASS）；evidence 里已按段报帧数（`持有态 N 帧 / boot 段 M 帧`），读报告时按段解读；无遮罩帧仍是 INFO | design 05 §4：分层防御（结构隔离 + 持有期隐藏）本就让单条回归难以单独暴露，这是判据的已知上限，不是本次缺陷 |
+| v2 内嵌 fixture 的 XFO 负例：`/embed-xfo` 被 Chromium 拒绝装载（`Network.loadingFailed` / 控制台 `Refused to display … X-Frame-Options`；控制台行的 URL 可能只报 fixture origin 根） | `W-11`/`W-12` 记**已登记容忍**（原始文本仍入报告）；`W-15` 自己判上游出口语义（external 可点 + 不自动开 + 点击恰一次 window.open） | 该拒绝是 `W-15` 的**判据输入**，不是缺陷；容忍按 fixture 专属路径 `/embed-xfo` 与**本次运行的 fixture origin**（随机端口）双重限定（`fixtureNoiseRules`），普通请求/其它源不豁免 |
+| v2 内嵌腿前置缺失（无可见 Session 右栏 surface；`--attach` 右栏收起/未预开页签；local 源无远端 forward；未给 `--embed-port`） | 对应 `W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b` 记 **INFO** 并写明缺什么（`--require-embed` 时改判 **FAIL**） | 未执行不等于通过；右栏展开与页签打开会写布局状态，`--attach` 不代开（与 `W-4a` 同一写入边界） |
 
 `CP-4` 的判据是 `quiescent === true`（**不是** `writers` 为空）：扫描到的 `reclaimed` 孤儿会如实列出，只有 `kept`（无法回收）才代表有无法解释的活写者。
+
+## v2 内嵌腿（W-13…W-15b、SH-7）
+
+design 28 §16.9 / plan §5 L4。判据全在 `checks.mjs`（CI 单测 + 假 DOM 跑真实页面表达式），本目录只负责驱动与留痕：
+
+| 腿 | 判据 | 在哪跑 |
+|---|---|---|
+| `W-13` 入口/面板结构 | 右栏 guide 入口按**上游标记**（`[data-sidebar-right-guide-entry="browser"]`，fork 保留上游 kind 'browser'）定位；上游 BrowserBody（地址栏 `input[aria-label=上游 placeholder]`、toolbar `back/forward/reload/go/external`、"sandbox 开关 aria-pressed"）恰一个可见且 `aria-busy` 可读；不再有自研 panel/phase/远端分区概念 | `--dev` 自开右栏+页签；`--attach` 仅在右栏/页签已预开时判定，否则 INFO |
+| `W-14a` local 内嵌真跑 | 走查自起 in-process fixture（127.0.0.1 随机端口，`/` 标记页 `parent.postMessage`）→ 地址栏输入**显式** `http://127.0.0.1:<port>/`（上游裸地址默认 https）→ iframe 恰一、src 指向本次 fixture、`data-sidebar-browser-frame="iframe"`、sandbox 精确上游 token（含 allow-popups）、referrerpolicy=no-referrer、**收到 postMessage**；不断言 name/title | `--dev`（local 直连；无需 SSH） |
+| `W-14b` remote 端到端 | `--ssh-fixture` 驱动，或 `--attach` + 真实 SSH 源 + `--embed-port`：活动视图切到 dsh/gateway+ssh 源 → 上游 BrowserBody 地址栏输入 `http://127.0.0.1:<port>/` → iframe src 为 **per-source alias**（127.0.0.2–254）、地址栏仍显示逻辑地址、上游 sandbox/referrer 契约、fixture postMessage；上游 fork 已删除 attached 行 UI，租约由 alias iframe + postMessage + 关 tab 后 alias 不可达证明 | `--dev --ssh-fixture`（本机真实 sshd/remote dsh/回环 fixture）或 `--attach` + 真实 ssh 源；缺前置 = **loud SKIP**（INFO，终端打 `SKIP W-14b`） |
+| `W-15` 系统浏览器出口（上游语义） | fixture `/embed-xfo`（XFO DENY）：上游**不承诺** XFO/TLS 失败探测，不要求 refusing/失败条；断言 iframe 尝试了该显式 http 地址、external 按钮存在且**可点**、装载时不自动打开、点击后 `window.open(逻辑地址,'_blank','noopener,noreferrer')` 恰一次（witness stub 掉真实打开）；观察到的上游失败条仅作证据 | 同 `W-14a`（`--dev` local） |
+| `W-15b` 关 tab 即释放 | 点页签关闭控件 → 面板/iframe 移除、无 pending（`aria-busy`/重建观察窗）；local 直连**没有** forward 记录，不做 list 探针（local 记录恒空，不能当释放证据）；有 forward 时 alias 端口必须 ECONNREFUSED（`node:net` 直连；未知不算已释放） | `--dev` local 版断言无 pending；远端 release 腿归真机/L5 |
+| `SH-7` CSP frame-src 合同 | `--live` 读壳 CSP：v2 精确源集（`blob:` + `127.0.0.1`/`localhost` + 253 alias + 裸 `http:`/`https:`，共 258 源，头 ≤8KB）PASS；v1 默认 `frame-src blob:`（gateway/cli/standalone 不放宽）INFO；`'self'`/通配/部分 alias/削弱的 `frame-ancestors`/超长头 FAIL | `--live`（纯 HTTP，无 GUI） |
+
+严格档 `--require-embed`：以上腿与 SH-7 的 v1 短头只要判成 INFO 就改判 **FAIL**（与 `--require-hover` 同形态）。它只重标“未执行”，已经是 PASS/FAIL 的判据原样通过；exit code 语义不变，所以这是**逐次显式选择**，不是新的默认门。
+
+写入边界：`--dev` 允许展开右栏/开页签/关闭页签（布局状态）；`--attach` **不**代开右栏与页签，只要 INFO 并写明前置（要真跑远端腿，先人工把窗口切到该 ssh 来源并打开浏览器页签，再给 `--embed-port`——给出端口即表示授权该腿驱动该面板，页签的逻辑目标会随 `browserTargetStorage` 持久化）。`W-14b` 结束后**不会**替操作者关页签（`--attach` 不碰他人页签），该 forward 随页签存活：验收后请手动关闭页签以释放 alias 端口。
+
+**W-14b 本机端到端夹具（`--ssh-fixture`，仅 `--dev`）。** 真机 ssh 源不在工具箱里，夹具在本机搭出完整链路，全部状态在 `<--out>/ssh-fixture`（一次性、可清理）：
+
+1. 一次性 sshd（独立端口/临时 host key/config/authorized_keys，不写用户 `~/.ssh`）+ 一次性 ssh-agent（临时 client key；`SSH_AUTH_SOCK` 注入给 app 的 ssh 子进程，不写用户身份）；
+2. 一次性 remote dsh（`packages/desktop/vendor/dsh` CLI、temp `DSH_HOME`、127.0.0.1:<dshPort>）并**预置 chamber host-graph seed**（四件 host 包中的三件 + loader overlay；open-in 是 localOnly 不上远端），否则远端来源的 UI provider 全 PENDING；
+3. 回环 **cookie 注入代理**（127.0.0.1:<remotePort>）：dsh web profile 的 `/api` 与 `/` 被 spawn 期 browser-auth cookie 硬门挡住，夹具从 dsh 自身 stdout 捕获 launch token、换取签名 cookie，代理把 Host/Origin 归一到 dsh 自身 authority 并注入 cookie，app 的真实 SSH 隧道/verifyUp/前端链路因此照常工作；
+4. 远端回环 HTTP fixture 页（127.0.0.1:<fixturePort>，`postMessage` marker）——即 iframe 经 alias 拉取的页面；
+5. app 侧预置：dev userData 的 app-owned `ssh/known_hosts`（临时 host key 行）+ `ssh-instances.json`（dsh/ssh 源）+ forward namespace/port 预授权（不然首个转发会弹 main 原生确认框，无头运行无法应答）；
+6. W-14b 用侧栏来源头部（`[data-chamber-row]` 的 HEADER）切活动来源 → 远端 Session 前置（同 W-13 的既有 UI 流程）→ 开右栏/浏览器页签 → 上游 BrowserBody 输入 `http://127.0.0.1:<fixturePort>/`（显式 http）→ 断言 alias iframe 的 sandbox/referrer 契约 + fixture `postMessage`（上游 fork 无 attached 行 UI）→ 关 tab 后 alias 端口 ECONNREFUSED；随后切回 local 跑 W-14a/W-15/W-15b。
+
+失败是 loud 的（夹具启动失败、端口未回收、Session/面板前置失败都直接 FAIL/异常），收尾 kill 全部子进程并等待端口释放。
+
+**W-13 前置：先有可见 Session。** 右栏 surface 按 Session 渲染（design 28 §10），冷 `--dev` 实例既无 workspace 也无 Session，整组内嵌腿会 INFO 跳过。走查因此先确保一个可见 Session，全程走**产品既有 UI**、只写一次性实例状态（与「`--dev` 才推进首启向导」同一写入边界）：
+
+1. 已选工作区：点 app 自己注册的 new-session 控件——结构定位优先用 `aria-keyshortcuts="Control+N"`（macOS 为 `Meta+N`），label 只作兜底（zh/en 白名单）；
+2. 冷实例（无工作区）：点 hero 的工作区入口（`选择工作区`/`Choose workspace` 白名单）→ 浏览式目录对话框（`主目录` 列表）→ 「编辑路径」输入本次验收自己的目录 `<out>/workspace`（走查创建，**不在产品源码树里**）→ Enter 定位 → 「打开」采用；dsh 空态选中工作区即生成空白 Session；
+3. `--attach` **不**创建/切换会话（会写真实实例状态），该前置记 INFO，`--require-embed` 时改判 FAIL——请先人工选中一个会话再复跑。
+
+新增的语言耦合点只有上述目录流程的 3 个 label（工作区入口/编辑路径/打开）；new-session 优先按快捷键属性定位，其余全部是 DOM 标记与几何身份。
 
 ## `--dev` 的干净退出
 
@@ -160,12 +207,22 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
 控制面从 17520 起自动退避（本工具箱默认固定 17530）；其托管 dsh 若发现 17510 已占用会
 自行让位。dev 模式不注册 `dsh-chamber://` 协议，故不会抢打包版的深链。
 
+`--dev` 的一次性状态根固定解析为 **`<--out>/dev-user-data` 的绝对路径**（`launch.mjs` 用
+`path.resolve` 后再交给 Electron）：Electron 会把相对的 `--user-data-dir` 按自己的 cwd
+（`packages/desktop`）解释，曾经因此把状态落到 `packages/desktop/.tmp/`，下一次运行读到
+上一个 PID 命名空间的 owner 记录就以 `state_root_locked` 拒绝启动。删掉 `<--out>/dev-user-data`
+即可回到冷实例（W-13 前置会重新建一个一次性工作区/会话）。
+
 ## 断言的取向（为什么这样写）
 
 - **只用仓库已有的 DOM 契约**，不新增测试钩子、不靠文案匹配：
   `[data-instance]`（每实例壳）、`[data-chamber-section]` / `[data-chamber-row]`（多来源侧栏）、
   `[data-chamber-hovercard]` / `[data-chamber-hovercard-anchor]`（行悬停卡片与其锚点，`RowHoverCard.tsx`）、
-  `[data-slot]` / `[data-slot-error]`（设置面渲染位）、`dialog nav [class*="navList"] > button`（设置导航项）。
+  `[data-slot]` / `[data-slot-error]`（设置面渲染位）、`dialog nav [class*="navList"] > button`（设置导航项）、
+  以及 v2 内嵌面的全部锚点：`[data-sidebar-right-session]` / `[data-sidebar-right-open]` / `[data-sidebar-right-expand]`
+  （右栏 surface 与其展开钮）、`[data-sidebar-right-guide-entry="<kind>"]`（guide 入口，按 kind 不按文案）、
+  `[data-sidebar-right-tab]` / `iframe[data-sidebar-browser-frame="iframe"]`（上游 BrowserBody 座位体与唯一 iframe）、
+  `[data-dockkit-tab]` / `[data-dockkit-tab-close]` 与 `[data-chamber-browser-title]`（页签 chip/关闭钮/标题座席）。
 - 悬停卡片的行选择与计数**只认标记**（曾经按 `position:fixed` + 244px + `z-index:100` 的几何计数，Tooltip
   气泡或残留卡片都能满足它）；可悬停行只认 `[data-chamber-hovercard-anchor]` 之内的行，所以未分组桶头
   不会被误选。
@@ -212,10 +269,16 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
   唯一的合成事件是 `W-4b-dismiss` 的 `blur` / `visibilitychange(hidden)` 探针——真实 OS 失焦与真实
   标签页隐藏无法用 CDP 制造，所以那一条验的是**监听接线**（首次开卡时绑定 + 能清卡），不是 OS 交接；
   走查会恢复 `document.visibilityState`，即使断言抛错也在 `finally` 里恢复。
-- 仅两处与语言耦合（侧栏「设置」座席、首启模态的关闭动作）走 zh/en 白名单，匹配不到就记
-  `INFO` 并留下截图，交给目检——不假装通过。
-- **点击白名单**：只点设置导航项、首启关闭动作、侧栏头部图标钮（`W-4`）与来源节折叠钮（`W-4a`）
-  这四处，因此按不到「启动/停止/保存/删除」这类变更控件。
+- 语言耦合点只限显式白名单（zh/en）：侧栏「设置」座席、首启模态的关闭动作，以及 W-13 前置目录流程的
+  工作区入口/「编辑路径」/「打开」三个 label（new-session 控件优先按 `aria-keyshortcuts` 结构定位）。
+  匹配不到就记 `INFO` 并留下截图，交给目检——不假装通过。
+- **点击白名单**：只点设置导航项、首启关闭动作、侧栏头部图标钮（`W-4`）、来源节折叠钮（`W-4a`），
+  以及 v2 内嵌腿的四个结构性控件——右栏展开钮（`[data-sidebar-right-expand]`）、右栏 guide 的浏览器入口
+  （按 `data-sidebar-right-guide-entry` 的 kind 'browser' 选中）、浏览器地址栏的提交钮（上游 BrowserBody form 内）
+  与浏览器页签的关闭钮（`[data-dockkit-tab-close]`，只认带 `[data-chamber-browser-title]` 的 chip）。
+  因此按不到「启动/停止/保存/删除」这类变更控件；内嵌腿的「系统浏览器出口」与远端行操作按钮**一律不点**
+  （点它们会真的开系统浏览器/建立 forward），只有 witness 会捕获并拦截产品自己触发的 `a[target=_blank]` 点击
+  （这正是 `W-15` 判「不自动开」的办法）。
 - **写入边界（2026-09-15 修订）**：`W-4` 只改内存态——导轨折叠是 layout store 的 0 状态，
   `view-prefs.ts` 明写「折叠不会持久化」（持久化的只有拖拽宽度 `sidebarWidth`）。`W-4a` 会写**持久化**
   偏好 `sourceFolded`（design 06 §3.1），所以它**只在一次性实例（`--dev`）上执行**，`--attach` 记

@@ -71,6 +71,11 @@ class MemoryStorage implements ForwardNamespaceStorage {
 class FakeChild implements ForwardChild {
   readonly exit: Promise<ForwardChildExit>
   stopped = false
+  killCalls = 0
+  /** v2 release drill: a stubborn child ignores stop() until told otherwise. */
+  autoExitOnStop = true
+  /** v2 release drill: the SIGKILL escalation may or may not settle the child. */
+  killResolves = true
   #resolve!: (exit: ForwardChildExit) => void
 
   constructor() {
@@ -81,7 +86,12 @@ class FakeChild implements ForwardChild {
 
   stop(): void {
     this.stopped = true
-    this.#resolve({ code: null, signal: 'SIGTERM', authFailed: false, bindFailed: false })
+    if (this.autoExitOnStop) this.#resolve({ code: null, signal: 'SIGTERM', authFailed: false, bindFailed: false })
+  }
+
+  kill(): void {
+    this.killCalls += 1
+    if (this.killResolves) this.#resolve({ code: null, signal: 'SIGKILL', authFailed: false, bindFailed: false })
   }
 
   fail(exit: Partial<ForwardChildExit> = {}): void {
@@ -201,6 +211,8 @@ function harness(overrides: {
   withAuthorize?: boolean
   spawnWindowMs?: number
   onAuthorize?: () => void
+  releaseTimeoutMs?: number
+  embedding?: { readonly enabled: boolean; readonly reason?: string }
 } = {}): Harness {
   const storage = new MemoryStorage()
   const clock = overrides.clock ?? { now: 1_000 }
@@ -255,6 +267,8 @@ function harness(overrides: {
     probeIntervalMs: 1,
     reconnect: overrides.reconnect ?? { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
     spawnWindowMs: overrides.spawnWindowMs ?? 0,
+    ...(overrides.releaseTimeoutMs === undefined ? {} : { releaseTimeoutMs: overrides.releaseTimeoutMs }),
+    ...(overrides.embedding === undefined ? {} : { embedding: overrides.embedding }),
   })
   return { manager, storage, namespaces, ports, launcher, openExternal, sources, clock, timers, authorize, grant }
 }
@@ -613,7 +627,7 @@ test('auth failure before bind is terminal and does not retry', async () => {
   assert.equal(h.launcher.launches.length, 1)
 })
 
-test('a bound child dying reconnects within the budget, then reports forward_failed', async () => {
+test('a bound child dying reconnects within the budget', async () => {
   const timers = new ManualTimers()
   const h = harness({ timers, reconnect: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0 } })
   install(h)
@@ -636,14 +650,62 @@ test('a bound child dying reconnects within the budget, then reports forward_fai
   assert.equal(rebound.ok, true)
   if (!rebound.ok) return
   assert.equal(rebound.records[0].state, 'bound')
+  assert.equal(rebound.records[0].stale, false)
+})
 
+test('a successful rebind resets the reconnect budget (v2: a later outage gets a full budget)', async () => {
+  const timers = new ManualTimers()
+  const h = harness({ timers, reconnect: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0 } })
+  install(h)
+  await h.manager.request(requestArgs(5173))
+
+  // First outage: the single attempt is spent on a successful rebind.
+  h.launcher.children[0].fail()
+  await settle()
+  await timers.runAll()
+  await settle()
+  assert.equal(h.launcher.launches.length, 2)
+  let list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.ok(list.ok)
+  if (!list.ok) return
+  assert.equal(list.records[0].state, 'bound')
+
+  // Second outage in the SAME record: the budget must have been reset on the
+  // successful bind, so this is a reconnect again instead of a terminal error.
   h.launcher.children[1].fail()
   await settle()
-  const failed = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
-  assert.equal(failed.ok, true)
-  if (!failed.ok) return
-  assert.equal(failed.records[0].state, 'error')
-  assert.equal(failed.records[0].error?.code, 'forward_failed')
+  list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.ok(list.ok)
+  if (!list.ok) return
+  assert.equal(list.records[0].state, 'reconnecting')
+
+  await timers.runAll()
+  await settle()
+  assert.equal(h.launcher.launches.length, 3)
+  list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.ok(list.ok)
+  if (!list.ok) return
+  assert.equal(list.records[0].state, 'bound')
+})
+
+test('reconnect budget exhaustion is still terminal (no unbounded retry)', async () => {
+  const timers = new ManualTimers()
+  const h = harness({ timers, reconnect: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0 } })
+  install(h)
+  // Every relaunch dies before it can bind, so no successful bind resets the budget.
+  h.launcher.onLaunch = (child, attempt) => {
+    if (attempt > 1) child.fail()
+  }
+  await h.manager.request(requestArgs(5173))
+  h.launcher.children[0].fail()
+  await settle()
+  await timers.runAll()
+  await settle()
+  const list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.equal(list.records[0].state, 'error')
+  assert.equal(list.records[0].error?.code, 'forward_failed')
   assert.equal(h.launcher.launches.length, 2, 'no unbounded retry after the budget')
 })
 
@@ -831,6 +893,18 @@ test('retireSource closes every forward and retires the alias', async () => {
   assert.deepEqual(list.records, [])
 })
 
+test('a source removed while its forward is starting leaves no listener behind', async () => {
+  const h = harness()
+  install(h)
+  // Remove the source while #start owns the await (the child is already spawning):
+  // retireSource can only close the records that existed when it ran.
+  h.launcher.onLaunch = () => { h.sources.delete(SOURCE_ID) }
+  const result = await h.manager.request(requestArgs(5173))
+  assertTypedFailure(result, 'source_changed')
+  assert.equal(h.launcher.children.length, 1)
+  assert.equal(h.launcher.children[0].stopped, true, 'the late-created listener must be closed')
+})
+
 test('stopAll closes everything (app exit)', async () => {
   const h = harness()
   install(h)
@@ -945,4 +1019,260 @@ test('the transition table is total and documents every state', () => {
   assert.equal(canForwardTransition('closing', 'closed'), true)
   assert.equal(canForwardTransition('bound', 'starting'), false)
   assert.equal(canForwardTransition('closed', 'bound'), false)
+})
+
+// ---------------------------------------------------------------------------
+// v2: consumer refcount, revoke, frameUrl, release hardening, frameError
+// ---------------------------------------------------------------------------
+
+const CONSUMER_A = 'consumer-aaaaaaa1'
+const CONSUMER_B = 'consumer-bbbbbbb2'
+
+function releaseArgs(id: string, consumer?: string): { sourceId: string; sourceFingerprint: string; id: string; consumer?: string } {
+  return { sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT, id, ...(consumer === undefined ? {} : { consumer }) }
+}
+
+test('v2: an attached bound request carries the main-composed frameUrl (path normalized)', async () => {
+  const h = harness()
+  install(h)
+  const result = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A, path: '/app?x=1#frag' }))
+  assert.equal(result.ok, true)
+  assert.equal(isForwardRequestResult(result), true)
+  if (!result.ok) return
+  // Main composes scheme://alias:localPort + normalized path; the fragment is dropped.
+  assert.equal(result.frameUrl, 'http://127.0.0.2:5173/app?x=1')
+
+  const pinned = await h.manager.request(requestArgs(5173))
+  assert.equal(pinned.ok, true)
+  if (!pinned.ok) return
+  assert.equal(pinned.frameUrl, undefined, 'a pinned (no consumer) request carries no frameUrl')
+  assert.equal(h.launcher.launches.length, 1, 'the pinned request attached to the same listener')
+})
+
+test('v2: two consumers share one listener; only the last detach closes it', async () => {
+  const h = harness()
+  install(h)
+  const first = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A }))
+  assert.equal(first.ok, true)
+  if (!first.ok) return
+  const shared = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_B }))
+  assert.equal(shared.ok, true)
+  if (!shared.ok) return
+  assert.equal(shared.record.id, first.record.id, 'attach-first reuses the record')
+  assert.equal(h.launcher.launches.length, 1)
+  const child = h.launcher.children[0]
+
+  // A refresh of the same consumer is idempotent.
+  await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A }))
+
+  const detachA = await h.manager.release(releaseArgs(first.record.id, CONSUMER_A))
+  assert.deepEqual(detachA, { ok: true })
+  assert.equal(child.stopped, false, 'one live consumer keeps the listener')
+  const list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.equal(list.records.length, 1)
+  assert.equal(list.records[0].state, 'bound')
+
+  // Detaching an already-detached consumer is a no-op success.
+  assert.deepEqual(await h.manager.release(releaseArgs(first.record.id, CONSUMER_A)), { ok: true })
+  assert.equal(child.stopped, false)
+
+  assert.deepEqual(await h.manager.release(releaseArgs(first.record.id, CONSUMER_B)), { ok: true })
+  assert.equal(child.stopped, true)
+  assert.equal((await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })).ok, true)
+  const gone = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.ok(gone.ok)
+  if (!gone.ok) return
+  assert.equal(gone.records.length, 0, 'the last consumer detach removed the record')
+})
+
+test('v2: a force-close drops every consumer and a detach of the gone record is idempotent', async () => {
+  const h = harness()
+  install(h)
+  const created = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A }))
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  await h.manager.request(requestArgs(5173, { consumer: CONSUMER_B }))
+
+  assert.deepEqual(await h.manager.release(releaseArgs(created.record.id)), { ok: true })
+  assert.equal(h.launcher.children[0].stopped, true)
+  // Both consumers were discarded with the record; late detaches stay successful.
+  assert.deepEqual(await h.manager.release(releaseArgs(created.record.id, CONSUMER_A)), { ok: true })
+  assert.deepEqual(await h.manager.release(releaseArgs(created.record.id, CONSUMER_B)), { ok: true })
+  // A v1 force-close of an unknown id keeps the honest refusal.
+  assertTypedFailure(await h.manager.release(releaseArgs(created.record.id)), 'forward_not_found')
+})
+
+test('v2: the idempotency key includes the scheme (http and https never share a child)', async () => {
+  const h = harness()
+  install(h)
+  const http = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A }))
+  const https = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_B, scheme: 'https' }))
+  assert.equal(http.ok && https.ok, true)
+  if (!http.ok || !https.ok) return
+  assert.notEqual(https.record.id, http.record.id)
+  assert.equal(https.record.scheme, 'https')
+  assert.equal(h.launcher.launches.length, 2)
+  assert.equal(https.frameUrl, 'https://127.0.0.2:40000/', 'the https frame URL keeps its scheme')
+})
+
+test('v2: revokeAttached closes consumer-held records only, pinned records stay', async () => {
+  const h = harness()
+  install(h)
+  // Pinned (system-browser leg): no consumer, must survive a renderer revoke.
+  const pinned = await h.manager.request(requestArgs(5173))
+  assert.equal(pinned.ok, true)
+  const attached = await h.manager.request(requestArgs(8080, { consumer: CONSUMER_A }))
+  assert.equal(attached.ok, true)
+  if (!pinned.ok || !attached.ok) return
+
+  assert.equal(await h.manager.revokeAttached(), 1)
+  assert.equal(h.launcher.children[1].stopped, true)
+  assert.equal(h.launcher.children[0].stopped, false)
+  const list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.deepEqual(list.records.map(record => record.id), [pinned.record.id])
+  // Revoke is idempotent.
+  assert.equal(await h.manager.revokeAttached(), 0)
+})
+
+test('v2: a revoke during the native confirmation wins over the in-flight create', async () => {
+  let revokeCount = 0
+  // The dialog is the long await the revokeGeneration guard protects: a
+  // renderer reload while it is open must leave no listener behind.
+  const h = harness({
+    withAuthorize: true,
+    onAuthorize: () => {
+      void h.manager.revokeAttached().then(count => { revokeCount += count })
+    },
+  })
+  install(h, makeSource({ browserEnabled: false }))
+  const result = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A }))
+  assertTypedFailure(result, 'forward_stale')
+  assert.equal(h.launcher.launches.length, 0)
+  await settle()
+  assert.equal(revokeCount, 0, 'no consumer-held record existed when the dialog opened')
+})
+
+test('v2: preferredLocalPort reuses the bound port when the same target is reopened', async () => {
+  const h = harness()
+  install(h)
+  const first = await h.manager.request(requestArgs(80, { consumer: CONSUMER_A }))
+  assert.equal(first.ok, true)
+  if (!first.ok) return
+  assert.equal(first.record.localPort, 40_000, 'a privileged target gets an ephemeral local port')
+  await h.manager.release(releaseArgs(first.record.id, CONSUMER_A))
+  assert.equal(h.ports.ephemeralCalls.length, 1)
+
+  const reopened = await h.manager.request(requestArgs(80, { consumer: CONSUMER_B }))
+  assert.equal(reopened.ok, true)
+  if (!reopened.ok) return
+  assert.equal(reopened.record.localPort, 40_000, 'the earlier local port is preferred')
+  assert.equal(h.ports.ephemeralCalls.length, 1, 'no new ephemeral allocation')
+})
+
+test('v2: release escalates to SIGKILL and keeps a release_timeout record for retry', async () => {
+  const timers = new ManualTimers()
+  const h = harness({ timers, releaseTimeoutMs: 2_000 })
+  install(h)
+  const created = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A }))
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  const child = h.launcher.children[0]
+  child.autoExitOnStop = false
+  child.killResolves = false
+
+  const releasing = h.manager.release(releaseArgs(created.record.id, CONSUMER_A))
+  await settle()
+  await timers.runAll()
+  const result = await releasing
+  assertTypedFailure(result, 'release_timeout')
+  assert.equal(child.killCalls, 1, 'the graceful stop was escalated once')
+
+  const list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.equal(list.records.length, 1, 'the unproven-dead record is kept')
+  assert.equal(list.records[0].state, 'error')
+  assert.equal(list.records[0].error?.code, 'release_timeout')
+
+  // The child finally exits: the late-exit watcher forgets the record.
+  child.fail()
+  await settle()
+  const after = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(after.ok, true)
+  if (!after.ok) return
+  assert.equal(after.records.length, 0)
+})
+
+test('v2: a release retry on a release_timeout record closes once the child exits', async () => {
+  const timers = new ManualTimers()
+  const h = harness({ timers, releaseTimeoutMs: 500 })
+  install(h)
+  const created = await h.manager.request(requestArgs(5173))
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+  const child = h.launcher.children[0]
+  child.autoExitOnStop = false
+  child.killResolves = false
+
+  const first = h.manager.release(releaseArgs(created.record.id))
+  await settle()
+  await timers.runAll()
+  assertTypedFailure(await first, 'release_timeout')
+
+  const retry = h.manager.release(releaseArgs(created.record.id))
+  await settle()
+  child.fail() // the second attempt observes the exit
+  const result = await retry
+  assert.deepEqual(result, { ok: true })
+  const list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.equal(list.records.length, 0)
+})
+
+test('v2: frameError projection patches by alias origin and clears on rebind', async () => {
+  const h = harness()
+  install(h)
+  const created = await h.manager.request(requestArgs(5173, { consumer: CONSUMER_A }))
+  assert.equal(created.ok, true)
+  if (!created.ok) return
+
+  assert.equal(h.manager.noteFrameErrorForUrl('http://127.0.0.2:5173/app', 'blocked_by_response'), 1)
+  const list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.equal(list.records[0].frameError, 'blocked_by_response')
+  assert.equal(isForwardListResult(list), true, 'the wire guard accepts frameError')
+
+  assert.equal(h.manager.noteFrameErrorForUrl('http://127.0.0.9:5173/app', 'load_failed'), 0)
+  assert.equal(h.manager.noteFrameErrorForUrl('not a url', 'load_failed'), 0)
+  // Runtime guard matrix: a forged code reaches the manager as never-typed input.
+  assert.equal(h.manager.noteFrameErrorForUrl('http://127.0.0.2:5173/', 'not-a-code' as never), 0)
+  assert.equal(h.manager.noteFrameErrorForUrl('http://127.0.0.2:5173/', null), 1)
+  const cleared = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(cleared.ok, true)
+  if (!cleared.ok) return
+  assert.equal(cleared.records[0].frameError, null)
+})
+
+test('v2: list carries the embedding capability (default enabled, rollback visible)', async () => {
+  const h = harness()
+  install(h)
+  await h.manager.request(requestArgs(5173))
+  const enabled = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(enabled.ok, true)
+  if (!enabled.ok) return
+  assert.deepEqual(enabled.embedding, { enabled: true })
+
+  const rolled = harness({ embedding: { enabled: false, reason: 'emergency_rollback' } })
+  install(rolled)
+  await rolled.manager.request(requestArgs(5173))
+  const disabled = await rolled.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(disabled.ok, true)
+  if (!disabled.ok) return
+  assert.deepEqual(disabled.embedding, { enabled: false, reason: 'emergency_rollback' })
 })

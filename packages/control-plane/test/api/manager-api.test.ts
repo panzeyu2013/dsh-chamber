@@ -845,3 +845,30 @@ test('DELETE during an in-flight start does not resurrect the connection (2026-0
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
+
+test('v2 embedded browser: cross-site Sec-Fetch-Site is rejected even without Origin', async () => {
+  const holder = await makePlane()
+  try {
+    const crossSiteRead = await fetchJson(holder.base, '/api/connections', {
+      headers: { 'sec-fetch-site': 'cross-site' },
+    })
+    assert.equal(crossSiteRead.status, 403)
+    assert.equal(crossSiteRead.body.code, 'origin_forbidden')
+
+    const crossSiteWrite = await fetchJson(holder.base, '/api/connections', {
+      method: 'POST',
+      headers: { 'sec-fetch-site': 'Cross-Site', 'content-type': 'text/plain' },
+      body: JSON.stringify({ kind: 'local' }),
+    })
+    assert.equal(crossSiteWrite.status, 403)
+    assert.equal(holder.wire.spawns, 0, 'cross-site write is rejected before side effects')
+
+    const sameOrigin = await fetchJson(holder.base, '/health', {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    })
+    assert.equal(sameOrigin.status, 200, 'the shell document keeps normal API access')
+  } finally {
+    await holder.plane.stop()
+    rmSync(holder.stateDir, { recursive: true, force: true })
+  }
+})

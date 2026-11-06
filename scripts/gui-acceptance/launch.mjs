@@ -111,9 +111,15 @@ function reclaimOwnLeftover(port) {
  */
 export async function launchDevInstance({ outDir = '.tmp/gui-acceptance', cpPort = 17530, cdpPort = 9333, electronArgs = [] } = {}) {
   preflight()
-  const userDataDir = path.join(outDir, 'dev-user-data')
+  // RESOLVE ABSOLUTE: Electron resolves a relative --user-data-dir against its
+  // own cwd, and the spawn below sets cwd to packages/desktop — a relative
+  // --out therefore parked the throwaway state under packages/desktop/.tmp/
+  // (where the next run's owner record could not be attributed: the stale lock
+  // record then refused startup). The toolbox owns this one directory, so the
+  // state root must follow --out exactly.
+  const userDataDir = path.resolve(outDir, 'dev-user-data')
   mkdirSync(userDataDir, { recursive: true })
-  const logPath = path.join(outDir, 'dev-app.log')
+  const logPath = path.resolve(outDir, 'dev-app.log')
   const logFd = openSync(logPath, 'a')
 
   const { distDir, status } = await ensureSharedElectronDist()

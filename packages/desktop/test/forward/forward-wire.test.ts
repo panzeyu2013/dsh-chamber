@@ -16,14 +16,25 @@ import assert from 'node:assert/strict'
 
 import {
   FORWARD_ALIAS_OCTETS,
+  FORWARD_CONSUMER_PATTERN as WIRE_CONSUMER_PATTERN,
   FORWARD_ERROR_CODES as WIRE_ERROR_CODES,
+  FORWARD_FRAME_ERRORS as WIRE_FRAME_ERRORS,
   FORWARD_LIMITS,
+  FORWARD_SCHEMES as WIRE_SCHEMES,
   FORWARD_STATES as WIRE_STATES,
+  FORWARD_WIRE_VERSION as WIRE_VERSION,
   forwardAliasHost,
   forwardLocalOrigin,
   isForwardAliasHost as isWireAliasHost,
   isForwardChangedEvent,
+  isForwardConsumer,
+  isForwardEmbeddingSnapshot,
   isForwardError,
+  isForwardFrameError,
+  isForwardFrameErrorEntry,
+  isForwardFrameErrorOrigin,
+  isForwardFrameUrl,
+  isForwardListArgs,
   isForwardListResult,
   isForwardOpenArgs,
   isForwardOpenResult,
@@ -34,14 +45,18 @@ import {
   isForwardTarget,
 } from '../../../dsh-chamber-wire/src/forward.ts'
 import {
+  FORWARD_CONSUMER_PATTERN as MANAGER_CONSUMER_PATTERN,
   FORWARD_ERROR_CODES as MANAGER_ERROR_CODES,
+  FORWARD_FRAME_ERRORS as MANAGER_FRAME_ERRORS,
   FORWARD_MAX_GLOBAL,
   FORWARD_MAX_LOCAL_PORT,
   FORWARD_MAX_PER_SOURCE,
   FORWARD_MAX_TARGET_PORT,
   FORWARD_MIN_LOCAL_PORT,
   FORWARD_MIN_TARGET_PORT,
+  FORWARD_SCHEMES as MANAGER_SCHEMES,
   FORWARD_STATES as MANAGER_STATES,
+  FORWARD_WIRE_VERSION as MANAGER_WIRE_VERSION,
 } from '../../remote-forward-manager.ts'
 import {
   FORWARD_ALIAS_CAPACITY,
@@ -75,6 +90,106 @@ test('the error-code and state tables are exactly the manager mirror', () => {
   assert.deepEqual([...WIRE_ERROR_CODES], [...MANAGER_ERROR_CODES])
   assert.equal(new Set(WIRE_STATES).size, WIRE_STATES.length)
   assert.equal(new Set(WIRE_ERROR_CODES).size, WIRE_ERROR_CODES.length)
+})
+
+test('v2 mirror: wire version, schemes, frame errors and consumer grammar agree', () => {
+  assert.equal(WIRE_VERSION, 2)
+  assert.equal(MANAGER_WIRE_VERSION, WIRE_VERSION)
+  assert.deepEqual([...WIRE_SCHEMES], [...MANAGER_SCHEMES])
+  assert.deepEqual([...WIRE_FRAME_ERRORS], [...MANAGER_FRAME_ERRORS])
+  assert.equal(WIRE_CONSUMER_PATTERN.source, MANAGER_CONSUMER_PATTERN.source)
+  assert.equal(WIRE_CONSUMER_PATTERN.flags, MANAGER_CONSUMER_PATTERN.flags)
+  for (const consumer of ['abcdefgh', 'crypto-randomUUID-123456', 'A_b-9'.repeat(8)]) {
+    assert.equal(isForwardConsumer(consumer), true, consumer)
+  }
+  for (const consumer of ['short', 'has space here', 'x'.repeat(65), '', 42, null]) {
+    assert.equal(isForwardConsumer(consumer), false, String(consumer))
+  }
+})
+
+test('v2 guards: consumer/path arguments, frameUrl, embedding, frameError', () => {
+  const args = { sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', port: 5173 }
+  assert.equal(isForwardRequestArgs({ ...args, consumer: 'abcdefgh' }), true)
+  assert.equal(isForwardRequestArgs({ ...args, consumer: 'nope' }), false)
+  assert.equal(isForwardRequestArgs({ ...args, path: '/app?x=1' }), true)
+  assert.equal(isForwardRequestArgs({ ...args, path: 'http://evil.example' }), false)
+  assert.equal(isForwardRequestArgs({ ...args, path: '//evil.example' }), false)
+  assert.equal(isForwardRequestArgs({ ...args, path: '/a#frag' }), false)
+  assert.equal(isForwardReleaseArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'fwd-0123456789abcdef', consumer: 'abcdefgh' }), true)
+  assert.equal(isForwardReleaseArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'fwd-0123456789abcdef', consumer: 'x' }), false)
+
+  // frameError is optional/nullable; a foreign string is refused.
+  assert.equal(isForwardRecord({ ...validRecord(), frameError: 'blocked_by_response' }), true)
+  assert.equal(isForwardRecord({ ...validRecord(), frameError: null }), true)
+  assert.equal(isForwardRecord({ ...validRecord(), frameError: 'nope' }), false)
+  assert.equal(isForwardFrameError('certificate_error'), true)
+  assert.equal(isForwardFrameError('weird'), false)
+
+  // frameUrl is main-composed: absolute http(s), no credentials/control bytes.
+  assert.equal(isForwardFrameUrl('http://127.0.0.2:5173/app?x=1'), true)
+  assert.equal(isForwardFrameUrl('https://127.0.0.2:443/'), true)
+  assert.equal(isForwardFrameUrl('http://user:pw@127.0.0.2:1/'), false)
+  assert.equal(isForwardFrameUrl('/relative'), false)
+  assert.equal(isForwardFrameUrl('http://127.0.0.2:5173/a#frag'), false)
+  assert.equal(isForwardRequestResult({ ok: true, record: validRecord(), frameUrl: 'http://127.0.0.2:5173/' }), true)
+  assert.equal(isForwardRequestResult({ ok: true, record: validRecord(), frameUrl: 'javascript:alert(1)' }), false)
+
+  // embedding: default enabled, optional bounded machine reason.
+  assert.equal(isForwardEmbeddingSnapshot({ enabled: true }), true)
+  assert.equal(isForwardEmbeddingSnapshot({ enabled: false, reason: 'emergency_rollback' }), true)
+  assert.equal(isForwardEmbeddingSnapshot({ enabled: false, reason: 'x'.repeat(129) }), false)
+  assert.equal(isForwardEmbeddingSnapshot({ enabled: 'yes' }), false)
+  assert.equal(isForwardEmbeddingSnapshot({ enabled: true, extra: 1 }), false)
+  const limits = { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 }
+  assert.equal(isForwardListResult({ ok: true, records: [], limits, embedding: { enabled: true } }), true)
+  assert.equal(isForwardListResult({ ok: true, records: [], limits, embedding: { enabled: 1 } }), false)
+})
+
+test('v2 local list identity: only list accepts {local,local}; request/release still refuse it', () => {
+  assert.equal(isForwardListArgs({ sourceId: 'local', sourceFingerprint: 'local' }), true)
+  assert.equal(isForwardListArgs({ sourceId: 'local', sourceFingerprint: 'a'.repeat(64) }), false)
+  assert.equal(isForwardListArgs({ sourceId: 'dsh-web-1', sourceFingerprint: 'local' }), false)
+  assert.equal(isForwardListArgs({ sourceId: 'local', sourceFingerprint: 'local', port: 5173 }), true)
+  assert.equal(isForwardListArgs(null), false)
+  assert.equal(isForwardListArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh' }), true)
+  // The local identity is a LIST-only arm; the forward actions keep the remote grammar.
+  assert.equal(isForwardRequestArgs({ sourceId: 'local', sourceFingerprint: 'local', port: 5173 }), false)
+  assert.equal(isForwardReleaseArgs({ sourceId: 'local', sourceFingerprint: 'local', id: 'fwd-0123456789abcdef' }), false)
+  assert.equal(isForwardOpenArgs({ sourceId: 'local', sourceFingerprint: 'local', id: 'fwd-0123456789abcdef' }), false)
+})
+
+test('v2 frame-error entries carry a canonical loopback origin and a closed code', () => {
+  for (const origin of [
+    'http://127.0.0.1:44215',
+    'https://localhost:8443',
+    'http://127.0.0.2:41000',
+    'http://127.0.0.254:65535',
+    'http://127.0.0.1',
+  ]) {
+    assert.equal(isForwardFrameErrorOrigin(origin), true, origin)
+    assert.equal(isForwardFrameErrorEntry({ origin, code: 'blocked_by_response' }), true, origin)
+  }
+  for (const origin of [
+    'http://127.0.0.1:44215/embed',
+    'http://127.0.0.1:44215?x=1',
+    'http://user:pw@127.0.0.1:44215',
+    'http://127.0.0.1:80', // non-canonical default port spelling
+    'http://127.0.0.0:1',
+    'http://127.0.0.255:1',
+    'http://10.0.0.1:1',
+    'http://example.com:1',
+    'blob:http://127.0.0.1:1/uuid',
+    'http://127.0.0.1:44215#frag',
+    'not a url',
+    '',
+    42,
+  ]) {
+    assert.equal(isForwardFrameErrorOrigin(origin), false, String(origin))
+  }
+  assert.equal(isForwardFrameErrorEntry({ origin: 'http://127.0.0.1:1', code: 'future' }), false)
+  assert.equal(isForwardFrameErrorEntry({ origin: 'http://127.0.0.1:1' }), false)
+  assert.equal(isForwardFrameErrorEntry({ origin: 'http://127.0.0.1:1', code: 'timeout', extra: 1 }), false)
+  assert.equal(isForwardFrameErrorEntry(null), false)
 })
 
 test('limits/alias tables agree with the manager and namespace leaf constants', () => {
@@ -190,6 +305,26 @@ test('list result guard enforces the cap snapshot causality', () => {
   const limits = { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 }
   assert.equal(isForwardListResult({ ok: true, records: [validRecord()], limits }), true)
   assert.equal(isForwardListResult({ ok: true, records: [], limits }), true)
+  // v2 local projection: an optional frameErrors array of canonical origin entries.
+  assert.equal(isForwardListResult({
+    ok: true,
+    records: [],
+    limits,
+    frameErrors: [{ origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' }],
+  }), true)
+  assert.equal(isForwardListResult({
+    ok: true,
+    records: [],
+    limits,
+    frameErrors: [{ origin: 'http://127.0.0.1:44215/embed', code: 'blocked_by_response' }],
+  }), false)
+  assert.equal(isForwardListResult({
+    ok: true,
+    records: [],
+    limits,
+    frameErrors: [{ origin: 'http://127.0.0.1:44215', code: 'future_code' }],
+  }), false)
+  assert.equal(isForwardListResult({ ok: true, records: [], limits, frameErrors: 'nope' }), false)
   assert.equal(isForwardListResult({ ok: true, records: [], limits: { ...limits, perSourceUsed: 9 } }), false)
   assert.equal(isForwardListResult({ ok: true, records: [validRecord()], limits: { ...limits, globalUsed: 33 } }), false)
   assert.equal(isForwardListResult({ ok: false, error: { code: 'source_unknown', detail: null } }), true)

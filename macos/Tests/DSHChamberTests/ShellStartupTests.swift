@@ -1219,6 +1219,10 @@ final class ShellStartupTests: XCTestCase {
                       "S-45：ATS 段必须存在")
         XCTAssertTrue(compact.contains("<key>NSAllowsLocalNetworking</key> <true/>"),
                       "S-45：local networking 放行必须保留")
+        // v2（design 28 §16.11）：右栏 iframe 可承载任意 http(s) 页面，需要 Web 内容级
+        // ATS 放行（不是进程级 ArbitraryLoads——后者保持 false，见下方解析断言）。
+        XCTAssertTrue(compact.contains("<key>NSAllowsArbitraryLoadsInWebContent</key> <true/>"),
+                      "v2：Web 内容 ATS 放行必须写进模板（右栏 iframe 的 http(s) 来源）")
         XCTAssertTrue(compact.contains("<key>NSExceptionDomains</key>"),
                       "S-45：回环域名例外域必须存在")
         XCTAssertTrue(compact.contains("<key>127.0.0.1</key>") && compact.contains("<key>localhost</key>"),
@@ -1232,7 +1236,10 @@ final class ShellStartupTests: XCTestCase {
     /// 放行的关键是**正确键名**——
     /// `localhost` 下的 NSExceptionAllowsInsecureHTTPLoads 是打包态
     /// http://localhost:<port> 导航的放行依据（NSTemporary... 写法实测不生效），
-    /// 127.0.0.1 例外键同样用正确键名保留。
+    /// 127.0.0.1 例外键同样用正确键名保留。v2（design 28 §16.11）再加一个
+    /// **Web 内容级**放行：右栏 iframe 可承载任意 http(s) 页面（含 local/http(s)/
+    /// remote loopback alias），不受域例外白名单覆盖；进程级
+    /// NSAllowsArbitraryLoads 必须仍为 false（主文档 ATS 底线不放大）。
     func testInfoPlistATSExceptionIsLocalhostWithModernKey() throws {
         let macosDir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // DSHChamberTests
@@ -1249,6 +1256,8 @@ final class ShellStartupTests: XCTestCase {
                        "S-45：ArbitraryLoads 必须保持 false")
         XCTAssertEqual(ats["NSAllowsLocalNetworking"] as? Bool, true,
                        "S-45：local networking 放行必须保留")
+        XCTAssertEqual(ats["NSAllowsArbitraryLoadsInWebContent"] as? Bool, true,
+                       "v2：Web 内容放行必须是 true（右栏 iframe 的 http(s) 来源）")
         let domains = try XCTUnwrap(ats["NSExceptionDomains"] as? [String: Any])
         let localhost = try XCTUnwrap(domains["localhost"] as? [String: Any],
                                       "S-45：localhost 例外域是打包态导航 origin 的放行依据")

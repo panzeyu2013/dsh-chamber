@@ -7,9 +7,12 @@
 //  （ChamberResources 定位的 SwiftPM 资源）注入 WebView；ChamberMessageHandler
 //  注册为 "dshChamber" 消息通道并回接 evaluateJavaScript；B 桥 invoke 结果与
 //  sidecar notify 帧经 __dshChamberResolve / __dshChamberEmit 回写页面；
-//  导航护栏：仅放行**壳文档**（origin 相等 + pathname=/ + 无 query，与 Electron
-//  isTrustedRendererUrl 对齐）——同源非壳文档（/api/i/* 代理 HTML）一律取消，
-//  其余交给系统打开或一律取消。
+//  导航护栏：主 frame 仅放行**壳文档**（origin 相等 + pathname=/ + 无 query，与
+//  Electron isTrustedRendererUrl 对齐）——同源非壳文档（/api/i/* 代理 HTML）一律
+//  取消，其余交给系统打开或一律取消；v2 §16.11（上游 ui-sidebar-browser 对齐）
+//  右栏 iframe 的子 frame 允许任意 http(s)（仍拒 credentials/非 web scheme），
+//  blob: 与 about:blank/srcdoc 保留；子 frame 的下载/新窗一律取消（见
+//  navigationDecision / createWebViewWith）。
 //  hostFacts 推送：本控制器是窗口/聚焦/加载事实的唯一事实源——
 //  窗口 key/关闭通知与 WKNavigationDelegate 生命周期回调经
 //  pushHostFacts 以 __host.hostFacts 推送 sidecar（node-edges.ts 同步门
@@ -1769,20 +1772,36 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - WKNavigationDelegate：导航护栏
 
     /// 导航决策（纯逻辑单测直测）。优先级：
-    ///  1. shouldPerformDownload → .download（WebKit 转交 WKDownload 保存，
-    ///     **绝不**把响应装进壳 webview——对此类导航 cancel 会让
-    ///     session 日志导出静默假成功）；
+    ///  1. shouldPerformDownload：主 frame → .download（WebKit 转交 WKDownload
+    ///     保存，**绝不**把响应装进壳 webview——对此类导航 cancel 会让 session
+    ///     日志导出静默假成功）；子 frame → .cancel（design 28 §16.11：上游
+    ///     iframe sandbox 无 allow-downloads，下载腿不随 iframe 放宽而改变）；
     ///  2. 首载失败说明页的 about:blank（一次性放行）；
-    ///  3. 壳文档 allow；同源非壳文档 cancel（文档绝不继承 shim/IPC 面）；
-    ///     外部 http(s) / mailto 交系统；
-    ///  4. **非主 frame** 的 blob: 放行（随包文档预览插件的
-    ///     HTML/PDF/图片经 URL.createObjectURL 子 frame 呈现）；主 frame 的
-    ///     blob 与其余 scheme 一律 cancel（主 frame 围栏不变）。
+    ///  3. http(s)：
+    ///     - **主 frame 真值表不变**：壳文档 allow；同源非壳文档 cancel（文档
+    ///       绝不继承 shim/IPC 面）；其余交系统；
+    ///     - **子 frame（右栏浏览器 iframe，design 28 §16.11 上游对齐）**：任意
+    ///       host 的 http(s) 都 allow（上游 ui-sidebar-browser 的 iframe 就是用来
+    ///       浏览 web 的），只拒 credentials 与非 web scheme；子 frame 拿不到桥
+    ///       （shim 只注主 frame，MessageHandler.fence 丢弃非主 frame 消息），
+    ///       所以同源非壳文档/壳文档在 iframe 里也不构成桥面扩大；
+    ///  4. **非主 frame** 的 blob:（文档预览/浏览器内的 blob 页面）与 about:blank
+    ///     /about:srcdoc 放行；主 frame 的 blob 与其余 scheme 一律 cancel（主 frame
+    ///     围栏不变）。
     enum NavigationDecision: Equatable {
         case allow
         case download
         case openExternally
         case cancel(reason: String)
+    }
+
+    /// 子 frame 目标 URL 是否携带 userinfo（凭据类 URL）。与 Electron
+    /// `isAllowedBrowserFrameUrl` 的 username/password 判定同义：带凭据的 http(s)
+    /// 子 frame 一律拒绝（壳从不构造或接受凭据型 frame target；同源判定
+    /// TrustGuard 也拒绝 userinfo）。解析失败 fail-closed = true。
+    static func browserFrameURLCarriesCredentials(_ url: URL) -> Bool {
+        guard let components = URLComponents(string: url.absoluteString) else { return true }
+        return components.user != nil || components.password != nil
     }
 
     /// - Parameter isMainFrame: 目标 frame 是否主 frame（默认 true = 未知/
@@ -1793,50 +1812,102 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                                    expectedOrigin: String,
                                    isMainFrame: Bool = true) -> NavigationDecision {
         guard let url else { return .cancel(reason: "无 URL") }
-        if shouldPerformDownload { return .download }
+        if shouldPerformDownload {
+            // v2：下载只从主文档发起（session 日志导出等）。右栏 iframe 的上游
+            // sandbox 没有 allow-downloads——主进程在引擎外拦下，绝不让子 frame
+            // 下载静默落盘（下载/弹窗 deny 面不随 iframe 放宽而改变）。
+            return isMainFrame ? .download : .cancel(reason: "子 frame 下载")
+        }
         let scheme = (url.scheme ?? "").lowercased()
         if failurePagePending, scheme == "about" { return .allow }
         if scheme == "http" || scheme == "https" {
-            // 目标是 cp origin 的 http(s)：放行（与 TrustGuard 同款大小写
-            // 折叠判定——导航/消息两门行为统一）
-            if TrustGuard.isTrustedDocument(url.absoluteString, expectedOrigin: expectedOrigin) {
-                return .allow
+            if isMainFrame {
+                // 主 frame 真值表不变：壳文档 allow / 同源非壳文档 cancel /
+                // 其余交系统默认浏览器。
+                if TrustGuard.isTrustedDocument(url.absoluteString, expectedOrigin: expectedOrigin) {
+                    return .allow
+                }
+                if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: expectedOrigin) {
+                    return .cancel(reason: "同源非壳文档")
+                }
+                return .openExternally
             }
-            // 同源但非壳文档（如 /api/i/<id>/* 代理回传的远端 HTML）：绝不
-            // 放行——放行会让该文档继承 shim 与全量 IPC 面。
-            // 判定不分 frame：同源非壳文档在任何 frame 都取消。
-            if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: expectedOrigin) {
-                return .cancel(reason: "同源非壳文档")
+            // 子 frame（右栏 iframe，design 28 §16.11）：上游 ui-sidebar-browser
+            // 的 iframe 允许任意 http(s) 页面（含 https、任意 host），只拒
+            // credentials（与 Electron isAllowedBrowserFrameUrl 同义）。桥面不扩大：
+            // shim 只注入主 frame，MessageHandler 丢弃非主 frame 消息——同源非壳
+            // 文档在 iframe 里同样拿不到桥，故不再按 origin 收紧，避免双 flavor
+            // 行为分叉（§16.11 覆盖 §16.8 的「任何 frame cancel」）。
+            if Self.browserFrameURLCarriesCredentials(url) {
+                return .cancel(reason: "子 frame 带凭据 URL")
             }
-            // 其余 http(s) 外链：交给系统默认浏览器打开
-            return .openExternally
-        }
-        if scheme == "mailto" { return .openExternally }
-        if scheme == "blob", !isMainFrame {
-            // 文档预览插件的 HTML/PDF/图片走 URL.createObjectURL 的 blob
-            // 子 frame（vendor ui-sidebar-documentpreview）。非主 frame 的该文档
-            // 拿不到桥：shim 只注入主 frame（BridgeShimInjector.makeUserScript
-            // forMainFrameOnly=true），且消息围栏丢弃非主 frame 消息
-            // （MessageHandler.fence 的 isMainFrame 门）——因此放行不扩大桥面。
-            // 主 frame 的 blob 仍按主 frame 围栏取消：壳文档只允许 ready 的 cp origin。
-            // about:blank/data: 不在放行之列（预览插件不需要；主 frame 的
-            // about:blank 仅经失败页一次性门放行）。
+            guard let host = url.host, !host.isEmpty else {
+                // 无 host 的 http(s) URL（畸形输入）绝不进引擎。
+                return .cancel(reason: "无 host")
+            }
             return .allow
         }
+        if scheme == "mailto" {
+            // mailto 是原生处理器腿：只有主文档点击才交系统；iframe 内取消
+            // （非 web scheme）。
+            return isMainFrame ? .openExternally : .cancel(reason: "非 http(s) scheme")
+        }
+        if !isMainFrame {
+            if scheme == "blob" {
+                // 文档预览插件的 HTML/PDF/图片走 URL.createObjectURL 的 blob
+                // 子 frame（vendor ui-sidebar-documentpreview）；右栏浏览器的
+                // iframe 也可能加载 blob 页面。非主 frame 的该文档拿不到桥：shim
+                // 只注入主 frame（BridgeShimInjector.makeUserScript
+                // forMainFrameOnly=true），且消息围栏丢弃非主 frame 消息
+                // （MessageHandler.fence 的 isMainFrame 门）——放行不扩大桥面。
+                return .allow
+            }
+            if scheme == "about",
+               let aboutPath = URLComponents(string: url.absoluteString)?.path.lowercased(),
+               aboutPath == "blank" || aboutPath == "srcdoc" {
+                // 空白/内联子 frame 的初始文档（about:blank）与 <iframe srcdoc>
+                // 的 about:srcdoc 放行；与 Electron isAllowedBrowserFrameUrl 的
+                // about 分支一致。主 frame 的 about: 仍只经失败说明页一次性门。
+                return .allow
+            }
+            // 其余非 web scheme 子 frame（data:/file:/javascript:/chrome:/自定义）
+            // 取消——与 Electron 子 frame 门「仍拒非 web scheme」同义。
+            return .cancel(reason: "非 http(s) scheme")
+        }
+        // 主 frame 的 blob 仍按主 frame 围栏取消：壳文档只允许 ready 的 cp origin。
+        // 主 frame 的 about:blank 仅经失败说明页的一次性门放行。
         return .cancel(reason: "非 http(s) scheme")
+    }
+
+    /// 响应级导航决策（纯逻辑单测直测，design 28 §16.11）：MIME 不可呈现时主
+    /// frame 转下载（session 导出等），**子 frame 一律 cancel**——右栏 iframe 内
+    /// 的下载不静默落盘，页面需要时用面板常显的系统浏览器出口。
+    enum NavigationResponseDecision: Equatable {
+        case allow
+        case download
+        case cancel(reason: String)
+    }
+
+    static func navigationResponseDecision(canShowMIMEType: Bool,
+                                           isForMainFrame: Bool) -> NavigationResponseDecision {
+        if canShowMIMEType { return .allow }
+        return isForMainFrame ? .download : .cancel(reason: "子 frame 下载")
     }
 
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         let url = navigationAction.request.url
+        // targetFrame 缺省（新窗口等）时以**发起点**兜底：主文档发起仍按主 frame，
+        // 子 frame 发起按子 frame 最严（v2：iframe 的 target=_blank download 不能因
+        // targetFrame 为 nil 而落回主 frame 下载腿）。
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame
+            ?? navigationAction.sourceFrame.isMainFrame
         switch Self.navigationDecision(url: url,
                                        shouldPerformDownload: navigationAction.shouldPerformDownload,
                                        failurePagePending: presentationGate.allowsFailurePageNavigation(),
                                        expectedOrigin: cpOrigin,
-                                       // targetFrame 缺省（新窗口等）按主 frame
-                                       // 最严围栏处理，绝不因未知而放宽。
-                                       isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true) {
+                                       isMainFrame: isMainFrame) {
         case .allow:
             // 失败页一次性豁免在这里只**观察**、绝不消费（didCommit 才消费——
             // 本回调实测先于 didCommit 到达，消费会让失败页呈现门失效）。只有
@@ -1866,15 +1937,23 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 响应级下载：MIME 不可呈现（如 application/zip 的 session 导出）
     /// 转下载；能呈现才放行。响应级导航不会是外链——外链在 action 级已转系统。
+    /// v2：子 frame 的不可呈现响应一律 cancel（design 28 §16.11）——右栏 iframe
+    /// 内的下载绝不静默落盘。
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-        if !navigationResponse.canShowMIMEType {
+        switch Self.navigationResponseDecision(canShowMIMEType: navigationResponse.canShowMIMEType,
+                                               isForMainFrame: navigationResponse.isForMainFrame) {
+        case .allow:
+            decisionHandler(.allow)
+        case .download:
             shellLog("[shell] 响应不可呈现 → 转下载 \(navigationResponse.response.url?.absoluteString ?? "")")
             decisionHandler(.download)
-            return
+        case .cancel(let reason):
+            shellLog("[shell] 拦截子 frame 下载（\(reason)）"
+                + "\(navigationResponse.response.url?.absoluteString ?? "")")
+            decisionHandler(.cancel)
         }
-        decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView,
@@ -2600,6 +2679,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     // MARK: - WKUIDelegate：禁新窗口
 
+    /// target=_blank 新窗是否交系统打开（纯逻辑单测直测，design 28 §16.7/§16.11）：
+    /// 只有**主文档**发起的外链才走既有系统打开预算；子 frame（右栏 iframe）一律
+    /// deny——远端页面不得借新窗把 URL 丢给系统浏览器/邮件客户端。上游 sandbox
+    /// **含** allow-popups（§16.11），引擎会放行 window.open，本判定是引擎外的
+    /// 第二道；Electron 的既有 window-open 腿按 URL 转系统（不经 frame 归属），
+    /// 因此这是 Swift 有意更严的一处差异（design 28 §16.11）。
+    static func shouldOpenNewWindowExternally(url: String?,
+                                              sourceIsMainFrame: Bool,
+                                              expectedOrigin: String) -> Bool {
+        guard sourceIsMainFrame else { return false }
+        return TrustGuard.isExternalLink(url, expectedOrigin: expectedOrigin)
+    }
+
     func webView(_ webView: WKWebView,
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
@@ -2607,9 +2699,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 一律不开新窗；但 target=_blank 的**外链**必须先交系统打开再拒绝
         // （Electron main.ts setWindowOpenHandler 先 openExternally 再 deny；
         // vendor markdown 的外链恒 _blank，静默丢弃会让点击无反应）。
+        // v2：只有主文档发起的外链走这条腿；子 frame 的新窗请求一律拒绝。
+        let url = navigationAction.request.url
         if navigationAction.targetFrame == nil,
-           let url = navigationAction.request.url,
-           TrustGuard.isExternalLink(url.absoluteString, expectedOrigin: cpOrigin) {
+           let url,
+           Self.shouldOpenNewWindowExternally(url: url.absoluteString,
+                                              sourceIsMainFrame: navigationAction.sourceFrame.isMainFrame,
+                                              expectedOrigin: cpOrigin) {
             shellLog("[shell] 新窗外链交系统打开 \(url.absoluteString)")
             openExternally(url)
         } else {

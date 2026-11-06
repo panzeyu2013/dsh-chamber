@@ -123,6 +123,9 @@ const GROUPS = {
     'test/proxy/uds-forward.test.ts',
     'test/proxy/ws-frames.test.ts',
     'test/proxy/static-serving.test.ts',
+    // v2 embedded-browser CSP sources (design 28 §16.3): default v1 claim,
+    // wire-generated alias+loopback grid, loud rejection of 'self'/bare scheme.
+    'test/proxy/browser-frame-sources.test.ts',
     // Injection-budget pin: MAX_HTML_INJECTION_BYTES is the single source
     // (the gateway html-inject.ts consumes it via @dsh-chamber/control-plane —
     // no twin constant); the test pins the budget value.

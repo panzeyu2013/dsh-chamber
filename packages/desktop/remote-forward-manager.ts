@@ -90,13 +90,66 @@ export const FORWARD_ERROR_CODES = [
   'invalid_path',
   'rate_limited',
   'open_failed',
+  /** Release escalation could not prove the ssh child exited; record kept, retryable. */
+  'release_timeout',
 ] as const
 
 /** One forward error code. */
 export type ForwardErrorCode = (typeof FORWARD_ERROR_CODES)[number]
 
+/** Wire version of this contract (mirror of the wire FORWARD_WIRE_VERSION). */
+export const FORWARD_WIRE_VERSION = 2
+
 /** One forward scheme (https is passed through, never downgraded). */
 export type ForwardScheme = 'http' | 'https'
+
+/** The two schemes the launcher may request (wire mirror). */
+export const FORWARD_SCHEMES = ['http', 'https'] as const
+
+/**
+ * Renderer-minted consumer id for one tab occurrence (v2 attach/detach). Never
+ * returned by `list`; it only proves "this caller still holds the record".
+ */
+export type ForwardConsumer = string
+
+/** Consumer grammar: URL-safe, bounded (crypto.randomUUID fits). Wire mirror. */
+export const FORWARD_CONSUMER_PATTERN = /^[A-Za-z0-9_-]{8,64}$/u
+
+/** Narrow an untrusted value to a forward consumer id. */
+export function isForwardConsumer(value: unknown): value is ForwardConsumer {
+  return typeof value === 'string' && FORWARD_CONSUMER_PATTERN.test(value)
+}
+
+/**
+ * Best-effort iframe failure projection (v2, wire mirror): main observes a
+ * child-frame load failure for the record's alias origin and exposes the
+ * classification here. `null` = unknown; never page content or stderr text.
+ */
+export const FORWARD_FRAME_ERRORS = [
+  'blocked_by_response',
+  'certificate_error',
+  'load_failed',
+  'timeout',
+] as const
+
+/** Frame-failure classification as a TS union. */
+export type ForwardFrameError = (typeof FORWARD_FRAME_ERRORS)[number]
+
+/** Narrow an untrusted value to a frame-failure classification. */
+export function isForwardFrameError(value: unknown): value is ForwardFrameError {
+  return typeof value === 'string' && (FORWARD_FRAME_ERRORS as readonly string[]).includes(value)
+}
+
+/**
+ * v2 embedding capability carried by `list`: default enabled; a main-side
+ * emergency rollback (or an unsupported flavor) may disable it with a bounded
+ * machine reason. Absent = enabled (v1 bridge compatibility).
+ */
+export interface ForwardEmbeddingSnapshot {
+  readonly enabled: boolean
+  /** Bounded machine reason; never localized, never carries page/secret content. */
+  readonly reason?: string
+}
 
 /** The fixed remote loopback target of v1. */
 export const FORWARD_TARGET_HOST = '127.0.0.1'
@@ -178,6 +231,11 @@ export interface ForwardRecord {
   readonly createdAt: number
   readonly updatedAt: number
   readonly boundAt: number | null
+  /**
+   * Best-effort iframe failure projection (v2): main observes a child-frame load
+   * failure for this record's alias origin; absent/null means unknown.
+   */
+  readonly frameError?: ForwardFrameError | null
 }
 
 /** Arguments of `request`. */
@@ -186,6 +244,13 @@ export interface ForwardRequestArgs {
   readonly sourceFingerprint: string
   readonly port: number
   readonly scheme?: ForwardScheme
+  /**
+   * v2 tab-occurrence consumer. Present = attach/refresh this consumer; absent =
+   * v1 pinned request (system-browser leg). Never exposed in `list`.
+   */
+  readonly consumer?: ForwardConsumer
+  /** Same-origin relative path used to compose `frameUrl` (fragment dropped). */
+  readonly path?: string
 }
 
 /** Arguments of `release`. */
@@ -193,6 +258,11 @@ export interface ForwardReleaseArgs {
   readonly sourceId: string
   readonly sourceFingerprint: string
   readonly id: string
+  /**
+   * v2: present = detach only this consumer (listener lives while others hold it);
+   * absent = force-close the record (v1 system-browser/pinned semantics).
+   */
+  readonly consumer?: ForwardConsumer
 }
 
 /** Arguments of `list`. */
@@ -219,7 +289,12 @@ export interface ForwardLimitsSnapshot {
 
 /** `request` result. */
 export type ForwardRequestResult =
-  | { readonly ok: true; readonly record: ForwardRecord }
+  | {
+    readonly ok: true
+    readonly record: ForwardRecord
+    /** v2: main-composed iframe URL; present only for an attached+bound record. */
+    readonly frameUrl?: string
+  }
   | { readonly ok: false; readonly error: ForwardError }
 
 /** `release` result. */
@@ -229,7 +304,13 @@ export type ForwardReleaseResult =
 
 /** `list` result. */
 export type ForwardListResult =
-  | { readonly ok: true; readonly records: readonly ForwardRecord[]; readonly limits: ForwardLimitsSnapshot }
+  | {
+    readonly ok: true
+    readonly records: readonly ForwardRecord[]
+    readonly limits: ForwardLimitsSnapshot
+    /** v2 embedding capability (default enabled; emergency rollback may disable). */
+    readonly embedding?: ForwardEmbeddingSnapshot
+  }
   | { readonly ok: false; readonly error: ForwardError }
 
 /** `openInBrowser` result. */
@@ -287,6 +368,8 @@ export interface ForwardChild {
   readonly exit: Promise<ForwardChildExit>
   /** Idempotent stop request; the adapter owns signal escalation. */
   stop(): void
+  /** v2 release hardening: immediate force-kill (adapter-owned); optional seam. */
+  kill?(): void
 }
 
 /** Everything the launcher needs to spawn one child (no envelope, no auth material here). */
@@ -371,6 +454,8 @@ export interface RemoteForwardManagerOptions {
   readonly reconnect?: { readonly maxAttempts: number; readonly baseDelayMs: number; readonly maxDelayMs: number }
   /** Test seam; production uses FORWARD_SPAWN_WINDOW_MS. */
   readonly spawnWindowMs?: number
+  /** v2 embedding capability (default enabled; emergency rollback may disable). */
+  readonly embedding?: ForwardEmbeddingSnapshot
 }
 
 /** One internal continuation token set per record (never serialized). */
@@ -388,6 +473,8 @@ interface InternalForward {
   reconnectAttempts: number
   bindAttempts: number
   reconnectTimer: unknown
+  /** v2 tab occurrences holding this record; last detach closes the listener. */
+  consumers: Set<string>
 }
 
 const defaultTimers: ForwardTimers = {
@@ -414,7 +501,7 @@ function isLocalPort(value: unknown): value is number {
 }
 
 function isScheme(value: unknown): value is ForwardScheme {
-  return value === 'http' || value === 'https'
+  return typeof value === 'string' && (FORWARD_SCHEMES as readonly string[]).includes(value)
 }
 
 /**
@@ -498,9 +585,14 @@ export class RemoteForwardManager {
   readonly #releaseTimeoutMs: number
   readonly #reconnect: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number }
   readonly #spawnWindowMs: number
+  readonly #embedding: ForwardEmbeddingSnapshot
 
   readonly #records = new Map<string, ForwardRecord>()
   readonly #internals = new Map<string, InternalForward>()
+  /** v2: bumped by revokeAttached; stale in-flight creates must not survive it. */
+  #revokeGeneration = 0
+  /** v2: (sourceId,targetPort,scheme) -> last bound local port (preferredLocalPort). */
+  readonly #preferredPorts = new Map<string, number>()
   /** (aliasHost:localPort) -> forward id; the global ownership table. */
   readonly #owners = new Map<string, string>()
   readonly #inflight = new Map<string, Promise<ForwardRequestResult>>()
@@ -530,34 +622,121 @@ export class RemoteForwardManager {
       maxDelayMs: reconnect.maxDelayMs,
     }
     this.#spawnWindowMs = options.spawnWindowMs ?? FORWARD_SPAWN_WINDOW_MS
+    this.#embedding = options.embedding ?? { enabled: true }
   }
 
   /**
-   * Request (or reuse) one forward. Idempotent on (sourceId, targetPort);
+   * Request (or reuse) one forward. Idempotent on (sourceId, targetPort, scheme);
    * concurrent identical calls share the same in-flight attempt (single-flight).
+   * A `consumer` attaches that tab occurrence to the record (v2 refcount); a
+   * repeated request from the same consumer is a refresh, never a second child.
    * Resolves once the first start attempt settled: bound, or error (with the
    * record still visible for display until release).
    */
   request(args: ForwardRequestArgs): Promise<ForwardRequestResult> {
-    const key = this.#requestKey(args)
-    if (key === null) return Promise.resolve(failure('target_port_invalid'))
+    const raw: unknown = args
+    if (typeof raw !== 'object' || raw === null) return Promise.resolve(failure('source_unknown'))
+    if (!isTargetPort(args.port)) return Promise.resolve(failure('target_port_invalid'))
+    const scheme = args.scheme ?? 'http'
+    if (!isScheme(scheme)) return Promise.resolve(failure('scheme_invalid'))
+    const consumer = args.consumer
+    if (consumer !== undefined && !isForwardConsumer(consumer)) return Promise.resolve(failure('forward_not_owned'))
+    const normalized = normalizeForwardPath(args.path)
+    if (!normalized.ok) return Promise.resolve(failure('invalid_path'))
+    const path = normalized.path
+    // Single-flight is scoped by fingerprint as well as (source, port, scheme):
+    // two requests from different source incarnations must never share one
+    // in-flight create (a retarget during the spawn could otherwise attach the
+    // NEW page to the OLD host's alias before retireSource closes it).
+    const key = String(args.sourceId) + ':' + String(args.port) + ':' + scheme + ':' + String(args.sourceFingerprint)
+    const generation = this.#revokeGeneration
     const inflight = this.#inflight.get(key)
-    if (inflight !== undefined) return inflight
-    const run = this.#requestOnce(args).finally(() => {
+    if (inflight !== undefined) {
+      return inflight.then(result => {
+        if (this.#revokeGeneration !== generation) return failure('forward_stale')
+        if (!result.ok) return result
+        // The shared attempt may have been released/revoked in the meantime; the
+        // caller's consumer only attaches to a record that still exists.
+        if (this.#internals.get(result.record.id) === undefined) return failure('forward_not_found')
+        if (consumer !== undefined) this.#attachConsumer(result.record.id, consumer)
+        return this.#requestResult(result.record.id, consumer !== undefined, path)
+      })
+    }
+    const run = this.#requestOnce({ ...args, scheme }, consumer, path, generation).finally(() => {
       this.#inflight.delete(key)
     })
     this.#inflight.set(key, run)
     return run
   }
 
-  /** Close one forward; never throws for an already-gone record. */
+  /**
+   * Close one forward (v1) or detach one consumer (v2). A consumer detach is
+   * idempotent and closes the listener only when it was the last holder; a
+   * release WITHOUT a consumer force-closes the record and discards consumers.
+   */
   async release(args: ForwardReleaseArgs): Promise<ForwardReleaseResult> {
     const source = this.#sources.resolve(args.sourceId, args.sourceFingerprint)
     if (source === null) return failure('source_unknown')
+    const consumer = args.consumer
+    if (consumer !== undefined && !isForwardConsumer(consumer)) return failure('forward_not_owned')
     const record = this.#records.get(args.id)
-    if (record === undefined || record.sourceId !== source.sourceId) return failure('forward_not_found')
-    await this.#releaseRecord(args.id)
-    return { ok: true }
+    if (record === undefined || record.sourceId !== source.sourceId) {
+      // A detach of an already-gone record is a no-op success (renderer dispose
+      // races the main-side revoke); a v1 force-close keeps the honest refusal.
+      return consumer === undefined ? failure('forward_not_found') : { ok: true }
+    }
+    if (consumer !== undefined) {
+      const internal = this.#internals.get(record.id)
+      if (internal === undefined || !internal.consumers.has(consumer)) return { ok: true }
+      internal.consumers.delete(consumer)
+      if (internal.consumers.size > 0) {
+        this.#patch(record.id, {})
+        return { ok: true }
+      }
+    }
+    const outcome = await this.#releaseRecord(record.id)
+    return outcome === 'timeout' ? failure('release_timeout') : { ok: true }
+  }
+
+  /**
+   * v2 renderer-lifecycle funnel (reload/crash/close): bump the in-flight
+   * generation guard, then close EVERY record a renderer consumer holds. Pinned
+   * (system-browser) records hold no consumer and are left alone. Returns how
+   * many records the revoke attempted to close.
+   */
+  async revokeAttached(): Promise<number> {
+    this.#revokeGeneration += 1
+    const ids = [...this.#records.values()]
+      .filter(record => (this.#internals.get(record.id)?.consumers.size ?? 0) > 0)
+      .map(record => record.id)
+    await Promise.all(ids.map(id => this.#releaseRecord(id).catch(() => 'closed' as const)))
+    return ids.length
+  }
+
+  /**
+   * v2 iframe failure projection (Electron did-fail-load / the bounded load
+   * deadline): patch every live record whose alias origin matches `url`.
+   * Returns the number of patched records. Main-only; no URL or page text is
+   * ever stored.
+   */
+  noteFrameErrorForUrl(url: string, frameError: ForwardFrameError | null): number {
+    if (typeof url !== 'string') return 0
+    if (frameError !== null && !isForwardFrameError(frameError)) return 0
+    let origin: string
+    try {
+      origin = new URL(url).origin
+    } catch {
+      return 0
+    }
+    let patched = 0
+    for (const record of this.#records.values()) {
+      if (record.state === 'closed') continue
+      const recordOrigin = record.scheme + '://' + record.aliasHost + ':' + String(record.localPort)
+      if (recordOrigin !== origin) continue
+      this.#patch(record.id, { frameError })
+      patched += 1
+    }
+    return patched
   }
 
   /** Per-source snapshot (poll face; v1 has no push channel). */
@@ -584,6 +763,7 @@ export class RemoteForwardManager {
         perSourceUsed: this.#countActive(source.sourceId),
         globalUsed: this.#countActive(),
       },
+      embedding: this.#embedding,
     })
   }
 
@@ -641,6 +821,11 @@ export class RemoteForwardManager {
       namespaceRetired = false
     }
     this.#openWindows.delete(sourceId)
+    // Drop the port memory of a retired source: a re-created source starts fresh.
+    const prefix = sourceId + '\u0000'
+    for (const key of [...this.#preferredPorts.keys()]) {
+      if (key.startsWith(prefix)) this.#preferredPorts.delete(key)
+    }
     return { released, namespaceRetired }
   }
 
@@ -654,14 +839,35 @@ export class RemoteForwardManager {
     await this.#withTimeout(all, FORWARD_QUIT_TIMEOUT_MS)
   }
 
-  #requestKey(args: ForwardRequestArgs): string | null {
-    const raw: unknown = args
-    if (typeof raw !== 'object' || raw === null) return null
-    if (!isTargetPort(args.port)) return null
-    return String(args.sourceId) + ':' + String(args.port)
+  /** The v2 request result: a bound attached record also carries its iframe URL. */
+  #requestResult(id: string, withFrameUrl: boolean, path: string): ForwardRequestResult {
+    const record = this.#records.get(id)
+    if (record === undefined) return failure('forward_not_found')
+    if (withFrameUrl && record.state === 'bound') {
+      return { ok: true, record, frameUrl: forwardOpenUrl(record, path) }
+    }
+    return { ok: true, record }
   }
 
-  async #requestOnce(args: ForwardRequestArgs): Promise<ForwardRequestResult> {
+  /** Attach (or refresh) one renderer consumer; a consumer is never exposed on the wire. */
+  #attachConsumer(id: string, consumer: ForwardConsumer): void {
+    const internal = this.#internals.get(id)
+    if (internal === undefined) return
+    internal.consumers.add(consumer)
+    this.#patch(id, {})
+  }
+
+  /** preferredLocalPort key: one local-port memory per (sourceId, targetPort, scheme). */
+  #portKey(sourceId: string, targetPort: number, scheme: ForwardScheme): string {
+    return sourceId + '\u0000' + String(targetPort) + '\u0000' + scheme
+  }
+
+  async #requestOnce(
+    args: ForwardRequestArgs,
+    consumer: ForwardConsumer | undefined,
+    path: string,
+    generation: number,
+  ): Promise<ForwardRequestResult> {
     const raw: unknown = args
     if (typeof raw !== 'object' || raw === null) return failure('source_unknown')
     const source = this.#sources.resolve(args.sourceId, args.sourceFingerprint)
@@ -674,16 +880,24 @@ export class RemoteForwardManager {
     // Retarget safety (review I2): an identity change closes the old host's
     // tunnels before a new one may use this source's alias.
     await this.#retireIdentityMismatches(source)
+    // v2 in-flight guard: a renderer reload/crash during the retirement await
+    // revoked every attachment; this request must not attach afterwards.
+    if (this.#revokeGeneration !== generation) return failure('forward_stale')
 
-    const existing = this.#findActive(source.sourceId, args.port)
-    if (existing !== null) return { ok: true, record: existing }
+    const existing = this.#findActive(source.sourceId, args.port, scheme)
+    if (existing !== null) {
+      // Attach-first: a second tab (or a refresh of the same tab) reuses the one
+      // listener; the repeated request never spawns a second child.
+      if (consumer !== undefined) this.#attachConsumer(existing.id, consumer)
+      return this.#requestResult(existing.id, consumer !== undefined, path)
+    }
 
     const limitError = this.#checkLimits(source.sourceId)
     if (limitError !== null) return { ok: false, error: limitError }
 
     // A failed record for the same key is display-only; drop it so a retry does
     // not grow the list. It owns no resources (fail() released them).
-    this.#dropTerminalRecord(source.sourceId, args.port)
+    this.#dropTerminalRecord(source.sourceId, args.port, scheme)
 
     // The design freezes the confirmation key as browserNamespace + targetPort,
     // so the namespace must be assigned before the native dialog. If the user
@@ -711,8 +925,12 @@ export class RemoteForwardManager {
       await this.#namespaces.retire(source.sourceId).catch(() => false)
       return failure('confirmation_late')
     }
+    // v2 in-flight guard: the dialog is the longest await; a revoke during it
+    // must win over a create that was already authorized.
+    if (this.#revokeGeneration !== generation) return failure('forward_stale')
 
-    const choice = await this.#chooseLocalPort(assignment.aliasHost, args.port, false)
+    const portKey = this.#portKey(source.sourceId, args.port, scheme)
+    const choice = await this.#chooseLocalPort(assignment.aliasHost, args.port, false, portKey)
     if (!choice.ok) return failure(choice.code)
 
     const now = this.#now()
@@ -746,6 +964,7 @@ export class RemoteForwardManager {
       reconnectAttempts: 0,
       bindAttempts: 0,
       reconnectTimer: null,
+      consumers: new Set(consumer === undefined ? [] : [consumer]),
     })
     if (!this.#claim(record.aliasHost, record.localPort, record.id)) {
       // Unreachable with a single-threaded manager (claim happens with no await
@@ -755,7 +974,22 @@ export class RemoteForwardManager {
     }
     const internal = this.#internals.get(record.id) as InternalForward
     await this.#start(record.id, internal, fresh)
-    return { ok: true, record: this.#records.get(record.id) ?? record }
+    // The renderer may have died while the child was starting: close the record
+    // that was just created instead of leaving an orphan listener behind.
+    if (this.#revokeGeneration !== generation) {
+      void this.#releaseRecord(record.id).catch(() => 'closed' as const)
+      return failure('forward_stale')
+    }
+    // A source delete/retarget during the spawn must not leave a listener owned
+    // by a source that no longer exists. retireSource() can only close records
+    // that existed when it ran, so re-prove the identity after the last await and
+    // close what THIS request created.
+    const live = this.#sources.resolve(source.sourceId, source.fingerprint)
+    if (live === null || live.identity !== source.identity) {
+      void this.#releaseRecord(record.id).catch(() => 'closed' as const)
+      return failure('source_changed')
+    }
+    return this.#requestResult(record.id, consumer !== undefined, path)
   }
 
   #mintForwardId(): string {
@@ -802,19 +1036,26 @@ export class RemoteForwardManager {
     await Promise.all(stale.map(record => this.#releaseRecord(record.id).catch(() => undefined)))
   }
 
-  #findActive(sourceId: string, targetPort: number): ForwardRecord | null {
+  #findActive(sourceId: string, targetPort: number, scheme: ForwardScheme): ForwardRecord | null {
     for (const record of this.#records.values()) {
       if (record.sourceId !== sourceId || record.targetPort !== targetPort) continue
+      // v2: the idempotency key includes the scheme; http and https on the same
+      // remote port are different origins and must never reuse one listener.
+      if (record.scheme !== scheme) continue
       if (record.state === 'error' || record.state === 'closed') continue
       return record
     }
     return null
   }
 
-  #dropTerminalRecord(sourceId: string, targetPort: number): void {
+  #dropTerminalRecord(sourceId: string, targetPort: number, scheme: ForwardScheme): void {
     for (const record of [...this.#records.values()]) {
       if (record.sourceId !== sourceId || record.targetPort !== targetPort) continue
+      if (record.scheme !== scheme) continue
       if (record.state !== 'error' && record.state !== 'closed') continue
+      // A release_timeout record still owns a live child/port; never forget it
+      // (the late-exit watcher or a retry release finalizes it).
+      if ((this.#internals.get(record.id)?.child ?? null) !== null) continue
       this.#records.delete(record.id)
       this.#internals.delete(record.id)
     }
@@ -860,7 +1101,19 @@ export class RemoteForwardManager {
     aliasHost: string,
     targetPort: number,
     fresh: boolean,
+    portKey: string,
   ): Promise<{ ok: true; port: number } | { ok: false; code: ForwardErrorCode }> {
+    // v2 preferredLocalPort: reopening the same logical target (same source,
+    // remote port and scheme) keeps the earlier local port when it is still
+    // free, so the alias origin — and its cookie/storage bucket — is stable.
+    const preferred = this.#preferredPorts.get(portKey)
+    if (!fresh && preferred !== undefined && isLocalPort(preferred) && !this.#isOwned(aliasHost, preferred)) {
+      try {
+        if (await this.#ports.isFree(aliasHost, preferred)) return { ok: true, port: preferred }
+      } catch {
+        /* probe failed: fall through to the same-port/ephemeral choice */
+      }
+    }
     // Same-port only when the remote side is an unprivileged port, the alias is
     // free and nobody owns the pair. A lost bind race on a retry NEVER picks the
     // same port again (fresh=true): that would loop on the same collision.
@@ -954,15 +1207,19 @@ export class RemoteForwardManager {
       const outcome = await this.#awaitBound(internal, record.aliasHost, record.localPort)
       if (!this.#alive(internal)) return
       if (outcome === 'bound' && internal.exit === null) {
-        this.#patch(id, { state: 'bound', stale: false, error: null, boundAt: this.#now() })
+        this.#patch(id, { state: 'bound', stale: false, error: null, boundAt: this.#now(), frameError: null })
         this.#authFailures.delete(source.sourceId)
         this.#authCooldownUntil.delete(source.sourceId)
-        // Reconnect budget is per record (not per incident): a flapping child
-        // must not loop forever. A successful bind only resets the BIND retry
-        // budget; the user starts a fresh reconnect budget by releasing and
-        // requesting again. TODO(W0): reset after a long stable session once
-        // the product decides the window.
+        // v2: a successful (re)bind ends the incident, so the reconnect budget
+        // resets — a long-lived iframe that loses the link twice must get a full
+        // budget each time instead of dying on the second outage.
         internal.bindAttempts = 0
+        internal.reconnectAttempts = 0
+        // preferredLocalPort: remember the bound port for the next reopen.
+        this.#preferredPorts.set(
+          this.#portKey(source.sourceId, record.targetPort, record.scheme),
+          record.localPort,
+        )
         return
       }
       // Re-read after the await with an explicit type: TypeScript's control-flow
@@ -1016,7 +1273,12 @@ export class RemoteForwardManager {
     const record = this.#records.get(id)
     if (record === undefined) return false
     this.#releaseOwnership(record)
-    const choice = await this.#chooseLocalPort(record.aliasHost, record.targetPort, true)
+    const choice = await this.#chooseLocalPort(
+      record.aliasHost,
+      record.targetPort,
+      true,
+      this.#portKey(record.sourceId, record.targetPort, record.scheme),
+    )
     if (!choice.ok) {
       this.#fail(id, choice.code)
       return false
@@ -1111,25 +1373,81 @@ export class RemoteForwardManager {
     this.#patch(id, { state: 'error', stale: false, error: errorOf(code) })
   }
 
-  /** Close + forget one record (release/retire). */
-  async #releaseRecord(id: string): Promise<void> {
+  /**
+   * Close + forget one record (release/retire). 'timeout' means the ssh child
+   * could not be proven dead inside the release budget: the record is KEPT (with
+   * release_timeout) together with its port ownership, and the late-exit watcher
+   * or a retried release finalizes it. v1 deleted the record on timeout, leaving
+   * a possibly-live listener unaccounted for.
+   */
+  async #releaseRecord(id: string): Promise<'closed' | 'timeout'> {
     const record = this.#records.get(id)
-    if (record === undefined) return
+    if (record === undefined) return 'closed'
     const internal = this.#internals.get(id)
-    if (internal !== undefined && !internal.closed) {
+    if (internal !== undefined) {
       internal.closed = true
       internal.launchToken += 1
+      internal.consumers.clear()
       if (internal.reconnectTimer !== null) {
         this.#timers.clearTimeout(internal.reconnectTimer)
         internal.reconnectTimer = null
       }
       const child = internal.child
-      internal.child = null
-      this.#patch(id, { state: 'closing', error: null })
       if (child !== null) {
-        const exited = child.exit.then(() => undefined, () => undefined)
+        this.#patch(id, { state: 'closing', error: null })
         child.stop()
-        await this.#withTimeout(exited, this.#releaseTimeoutMs)
+        if (this.#releaseTimeoutMs > 0) {
+          // v2 release hardening: first bounded wait, explicit SIGKILL
+          // escalation, second bounded wait; only a proven-dead child is
+          // forgotten. releaseTimeoutMs <= 0 keeps the v1 fast path (tests).
+          let exited = await this.#waitChildExit(child, this.#releaseTimeoutMs)
+          if (!exited) {
+            child.kill?.()
+            exited = await this.#waitChildExit(child, this.#releaseTimeoutMs)
+          }
+          if (!exited) {
+            this.#patch(id, { state: 'error', error: errorOf('release_timeout') })
+            this.#watchLateRelease(id, internal, child)
+            return 'timeout'
+          }
+        }
+      } else {
+        this.#patch(id, { state: 'closing', error: null })
+      }
+    }
+    this.#finalizeReleased(id)
+    return 'closed'
+  }
+
+  /** Bounded wait for one child exit; true only when it settled in time. */
+  #waitChildExit(child: ForwardChild, ms: number): Promise<boolean> {
+    if (ms <= 0) return Promise.resolve(false)
+    return new Promise(resolve => {
+      let settled = false
+      const timer = this.#timers.setTimeout(() => {
+        if (settled) return
+        settled = true
+        resolve(false)
+      }, ms)
+      const exited = (): void => {
+        if (settled) return
+        settled = true
+        this.#timers.clearTimeout(timer)
+        resolve(true)
+      }
+      void child.exit.then(exited, exited)
+    })
+  }
+
+  /** Forget a closed record once its child (if any) is proven gone. Idempotent. */
+  #finalizeReleased(id: string): void {
+    const internal = this.#internals.get(id)
+    if (internal !== undefined) {
+      internal.closed = true
+      internal.child = null
+      if (internal.reconnectTimer !== null) {
+        this.#timers.clearTimeout(internal.reconnectTimer)
+        internal.reconnectTimer = null
       }
     }
     const current = this.#records.get(id)
@@ -1137,6 +1455,14 @@ export class RemoteForwardManager {
     this.#patch(id, { state: 'closed', error: null })
     this.#records.delete(id)
     this.#internals.delete(id)
+  }
+
+  /** A release-timed-out child that exits later must not leave a record behind. */
+  #watchLateRelease(id: string, internal: InternalForward, child: ForwardChild): void {
+    void child.exit.then(() => {
+      if (this.#internals.get(id) !== internal) return
+      this.#finalizeReleased(id)
+    }, () => undefined)
   }
 
   #withTimeout(promise: Promise<void>, ms: number): Promise<void> {

@@ -32,9 +32,9 @@ import { performance } from 'node:perf_hooks';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { applyWindowsAclTightening } from './win-acl.ts';
 import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
-import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import { createTrustedIpc, forwardFrameErrorFromElectronError, isAllowedBrowserDownloadUrl, isAllowedBrowserFrameUrl, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import type { TrustedIpc } from './renderer-trust.ts';
-import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow, startLoginShellEnvironment } from './control-plane-module.ts';
+import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, forwardFrameSources, readPrivateFileNoFollow, startLoginShellEnvironment } from './control-plane-module.ts';
 import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
 import { createUpdateController, flashUpdateAttentionWindow, normalizeSealedChannel } from './updater.ts';
 import { shellStrings } from './shell-locale.ts';
@@ -47,7 +47,7 @@ import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_P
 // 共享宿主装配（transport/gateway/seed/runtime 单一实现，与 Swift sidecar 同一份）。
 import { createHostAssembly } from './host-assembly.ts';
 import type { HostAssembly } from './host-assembly.ts';
-import { disposeForwardService } from './shell-ipc-open-in.ts';
+import { disposeForwardService, isLocalBrowserFrameUrl, noteForwardFrameError, noteLocalFrameError } from './shell-ipc-open-in.ts';
 // pnpm 入口候选集/选择算法的单一实现（runtime 安装器 + sidecar 装配共用）。
 import { bundledPnpmEntryCandidates, firstExistingPnpmEntry } from './pnpm-launcher.ts';
 // 深链 scheme 的单一来源（协议注册字面量）。
@@ -370,6 +370,8 @@ if (builtinDshWorkspace === null) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+/** v2 browser download gate is session-scoped; install once even when the window is recreated. */
+let browserDownloadGateInstalled = false;
 // rc.2 官方 shortcuts 客户端的原生键盘桥（协议来自活动 runtime 树；null = 未接线）。
 let shortcutsBridge: DesktopShortcutsBridge | null = null;
 let controlPlane: PlaneHandle | null = null;
@@ -936,9 +938,11 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   win.webContents.on('did-finish-load', () => { pushFullscreenMark(win.isFullScreen()); });
   // The preload exposes host-impacting IPC: keep it confined to the exact
   // control-plane document — never open a popup/new WebContents (it would inherit
-  // the bridge), cancel cross-origin navigation/redirects, and hand genuinely
-  // external http(s)/mailto targets to the OS while always denying the window.
-  // Same-origin targets, file:/custom schemes and parse failures stay denied.
+  // the bridge), cancel cross-origin main-document navigation/redirects, and
+  // hand genuinely external http(s)/mailto targets to the OS while always
+  // denying the window. Same-origin targets, file:/custom schemes and parse
+  // failures stay denied; child-frame redirects are handled by the v2 frame gate
+  // below instead of the main-document fence.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isExternalLinkUrl(url, rendererOrigin)) {
       openExternally(url);
@@ -948,8 +952,52 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   win.webContents.on('will-navigate', (event, url) => {
     handleUntrustedNavigation(event, url, rendererOrigin);
   });
-  win.webContents.on('will-redirect', (event, url) => {
-    handleUntrustedNavigation(event, url, rendererOrigin);
+  win.webContents.on('will-redirect', (details) => {
+    // `will-redirect` fires for ANY frame's redirect. A child-frame redirect is
+    // ordinary browsing traffic for the v2 iframe (which may frame any http(s)
+    // page): apply the same child-frame URL gate as will-frame-navigate and
+    // never hand a framed page's redirect to the system browser. Only the main
+    // document keeps the shell fence.
+    if (!details.isMainFrame) {
+      if (!isAllowedBrowserFrameUrl(details.url)) details.preventDefault();
+      return;
+    }
+    handleUntrustedNavigation(details, details.url, rendererOrigin);
+  });
+  // v2 right-sidebar browser (design 28 §16.7, upstream ui-sidebar-browser
+  // behavior): ANY http(s) child frame may navigate (that is the browser's job);
+  // only non-web schemes and credential-bearing URLs are cancelled, while the
+  // document-preview carriers (blob:/about:blank/srcdoc) stay allowed. This is
+  // the main-process half; the renderer's sandbox attributes are not the boundary.
+  win.webContents.on('will-frame-navigate', (details) => {
+    if (!details.isMainFrame && !isAllowedBrowserFrameUrl(details.url)) details.preventDefault();
+  });
+  // Child-frame load failures (XFO/frame-ancestors/TLS/network) are unreadable from
+  // the cross-origin renderer; project the classification so the panel can offer
+  // the system-browser exit honestly (design 28 §16.7). A local loopback frame has
+  // NO forward record: it is routed to the bounded local store the panel reads
+  // through forward.list.frameErrors; an alias (127.0.0.2..254) frame keeps the
+  // record frameError path.
+  win.webContents.on('did-fail-load', (_event, errorCode, _description, validatedURL, isMainFrame, frameProcessId, frameRoutingId) => {
+    if (isMainFrame) return;
+    // A blocked XFO response can report an empty validatedURL on some engines;
+    // fall back to the exact failing child frame's URL when possible.
+    const resolvedUrl = validatedURL !== ''
+      ? validatedURL
+      : (win.webContents.mainFrame.framesInSubtree.find(
+        (frame) => frame.processId === frameProcessId && frame.routingId === frameRoutingId,
+      )?.url ?? '');
+    if (resolvedUrl === '') return;
+    const frameError = forwardFrameErrorFromElectronError(errorCode);
+    if (isLocalBrowserFrameUrl(resolvedUrl)) noteLocalFrameError(resolvedUrl, frameError);
+    else noteForwardFrameError(resolvedUrl, frameError);
+  });
+  // A committed child-frame navigation clears the failure projection for that
+  // origin: a transient failure must not keep the panel refusing after a reload.
+  win.webContents.on('did-frame-navigate', (_event, url, httpResponseCode, _httpStatusText, isMainFrame) => {
+    if (isMainFrame || httpResponseCode < 200 || httpResponseCode >= 400) return;
+    if (isLocalBrowserFrameUrl(url)) noteLocalFrameError(url, null);
+    else noteForwardFrameError(url, null);
   });
   // rc.2 原生键盘门（upstream keyboard.ts before-input-event 语义）：只有命中已
   // 接受命令目录的组合才 preventDefault + 投递；其余键保持正常 DOM 交付。
@@ -983,9 +1031,13 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // clobber 成永久 false；start-loading 必先于页面脚本执行（invoke 恒在其后）。
   // （ready 位复位/requeue/drain 在 shell-core，本 glue 只转发事件。）
   win.webContents.on('did-start-loading', () => {
-    if (mainWindow === win) {
-      onRendererLifecycle('did-start-loading');
-    }
+    if (mainWindow !== win) return;
+    // `did-start-loading` also fires for child-frame loads (e.g. the v2 embedded
+    // browser iframe). This vocabulary means "a new top-level document" — ready
+    // flags and the forward revoke funnel must not run for iframe navigations,
+    // or every remote-loopback attach would revoke its own listener.
+    if (!win.webContents.isLoadingMainFrame()) return;
+    onRendererLifecycle('did-start-loading');
   });
   win.on('closed', () => {
     if (mainWindow === win) {
@@ -1454,6 +1506,11 @@ if (!gotTheLock) {
         // dev and packaged alike (renderer owns dist/web only; preload and host
         // packages live beside it in dist/).
         webDistDir: path.join(pkgDir, 'dist', 'web'),
+        // v2 right-sidebar embedded browser (design 28 §16.3): blob: previews,
+        // local loopback + this instance's alias hosts, and the bare http:/https:
+        // widening the upstream iframe behavior needs (any http(s) page). Gateway/
+        // cli/standalone never pass this option and keep the v1 short CSP.
+        frameSources: [...forwardFrameSources(), 'http:', 'https:'],
         safeMode: safeModeActive,
         // Host-graph package source: seeded into the local web profile at start
         // (dev source tree; packaged copy in dist/). Missing → graceful
@@ -1583,6 +1640,15 @@ if (!gotTheLock) {
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
       callback(isChamberPermissionGranted(permission)));
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => isChamberPermissionGranted(permission));
+    // v2 browser download gate (design 28 §16.7): only the shell's own blob exports
+    // may be saved; child-frame/page downloads are cancelled (the sandbox also
+    // lacks allow-downloads, so this is defense in depth). Session-scoped + once.
+    if (!browserDownloadGateInstalled) {
+      browserDownloadGateInstalled = true;
+      session.defaultSession.on('will-download', (event, item) => {
+        if (!isAllowedBrowserDownloadUrl(item.getURL(), rendererOrigin)) event.preventDefault();
+      });
+    }
 
     // shell IPC 注册点 = shell-core 的 installIpcHandlers；本文件只做装配与注入
     // （ipc：trustedIpc 围栏；edges：createElectronEdges；ctx：装配体 ctx）。调用

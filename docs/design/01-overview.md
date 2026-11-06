@@ -93,7 +93,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、65 通道 manifest 锁步（56 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留；P5b 起 sidecar 继续作为 Swift flavor 的 node 来源 |
 | 26 | [26-page-channel.md](26-page-channel.md) | 现行 | 页面级多路复用通道：一条同源 WS 承载全部长活流（health / pluginGraph / sessionFacts），实例在通道内以 instanceId 定址、容量归控制面（O(活跃订阅)）；每订阅信用窗口流控；通道独占重连与重订阅；不变量 I-1（页面长活 HTTP 流 = 0）配静态与运行期断言；健康 SSE 端点退役；§D7 页面级同源 HTTP 派发预算（有界队列、local 保留槽、`dispatched` 证据、fetch 唯一所有权 allowlist） |
 | 27 | [27-network-io-resilience.md](27-network-io-resilience.md) | v1 代码面完成（实机/组装态门禁见 STATUS） | WAN 网络 IO 韧性：transport link health 子态（healthy/suspect/down）、两次网络失败才 down、suspect 放行/down 复用 503、注册边沿、上传总预算、页面通道 link epoch、载波 closed 逃生、mutation unknown 分类；不新增包/phase/503 码 |
-| 28 | [28-remote-browser.md](28-remote-browser.md) | 现行（W0/S1/S2 实现面；S3/真机验收未完成，开放项见 STATUS） | 远端浏览器启动器：右栏 Browser = 地址栏 + 每来源 SSH loopback forward 列表，经系统浏览器打开；除 http 外全部来源有入口（local 只保留本机打开；dsh/gateway+ssh 走转发），per-source `127.0.0.n` alias、永不复用、无共享 `127.0.0.1` 回退；不内嵌页面/不做 gateway 隧道。**§4 有界例外**，不是 web 预览回归 |
+| 28 | [28-remote-browser.md](28-remote-browser.md) | 现行 = v2（2026-11 用户裁决；设计 §16.11 上游对齐已落地，开放项见 STATUS） | 右栏浏览器（v2）：**样式/行为 = 上游 `ui-sidebar-browser` iframe 路径的 chamber fork**（地址栏/工具栏/历史/多标签/快捷键/标题/8 语言/sandbox 开关逐字同源），唯一差异 = SSH 反代：local 直连 iframe，dsh/gateway+ssh 的 remote `127.0.0.1` 经 forward 到 per-source `127.0.0.n` alias 再 iframe（代理页 external 出口同用该 alias，解析中/失败禁用）；任意 http(s) 页面可内嵌（含 https，上游语义）；Electron 与 Swift 双核心默认开启；desktop CSP 放行 blob:+loopback+alias+http:/https:，main 仍强制子 frame/下载/权限门；不做 gateway 隧道/共享 127.0.0.1 回退/原生子视图。**§4 有界例外**，不是 web 预览回归 |
 
 ---
 
@@ -108,7 +108,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 控制面会话运行时/统一索引/交互管线 | **移除** | 各实例前端 runtime 自有（N-ctx） |
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
-| walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）**；「web 预览」的裁决见下（design 28 是有界例外，不是回归） | 宿主原生覆盖，控制面只接入/服务 |
+| walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **仍移出**；「web 预览」裁决见下：design 28 v2 是**右栏内嵌 iframe 的有界例外**（2026-11 用户裁决），不是 web 预览域回流 | 宿主原生覆盖，控制面只接入/服务 |
 | 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步；移动适配包已退役，design 17 §10/§18）+ **只读插件投影**（`GET …/installed`；install/remove/materialize/tasks 写面已于 2026-09 退役，读契约见 design 21 §6.2/§6.3） |
 | git/GitHub | **插件化** | design 08 的 seed Git Remote 是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；P5b 的官方 `forge-bundle` 是实例内**官方工作树 UI 面**（opt-in；GitHub provider 由 overlay 关闭；仅 worktree UI/本地 diff，不新增 chamber 执行面）；gateway 服务器侧 worktree 记录已随编排面剥离 |
 
@@ -134,13 +134,15 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 > 实例图，见 `packages/control-plane/src/host-graph-seed.ts`）：只删不读、运行中整棵跳过、
 > 幂等，域缺失 404 给诚实文案；控制面不持有归档事实、不新增执行面，最窄边界见 design 24 §2。
 >
-> **design 28 远端浏览器 = 有界例外，不是「web 预览」回归**：只从右栏 Browser 条目发起；对
-> `dsh`/`gateway` + ssh 来源把远端 `127.0.0.1:<port>` 经 SSH `-L` 映射到该来源专属的 `127.0.0.n`
-> alias 再交给系统浏览器；公网 http(s) 仍走既有链接腿，本地实例只保留“在本机打开”。面板**不渲染任何页面**（无 iframe / webview /
-> 原生子视图）、不代答、不注入，**不建 gateway 隧道**、不做远端 LAN/主机名/任意 target；
-> per-source alias 永不复用（删除即 tombstone），且**没有共享 `127.0.0.1` 回退**。故 §4 的
-> 「web 预览（移出）」仍成立：被否决的是在宿主 UI 内渲染页面内容，不是把远端 loopback 端口
-> 交到系统浏览器。
+> **design 28 右栏浏览器 v2 = 有界例外，不是「web 预览」回归**（2026-11 用户裁决，见 design 28 §16）：
+> 面板是上游 `ui-sidebar-browser` iframe 路径的忠实 fork（样式/行为逐字同源），唯一差异 = SSH 反代：
+> local 直接 iframe；`dsh`/`gateway` + ssh 来源的远端 `127.0.0.1` 经 SSH `-L` 映射到该来源专属
+> `127.0.0.n` alias 再 iframe（代理页的 external 出口同用 alias；租约解析中/失败时禁用）；任意 http(s)
+> 页面（含 https、任意 host）按上游语义直接 iframe，工具栏 external 按钮转系统浏览器。边界：仅右栏 Browser 条目、仅上述来源、SSH 反代只覆盖 remote `127.0.0.1`、
+> **不建 gateway 隧道**、不做原生子视图；per-source alias 永不复用（删除即 tombstone），**没有共享
+> `127.0.0.1` 回退**；desktop CSP 放行 `blob:`/loopback/alias/`http:`/`https:`，main 仍补
+> `will-frame-navigate`/下载/权限门。故 §4 的「web 预览（移出）」仍成立：被否决的是把 web 预览做成
+> 通用宿主 UI 域/执行面；右栏这个上游同源浏览器是显式例外，不是域回流。
 
 宿主已覆盖的“通知中心”UI/历史/管理域属移出面；设计 19 的桌面原生边沿通知只投影
 renderer 已有的每实例运行时事实，不建立控制面通知消费者/历史/中心，不属该移出域。

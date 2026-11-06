@@ -713,11 +713,27 @@ export type ForwardErrorCode =
   | 'invalid_path'
   | 'rate_limited'
   | 'open_failed'
+  | 'release_timeout'
 
 /** One non-secret failure; `detail` is main-composed and never ssh material. */
 export interface ForwardError {
   code: ForwardErrorCode
   detail: string | null
+}
+
+/** Renderer-minted tab-occurrence consumer id (v2 attach/detach lifetime proof). */
+export type ForwardConsumer = string
+
+/**
+ * Main's best-effort child-frame failure projection (v2): XFO/frame-ancestors,
+ * TLS, network, or the main-side load deadline. `null`/absent = unknown.
+ */
+export type ForwardFrameError = 'blocked_by_response' | 'certificate_error' | 'load_failed' | 'timeout'
+
+/** v2 runtime embedding capability from `list` (absent = enabled). */
+export interface ForwardEmbeddingSnapshot {
+  readonly enabled: boolean
+  readonly reason?: string
 }
 
 /** One forwarded port as shown by the launcher (no child handle, no ssh argv). */
@@ -736,6 +752,8 @@ export interface ForwardRecord {
   readonly createdAt: number
   readonly updatedAt: number
   readonly boundAt: number | null
+  /** Main's best-effort iframe failure projection (v2); absent/null = unknown. */
+  readonly frameError?: ForwardFrameError | null
 }
 
 /** Cap usage for one source snapshot (the launcher names what holds a slot). */
@@ -746,12 +764,16 @@ export interface ForwardLimitsSnapshot {
   readonly globalUsed: number
 }
 
-/** `forward.request` arguments (idempotent on (sourceId, targetPort)). */
+/** `forward.request` arguments (idempotent on (sourceId, targetPort, scheme)). */
 export interface ForwardRequestArgs {
   readonly sourceId: string
   readonly sourceFingerprint: string
   readonly port: number
   readonly scheme?: ForwardScheme
+  /** v2 tab-occurrence claim (attach/renew); absent = v1 pinned request. */
+  readonly consumer?: ForwardConsumer
+  /** Same-origin relative path main appends to the composed `frameUrl`. */
+  readonly path?: string
 }
 
 /** `forward.release` arguments. */
@@ -759,6 +781,8 @@ export interface ForwardReleaseArgs {
   readonly sourceId: string
   readonly sourceFingerprint: string
   readonly id: string
+  /** v2: present = detach only this consumer; absent = force-close. */
+  readonly consumer?: ForwardConsumer
 }
 
 /** `forward.list` arguments (the poll face). */
@@ -776,15 +800,35 @@ export interface ForwardOpenArgs {
 }
 
 export type ForwardRequestResult =
-  | { readonly ok: true; readonly record: ForwardRecord }
+  | {
+    readonly ok: true
+    readonly record: ForwardRecord
+    /** v2: main-composed iframe URL (present only for an attached+bound record). */
+    readonly frameUrl?: string
+  }
   | { readonly ok: false; readonly error: ForwardError }
 
 export type ForwardReleaseResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly error: ForwardError }
 
+/** v2 local-frame failure entry (additive list field; a local iframe has no record). */
+export interface ForwardFrameErrorEntry {
+  /** Canonical http(s) loopback origin (scheme://host:port). */
+  readonly origin: string
+  readonly code: ForwardFrameError
+}
+
 export type ForwardListResult =
-  | { readonly ok: true; readonly records: readonly ForwardRecord[]; readonly limits: ForwardLimitsSnapshot }
+  | {
+    readonly ok: true
+    readonly records: readonly ForwardRecord[]
+    readonly limits: ForwardLimitsSnapshot
+    /** v2 embedding capability (default enabled; emergency rollback may disable). */
+    readonly embedding?: ForwardEmbeddingSnapshot
+    /** v2 local-frame failures main observed (local list only; mapped by origin). */
+    readonly frameErrors?: readonly ForwardFrameErrorEntry[]
+  }
   | { readonly ok: false; readonly error: ForwardError }
 
 export type ForwardOpenResult =
@@ -792,8 +836,10 @@ export type ForwardOpenResult =
   | { readonly ok: false; readonly error: ForwardError }
 
 /** window.dshChamber.forward — the four-invoke remote-browser forward surface
- *  (design 28 §7). No subscribe member: v1 polls list() every 1-2s (D6), and
- *  the wire's reserved 'forward:changed' push is deliberately absent. */
+ *  (design 28 §16.6). No subscribe member: the launcher still polls list()
+ *  every 1-2 s, and the wire's reserved 'forward:changed' push is deliberately
+ *  absent. v2 additive fields: consumer/path/frameUrl/embedding/frameError and
+ *  the release_timeout error code; the channel count stays 58 invoke + 9 push. */
 export interface ForwardSurface {
   request(input: ForwardRequestArgs): Promise<ForwardRequestResult>
   release(input: ForwardReleaseArgs): Promise<ForwardReleaseResult>

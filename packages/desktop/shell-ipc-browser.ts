@@ -18,7 +18,11 @@
  *     userinfo, CR/LF, encoded control bytes and >2048-byte strings are refused
  *     before the manager composes any URL; the fragment is dropped);
  *   - forward-record ownership re-check on the two calls that return records —
- *     an answer naming another source is refused instead of relayed.
+ *     an answer naming another source is refused instead of relayed;
+ *   - the v2 local-list exception (design 28 §16.7, W-15): `list` is the ONE call
+ *     that also accepts `{sourceId:'local', sourceFingerprint:'local'}`; it has no
+ *     records, but answers the bounded local-frame `frameErrors` projection plus
+ *     the embedding capability so a rejected local iframe cannot paint live.
  *
  * WHAT IT DELIBERATELY DOES NOT OWN (the manager stays authoritative):
  * limits (8/32), idempotency/single-flight, the state machine, the per-source
@@ -54,14 +58,22 @@ import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import type { NotificationSourceToken } from './notifications.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'
 import { isValidNotificationSourceFingerprint } from './notifications.ts'
-import { normalizeForwardPath } from './remote-forward-manager.ts'
+import { isForwardConsumer, normalizeForwardPath } from './remote-forward-manager.ts'
+import {
+  FORWARD_MAX_GLOBAL,
+  FORWARD_MAX_PER_SOURCE,
+} from './remote-forward-manager.ts'
 import type {
+  ForwardEmbeddingSnapshot,
   ForwardError,
   ForwardErrorCode,
+  ForwardFrameError,
+  ForwardLimitsSnapshot,
   ForwardListArgs,
   ForwardListResult,
   ForwardOpenArgs,
   ForwardOpenResult,
+  ForwardRecord,
   ForwardReleaseArgs,
   ForwardReleaseResult,
   ForwardRequestArgs,
@@ -82,6 +94,44 @@ export interface ForwardIpcService {
 
 /** The refusal half shared by all four results. */
 type ForwardFailure = { readonly ok: false; readonly error: ForwardError }
+
+/**
+ * v2 local-frame failure entry (wire additive `forward.list.frameErrors`; the
+ * desktop mirror here keeps this module independent of the wire package while
+ * `test/forward/forward-wire.test.ts` pins the shapes side by side).
+ */
+export interface ForwardFrameErrorInfo {
+  /** Canonical http(s) loopback/alias origin (scheme://host:port). */
+  readonly origin: string
+  readonly code: ForwardFrameError
+}
+
+/**
+ * The bounded local-frame state the forward registrar reads on `list`: the
+ * direct local leg owns no forward record, so its did-fail-load projection and
+ * the embedding capability ride beside the service (supplied by
+ * `shell-ipc-open-in.ts`, never by the manager).
+ */
+export interface ForwardLocalFrameState {
+  frameErrors(): readonly ForwardFrameErrorInfo[]
+  /** Absent = enabled (v1 bridge compatibility). */
+  embedding?(): ForwardEmbeddingSnapshot | undefined
+}
+
+/** The list reply: the remote manager snapshot plus the additive local fields. */
+export type ForwardListIpcResult =
+  | {
+    readonly ok: true
+    readonly records: readonly ForwardRecord[]
+    readonly limits: ForwardLimitsSnapshot
+    readonly embedding?: ForwardEmbeddingSnapshot
+    readonly frameErrors?: readonly ForwardFrameErrorInfo[]
+  }
+  | ForwardFailure
+
+/** The local instance's list identity (wire constants; local never forwards). */
+const LOCAL_SOURCE_ID = 'local'
+const LOCAL_SOURCE_FINGERPRINT = 'local'
 
 /** Source-id grammar (wire mirror; `local` can never match). */
 const SOURCE_ID_PATTERN = /^(?:dsh|gateway|ssh)-[A-Za-z0-9_-]{1,64}$/u
@@ -175,13 +225,36 @@ async function requestForward(
   if (!isTargetPort(input.port)) return failure('target_port_invalid')
   const scheme = input.scheme === undefined ? 'http' : input.scheme
   if (!isScheme(scheme)) return failure('scheme_invalid')
+  // v2 tab-occurrence consumer: a malformed id would otherwise turn a detach
+  // into a force-close, so it is refused at the boundary (closed error table).
+  if (input.consumer !== undefined && !isForwardConsumer(input.consumer)) return failure('forward_not_owned')
+  // v2 frameUrl needs the same-origin relative path; normalize it in main before
+  // the manager ever composes the iframe URL (never a renderer-built URL).
+  const normalized = normalizeForwardPath(input.path)
+  if (!normalized.ok) return failure('invalid_path')
   const result = await service.request({
     sourceId: proof.source.sourceId,
     sourceFingerprint: proof.source.fingerprint,
     port: input.port,
     scheme,
+    ...(input.consumer === undefined ? {} : { consumer: input.consumer }),
+    ...(input.path === undefined ? {} : { path: normalized.path }),
   })
-  if (!stillOwns(ctx, proof.source)) return failure('source_changed')
+  if (!stillOwns(ctx, proof.source)) {
+    // The manager accepted the claim while the source proof changed. The renderer
+    // will see source_changed and cannot release what it never received, so undo
+    // OUR consumer claim here (a no-op if the manager's own source guard already
+    // closed/refused the record); only a consumer-scoped release is safe.
+    if (result.ok && input.consumer !== undefined) {
+      void service.release({
+        sourceId: proof.source.sourceId,
+        sourceFingerprint: proof.source.fingerprint,
+        id: result.record.id,
+        consumer: input.consumer,
+      }).catch(() => undefined)
+    }
+    return failure('source_changed')
+  }
   // Defense in depth: a record minted for another source never crosses the IPC
   // boundary (the manager already refuses it; this keeps a future adapter honest).
   if (result.ok && result.record.sourceId !== proof.source.sourceId) return failure('forward_not_owned')
@@ -199,23 +272,49 @@ async function releaseForward(
   const proof = proveSource(ctx, input.sourceId, input.sourceFingerprint)
   if (!proof.ok) return proof
   if (typeof input.id !== 'string' || !FORWARD_ID_PATTERN.test(input.id)) return failure('forward_not_found')
+  if (input.consumer !== undefined && !isForwardConsumer(input.consumer)) return failure('forward_not_owned')
   const result = await service.release({
     sourceId: proof.source.sourceId,
     sourceFingerprint: proof.source.fingerprint,
     id: input.id,
+    ...(input.consumer === undefined ? {} : { consumer: input.consumer }),
   })
   if (!stillOwns(ctx, proof.source)) return failure('source_changed')
   return result
 }
 
-/** `list`: the poll face; every returned record must belong to this source. */
+/**
+ * `list`: the poll face. Remote sources use the manager snapshot; the LOCAL
+ * instance is the one accepted non-forward source — it has no records, but its
+ * direct iframe failures (XFO/frame-ancestors/TLS/network) are projected here as
+ * a DIAGNOSTIC contract (the v2 upstream fork UI does not consume it; §16.11).
+ * Every returned REMOTE record must belong to the proven source.
+ */
 async function listForwards(
   ctx: ShellIpcCtx,
   service: ForwardIpcService | null,
   payload: unknown,
-): Promise<ForwardListResult> {
-  if (service === null) return notAssembled()
+  local: ForwardLocalFrameState | null,
+): Promise<ForwardListIpcResult> {
   const input = isRecord(payload) ? payload : {}
+  if (input.sourceId === LOCAL_SOURCE_ID) {
+    if (input.sourceFingerprint !== LOCAL_SOURCE_FINGERPRINT) return failure('source_unknown')
+    const frameErrors = local?.frameErrors() ?? []
+    const embedding = local?.embedding?.()
+    return {
+      ok: true,
+      records: [],
+      limits: {
+        perSource: FORWARD_MAX_PER_SOURCE,
+        global: FORWARD_MAX_GLOBAL,
+        perSourceUsed: 0,
+        globalUsed: 0,
+      },
+      ...(embedding === undefined ? {} : { embedding }),
+      ...(frameErrors.length === 0 ? {} : { frameErrors }),
+    }
+  }
+  if (service === null) return notAssembled()
   const proof = proveSource(ctx, input.sourceId, input.sourceFingerprint)
   if (!proof.ok) return proof
   const result = await service.list({
@@ -265,9 +364,13 @@ async function openForward(
  * adapters are still TODO — null keeps the channels present and answers a typed
  * refusal instead of disappearing from the bridge surface.
  */
-export function registerForwardHandlers(ctx: ShellIpcCtx, service: ForwardIpcService | null = null): void {
+export function registerForwardHandlers(
+  ctx: ShellIpcCtx,
+  service: ForwardIpcService | null = null,
+  local: ForwardLocalFrameState | null = null,
+): void {
   ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_REQUEST, (payload: unknown) => requestForward(ctx, service, payload))
   ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_RELEASE, (payload: unknown) => releaseForward(ctx, service, payload))
-  ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_LIST, (payload: unknown) => listForwards(ctx, service, payload))
+  ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_LIST, (payload: unknown) => listForwards(ctx, service, payload, local))
   ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_OPEN_IN_BROWSER, (payload: unknown) => openForward(ctx, service, payload))
 }

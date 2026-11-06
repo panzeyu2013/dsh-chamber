@@ -126,3 +126,66 @@ export function createTrustedIpc(deps: {
       return handler(...args)
     }
 }
+/**
+ * v2 embedded-browser child-frame predicate (design 28 §16.7) — pure so the
+ * main-process gate and node tests consume one spelling.
+ *
+ * The embedded browser now follows upstream ui-sidebar-browser behavior: it may
+ * frame ANY http(s) page (the browser's job is to browse), so main must not be
+ * narrower than the surface it hosts. The gate therefore allows every http(s)
+ * subframe URL and still refuses:
+ *   - non-web schemes (file:, javascript:, data:, chrome:, custom protocols);
+ *   - URLs carrying userinfo (a different trust class: the shell never composes
+ *     or accepts a credential-bearing frame target; Swift TrustGuard is stricter);
+ *   - the document-preview carriers stay allowed: blob: and about:blank/srcdoc.
+ * The app-origin fence is NOT this predicate: frame-ancestors 'none' +
+ * X-Frame-Options DENY + the shell's own will-navigate keep the app document
+ * privileged, and will-download/popups keep their existing gates.
+ */
+export function isAllowedBrowserFrameUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'blob:') return true
+    if (parsed.protocol === 'about:') return parsed.pathname === 'blank' || parsed.pathname === 'srcdoc'
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+    if (parsed.username !== '' || parsed.password !== '') return false
+    // URL parsing guarantees an http(s) host is non-empty; the explicit check is
+    // the fail-closed invariant (no originless web URL ever reaches the engine).
+    return parsed.hostname !== ''
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Download gate: only the shell's own blob exports (document previews / file
+ * save arm) may reach the download manager; every other child-frame download is
+ * cancelled. `item.getURL()` carries no initiator-frame attribution, so this is
+ * intentionally a URL-prefix check (defense in depth; the sandbox has no
+ * allow-downloads).
+ */
+export function isAllowedBrowserDownloadUrl(url: string, controlPlaneOrigin: string): boolean {
+  if (!url.startsWith('blob:')) return false
+  try {
+    return new URL(url).origin === new URL(controlPlaneOrigin).origin
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Map an Electron did-fail-load error code onto the v2 frame-error projection.
+ * ERR_ABORTED (-3) is a superseded child navigation, not a page failure: null
+ * clears/keeps the record projection unchanged.
+ */
+export function forwardFrameErrorFromElectronError(
+  errorCode: number,
+): 'blocked_by_response' | 'certificate_error' | 'load_failed' | null {
+  if (!Number.isFinite(errorCode)) return null
+  if (errorCode === -3) return null
+  // Chromium net::ERR_CERT_* occupy -200..-299; they are the only stable numeric band.
+  if (errorCode <= -200 && errorCode >= -299) return 'certificate_error'
+  // net::ERR_BLOCKED_BY_RESPONSE = -27 (XFO / CSP frame-ancestors / CORB).
+  if (errorCode === -27) return 'blocked_by_response'
+  return 'load_failed'
+}

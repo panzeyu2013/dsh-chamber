@@ -34,6 +34,7 @@ import {
   SOURCE_ID,
   makeRecord,
 } from './forward-ipc-fixture.ts'
+import { isForwardListResult } from '../../../dsh-chamber-wire/src/forward.ts'
 
 const CHANNEL = {
   request: IPC_CHANNELS.FORWARD_REQUEST,
@@ -182,6 +183,26 @@ test('the source is re-proved across the await boundary (source_changed)', async
   assert.equal(service.calls.length, 1, 'the manager may only be entered after a successful proof')
 })
 
+test('a v2 consumer claim is released when the source proof changes after the request', async () => {
+  const harness = new ForwardIpcHarness()
+  const service = new FakeForwardService()
+  service.beforeResolve = () => harness.retire(SOURCE_ID)
+  harness.install(service)
+  const consumer = 'consumer-0123456789'
+  assert.deepEqual(
+    await harness.invoke(CHANNEL.request, requestPayload({ consumer })),
+    refusal('source_changed'),
+  )
+  const releaseCall = service.calls.find(call => call.method === 'release')
+  assert.ok(releaseCall, 'the orphan consumer claim must be released')
+  assert.deepEqual(releaseCall.args, {
+    sourceId: SOURCE_ID,
+    sourceFingerprint: FINGERPRINT,
+    id: FORWARD_ID,
+    consumer,
+  })
+})
+
 test('release: invalid ids are refused, foreign failures are relayed unchanged', async () => {
   const harness = new ForwardIpcHarness()
   const service = new FakeForwardService()
@@ -264,4 +285,126 @@ test('the registered handlers are async (the IPC fence awaits every reply)', () 
     assert.ok(pending instanceof Promise, 'a non-async handler would resolve before the await-boundary proof')
     pending.catch(() => {})
   }
+})
+
+test('v2: request relays the consumer and the main-normalized path (frameUrl comes back verbatim)', async () => {
+  const harness = new ForwardIpcHarness()
+  const service = new FakeForwardService()
+  service.requestResult = {
+    ok: true,
+    record: makeRecord(),
+    frameUrl: 'http://127.0.0.7:5173/app?x=1',
+  }
+  harness.install(service)
+  const CONSUMER = 'consumer-aaaaaaa1'
+  const result = await harness.invoke(CHANNEL.request, requestPayload({
+    consumer: CONSUMER,
+    path: '/app?x=1#frag',
+  }))
+  assert.deepEqual(result, service.requestResult)
+  assert.deepEqual(service.calls, [{
+    method: 'request',
+    args: {
+      sourceId: SOURCE_ID,
+      sourceFingerprint: FINGERPRINT,
+      port: 5173,
+      scheme: 'http',
+      consumer: CONSUMER,
+      path: '/app?x=1',
+    },
+  }])
+})
+
+test('v2: a malformed consumer or path never reaches the manager', async () => {
+  for (const [payload, code] of [
+    [requestPayload({ consumer: 'short' }), 'forward_not_owned'],
+    [requestPayload({ consumer: 'has space' }), 'forward_not_owned'],
+    [requestPayload({ path: 'http://evil.example/app' }), 'invalid_path'],
+    [requestPayload({ path: '//evil.example' }), 'invalid_path'],
+    [requestPayload({ path: '/a\u0000b' }), 'invalid_path'],
+  ] as const) {
+    const harness = new ForwardIpcHarness()
+    const service = new FakeForwardService()
+    harness.install(service)
+    assert.deepEqual(await harness.invoke(CHANNEL.request, payload), refusal(code), JSON.stringify(payload))
+    assert.deepEqual(service.calls, [])
+  }
+})
+
+test('v2: release relays the consumer (detach) and refuses a malformed one', async () => {
+  const harness = new ForwardIpcHarness()
+  const service = new FakeForwardService()
+  harness.install(service)
+  const CONSUMER = 'consumer-bbbbbbb2'
+  assert.deepEqual(await harness.invoke(CHANNEL.release, releasePayload({ consumer: CONSUMER })), { ok: true })
+  assert.deepEqual(service.calls, [{
+    method: 'release',
+    args: { sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT, id: FORWARD_ID, consumer: CONSUMER },
+  }])
+
+  const bad = new ForwardIpcHarness()
+  const badService = new FakeForwardService()
+  bad.install(badService)
+  assert.deepEqual(
+    await bad.invoke(CHANNEL.release, releasePayload({ consumer: 'x' })),
+    refusal('forward_not_owned'),
+  )
+  assert.deepEqual(badService.calls, [])
+})
+
+test('v2 W-15: the local identity answers list with the bounded frameErrors projection', async () => {
+  const harness = new ForwardIpcHarness()
+  const service = new FakeForwardService()
+  // Local list must not enter the manager: the local leg owns no forward record.
+  harness.install(service, {
+    frameErrors: () => [
+      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
+      { origin: 'https://localhost:8443', code: 'certificate_error' },
+    ],
+    embedding: () => ({ enabled: true }),
+  })
+  const result = await harness.invoke(CHANNEL.list, { sourceId: 'local', sourceFingerprint: 'local' })
+  assert.deepEqual(result, {
+    ok: true,
+    records: [],
+    limits: { perSource: 8, global: 32, perSourceUsed: 0, globalUsed: 0 },
+    embedding: { enabled: true },
+    frameErrors: [
+      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
+      { origin: 'https://localhost:8443', code: 'certificate_error' },
+    ],
+  })
+  assert.equal(isForwardListResult(result), true, 'the local list answer satisfies the wire guard')
+  assert.deepEqual(service.calls, [], 'the local list never calls the forward manager')
+
+  // An empty/bounded store omits the additive array (absent = none).
+  const quiet = new ForwardIpcHarness()
+  quiet.install(new FakeForwardService(), { frameErrors: () => [] })
+  assert.deepEqual(await quiet.invoke(CHANNEL.list, { sourceId: 'local', sourceFingerprint: 'local' }), {
+    ok: true,
+    records: [],
+    limits: { perSource: 8, global: 32, perSourceUsed: 0, globalUsed: 0 },
+  })
+
+  // The local identity is exact: any other fingerprint is refused as unknown.
+  for (const fingerprint of ['a'.repeat(64), '', 'LOCAL', 42]) {
+    assert.deepEqual(
+      await harness.invoke(CHANNEL.list, { sourceId: 'local', sourceFingerprint: fingerprint }),
+      refusal('source_unknown'),
+      String(fingerprint),
+    )
+  }
+})
+
+test('v2: list relays the embedding capability verbatim', async () => {
+  const harness = new ForwardIpcHarness()
+  const service = new FakeForwardService()
+  service.listResult = {
+    ok: true,
+    records: [makeRecord({ frameError: 'timeout' })],
+    limits: { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 },
+    embedding: { enabled: false, reason: 'emergency_rollback' },
+  }
+  harness.install(service)
+  assert.deepEqual(await harness.invoke(CHANNEL.list, listPayload()), service.listResult)
 })

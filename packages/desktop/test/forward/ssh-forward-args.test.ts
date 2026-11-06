@@ -21,6 +21,8 @@ import {
   FORWARD_SERVER_ALIVE_INTERVAL_SECONDS,
   FORWARD_TARGET_HOST,
 } from '../../remote-forward-args.ts'
+import type { ForwardSshSpec } from '../../remote-forward-args.ts'
+import { sshTrustPins } from '../../host-key.ts'
 
 const SSH_PROVIDER_PATH = fileURLToPath(new URL('../../ssh-provider.ts', import.meta.url))
 
@@ -40,6 +42,8 @@ test('argv golden: default ssh port, no user, alias bind on 127.0.0.2', () => {
       '-o', 'ExitOnForwardFailure=yes',
       '-o', 'ServerAliveInterval=30',
       '-o', 'ServerAliveCountMax=3',
+      '-o', 'ControlMaster=no',
+      '-o', 'ControlPath=none',
       '-L', '127.0.0.2:51234:127.0.0.1:5173',
       'dev.example.com',
     ],
@@ -55,9 +59,41 @@ test('argv golden: user@host, explicit ssh port and the full alias range', () =>
       '-o', 'ExitOnForwardFailure=yes',
       '-o', 'ServerAliveInterval=30',
       '-o', 'ServerAliveCountMax=3',
+      '-o', 'ControlMaster=no',
+      '-o', 'ControlPath=none',
       '-p', '2222',
       '-L', '127.0.0.254:1024:127.0.0.1:9432',
       'root@203.0.113.9',
+    ],
+  )
+})
+
+test('argv golden: the app-owned known_hosts pins the tunnel trust store (v2)', () => {
+  const spec: ForwardSshSpec = {
+    host: 'dev.example.com',
+    user: 'root',
+    sshPort: 2222,
+    knownHosts: { knownHostsFile: '/app data/ssh/known_hosts', globalKnownHostsFile: '/dev/null' },
+  }
+  assert.deepEqual(
+    buildForwardArgs(spec, '127.0.0.2', 40000, 5173),
+    [
+      '-N',
+      '-o', 'ConnectTimeout=8',
+      '-o', 'ExitOnForwardFailure=yes',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ServerAliveCountMax=3',
+      '-o', 'ControlMaster=no',
+      '-o', 'ControlPath=none',
+      '-o', 'StrictHostKeyChecking=yes',
+      // Paths are ssh-quoted (macOS userData contains a space).
+      '-o', 'UserKnownHostsFile="/app data/ssh/known_hosts"',
+      '-o', 'GlobalKnownHostsFile="/dev/null"',
+      '-o', 'HostKeyAlias=dev.example.com:2222',
+      ...sshTrustPins(),
+      '-p', '2222',
+      '-L', '127.0.0.2:40000:127.0.0.1:5173',
+      'root@dev.example.com',
     ],
   )
 })
@@ -95,7 +131,7 @@ test('no argv in the grid ever carries a forbidden ssh option', () => {
               // Every -o value is a compile-time literal, never a payload string.
               for (let index = 0; index < args.length; index += 1) {
                 if (args[index] !== '-o') continue
-                assert.match(args[index + 1] ?? '', /^(?:ConnectTimeout|ExitOnForwardFailure|ServerAliveInterval|ServerAliveCountMax)=/u)
+                assert.match(args[index + 1] ?? '', /^(?:ConnectTimeout|ExitOnForwardFailure|ServerAliveInterval|ServerAliveCountMax|ControlMaster|ControlPath)=/u)
               }
             }
           }
@@ -150,4 +186,79 @@ test('a hostile host/user can never become an ssh option or a second word', () =
   for (const user of ['root@evil', 'root -o X', 'root\nX', '']) {
     assert.throws(() => buildForwardArgs({ host: 'h', user, sshPort: null }, '127.0.0.2', 5173, 5173), TypeError, user)
   }
+})
+
+test('the transport provider and the forward builder share one -o option set (v2 lockstep)', () => {
+  // Runtime-importing ssh-provider.ts is not available to the pure desktop test
+  // leg (it reaches the packaged control-plane facade), so the lockstep reads
+  // its buildStartArgs source text: the option NAMES come from the same table.
+  const providerText = readFileSync(SSH_PROVIDER_PATH, 'utf8')
+  const start = providerText.indexOf('buildStartArgs(')
+  const end = providerText.indexOf('buildStartEnv(', start)
+  assert.ok(start > 0 && end > start, 'ssh-provider buildStartArgs must exist')
+  // Template literals become single-quoted literals for the name scan.
+  const body = providerText.slice(start, end).split(String.fromCharCode(96)).join("'")
+
+  const spec = {
+    host: 'dev.example.com',
+    user: 'root',
+    sshPort: null,
+    knownHosts: { knownHostsFile: '/app/ssh/known_hosts', globalKnownHostsFile: '/dev/null' },
+  }
+  const argv = buildForwardArgs(spec, '127.0.0.2', 40000, 5173)
+  const optionNames = (args: readonly string[]): Set<string> => {
+    const names = new Set<string>()
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index] !== '-o') continue
+      const value = args[index + 1] ?? ''
+      names.add(value.slice(0, value.indexOf('=')))
+    }
+    return names
+  }
+  const forwardNames = optionNames(argv)
+  // The trust pins come from the shared host-key.ts helper, never re-typed.
+  for (const name of optionNames(sshTrustPins())) forwardNames.delete(name)
+
+  const providerNames = new Set<string>()
+  for (const match of body.matchAll(/-o',\s*'([A-Za-z][A-Za-z0-9]*)=/gu)) {
+    if (match[1] !== undefined) providerNames.add(match[1])
+  }
+  // Transport-only option: the tunnel's POSIX UDS branch replaces a stale socket
+  // file; a browser forward always binds a TCP alias host and never sets it.
+  providerNames.delete('StreamLocalBindUnlink')
+  assert.deepEqual([...forwardNames].sort(), [...providerNames].sort())
+  // The dynamic host-key expressions are the SAME helper calls, not re-typed.
+  for (const literal of [
+    'StrictHostKeyChecking=yes',
+    'UserKnownHostsFile=${sshOptionValue(knownHosts.knownHostsFile)}',
+    'GlobalKnownHostsFile=${sshOptionValue(knownHosts.globalKnownHostsFile)}',
+    'HostKeyAlias=${hostKeyAliasFor(spec)}',
+    '...sshTrustPins()',
+  ]) {
+    assert.ok(body.includes(literal), 'ssh-provider must build ' + literal)
+  }
+})
+
+test('the known_hosts store argument is validated and quoted (never raw payload)', () => {
+  const base = { host: 'h', user: null, sshPort: null }
+  for (const knownHosts of [
+    { knownHostsFile: '', globalKnownHostsFile: '/dev/null' },
+    { knownHostsFile: '/x', globalKnownHostsFile: '' },
+    { knownHostsFile: '/x\nrm -rf', globalKnownHostsFile: '/dev/null' },
+    { knownHostsFile: 'x'.repeat(4097), globalKnownHostsFile: '/dev/null' },
+    { knownHostsFile: 42, globalKnownHostsFile: '/dev/null' },
+    'not-an-object',
+  ]) {
+    assert.throws(() => buildForwardArgs(
+      { ...base, knownHosts: knownHosts as unknown as { knownHostsFile: string; globalKnownHostsFile: string } },
+      '127.0.0.2',
+      5173,
+      5173,
+    ), TypeError, JSON.stringify(knownHosts))
+  }
+  const quoted = buildForwardArgs({
+    ...base,
+    knownHosts: { knownHostsFile: '/a b/c', globalKnownHostsFile: '/dev/null' },
+  }, '127.0.0.2', 5173, 5173)
+  assert.ok(quoted.includes('UserKnownHostsFile="/a b/c"'), 'the path value must be ssh-quoted')
 })

@@ -12,9 +12,10 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import {
-  createRecorder, deriveSourceIds, hasSecurityHeaders, isHonestError, isInstanceIndex, isShellIndex,
-  isWriterQuiescent, leakedFileContent, parseBaseHref, parseInstanceAssets, parsePluginLoaderUrls,
-  parseShellAssets, renderMarkdown, resolveDeclaredUrl, safeJson, summarizeNetFailures, writerEvidence,
+  applyRequireEmbed, browserFrameCspVerdict, createRecorder, deriveSourceIds, hasSecurityHeaders,
+  isHonestError, isInstanceIndex, isShellIndex, isWriterQuiescent, leakedFileContent, parseBaseHref,
+  parseInstanceAssets, parsePluginLoaderUrls, parseShellAssets, renderMarkdown, resolveDeclaredUrl,
+  safeJson, summarizeNetFailures, writerEvidence,
 } from './checks.mjs'
 
 /** Raw request target (fetch normalizes; the origin-form fence must see the raw one). */
@@ -112,6 +113,9 @@ async function get(origin, target, init) {
  * @param opts.registryFile registry file to read when sourceIds is absent (default: the Electron
  *   userData convention — pass the probed instance's own file when --plane is not that instance)
  * @param opts.outDir artifact directory (default .tmp/gui-acceptance)
+ * @param opts.requireEmbed (`--require-embed`) demand the v2 frame-src contract: a v1 short
+ *   `frame-src blob:` header is recorded as INFO by default (the gateway must never widen) and
+ *   becomes a FAIL under this flag.
  */
 export async function runLiveAcceptance({
   planeOrigin = 'http://127.0.0.1:17500',
@@ -120,6 +124,7 @@ export async function runLiveAcceptance({
   registryFile,
   outDir = '.tmp/gui-acceptance',
   localInstanceId = 'local',
+  requireEmbed = false,
 } = {}) {
   const rec = createRecorder()
   mkdirSync(outDir, { recursive: true })
@@ -202,6 +207,15 @@ export async function runLiveAcceptance({
   rec.add('SH-6', '静态路径穿越围栏',
     !leakedFileContent(traversalEncoded.body) && !leakedFileContent(traversalRaw.body),
     `encoded=${traversalEncoded.status} raw=${traversalRaw.status}`)
+
+  // v2 embedded browser (design 28 §16.3): the shell CSP's frame-src contract.
+  // SH-2 only checks default-src 'self', so a widened (or accidentally
+  // narrowed) frame-src would not turn it red — this leg is why SH-7 exists.
+  const frameContract = applyRequireEmbed(
+    browserFrameCspVerdict(shell.headers['content-security-policy']),
+    requireEmbed,
+  )
+  rec.add('SH-7', '壳 CSP frame-src 合同（v2 内嵌源集；gateway 不得放宽）', frameContract.ok, frameContract.evidence)
 
   // ---------------------------------------------------------------- instance proxy
   // Every /api/i/* and /api/host/logs probe needs a READY managed instance: while

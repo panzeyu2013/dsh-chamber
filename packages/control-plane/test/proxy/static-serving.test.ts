@@ -71,7 +71,7 @@ interface StaticHolder {
 }
 
 /** Start the plane over the fixture dist on an ephemeral port. */
-async function makeStaticPlane(): Promise<StaticHolder> {
+async function makeStaticPlane(extra: { readonly frameSources?: readonly string[] } = {}): Promise<StaticHolder> {
   const fixture = fixtureDist()
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-static-state-'))
   const wire = fakeWire()
@@ -81,6 +81,7 @@ async function makeStaticPlane(): Promise<StaticHolder> {
     webDistDir: fixture.dir,
     logger: silentLogger,
     localConnectionDeps: { spawnDsh: wire.spawnDsh, probeHostIdentity: wire.probeHostIdentity },
+    ...(extra.frameSources === undefined ? {} : { frameSources: extra.frameSources }),
   })
   try {
     await plane.start()
@@ -661,5 +662,50 @@ test('createControlPlane 安全模式 env 缺省读点：DSH_CHAMBER_SAFE_MODE=1
   } finally {
     if (previous === undefined) delete process.env.DSH_CHAMBER_SAFE_MODE
     else process.env.DSH_CHAMBER_SAFE_MODE = previous
+  }
+})
+
+test('createControlPlane frameSources extends frame-src with loopback+alias hosts and the desktop http(s) widening', async () => {
+  // Desktop entries append the bare scheme sources (upstream ui-sidebar-browser
+  // frames ANY http(s) page); the loopback/alias list is kept for the local and
+  // per-source forward legs, and the short default stays untouched above.
+  const frameSources = [
+    'blob:', 'http://127.0.0.1:*', 'http://localhost:*', 'http://127.0.0.2:*', 'http:', 'https:',
+  ] as const
+  const holder = await makeStaticPlane({ frameSources })
+  try {
+    const html = await rawRequest(holder.plane.port!, 'GET', '/')
+    const csp = html.headers['content-security-policy'] ?? ''
+    assert.match(
+      csp,
+      /frame-src blob: http:\/\/127\.0\.0\.1:\* http:\/\/localhost:\* http:\/\/127\.0\.0\.2:\* http: https:;/,
+    )
+    // The widening is scheme-scoped only: the app-origin fence stays (no 'self',
+    // frame-ancestors none, XFO DENY), and no wildcard host source crept in.
+    const frameSrcTokens = (/frame-src ([^;]*);/u.exec(csp)?.[1] ?? '').split(' ')
+    assert.equal(frameSrcTokens.includes('*'), false, 'no wildcard host source')
+    assert.equal(frameSrcTokens.includes("'self'"), false, 'no self source')
+    assert.match(csp, /frame-ancestors 'none'/)
+    assert.equal(html.headers['x-frame-options'], 'DENY')
+  } finally {
+    await cleanup(holder)
+  }
+})
+
+test('createControlPlane rejects an invalid frameSources list at construction', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-static-state-'))
+  try {
+    assert.throws(
+      () => createControlPlane({
+        port: 0,
+        stateDir,
+        webDistDir: join(stateDir, 'dist-web'),
+        logger: silentLogger,
+        frameSources: ['self'],
+      }),
+      TypeError,
+    )
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
   }
 })

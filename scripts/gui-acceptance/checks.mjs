@@ -859,3 +859,822 @@ export function veilLayeringVerdict({ veilFrames = 0, samples = [], error = null
     evidence: `遮罩 ${veilFrames} 帧内 ${judged.length} 个采样组（锚点×归属）均由遮罩获胜（命中 .instance-loading）${note}${split}`,
   }
 }
+
+
+// ============================================================================
+// v2 embedded browser (design 28 §16): pure judgement for W-13 / W-14a / W-14b
+// / W-15 / W-15b + the SH-7 CSP contract. No DOM, no HTTP, no CDP — the
+// walkthrough gathers facts, these functions decide, and checks.test.mjs runs
+// them in CI (including the REAL page expressions against a fake DOM).
+// ============================================================================
+
+/**
+ * The upstream-fork iframe contract (design 28 §16; the browser package is a
+ * faithful fork of upstream `ui-sidebar-browser` 0.2.2-rc.1's iframe path —
+ * the ONLY behavior diff is the SSH-forward frame URL resolver).
+ *
+ * Kept here instead of importing the browser package: checks.mjs is the
+ * dependency-free judgement layer and the package is a source-only renderer
+ * package. Drift is caught in CI by checks.test.mjs, which reads the fork's
+ * own source text (`view/IframePresentation.ts`, `view/BrowserBody.tsx`,
+ * `definition.tsx`, `shared/source.ts`, `browser/ForwardFrameResolver.ts`)
+ * and asserts these mirrors, plus the vendored upstream guide/chip markers.
+ *
+ * The self-built v2 launcher UI (panel marker / data-frame-phase / remote
+ * sections / attached rows / XFO projection) is GONE: the upstream surface has
+ * no such DOM, so W-13/W-14a/W-14b/W-15/W-15b judge the upstream DOM/behavior
+ * instead of fake self-built anchors.
+ */
+/** Alias octet range of the per-source forward hosts (wire FORWARD_ALIAS_OCTETS). */
+const BROWSER_ALIAS_MIN_OCTET = 2
+const BROWSER_ALIAS_MAX_OCTET = 254
+
+/** `127.0.0.2` .. `127.0.0.254` (never 127.0.0.1, never another 127/8). */
+const BROWSER_ALIAS_HOST = /^127\.0\.0\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/u
+
+/**
+ * The exact desktop v2 `frame-src` list (design 28 §16.3): the wire's
+ * `forwardFrameSources()` (blob: + 127.0.0.1 + localhost + the 253 aliases)
+ * followed by the two bare scheme sources desktop main/sidecar append because
+ * the upstream iframe browser may frame ANY http(s) page. This is a MIRROR;
+ * checks.test.mjs reads the wire generator, the control-plane validator and the
+ * desktop caller and asserts the mirror has not drifted (SH-7 must judge the
+ * real contract).
+ */
+export const BROWSER_FRAME_CSP_SOURCES = Object.freeze([
+  'blob:',
+  'http://127.0.0.1:*',
+  'http://localhost:*',
+  ...Array.from(
+    { length: BROWSER_ALIAS_MAX_OCTET - BROWSER_ALIAS_MIN_OCTET + 1 },
+    (_unused, index) => 'http://127.0.0.' + String(index + BROWSER_ALIAS_MIN_OCTET) + ':*',
+  ),
+  'http:',
+  'https:',
+])
+
+/** Size ceiling of the desktop CSP header (plan E2: ~5.7KB measured; keep < 8KB). */
+export const BROWSER_FRAME_CSP_MAX_BYTES = 8_192
+
+/** The v1 default `frame-src` claim (control-plane default; gateway/cli carry it). */
+export const BROWSER_FRAME_CSP_V1 = Object.freeze(['blob:'])
+
+/**
+ * Whether a source id carries a remote-loopback forward leg (design 28 §16.2):
+ * `local` never does; `dsh-<id>` / `gateway-<id>` do; anything else is unknown
+ * (null) and the caller must fail closed rather than guess.
+ * @param sourceId - an instance's `data-instance` / a boot source id.
+ * @returns true/false, or null for an unreadable source id.
+ */
+export function sourceIdAllowsForward(sourceId) {
+  if (typeof sourceId !== 'string' || sourceId === '') return null
+  if (sourceId === 'local') return false
+  return /^(?:dsh|gateway|ssh)-[A-Za-z0-9_-]{1,64}$/u.test(sourceId) ? true : null
+}
+
+/** Whether a frame URL points at one of this app's own per-source aliases. */
+export function isAliasFrameUrl(value) {
+  if (typeof value !== 'string' || value === '') return false
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+    return BROWSER_ALIAS_HOST.test(url.hostname.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether an iframe src is the W-14a fixture document: same origin as the
+ * fixture and the root path. The fixture's own origin is generated per run, so
+ * only the runner knows it; comparing origins (not a fixed string) is the
+ * contract here.
+ */
+export function isLocalFixtureUrl(value, fixtureOrigin) {
+  if (typeof value !== 'string' || typeof fixtureOrigin !== 'string') return false
+  try {
+    const frame = new URL(value)
+    const fixture = new URL(fixtureOrigin)
+    return frame.origin === fixture.origin
+      && frame.pathname === '/'
+      && frame.search === ''
+      && frame.hash === ''
+  } catch {
+    return false
+  }
+}
+
+export const BROWSER_FRAME_CONTRACT = Object.freeze({
+  /** The upstream iframe dataset marker (IframePresentation.ts). */
+  frameMarker: 'data-sidebar-browser-frame',
+  /** Its upstream value (dataset assignment), not merely presence. */
+  frameMarkerValue: 'iframe',
+  /** Exact sandbox attribute (upstream WEB_BROWSER_SANDBOX, order included). */
+  sandbox: 'allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox',
+  sandboxTokens: Object.freeze([
+    'allow-scripts', 'allow-forms', 'allow-same-origin', 'allow-popups', 'allow-popups-to-escape-sandbox',
+  ]),
+  /** Exact referrerpolicy attribute (upstream IframePresentation). */
+  referrerPolicy: 'no-referrer',
+  /** The guide/chip registry kind: the FORK keeps upstream's 'browser'. */
+  guideEntryKind: 'browser',
+})
+
+/**
+ * The upstream address input's localized aria-label/placeholder. The guide,
+ * toolbar and body are addressed by STRUCTURE + these upstream labels, never
+ * by document order or by a test-only hook.
+ */
+export const BROWSER_ADDRESS_LABELS = Object.freeze(['输入 HTTP(S) 地址', 'Enter an HTTP(S) address'])
+
+/** Upstream toolbar control labels per role (zh/en; the run's locale is zh). */
+export const BROWSER_TOOLBAR_LABELS = Object.freeze({
+  back: Object.freeze(['后退', 'Back']),
+  forward: Object.freeze(['前进', 'Forward']),
+  reload: Object.freeze(['刷新', 'Reload']),
+  go: Object.freeze(['前往', 'Go']),
+  external: Object.freeze(['在系统浏览器中打开', 'Open in system browser']),
+})
+
+/** Upstream iframe sandbox toggle labels (aria-pressed carries the state). */
+export const BROWSER_SANDBOX_LABELS = Object.freeze({
+  disable: Object.freeze(['关闭沙箱限制', 'Disable sandbox restrictions']),
+  enable: Object.freeze(['恢复沙箱限制', 'Restore sandbox restrictions']),
+})
+
+/** Whether one label belongs to a role's upstream allowlist. */
+export function isBrowserLabel(labels, value) {
+  return typeof value === 'string' && Array.isArray(labels) && labels.includes(value)
+}
+
+/**
+ * The W-13 entry locator: the visible right-sidebar guide capsule whose marker
+ * is the tab KIND (upstream GuideBody renders `data-sidebar-right-guide-entry=
+ * {entry.kind}`). Never by translated label, never by document index; several
+ * visible candidates fail closed.
+ * @param entries - descriptor dump `{ index, kind, visible }`.
+ * @param opts.expectedKind - the tab kind (defaults to the contract 'browser').
+ * @returns `{ ok, picked?, reason?, candidates }`; `ok: false` = NOT LOCATED.
+ */
+export function pickBrowserGuideEntry(entries, { expectedKind = BROWSER_FRAME_CONTRACT.guideEntryKind } = {}) {
+  const list = Array.isArray(entries) ? entries : []
+  const candidates = list.filter(entry =>
+    entry !== null && typeof entry === 'object'
+    && entry.kind === expectedKind
+    && entry.visible === true)
+  if (candidates.length === 0) return { ok: false, reason: 'no-entry', candidates: [] }
+  if (candidates.length > 1) return { ok: false, reason: 'ambiguous', candidates }
+  return { ok: true, picked: candidates[0], candidates }
+}
+
+/** One upstream BrowserBody's facts from BROWSER_LANDSCAPE's `bodies`. */
+function firstBody(bodies) {
+  return Array.isArray(bodies) && bodies.length === 1 ? bodies[0] : null
+}
+
+/**
+ * W-13's verdict: the upstream Browser surface STRUCTURE (design 28 §16.9).
+ *
+ * Judged facts (reported by the page dump, decided here):
+ *  - a visible Session's right sidebar is open (upstream renders the surface
+ *    per Session; a collapsed panel is not a pass);
+ *  - exactly ONE upstream BrowserBody (located by its address input, upstream
+ *    BrowserBody.tsx), visible, with every upstream toolbar role present;
+ *  - the address input carries the upstream placeholder aria-label;
+ *  - the sandbox toggle exists and reports the default ON state
+ *    (aria-pressed=true after the upstream iframe provider's sandboxEnabled);
+ *  - the content region's aria-busy is readable.
+ * No iframe is required at this point: the guide tab is a doorway, and an
+ * iframe only exists after a navigation.
+ *
+ * A missing session surface is INFO (design 28 §10: no Session, no surface). A
+ * visible session whose entry cannot be located or whose click produces no body
+ * IS a FAIL — the entry is the contract this leg exists for.
+ * @param facts - BROWSER_LANDSCAPE facts (walkthrough.mjs) or the fake-DOM subset.
+ * @param facts.entryPick - result of {@link pickBrowserGuideEntry} (or null).
+ * @param facts.openedVia - 'existing' | 'clicked-entry' | 'none' (diagnostic).
+ * @returns `{ ok, evidence }` (`ok === null` is INFO).
+ */
+export function browserPanelVerdict({
+  hasActiveView = false,
+  activeSource = null,
+  sessionPresent = false,
+  sessionOpen = false,
+  entryPick = null,
+  openedVia = 'none',
+  bodyCount = 0,
+  bodies = [],
+  frames = [],
+} = {}) {
+  if (hasActiveView !== true) {
+    return { ok: false, evidence: '没有可见的 [data-instance] 实例视图：N-ctx 窗口里找不到活动来源（见 W-1）' }
+  }
+  if (sessionPresent !== true) {
+    return {
+      ok: null,
+      evidence: '未执行：来源 ' + JSON.stringify(activeSource) + ' 没有可见 Session 的右栏 surface（design 28 §10：无 Session/右栏收起时不渲染），本腿无法进入浏览器页签',
+    }
+  }
+  const where = '来源 ' + JSON.stringify(activeSource) + ' 会话' + (sessionOpen === true ? '已展开' : '未展开')
+  if (sessionOpen !== true) {
+    return { ok: false, evidence: where + '；右栏面板未展开，upstream BrowserBody 不渲染' }
+  }
+  if (bodyCount !== 1 || firstBody(bodies) === null) {
+    const reason = entryPick !== null && entryPick.ok === true
+      ? '入口存在但点击后上游 BrowserBody 仍未出现（openedVia=' + openedVia + '）——页签注册/呈现断链'
+      : entryPick !== null && entryPick.reason === 'ambiguous'
+        ? '可见的浏览器入口候选并列（不可安全点击）'
+        : '未定位到右栏浏览器入口 [data-sidebar-right-guide-entry="' + BROWSER_FRAME_CONTRACT.guideEntryKind + '"]'
+    return { ok: false, evidence: where + '；' + reason + '；BrowserBody=' + bodyCount + ' iframe=' + (Array.isArray(frames) ? frames.length : 'n/a') }
+  }
+  const body = firstBody(bodies)
+  if (body.visible !== true) {
+    return { ok: false, evidence: where + '；BrowserBody 存在但不可见（隐藏视图/收起面板里的 body 不算当前来源）' }
+  }
+  const missing = []
+  for (const role of ['back', 'forward', 'reload', 'go', 'external']) {
+    if (body.toolbarRoles === null || body.toolbarRoles === undefined || body.toolbarRoles.includes(role) !== true) missing.push(role)
+  }
+  if (missing.length > 0) {
+    return { ok: false, evidence: where + '；上游工具栏缺少控件：' + missing.join(',') + '（aria-label 未命中 upstream 文案）' }
+  }
+  if (body.addressInput !== true) {
+    return { ok: false, evidence: where + '；BrowserBody 没有地址栏（upstream form input[aria-label=地址 placeholder]）——入口存在但不可操作' }
+  }
+  if (body.sandboxToggle !== true) {
+    return { ok: false, evidence: where + '；BrowserBody 没有 sandbox 开关（upstream aria-pressed 控件）' }
+  }
+  if (body.sandboxed !== true) {
+    return { ok: false, evidence: where + '；sandbox 开关初始应为开启（aria-pressed=true），实际 ' + JSON.stringify(body.sandboxed) }
+  }
+  if (typeof body.busy !== 'boolean') {
+    return { ok: false, evidence: where + '；content 的 aria-busy 不可读（读不到不算结构成立）' }
+  }
+  return {
+    ok: true,
+    evidence: 'source=' + String(activeSource) + ' body=1 addressLabel=' + JSON.stringify(body.addressLabel)
+      + ' toolbar=' + JSON.stringify(body.toolbarRoles) + ' sandboxToggle=true sandboxed=' + String(body.sandboxed)
+      + ' iframe=' + (Array.isArray(frames) ? frames.length : 0) + ' openedVia=' + openedVia,
+  }
+}
+
+/**
+ * W-14a's verdict: a LOCAL fixture page really rendered inside the upstream
+ * BrowserBody iframe.
+ *
+ * Required: exactly one upstream BrowserBody/frame, the frame marker VALUE is
+ * 'iframe', the src is THIS run's local fixture root, the sandbox token set and
+ * referrerpolicy equal the upstream contract, the iframe is inside the browser
+ * body, the address bar keeps the typed LOGICAL address (explicit http URL), and
+ * the fixture's own postMessage proves the script ran. Upstream exposes no
+ * title/name contract for the iframe, so those are not asserted.
+ * @param facts.bodyCount - visible-session BrowserBody count.
+ * @param facts.bodies - BrowserBody facts (addressValue/busy/...).
+ * @param facts.frames - iframe facts (src/sandbox/referrerpolicy/markerValue/insideBody).
+ * @param facts.fixtureOrigin - this run's fixture origin (http://127.0.0.1:<port>).
+ * @param facts.messages - postMessage facts collected by the witness.
+ * @param facts.expectedAddress - the explicit address typed into the bar.
+ * @returns `{ ok, evidence }`.
+ */
+export function embedFrameVerdict({
+  bodyCount = 0,
+  bodies = [],
+  frames = [],
+  fixtureOrigin = '',
+  messages = [],
+  expectedAddress = null,
+  expectedType = 'dsh-chamber-embed-probe',
+  expectedMarker = 'dsh-embed-ok',
+} = {}) {
+  const body = firstBody(bodies)
+  if (bodyCount !== 1 || body === null) {
+    return { ok: false, evidence: '可见 BrowserBody 数=' + bodyCount + '：W-14a 需要恰一个可见的上游 BrowserBody' }
+  }
+  if (!Array.isArray(frames) || frames.length !== 1) {
+    return { ok: false, evidence: 'iframe[' + BROWSER_FRAME_CONTRACT.frameMarker + '] 数=' + (Array.isArray(frames) ? frames.length : 'n/a') + '（应恰 1 个）；busy=' + JSON.stringify(body.busy) }
+  }
+  const frame = frames[0]
+  const problems = []
+  if (frame.markerValue !== BROWSER_FRAME_CONTRACT.frameMarkerValue) {
+    problems.push('iframe ' + BROWSER_FRAME_CONTRACT.frameMarker + '=' + JSON.stringify(frame.markerValue) + '（upstream 值是 ' + JSON.stringify(BROWSER_FRAME_CONTRACT.frameMarkerValue) + '）')
+  }
+  if (frame.sandbox !== BROWSER_FRAME_CONTRACT.sandbox) {
+    problems.push('sandbox=' + JSON.stringify(frame.sandbox) + ' 不是上游契约值 ' + JSON.stringify(BROWSER_FRAME_CONTRACT.sandbox))
+  }
+  if (frame.referrerpolicy !== BROWSER_FRAME_CONTRACT.referrerPolicy) {
+    problems.push('referrerpolicy=' + JSON.stringify(frame.referrerpolicy) + ' 不是 ' + BROWSER_FRAME_CONTRACT.referrerPolicy)
+  }
+  if (!isLocalFixtureUrl(frame.src, fixtureOrigin)) {
+    problems.push('src=' + JSON.stringify(frame.src) + ' 未指向本次 fixture ' + fixtureOrigin + '/')
+  }
+  if (frame.insideBody !== true) problems.push('iframe 不在 BrowserBody 的 [data-sidebar-right-tab] 内')
+  const wantedAddress = expectedAddress === null ? fixtureOrigin + '/' : expectedAddress
+  if (body.addressValue !== wantedAddress) {
+    problems.push('地址栏=' + JSON.stringify(body.addressValue) + ' 未显示本次逻辑地址 ' + JSON.stringify(wantedAddress))
+  }
+  if (body.busy !== false) problems.push('content aria-busy=' + JSON.stringify(body.busy) + '（fixture 已回应，页面不应仍 busy）')
+  const message = (Array.isArray(messages) ? messages : []).find(entry => {
+    const data = entry?.data
+    return data !== null && typeof data === 'object' && data.type === expectedType && data.marker === expectedMarker
+  })
+  if (message === undefined) {
+    problems.push('未收到 fixture 的 postMessage（type=' + expectedType + '，marker=' + expectedMarker + '）——iframe 没真正载入并运行页面脚本')
+  }
+  if (problems.length > 0) return { ok: false, evidence: problems.join('；') }
+  return {
+    ok: true,
+    evidence: 'src=' + frame.src + ' sandbox=' + JSON.stringify(frame.sandbox) + ' referrerpolicy=' + frame.referrerpolicy
+      + ' address=' + JSON.stringify(body.addressValue) + ' postMessage=' + JSON.stringify(message.origin),
+  }
+}
+
+/**
+ * W-14b's verdict: a REMOTE source's loopback page embedded end-to-end through
+ * main's forward lease (upstream BrowserBody iframe src = per-source alias).
+ *
+ * Required: one visible BrowserBody, exactly one marker frame whose src host is
+ * a per-source ALIAS (127.0.0.2..254 — never 127.0.0.1, never the remote
+ * spelling), the upstream sandbox/referrer contract, the address bar keeping the
+ * LOGICAL remote address (explicit `http://127.0.0.1:<port>/`, never the alias),
+ * and — when the page is the acceptance fixture — its postMessage proof. The
+ * upstream fork deleted the old attached-list UI, so the lease is proven by the
+ * alias iframe + message + the tab-close release leg (W-15b), not by a row.
+ * @param facts.executed - whether the leg ran.
+ * @param facts.reason - why not (INFO evidence).
+ * @param facts.bodyCount - visible BrowserBody count.
+ * @param facts.bodies - BrowserBody facts.
+ * @param facts.frames - marker-iframe facts.
+ * @param facts.messages - postMessage witness facts.
+ * @param facts.requireMessage - demand the fixture page's own postMessage.
+ * @param facts.expectedAddress - the logical address typed into the bar.
+ * @returns `{ ok, evidence }` (`ok === null` is INFO).
+ */
+export function remoteEmbedVerdict({
+  executed = false,
+  reason = '',
+  bodyCount = 0,
+  bodies = [],
+  frames = [],
+  messages = null,
+  requireMessage = false,
+  expectedAddress = null,
+} = {}) {
+  if (executed !== true) return { ok: null, evidence: '未执行：' + reason }
+  const body = firstBody(bodies)
+  if (bodyCount !== 1 || body === null) {
+    return { ok: false, evidence: '可见 BrowserBody 数=' + bodyCount + '：W-14b 需要恰一个可见的上游 BrowserBody' }
+  }
+  const bodyFacts = 'busy=' + JSON.stringify(body.busy) + ' failures=' + JSON.stringify((body.failureTexts ?? []).slice(0, 2))
+  if (!Array.isArray(frames) || frames.length !== 1) {
+    return { ok: false, evidence: 'iframe[' + BROWSER_FRAME_CONTRACT.frameMarker + '] 数=' + (Array.isArray(frames) ? frames.length : 'n/a') + '（应恰 1 个）；' + bodyFacts }
+  }
+  const frame = frames[0]
+  const problems = []
+  if (!isAliasFrameUrl(frame.src)) {
+    problems.push('iframe src=' + JSON.stringify(frame.src) + ' 不是 per-source alias（127.0.0.2–254）——远端内嵌必须经 forward；' + bodyFacts)
+  }
+  if (frame.sandbox !== BROWSER_FRAME_CONTRACT.sandbox) {
+    problems.push('sandbox=' + JSON.stringify(frame.sandbox) + ' 不是上游契约值')
+  }
+  if (frame.referrerpolicy !== BROWSER_FRAME_CONTRACT.referrerPolicy) {
+    problems.push('referrerpolicy=' + JSON.stringify(frame.referrerpolicy) + ' 不是 ' + BROWSER_FRAME_CONTRACT.referrerPolicy)
+  }
+  if (frame.markerValue !== BROWSER_FRAME_CONTRACT.frameMarkerValue) {
+    problems.push('iframe ' + BROWSER_FRAME_CONTRACT.frameMarker + ' 值=' + JSON.stringify(frame.markerValue))
+  }
+  if (body.addressValue === null || body.addressValue === undefined) {
+    problems.push('地址栏值不可读（上游地址栏必须保留逻辑地址，而不是 alias）')
+  } else if (expectedAddress !== null) {
+    if (body.addressValue !== expectedAddress) {
+      problems.push('地址栏=' + JSON.stringify(body.addressValue) + ' 未显示逻辑地址 ' + JSON.stringify(expectedAddress) + '（alias 只能出现在 iframe src）')
+    }
+  } else if (typeof body.addressValue === 'string' && body.addressValue.includes(frame.src === null ? '' : new URL(frame.src).hostname)) {
+    problems.push('地址栏=' + JSON.stringify(body.addressValue) + ' 出现 alias 主机——逻辑地址被改写')
+  }
+  if (body.busy === true) problems.push('content aria-busy=true（导航未落地）')
+  let messageNote = ''
+  if (requireMessage === true) {
+    const proof = (Array.isArray(messages) ? messages : []).find(entry => {
+      const data = entry?.data
+      return data !== null && typeof data === 'object' && data.type === 'dsh-chamber-embed-probe' && data.marker === 'dsh-embed-ok'
+    })
+    if (proof === undefined) {
+      problems.push('未收到 fixture 页经 alias iframe 发回的 postMessage（引擎级证明：aliased 文档没有真正运行）')
+    } else {
+      messageNote = ' postMessage=' + JSON.stringify(proof.origin)
+    }
+  }
+  if (problems.length > 0) return { ok: false, evidence: problems.join('；') }
+  return {
+    ok: true,
+    evidence: 'src=' + frame.src + ' alias=true sandbox=' + JSON.stringify(frame.sandbox)
+      + ' referrerpolicy=' + frame.referrerpolicy + ' address=' + JSON.stringify(body.addressValue) + messageNote,
+  }
+}
+
+/**
+ * W-15's verdict: the SYSTEM-BROWSER EXIT under upstream iframe semantics.
+ *
+ * Upstream `ui-sidebar-browser` does NOT promise XFO/TLS failure detection: a
+ * framed document that sets `X-Frame-Options: DENY` simply stays an empty
+ * frame, and no failure UI is projected. The honest acceptance contract is
+ * therefore:
+ *  - the upstream toolbar's external control exists and is ENABLED once a target
+ *    exists, and clicking it calls `window.open(externalUrl, '_blank',
+ *    'noopener,noreferrer')` exactly once (the witness stubs window.open, so no
+ *    real browser opens);
+ *  - the page NEVER opens the system browser on its own while loading the XFO
+ *    negative control;
+ *  - the iframe actually attempted the explicit http XFO URL;
+ *  - any upstream failure bar text is reported as OBSERVED evidence, not
+ *    required — "no failure UI" is an upstream limitation, not a defect (INFO
+ *    is acceptable here; the leg passes on the documented exit contract).
+ * @param facts.executed - whether the leg ran.
+ * @param facts.reason - why not (INFO evidence).
+ * @param facts.bodyCount - visible BrowserBody count.
+ * @param facts.bodies - BrowserBody facts.
+ * @param facts.frames - iframe facts.
+ * @param facts.expectedFrameUrl - the explicit XFO URL the iframe must load.
+ * @param facts.autoOpened - window.open calls observed BEFORE the explicit click.
+ * @param facts.openedAfterClick - window.open URLs observed after the click.
+ * @param facts.expectedExternalUrl - the logical URL the exit must open.
+ * @param facts.failureTexts - upstream failure/status texts (evidence only).
+ * @returns `{ ok, evidence }` (`ok === null` is INFO).
+ */
+export function externalExitVerdict({
+  executed = false,
+  reason = '',
+  bodyCount = 0,
+  bodies = [],
+  frames = [],
+  expectedFrameUrl = null,
+  autoOpened = 0,
+  openedAfterClick = [],
+  expectedExternalUrl = null,
+  failureTexts = [],
+} = {}) {
+  if (executed !== true) return { ok: null, evidence: '未执行：' + reason }
+  const body = firstBody(bodies)
+  if (bodyCount !== 1 || body === null) {
+    return { ok: false, evidence: '可见 BrowserBody 数=' + bodyCount + '：W-15 需要恰一个可见的上游 BrowserBody' }
+  }
+  const problems = []
+  if (body.externalButton !== true) {
+    problems.push('上游工具栏没有系统浏览器出口控件（aria-label 未命中 ' + JSON.stringify(BROWSER_TOOLBAR_LABELS.external) + '）')
+  } else if (body.externalEnabled !== true) {
+    problems.push('系统浏览器出口在有目标时仍 disabled（upstream externalUrl 未就绪）')
+  }
+  if (autoOpened > 0) {
+    problems.push('页面装载 XFO 负例时自动打开了系统浏览器（window.open ×' + String(autoOpened) + '）——出口必须显式')
+  }
+  if (!Array.isArray(frames) || frames.length !== 1) {
+    problems.push('iframe 数=' + (Array.isArray(frames) ? frames.length : 'n/a') + '（XFO 负例仍应留下上游 iframe）')
+  } else if (expectedFrameUrl !== null && frames[0].src !== expectedFrameUrl) {
+    problems.push('iframe src=' + JSON.stringify(frames[0].src) + ' 不是本次 XFO 地址 ' + JSON.stringify(expectedFrameUrl))
+  }
+  if (!Array.isArray(openedAfterClick) || openedAfterClick.length !== 1) {
+    problems.push('点击系统浏览器出口后 window.open 次数=' + (Array.isArray(openedAfterClick) ? openedAfterClick.length : 'n/a') + '（应恰 1 次；upstream 出口走 window.open）')
+  } else if (expectedExternalUrl !== null && openedAfterClick[0] !== expectedExternalUrl) {
+    problems.push('window.open URL=' + JSON.stringify(openedAfterClick[0]) + ' 不是逻辑地址 ' + JSON.stringify(expectedExternalUrl))
+  }
+  const observed = Array.isArray(failureTexts) && failureTexts.length > 0
+    ? '上游失败条=' + JSON.stringify(failureTexts.slice(0, 2))
+    : '上游未投影 XFO 失败 UI（design 28：上游不承诺 XFO/TLS 探测，属 INFO 语义）'
+  if (problems.length > 0) return { ok: false, evidence: problems.join('；') + '；' + observed }
+  return {
+    ok: true,
+    evidence: 'external=present+enabled window.open=' + JSON.stringify(openedAfterClick[0]) + ' autoOpen=0 frame=' + String(frames[0].src) + '；' + observed,
+  }
+}
+
+/**
+ * W-15b's verdict: closing the Browser tab releases the tab occurrence — the
+ * upstream BrowserBody and its iframe are gone, no pending rebuild shows up in
+ * the settle window, and (when the run had a forward) its alias port is
+ * unreachable. The upstream fork has no forward-list UI; the release is proven
+ * by the removed DOM plus the alias TCP probe.
+ * @param facts.executed - whether the close was driven by this run.
+ * @param facts.reason - why not (INFO evidence).
+ * @param facts.bodyCount - BrowserBody count after the settle window.
+ * @param facts.frameCount - marker iframe count after the settle window.
+ * @param facts.busy - whether any surviving body still reports aria-busy.
+ * @param facts.settled - whether the immediately-after and settled snapshots agree.
+ * @param facts.aliasProbe - `{ url, reachable }` when a forward alias was captured, else null.
+ * @returns `{ ok, evidence }` (`ok === null` is INFO).
+ */
+export function closeReleaseVerdict({
+  executed = false,
+  reason = '',
+  bodyCount = null,
+  frameCount = null,
+  busy = null,
+  settled = null,
+  aliasProbe = null,
+} = {}) {
+  if (executed !== true) return { ok: null, evidence: '未执行：' + reason }
+  const problems = []
+  if (bodyCount !== 0) problems.push('上游 BrowserBody 仍为 ' + String(bodyCount) + ' 个')
+  if (frameCount !== 0) problems.push('iframe[' + BROWSER_FRAME_CONTRACT.frameMarker + '] 仍为 ' + String(frameCount) + ' 个')
+  if (busy === true) problems.push('BrowserBody 仍处 aria-busy=true（有未落地的 pending 操作）')
+  if (busy === null) problems.push('pending 状态不可读（读不到不算已释放）')
+  if (settled !== true) problems.push('关闭后的观察窗内 BrowserBody/iframe 又出现（pending 重建）')
+  if (aliasProbe !== null && aliasProbe !== undefined) {
+    if (aliasProbe.reachable === 'open' || aliasProbe.reachable === true) {
+      problems.push('forward alias ' + aliasProbe.url + ' 关闭页签后仍可连通——listener 未释放')
+    } else if (aliasProbe.reachable !== 'closed' && aliasProbe.reachable !== false) {
+      problems.push('alias 可达性未能判定（' + aliasProbe.url + '：' + String(aliasProbe.reachable) + '）——不把未知读成已释放')
+    }
+  }
+  if (problems.length > 0) return { ok: false, evidence: problems.join('；') }
+  const alias = aliasProbe === null || aliasProbe === undefined
+    ? '本次无 forward（local 直连）：alias 不可达腿不适用'
+    : aliasProbe.url + ' 已不可连通'
+  return { ok: true, evidence: '关 tab 后 body=0 frame=0 无 pending；' + alias }
+}
+
+/**
+ * Opt-in strictness for the embedded-browser legs (`--require-embed`).
+ *
+ * Same shape as {@link applyRequireHover}: an INFO verdict means the leg did
+ * not exercise the embedding surface (no SSH source, panel not staged, panel
+ * hidden...), and a green run must not read as "embedding verified". The strict
+ * flag re-labels ONLY `ok === null` — a decided PASS/FAIL is returned untouched.
+ * @param verdict - `{ ok, evidence }` from any embed verdict.
+ * @param requireEmbed - whether this run demands the embed legs really ran.
+ * @returns the original verdict, or its FAIL re-labelling.
+ */
+export function applyRequireEmbed(verdict, requireEmbed) {
+  if (requireEmbed !== true || verdict.ok !== null) return verdict
+  return {
+    ...verdict,
+    ok: false,
+    evidence: verdict.evidence + '（--require-embed：本次运行要求内嵌腿必须真实执行）',
+  }
+}
+
+/** Split a CSP header into `directive -> tokens` (first occurrence wins). */
+function cspDirectives(header) {
+  const directives = new Map()
+  for (const part of String(header).split(';')) {
+    const tokens = part.trim().split(/\s+/u).filter(Boolean)
+    if (tokens.length === 0) continue
+    const name = tokens[0].toLowerCase()
+    if (!directives.has(name)) directives.set(name, tokens.slice(1))
+  }
+  return directives
+}
+
+/**
+ * SH-7's verdict: the shell's CSP `frame-src` contract (design 28 §16.3).
+ *
+ * TWO LEGITIMATE SHAPES, one per deployment:
+ *  - v2 (desktop main/sidecar pass `[...forwardFrameSources(), 'http:', 'https:']`):
+ *    `frame-src` equals the frozen source list exactly — blob: + the two local
+ *    loopback hosts + the 253 aliases, then the two bare scheme sources the
+ *    upstream iframe browser needs (it may frame ANY http(s) page). The bare
+ *    schemes are the ONE supported widening; `'self'`, `*`, `data:` and any
+ *    other host stay forbidden. PASS.
+ *  - v1 (gateway/cli/standalone and old installs keep the control-plane
+ *    default): `frame-src blob:` byte-for-byte. NOT a failure — the gateway
+ *    must never widen — but it did not exercise the v2 contract, so INFO, and
+ *    `--require-embed` turns it into FAIL.
+ * Anything else (partial list, forbidden source, weakened `frame-ancestors`,
+ * missing directive, oversized header) is FAIL.
+ * @param contentSecurityPolicy - the shell response header (or undefined).
+ * @returns `{ ok, shape, evidence }` (`ok === null` is INFO).
+ */
+export function browserFrameCspVerdict(contentSecurityPolicy) {
+  const header = typeof contentSecurityPolicy === 'string' ? contentSecurityPolicy : ''
+  if (header.trim() === '') {
+    return { ok: false, shape: 'missing', evidence: '响应没有 Content-Security-Policy 头（SH-2 同样会红）' }
+  }
+  const directives = cspDirectives(header)
+  const frame = directives.get('frame-src')
+  const ancestors = directives.get('frame-ancestors')
+  if (frame === undefined) {
+    return {
+      ok: false,
+      shape: 'invalid',
+      evidence: "CSP 缺 frame-src 指令——回落到 default-src 'self' 会拒绝一切内嵌",
+    }
+  }
+  if (ancestors === undefined || ancestors.length !== 1 || ancestors[0] !== "'none'") {
+    return {
+      ok: false,
+      shape: 'invalid',
+      evidence: '应用自身的 frame-ancestors 合同被改弱（期望恰为 ' + JSON.stringify("'none'") + '，实际 ' + JSON.stringify(ancestors ?? null) + '）',
+    }
+  }
+  const expected = BROWSER_FRAME_CSP_SOURCES
+  const forbidden = frame.filter(token => ["'self'", '*', 'data:'].includes(token))
+  if (forbidden.length > 0) {
+    return {
+      ok: false,
+      shape: 'invalid',
+      evidence: 'frame-src 含禁止源 ' + forbidden.join(' ') + "——不得放 'self'/通配/data:（design 28 §16.3）",
+    }
+  }
+  const exact = frame.length === expected.length && expected.every((token, index) => frame[index] === token)
+  if (exact) {
+    if (header.length > BROWSER_FRAME_CSP_MAX_BYTES) {
+      return {
+        ok: false,
+        shape: 'invalid',
+        evidence: 'CSP 头 ' + String(header.length) + 'B 超过 ' + String(BROWSER_FRAME_CSP_MAX_BYTES) + 'B 上限（长头需按平台分表，plan E2）',
+      }
+    }
+    return {
+      ok: true,
+      shape: 'v2',
+      evidence: 'frame-src 精确等于 v2 源集（' + String(expected.length) + ' 源 = blob: + 2 local loopback + 253 alias + 裸 http:/https:），头长 ' + String(header.length) + 'B ≤ ' + String(BROWSER_FRAME_CSP_MAX_BYTES) + "B，frame-ancestors 'none'；gateway/cli 不传 frameSources，由 control-plane 缺省逐字节锁 + gateway 包测试保证不放宽",
+    }
+  }
+  const v1 = frame.length === BROWSER_FRAME_CSP_V1.length && BROWSER_FRAME_CSP_V1.every((token, index) => frame[index] === token)
+  if (v1) {
+    return {
+      ok: null,
+      shape: 'v1',
+      evidence: 'frame-src 为 v1 短头（仅 blob:，' + String(header.length) + 'B）——gateway/cli/standalone 的既有缺省不放宽；desktop 启用链未生效或该平面本就不该放宽（--require-embed 会改判 FAIL）',
+    }
+  }
+  const missing = expected.filter(token => !frame.includes(token))
+  const extra = frame.filter(token => !expected.includes(token))
+  return {
+    ok: false,
+    shape: 'drift',
+    evidence: 'frame-src 与 v2 源集不符（' + String(frame.length) + ' 源 vs ' + String(expected.length) + '）：缺 ' + (missing.slice(0, 4).join(' ') || '（无）') + (missing.length > 4 ? ' …' : '') + '；多 ' + (extra.slice(0, 4).join(' ') || '（无）') + (extra.length > 4 ? ' …' : ''),
+  }
+}
+
+/**
+ * Request/console noise produced by the acceptance fixture itself (W-15's XFO
+ * negative control). Scoped by the fixture-only path segment `/embed-xfo`:
+ * Chromium's refusal of that framed document is the criterion W-15 judges, so
+ * the global W-11/W-12 gates must not call it an unexpected failure. A normal
+ * request is never tolerated.
+ */
+export const EXPECTED_FIXTURE_REQUEST_FAILURES = Object.freeze([
+  Object.freeze({
+    pattern: /\/embed-xfo(?:\?|#|$)/,
+    reason: 'W-15 的 XFO 负例 fixture 自身的子 frame 装载失败（判据在 W-15：上游不承诺失败 UI，系统浏览器出口必须显式且不自动打开）',
+  }),
+])
+
+/** Console noise of the same fixture (Chromium's "Refused to display" log). */
+export const EXPECTED_FIXTURE_CONSOLE_NOISE = Object.freeze([
+  Object.freeze({
+    pattern: /Refused to display [^]*\/embed-xfo[^]*X-Frame-Options/i,
+    reason: 'W-15 的 XFO 负例 fixture：Chromium 的拒绝日志是已知上游语义（上游不投影 XFO 失败），不是缺陷',
+  }),
+])
+
+// ============================================================================
+// W-13 prerequisite: a visible Session (design 28 §10 — the right sidebar
+// renders per Session). A cold --dev instance has no workspace and no session,
+// so the whole embed family would INFO out; these pure helpers decide which
+// EXISTING UI control bootstraps one, the walkthrough drives the clicks.
+//
+// Locale coupling is explicit and allowlisted here (zh/en), the same discipline
+// as the settings seat / onboarding dismiss lookups: the workspace chip, the
+// directory dialog's "edit path" and "open" actions. The new-session control is
+// located STRUCTURALLY by its registered shortcut (aria-keyshortcuts
+// Control+N / Meta+N) and only falls back to the label allowlist.
+// ============================================================================
+
+/** Hero workspace chip aria-labels (zh/en) — "choose workspace" when none is picked. */
+export const WORKSPACE_CHIP_LABELS = Object.freeze(['选择工作区', 'Choose workspace'])
+/** Directory-browser path-edit control labels (zh/en). */
+export const DIRECTORY_EDIT_PATH_LABELS = Object.freeze(['编辑路径', 'Edit path'])
+/** Directory-browser confirm control labels (zh/en; fallback when no primary class is readable). */
+export const DIRECTORY_OPEN_LABELS = Object.freeze(['打开', 'Open'])
+/** New-session control labels (zh/en) — fallback only; the shortcut attr is the structural locator. */
+export const NEW_SESSION_LABELS = Object.freeze(['新建会话', '新会话', 'New session', 'New Session'])
+/** Registered new-session shortcut (aria-keyshortcuts spelling, platform-dependent modifier). */
+export const NEW_SESSION_KEYS = /^(?:Control|Meta)\+N$/iu
+
+/** Area of a dumped control (for the deterministic "largest new-session button" pick). */
+function controlArea(control) {
+  const width = Number(control?.width)
+  const height = Number(control?.height)
+  return Number.isFinite(width) && Number.isFinite(height) ? width * height : 0
+}
+
+/**
+ * Pick the new-session control from a descriptor dump.
+ *
+ * The sidebar renders TWO new-session buttons (the brand button and the
+ * labelled "New session" row) plus a Control+N registration; both do the same
+ * thing, so the pick is deterministic (largest area, then earliest) rather than
+ * ambiguous. Shortcut match wins; the zh/en label allowlist is only a fallback
+ * for builds that stop publishing aria-keyshortcuts.
+ * @param buttons - descriptor dump `{ index, ariaLabel, keys, text, width, height, disabled }`.
+ * @returns `{ ok, picked?, reason?, candidates }`; `ok:false` = not located.
+ */
+export function pickNewSessionControl(buttons) {
+  const list = Array.isArray(buttons) ? buttons : []
+  const usable = list.filter(button =>
+    button !== null && typeof button === 'object' && button.disabled !== true)
+  const byShortcut = usable.filter(button =>
+    typeof button.keys === 'string' && NEW_SESSION_KEYS.test(button.keys.trim()))
+  const candidates = byShortcut.length > 0 ? byShortcut : usable.filter(button =>
+    NEW_SESSION_LABELS.includes(typeof button.ariaLabel === 'string' ? button.ariaLabel : ''))
+  if (candidates.length === 0) return { ok: false, reason: 'no-control', candidates: [] }
+  const sorted = [...candidates].sort((a, b) => controlArea(b) - controlArea(a)
+    || (Number(a.index) || 0) - (Number(b.index) || 0))
+  return { ok: true, picked: sorted[0], candidates: sorted }
+}
+
+/** Pick the hero workspace chip (exactly one; several visible chips fail closed). */
+export function pickWorkspaceChip(buttons) {
+  const list = Array.isArray(buttons) ? buttons : []
+  const candidates = list.filter(button => button !== null && typeof button === 'object'
+    && button.disabled !== true
+    && WORKSPACE_CHIP_LABELS.includes(typeof button.ariaLabel === 'string' ? button.ariaLabel : ''))
+  if (candidates.length === 0) return { ok: false, reason: 'no-control', candidates: [] }
+  if (candidates.length > 1) return { ok: false, reason: 'ambiguous', candidates }
+  return { ok: true, picked: candidates[0], candidates }
+}
+
+/** Pick the directory browser's path-edit control (aria-label, exactly one). */
+export function pickDirectoryEditButton(buttons) {
+  const list = Array.isArray(buttons) ? buttons : []
+  const candidates = list.filter(button => button !== null && typeof button === 'object'
+    && button.disabled !== true
+    && DIRECTORY_EDIT_PATH_LABELS.includes(typeof button.ariaLabel === 'string' ? button.ariaLabel : ''))
+  if (candidates.length === 0) return { ok: false, reason: 'no-control', candidates: [] }
+  if (candidates.length > 1) return { ok: false, reason: 'ambiguous', candidates }
+  return { ok: true, picked: candidates[0], candidates }
+}
+
+/**
+ * Pick the directory browser's confirm ("open") control: an enabled PRIMARY
+ * button (the class token is the vendor's own variant), falling back to the
+ * zh/en label allowlist. The walkthrough clicks it only after the path has been
+ * typed — the caller fails closed when no enabled candidate exists (no target
+ * yet / still loading).
+ */
+export function pickDirectoryOpenButton(buttons) {
+  const list = Array.isArray(buttons) ? buttons : []
+  const enabled = list.filter(button => button !== null && typeof button === 'object'
+    && button.disabled !== true)
+  const primary = enabled.filter(button => button.primary === true)
+  const candidates = primary.length > 0 ? primary : enabled.filter(button =>
+    DIRECTORY_OPEN_LABELS.includes(typeof button.text === 'string' ? button.text : ''))
+  if (candidates.length === 0) return { ok: false, reason: 'no-control', candidates: [] }
+  return { ok: true, picked: candidates[candidates.length - 1], candidates }
+}
+
+/**
+ * W-13 prerequisite verdict: after the bootstrap attempt there must be a
+ * visible Session (the right sidebar surface exists).
+ *
+ * `executed:false` is INFO: `--attach` never creates or switches sessions (that
+ * writes the real instance's state), so the operator must select one; the
+ * `--require-embed` strict flag re-labels that INFO to FAIL.
+ * @param facts.executed - whether this run drove the bootstrap UI.
+ * @param facts.reason - why it did not run (INFO evidence).
+ * @param facts.sessionPresent - whether a visible `[data-sidebar-right-session]` exists afterwards.
+ * @param facts.via - 'existing' | 'new-session' | 'workspace-created' | 'none'.
+ * @param facts.note - bootstrap-side explanation appended to the evidence.
+ * @returns `{ ok, evidence }` (`ok === null` is INFO).
+ */
+export function sessionBootstrapVerdict({
+  executed = false,
+  reason = '',
+  sessionPresent = false,
+  via = 'none',
+  note = '',
+} = {}) {
+  const tail = note === '' ? '' : '；' + note
+  if (executed !== true) return { ok: null, evidence: '未执行：' + reason }
+  if (sessionPresent === true) {
+    return { ok: true, evidence: '已有可见 Session（via=' + via + '）' + tail }
+  }
+  return {
+    ok: false,
+    evidence: '仍没有可见 Session（via=' + via + '）' + tail
+      + '——右栏 surface 按 Session 渲染（design 28 §10），W-13 无法进入浏览器页签',
+  }
+}
+
+/**
+ * Run-scoped fixture noise rules (W-11/W-12 hygiene).
+ *
+ * The fixture's XFO negative control is EXPECTED to be refused by the engine,
+ * and Chromium reports the refusal against the fixture origin (the console line
+ * may name the framed origin's root while the failed navigation names the XFO
+ * path). The static rules in EXPECTED_FIXTURE_* cover the canonical spellings;
+ * these rules scope the SAME acceptance-owned noise to THIS RUN's random
+ * origin — an unrelated page refusing framing can never be tolerated by it.
+ * @param fixtureOrigin - the live fixture origin ('http://127.0.0.1:<port>') or ''.
+ * @returns request/console rule lists for partitionFailures.
+ */
+export function fixtureNoiseRules(fixtureOrigin) {
+  if (typeof fixtureOrigin !== 'string' || fixtureOrigin === '') return { request: [], console: [] }
+  const escaped = fixtureOrigin.replace(/[.*+?^$()|[\]\\]/gu, '\\$&')
+  const reason = 'W-15 的 XFO 负例 fixture（本次运行 ' + fixtureOrigin + '）：拒绝装载是判据输入，不是未预期失败'
+  return {
+    request: [{ pattern: new RegExp('FAILED\\([^)]*\\)[^]*' + escaped), reason }],
+    console: [{ pattern: new RegExp('Refused to display [^]*' + escaped + '[^]*X-Frame-Options', 'iu'), reason }],
+  }
+}

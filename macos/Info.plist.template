@@ -101,6 +101,19 @@
     <dict>
         <key>NSAllowsArbitraryLoads</key>
         <false/>
+        <!-- design 28 §16.11（覆盖 §16.8 的 loopback 白名单说法）：右栏 iframe 是上游
+             ui-sidebar-browser iframe 路径的忠实 fork，可承载任意 http(s) 页面
+             （含 https/任意 host；SSH 反代只把 remote 127.0.0.1 换成 per-source
+             alias 127.0.0.2–254）。ATS 是**按 host 例外**的域白名单，无法表达
+             「任意 host + 任意端口」，故用 NSAllowsArbitraryLoadsInWebContent 只
+             放宽 **Web 内容**（WKWebView 装载的页面/子资源/子 frame）；主文档请求
+             仍受既有 ATS 底线约束：NSAllowsArbitraryLoads 保持 false，
+             NSAllowsLocalNetworking 与 NSExceptionDomains 保持。
+             **绝不**把本键升级成进程级 NSAllowsArbitraryLoads=true。
+             同步断言：ShellStartupTests（plist）、build-swift-app.test.mjs（产物）、
+             after-pack-adhoc-sign.mjs（Electron flavor 仍只断言 false）。 -->
+        <key>NSAllowsArbitraryLoadsInWebContent</key>
+        <true/>
         <key>NSAllowsLocalNetworking</key>
         <true/>
         <key>NSExceptionDomains</key>

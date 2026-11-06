@@ -5,7 +5,13 @@
     // root is the repository root only to reuse the shared compiler options
     // (the same layout precedent as the other chamber client packages).
     "rootDir": "../..",
-    "outDir": "lib/types"
+    "outDir": "lib/types",
+    // Source-reuse fork of upstream ui-sidebar-browser (design 28 §16): the
+    // upstream client sources are copied VERBATIM (parameter properties are part
+    // of that fidelity). This package is bundled by vite/esbuild, never run under
+    // Node type stripping, so the repo-wide erasable-only rule does not apply —
+    // same documented opt-out precedent as packages/dsh-client-connection.
+    "erasableSyntaxOnly": false
   },
   "include": [
     "src",

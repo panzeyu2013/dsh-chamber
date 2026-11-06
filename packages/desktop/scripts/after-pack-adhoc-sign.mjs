@@ -26,6 +26,16 @@
 // chamber needs plaintext HTTP only for its loopback control plane, never a
 // process-wide NSAllowsArbitraryLoads grant. This must happen before signing
 // because Info.plist is a sealed resource.
+//
+// design 28 §16.8 (Browser v2): the right-sidebar iframe also loads remote
+// loopback pages, but that grant belongs to the SWIFT flavor only — its
+// WKWebView loads web content through WebKit's ATS-gated stack and carries
+// NSAllowsArbitraryLoadsInWebContent in macos/Info.plist.template. Electron's
+// web content rides Chromium's network stack, which ATS does not gate, so this
+// hook keeps the process-wide grant disabled and must NOT add a web-content
+// grant here as a substitute (the two flavors' ATS surfaces stay minimal and
+// distinct; the Swift template is asserted by ShellStartupTests and
+// build-swift-app.test.mjs).
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -409,7 +419,13 @@ export default async function afterPackAdhocSign(context) {
   if (arbitraryLoads !== 'false') {
     throw new Error(`failed to disable NSAllowsArbitraryLoads (got ${JSON.stringify(arbitraryLoads)})`);
   }
-  console.log('[after-pack-adhoc-sign] ATS restricted to declared loopback exceptions');
+  // v2（design 28 §16.8）：这里**不**写 NSAllowsArbitraryLoadsInWebContent——
+  // Electron 的 Web 内容走 Chromium 网络栈、不受 ATS 管辖；Web 内容级放行只属于
+  // Swift flavor 的 WKWebView（macos/Info.plist.template，断言在
+  // ShellStartupTests / build-swift-app.test.mjs）。两 flavor 的 ATS 面保持最小且
+  // 分离：本腿只保证进程级 ArbitraryLoads 关闭。
+  console.log('[after-pack-adhoc-sign] ATS restricted to declared loopback exceptions'
+    + ' (Electron web content is not ATS-gated; the v2 iframe web-content grant is Swift-only)');
   verifyMacEntitlementsFile();
   console.log(`[after-pack-adhoc-sign] ad-hoc signing ${appPath}`);
   execFileSync('codesign', macAdhocSignArgs(appPath), { stdio: 'inherit' });

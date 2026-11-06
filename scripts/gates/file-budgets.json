@@ -16,9 +16,9 @@
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 1318,
+      "lines": 1320,
       "target": 1450,
-      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)",
+      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)；+2（2026-11，design 28 §16 revoke 漏斗）= onRendererLifecycle 顶部的注释 1 行 + revokeForwardRenderer(event) 调用 1 行（单漏斗：Electron main 与 Swift node-edges 都汇到该入口；替代方案是两处 entry glue 各 +1 行，但那会失去单漏斗语义）",
       "kind": "ceiling"
     },
     {

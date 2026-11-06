@@ -35,6 +35,7 @@ import {
 import { createPageChannel } from './page-channel.ts'
 import { PAGE_CHANNEL_PATH } from '@dsh-chamber/dsh-chamber-wire/page-channel'
 import { ensureInstanceId } from './instance-id.ts'
+import { frameSrcDirective, resolveBrowserFrameSources } from './browser-frame-sources.ts'
 import { ensurePrivateDirectoryNoFollow } from './private-file.ts'
 import {
   acquireStateRootLease,
@@ -151,6 +152,17 @@ export interface ControlPlaneOptions {
   /** First port attempted for the managed dsh host (absent = BASE_DHSPORT 17510). */
   dshPortBase?: number
   webDistDir?: string
+  /**
+   * v2 embedded-browser frame sources (design 28 §16.3/§16.11). Absent/null = the
+   * v1 `frame-src blob:` claim byte-for-byte (gateway/cli/standalone/tests). The
+   * desktop main and Swift sidecar pass `forwardFrameSources()` from
+   * `@dsh-chamber/dsh-chamber-wire/forward` (blob: + local loopback + every
+   * 127.0.0.2..254 alias host) plus the upstream-iframe scheme sources
+   * `http:`/`https:` (any http(s) child frame, the ui-sidebar-browser behavior).
+   * Invalid entries throw at construction (no silent widening to 'self', `*`, or an
+   * arbitrary host-source; only the two explicit bare web schemes are allowed).
+   */
+  frameSources?: readonly string[]
   /**
    * 安全模式（C4 启动与修复）：true = 本次启动跳过 chamber 宿主包 seeding，并向
    * 页面注入 __DSH_CHAMBER_SAFE_MODE__（渲染端跳过 extra rows 装载）。缺省读进程
@@ -314,6 +326,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // anonymous management API + reverse proxy, and the Host/Origin fence is browser-only.
     throw new Error(`control plane refuses non-loopback bind ${JSON.stringify(host)} without an external request-boundary evaluator plus HTTP/upgrade middleware; loopback-only is the anonymous v1 invariant`)
   }
+  // v2 iframe policy is resolved/validated once, before any listener exists: a
+  // bad frameSources list must fail construction, not a request later.
+  const browserFrameSources = resolveBrowserFrameSources(options.frameSources)
   const stateDir = resolveStateRoot({ explicit: options.stateDir, env: process.env })
   // The state root has exactly one writer. A caller that already holds the lease
   // (gateway shape) passes it in and the plane adopts it — same root verified plus
@@ -936,11 +951,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               'content-security-policy',
               // frame-src blob: — document previews inject HTML/PDF/image content into
               // blob: iframes; without an explicit frame-src, default-src 'self' rejects
-              // them (both flavors). Only blob: is opened.
+              // them (both flavors). v2 (design 28 §16.3) extends this list from
+              // ControlPlaneOptions.frameSources with blob:+local loopback+alias hosts;
+              // the default list is exactly ['blob:'] (v1 byte-for-byte).
               // style-src 'unsafe-inline' is a runtime precondition for the macOS shell's
               // overscroll policy: the injected <style> has no nonce, so removing it,
               // adding a nonce/hash, or adding style-src-elem all re-break the policy silently.
-              `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
+              `default-src 'self'; base-uri 'none'; object-src 'none'; ${frameSrcDirective(browserFrameSources)}; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
             )
             let url: URL
             try {
@@ -1391,6 +1408,11 @@ export type {
   ProtectedSource,
   RuntimeFamilyResolution,
 } from './protected-plugins.ts'
+// v2 embedded-browser frame sources (single source =
+// @dsh-chamber/dsh-chamber-wire/forward): re-exported through this esbuild-bundled
+// entry so the packaged desktop/sidecar can consume the same generator from the
+// facade instead of adding a bare wire specifier (not type-strippable when packaged).
+export { forwardFrameSources } from '@dsh-chamber/dsh-chamber-wire/forward'
 // The plugin-manifest read algorithm + materialize ruler (single source =
 // @dsh-chamber/dsh-chamber-wire/plugin-manifest), re-exported because the packaged
 // desktop must consume them from the esbuild-bundled entry (bare wire specifiers are

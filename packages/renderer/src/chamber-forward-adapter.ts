@@ -10,7 +10,12 @@
  * `@dsh-chamber/dsh-chamber-wire/forward`: `record` / `records`, seven states,
  * a closed table of snake_case error codes, and
  * `{ ok: false, error: { code, detail } }`. The launcher speaks a smaller UI
- * vocabulary: three states, ten kebab-case codes, `{ ok: false, code }`.
+ * vocabulary: three states, eleven kebab-case codes, `{ ok: false, code }`.
+ * v2 also adds the renderer-minted `consumer` (attach/detach lifetime),
+ * main-composed `frameUrl`, the `embedding` capability, the
+ * `record.frameError` iframe-failure projection and the local-only
+ * `list.frameErrors` origin projection (a direct local iframe has no record,
+ * design 28 §16.7 / W-15).
  *
  * This module is the ONE translation between those two vocabularies: preload
  * and main stay wire-shaped (design 28 §7: no main-side rewrite, or Electron
@@ -54,7 +59,7 @@ const PAGE_FORWARD_KEY = 'forward'
 /** The launcher's state bucket (`ForwardState` in the browser package). */
 export type LauncherForwardState = 'bound' | 'binding' | 'error'
 
-/** The launcher's failure vocabulary (`ForwardFailureCode`; ten codes, kebab-case). */
+/** The launcher's failure vocabulary (`ForwardFailureCode`; eleven codes, kebab-case). */
 export type LauncherForwardFailureCode =
   | 'forbidden-source'
   | 'invalid-port'
@@ -64,8 +69,34 @@ export type LauncherForwardFailureCode =
   | 'spawn-failed'
   | 'bind-failed'
   | 'confirm-declined'
+  | 'release-timeout'
   | 'unavailable'
   | 'unknown'
+
+/** The launcher's frame-failure vocabulary (same closed tokens as the wire table). */
+export type LauncherForwardFrameError =
+  | 'blocked_by_response'
+  | 'certificate_error'
+  | 'load_failed'
+  | 'timeout'
+
+/** v2 embedding capability (list-only, default enabled, emergency rollback only). */
+export interface LauncherForwardEmbedding {
+  enabled: boolean
+  reason?: string
+}
+
+/**
+ * v2 local-frame failure projection (list-only, additive): an origin-scoped
+ * classification for a browser child frame that main observed failing without a
+ * forward record (the direct local loopback leg). The launcher maps it onto the
+ * CURRENT iframe origin so an engine error page can never settle as live.
+ */
+export interface LauncherForwardFrameErrorEntry {
+  /** Canonical http(s) loopback/alias origin (scheme://host:port). */
+  origin: string
+  code: LauncherForwardFrameError
+}
 
 /** One row as the launcher renders it (display facts only; never a URL to open). */
 export interface LauncherForwardRecord {
@@ -80,14 +111,22 @@ export interface LauncherForwardRecord {
   stale: boolean
   /** Mapped launcher code; present iff `state === 'error'`. */
   error?: string
+  /** main's best-effort iframe failure projection; absent = unknown. */
+  frameError?: LauncherForwardFrameError
 }
 
 export type LauncherForwardFailure = { ok: false; code: LauncherForwardFailureCode }
 export type LauncherForwardListResult =
-  | { ok: true; records: LauncherForwardRecord[] }
+  | {
+    ok: true
+    records: LauncherForwardRecord[]
+    embedding?: LauncherForwardEmbedding
+    /** v2 local-frame failures (origin-scoped; local list only). */
+    frameErrors?: LauncherForwardFrameErrorEntry[]
+  }
   | LauncherForwardFailure
 export type LauncherForwardRequestResult =
-  | { ok: true; record: LauncherForwardRecord }
+  | { ok: true; record: LauncherForwardRecord; frameUrl?: string }
   | LauncherForwardFailure
 export type LauncherForwardAck = { ok: true } | LauncherForwardFailure
 
@@ -98,11 +137,17 @@ export interface ChamberForwardBridge {
     sourceFingerprint: string
     port: number
     scheme?: 'http' | 'https'
+    /** v2 tab-occurrence claim (attach/renew). */
+    consumer?: string
+    /** Same-origin relative path main appends to the composed frameUrl. */
+    path?: string
   }): Promise<LauncherForwardRequestResult>
   release(input: {
     sourceId: string
     sourceFingerprint: string
     id: string
+    /** v2: present = detach this claim; absent = force-close. */
+    consumer?: string
   }): Promise<LauncherForwardAck>
   list(input: {
     sourceId: string
@@ -128,7 +173,10 @@ type WireRecordFacts =
     WireForwardRecord,
     'id' | 'targetPort' | 'localPort' | 'scheme' | 'aliasHost' | 'state' | 'stale' | 'error'
   >, 'error'>
-  & { error: LauncherForwardFailureCode | null }
+  & {
+    error: LauncherForwardFailureCode | null
+    frameError: LauncherForwardFrameError | null
+  }
 
 /**
  * Wire state → launcher bucket, EXHAUSTIVE over the wire union (a new wire state
@@ -146,10 +194,12 @@ const WIRE_STATE_TO_LAUNCHER: Readonly<Record<WireForwardState, LauncherForwardS
 
 /**
  * Wire error code → launcher code, EXHAUSTIVE over the wire union. The fold is
- * deliberate (the UI has ten codes): caps and budgets share `limit`, ownership
+ * deliberate (the UI has eleven codes): caps and budgets share `limit`, ownership
  * and transport gates share `forbidden-source`, start/authentication failures
  * share `spawn-failed`, alias/namespace/browser-open failures share
  * `unavailable`, and client-side path/scheme violations fall back to `unknown`.
+ * v2 passes `release_timeout` through as its own code: the row must be able to
+ * say "still reaping, retry" instead of claiming an unknown failure.
  */
 const WIRE_CODE_TO_LAUNCHER: Readonly<Record<WireForwardErrorCode, LauncherForwardFailureCode>> = {
   source_unknown: 'not-found',
@@ -177,10 +227,101 @@ const WIRE_CODE_TO_LAUNCHER: Readonly<Record<WireForwardErrorCode, LauncherForwa
   invalid_path: 'unknown',
   rate_limited: 'limit',
   open_failed: 'unavailable',
+  release_timeout: 'release-timeout',
 }
 
 /** The alias range 127.0.0.2-254 (never .1/.0/.255); display host only. */
 const ALIAS_HOST = /^127\.0\.0\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/u
+
+/** The wire frame-failure table, re-declared locally (no runtime wire import). */
+const LAUNCHER_FRAME_ERRORS: ReadonlySet<string> = new Set<LauncherForwardFrameError>([
+  'blocked_by_response',
+  'certificate_error',
+  'load_failed',
+  'timeout',
+])
+
+/** Narrow an untrusted projection to the launcher's frame-failure vocabulary. */
+function isLauncherFrameError(value: unknown): value is LauncherForwardFrameError {
+  return typeof value === 'string' && LAUNCHER_FRAME_ERRORS.has(value)
+}
+
+/**
+ * Main-composed iframe URL guard (the adapter has no runtime wire import; the
+ * same bounds are mirrored from the wire's isForwardFrameUrl). A malformed URL
+ * is dropped, never trusted into a row.
+ */
+function isLauncherFrameUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length < 9 || value.length > 4096) return false
+  if (!/^https?:\/\//u.test(value) || /[\u0000-\u0020\u007f\\#]/u.test(value)) return false
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && url.username === '' && url.password === ''
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Frame-origin guard (no runtime wire import): canonical http(s) origin of a
+ * loopback browser frame — 127.0.0.1 / localhost or a 127.0.0.2..254 alias. The
+ * value must be the CANONICAL origin spelling (URL.origin), never a URL with a
+ * path, credentials or a non-canonical port.
+ */
+function isLauncherFrameOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  if (url.username !== '' || url.password !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '') return false
+  if (url.origin !== value) return false
+  if (url.hostname === 'localhost') return true
+  if (url.hostname === '127.0.0.1') return true
+  return ALIAS_HOST.test(url.hostname)
+}
+
+/** Project the optional additive frameErrors array; malformed entries are dropped. */
+function readFrameErrors(value: unknown): LauncherForwardFrameErrorEntry[] {
+  if (!Array.isArray(value)) return []
+  const out: LauncherForwardFrameErrorEntry[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    let origin: unknown
+    let code: unknown
+    try {
+      ;({ origin, code } = entry as Record<string, unknown>)
+    } catch {
+      continue
+    }
+    if (!isLauncherFrameOrigin(origin) || !isLauncherFrameError(code) || seen.has(origin)) continue
+    seen.add(origin)
+    out.push({ origin, code })
+  }
+  return out
+}
+
+/** Read the optional embedding capability; absent/malformed = absent (= enabled). */
+function readEmbedding(value: unknown): LauncherForwardEmbedding | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  let enabled: unknown
+  let reason: unknown
+  try {
+    ;({ enabled, reason } = value as Record<string, unknown>)
+  } catch {
+    return undefined
+  }
+  if (typeof enabled !== 'boolean') return undefined
+  if (reason !== undefined && (typeof reason !== 'string' || reason === '' || reason.length > 128)) {
+    return undefined
+  }
+  return reason === undefined ? { enabled } : { enabled, reason }
+}
 
 /** The four wire calls this adapter forwards, in wire order. */
 const FORWARD_METHODS = ['request', 'release', 'list', 'openInBrowser'] as const
@@ -276,8 +417,9 @@ function readWireRecord(value: unknown): WireRecordFacts | null {
   let state: unknown
   let stale: unknown
   let error: unknown
+  let frameError: unknown
   try {
-    ;({ id, targetPort, localPort, scheme, aliasHost, state, stale, error }
+    ;({ id, targetPort, localPort, scheme, aliasHost, state, stale, error, frameError }
       = value as Record<string, unknown>)
   } catch {
     // Hostile getters are one malformed record, not a list-wide failure.
@@ -295,7 +437,20 @@ function readWireRecord(value: unknown): WireRecordFacts | null {
   if (!wireError.ok) return null
   // Wire invariant (`isForwardRecord`): an error is present iff state is 'error'.
   if ((wireError.code === null) !== (wireState !== 'error')) return null
-  return { id, targetPort, localPort, scheme, aliasHost, state: wireState, stale, error: wireError.code }
+  // frameError is optional/null (absent = unknown); an unknown future token is
+  // dropped (the row still renders) instead of failing the whole record.
+  const projectedFrameError = isLauncherFrameError(frameError) ? frameError : null
+  return {
+    id,
+    targetPort,
+    localPort,
+    scheme,
+    aliasHost,
+    state: wireState,
+    stale,
+    error: wireError.code,
+    frameError: projectedFrameError,
+  }
 }
 
 /** Translate one validated wire record into the launcher's row shape. */
@@ -309,6 +464,7 @@ function translateRecord(facts: WireRecordFacts): LauncherForwardRecord {
     state: WIRE_STATE_TO_LAUNCHER[facts.state],
     stale: facts.stale,
     ...(facts.error === null ? {} : { error: facts.error }),
+    ...(facts.frameError === null ? {} : { frameError: facts.frameError }),
   }
 }
 
@@ -362,7 +518,14 @@ function projectListResult(value: unknown): LauncherForwardListResult {
   if (!envelope.ok) return projectFailure(envelope.value)
   const records = envelope.value.records
   if (!Array.isArray(records)) return { ok: false, code: 'unknown' }
-  return { ok: true, records: projectRecords(records) }
+  const embedding = readEmbedding(envelope.value.embedding)
+  const frameErrors = readFrameErrors(envelope.value.frameErrors)
+  return {
+    ok: true,
+    records: projectRecords(records),
+    ...(embedding === undefined ? {} : { embedding }),
+    ...(frameErrors.length === 0 ? {} : { frameErrors }),
+  }
 }
 
 function projectRequestResult(value: unknown): LauncherForwardRequestResult {
@@ -370,7 +533,10 @@ function projectRequestResult(value: unknown): LauncherForwardRequestResult {
   if (envelope === null) return { ok: false, code: 'unknown' }
   if (!envelope.ok) return projectFailure(envelope.value)
   const record = projectRecord(envelope.value.record)
-  return record === null ? { ok: false, code: 'unknown' } : { ok: true, record }
+  if (record === null) return { ok: false, code: 'unknown' }
+  return isLauncherFrameUrl(envelope.value.frameUrl)
+    ? { ok: true, record, frameUrl: envelope.value.frameUrl }
+    : { ok: true, record }
 }
 
 function projectAck(value: unknown): LauncherForwardAck {
@@ -398,6 +564,8 @@ function createBridge(host: WireForwardHost): ChamberForwardBridge {
           sourceFingerprint: input.sourceFingerprint,
           port: input.port,
           scheme: input.scheme,
+          consumer: input.consumer,
+          path: input.path,
         }))
       } catch {
         return { ok: false, code: 'unavailable' }
@@ -409,6 +577,7 @@ function createBridge(host: WireForwardHost): ChamberForwardBridge {
           sourceId: input.sourceId,
           sourceFingerprint: input.sourceFingerprint,
           id: input.id,
+          consumer: input.consumer,
         }))
       } catch {
         return { ok: false, code: 'unavailable' }

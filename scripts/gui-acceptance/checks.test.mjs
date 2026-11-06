@@ -14,21 +14,35 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import {
+  BROWSER_ADDRESS_LABELS, BROWSER_FRAME_CONTRACT, BROWSER_FRAME_CSP_MAX_BYTES, BROWSER_FRAME_CSP_SOURCES,
+  BROWSER_FRAME_CSP_V1, BROWSER_SANDBOX_LABELS, BROWSER_TOOLBAR_LABELS,
+  EXPECTED_FIXTURE_CONSOLE_NOISE, EXPECTED_FIXTURE_REQUEST_FAILURES,
   HOVER_RACE_FALLBACK_OFFSETS, HOVER_RACE_WINDOW_CAP_MS, KNOWN_UPSTREAM_BOOT_NOISE,
   RAIL_TOGGLE_BAND_MAX_TOP_PX, RAIL_TOGGLE_BOX_MAX_PX, RAIL_TOGGLE_LEFT_FRACTION, TOLERATED_REQUEST_FAILURES,
-  applyRequireHover, cardIdentityHolds, createRecorder, deriveSourceIds, hasSecurityHeaders, hoverCardVerdict,
-  hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, isHonestError, isInstanceIndex, isShellIndex,
-  isWriterQuiescent, leakedFileContent, normalizeCardText, parseBaseHref, parseInstanceAssets,
-  parsePluginLoaderUrls, parseShellAssets, partitionFailures, pickRailToggle, raceBandForWindow,
-  railToggleVerdict, renderMarkdown, railFactsSnapshot, resolveDeclaredUrl, safeJson, sourceFoldVerdict,
-  summarize, summarizeNetFailures, veilLayeringVerdict,
-  viewPrefsDelta, viewPrefsFingerprint, viewPrefsUnreadable, writerEvidence,
+  applyRequireEmbed, applyRequireHover, browserFrameCspVerdict, browserPanelVerdict, cardIdentityHolds,
+  closeReleaseVerdict, createRecorder, deriveSourceIds, embedFrameVerdict, hasSecurityHeaders,
+  hoverCardVerdict, hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, isAliasFrameUrl,
+  isHonestError, isInstanceIndex, isLocalFixtureUrl, isShellIndex, isWriterQuiescent, leakedFileContent,
+  normalizeCardText, parseBaseHref, parseInstanceAssets, parsePluginLoaderUrls, parseShellAssets,
+  partitionFailures, pickBrowserGuideEntry, pickRailToggle, raceBandForWindow, railToggleVerdict,
+  externalExitVerdict, remoteEmbedVerdict, renderMarkdown, railFactsSnapshot, resolveDeclaredUrl, safeJson, sourceFoldVerdict,
+  fixtureNoiseRules, pickDirectoryEditButton, pickDirectoryOpenButton, pickNewSessionControl,
+  pickWorkspaceChip, sessionBootstrapVerdict, sourceIdAllowsForward, summarize, summarizeNetFailures,
+  veilLayeringVerdict, viewPrefsDelta, viewPrefsFingerprint, viewPrefsUnreadable,
+  writerEvidence,
 } from './checks.mjs'
 // The two page-level click expressions are imported so CI can run the REAL strings against a fake
 // DOM (identity addressing and the no-click-when-missing rule are behaviour, not source facts).
 import {
-  CLICK_STASHED_BUTTON, VEIL_LAYERING_PROBE_INSTALL, VEIL_LAYERING_PROBE_READ, clickButtonAt,
+  BROWSER_LANDSCAPE, CLICK_BROWSER_EXTERNAL, CLICK_BROWSER_GUIDE_ENTRY, CLICK_RIGHT_SIDEBAR_EXPAND,
+  CLICK_STASHED_BUTTON, CLOSE_BROWSER_TAB, INSTALL_EMBED_WITNESS, READ_EMBED_WITNESS, RELOAD_BROWSER_PAGE,
+  SESSION_BOOTSTRAP_FACTS, SUBMIT_BROWSER_ADDRESS, VEIL_LAYERING_PROBE_INSTALL, VEIL_LAYERING_PROBE_READ,
+  clickButtonAt, clickButtonDescriptor, setBrowserAddress, typeDirectoryPath,
 } from './walkthrough.mjs'
+// The v2 embed fixture (W-14a/W-15's real local document): its routes and the
+// release probe are exercised here so a fixture change cannot silently turn the
+// driving legs into no-ops.
+import { FIXTURE_MARKER, FIXTURE_MESSAGE_TYPE, FIXTURE_XFO_PATH, probeTcpReachable, startEmbedFixture } from './fixture.mjs'
 // 一处回归直接驱动真实的 --live 探针：实例文档声明 URL 的解析决定 IP-2/IP-3 的判定。
 import { runLiveAcceptance } from './probe.mjs'
 // Native flavor mode helpers: the native walkthrough drives the sidecar assembly the packaged Swift shell spawns (WKWebView has no CDP).
@@ -1405,4 +1419,852 @@ test('I15: the switch legs own --require-switch and the walkthrough declares non
   assert.match(probe, /--require-switch/)
   // 走查：没有切换腿 ⇒ 不得声明该旗标（否则就是假严格）。
   assert.doesNotMatch(walkthrough, /require-switch/)
+})
+
+// ============================================================================
+// Browser (design 28 §16.9): the upstream ui-sidebar-browser iframe fork.
+// Part 1 = product source-lock mirrors; part 2 = pure verdicts; part 3 = the
+// REAL page expressions against a fake upstream DOM; part 4 = fixture + SH-7
+// over real HTTP.
+// ============================================================================
+
+const readProduct = relative => readFileSync(new URL('../../packages/dsh-chamber-client-ui-browser/' + relative, import.meta.url), 'utf8')
+const BROWSER_IFRAME_PRESENTATION = readProduct('src/client/view/IframePresentation.ts')
+const BROWSER_BODY_SOURCE = readProduct('src/client/view/BrowserBody.tsx')
+const BROWSER_DEFINITION_SOURCE = readProduct('src/client/definition.tsx')
+const BROWSER_INDEX_SOURCE = readProduct('src/client/index.ts')
+const BROWSER_SOURCE_GATE = readProduct('src/shared/source.ts')
+const BROWSER_RESOLVER_SOURCE = readProduct('src/client/browser/ForwardFrameResolver.ts')
+const BROWSER_LOCALES = readProduct('src/client/locales.ts')
+const WIRE_FORWARD_SOURCE = readFileSync(new URL('../../packages/dsh-chamber-wire/src/forward.ts', import.meta.url), 'utf8')
+const CONTROL_PLANE_FRAME_SOURCES = readFileSync(new URL('../../packages/control-plane/src/browser-frame-sources.ts', import.meta.url), 'utf8')
+const DESKTOP_MAIN_SOURCE = readFileSync(new URL('../../packages/desktop/main.ts', import.meta.url), 'utf8')
+const BROWSER_WALKTHROUGH = readFileSync(new URL('./walkthrough.mjs', import.meta.url), 'utf8')
+
+test('upstream fork contract mirror: sandbox/referrer/marker/guide kind agree with the product source', () => {
+  const sandboxMatch = /export const WEB_BROWSER_SANDBOX = '([^']+)'/u.exec(BROWSER_IFRAME_PRESENTATION)
+  assert.notEqual(sandboxMatch, null, 'the upstream sandbox constant must stay readable')
+  assert.equal(sandboxMatch[1], BROWSER_FRAME_CONTRACT.sandbox, 'the sandbox mirror drifted from IframePresentation.ts')
+  assert.deepEqual(sandboxMatch[1].split(' '), [...BROWSER_FRAME_CONTRACT.sandboxTokens])
+  for (const marker of [
+    "element.referrerPolicy = 'no-referrer'",
+    "element.dataset.sidebarBrowserFrame = 'iframe'",
+    "element.setAttribute('sandbox', WEB_BROWSER_SANDBOX)",
+    'element.src = current.url',
+  ]) {
+    assert.equal(BROWSER_IFRAME_PRESENTATION.includes(marker), true, marker)
+  }
+  assert.equal(BROWSER_FRAME_CONTRACT.referrerPolicy, 'no-referrer')
+  assert.equal(BROWSER_FRAME_CONTRACT.frameMarkerValue, 'iframe', 'the dataset VALUE is the upstream contract, not mere presence')
+  const kindMatch = /export const BROWSER_KIND = '([^']+)'/u.exec(BROWSER_DEFINITION_SOURCE)
+  assert.equal(kindMatch[1], 'browser', 'the fork keeps upstream tab kind browser')
+  assert.equal(BROWSER_FRAME_CONTRACT.guideEntryKind, kindMatch[1])
+  for (const marker of [
+    'className={css.root}',
+    'className={css.toolbar}',
+    "aria-label={t('address.placeholder')}",
+    "aria-label={t('back')}",
+    "aria-label={t('forward')}",
+    "aria-label={t('reload')}",
+    "aria-label={t('go')}",
+    "aria-label={t('external')}",
+    "window.open(externalUrl, '_blank', 'noopener,noreferrer')",
+    'className={css.content}',
+    'className={css.viewport}',
+    'role="status"',
+    'role="alert"',
+  ]) {
+    assert.equal(BROWSER_BODY_SOURCE.includes(marker), true, marker)
+  }
+  assert.match(BROWSER_RESOLVER_SOURCE, /FORWARD_TARGET_HOST = '127\.0\.0\.1'/u)
+  assert.match(BROWSER_RESOLVER_SOURCE, /controller\.attach\(/u)
+  assert.match(BROWSER_RESOLVER_SOURCE, /detachCurrent\(\)/u)
+  assert.match(BROWSER_RESOLVER_SOURCE, /return target\.url/u, 'local/direct targets keep the upstream URL')
+  assert.match(BROWSER_INDEX_SOURCE, /resolveBrowserEntry\(/u, 'the chamber source gate must stay')
+  assert.match(BROWSER_SOURCE_GATE, /transport !== 'local' && transport !== 'ssh'/u, 'plain-http sources are excluded')
+  assert.match(BROWSER_SOURCE_GATE, /prefix: 'dsh-'/u)
+  assert.match(BROWSER_SOURCE_GATE, /prefix: 'gateway-'/u)
+  for (const gone of [
+    'src/shared/frame-policy.ts', 'src/client/BrowserPanel.tsx', 'src/client/BrowserPanel.module.css',
+    'src/shared/launcher-model.ts', 'src/shared/address.ts', 'src/locales.ts',
+  ]) {
+    assert.equal(existsSync(new URL('../../packages/dsh-chamber-client-ui-browser/' + gone, import.meta.url)), false, gone)
+  }
+  for (const forbidden of ['data-chamber-browser-panel', 'data-frame-phase', 'chamber-remote-browser', 'attachedRows']) {
+    assert.equal(BROWSER_WALKTHROUGH.includes(forbidden), false, 'the acceptance layer must not lock the deleted self-built UI: ' + forbidden)
+  }
+  for (const marker of [
+    'iframe[data-sidebar-browser-frame]',
+    "'[data-sidebar-right-guide-entry]'",
+    "'[data-sidebar-right-tab]'",
+    "'[data-dockkit-tab-close]'",
+    "'[data-sidebar-right-expand]'",
+    'data-sidebar-right-panel',
+    "=== 'browser'",
+    'http://127.0.0.1:',
+    'window.open',
+  ]) {
+    assert.equal(BROWSER_WALKTHROUGH.includes(marker), true, marker)
+  }
+})
+
+test('copy mirrors: the acceptance label allowlists cover the upstream zh dictionary', () => {
+  const zhValue = key => {
+    const escaped = key.replace(/\./gu, '\\.')
+    const match = new RegExp("(?:'" + escaped + "'|" + escaped + "): '([^']*)'", 'u').exec(BROWSER_LOCALES)
+    assert.notEqual(match, null, 'missing locale key ' + key)
+    return match[1]
+  }
+  assert.equal(BROWSER_ADDRESS_LABELS.includes(zhValue('address.placeholder')), true)
+  for (const [role, labels] of Object.entries(BROWSER_TOOLBAR_LABELS)) {
+    assert.notEqual(labels.indexOf(zhValue(role)), -1, 'toolbar mirror missing ' + role)
+  }
+  assert.equal(BROWSER_SANDBOX_LABELS.disable.indexOf(zhValue('sandbox.disable')) !== -1, true)
+  assert.equal(BROWSER_SANDBOX_LABELS.enable.indexOf(zhValue('sandbox.enable')) !== -1, true)
+})
+
+test('CSP frame-src mirror: wire sources + the desktop bare http:/https: widening; v1 default stays blob:', () => {
+  const range = /FORWARD_ALIAS_OCTETS = Object\.freeze\(\{ min: (\d+), max: (\d+), capacity: \d+ \}\)/u.exec(WIRE_FORWARD_SOURCE)
+  assert.notEqual(range, null, 'the wire alias range must stay readable')
+  const hosts = [.../FORWARD_LOCAL_LOOPBACK_HOSTS = Object\.freeze\(\[([^\]]*)\]/u.exec(WIRE_FORWARD_SOURCE)[1]
+    .matchAll(/'([^']+)'/gu)].map(match => match[1])
+  assert.deepEqual(hosts, ['127.0.0.1', 'localhost'])
+  const expected = [
+    'blob:',
+    ...hosts.map(host => 'http://' + host + ':*'),
+    ...Array.from({ length: Number(range[2]) - Number(range[1]) + 1 }, (_unused, index) => 'http://127.0.0.' + String(index + Number(range[1])) + ':*'),
+    'http:',
+    'https:',
+  ]
+  assert.deepEqual([...BROWSER_FRAME_CSP_SOURCES], expected, 'the SH-7 mirror drifted from wire + desktop widening')
+  assert.match(CONTROL_PLANE_FRAME_SOURCES, /ANY_HTTP_SCHEME_FRAME_SOURCES: ReadonlySet<string> = new Set\(\['http:', 'https:'\]\)/u)
+  assert.match(CONTROL_PLANE_FRAME_SOURCES, /DEFAULT_BROWSER_FRAME_SOURCES: readonly string\[\] = Object\.freeze\(\['blob:'\]\)/u)
+  assert.match(CONTROL_PLANE_FRAME_SOURCES, /isAllowedBrowserFrameSource/u)
+  assert.match(DESKTOP_MAIN_SOURCE, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/u)
+  assert.deepEqual([...BROWSER_FRAME_CSP_V1], ['blob:'])
+})
+
+test('SH-7: the v2 frame-src set passes, v1 stays INFO, forbidden sources and drift FAIL', () => {
+  const v2 = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ') + "; frame-ancestors 'none'; script-src 'self'"
+  const pass = browserFrameCspVerdict(v2)
+  assert.equal(pass.ok, true)
+  assert.equal(pass.shape, 'v2')
+  assert.match(pass.evidence, /258 源/u)
+  const v1 = "default-src 'self'; frame-src blob:; frame-ancestors 'none'; script-src 'self'"
+  assert.equal(browserFrameCspVerdict(v1).ok, null)
+  assert.equal(browserFrameCspVerdict(v1).shape, 'v1')
+  assert.equal(applyRequireEmbed(browserFrameCspVerdict(v1), true).ok, false)
+  assert.match(applyRequireEmbed(browserFrameCspVerdict(v1), true).evidence, /--require-embed/)
+  assert.equal(applyRequireEmbed(browserFrameCspVerdict(v2), true).ok, true)
+  for (const widened of ["'self'", '*', 'data:']) {
+    const verdict = browserFrameCspVerdict("default-src 'self'; frame-src blob: " + widened + "; frame-ancestors 'none'")
+    assert.equal(verdict.ok, false, widened + ' must FAIL')
+    assert.match(verdict.evidence, /禁止源/u)
+  }
+  const old256 = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.slice(0, -2).join(' ') + "; frame-ancestors 'none'"
+  const oldVerdict = browserFrameCspVerdict(old256)
+  assert.equal(oldVerdict.ok, false)
+  assert.equal(oldVerdict.shape, 'drift')
+  assert.match(oldVerdict.evidence, /http:/u)
+  assert.equal(browserFrameCspVerdict("default-src 'self'; script-src 'self'").ok, false)
+  assert.equal(browserFrameCspVerdict("default-src 'self'; frame-src blob:; frame-ancestors *").ok, false)
+  assert.equal(browserFrameCspVerdict('').ok, false)
+  const partial = "default-src 'self'; frame-src blob: http://127.0.0.1:* http://localhost:*; frame-ancestors 'none'"
+  const partialVerdict = browserFrameCspVerdict(partial)
+  assert.equal(partialVerdict.ok, false)
+  assert.equal(partialVerdict.shape, 'drift')
+  assert.match(partialVerdict.evidence, /127\.0\.0\.2/iu)
+})
+
+test('CSP size ceiling: the exact v2 set over the 8KB header ceiling FAILs', () => {
+  const overLong = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ')
+    + "; frame-ancestors 'none'; report-uri " + 'x'.repeat(BROWSER_FRAME_CSP_MAX_BYTES)
+  const verdict = browserFrameCspVerdict(overLong)
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.evidence, /8192/u)
+})
+
+test('browser guide entry picker: kind marker + visibility only, ambiguity fails closed', () => {
+  const visible = { index: 1, kind: 'browser', visible: true, labelLength: 2 }
+  const hidden = { index: 0, kind: 'browser', visible: false, labelLength: 2 }
+  const other = { index: 2, kind: 'terminal', visible: true, labelLength: 4 }
+  assert.equal(pickBrowserGuideEntry([hidden, visible, other]).ok, true)
+  assert.equal(pickBrowserGuideEntry([hidden, visible, other]).picked.index, 1)
+  assert.equal(pickBrowserGuideEntry([hidden, other]).reason, 'no-entry')
+  assert.equal(pickBrowserGuideEntry([visible, { ...visible, index: 3 }]).reason, 'ambiguous')
+})
+
+/** One upstream BrowserBody fact set for verdict tests. */
+function bodyFacts(overrides = {}) {
+  return {
+    visible: true,
+    addressInput: true,
+    addressLabel: BROWSER_ADDRESS_LABELS[0],
+    addressValue: 'http://127.0.0.1:41234/',
+    toolbarRoles: ['back', 'forward', 'reload', 'go', 'external'],
+    externalButton: true,
+    externalEnabled: true,
+    sandboxToggle: true,
+    sandboxed: true,
+    busy: false,
+    failureTexts: [],
+    tabId: 'tab-browser',
+    frameCount: 0,
+    ...overrides,
+  }
+}
+
+/** One upstream iframe fact set for verdict tests. */
+function frameFacts(overrides = {}) {
+  return {
+    src: 'http://127.0.0.1:41234/',
+    sandbox: BROWSER_FRAME_CONTRACT.sandbox,
+    referrerpolicy: BROWSER_FRAME_CONTRACT.referrerPolicy,
+    markerValue: 'iframe',
+    insideBody: true,
+    ...overrides,
+  }
+}
+
+const FIXTURE_MESSAGE = Object.freeze({ type: FIXTURE_MESSAGE_TYPE, marker: FIXTURE_MARKER })
+
+test('W-13 verdict: upstream BrowserBody structure, toolbar roles and sandbox default', () => {
+  const pass = browserPanelVerdict({
+    hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true,
+    openedVia: 'clicked-entry', bodyCount: 1, bodies: [bodyFacts()],
+  })
+  assert.equal(pass.ok, true)
+  assert.match(pass.evidence, /toolbar=/)
+  assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: false }).ok, null)
+  assert.equal(browserPanelVerdict({
+    hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: false, bodyCount: 1, bodies: [bodyFacts()],
+  }).ok, false)
+  assert.equal(browserPanelVerdict({
+    hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true,
+    entryPick: { ok: true, picked: { index: 1 } }, openedVia: 'clicked-entry', bodyCount: 0, bodies: [],
+  }).ok, false)
+  assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true, bodyCount: 2, bodies: [bodyFacts(), bodyFacts()] }).ok, false)
+  for (const missing of ['back', 'forward', 'reload', 'go', 'external']) {
+    const body = bodyFacts({ toolbarRoles: ['back', 'forward', 'reload', 'go', 'external'].filter(role => role !== missing) })
+    assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true, bodyCount: 1, bodies: [body] }).ok, false, missing)
+  }
+  assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true, bodyCount: 1, bodies: [bodyFacts({ addressInput: false })] }).ok, false)
+  assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true, bodyCount: 1, bodies: [bodyFacts({ sandboxToggle: false })] }).ok, false)
+  assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true, bodyCount: 1, bodies: [bodyFacts({ sandboxed: false })] }).ok, false)
+  assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true, bodyCount: 1, bodies: [bodyFacts({ busy: null })] }).ok, false)
+  assert.equal(browserPanelVerdict({ hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true, bodyCount: 1, bodies: [bodyFacts({ visible: false })] }).ok, false)
+  assert.equal(browserPanelVerdict({ hasActiveView: false }).ok, false)
+})
+
+test('W-14a verdict: upstream iframe contract + fixture postMessage + logical address', () => {
+  const origin = 'http://127.0.0.1:41234'
+  const messages = [{ origin, data: FIXTURE_MESSAGE }]
+  const pass = embedFrameVerdict({
+    bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts()], fixtureOrigin: origin, messages, expectedAddress: origin + '/',
+  })
+  assert.equal(pass.ok, true)
+  assert.match(pass.evidence, /postMessage=/)
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts()], fixtureOrigin: origin, messages: [] }).ok, false, 'the script-run proof is mandatory')
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ markerValue: null })], fixtureOrigin: origin, messages }).ok, false)
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ sandbox: 'allow-scripts allow-forms allow-same-origin' })], fixtureOrigin: origin, messages }).ok, false, 'the upstream popup tokens are part of the contract')
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ referrerpolicy: 'origin' })], fixtureOrigin: origin, messages }).ok, false)
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: 'http://127.0.0.1:41235/' })], fixtureOrigin: origin, messages }).ok, false)
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ insideBody: false })], fixtureOrigin: origin, messages }).ok, false)
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts({ addressValue: 'https://127.0.0.1:41234/' })], frames: [frameFacts()], fixtureOrigin: origin, messages, expectedAddress: origin + '/' }).ok, false, 'a bare host defaulting to https is not the typed http address')
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts({ busy: true })], frames: [frameFacts()], fixtureOrigin: origin, messages }).ok, false)
+  assert.equal(embedFrameVerdict({ bodyCount: 2, bodies: [bodyFacts(), bodyFacts()], frames: [frameFacts()], fixtureOrigin: origin, messages }).ok, false)
+  assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts(), frameFacts()], fixtureOrigin: origin, messages }).ok, false)
+})
+
+test('W-14b verdict: alias iframe + logical address + fixture postMessage (no attached-row UI)', () => {
+  const alias = 'http://127.0.0.2:51234/'
+  const messages = [{ origin: alias, data: FIXTURE_MESSAGE }]
+  const pass = remoteEmbedVerdict({
+    executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: alias })],
+    messages, requireMessage: true, expectedAddress: 'http://127.0.0.1:41234/',
+  })
+  assert.equal(pass.ok, true)
+  assert.match(pass.evidence, /alias=true/)
+  assert.equal(remoteEmbedVerdict({}).ok, null)
+  assert.match(remoteEmbedVerdict({ reason: 'no ssh source' }).evidence, /no ssh source/)
+  for (const src of ['http://127.0.0.1:51234/', 'http://10.0.0.9:8080/', 'http://127.0.0.3.evil:1/']) {
+    assert.equal(remoteEmbedVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src })], messages, requireMessage: true }).ok, false, src)
+  }
+  assert.equal(remoteEmbedVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: alias })], messages: [], requireMessage: true }).ok, false)
+  assert.equal(remoteEmbedVerdict({
+    executed: true, bodyCount: 1, bodies: [bodyFacts({ addressValue: alias })], frames: [frameFacts({ src: alias })], messages, requireMessage: true,
+  }).ok, false, 'the address bar must keep the logical address, never the alias')
+  assert.equal(remoteEmbedVerdict({
+    executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: alias, sandbox: 'allow-scripts' })], messages, requireMessage: true,
+  }).ok, false)
+  assert.equal(remoteEmbedVerdict({
+    executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: alias, referrerpolicy: null })], messages, requireMessage: true,
+  }).ok, false)
+})
+
+test('W-15 verdict: upstream explicit system-browser exit, never automatic, XFO failure UI not promised', () => {
+  const xfo = 'http://127.0.0.1:41234/embed-xfo'
+  const pass = externalExitVerdict({
+    executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: xfo })],
+    expectedFrameUrl: xfo, autoOpened: 0, openedAfterClick: [xfo], expectedExternalUrl: xfo, failureTexts: [],
+  })
+  assert.equal(pass.ok, true)
+  assert.match(pass.evidence, /autoOpen=0/)
+  assert.match(pass.evidence, /不承诺 XFO/u)
+  const withBar = externalExitVerdict({
+    executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: xfo })],
+    expectedFrameUrl: xfo, autoOpened: 0, openedAfterClick: [xfo], expectedExternalUrl: xfo, failureTexts: ['页面加载失败'],
+  })
+  assert.equal(withBar.ok, true)
+  assert.match(withBar.evidence, /上游失败条/u)
+  assert.equal(externalExitVerdict({}).ok, null)
+  assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts({ externalButton: false })], frames: [frameFacts({ src: xfo })], expectedFrameUrl: xfo, openedAfterClick: [xfo] }).ok, false)
+  assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts({ externalEnabled: false })], frames: [frameFacts({ src: xfo })], expectedFrameUrl: xfo, openedAfterClick: [xfo] }).ok, false)
+  assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: xfo })], expectedFrameUrl: xfo, autoOpened: 1, openedAfterClick: [xfo] }).ok, false, 'auto-opening the system browser is forbidden')
+  assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: xfo })], expectedFrameUrl: xfo, openedAfterClick: [] }).ok, false, 'the explicit exit must open exactly once')
+  assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: xfo })], expectedFrameUrl: xfo, expectedExternalUrl: xfo, openedAfterClick: ['http://other/'] }).ok, false)
+  assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [], expectedFrameUrl: xfo, openedAfterClick: [xfo] }).ok, false, 'the iframe must still exist (upstream leaves the framed document)')
+  assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: 'http://127.0.0.1:41234/' })], expectedFrameUrl: xfo, openedAfterClick: [xfo] }).ok, false)
+})
+
+test('W-15b verdict: closing the tab removes BrowserBody/iframe and releases the alias', () => {
+  const pass = closeReleaseVerdict({
+    executed: true, bodyCount: 0, frameCount: 0, busy: false, settled: true,
+    aliasProbe: { url: 'http://127.0.0.2:51234/', reachable: 'closed' },
+  })
+  assert.equal(pass.ok, true)
+  assert.match(pass.evidence, /127\.0\.0\.2/)
+  const local = closeReleaseVerdict({ executed: true, bodyCount: 0, frameCount: 0, busy: false, settled: true, aliasProbe: null })
+  assert.equal(local.ok, true)
+  assert.match(local.evidence, /本次无 forward/)
+  assert.equal(closeReleaseVerdict({}).ok, null)
+  assert.equal(closeReleaseVerdict({ executed: true, bodyCount: 1, frameCount: 1, busy: false, settled: true }).ok, false)
+  assert.equal(closeReleaseVerdict({ executed: true, bodyCount: 0, frameCount: 0, busy: null, settled: true }).ok, false, 'unreadable pending is not a release claim')
+  assert.equal(closeReleaseVerdict({ executed: true, bodyCount: 0, frameCount: 0, busy: false, settled: false }).ok, false)
+  assert.equal(closeReleaseVerdict({ executed: true, bodyCount: 0, frameCount: 0, busy: false, settled: true, aliasProbe: { url: 'http://127.0.0.2:51234/', reachable: 'open' } }).ok, false)
+  assert.equal(closeReleaseVerdict({ executed: true, bodyCount: 0, frameCount: 0, busy: false, settled: true, aliasProbe: { url: 'http://127.0.0.2:51234/', reachable: 'unknown' } }).ok, false)
+})
+
+test('fixture XFO noise is tolerated BY THE FIXTURE PATH, never as a blanket failure', () => {
+  const requestKey = 'FAILED(net::ERR_BLOCKED_BY_RESPONSE) http://127.0.0.1:41234/embed-xfo'
+  const partition = partitionFailures(
+    [requestKey, 'FAILED(net::ERR_FAILED) http://127.0.0.1:41234/elsewhere'],
+    EXPECTED_FIXTURE_REQUEST_FAILURES,
+  )
+  assert.equal(partition.tolerated.length, 1)
+  assert.deepEqual(partition.unexpected, ['FAILED(net::ERR_FAILED) http://127.0.0.1:41234/elsewhere'])
+  const consoleText = "Refused to display 'http://127.0.0.1:41234/embed-xfo' in a frame because it set 'X-Frame-Options' to 'deny'."
+  const consolePartition = partitionFailures([consoleText, 'TypeError: unrelated'], EXPECTED_FIXTURE_CONSOLE_NOISE)
+  assert.equal(consolePartition.tolerated.length, 1)
+  assert.deepEqual(consolePartition.unexpected, ['TypeError: unrelated'])
+})
+
+// ---------------------------------------------------------------- fake DOM layer
+/**
+ * Mini fake DOM for the REAL upstream-browser page expressions. Each node
+ * carries the selector maps the expression asks for (one = querySelector,
+ * many = querySelectorAll, closest = selector to node), plus
+ * attributes/rect/computed style. Deliberately not a general DOM: an unmapped
+ * selector returns nothing, so drift in the selector set surfaces as a
+ * fact-free result instead of a silent pass.
+ */
+function fakeNode({
+  tag = 'DIV', attrs = {}, rect = { left: 0, top: 0, width: 100, height: 100 },
+  style = { visibility: 'visible', display: 'block' }, one = {}, many = {}, closest = {},
+  text = '', className = '', disabled = false,
+} = {}) {
+  const node = {
+    tagName: tag,
+    attrs,
+    clicks: 0,
+    focused: false,
+    className,
+    disabled,
+    getAttribute: name => (Object.hasOwn(attrs, name) ? attrs[name] : null),
+    hasAttribute: name => Object.hasOwn(attrs, name),
+    getBoundingClientRect: () => ({ right: rect.left + rect.width, bottom: rect.top + rect.height, ...rect }),
+    querySelector: selector => one[selector] ?? null,
+    querySelectorAll: selector => many[selector] ?? [],
+    closest: selector => (Object.hasOwn(closest, selector) ? closest[selector] : null),
+    click() { node.clicks += 1 },
+    focus() { node.focused = true },
+    style,
+  }
+  Object.defineProperty(node, 'innerText', { get: () => text })
+  Object.defineProperty(node, 'textContent', { get: () => text })
+  return node
+}
+
+function fakeWindow({ witness = undefined } = {}) {
+  const win = {
+    innerWidth: 1400,
+    innerHeight: 900,
+    getComputedStyle: element => element.style ?? { visibility: 'visible', display: 'block' },
+    open: () => { throw new Error('the acceptance witness must stub window.open') },
+  }
+  if (witness !== undefined) win.__dshGuiEmbedWitness = witness
+  return win
+}
+
+/** One composed upstream-browser scene: active view + hidden N-ctx view. */
+function browserScene({ origin = 'http://127.0.0.1:41234', sessionOpen = true, frameSrc = origin + '/', extraChips = [] } = {}) {
+  const input = fakeNode({ tag: 'INPUT', attrs: { 'aria-label': BROWSER_ADDRESS_LABELS[0] } })
+  input.value = origin + '/'
+  const button = label => fakeNode({ attrs: { 'aria-label': label } })
+  const buttons = [
+    button(BROWSER_TOOLBAR_LABELS.back[0]),
+    button(BROWSER_TOOLBAR_LABELS.forward[0]),
+    button(BROWSER_TOOLBAR_LABELS.reload[0]),
+    button(BROWSER_TOOLBAR_LABELS.go[0]),
+    button(BROWSER_TOOLBAR_LABELS.external[0]),
+    fakeNode({ attrs: { 'aria-label': BROWSER_SANDBOX_LABELS.disable[0], 'aria-pressed': 'false' } }),
+  ]
+  const frame = fakeNode({
+    attrs: {
+      'data-sidebar-browser-frame': 'iframe',
+      src: frameSrc,
+      sandbox: BROWSER_FRAME_CONTRACT.sandbox,
+      referrerpolicy: BROWSER_FRAME_CONTRACT.referrerPolicy,
+    },
+  })
+  const content = fakeNode({ attrs: { 'aria-busy': 'false' } })
+  const tabBody = fakeNode({
+    attrs: { 'data-sidebar-right-tab': 'tab-browser' },
+    one: { '[aria-busy]': content },
+    many: {
+      button: buttons,
+      input: [input],
+      '[role="status"], [role="alert"]': [],
+      '[role="status"]': [],
+      '[role="alert"]': [],
+      'iframe[data-sidebar-browser-frame]': [frame],
+    },
+  })
+  const form = fakeNode({
+    one: { 'button[type="submit"]': buttons[3] },
+    many: { button: buttons, input: [input] },
+    closest: { '[data-sidebar-right-tab]': tabBody },
+  })
+  input.form = form
+  input.closest = selector => (selector === 'form' ? form : null)
+  const closeButton = fakeNode({ attrs: { 'data-dockkit-tab-close': 'tab-browser' } })
+  const chip = fakeNode({
+    attrs: { 'data-dockkit-tab': 'tab-browser' },
+    one: { '[data-dockkit-tab-title]': fakeNode({ text: '127.0.0.1' }) },
+    many: { '[data-dockkit-tab-close]': [closeButton] },
+  })
+  const entry = fakeNode({ attrs: { 'data-sidebar-right-guide-entry': 'browser' }, text: '浏览器' })
+  const hiddenEntry = fakeNode({
+    attrs: { 'data-sidebar-right-guide-entry': 'browser' },
+    rect: { left: 0, top: 0, width: 0, height: 0 },
+  })
+  const panel = fakeNode({ attrs: sessionOpen ? { 'data-sidebar-right-panel': '', 'data-sidebar-right-open': '' } : { 'data-sidebar-right-panel': '' } })
+  const session = fakeNode({
+    attrs: { 'data-sidebar-right-session': 's1' },
+    one: { '[data-sidebar-right-panel]': panel, '[data-sidebar-right-unavailable]': null },
+    many: {
+      '[data-sidebar-right-guide-entry]': [hiddenEntry, entry],
+      '[data-sidebar-right-unavailable]': [],
+      'form input': [input],
+      '[data-dockkit-tab]': [chip],
+    },
+  })
+  const activeView = fakeNode({
+    attrs: { 'data-instance': 'local' },
+    many: {
+      '[data-sidebar-right-session]': [session],
+      '[data-sidebar-right-expand]': [],
+      'form input': [input],
+      button: buttons,
+      '[data-dockkit-tab]': [...extraChips, chip],
+    },
+  })
+  const hiddenView = fakeNode({
+    attrs: { 'data-instance': 'gateway-x' },
+    style: { visibility: 'hidden', display: 'block' },
+    rect: { left: 0, top: 0, width: 0, height: 0 },
+  })
+  return {
+    document: { querySelectorAll: selector => (selector === '[data-instance]' ? [hiddenView, activeView] : []) },
+    window: fakeWindow(),
+    nodes: { input, buttons, frame, tabBody, form, chip, closeButton, content, entry, hiddenEntry, panel, session, activeView, hiddenView },
+  }
+}
+
+test('BROWSER_LANDSCAPE fake DOM: active-view scoping, BrowserBody/toolbar/frame/tab facts', () => {
+  const scene = browserScene()
+  const witness = { messages: [{ origin: 'http://127.0.0.1:41234', data: FIXTURE_MESSAGE }], external: [], opened: [] }
+  scene.window.__dshGuiEmbedWitness = witness
+  const facts = new Function('document', 'window', 'return (' + BROWSER_LANDSCAPE + ')')(scene.document, scene.window)
+  assert.equal(facts.hasActiveView, true)
+  assert.equal(facts.activeSource, 'local', 'the hidden N-ctx view must never become the active source')
+  assert.equal(facts.sessionPresent, true)
+  assert.equal(facts.sessionOpen, true)
+  assert.equal(facts.bodyCount, 1)
+  const body = facts.bodies[0]
+  assert.deepEqual(body.toolbarRoles, ['back', 'forward', 'reload', 'go', 'external'])
+  assert.equal(body.addressLabel, BROWSER_ADDRESS_LABELS[0])
+  assert.equal(body.sandboxToggle, true)
+  assert.equal(body.sandboxed, true)
+  assert.equal(body.busy, false)
+  assert.equal(facts.frames.length, 1)
+  assert.equal(facts.frames[0].markerValue, 'iframe')
+  assert.equal(facts.browserTabs.length, 1)
+  assert.equal(facts.browserTabs[0].tabId, 'tab-browser')
+  assert.equal(facts.browserTabs[0].close, 1)
+  assert.deepEqual(facts.entries.map(entry => entry.visible), [false, true])
+  assert.equal(facts.messages.length, 1)
+  const pick = pickBrowserGuideEntry(facts.entries)
+  assert.equal(pick.ok, true)
+  assert.equal(browserPanelVerdict({ ...facts, entryPick: pick, openedVia: 'existing' }).ok, true)
+  assert.equal(embedFrameVerdict({
+    bodyCount: facts.bodyCount, bodies: facts.bodies, frames: facts.frames,
+    fixtureOrigin: 'http://127.0.0.1:41234', messages: facts.messages,
+  }).ok, true)
+  assert.equal(embedFrameVerdict({
+    bodyCount: facts.bodyCount, bodies: facts.bodies, frames: facts.frames,
+    fixtureOrigin: 'http://127.0.0.1:41234', messages: [],
+  }).ok, false)
+})
+
+test('BROWSER_LANDSCAPE fake DOM: collapsed panel and no-active-view fail closed', () => {
+  const scene = browserScene({ sessionOpen: false })
+  const facts = new Function('document', 'window', 'return (' + BROWSER_LANDSCAPE + ')')(scene.document, scene.window)
+  assert.equal(facts.sessionOpen, false)
+  assert.equal(browserPanelVerdict({ ...facts, entryPick: pickBrowserGuideEntry(facts.entries) }).ok, false)
+  const hiddenOnly = { querySelectorAll: selector => (selector === '[data-instance]' ? [scene.nodes.hiddenView] : []) }
+  const empty = new Function('document', 'window', 'return (' + BROWSER_LANDSCAPE + ')')(hiddenOnly, fakeWindow())
+  assert.equal(empty.hasActiveView, false)
+  assert.equal(empty.bodyCount, 0)
+  assert.equal(browserPanelVerdict(empty).ok, false)
+})
+
+test('upstream click expressions: guide kind browser, expand, close by body/chip tab id', () => {
+  const visibleToggle = fakeNode({ attrs: { 'data-sidebar-right-expand': '' } })
+  const hiddenToggle = fakeNode({ attrs: { 'data-sidebar-right-expand': '' }, rect: { left: 0, top: 0, width: 0, height: 0 } })
+  const win = fakeWindow()
+  const expandDoc = { querySelectorAll: selector => (selector === '[data-sidebar-right-expand]' ? [hiddenToggle, visibleToggle] : []) }
+  assert.equal(new Function('document', 'window', 'return (' + CLICK_RIGHT_SIDEBAR_EXPAND + ')')(expandDoc, win).clicked, true)
+  assert.equal(visibleToggle.clicks, 1)
+  const visibleEntry = fakeNode({ attrs: { 'data-sidebar-right-guide-entry': 'browser' } })
+  const otherKind = fakeNode({ attrs: { 'data-sidebar-right-guide-entry': 'terminal' } })
+  const hiddenEntry = fakeNode({ attrs: { 'data-sidebar-right-guide-entry': 'browser' }, rect: { left: 0, top: 0, width: 0, height: 0 } })
+  const entryDoc = { querySelectorAll: selector => (selector === '[data-sidebar-right-guide-entry]' ? [hiddenEntry, otherKind, visibleEntry] : []) }
+  assert.equal(new Function('document', 'window', 'return (' + CLICK_BROWSER_GUIDE_ENTRY + ')')(entryDoc, win).clicked, true)
+  assert.equal(visibleEntry.clicks, 1)
+  assert.equal(otherKind.clicks, 0)
+  const scene = browserScene()
+  const closeResult = new Function('document', 'window', 'return (' + CLOSE_BROWSER_TAB + ')')(scene.document, win)
+  assert.equal(closeResult.clicked, true)
+  assert.equal(closeResult.tabId, 'tab-browser')
+  assert.equal(scene.nodes.closeButton.clicks, 1)
+  const otherClose = fakeNode({ attrs: { 'data-dockkit-tab-close': 'tab-other' } })
+  const otherChip = fakeNode({ attrs: { 'data-dockkit-tab': 'tab-other' }, many: { '[data-dockkit-tab-close]': [otherClose] } })
+  const twoChips = browserScene({ extraChips: [otherChip] })
+  assert.equal(new Function('document', 'window', 'return (' + CLOSE_BROWSER_TAB + ')')(twoChips.document, win).clicked, true, 'a non-browser chip is ignored')
+  assert.equal(otherClose.clicks, 0)
+})
+
+test('upstream address expressions: native-setter typing, own submit, reload and external click', () => {
+  function FakeInput() {}
+  Object.defineProperty(FakeInput.prototype, 'value', {
+    get() { return this._value },
+    set(value) { this._value = value },
+  })
+  const input = new FakeInput()
+  input.getAttribute = name => (name === 'aria-label' ? BROWSER_ADDRESS_LABELS[0] : null)
+  input.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 20, right: 100, bottom: 20 })
+  input.style = { visibility: 'visible', display: 'block' }
+  input.dispatchEvent = event => { input.events = (input.events ?? []).concat(event.type) }
+  input.focus = () => { input.focused = true }
+  input.form = null
+  input.closest = selector => (selector === 'form' ? input.form : null)
+  const win = fakeWindow()
+  win.HTMLInputElement = FakeInput
+  const view = fakeNode({
+    attrs: { 'data-instance': 'local' },
+    many: { 'form input': [input], button: [], '[data-sidebar-right-session]': [] },
+  })
+  const doc = { querySelectorAll: selector => (selector === '[data-instance]' ? [view] : []) }
+  const typed = new Function('document', 'window', 'return (' + setBrowserAddress('http://127.0.0.1:41234/') + ')')(doc, win)
+  assert.equal(typed.set, true)
+  assert.equal(typed.value, 'http://127.0.0.1:41234/', 'React reads the native setter value')
+  assert.deepEqual(input.events, ['input', 'change'])
+  assert.equal(input.focused, true)
+  const submitButton = { clicks: 0, click() { submitButton.clicks += 1 } }
+  const form = { querySelector: selector => (selector === 'button[type="submit"]' ? submitButton : null) }
+  input.form = form
+  const submitted = new Function('document', 'window', 'return (' + SUBMIT_BROWSER_ADDRESS + ')')(doc, win)
+  assert.equal(submitted.submitted, true)
+  assert.equal(submitButton.clicks, 1)
+  const reloadButton = fakeNode({ attrs: { 'aria-label': BROWSER_TOOLBAR_LABELS.reload[0] } })
+  const externalButton = fakeNode({ attrs: { 'aria-label': BROWSER_TOOLBAR_LABELS.external[0] } })
+  const actionView = fakeNode({ many: { button: [reloadButton, externalButton] } })
+  const actionDoc = { querySelectorAll: selector => (selector === '[data-instance]' ? [actionView] : []) }
+  assert.equal(new Function('document', 'window', 'return (' + RELOAD_BROWSER_PAGE + ')')(actionDoc, win).reloaded, true)
+  assert.equal(reloadButton.clicks, 1)
+  const clickedExternal = new Function('document', 'window', 'return (' + CLICK_BROWSER_EXTERNAL + ')')(actionDoc, win)
+  assert.equal(clickedExternal.clicked, true)
+  assert.equal(externalButton.clicks, 1)
+  externalButton.disabled = true
+  assert.equal(new Function('document', 'window', 'return (' + CLICK_BROWSER_EXTERNAL + ')')(actionDoc, win).clicked, false, 'a disabled exit is never clicked')
+})
+
+test('embed witness: postMessage, anchor suppression and the stubbed window.open record', () => {
+  const win = fakeWindow()
+  const windowListeners = new Map()
+  win.addEventListener = (type, listener) => windowListeners.set(type, listener)
+  win.removeEventListener = (type, listener) => { if (windowListeners.get(type) === listener) windowListeners.delete(type) }
+  const documentListeners = new Map()
+  const doc = {
+    addEventListener: (type, listener) => documentListeners.set(type, listener),
+    removeEventListener: (type, listener) => { if (documentListeners.get(type) === listener) documentListeners.delete(type) },
+  }
+  const installed = new Function('window', 'document', 'return (' + INSTALL_EMBED_WITNESS + ')')(win, doc)
+  assert.equal(installed.installed, true)
+  assert.equal(windowListeners.has('message'), true)
+  assert.equal(documentListeners.has('click'), true)
+  windowListeners.get('message')({ origin: 'http://127.0.0.1:41234', data: FIXTURE_MESSAGE })
+  const anchor = { getAttribute: name => (name === 'href' ? 'http://127.0.0.1:41234/embed-xfo' : null) }
+  const clickEvent = {
+    target: { closest: selector => (selector === 'a[href][target="_blank"]' ? anchor : null) },
+    prevented: false, stopped: false,
+    preventDefault() { this.prevented = true }, stopPropagation() { this.stopped = true },
+  }
+  documentListeners.get('click')(clickEvent)
+  assert.equal(clickEvent.prevented, true)
+  assert.equal(clickEvent.stopped, true)
+  const openedUrl = win.open('http://127.0.0.1:41234/embed-xfo', '_blank', 'noopener,noreferrer')
+  assert.equal(openedUrl, null, 'the acceptance stub never opens a real browser')
+  const read = new Function('window', 'document', 'return (' + READ_EMBED_WITNESS + ')')(win, doc)
+  assert.equal(read.messages.length, 1)
+  assert.equal(read.external.length, 1)
+  assert.deepEqual(read.opened, ['http://127.0.0.1:41234/embed-xfo'])
+  assert.match(read.external[0], /embed-xfo/)
+  assert.equal(win.__dshGuiEmbedWitness, undefined)
+  assert.equal(typeof win.open, 'function')
+  const empty = new Function('window', 'document', 'return (' + READ_EMBED_WITNESS + ')')(fakeWindow(), {})
+  assert.equal(empty.installed, false)
+})
+
+// ---------------------------------------------------------------- real HTTP layers
+test('embed fixture: / serves the marker page, /embed-xfo adds XFO DENY, close frees the port', async () => {
+  const fixture = await startEmbedFixture({ host: '127.0.0.1' })
+  try {
+    assert.equal(fixture.xfoPath, FIXTURE_XFO_PATH)
+    const ok = await fetch(fixture.origin + '/')
+    assert.equal(ok.status, 200)
+    assert.equal(ok.headers.get('x-frame-options'), null)
+    const body = await ok.text()
+    assert.match(body, new RegExp(FIXTURE_MESSAGE_TYPE))
+    assert.match(body, new RegExp(FIXTURE_MARKER))
+    assert.match(body, /parent\.postMessage/)
+    const xfo = await fetch(fixture.origin + fixture.xfoPath)
+    assert.equal(xfo.status, 200)
+    assert.equal(xfo.headers.get('x-frame-options'), 'DENY')
+    assert.equal(await probeTcpReachable(fixture.origin), 'open')
+  } finally {
+    await fixture.close()
+  }
+  assert.equal(await probeTcpReachable(fixture.origin), 'closed', 'closing the fixture releases the port')
+})
+
+test('live probe SH-7: the v2 CSP header passes, the v1 default is INFO and --require-embed FAILs it', async () => {
+  const shellHtml = '<!doctype html><html><head><title>dsh-chamber</title></head><body><div id="root"></div></body></html>'
+  let csp = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ') + "; frame-ancestors 'none'; script-src 'self'"
+  const server = createServer((request, response) => {
+    const target = request.url ?? '/'
+    if (target === '/') {
+      response.writeHead(200, {
+        'content-type': 'text/html',
+        'content-security-policy': csp,
+        'x-frame-options': 'DENY',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'same-origin',
+      })
+      response.end(shellHtml)
+      return
+    }
+    if (target === '/health') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"status":"ok","dsh":{"status":"ready"}}')
+      return
+    }
+    response.writeHead(404, { 'content-type': 'application/json' })
+    response.end('{"error":"not_found","code":"not_found"}')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = 'http://127.0.0.1:' + String(server.address().port)
+  const outDir = mkdtempSync(path.join(tmpdir(), 'dsh-gui-csp-'))
+  try {
+    const run = async requireEmbed => {
+      const { results } = await runLiveAcceptance({ planeOrigin: origin, instanceOrigin: '', sourceIds: [], outDir, requireEmbed })
+      return results.find(entry => entry.id === 'SH-7')
+    }
+    const v2 = await run(false)
+    assert.equal(v2.ok, true)
+    assert.match(v2.evidence, /v2 源集/u)
+    csp = "default-src 'self'; frame-src blob:; frame-ancestors 'none'; script-src 'self'"
+    const v1 = await run(false)
+    assert.equal(v1.ok, null, 'the gateway/default v1 header must not fail SH-7')
+    const strict = await run(true)
+    assert.equal(strict.ok, false, '--require-embed demands the v2 frame-src set')
+  } finally {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------- W-13 session bootstrap
+test('W-13 bootstrap pickers: new-session shortcut first, workspace/edit/open exactly-one', () => {
+  const buttons = [
+    { index: 1, ariaLabel: '新建会话', keys: 'Control+N', text: '', width: 216, height: 24 },
+    { index: 2, ariaLabel: '新建会话', keys: 'Control+N', text: '新会话 Ctrl N', width: 252, height: 38 },
+    { index: 3, ariaLabel: '设置', keys: null, text: '设置', width: 260, height: 42 },
+  ]
+  const picked = pickNewSessionControl(buttons)
+  assert.equal(picked.ok, true)
+  assert.equal(picked.picked.index, 2, 'the labelled new-session row (largest) wins deterministically')
+  assert.equal(picked.candidates.length, 2)
+  // Shortcut attribute is the structural locator; the label list is the fallback.
+  assert.equal(pickNewSessionControl([{ index: 4, ariaLabel: 'New session', keys: null, width: 200, height: 30 }]).picked.index, 4)
+  // Disabled controls and unrelated labels are never picked.
+  assert.equal(pickNewSessionControl([{ ...buttons[2], disabled: true }]).ok, false)
+  assert.equal(pickNewSessionControl([{ index: 0, ariaLabel: '其他', keys: null, text: 'x', width: 1, height: 1 }]).ok, false)
+  // Meta+N (macOS spelling) matches too.
+  assert.equal(pickNewSessionControl([{ index: 5, keys: 'Meta+N', width: 10, height: 10 }]).ok, true)
+
+  const chip = pickWorkspaceChip([
+    { index: 1, ariaLabel: '设置', width: 1, height: 1 },
+    { index: 2, ariaLabel: '选择工作区', width: 117, height: 28 },
+  ])
+  assert.equal(chip.ok, true)
+  assert.equal(chip.picked.index, 2)
+  assert.equal(pickWorkspaceChip([{ index: 1, ariaLabel: 'Choose workspace', width: 1, height: 1 }]).ok, true)
+  assert.equal(pickWorkspaceChip([]).reason, 'no-control')
+  assert.equal(pickWorkspaceChip([
+    { index: 1, ariaLabel: '选择工作区', width: 1, height: 1 },
+    { index: 2, ariaLabel: 'Choose workspace', width: 1, height: 1 },
+  ]).reason, 'ambiguous')
+
+  const dialogButtons = [
+    { index: 1, ariaLabel: '编辑路径', text: '', width: 40, height: 28 },
+    { index: 2, ariaLabel: null, text: '取消', primary: false, width: 80, height: 32 },
+    { index: 3, ariaLabel: null, text: '打开', primary: true, width: 80, height: 32 },
+  ]
+  assert.equal(pickDirectoryEditButton(dialogButtons).picked.index, 1)
+  assert.equal(pickDirectoryOpenButton(dialogButtons).picked.index, 3)
+  assert.equal(pickDirectoryEditButton([dialogButtons[1]]).ok, false)
+  // A disabled open button is "no target yet": fail closed, never click it.
+  assert.equal(pickDirectoryOpenButton([{ index: 3, text: '打开', primary: true, disabled: true, width: 80, height: 32 }]).ok, false)
+  // Without a readable primary class the localized label is the fallback.
+  assert.equal(pickDirectoryOpenButton([{ index: 4, text: 'Open', primary: false, width: 80, height: 32 }]).picked.index, 4)
+})
+
+test('W-13 bootstrap verdict: a visible Session is a pass, --attach INFO, a failed attempt FAIL', () => {
+  assert.equal(sessionBootstrapVerdict({ executed: false, reason: 'attach' }).ok, null)
+  assert.match(sessionBootstrapVerdict({ executed: false, reason: 'attach' }).evidence, /未执行/u)
+  const pass = sessionBootstrapVerdict({ executed: true, sessionPresent: true, via: 'workspace-created', note: 'workspace=/tmp/x' })
+  assert.equal(pass.ok, true)
+  assert.match(pass.evidence, /workspace-created/u)
+  assert.match(pass.evidence, /workspace=\/tmp\/x/u)
+  const fail = sessionBootstrapVerdict({ executed: true, sessionPresent: false, via: 'none', note: 'typed=false' })
+  assert.equal(fail.ok, false)
+  assert.match(fail.evidence, /仍没有可见 Session/u)
+  // --require-embed turns the --attach INFO into FAIL, same as every embed leg.
+  assert.equal(applyRequireEmbed(sessionBootstrapVerdict({ executed: false, reason: 'x' }), true).ok, false)
+})
+
+test('fixture noise scoping: only THIS run fixture origin is tolerated', () => {
+  const rules = fixtureNoiseRules('http://127.0.0.1:36199')
+  assert.equal(partitionFailures([
+    'FAILED(net::ERR_BLOCKED_BY_RESPONSE) http://127.0.0.1:36199/embed-xfo',
+  ], rules.request).tolerated.length, 1)
+  assert.equal(partitionFailures([
+    'FAILED(net::ERR_BLOCKED_BY_RESPONSE) http://127.0.0.1:40000/embed-xfo',
+  ], rules.request).unexpected.length, 1)
+  const consoleLine = "other: Refused to display 'http://127.0.0.1:36199/' in a frame because it set 'X-Frame-Options' to 'deny'."
+  assert.equal(partitionFailures([consoleLine], rules.console).tolerated.length, 1, 'the console line may name the framed origin root')
+  assert.equal(partitionFailures(["Refused to display 'http://127.0.0.1:40000/x' in a frame because X-Frame-Options"], rules.console).unexpected.length, 1)
+  assert.deepEqual(fixtureNoiseRules(''), { request: [], console: [] })
+})
+
+test('SESSION_BOOTSTRAP_FACTS fake DOM: active-view buttons, session surface, directory dialog', () => {
+  const sessionSurface = fakeNode({ attrs: { 'data-sidebar-right-session': 's1' } })
+  const newSession = fakeNode({ attrs: { 'aria-label': '新建会话', 'aria-keyshortcuts': 'Control+N' }, rect: { left: 14, top: 70, width: 252, height: 38 }, text: '新会话 Ctrl N' })
+  const chip = fakeNode({ attrs: { 'aria-label': '选择工作区' }, rect: { left: 425, top: 342, width: 117, height: 28 } })
+  const disabled = fakeNode({ attrs: { 'aria-label': '新建会话' }, rect: { left: 16, top: 24, width: 216, height: 24 }, disabled: true })
+  const edit = fakeNode({ attrs: { 'aria-label': '编辑路径' }, rect: { left: 500, top: 200, width: 40, height: 28 } })
+  const open = fakeNode({ rect: { left: 900, top: 600, width: 80, height: 32 }, text: '打开', className: '_button_primary' })
+  const input = fakeNode({ tag: 'INPUT', attrs: { 'aria-label': '编辑路径' } })
+  const dialog = fakeNode({
+    attrs: { role: 'dialog' },
+    rect: { left: 300, top: 120, width: 700, height: 500 },
+    one: { input },
+    many: { input: [input], button: [edit, open] },
+  })
+  const view = fakeNode({
+    attrs: { 'data-instance': 'local' },
+    many: {
+      button: [newSession, chip, disabled],
+      '[data-session-id]': [fakeNode()],
+      '[data-sidebar-right-session]': [sessionSurface],
+    },
+  })
+  const document = {
+    querySelectorAll: selector => {
+      if (selector === '[data-instance]') return [view]
+      if (selector === '[role="dialog"]') return [dialog]
+      return []
+    },
+  }
+  const facts = new Function('document', 'window', 'return (' + SESSION_BOOTSTRAP_FACTS + ')')(document, fakeWindow())
+  assert.equal(facts.hasActiveView, true)
+  assert.equal(facts.activeSource, 'local')
+  assert.equal(facts.sessionRows, 1)
+  assert.equal(facts.rightSessions, 1)
+  assert.equal(facts.sessionPresent, true)
+  assert.equal(facts.buttons.length, 3)
+  const picked = pickNewSessionControl(facts.buttons.filter(button => button.disabled !== true))
+  assert.equal(picked.ok, true)
+  assert.equal(picked.picked.index, 0, 'only the enabled 252x38 new-session row can be picked')
+  assert.equal(pickWorkspaceChip(facts.buttons).picked.index, 1)
+  assert.equal(facts.dialog.buttons.length, 2)
+  assert.equal(pickDirectoryEditButton(facts.dialog.buttons).picked.ariaLabel, '编辑路径')
+  assert.equal(pickDirectoryOpenButton(facts.dialog.buttons).picked.primary, true)
+  assert.equal(facts.dialog.inputs.length, 1)
+})
+
+test('clickButtonDescriptor / typeDirectoryPath: identity click + native-setter path entry', () => {
+  function FakeInput() {}
+  Object.defineProperty(FakeInput.prototype, 'value', {
+    get() { return this._value },
+    set(value) { this._value = value },
+  })
+  const input = new FakeInput()
+  const events = []
+  input.dispatchEvent = event => events.push(event.type)
+  input.focus = () => {}
+  const openButton = fakeNode({ attrs: { 'aria-label': '打开' }, rect: { left: 900, top: 600, width: 80, height: 32 }, text: '打开' })
+  const lookalike = fakeNode({ attrs: { 'aria-label': '打开' }, rect: { left: 900, top: 640, width: 80, height: 32 }, text: '打开' })
+  const dialog = fakeNode({ attrs: { role: 'dialog' }, one: { input }, many: { input: [input] } })
+  const document = { querySelectorAll: selector => (selector === 'button' ? [lookalike, openButton] : selector === '[role="dialog"]' ? [dialog] : []) }
+  const win = fakeWindow()
+  win.HTMLInputElement = FakeInput
+  if (typeof globalThis.KeyboardEvent !== 'function') {
+    globalThis.KeyboardEvent = class KeyboardEvent {
+      constructor(type, init) { this.type = type; Object.assign(this, init) }
+    }
+  }
+  const clicked = new Function('document', 'window', 'return (' + clickButtonDescriptor({ ariaLabel: '打开', text: '打开', left: 900, top: 600, width: 80, height: 32 }) + ')')(document, win)
+  assert.equal(clicked.clicked, true)
+  assert.equal(openButton.clicks, 1)
+  assert.equal(lookalike.clicks, 0, 'a different control at another rect is never clicked')
+  const missing = new Function('document', 'window', 'return (' + clickButtonDescriptor({ ariaLabel: '打开', text: '打开', left: 1, top: 1, width: 1, height: 1 }) + ')')(document, win)
+  assert.equal(missing.clicked, false)
+  const typed = new Function('document', 'window', 'return (' + typeDirectoryPath('/tmp/ws') + ')')(document, win)
+  assert.equal(typed.typed, true)
+  assert.equal(input._value, '/tmp/ws')
+  assert.ok(events.includes('input'))
 })

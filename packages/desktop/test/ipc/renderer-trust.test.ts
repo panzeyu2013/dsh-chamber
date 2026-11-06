@@ -1,9 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import {
   CHAMBER_PERMISSION_ALLOWLIST,
   createTrustedIpc,
+  forwardFrameErrorFromElectronError,
+  isAllowedBrowserDownloadUrl,
+  isAllowedBrowserFrameUrl,
   isChamberPermissionGranted,
   isExternalLinkUrl,
   isTrustedIpcSender,
@@ -213,5 +216,95 @@ test('window-open and navigation fences share the external-link allowlist', () =
   const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
   assert.match(main, /setWindowOpenHandler\(\(\{ url \}\) => \{[\s\S]*?isExternalLinkUrl\(url, rendererOrigin\)[\s\S]*?return \{ action: 'deny' \};/)
   assert.match(main, /will-navigate', \(event, url\) => \{[\s\S]*?handleUntrustedNavigation\(event, url, rendererOrigin\)/)
-  assert.match(main, /will-redirect', \(event, url\) => \{[\s\S]*?handleUntrustedNavigation\(event, url, rendererOrigin\)/)
+  // v2: will-redirect fires for subframes too. A framed page's redirect must use
+  // the browser frame gate (cancel non-web/credentialed targets) and NEVER the
+  // main-document external-open fence; only the main frame keeps the shell fence.
+  assert.match(main, /will-redirect', \(details\) => \{[\s\S]*?if \(!details\.isMainFrame\) \{[\s\S]*?isAllowedBrowserFrameUrl\(details\.url\)[\s\S]*?details\.preventDefault\(\);[\s\S]*?handleUntrustedNavigation\(details, details\.url, rendererOrigin\)/)
+})
+
+test('v2 browser child-frame gate: any http(s) subframe, credentials/non-web refused, preview carriers kept', () => {
+  // Upstream ui-sidebar-browser iframe behavior: the embedded browser browses the
+  // web, so main must not narrow it back to the loopback/alias set.
+  for (const url of [
+    'http://127.0.0.1:5173/', 'https://localhost:8443/app', 'http://127.0.0.2:51234/x?y=1',
+    'https://example.com/', 'https://example.com:8443/a?b=1', 'http://192.168.1.2/',
+    'blob:http://127.0.0.1:17500/uuid', 'about:blank', 'about:srcdoc',
+  ]) {
+    assert.equal(isAllowedBrowserFrameUrl(url), true, url)
+  }
+  // Still-refused classes: non-web schemes, credential URLs, malformed targets.
+  for (const url of [
+    'file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,<b>x</b>', 'chrome://settings',
+    'ftp://example.com/', 'http://user:pass@127.0.0.1:5173/', 'https://user@example.com/',
+    'about:config', 'http://127.0.0.1:17500.evil.example/', 'not a url', '',
+  ]) {
+    assert.equal(isAllowedBrowserFrameUrl(url), false, url)
+  }
+})
+
+test('v2 download gate: only the shell origin blob exports may be saved', () => {
+  assert.equal(isAllowedBrowserDownloadUrl('blob:http://127.0.0.1:17500/uuid', origin), true)
+  assert.equal(isAllowedBrowserDownloadUrl('blob:http://127.0.0.1:17501/uuid', origin), false)
+  assert.equal(isAllowedBrowserDownloadUrl('blob:https://example.com/uuid', origin), false)
+  assert.equal(isAllowedBrowserDownloadUrl('http://127.0.0.1:17500/file.txt', origin), false)
+  assert.equal(isAllowedBrowserDownloadUrl('data:text/plain,x', origin), false)
+  assert.equal(isAllowedBrowserDownloadUrl('not a url', origin), false)
+})
+
+test('did-fail-load classification for the v2 frameError projection', () => {
+  assert.equal(forwardFrameErrorFromElectronError(-3), null, 'superseded navigation is not a failure')
+  assert.equal(forwardFrameErrorFromElectronError(-27), 'blocked_by_response')
+  for (const code of [-200, -202, -299]) assert.equal(forwardFrameErrorFromElectronError(code), 'certificate_error')
+  assert.equal(forwardFrameErrorFromElectronError(-105), 'load_failed')
+  assert.equal(forwardFrameErrorFromElectronError(Number.NaN), null)
+})
+
+test('main.ts wires the v2 child-frame / download / did-fail-load gates', () => {
+  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  assert.match(main, /will-frame-navigate', \(details\) => \{\s*if \(!details\.isMainFrame && !isAllowedBrowserFrameUrl\(details\.url\)\) details\.preventDefault\(\);/)
+  // W-15: a local-loopback child frame has no forward record, so the same
+  // did-fail-load observation is routed to the bounded local store; alias frames
+  // keep the record projection (an empty validatedURL falls back to the exact
+  // failing child frame). A committed child navigation clears both.
+  assert.match(main, /did-fail-load', \(_event, errorCode, _description, validatedURL, isMainFrame, frameProcessId, frameRoutingId\) => \{\s*if \(isMainFrame\) return;[\s\S]*?framesInSubtree\.find\([\s\S]*?if \(resolvedUrl === ''\) return;[\s\S]*?const frameError = forwardFrameErrorFromElectronError\(errorCode\);[\s\S]*?if \(isLocalBrowserFrameUrl\(resolvedUrl\)\) noteLocalFrameError\(resolvedUrl, frameError\);[\s\S]*?else noteForwardFrameError\(resolvedUrl, frameError\);/)
+  assert.match(main, /did-frame-navigate', \(_event, url, httpResponseCode, _httpStatusText, isMainFrame\) => \{\s*if \(isMainFrame \|\| httpResponseCode < 200 \|\| httpResponseCode >= 400\) return;\s*if \(isLocalBrowserFrameUrl\(url\)\) noteLocalFrameError\(url, null\);\s*else noteForwardFrameError\(url, null\);/);
+  assert.match(main, /will-download', \(event, item\) => \{\s*if \(!isAllowedBrowserDownloadUrl\(item\.getURL\(\), rendererOrigin\)\) event\.preventDefault\(\);/)
+})
+
+test('v2 CSP enable chain: only the two desktop entries pass frameSources', async () => {
+  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const sidecar = readFileSync(new URL('../../sidecar-entry.ts', import.meta.url), 'utf8')
+  assert.match(main, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/)
+  assert.match(sidecar, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/)
+  // gateway / cli / standalone must keep the v1 short claim (no opt-in).
+  const roots = ['../../../gateway/src', '../../../cli/src']
+  for (const root of roots) {
+    const dir = new URL(root + '/', import.meta.url)
+    for (const entry of readdirSync(dir)) {
+      const file = new URL(entry, dir)
+      if (!entry.endsWith('.ts')) continue
+      assert.equal(readFileSync(file, 'utf8').includes('frameSources'), false, root + '/' + entry + ' must not pass frameSources')
+    }
+  }
+})
+
+test('v2 revoke funnel is wired exactly once in shell-core.onRendererLifecycle', () => {
+  const shellCore = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
+  const onLifecycle = shellCore.slice(shellCore.indexOf('export function onRendererLifecycle'))
+  assert.match(onLifecycle, /revokeForwardRenderer\(event\)/)
+  // did-finish-load must not revoke (it renders, it does not start a document);
+  // the guard lives in the funnel implementation, not the shell-core entry.
+  const openIn = readFileSync(new URL('../../shell-ipc-open-in.ts', import.meta.url), 'utf8')
+  assert.match(openIn, /if \(event !== 'did-start-loading' && event !== 'crashed' && event !== 'closed'\) return/)
+})
+
+test('v2 forward revoke runs only for a top-level document load, never an iframe load', () => {
+  // Electron emits did-start-loading for child-frame loads too; without the
+  // main-frame guard a remote-loopback attach would revoke its own SSH forward
+  // immediately (W-14b caught this: alias listener closed right after bind).
+  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  assert.match(
+    main,
+    /did-start-loading', \(\) => \{\s*if \(mainWindow !== win\) return;\s*\/\/[\s\S]*?if \(!win\.webContents\.isLoadingMainFrame\(\)\) return;\s*onRendererLifecycle\('did-start-loading'\);/,
+  )
 })

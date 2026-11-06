@@ -31,11 +31,19 @@ import path from 'node:path'
 import { CdpSession, discoverPageTarget } from './cdp.mjs'
 import { sleep } from '../lib/cli.mjs'
 import {
-  KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, applyRequireHover, createRecorder, hoverCardVerdict,
-  hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, partitionFailures, pickRailToggle,
-  raceBandForWindow, railFactsSnapshot, railToggleVerdict, renderMarkdown, sourceFoldVerdict, summarize,
+  KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, applyRequireEmbed, applyRequireHover,
+  browserPanelVerdict, closeReleaseVerdict, createRecorder, embedFrameVerdict,
+  EXPECTED_FIXTURE_CONSOLE_NOISE, EXPECTED_FIXTURE_REQUEST_FAILURES, hoverCardVerdict,
+  hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, isAliasFrameUrl, partitionFailures,
+  pickBrowserGuideEntry, pickRailToggle, raceBandForWindow, railFactsSnapshot, railToggleVerdict,
+  externalExitVerdict, remoteEmbedVerdict, renderMarkdown, sourceFoldVerdict, summarize,
   summarizeNetFailures, veilLayeringVerdict,
 } from './checks.mjs'
+import {
+  fixtureNoiseRules, pickDirectoryEditButton, pickDirectoryOpenButton, pickNewSessionControl,
+  pickWorkspaceChip, sessionBootstrapVerdict,
+} from './checks.mjs'
+import { probeTcpReachable, startEmbedFixture } from './fixture.mjs'
 
 const SETTINGS_SEAT_LABELS = ['设置', 'Settings']
 const ONBOARDING_DISMISS_LABELS = ['稍后配置', '稍后', 'Later', 'Skip', '跳过']
@@ -532,6 +540,523 @@ const FORCE_HIDDEN = `(() => {
 const RESTORE_VISIBILITY = `(() => { delete document.visibilityState; return document.visibilityState })()`
 
 /**
+ * Upstream-fork browser facts (design 28 §16.9; the bus package is a faithful
+ * fork of upstream `ui-sidebar-browser`'s iframe path): ONE page expression,
+ * scoped to the VISIBLE instance view, so an inactive N-ctx view (still mounted
+ * under `visibility: hidden`) can never supply an entry, a body or a frame.
+ * Everything the pure verdicts need is reported as FACTS here — this file only
+ * drives, `checks.mjs` decides.
+ *
+ * Markers used (all shipped upstream DOM, no test-only hooks):
+ *   - `[data-sidebar-right-session]` / `[data-sidebar-right-panel]` /
+ *     `[data-sidebar-right-open]` / `[data-sidebar-right-expand]` — the
+ *     upstream right-sidebar shell and the conversation-header expand button;
+ *   - `[data-sidebar-right-guide-entry="<kind>"]` — the guide capsule a tab type
+ *     contributes (GuideBody.tsx; selected by KIND 'browser', never by label);
+ *   - `[data-sidebar-right-tab]` — the seat body of one right-sidebar tab
+ *     (SidebarRight.tsx), which is where the upstream BrowserBody lives;
+ *   - `iframe[data-sidebar-browser-frame="iframe"]` — the upstream iframe marker
+ *     (value pinned by IframePresentation.ts);
+ *   - `[data-dockkit-tab]` / `[data-dockkit-tab-close]` — the vendored chip and
+ *     its close control; the browser chip is correlated to the body's tab id.
+ */
+export const BROWSER_LANDSCAPE = `(() => {
+  const computedOf = element => window.getComputedStyle(element)
+  const visible = element => {
+    const rect = element.getBoundingClientRect()
+    const computed = computedOf(element)
+    return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+  }
+  const labelIn = (labels, value) => typeof value === 'string' && labels.indexOf(value) >= 0
+  const addressLabels = ['输入 HTTP(S) 地址', 'Enter an HTTP(S) address']
+  const toolbarLabels = {
+    back: ['后退', 'Back'],
+    forward: ['前进', 'Forward'],
+    reload: ['刷新', 'Reload'],
+    go: ['前往', 'Go'],
+    external: ['在系统浏览器中打开', 'Open in system browser'],
+  }
+  const sandboxLabels = {
+    disable: ['关闭沙箱限制', 'Disable sandbox restrictions'],
+    enable: ['恢复沙箱限制', 'Restore sandbox restrictions'],
+  }
+  const roleOf = label => {
+    for (const role of Object.keys(toolbarLabels)) if (labelIn(toolbarLabels[role], label)) return role
+    return null
+  }
+  const views = [...document.querySelectorAll('[data-instance]')]
+  const activeView = views.find(view => {
+    const computed = computedOf(view)
+    return computed.visibility !== 'hidden' && computed.display !== 'none'
+  }) ?? null
+  const activeSource = activeView === null ? null : activeView.getAttribute('data-instance')
+  const sessionRoot = activeView === null ? null : ([...activeView.querySelectorAll('[data-sidebar-right-session]')]
+    .find(element => element.hidden !== true && visible(element)) ?? null)
+  const panel = sessionRoot === null ? null : (sessionRoot.querySelector('[data-sidebar-right-panel]') ?? sessionRoot)
+  const sessionOpen = panel !== null && panel.hasAttribute('data-sidebar-right-open')
+  const bodies = []
+  const frames = []
+  if (sessionRoot !== null) {
+    for (const input of [...sessionRoot.querySelectorAll('form input')]) {
+      const addressLabel = input.getAttribute('aria-label')
+      if (!labelIn(addressLabels, addressLabel)) continue
+      const form = input.form ?? input.closest('form')
+      const tabBody = form === null ? null : form.closest('[data-sidebar-right-tab]')
+      if (tabBody === null) continue
+      const buttons = [...form.querySelectorAll('button')]
+      const dumpButton = button => ({ label: button.getAttribute('aria-label'), disabled: button.disabled === true, pressed: button.getAttribute('aria-pressed') })
+      const buttonFacts = buttons.map(dumpButton)
+      const toolbarRoles = []
+      for (const button of buttonFacts) {
+        const role = roleOf(button.label)
+        if (role !== null && toolbarRoles.indexOf(role) < 0) toolbarRoles.push(role)
+      }
+      const externalButton = buttonFacts.find(button => labelIn(toolbarLabels.external, button.label)) ?? null
+      const sandboxButton = buttonFacts.find(button => labelIn(sandboxLabels.disable, button.label) || labelIn(sandboxLabels.enable, button.label)) ?? null
+      const content = tabBody.querySelector('[aria-busy]')
+      const failureTexts = [...tabBody.querySelectorAll('[role="status"], [role="alert"]')]
+        .map(node => (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim()).filter(text => text !== '')
+      const bodyFrames = [...tabBody.querySelectorAll('iframe[data-sidebar-browser-frame]')].map(frame => ({
+        src: frame.getAttribute('src'),
+        sandbox: frame.getAttribute('sandbox'),
+        referrerpolicy: frame.getAttribute('referrerpolicy'),
+        markerValue: frame.getAttribute('data-sidebar-browser-frame'),
+        insideBody: true,
+      }))
+      bodies.push({
+        visible: visible(input) && visible(form),
+        addressInput: true,
+        addressLabel,
+        addressValue: input.value,
+        toolbarRoles,
+        externalButton: externalButton !== null,
+        externalEnabled: externalButton !== null && externalButton.disabled !== true,
+        sandboxToggle: sandboxButton !== null,
+        sandboxed: sandboxButton === null ? null : sandboxButton.pressed !== 'true',
+        busy: content === null ? null : content.getAttribute('aria-busy') === 'true',
+        failureTexts: failureTexts.slice(0, 4),
+        tabId: tabBody.getAttribute('data-sidebar-right-tab'),
+        frameCount: bodyFrames.length,
+      })
+      frames.push(...bodyFrames)
+    }
+  }
+  const bodyTabIds = bodies.map(body => body.tabId).filter(id => typeof id === 'string')
+  const browserTabs = sessionRoot === null ? [] : [...sessionRoot.querySelectorAll('[data-dockkit-tab]')]
+    .filter(chip => bodyTabIds.indexOf(chip.getAttribute('data-dockkit-tab')) >= 0)
+    .map(chip => ({
+      tabId: chip.getAttribute('data-dockkit-tab'),
+      close: chip.querySelectorAll('[data-dockkit-tab-close]').length,
+      title: ((chip.querySelector('[data-dockkit-tab-title]') ?? chip).innerText || '').trim().slice(0, 80),
+    }))
+  const witness = window.__dshGuiEmbedWitness
+  return {
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    hasActiveView: activeView !== null,
+    activeSource,
+    sessionPresent: sessionRoot !== null,
+    sessionOpen,
+    expandToggles: activeView === null ? 0 : [...activeView.querySelectorAll('[data-sidebar-right-expand]')].filter(visible).length,
+    entries: sessionRoot === null ? [] : [...sessionRoot.querySelectorAll('[data-sidebar-right-guide-entry]')].map((element, index) => ({
+      index,
+      kind: element.getAttribute('data-sidebar-right-guide-entry'),
+      visible: visible(element),
+      labelLength: ((element.innerText || '').trim()).length,
+    })),
+    unavailable: sessionRoot === null ? 0 : sessionRoot.querySelectorAll('[data-sidebar-right-unavailable]').length,
+    bodies,
+    bodyCount: bodies.length,
+    frames,
+    frameCount: frames.length,
+    browserTabs,
+    messages: witness === undefined ? null : witness.messages.slice(-20),
+    externalClicks: witness === undefined ? null : witness.external.slice(-20),
+    opened: witness === undefined ? null : witness.opened.slice(-20),
+  }
+})()`
+
+/**
+ * Embed-message + system-browser-exit witness (installed before W-14a, read
+ * live by {@link BROWSER_LANDSCAPE}, removed after W-15b).
+ *
+ * - the message listener is the W-14a/W-14b engine-level proof (the fixture page
+ *   ran `parent.postMessage`);
+ * - the CAPTURE-phase anchor click listener suppresses+records the old
+ *   anchor-based exit (kept defensively: the upstream toolbar calls
+ *   `window.open` today, but the acceptance run must never open a real system
+ *   browser);
+ * - `window.open` is STUBBED: upstream BrowserBody's external button calls it
+ *   directly, so the witness records the URL and returns null instead of
+ *   spawning a browser. W-15 asserts auto-open = 0 and explicit click = 1.
+ */
+export const INSTALL_EMBED_WITNESS = `(() => {
+  if (window.__dshGuiEmbedWitness !== undefined) return { installed: false, reason: 'already' }
+  const messages = []
+  const external = []
+  const opened = []
+  const originalOpen = typeof window.open === 'function' ? window.open.bind(window) : null
+  try {
+    window.open = (url) => {
+      opened.push(String(url))
+      if (opened.length > 100) opened.shift()
+      return null
+    }
+  } catch (error) { /* a frozen window keeps the anchor witness only */ }
+  const onMessage = event => {
+    let data = null
+    try { data = event.data } catch (error) { data = null }
+    messages.push({ origin: String(event.origin), data })
+    if (messages.length > 100) messages.shift()
+  }
+  const onClick = event => {
+    const target = event.target
+    const anchor = target !== null && typeof target.closest === 'function' ? target.closest('a[href][target="_blank"]') : null
+    if (anchor === null) return
+    external.push(String(anchor.getAttribute('href') ?? ''))
+    if (external.length > 100) external.shift()
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  window.addEventListener('message', onMessage)
+  document.addEventListener('click', onClick, true)
+  window.__dshGuiEmbedWitness = { messages, external, opened, onMessage, onClick, originalOpen }
+  return { installed: true }
+})()`
+
+/** Read back and remove the witness (idempotent; a page reload loses it honestly). */
+export const READ_EMBED_WITNESS = `(() => {
+  const witness = window.__dshGuiEmbedWitness
+  if (witness === undefined) return { installed: false, messages: [], external: [], opened: [] }
+  window.removeEventListener('message', witness.onMessage)
+  document.removeEventListener('click', witness.onClick, true)
+  try { if (witness.originalOpen !== null) window.open = witness.originalOpen } catch (error) { /* frozen */ }
+  delete window.__dshGuiEmbedWitness
+  return { installed: true, messages: witness.messages.slice(-20), external: witness.external.slice(-20), opened: witness.opened.slice(-20) }
+})()`
+
+/** Locate the ONE visible upstream BrowserBody's address input (active view only). */
+const FIND_BROWSER_INPUT = `const addressLabels = ['输入 HTTP(S) 地址', 'Enter an HTTP(S) address']
+    const computedOf = element => window.getComputedStyle(element)
+    const visible = element => {
+      const rect = element.getBoundingClientRect()
+      const computed = computedOf(element)
+      return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+    }
+    const views = [...document.querySelectorAll('[data-instance]')]
+    const activeView = views.find(view => {
+      const computed = computedOf(view)
+      return computed.visibility !== 'hidden' && computed.display !== 'none'
+    }) ?? null
+    const candidates = activeView === null ? [] : [...activeView.querySelectorAll('form input')]
+      .filter(input => addressLabels.indexOf(input.getAttribute('aria-label')) >= 0 && visible(input))
+    const picked = candidates.length === 1 ? candidates[0] : null`
+
+/**
+ * Type one address into the visible upstream BrowserBody address bar. A React
+ * controlled input only updates when the value goes through the native setter
+ * and an `input` event. The upstream parser defaults a bare host to HTTPS, so
+ * callers type an EXPLICIT http(s) URL for loopback fixtures.
+ * @param address - the logical address to type (never an alias).
+ * @returns a page expression `{ set, value, candidates }`.
+ */
+export function setBrowserAddress(address) {
+  return `(() => {
+    ${""}${FIND_BROWSER_INPUT}
+    if (picked === null) return { set: false, reason: 'no-input', candidates: candidates.length }
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(picked, ${JSON.stringify(address)})
+    picked.dispatchEvent(new Event('input', { bubbles: true }))
+    picked.dispatchEvent(new Event('change', { bubbles: true }))
+    picked.focus()
+    return { set: true, value: picked.value, candidates: candidates.length }
+  })()`
+}
+
+/** Submit the visible upstream BrowserBody address form (its own go button). */
+export const SUBMIT_BROWSER_ADDRESS = `(() => {
+  ${""}${FIND_BROWSER_INPUT}
+  if (picked === null) return { submitted: false, reason: 'no-input', candidates: candidates.length }
+  const form = picked.form ?? picked.closest('form')
+  if (form === null) return { submitted: false, reason: 'no-form' }
+  const button = form.querySelector('button[type="submit"]') ?? form.querySelector('button')
+  if (button === null) return { submitted: false, reason: 'no-submit' }
+  button.click()
+  return { submitted: true }
+})()`
+
+/** Click the visible upstream BrowserBody page-reload control (aria-label allowlist). */
+export const RELOAD_BROWSER_PAGE = `(() => {
+  const computedOf = element => window.getComputedStyle(element)
+  const visible = element => {
+    const rect = element.getBoundingClientRect()
+    const computed = computedOf(element)
+    return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+  }
+  const views = [...document.querySelectorAll('[data-instance]')]
+  const activeView = views.find(view => {
+    const computed = computedOf(view)
+    return computed.visibility !== 'hidden' && computed.display !== 'none'
+  }) ?? null
+  const buttons = activeView === null ? [] : [...activeView.querySelectorAll('button')]
+  const button = buttons.find(candidate => ['刷新', 'Reload'].indexOf(candidate.getAttribute('aria-label')) >= 0 && visible(candidate))
+  if (button === undefined) return { reloaded: false, reason: 'no-reload' }
+  button.click()
+  return { reloaded: true }
+})()`
+
+/** Click the visible upstream BrowserBody system-browser exit (explicit, never automatic). */
+export const CLICK_BROWSER_EXTERNAL = `(() => {
+  const computedOf = element => window.getComputedStyle(element)
+  const visible = element => {
+    const rect = element.getBoundingClientRect()
+    const computed = computedOf(element)
+    return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+  }
+  const views = [...document.querySelectorAll('[data-instance]')]
+  const activeView = views.find(view => {
+    const computed = computedOf(view)
+    return computed.visibility !== 'hidden' && computed.display !== 'none'
+  }) ?? null
+  const buttons = activeView === null ? [] : [...activeView.querySelectorAll('button')]
+  const candidates = buttons.filter(candidate => ['在系统浏览器中打开', 'Open in system browser'].indexOf(candidate.getAttribute('aria-label')) >= 0)
+  const visibleCandidates = candidates.filter(visible)
+  if (visibleCandidates.length !== 1) return { clicked: false, candidates: visibleCandidates.length }
+  const button = visibleCandidates[0]
+  if (button.disabled === true) return { clicked: false, disabled: true }
+  button.click()
+  return { clicked: true, disabled: false }
+})()`
+
+/**
+ * Open the right sidebar through its conversation-header expand button. Click
+ * allowlist: this is a non-mutating open control; it is driven ONLY on a
+ * throwaway instance (`--dev`), because the expanded state is layout state.
+ */
+export const CLICK_RIGHT_SIDEBAR_EXPAND = `(() => {
+  const visible = element => {
+    const rect = element.getBoundingClientRect()
+    const computed = window.getComputedStyle(element)
+    return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+  }
+  const toggles = [...document.querySelectorAll('[data-sidebar-right-expand]')].filter(visible)
+  if (toggles.length !== 1) return { clicked: false, candidates: toggles.length }
+  toggles[0].click()
+  return { clicked: true, candidates: 1 }
+})()`
+
+/**
+ * Open the Browser tab from the upstream right-sidebar guide, identified by the
+ * tab KIND marker (`[data-sidebar-right-guide-entry="browser"]`, the fork keeps
+ * upstream's 'browser' kind) — never by its translated label, never by a
+ * document index. Exactly one visible candidate may exist; zero or several click
+ * nothing (the leg fails on the effect it did not produce).
+ */
+export const CLICK_BROWSER_GUIDE_ENTRY = `(() => {
+  const visible = element => {
+    const rect = element.getBoundingClientRect()
+    const computed = window.getComputedStyle(element)
+    return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+  }
+  const entries = [...document.querySelectorAll('[data-sidebar-right-guide-entry]')]
+    .filter(element => element.getAttribute('data-sidebar-right-guide-entry') === 'browser' && visible(element))
+  if (entries.length !== 1) return { clicked: false, candidates: entries.length }
+  entries[0].click()
+  return { clicked: true, candidates: 1 }
+})()`
+
+/**
+ * Close the Browser tab through the upstream chip's own close control. The chip
+ * and the body are correlated by TAB ID: upstream SidebarRight renders
+ * `data-sidebar-right-tab=<id>` on the seat body and the dock-kit chip carries
+ * `data-dockkit-tab=<id>` + `data-dockkit-tab-close=<id>`. Scoped to the
+ * VISIBLE instance view: inactive N-ctx views stay mounted, so a document-wide
+ * tab list can hold two browser chips and the "exactly one" rule would click
+ * nothing.
+ */
+export const CLOSE_BROWSER_TAB = `(() => {
+  const addressLabels = ['输入 HTTP(S) 地址', 'Enter an HTTP(S) address']
+  const computedOf = element => window.getComputedStyle(element)
+  const visible = element => {
+    const rect = element.getBoundingClientRect()
+    const computed = computedOf(element)
+    return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+  }
+  const view = [...document.querySelectorAll('[data-instance]')].find(element => {
+    const computed = computedOf(element)
+    return computed.visibility !== 'hidden' && computed.display !== 'none'
+  }) ?? null
+  const scope = view === null ? document : view
+  const tabIds = []
+  for (const input of [...scope.querySelectorAll('form input')]) {
+    if (addressLabels.indexOf(input.getAttribute('aria-label')) < 0) continue
+    const form = input.form ?? input.closest('form')
+    const body = form === null ? null : form.closest('[data-sidebar-right-tab]')
+    const id = body === null ? null : body.getAttribute('data-sidebar-right-tab')
+    if (id !== null && tabIds.indexOf(id) < 0) tabIds.push(id)
+  }
+  const chips = [...scope.querySelectorAll('[data-dockkit-tab]')]
+    .filter(chip => tabIds.indexOf(chip.getAttribute('data-dockkit-tab')) >= 0)
+  const closable = chips.filter(chip => chip.querySelectorAll('[data-dockkit-tab-close]').length > 0)
+  if (closable.length !== 1) return { clicked: false, candidates: closable.length, chips: chips.length }
+  const close = closable[0].querySelectorAll('[data-dockkit-tab-close]')[0]
+  close.click()
+  return { clicked: true, tabId: closable[0].getAttribute('data-dockkit-tab') }
+})()`
+
+/**
+ * W-13 prerequisite facts: a visible Session is what makes the right sidebar
+ * surface exist at all (design 28 §10 renders it per Session). A cold --dev
+ * instance has neither workspace nor session, so this dump feeds the pure
+ * bootstrap pickers (checks.mjs) that choose the EXISTING UI controls:
+ *   - the new-session control, located by its registered shortcut attribute
+ *     (aria-keyshortcuts Control+N / Meta+N) with a zh/en label fallback;
+ *   - the hero workspace chip (aria-label allowlist), which opens the browse
+ *     directory dialog when the instance has no workspace yet;
+ *   - that dialog's path-edit / open controls (aria-label / primary variant).
+ * The page only REPORTS descriptors; the pure pickers decide and
+ * clickButtonDescriptor clicks by identity.
+ */
+export const SESSION_BOOTSTRAP_FACTS = `(() => {
+  const visible = element => {
+    const rect = element.getBoundingClientRect()
+    const computed = window.getComputedStyle(element)
+    return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+  }
+  const views = [...document.querySelectorAll('[data-instance]')]
+  const view = views.find(element => {
+    const computed = window.getComputedStyle(element)
+    return computed.visibility !== 'hidden' && computed.display !== 'none'
+  }) ?? null
+  const dump = element => {
+    const rect = element.getBoundingClientRect()
+    return {
+      ariaLabel: element.getAttribute('aria-label'),
+      keys: element.getAttribute('aria-keyshortcuts'),
+      text: (element.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40),
+      primary: String(element.className).includes('primary'),
+      disabled: element.disabled === true,
+      left: Math.round(rect.left), top: Math.round(rect.top),
+      width: Math.round(rect.width), height: Math.round(rect.height),
+    }
+  }
+  const dialog = [...document.querySelectorAll('[role="dialog"]')].find(visible) ?? null
+  return {
+    activeSource: view === null ? null : view.getAttribute('data-instance'),
+    hasActiveView: view !== null,
+    sessionRows: view === null ? 0 : view.querySelectorAll('[data-session-id]').length,
+    rightSessions: view === null ? 0 : view.querySelectorAll('[data-sidebar-right-session]').length,
+    sessionPresent: view !== null && [...view.querySelectorAll('[data-sidebar-right-session]')].some(visible),
+    buttons: view === null ? [] : [...view.querySelectorAll('button')].filter(visible)
+      .map((element, index) => ({ index, ...dump(element) })),
+    dialog: dialog === null ? null : {
+      text: (dialog.innerText || '').replace(/\\s+/g, ' ').slice(0, 400),
+      inputs: [...dialog.querySelectorAll('input')].map(element => ({
+        label: element.getAttribute('aria-label'),
+        value: element.value,
+      })),
+      buttons: [...dialog.querySelectorAll('button')].filter(visible)
+        .map((element, index) => ({ index, ...dump(element) })),
+    },
+  }
+})()`
+
+/**
+ * Click one dumped button by IDENTITY (aria-label + visible text + rect), never
+ * by document index: the bootstrap dialogs re-render between the facts call and
+ * the click, and a stale index would hit a different control.
+ * @param descriptor - the button descriptor a pure picker chose.
+ * @returns a page expression \`{ clicked, identity }\`.
+ */
+export function clickButtonDescriptor(descriptor) {
+  return `(() => {
+    const wanted = ${JSON.stringify(descriptor ?? null)}
+    if (wanted === null) return { clicked: false, identity: null }
+    const visible = element => {
+      const rect = element.getBoundingClientRect()
+      const computed = window.getComputedStyle(element)
+      return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+    }
+    const normalized = element => (element.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40)
+    const near = (value, expected) => Math.abs(value - expected) <= 2
+    const matches = element => {
+      if (!visible(element)) return false
+      if ((element.getAttribute('aria-label') ?? null) !== (wanted.ariaLabel ?? null)) return false
+      if (normalized(element) !== (wanted.text ?? '')) return false
+      const rect = element.getBoundingClientRect()
+      return near(Math.round(rect.left), wanted.left) && near(Math.round(rect.top), wanted.top)
+        && near(Math.round(rect.width), wanted.width) && near(Math.round(rect.height), wanted.height)
+    }
+    const element = [...document.querySelectorAll('button')].find(matches)
+    if (element === undefined) return { clicked: false, identity: null }
+    element.click()
+    const rect = element.getBoundingClientRect()
+    return {
+      clicked: true,
+      identity: {
+        ariaLabel: element.getAttribute('aria-label'),
+        text: normalized(element),
+        left: Math.round(rect.left), top: Math.round(rect.top),
+      },
+    }
+  })()`
+}
+
+/**
+ * Type one absolute directory path into the browse directory dialog's path
+ * editor and submit it with Enter (the dialog navigates to the listed level; the
+ * caller then confirms with its primary control). React reads the native setter
+ * value + an input event; a plain value assignment is reverted on the next render.
+ * @param directoryPath - absolute Host path the acceptance run owns (under --out).
+ * @returns a page expression \`{ typed, value }\`.
+ */
+export function typeDirectoryPath(directoryPath) {
+  return `(() => {
+    const visible = element => {
+      const rect = element.getBoundingClientRect()
+      const computed = window.getComputedStyle(element)
+      return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+    }
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find(visible)
+    if (dialog === undefined) return { typed: false, reason: 'no-dialog' }
+    const input = dialog.querySelector('input')
+    if (input === null) return { typed: false, reason: 'no-input' }
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, ${JSON.stringify(directoryPath)})
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }))
+    input.focus()
+    return { typed: true, value: input.value }
+  })()`
+}
+
+/**
+ * Activate one source view through the sidebar's OWN source header (the
+ * product's activation path: header {role=button} → requestActivateSource).
+ * The header is addressed by the source id (the section/header marker), never
+ * by label text or document order.
+ * @param sourceId - chamber source id (e.g. 'dsh-ifx', 'local').
+ * @returns a page expression { clicked, candidates }.
+ */
+export function clickSourceHeader(sourceId) {
+  const target = JSON.stringify(sourceId)
+  return `(() => {
+    const visible = element => {
+      const rect = element.getBoundingClientRect()
+      const computed = window.getComputedStyle(element)
+      return rect.width > 0 && rect.height > 0 && computed.visibility !== 'hidden' && computed.display !== 'none'
+    }
+    const candidates = [...document.querySelectorAll('[data-chamber-row]')]
+      .filter(element => element.tagName === 'HEADER'
+        && element.getAttribute('data-chamber-row') === ${target}
+        && element.getAttribute('role') === 'button'
+        && visible(element))
+    if (candidates.length !== 1) return { clicked: false, candidates: candidates.length }
+    candidates[0].click()
+    return { clicked: true, candidates: 1 }
+  })()`
+}
+
+/**
  * Run the walkthrough.
  * @param opts.cdpPort CDP port of a dev instance (9333 by convention, scripts/perf/README.md)
  * @param opts.outDir artifact directory
@@ -547,6 +1072,14 @@ export async function runWalkthrough({
   // Legs that WRITE state (the source-section fold persists `sourceFolded`) are
   // allowed only on a throwaway instance, exactly like advancing the wizard.
   allowPersistentWrites = false,
+  // v2 embedded browser (design 28 §16.9): `--require-embed` re-labels the
+  // embed legs' INFO to FAIL; `--embed-port` is the operator's explicit opt-in
+  // for W-14b (a remote loopback port that really serves on the SSH source).
+  requireEmbed = false,
+  embedPort = null,
+  // --ssh-fixture: the local SSH fixture facts (started by run.mjs BEFORE the
+  // app launched, because the registry/known_hosts must exist at boot).
+  sshFixture = null,
 } = {}) {
   const rec = createRecorder()
   const shots = path.join(outDir, 'shots')
@@ -931,17 +1464,532 @@ export async function runWalkthrough({
       `settingsOpen=${afterEscape.settingsOpen} 其它模态=${afterEscape.otherDialogs}`)
   }
 
+  // ------------------------------------------------- W-13…W-15b: upstream browser fork
+  // design 28 §16.9. The browser package is a faithful fork of upstream
+  // ui-sidebar-browser's iframe path, so these legs judge the UPSTREAM DOM and
+  // behavior: W-13 opens the Browser tab (guide kind 'browser') on the throwaway
+  // instance and asserts the upstream BrowserBody structure; W-14a embeds a REAL
+  // local fixture (explicit http address) and requires its postMessage; W-14b is
+  // the remote end-to-end leg (real SSH source → alias iframe + postMessage;
+  // loud skip otherwise); W-15 judges the upstream explicit system-browser exit
+  // (upstream does NOT promise XFO/TLS failure UI) and that it never auto-opens;
+  // W-15b closes the tab and asserts the occurrence release + alias closure.
+  const W13_TITLE = '右栏浏览器页签/上游 BrowserBody 结构（guide kind browser、地址栏、工具栏、sandbox 开关）'
+  const W14A_TITLE = 'local 内嵌真跑（上游 iframe sandbox/referrer 契约 + fixture postMessage）'
+  const W14B_TITLE = 'remote 内嵌端到端（真实 SSH 源 → alias iframe → postMessage + 关 tab 释放）'
+  const W15_TITLE = '系统浏览器出口（upstream 语义：始终可点、不自动打开；XFO 不做失败 UI 承诺）'
+  const W15B_TITLE = '关 tab 即释放（面板/iframe 移除；有 forward 时 alias 不可达）'
+  let w13 = null
+  let w14a = null
+  let w14b = null
+  let w15 = null
+  let w15b = null
+  // W-14b's release leg (only in --ssh-fixture mode): judged outside the try so
+  // W-15b can fold it into the tab-close release verdict.
+  let remoteRelease = null
+  // W-13 prerequisite (a visible Session) is judged here, outside the try: the
+  // recorder lines run after the try/finally, so the verdict must stay in scope.
+  let bootstrap = { ok: true, evidence: '已有可见 Session' }
+  let embedLandscape = null
+  let browserFixture = null
+  const visibleBodyOf = facts => (facts?.bodies ?? []).find(body => body.visible === true) ?? null
+  const readEmbedLandscape = async () => {
+    embedLandscape = await session.evaluate(BROWSER_LANDSCAPE)
+    return embedLandscape
+  }
+  /**
+   * Ensure the run has ONE visible Session, so the right sidebar (and its
+   * Browser tab) exists at all (design 28 §10). Runs ONLY on the throwaway
+   * --dev instance: creating a workspace/session writes the instance's own
+   * state, which is allowed here by the same rule as advancing the first-run
+   * wizard. --attach never drives this and reports INFO instead.
+   *
+   * Order:
+   *  1. an existing workspace: the registered new-session control creates a
+   *     blank Session (structural locator: aria-keyshortcuts Control+N);
+   *  2. a cold instance (no workspace): the hero workspace chip opens the
+   *     browse directory dialog; the run adopts its OWN artifact directory
+   *     (<out>/workspace, created here, never inside the product tree), which
+   *     creates the blank Session as the flow's documented outcome.
+   * @returns `{ ok, evidence }` (INFO when --attach; FAIL when the UI path fails).
+   */
+  const ensureVisibleSession = async (workspacePathOverride = null) => {
+    if (allowPersistentWrites !== true) {
+      return applyRequireEmbed({
+        ok: null,
+        evidence: '未执行：右栏 surface 按 Session 渲染，--attach 不创建/切换会话（会写真实实例状态）；请人工选中一个会话后复跑',
+      }, requireEmbed)
+    }
+    const workspacePath = workspacePathOverride === null ? path.resolve(outDir, 'workspace') : workspacePathOverride
+    mkdirSync(workspacePath, { recursive: true })
+    const notes = []
+    let facts = await session.evaluate(SESSION_BOOTSTRAP_FACTS)
+    // 1) Existing workspace: create the blank Session through the app's own control.
+    const newSession = pickNewSessionControl(facts.buttons)
+    if (newSession.ok === true) {
+      const click = await session.evaluate(clickButtonDescriptor(newSession.picked))
+      notes.push('newSession=' + String(click.clicked))
+      await sleep(settleMs + 800)
+      facts = await session.evaluate(SESSION_BOOTSTRAP_FACTS)
+      if (facts.sessionPresent === true) {
+        return sessionBootstrapVerdict({ executed: true, sessionPresent: true, via: 'new-session', note: notes.join('，') })
+      }
+    } else {
+      notes.push('newSession=' + newSession.reason)
+    }
+    // 2) Cold instance: pick the acceptance workspace through the browse dialog.
+    if (facts.dialog === null) {
+      const chip = pickWorkspaceChip(facts.buttons)
+      if (chip.ok !== true) {
+        return sessionBootstrapVerdict({
+          executed: true, sessionPresent: false, via: 'none',
+          note: notes.concat('workspaceChip=' + chip.reason).join('，'),
+        })
+      }
+      const click = await session.evaluate(clickButtonDescriptor(chip.picked))
+      notes.push('workspaceChip=' + String(click.clicked))
+      await sleep(1_500)
+      facts = await session.evaluate(SESSION_BOOTSTRAP_FACTS)
+    }
+    if (facts.dialog === null) {
+      return sessionBootstrapVerdict({
+        executed: true, sessionPresent: false, via: 'none',
+        note: notes.concat('directoryDialog=absent').join('，'),
+      })
+    }
+    const edit = pickDirectoryEditButton(facts.dialog.buttons)
+    if (edit.ok !== true) {
+      return sessionBootstrapVerdict({
+        executed: true, sessionPresent: false, via: 'none',
+        note: notes.concat('editPath=' + edit.reason).join('，'),
+      })
+    }
+    await session.evaluate(clickButtonDescriptor(edit.picked))
+    await sleep(400)
+    const typed = await session.evaluate(typeDirectoryPath(workspacePath))
+    notes.push('typed=' + String(typed.typed))
+    await sleep(2_000)
+    facts = await session.evaluate(SESSION_BOOTSTRAP_FACTS)
+    const open = pickDirectoryOpenButton(facts.dialog === null ? [] : facts.dialog.buttons)
+    if (open.ok !== true) {
+      return sessionBootstrapVerdict({
+        executed: true, sessionPresent: false, via: 'none',
+        note: notes.concat('open=' + open.reason).join('，'),
+      })
+    }
+    await session.evaluate(clickButtonDescriptor(open.picked))
+    await sleep(settleMs + 2_000)
+    facts = await session.evaluate(SESSION_BOOTSTRAP_FACTS)
+    return sessionBootstrapVerdict({
+      executed: true,
+      sessionPresent: facts.sessionPresent,
+      via: facts.sessionPresent ? 'workspace-created' : 'none',
+      note: notes.concat('workspace=' + workspacePath).join('，'),
+    })
+  }
+
+  try {
+    let landscape = await readEmbedLandscape()
+    // ---- W-13 prerequisite: the right sidebar renders per Session; a cold
+    // --dev instance has none. Create/select one through the EXISTING UI (only
+    // on the throwaway instance; --attach reports INFO).
+    if (landscape.sessionPresent !== true) {
+      bootstrap = await ensureVisibleSession()
+      landscape = await readEmbedLandscape()
+    }
+    // ---- W-13: upstream guide entry + BrowserBody structure.
+    if (blockedByModal) {
+      w13 = applyRequireEmbed({ ok: null, evidence: '未执行：首启模态未走完（见 W-3），右栏面板腿被挡住' }, requireEmbed)
+    } else if (landscape.sessionPresent !== true) {
+      w13 = bootstrap.ok === true
+        ? applyRequireEmbed({
+          ok: null,
+          evidence: '未执行：来源 ' + JSON.stringify(landscape.activeSource) + ' 没有可见 Session 的右栏 surface（design 28 §10：无 Session 不渲染），无法进入浏览器页签',
+        }, requireEmbed)
+        : bootstrap
+    } else {
+      if (landscape.sessionOpen !== true) {
+        if (allowPersistentWrites !== true) {
+          w13 = applyRequireEmbed({
+            ok: null,
+            evidence: '未执行：右栏收起；--attach 不代开右栏（展开态是布局状态，只允许一次性实例 --dev）',
+          }, requireEmbed)
+        } else {
+          const expand = await session.evaluate(CLICK_RIGHT_SIDEBAR_EXPAND)
+          await sleep(settleMs)
+          landscape = await readEmbedLandscape()
+          if (landscape.sessionOpen !== true) {
+            w13 = {
+              ok: false,
+              evidence: '右栏展开点击未生效（[data-sidebar-right-expand] 候选=' + expand.candidates + '，sessionOpen=' + String(landscape.sessionOpen) + '）',
+            }
+          }
+        }
+      }
+      if (w13 === null) {
+        let entryPick = pickBrowserGuideEntry(landscape.entries ?? [])
+        let openedVia = landscape.bodyCount > 0 ? 'existing' : 'none'
+        if (landscape.bodyCount === 0 && entryPick.ok === true) {
+          const click = await session.evaluate(CLICK_BROWSER_GUIDE_ENTRY)
+          await sleep(settleMs)
+          landscape = await readEmbedLandscape()
+          openedVia = click.clicked === true ? 'clicked-entry' : 'none'
+          entryPick = pickBrowserGuideEntry(landscape.entries ?? [])
+        }
+        w13 = browserPanelVerdict({ ...landscape, entryPick, openedVia })
+      }
+    }
+    await shot('07-browser-panel')
+
+    // ---- W-14b: remote end-to-end (upstream fork semantics).
+    // Mode A (--ssh-fixture): drive the fixture source end to end — switch the
+    // active source via the sidebar header (the product's own activation path),
+    // create the remote Session, open the Browser tab, forward the remote
+    // loopback fixture page through the REAL SSH tunnel, assert the upstream
+    // iframe contract on the per-source alias + the fixture's postMessage, then
+    // close the tab and prove the alias listener is gone. Mode B (--attach +
+    // --embed-port): judge an operator-staged remote BrowserBody; the release
+    // leg then belongs to the true-machine/L5 walkthroughs.
+    const fixtureMode = sshFixture !== null && sshFixture !== undefined
+    const remoteAddressOf = port => 'http://127.0.0.1:' + String(port) + '/'
+    const driveRemoteSource = async () => {
+      const sourceId = sshFixture.sourceViewId
+      const switched = await session.evaluate(clickSourceHeader(sourceId))
+      if (switched.clicked !== true) {
+        return { embed: { ok: false, evidence: '未定位到 fixture 来源的侧栏头部（[data-chamber-row="' + sourceId + '"]，候选=' + switched.candidates + '）' }, release: null, switched: false }
+      }
+      let facts = await readEmbedLandscape()
+      let waitUntil = Date.now() + 60_000
+      while (Date.now() < waitUntil && !(facts.hasActiveView === true && facts.activeSource === sourceId)) {
+        await sleep(500)
+        facts = await readEmbedLandscape()
+      }
+      if (facts.activeSource !== sourceId) {
+        return { embed: { ok: false, evidence: '切换活动来源超时：期望 ' + sourceId + '，实际 ' + JSON.stringify(facts.activeSource) }, release: null, switched: true }
+      }
+      if (facts.sessionPresent !== true) {
+        const remoteBootstrap = await ensureVisibleSession(sshFixture.workspacePath)
+        if (remoteBootstrap.ok !== true) {
+          return { embed: { ok: false, evidence: '远端来源的 Session 前置失败：' + remoteBootstrap.evidence }, release: null, switched: true }
+        }
+        facts = await readEmbedLandscape()
+      }
+      if (facts.sessionOpen !== true) {
+        await session.evaluate(CLICK_RIGHT_SIDEBAR_EXPAND)
+        await sleep(settleMs)
+        facts = await readEmbedLandscape()
+      }
+      if (facts.bodyCount === 0) {
+        const entryPick = pickBrowserGuideEntry(facts.entries ?? [])
+        if (entryPick.ok !== true) {
+          return { embed: { ok: false, evidence: '远端来源的浏览器入口未定位（' + entryPick.reason + '）' }, release: null, switched: true }
+        }
+        await session.evaluate(CLICK_BROWSER_GUIDE_ENTRY)
+        await sleep(settleMs)
+        facts = await readEmbedLandscape()
+      }
+      const bodyBefore = visibleBodyOf(facts)
+      if (facts.bodyCount !== 1 || bodyBefore === null) {
+        return { embed: { ok: false, evidence: '远端来源 BrowserBody 结构不符：bodyCount=' + facts.bodyCount }, release: null, switched: true }
+      }
+      await session.evaluate(INSTALL_EMBED_WITNESS)
+      const address = remoteAddressOf(sshFixture.fixturePort)
+      const typed = await session.evaluate(setBrowserAddress(address))
+      if (typed.set !== true) {
+        return { embed: { ok: false, evidence: '远端地址栏输入失败：' + JSON.stringify(typed) }, release: null, switched: true }
+      }
+      await sleep(200)
+      const submitted = await session.evaluate(SUBMIT_BROWSER_ADDRESS)
+      if (submitted.submitted !== true) {
+        return { embed: { ok: false, evidence: '远端地址提交失败：' + JSON.stringify(submitted) }, release: null, switched: true }
+      }
+      // Wait for the fork's async src resolution: the alias iframe only exists
+      // after the forward lease settles; the fixture postMessage proves the
+      // aliased document ran. A listener that is not yet reachable can make the
+      // first navigation land on an error page, so one explicit upstream reload
+      // retries; the verdict still judges whatever the reloaded frame reports.
+      waitUntil = Date.now() + 30_000
+      facts = await readEmbedLandscape()
+      let aliasOpenedAt = null
+      while (Date.now() < waitUntil) {
+        facts = await readEmbedLandscape()
+        const alias = (facts.frames ?? []).map(frame => frame.src).find(src => isAliasFrameUrl(src)) ?? null
+        const hasMessage = (facts.messages ?? []).some(entry => {
+          const data = entry?.data
+          return data !== null && typeof data === 'object' && data.type === 'dsh-chamber-embed-probe'
+        })
+        if (alias !== null && aliasOpenedAt === null && await probeTcpReachable(alias) === 'open') aliasOpenedAt = Date.now()
+        if ((facts.frames ?? []).length === 1 && (hasMessage || aliasOpenedAt !== null)) break
+        await sleep(500)
+      }
+      let messageSeen = (facts.messages ?? []).some(entry => {
+        const data = entry?.data
+        return data !== null && typeof data === 'object' && data.type === 'dsh-chamber-embed-probe'
+      })
+      if (!messageSeen && (facts.frames ?? []).length > 0) {
+        const reloaded = await session.evaluate(RELOAD_BROWSER_PAGE)
+        if (reloaded.reloaded === true) {
+          await sleep(4_000)
+          facts = await readEmbedLandscape()
+        }
+      }
+      const embed = remoteEmbedVerdict({
+        executed: true,
+        bodyCount: facts.bodyCount,
+        bodies: facts.bodies ?? [],
+        frames: facts.frames ?? [],
+        messages: facts.messages ?? [],
+        requireMessage: true,
+        expectedAddress: address,
+      })
+      await shot('11-browser-remote-iframe')
+      const aliasUrl = (facts.frames ?? []).map(frame => frame.src).find(src => isAliasFrameUrl(src)) ?? null
+      const closeControl = (facts.browserTabs ?? []).some(tab => (tab.close ?? 0) > 0)
+      let release = null
+      if (!closeControl) {
+        release = { ok: false, evidence: '远端来源的浏览器页签没有可点的关闭控件（[data-dockkit-tab-close]）' }
+      } else {
+        const closed = await session.evaluate(CLOSE_BROWSER_TAB)
+        await sleep(1_200)
+        const justClosed = await readEmbedLandscape()
+        await sleep(1_500)
+        const settled = await readEmbedLandscape()
+        const aliasProbe = aliasUrl === null ? null : { url: aliasUrl, reachable: await probeTcpReachable(aliasUrl) }
+        release = closeReleaseVerdict({
+          executed: closed.clicked === true,
+          reason: closed.clicked === true ? '' : '关闭点击未落下',
+          bodyCount: settled.bodyCount,
+          frameCount: settled.frameCount,
+          busy: settled.bodyCount === 0 ? false : (settled.bodies ?? []).some(body => body.busy === true),
+          settled: settled.bodyCount <= justClosed.bodyCount && settled.frameCount <= justClosed.frameCount,
+          aliasProbe,
+        })
+      }
+      await shot('12-browser-remote-release')
+      return { embed, release, switched: true }
+    }
+    if (fixtureMode) {
+      const driven = await driveRemoteSource()
+      w14b = driven.embed
+      remoteRelease = driven.release
+      if (driven.switched) {
+        await session.evaluate(clickSourceHeader('local'))
+        const backUntil = Date.now() + 30_000
+        let back = await readEmbedLandscape()
+        while (Date.now() < backUntil && !(back.hasActiveView === true && back.activeSource === 'local')) {
+          await sleep(500)
+          back = await readEmbedLandscape()
+        }
+        landscape = back
+        if (back.activeSource !== 'local') console.warn('W-14b: 未能切回 local 来源（后续 local 腿可能 INFO）')
+      }
+      await session.evaluate(READ_EMBED_WITNESS)
+    } else {
+      const remoteSource = typeof landscape.activeSource === 'string' && landscape.activeSource !== 'local'
+      if (!remoteSource) {
+        w14b = applyRequireEmbed({
+          ok: null,
+          evidence: '未执行：当前活动来源是 ' + JSON.stringify(landscape.activeSource) + '（local 无远端 forward）；W-14b 需要 --ssh-fixture（本机真实 sshd + remote dsh + 回环 fixture），或把窗口切到 dsh/gateway+ssh 来源并用 --embed-port 指定该主机 loopback 上真实可服务的端口',
+        }, requireEmbed)
+      } else if (embedPort === null || !Number.isInteger(embedPort)) {
+        w14b = applyRequireEmbed({
+          ok: null,
+          evidence: '未执行：远端来源未给出 --embed-port（远端 127.0.0.1 上真实可服务的端口）——W-14b 是真实 SSH 端到端腿，不能伪造',
+        }, requireEmbed)
+      } else if (landscape.bodyCount !== 1 || visibleBodyOf(landscape) === null) {
+        w14b = applyRequireEmbed({
+          ok: null,
+          evidence: '未执行：远端来源的 BrowserBody 未打开；--attach 不代开右栏与页签（先人工打开再复跑）',
+        }, requireEmbed)
+      } else {
+        await session.evaluate(INSTALL_EMBED_WITNESS)
+        const address = remoteAddressOf(embedPort)
+        await session.evaluate(setBrowserAddress(address))
+        await sleep(200)
+        await session.evaluate(SUBMIT_BROWSER_ADDRESS)
+        const deadline = Date.now() + 25_000
+        landscape = await readEmbedLandscape()
+        while (Date.now() < deadline) {
+          landscape = await readEmbedLandscape()
+          const alias = (landscape.frames ?? []).map(frame => frame.src).find(src => isAliasFrameUrl(src))
+          if (alias !== undefined && await probeTcpReachable(alias) === 'open') break
+          await sleep(500)
+        }
+        w14b = remoteEmbedVerdict({
+          executed: true,
+          bodyCount: landscape.bodyCount,
+          bodies: landscape.bodies ?? [],
+          frames: landscape.frames ?? [],
+          messages: landscape.messages ?? [],
+          requireMessage: false,
+          expectedAddress: address,
+        })
+        await shot('11-browser-remote-iframe')
+      }
+    }
+    if (w14b === null) w14b = { ok: false, evidence: 'W-14b 未产出判据（面板腿异常中断）' }
+    w14b = applyRequireEmbed(w14b, requireEmbed)
+
+    // ---- W-14a + W-15: local upstream BrowserBody (only --dev).
+    const localBodyReady = allowPersistentWrites === true
+      && blockedByModal === false
+      && w13.ok === true
+      && landscape.bodyCount === 1
+      && visibleBodyOf(landscape) !== null
+      && landscape.activeSource === 'local'
+    if (!localBodyReady) {
+      const reason = landscape.sessionPresent !== true
+        ? '没有可见 Session 右栏 surface'
+        : landscape.bodyCount !== 1
+          ? '上游 BrowserBody 未打开（见 W-13）'
+          : landscape.activeSource !== 'local'
+            ? '活动来源 ' + JSON.stringify(landscape.activeSource) + ' 不是 local：W-14a 的本地 fixture 只在 local 直连 body 上跑'
+            : '--attach 不驱动一次性 fixture 面板（--dev 才允许）'
+      w14a = applyRequireEmbed({ ok: null, evidence: '未执行：' + reason }, requireEmbed)
+      w15 = applyRequireEmbed({ ok: null, evidence: '未执行：' + reason }, requireEmbed)
+      w15b = applyRequireEmbed({ ok: null, evidence: '未执行：' + reason }, requireEmbed)
+    } else {
+      browserFixture = await startEmbedFixture({ host: '127.0.0.1' })
+      await session.evaluate(INSTALL_EMBED_WITNESS)
+      // W-14a: an explicit http loopback address (the upstream parser defaults a
+      // bare host to HTTPS) must load the local fixture and run its script.
+      const localAddress = remoteAddressOf(browserFixture.port)
+      await session.evaluate(setBrowserAddress(localAddress))
+      await sleep(200)
+      await session.evaluate(SUBMIT_BROWSER_ADDRESS)
+      let deadline = Date.now() + 25_000
+      landscape = await readEmbedLandscape()
+      while (Date.now() < deadline) {
+        landscape = await readEmbedLandscape()
+        const message = (landscape.messages ?? []).some(entry => entry?.data?.type === 'dsh-chamber-embed-probe')
+        if ((landscape.frames ?? []).length === 1 && message) break
+        await sleep(400)
+      }
+      w14a = embedFrameVerdict({
+        bodyCount: landscape.bodyCount,
+        bodies: landscape.bodies ?? [],
+        frames: landscape.frames ?? [],
+        fixtureOrigin: browserFixture.origin,
+        messages: landscape.messages ?? [],
+        expectedAddress: localAddress,
+      })
+      await shot('08-browser-local-iframe')
+      // W-15: upstream semantics — the XFO negative control leaves an empty
+      // framed document (no failure projection); judge the ALWAYS-PRESENT
+      // explicit system-browser exit and the no-auto-open rule instead.
+      const xfoAddress = remoteAddressOf(browserFixture.port) + browserFixture.xfoPath.slice(1)
+      await session.evaluate(setBrowserAddress(xfoAddress))
+      await sleep(200)
+      await session.evaluate(SUBMIT_BROWSER_ADDRESS)
+      deadline = Date.now() + 20_000
+      landscape = await readEmbedLandscape()
+      while (Date.now() < deadline) {
+        landscape = await readEmbedLandscape()
+        const frameSrc = (landscape.frames ?? []).length === 1 ? landscape.frames[0].src : null
+        if (frameSrc === xfoAddress) break
+        await sleep(500)
+      }
+      const autoOpened = (landscape.opened ?? []).length
+      const externalClick = await session.evaluate(CLICK_BROWSER_EXTERNAL)
+      await sleep(600)
+      const afterExternal = await readEmbedLandscape()
+      const openedAfterClick = (afterExternal.opened ?? []).slice(autoOpened)
+      const bodyAfter = visibleBodyOf(afterExternal)
+      w15 = externalExitVerdict({
+        executed: true,
+        bodyCount: afterExternal.bodyCount,
+        bodies: afterExternal.bodies ?? [],
+        frames: afterExternal.frames ?? [],
+        expectedFrameUrl: xfoAddress,
+        autoOpened,
+        openedAfterClick,
+        expectedExternalUrl: xfoAddress,
+        failureTexts: bodyAfter === null ? [] : bodyAfter.failureTexts,
+      })
+      if (externalClick.clicked !== true) {
+        w15 = { ok: false, evidence: '系统浏览器出口点击未落下：' + JSON.stringify(externalClick) }
+      }
+      await shot('09-browser-external-exit')
+      // W-15b: close the tab; the occurrence abort must release everything.
+      const closeControl = (afterExternal.browserTabs ?? []).some(tab => (tab.close ?? 0) > 0)
+      if (!closeControl) {
+        w15b = { ok: false, evidence: '浏览器页签上没有可点的关闭控件（[data-dockkit-tab-close]）——关 tab 释放腿无法执行' }
+      } else {
+        const closed = await session.evaluate(CLOSE_BROWSER_TAB)
+        await sleep(800)
+        const rightAfter = await readEmbedLandscape()
+        await sleep(1_500)
+        const settledFacts = await readEmbedLandscape()
+        w15b = closeReleaseVerdict({
+          executed: closed.clicked === true,
+          reason: closed.clicked === true ? '' : '关闭点击未落下（页签控件已漂移）',
+          bodyCount: settledFacts.bodyCount,
+          frameCount: settledFacts.frameCount,
+          busy: settledFacts.bodyCount === 0 ? false : (settledFacts.bodies ?? []).some(body => body.busy === true),
+          settled: settledFacts.bodyCount <= rightAfter.bodyCount && settledFacts.frameCount <= rightAfter.frameCount,
+          aliasProbe: null,
+        })
+        await shot('10-browser-tab-closed')
+      }
+    }
+  } catch (error) {
+    const message = '内嵌面板腿异常：' + String(error?.message ?? error)
+    if (w13 === null) w13 = { ok: false, evidence: message }
+    if (w14a === null) w14a = { ok: false, evidence: message }
+    if (w14b === null) w14b = { ok: false, evidence: message }
+    if (w15 === null) w15 = { ok: false, evidence: message }
+    if (w15b === null) w15b = { ok: false, evidence: message }
+  } finally {
+    if (browserFixture !== null) {
+      try { await browserFixture.close() } catch { /* fixture already gone */ }
+    }
+    try { await session.evaluate(READ_EMBED_WITNESS) } catch { /* page may be gone */ }
+  }
+  rec.add('W-13', W13_TITLE, w13.ok, w13 === bootstrap ? w13.evidence : w13.evidence + '；Session 前置：' + bootstrap.evidence)
+  rec.add('W-14a', W14A_TITLE, w14a.ok, w14a.evidence)
+  rec.add('W-14b', W14B_TITLE, w14b.ok, w14b.evidence)
+  rec.add('W-15', W15_TITLE, w15.ok, w15.evidence)
+  if (remoteRelease !== null) {
+    if (remoteRelease.ok !== true) w15b = remoteRelease
+    else w15b = {
+      ok: w15b.ok === null ? true : w15b.ok,
+      evidence: w15b.evidence + '；远端 fixture 释放：' + remoteRelease.evidence,
+    }
+  }
+  rec.add('W-15b', W15B_TITLE, w15b.ok, w15b.evidence)
+  // Loud skip: a missing W-14b prerequisite must be visible at the terminal,
+  // not only inside the report (the report still carries the INFO reason).
+  for (const [id, verdict] of [['W-14a', w14a], ['W-14b', w14b], ['W-15', w15], ['W-15b', w15b]]) {
+    if (verdict.ok === null) console.warn(`SKIP ${id}：${verdict.evidence}`)
+  }
+
   // Tolerance patterns match the RAW keys; the `×N` counts are display only.
   const withCounts = keys => keys.map(key => `${key} ×${session.netFailures.get(key) ?? 1}`)
   const netFailures = summarizeNetFailures(session.netFailures)
-  const net = partitionFailures([...session.netFailures.keys()], TOLERATED_REQUEST_FAILURES)
+  // Run-scoped fixture noise: the XFO negative control is THIS run's fixture and
+  // its refusal (request failure + Chromium console line) is the criterion W-15
+  // judges — scope the tolerance to the live fixture origin so no other page's
+  // refusal can hide behind it.
+  const fixtureRules = fixtureNoiseRules(browserFixture === null ? '' : browserFixture.origin)
+  // The --ssh-fixture alias is acceptance-owned: the first aliased navigation can
+  // race the forward listener coming up. W-14b judges the loaded outcome (and its
+  // own reload retry); the global gate tolerates only THIS run's alias origin.
+  const sshAliasRules = sshFixture !== null && typeof sshFixture.expectedAliasHost === 'string'
+    ? [{
+      pattern: new RegExp('FAILED\\([^)]*\\)[^]*http://' + sshFixture.expectedAliasHost.replace(/\./gu, '\\.') + ':'),
+      reason: 'W-14b 的 ssh fixture alias（本次运行 ' + sshFixture.expectedAliasHost + '）初次装载竞态：判据在 W-14b',
+    }]
+    : []
+  const net = partitionFailures([...session.netFailures.keys()],
+    [...TOLERATED_REQUEST_FAILURES, ...EXPECTED_FIXTURE_REQUEST_FAILURES, ...fixtureRules.request, ...sshAliasRules])
   const unexpectedNet = withCounts(net.unexpected)
   const toleratedNet = withCounts(net.tolerated.map(entry => entry.split(' — ')[0]))
   rec.add('W-11', '走查期间无未预期的 ≥400 请求', net.unexpected.length === 0,
     [`未预期：${unexpectedNet.slice(0, 6).join(' | ') || '（无）'}`,
       `已登记容忍：${net.tolerated.slice(0, 4).join(' | ') || '（无）'}`].join('\n'))
 
-  const consolePartition = partitionFailures(session.consoleErrors, KNOWN_UPSTREAM_BOOT_NOISE)
+  const consolePartition = partitionFailures(session.consoleErrors,
+    [...KNOWN_UPSTREAM_BOOT_NOISE, ...EXPECTED_FIXTURE_CONSOLE_NOISE, ...fixtureRules.console])
   rec.add('W-12', '走查期间无未预期的渲染层 error', consolePartition.unexpected.length === 0,
     [`未预期：${consolePartition.unexpected.slice(0, 4).join(' | ') || '（无）'}`,
       `已登记上游噪声：${consolePartition.tolerated.slice(0, 3).join(' | ') || '（无）'}`].join('\n'))

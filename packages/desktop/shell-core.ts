@@ -22,7 +22,7 @@ import { attemptCommittedRegistryPush } from './transport-manager.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
 // Domain registrars (order of the calls below is the registration order).
 import { registerConnectionHandlers } from './shell-ipc-connections.ts';
-import { registerOpenInHandlers } from './shell-ipc-open-in.ts';
+import { registerOpenInHandlers, revokeForwardRenderer } from './shell-ipc-open-in.ts';
 import { registerGatewayPluginHandlers } from './shell-ipc-plugins-gateway.ts';
 import { registerLocalPluginHandlers } from './shell-ipc-plugins-local.ts';
 import { registerSshPluginHandlers } from './shell-ipc-plugins-ssh.ts';
@@ -651,6 +651,8 @@ export type RendererLifecycleEvent = 'did-start-loading' | 'did-finish-load' | '
 /** ready 位挂钩收敛入口。复位点选 did-start-loading 而非 did-finish-load：慢子资源
  *  可让 finish 拖到 ready IPC 之后，finish 时重置会把已置位标志 clobber 成永久 false。 */
 export function onRendererLifecycle(event: RendererLifecycleEvent): void {
+  // v2 forward revoke funnel: a new/crashed/closed document kills every iframe.
+  revokeForwardRenderer(event);
   if (event === 'did-start-loading') {
     notificationOpenDrainReady = false;
     deepLinkRendererReady = false;
