@@ -682,10 +682,10 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           // （与 data-row-key/rowKeys 同一套）。
                           const accountStateKey = flatAccount ? flatAccountKey(server.id) : workspaceKey
                           liveWorkspaceKeys.current.add(workspaceKey)
-                          // 派生 checkout 行（design 08 §3.2-§3.3）：不独立折叠（折叠只从主行发起），
-                          // 无 kebab/rename，动作全在 Git 座席；会话按放置结果渲染。
+                          // 派生 checkout 行（design 08 §3.2-§3.3）：与旧 worktree 行同形——可独立折叠
+                          // （branch 字形 ↔ chevron），无 kebab/rename，动作全在 Git 座席；会话按放置结果渲染。
                           const checkout = isCheckoutRow(workspace)
-                          const folded = !checkout && viewPrefs.folded[accountStateKey] === true
+                          const folded = viewPrefs.folded[accountStateKey] === true
                           // While THIS workspace's inline rename is active the header row
                           // hosts the edit form in place (no added list row); the flag
                           // gates form embedding, drag-off, double-click re-entry,
@@ -706,6 +706,8 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                             ? workspaceAccentStyle(server.id, workspace.id, gitFlag)
                             : undefined
                           const isWorktree = gitFlag?.isWorktree === true && !checkout
+                          // 视觉同形判据：注册 worktree 行与派生 checkout 行共用分支字形/次级标题。
+                          const gitRow = isWorktree || checkout
                           // 行健康（fail-closed）：布局快照未到 = status-unknown，绝不宣称健康；
                           // 分支/路径/健康同时进 Git 座席的 occurrence context 与行 tooltip。
                           const checkoutFacts = checkout
@@ -832,14 +834,12 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               style={workspaceAccent}
                               data-chamber-row={workspaceKey}
                               data-row-key={`workspace:${workspace.id}`}
-                              // 派生 checkout 行头：不折叠（折叠只从主行发起），无 kebab/rename；
-                              // 动作全在 Git 座席，故行头自己是键盘入口（Tab 进入 → 揭示座席），
-                              // 与主行 fold 按钮的键盘揭示路径一致。
+                              // 派生 checkout 行头：与旧 worktree 行同形——有独立折叠钮（Tab 可达，
+                              // 焦点揭示 Git 座席），无 kebab/rename；主行折叠仍隐藏整族。
                               data-checkout-row={checkout ? '' : undefined}
                               data-chamber-checkout-health={checkoutFacts?.healthKey}
                               role="treeitem"
-                              tabIndex={checkout ? 0 : undefined}
-                              aria-expanded={checkout ? undefined : !folded}
+                              aria-expanded={!folded}
                               draggable={!renamingThisWorkspace
                                 && workspace.ungrouped !== true && workspace.synthetic !== true}
                               // The git occupant (create/remove) cannot reach
@@ -953,28 +953,19 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   window.setTimeout(() => { suppressClickRef.current = false }, 0)
                                 }}
                             >
-                              {checkout ? (
-                                // 派生 checkout 行头**不折叠**（design 08 §3.2-§3.3：折叠只从主行发起）：
-                                // 这里是与 worktree 行同形的静息分支字形，只是没有折叠钮语义。
-                                <span
-                                  className={clsx(cc.foldToggle, cc.foldToggleGit, cc.checkoutGlyph)}
-                                  data-chamber-checkout-glyph=""
-                                  aria-hidden="true"
-                                >
-                                  <IconBranchOutlineRegular size={14} className={cc.foldBranch} />
-                                </span>
-                              ) : (
+                              {/* 派生 checkout 行与旧 worktree 行同形（design 08 §3.2-§3.3）：可独立折叠。
+                                  主行折叠仍隐藏整族；checkout 行自己的 folded 只隐藏本行会话。 */}
                               <button
                                 type="button"
                                 className={clsx(
                                   cc.foldToggle,
                                   folded && cc.foldToggleFolded,
-                                  // A worktree (derived) workspace shows the git-branch glyph
+                                  // A worktree/checkout row shows the git-branch glyph
                                   // at rest and the collapse chevron on hover; a normal
                                   // workspace shows a FOLDER glyph whose artwork carries the
                                   // fold state (open / closed, upstream ui-workspace parity);
                                   // the ungrouped bucket keeps the plain chevron.
-                                  isWorktree
+                                  gitRow
                                     ? cc.foldToggleGit
                                     : (workspace.ungrouped !== true && cc.foldToggleFolder),
                                 )}
@@ -986,7 +977,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 }}
                               >
                                 <IconChevronRightOutlineRegular size={14} className={cc.foldChevron} />
-                                {isWorktree && (
+                                {gitRow && (
                                   <IconBranchOutlineRegular size={14} className={cc.foldBranch} />
                                 )}
                                 {/* Upstream ui-workspace ProjectRowItem STATE-MECHANISM parity:
@@ -996,13 +987,12 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                     IconFolderOpenOutlineRegular (upstream's pair is fill open /
                                     stroke close); the hover chevron swap above stays exactly as
                                     it was. */}
-                                {!isWorktree && workspace.ungrouped !== true && (
+                                {!gitRow && workspace.ungrouped !== true && (
                                   folded
                                     ? <IconFolderCloseRegular size={14} className={cc.foldFolder} />
                                     : <IconFolderOpenOutlineRegular size={14} className={cc.foldFolder} />
                                 )}
                               </button>
-                              )}
                               {renamingThisWorkspace ? (
                                 // In-place rename: the form replaces the header's trailing
                                 // content INSIDE the row — fold toggle + gutter stay, so the
@@ -1011,7 +1001,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               ) : (
                                 <>
                                   <span
-                                    className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}
+                                    className={clsx(cc.workspaceTitle, gitRow && cc.workspaceTitleGit)}
                                     // 分支/路径 tooltip（design 06 §1.2）：checkout 行没有创建时间，
                                     // 因此没有悬停卡，tooltip 是它唯一的路径可见面。
                                     title={checkoutFacts === undefined
@@ -1354,9 +1344,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 dragAccountKey={checkout ? (workspace.familyMainId ?? workspace.id) : workspace.id}
                                 dragPlacementId={workspace.id}
                                 dragCheckoutPath={checkoutFacts?.path}
-                                checkoutParent={checkoutFacts === undefined
-                                  ? undefined
-                                  : { title: checkoutFacts.branch, ...(checkoutFacts.path === undefined ? {} : { path: checkoutFacts.path }) }}
                               />
                               {checkout && visibleSessionCount === 0 && (
                                 // checkout 行空态（design 06 §1.3）：行仍成立，只是没有会话（非整源空态）。

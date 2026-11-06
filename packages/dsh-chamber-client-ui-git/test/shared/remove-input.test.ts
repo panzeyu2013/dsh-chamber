@@ -22,9 +22,14 @@ test('unregistered removal carries discardChanges only when explicitly authorize
     'identity re-verification rides along on every request')
 })
 
-test('the checkout row authorizes the discard flag only for a dirty target', () => {
+test('the checkout row authorizes the discard flag only when the dialog collected it', () => {
   assert.deepEqual(unregisteredRemoveOptions(false), {},
-    'a clean row must not send the force authorization')
+    'a row without a discard acknowledgement must not send the force authorization')
   assert.deepEqual(unregisteredRemoveOptions(true), { discardChanges: true },
-    'the acknowledged dirty row sends exactly the flag the host consumes')
+    'the acknowledged dirty/submodule row sends exactly the flag the host consumes')
+  assert.deepEqual(unregisteredRemoveOptions(false, 'task'), { deleteBranch: 'task' },
+    'the explicit branch checkbox sends exactly the branch')
+  assert.deepEqual(unregisteredRemoveOptions(false, null), {}, 'no branch choice = keep the branch')
+  assert.deepEqual(unregisteredRemoveOptions(true, 'task'), { discardChanges: true, deleteBranch: 'task' },
+    'both explicit authorizations can ride together')
 })

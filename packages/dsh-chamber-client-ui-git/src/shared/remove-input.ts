@@ -16,12 +16,23 @@ export interface RemoveInputTarget {
 
 /**
  * The remove options one unregistered row authorizes: the discard flag rides only
- * after the dirty acknowledgement, never as a default.
- * @param dirty - the row's fresh dirty fact the confirmation copy was built from.
+ * after the matching acknowledgement (dirty or submodule), and the branch-deletion
+ * string only after the explicit "also delete the local branch" acknowledgement —
+ * neither is a default.
+ * @param discard - the user authorized the force/discard path (dirty row or a
+ *   host `worktree-submodules` refusal re-armed the acknowledgement).
+ * @param deleteBranch - the checked-out branch to delete after a successful
+ *   removal (null/undefined = keep the branch, the default).
  * @returns the options consumed by `removeUnregisteredWorktree`.
  */
-export function unregisteredRemoveOptions(dirty: boolean): { discardChanges?: true } {
-  return dirty ? { discardChanges: true } : {}
+export function unregisteredRemoveOptions(
+  discard: boolean,
+  deleteBranch?: string | null,
+): { discardChanges?: true; deleteBranch?: string } {
+  return {
+    ...(discard ? { discardChanges: true as const } : {}),
+    ...(deleteBranch === undefined || deleteBranch === null || deleteBranch === '' ? {} : { deleteBranch }),
+  }
 }
 
 /**

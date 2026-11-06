@@ -1,8 +1,8 @@
 /**
  * Removal-failure code resolution: the code behind an action failure and its
- * localized copy key. The removal DIALOG is gone (PR3): the checkout row's
- * confirmation owns the discard acknowledgement, so the running-session notes it
- * used to derive have no consumer. What remains is the code chain the shared
+ * localized copy key. The checkout row's removal dialog owns the discard /
+ * submodule acknowledgement, so these codes re-arm that dialog's checkbox and
+ * the next attempt carries `discardChanges`. Also the code chain the shared
  * action-error resolver reads for every Git failure.
  */
 import type { GitSidebarKey } from '../locales.ts'
@@ -46,6 +46,9 @@ export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | 
     case 'agent-not-ready': return 'agentNotReady'
     // A fresh host re-check that found the tree dirty: the host's own refusal.
     case 'worktree-dirty': return 'dirtyDiscardWarning'
+    // Submodule checkouts make Git refuse a plain remove; the retry needs the
+    // explicit discard authorization (force).
+    case 'worktree-submodules': return 'submoduleDiscardWarning'
     case 'worktree-invalid': return 'unhealthyInvalidBlocked'
     // 404 on the gitWorktree namespace: the host package is absent/inactive.
     case 'git-host-not-loaded': return 'gitHostNotLoaded'
@@ -60,6 +63,7 @@ export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | 
     case 'worktree-not-found': return 'worktreeNotFound'
     case 'unhealthy-target': return 'unhealthyTarget'
     case 'source-workspace-missing': return 'sourceWorkspaceMissing'
+    case 'archive-failed': return 'archiveFailed'
     default: return undefined
   }
 }

@@ -203,6 +203,11 @@ export interface GitSourceState {
   /** The failure code behind {@link GitSourceState.actionError}: the source-level
    *  strip localizes it; absent on an unmapped/plain failure (English message shown). */
   actionErrorCode?: string
+  /** Non-blocking completion notice (e.g. the worktree was removed but the
+   *  optional branch deletion failed). The source strip renders it with a
+   *  dismiss control; it never blocks an action and is cleared by the next
+   *  action, a dismiss, or a disconnect. */
+  notice?: string
   busy?: GitBusyState
   recovery?: GitRecovery
   updatedAt?: number

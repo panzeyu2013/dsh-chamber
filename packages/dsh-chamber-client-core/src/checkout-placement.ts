@@ -52,6 +52,23 @@ function pathSegments(path: string): string[] {
   return checkoutPathKey(path).replaceAll('\\', '/').split('/').filter(segment => segment !== '')
 }
 
+/**
+ * True when `path` is `ancestor` itself or one of its descendants on a path
+ * segment boundary. Shared by checkout placement (row derivation) and the
+ * checkout-archive plan so the two never disagree about what "inside" means.
+ * Paths are host-canonical; only the spelling is normalized here.
+ */
+export function pathIsWithin(path: string | undefined, ancestor: string): boolean {
+  if (path === undefined || path === '') return false
+  const pathParts = pathSegments(path)
+  const ancestorParts = pathSegments(ancestor)
+  if (ancestorParts.length === 0 || pathParts.length < ancestorParts.length) return false
+  for (let index = 0; index < ancestorParts.length; index += 1) {
+    if (pathParts[index] !== ancestorParts[index]) return false
+  }
+  return true
+}
+
 /** Stable derived row id of one checkout path. */
 export function checkoutRowId(path: string): string {
   return `${CHECKOUT_ID_PREFIX}${checkoutPathKey(path)}`

@@ -28,6 +28,10 @@ const COORDINATOR = source('../../src/shared/coordinator.ts')
 const LAYOUT = source('../../src/shared/layout.ts')
 const TYPES = source('../../src/shared/types.ts')
 const CREATE_DIALOG = source('../../src/client/CreateWorktreeDialog.tsx')
+const REMOVAL = source('../../src/client/useCheckoutRemoval.tsx')
+const REMOVE_DIALOG = source('../../src/client/CheckoutRemoveDialog.tsx')
+const STOP_DIALOG = source('../../src/client/CheckoutArchiveStopDialog.tsx')
+const ARCHIVE_FACTS = source('../../src/client/checkout-archive-facts.ts')
 
 const flat = (text: string): string => normalize(text)
 
@@ -61,9 +65,9 @@ test('checkout facts resolve by path and stay scoped to the row repository', () 
 test('the checkout row offers exactly its three actions behind the host reveal hooks', () => {
   assert.match(flat(checkoutBranch), /createSessionHere\(context\.sourceId, checkout\.path\)/,
     'new session: session.create(source) + enter(path) — PR1 createSessionHere')
-  assert.match(flat(checkoutBranch), /\{pathRemoveConfirmation\}/,
+  assert.match(flat(checkoutBranch), /\{removal\.dialog\}/,
     'the checkout row renders the shared path-based removal confirmation')
-  assert.match(flat(LINE), /removeUnregisteredWorktree\(context\.sourceId, \{/,
+  assert.match(flat(REMOVAL), /removeUnregisteredWorktree\(sourceId, \{/,
     'removal goes through the path-based unregistered removal (no workspace.delete)')
   assert.match(flat(checkoutBranch), /copyCheckoutPath\(checkout\.path\)/,
     'copy path: the row canonical path through the clipboard affordance')
@@ -107,6 +111,33 @@ test('PR3: the unregistered block and the registered removal path are gone', () 
   assert.match(CREATE_DIALOG, /createFromPreview\(sourceId, preview\)/)
   assert.doesNotMatch(CREATE_DIALOG, /createSessionHere|workspace\.create|createWorkspace|rollbackCreate/,
     'the create dialog never creates a workspace or a session')
+})
+
+test('the removal flow is close-safe, re-plans the archive at confirm, and arms the force acknowledgements', () => {
+  // A confirmed removal cannot be dismissed by X/Escape/mask (only the success
+  // path closes it): the async step would otherwise continue after an apparent cancel.
+  assert.match(flat(REMOVE_DIALOG), /if \(disabled\) return/,
+    'the dialog ignores a close while removal is disabled')
+  assert.match(flat(REMOVE_DIALOG), /onClose=\{requestClose\}/,
+    'the Modal close path uses the guarded close')
+  // The archive roots are physical sessions, planned from the unary snapshot and
+  // re-fetched at confirm; no polled workspace membership and no stale preview.
+  assert.match(flat(ARCHIVE_FACTS), /planCheckoutArchive\(/)
+  assert.match(flat(ARCHIVE_FACTS), /archiveSetKnown === true/)
+  assert.match(flat(REMOVAL), /fetchCheckoutArchiveFacts\(sourceId, target\.path/,
+    'the confirm path re-plans with fresh facts')
+  assert.doesNotMatch(flat(REMOVAL), /main\.sessionIds/, 'archive roots do not depend on polled membership')
+  assert.match(flat(REMOVAL), /readActivityRefusal: error => sessionArchiveRefusal\(error\)/,
+    'the stop confirmation carries the activity families')
+  assert.match(flat(REMOVAL), /<CheckoutArchiveStopDialog/, 'the stop confirmation is the activity-list dialog')
+  assert.doesNotMatch(flat(REMOVAL), /<RiskConfirmation/, 'the generic risk dialog is not the stop surface')
+  // Dirty/submodule host refusals re-arm the acknowledgment and the retry is a
+  // separate, explicit discard authorization.
+  assert.match(flat(REMOVAL), /removeFailureCode\(error\)/)
+  assert.match(flat(REMOVAL), /worktree-submodules/)
+  assert.match(flat(REMOVAL), /setRowForceReason/)
+  assert.match(flat(REMOVAL), /unregisteredRemoveOptions\(discard, rowDeleteBranch/)
+  assert.match(flat(STOP_DIALOG), /archiveActivityList/)
 })
 
 test('the coordinator publishes the layout projection with the placement keys (path/locked)', () => {

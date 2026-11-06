@@ -29,6 +29,7 @@ import { GitSagaError, recoveryAfterSagaFailure, recoveryForFailure, runCreateSa
 import { createListenerSet, errorMessage as errorText } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   GitBusyState, GitRecovery, GitSourceError, GitSourceState, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult,
+  RemoveWorktreeResult,
 } from './types.ts'
 
 const POLL_MS = 30_000
@@ -322,7 +323,7 @@ async function runBusy<T>(sourceId: string, busy: GitBusyState, operation: () =>
     throw new GitActionError('action-in-progress', 'Another Git operation is already running on this source')
   }
   try {
-    patchSource(sourceId, { busy, actionError: undefined, actionErrorCode: undefined })
+    patchSource(sourceId, { busy, actionError: undefined, actionErrorCode: undefined, notice: undefined })
     const result = await operation()
     patchSource(sourceId, { actionError: undefined, actionErrorCode: undefined })
     return result
@@ -518,7 +519,7 @@ export async function removeUnregisteredWorktree(
   sourceId: string,
   target: { repoId: string; worktreeId: string; path: string; branch: string | null; head: string },
   options: { deleteBranch?: string; discardChanges?: boolean } = {},
-): Promise<void> {
+): Promise<RemoveWorktreeResult> {
   const operationId = nextId('remove')
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
     // Fresh refresh first: the row identity may be up to 30s stale. Inside the busy
@@ -536,8 +537,9 @@ export async function removeUnregisteredWorktree(
     // The host input (identity + the explicit discard/delete authorizations) is the
     // one shared builder, so the unregistered path cannot drift from the wire shape.
     const input = unregisteredRemoveInput(operationId, target, options)
+    let result: RemoveWorktreeResult
     try {
-      await runRemoveSaga({
+      result = await runRemoveSaga({
         hostRemove: () => gitWorktreeApi.remove(sourceId, input, target.path),
         ambiguousRecovery: error => isAmbiguousGitRpcFailure(error) && !isDeterministicGitRejection(error)
           ? { kind: 'git-remove', ...input, message: errorText(error) }
@@ -553,6 +555,7 @@ export async function removeUnregisteredWorktree(
       }
       throw error
     }
+    return result
   })
 }
 
@@ -573,9 +576,16 @@ export async function retryRecovery(sourceId: string): Promise<void> {
 
 export function clearActionError(sourceId: string): void {
   const current = states.get(sourceId)
-  if (current?.actionError !== undefined || current?.actionErrorCode !== undefined) {
-    patchSource(sourceId, { actionError: undefined, actionErrorCode: undefined })
+  if (current?.actionError !== undefined || current?.actionErrorCode !== undefined || current?.notice !== undefined) {
+    patchSource(sourceId, { actionError: undefined, actionErrorCode: undefined, notice: undefined })
   }
+}
+
+/** Report a partial success the source strip must state: the worktree removal
+ *  committed, but the optional local-branch deletion failed. The dialog's row
+ *  unmounts with the checkout, so the notice rides the source state instead. */
+export function reportBranchDeleteFailure(sourceId: string, message: string): void {
+  patchSource(sourceId, { notice: message })
 }
 
 /** Per-poll wave: the 30s tick refreshes at most this many connected sources,

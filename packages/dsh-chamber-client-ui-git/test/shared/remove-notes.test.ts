@@ -21,6 +21,7 @@ test('removeFailureCopyKey: host and local refusals map to localized copy', () =
   assert.equal(removeFailureCopyKey('main-worktree'), 'mainWorktreeBlocked')
   assert.equal(removeFailureCopyKey('worktree-locked'), 'lockedBlocked')
   assert.equal(removeFailureCopyKey('worktree-dirty'), 'dirtyDiscardWarning')
+  assert.equal(removeFailureCopyKey('worktree-submodules'), 'submoduleDiscardWarning')
   assert.equal(removeFailureCopyKey('worktree-invalid'), 'unhealthyInvalidBlocked')
   assert.equal(removeFailureCopyKey('fresh-facts-unavailable'), 'freshFactsUnavailable')
   assert.equal(removeFailureCopyKey('source-workspace-missing'), 'sourceWorkspaceMissing')
@@ -29,12 +30,13 @@ test('removeFailureCopyKey: host and local refusals map to localized copy', () =
   assert.equal(removeFailureCopyKey('worktree-current'), undefined)
   assert.equal(removeFailureCopyKey('worktree-runtime-unknown'), undefined)
   assert.equal(removeFailureCopyKey('worktree-unhealthy'), undefined)
-  assert.equal(removeFailureCopyKey('archive-failed'), undefined)
+  // The optional archive-before-remove step has its own localized failure.
+  assert.equal(removeFailureCopyKey('archive-failed'), 'archiveFailed')
   // Unmapped codes keep the host message (honest, if English).
   assert.equal(removeFailureCopyKey('operation-conflict'), undefined)
   assert.equal(removeFailureCopyKey(undefined), undefined)
   // Every mapped key exists in BOTH locales (zh/en parity).
-  for (const code of ['running-agent', 'main-worktree', 'worktree-locked', 'worktree-dirty', 'worktree-invalid']) {
+  for (const code of ['running-agent', 'main-worktree', 'worktree-locked', 'worktree-dirty', 'worktree-submodules', 'worktree-invalid', 'archive-failed']) {
     const key = removeFailureCopyKey(code)!
     assert.equal(typeof zh[key], 'string', `${code} → zh.${key}`)
     assert.equal(typeof en[key], 'string', `${code} → en.${key}`)

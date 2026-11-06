@@ -319,3 +319,76 @@
   font-size: 11px;
   line-height: 16px;
 }
+/* Checkout-row removal dialog: identity facts, the optional branch/archive
+   choices and the required acknowledgements. */
+.removeFacts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.removeFacts code {
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-primary);
+}
+
+.removeDescription {
+  margin: 0;
+}
+
+.rowCheckbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.rowCheckbox input {
+  margin-top: 2px;
+}
+
+.archiveNote {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.danger {
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
+}
+.archiveSessionList,
+.archiveActivityList {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.archiveSessionList li,
+.archiveActivityList li {
+  overflow-wrap: anywhere;
+}
+
+.archiveRetry {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.removeNotice {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}

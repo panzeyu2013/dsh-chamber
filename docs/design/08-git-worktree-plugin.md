@@ -33,6 +33,12 @@
    bundle 默认的 `node` + 部署方 PATH。缺失 = fail-fast + 诊断，不设计 E1/E2 回退。
 8. **Swift 原生壳与 sidecar 保留**：不删、不迁 sidecar；node 分 flavor，P5b 在 Swift 与
    Electron 两壳内都要验收（§7.3）。
+9. **worktree 是目录，不是权限边界（上游语义）**：上游 `workingDirectory.set` 的契约是
+   “切换目录，不改变现有进程或权限”；`sandboxPolicy` 的 `workspaceRoot` 始终取
+   `session.header.cwd`（会话原始 workspace），池内 checkout 只有落在该根之下才可写。
+   chamber 不修改这一默认，也不把 worktree 注册成 workspace；会话仍属于源 workspace
+   （官方 UI / mobile / gateway 亦按源 workspace 分组）。fork、subagent、AGENTS.md 与
+   skills 的目录解析都走 effective `workingDirectory`（fork 另经事件回放继承），与上游一致。
 
 ```text
 ┌─ 侧栏（自建）──────────────────────────────────────────────┐
@@ -280,10 +286,12 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与
   `headState/attention/upstream/ahead/behind` 不进行内（保留给删除门控、创建对话框的
   unborn 过滤与未来管理页）。facts 未到时显示骨架/源行回落，不能声称 ready。
 - **动作**：宽栏 hover 揭示（与主行同一 `data-git-action` 钩子、键盘焦点同一
-  `.rowActionsVisible` 路径）；派生行动作 = 新建会话、删除、复制路径；**没有 kebab /
-  rename / 折叠钮**（checkout 行 header 不独立折叠，折叠只从主行发起），没有“创建子工作树”。
-  命中盒=视觉盒（20px 动作钮的 24px 偏差与主行同一既有取舍）。occupant 容器 rest 态零布局
-  占用（`data-git-occupant`），与主行同一揭示规则；对话框是 body portal。
+  `.rowActionsVisible` 路径）；派生行动作 = 新建会话、复制路径、删除；**没有 kebab / rename**，
+  但**有独立折叠钮**（与旧 worktree 行同形：branch 字形 ↔ chevron，`viewPrefs.folded` 按行
+  自己的 id）；主行折叠仍隐藏整族。状态词只在 `有改动/已锁定/状态未知` 时渲染于动作之前，
+  **不显示「无改动」占位**；动作簇贴右缘，状态词出现只压缩标题、不推动动作。会话行**不画**
+  checkout 分支 glyph。命中盒=视觉盒（20px 动作钮的 24px 偏差与主行同一既有取舍）。occupant
+  容器 rest 态零布局占用（`data-git-occupant`），与主行同一揭示规则；对话框是 body portal。
 - **可访问性**：动作有键盘等价入口（Tab 可达的揭示），拖动有非拖动替代（菜单移动），
   aria 名称/描述覆盖分支、路径、健康与动作。
 
@@ -291,7 +299,8 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与
 
 - **折叠**：派生行带 `familyMainId`；`hiddenByMainWorkspaceFold` 读派生行字段，主行折叠
   隐藏同族 checkout，展开恢复；主行消失时谓词要求主行仍在列表，避免旧 folded 偏好把派生行
-  锁死；隐藏行不携带破坏性在途状态。派生行自己的 folded 状态不写（无折叠钮）。
+  锁死；隐藏行不携带破坏性在途状态。派生行**有自己的 folded 状态**（行头折叠钮，与旧 worktree
+  行同形）：只隐藏本行会话，不影响同族其它行。
 - **树（家族优先）**：`workspaceTreeParents` 接受 `kind:'checkout'`，派生行的显示父级取
   它 main 的父级；池在 `<repo>/.agents/worktrees` 时纯前缀本可落在 repo 之内，但派生行不是
   注册 workspace，树仍以 familyMain 归位。无 git 家族信息时退化为纯前缀；树只改缩进、不解
@@ -312,7 +321,7 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与
   不变；归档集/可见性仍按源 workspace。
 - **flat/窄栏**：flat 不渲染 checkout 行（会话在 flat 列表）；窄栏无 Git 动作；空态文案见
   侧栏语言面。
-- **行激活**：无独立折叠；无 kebab/rename；动作 hover 揭示；与主行共用同一套家族树缩进
+- **行激活**：有独立折叠钮；无 kebab/rename；动作 hover 揭示；与主行共用同一套家族树缩进
   变量（`--chamber-tree-depth`）。
 
 ### 3.4 池内边界、去重与旧池
@@ -398,8 +407,10 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - **idle 当前会话允许删除**：当前会话若 idle，删除后下一次消息由宿主 `workingDirectory.ensure()`
   回落到源项目（PR1 真机门）；只有运行中的当前会话阻塞。blank/从未提交的当前会话同样按 idle
   处理（没有内容可保护）。
-- 删除**不停止、不取消、不归档、不删除任何会话**；没有“先归档（含子会话）”勾选项。归档只
-  通过 running 的 INERT 判据影响阻塞（§5.2），归档动作归侧栏/归档管理器。
+- 删除**默认不**停止、不取消、不归档、不删除任何会话；宿主 `remove` 本身不碰归档。“同时
+  归档这些会话（含子会话）”是 §5.4 的可选、默认关闭的**客户端**授权，在 remove 之前执行
+  官方两段式归档，不是删除的前置。归档只通过 running 的 INERT 判据影响阻塞（§5.2），
+  归档动作归侧栏/归档管理器。
 - 身份/锁/主 checkout/注册前置全保留；`remove` 对已注册路径 fail-closed
   `workspace-registered`（§3.4），不做 registration-only 删除。
 - 响应丢失后以权威 topology 已无该 worktree 为成功对账条件；删除后不反向重建 Git 树，也不
@@ -443,25 +454,38 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 
 ### 5.4 删除对话框与文案
 
-- 会话闭包统计 + **会话标题列表**（≤5 + “还有 N 条”，取自侧栏 aggregate）；**不再有**
-  “先归档（含子会话）”勾选或归档失败前置。另有“同时删除本地分支”勾选（§5.3）。
-- **dirty**：删除图标不禁用（仅 dirty），点击进对话框显示醒示；授权由官方
-  `RiskConfirmation` 收集（警示 + 自动聚焦的勾选框），一次手势即 移除 → 勾选 → 确认，
-  确认后以 `discardChanges: true` 跑同一删除路径。取消/关闭/遮罩/Escape 都复位授权，
-  不留下“已授权但没删”的脏状态。
-- **含子模块**：首次删除被 host 确定性拒绝后，对话框就地显示警示，点“移除”重开同一官方
-  `RiskConfirmation`（勾选“丢弃该工作树中的子模块检出”）；勾选后同一授权重试。
-- **运行中会话**：`blocked === 'running'` 时删除图标不禁用（与 dirty 同型），没有勾选框；
-  删除不询问、不触碰会话；标题/aria 用 `runningRemoveTitle` 说明“有未归档会话正在运行，
-  无法移除；已归档的运行中会话不阻塞”。旧宿主（无 `blockingRunningSessionIds`）用中性
-  legacy 文案，不得声称归档状态。另有已归档运行中会话时追加 `runningRemoveArchivedNote`。
+- 对话框是应用内 `CheckoutRemoveDialog`（`Modal` + `Button` 原语；三个选择需要
+  同框，故不是单一 `RiskConfirmation`）。身份行给路径与分支；**会话闭包标题列表**
+  （≤5 + “还有 N 条”，unary snapshot 的标题；未命名会话用占位）在勾选归档后展示。
+- **归档 roots = 物理在该 checkout 内的会话**（`workingDirectory ?? cwd` 按路径段边界），
+  再加 `parentSessionId` 的 fork 闭包；**不依赖轮询的 workspace membership**（宿主
+  canonical-cwd 索引退化或 30s 轮询窗口内新建的会话也能被归档）。归档集用 mounted
+  aggregate 的权威集（`archiveSetKnown === true`）跳过已归档；unary 的未知集不冒充。
+- **归档勾选默认关闭**：这是客户端 consumer 的一步，不是宿主 remove 的一部分，也不改变
+  “删除默认不归档”的语义。勾选后**确认时重新拉取 unary 并重算**（对话框打开时的预览只用于
+  计数/标题；可能已过期）；先 plain `archiveSession`，`workspace/session-active` 拒绝时由
+  用户确认（停止对话框逐类列出 turn/subagent/job/schedule）再带 `stopActivity` 重发；
+  归档失败/确认取消则中止删除。归档与删除非原子（已归档的保持归档）。另有“同时删除本地
+  分支”勾选（§5.3）。
+- **dirty**：删除图标不禁用（仅 dirty），点击进对话框显示警示；对话框内勾选后以
+  `discardChanges: true` 跑同一删除路径。**关闭/遮罩/Escape 在删除进行中被忽略**（footer
+  Cancel 也禁用），避免“看起来取消、实际继续删”；取消只在未开始时复位授权。
+- **含子模块**：首次删除被 host 确定性拒绝 `worktree-submodules` 后，对话框就地显示警示并
+  **重新武装**“丢弃子模块检出”的勾选；勾选后同一授权以 `discardChanges: true` 重试。
+  dirty 在快照之后才发生时同理（`worktree-dirty` 重新武装 dirty 勾选）。
+- **运行中会话**：`blocked === 'running'` 时删除图标不禁用（与 dirty 同型），对话框给出
+  归档勾选；不勾选时由宿主 `running-agent` 拒绝（客户端不预判），勾选后走上游两段式归档，
+  归档即 INERT，删除可通过。删除本身不询问、不停、不归档、不删除会话；标题/aria 用
+  `runningRemoveTitle` 说明“有未归档会话在运行；可勾选归档后移除，或先结束这些会话”。
+  旧宿主（无 `blockingRunningSessionIds`）用中性 legacy 文案，不得声称归档状态。
 - **硬阻断**：main/locked/unhealthy/status-unknown 保留；已注册路径走 workspace 删除
   （先解注册），不在本对话框。
-- **会话事实拉取失败 = 硬阻断（fail-closed）**：对话框打开时拉取 instance snapshot 枚举
-  将被孤立的会话树；失败则 `sessionFactsError` 非空、确认按钮禁用并就地显示错误。
-- **未注册/缺失行删除**：走应用内官方 `RiskConfirmation`（行内按钮只武装确认，确认后才发）。
-  dirty 行在同一确认框收集丢弃授权；missing 行文案明示这是“残留记录清理”（等效
-  `git worktree prune`，不涉及任何文件或分支）。新建会话对 missing 行禁用。
+- **会话事实拉取失败**：对话框打开时拉取 unary；失败时归档勾选禁用、就地显示错误并提供
+  “重试”，但**不阻断**删除本身（path-based remove 不依赖会话事实；旧 registered 流程的
+  硬阻断随该流程一起退役）。
+- **未注册/缺失行删除**：同一应用内对话框（行内按钮只武装确认，确认后才发）。缺失行不显示
+  分支/归档勾选，文案明示这是“残留记录清理”（等效 `git worktree prune`，不涉及任何文件或
+  分支）；新建会话对 missing 行禁用。
 
 ### 5.5 missing 记录清理
 
@@ -662,15 +686,17 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
   不可写就 fail-closed）。
 - **保留 registered remove / 先归档再删**：否决。checkout 不是 workspace，registered 删除
   只会把“删 Git 树”与“删注册/归档会话”两个域重新耦合；归档是用户对会话的选择，不应成为
-  删除工作树的前置。改为 path-based remove + running/current 守卫；已注册路径先解注册。
-  旧 registered 池由发布前提清空（§7.4）。
+  删除工作树的**默认前置**。改为 path-based remove + running/current 守卫；已注册路径先解注册。
+  旧 registered 池由发布前提清空（§7.4）。**可选的**客户端归档勾选（默认关闭，§5.4）是
+  显式用户授权，不改变默认语义，故保留。
 - **在 flags store 发布合成 checkout flag / 把派生行 id 写进 workspace order**：否决。
   `retainSourceWorkspaceFlags` 会剪掉非 workspace key；派生行自带
   `repoKey/familyMainId/isMain`，flag 查找回落即可。拖动用独立 `checkoutOrder` 子序，
   `resolveWorkspaceDrop`/`commitWorkspaceDrag` 零改动，避免把派生 id 送进宿主的
   workspace order（会 404/污染注册表序）。
 - **恢复“trailing”行尾 glyph / GitHub PR 行图标**：否决。trailing 座席与行几何冲突（旧裁决
-  不变）；P5b 关闭 GitHub provider，行图标/PR 卡暂缓，checkout 会话 glyph 由侧栏自绘。
+  不变）；P5b 关闭 GitHub provider，行图标/PR 卡暂缓。会话行**不画** checkout 分支 glyph
+  （旧 worktree 会话显示同形，避免每行标题左移）。
 - **P5b 默认启用**：否决。forge 仍是 EXPERIMENTAL，启用会改变 composer/restore 面并引入
   两实例配置；改为 opt-in + 重启，GitHub 行 disabled 由 overlay 保证。
 - **node 写 `process.execPath`（Electron 二进制当 node）**：否决。forge 的 `nodeCommand`
@@ -678,6 +704,15 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
   `node-unavailable`。改为 PATH shim / string-only 真实 node，Swift 用 sidecar node。
 - **旧池自动迁移/提示**：否决。检测旧根会把“升级前清空”变成代码里的兼容分支，且旧根残留
   会被 snapshot 变成 missing 行（被动提示）。改为发布前提 + 只报池内。
+- **归档 roots 仍取主 workspace membership / 复用打开时的预览**：否决。membership 是轮询 +
+  可退化视图（canonical-cwd 索引为空时 roots=0），且打开后新建/进入的会话不在其中；物理
+  `workingDirectory ?? cwd` + 确认时重算才是 checkout 的权威。
+- **删除进行中允许 X/Escape 关闭以“取消”**：否决。异步删除没有取消语义，关闭只会造成
+  “看起来取消、实际继续”；改为删除中忽略关闭，停止确认仍可单独取消归档。
+- **子模块 refusal 只显示错误、不重新武装勾选**：否决。host 的强制移除需要显式
+  `discardChanges`；不重新武装会让用户永远无法越过该拒绝。
+- **归档对话框复用单一 `RiskConfirmation`**：否决。分支/归档/确认三个选择无法塞进单框；
+  改为自定义 `Modal` + 停止对话框，仍只用原语组件。
 
 ## 9. 被否方案（重复实现单源化：`isRecord`）
 
