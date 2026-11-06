@@ -1,8 +1,15 @@
 /**
- * Creation-echo placement (design 08 PR2 §5.3): a checkout session is echoed
- * with its intended `workingDirectory`, so the derived row places it in the
- * checkout IMMEDIATELY and converges onto the authoritative snapshot without a
- * visible jump back to the source row.
+ * Creation-echo placement (design 08 PR2 §5.3): a checkout session is echoed with its
+ * intended `workingDirectory`, so the derived row places it in the checkout
+ * IMMEDIATELY and converges onto the authoritative snapshot without a visible
+ * jump back to the source row.
+ *
+ * HOST FACT this suite now models: the `working-directory` projection's init is
+ * `header.cwd`, so every authoritative row carries `workingDirectory = source
+ * workspace path` from the moment the session is created — `enter` only makes
+ * that value DEPART from the creation seed. The placement intent therefore holds
+ * on the seed and retires on the departure; a fixture without `workingDirectory`
+ * models an older host, not this one.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -90,20 +97,21 @@ test('the authoritative snapshot retires the echo without moving the row', () =>
     'echo and authoritative placement are identical: no visible jump')
 })
 
-test('the enter window: accounting alone does NOT retire the placement intent (no source-row flash)', () => {
+test('the enter window: the creation seed is NOT a placement fact (no source-row flash)', () => {
   // The push that accounts the new membership lands BEFORE `gitWorkTree/enter` (a second
-  // unary), so it still reports the source cwd with no `workingDirectory` projection.
+  // unary), and the host projects `workingDirectory = header.cwd` — the SOURCE root — from
+  // creation on. Only a value that DEPARTS from that seed is the host's placement fact.
   const window = aggregateOf(
     [workspace('m1', MAIN, ['s-new'])],
-    [session('s-new', { cwd: MAIN, blank: true })],
+    [session('s-new', { cwd: MAIN, workingDirectory: MAIN, blank: true })],
   )
   const ledger = recordPendingSession({}, 'srv-a', PENDING, 1000)
   const held = reconcilePendingSessions(ledger, 'srv-a', window.workspaces, window.sessions)
   assert.deepEqual(held['srv-a']?.map(entry => entry.sessionId), ['s-new'],
-    'membership accounting is no convergence signal for a placement intent')
-  assert.equal(window.sessions[0]?.workingDirectory, undefined, 'control: the host has not projected it yet')
+    'the creation seed is no convergence signal for a placement intent')
+  assert.equal(window.sessions[0]?.workingDirectory, MAIN, 'control: the host reports the creation seed')
   const projected = withSessionEcho(window, held['srv-a'])
-  assert.equal(projected.sessions[0]?.workingDirectory, FEAT, 'the intent rides the listed row')
+  assert.equal(projected.sessions[0]?.workingDirectory, FEAT, 'the intent replaces the seed on the listed row')
   assert.deepEqual(shape(derive(projected)), [
     { id: 'm1', sessions: [] },
     { id: `__checkout__:${FEAT}`, sessions: ['s-new'] },
@@ -115,6 +123,48 @@ test('the enter window: accounting alone does NOT retire the placement intent (n
   )
   assert.deepEqual(reconcilePendingSessions(held, 'srv-a', converged.workspaces, converged.sessions), {})
   assert.equal(withSessionEcho(converged, held['srv-a']), converged, 'identity preserved once the fact exists')
+})
+
+test('the creation seed compares canonically: a trailing separator still holds the intent', () => {
+  const window = aggregateOf(
+    [workspace('m1', MAIN, ['s-new'])],
+    [session('s-new', { cwd: MAIN, workingDirectory: `${MAIN}/`, blank: true })],
+  )
+  const ledger = recordPendingSession({}, 'srv-a', PENDING, 1000)
+  const held = reconcilePendingSessions(ledger, 'srv-a', window.workspaces, window.sessions)
+  assert.deepEqual(held['srv-a']?.map(entry => entry.sessionId), ['s-new'],
+    'canonicalPathKey(seed spelling) must not retire the intent')
+  assert.equal(withSessionEcho(window, held['srv-a']).sessions[0]?.workingDirectory, FEAT,
+    'the seed spelling is still patched to the intent')
+})
+
+test('the seed may come from the accounting workspace when the echo path is unresolved', () => {
+  // An unmounted source lists the session under a synthetic cwd group: the fact's host
+  // workspace id has no aggregate row, so `onSessionCreated` records the entry with a
+  // workspaceId and NO path. The accounting workspace still supplies the creation seed.
+  const synthetic = aggregateOf(
+    [workspace('__cwd__:/repo', MAIN, ['s-new'], { synthetic: true })],
+    [session('s-new', { cwd: MAIN, workingDirectory: MAIN, blank: true })],
+  )
+  const unresolved = recordPendingSession({}, 'srv-a', {
+    sessionId: 's-new', workspaceId: 'm1', workingDirectory: FEAT, blank: true,
+  }, 1000)
+  const held = reconcilePendingSessions(unresolved, 'srv-a', synthetic.workspaces, synthetic.sessions)
+  assert.deepEqual(held['srv-a']?.map(entry => entry.sessionId), ['s-new'],
+    'the accounting path is the seed, so the intent is held')
+  assert.equal(withSessionEcho(synthetic, held['srv-a']).sessions[0]?.workingDirectory, FEAT,
+    'the projection honours the intent even though the entry carried no path')
+})
+
+test('a missing projection keeps the historical accounting convergence (older host)', () => {
+  const window = aggregateOf(
+    [workspace('m1', MAIN, ['s-new'])],
+    [session('s-new', { cwd: MAIN, blank: true })],
+  )
+  const ledger = recordPendingSession({}, 'srv-a', PENDING, 1000)
+  assert.deepEqual(reconcilePendingSessions(ledger, 'srv-a', window.workspaces, window.sessions), {},
+    'no workingDirectory projection = no placement fact to hold for: retire on accounting')
+  assert.equal(withSessionEcho(window, undefined), window, 'nothing is patched without a live entry')
 })
 
 test('a different host value wins: the intent never overrides a present workingDirectory', () => {

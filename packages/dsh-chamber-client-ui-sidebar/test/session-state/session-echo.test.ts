@@ -121,31 +121,39 @@ test('reconcilePendingSessions: only AUTHORITATIVE ACCOUNTING converges — a li
   assert.equal(accounted['ssh-b'], undefined, 'both accounted = the ledger entry is retired')
 })
 
-test('reconcilePendingSessions: a checkout placement intent outlives accounting until the host projects it', () => {
+test('reconcilePendingSessions: a placement intent holds the creation seed until the host departs from it', () => {
   const ledger = { 'ssh-b': [pending('new', 'w1', '/p/a', 1000, true, '/p/a/.agents/worktrees/feat')] }
   const accounted = [realWorkspace('w1', '/p/a', ['new'])]
+  // The host projects `workingDirectory = header.cwd` (the source root) from creation on; that
+  // seed is NOT the placement fact. Membership + seed therefore keep the intent alive.
+  const seed = [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a' }]
   assert.equal(
-    reconcilePendingSessions(ledger, 'ssh-b', accounted, [sessionRow('new', '/p/a', true)]), ledger,
-    'membership alone is no signal for a placement intent: enter is the second unary (design 08 §4.2)',
+    reconcilePendingSessions(ledger, 'ssh-b', accounted, seed), ledger,
+    'the creation seed is no convergence signal for a placement intent (design 08 §4.2)',
   )
   const placed = [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a/.agents/worktrees/feat' }]
   assert.deepEqual(reconcilePendingSessions(ledger, 'ssh-b', accounted, placed), {},
-    'the host placement fact retires the intent')
+    'the host placement fact (a value departing from the seed) retires the intent')
   const diverged = [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a/.agents/worktrees/other' }]
   assert.deepEqual(reconcilePendingSessions(ledger, 'ssh-b', accounted, diverged), {},
-    'any host value retires it: the authority always wins')
+    'any departing host value retires it: the authority always wins')
 })
 
-test('withSessionEcho: a listed row without the placement fact renders the intent (no source-row flash)', () => {
-  const before = aggregate([realWorkspace('w1', '/p/a', ['new'])], [sessionRow('new', '/p/a', true)])
+test('withSessionEcho: a listed row still carrying the creation seed renders the intent (no source-row flash)', () => {
+  const before = aggregate([realWorkspace('w1', '/p/a', ['new'])],
+    [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a' }])
   const after = withSessionEcho(before, [pending('new', 'w1', '/p/a', 900, true, '/p/a/.agents/worktrees/feat')])
   assert.equal(after.sessions[0]?.workingDirectory, '/p/a/.agents/worktrees/feat',
     'the enter window keeps the row in its checkout instead of the source row')
-  assert.equal(before.sessions[0]?.workingDirectory, undefined, 'the input aggregate is never mutated')
+  assert.equal(before.sessions[0]?.workingDirectory, '/p/a', 'the input aggregate is never mutated')
+  const missing = aggregate([realWorkspace('w1', '/p/a', ['new'])], [sessionRow('new', '/p/a', true)])
+  assert.equal(withSessionEcho(missing, [pending('new', 'w1', '/p/a', 900, true, '/p/a/.agents/worktrees/feat')])
+    .sessions[0]?.workingDirectory, '/p/a/.agents/worktrees/feat',
+  'a missing projection is patched too (older host / enter window)')
   const placed = aggregate([realWorkspace('w1', '/p/a', ['new'])],
     [{ ...sessionRow('new', '/p/a', true), workingDirectory: '/p/a/.agents/worktrees/feat' }])
   assert.equal(withSessionEcho(placed, [pending('new', 'w1', '/p/a', 900, true, '/p/a/.agents/worktrees/feat')]),
-    placed, 'a present host value is never patched and the identity is preserved')
+    placed, 'a departing host value is never patched and the identity is preserved')
 })
 
 test('removePendingSession / forgetPendingSessions: the withdraw halves are identity-preserving', () => {
