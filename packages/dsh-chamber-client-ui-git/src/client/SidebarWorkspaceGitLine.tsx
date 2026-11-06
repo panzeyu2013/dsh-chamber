@@ -224,12 +224,24 @@ export function SidebarWorkspaceGitLine({
           : worktree.dirty === null ? t('checkoutStatusUnknownBadge') : undefined
     return (
       <>
+        {checkoutBadge !== undefined && (
+          // REST-state trailing status (design 06 §7's hover swap, design 08 §3.2):
+          // readable WITHOUT hovering, and swapped OUT together with the sidebar's
+          // count badge when the hover/keyboard reveal brings the action cluster in.
+          // The hook is a data attribute — CSS modules hash classes, and the sidebar's
+          // swap rule must match this capsule from its own stylesheet.
+          //
+          // NOT inside the occupant container: that container is deliberately
+          // rest-zero layout (`data-git-occupant`), so a capsule nested in it would
+          // either break that rule or leave dirty/locked hover-only — the defect this
+          // capsule's placement fixes.
+          <span className={css.checkoutStatus} data-git-checkout-status="">
+            {/* Upstream `Tag`: a hand-rolled capsule with a neutral fill would
+                vanish into the row's hover fill. */}
+            <Tag tone="warning">{checkoutBadge}</Tag>
+          </span>
+        )}
         <span className={css.headerGit} data-git-occupant="" role="group" aria-label={checkoutLabel}>
-          {checkoutBadge !== undefined && (
-            // Upstream `Tag`: a hand-rolled capsule with a neutral fill would
-            // vanish into the row's hover fill.
-            <Tag tone="warning" className={css.checkoutStatus}>{checkoutBadge}</Tag>
-          )}
           <button
             type="button"
             className={css.headerGitAction}

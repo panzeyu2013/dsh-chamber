@@ -215,6 +215,11 @@ test('PR1 wiring lock: create is host-only and a new session is source workspace
   // Exactly one labelled session-creation site remains (the sidebar ledger lock).
   assert.equal((coordinator.match(/origin: 'user'/gu) ?? []).length, 1,
     'the checkout session creation is the only user-labelled session site left')
+  // Enter failure voids the echo's placement intent (design 08 §4.2): the committed session is
+  // rooted in the source workspace, so its row must follow the host cwd at once.
+  assert.match(coordinator, /chamberBridge\.reportSessionPlacementFailed\(\{ sourceId, sessionId: created \}\)/)
+  assert.equal((coordinator.match(/reportSessionPlacementFailed/gu) ?? []).length, 1,
+    'the failure side is the only publisher (the success path retires on the authority)')
 })
 
 test('PR3 wiring lock: the registered removal, archive and workspace handoff are gone', () => {

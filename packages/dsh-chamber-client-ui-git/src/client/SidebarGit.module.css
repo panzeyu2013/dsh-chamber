@@ -14,22 +14,30 @@
      the action hook, is load-bearing for the row's right edge. */
   display: inline-flex;
   align-items: center;
-  /* 2px: the sidebar sheet's own gap value. The gap is structurally inert
-     anyway (this span holds at most one action), so the value is not
-     load-bearing. */
+  /* 2px: the sidebar sheet's own gap value (the sidebar's comment owns the
+     rationale; the cluster's own between-button rhythm is 4px and lives on the
+     sidebar cluster, not here). */
   gap: 2px;
-  /* Retired branch-chip leftovers: the span holds at most one 20px action and
-     45% of the header's content box is far wider, so neither clamp can bind. */
-  min-width: 0;
-  max-width: 45%;
+  /* NO width clamps: an earlier `min-width: 0; max-width: 45%` pair assumed "the
+     span holds at most one 20px action" — it now holds the checkout row's THREE
+     reveal actions, so 45% of a narrow header clamped the cluster and let the
+     buttons overflow past the row's right edge (layout and hit-box both wrong).
+     The span sizes to its content; only the reveal actions live here. */
 }
 
-/* The derived checkout row's dirty/locked capsule, rendered by the Git occupant
-   because those two facts are the occupant's own (design 06 §1.2: redrawn from
-   its snapshot, they never enter an aggregate signature). The row's PATH health
-   stays the sidebar's row-state surface — deliberately not duplicated here. */
+/* The derived checkout row's dirty/locked/unknown capsule, rendered by the Git
+   occupant's owner because those two facts are its own (design 06 §1.2: redrawn
+   from its snapshot, they never enter an aggregate signature). The row's PATH
+   health stays the sidebar's row-state surface — deliberately not duplicated
+   here.
+   REST state, OUTSIDE the occupant container: the sidebar's hover swap hides it
+   together with the count badge (`[data-git-checkout-status]`) on exactly the
+   reveal paths, so the status is readable without hovering and revealing the
+   actions never shifts it. */
 .checkoutStatus {
   flex: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* HIT BOX IS THE VISUAL BOX: `.headerGitAction` sits inside a 26px workspace

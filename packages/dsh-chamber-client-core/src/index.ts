@@ -50,7 +50,7 @@ export { forgetPendingPlacements, reconcilePendingPlacements, recordWorkspacePla
 export type * from './workspace-removal.ts'
 export { forgetPendingRemovals, reconcilePendingRemovals, recordPendingWorkspaceRemoval, removePendingWorkspaceRemoval, sweepPendingRemovals, withoutPendingWorkspaceRemovals } from './workspace-removal.ts'
 export type * from './session-echo.ts'
-export { forgetPendingArchives, forgetPendingSessions, reconcilePendingArchives, reconcilePendingSessions, recordPendingArchive, recordPendingSession, refreshPendingArchives, removePendingArchive, removePendingSession, sweepPendingArchives, sweepPendingSessions, withPendingArchives, withSessionEcho } from './session-echo.ts'
+export { forgetPendingArchives, forgetPendingSessions, reconcilePendingArchives, reconcilePendingSessions, recordPendingArchive, recordPendingSession, refreshPendingArchives, removePendingArchive, removePendingSession, sweepPendingArchives, sweepPendingSessions, voidPendingSessionPlacement, withPendingArchives, withSessionEcho } from './session-echo.ts'
 export type * from './session-restore.ts'
 export { onSessionRestored } from './session-restore.ts'
 export type * from './session-row-state.ts'

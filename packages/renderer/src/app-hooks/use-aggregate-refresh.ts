@@ -225,7 +225,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
       // mounted merge 保留权威工作区行，用兜底合成行收敛会把行抛进未分组桶（位置跳动）。
       sweepSessionEcho()
       if (mountedSources.getSnapshot()[instanceId] !== true) {
-        const reconciled = reconcilePendingSessions(echoStore.getSnapshot().session, instanceId, snapshot.workspaces)
+        const reconciled = reconcilePendingSessions(echoStore.getSnapshot().session, instanceId, snapshot.workspaces, snapshot.sessions)
         updateSessionEcho(reconciled)
       }
       // 归档墓碑租约挂同一条兜底时钟：只要视图还在列该会话就继续藏着；权威归档集只

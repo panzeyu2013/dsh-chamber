@@ -811,8 +811,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           if (!flatAccount) rowKeys.push(`workspace:${workspace.id}`)
                           if (workspaceError !== undefined) rowKeys.push(`error:workspace:${workspace.id}`)
                           if (workspaceDragError !== undefined) rowKeys.push(`error:workspace-drag:${workspace.id}`)
-                          // checkout 行的空态提示不占动键位：它是静态文案，不进 AnimatedRows 的
-                          // rowKeys↔data-row-key 契约（该契约只服务会位移的行）。
                           for (const session of hoistedOpenErrors) rowKeys.push(`error:open:${session.id}`)
                           if (!folded) {
                             for (const session of visibleSessions) rowKeys.push(`session:${session.id}`)
@@ -1068,6 +1066,23 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                       <IconTrashOutlineRegular size={14} />
                                     </button>
                                   )}
+                                  {checkout && checkoutFacts?.path !== undefined && (
+                                    // 派生 checkout 行：workspaceId 仍是**源 main workspace** id（动作落在它上面），
+                                    // checkout 只带 display 身份；没有 path 的派生行不挂座席。位置在计数徽标**之前**
+                                    // （座席还渲染静息状态词，徽标须保持每行共享右列）——理由见 git-occupant-rest-flow。
+                                    renderWorkspaceGit('sidebar.workspace.git', { wide }, {
+                                      hookContext: {
+                                        sourceId: server.id,
+                                        workspaceId: workspace.familyMainId ?? workspace.id,
+                                        ...(workspace.repoKey === undefined ? {} : { repoKey: workspace.repoKey }),
+                                        checkout: {
+                                          path: checkoutFacts.path,
+                                          branch: checkoutFacts.branch,
+                                          title: checkoutFacts.title,
+                                        },
+                                      },
+                                    })
+                                  )}
                                   {visibleSessionCount > 0 && (
                                     <span className={cc.workspaceCount}>{visibleSessionCount}</span>
                                   )}
@@ -1083,23 +1098,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                     // (design 08 §3.2).
                                     renderWorkspaceGit('sidebar.workspace.git', { wide }, {
                                       hookContext: { sourceId: server.id, workspaceId: workspace.id },
-                                    })
-                                  )}
-                                  {checkout && checkoutFacts?.path !== undefined && (
-                                    // 派生 checkout 行：workspaceId 仍是**源 main workspace** id（行内动作
-                                    // 都落在它上面），checkout 只带 display 身份（path/branch/title）。没有
-                                    // path 的派生行不挂座席——绝不让它退化成又一份 workspace 座席。
-                                    renderWorkspaceGit('sidebar.workspace.git', { wide }, {
-                                      hookContext: {
-                                        sourceId: server.id,
-                                        workspaceId: workspace.familyMainId ?? workspace.id,
-                                        ...(workspace.repoKey === undefined ? {} : { repoKey: workspace.repoKey }),
-                                        checkout: {
-                                          path: checkoutFacts.path,
-                                          branch: checkoutFacts.branch,
-                                          title: checkoutFacts.title,
-                                        },
-                                      },
                                     })
                                   )}
                                   {checkout && (
@@ -1345,12 +1343,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                 dragPlacementId={workspace.id}
                                 dragCheckoutPath={checkoutFacts?.path}
                               />
-                              {checkout && visibleSessionCount === 0 && (
-                                // checkout 行空态（design 06 §1.3）：行仍成立，只是没有会话（非整源空态）。
-                                <div className={cc.checkoutEmpty}>
-                                  {t('checkout.empty')}
-                                </div>
-                              )}
                               {hiddenVisibleCount > 0 && (
                                 <button
                                   type="button"

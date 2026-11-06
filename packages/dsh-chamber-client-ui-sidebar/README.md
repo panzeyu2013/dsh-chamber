@@ -263,7 +263,14 @@ session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and
   first, canonical path second), requests that source's official session-list
   refresh (mounted contexts only) and retires the entry as soon as the
   authoritative membership names the id (the push, or an unmounted source's
-  fallback pull). Blank semantics are deliberately NOT overridden — a
+  fallback pull) — except a checkout PLACEMENT intent (`workingDirectory`),
+  which retires on the authoritative `workingDirectory` projection instead:
+  `enter` is a second unary call, so the membership push always arrives with
+  the source cwd first and retiring there would lift a row already rendered in
+  its checkout back to the source row (design 08 §4.2). While it lives, the
+  projection patches only a MISSING `workingDirectory` onto a listed row (the
+  host value always wins), and the `enter` failure side voids it
+  (`reportSessionPlacementFailed`). Blank semantics are deliberately NOT overridden — a
   provisional row still renders only while it is that source's current session
   — and a create → archive inside the window is retired by the same funnel's
   removal fact. The membership is inserted at the workspace HEAD, matching the

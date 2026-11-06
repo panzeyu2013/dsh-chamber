@@ -164,7 +164,7 @@
 
 ### 4.1 架构、门禁与平台边界
 
-- **God 文件预算例外**：`App.tsx`/`aggregate-store.ts`/`derive.ts` 高于基线，note 记理由；收口 = 放置/删除事实迁到 `workspace-placement.ts`/`workspace-removal.ts`。
+- **God 文件预算例外**：`App.tsx`/`aggregate-store.ts`/`derive.ts` 高于基线，note 记理由；收口 = 放置/删除事实迁到 `workspace-placement.ts`/`workspace-removal.ts`。checkout 会话放置失败事实（design 08 §4.2）把 `aggregate-store.ts` +30（事实/通道/两方法）与 `use-bridge-subscriptions.ts` +18（App 订阅）抬过棘轮——note 记理由；桥面方法不可外移，其放置半边随上述收口方向一并考虑。`ServerSection.tsx` 因 0 会话 checkout 空态退役 −8，棘轮同步下调。
 - **门禁**：i18n/文档链接/测试接线/死导出/样式 token 为本地例外；seed 自检只报不阻断；测试面再压需显式裁决；`ALLOW_BUILDS` `fs-ext` 保留、`runtime-host-adapter` 不退役、`ownsGeneration()` 保留（勿补测试）；统一名称保留面（bundle id/协议串/`native-shell.page-zoom`/POC 标记）改名须同步 T-14/T-17/T-22 与测试。
 - **不做/推迟**：组件工厂 + local slots；0.1.6 五项（`writer-held`/`toggle.badge`/`workspace-tree` 认领/`.dsh-module-fallback`/外部仓 `plugins.bundle.config`）；依赖声明补齐待 lockfile；工程门禁 P2；git 钩子。
 - **移出项（P3）**：匿名 control-plane 认证/审计、薄壳会话面、统一索引、broker、通知中心、MCP 不得回流；design 17/18/19/08/20/24 例外不作他域先例。

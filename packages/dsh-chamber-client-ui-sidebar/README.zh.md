@@ -193,7 +193,11 @@ pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-
   App 把**宿主 id** 记入渲染端账本并把它并入所属工作区（`withSessionEcho`：先按
   宿主 workspaceId、再按 canonical path），随后请求该来源的官方 session-list 刷新
   （仅挂载壳有这条 seam），并在权威成员位命名该 id 时立刻退休（挂载 push，或未挂载
-  来源的兜底拉取）。**blank 语义刻意不被覆盖**——暂存行仍只在它是该来源 current 时
+  来源的兜底拉取）——**例外 = 带 checkout 放置意图（`workingDirectory`）的条目**：它要等
+  该会话行自身投影出 `workingDirectory` 才退休（`enter` 是第二次 unary，承载成员位的
+  push 必然先带源 cwd 到达，按成员位退休会把已渲染在 checkout 的行抬回源行，
+  design 08 §4.2）。意图存活期间投影只给**缺**该字段的已列出行补上意图（宿主既有值
+  永远优先），`enter` 失败侧由 `reportSessionPlacementFailed` 立刻作废。**blank 语义刻意不被覆盖**——暂存行仍只在它是该来源 current 时
   渲染；窗口内"创建后立刻归档"由同一出口的撤下事实上报。成员位插在该工作区**头部**，
   与宿主 `attachSession` 的顺序一致（`[sessionId, ...rest]`），行不会先渲染在尾部、
   收敛时再跳上去。这条撤下事实同时记一条本地**归档墓碑**：壳未挂载的来源会继续列出

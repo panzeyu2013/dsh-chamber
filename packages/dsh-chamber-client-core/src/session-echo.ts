@@ -16,7 +16,11 @@
  * fact, or the next mount). NOT a second source of truth: an authoritative row
  * that ACCOUNTS the id wins, the merge is defensive (an already-listed id
  * injects no duplicate row, an already-accounted one no membership), and entries
- * expire / retire with their source. The ledger lives in the renderer App layer.
+ * expire / retire with their source. The one exception is a PLACEMENT INTENT
+ * ('workingDirectory'): it outlives membership accounting and retires on the
+ * authoritative placement fact (see 'reconcilePendingSessions'), because the
+ * checkout's 'enter' is a second unary call (design 08 §4.2). The ledger lives
+ * in the renderer App layer.
  *
  * It also owns the LOCAL ARCHIVE tombstone ({@link PendingArchive}): the archive
  * verb runs over the unary client too, so an unmounted source's frozen view
@@ -49,6 +53,14 @@ export interface PendingSession {
    * the checkout path for a session created there, so the echo row is placed in
    * its derived checkout row immediately instead of the source row. Absent =
    * the source workspace's own directory.
+   *
+   * It is also the entry's PLACEMENT INTENT and therefore the one field that
+   * keeps the echo alive past membership convergence: `gitWorkTree/enter` is a
+   * SECOND unary call, so the push that accounts the new membership still
+   * carries the source cwd and no projection — the entry retires on the
+   * authoritative `workingDirectory` fact, not on accounting
+   * ({@link reconcilePendingSessions}), and the failure side voids it explicitly
+   * ({@link voidPendingSessionPlacement}).
    */
   workingDirectory?: string
   /**
@@ -147,24 +159,50 @@ export function sweepPendingSessions(ledger: SessionEchoLedger, now: number): Se
 }
 
 /**
- * Drop every echo the given AUTHORITATIVE workspace list already ACCOUNTS
- * (`sessionIds` of any row, synthetic included): the authoritative row renders
- * it and the echo must not survive as a duplicate. Identity-preserving when
- * nothing is covered. A row merely LISTED but accounted by no workspace is NOT a
- * convergence signal — dropping the echo would re-home the row into the ungrouped
- * bucket, the very jump the echo prevents.
+ * Drop every echo the given AUTHORITATIVE view already covers. Identity-preserving when nothing
+ * is covered.
+ *
+ * Two jobs ride one entry and they converge on DIFFERENT facts:
+ * - VISIBILITY (membership): once any authoritative workspace ACCOUNTS the id
+ *   (`sessionIds`, synthetic included) the authoritative row renders it and the echo must not
+ *   survive as a duplicate. A row merely LISTED but accounted by no workspace is NOT a
+ *   convergence signal — dropping the echo would re-home it into the ungrouped bucket.
+ * - PLACEMENT (`workingDirectory`, design 08 §4.2): the intent holds the row in its derived
+ *   checkout. That window is STRUCTURAL, not a race: `gitWorkTree/enter` is a second unary
+ *   call, so the mounted push accounting the new membership still reports the source cwd and
+ *   no projection. Retiring on accounting would move a row already rendered in its checkout
+ *   up to the source row for that window and glide it back down when `enter` lands — the
+ *   entrance animation starts at the root group instead of the checkout (the exact jump
+ *   §4.2 forbids). An entry WITH an intent therefore retires on the PLACEMENT fact: the
+ *   authoritative row for that id carries a `workingDirectory` (any value — the host's fact
+ *   wins, including a different path). An entry whose row is not listed yet keeps its intent:
+ *   the echo row is the only thing that can place it.
+ *
+ * The failure side ({@link voidPendingSessionPlacement}) covers the intent that will never
+ * land; the TTL ({@link sweepPendingSessions}) is the leak guard for a lost fact.
  */
 export function reconcilePendingSessions(
   ledger: SessionEchoLedger,
   sourceId: string,
   authoritative: readonly WorkspaceRow[],
+  sessions: readonly Pick<SessionRow, 'sessionId' | 'workingDirectory'>[],
 ): SessionEchoLedger {
   if (ledger[sourceId] === undefined) return ledger
   const accounted = new Set<string>()
   for (const workspace of authoritative) {
     for (const sessionId of workspace.sessionIds) accounted.add(sessionId)
   }
-  return filterLedgerRows(ledger, sourceId, row => !accounted.has(row.sessionId))
+  const placed = new Set<string>()
+  for (const session of sessions) {
+    if (session.workingDirectory !== undefined) placed.add(session.sessionId)
+  }
+  return filterLedgerRows(ledger, sourceId, (row) => {
+    if (!accounted.has(row.sessionId)) return true
+    // No placement intent: authoritative accounting is all this echo waited for.
+    if (row.workingDirectory === undefined) return false
+    // The intent holds until the host's own placement fact exists on the row.
+    return !placed.has(row.sessionId)
+  })
 }
 
 /**
@@ -179,6 +217,28 @@ export function removePendingSession(
   sessionId: string,
 ): SessionEchoLedger {
   return filterLedgerRows(ledger, sourceId, row => row.sessionId !== sessionId)
+}
+
+/**
+ * Void one entry's PLACEMENT intent, keeping the echo itself (the withdraw half of the
+ * `workingDirectory` hold). Published by the `enter` failure side of the checkout-session saga
+ * (`createSessionHere`): the session is already committed in the SOURCE workspace but its
+ * working directory will never move, so the row must follow the authoritative cwd instead of
+ * staying parked in a checkout until the TTL. Identity-preserving when the entry (or its
+ * intent) is absent — silence on the success side is deliberate: the success path retires on
+ * the authoritative `workingDirectory` fact, and a settle fact there would race that push.
+ */
+export function voidPendingSessionPlacement(
+  ledger: SessionEchoLedger,
+  sourceId: string,
+  sessionId: string,
+): SessionEchoLedger {
+  return mapLedgerRows(ledger, sourceId, (row) => {
+    if (row.sessionId !== sessionId || row.workingDirectory === undefined) return row
+    const next = { ...row }
+    delete next.workingDirectory
+    return next
+  })
 }
 
 /** Retire the echoes of sources that left the registry (same-id re-add = new generation). */
@@ -199,6 +259,12 @@ export function forgetPendingSessions(
  * route into a workspace group), matched by host workspace id first and by
  * canonical path second (cwd-derived synthetic groups carry no host id). An entry
  * matching neither renders in the trailing ungrouped bucket.
+ *
+ * It also carries the placement intent onto a row the aggregate ALREADY lists:
+ * while the entry lives, a row with no `workingDirectory` renders with the
+ * intent, so the `enter` window never puts a checkout session under the source
+ * row (design 08 §4.2). The host's own `workingDirectory` always wins and the
+ * entry retires the moment that fact exists ({@link reconcilePendingSessions}).
  */
 export function withSessionEcho(
   aggregate: InstanceAggregate,
@@ -217,11 +283,12 @@ export function withSessionEcho(
     const key = canonicalPathKey(workspace.path)
     if (!byPath.has(key)) byPath.set(key, workspace)
   }
-  if (pending.every(entry => accounted.has(entry.sessionId))) return aggregate
   const listed = new Set(aggregate.sessions.map(session => session.sessionId))
   const membership = new Map<string, string[]>()
   const additions: SessionRow[] = []
+  const intents = new Map<string, string>()
   for (const entry of pending) {
+    if (entry.workingDirectory !== undefined) intents.set(entry.sessionId, entry.workingDirectory)
     // Authoritative membership always wins: nothing to inject for this id.
     if (accounted.has(entry.sessionId)) continue
     if (!listed.has(entry.sessionId)) additions.push(sessionEchoRow(entry))
@@ -232,7 +299,22 @@ export function withSessionEcho(
     if (extra === undefined) membership.set(target.workspaceId, [entry.sessionId])
     else extra.push(entry.sessionId)
   }
-  if (additions.length === 0 && membership.size === 0) return aggregate
+  // Placement intents (design 08 §4.2): a LISTED authoritative row the host has not moved yet
+  // (no `workingDirectory` projection) renders with the intent, so the checkout row keeps the
+  // session instead of the source row for the `enter` window. Only a MISSING fact is patched —
+  // the host's own value always wins, and the ledger entry retires as soon as it exists.
+  let sessions = aggregate.sessions
+  if (intents.size > 0) {
+    let patched = false
+    const next = aggregate.sessions.map((row) => {
+      const intent = intents.get(row.sessionId)
+      if (intent === undefined || row.workingDirectory !== undefined) return row
+      patched = true
+      return { ...row, workingDirectory: intent }
+    })
+    if (patched) sessions = next
+  }
+  if (additions.length === 0 && membership.size === 0 && sessions === aggregate.sessions) return aggregate
   return {
     ...aggregate,
     workspaces: membership.size === 0
@@ -245,7 +327,7 @@ export function withSessionEcho(
           // order — appending would make the row jump to the head on mount.
           return { ...workspace, sessionIds: [...[...extra].reverse(), ...workspace.sessionIds] }
         }),
-    sessions: additions.length === 0 ? aggregate.sessions : [...aggregate.sessions, ...additions],
+    sessions: additions.length === 0 ? sessions : [...sessions, ...additions],
   }
 }
 

@@ -238,7 +238,6 @@ export const zh = {
   'checkout.invalid': '工作树异常',
   'checkout.notARepo': '不是 Git 仓库',
   'checkout.statusUnknown': '状态未知',
-  'checkout.empty': '该工作树暂无会话',
   // 会话行窗口的展开条：双向 disclosure，文案取自上游 ui-workspace locales.ts sessions.expand / sessions.collapse。
   'sessions.expand': '展开其余 {n} 个会话',
   'sessions.collapse': '收起',
@@ -438,7 +437,6 @@ export const en = {
   'checkout.invalid': 'Worktree invalid',
   'checkout.notARepo': 'Not a Git repository',
   'checkout.statusUnknown': 'Status unknown',
-  'checkout.empty': 'No sessions in this worktree',
   'sessions.expand': 'Show {n} more sessions',
   'sessions.collapse': 'Show less',
   'server.expand': 'Expand all workspaces',

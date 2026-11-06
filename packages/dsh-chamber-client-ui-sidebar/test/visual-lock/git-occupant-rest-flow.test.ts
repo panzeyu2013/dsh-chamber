@@ -66,6 +66,43 @@ const selectors = (rule: Rule): string[] => rule.selector.split(',').map(part =>
 const displayRules = (hook: string): Rule[] =>
   rules(sidebarCss).filter(rule => rule.selector.includes(hook) && /\bdisplay\s*:/u.test(rule.declarations))
 
+test('the checkout status capsule is rest-visible and swaps out on the same two reveal paths', () => {
+  // The capsule is rendered by the Git occupant's owner but OUTSIDE its rest-zero
+  // container (SidebarWorkspaceGitLine.tsx): a status nested in the hover reveal
+  // only exists while hovering. The sidebar swaps it out with the count badge.
+  const STATUS = '[data-git-checkout-status]'
+  const gitLine = flat(gitLineTsx)
+  const capsuleAt = gitLine.indexOf('data-git-checkout-status')
+  const occupantAt = gitLine.indexOf('data-git-occupant')
+  assert.notEqual(capsuleAt, -1, 'the capsule carries the cross-package hook')
+  assert.ok(capsuleAt < occupantAt,
+    'the capsule renders before (outside) the occupant container — that container is rest-zero')
+  const hide = rules(sidebarCss).filter(rule =>
+    rule.selector.includes(STATUS) && /\bdisplay:\s*none;/u.test(rule.declarations))
+  assert.equal(hide.length, 1, 'exactly one swap-out rule for the capsule')
+  assert.deepEqual(
+    selectors(hide[0]!).filter(part => part.includes(STATUS)).sort(),
+    [
+      '.workspaceHeader:hover:not([data-hover-gate]) ' + STATUS,
+      '.workspaceHeader:has(.rowActionsVisible) ' + STATUS,
+    ].sort(),
+    'the same hover-gated / keyboard reveal paths as the count badge — never left visible with the cluster',
+  )
+})
+
+test('the checkout mount precedes the count badge (its rest status cannot push the shared right column)', () => {
+  // The checkout mount also renders the rest status capsule. The mount therefore
+  // sits BEFORE the count badge: the badge stays the row-end element on every row
+  // (one shared right column, the invariant this whole mechanism exists for), and
+  // the capsule lands to its left.
+  const checkoutMount = serverSection.indexOf('workspaceId: workspace.familyMainId ?? workspace.id,')
+  assert.notEqual(checkoutMount, -1, 'the checkout mount exists')
+  assert.ok(
+    checkoutMount < serverSection.indexOf('cc.workspaceCount'),
+    'the checkout mount (rest status included) renders before the count badge',
+  )
+})
+
 test('the mount stays before (left of) the sidebar cluster', () => {
   const render = serverSection.indexOf(MOUNT_CONTEXT)
   assert.notEqual(render, -1, 'the workspace-scope occupant mount exists')

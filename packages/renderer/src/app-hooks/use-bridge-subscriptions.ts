@@ -58,6 +58,7 @@ import {
   sweepPendingRemovals,
   sweepPendingSessions,
   sweepPendingWorkspaces,
+  voidPendingSessionPlacement,
   type InstanceAggregate,
   type InstanceSnapshot,
   type IntentPrewarmBudget,
@@ -714,6 +715,21 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       updateSessionArchive(archived)
     })
   }, [updateSessionArchive, updateSessionEcho])
+  // 会话放置意图的**作废**通道（只发失败侧）：enter 失败后会话已提交在源工作区，行必须立刻
+  // 跟随权威 cwd，否则会停在 checkout 行直到回声 TTL；成功侧的收敛点是权威 workingDirectory 投影。
+  useEffect(() => {
+    return chamberBridge.onSessionPlacementFailed((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      updateSessionEcho(voidPendingSessionPlacement(
+        echoStore.getSnapshot().session,
+        sourceId,
+        fact.sessionId,
+      ))
+    })
+  }, [updateSessionEcho])
   /**
    * 恢复事实（I-1）：官方 `workspace/unarchiveSession` 成功后，本地归档墓碑必须同拍
    * 清除——权威集合**不再覆盖**该 id，而墓碑的收敛规则只退休仍被覆盖的 id；不清就会
@@ -786,10 +802,12 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         updateRemoval(reconciled)
       }
       // 会话回声的权威收敛点：挂载壳的 follow 基线把该会话**归属**到某工作区（成员位，
-      // 含合成行）即退休；刻意只看成员位（只列出而无所属时退休会把行抛进未分组桶）。
+      // 含合成行）即退休可见性半边；带 checkout 放置意图（workingDirectory）的条目还要等
+      // 权威**放置事实**（该行自身投影出 workingDirectory）才退休——enter 是第二次 unary，
+      // 承载成员位的 push 一定先带着源 cwd 到达（design 08 §4.2 的「不先落源行再跳」）。
       {
         const swept = sweepPendingSessions(echoStore.getSnapshot().session, Date.now())
-        const reconciled = reconcilePendingSessions(swept, sourceId, snapshot.workspaces)
+        const reconciled = reconcilePendingSessions(swept, sourceId, snapshot.workspaces, snapshot.sessions)
         updateSessionEcho(reconciled)
       }
       // 归档墓碑收敛只认挂载壳 follow 的 archiveSetKnown 事实；degraded 的空集绝不能传进去。
