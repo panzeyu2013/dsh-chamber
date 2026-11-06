@@ -704,6 +704,37 @@ test('the page-channel downlink observer is isolated: a throw never fails the su
   assert.equal(item.data, 'still-alive', 'the item still crosses after the observer threw')
 })
 
+test('an SSE event split across chunks (payload + split CRLF) crosses verbatim exactly once', async (t) => {
+  const upstream = fakeSseUpstream()
+  const harness = await startChannel({
+    httpRequest: upstream.fn,
+    resolveTargetFor: () => ({ baseUrl: 'http://127.0.0.1:41000' }),
+  })
+  t.after(() => harness.close())
+  const client = await harness.connect()
+  t.after(() => client.ws.close())
+
+  client.send({ type: 'subscribe', id: 'pg-split', family: 'pluginGraph', instanceId: 'dsh-split' })
+  await client.waitForType('ready', 'pg-split')
+
+  // The scan cursor must resume from where the previous chunk stopped: chunks 1–3 carry no
+  // terminator until the CR at the very end of chunk 3, and chunk 4 starts with the LF that
+  // completes that CRLF. A cursor that re-scanned from 0 would still pass; a cursor that
+  // skipped bytes would drop or duplicate the payload.
+  const payload = 'x'.repeat(40_000)
+  const chunks = [
+    `data: ${payload.slice(0, 12_000)}`,
+    payload.slice(12_000, 26_000),
+    `${payload.slice(26_000)}\r`,
+    '\n\r\n',
+  ]
+  for (const chunk of chunks) upstream.calls[0].res.emit('data', Buffer.from(chunk))
+
+  const item = await client.waitForType('item', 'pg-split')
+  assert.equal(item.data, payload, 'one event split over four chunks crosses verbatim (split CRLF included)')
+  assert.equal(client.messages.filter(message => message.type === 'item').length, 1, 'no duplicate and no half event')
+})
+
 test('noteDownlink feeds the same busy window as a proxy response body', async () => {
   const proxy = proxyFor(() => { throw new Error('never used') }, { getLocalDshPort: () => 17510, busyActivityWindowMs: 40 })
   proxy.registerTransport('dsh:page', 'http://127.0.0.1:22110')

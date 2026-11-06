@@ -378,6 +378,11 @@ function createSseParser(maxChars: number): { push(chunk: Buffer): SseEvent[]; e
   }
   // 上一行进终止符是块尾的 `\r`：下一块若以 `\n` 开头，那是同一个 CRLF 的后半，要吃掉。
   let pendingCrLfTail = false
+  // 扫描游标：一条跨块的大事件（3 MB 单行）此前每次 push 都从 0 重扫整个累积
+  // buffer，整体是 O(n²/chunk)——64 KiB 分块实测 90 ms、8 KiB 分块 757 ms，全部落在
+  // sidecar 主线程上。游标让每个字符只被看一次；任何一次 buffer 前移都要把游标归零
+  // （已消费的前缀不再属于后续扫描）。
+  let scanFrom = 0
   /**
    * 取下一整行，按 WHATWG 语义把 `\r\n` / `\r` / `\n` 都当行终止符。块尾的 `\r`
    * **立即**当终止符（浏览器就是这样：能看见的数据先成行），若后继块以 `\n` 开头则
@@ -390,26 +395,37 @@ function createSseParser(maxChars: number): { push(chunk: Buffer): SseEvent[]; e
       // 跨块的 CRLF 就会被当成两个终止符——事件名丢失、多行 data 被切成两条事件。
       if (buffer.length === 0) return null
       pendingCrLfTail = false
-      if (buffer.startsWith('\n')) buffer = buffer.slice(1)
+      if (buffer.startsWith('\n')) {
+        buffer = buffer.slice(1)
+        scanFrom = 0
+      }
     }
-    for (let index = 0; index < buffer.length; index += 1) {
-      const char = buffer[index]
-      if (char === '\n') {
-        const line = buffer.slice(0, index)
-        buffer = buffer.slice(index + 1)
-        return line
-      }
-      if (char !== '\r') continue
-      const line = buffer.slice(0, index)
-      if (index + 1 >= buffer.length) {
-        buffer = ''
-        pendingCrLfTail = true
-        return line
-      }
-      buffer = buffer.slice(buffer[index + 1] === '\n' ? index + 2 : index + 1)
+    // 用 indexOf 找最近的行终止符而不是逐字符循环：V8 的 indexOf 走 SIMD 扫描，
+    // 3 MB 单行事件实测 14.6 → 6.4 ms（同一游标策略下）。两个字符各自 indexOf 后取
+    // 较小值，语义与「遇到第一个 \n 或 \r」完全一致。
+    const lineFeed = buffer.indexOf('\n', scanFrom)
+    const carriageReturn = buffer.indexOf('\r', scanFrom)
+    const index = lineFeed === -1 ? carriageReturn : carriageReturn === -1 ? lineFeed : Math.min(lineFeed, carriageReturn)
+    if (index === -1) {
+      // 没有终止符：已扫过的前缀没有可消费内容，下一块只扫新增部分。
+      scanFrom = buffer.length
+      return null
+    }
+    const line = buffer.slice(0, index)
+    if (buffer[index] === '\n') {
+      buffer = buffer.slice(index + 1)
+      scanFrom = 0
       return line
     }
-    return null
+    if (index + 1 >= buffer.length) {
+      buffer = ''
+      scanFrom = 0
+      pendingCrLfTail = true
+      return line
+    }
+    buffer = buffer.slice(buffer[index + 1] === '\n' ? index + 2 : index + 1)
+    scanFrom = 0
+    return line
   }
   return {
     push(chunk: Buffer): SseEvent[] {
