@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  HOST_KEY_PROBE_TTL_MS, applyTrustedHostKey, buildSelfProofArgs, classifyPresentedHostKey, sshTrustPins,
+  HOST_KEY_PROBE_TTL_MS, applyTrustedHostKey, buildSelfProofArgs, classifyPresentedHostKey, sshOptionValue, sshTrustPins,
   createHostKeyGuard, ensureKnownHostsFile, fingerprintSha256, formatKnownHostsLine,
   globalKnownHostsFileFor, hostPatternFor, isHostKeyKnown, knownHostsPathFor, lastHostKeyProbe,
   parseKnownHosts, parseKnownHostsLine, probeHostKey, recordHostKeyProbe,
@@ -43,6 +43,12 @@ function lineFor(target: HostKeyTarget, key: { type: string; blob: string }): st
   return hostPatternFor(target) + ' ' + key.type + ' ' + key.blob
 }
 
+/** The file a `-o <name>=…` argument names (sshOptionValue quotes it for ssh). */
+function optionFile(args: readonly string[], name: string): string {
+  const raw = (args.find(arg => arg.startsWith(name + '=')) ?? '').slice(name.length + 1)
+  return raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw
+}
+
 class FakeProbeChild extends EventEmitter {
   stdout = null
   stderr = new EventEmitter()
@@ -65,7 +71,7 @@ function probeSpawn(plan: {
   const child = new FakeProbeChild()
   const spawnFn = (_command: string, args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
     calls.push([...args])
-    const file = (args.find(arg => arg.startsWith('UserKnownHostsFile=')) ?? '').slice('UserKnownHostsFile='.length)
+    const file = optionFile(args, 'UserKnownHostsFile')
     files.push(file)
     plan.inspect?.(args)
     setImmediate(() => {
@@ -188,6 +194,12 @@ test('the probe TTL registry keeps the LAST probe per target and expires after 5
   assert.equal(latest?.state, 'changed', 'only the most recent probe counts')
   assert.equal(lastHostKeyProbe(knownHostsFile, PORT_TARGET, t0 + 2001), null, 'targets do not share records')
   assert.deepEqual(toHostKeyProjection(latest!), { state: 'changed', fingerprints: [fingerprintSha256(ED25519_B.blob)], changed: true, previousFingerprints: ['SHA256:old'] })
+  // previousFingerprints is a changed-state field: a KNOWN key must not render「原指纹」next to
+  // 「主机指纹」with the same value (that display was read as a key rotation when none happened).
+  assert.deepEqual(toHostKeyProjection(okOutcome('known', ED25519_A, ['SHA256:old'])), {
+    state: 'known',
+    fingerprints: [fingerprintSha256(ED25519_A.blob)],
+  })
 })
 
 test('the module mutex serializes read-modify-write tasks (and survives a rejected task)', async () => {
@@ -239,8 +251,8 @@ test('the self-proof argv pins the throwaway store, BatchMode and no auth method
   assert.deepEqual(
     buildSelfProofArgs({ host: 'h.example.com', sshPort: 2222, user: 'u' }, '/tmp/x/known_hosts', '/dev/null'),
     [
-      '-o', 'UserKnownHostsFile=/tmp/x/known_hosts',
-      '-o', 'GlobalKnownHostsFile=/dev/null',
+      '-o', 'UserKnownHostsFile="/tmp/x/known_hosts"',
+      '-o', 'GlobalKnownHostsFile="/dev/null"',
       '-o', 'StrictHostKeyChecking=no',
       '-o', 'BatchMode=yes',
       '-o', 'ConnectTimeout=8',
@@ -260,8 +272,8 @@ test('the self-proof argv pins the throwaway store, BatchMode and no auth method
 test('the tunnel argv pins StrictHostKeyChecking=yes and the app store (legacy argv unchanged)', () => {
   const argv = sshProvider.buildStartArgs!(spec('t-argv'), 40000, { knownHostsFile: '/u/ssh/known_hosts', globalKnownHostsFile: '/dev/null' })
   assert.ok(argv.includes('StrictHostKeyChecking=yes'), 'strict checking is explicit')
-  assert.ok(argv.includes('UserKnownHostsFile=/u/ssh/known_hosts'))
-  assert.ok(argv.includes('GlobalKnownHostsFile=/dev/null'))
+  assert.ok(argv.includes('UserKnownHostsFile="/u/ssh/known_hosts"'))
+  assert.ok(argv.includes('GlobalKnownHostsFile="/dev/null"'))
   // B1: the alias is the SAME token the trust file records, or strict lookup
   // would ask for [realhost]:port and never find the trusted line.
   assert.ok(argv.includes('HostKeyAlias=h.example.com'))
@@ -272,13 +284,34 @@ test('the tunnel argv pins StrictHostKeyChecking=yes and the app store (legacy a
   assert.ok(!legacy.some(arg => arg.startsWith('UserKnownHostsFile=')))
 })
 
+test('a known_hosts path with a space is quoted so ssh keeps it as ONE argument (macOS userData)', () => {
+  // Production replica: every macOS userData root contains "Application Support". ssh splits an
+  // -o value on whitespace, so the unquoted form pointed ssh at a truncated/relative path, read no
+  // key, and failed every strict child with "No ... host key is known" / "Host key verification
+  // failed" — trust could never take effect (real-machine report, 0.4.4-beta.3).
+  const file = join('/Users/someone/Library/Application Support/@dsh-chamber/desktop/ssh', 'known_hosts')
+  assert.equal(sshOptionValue(file), '"' + file + '"')
+  assert.equal(sshOptionValue('/a "b"/c'), '"/a \\"b\\"/c"', 'quotes are escaped for the ssh_config parser')
+
+  const proof = buildSelfProofArgs(TARGET, file, '/dev/null')
+  assert.ok(proof.includes('UserKnownHostsFile="' + file + '"'))
+  assert.ok(proof.includes('GlobalKnownHostsFile="/dev/null"'))
+  assert.equal(optionFile(proof, 'UserKnownHostsFile'), file, 'the quoted value round-trips')
+
+  const tunnel = sshProvider.buildStartArgs!(spec('t-space'), 40000, { knownHostsFile: file, globalKnownHostsFile: '/dev/null' })
+  const option = tunnel.find(arg => arg.startsWith('UserKnownHostsFile='))
+  // The value ssh receives after its own whitespace split must still be exactly one token.
+  assert.equal(option, 'UserKnownHostsFile=' + sshOptionValue(file))
+  assert.equal(sshOptionValue(file).slice(1, -1), file, 'the space inside the path is preserved')
+})
+
 test('the self-proof probe writes its key to a 0600 throwaway file and deletes it', async (t) => {
   const store = tempStore(t)
   const fake = probeSpawn({
     line: lineFor(TARGET, ED25519_A),
     stderr: 'Permission denied (publickey).\n',
     inspect: (args) => {
-      const file = (args.find(arg => arg.startsWith('UserKnownHostsFile=')) ?? '').slice('UserKnownHostsFile='.length)
+      const file = optionFile(args, 'UserKnownHostsFile')
       assert.match(file, /dsh-chamber-hostkey-/, 'the probe never touches the app or user store')
       assert.equal(statSync(file).mode & 0o777, 0o600)
     },

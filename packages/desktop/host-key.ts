@@ -7,11 +7,12 @@
  * <userData>/ssh/known_hosts (0600, atomic replace, module-level mutex). On first use the user
  * file is COPIED in, so hosts the user already trusts stay known; from then on the app file is
  * the only trust store the ssh children read
- * (-o StrictHostKeyChecking=yes -o UserKnownHostsFile=<app> -o GlobalKnownHostsFile=/dev/null).
+ * (-o StrictHostKeyChecking=yes -o UserKnownHostsFile="<app>" -o GlobalKnownHostsFile=/dev/null;
+ * paths are quoted for ssh — see sshOptionValue).
  *
  * WHY the self-proof probe: with StrictHostKeyChecking=yes a new/changed host fails BEFORE the app
  * can show what it actually presented. ssh can prove a host key without authenticating:
- *   ssh -o UserKnownHostsFile=<fresh tmp 0600> -o GlobalKnownHostsFile=/dev/null
+ *   ssh -o UserKnownHostsFile="<fresh tmp 0600>" -o GlobalKnownHostsFile=/dev/null
  *       -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=8
  *       -o PreferredAuthentications=none <target> true
  * KEX runs first, ssh writes the presented key to the throwaway file, then auth fails (by design:
@@ -487,7 +488,12 @@ export function toHostKeyProjection(outcome: HostKeyProbeOutcome): HostKeyProjec
     state: outcome.state,
     fingerprints: [...outcome.fingerprints],
     ...(outcome.changed ? { changed: true } : {}),
-    ...(outcome.previousFingerprints.length > 0 ? { previousFingerprints: [...outcome.previousFingerprints] } : {}),
+    // previousFingerprints is a CHANGED-state field (see HostKeyProjection): projecting it for a
+    // known key rendered「原指纹」and「主机指纹」with the SAME value, which reads like a rotation
+    // when nothing rotated.
+    ...(outcome.changed && outcome.previousFingerprints.length > 0
+      ? { previousFingerprints: [...outcome.previousFingerprints] }
+      : {}),
   }
 }
 
@@ -521,6 +527,24 @@ export function sshTrustPins(): string[] {
   return pins
 }
 
+/**
+ * Quote one ssh-config option VALUE for `-o`.
+ *
+ * ssh splits a `-o` argument on whitespace and honours double quotes only INSIDE the argument
+ * (ssh_config syntax: "Arguments may optionally be enclosed in double quotes in order to
+ * represent arguments containing spaces"). An unquoted path with a space is silently truncated,
+ * so the option points somewhere else — for a file it does not exist and ssh reports
+ * "No <type> host key is known for <alias>" / "Host key verification failed.".
+ *
+ * This matters on every macOS install: userData lives under
+ * `~/Library/Application Support/<app>/…`, so the app-owned known_hosts path ALWAYS contains a
+ * space. Without quoting, no strict child could ever read the store, and trusting a key could
+ * never make a tunnel succeed (the trust UI kept re-offering the same key forever).
+ */
+export function sshOptionValue(value: string): string {
+  return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
+}
+
 /** The exact self-proof argv (exported for the argv pin test). */
 export function buildSelfProofArgs(
   target: HostKeyTarget,
@@ -528,8 +552,8 @@ export function buildSelfProofArgs(
   globalKnownHostsFile: string = globalKnownHostsFileFor(),
 ): string[] {
   return [
-    '-o', 'UserKnownHostsFile=' + knownHostsFile,
-    '-o', 'GlobalKnownHostsFile=' + globalKnownHostsFile,
+    '-o', 'UserKnownHostsFile=' + sshOptionValue(knownHostsFile),
+    '-o', 'GlobalKnownHostsFile=' + sshOptionValue(globalKnownHostsFile),
     '-o', 'StrictHostKeyChecking=no',
     '-o', 'BatchMode=yes',
     '-o', 'ConnectTimeout=' + String(HOST_KEY_CONNECT_TIMEOUT_SECONDS),

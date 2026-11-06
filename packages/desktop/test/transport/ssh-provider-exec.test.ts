@@ -533,8 +533,8 @@ test('exec/run ssh children carry the app known-host pin (R1-B M1)', async () =>
   assert.equal(result.ok, true)
   const args = argsSeen[0]!
   assert.ok(args.includes('StrictHostKeyChecking=yes'))
-  assert.ok(args.includes('UserKnownHostsFile=/u/kh'))
-  assert.ok(args.includes('GlobalKnownHostsFile=/dev/null'))
+  assert.ok(args.includes('UserKnownHostsFile="/u/kh"'))
+  assert.ok(args.includes('GlobalKnownHostsFile="/dev/null"'))
   assert.ok(args.includes('HostKeyAlias=h.example.com'))
   assert.ok(args.includes('ControlMaster=no'))
   assert.ok(args.includes('ControlPath=none'))

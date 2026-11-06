@@ -58,7 +58,7 @@ import type {
   TransportVerifyResult,
 } from './transport-provider.ts'
 import { buildGatewaySessionOrigin, gatewaySessionScopeForConnection } from './gateway-session.ts'
-import { hostKeyAliasFor } from './host-key.ts'
+import { hostKeyAliasFor, sshOptionValue } from './host-key.ts'
 import type { GatewaySessionOrigin } from './gateway-session.ts'
 import { gatewayTunnelAuthority } from './gateway-session-refresh.ts'
 import { MAX_SSH_PASSWORD_CHARS, openSshCredentialStore, type OpenedSshCredentialStore, type SshCredentialCryptoAdapter, type SshCredentialEntry } from './ssh-credentials.ts'
@@ -773,7 +773,7 @@ export const sshProvider: TransportProvider = {
     // passes one from host-assembly.
     const hostKeyArgs = knownHosts === undefined
       ? []
-      : ['-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${knownHosts.knownHostsFile}`, '-o', `GlobalKnownHostsFile=${knownHosts.globalKnownHostsFile}`, '-o', `HostKeyAlias=${hostKeyAliasFor(spec)}`, ...sshTrustPins()]
+      : ['-o', 'StrictHostKeyChecking=yes', '-o', `UserKnownHostsFile=${sshOptionValue(knownHosts.knownHostsFile)}`, '-o', `GlobalKnownHostsFile=${sshOptionValue(knownHosts.globalKnownHostsFile)}`, '-o', `HostKeyAlias=${hostKeyAliasFor(spec)}`, ...sshTrustPins()]
     // POSIX: one owner-only filesystem socket instead of an ephemeral loopback
     // port (design 27 §3.3: no allocator race, no other local process can dial
     // the tunnel). StreamLocalBindUnlink replaces a crashed predecessor's socket
@@ -1049,8 +1049,8 @@ function execHostKeyArgs(spec: TransportInstanceSpec, deps: TransportExecDeps): 
   if (knownHosts === undefined) return []
   return [
     '-o', 'StrictHostKeyChecking=yes',
-    '-o', `UserKnownHostsFile=${knownHosts.knownHostsFile}`,
-    '-o', `GlobalKnownHostsFile=${knownHosts.globalKnownHostsFile}`,
+    '-o', `UserKnownHostsFile=${sshOptionValue(knownHosts.knownHostsFile)}`,
+    '-o', `GlobalKnownHostsFile=${sshOptionValue(knownHosts.globalKnownHostsFile)}`,
     '-o', `HostKeyAlias=${hostKeyAliasFor(spec)}`,
     ...sshTrustPins(),
     '-o', 'ControlMaster=no',

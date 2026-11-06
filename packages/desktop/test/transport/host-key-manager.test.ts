@@ -71,8 +71,8 @@ test('after trust the tunnel spawns with strict host-key checking against the ap
   await waitFor(() => spawnCalls.length === 1, 3000, 'the trusted target spawns')
   const args = spawnCalls[0]!.args
   assert.ok(args.includes('StrictHostKeyChecking=yes'))
-  assert.ok(args.includes('UserKnownHostsFile=/app/ssh/known_hosts'))
-  assert.ok(args.includes('GlobalKnownHostsFile=/dev/null'))
+  assert.ok(args.includes('UserKnownHostsFile="/app/ssh/known_hosts"'))
+  assert.ok(args.includes('GlobalKnownHostsFile="/dev/null"'))
   assert.ok(!args.some(arg => arg.startsWith('StrictHostKeyChecking=no')))
   // A credential failure still classifies as auth (host-key never steals it).
   children[0]!.stderrWrite('Permission denied (publickey).\n')
