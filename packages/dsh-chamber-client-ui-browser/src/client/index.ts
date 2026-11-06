@@ -2,14 +2,16 @@
  * Chamber remote-browser client plugin (design 28, W0 skeleton): the
  * right-sidebar "浏览器" tab type and its launcher.
  *
- * Entry discipline (report v4 §2, review round-2 B1/I5):
- *  - `apply` EARLY-RETURNS unless the boot context is a dsh-kind source over
- *    SSH. The kind is derived from the source id (no `chamberTargetKind` boot
- *    fact is added); `local`, `gateway-*` and `http` never register anything.
+ * Entry discipline (report v4 §2, review round-2 B1/I5, widened gate):
+ *  - `apply` EARLY-RETURNS only for a plain-HTTP source. The local instance and
+ *    every SSH-reached source (dsh or gateway) register the tab; the kind is
+ *    derived from the source id (no `chamberTargetKind` boot fact is added).
+ *    A source without an SSH tunnel has no forward leg — the launcher hides the
+ *    remote section instead of refusing every address.
  *  - The exported `inject` face deliberately does NOT name `sidebarRightTabs`.
  *    The required-service probe reads exported inject arrays, so naming it here
- *    would make every local/gateway source report a missing service for an entry
- *    that is intentionally absent. The registry is probed with
+ *    would make an http source report a missing service for an entry that is
+ *    intentionally absent. The registry is probed with
  *    `ctx.get('sidebarRightTabs')` AFTER the source gate; when it is absent the
  *    tab is honestly absent and one warning is logged.
  *  - No shortcut is registered (report v4: 无 shortcut). Clicking the guide
@@ -71,14 +73,14 @@ export const inject = ['slots', 'locale']
 
 /**
  * Register the Browser tab type, its guide entry, body, title and dictionaries
- * — but only for a dsh-kind SSH source.
+ * — for the local instance and every SSH source (http sources never apply).
  *
  * @param ctx - the per-source client context (carries chamberInstanceId /
  *   chamberTransport / chamberSourceFingerprint).
  */
 export function apply(ctx: ClientContext): void {
-  // 1. Source gate BEFORE any registration or locale write: a non-ssh or
-  //    gateway/local source must leave no visible or diagnostic trace.
+  // 1. Source gate BEFORE any registration or locale write: an http source (or
+  //    a malformed boot fact) must leave no visible or diagnostic trace.
   const source = resolveBrowserEntry(
     (ctx as { chamberInstanceId?: string }).chamberInstanceId,
     (ctx as { chamberTransport?: 'local' | 'ssh' | 'http' }).chamberTransport,
@@ -90,7 +92,7 @@ export function apply(ctx: ClientContext): void {
     (ctx as { chamberSourceFingerprint?: string }).chamberSourceFingerprint,
   )
   if (sourceFingerprint === null) {
-    console.warn('[chamber-browser] dsh+ssh source has no valid boot fingerprint; the Browser tab stays absent')
+    console.warn('[chamber-browser] ' + source.sourceId + ' has no valid boot fingerprint; the Browser tab stays absent')
     return
   }
 

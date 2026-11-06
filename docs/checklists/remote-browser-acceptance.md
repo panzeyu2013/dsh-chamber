@@ -6,8 +6,8 @@
 
 - 当前 pin 的 vendor 树已填充（`vendor/harness-checkout` 非空）。
 - `node_modules` 已安装；锁文件与 workspace 一致。
-- 有一个可用的 SSH 源（dsh + ssh），或按 B/C/D 使用临时本地夹具。
-- 只对 dsh + ssh 源出现入口；local/http/gateway 不出现。
+- 有一个 dsh 或 gateway 的 SSH 源（或按 B/C/D 使用临时本地夹具）；本地实例也应出现入口（无远端分区）。
+- 入口 = 除 http 外全部来源：local、dsh+ssh、gateway+ssh 出现；gateway+http 不出现。
 
 ## A. 自动化（Linux，已可在本仓库跑）
 
@@ -55,22 +55,26 @@ node scripts/gates/verify-md-links.mjs
 
 ## E. S2 GUI 走查
 
-1. 右栏指南/标签只在一个 dsh+ssh 源出现；local/http/gateway 不出现；缺 `sidebarRightTabs` 时诚实缺席。
+1. 右栏指南/标签在 local、dsh+ssh、gateway+ssh 源出现；gateway+http 不出现；缺 `sidebarRightTabs` 时诚实缺席。
 2. 地址栏公网 URL → 系统浏览器；无 forward。
 3. 地址栏 `http://127.0.0.1:<port>/path` → ensure forward → 系统浏览器 alias URL；https 透传并给证书警告。
+   local 源：同一地址直接在本机系统浏览器打开（面板无远端分区、不轮询 `list`）。
+   gateway+ssh 源：与 dsh+ssh 同一路径（forward 复用该来源的 SSH 隧道）。
 4. 两 source 同端口：各自 alias；cookie 探针隔离；不存在共享 127.0.0.1。
 5. 端口冲突 → ephemeral；stale/重开；console 关闭不杀；退出回收。
 6. 错误/上限/no-bridge/空态/a11y（role=alert/status）可见。
 7. per-port 确认：5173 确认后，5174 再次弹窗；同端口不再弹；dialog 期间 retarget 返回
    `confirmation_late` 且没有新 listener。
-8. 官方 `ui-sidebar-browser` 未同时出现；若加载，走 F。
+8. 官方 `ui-sidebar-browser` 未同时出现（web profile 恒禁用，F 已核实）。
 
-## F. 官方行 skip（vendor 证据）
+## F. 官方行证据（只读核对）
 
-1. 在当前 pin 的 `bundle/*/cordis.patch.yml` 与 web profile 中确认 `ui-sidebar-browser` 行是否加载。
-2. 若加载：把该行加入 covered/skip 家族③，补 design 09 §3.5 和 host-graph 负例；不要只靠不同 kind 掩盖重复入口。
-3. 若不加载：保留 TODO/证据指针；`upstream-touchpoints` 的 not-applicable 不是证据。
-4. 无 vendor 树时不得声称已验证。
+1. 在 pin 的 `dsh-web-app/cordis.patch.yml` 确认该行条件：
+   `disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`。
+2. 在 `packages/control-plane/src/spawn-dsh.ts` 确认宿主恒以 `--profile web` 启动。
+3. 实测：`POST /api/i/<source>/api/clientGraph/graph` 的 entries 不含
+   `@deepseek-ai/dsh-client-ui-sidebar-browser`（web profile 的 75 行图）。
+4. 结论：不需要 covered/skip 条目；若 chamber 未来提供 desktop profile，再按 design 28 §5.1 处理重复入口。
 
 ## G. 构建/锁文件
 

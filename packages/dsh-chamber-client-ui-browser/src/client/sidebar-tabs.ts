@@ -3,11 +3,11 @@
  * (`ctx.sidebarRightTabs`) — the ONE service this plugin cannot declare in its
  * exported `inject` face.
  *
- * Why a local declaration: the plugin must register the Browser tab ONLY on a
- * dsh+ssh source, while the required-service probe reads each plugin's exported
- * `inject` array. Naming `sidebarRightTabs` there would make every
- * local/gateway/http source report a missing service even though the entry is
- * deliberately absent there (review round-2 repo-process B1). The probe is
+ * Why a local declaration: the plugin must register the Browser tab only on
+ * the sources that show it, while the required-service probe reads each
+ * plugin's exported `inject` array. Naming `sidebarRightTabs` there would make
+ * an http source report a missing service even though the entry is deliberately
+ * absent there (review round-2 repo-process B1). The probe is
  * therefore done at apply time with `ctx.get('sidebarRightTabs')`, and the
  * service face is declared here instead of being imported.
  *

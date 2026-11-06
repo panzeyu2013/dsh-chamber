@@ -93,7 +93,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 路线 A 代码面；实机/凭据门禁见 STATUS | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、65 通道 manifest 锁步（56 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留；P5b 起 sidecar 继续作为 Swift flavor 的 node 来源 |
 | 26 | [26-page-channel.md](26-page-channel.md) | 现行 | 页面级多路复用通道：一条同源 WS 承载全部长活流（health / pluginGraph / sessionFacts），实例在通道内以 instanceId 定址、容量归控制面（O(活跃订阅)）；每订阅信用窗口流控；通道独占重连与重订阅；不变量 I-1（页面长活 HTTP 流 = 0）配静态与运行期断言；健康 SSE 端点退役；§D7 页面级同源 HTTP 派发预算（有界队列、local 保留槽、`dispatched` 证据、fetch 唯一所有权 allowlist） |
 | 27 | [27-network-io-resilience.md](27-network-io-resilience.md) | v1 代码面完成（实机/组装态门禁见 STATUS） | WAN 网络 IO 韧性：transport link health 子态（healthy/suspect/down）、两次网络失败才 down、suspect 放行/down 复用 503、注册边沿、上传总预算、页面通道 link epoch、载波 closed 逃生、mutation unknown 分类；不新增包/phase/503 码 |
-| 28 | [28-remote-browser.md](28-remote-browser.md) | 现行（W0/S1/S2 实现面；S3/真机验收未完成，开放项见 STATUS） | 远端浏览器启动器：右栏 Browser = 地址栏 + 每来源 SSH loopback forward 列表，经系统浏览器打开；`dsh` + `ssh` 才有入口，per-source `127.0.0.n` alias、永不复用、无共享 `127.0.0.1` 回退；不内嵌页面/不做 gateway 隧道。**§4 有界例外**，不是 web 预览回归 |
+| 28 | [28-remote-browser.md](28-remote-browser.md) | 现行（W0/S1/S2 实现面；S3/真机验收未完成，开放项见 STATUS） | 远端浏览器启动器：右栏 Browser = 地址栏 + 每来源 SSH loopback forward 列表，经系统浏览器打开；除 http 外全部来源有入口（local 只保留本机打开；dsh/gateway+ssh 走转发），per-source `127.0.0.n` alias、永不复用、无共享 `127.0.0.1` 回退；不内嵌页面/不做 gateway 隧道。**§4 有界例外**，不是 web 预览回归 |
 
 ---
 
@@ -134,9 +134,9 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 > 实例图，见 `packages/control-plane/src/host-graph-seed.ts`）：只删不读、运行中整棵跳过、
 > 幂等，域缺失 404 给诚实文案；控制面不持有归档事实、不新增执行面，最窄边界见 design 24 §2。
 >
-> **design 28 远端浏览器 = 有界例外，不是「web 预览」回归**：只从右栏 Browser 条目发起，只对
-> `dsh` + `ssh` 来源把远端 `127.0.0.1:<port>` 经 SSH `-L` 映射到该来源专属的 `127.0.0.n` alias，
-> 再交给系统浏览器；公网 http(s) 仍走既有链接腿。面板**不渲染任何页面**（无 iframe / webview /
+> **design 28 远端浏览器 = 有界例外，不是「web 预览」回归**：只从右栏 Browser 条目发起；对
+> `dsh`/`gateway` + ssh 来源把远端 `127.0.0.1:<port>` 经 SSH `-L` 映射到该来源专属的 `127.0.0.n`
+> alias 再交给系统浏览器；公网 http(s) 仍走既有链接腿，本地实例只保留“在本机打开”。面板**不渲染任何页面**（无 iframe / webview /
 > 原生子视图）、不代答、不注入，**不建 gateway 隧道**、不做远端 LAN/主机名/任意 target；
 > per-source alias 永不复用（删除即 tombstone），且**没有共享 `127.0.0.1` 回退**。故 §4 的
 > 「web 预览（移出）」仍成立：被否决的是在宿主 UI 内渲染页面内容，不是把远端 loopback 端口

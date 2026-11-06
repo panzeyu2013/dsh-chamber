@@ -8,8 +8,9 @@
  *
  *   - only http(s) is accepted; a missing scheme defaults to `http` (report v4
  *     §1) — a bare `host:port` is NOT read as a custom protocol;
- *   - `127.0.0.1` / `localhost` are the ONLY remote forward targets and are
- *     canonicalised to `127.0.0.1` (`kind: 'remote-loopback'`);
+ *   - `127.0.0.1` / `localhost` are the ONLY remote forward targets; `host` is
+ *     canonicalised to `127.0.0.1` (`kind: 'remote-loopback'`) while the
+ *     system-browser URL keeps the typed spelling (see the `url` field);
  *   - every other address is a public/system-browser URL (`kind: 'public'`),
  *     including RFC1918, other 127/8 spellings and hostnames — these are
  *     explicitly NOT remote targets, because the forward target is always the
@@ -64,7 +65,11 @@ export type PublicReachability = 'public' | 'local-machine' | 'private-network'
 /** Fields shared by both accepted kinds (canonical URL, path and query). */
 export interface BrowserAddressBase {
   scheme: BrowserAddressScheme
-  /** Canonical URL without fragment and without userinfo. */
+  /** URL the system browser opens: fragment and userinfo stripped. For a
+   *  remote-loopback address the TYPED host spelling survives (a local service
+   *  may answer only as `localhost`, IPv6 loopback included, or hold a
+   *  localhost certificate); `host` is the canonical forward target and the
+   *  forward leg never reads this URL. */
   url: string
   /** URL hostname as canonicalised by the URL parser (bracketed for IPv6). */
   host: string
@@ -86,7 +91,8 @@ export interface PublicBrowserAddress extends BrowserAddressBase {
   reachability: PublicReachability
 }
 
-/** A remote loopback target: the launcher MUST request a forward for it. */
+/** A remote loopback target: the launcher forwards it on an SSH source and opens
+ *  it directly on this machine for the local instance. */
 export interface RemoteLoopbackBrowserAddress extends BrowserAddressBase {
   kind: 'remote-loopback'
   /** Always the remote target host; the browser opens an alias, not this host. */
@@ -205,13 +211,16 @@ export function parseBrowserAddress(
   }
 
   if (hostname === '127.0.0.1' || hostname === 'localhost') {
-    // Canonicalise the remote target: both spellings mean the remote's IPv4
-    // loopback, and main must never see `localhost` as the forward target.
+    // Two different facts, so capture the link URL BEFORE canonicalising:
+    //  - `url` is what the system browser opens (the local instance's leg);
+    //  - `host` is the canonical forward target (main must never see
+    //    `localhost` as the forward target).
+    const url = parsed.href
     parsed.hostname = '127.0.0.1'
     return {
       kind: 'remote-loopback',
       host: '127.0.0.1',
-      url: parsed.href,
+      url,
       ...base,
     }
   }

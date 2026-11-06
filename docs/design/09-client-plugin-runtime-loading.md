@@ -88,7 +88,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   渲染期 `useResource` 座 `resources` 因
   「非任何复合插件的 inject、且不可能单独缺失」不再登记）。**第二个运行期消费者（design 28）**：右栏
   Browser 插件在 `apply` 里按来源早退后才 `ctx.get('sidebarRightTabs')` 探测，且**故意不**在导出的
-  `inject` 里点名它（否则 local/gateway 源会为一条本来就不该出现的页签报缺失服务）；缺行时页签诚实
+  `inject` 里点名它（否则 http 源会为一条本来就不该出现的页签报缺失服务）；缺行时页签诚实
   缺席并 warn 一次。故本节的 inject 反向依赖仍只数 1 条，Browser 条不计入。宿主图通道降级（返回 `[]`）或该行 apply
   失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过、会话视图不注册，而 boot 仍报成功。
   **两级自愈**：① 取图撞上 `503 instance_unavailable`（实例仍在启动）时，shell 经 App
@@ -280,11 +280,12 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   path/sessionId 的 image 目标」。被否方案：①整行跳过——该行是新增的官方面，跳过等于删掉一个可工作的功能；
   ②covered + 构建期补丁——运行期 bundle 的模块不在复合构建图里，登记补丁会被 §3.6 的「patch never applied」
   覆盖门硬失败，且要为 `remote.workspaceFiles` 再造覆盖前提。
-  **TODO(pin-vendor) 官方 `ui-sidebar-browser` 行**：pin 的 web profile 是否加载它**仍无证据**；
-  `docs/checklists/upstream-touchpoints.md` 对 `browser-guests.ts`/`preload-browser.ts` 的
-  not-applicable 只是上游桌面文件分类，不是 profile 启停证据。pin-vendor 必须用真实 vendor 复核；若加载，
-  把该行加进本族③与「有意跳过名单」并配一条负例（宿主图含该行时仍只有一个浏览器页签）。
-  若加载的是另一 kind，也**不能替代 skip**：重复入口不是注册冲突。
+  **官方 `ui-sidebar-browser` 行（已核实，pin 0.2.2-rc.1）**：web profile 把它写成
+  `disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`（`dsh-web-app/cordis.patch.yml`），
+  而控制面恒以 `--profile web` 起宿主（`packages/control-plane/src/spawn-dsh.ts`），实测本地实例的
+  `clientGraph/graph` 也不含该行：web profile **永不加载**它，因此本族③与「有意跳过名单」都不需要
+  该条目。若 chamber 未来提供 desktop profile，再按“有意跳过 + 负例（宿主图含该行时仍只有一个浏览器
+  页签）”处理——若加载的是另一 kind，也**不能替代 skip**：重复入口不是注册冲突。
 
 - **有意跳过名单（覆盖集/复合入口的显式例外）**：①官方 HMR 行（宿主半身 always mounted；dev-only 的只是 rebuild watcher）
   `@deepseek-ai/dsh-client-hmr` 在覆盖集内但**永不加载**——它开的是 **document-relative**

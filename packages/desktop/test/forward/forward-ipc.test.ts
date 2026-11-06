@@ -5,7 +5,7 @@
  * renderer payload and the ForwardManager. What is pinned here:
  *   - the four registered channels, their wire names, and ZERO push channels
  *     ('forward:changed' stays reserved: v1 polls list());
- *   - the full rejection matrix (no source, local, gateway, dsh+http, malformed
+ *   - the full rejection matrix (no source, local, dsh+http, malformed
  *     fingerprint, impossible ports, unknown scheme) — none of these may reach
  *     the manager;
  *   - the frozen argument table per method (one input object, explicit keys);
@@ -133,18 +133,22 @@ test('the rejection matrix never reaches the manager (design 28 §7)', async () 
   }
 })
 
-test('gateway and dsh+http sources are refused with the wire gate codes', async () => {
+test('a gateway ssh source passes the source proof like a dsh source', async () => {
   const gateway = new ForwardIpcHarness()
   gateway.instances = [{ id: 'gw-1', kind: 'gateway', transport: 'ssh' }]
   gateway.addSource('gateway-gw-1', FINGERPRINT)
   const gatewayService = new FakeForwardService()
+  gatewayService.requestResult = { ok: true, record: makeRecord({ sourceId: 'gateway-gw-1' }) }
   gateway.install(gatewayService)
-  assert.deepEqual(
-    await gateway.invoke(CHANNEL.request, requestPayload({ sourceId: 'gateway-gw-1' })),
-    refusal('source_not_dsh'),
-  )
-  assert.deepEqual(gatewayService.calls, [])
+  const result = await gateway.invoke(CHANNEL.request, requestPayload({ sourceId: 'gateway-gw-1' }))
+  assert.deepEqual(result, gatewayService.requestResult)
+  assert.deepEqual(gatewayService.calls, [{
+    method: 'request',
+    args: { sourceId: 'gateway-gw-1', sourceFingerprint: FINGERPRINT, port: 5173, scheme: 'http' },
+  }])
+})
 
+test('a dsh http source is refused with the wire gate code', async () => {
   const http = new ForwardIpcHarness()
   http.instances = [{ id: 'web-2', kind: 'dsh', transport: 'http' }]
   http.addSource('dsh-web-2', FINGERPRINT)

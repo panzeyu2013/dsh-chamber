@@ -248,7 +248,7 @@ export interface ForwardSource {
   readonly sourceId: string
   /** Per-process proof minted by the main process (notifications.ts). */
   readonly fingerprint: string
-  /** Target kind; only 'dsh' gets a browser. */
+  /** Target kind; both remote kinds ('dsh', 'gateway') may forward over ssh. */
   readonly kind: string
   /** Transport method; only 'ssh' can be forwarded. */
   readonly transport: string
@@ -420,11 +420,15 @@ function isScheme(value: unknown): value is ForwardScheme {
 /**
  * The gate: which sources may forward, and which target ports are legal.
  * Pure and exported so the IPC rejection matrix and the manager share one
- * verdict (security review: reject gateway/local/http, reject the instance's
- * own tunnel port, reject 0/negative/fractional/out-of-range ports).
+ * verdict (every SSH-reached source forwards: dsh and gateway; an http source
+ * and any non-registry kind are rejected; the instance's own tunnel port and
+ * 0/negative/fractional/out-of-range ports are rejected).
  */
 export function evaluateForwardSourceGate(source: ForwardSource): ForwardError | null {
-  if (source.kind !== 'dsh') return errorOf('source_not_dsh')
+  // `local` never reaches this gate: it has no ssh tunnel and the launcher does
+  // not offer it the forward leg. Both remote target kinds share the same ssh
+  // facts, so the tunnel — not the gateway-facing surface — decides.
+  if (source.kind !== 'dsh' && source.kind !== 'gateway') return errorOf('source_not_dsh')
   if (source.transport !== 'ssh') return errorOf('transport_not_ssh')
   return null
 }

@@ -134,8 +134,8 @@ type ProofResult = { readonly ok: true; readonly source: ProvenSource } | Forwar
  * shape as `shell-ipc-open-in.ts`):
  *   1. source-id grammar (rejects 'local' and any non-<kind>-<id> spelling);
  *   2. fingerprint validity for this source;
- *   3. registry lookup + kind/transport gate ('dsh' + 'ssh' only — gateway and
- *      http sources never get a browser);
+ *   3. registry lookup + kind/transport gate ('dsh'/'gateway' over 'ssh' — an
+ *      http source never gets a browser);
  *   4. fingerprint match against the live incarnation, then capture the token.
  * The caller re-proves the token after the await (see `stillOwns`).
  */
@@ -148,7 +148,7 @@ function proveSource(ctx: ShellIpcCtx, sourceId: unknown, fingerprint: unknown):
     .listInstances()
     .find(candidate => `${candidate.kind}-${candidate.id}` === sourceId)
   if (instance === undefined) return failure('source_unknown')
-  if (instance.kind !== 'dsh') return failure('source_not_dsh')
+  if (instance.kind !== 'dsh' && instance.kind !== 'gateway') return failure('source_not_dsh')
   if (instance.transport !== 'ssh') return failure('transport_not_ssh')
   if (!ctx.matchesNotificationSource(sourceId, fingerprint)) return failure('source_unknown')
   const token = ctx.captureVscodeSource(instance.id)
