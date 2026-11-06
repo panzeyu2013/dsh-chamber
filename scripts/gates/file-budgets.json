@@ -103,7 +103,7 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-sidebar/src/client/ServerSection.tsx",
-      "lines": 1431,
+      "lines": 1418,
       "target": 400,
       "note": "sidebar section container (header + browsing region + rows + view options + pin partition); the 2026-09 pin merge added 198 net (view options, pin partition, flat and tree modes). Nearest extraction: the ordering/partition preparation block (394-469) into server-section-order.ts; −3 = the panel-axis mount moved into the source header (ServerSectionPanels deleted; design 06 §4.7); +30 = alpha.3 #6062 attention-watermark window (requiredAttentionIndex + monotonic per-workspace floor, upstream WorkspaceBrowser parity; feature, review-justified raise; registered in STATUS); +174 = PR2 derived checkout rows (design 11 §4-§5): the derived-row git-flag fallback + family fold/tree anchors, the checkout header (independent fold toggle — branch glyph at rest / chevron on hover —, branch/path title, health hint, 0-session empty state, no kebab/rename), the checkout Git-occupant mount with the source workspace id + display identity, the empty keyboard-reveal cluster, and the in-family checkout drag handlers/markers (+ the shared row-identity threading). Feature, review-justified raise; nearest extraction stays the ordering/partition preparation block, and the checkout header block is the next candidate (server-section-checkout.tsx); −16 = PR3 removed the legacy repo-scope unregistered-worktree mount (the derived checkout row owns that surface now)"
     },
@@ -235,9 +235,9 @@
     },
     {
       "path": "packages/desktop/host-key.ts",
-      "lines": 765,
+      "lines": 782,
       "target": 600,
-      "note": "P0-3 app-owned known_hosts + self-proof + trust TTL (new in v0.2). Target 600 = extract the known_hosts parser/serializer leaf once the trust UI stabilizes; +17（review R3 MINOR-2）= @revoked denial semantics（classify/gate/trust 拒绝覆盖 + replace 保留撤销行）；+8 = @cert-authority 行不当作 host key、replace 保留；+33（合并前 review B-M1/M2）= legacy bracket revoked 识别 + wildcard/multi-pattern 用 negation 收窄而非整行删除；+4 = @revoked 改为逐 key（R4 B2）；+27 = sshTrustPins/版本门（自证与隧道/exec 共用，R5 B M1/M2）；+5 = probe 无目标条目时 unavailable（R6 A-m3）。"
+      "note": "P0-3 app-owned known_hosts + self-proof + trust TTL (new in v0.2). Target 600 = extract the known_hosts parser/serializer leaf once the trust UI stabilizes; +17（review R3 MINOR-2）= @revoked denial semantics（classify/gate/trust 拒绝覆盖 + replace 保留撤销行）；+8 = @cert-authority 行不当作 host key、replace 保留；+33（合并前 review B-M1/M2）= legacy bracket revoked 识别 + wildcard/multi-pattern 用 negation 收窄而非整行删除；+4 = @revoked 改为逐 key（R4 B2）；+27 = sshTrustPins/版本门（自证与隧道/exec 共用，R5 B M1/M2）；+5 = probe 无目标条目时 unavailable（R6 A-m3）；+17 = sshOptionValue 给每个 ssh -o 的应用 known_hosts 路径加引号（macOS 的 userData 必含空格，beta.3 构建上 strict 子进程读不到信任库的 P0）并让 previousFingerprints 只在密钥变更时投影；review-justified raise。"
     },
     {
       "path": "packages/desktop/ssh-askpass.ts",

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-browser",
   "description": "Chamber remote-browser client plugin (design 28): the right-sidebar launcher over SSH loopback forwards — an address bar (http(s), path; remote 127.0.0.1/localhost) plus the per-source forward list. It never embeds a page, never opens a gateway tunnel and never re-implements the dsh host surface: a public URL goes through the existing system-browser link leg, and a remote loopback URL is opened by the trusted main process (openInBrowser), not by this package",
-  "version": "0.4.4-beta.3",
+  "version": "0.4.4-beta.4",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

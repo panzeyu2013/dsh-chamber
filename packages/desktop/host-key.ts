@@ -528,18 +528,11 @@ export function sshTrustPins(): string[] {
 }
 
 /**
- * Quote one ssh-config option VALUE for `-o`.
- *
- * ssh splits a `-o` argument on whitespace and honours double quotes only INSIDE the argument
- * (ssh_config syntax: "Arguments may optionally be enclosed in double quotes in order to
- * represent arguments containing spaces"). An unquoted path with a space is silently truncated,
- * so the option points somewhere else — for a file it does not exist and ssh reports
- * "No <type> host key is known for <alias>" / "Host key verification failed.".
- *
- * This matters on every macOS install: userData lives under
- * `~/Library/Application Support/<app>/…`, so the app-owned known_hosts path ALWAYS contains a
- * space. Without quoting, no strict child could ever read the store, and trusting a key could
- * never make a tunnel succeed (the trust UI kept re-offering the same key forever).
+ * Quote one ssh-config option VALUE for `-o`: ssh splits the argument on whitespace and honours
+ * double quotes only inside it, so an unquoted path with a space is silently truncated. On macOS
+ * userData is `~/Library/Application Support/<app>/…`, so the app-owned known_hosts path always
+ * contains one — without quoting no strict child could read the store (0.4.4-beta.3 P0: trust
+ * never took effect and the panel kept re-offering the same key).
  */
 export function sshOptionValue(value: string): string {
   return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'

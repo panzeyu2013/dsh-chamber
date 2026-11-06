@@ -83,7 +83,7 @@
 - rc.2（仅该来源）：①Web 搜索开关（默认关、三命名空间字段与凭据、sendOriginalQuestion 128 字符、下次搜索生效、回退前先关）；②模型徽标三处（112px 回归已修，菜单/模型行待目检）；③web-deepseek-api 凭据/available；④日志 body.thinking 可选 log-only。
 - 0.2.1 整页插件/自动化：窄屏布局已由上游前端负责；待真机 = 安全区/横屏、iOS/Android 键盘、真实插件动作与保存；判据 = 目检 + `acceptance:mobile` 路由步。
 
-**open-in/Git/深链/只读镜像**：open-in S3=复制路径（工作区已落、会话行待补或裁决；S4/复制 ssh/深链不做）；VS Code 深链 8 项；Git worktree 真机（池内创建/enter/path-based 删除/旧池清空）；只读会话镜像（无 CDP 阻断、gateway/SSH 事实、404 自愈、DOM、性能）。
+**open-in/Git/深链/只读镜像**：open-in S3=复制路径（工作区已落、会话行待补或裁决；S4/复制 ssh/深链不做）；VS Code 深链 8 项；Git worktree 真机（池内创建/enter/path-based 删除、删除对话框的可选归档与分支删除/旧池清空）；只读会话镜像（无 CDP 阻断、gateway/SSH 事实、404 自愈、DOM、性能）。
 
 ### 1.5 平台、发布与外部凭据
 
