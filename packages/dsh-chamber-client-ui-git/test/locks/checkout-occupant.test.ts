@@ -147,6 +147,8 @@ test('the removal flow is close-safe, re-plans the archive at confirm, and arms 
   // re-fetched at confirm; no polled workspace membership and no stale preview.
   assert.match(flat(ARCHIVE_FACTS), /planCheckoutArchive\(/)
   assert.match(flat(ARCHIVE_FACTS), /archiveSetKnown === true/)
+  assert.match(flat(ARCHIVE_FACTS), /blank: session\.blank/,
+    'the unary blank fact reaches the plan: a default "new session" placeholder is never archived')
   assert.match(flat(REMOVAL), /fetchCheckoutArchiveFacts\(sourceId, target\.path/,
     'the confirm path re-plans with fresh facts')
   assert.doesNotMatch(flat(REMOVAL), /main\.sessionIds/, 'archive roots do not depend on polled membership')

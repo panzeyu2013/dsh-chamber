@@ -51,6 +51,7 @@ export async function fetchCheckoutArchiveFacts(
   const plan = planCheckoutArchive(
     instance.sessions.map(session => ({
       sessionId: session.sessionId,
+      blank: session.blank,
       ...(session.workingDirectory === undefined ? {} : { workingDirectory: session.workingDirectory }),
       ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
       ...(session.parentSessionId === undefined ? {} : { parentSessionId: session.parentSessionId }),

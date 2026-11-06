@@ -496,6 +496,14 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
   再加 `parentSessionId` 的 fork 闭包；**不依赖轮询的 workspace membership**（宿主
   canonical-cwd 索引退化或 30s 轮询窗口内新建的会话也能被归档）。归档集用 mounted
   aggregate 的权威集（`archiveSetKnown === true`）跳过已归档；unary 的未知集不冒充。
+- **blank（未首发）会话不计数也不归档**：`session.list` 的 `blank` 事实（首回合
+  `turn/start` 前为真）标出的行是建而未用的“新建会话”默认占位——checkout 行「+」的
+  `createSessionHere` 建出、`workingDirectory = checkout path` 且 echo `blank:true` 的行
+  即此形态（宿主建而未用的空行同形）：无内容、无 durable 标题，弹窗里只会落到「未命名会话」
+  占位（用户报告的默认会话即此形态）。它既不是 root 也不进 closure 输出：不计入归档
+  计数/标题列表，也不发起归档调用；fork 闭包遍历仍可穿过它到达有内容的 descendant。
+  冷行无投影时 `blank` 不可知按 false 处理（fail-open：宁可多算，不误删有内容的历史行）；
+  wire 重命名不会清 `blank`，所以被外部改名的空会话仍按空会话排除（语义不变）。
 - **归档勾选默认关闭**：这是客户端 consumer 的一步，不是宿主 remove 的一部分，也不改变
   “删除默认不归档”的语义。勾选后**确认时重新拉取 unary 并重算**（对话框打开时的预览只用于
   计数/标题；可能已过期）；先 plain `archiveSession`，`workspace/session-active` 拒绝时由
@@ -742,6 +750,11 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - **归档 roots 仍取主 workspace membership / 复用打开时的预览**：否决。membership 是轮询 +
   可退化视图（canonical-cwd 索引为空时 roots=0），且打开后新建/进入的会话不在其中；物理
   `workingDirectory ?? cwd` + 确认时重算才是 checkout 的权威。
+- **归档闭包按「无 durable 标题」排除默认会话（而不是按 `blank`）**：否决。无标题也可能
+  是有内容的历史行（冷缓存未带 title 投影，标题只是显示投影），按标题排除会漏归档真实内容；
+  `blank` 是宿主首回合事实，恰好等价于“未首发、无内容”，即“新建会话”默认占位的形态
+  （checkout 行「+」的 `createSessionHere` 是典型来源；宿主/客户端建而未用的空行同形）。
+  冷行未知按非 blank（fail-open）：宁可多算一个，不误删有内容的历史行。
 - **删除进行中允许 X/Escape 关闭以“取消”**：否决。异步删除没有取消语义，关闭只会造成
   “看起来取消、实际继续”；改为删除中忽略关闭，停止确认仍可单独取消归档。
 - **子模块 refusal 只显示错误、不重新武装勾选**：否决。host 的强制移除需要显式

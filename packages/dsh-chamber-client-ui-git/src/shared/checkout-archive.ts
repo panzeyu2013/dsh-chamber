@@ -23,6 +23,14 @@ export interface ArchiveSessionFacts {
   readonly cwd?: string
   readonly parentSessionId?: string
   readonly title?: string
+  /**
+   * The host `session.list` provisional blank fact: true until the session's
+   * first turn. The "new session" default placeholder has no content and no
+   * durable title, so there is nothing to archive; it is never a root and never
+   * archived. It still stays in the fork graph, so its content-bearing
+   * descendants are reached through it.
+   */
+  readonly blank: boolean
 }
 
 /** One item of an archive-admission family (upstream SessionActivityItem shape). */
@@ -45,9 +53,15 @@ export interface ArchiveStopPending {
 
 /** The deterministic plan for one checkout's archive step. */
 export interface CheckoutArchivePlan {
-  /** Sessions whose effective directory is inside the checkout. */
+  /**
+   * Sessions whose effective directory is inside the checkout. Blank
+   * (provisional, first-turn-pending) rows are omitted: no content to archive.
+   */
   readonly roots: string[]
-  /** Roots plus every transitive fork descendant (parentSessionId edges). */
+  /**
+   * Roots plus every transitive fork descendant (parentSessionId edges). Blank
+   * rows are omitted even when traversed as fork intermediates.
+   */
   readonly closure: string[]
   /** Closure minus already-archived ids when the archive set is known. */
   readonly toArchive: string[]
@@ -62,6 +76,11 @@ export function isInsideCheckout(path: string | undefined, checkoutPath: string)
 
 /**
  * Plan the archive closure for one checkout.
+ *
+ * Blank (provisional, content-free) rows are never planned for archiving: they
+ * are not roots, and they do not enter the closure. The fork graph is still
+ * built from every row so a blank intermediate is traversed on the way to its
+ * content-bearing descendants, which are archived normally.
  * @param sessions - every non-subagent session row (unary snapshot facts).
  * @param checkoutPath - the derived row's canonical checkout path.
  * @param archived - the authoritative archive set, or undefined when unknown.
@@ -73,7 +92,9 @@ export function planCheckoutArchive(
 ): CheckoutArchivePlan {
   const byId = new Map(sessions.map(session => [session.sessionId, session]))
   const roots = sessions
-    .filter(session => isInsideCheckout(session.workingDirectory ?? session.cwd, checkoutPath))
+    .filter(session =>
+      session.blank !== true
+      && isInsideCheckout(session.workingDirectory ?? session.cwd, checkoutPath))
     .map(session => session.sessionId)
   const children = new Map<string, string[]>()
   for (const session of sessions) {
@@ -82,17 +103,27 @@ export function planCheckoutArchive(
     if (siblings === undefined) children.set(session.parentSessionId, [session.sessionId])
     else siblings.push(session.sessionId)
   }
-  const seen = new Set(roots)
-  const queue = [...roots]
+  // Traversal visits every reached row, but only non-blank rows are included:
+  // a blank row is enqueued so its descendants are still walked.
+  const visited = new Set<string>()
+  const included = new Set<string>()
+  const queue: string[] = []
+  for (const root of roots) {
+    if (visited.has(root)) continue
+    visited.add(root)
+    included.add(root)
+    queue.push(root)
+  }
   while (queue.length > 0) {
     const parent = queue.shift()!
     for (const child of children.get(parent) ?? []) {
-      if (seen.has(child)) continue
-      seen.add(child)
+      if (visited.has(child)) continue
+      visited.add(child)
+      if (byId.get(child)?.blank !== true) included.add(child)
       queue.push(child)
     }
   }
-  const closure = [...seen]
+  const closure = [...included]
   const toArchive = archived === undefined ? closure : closure.filter(sessionId => !archived.has(sessionId))
   const titles = toArchive.map(sessionId => {
     const session = byId.get(sessionId)

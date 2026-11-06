@@ -1,7 +1,8 @@
 /**
  * Optional archive-before-remove: the closure plan (every session physically in
- * the checkout + fork descendants, archived skipped) and the upstream two-phase
- * runner (plain → confirm → stopActivity; non-refusal failures abort).
+ * the checkout + fork descendants, archived skipped, blank placeholders never
+ * archived) and the upstream two-phase runner (plain → confirm → stopActivity;
+ * non-refusal failures abort).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,12 +20,12 @@ test('isInsideCheckout matches the checkout itself and descendants on segment bo
 
 test('the plan takes EVERY session physically in the checkout plus its fork closure, not a workspace membership', () => {
   const sessions = [
-    { sessionId: 'a', workingDirectory: CHECKOUT, title: 'A' },
-    { sessionId: 'b', cwd: `${CHECKOUT}/nested` },
-    { sessionId: 'c', cwd: '/repo' },
-    { sessionId: 'a-fork', parentSessionId: 'a', cwd: '/repo', title: 'A fork' },
-    { sessionId: 'a-fork-fork', parentSessionId: 'a-fork', cwd: '/repo' },
-    { sessionId: 'stray', workingDirectory: '/repo/elsewhere' },
+    { sessionId: 'a', workingDirectory: CHECKOUT, title: 'A', blank: false },
+    { sessionId: 'b', cwd: `${CHECKOUT}/nested`, blank: false },
+    { sessionId: 'c', cwd: '/repo', blank: false },
+    { sessionId: 'a-fork', parentSessionId: 'a', cwd: '/repo', title: 'A fork', blank: false },
+    { sessionId: 'a-fork-fork', parentSessionId: 'a-fork', cwd: '/repo', blank: false },
+    { sessionId: 'stray', workingDirectory: '/repo/elsewhere', blank: false },
   ]
   const plan = planCheckoutArchive(sessions, CHECKOUT, new Set(['a-fork']))
   assert.deepEqual(plan.roots, ['a', 'b'])
@@ -40,9 +41,38 @@ test('the plan takes EVERY session physically in the checkout plus its fork clos
 })
 
 test('no workspace membership argument: a session with no membership entry is still a root', () => {
-  const plan = planCheckoutArchive([{ sessionId: 'orphan', cwd: CHECKOUT }], CHECKOUT)
+  const plan = planCheckoutArchive([{ sessionId: 'orphan', cwd: CHECKOUT, blank: false }], CHECKOUT)
   assert.deepEqual(plan.roots, ['orphan'])
   assert.deepEqual(plan.toArchive, ['orphan'])
+})
+
+test('a blank (provisional, content-free) session inside the checkout is neither counted nor listed/archived', () => {
+  const plan = planCheckoutArchive([
+    { sessionId: 'blank-new', workingDirectory: CHECKOUT, blank: true },
+    { sessionId: 'real', workingDirectory: CHECKOUT, title: 'Real work', blank: false },
+  ], CHECKOUT)
+  assert.deepEqual(plan.roots, ['real'])
+  assert.deepEqual(plan.closure, ['real'])
+  assert.deepEqual(plan.toArchive, ['real'])
+  assert.deepEqual(plan.titles, [{ sessionId: 'real', title: 'Real work' }])
+  assert.equal(plan.closure.includes('blank-new'), false,
+    'the blank default-session placeholder is not counted or archived')
+})
+
+test('a blank fork intermediate is traversed but never archived', () => {
+  const plan = planCheckoutArchive([
+    { sessionId: 'root', workingDirectory: CHECKOUT, title: 'Root', blank: false },
+    { sessionId: 'blank-mid', parentSessionId: 'root', cwd: '/repo', blank: true },
+    { sessionId: 'grandchild', parentSessionId: 'blank-mid', cwd: '/repo', title: 'Kept work', blank: false },
+  ], CHECKOUT)
+  assert.deepEqual(plan.roots, ['root'])
+  assert.deepEqual(plan.closure, ['root', 'grandchild'],
+    'the blank child is omitted while its content-bearing grandchild is included')
+  assert.deepEqual(plan.toArchive, ['root', 'grandchild'])
+  assert.deepEqual(plan.titles, [
+    { sessionId: 'root', title: 'Root' },
+    { sessionId: 'grandchild', title: 'Kept work' },
+  ])
 })
 
 test('archiveBeforeRemove archives plainly, then confirms once with the activity families and retries with stopActivity', async () => {
