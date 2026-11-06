@@ -208,6 +208,19 @@ test('the badge is fed the merged runtime projection, never the raw channel repo
   // 的 goal 压制输入，徽标退回它时点/待办/徽标分叉（M5 wiring lock，Wave6 收口）。
   assert.match(app, /record\[server\.id\] = server\.runtime/, '徽标 runtime 必须取 deriveServers 的合并投影')
   assert.match(app, /runtimeFacts: badgeRuntime/, 'useBadgeCount 必须收 badgeRuntime')
+  // 归档行排除集（design 19 §3.7）：归档行在六面均无完成点且不可打开，徽标必须收 App 用
+  // **投影同一出处**算出的 id（权威归档集 ∪ 本页归档回声），否则 Dock 留下清不掉的数字。
+  assert.match(app, /archivedSessions: badgeArchived/, 'useBadgeCount 必须收归档排除集')
+  assert.match(
+    app,
+    /const badgeArchived = useMemo\(\(\) => projectArchivedSessionIds\(servers, echoes\.archive\), \[servers, echoes\.archive\]\)/,
+    '归档排除集 = 投影同一出处（servers 的归档集 ∪ echoes.archive），经纯函数计算',
+  )
+  // 纯函数住零 import 的 badge-count.ts（徽标计数模块的零依赖纪律不变）。
+  const badgeModule = readFileSync(
+    fileURLToPath(new URL('../../src/badge-count.ts', import.meta.url)), 'utf8')
+  assert.match(badgeModule, /export function projectArchivedSessionIds\(/, '归档排除集纯函数在 badge-count.ts')
+  assert.doesNotMatch(badgeModule, /^import /mu, 'badge-count.ts 保持零 import')
   const badgeCall = /useBadgeCount\(\{([\s\S]*?)\}\)/u.exec(app)
   assert.ok(badgeCall !== null, '必须存在 useBadgeCount 调用点')
   const badgeInputs = badgeCall[1]

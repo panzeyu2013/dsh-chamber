@@ -341,6 +341,11 @@
   pin 两入口缺席、归档钮/菜单项翻转为「恢复」（官方 `workspace/unarchiveSession`，失败落
   `/unarchive` 行错误键）；**搜索命中行**同为归档形态，恢复入口以行后文本动作承载（搜索行是
   单一 button 的 a11y 结构，嵌套按钮非法——形态差异登记在 checklist §4.6 该行，行为面与上游一致）。
+  **同一排除贯穿可见呈现面**：归档行状态槽留空 + 待办区排除（§8.1）+ Dock 角标不计入
+  （design 19 §3.7「归档行排除」）——归档行不可打开，任何一面单独宣称「完成未读」都会留下
+  无法通过查看清除的幻影提醒。**诊断面缺口（已登记）**：`data-chamber-session-state`/
+  `data-chamber-state-source` 与行 `title`/`aria-label` 仍按未含 archived 的派生报状态
+  （见 STATUS §1.2）。
 - **归档警示**（上游 `RowActionToast` 的 section 内实例化，2026-10 收敛）：只剩「点击归档行
   不可打开」一态（`toast.archivedNotOpenable`），落**触发来源**的 section 内、折叠门内、per-shell
   瞬态，3s 自动消失（上游 Toast 默认 hold；`sidebar-root-notices.ts`）。alpha.3 起同一 per-source
@@ -1439,6 +1444,10 @@ observable 显式传播。
    一致）；上限 3 条 +「还有 N 项」展开（组件本地态，条目数回到上限即自动收起；
    展开侧有界——行区内部滚动约 8 行，「收起」常驻行区之外，积压再多也不挤压会话
    列表或埋掉折叠钮）。
+
+归档行排除（规则 2 之外的单列；视觉面）：待办区与 Dock 角标共用同一「归档行永不呈现完成未读」
+排除——归档行不可打开、状态槽留空，计入任何提醒面都是清不掉的幻影（design 19 §3.7）。
+诊断属性/a11y 名的同源缺口见 §3.4 与 STATUS §1.2。
 
 ### 8.2 交互：点击即跳转，权威式移除
 

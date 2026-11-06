@@ -35,6 +35,8 @@
 - **通知壳 sink `runtimeSettled`（I2）**：两 sink 共用 `completionAlreadySettled`（fail-open，只影响抑制）；打包态需证「同页、非首批、producer 重置后的壳完成重放」不再双发；候选证据门、`factsContradictsIdle`、Dock 读回、`facts-health` 保底名额待复核。
 - **目标活跃期通知/未读压制（design 19 §3.2）**：N 轮 `held≥1 && sent==0`、outcome 后一条、六面同拍、reload/冷启、撤回、local/gateway/SSH 各一组；activation unknown 需上游只读面；围栏双发（F30）待裁。
 - **P6 完成未读实机**：官方位读数（武装/清除/重载即空/修正臂）与六面矩阵（侧栏/搜索/待办/Dock/通知/诊断）；local+gateway+SSH（design 06 §4.1–§4.3）。
+- **归档行诊断/a11y 面与呈现面互斥（六面矩阵的「诊断」面）**：`ServerSectionRows` 的 `data-chamber-session-state`/`data-chamber-state-source` 与行 `title`/`aria-label`（`sessionStateLabel`）仍按未含 archived 输入的 `sessionRowState` 报 `completed`，同一行的状态槽却留空（design 06 §3.4）——归档行上仪表、可访问名与呈现三者互相矛盾，P6 的诊断面在归档行上不可信；修法 = 归档（或「不可呈现」）并进共享派生或对这三处输出统一门控，`session-row-state.test.ts` 的文本锁同批更新。
+- **Electron `setBadgeCount` 的 boolean 回执被丢弃**：`packages/desktop/electron-edges.ts` 的 `setBadge` 恒回 `{applied:true}`（忽略 `app.setBadgeCount` 返回值），而 `host-edges.ts` 的契约写「Electron 缺省同步叶的真实结果本来可得」；Linux Unity DBus 不可用时 `false` 被当成功 ⇒ 渲染端提交闸锁死、无 loud（design 19 §3.7 回执纪律）。修法 = 按 boolean 返回 `{applied:false, reason}`；同批需裁决 Linux「无消费方」平台说明（design 19 §3.7 平台门），避免每次计数都重试/告警。
 - **通知行为缺口**：点击二级门、主进程握手、设置页渲染、`pagehide` flush。
 - **事实健康环**：仅无壳 mux 快照、无 in-app 读面；收口 = gateway 采样 + 只读环。
 - **归档清理/管理器（design 24）**：打包版目检、探针 fail-closed、>65,536 不清扫、gateway/远程实机；两段式与恢复路径实机未跑；残余 = 上游 wire no-op、维护期 force、保护边界；缺陷 = `errors` 通道混用；清理残留 = projcache 4KB、迁移代际窗口；tombstone 由孤儿清扫收敛。

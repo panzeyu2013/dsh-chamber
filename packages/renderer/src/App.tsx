@@ -137,6 +137,7 @@ import { ReloadPageButton } from './components/ReloadPageButton.tsx'
 import { useAggregateRefresh } from './app-hooks/use-aggregate-refresh.ts'
 import { useShellRetry } from './app-hooks/use-shell-retry.ts'
 import { useBadgeCount } from './app-hooks/use-badge-count.ts'
+import { projectArchivedSessionIds } from './badge-count.ts'
 import {
   durableUnreadPruneAllowed, healthProbeUnavailableDiagnostic, rosterIncompleteDiagnostic,
   useBridgeSubscriptions,
@@ -1540,25 +1541,24 @@ export default function App() {
     stepCompletionArmFor(paintedView)
   }, [paintedView, stepCompletionArmFor])
 
-  /**
-   * 徽标输入 = **合并后**的 runtime 投影（与侧栏六面同一份事实，INV7）：deriveServers 已经把
-   * 通道报告 ∪ 蓝点 ∪ facts overlay（含 P2a goal）∪ stale 合并进 server.runtime；徽标不再读
-   * 原始通道报告——否则无壳来源的 goal 压制在 Dock 上缺席（点/待办/徽标分叉）。
-   */
+  /** 徽标输入 = 合并后 runtime（与侧栏六面同源，INV7）；不读原始通道报告（无壳 goal 压制会缺席）。 */
   const badgeRuntime = useMemo(() => {
     const record: Record<string, InstanceRuntimeReport | undefined> = {}
     for (const server of servers) record[server.id] = server.runtime
     return record
   }, [servers])
 
+  /** 归档排除集：归档行六面均不呈现完成未读且不可打开（design 19 §3.7）。 */
+  const badgeArchived = useMemo(() => projectArchivedSessionIds(servers, echoes.archive), [servers, echoes.archive])
+
   // 未读徽标 effect 簇（推送 / 桥迟到兜底 / reject 重推与卸载清理）是命名 hook；事实源与预算显式传入。
   useBadgeCount({
     correctionArms,
     runtimeFacts: badgeRuntime,
+    archivedSessions: badgeArchived,
     retryMs: LISTENER_READY_RETRY_MS,
     retryLimit: LISTENER_READY_RETRY_LIMIT,
   })
-
 
   // 控制面失联 = 覆盖式致命屏（视图保持挂载、恢复即续会话，design 05）。判定：
   // 健康错误**持续**存在超过宽容窗才呈现——首帧（health 从未拉到）立即呈现。

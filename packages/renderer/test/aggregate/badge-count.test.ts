@@ -2,17 +2,21 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { projectBadgeCount } from '../../src/badge-count.ts'
+import { projectArchivedSessionIds, projectBadgeCount } from '../../src/badge-count.ts'
 // 徽标推送的有界重推链：hook 本体是 React 效果簇（node 测试不可渲染），链的调度
 // 语义由 use-badge-count.ts 的 createBadgePushRetry 承载（纯注入缝，fake timer 直驱）。
 import { createBadgePushRetry } from '../../src/app-hooks/use-badge-count.ts'
 // INV7 同拍对拍：徽标消费的 goalActive 就是侧栏唯一谓词的结果，输入用
 // subagentActivityOf 归一（零依赖叶模块，直测不引入 React）。
 import {
+  deriveArchivedSessions,
+  deriveServerWorkspaces,
+  deriveTodoAttention,
   mergeRuntimeFacts,
   runtimeReportSignature,
   sessionRowState,
   subagentActivityOf,
+  type ChamberServerAggregate,
   type GoalFact,
   type InstanceRuntimeReport,
   type SessionRowStateFacts,
@@ -315,6 +319,106 @@ test('projectBadgeCount agrees with sessionRowState on the completed row across 
       }
     }
   }
+})
+
+// ---- 归档行排除（design 06 §3.4/§8.1、design 19 §3.7）----
+// 归档行在任何窗口内呈现面上都不呈现「完成未读」：列表/搜索/悬停的状态槽留空、待办区
+// 显式排除、且归档行不可打开（无法通过查看清除）——Dock 计入会留下一个既没有可见对应物、
+// 也清不掉的数字，正是待办区已经拒绝的「永久幻影未读」。
+
+test('projectBadgeCount: an archived session never counts, through either input arm', () => {
+  const archived = { local: new Set(['a']) }
+  // 修正臂路径与官方位路径都被排除；同来源的非归档行照常计数。
+  assert.equal(projectBadgeCount({ local: { a: true, b: true } }, undefined, archived), 1)
+  assert.equal(projectBadgeCount({}, { local: { sessions: { a: { completed: true } } } }, archived), 0)
+  // 并集（臂 ∨ 官方位）仍只算一次：排除先于并集，两路都为真也不会漏成两条。
+  assert.equal(
+    projectBadgeCount({ local: { a: true } }, { local: { sessions: { a: { completed: true } } } }, archived),
+    0,
+  )
+})
+
+test('projectBadgeCount: the archived exclusion is per source, and absent/empty keeps old semantics', () => {
+  // 同一个会话 id 在另一来源未归档时照常计数（行键控纪律与 correctionArms 相同）。
+  assert.equal(
+    projectBadgeCount({ local: { s: true }, 'dsh-x': { s: true } }, undefined, { local: new Set(['s']) }),
+    1,
+  )
+  // 兼容锁：省略第三参、空表或空来源集合时行为与引入排除前逐字一致。
+  assert.equal(projectBadgeCount({ local: { a: true } }), 1)
+  assert.equal(projectBadgeCount({ local: { a: true } }, undefined, {}), 1)
+  assert.equal(projectBadgeCount({ local: { a: true } }, undefined, { local: new Set() }), 1)
+  // 排除集自身不产生来源：没有臂/事实输入时仍是 0。
+  assert.equal(projectBadgeCount(undefined, undefined, { local: new Set(['a']) }), 0)
+})
+
+test('archived parity: list rows, todo strip and badge all drop the archived completion (INV7)', () => {
+  // 归档行「视觉呈现面零呈现」的端到端纯函数对拍：默认筛选的投影不产行、待办不产条目、徽标也
+  // 不得计入——三面读同一份归档事实，任何一面单独计数就是 INV7 分叉。
+  const snapshot = {
+    workspaces: [{
+      workspaceId: 'w1', path: '/tmp/project', title: 'proj',
+      sessionIds: ['s-done'], createdAt: '', updatedAt: '',
+    }],
+    sessions: [{
+      sessionId: 's-done', running: false, blank: false,
+      title: 'Done', cwd: '/tmp/project', updatedAt: 1,
+    }],
+    archivedSessionIds: ['s-done'],
+    archiveSetKnown: true,
+  }
+  // default：归档行不进列表投影。
+  const defaultRows = deriveServerWorkspaces(snapshot, 'src', '', undefined, 0, 'default')
+    .flatMap(workspace => workspace.sessions)
+  assert.deepEqual(defaultRows, [], '归档行在默认筛选下不进列表投影')
+  // show：归档行可见（原槽位、带稀疏 archived 位），状态槽仍留空——待办区必须**在行可见时**
+  // 仍排除它，否则本用例走不到 todo-attention 的 archived 分支（空转断言）。
+  const workspaces = deriveServerWorkspaces(snapshot, 'src', '', undefined, 0, 'show')
+  const showRows = workspaces.flatMap(workspace => workspace.sessions)
+  assert.deepEqual(showRows.map(row => row.id), ['s-done'], '归档行在 show 下回到原槽位')
+  assert.equal(showRows[0]?.archived, true, '归档位是稀疏 true')
+  const archivedSessions = deriveArchivedSessions(snapshot)
+  assert.deepEqual(archivedSessions.map(row => row.sessionId), ['s-done'])
+  const runtime: InstanceRuntimeReport = {
+    sessions: { 's-done': { running: false, completed: true, subagentActivity: 'none' } },
+  }
+  const server: ChamberServerAggregate = {
+    id: 'src', sourceFingerprint: 'f'.repeat(64), kind: 'dsh', transport: 'ssh', label: 'A',
+    connected: true, phase: 'ready', workspaces, archivedSessions, archiveSetKnown: true,
+    aggregateReady: true, runtime, updatedAt: 0,
+  }
+  assert.deepEqual(
+    deriveTodoAttention([server], { filters: { completed: true, ask: true, request: true } }),
+    [],
+    '归档行可见时也不进待办区（todo-attention.ts 的显式排除分支）',
+  )
+  const excluded = { src: new Set(archivedSessions.map(row => row.sessionId)) }
+  assert.equal(
+    projectBadgeCount({ src: { 's-done': true } }, { src: runtime }, excluded),
+    0,
+    '徽标与行/待办同一读取形态：归档行的武装/官方位不计数',
+  )
+  // 反证：同一会话未归档（第三参缺席）时计数为 1——排除集是唯一差异。
+  assert.equal(projectBadgeCount({ src: { 's-done': true } }, { src: runtime }), 1)
+})
+
+test('projectArchivedSessionIds: authoritative set ∪ page archive echo, per source', () => {
+  const servers = [
+    { id: 'a', archivedSessions: [{ sessionId: 's1' }] },
+    { id: 'b' },
+  ]
+  const echo = { b: [{ sessionId: 's2', at: 1 }] }
+  const ids = projectArchivedSessionIds(servers, echo)
+  assert.deepEqual([...(ids.a ?? [])], ['s1'], '权威归档集进入排除集')
+  assert.deepEqual([...(ids.b ?? [])], ['s2'], '本页归档回声（未挂载来源的墓碑）同样进入排除集')
+  // 同一 id 同时来自权威集与回声：集合语义去重。
+  assert.deepEqual(
+    [...(projectArchivedSessionIds([{ id: 'a', archivedSessions: [{ sessionId: 's1' }] }], { a: [{ sessionId: 's1', at: 1 }] }).a ?? [])],
+    ['s1'],
+  )
+  // 无归档的来源不产键——排除集缺席时 projectBadgeCount 的语义与引入前逐字一致。
+  assert.deepEqual(projectArchivedSessionIds([{ id: 'a' }]), {})
+  assert.deepEqual(projectArchivedSessionIds([]), {})
 })
 
 // ---- 有界重推链（design 19 §3.7 / M4）：连续失败、取代与卸载 -----------------

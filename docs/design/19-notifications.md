@@ -570,7 +570,8 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   sessionStateDot`、`ServerSectionRows.tsx` 的 `data-chamber-session-state` /
   `data-chamber-state-source` 仪表属性和可选 `data-chamber-goal-active`、
   `ServerSectionSearch.tsx` 的搜索结果
-  行、`todo-attention.ts` 的待办条目、以及徽标计数。`goalSuppressesPresentation`
+  行、`todo-attention.ts` 的待办条目、以及徽标计数（徽标另加 §3.7「归档行排除」的 id 集，
+  其余维度仍与 `sessionRowState` 同拍）。`goalSuppressesPresentation`
   生效时 `state` 必须落 `running`/`none`——**不得为 completed**；`suppressedBy` 区分
   `'goal'`（activation 已知）与 `'unknown'`（activation 未知）。
 - **M5（已知分叉，留作后续收敛点）**：待办区的**阶梯**（`todo-attention.ts` 的
@@ -581,9 +582,10 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   no-fallback 语义藏进分类器（`sessionRowState` 不掌握逐 kind 开关）。现状两处等价、
   用例各自钉住；收敛（或显式共享阶梯）留作后续。
 - **徽标**：`badge-count.ts` 保持**零 import**，只消费调用方预计算的 `goalActive` 布尔
-  （sidebar 叶谓词）与 `subagentActivity` 三值；`use-badge-count` 传入**合并后**的
-  runtime（通道 ∪ 修正臂 ∪ facts overlay ∪ stale），与 `sessionRowState` 同拍（INV7）；
-  断连/stale 来源的残留计数不算「在跑」（§3.7）。
+  （sidebar 叶谓词）、`subagentActivity` 三值，以及投影同一出处的归档行 id 集；`use-badge-count`
+  传入**合并后**的 runtime（通道 ∪ 修正臂 ∪ facts overlay ∪ stale），与 `sessionRowState`
+  同拍（INV7）；断连/stale 来源的残留计数不算「在跑」（§3.7）。归档行是呈现面本身不留
+  完成状态的行，徽标按同一排除集不计（§3.7「归档行排除」）。
 - **独立计数**：收敛器的 `held/flushed/voided/dropped/deferred` 与 `origin`/`pendingAge`
   是独立诊断计数（`notification-ledger.ts`），与主进程 `sent/suppressed/skipped` 回执
   账本互不替代；实机正对照读 `held ≥ 1 && sent == 0` 这类判据（§4）。
@@ -1090,9 +1092,9 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   （权威是 vendor 内存 Set `uiSession.sessionStatus.completionUnread`；通道行稀疏携带该
    位，App 在 mergeRuntimeFacts 里只 OR 入按行键控的 N-ctx 修正臂（读一行不清另一行）。纯内存、
    重载即空、无水位、无持久面；窗口内蓝点与 Dock 角标是同一个析取，两面永不分叉）
-  → projectBadgeCount(correctionArms, badgeSuppressionFacts(runtimeFacts))（renderer
-    纯函数，跨来源求「用户实际可见」的未读会话数——goal active 与归一为 running 的
-    runningSubagents（后台子代理存活）压制；0 = 清除）
+  → projectBadgeCount(correctionArms, badgeSuppressionFacts(runtimeFacts), archivedSessions)
+    （renderer 纯函数，跨来源求「用户实际可见」的未读会话数——goal active、归一为 running 的
+    runningSubagents（后台子代理存活）与归档行压制；0 = 清除）
   → window.dshChamber.badge.set(count)                 ← 新 IPC（invoke，**等真实回执**）
   → 主进程：白名单校验 → 记录意图（电平；quit 清理也由它守护）→ 设置裁决（badgeEnabled 关 → 强制 0）
     → 平台门（app.setBadgeCount：darwin/linux；win32 overlay 门控）
@@ -1108,14 +1110,30 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   （镜像不投递、观察者跳过），永不主体、永不武装、不计徽标。
 - **计数语义**：一个未读会话 = 1（同 OpenChamber「chats with unseen activity」，非通知条数）；
   pending（ask/request）不计数（窗口内提醒仍由侧边栏 pending 徽标承担）。投影输入只有
-  合并后的完成析取（`projectBadgeCount(correctionArms, runtimeFacts)` 的 `row.completed`）
-  与 goal/subagent 压制位——`pending` 字段**不进** `projectBadgeCount`（它只决定窗口内的
-  pending 徽标）。
+  合并后的完成析取（`projectBadgeCount(correctionArms, runtimeFacts, archivedSessions)` 的
+  `row.completed`）、goal/subagent 压制位与归档行排除集——`pending` 字段**不进**
+  `projectBadgeCount`（它只决定窗口内的 pending 徽标）。
+- **归档行排除（2026-11）**：归档会话**不计数**。归档行在任何**视觉**呈现面上都不呈现
+  「完成未读」——列表/搜索/悬停卡的状态槽留空（design 06 §3.4；诊断属性/a11y 名的同源缺口
+  已登记在 design 06 §3.4/STATUS §1.2），待办区显式排除
+  （§8.1），且归档行不可打开（点击只提示），用户无法通过查看把它清掉；计入 Dock 会留下
+  一个没有可见对应物、也清不掉的数字（与待办区拒绝「永久幻影未读」同一理由）。排除集与
+  渲染投影**同源**：来源连接且聚合就绪时取权威归档集（`deriveArchivedSessions`，含降级
+  来源仍携带的记住集合——投影按同一集合隐藏其行）∪ 本页归档回声（`withPendingArchives`
+  隐藏的行）。**断连残余**：来源当前无投影时排除集不可得，冻结臂里若有归档会话，角标在
+  断连期间仍可能显示该未读——重连后归档集恢复即归零，属下条「呈现边界」的同一断连边界
+  （不是新增分叉）。`badge-count.ts` 保持零 import，只消费 App 传入的 sourceId →
+  sessionId 集合（`projectBadgeCount` 第 3 参）；省略/空集时语义与引入前逐字一致。
 - **呈现边界（与窗口内蓝点同一析取）**：窗口内完成点 = `mergeRuntimeFacts` 合并后的行
   `completed`（官方位 ∪ 修正臂），徽标投影**同一读取形态**——`badge-count.ts` 的
-  `armed = correctionArms[source][session] || row.completed`。断连（来源 not-ready）清空该
-  来源的运行时事实（窗口内无行可显示）；修正臂在无上报时冻结（06 §4.2），重连后按新上报
-  重新对账——既有取舍的诚实边界，非分叉缺陷。
+  `armed = correctionArms[source][session] || row.completed`，唯一例外是归档行（行本身
+  不渲染状态槽，见上条「归档行排除」——呈现面不呈现的完成不计数）。断连（来源 not-ready）
+  清空该来源的**通道**运行时事实（窗口内无行可显示；App 合并层仍会以冻结臂补出 stale 行供
+  徽标计数）；修正臂在无上报时冻结（06 §4.2），重连后按新上报重新对账——既有取舍的诚实
+  边界，非分叉缺陷；归档排除集随投影一起不可得，见上条「断连残余」。**首拉/投影滞后窗口同规**：
+  来源已连接但聚合未就绪（`workspaces` 为空）、或事实行先于侧栏行落地时，徽标以事实为准、可能
+  短暂领先于行/待办，聚合或行落地即对齐；行长期缺席只可能来自降级/失灵的事实载体（其本身已由
+  facts-health 记账），不改写冻结事实。
 - **子代理压制（同窗口内蓝点语义，§3.2/§3.5）**：父会话回合结束但后台子代理仍存活
   （归一后 `subagentActivity === 'running'`，06 §4.5 后台模式）时，该会话已武装的完成点
   **不计入徽标**——徽标投影必须与窗口内蓝点一致，否则「主分支闲置等子代理」期间 Dock
@@ -1142,7 +1160,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
 - **设置**：`notifications.badgeEnabled`（默认 **true**——被动指示，镜像蓝点「始终开启」与
   OpenChamber 默认；与横幅主开关 `enabled` 独立）。设置 UI 在客户端页「通知」组加一条始终
   可见的无边框开关行（主开关下方、子设置卡上方），不增加边框层数；zh/en i18n。
-- **renderer 推送**：`[correctionArms, runtimeFacts]` effect 每次变化**重算**计数，但只有
+- **renderer 推送**：`[correctionArms, runtimeFacts, archivedSessions]` effect 每次变化**重算**计数，但只有
   **计数变化**才推 IPC（`pushedCountRef` 闸；官方位/臂的武装与解除/来源退役/子代理计数归零
   自然驱动）——实测 Swift 包里 4.8 Hz 的同值冗余 IPC，而 Dock 视觉毫无变化。挂载/重载后的
   首个计数（含 0）必推：窗口重载后完成未读复位为 {}（官方位与臂都不跨 reload），主进程遗留徽标必须清除；桥迟到兜底与 reject
@@ -1178,6 +1196,18 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   此时丢弃该源的快照是正确语义；非权威空 roster 的风险已由既有 roster 权威门承担
   （design 05 §7.4）。给没有缺陷的路径再叠一个条件是补丁，故不做；真出现 roster 抖动导致的
   侧栏闪空，应在 roster 权威门收口。
+- *「徽标按侧栏可见行集过滤」*（覆盖归档之外的断连/聚合未就绪/`only` 筛选）：否决。断连与
+  冷聚合窗口里行与点会随重连同拍恢复，这是本行「呈现边界」已登记的诚实边界；让徽标随无投影
+  归零会在每次连接抖动时闪一次、并丢掉「离线来源仍有未读」的提醒。`only` 归档筛选是用户显式
+  视图偏好，同样不该改写应用级未读数。**归档行不同**：它在**任何筛选**下都不呈现完成未读、
+  且不可打开，是唯一永久不可见的类别，故只排除它。
+- *「在 `mergeRuntimeFacts`/`deriveServers` 里删除归档行的 runtime 事实」*：否决。归档行的
+  pending/goal 事实仍被悬停卡与诊断消费；删除事实会牺牲非完成读数，并把「呈现排除」混进
+  事实合并层（六面单源更难保证）。排除只发生在徽标计数这一个投影点上，由 App 传 id 集合、
+  `badge-count.ts` 保持零 import。
+- *「不排除归档行，改为在归档行上呈现完成提示」*：否决。归档行不可打开（点击只提示），
+  任何提醒面宣称它需要查看都无法通过阅读结算——正是用户报告的「清不掉的数字」；
+  且与上游「归档行状态槽留空」的形态直接冲突。
 
 ---
 

@@ -38,6 +38,22 @@
  * A session absent from the latest report or a source without a report
  * snapshot keeps the pre-suppression semantics (no suppression info → no
  * guesswork); callers without the channel may omit the argument.
+ *
+ * ARCHIVED-ROW EXCLUSION (design 06 §3.4 / §8.1, design 19 §3.7): an archived
+ * session is NEVER presented as completed-unread by any in-window face — the
+ * list row leaves its state slot empty (`ServerSectionRows`), search-hit rows
+ * do the same, the hover card filters the completed status line, the todo strip
+ * excludes archived rows outright, and an archived row is not openable, so the
+ * user could never clear it by reading it. Counting such a row in the OS badge
+ * therefore leaves a number that no visible unread content corresponds to and
+ * that cannot be cleared — the exact phantom-unread the todo strip already
+ * refuses. The caller passes the archived ids of the SAME provenance the
+ * rendering projection hides rows by (the authoritative archive set — including
+ * the remembered set a degraded source still carries — plus this page's archive
+ * echo). The set is derived from the projection, so a source with NO projection
+ * right now (disconnected / aggregate not ready) carries no ids: the frozen-arm
+ * boundary in design 19 §3.7 then applies unchanged (the badge may keep showing
+ * such unread until reconnect restores the projection; it drops to 0 then).
  */
 
 /**
@@ -89,6 +105,15 @@ function subagentSuppressesBadge(
 export function projectBadgeCount(
   correctionArms: Record<string, Record<string, boolean>> | undefined,
   runtimeFacts?: Record<string, BadgeSuppressionFacts | undefined>,
+  /**
+   * sourceId → session ids the in-window faces never present as unread
+   * (archived rows: every face blanks them, and an archived row cannot be
+   * opened, so such an arm/bit could never be cleared by reading). Omitted or
+   * an empty set keeps the pre-exclusion semantics; a source with no projection
+   * right now (disconnected / aggregate not ready) carries no ids here and the
+   * design 19 §3.7 frozen-arm boundary applies.
+   */
+  archivedSessions?: Record<string, ReadonlySet<string>>,
 ): number {
   if (correctionArms === undefined && runtimeFacts === undefined) return 0
   const sources = new Set<string>([
@@ -99,11 +124,15 @@ export function projectBadgeCount(
   for (const sourceId of sources) {
     const ledger = correctionArms?.[sourceId]
     const facts = runtimeFacts?.[sourceId]
+    const archived = archivedSessions?.[sourceId]
     const sessions = new Set<string>([
       ...Object.keys(ledger ?? {}),
       ...Object.keys(facts?.sessions ?? {}),
     ])
     for (const sessionId of sessions) {
+      // 归档行在任何窗口内呈现面上都不呈现「完成未读」（状态槽留空 / 待办排除 /
+      // 不可打开）——计入 Dock 只会留下无法通过查看清掉、也没有可见对应物的数字。
+      if (archived?.has(sessionId) === true) continue
       const row = facts?.sessions?.[sessionId]
       const armed = ledger?.[sessionId] === true || row?.completed === true
       if (!armed) continue
@@ -113,4 +142,35 @@ export function projectBadgeCount(
     }
   }
   return count
+}
+
+/**
+ * 徽标计数的归档行排除集（design 06 §3.4/§8.1、design 19 §3.7）。纯函数、零 import：
+ * 归档行在窗口内任何呈现面上都不呈现「完成未读」（列表/搜索/悬停状态槽留空、待办区
+ * 显式排除），且归档行不可打开——用户无法通过查看清除它；计入 Dock 只会留下一个没有
+ * 可见对应物也清不掉的数字。集合与渲染投影**同源**：来源连接且聚合就绪时取权威归档集
+ * （含降级来源记住的权威集，投影同规则隐藏其行）∪ 本页归档回声（`withPendingArchives`
+ * 隐藏的行）；来源当前无投影（断连/未就绪）时排除集不可得——角标按 design 19 §3.7 的
+ * 断连边界处理（冻结臂可继续计数，重连后随投影恢复归零）。
+ *
+ * 入参刻意写成结构切片而不是 client-core 类型，保证本模块零 import。
+ */
+export interface BadgeArchivedSource {
+  id: string
+  archivedSessions?: readonly { sessionId: string }[]
+}
+
+export function projectArchivedSessionIds(
+  servers: readonly BadgeArchivedSource[],
+  /** 本页归档回声账本（PendingArchive 的结构切片；`at` 是租约锚，本函数不读）。 */
+  archiveEcho?: Readonly<Record<string, readonly { sessionId: string; at?: number }[]>>,
+): Record<string, ReadonlySet<string>> {
+  const record: Record<string, ReadonlySet<string>> = {}
+  for (const server of servers) {
+    const ids = new Set<string>()
+    for (const row of server.archivedSessions ?? []) ids.add(String(row.sessionId))
+    for (const pending of archiveEcho?.[server.id] ?? []) ids.add(pending.sessionId)
+    if (ids.size > 0) record[server.id] = ids
+  }
+  return record
 }

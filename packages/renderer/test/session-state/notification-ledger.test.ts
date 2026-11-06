@@ -96,7 +96,8 @@ test('the instruments publish once and stay live views', () => {
 test('the badge hook publishes the dispatched count next to the projection', () => {
   // goal-aware v5 §4：投影输入是**合并后**的 runtime（badgeSuppressionFacts 把
   // goalActive / subagentActivity 从行上归一），发布点仍必须紧邻同一次投影。
-  assert.match(BADGE_HOOK, /const count = projectBadgeCount\(correctionArms, badgeSuppressionFacts\(runtimeFacts\)\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
+  // 归档排除集同批过桥（归档行永不呈现完成未读，design 19 §3.7）。
+  assert.match(BADGE_HOOK, /const count = projectBadgeCount\(correctionArms, badgeSuppressionFacts\(runtimeFacts\), archivedSessions\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
 })
 
 test('every notification decision is recorded — including the no-bridge case', () => {

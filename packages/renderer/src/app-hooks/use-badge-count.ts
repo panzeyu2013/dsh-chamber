@@ -1,10 +1,9 @@
 /**
  * 未读徽标推送的 effect 簇（design 19 §3.7）。
  *
- * 输入只有两个事实源（correctionArms 修正臂 / **合并后** runtimeFacts）与
- * LISTENER_READY 重试预算；桥面经 window.dshChamber 读取（页面级单例）。
- * App 只传当前事实与预算常量——**合并投影**（含 facts overlay 与 stale）保证
- * 徽标与侧栏六面（sessionRowState）消费同一份事实。
+ * 输入是三个事实源（correctionArms 修正臂 / **合并后** runtimeFacts / 归档行排除集）与
+ * LISTENER_READY 重试预算；桥面经 window.dshChamber 读取。App 只传当前事实与预算常量——
+ * **合并投影**（含 facts overlay 与 stale）保证徽标与侧栏六面（sessionRowState）同源。
  */
 import { useEffect, useRef } from 'react'
 import { projectBadgeCount, type BadgeSuppressionFacts } from '../badge-count.ts'
@@ -25,6 +24,8 @@ export interface BadgeCountDeps {
    * 而不是原始通道报告（无壳来源的 goal 只在 facts overlay 里）。
    */
   runtimeFacts: Record<string, InstanceRuntimeReport | undefined>
+  /** 归档行排除集（与投影同一出处：权威归档集 ∪ 本页归档回声；六面均不呈现其完成未读）。 */
+  archivedSessions: Record<string, ReadonlySet<string>>
   /** LISTENER_READY 重试间隔（与通知就绪 handshake 同源常量）。 */
   retryMs: number
   /** LISTENER_READY 重试预算。 */
@@ -187,7 +188,7 @@ export function createBadgePushRetry(options: BadgePushRetryOptions): BadgePushR
 }
 
 export function useBadgeCount(deps: BadgeCountDeps): void {
-  const { correctionArms, runtimeFacts, retryMs, retryLimit } = deps
+  const { correctionArms, runtimeFacts, archivedSessions, retryMs, retryLimit } = deps
 
   // 未读徽标（design 19 §3.7）：correctionArms（N-ctx 补臂）∪ 合并行的官方 completed
   // 是徽标计数的输入——跨来源求未读会话数（projectBadgeCount，纯函数），推给主进程
@@ -199,9 +200,8 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   // 子代理全部结束后 armed 蓝点正常浮现计入（与侧边栏同语义）；断连/stale 来源的
   // 残留计数不再算「在跑」（与 subagentActivityOf 同拍）。goal 压制（v5 §4 呈现门）：
   // goal 相位 active 的已武装完成不计入——否则 Dock 会为一个用户看不到的蓝点亮红气泡。
-  // runtimeFacts
-  // 在依赖里：子代理计数归零（事实行变化）时无需蓝点变化也要重推当前计数。
-  // 通道-only 变化会重算但不再重推相同计数值（见 pushedCountRef 的计数变化闸）。
+  // runtimeFacts 在依赖里：子代理计数归零（事实行变化）时无需蓝点变化也要重推；通道-only
+  // 变化会重算但不再重推相同计数值（见 pushedCountRef 的计数变化闸）。
   // 桥未就绪（window.dshChamber 异步 expose）时静默跳过
   // ——计数变化发生在运行时上报之后（远晚于桥暴露），首个真实计数不会丢；
   // 重载后复位为 0 的兜底推送由下方挂载 effect 负责。reject 兜底：
@@ -237,7 +237,7 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
   }
   const badgeRetry = badgeRetryRef.current
   useEffect(() => {
-    const count = projectBadgeCount(correctionArms, badgeSuppressionFacts(runtimeFacts))
+    const count = projectBadgeCount(correctionArms, badgeSuppressionFacts(runtimeFacts), archivedSessions)
     badgeCountRef.current = count
     // 把 renderer 派发的计数发布成只读回读值，可在测试中比对
     // 「徽标数 == 蓝点集合大小」，无需 IPC 或读主进程状态。
@@ -246,7 +246,7 @@ export function useBadgeCount(deps: BadgeCountDeps): void {
     // 只有真的派发出去才提交闸：没推出去（桥缺失/版本偏斜）时不提交，下一次 effect 提交
     // 同一计数还会再试（首个计数含重载复位的 0 永不丢）。
     if (badgeRetry.start(count, retryLimit, retryMs)) pushedCountRef.current = count
-  }, [correctionArms, runtimeFacts, badgeRetry, retryLimit, retryMs])
+  }, [correctionArms, runtimeFacts, archivedSessions, badgeRetry, retryLimit, retryMs])
 
   // 桥迟到的兜底（同 LISTENER_READY 重试纪律，见通知就绪 handshake）：窗口重载/
   // 重建后 correctionArms 复位为 {}，必须向主进程推 0 清除遗留徽标——桥经
