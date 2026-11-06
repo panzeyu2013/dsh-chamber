@@ -20,19 +20,19 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { ReactNode } from 'react'
 import {
   IconBranchOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular,
-  RiskConfirmation, Tag, writeClipboard,
+  Tag, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconCopyOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives/src/icons/index.tsx'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core'
 import {
-  clearActionError, createSessionHere, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
+  clearActionError, createSessionHere, gitCoordinator, retryRecovery,
 } from '../shared/coordinator.ts'
 import { gitActionErrorTextFor } from '../shared/action-error.ts'
-import { unregisteredRemoveOptions } from '../shared/remove-input.ts'
 import { gitFactsForWorkspace } from '../shared/git-facts.ts'
 import { checkoutDisplayLabel, checkoutRemoveBlockReason, findCheckout } from '../shared/checkout.ts'
 import type { GitBusyKind, GitRecovery, GitWorktreeInfo } from '../shared/types.ts'
 import type { GitSidebarKey } from '../locales.ts'
+import { useCheckoutRemoval } from './useCheckoutRemoval.tsx'
 import { CreateWorktreeDialog } from './CreateWorktreeDialog.tsx'
 import css from './SidebarGit.module.css'
 
@@ -51,25 +51,6 @@ export interface WorkspaceGitContext {
    *  label (branch, or the directory name when detached); the facts are resolved
    *  by `path` because the checkout has no workspace identity. */
   checkout?: { path: string; branch: string | null; title: string }
-}
-
-/** One derived checkout row awaiting removal authorization; the destructive
- *  action rides the in-app `RiskConfirmation` (a native prompt cannot use alias
- *  tokens). */
-interface RowRemoveTarget {
-  repoId: string
-  worktreeId: string
-  path: string
-  branch: string | null
-  head: string
-  /** Row label substituted into the confirmation copy (`{name}`). */
-  name: string
-  /** The snapshot reported the directory as gone: the copy then explains the
-   *  leftover-record cleanup instead of a plain removal. */
-  missing: boolean
-  /** The snapshot reports uncommitted changes: the confirmation collects the
-   *  discard acknowledgement and the request then carries `discardChanges`. */
-  dirty: boolean
 }
 
 /** The copy affordance's transient acknowledgement, with the timer owned by the
@@ -159,10 +140,6 @@ export function SidebarWorkspaceGitLine({
   useSyncExternalStore(gitCoordinator.subscribe, gitCoordinator.getVersion, gitCoordinator.getVersion)
   const context = useWorkspaceGitContext()
   const [createOpen, setCreateOpen] = useState(false)
-  // The path-based removal's authorization is per pending target and reset on every
-  // close, so a second removal can never inherit a previous consent.
-  const [rowRemove, setRowRemove] = useState<RowRemoveTarget | null>(null)
-  const [rowAcknowledged, setRowAcknowledged] = useState(false)
   // Copy-path feedback for the derived checkout row (a refused clipboard write
   // paints nothing — see useCopyFeedback).
   const { copied: checkoutCopied, copy: copyCheckoutPath } = useCopyFeedback()
@@ -178,51 +155,15 @@ export function SidebarWorkspaceGitLine({
   )
   const currentSessionId = runtime?.current
 
+  const removalSource = context === undefined ? undefined : gitCoordinator.getSource(context.sourceId)
+  const removal = useCheckoutRemoval({
+    sourceId: context?.sourceId ?? '',
+    t,
+    disabled: removalSource?.busy !== undefined || removalSource?.recovery !== undefined,
+  })
+
   if (!wide || context === undefined) return null
   const source = gitCoordinator.getSource(context.sourceId)
-
-  // The path-based destructive confirmation of the derived checkout row. One
-  // surface, one wire input and one consent reset; a second implementation could
-  // only drift.
-  const pathRemoveConfirmation = (
-    <RiskConfirmation
-      open={rowRemove !== null}
-      title={t('removeTitle')}
-      description={rowRemove === null
-        ? ''
-        : (rowRemove.missing
-          ? t('unregisteredMissingRemoveConfirm')
-          : rowRemove.dirty
-            ? t('unregisteredDirtyRemoveConfirm')
-            : t('unregisteredRemoveConfirm')).replace('{name}', rowRemove.name)}
-      acknowledgeLabel={rowRemove?.dirty === true
-        ? t('unregisteredDirtyDiscardAck')
-        : t('unregisteredRemoveAck')}
-      cancelLabel={t('cancel')}
-      closeLabel={t('close')}
-      confirmLabel={t('removeConfirm')}
-      acknowledged={rowAcknowledged}
-      disabled={source.busy !== undefined || source.recovery !== undefined}
-      onAcknowledgedChange={setRowAcknowledged}
-      onCancel={() => {
-        setRowRemove(null)
-        setRowAcknowledged(false)
-      }}
-      onConfirm={() => {
-        const target = rowRemove
-        setRowRemove(null)
-        setRowAcknowledged(false)
-        if (target === null) return
-        void removeUnregisteredWorktree(context.sourceId, {
-          repoId: target.repoId,
-          worktreeId: target.worktreeId,
-          path: target.path,
-          branch: target.branch,
-          head: target.head,
-        }, unregisteredRemoveOptions(target.dirty)).catch(() => {})
-      }}
-    />
-  )
 
   // ---- Derived checkout-row mount (design 08 PR2). The row is NOT a dsh
   // workspace (I3): `workspaceId` keeps naming the SOURCE main workspace (the
@@ -251,8 +192,12 @@ export function SidebarWorkspaceGitLine({
       ? undefined
       : checkoutRemoveBlockReason(worktree, currentSessionId)
     // A DIRTY checkout stays actionable: its confirmation collects the discard
-    // acknowledgement (`discardChanges`) before the host may force-remove it.
-    const canRemove = worktree !== undefined && !actionLocked && (blocked === undefined || blocked === 'dirty')
+    // acknowledgement (`discardChanges`). A RUNNING checkout is actionable too:
+    // the dialog offers the optional archive step (which stops the work under the
+    // user's explicit choice), and without it the host's own running guard is the
+    // authority — the client never pre-claims that state.
+    const canRemove = worktree !== undefined && !actionLocked
+      && (blocked === undefined || blocked === 'dirty' || blocked === 'running')
     const createBlocked = worktree === undefined
       ? t('checkoutFactsUnavailable')
       : worktree.status !== 'ready'
@@ -300,13 +245,22 @@ export function SidebarWorkspaceGitLine({
             type="button"
             className={css.headerGitAction}
             data-git-action=""
+            aria-label={copyLabel}
+            title={checkoutCopied ? copyLabel : copyLabel + ': ' + checkout.path}
+            onClick={() => { void copyCheckoutPath(checkout.path) }}
+          >
+            <IconCopyOutlineRegular size={16} />
+          </button>
+          <button
+            type="button"
+            className={css.headerGitAction}
+            data-git-action=""
             disabled={!canRemove}
             aria-label={t('remove')}
             title={checkoutRemoveTitle(worktree, blocked, t)}
             onClick={() => {
               if (target === undefined) return
-              setRowAcknowledged(false)
-              setRowRemove({
+              removal.openRemove({
                 repoId: target.repo.repoId,
                 worktreeId: target.worktree.worktreeId,
                 path: target.worktree.path,
@@ -320,18 +274,8 @@ export function SidebarWorkspaceGitLine({
           >
             <IconTrashOutlineRegular size={16} />
           </button>
-          <button
-            type="button"
-            className={css.headerGitAction}
-            data-git-action=""
-            aria-label={copyLabel}
-            title={checkoutCopied ? copyLabel : copyLabel + ': ' + checkout.path}
-            onClick={() => { void copyCheckoutPath(checkout.path) }}
-          >
-            <IconCopyOutlineRegular size={16} />
-          </button>
         </span>
-        {pathRemoveConfirmation}
+        {removal.dialog}
       </>
     )
   }
@@ -342,10 +286,11 @@ export function SidebarWorkspaceGitLine({
   if (context.workspaceId === '') {
     const recovery = source.recovery
     const actionError = source.actionError
-    if (recovery === undefined && actionError === undefined) return null
+    const notice = source.notice
+    if (recovery === undefined && actionError === undefined && notice === undefined) return null
     const busy = source.busy !== undefined
     return (
-      <div className={css.wsSourceAlert} role="alert">
+      <div className={css.wsSourceAlert} role={recovery !== undefined || actionError !== undefined ? 'alert' : 'status'}>
         {recovery !== undefined && (
           <span className={css.wsSourceAlertText}>
             {busyLabel(source.busy?.kind ?? 'recovery', t)}{t('busySeparator')}{recoveryLabel(recovery, t)} {recovery.message}
@@ -355,6 +300,9 @@ export function SidebarWorkspaceGitLine({
           <span className={css.wsSourceAlertText}>
             {t('actionError')} {gitActionErrorTextFor(source.actionErrorCode, actionError, t)}
           </span>
+        )}
+        {notice !== undefined && (
+          <span className={css.wsSourceAlertText}>{notice}</span>
         )}
         {recovery !== undefined && (
           <button
@@ -367,7 +315,7 @@ export function SidebarWorkspaceGitLine({
             {t('retry')}
           </button>
         )}
-        {actionError !== undefined && (
+        {(actionError !== undefined || notice !== undefined) && (
           <button
             type="button"
             className={css.wsRetry}

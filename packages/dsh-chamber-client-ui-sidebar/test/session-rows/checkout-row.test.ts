@@ -3,8 +3,8 @@
  *
  * Behaviour locks (the pure helpers the shell renders and drags with) plus
  * source locks for the wiring a plain-node test cannot render: the row owns no
- * kebab/rename, its header never folds on its own (folding is the main row's
- * gesture), the Git occupant mounts with the SOURCE workspace id and the
+ * kebab/rename, its header folds like the old worktree row (the main fold still
+ * hides the whole family), the Git occupant mounts with the SOURCE workspace id and the
  * checkout display identity, and the drag commit persists into `checkoutOrder`
  * (view-prefs) instead of the host order.
  */
@@ -187,9 +187,10 @@ test('the checkout row renders as an action seat row, never as a workspace row',
     'the host workspace kebab cluster is gated off the checkout row')
   assert.ok(SECTION.includes('|| workspace.synthetic === true || checkout) return'),
     'a checkout row never arms the inline rename')
-  // The header does not fold on its own: no aria-expanded, no fold toggle button.
-  assert.ok(SECTION.includes('aria-expanded={checkout ? undefined : !folded}'))
-  assert.ok(SECTION.includes('const folded = !checkout && viewPrefs.folded[accountStateKey] === true'))
+  // The header folds like the old worktree row; the state key is the row's own.
+  assert.ok(SECTION.includes('aria-expanded={!folded}'))
+  assert.ok(SECTION.includes('const folded = viewPrefs.folded[accountStateKey] === true'))
+  assert.ok(SECTION.includes("toggleWorkspaceFold(server.id, workspace.id)"), 'the fold toggle is shared')
   assert.ok(SECTION.includes('data-checkout-row={checkout ? \'\' : undefined}'))
   // The Git occupant is the only action surface: it mounts with the SOURCE
   // workspace id plus the display identity, and the host-workspace mount is off.
@@ -203,9 +204,8 @@ test('the checkout row renders as an action seat row, never as a workspace row',
     'a checkout row never mounts the host-workspace occupant')
   assert.ok(SECTION.includes("renderWorkspaceGit('sidebar.workspace.git', { wide }, {"),
     'the occupant receives the column state (the plugin hides itself on the rail)')
-  // Keyboard reachability for the seat: the row header is a tab stop and reuses
-  // the shared .rowActionsVisible reveal (no resident override rule).
-  assert.ok(SECTION.includes('tabIndex={checkout ? 0 : undefined}'))
+  // Keyboard reachability for the seat: the fold button is the tab stop (as on
+  // the old worktree row) and focus reuses the shared .rowActionsVisible reveal.
   assert.ok(SECTION.includes('(menuOpen[workspaceKey] === true || keyboardFocusKey === workspaceKey)'),
     'the shared keyboard reveal state drives the checkout occupant too')
   assert.equal(/data-checkout-row[^{]*\{[^}]*data-git-occupant[^}]*display/u.test(CSS), false,
@@ -219,7 +219,9 @@ test('the row renders branch title, health hint, count and its own empty state',
   assert.ok(SECTION.includes('data-chamber-checkout-health={checkoutFacts?.healthKey}'))
   assert.ok(SECTION.includes('{visibleSessionCount > 0 && ('), 'the session count badge is shared with host rows')
   assert.ok(SECTION.includes("{t('checkout.empty')}"), 'a 0-session checkout row still says so')
-  assert.ok(SECTION.includes('data-chamber-checkout-glyph=""'), 'the header gutter is a static branch glyph')
+  assert.equal(SECTION.includes('data-chamber-checkout-glyph'), false, 'the static (non-foldable) glyph is retired')
+  assert.ok(SECTION.includes('gitRow\n                                    ? cc.foldToggleGit'),
+    'the header gutter keeps the worktree/checkout branch glyph + chevron swap')
   // pin / archive / count parity: the placed sessions ride the SAME account order and
   // the SAME pin partition pipeline as a host row (only the account id is the source's).
   assert.ok(SECTION.includes('const accountId = checkoutFamilyMainOf(workspace) ?? workspace.id'),
@@ -230,12 +232,11 @@ test('the row renders branch title, health hint, count and its own empty state',
     'the pin partition is the shared one for every row kind')
 })
 
-test('placed sessions render a branch glyph, gated on the parent row kind', () => {
-  assert.ok(ROWS.includes('data-chamber-checkout-session-glyph=""'))
-  assert.ok(ROWS.includes('checkoutParent !== undefined'))
-  assert.ok(SECTION.includes('checkoutParent={checkoutFacts === undefined'),
-    'only a checkout row passes the glyph facts down (no new session field)')
-  assert.ok(ROWS.includes('<IconBranchOutlineRegular size={13} />'), 'the 12-14px branch mark')
+test('placed sessions render like host-row sessions (no per-session branch glyph)', () => {
+  assert.equal(ROWS.includes('data-chamber-checkout-session-glyph'), false,
+    'the session row carries no checkout glyph (old worktree-session display parity)')
+  assert.equal(ROWS.includes('checkoutParent'), false, 'the glyph facts/prop are retired')
+  assert.equal(SECTION.includes('checkoutParent'), false, 'the sidebar passes no checkout parent down')
 })
 
 test('the drag commits the checkout sub-order into view-prefs, blocked across families', () => {

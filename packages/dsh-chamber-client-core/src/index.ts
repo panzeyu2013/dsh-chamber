@@ -30,7 +30,7 @@ export { BLANK_GHOST_GRACE_MS, SEARCH_QUERY_MAX_CODE_UNITS, armBlankGhost, basen
 // owns identity/placement. `orderCheckoutRows`/`checkoutRowId` stay on the
 // ./checkout-placement subpath (the sidebar drag consumes them there).
 export type * from './checkout-placement.ts'
-export { checkoutOrderKey, checkoutPathKey, checkoutWorkspaceOf, parseCheckoutOrderKey, planCheckoutPlacements } from './checkout-placement.ts'
+export { checkoutOrderKey, checkoutPathKey, checkoutWorkspaceOf, parseCheckoutOrderKey, pathIsWithin, planCheckoutPlacements } from './checkout-placement.ts'
 export { cachedServersProjectionSignature, createChamberProjectionSignatureCache, rememberServersProjectionSignature, type ChamberProjectionSignatureCache } from './projection-signature-cache.ts'
 export type * from './projection-signature-cache.ts'
 export type * from './completion-arm.ts'

@@ -31,6 +31,8 @@ export type GitActionErrorCode =
   /** The repository's main checkout is not a registered workspace, so a
    *  source-rooted session cannot be created for this checkout (design 08 I9). */
   | 'source-workspace-missing'
+  /** The optional archive-before-remove step failed; no worktree was removed. */
+  | 'archive-failed'
   /** Host refusals with dedicated copy (they arrive as GitWorktreeRpcError). */
   | 'main-worktree'
   | 'worktree-locked'
