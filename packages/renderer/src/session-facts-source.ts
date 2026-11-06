@@ -559,6 +559,41 @@ export function sessionFactsRowSignature(row: SessionFactsRow): string {
 }
 
 /**
+ * 两行的 **payload 字段集** 是否等价：与 {@link sessionFactsRowSignature} 完全同一字段
+ * （含 `=== true` 归一化与 goal 三元），但逐字段比较、不产生 JSON 字符串。整量快照
+ * 里 12k 行的变更检测因此不再为每行分配两份签名串（实测 5.4 ms → 逐字段比较可忽略）。
+ * 只比较 wire 白名单字段：客户端本地位（factAt/firstSeenByDelta/identityConfirmed）不
+ * 进签名，也不该触发 row hint。
+ */
+function sameTurnEnd(left: SessionFactsRow['lastTurnEnd'], right: SessionFactsRow['lastTurnEnd']): boolean {
+  if (left === right) return true
+  if (left === null || right === null) return false
+  return left.kind === right.kind && (left.cause ?? null) === (right.cause ?? null)
+    && left.at === right.at && (left.seq ?? null) === (right.seq ?? null)
+}
+
+function sameGoalFact(left: SessionFactsRow['goal'], right: SessionFactsRow['goal']): boolean {
+  if (left === right) return true
+  if (left === undefined || left === null || right === undefined || right === null) return false
+  return left.goalId === right.goalId && left.revision === right.revision && left.phase === right.phase
+    && (left.activation ?? null) === (right.activation ?? null)
+    && (left.updatedAt ?? null) === (right.updatedAt ?? null)
+}
+
+function sameRowFacts(left: SessionFactsRow, right: SessionFactsRow): boolean {
+  return left.running === right.running
+    && left.pendingKind === right.pendingKind
+    && left.subagentCount === right.subagentCount
+    && (left.lineageVerified === true) === (right.lineageVerified === true)
+    && (left.subagentKnown === true) === (right.subagentKnown === true)
+    && left.updatedAt === right.updatedAt
+    && left.completedAt === right.completedAt
+    && left.completedAtSource === right.completedAtSource
+    && sameTurnEnd(left.lastTurnEnd, right.lastTurnEnd)
+    && sameGoalFact(left.goal, right.goal)
+}
+
+/**
  * 快照行集变化提示：与增量项同一字段集与优先级（added > removed > changed）。
  * 整量帧（探测/通道 sync/snapshot）过去不发提示，只有增量项发——轮询档与重订阅后的
  * 首帧因此没有聚合刷新触发（G1 的真实通路是 提示 → unary，而不是虚拟上报）。
@@ -572,7 +607,7 @@ function snapshotRowHint(
   for (const [sessionId, row] of Object.entries(after.rows)) {
     const previous = before.rows[sessionId]
     if (previous === undefined) return 'added'
-    if (!changed && sessionFactsRowSignature(previous) !== sessionFactsRowSignature(row)) changed = true
+    if (!changed && !sameRowFacts(previous, row)) changed = true
   }
   for (const sessionId of Object.keys(before.rows)) {
     if (after.rows[sessionId] === undefined) return 'removed'

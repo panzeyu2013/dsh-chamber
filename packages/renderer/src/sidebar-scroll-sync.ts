@@ -146,8 +146,11 @@ export function restoreSidebarScroll(instanceId: string, anchor: SidebarScrollAn
     const maxScroll = (): number => container.scrollHeight - container.clientHeight
     // PARK: raw scroll, no rects — runs synchronously on the first attempt (inside
     // the view-transition apply callback for a settled shell), so the incoming
-    // shell's first painted frame is already at the anchored position.
-    container.scrollTop = Math.max(0, Math.min(anchor.scrollTop, maxScroll()))
+    // shell's first painted frame is already at the anchored position. The browser
+    // clamps an out-of-range assignment itself, so reading scrollHeight/clientHeight
+    // here would only force a synchronous layout of the incoming shell on each 80 ms
+    // retry (up to 8 s) while its height is still settling.
+    container.scrollTop = anchor.scrollTop
     // REFINE: rect-based, only trustworthy once the shell is actually rendered.
     if (typeof container.checkVisibility === 'function' && container.checkVisibility() === false) {
       if (!expired) timerRetry()
