@@ -134,13 +134,16 @@ export function startPageScheduleProbe(): () => void {
   state.installed = true
   const doc = global.document
   if (doc?.visibilityState !== undefined) state.visible = doc.visibilityState === 'visible'
+  // One-shot initial focus fact: a page launched unfocused never fires blur, so without
+  // this the state would stay `undefined` (hadSchedulingGap then treats a genuinely
+  // unscheduled window as a real source failure). The focus/blur listeners below keep it
+  // current afterwards — no per-frame read needed.
+  if (typeof doc?.hasFocus === 'function') noteFocus(doc.hasFocus())
   const windowLike = globalThis as { addEventListener?: (t: string, l: () => void) => void, removeEventListener?: (t: string, l: () => void) => void }
   const loop = (): void => {
     notePageTick()
-    // \`document.hasFocus()\` is the page-visible half of the shell's \`focused\` fact — no
-    // bridge plumbing needed, and it is false exactly while the window is not key.
-    const hasFocus = typeof doc?.hasFocus === 'function' ? doc.hasFocus() : undefined
-    if (hasFocus !== undefined) noteFocus(hasFocus)
+    // Focus is tracked by the focus/blur listeners below; reading hasFocus() on every
+    // frame re-fetched the same fact at 60–120 Hz without any state change.
     raf(loop)
   }
   raf(loop)
