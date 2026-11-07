@@ -28,7 +28,7 @@
  * whole-gate commands the same way (capped at min(--jobs, 6), with
  * DSH_TEST_JOBS=1 so a gate that itself fans out cannot multiply the pool); only
  * the ordered leftovers
- * (artifact freshness, the darwin build→test chain) keep the serial loop,
+ * (the darwin build→test chain) keep the serial loop,
  * because their order is a build contract.
  *
  * Usage:
@@ -94,7 +94,7 @@ const GATE_STEPS = new Set([...MODES.static, ...MODES.typecheck])
 
 /**
  * Package-test steps: registry tier 'test', mode 'tests', declared as a bare root
- * script (the artifact-freshness node step and the darwin assembly gates stay serial).
+ * script (the darwin assembly gates stay serial).
  */
 const PACKAGE_TEST_STEPS = new Set(
   GATE_REGISTRY.gates
@@ -437,7 +437,7 @@ export function stepInvocation(step, pnpm = pnpmInvocation()) {
  *   1. repository gates (static/typecheck) — whole commands on a bounded pool;
  *   2. package tests — every package manifest resolved once, then all files on
  *      ONE global pool (--jobs is the total budget);
- *   3. ordered leftovers (artifact freshness, the darwin assembly chain) — the
+ *   3. ordered leftovers (the darwin assembly chain) — the
  *      serial declaration loop, because their order is a build contract.
  * A failure stops later launches unless --continue; the per-phase order of the
  * transcript is always the declaration order.
@@ -580,7 +580,7 @@ export async function runMode(mode, options = {}) {
     recordFailures(pool)
   }
 
-  // Phase 3 — ordered leftovers (artifact freshness, the darwin build→test
+  // Phase 3 — ordered leftovers (the darwin build→test
   // chain) keep the serial loop: their order is a contract, not a preference.
   const serialSteps = steps.filter(step => !GATE_STEPS.has(step) && !PACKAGE_TEST_STEPS.has(step))
   for (const step of serialSteps) {

@@ -95,6 +95,41 @@ test('local dev-instance state under the scan roots is not scanned', () => {
   })
 })
 
+test('the scan set covers scripts/ READMEs, .github/ Markdown and the root notices file', () => {
+  // The documented surface is not docs/ alone: a dead link in a gate README, the
+  // PR template or the shipped notices file is the same silent loss.
+  withTempRepo({
+    'scripts/README.md': '[dead](./missing-from-scripts.md)\n',
+    '.github/PULL_REQUEST_TEMPLATE.md': '[dead](../docs/missing.md)\n[ok](../docs/present.md)\n',
+    'docs/present.md': '# Present\n',
+    'THIRD_PARTY_NOTICES.md': '[dead](./missing-notices.md)\n',
+  }, (root) => {
+    const { documents, failures } = collectLinkFailures(root)
+    assert.equal(documents, 4)
+    assert.deepEqual(failures.map(failure => failure.file), [
+      '.github/PULL_REQUEST_TEMPLATE.md',
+      'THIRD_PARTY_NOTICES.md',
+      'scripts/README.md',
+    ])
+    assert.deepEqual(failures.map(failure => failure.reason), [
+      'target does not exist: ../docs/missing.md',
+      'target does not exist: ./missing-notices.md',
+      'target does not exist: ./missing-from-scripts.md',
+    ])
+  })
+})
+
+test('the scan set covers tracked skills under .agents/skills', () => {
+  withTempRepo({
+    '.agents/skills/demo/SKILL.md': '[dead](../../../docs/missing.md)\n[ok](../../../docs/present.md)\n',
+    'docs/present.md': '# Present\n',
+  }, (root) => {
+    const { documents, failures } = collectLinkFailures(root)
+    assert.equal(documents, 2)
+    assert.deepEqual(failures.map(failure => failure.file), ['.agents/skills/demo/SKILL.md'])
+  })
+})
+
 test('frozen upstream mirrors are excluded from the checked set and reported', () => {
   const { mirrored } = collectDocuments(join(import.meta.dirname, '..', '..'))
   for (const path of MIRRORED_DOCUMENTS.keys()) {

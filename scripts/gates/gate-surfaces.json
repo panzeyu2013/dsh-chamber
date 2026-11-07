@@ -12,10 +12,15 @@
       "tier": "policy",
       "surfaces": {
         "local": true,
-        "ci": false,
-        "release": false
+        "ci": true,
+        "release": true
       },
-      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract (verify-i18n also runs inside release-preflight, a release procedure step, not a workflow step)"
+      "note": "Documentation pair consistency: structure + hash record; cheap, no install needed (also invoked by release-preflight).",
+      "workflow": {
+        "ciJob": "test",
+        "releaseJob": "validation",
+        "order": "pre"
+      }
     },
     {
       "id": "quality.style-tokens",
@@ -30,7 +35,7 @@
         "ci": false,
         "release": false
       },
-      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+      "reason": "local-only by decision (2026-11-07): house-style/quality gate kept in check:static/check:full; CI carries only the i18n pair gate (policy.i18n) plus gates that need a platform, a clean checkout or a shipped-behaviour contract"
     },
     {
       "id": "policy.workflow-pins",
@@ -84,7 +89,7 @@
         "ci": false,
         "release": false
       },
-      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+      "reason": "local-only by decision (2026-11-07): metadata/house-style gate; CI keeps only the documentation-pair gate (policy.i18n), it runs on every push including prose-only changes."
     },
     {
       "id": "payload.shim",
@@ -115,7 +120,7 @@
         "ci": false,
         "release": false
       },
-      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+      "reason": "local-only by decision (2026-11-07): documentation/quality gate kept in check:static/check:full; CI carries only the i18n pair gate (policy.i18n)."
     },
     {
       "id": "upstream.registry",
@@ -327,7 +332,7 @@
         "ci": false,
         "release": false
       },
-      "reason": "local-only by decision (2026-09-25): house-style/documentation gate; CI carries what needs a platform, a clean checkout or a shipped-behaviour contract"
+      "reason": "local-only by decision (2026-11-07): house-style/quality gate kept in check:static/check:full; CI carries only the i18n pair gate (policy.i18n) plus gates that need a platform, a clean checkout or a shipped-behaviour contract"
     },
     {
       "id": "upstream.lifecycle-contract",
@@ -867,20 +872,6 @@
       "id": "tests.cli",
       "title": "Package tests: cli",
       "command": "test:cli",
-      "modes": [
-        "tests"
-      ],
-      "tier": "test",
-      "surfaces": {
-        "local": true,
-        "ci": true,
-        "release": true
-      }
-    },
-    {
-      "id": "tests.artifact-freshness",
-      "title": "Build-time artifacts match sources (local compare)",
-      "command": "node scripts/gates/verify-artifact-freshness.mjs",
       "modes": [
         "tests"
       ],

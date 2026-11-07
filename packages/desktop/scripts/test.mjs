@@ -89,8 +89,7 @@ export const GROUPS = {
   // a summary (deleting an acceptance stays red):
   //   - forward-real-ssh needs Linux + root + sshd/ssh-keygen/ssh;
   //   - forward-spawn proves the real-child identity through Linux /proc start
-  //     ticks (the file documents macOS/win32 real-machine drills as its gap);
-  //   - forward-storage-compiled needs the dist/control-plane build output.
+  //     ticks (the file documents macOS/win32 real-machine drills as its gap).
   forward: [
     'test/forward/forward-wire.test.ts',
     'test/forward/ssh-forward-args.test.ts',
@@ -104,9 +103,6 @@ export const GROUPS = {
     'test/forward/forward-windows.test.ts',
     { file: 'test/forward/forward-spawn.test.ts', guard: 'registered' },
     { file: 'test/forward/forward-real-ssh.test.ts', guard: 'registered' },
-    // dist/control-plane/index.js only exists after build:control-plane, which a
-    // plain `pnpm run test:desktop` on a clean checkout does not run.
-    { file: 'test/forward/forward-storage-compiled.test.ts', guard: 'registered' },
   ],
   // gateway: gateway provider/session and the manual gateway chamber seed sync path
   gateway: [

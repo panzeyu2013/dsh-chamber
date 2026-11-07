@@ -1,5 +1,8 @@
 /**
  * verify-artifact-freshness.mjs —— 已提交/打包产物的「陈旧即红」守卫
+ *
+ * 非注册门（不在 gate-surfaces.json）：tests/CI 在构建前跑，没有产物可比；
+ * 发布 checklist §4 在 `build:renderer` / `build:desktop` 之后用 `--require-compare` 手动跑。
  * （design 21 §7 G2–G8）。
  *
  * 为什么需要：以下三类产物不是 C8（seed dist ×4 + dsh-runtime dist）的覆盖

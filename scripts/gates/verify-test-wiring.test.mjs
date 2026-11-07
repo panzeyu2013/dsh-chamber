@@ -9,10 +9,12 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  collectTestFiles,
   findDuplicateGroupKeys,
   findSwiftTestScript,
   findUnwiredSwiftTests,
@@ -20,7 +22,9 @@ import {
   parseSwiftTestTargets,
   rootEntryPoints,
   swiftWiringProblems,
+  IGNORED_DIRECTORIES,
   TEST_FILE_PATTERN,
+  TEST_WIRING_IGNORED_DIRECTORIES,
   UNWIRED_ALLOWLIST,
 } from './verify-test-wiring.mjs'
 /** Build the wiring evidence shape the gate consumes. */
@@ -51,6 +55,32 @@ test('pattern accepts the two test extensions and nothing else', () => {
   assert.equal(TEST_FILE_PATTERN.test('a.test.mjs'), true)
   assert.equal(TEST_FILE_PATTERN.test('a.spec.ts'), false)
   assert.equal(TEST_FILE_PATTERN.test('a.test.js'), false)
+})
+test('collectTestFiles scans scripts/release but keeps the release ignore under packages', () => {
+  // The shared repo walk ignores the name `release` (electron-builder output);
+  // inheriting it under scripts/ silently dropped every scripts/release/*.test.mjs
+  // from the corpus (619 scanned while the full on-disk set was larger). The packages/ root keeps
+  // the shared union: after a local dist, packages/desktop/release/ is build output.
+  const root = mkdtempSync(join(tmpdir(), 'test-wiring-release-'))
+  try {
+    for (const directory of ['scripts/release', 'scripts/release-output', 'scripts/node_modules', 'packages/alpha/.dev-user-data', 'packages/desktop/release/unpacked']) {
+      mkdirSync(join(root, directory), { recursive: true })
+    }
+    writeFileSync(join(root, 'scripts/release/policy.test.mjs'), '')
+    writeFileSync(join(root, 'scripts/release-output/keep.test.mjs'), '')
+    writeFileSync(join(root, 'scripts/node_modules/skip.test.mjs'), '')
+    writeFileSync(join(root, 'packages/alpha/.dev-user-data/skip.test.ts'), '')
+    writeFileSync(join(root, 'packages/desktop/release/unpacked/leftover.test.mjs'), '')
+    assert.deepEqual(collectTestFiles(root), [
+      'scripts/release-output/keep.test.mjs',
+      'scripts/release/policy.test.mjs',
+    ])
+    assert.equal(TEST_WIRING_IGNORED_DIRECTORIES.has('release'), false, 'release is this gate\'s own source directory')
+    assert.equal(TEST_WIRING_IGNORED_DIRECTORIES.has('node_modules'), true, 'the rest of the shared union still applies')
+    assert.equal(IGNORED_DIRECTORIES.has('release'), true, 'the packages root keeps the electron-builder output ignore')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 test('a package-relative path in the owning package script counts as wired', () => {
   const verdict = findUnwiredTests({

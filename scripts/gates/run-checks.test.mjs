@@ -224,7 +224,7 @@ test('the shipped map covers every package and no step is left on a chain', () =
 test('tests mode drives one global pool over every resolved package manifest', async () => {
   const logged = []
   // Phase 2 pools exactly the manifest-based package steps; the darwin/CI
-  // serial leftovers (artifact freshness, the macos assembly chain) are phase 3
+  // serial leftovers (the macos assembly chain) are phase 3
   // and intentionally do not run once a package step has failed. Deriving the
   // set from the shipped root scripts keeps the expectation platform-neutral.
   const scripts = rootScripts()

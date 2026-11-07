@@ -218,7 +218,7 @@ function checkChangelog() {
 
 /** (c) i18n：spawn verify-i18n.mjs（无 --write），全部 pair consistent。 */
 function checkI18n() {
-  const c = check('verify:i18n (5 pairs consistent)')
+  const c = check('verify:i18n (documentation pairs consistent)')
   const result = spawnSync(process.execPath, ['scripts/gates/verify-i18n.mjs'], {
     cwd: REPO_ROOT,
     encoding: 'utf8',

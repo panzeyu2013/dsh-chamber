@@ -10,7 +10,6 @@
  *   ④ deviations id：`deviations`(S/T/P 表行) 必须命中 docs/progress/deviations.md 里
  *      真实存在的行 id；`relatedGates` 是真实门引用（根 package.json script 名或仓内
  *      脚本/测试路径），必须可解析；
- *      脚本/测试路径），必须可解析；
  *   ⑤ 覆盖面网（防"静默缩小"）：
  *      A. checklist §2.x 标题（人手写）↔ registry 的每个 fork/seed 条目一一对应；
  *      B. `chamberNamedForks` ↔ `versionAnchor: chamber` 条目（在 schema 校验里）；
@@ -114,21 +113,21 @@ function main(argv) {
     if (!existsSync(join(ROOT, item.vendorFile))) fail(`vendorSourceConsumers 的 vendorFile 不存在: ${item.vendorFile}`)
   }
 
-    // ④ deviations 行 id（deviations.md）+ relatedGates 真实门引用
-    const deviationIds = parseDeviationIds(readFileSync(DEVIATIONS, 'utf8'))
-    const rootScripts = (() => {
-      try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts ?? {} } catch { return {} }
-    })()
-    for (const entry of registry.entries) {
-      for (const id of entry.deviations ?? []) {
-        if (!deviationIds.has(id)) fail(`[${entry.id}] deviations 引用了不存在的行 id: ${id}`)
-      }
-      for (const ref of entry.relatedGates ?? []) {
-        if (Object.hasOwn(rootScripts, ref)) continue
-        if (ref.includes('/') && existsSync(join(ROOT, ref))) continue
-        fail(`[${entry.id}] relatedGates 引用了不存在的门: ${ref}（要求根 package.json script 名或仓内脚本/测试路径）`)
-      }
+  // ④ deviations 行 id（deviations.md）+ relatedGates 真实门引用
+  const deviationIds = parseDeviationIds(readFileSync(DEVIATIONS, 'utf8'))
+  const rootScripts = (() => {
+    try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).scripts ?? {} } catch { return {} }
+  })()
+  for (const entry of registry.entries) {
+    for (const id of entry.deviations ?? []) {
+      if (!deviationIds.has(id)) fail(`[${entry.id}] deviations 引用了不存在的行 id: ${id}`)
     }
+    for (const ref of entry.relatedGates ?? []) {
+      if (Object.hasOwn(rootScripts, ref)) continue
+      if (ref.includes('/') && existsSync(join(ROOT, ref))) continue
+      fail(`[${entry.id}] relatedGates 引用了不存在的门: ${ref}（要求根 package.json script 名或仓内脚本/测试路径）`)
+    }
+  }
 
   // ⑤A checklist §2.x 标题 ↔ fork/seed 条目
   const checklist = readFileSync(CHECKLIST_PATH, 'utf8')

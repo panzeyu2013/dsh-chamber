@@ -73,6 +73,9 @@ jobs:
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
       # GENERATED:gates:ci.test.pre:begin
+      # Documentation pair consistency: structure + hash record; cheap, no install needed (also invoked by release-preflight).
+      - name: Documentation pair consistency (zh/en)
+        run: pnpm run verify:i18n
       - name: Verify workflow action pins
         run: pnpm run verify:workflows
       - name: Verify workflow YAML scalars

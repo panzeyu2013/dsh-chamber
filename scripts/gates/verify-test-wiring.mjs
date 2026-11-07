@@ -43,6 +43,22 @@ import { IGNORED_DIRECTORIES, walkFiles } from '../lib/walk.mjs'
 
 export { IGNORED_DIRECTORIES, walkFiles }
 
+/**
+ * Directory names this gate never descends into FOR THE `scripts/` SCAN ROOT.
+ * The shared walk ignores the name `release` because electron-builder writes its
+ * output there at the repo root, but the scripts root legitimately contains a
+ * source directory with that name: `scripts/release/` holds the release-policy tests.
+ * Filtering the shared union here is the same caller-side discipline
+ * run-script-tests.mjs documents (SCRIPT_TEST_IGNORED_DIRECTORIES): inheriting the
+ * union silently dropped those files from the corpus (619 scanned instead of the full on-disk set).
+ * The `packages/` root KEEPS the shared union: a local `npm run dist` creates
+ * `packages/desktop/release/` (electron-builder output), and scanning build output as
+ * source test files would report phantom unwired tests.
+ */
+export const TEST_WIRING_IGNORED_DIRECTORIES = new Set(
+  [...IGNORED_DIRECTORIES].filter(name => name !== 'release'),
+)
+
 /** Wiring forms accepted for one test file. */
 export const TEST_FILE_PATTERN = /\.test\.(?:ts|mjs)$/u
 
@@ -78,7 +94,13 @@ export function collectTestFiles(repoRoot) {
   for (const scanRoot of TEST_SCAN_ROOTS) {
     const absolute = join(repoRoot, scanRoot)
     if (!existsSync(absolute)) continue
-    for (const path of walkFiles(absolute, candidate => TEST_FILE_PATTERN.test(candidate))) {
+    // scripts/ keeps its own `release` source dir; packages/ keeps the shared
+    // union so electron-builder output under packages/desktop/release/ is not read
+    // as source test files.
+    const ignoredDirs = scanRoot === 'scripts' ? TEST_WIRING_IGNORED_DIRECTORIES : IGNORED_DIRECTORIES
+    for (const path of walkFiles(absolute, candidate => TEST_FILE_PATTERN.test(candidate), {
+      ignoredDirs,
+    })) {
       files.push(relative(repoRoot, path).split(sep).join('/'))
     }
   }

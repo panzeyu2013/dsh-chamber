@@ -5,9 +5,20 @@
  * WHY. The fork's single-tier 30 s opening deadline exists only because the pinned
  * host `session/follow` has no first-frame bound and the client `doOpen` awaits it
  * without one: a lost opening frame parks `openState='loading'` forever. This gate
- * pins both halves of that contract against the pinned vendor tree, so the day
- * upstream lands a bound the retirement is loud: re-evaluate retiring the client
- * deadline (design 14 §D4 ①/③) and update this gate.
+ * pins both **code** halves of that contract against the pinned vendor tree, so the
+ * day upstream lands a bound the retirement is loud: re-evaluate retiring the
+ * client deadline (design 14 §D4 ①/③) and update this gate.
+ *
+ * The fourth input is the contract's documented home, not a plan document: the
+ * retirement condition must stay written where design 14 §D4 records this gate's
+ * tripwire ({@link documentedRetirement}). design 17 §18.4 was checked first: it
+ * keeps the *host-side* residual (if a first-frame deadline is ever needed it
+ * belongs to host/session), not the retirement contract, so design 14 §D4 is the
+ * stable sentence. The old check matched /首帧期限/ and /退役/ anywhere in
+ * docs/progress/TODO.md — rewriting the plan turned the gate red while proving
+ * only that two words existed. A documentation wording change is now a loud
+ * warning, never a code-contract failure; losing the contract registration is a
+ * failure because the design reference itself disappeared.
  *
  * Source text only (no build, no imports), like verify:anchors, so it runs in any
  * checkout with the vendor tree present.
@@ -27,8 +38,11 @@ const FILES = {
   hostFollow: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/web/controller.ts'),
   clientSession: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/client/sessions/session.ts'),
   forkOpening: join(ROOT, 'packages/dsh-api-gateway/src/client/stream-client.ts'),
-  proposals: join(ROOT, 'docs/progress/TODO.md'),
+  retirementContract: join(ROOT, 'docs/design/14-sleep-background.md'),
 }
+
+/** The machine identifier the design contract records as its tripwire. */
+export const LIFECYCLE_GATE_NAME = 'verify:upstream-lifecycle-contract'
 
 /** Any of these in a pinned lifecycle source means a first-frame bound exists. */
 export const FIRST_FRAME_BOUND =
@@ -66,25 +80,62 @@ export function clientOpenContract(session) {
 }
 
 /**
- * The fork half: the deadline must still be armed by the reducer path, and the
- * retirement condition must still be written down.
+ * The fork half: the deadline must still be armed by the reducer path.
  * @param fork - stream-client source.
- * @param proposals - the plan document that records the retirement condition (TODO.md).
  */
-export function forkRetirementPins(fork, proposals) {
+export function forkRetirementPins(fork) {
   return {
     armsDeadline: /kind: 'openingSent'/u.test(fork) && /armOpeningDeadline/u.test(fork),
-    documentsRetirement: /首帧期限/u.test(proposals) && /退役/u.test(proposals),
   }
+}
+
+/**
+ * Locate the retirement contract in its documented home: design 14 §D4's blockquote
+ * "退役 tripwire" stanza. The stanza line must name BOTH the gate's machine
+ * identifier AND the tripwire label; a stray mention elsewhere in the page cannot
+ * register it. The stanza then runs until the next block-level item (`> ①`…/`> - `).
+ *
+ * Verdicts: `registered` = a tripwire stanza still names this gate (a missing
+ * registration is a failure: the design contract no longer points at its tripwire);
+ * `statesRetirement` = that stanza still states the upstream first-frame-bound
+ * retirement condition (a missing/reworded statement is only a loud warning — prose
+ * rewording must not fail the code contract).
+ * @param contract - design 14 source (null/undefined when unreadable).
+ * @returns {{ registered: boolean, statesRetirement: boolean }} documentation verdict.
+ */
+export function documentedRetirement(contract) {
+  const lines = String(contract ?? '').split(/\r?\n/u)
+  // Registration needs the gate identifier and the tripwire label on the SAME line:
+  // a passing mention elsewhere in the page must not register the contract.
+  const at = lines.findIndex((line) => line.includes(LIFECYCLE_GATE_NAME) && /[tT]ripwire/u.test(line))
+  if (at === -1) return { registered: false, statesRetirement: false }
+  const stanza = [lines[at]]
+  for (let index = at + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    const trimmed = line.trimStart()
+    if (!trimmed.startsWith('>')) break
+    if (/^>\s*(?:[①②③④⑤⑥⑦⑧⑨⑩]|[-*]\s)/u.test(trimmed)) break
+    stanza.push(line)
+  }
+  // The retirement condition is a CONDITIONAL statement about the upstream
+  // first-frame bound, not the word "退役" on its own: the tripwire label and
+  // sibling notes legitimately mention retirement. Requiring the bound phrase
+  // near the retirement verb keeps a deleted condition (or a title-only stanza)
+  // from silently passing.
+  const body = stanza.slice(1).join('\n')
+  const statesRetirement = /(?:首帧期限|first-frame)[^\n]{0,80}(?:退役|retire)|(?:退役|retire)[^\n]{0,80}(?:首帧期限|first-frame)|(?:客户端期限|client deadline)[^\n]{0,60}(?:退役|retire)/iu.test(body)
+  return { registered: true, statesRetirement }
 }
 
 /**
  * Evaluate the contract.
  * @param read - file reader seam (tests inject fabricated sources).
- * @returns the failure list; empty means the pinned contract still holds.
+ * @returns {{ failures: string[], warnings: string[] }} empty failures mean the
+ *   pinned code contract still holds; warnings flag a stale documentation sentence.
  */
 export function evaluate(read = (path) => readFileSync(path, 'utf8')) {
   const failures = []
+  const warnings = []
   const host = hostFirstFrameContract(read(FILES.hostFollow))
   if (!host.hasFollow || !host.hasSnapshot) {
     failures.push('the host session/follow no longer yields an opening snapshot first')
@@ -99,10 +150,21 @@ export function evaluate(read = (path) => readFileSync(path, 'utf8')) {
   if (client.hasBound) {
     failures.push('the client doOpen gained a bound: the fork opening deadline is no longer the only owner')
   }
-  const fork = forkRetirementPins(read(FILES.forkOpening), read(FILES.proposals))
+  const fork = forkRetirementPins(read(FILES.forkOpening))
   if (!fork.armsDeadline) failures.push('the fork no longer arms its opening deadline (openingSent/armOpeningDeadline)')
-  if (!fork.documentsRetirement) failures.push('the retirement condition is no longer documented (TODO.md 首帧期限/退役)')
-  return { failures }
+  let contract = ''
+  try {
+    contract = read(FILES.retirementContract)
+  } catch {
+    contract = ''
+  }
+  const documentation = documentedRetirement(contract)
+  if (!documentation.registered) {
+    failures.push('the design 14 §D4 retirement contract no longer registers ' + LIFECYCLE_GATE_NAME + ': restore the tripwire stanza, or update this gate and the design together')
+  } else if (!documentation.statesRetirement) {
+    warnings.push('the design 14 §D4 tripwire stanza registers ' + LIFECYCLE_GATE_NAME + ' but no longer states the retirement condition (upstream first-frame bound ⇒ re-evaluate retiring the client deadline): review design 14 §D4 and this gate')
+  }
+  return { failures, warnings }
 }
 
 /** Negative control: the detector must flag a bound and stay quiet without one. */
@@ -120,9 +182,10 @@ function main() {
     selfTest()
     return
   }
-  const { failures } = evaluate()
+  const { failures, warnings } = evaluate()
+  for (const warning of warnings) console.error('upstream lifecycle contract: WARNING ' + warning)
   if (failures.length === 0) {
-    console.log('upstream lifecycle contract: host follow yields an opening snapshot with no first-frame bound; the fork opening deadline is the only owner')
+    console.log('upstream lifecycle contract: host follow yields an opening snapshot with no first-frame bound; the fork opening deadline is the only owner' + (warnings.length > 0 ? '; documentation needs review (warning above)' : ''))
     process.exit(0)
   }
   for (const failure of failures) console.error('upstream lifecycle contract: ' + failure)

@@ -37,7 +37,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { stripComments, normalize } from '../../../../scripts/dev/test-support/source-text.ts'
 
@@ -108,24 +108,3 @@ test('vendor access contract: binding(id) is the rc.2 session entry, and resolve
   assert.doesNotMatch(sessionsContract, /\bresolve\(id: SessionId\)/, 'a resolve(id) accessor reappeared on ISessions')
 })
 
-/**
- * The desktop page loads the BUILT session-controller bundle, so the same fact
- * is pinned against the shipped bytes when that bundle is present. A bare
- * checkout has not run `bundle:dsh` yet; absence is not a lock failure.
- */
-const BUILT_SESSION_CONTROLLER = fileURLToPath(new URL(
-  '../../../../packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh-api-session-controller/lib/client.js',
-  import.meta.url,
-))
-
-test('vendor access contract: the built bundle ships binding, not resolve', {
-  skip: existsSync(BUILT_SESSION_CONTROLLER) ? false : 'packages/desktop/vendor/dsh is not installed (pnpm run bundle:dsh)',
-}, () => {
-  const built = normalize(readFileSync(BUILT_SESSION_CONTROLLER, 'utf8'))
-  assert.match(
-    built,
-    /binding\(id\) \{ return this\.scopes\.get\(id\)\?\.binding; \}/,
-    'the shipped session-controller bundle no longer carries binding(id) — the access path must be re-derived',
-  )
-  assert.doesNotMatch(built, /\bresolve\(id\) \{/, 'a resolve(id) accessor reappeared in the shipped bundle')
-})

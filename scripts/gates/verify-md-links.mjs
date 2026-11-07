@@ -3,6 +3,14 @@
  * documentation set must resolve — the target file must exist, and a `#fragment`
  * onto a Markdown target must name a real heading slug or an explicit anchor.
  *
+ * The checked set is the documentation surface, not just `docs/`: the
+ * `docs/`, `packages/`, `scripts/`, `.github/` and `.agents/skills/` trees plus
+ * the root Markdown files below. Gate and release scripts document their own
+ * wiring in the READMEs under `scripts/`, the PR template lives under
+ * `.github/`, tracked skills are a documentation layer, and the notices file is
+ * shipped documentation — a dead link in any of them is the same silent loss, so
+ * the same walk covers them.
+ *
  * Why it exists: the repository moves files between `docs/design`,
  * `docs/checklists` and `docs/progress` often enough that a link left behind is
  * a silent loss — the reader follows a path that no longer exists and nothing
@@ -23,11 +31,17 @@ import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
-/** Documentation roots scanned for relative links. */
-export const LINK_SCAN_ROOTS = ['docs', 'packages']
+/**
+ * Documentation roots scanned for relative links: the design/plan trees, the
+ * per-package documentation, the gate and release scripts' own READMEs, the
+ * GitHub-facing Markdown (PR template, issue templates), and the tracked skills
+ * (`docs/AGENTS.md` §1 lists `.agents/skills/` as a documentation layer; only that
+ * subdirectory is scanned, never the surrounding local runtime state).
+ */
+export const LINK_SCAN_ROOTS = ['docs', 'packages', 'scripts', '.github', '.agents/skills']
 
 /** Standalone Markdown files at the repository root that are scanned too. */
-export const LINK_SCAN_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'README.md', 'CHANGELOG.md']
+export const LINK_SCAN_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'README.md', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md']
 
 /**
  * Directory names never descended into. Besides build output and VCS metadata

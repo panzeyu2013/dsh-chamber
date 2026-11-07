@@ -180,6 +180,17 @@ export function manifestLockstepProblems({
 const WIRING_PATH_REFERENCE = /(?:[A-Za-z0-9_.@+-]+\/)*[A-Za-z0-9_.@+-]+\.test\.(?:ts|mjs)(?![A-Za-z0-9_.])/gu
 
 /**
+ * Per-text memo for {@link wiringPathReferences}: one text is scanned once per
+ * process. The repo-wide wiring gate consults the SAME evidence text once per
+ * test file it checks, and the root evidence is ~460 KB — re-scanning it for
+ * every file turned the gate into an 11 s run. The cache is keyed by the text
+ * itself (the gate hands the same string instance back for every file), so the
+ * scan cost is paid once; callers must treat the returned array as read-only.
+ * @type {Map<string, string[]>}
+ */
+const WIRING_REFERENCE_CACHE = new Map()
+
+/**
  * Every path-shaped test-file reference inside one command / helper text. Only
  * the reference text is extracted here; whether it actually WIRES a file is
  * decided by {@link referenceResolvesToFile} — a bare basename, an `echo`
@@ -188,8 +199,12 @@ const WIRING_PATH_REFERENCE = /(?:[A-Za-z0-9_.@+-]+\/)*[A-Za-z0-9_.@+-]+\.test\.
  * @returns {string[]} the matched references, in text order.
  */
 export function wiringPathReferences(text) {
+  const source = String(text ?? '')
+  const cached = WIRING_REFERENCE_CACHE.get(source)
+  if (cached !== undefined) return cached
   const references = []
-  for (const match of String(text ?? '').matchAll(WIRING_PATH_REFERENCE)) references.push(match[0])
+  for (const match of source.matchAll(WIRING_PATH_REFERENCE)) references.push(match[0])
+  WIRING_REFERENCE_CACHE.set(source, references)
   return references
 }
 
