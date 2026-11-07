@@ -18,59 +18,32 @@ pnpm run dev:desktop                     # full window (control plane + dsh fron
 
 ## Testing
 
-The root `package.json` scripts are CI's sole test roster; do not hand-maintain a control-plane test file list:
+The single source for the gate roster is `scripts/gates/gate-surfaces.json` (gate ids, their modes, and local/CI/release surface membership); the root `package.json` is only the command entry point, not the roster — do not hand-maintain a `test:*` list:
 
 ```bash
-pnpm run test:control-plane
-pnpm run test:runtime
-pnpm run test:desktop
-pnpm run test:gateway
-pnpm run test:renderer-shell
-pnpm run test:git && pnpm run test:host-git
-pnpm run test:sidebar && pnpm run test:layout
-pnpm run test:settings-bridge && pnpm run test:connections
-pnpm run test:client-web && pnpm run test:connection
-pnpm run test:open-in && pnpm run test:cli
-pnpm run test:release-workflow
-pnpm run smoke
+node scripts/gates/run-checks.mjs static --list     # static mode (static / policy gates)
+node scripts/gates/run-checks.mjs tests --list      # tests mode (same set as ci.yml)
+node scripts/gates/run-checks.mjs typecheck --list  # type-check mode
+node scripts/gates/run-checks.mjs full --list       # full = static + typecheck + tests
 ```
 
-`pnpm run smoke` prints SKIP and exits 0 without a dsh install; expected, not a failure.
+Pick the mode for the change surface; gates outside the modes (macOS / Swift legs, hand-written host typechecks, remote-state acceptance, …) are enumerated in `docs/progress/STATUS.md` §1.6. `pnpm run smoke` prints SKIP and exits 0 without a dsh install; expected, not a failure.
 
 ## Before Submitting
 
+Do not run the full suite for every commit; select the minimum evidence for the change surface from `scripts/gates/gate-surfaces.json` and `docs/progress/STATUS.md` §1.6:
+
 ```bash
-pnpm run typecheck                            # tsc --noEmit (0 errors)
-pnpm run typecheck:runtime
-pnpm run typecheck:gateway
-pnpm run typecheck:host-graph
-pnpm run typecheck:host-git
-pnpm run typecheck:sidebar                    # client plugin type checks
-pnpm run typecheck:layout
-pnpm run typecheck:git
-pnpm run typecheck:connections
-pnpm run typecheck:settings-bridge
-pnpm run typecheck:open-in
-pnpm run typecheck:client-web
-pnpm run typecheck:connection
-pnpm run test:control-plane && pnpm run test:runtime
-pnpm run test:desktop && pnpm run test:gateway
-pnpm run test:renderer-shell
-pnpm run test:git && pnpm run test:host-git
-pnpm run test:sidebar && pnpm run test:layout
-pnpm run test:settings-bridge && pnpm run test:connections
-pnpm run test:client-web && pnpm run test:connection
-pnpm run test:open-in && pnpm run test:cli
-pnpm run test:release-workflow
-pnpm run smoke                                # PASS (or SKIP, which is normal)
-pnpm run build:renderer                       # renderer build succeeds
-pnpm run build:gateway                        # gateway + dsh-runtime build succeeds
-pnpm --filter @dsh-chamber/desktop run build:preload
-pnpm run verify:i18n
-pnpm run verify:styles
+pnpm run check:static        # static / policy gates (includes i18n, md-links, test-wiring, styles, etc.; all except i18n are local-only)
+pnpm run check:tests         # all package tests (same set as ci.yml)
+pnpm run check:typecheck     # client-plugin and host-package type checks
+pnpm run check:full          # = static + typecheck + tests (cross-surface changes / CI diagnosis only)
 ```
 
-For changes touching runtime, auth, protocol, or desktop-shell behavior, add or update focused tests — static checks alone do not prove runtime correctness.
+- Plan only, no execution: `node scripts/gates/run-checks.mjs <mode> --list` prints that mode's gate plan.
+- macOS / Swift / Windows legs are not inside the linux modes: `test:swift`, `test:macos`, and the Windows packaging/manifest gates must run on their platform; a green linux run does not prove them.
+- Validation for documentation-only changes is listed in `docs/AGENTS.md` §5 (md-links / i18n / registry; re-record with `--write` when a bilingual pair changed).
+- For changes touching runtime, auth, protocol, or desktop-shell behavior, add or update focused tests — static checks alone do not prove runtime correctness; state any validation you could not run in the pull request's Validation section.
 
 ## Code Style
 
@@ -108,7 +81,7 @@ One logical change per commit; split commits that bundle unrelated changes.
 ## Scope Discipline
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is attached or served, never re-implemented.
-- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) must not return in any form. Ratified bounded exceptions only: Design 08's in-instance Git worktree plugin; Design 17's separately invoked gateway (shell + host duties + seed registry); Design 18's shared dsh runtime-management core; Design 19's Electron-native notification edge projection; Design 20's trusted open-in edge capability (including its local-shape in-instance host domain `openInApp`, boundaries in design 20 §6.3); Design 24's in-instance archive-cleanup host domain `archiveCleanup/{probe,purge}` (delete-only, whole-subtree skip while running, idempotent; narrowest boundaries in design 24 §2). None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
+- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) must not return in any form. Ratified bounded exceptions only: Design 08's in-instance Git worktree plugin; Design 17's separately invoked gateway (shell + host duties + seed registry); Design 18's shared dsh runtime-management core; Design 19's Electron-native notification edge projection; Design 20's trusted open-in edge capability (including its local-shape in-instance host domain `openInApp`, boundaries in design 20 §6.3); Design 24's in-instance archive-cleanup host domain `archiveCleanup/{probe,purge}` (delete-only, whole-subtree skip while running, idempotent; narrowest boundaries in design 24 §2); Design 28's right-sidebar browser client plugin (remote-browser: a faithful fork of upstream `ui-sidebar-browser`'s iframe path whose only difference is the SSH reverse-proxied `frameUrl` and its lease lifecycle; narrowest boundaries in design 28 §16.9/§16.11). None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
 - For any new domain feature, ask first whether dsh native, the plugin ecosystem, or the host web frontend already covers it; if so, don't build.
 
 ## Pull Requests

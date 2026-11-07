@@ -13,7 +13,7 @@
 │ └─ dsh official frontend (source reuse)                                │
 │     ├─ self-built sidebar plugin: multi-source session navigation      │
 │     │   + chamberBridge                                                │
-│     ├─ Git worktree client plugin: per-instance topology + safe sagas  │
+│     ├─ Git worktree client plugin: repo-internal checkout rows + sagas │
 │     ├─ bridge host (entry-level React): first screen = local pure dsh  │
 │     │   shell                                                          │
 │     └─ N-ctx: one dsh shell per instance via /api/i/<id>/* same-origin │
@@ -37,37 +37,18 @@
 
 In one sentence: the control plane owns connection management, per-instance same-origin reverse proxying and static frontend serving; the renderer is the source-reused, self-built dsh official frontend (single window, single frame, N-ctx shells); the desktop composes `dsh|gateway` targets with `ssh|http` transports, while the explicitly started Gateway reuses the same local-host core behind an authenticated-by-default public boundary.
 
-Git worktree support pairs a chamber-bundled client plugin with an in-instance host plugin. The control plane and desktop only distribute the host package and mount loader rows; they neither interpret Git facts nor execute Git over SSH.
+Git worktree support pairs a chamber-bundled client plugin with an in-instance host plugin (P5b: a worktree is a checkout inside the source repository under `.agents/worktrees`, and the official forge bundle shares that same pool with this plugin). The control plane and desktop only distribute the host package and mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 
 Design authority: `docs/design/` (01 entry point, 05 v1 surface/architecture contract); package responsibilities and constraints: `AGENTS.md` "Runtime Boundaries"—this file navigates only.
 
-|Package|Responsibility (one line)|
-|-|-|
-|`packages/control-plane`|Connection-manager core: web-profile host hosting, two-host-package seed/overlay, management REST, per-instance proxy, static frontend serving|
-|`packages/renderer`|Self-built dsh frontend (source reuse): entry build, pure-dsh first-screen bridge host, N-ctx orchestration, boot manifest|
-|`packages/desktop`|Electron shell: single frame, orthogonal target/transport providers, ready-time remote host-package seed, instance registry, IPC, runtime management and native edges|
-|`packages/cli`|CLI thin shell (serve/status/connections/host logs)|
-|`packages/gateway`|Standalone authenticated server shape (Design 17): mandatory-auth public boundary, one local dsh proxy, runtime management/credential panel/seed registry|
-|`packages/dsh-runtime`|Pure-Node dsh version-tree, install, activation, probe and two-phase rollback core shared by desktop and Gateway; state stays host-owned|
-|`packages/dsh-client-connection`|In-repo copy of the official connection client + base-path patch|
-|`packages/dsh-client-web`|In-repo copy of the official web shell + boot.ts N-ctx module-table sharing seam|
-|`packages/dsh-chamber-client-ui-sidebar`|Self-built sidebar plugin: multi-source session navigation + chamberBridge (replaces the official ui-sidebar registration)|
-|`packages/dsh-chamber-client-ui-settings-connections`|Self-built connections settings plugin (local instance card + remote host CRUD/connect/systemd/logs)|
-|`packages/dsh-chamber-client-ui-settings-bridge`|Self-built settings shell plugin (shadows official SettingsRoot registration; server dropdown + fixed connections nav)|
-|`packages/dsh-chamber-client-ui-layout`|Self-built ui-layout shell fork (layout-store replacement persisting sidebarWidth)|
-|`packages/dsh-chamber-seed-client-graph`|Host-side package: read-only exposure of the instance's client-plugin boot graph via Typert Remote|
-|`packages/dsh-chamber-client-ui-git`|Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly|
-|`packages/dsh-chamber-client-ui-open-in`|Chamber-bundled open-in client plugin (a superset of the official client, replacing its registration): session-header utilities open button—local app catalog + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link|
-|`packages/dsh-chamber-client-ui-browser`|Chamber-bundled remote-browser client plugin (design 28; client-only, not seeded): right-sidebar Browser tab + address bar + per-source forward list; every source except http shows it (local keeps only the on-this-machine leg; dsh/gateway over ssh forward), embeds no page, opens no gateway tunnel, and leaves opening to the main process `forward.openInBrowser`|
-|`packages/dsh-chamber-seed-git-worktree`|In-instance host package: authoritative workspace/agent guards + constrained local-only Git worktree lifecycle|
-|`packages/dsh-chamber-seed-archive-cleanup`|In-instance host package: archived-session content cleanup `archiveCleanup/{probe,purge}` (delete-only, idempotent; design 24)|
-|`packages/dsh-chamber-seed-open-in`|In-instance host package (local shape only): fork of the upstream `dsh-host-open-in-app` serving the local app catalog, real bundle icons and launches over the `openInApp/*` Typert Remote (design 20 §6)|
+Package responsibilities, boundaries and constraints have one home: root [`AGENTS.md`](../AGENTS.md) "Runtime Boundaries"; each package contract lives in `packages/*/README.md`. This file does not copy the package table; it keeps only the architecture diagram above.
 
 ## 2. Environment setup
 
 ### 2.1 Requirements
 
 - Node.js 24+ (LTS recommended; TypeScript sources run natively via Node type stripping, see `.nvmrc`)
+- Swift toolchain (only `verify:stream-state-swift-parity` needs it; the gate fails without it — skip explicitly with `DSH_CHAMBER_SWIFT_PARITY_SKIP=1`)
 - pnpm≥11 (package manager; lockfile `pnpm-lock.yaml`)
 - git
 - macOS (needed for `dist:desktop:mac` dmg/zip packaging)
@@ -127,7 +108,7 @@ Artifacts land in `packages/desktop/release/` (electron-builder `directories.out
 
 > Windows install slowness/hangs on "Installing" (Windows Defender per-file scanning) — see the README FAQ.
 
-### Windows support matrix (design 23, in progress)
+### Windows support matrix (design 23)
 
 |Area|Status|
 |-|-|
@@ -138,15 +119,15 @@ Artifacts land in `packages/desktop/release/` (electron-builder `directories.out
 |Desktop capabilities (M3)|AUMID/tray-candidate convergence/loud preload failure wired; real-machine matrix pending|
 |Decision unlocks (M4)|Login autostart, deep-link registration, open-in local paths, SSH password gate guidance unlocked (code); NSIS uninstall Run-key cleanup wired|
 |Known limits|Unsigned (SmartScreen); SSH passwords disabled (use keys/Pageant); runtime mutations read-only; 0700/0600 via icacls/ACLs|
-|Authority records|`docs/design/23-windows-support.md`, `docs/progress/TODO.md` (baseline rules included)|
+|Authority records|`docs/design/23-windows-support.md`; open real-machine gates and progress live in `docs/progress/STATUS.md`|
 
 ## 5. CI & releases
 
-- `.github/workflows/ci.yml`: every push/PR runs the validation chain only (frozen install→root/gateway/runtime/two-host-package/client-plugin type checks→control-plane/runtime/desktop/gateway/renderer/client/host tests, including `test:git` and `test:host-git`→workflow action-SHA gate (`release-preflight --actions-only`, since )→smoke [SKIPs without a bundled runtime]→renderer/host/desktop sub-builds→gateway pack-and-install smoke [`pack`→temporary prefix install→`gateway --help`]); it produces no release artifacts; desktop packaging and the real smoke run live in `release.yml` (tag/manual trigger).
+- `.github/workflows/ci.yml`: branch pushes to `main` and PRs run the validation chain (no release artifacts). A **code change** runs frozen install → root/gateway/runtime/host-package/client-plugin type checks → control-plane/runtime/desktop/gateway/renderer/client/host tests (including `test:git` and `test:host-git`) → workflow action-SHA gate (`release-preflight --actions-only`) → smoke [SKIPs without a bundled runtime] → renderer/host/desktop sub-builds → gateway pack-and-install smoke [`pack` → temporary prefix install → `gateway --help`]); a **prose-only change** runs only the file-only gates (classification below) and skips install/type checks/tests/builds. The macOS legs `test-macos` (Swift build/test) and `test-macos-pack` (darwin lock + packaging-script suites i.e. `test:macos`, the compiled sidecar / native GUI assembly / Electron artifact gates) run on macos-latest; the Windows legs `test-windows` (PR + main pushes) and `test-windows-pack` (main pushes only) run on windows-2022. Desktop packaging and the real smoke run live in `release.yml` (tag/manual trigger).
 - `.github/workflows/release.yml`: produces distributable releases—push a `v*` tag (or run manually with a version without `v` and an optional dry-run). Publishable versions are canonical stable `X.Y.Z` or beta `X.Y.Z-beta.N` only; `alpha`, `rc` and other prereleases fail closed. Stable uses the default desktop build config and publishes only `latest.yml`/`latest-mac.yml`; beta uses `packages/desktop/electron-builder.beta.yml` and publishes only `beta.yml`/`beta-mac.yml`, with mutually exclusive channel assets. A formal run creates a draft, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, and goes public only after the fail-closed macOS checks above; dry-run writes no Release. `release-preflight --versions-only` checks the root, every non-fork chamber package, and all three fork baselines; the matching `## [<version>]` section of `CHANGELOG.md` is the mandatory release body. The `validation` job runs the release CI proof after the local chain and the builds, immediately before the third-party notices check (deliberately late: the proof polls the ci.yml run for this SHA, so local validation overlaps that wait; `scripts/release/verify-release-ci-proof.mjs`: the commit must carry a completed, successful `ci.yml` push run on `main` with the `test`, `test-windows` + `test-windows-pack` and `test-macos` + `test-macos-pack` jobs green (each contract leg plus the parallel packaging job its assembly/rehearsal steps were split into — the proof still pins those steps by name); an in-flight run is waited for with a bound; a failed run or a commit that never went through `main` fails closed); the local chain (gateway/runtime type checks and tests plus critical control-plane/desktop/renderer/plugin/CLI/policy gates) has already completed by then; `build-gateway` publishes only a clean-prefix-smoked `.tgz` plus matching `.tgz.sha256` to GitHub Releases; npm publish/dist-tags deferred.
-- Pre-release mechanical gate (since ): `pnpm run release:preflight <version>` (`scripts/release/release-preflight.mjs`)—version uniformity (incl. fork copies and the installer dsh constant), changelog zh/en parity, i18n, every workflow action SHA resolves upstream, conflict markers, clean git status, frozen install, test:release-workflow; the release checklist §1.5/§7 mandates it before commit and before push.
+- Pre-release mechanical gate: `pnpm run release:preflight <version>` (`scripts/release/release-preflight.mjs`) — version uniformity (incl. fork copies and the installer dsh constant), changelog zh/en parity, i18n, every workflow action SHA resolves upstream, conflict markers, clean git status, frozen install, test:release-workflow; the release checklist §2/§7 mandates it before commit and before push.
 - Release flow (optimization): local preflight + full battery on the exact release commit→commit+tag→workflow_dispatch dry-run first (new/modified workflows, script paths and action SHAs must pass one dry-run)→real tag push; full steps in the release checklist.
-- Push-path classification : the linux chain in `ci.yml` differs per event. On a branch push/PR, a prose-only change (`docs/**` plus the root prose allowlist, classified by `scripts/gates/classify-ci-changes.mjs`) runs only the file-only gates (workflow action SHAs, upstream-touchpoint registry/anchors, release-workflow policy, tooling unit tests; i18n and the design-token check are **local-only** gates that run in `check:static`, see `surfaces.ci=false` in `scripts/gates/gate-surfaces.json`) and skips install/type checks/unit suites/builds/the gateway pack smoke and the Windows leg; a code change runs everything. **Tag pushes do not trigger `ci.yml` at all** (CI-trigger revision)—a release PROVES instead of re-running: `release.yml`'s `validation` runs `verify-release-ci-proof.mjs`, which requires a successful full `ci.yml` run on `main` (the linux `test` chain plus the `test-windows`/`test-macos` legs and their `-pack` packaging jobs), waiting a bounded time for an in-flight run and failing closed otherwise. The old shape (linux chain stepping aside, Windows leg re-running on the tag) repeated one Windows run on the identical SHA and left a hole: tagging a commit that never went through `main` skipped the entire linux chain; the proof closes that hole. release.yml's gate alignment with ci.yml is still asserted by `release-workflow-policy.test.mjs` derived from ci.yml (adding a gate to ci.yml without mirroring it into release.yml turns CI red). The classifier fails safe: anything it cannot prove to be prose runs the full chain, and the prose allowlist is frozen by the policy test, so widening it takes a deliberate edit.
+- Push-path classification : the linux chain in `ci.yml` differs per event. On a branch push/PR, a prose-only change (`docs/**` plus the root prose allowlist, classified by `scripts/gates/classify-ci-changes.mjs`) runs only the file-only gates (every step of the `ci.test.pre`/`post` generated blocks — single source `scripts/gates/gate-surfaces.json`: action SHAs, upstream touchpoints, workflow policy, tooling unit tests, i18n (the `pre` block runs before install, the `post` block after). `verify:md-links`, `verify:test-wiring`, `verify:styles` and `verify:no-dead-exports` remain **local-only** gates that run in `check:static`) and skips install/type checks/unit suites/builds/the gateway pack smoke and the Windows leg; a code change runs everything. **Tag pushes do not trigger `ci.yml` at all** (CI-trigger revision)—a release PROVES instead of re-running: `release.yml`'s `validation` runs `verify-release-ci-proof.mjs`, which requires a successful full `ci.yml` run on `main` (the linux `test` chain plus the `test-windows`/`test-macos` legs and their `-pack` packaging jobs), waiting a bounded time for an in-flight run and failing closed otherwise. The old shape (linux chain stepping aside, Windows leg re-running on the tag) repeated one Windows run on the identical SHA and left a hole: tagging a commit that never went through `main` skipped the entire linux chain; the proof closes that hole. release.yml's gate alignment with ci.yml is still asserted by `release-workflow-policy.test.mjs` derived from ci.yml (adding a gate to ci.yml without mirroring it into release.yml turns CI red). The classifier fails safe: anything it cannot prove to be prose runs the full chain, and the prose allowlist is frozen by the policy test, so widening it takes a deliberate edit.
 - `ci.yml` serializes pushes per ref with `concurrency: ci-${{ github.ref }}` and cancels only superseded pull-request runs: branch pushes queue, because a prose-only push that cancelled the previous run would leave the code commit it followed with no validation at all (the classifier spares prose the heavy chain, but there is no "zero validation" tier). `release.yml` keeps `release-publish` + `cancel-in-progress: false` so a run that may already have created a draft is never cancelled.
 - Both workflows bootstrap the vendor source tree at the `harness.commit` pin before installing.
 
@@ -163,12 +144,18 @@ packages/
   dsh-runtime/              Pure-Node dsh runtime-management core shared by desktop and Gateway
   dsh-client-connection/    Modified dsh source #1 (base-path patch)
   dsh-client-web/           Modified dsh source #2 (boot.tsx N-ctx seam)
+  dsh-chamber-client-core/  Shared chamber client kernel (source-only; multi-source projection / page-level load kernel / unary / multiplex channel / settings seat)
+  dsh-chamber-wire/         Neutral host↔client wire contracts (session-state / json-guards / mux-frame; zero runtime deps)
+  dsh-stream-state/         Pure, clockless session/stream lifecycle state (design 14 §D4)
+  dsh-api-gateway/          Second-implementation fork of the official api-gateway client half (G43; replay as a fork)
   dsh-chamber-client-ui-sidebar/     Self-built sidebar plugin: multi-source session navigation + chamberBridge
   dsh-chamber-client-ui-layout/      Self-built ui-layout shell fork (persists sidebarWidth)
   dsh-chamber-client-ui-settings-connections/
                             Self-built connections settings plugin
   dsh-chamber-client-ui-settings-bridge/
                             Self-built settings shell plugin
+  dsh-chamber-client-ui-settings-plugin-manager/
+                            Settings plugin-manager section (design 05; owns no sidebar panel)
   dsh-chamber-seed-client-graph/    Self-built host-side package (read-only exposure of the client-plugin boot graph)
   dsh-chamber-client-ui-git/
                             Git worktree client (sidebar + coordinator + sagas)
@@ -179,14 +166,14 @@ packages/
   dsh-chamber-client-ui-open-in/
                             Open-in client plugin (session-header local app / VS Code open)
   dsh-chamber-client-ui-browser/
-                            Remote-browser client plugin (right-sidebar Browser + per-source forward list; not seeded)
+                            Remote-browser client plugin (embedded right-sidebar iframe browser: a faithful fork of the upstream ui-sidebar-browser; not seeded)
   dsh-chamber-seed-open-in/
                             In-instance open-in host Remote (local app catalog + icons + launches; local shape only)
 docs/
   design/                   Design documents (01 is the entry point; 05 is the surface/architecture contract (v1))
   progress/                 STATUS.md — the only progress record; TODO.md — unscheduled plans (A upstream / B platform / C features / D engineering);
                             deviations.md — dual-flavor deviations
-  checklists/               Operational checklists (release / dsh upgrade / packaging integrity)
+  checklists/               Operational checklists (release / dsh upgrade / packaging integrity / GUI acceptance / remote browser / session-authority calibration / upstream touchpoints)
   *.en-US.md                English mirrors of the root docs
 scripts/
   install-gateway.sh        One-shot Gateway installer (user/ops; entry docs/deploy/deploy-gateway.md)
@@ -207,30 +194,7 @@ vendor/
 
 ## 7. Scripts
 
-|Script|Description|
-|-|-|
-|`pnpm run dev:control-plane`|Start the control plane (management REST + static frontend), port 17500|
-|`pnpm run dev:desktop`|Electron shell: full window (control plane + dsh frontend + desktop shell)|
-|`pnpm run acceptance:gui`|GUI acceptance (`--live` read-only probes/`--attach`/`--dev` walkthrough); procedure in `docs/checklists/gui-acceptance-checklist.md`, boundaries in `scripts/gui-acceptance/README.md`|
-|`pnpm run test:gui-acceptance`|Unit tests for the toolbox's pure judgement layer (= `test:scripts:gui-acceptance`; run in CI; the GUI-driving layer is not)|
-|`pnpm run test:scripts`|Single entry for all `scripts/` unit tests (groups: gates/upstream/release/gui-acceptance; manifest and naming rules in `scripts/README.md` §分类规则3)|
-|`pnpm run build:renderer`|Build the dsh-frontend bundle|
-|`pnpm run build:host-graph`|Build the host-graph package (esbuild)|
-|`pnpm run build:host-git`|Build the in-instance Git worktree host package (esbuild)|
-|`pnpm run build:host-packages`|Build the four host packages (graph / git-worktree / archive-cleanup / open-in), in order|
-|`pnpm run build:desktop`|Four host packages + renderer + control-plane compile/host-package copy + preload + dsh bundling|
-|`pnpm run typecheck:git`|Type-check the Git worktree client plugin|
-|`pnpm run typecheck:browser`|Type-check the remote-browser client plugin (design 28)|
-|`pnpm run typecheck:host-git`|Type-check the in-instance Git worktree host package|
-|`pnpm run test:git`|Run the Git worktree client-plugin tests|
-|`pnpm run test:browser`|Run the remote-browser client-plugin tests (design 28)|
-|`pnpm run test:host-git`|Run the Git host core lifecycle and safety-guard tests|
-|`pnpm run dist:desktop:mac`|Package the macOS app (dmg + zip)|
-|`pnpm run dist:desktop:win`|Package the Windows app (nsis only; must run on Windows)|
-|`pnpm run cli -- <args>`|In-repo CLI thin shell (serve/status/connections/host logs)|
-|`pnpm run verify:i18n`|Fail when an EN↔ZH pair drifts (re-record with `-- --write`)|
-|`pnpm run verify:styles`|Upstream design-token conformance (S1 undeclared `--dsw-*` reference/S2 namespace overreach/S3 0.5px hairline/S4 literal fallback/S5 border-beside-shadow pairing/S6 dead declaration/S7 full-round radius pairing) across every chamber package and CSS-carrying file kind|
-|`pnpm run gen:notices`|Regenerate THIRD_PARTY_NOTICES.md (Chinese root + docs/ English mirror) from the installed dependency tree|
+The script list has one home: root [`package.json`](../package.json) `scripts` (not copied here). For gate selection by change surface see [`CONTRIBUTING.md`](../CONTRIBUTING.md) and [`docs/AGENTS.md`](AGENTS.md) §5; build/release chains are in §4–§5.
 
 ## 8. Documentation map
 
@@ -239,10 +203,16 @@ vendor/
 |[README.md](../README.md)|User docs (features/install/deploy/FAQ)|
 |This file `docs/DEVELOPMENT.md`|Development: architecture/build/package/CI/release|
 |[CONTRIBUTING.md](../CONTRIBUTING.md)|Contribution process (testing/commits/PR contract)|
-|[AGENTS.md](../AGENTS.md)|Always-on repository rules (package map/hard constraints/STATUS recording rules)|
+|[AGENTS.md](../AGENTS.md)|Always-on repository rules (purpose/hard facts/execution flows/package map)|
+|[docs/AGENTS.md](AGENTS.md)|Documentation standard (layering/writing/word budgets/doc gates/review checklist)|
+|[.agents/skills/](../.agents/skills/)|Reusable workflows: chamber-doc / chamber-pre-push / chamber-code-review|
 |[CHANGELOG.md](../CHANGELOG.md)|Version history|
 |[docs/design/01-overview.md](design/01-overview.md)|Design entry point & consolidation principles|
 |[docs/progress/STATUS.md](progress/STATUS.md)|Progress overview (the only progress record)|
 |[docs/checklists/release-checklist.md](checklists/release-checklist.md)|Pre-release checklist (version/changelog/tests/build/tag/CI)|
 |[docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md)|Pre-dsh-upgrade checklist (pin consistency/fork rebase/lockfile/regression)|
 |[docs/checklists/packaging-closure-checklist.md](checklists/packaging-closure-checklist.md)|Packaging integrity checklist (module closure vs build.files, build-chain artifacts, packaged-app smoke)|
+|[docs/checklists/gui-acceptance-checklist.md](checklists/gui-acceptance-checklist.md)|GUI acceptance procedure (what to run / look for / record)|
+|[docs/checklists/remote-browser-acceptance.md](checklists/remote-browser-acceptance.md)|Right-sidebar browser v2 acceptance (local CDP + dual-flavor real machine)|
+|[docs/checklists/session-authority-calibration.md](checklists/session-authority-calibration.md)|Session-fact single-authority real-machine calibration (design 14 §D4)|
+|[docs/checklists/upstream-touchpoints.md](checklists/upstream-touchpoints.md)|Upstream touchpoint registry and per-tag maintenance loop (generated views; §2/§9 hand-edit forbidden)|

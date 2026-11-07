@@ -6,9 +6,9 @@
 > 桌面按四维正交模型接入，客户端对弱模式（http 明文、无认证）不前置拦截，服务器是唯一授权方；
 > 未完成门禁见 docs/progress/STATUS.md。本设计自包含：原 design 01 的编排规则不再作为本设计依据。
 
-> **实现状态（2026-09 C 分层裁决，已落地为本仓基线）**：gateway 的**插件模型写路由已退役**——
-> `/chamber/plugins/install|remove|undo|tasks|materialize` 不再存在，桌面不再有
-> `gateway_plugin_apply` / `gateway_plugin_materialize` IPC；保留 `/chamber/plugins`
+> **插件写面 = 不存在（设计契约）**：gateway **不提供**插件模型的写路由——
+> `/chamber/plugins/install|remove|undo|tasks|materialize` 不存在，桌面也没有
+> `gateway_plugin_apply` / `gateway_plugin_materialize` IPC。保留 `/chamber/plugins`
 > （seed-cache GET/PUT，桌面供给面）、`/chamber/plugins/installed`（只读行投影）与
 > `/chamber/runtime/*` 控制器。本文涉及写操作的段落为历史记录。
 
@@ -818,7 +818,7 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
   `packages/gateway/src/html-inject.ts`），使官方前端 `connection.isLoopback=true`。
   **alpha.3 修正**：上游已删除 settings 的 `persistence`/`'memory'` 分支，上述「设置持久化进入 host 模式」
   的因果**不再存在**；但注入本身未必是死件——`isLoopback` 仍被 `ui-settings-general` 的 documentController
-  与 `api-request-trust` 的请求信任判定消费，二者的语义结论与注入存废须逐条复核后决定（本轮仅登记，
+  与 `api-request-trust` 的请求信任判定消费，二者的语义结论与注入存废须逐条复核后决定（此处仅登记，
   不改注入）。**信任决策**不变：auth 门在先、能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过
   （服务端 RPC 不区分来源，该门是纯客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft）。
   **Rejected alternatives**：为保留 `persistence='memory'` 而 fork `ui-settings`、或继续以该门为注入的
@@ -830,7 +830,7 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
   ⇒ 官方前端的会话 raw-chunk 校验抛普通 TypeError，`doOpen` 只对远程失败写 `error`，页面永停 `loading`。
   chamber 自建前端曾由 renderer 构建期的第三类 vendor 补丁覆盖（0.2.0 上游落地后该补丁已退役，design 14 §D4）；
   代理的官方前端无法在这里重建，故当时在出口做等价归一（V8 无变化；只有整段源码就是原生标记的函数被改写）。
-  **0.2.0 上游已改为引擎无关比较**，且本轮把**最低支持 runtime 抬到 0.2.0-rc.1** ⇒ 该注入随本轮升级删除：
+  **0.2.0 上游已改为引擎无关比较**，且**最低支持 runtime 为 0.2.0-rc.1** ⇒ 该注入随最低线升级删除：
   `html-inject.ts` 现在只注入信任声明，页面原生函数源码恢复引擎原生形态（原先的取舍随之消失）。
 - **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、Credentials 面板与 dsh
   运行时管理（版本 / 选择 / apply / rollback / restore / retry / restart / registry）；它是 gateway
@@ -963,12 +963,12 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
 - 观察者纪律：作为 `$events` 的 waterfall 交付目标时，**仅当另有下游 mux 客户端在线且过 1.5s grace 才回 `next` 委派，否则保持等待**——不得自行 settle 审批/提问；
 - 只存状态元数据：**不存标题 / cwd / 消息 / 审批与提问载荷**；状态文件 0600、目录 0700；
 - 路由全部落在既有 `/chamber/*` 鉴权门内；宿主停机时返回 200 + `serviceable:false`（不 5xx，避免被误判为「未升级」）。
-- **行集 = 顶层会话（2026-12）**：镜像不投递 `origin === 'subagent'` 的行——`commitDelta` 单点过滤
+- **行集 = 顶层会话**：镜像不投递 `origin === 'subagent'` 的行——`commitDelta` 单点过滤
   （全被过滤时空 payload 早退、游标不前进），`snapshotFor` 同过滤；子代理行只作统计输入，父行
   `subagentCount` 仍由它们统计；行身份「顶层 → subagent」翻转时补发 `removedSessionIds`（行离场，
   而非静默改写）。替代方案「wire 加 `origin`、由桌面过滤」被否：桌面没有子代理行的消费者，却要动
   冻结协议、fixture 与旧端矩阵（§20）。P2b 观察者同样在本地跳过子代理行（design 19 §3.5）。
-- **身份只能由列表事实确认（S1，2026-12 收尾）**：`StoredRow.originKnown` 只在
+- **身份只能由列表事实确认（S1）**：`StoredRow.originKnown` 只在
   `applyBaseline`/`applyAdded` 置真（`createStoredRow` 置假，随行持久化；旧文档缺该字段
   按未确认读）。投递判定（`commitDelta` 与 `snapshotFor` 共用同一条 `isDeliverable`）是
   `row.present && row.origin !== 'subagent' && row.originKnown`——**没有进程级一次性门**：
@@ -996,7 +996,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   计数另放 `muxBaselines`（观察者自诊断），**不得**再当 `listComplete` 的来源。证据：
   `session-state-observer.test.ts` 的 poll 档 wire 用例 + `session-state-diagnostics.test.ts`
   的负控制（注入 muxBaselines=2 仍读 store 的 1）。
-- **缺席即删除（2026-12 收尾，按上游 ready-即删对齐）**：missing-row 分支是**单阶段**删除——
+- **缺席即删除（按上游 ready-即删对齐）**：missing-row 分支是**单阶段**删除——
   行在一次**成功且完整**的基线缺席时立即从 store 删除；**曾可投递**的行同拍进
   `removedSessionIds`（从未上线的行静默删除——补移除即幽灵撤回，见上一条），
   `commitDelta` 与 `snapshotFor` 同规（缺席行没有 wire 形态，绝不投影 `running:false`）。
@@ -1024,7 +1024,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
 `packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts` 逐条 replay 断言
 404，并断言退役能力不再出现在 `features` 词汇表里。
 
-**P2a 增量面：goal 事实（2026-12 落地，design 19 §3.2.1）**
+**P2a 增量面：goal 事实（design 19 §3.2.1）**
 
 - **`session/list` 白名单扩 goal**：`session-mux.ts` 从每行
   `projections.values.goal` 只取 `goalId/revision/phase/updatedAt`（嵌套形
@@ -1033,7 +1033,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   （title/cwd/todos/inbox…）在**解析处**即被丢弃，绝不进 observer/持久文档/wire。三值：
   键缺席或形状不符 = 字段缺席（unknown，绝不臆造「无 goal」）；`null` = 宿主明确无
   goal；对象 = 当前 goal。`session/list` 依旧不激活 agent（只读 unary，冷会话可见）。
-- **`$events` 的 activation（身份绑定，2026-12 收敛）**：`goal/activation-changed`
+- **`$events` 的 activation（身份绑定）**：`goal/activation-changed`
   （emit 帧，无重放）在 mux 解析边界归一为 `SessionStateGoalActivationEvent` 三变体：
   bound `{goalId, activation}` / unbound `{goalId: null, activation}` / no-goal
   `{goalId: null, activation: null}`；形状漂移（`activation` 非词表）丢弃不猜。
@@ -1042,7 +1042,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   行尚未出现或投影仍 unknown/null 时一律保留待匹配（不直接 drop）**，由后续 baseline/added
   携带匹配 identity 时消费，**换 id 不继承**旧 activation（把新 goal 的 armed 落到旧 goal
   行上正是要防的 `complete+armed` 污染）；unbound 边作用于行当前已知 goal（镜像
-  renderer P2b 的宽松解析）。保留边纪律 P2b/P1 同规（2026-12/F14 统一）：绑定 id 与基线
+  renderer P2b 的宽松解析）。保留边纪律 P2b/P1 同规（F14 统一）：绑定 id 与基线
   不符一律保留待匹配、不直接 drop，不再设第三 goalId 出口——P1 有壳插件
   （`goal-activation.ts`；每会话至多一条、新事件覆盖，只随会话/行离开、显式 no-goal、
   reset/dispose 清除，绑定守卫绝不落到别的 goal 上，design 19 §3.2.2）、P2b
@@ -1333,7 +1333,7 @@ connection-target scope 所有的目标；重登有界（一次 + 429 退避）�
 （esbuild `node22`）只约束编译产物，是另一条轴，不设运行下限。
 
 运行时版本管理（design 18 §9）：`@dsh-chamber/dsh-runtime` 以 workspace devDependency
-经 `scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时
+经 `packages/gateway/scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时
 依赖 `pnpm@11.21.0`（与 desktop 同源，design 18 §9.2 D1）。pack/install smoke 必须
 覆盖 pnpm 依赖安装成功与 `gateway --help`。gateway 不再打包任何客户端插件；
 gateway 不再产出 `host-packages/`，也没有任何 packaged client plugin（seed 只来自桌面同步）。
@@ -1580,8 +1580,8 @@ flag（只延后删除，不产生功能价值；不保留配置兼容窗口，�
   - 把该镜像扩成控制路径（gateway 代答审批/提问，或代替桌面决定已读）——**否决**：正是 §10 开头禁止的回流；
     审批是 dsh 原生的，镜像只能看。
   - 未挂载来源的完成状态**只等上游**（host 持久 unread/pending）——**否决**为唯一路径：来源以 gateway 为主时
-    镜像可立即闭合绝大多数窗口；本轮补了**受控的判定侧读回退**（facts-only provenance 的逐行 host
-    运行边沿 + facts 完成候选，design 06 §4.2、design 19 §3.2/§3.5），只在**无 ctx 上报**时生效；
+    镜像可立即闭合绝大多数窗口；**受控的判定侧读回退**（facts-only provenance 的逐行 host
+    运行边沿 + facts 完成候选，design 06 §4.2、design 19 §3.2/§3.5）只在**无 ctx 上报**时生效；
     上游提案作为长期根治并行推进，前提是降级路径不劣化（§10.7）。
   - 让镜像投递完成/未读位（wire 加 `completionUnread`/`unread`，或服务端自行判完成）——**否决**：
     vendor 的位是「未读」而非「完成」，只在 ctx 内被 retain/read 清除；服务端另存会造第二权威与第二

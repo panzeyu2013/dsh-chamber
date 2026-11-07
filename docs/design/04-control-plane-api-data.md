@@ -197,7 +197,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 > `details`。
 >
 > **after-body 语义不变**：body 已完整发出后上游超时/失败仍返回 504/502 +
-> `details.phase='after-body'`（mutation 归 unknown，27 §3.3/§3.5）；本轮错误码/预算改动
+> `details.phase='after-body'`（mutation 归 unknown，27 §3.3/§3.5）；该错误码/预算改动
 > 不改变它。
 
 **Rejected alternatives（degraded 服务化）**：

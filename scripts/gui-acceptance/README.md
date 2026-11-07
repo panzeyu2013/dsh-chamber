@@ -136,7 +136,7 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
 | `W-4a` 来源级收拢（会写持久化偏好 `sourceFolded`） | `--dev` 执行（收拢→展开往返，并断言往返后无残留）；`--attach` 记 **INFO** 并写明原因 | design 06 §3.1；与上一行"只允许写在一次性实例上"同一口径 |
 | `--flavor native --attach`（不启动 sidecar） | `N-1`（ready 帧）/ `N-7`（SIGTERM 退出）记 **INFO** 并写明"未观测/无生命周期" | 未观测不算 PASS；attach 不启动也不终止运行中的壳（不碰他人实例） |
 | 实例未就绪（`dsh.status != ready`） | 实例面检查（`IP-*`/`IN-1`/`CP-5`）转 **INFO** 并说明隔离期 503 属预期 | design 18 §3.4 |
-| 实例确无可悬停的卡片行（只有来源头，或只有按设计无卡片的未分组桶头 `[data-chamber-row][role="treeitem"]`） | `W-4b`/`W-4b-race`/`W-4b-swap`/`W-4b-dismiss` 记 **INFO** 并写明未执行（`--require-hover` 时改记 **FAIL**） | design 06 §7：来源头、未分组桶头都不是卡片锚点（`ServerSection.tsx:1436-1437` 有行属性但 `:1743-1746` 不套 `RowHoverCard`） |
+| 实例确无可悬停的卡片行（只有来源头，或只有按设计无卡片的未分组桶头 `[data-chamber-row][role="treeitem"]`） | `W-4b`/`W-4b-race`/`W-4b-swap`/`W-4b-dismiss` 记 **INFO** 并写明未执行（`--require-hover` 时改记 **FAIL**） | design 06 §7：来源头、未分组桶头都不是卡片锚点——`packages/dsh-chamber-client-ui-sidebar/src/client/ServerSection.tsx` 的 `workspaceHeader` 有行属性（`data-chamber-row`@833 / `role="treeitem"`@839）；未分组桶在 :1287 原样渲染，只有 `createdAt` 在场时才包 `RowHoverCard`（:1289）；来源头由 `ServerSectionHeader.tsx` 渲染（`data-chamber-row` + `role=button`，不套 `RowHoverCard`） |
 | 有锚点形状的行（父节点是 `RowHoverCard` 的锚点 `<span>`）却没有 `[data-chamber-hovercard-anchor]` | `W-4b` 记 **FAIL** 并点名缺失标记 | **不是环境事实**：`--attach`/`--dev` 面向本仓 dev 构建，标记由 `RowHoverCard.tsx` 落地；缺标记 = 修复没打进包，正是 `W-4b` 要拦的 |
 | 同屏凑不出两个可悬停行（视口太小/工作区折叠） | `W-4b-swap` 记 **INFO**（`--require-hover` 时改记 **FAIL**） | 互斥腿要有 A、B 两行同屏可悬停；单行无从判"至多一张" |
 | 本机 dwell→提交窗口测不到、或 ≤2ms（探针/计时器分辨率之下） | `W-4b-race` 记 **INFO**（"本次运行不具区分力"，`--require-hover` 时改记 **FAIL**） | 固定 band 只是窗口下界：窗口不可测时该腿证明不了任何事，报 PASS 就是把没区分力的运行当证据（复核 finding H5/#3） |

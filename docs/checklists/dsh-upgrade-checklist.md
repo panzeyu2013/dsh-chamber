@@ -1,6 +1,6 @@
 # dsh 版本更新前 Checklist
 
-> 把chamber依赖的上游dsh从当前pin升到目标tag（形如 `dsh-vX.Y.Z-<stage>.N`）。核心约束（AGENTS.md）：**只**改chamber侧，不动dsh内容（vendor/submodule源码零修改）。命令前先 `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`。
+> 把chamber依赖的上游dsh从当前pin升到目标tag（形如 `dsh-vX.Y.Z-<stage>.N`）。核心约束（AGENTS.md）：**只**改chamber侧，不动dsh内容（vendor/submodule源码零修改）。命令前先 `nvm use`（或等价方式）让 `node --version` 与 `.nvmrc` 一致——本清单只写流程，不写版本字面值。
 >
 > 只写可复用流程：升级叙述写 `CHANGELOG.md` 发布节，仍open的门禁写 `STATUS.md`；触点结构与每tag维护循环见同目录 [`upstream-touchpoints.md`](upstream-touchpoints.md)（§7）。
 >
@@ -75,7 +75,7 @@
 ## 7. 文档与记录
 
 - [ ] 迁移叙述（pin、fork rebase面、适配面、验证结论）写 `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节——**发版时才写**（升级提交本身不动 CHANGELOG），随后 `node scripts/gates/verify-i18n.mjs --write` 刷新 i18n 记录。
-- [ ] 若升级跨越 P5b 工作树切换：发布说明必须带**旧池清空前提**（逐树 `workspace.delete` + `git worktree remove/prune`，不是删目录）、filters/LFS 降级（手动 `git lfs pull`）、P5b opt-in/重启、Swift 保留；本清单不重复写发布叙述。
+- [ ] P5b 工作树换代是一次性历史迁移（旧池清空前提、filters/LFS 降级、opt-in/重启、Swift 保留见 `CHANGELOG.md` 对应发布节与 design 08 §7.4）；本清单不重复写发布叙述，后续升级不再执行该迁移。
 - [ ] 触点结构变更走registry：`registry.json` → `registry-views.mjs --write` → `verify-registry.mjs` 绿。
 - [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop README、本目录）更新版本号，历史叙述保留；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
 - [ ] 未落地的实机门禁与遗留偏差登记进 `docs/progress/STATUS.md`（只写仍open的项，不留已完成台账）；下次升级复用本清单复验。版本值不写进checklist。

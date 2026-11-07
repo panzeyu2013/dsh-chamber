@@ -311,7 +311,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
    Node 注册表，故另有四处镜像锁步：`plugin-inventory-text.ts` 的 `OPEN_IN_PACKAGE` 与
    `InventoryEntryKind`/`chamberKindOf` 分类、`packages/renderer/src/global.d.ts` 与
    `packages/desktop/preload.cts` 的 `ChamberHostPackageState`（加 `localOnly?: boolean`；四份声明由
-   §9 字段集门钉住）、`test/plugin-inventory/chamber-rows.test.ts`（读 `host-graph-seed.ts`：断言
+   §9 字段集门钉住）、`packages/dsh-chamber-client-ui-settings-connections/test/plugin-inventory/chamber-rows.test.ts`（读 `host-graph-seed.ts`：断言
    名字集合与注册表行一一对应，**新包不加入即红**）。远端探针在该行**零远端调用**（`installed:false`
    只表示"没问"；页面据注册表标志**不列**该行，绝不渲染"未注入"，也不参与 ssh 的 `sshChamberGates`）。
    main 侧凡判定"那台机器上该有什么"的路径（注入预检、ready-time 缺口日志、gateway 上传**源清单**
@@ -320,7 +320,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
    design 17 §10.2）——该行 `sourceDir` 按设计为空，当成"产物缺失"会让「注入」按钮失败并留假缺口；
 7. 打包闭包：根 `build:host-open-in` / `typecheck:host-open-in` / `test:host-open-in` 与
    `build:host-packages` 聚合；desktop 的 `HOST_PACKAGE_BUILD_ROWS` 加 `open-in` 行
-   （`scripts/build-host-graph-package.mjs` → `dist/host-open-in-package`，打包态 `main.ts` 的
+   （`packages/desktop/scripts/build-host-graph-package.mjs` → `dist/host-open-in-package`，打包态 `main.ts` 的
    `hostOpenInPackageSourceDir` 读它）；CI/release 类型检查与单测清单、`docs/checklists/packaging-closure-checklist.md`
    登记；`pnpm-lock.yaml` importer 记录（新工作区成员必须落锁，否则 CI 的 "Assert lockfile not rewritten" 红）；
 8. 产物不提交、`.gitignore` 无需 dist 负向登记（根规则忽略 `dist/`；clean checkout 由 `pnpm run build:artifacts` 自举，design 05 §6）。
@@ -355,8 +355,8 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 | 4 | 与启动标记解耦：任何 runtime 版本、任何 chamber 形态下本地目录都可用 | 本设计 |
 | 5 | 远程 provider 家族（Insiders / Cursor / Windsurf / JetBrains Gateway / `ssh://` 终端） | todo（S1，每个新增项需一次实机 scheme 验证） |
 | 6 | 远程**文件级**打开（只是 URL 构造；本地仍目录限定） | todo（S2） |
-| 7 | 无应用来源的诚实出口（复制远端路径 / 复制 `ssh user@host` / 复制深链，零执行面） | **收窄**：只保留「复制路径」——侧栏既有 `HoverCard` 复制模式 + 会话行已带 `SessionRow.cwd`，零新 IPC；复制 ssh 命令/深链不做（形态留档 todo §3 附录 A） |
-| 8 | 多入口共用同一执行管线（侧栏会话行右键、快捷键；`runOpenInLaunch` 已是单一管线） | **不做**（理由与证据见 STATUS；形态留档 todo §3 附录 B） |
+| 7 | 无应用来源的诚实出口（复制远端路径 / 复制 `ssh user@host` / 复制深链，零执行面） | **收窄**：只保留「复制路径」——侧栏既有 `HoverCard` 复制模式 + 会话行已带 `SessionRow.cwd`，零新 IPC；复制 ssh 命令/深链不做（理由见 `docs/progress/STATUS.md` §1.4「open-in/Git/深链/只读镜像」） |
+| 8 | 多入口共用同一执行管线（侧栏会话行右键、快捷键；`runOpenInLaunch` 已是单一管线） | **不做**（理由与证据见 `docs/progress/STATUS.md` §1.4「open-in/Git/深链/只读镜像」） |
 | 9 | 拉起失败原因**用户可见**（`Tooltip` 就地呈现域错误/传输异常，随 error 装饰清除） | 已有 |
 | 10 | 官方 Files 页签目录座席 `sidebar.right.tab.files.actions`（官方 `ui-open-in-app` 占座，但读 document-relative `open-in-app/*` ⇒ N-ctx 下落控制面 SPA 回退、渲染 null）由本插件以自有 id `open-in` 同槽占座：owner `{ absolutePath }` 直取文件树显示目录，per-source 目录/记忆照旧；残余风险 = 官方条若复活会同槽双条 | 本设计（`test/ui-lock/files-seat-declaration.test.ts` + `test/launch-flow/open-in-path.test.ts`） |
 
@@ -364,7 +364,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 
 - 远端宿主侧打开（需 ssh/http cookie 注入 + UI 明示，且与"远程只用 vscode 部分"的契约冲突）；
 - fork 官方 catalog 再扩**本地**应用集合之外的执行面（如"在终端里打开"）；
-- 主进程自行枚举本机应用（重开 Batch 3 Phase 2 关闭的红线）。
+- 主进程自行枚举本机应用（已关闭的红线）。
 
 ## 8. 文件清单（本设计落地后的形态）
 

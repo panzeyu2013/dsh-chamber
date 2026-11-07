@@ -6,7 +6,7 @@
 > chamber seed 保留为仓库级管理 rail（snapshot/create/enter/remove）；官方
 > `@deepseek-ai/dsh-experimental-forge-bundle`（P5b，opt-in）提供 agent 的
 > `create_worktree` 工具与 composer/restore UI，两套创建引擎共用同一个池、同一套行/放置。
-> 旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**，清空是发布前提（§7.4）。
+> 旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**，清空是 0.4.4 一次性历史迁移的前提（§7.4）；后续发布不再作为前提。
 > 未完成门禁见 `docs/progress/STATUS.md`；实现分期见 `.tmp/worktree-union-plan/11-final-design.md`（过程文档）。
 
 ## 1. 边界与部署形态
@@ -98,7 +98,7 @@ Typert carrier 把普通业务异常归并为 `internal`，故所有方法都在
 - **只发布池内 checkout**：未注册 checkout 只有落在
   `<mainPath>/.agents/worktrees/` 之下才进入客户端 layout；池外未注册 worktree（包括旧
   `$DSH_HOME/worktrees` 残留、外部工具手工建的树）既不成行、也不变成 missing 行——
-  “不检测、不提示”是发布前提的一部分（§7.4）。已注册 workspace 仍按 workspace 行关联
+  “不检测、不提示”是 0.4.4 一次性迁移的前提之一（§7.4），后续发布只保留该形态为基线。已注册 workspace 仍按 workspace 行关联
   （`workspaceId` 非空）；主 checkout 未注册时该 repo 没有派生行（§3.2）。
 - **孤儿/关联诊断**：注册 workspace 路径不可解析时，host 在快照 `errors` 里加一条逐行诊断
   （路径消失 = `path-unavailable`，兜底码 `workspace-path-failed`，带 `workspaceId`）；
@@ -606,9 +606,9 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
   workspace 行畸形）让整次读取以可重试 `state-source-*` 失败；此时没有 mutation 被尝试。
 - **外部 Git TOCTOU**：锁检查、目录重现、递归删除失败后的目录残留只能靠紧邻终态验证缩小，
   不能消除。
-- **unary 抛错期间孤儿入口缺席**：一轮 unary 直接抛错时客户端拿不到新快照，本轮新出现的
+- **unary 抛错期间孤儿入口缺席**：一轮 unary 直接抛错时客户端拿不到新快照，新出现的
   `path-unavailable` 无从合并出 `orphaned`，直到下一轮成功快照或重启来源。空快照分支由
-  `effectiveSnapshot` 合并本轮 errors 收口。
+  `effectiveSnapshot` 合并 errors 收口。
 - **池外 worktree 不可见**：只报池内是发布前提的反面；用户若在池外手工建树，它不会出现在
   侧栏（可从主 checkout 的 git 命令或 forge 自身视图查看）。这是“旧池不提示”的必要代价。
 - **restore 不对称**：仅 forge record 可 restore，seed 树无 restore（§4.3）。
@@ -675,7 +675,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
      保留的会话**——归档是用户选择，不是删除前置）；
   2. 再对每棵树 `git worktree remove <path>`（必要时 `--force` 处理 dirty）并
      `git worktree prune`；**不是删目录**（删目录只会留下 admin 记录）。
-  发布 checklist 以 ❌ 阻断，CHANGELOG 发布说明与 STATUS 写明；snapshot 只报池内，旧根残留
+  P5b 是一次性历史迁移（随 P5b 那次正式发布执行，见 CHANGELOG）：CHANGELOG 发布说明与 STATUS 写明；从更早版本直接升级者按本节操作，之后的发布 checklist 不再把旧池清空列为阻断项。snapshot 只报池内，旧根残留
   不变成行（§2.1）。升级前验证：升级后旧路径不出现在任何来源的 checkout 行，源仓库
   `git worktree list` 无旧根。
 - **view-prefs 清理**：回滚/升级脚本清 `__checkout__` 前缀键与 `checkoutOrder`；正常升级

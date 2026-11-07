@@ -429,7 +429,7 @@
     官方位**——vendor 内存 Set 是唯一权威、不落盘、重载即空；生产者把它稀疏带进通道行
     `completed`，App 只追加一条 N-ctx 修正臂（§4.2）补官方 `isMain` 在隐藏来源上漏掉的
     那一格。
-- **goal 三值事实**（design 19 §3.2.1，2026-12 落地）：行字段
+- **goal 三值事实**（design 19 §3.2.1）：行字段
   `goal?: GoalFact | null`——**字段缺席 = unknown**（投影还没给出 goal 键）、`null` =
   明确无 goal、对象 = 有 goal；
   `GoalFact = { goalId, revision, phase: 'active'|'paused'|'blocked'|'complete',
@@ -459,7 +459,7 @@
   STATUS ⑮），动机与语义见 §4.5：父会话 running 位只反映「agent 回合进行中」，后台
   子 agent 存活时父回合已结束（running=false）、子 agent 仍在工作——没有这条
   计数，完成蓝点会在子 agent 干活时提前亮起。
-- **无壳来源的判定侧读回退（facts-only provenance，2026-12）**：没有任何官方 ctx 上报的
+- **无壳来源的判定侧读回退（facts-only provenance）**：没有任何官方 ctx 上报的
   来源（被释放、或从未 boot）没有壳行可读，但 facts 通道与挂载无关（P2a 镜像 /
   P2b 观察者，§4.2）。App 在**两个判定读取点**（修正臂步进与通知 reconcile 的 shell 输入）
   用纯投影 `packages/renderer/src/virtual-runtime-report.ts` 把 `SessionFactsSnapshot`
@@ -566,7 +566,7 @@
   当证据；臂的武装证据同样要求 `!stale`。facts 行/水位**不参与**完成点武装（对齐后
   无水位概念），只服务通知候选与渲染；`todo-attention` 对断连来源只渲染
   `runtime.stale === true` 的事实（R14 方案 A）。
-- **facts 快照的行级输入（2026-12）**：`SessionFactsSnapshot.baselines` 从 wire
+- **facts 快照的行级输入**：`SessionFactsSnapshot.baselines` 从 wire
   `diagnostics.baselines` 闩锁——该值的单一来源是 **store** 的「成功且完整基线」计数
   （每次成功 `applyBaseline` 递增，**含 poll 档**；mux 自己的 reconcile 计数另放
   `SessionStateObserverStatus.muxBaselines`，不再进 wire，design 17 §10.7 S4/T2）。
@@ -585,7 +585,7 @@
   降级窗口（`disabled`/`forward-skew`/2xx unversioned/曾探到协议载荷后的 404）**保留既有
   行并标 `stale`/`serviceable=false`，绝不是权威空行集**——空行集会让在场集判空、走遗忘
   结算、清 held pending 并撤掉已武装的行（design 19 §3.5）。
-- **goal 事实过桥与身份签名**（v5 §2.1/§6 P2a；2026-12）：mounted 来源由插件生产者在
+- **goal 事实过桥与身份签名**（v5 §2.1/§6 P2a）：mounted 来源由插件生产者在
   `sync()` 里先回填最后已知值、再合并 activation 缓存（`applyGoalActivation`，门读它）；
   无壳来源的 goal 经 App 的 `factsOverlay` 走 `mergeRuntimeFacts` 的 overlay 行——通道行
   已给对象/显式 null 即权威，overlay 只在通道 unknown 时填补（含显式 null），缺席 = unknown
@@ -595,11 +595,11 @@
   （`goalId/revision/phase/activation/updatedAt`）必须整体进 `runtimeReportSignature` 的**行编码**，
   且**不得**落进 `includeRunning` 分支——activation 是易失缓存，不入签名会被 App 的身份
   去重冻结在首见值（`goalFactSignature`）。
-- **facts 快照通道判定（`session-facts-source.ts` 单源，2026-12）**：
+- **facts 快照通道判定（`session-facts-source.ts` 单源）**：
   `classifySessionFactsProbe` 判 2xx 无 `protocol`（解析失败 / 非协议载荷）=
   `degraded/unversioned`——通道**不可用（unknown）**：**保留既有行**（无既往行才给空行）
   并标 `serviceable=false`/`stale=true`；消费侧按原始行键判在场、按 `factsUsable=false`
-  停判（不得当权威空行集，否则无壳来源整体遗忘）。404 = `legacy-gateway` 二分（2026-12）：
+  停判（不得当权威空行集，否则无壳来源整体遗忘）。404 = `legacy-gateway` 二分：
   **首探**（从未探到协议载荷）给空权威快照（路由不存在的版本事实，侧栏 legacy 档由它可达）；
   **曾探到协议载荷后转 404**（`protocolFactsSeen`，来源指纹换代清零）保留既有行/游标并标
   `serviceable=false`/`stale=true`（不可用但绝不当会话消失，held pending 不被清），404→ok 恢复权威。
@@ -691,7 +691,7 @@
   runningSubagents 同样压过 running 环与 completed 点（vendor 保证 completed 与
   running 互斥）。官方 sessionStatuses 的「有运行中子 agent 就显示 ongoing」语义
   原样对齐（chamber 为避免瞬时双通道错位把用户需处理状态前置）。
-- **goal 呈现门与压制后 state（v5 §2.3/§4 单源，2026-12）**：唯一派生入口是
+- **goal 呈现门与压制后 state（v5 §2.3/§4 单源）**：唯一派生入口是
   `packages/dsh-chamber-client-core/src/session-row-state.ts` 的 `sessionRowState(facts)`（零依赖叶模块，同时是
   `GoalFact` / `goalSuppressesPresentation` / `goalHoldsCompletion` 的类型家）；label/dot、
   `data-chamber-session-state` / `data-chamber-state-source` 仪表属性、搜索结果行、待办条目
@@ -731,14 +731,14 @@
   不重复驱动同一环渲染；通道 running 位仍保留在 `InstanceRuntimeReport` 中，供 App 完成
   修正臂（`stepCompletionArm`）推导 running→idle 边沿（App 内部逻辑，非侧边栏
   渲染）。
-- **G1 的真实机制（2026-12）**：运行环的唯一权威仍是聚合快照行（`runningRingVisible`
+- **G1 的真实机制**：运行环的唯一权威仍是聚合快照行（`runningRingVisible`
   **不吃**通道/虚拟上报的 running 位）；实时性由「facts 行集变化提示（`onRowHint`，快照帧
   与增量帧都发）→ 既有 `requestFactsRefresh` 四拒 + 1s 底线 → **≤1 次 unary 聚合拉取**」
   承担（P2a 网关档与 P2b 观察者同规；poll 档为一个 poll 周期）；该次拉取与边沿轮询/watchdog
-  共享同一个有界刷新波（队列按来源去重 + 4 并发帽，`drainAggregateWaves`，2026-12）。
+  共享同一个有界刷新波（队列按来源去重 + 4 并发帽，`drainAggregateWaves`）。
   判定侧读回退（§4.1）只服务
   通知/修正臂，**不驱动环**；若将来要「通道 running 直接画环」，那是独立契约变更（需改
-  `runningRingVisible` 与两条锁测试并登记第二权威例外），本轮不做。
+  `runningRingVisible` 与两条锁测试并登记第二权威例外），本版不做。
 - **被否方案（运行位解析）**：①**扩大 tier-3 写回去写 `true`**——要检测分歧就得先读
   `status.running`（读是必需的），却把 chamber 变成 running 的第二写入者（违反既有锁；
   上游 `refreshList` 才是契约内的修复路径），还会把渲染事实绑到 N=2/60s 门槛上；
@@ -775,7 +775,7 @@
   `applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、
   `packages/dsh-chamber-client-core/src/session-row-state.ts`（goal 三值 + 两个谓词 + `sessionRowState` 压制后 state 的
   零依赖叶模块）、`client/goal-activation.ts`（事件制 activation 缓存 + 有界重试；缓存上限
-  `MAX_ACTIVATION_CACHE = 2000`，LRU 淘汰 + warn-once + `evictedCount` 诊断，B4-1；不调
+  `MAX_ACTIVATION_CACHE = 2000`，LRU 淘汰 + warn-once + `evictedCount` 诊断；不调
   `goals/get`）、`packages/dsh-chamber-client-core/src/instance-api.ts`（unary 兜底行读 `projections.values` 同一
   事实）、`packages/dsh-chamber-client-core/src/session-row-window.ts`（`sessionRowWindow` + `sessionRowDisclosure`）、
   `locales.ts`（`status.waitingApproval/planReview/waitingAnswer/completed` +
@@ -822,7 +822,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
   守卫单源 = `packages/dsh-chamber-client-core/src/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
   上游完整性信号落地后删除本地 fallback（见 `docs/progress/TODO.md` A§7）。
-- **facts-only 源的 `subagentCount` 只在谱系已认证时是 busy 证据（I-12 修正 R2-G，2026-12）**：
+- **facts-only 源的 `subagentCount` 只在谱系已认证时是 busy 证据（I-12 修正 R2-G）**：
   gateway/SSH facts 行的 `subagentCount` 是「在场子会话数」（宿主投影/谱系索引的
   cross-section），默认不是「正在干活」的证据。`completion-observation.ts` 只把**壳通道**的
   `runningSubagents + subagentActivity` 当运行证据；facts-only 行要成为运行证据须命中源侧认证——
@@ -1029,11 +1029,11 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   关闭的 drawer 继续持有展开内容（`wide = drawer || …`），本 fork 的 collapse settle 会卸载宽内容改渲 rail，
   故每次重开 drawer，浏览区局部状态（滚动位置）重置；要保活只需把 collapse 的宽判据补上 drawer
   （vendor 是 `wide = drawer || …`，本 fork 是 `wide = !collapsed || !settled`），代价是窄窗常驻宽子树——
-  本轮不取，登记为残余而不是产品化改造；③store 的两处窄窗分支（`selectPanel` 在 <768 清零 `narrowExpanded`、
+  本版不取，登记为残余而不是产品化改造；③store 的两处窄窗分支（`selectPanel` 在 <768 清零 `narrowExpanded`、
   `setViewportWidth` 同时看 768 与 1024 两个断点）是 chamber 侧镜像，行为用例见
   `packages/dsh-chamber-client-ui-layout/test/layout-store.test.ts`；④导航座席文案在本壳里改写为
   「侧边栏」/`Sidebar`（vendor 为「导航」/`Navigation`）——该座席在本壳承载整个侧栏而不只是导航列表。
-- **置顶（pin）：渲染分区已落地（Phase 4 选项 1），残余 = 块内拖拽 + 跨块守卫 + 账号写入**——
+- **置顶（pin）：渲染分区 = Phase 4 选项 1，残余 = 块内拖拽 + 跨块守卫 + 账号写入**——
   pin/unpin 写入口、静息标记、两个行入口与**置顶分区**都已按上游形态落地（§7）：置顶行在其所属
   分组、树节点与 flat 列表里领跑（上游 `sectionMembers` 的 blank → pinned → 其余三段语义，
   `pin-partition.ts`），manual 的块内序取宿主「最近置顶在前」的 `pinnedSessionIds`，updated 保留本仓
@@ -1047,7 +1047,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   本地置顶集仍指着该 id（宿主归档时已清、此后的 unpin 是 no-op），直到基线重放——本仓不做乐观回声，
   修法方向见 parity plan §1.1。行级失败槽每行只显示一条且不清陈旧键：pin 键插在 archive 与 unarchive
   之间，归档/恢复后陈旧键仍可能显示（既有族行为）。
-- **归档筛选（`archivedFilter` 三态）已落地**（§3.4）：default 隐藏 / show 原槽位混入 / only 仅归档行
+- **归档筛选（`archivedFilter` 三态）**（§3.4）：default 隐藏 / show 原槽位混入 / only 仅归档行
   并丢弃无可见成员的 workspace；列表与搜索同规则；归档行置灰、不可开（点击就地提示）、不可拖（仍是
   落点）、状态槽留空、pin 两入口缺席、归档钮/菜单项翻转为「恢复」（官方 `workspace/unarchiveSession`）；
   归档成功不再就地提示（上游 `RowActionToast` 的 archived / stoppedAndArchived 两态按用户裁决移除，
@@ -1055,10 +1055,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   only 空态可一键跳回。**降级规则（本仓特有状态）**：`archiveSetKnown !== true` 时筛选轴三项整体禁用、
   按实际渲染态（隐藏已归档）显示选中、存储值保留，集合恢复已知后自动生效（点击默认项会把存储值写回
   `default`，故默认项也禁用）。管理器（design 24）仍是批量维护面，purge 是其独有能力。
-- **flat 单列表已落地（per-source）**：该来源一条平铺列表（伪账号替换分组列表，不渲染工作区表头），
+- **flat 单列表（per-source）**：该来源一条平铺列表（伪账号替换分组列表，不渲染工作区表头），
   manual 走 `flatOrder[sourceId]`、updated 走 `flatAccountKey(sourceId)` 哨兵账号；会话拖拽只写本地账号、
   不发 wire（上游 flat 账号同规则）。**不做跨来源平铺**（拒绝项见 §12）。
-- **按工作区树已落地（家族优先）**：上游 `owningParentFolder` 的已注册父目录前缀嵌套；派生 checkout 行的
+- **按工作区树（家族优先）**：上游 `owningParentFolder` 的已注册父目录前缀嵌套；派生 checkout 行的
   显示父级取它 main 的父级，家族不被拆开（design 08 §3.3 连续家族不变式）；无 git 家族信息时退化为
   纯前缀。树只改缩进不改序：同级顺序仍由 wire 序与家族约束决定，父组折叠只隐藏自己的会话行。
 - 跨实例 `dsh.sessions.current` localStorage 共享键（last-writer-wins）：
@@ -1073,7 +1073,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   - **重载即忘**：官方位是 ctx 内存 Set，桌面 reload/重启后全空；chamber 不再有
     durable 账本，也不做任何恢复或播种。
   - **未挂载来源的官方完成位仍缺席**：无 ctx 即无官方 `completionUnread`（「正在阅读」的
-    解除语义也只存在于挂载 ctx）；但本轮加了受控的**判定侧读回退**——facts-only provenance 的
+    解除语义也只存在于挂载 ctx）；但受控的**判定侧读回退**——facts-only provenance 的
     来源由修正臂按逐行 host 运行边沿补蓝点、facts 候选补完成通知（§4.1/§4.2、
     design 19 §3.2/§3.5），只在**无 ctx 上报**时生效。
   - **手机读不再清桌面**：跨端读回执（原 mobile 端 `read-watermark` + gateway
@@ -1084,7 +1084,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     播种、无时间域概念；facts 只服务通知候选与渲染）。无壳路径的 `beforeBaseline` 支也只用
     host running 边沿 + status 首发位，不引入 observer 戳。
 - **有壳来源在 shell 首次观察之前的完成仍无官方位**（与上游相同）：官方位只在已挂载
-  ctx 里产生。本轮起该窗口只在**没有 facts 载体**时才是完成的盲区：P2a 镜像 / P2b 观察者与
+  ctx 里产生。该窗口只在**没有 facts 载体**时才是完成的盲区：P2a 镜像 / P2b 观察者与
   挂载无关，被观察到的 host 运行边沿 + facts 候选可补完成点与通知（§4.1/§4.2）；采样粒度
   之间起止的短任务仍可能漏（P2b 30s 基线、poll 档一个周期，design 19 §3.5 与 STATUS）。
   空闲预热仍保证连接后尽快挂载。「不做轮询级完成推导（10s 粒度会漏掉更短任务）」仍是官方位的
@@ -1210,7 +1210,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   行结构（上游 row gap 为 0，那 6px 就是它的全部间距；上游两个盒都是 16px），已登记 checklist §4.6），
   落在状态槽之后、与状态槽共用同一条 hover 换出规则——复现上游「静息标记与悬停钮共用行右缘同一格」的替换语义
   （盒宽跟齐动作盒使 hover 换入不跳字）。
-  **置顶分区已落地（Phase 4 选项 1）**：置顶行领跑所属分组、树节点与 flat 列表（上游 `sectionMembers` 语义，
+  **置顶分区（Phase 4 选项 1）**：置顶行领跑所属分组、树节点与 flat 列表（上游 `sectionMembers` 语义，
   `pin-partition.ts`）；manual 块内按宿主「最近置顶在前」，updated 保留本仓 account 序；
   `pinSetKnown !== true`（老宿主形状 / unary 兜底）时无置顶块（blank 占位行仍提前）、标记不出现、动作按 pin 方向出（宿主 pin 幂等，
   重复 pin 无害；反向才会造成假断言）；块内拖拽与账号写入未做（§5）。
@@ -1363,7 +1363,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   与聚合错误分支各自保留裸 `cc.workspaceList`（搜索结果自带 `role="tree"`，不参与动画）。**key 契约**：
   `rowKeys` 在渲染 walk 中按同一 DOM 序 push（`workspace:` / `error:workspace:` / `error:workspace-drag:` /
   `error:open:` / `session:` / `more:`，空列表初始化 `empty`），与元素上的 `data-row-key` 一一对应
-  ——例外有三类（都不是本轮引入）：过期 ghost 行与内联重命名的会话行**有键无可见元素**（ghost 只 `visibility:hidden`，
+  ——例外有三类（都不是当前引入）：过期 ghost 行与内联重命名的会话行**有键无可见元素**（ghost 只 `visibility:hidden`，
   仍占位、仍参与 FLIP），列表顶部拖拽指示 `listTopDropIndicator` **有元素无键**；尾部还有
   「添加工作区错误」不带 key：它**自身**的位置跳变不可见，但上方行被删时 keyed 行会向上滑过它已就位的
   新位置，存在 100–200ms 交叠。P5b 的派生 checkout 行已是真实行（`workspace:` 键），不再有未注册
@@ -1371,7 +1371,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   上游口径接受的退化：上游以 list 自身 rect 做视口裁剪，本仓 `.workspaceList` 不是滚动容器（滚动在 `.chamberList`）
   ⇒ 裁剪退化为「全部相交」，屏外被删行同样克隆 + 动画（`finish` 即回收，无残留）。同类边界：**行集与 key 集来自不同判据**
   ——过期 ghost 行（键仍在、`visibility:hidden` 仍占位）与自动窗口上限外的行（键仍在、组件不渲染）都不会触发退出淡出，
-  下方行瞬移；要消除得让 key 集跟着渲染判定走，本轮按上游口径接受。**删除 workspace 的 unranked-sink 瞬时不由动画器处理**：
+  下方行瞬移；要消除得让 key 集跟着渲染判定走，按上游口径接受。**删除 workspace 的 unranked-sink 瞬时不由动画器处理**：
   pinned client store 在两帧之间把被删行排到权威列表**尾部**（design 05 §2.2.1 的删除意图头注），若照渲染序走就会
   FLIP 到"本 section 最后一行"再淡出；投影侧的删除意图在**观察到下沉**的那一帧摘掉尾部 pending 段中真正沉下来的那部分，动画器收到的始终是"键消失"
   （退出克隆在原位 + 下方行上滑）——除 design 05 §2.2.1 边界清单的窄窗（投影自追加的回声行挡住走查；该窗内被删行先有一次位移）**及边界①的失败撤回**（order 写之后失败 / 回答丢失时撤下意图，行在尾部重现一帧）外，动画器收到的是"键消失"——动画器与常量因此零改动，本段不是修复落点。**门控**（照抄上游语义）：
@@ -1394,12 +1394,12 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   「新增 workspace 行」一起降级为 settle；上游的 `sessionLimits` 只在用户视图动作里变（折叠组 / reveal / 展开条
   步进，见 vendor `WorkspaceBrowser`），对数据抖动免疫——本仓的这两维（视图键 + 钳制窗口签名）正是同一效果。
   **已知偏差（登记）**：本仓的**来源折叠**（`folded`）不进键，折叠时下方行滑移而不是 settle（上游折叠组会把
-  `sessionLimits` 重置为 `COLLAPSED_SESSION_LIMIT` ⇒ settle）；属既有行为，本轮不改。**重复维**：
+  `sessionLimits` 重置为 `COLLAPSED_SESSION_LIMIT` ⇒ settle）；属既有行为，不改。**重复维**：
   `sessionRowsExpanded` 与签名里的 `expanded` 输入重叠——保留是为了让窗口规则只由 `sessionRowWindowMotionKey`
   定义（这里不手写窗口语义），行为上无影响；`prefers-reduced-motion: reduce` 整体跳过；每次动画 `finish` 即 `cancel()`，静止态永远是元素自身样式。
   回归锁：`test/session-rows/animated-rows.test.ts`（移植体与 pin 住的上游逐字一致 + 常量/key 契约/门控）。
 - **行位移期间的指针门控（`hover-motion-gate.ts` + `data-hover-gate`）**：一次提交把某 keyed 行搬到**静止指针**下时，浏览器会为该行合成 boundary 事件——本机 headless Chromium 149 实测：提交后 t≈347ms 收到 `pointerover`/`pointerenter`/`mouseover`/`mouseenter`（`clientX/Y` 与按下时相同，同期 0 个 `pointermove`），随后 `:hover` 也命中它。于是三条"指针进入"路径在用户并未指向该行时被触发：① `:hover` 揭示树（整行洗色占该行盒 93.19% 像素 + 文件夹→chevron + 计数徽标换 `+`/kebab + git 占位者换入）——即「删除会话时对应的 workspace 闪一下」；② `RowHoverCard` 的 `onPointerEnter` → 800ms 停留后卡片自己弹开；③ 会话标题跑马灯 `onPointerEnter` → 标题自己开始爬行。修法是**门控而非改动画**：机器在提交后的 layout 阶段（早于本帧 hover 更新，故 `matches(':hover')` 仍是位移前的真相）用 `getAnimations({ subtree: true })` 取候选，只给**本帧正在位移且扫描时不在 `:hover`** 的 keyed 行加 `data-hover-gate`（机器不读指针坐标；这正是本帧会 latch `:hover` 的那批）；下一个真实 `pointermove`（坐标变化）或 `pointerdown` 摘门控，并对仍在指针下的行补一次 `pointerover` 让 React 重算 enter（`pointerenter/leave` 不冒泡，React 由 `pointerover/out` 合成），卡片与跑马灯语义不丢。样式侧只给**行级** `:hover` 揭示加 `:not([data-hover-gate])` 条件（含 `more:` 披露行；归档管理器、JS 揭示半边 `:has(.rowActionsVisible)`、未分组桶的 transparent 复位都不在面内；重命名态的**抑制**规则不是揭示面，但其 hover 半边必须带同一条款——`:not()` 计一个额外伪类，不带上就会被 `(0,5,0)` 的揭示反超、改名中仍交换字形）；门控行仍可点击、kebab 与键盘揭示照旧。**实测边界**：退出克隆体不是本现象成因（后继组头的标题行框与克隆体重叠始于 t≈60ms，彼时克隆体透明度已 ≤0.215，t≥83ms 像素差 ≤maxΔ7），故动画器移植体与常量一律不动；残余 = 常驻可见控件的子元素级 hover（`.foldToggle:hover` 的墨色台阶、`.orphanBadge:hover`）与原生 `title` 提示不可门控；另一类 = **无 key 的行表面**（来源表头 `.sourceHeader:hover .sourceActions`、面板行 `.panelRow:hover`、git 未注册行 `.unregisteredRow:hover`、归档管理器组头 `.archiveManagerGroupHeader:hover`）在相邻 section 因折叠/增删行瞬时变高变矮（无动画）时被搬到静止指针下，机器只认带 `data-row-key` 的动画目标、看不见它们——两类一并登记为已知边界，实机复核与 STATUS 第 ⑤ 项同看。回归锁：`test/session-rows/hover-motion-gate.test.ts`（纯判定真值表 + 机器/接线/样式条款漂移锁）与 `test/visual-lock/git-occupant-rest-flow.test.ts`、`test/session-rows/session-row-actions.test.ts` 的揭示选择器对拍（容器与动作两侧必须同时带门控，漏一侧即红）。
-- **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-primitives/src/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是本轮要修的观感。④*把每个工作区的渲染行数（`renderCount`）直接放进 resetKey*（首版实现，已被替换）——`total ≤ visibleFirst` 且未展开时 `renderCount === total`，于是任何行增删（新建行出现、归档、ghost 到期）都会改键、把入场动画取消掉，且数组形状让「新增 workspace」也退化为 settle；被「只有被钳制的组按 id 贡献分量」取代。⑤*由渲染层手写窗口语义*（在键里自己判断 >200 / 当前行位置）——同一规则就有了第二份实现，`sessionRowWindow` 一改就漂移；被抽出纯函数 `sessionRowWindowMotionKey` 取代。
+- **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-primitives/src/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是要修的观感。④*把每个工作区的渲染行数（`renderCount`）直接放进 resetKey*（首版实现，已被替换）——`total ≤ visibleFirst` 且未展开时 `renderCount === total`，于是任何行增删（新建行出现、归档、ghost 到期）都会改键、把入场动画取消掉，且数组形状让「新增 workspace」也退化为 settle；被「只有被钳制的组按 id 贡献分量」取代。⑤*由渲染层手写窗口语义*（在键里自己判断 >200 / 当前行位置）——同一规则就有了第二份实现，`sessionRowWindow` 一改就漂移；被抽出纯函数 `sessionRowWindowMotionKey` 取代。
 - **Rejected alternatives（行位移指针门控）**：①*改退出克隆体的画序*（给 `.workspaceList` 加 `z-index`，或把覆盖层挂进列表）——实测克隆体不是成因（重叠时间线与透明度见上），改了只把叠影从"盖住"变成"透出"，还要调用方耦合 vendor 未导出的覆盖层结构。②*改 vendor 动画器退出段*——`AnimatedRows` 是逐字移植体（byte-fidelity 锁 + registry/design 登记成本），且同样不针对成因。③*容器级 `pointer-events: none` 锁*——会吞掉门控行上的真实点击（门控行必须仍是可点目标）。④*只把揭示延后到动画结束*——仍是"无指令揭示"，且会把位移前已悬停的行打断成"闪掉再回来"。
 
 - **视图选项三轴的新增几何（2026 对齐轮）**：树模式嵌套缩进 = `--chamber-tree-depth × 12px`
@@ -1553,7 +1553,7 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 6. **用 focus/隐藏收紧官方位**（失焦即未读）：与上游 `isMain` 语义分叉；
    `document.hasFocus` 只留在通知的 `requireHidden` 门。
 7. **保留 facts 轨武装**（observer 域戳）：旧「点击消不掉」的根因链，整条删除。**边界 =
-   有壳来源**：无壳来源没有官方位可用，本轮实现的上游 `beforeBaseline` 支只用 host running
+   有壳来源**：无壳来源没有官方位可用，当前实现的上游 `beforeBaseline` 支只用 host running
    边沿 + status 首发位（列表基数已知未就绪），不引入 observer 戳/水位。
 8. **把通知候选也改成官方位边沿**：会让「开着但失焦的会话完成」不再通知（官方位被
    `isMain` 抑制），与通知既有 gates 语义冲突；通知继续用运行边沿（本已独立）。
@@ -1618,10 +1618,10 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
    行的垃圾桶或外部 prune 即可（design 08 §5.5）。
 
 **已登记残余**（不进被否方案清单，见 design 08 §6.4）：只有 Git 来源的 unary 调用**直接抛错**这一
-支（客户端拿不到任何新快照）时，本轮新出现的 `path-unavailable` 无从合并出 `orphaned`；若该行
+支（客户端拿不到任何新快照）时，当前新出现的 `path-unavailable` 无从合并出 `orphaned`；若该行
 旗标历史是 worktree，则徽标与本钮都缺席、kebab 也在 `isWorktree` 门上关闭，直到下一轮成功快照或
 按 design 08 §6.3 重启来源。空快照的 deadline/`git-unavailable` 支已由 `effectiveSnapshot`
-（`git-facts.ts`：保留上一轮 repos、合并本轮 `errors`）收口。来源健康时不可达，余下这一支按已接受
+（`git-facts.ts`：保留上一轮 repos、合并当前 `errors`）收口。来源健康时不可达，余下这一支按已接受
 残余登记。
 
 ## 12. Rejected alternatives（视图选项三轴）

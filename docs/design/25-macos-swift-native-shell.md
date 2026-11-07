@@ -43,12 +43,12 @@
 | A3 | "port 从 17500 起试"与现状不符 | §3.3 改：**打包固定 17500 无退避**（`shell-core.ts:426-441` 的 resolveControlPlanePort）；dev 从 17520 起 bind 探测首个空闲端口（200 个候选），或按 `DSH_CHAMBER_SHELL_PORT` > `DSH_CHAMBER_CP_PORT` 钉死（Swift 侧 ControlPlanePort.swift）；控制面 EADDRINUSE 即失败；**dsh 实例**从 17510 起 +1 ≤5 次 |
 | A4 | Supervisor backoff 误引 "5×500ms"（那是 renderer-ready 握手语义） | §3.3 改：sidecar 重启退避另立；renderer 恢复 = 500ms 延迟 + 60s 窗口 ≤3 次 + 15s unresponsive（main.ts:1178-1267）参数化 |
 | A5/4.3 | spawn-dsh 纯 Node 分支有 basename 门；Electron 分支另带 --expose-internals | §4.3 写明基名表（{node,node.exe,dsh-chamber-helper}）+ 解析断言测试；Swift 捆绑 `Resources/sidecar/dsh-chamber-helper` 即满足（A5 反转的理由见 §4.3 Rejected alternatives） |
-| A6 | "13 命名空间"实为 4 标量 + 9 命名空间 | §4.4.1 全篇改口径（companion 同） |
+| A6 | "13 命名空间"实为 4 标量 + 9 命名空间 | §4.4.1 全篇改口径 |
 | A7 | "macOS 无 argv 扫描"不实（open-url + argv 防御双路径，main.ts:1479-1482/1687） | §4.5 改写 |
 | A8 | Electron 从未 setApplicationMenu（Cmd+C/V 靠默认菜单） | §5 E3 现状列改正，Swift 结论不变（W2 必修） |
 | A9 | §6.1/§6.4 验证项编号 E1/E2 与 §5 边沿表撞车 | 更名 **U1**（userData 实根）/ **S1**（safeStorage 判别单测） |
 | A10 | E8 对话框归属错引 design 24；desktop_pick_directory 已不存在 | E8 = 插件源 folder\|.tgz 一体化 picker（design 21 §6.5 / 13 §5.8）；**删除无消费方的 pickDirectory()** |
-| A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt | §6.1 补全（ssh-plugin-journal 已随写面退役删除，见 design 13 实现状态） |
+| A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt | §6.1 补全（ssh-plugin-journal 已随写面退役删除，见 design 13 当前基线） |
 | B1/B13 | 资源/打包路径 seam 缺失；sidecar 打包双路径解析未写 | §4.1 HostEdges 补 `resolveResource`/`isPackaged` 能力位（≈15 处直拼点 P1 参数化）；§3.2 补 sidecar 打包布局同构（tsc 产物 + dist/web + host 包 + dsh-chamber-helper/pnpm） |
 | B2 | §6.3 互斥锁设计缺陷（pidfile stale 模式正是 STATUS 判死刑的；未提 Electron 侧同落地；二次 flock 自锁） | §6.3 改 **flock(LOCK_EX\|LOCK_NB)** + 双 flavor 同实现 + fd 常驻 + 复验不二次 flock |
 | B3 | HostEdges 缺渲染器可用性门 | §4.1 补 `webViewLoading()`/`webViewContentAlive()`（或事件状态机进 core）；就绪握手"返回 false → 渲染端有界重试"语义保留 |
@@ -196,7 +196,7 @@ sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是双 flavor 宿�
 `dist/host-*-package`，sidecar 直接读 `packages/dsh-chamber-seed-*/{package.json,dist/index.js}` 拷进自己的
 `dist/dsh-chamber-seed-*/`（两条腿别混目录名）。
 
-**装配目录（`scripts/build-sidecar.mjs` 的 `sidecarLayout`，:156-172）**：
+**装配目录（`packages/desktop/scripts/build-sidecar.mjs` 的 `sidecarLayout`）**：
 `<out>/{dsh-chamber-helper, sidecar.js, package.json, dist/control-plane/, dist/dsh-chamber-seed-*/, vendor/dsh/, pnpm/}`。要点：
 - `sidecar.js` = esbuild 入口（shell-core 全家 + sidecar-ctx + node-edges + dsh-runtime）；
   `@dsh-chamber/control-plane`、`electron` 与 `./dist/control-plane/index.js` 为运行期外部；
@@ -254,7 +254,7 @@ Apple 凭据（外部阻断）。
    shellVersion}**（其余身份字段走既有 `dsh-chamber:info`，保留其 10×50ms 重试与 null 兜底，
    防双源漂移，D8）→ 异步启动尾部 `runStartupTail` 内 pre-spawn 本地实例（**绝不使 ready 帧
    延迟**；与 main.ts 同序——`controlPlane.start()` → 建窗/ready → `runStartupTail()`；
-   旧文「pre-spawn → ready」是笔误，2026-12 次序裁定按实现）。**overlap 只在 Electron 腿成立**：
+   旧文「pre-spawn → ready」是笔误，次序裁定按实现）。**overlap 只在 Electron 腿成立**：
    main.ts 不等本地 dsh，spawn 与页面加载重叠；Swift 腿的首帧被 (3) 的就绪门挡住
    （`starting`/`restarting` 期间不导航），首次冷启 = 等整段 runtime 安装收敛，**Swift 腿不重叠**。
    等待期深链不丢：`DeepLinkBuffer`（RendererRecovery.swift）有界暂存到 ready，
@@ -1090,9 +1090,9 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 
 ## 8. 实施阶段、测试与验收
 
-> companion `docs/progress/TODO.md` B§1 持有 WBS 编号索引（W-01…W-32）、双线防漂移门禁清单、W1–W7 判定
-> 标准、双端性能/产物体积 A/B 协议、中止点 A1–A8 与 dev 侧约定；分批顺序、runbook 与工期估算已随收口删除（git
-> 历史），本节只留契约性要点。
+> WBS 编号索引与未闭合外部门径见 `docs/progress/TODO.md` B§1；W1–W7 判定见本节 §8.5 与
+> `docs/checklists/gui-acceptance-checklist.md` §4.2；双端性能/产物体积 A/B 协议见 `scripts/perf/README.md`。
+> 分批顺序、runbook、工期估算与中止点 A1–A8 等历史细则已随收口删除（原文存 git 历史），本节只留契约性要点。
 
 ### 8.1 P0 POC（1–2 人周）——先证伪再立项
 
@@ -1111,7 +1111,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
    - G5 退出/隐藏/唤醒补发语义与 Electron 版一致；**hide 后 ≥30s 的 SSE/WS 心跳与唤醒即时重连实测（C1：
      backgroundThrottling:false 无 WKWebView 等价物）**；
    - C2 双 flavor 交替用同一 userData/dsh 实例时，WebKit 独立存储 jar 下会话 cookie/登录态实测并定共存语义；
-   - P0 预检：双端同机跑 boot 参考点（方法见 companion §七），只为尽早暴露引擎级数量级异常，**不作定标**。
+   - P0 预检：双端同机跑 boot 参考点（方法见 `scripts/perf/README.md`），只为尽早暴露引擎级数量级异常，**不作定标**。
    G1–G5 任一实质失败 → 回到本文档重审路线（§10 决策 1）；**C1/C2 除外**——按 §0.1 闭合清单处置（C1 失败 = 登记
    已知降级或走 keep-alive/唤醒补发；C2 = 定共存语义后继续）。
 
@@ -1168,10 +1168,22 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
 WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
 与拖拽、W4 打印/查找、W5 字体/滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**、W7 刷新率
 三工况（插电 120fps / 电池 + 低电量模式 60fps / 60Hz 外接屏不回退；判据见 §5.1、登记 deviations S-48；100Hz 类非
-整数倍屏以 `[shell-fps]` 实测为准），判定标准见 companion §七）。性能与同环境 A/B 纪律见
-`scripts/perf/README.md` + **双端性能/产物体积验收协议**（companion §七：相对门/绝对预算/能力门、注入式探针平移
-四场景、M5 双端同 tag 的 .app/dmg/zip 目标 ≤ Electron × 0.75）。原生壳专项：**最低支持版本 macOS 14.4 上首启 +
-视口越界策略（§5.2）复验**，通过后 S-50 退役判据才闭环。
+整数倍屏以 `[shell-fps]` 实测为准））。性能与同环境 A/B 纪律（方法与环境）见 `scripts/perf/README.md`；**双端性能/产物体积验收协议** = 相对门/绝对预算/能力门、注入式探针平移四场景、M5 双端同 tag 的 .app/dmg/zip 目标 ≤ Electron × 0.75（本节口径）。原生壳专项：
+**最低支持版本 macOS 14.4 上首启 + 视口越界策略（§5.2）复验**，通过后 S-50 退役判据才闭环。
+
+**WKWebView 实测项判定（W1–W7；原 TODO B§1 收口迁入）**
+
+| 项 | 通过判据 | 失败处置 |
+|---|---|---|
+| W1 剪贴板（富文本复制/粘贴） | 会话复制富文本（代码块/表格）粘贴进外部富文本 app 保结构；页内粘贴正常 | 仅纯文本/结构丢/粘贴被吞，或写剪贴板需弹权限而 UI 无流程 → 归因（渲染 vs 权限），修复预算 ≤2–3 人-日；超预算或 P0 期失败 → 回退路线评估（按 §8.1 的 G1–G5/C1/C2 门判定） |
+| W2 菜单快捷键 | Cmd+C/V/A/全选与 Electron 一致 | 快捷键无响应（first-responder 断）→ 必修 |
+| W3 富文本粘贴 + 文件拖拽 | 拖文件进 composer 成附件；拖进归档对话框入口可用 | 拖拽无反应或触发导航 → 同 W1 |
+| W4 打印/查找 | Cmd+P 弹系统打印对话框且内容合理；Cmd+F 若 dsh UI 未实现查找则 N/A（登记不视为失败） | 打印无对话框/空白 → N/A 不阻断；真失败按渲染差异排查 |
+| W5 字体/滚动/IME | 中文输入无吞字/乱序；长会话滚动无感卡顿；无方块字 | IME 丢字；滚动明显劣于 Electron；字体破损 → 归因 WebKit 渲染差异，按 W1 预算 |
+| W6 后台节流对 SSE/WS | 隐藏/失焦后 SSE/WS 心跳不断、恢复即时（≤现 Electron 语义） | 后台 WS 掉线且无法自动重连或恢复 >30s → 归因 WebKit 节流，改 keep-alive/唤醒补发（core 具备） |
+| W7 刷新率三工况 | 打包态：插电 120fps；电池 + 低电量模式 60fps（系统级帧间隔 ×2）；60Hz 外接屏不回退 | 任一工况达不到，或启动日志与 `[shell-fps]` 实测矛盾 → 归因（渲染侧偏好 vs 系统节流）；日志标「面板上限」时以 `[shell-fps]` 实测为准 |
+
+验收程序见 `docs/checklists/gui-acceptance-checklist.md` §4.2。
 
 ### 8.6 测试策略汇总
 
@@ -1199,16 +1211,15 @@ WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
 - R8 **更新双轨**：v1 blocked-available 诚实形态；Sparkle 密钥/回滚在 v2 单独评审。
 - R9 维护负担：Swift 壳新增一门语言/一条 macOS CI；需有人持续负责 Swift 侧。
 - R10 开发期双后端竞态：Electron dev 与 sidecar dev 共享 cp 端口族 → 各自
-  退避 + 端口钉死 + 独立 .dev-user-data（companion）。
+  退避 + 端口钉死 + 独立 .dev-user-data。
 - R11 Swift 侧人手单点：护栏规则集中 DSHChamber 单 target + Generated 产物减少手写面。
 - R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 + 通道数守恒断言（65 = 56 + 9；命名空间成员口径 63 = 54 + 9）。
 - R13 WKWebView devtools：默认关；发布态由设置页运行期开关显式开启（§5.1.1），`#if DEBUG`
   构建仅在**无设置文件/文件级损坏**（不动作）时保留开发便利的默认开。inspector 属信任边界。
 
-## 10. 外部决策清单（签核尚未完成；日程见 companion §八）
+## 10. 外部决策清单（签核尚未完成）
 
-1. **路线确认与 P0 先行**：是否按路线 A 启动 P0（1–2 周 POC）？验证门（G1–G5 + C1/C2）任一失败即回路线评估（中止点
-   A1–A8 见 companion）。
+1. **路线确认与 P0 先行**：是否按路线 A 启动 P0（1–2 周 POC）？验证门（G1–G5 + C1/C2）任一失败即回路线评估（中止点 A1–A8 的明细已随收口删除（git 历史），现行判定见 §8.1 的 G1–G5/C1/C2 门）。
 2. **双壳共存形态**：Swift 与 Electron 长期共存（各自发布）还是 macOS 替换？推荐**共存**，bundle id
    `com.dshchamber.native`。
 3. **更新路线**：v1 blocked-available 诚实形态 → v2 Sparkle（推荐）；或 v1 直接 Sparkle。

@@ -1,7 +1,7 @@
 # 发布前 Checklist
 
 > 按序执行，任何 ❌ 都阻断发布。依据 `.github/workflows/release.yml` 与 `docs/DEVELOPMENT.md` §5。命令前先
-> `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`。
+> `nvm use`（或等价方式）让 `node --version` 的主版本与 `.nvmrc` 一致——本清单只写流程，不写版本字面值。
 > 只写可复用流程：某次发布的叙述写 `CHANGELOG.md` 发布节，仍open的门禁写 `STATUS.md`。
 
 ```
@@ -13,7 +13,7 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 
 - [ ] 版本号只允许 `X.Y.Z` 或 `X.Y.Z-beta.N`；`alpha`/`rc` 与其他prerelease fail closed；changelog无待收尾条目。
 - [ ] 发布内容已全部合入发布分支，本地无未提交改动。
-- [ ] 若本次跨 P5b 工作树切换：发布说明含**旧池清空前提**（逐树 `workspace.delete`（归档需保留的会话）+ `git worktree remove/prune`，**不是删目录**）、**filters/LFS 降级**（checkout 为指针文件，需手动 `git lfs pull`）、**P5b opt-in**（默认关、Plugins → More 开启、重启生效）与 **Swift 保留/node 分 flavor**；不得宣称 seed 树也支持 restore。
+- [ ] 工作树换代是**已执行的一次性历史迁移**（旧池清空前提、filters/LFS 降级、opt-in 开关/重启、Swift 保留与 node 分 flavor，见 `CHANGELOG.md` 对应发布节与 design 08 §7.4）；从更早版本直接升级的用户按该节操作，本清单不再把它作为每次发布的阻断项。
 - [ ] 自上次发布以来改过workflow / 脚本路径 / action SHA → 先 `workflow_dispatch` dry_run全链（§7），不上正式tag。
 
 ## 1. 版本断言（release.yml 硬校验，preflight 同源扫描）
@@ -32,20 +32,19 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 - [ ] `CHANGELOG.md` 与 `docs/CHANGELOG.en-US.md` 均有 `## [<version>]` 节且条目对等（release.yml提取为发布正文，缺失即失败）。
 - [ ] 版本节结构完整，无重复版本标题。
 - [ ] `pnpm run verify:i18n` 全 `consistent`（改动任一语对后须 `-- --write` 刷新记录）。
-- [ ] 发布说明与 CHANGELOG 一致：LFS/clean-smudge 降级、旧池不迁移/不检测/不提示、P5b 默认关 + 重启、Swift 保留（不写“移除 sidecar”）。
+- [ ] 发布说明与 CHANGELOG 一致；历史迁移前提引用对应版本节，不重写旧叙述，也不宣称移除仍在的形态（如 Swift/sidecar）。
 
 ## 4. 测试与构建（在精确发布提交上执行）
 
-- [ ] 架构门 `verify:import-cycles` / `verify:file-budgets` / `verify:package-boundaries` 在普通 CI、发布验证及本地全量套件中执行；其余质量辅助门 `verify:i18n` / `verify:md-links` / `verify:test-wiring` / `verify:no-dead-exports` / `verify:styles` 由本地全量套件覆盖。所有门必须在下一条的本地绿色记录里出现，发布提交上不许漏跑。
-- [ ] 全量套件：`pnpm run check:full`（= `node scripts/gates/run-checks.mjs full`：static + typecheck + 全部包测试；macOS/Swift 腿由 `MACOS_CHECKS` 仅在 darwin 追加，冒烟是独立入口——本清单 §4）。上一提交的记录不算数；失败必须定位，不能用重跑代替结论。
+- [ ] 架构门 `verify:import-cycles` / `verify:file-budgets` / `verify:package-boundaries` 在普通 CI、发布验证及本地全量套件中执行；文档门 `verify:i18n` 在 ci.yml `test` 与 release.yml `validation` 的 pre-install 生成块内执行（file-only）；其余质量辅助门 `verify:md-links` / `verify:test-wiring` / `verify:no-dead-exports` / `verify:styles` 仍按 local-only 决策由本地全量套件覆盖。所有门必须在下一条的本地绿色记录里出现，发布提交上不许漏跑。
+- [ ] 全量套件：`pnpm run check:full`（= `node scripts/gates/run-checks.mjs full`：static + typecheck + 全部包测试）；darwin 上 `tests` 模式按 `scripts/gates/gate-surfaces.json` 的 `macos.*` 门（platform=darwin）追加 Swift/打包腿类，CI 侧对应 ci.yml 手写的 `test-macos`（Swift 构建/测试）与 `test-macos-pack`（`test:macos`、compiled sidecar / native GUI 装配 / Electron 产物门）两个 job——它们不在生成块内，登记见 `docs/progress/STATUS.md` §1.6，且都被发布 proof 按 job 名钉住。冒烟是独立入口。上一提交的记录不算数；失败必须定位，不能用重跑代替结论。
 - [ ] full之外的发布项：`build:dsh-runtime`、`typecheck:host-graph` / `typecheck:host-git` / `typecheck:host-archive-cleanup` / `typecheck:host-open-in`；`test:win32` 只能由CI跑。
 - [ ] 旧版本号残留扫描：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs` 为空（硬编码旧shellVersion会误触发壳升级路径）。
 - [ ] `pnpm install --frozen-lockfile` 通过；`build:renderer`、`build:host-packages`、`build:desktop` 通过。
-- [ ] 产物建成后（`build:renderer` / `build:host-packages` / `build:desktop`）跑一次 `node scripts/gates/verify-artifact-freshness.mjs --require-compare`：严格档把「一类都没比过」判红，防止 clean checkout 的 SKIP 冒充通过；`check:full` 内仍按默认档（SKIP 只 loud 打印）。
+- [ ] 产物建成后（`build:renderer` / `build:host-packages` / `build:desktop`）跑一次 `node scripts/gates/verify-artifact-freshness.mjs --require-compare`：严格档把「一类都没比过」判红，防止 clean checkout 的 SKIP 冒充通过（该门不在 `check:full`/`tests` 内，仅本清单在构建后手动跑）。
 - [ ] 打包完整性自检（`packaging-closure-checklist.md` §1–§2、§3.2）：main.ts传递import闭包 ⊆ `build.files`；产物齐全（dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。tag触发的构建腿另跑afterPack断言（vendor dsh平台 / pnpm模块 / asar内dsh-runtime）；改动打包链后先dry-run（§7）。
 - [ ] Linux腿（CI）：build-linux产AppImage(x64)；非dry_run断言 `latest-linux.yml`（beta为 `beta-linux.yml`）存在且互斥、无 `.blockmap`、runtime平台前缀 `linux-`。
-- [ ] **P5b 载荷与双形态**：forge bundle + 六个依赖包（七个 package.json；`worktree` / `tool-worktree` / `forge` / `forge-github` / `forge-session` / `client-ui-forge`）在 Electron 的 `resources/vendor/dsh/node_modules/@deepseek-ai/` 与 Swift sidecar 的 `vendor/dsh/node_modules/@deepseek-ai/` 内均有 `package.json`；实例前端 Plugins → More 可见 opt-in 开关，启用后 `forge-github` 行 disabled；Electron **打包态 + Finder 启动**下四项 UI、同池三条、node 实际创建成功；Swift 壳内同样四项 UI、同池三条、node 实际创建通过（design 08 §7.3）。任一 ❌ = 发布阻断。
-- [ ] **旧池前置验证**：升级前的旧 `$DSH_HOME/worktrees` 已按 §0 清空；升级后侧栏/快照没有旧根 checkout 行、没有 missing 行，源仓库 `git worktree list` 无旧根；P5b 派生行只来自池内。旧根会话回落源行（普通成员行），仍可 archive/delete——不是“会话丢失”。
+- [ ] **打包载荷与双形态**：forge bundle + 六个依赖包（七个 package.json；`worktree` / `tool-worktree` / `forge` / `forge-github` / `forge-session` / `client-ui-forge`）在 Electron 的 `resources/vendor/dsh/node_modules/@deepseek-ai/` 与 Swift sidecar 的 `vendor/dsh/node_modules/@deepseek-ai/` 内均有 `package.json`；实例前端 Plugins → More 可见 opt-in 开关，启用后 `forge-github` 行 disabled；Electron **打包态 + Finder 启动**下四项 UI、同池三条、node 实际创建成功；Swift 壳内同样四项 UI、同池三条、node 实际创建通过（design 08 §7.3）。任一 ❌ = 发布阻断。
 - [ ] `pnpm run smoke` 通过（未封装dsh时SKIP属正常）。
 - [ ] 原生壳视口越界策略实机目检（无自动化探针）：滚到端点、指针停在不可滚动chrome上滚动，整页不平移。
 

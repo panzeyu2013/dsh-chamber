@@ -15,44 +15,29 @@ frontend runtime — the desktop control plane consumes no host frames.**
 local-host manager behind an authenticated-by-default public request boundary. It is never
 auto-started or imported by the desktop control plane, and never becomes authoritative for dsh facts.
 
-This file is an action guide, not a record: it carries the purpose, the recording rules for
-`docs/progress/STATUS.md`, and the flows with a fixed procedure. Design lives in `docs/design/`
-(entry point `01-overview.md`), unimplemented ideas in `docs/progress/TODO.md`. The Electron↔Swift
-deviation register is `docs/progress/deviations.md` (S/T/P/G/D rows plus the reachability
-discipline); STATUS keeps a one-line pointer to it instead of duplicating dual-flavor rows.
+This file is an action guide, not a record: purpose, hard facts, and the flows with a fixed
+procedure. Document structure and writing rules are `docs/AGENTS.md`; design lives in
+`docs/design/` (entry point `01-overview.md`), unimplemented ideas in `docs/progress/TODO.md`
+and progress in `docs/progress/STATUS.md` (recording rules: `docs/progress/README.md`). The
+Electron↔Swift deviation register is `docs/progress/deviations.md` (S/T/P/G/D rows plus the
+reachability discipline); STATUS keeps a one-line pointer to it instead of duplicating dual-flavor
+rows.
 
 ## STATUS.md — what to record
 
-`docs/progress/STATUS.md` is the repository's only progress record, and it holds **open** work only:
-
-- 未完成 / 部分完成 items, including outstanding real-machine / on-device acceptance gates;
-- 设计未决 — open design questions;
-- 必要取舍 that still hold today: scope decisions (不做 / 推迟 / 移出) and known deviations or
-  degradations, each with the evidence that keeps it checkable (path, command, design reference).
-
-Change scope: **Add** an entry when open work appears or a deviation is registered; **Remove** it once
-the work lands or the deviation stops being true — the implemented baseline then lives in git history,
-`CHANGELOG.md` and `docs/design/`, never as a "completed" record here; **Update** it when module
-ownership, contracts or invariants change. Nothing else obliges an edit.
-
-STATUS.md is not a log, a changelog draft or a verification report: no `✅ 已完成 / 已落地 / 已合入`
-narrative, no batch or round ledgers, no test counts or green-gate lists, no commit hashes, no
-retelling of how something was implemented, no temporary "baseline alignment" blocks — those belong to
-the CHANGELOG release section. Record only what still carries decision value and is not already owned
-by a design document or `CHANGELOG.md`.
+`docs/progress/STATUS.md` is the repository's only progress record and holds **open** work only.
+The recording rules — what to add, remove or update, and the prohibited narratives — live in
+`docs/progress/README.md`; this file does not repeat them.
 
 ## Execution Flows
 
 ### Before release
 
-- Read and execute `docs/checklists/release-checklist.md` — any ❌ blocks the release (version
-  assertions, release preflight, changelog/i18n, the full test suite on the exact release commit,
-  build, tag, and a CI dry-run first).
-- **Release-blocking markers**: `FIXME` should block a release — it does not ship with an open
-  `FIXME` unless the reviewers explicitly agree the change can merge anyway; `TODO` means fix soon;
-  `XXX` means someday, no commitment. Pick the tag matching the urgency so anyone scanning the code
-  can tell a release blocker from a someday-maybe. `release-preflight` reports open `FIXME` markers
-  and requires the explicit `--allow-fixme` opt-out, so shipping one is a recorded decision.
+- Read and execute `docs/checklists/release-checklist.md` — any ❌ blocks the release (version,
+  preflight, changelog/i18n, full suite on the exact release commit, build, tag, CI dry-run first).
+- **Release-blocking markers**: `FIXME` blocks a release unless reviewers explicitly agree;
+  shipping one requires `release-preflight --allow-fixme` (a recorded decision). `TODO` means fix
+  soon; `XXX` means someday. Pick the tag matching urgency.
 - Changes to packaged modules, build scripts, `build.files` or `extraResources` additionally require
   `docs/checklists/packaging-closure-checklist.md`.
 - The release workflow is policy-tested: `pnpm run test:release-workflow`.
@@ -60,13 +45,11 @@ by a design document or `CHANGELOG.md`.
   at RELEASE time only — never add `[Unreleased]` entries while implementing.
 - `CHANGELOG.md` records **only the difference between adjacent formal releases** (`X.Y.Z` against the
   previous `X.Y.Z`): what someone running the previous formal release sees changed. A formal release
-  preceded by a beta series is therefore **never** the delta from the last beta
-  (`X.Y.Z` against `X.Y.Z-beta.N`): it aggregates that whole series into one release-level delta,
-  expressed once, with the beta-to-beta steps left out. A beta section obeys the same rule (it is
-  written against the previous formal release) and must still exist because `release.yml` extracts it
-  as the release body. The internal path — intermediate dsh pins, beta-to-beta deltas, batch/round
-  codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in: it belongs
-  to git history and, while still open, `docs/progress/STATUS.md`.
+  preceded by a beta series is **never** the delta from the last beta; it aggregates the series into
+  one release-level delta. A beta section obeys the same rule and must still exist because
+  `release.yml` extracts it as the release body. Internal path — intermediate pins, beta-to-beta
+  deltas, batch/round codenames, gate counts, lockfile notes, verification reports — never goes in:
+  it belongs to git history and, while still open, `docs/progress/STATUS.md`.
 
 ### Before a dsh (upstream) upgrade
 
@@ -99,7 +82,8 @@ by a design document or `CHANGELOG.md`.
   assembly's own `codesign --verify --deep --strict` and the bundle must stay free of symlinks that
   escape it.
 - `pnpm run test:macos` is the macOS-only leg (darwin lock assertions plus the packaging-script
-  suites); it runs in the ci.yml `test-macos` job, never on the ubuntu leg.
+  suites); it runs in the ci.yml `test-macos-pack` job (the Swift build/test core is `test-macos`),
+  never on the ubuntu leg.
 
 ### Before a pull request
 
@@ -168,13 +152,14 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   lock file carries no secrets and is **never the arbitration authority** — the exclusive lock itself
   is, and the recorded pid/start time are diagnostics only (design 25 §6.3).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request (current
-  set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh client
-  workspace packages; `Sparkle` 2.10.0 is the Swift native shell's only SwiftPM dependency — the
+  set: `ws`, `electron-updater`, `clsx` (client UI class composition), React/Vite, Electron, the
+  embedded pinned `pnpm`, the dsh client workspace packages; `Sparkle` 2.10.0 is the Swift native
+  shell's only SwiftPM dependency — the
   in-app update chain, added on the user's explicit ruling "D-1 = B"). `typescript` /
   `@types/*` / `node-pty` are devDependencies — `node-pty` is the root resolution target for
   `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall (`pnpm-workspace.yaml` allowBuilds note
   + `scripts/dev/ensure-harness-vendor.mjs` shim), not a runtime dependency of the chamber tree; it
   heads the runtime tree's `ALLOW_BUILDS`.
 - Removed domains and the bounded exceptions (designs 08, 17, 19, 20, 24, 28 — narrowest boundaries in
-  design 24 §2, for the open-in host domain in design 20 §6.3, and for the remote-browser launcher in
-  design 28 §13) are stated in `docs/design/01-overview.md` §4 and §5.
+  design 24 §2, for the open-in host domain in design 20 §6.3, and for the right-sidebar browser in
+  design 28 §16.9/§16.11) are stated in `docs/design/01-overview.md` §4 and §5.

@@ -135,7 +135,7 @@ type NotificationKind = 'complete' | 'ask' | 'request'
 | `ask` | `pending` **值变化到 `'question'`** | 代理提问等待回答；含直切（question→approval 等不经 undefined 的切换——vendor 组合选择器会正常产生，每个新值都通知一次）；同值重放与清除（→undefined）不发 |
 | `request` | `pending` **值变化到 `'approval' \| 'plan-review'`** | 工具/计划审批请求；直切/重放/清除语义同上 |
 
-- **facts-only provenance 的判定输入（2026-12）**：来源**没有官方 ctx 上报**时（回收壳 /
+- **facts-only provenance 的判定输入**：来源**没有官方 ctx 上报**时（回收壳 /
   从未 boot），`stepArmNow` 与 `reconcileCompletionsNow` 都读 `runtime ??
   virtualRuntimeReport(facts 快照)`（`packages/renderer/src/virtual-runtime-report.ts`）；
   虚拟投影只在有**可判** facts 快照时在场，且 `shellReport: true` **只随虚拟批**——reconcile
@@ -224,11 +224,11 @@ interface GoalFact {
   `test/session-state/goal-activation.test.ts`）。订阅就绪时的「重扫」只针对**最后一份
   已观测事实的缓存**（没有 activation 读通路，无法凭空枚举在场 active 会话——这是
   §3.2.7 开放项的一部分；v5 的「就绪后扫描在场 active 会话」按代码收敛为此语义）。
-  缓存有界（B4-1）：`MAX_ACTIVATION_CACHE = 2000`（与 P2a 的
+  缓存有界：`MAX_ACTIVATION_CACHE = 2000`（与 P2a 的
   `MAX_PENDING_GOAL_ACTIVATIONS = MAX_SESSIONS` 同值，17 §10.7），超限淘汰**最久未
   更新**的一条（LRU：更新已有键 delete+set 刷新保留序，同 P2a），warn-once 并计入
   `evictedCount()` 诊断——ghost sessionId 事件洪泛不得无界增长（回归见 §4 `test:sidebar`）。
-- **载荷与身份绑定（P1，2026-12 收敛）**：宿主载荷是嵌套
+- **载荷与身份绑定（P1）**：宿主载荷是嵌套
   `{sessionId, goal?: {id, revision, activation}}`（pin 上游
   `vendor/harness-checkout/packages/goal/goal/src/types.ts#GoalActivationChanged`）。
   `goal` 键缺席或显式 `undefined` = 宿主**明确无 goal**：清该会话缓存，值确有变化才
@@ -237,7 +237,7 @@ interface GoalFact {
   投影追上、id 匹配才应用（activation 永不转移，绝不落到投影里的另一个 goal 上）；边每
   会话至多一条、新事件覆盖，只随会话离开 report、显式 no-goal 事件、`reset()`/`dispose()`
   清除，绑定守卫（`activationOf` 仅在投影 id 匹配时合并）保证它绝不落到别的 goal 上。
-  2026-12/F14 统一：旧的「换成第三个 goalId 才 drop」出口与 `awaitingBaselineOf` 已删，
+  F14 统一：旧的「换成第三个 goalId 才 drop」出口与 `awaitingBaselineOf` 已删，
   `scan` 对任何投影 id 都保留、绝不改写绑定。保留边纪律 P2a/P2b 同规——绑定 id 与基线
   不符一律保留待匹配、不直接 drop；no-goal 事件只清已知对象 goal、不缓存到 unknown 行、
   不落到新建行（P2b 见 §3.5，P2a 见 design 17 §10.7）。
@@ -429,7 +429,7 @@ goal.updatedAt)`；`notified` 单调只升。**settleFence（A2/A3-3/B3-1 边界
 releaseDeferred（#13）、基线/首见 outcome 的静默结清无水位路径——为该会话置一次性栏
 `{ boundary, seededSince? }`，`boundary` = 置栏观测当时该会话**已吸收**的 facts 水位
 （`observation.factsMemory`，不可知 = 0）。栏对 facts 候选的裁决按序：
-① `W ≤ boundary`（含 `W == boundary`，R5/B4-3 用例钉扎）⇒ 必为被守卫的同一完成，
+① `W ≤ boundary`（含 `W == boundary`，R5 用例钉扎）⇒ 必为被守卫的同一完成，
 吞并推进 `notified`；② 否则
 `seededSince !== undefined && W > seededSince` ⇒ 播种只到 ≤ boundary，这是被守卫完成
 的首次上报，吞并推进 `notified`；③ 否则（严格高于 boundary 且无播种补偿）⇒ 真正的新
@@ -531,7 +531,7 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   `prevRunning` 原样保留（窗口内 observed+host 完成恰好通知一次；虚拟接管按 facts 逐行边沿武装蓝点）。
   ②**事实载体真正换代**（gateway facts teardown / mux 观察者 teardown / aggregate notReady 删 runtime /
   观测状态删除）才走整代撤回：清该来源 armed + armedFloor + pending + settleFence + goalKnown 并删观测
-  状态（B4-2：结算点记忆与会话身份同拍作废，恢复后首份已知 goal 事实重新成为结算点；恢复后首份观测
+  状态（结算点记忆与会话身份同拍作废，恢复后首份已知 goal 事实重新成为结算点；恢复后首份观测
   不补发窗口内完成；水位界与 armed 同拍清理），`notified/outcomes` 保持 durable，reload 不清。
   ③`forget/prune/归档/removed` 按既有作用域收敛（来源退役 `forget` 连 durable 表一并删）。**会话级遗忘**：
   会话从**在场集**消失时同拍清 armed + armedFloor + settleFence + pending + goalKnown 并进入
@@ -616,7 +616,7 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
 2. **实机验收与上游读**：打包态实机走查（§4）与本项第 1 条仍是剩余面。
 3. **侧边栏 goal 指示与 schedule/job 续跑扩展**：本期只做压制/标题/六面一致；续跑类来源（schedule/job）不在收敛器输入内（范围决策见 `docs/progress/STATUS.md`）。
 
-**已知边界/取舍（2026-12 同步登记、逐条与实现核对；原第②条「ssh-instances 注册表损坏剪远端 durable 键」已随 F13/F16/A4/F19 闭合注销——degraded 期间不剪不落盘、补偿写不落空表、重启仍 degraded，契约见 05 §7.4 与 §3.2.4）**：
+**已知边界/取舍（同步登记、逐条与实现核对；原第②条「ssh-instances 注册表损坏剪远端 durable 键」已随 F13/F16/A4/F19 闭合注销——degraded 期间不剪不落盘、补偿写不落空表、重启仍 degraded，契约见 05 §7.4 与 §3.2.4）**：
 
 - ① **无桥形态剪枝门视为已结算（F11 已修）**：500ms 预算耗尽仍无 `desktopSsh` ⇒ `bridgeVerdict='absent'`
   视同已结算放行（`live={local}` 完整）；预算内缺席与有桥未结算关门。实现见 §3.2.4。
@@ -878,7 +878,7 @@ interface ChamberSettings {
 
 ### 3.5 覆盖边界与诚实性
 
-- **ask/request 的来源分档（2026-12）**：有壳来源用 ctx 内实时 mux 事实；无壳来源按 facts
+- **ask/request 的来源分档**：有壳来源用 ctx 内实时 mux 事实；无壳来源按 facts
   通道分档——P2a 镜像行带 `pending`，P2b 观察者从 `$events` 的 waterfall/cancel 帧只观察出
   `pendingKind`（设计上**永不**回 `$events/result`，不替任何客户端结算审批/提问）。两者都经
   判定侧虚拟投影进入同一条边沿（§3.2）。**仍开放**：P2b 的 `$events` 降级窗口（宿主重负载 /
@@ -888,7 +888,7 @@ interface ChamberSettings {
   `beforeBaseline`——今天两个平面实际上都到不了该窗口：P2b 可判即 ≥1 基线；P2a 网关平面
   的行**永不带 `firstSeenByDelta`**（快照/增量都不赋该位），第二支永不触发。登记为已知窗口；
   有载体但未收到任何帧的来源不产生通知。
-- **goal 活性事实的覆盖边界（2026-12）**：压制与目标标题需要 goal 事实，通路按来源形态
+- **goal 活性事实的覆盖边界**：压制与目标标题需要 goal 事实，通路按来源形态
   分三档——
   - **P1（有挂载壳的来源）**：插件从会话投影 `projectionValues.goal` 读三值，零新增
     wire；被释放/收割释放的源在 P1 下没有 goal 事实（无壳即无投影）⇒ P2a/P2b。
@@ -980,7 +980,7 @@ interface ChamberSettings {
     `legacy-gateway`、`serviceable=false`、`stale=true`（不可用但**不触发遗忘**、held pending
     不被清）；持续 404 的重探不得清掉这些行，行与水位也绝不推进。消费侧按 §3.2.4 的在场集
     纪律仍用**原始行键**判在场；**404→ok 恢复**时由新的协议快照重新成为权威行集（自愈）。
-  **disabled / forward-skew 同规（2026-12）**：503 `session_state_disabled`、mode `off`、
+  **disabled / forward-skew 同规**：503 `session_state_disabled`、mode `off`、
   2xx 无 `protocol`、`protocol > 1` 等无载荷降级一律**保留既有行 +
   `serviceable=false`/`stale=true`**，同样**不是权威空行集**——空行集会触发遗忘结算、清
   held pending、撤掉已武装的完成点（无壳路径尤其不能失行）。该档重试无意义（等流/版本
@@ -998,7 +998,7 @@ interface ChamberSettings {
   会话重新播种（吸收水位、不产候选）；其余 facts-only 会话照常按水位严格前进通知（否则永久
   丢发），从未播种来源的恢复批仍按 G2 对全体会话播种。无壳轨/壳轨在场但从未通知的形态不再
   触发复位（COR-1 收窄），详见 §3.2.3 G5。
-  **已闭合契约（2026-12 F24）**：此前登记的「运行中由 `ok` 转 404 时旧行随空行集消失」
+  **已闭合契约（F24）**：此前登记的「运行中由 `ok` 转 404 时旧行随空行集消失」
   不再是开放项——`buildEmptySnapshot` 只在**首探 404** 出口使用；曾探到协议载荷后的 404
   一律走「保留既有行 + 标不可用」出口（上二分），无壳来源不被整体遗忘、held pending 不被清，
   404→ok 恢复为权威行集。**被否决的替代**：404 一律清成空权威集——它把无壳来源唯一的在场
@@ -1103,7 +1103,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   → 呈现（窗口恢复 / 重载有重放钩子；`applied:false` = 未派发 → 与 rejection 同一条有界重试链）
 ```
 
-- **无壳来源的角标（2026-12）**：修正臂在 `factsOnly`（facts-only provenance）下对**逐行**
+- **无壳来源的角标**：修正臂在 `factsOnly`（facts-only provenance）下对**逐行**
   host `running true → false` 边沿武装（06 §4.2），徽标投影仍走同一析取
   `armed = correctionArms[source][session] || row.completed`；facts 降级窗口保留行 + `stale`
   只冻结武装、保留记忆，**不触发遗忘**（丢点方向 fail-closed）。子代理行已在源侧排除
@@ -1223,7 +1223,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   INV1/#7 hold 与水位吸收、#2/#4 flush 与一次性标题、#3/#10/#11 drop/fail-open（#3 可达
   origin 仅 `goal-none`/`goal-paused`/`goal-changed` 三个，旧 `goal-drop` 兜底已删）、
   #9 直接 outcome、#12 ask/request 直通、#13 G4 释放、G1–G5、settleFence/结算守卫（围栏
-  边界含 `W == boundary` 必吞的 R5/B4-3 钉扎）
+  边界含 `W == boundary` 必吞的 R5 钉扎）
   （含 releaseDeferred 已被通知时的 settle-guard、boot=fresh 的 `forgetGoalKnown` 回归）、
   INV6 幂等、TL1/TL2 窗口）；
   `completion-observation` 观测组装单测（壳/facts 权威合并、候选归属、壳边沿语义
@@ -1235,7 +1235,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   及行完全缺席也登记围栏（含无栏 no-op 对照、同批 `keepFence` 清栏豁免、跨批
   `KNOWN-BOUNDARY` 各一条 2 完成/3 条钉住）、I1 不吸收水位与候选可重提、
   代际门与批次落盘，含 `FORGOTTEN_SESSION_LIMIT + 1` 会话的 FIFO 越界用例）；
-  `complete-ledger`（账本状态/围栏边界 + 撤回/卫生，含 B4-2 forgetSession/withdraw
+  `complete-ledger`（账本状态/围栏边界 + 撤回/卫生，含 forgetSession/withdraw
   同步清 goalKnown）与 `notification-store`（pending/outcomes 增量与清洗、旧 `unread.v4`/v2
   一次性迁移与旧键清理）用例；
   `badge-count` 投影用例（goal 与子代理压制、stale 守卫）；`frame-locale` 锁住
@@ -1252,7 +1252,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   `completion-arm`（五条不变式 + 边界表逐行 + 官方位为真时臂无意义）；`goal-facts`（三值
   解析/最后已知/activation 合并/身份签名）、`goal-activation`（事件制、有界重试、
   触发矩阵、绑定 id 与投影不符时保留待匹配——含「第三个 goalId 期间保留、投影回到匹配 id
-  仍应用」的 F14 回归、B4-1 缓存上限 2000/LRU/warn-once/`evictedCount` 诊断回归、
+  仍应用」的 F14 回归、缓存上限 2000/LRU/warn-once/`evictedCount` 诊断回归、
   禁 `goals/get` 源文本锁）、`session-row-state`（两个门与压制后
   state）与 `todo-attention` 的 goal 压制用例。
 - `test:control-plane`：wire 叶子 `packages/dsh-chamber-wire/src/session-state.ts`

@@ -233,7 +233,7 @@ rows，不改变官方 web profile 的其它组合层。
   cwd 解析 dsh CLI；会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
 - **环境固定**（确定性 + 隐私）：`DSH_TELEMETRY_DISABLED=1`（任意非空值即禁用）——**只关
   `session-telemetry-otel`**（上游 telemetry 贡献者的开关），**不覆盖**上游 base profile 默认挂载的
-  `session-log-deepseek`（会话日志贡献者）；后者按 2026-12 裁决「不影响功能就与上游行为一致」保持默认挂载，
+  `session-log-deepseek`（会话日志贡献者）；后者按裁决「不影响功能就与上游行为一致」保持默认挂载，
   chamber 不写 `disabled: true` patch，也不在控制面/渲染端复制或上报其内容（日志落在实例宿主 home）；
   `DSH_PERMISSION_MODE=workspace-write`（显式固定默认）；
   `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0`（目录选择交互 pin：托管宿主恒以应用内目录对话框

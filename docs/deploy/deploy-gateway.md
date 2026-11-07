@@ -227,3 +227,46 @@ bash install-gateway.sh install -y \
  ```
 
   `BASE_DIR` 必须在root家目录之外（服务用户无法穿越 `/root`，安装器preflight即拒绝），用 `DSH_CHAMBER_BASE_DIR=/var/lib/dsh-chamber` 等可达位置。安装器会：unit加 `User=dsh-chamber`； 把 `gateway/data`（`DSH_GATEWAY_STATE`：dsh-runtime/ 版本树与dsh-home/ 会话数据）、 `gateway/dsh-anchor` 与 `run/` 属主移交该用户，版本树与启动器放开traverse/读/执行（`a+rX`）； `gateway.conf`/`gateway.env` 保持root 0600（root管理命令与systemd读取需要，服务用户无需凭据），`SERVICE_USER=` 写入 `gateway.conf`（`update` 时保持）。注意：① 用户必须预先存在 （安装器不建号）；② 手工改unit加 `User=` 会被下次 `update` 重写丢失，请用 `--service-user` 或编辑 `gateway.conf` 的 `SERVICE_USER=`；③ 切换运行用户后 `$BASE_DIR` 下移交目录属主必须 匹配，异主则启动fail-closed。
+
+## 10. 回滚到旧构建前：HMAC verifier 的凭据前置
+
+> 当前 HMAC verifier 构建起 bearer token 的 verifier 是 keyed HMAC（`hmac$<64hex>`，key = `<stateDir>/auth/token-key`）；旧构建（scrypt-only）读到 `hmac$` 记录按 corrupt-v2 处理、当作 token **未配置**。因此**直接降级**的后果是：runtime token 失效（部署配置里还有 token 时，旧构建下次启动会按 config 重新播种 scrypt；`--no-auth` 的 loopback 部署则退化为匿名，只有一行 SECURITY WARNING）。依据 design 17 §7.2；store 实现见 `packages/gateway/src/store.ts`（`TOKEN_VERIFIER_RE` / `getTokenKey` / `ensureTokenKey`），CLI 见 `src/cli.ts` 与 `src/auth-cli.ts`。
+
+两种前置任选其一，都要求先**停机**。`<stateDir>` 默认 `~/.dsh-chamber/gateway/data`（安装器的 `DSH_GATEWAY_STATE`；改过 `DSH_CHAMBER_BASE_DIR` 或 state 的按实际值替换，可用 `grep DSH_GATEWAY_STATE ~/.dsh-chamber/gateway/gateway.env` 确认）。
+
+### 10.1 备份凭据对（之后升回新构建时成对恢复）
+
+```bash
+sudo systemctl stop dsh-chamber-gateway   # 非root用户态：systemctl --user stop dsh-chamber-gateway
+STATE="${DSH_GATEWAY_STATE:-$HOME/.dsh-chamber/gateway/data}"
+BK="$HOME/.dsh-chamber/cred-backup-$(date +%Y%m%d-%H%M%S)"
+install -d -m 700 "$BK"
+test -f "$STATE/tokens.json" && cp -a "$STATE/tokens.json" "$BK/"     # token verifier（hmac$…，或迁移前的 scrypt$…；仅密码部署无此文件）
+test -f "$STATE/auth/token-key" && cp -a "$STATE/auth/token-key" "$BK/" # 必须与 verifier 成对
+```
+
+`tokens.json` 与 `auth/token-key` **必须成对**备份与恢复：只恢复 verifier 而丢了 key 时，所有 hmac token 都 fail-closed（校验路径读不到 key 时 `verifyToken` 恒为 false），只能改用 §10.2 的 clear 后重设。备份目录按 token 泄露对待（verifier 与 key 同目录，等于可离线穷举），保持 0700、不要放入支持包或共享盘。
+
+**回滚本身不需要**恢复这一对——旧构建读不了 hmac，会按未配置处理（config 里有 token 时会被 scrypt 重新播种）。这一对的用途是之后**升回 HMAC 构建**且仍要沿用原 runtime token 时：停机，把 verifier 与 key **一起**放回原位，再启动；只恢复 verifier 会锁死。不再需要原 runtime token 时可只依赖 config 播种（旧构建写入 scrypt，新构建首次成功校验后就地迁移）。
+
+### 10.2 清凭据让旧构建重新播种
+
+```bash
+sudo systemctl stop dsh-chamber-gateway   # 必须先停：auth 子命令要取 state 根短租约，活 gateway 会被拒（exit 1）
+STATE="${DSH_GATEWAY_STATE:-$HOME/.dsh-chamber/gateway/data}"
+gateway auth clear --state-dir "$STATE"   # 同时删除 tokens.json 与 password-credential，并先轮换 jwt-secret
+```
+
+`gateway` 命令来自安装器的 `~/.dsh-chamber/bin/gateway`（未加 PATH 时写全路径），并以 state 目录的属主身份执行（root + systemd 安装即 root；`--service-user` 形态见 §9）。
+
+下次启动从部署配置（`gateway.conf`/`gateway.env` 里的 `--ui-password`/`--api-token` 或 `DSH_GATEWAY_*`）重新播种 verifier。前提是凭据本来就在部署配置里：token 若只经运行时（页面 `/chamber/` 或 API）设置、config 中没有，clear 后需要重新部署一个 token；`--no-auth` 部署 clear 后回到匿名。
+
+### 10.3 降级并核对
+
+```bash
+install-gateway.sh update --version <旧版本>   # 降级需在交互终端确认；非 TTY 会拒绝非交互降级
+install-gateway.sh status                     # 健康与版本
+gateway auth status --state-dir "$STATE"      # 只读投影：凭据来源（config|runtime）与写入时间，不显示秘密
+```
+
+`update` 失败会自动回滚旧版本树。启动后用原密码登录或带原 token 调用 API 验证；随后要再升回 HMAC 构建时，hmac 记录会在首次成功校验后就地迁移，无需额外操作。

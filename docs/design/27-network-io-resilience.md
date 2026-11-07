@@ -385,4 +385,4 @@ mutation → `MutationOutcomeUnknownError`（不得重试）；非 mutation →
 - **把所有 terminal 都改成自动重试**：认证/主机密钥/环境失败重试会训练错误操作并触发 fail2ban/网关锁定。拒绝。
 - **把初始可达窗口抬到 20s**：既有测试用 `10s + AUTH` 的算术钉住预算，黑洞失败从 50s 拉到 75s；改用一次性延展。拒绝。
 - **为慢探复用半开 jitter（0.5–1.0）**：均值从 60s 压到 45s，反而更频繁。拒绝；改 ±20% 对称抖动。
-- **exec/run 的 ControlMaster 复用**：控制 socket 是同用户认证旁路、绕开 exec 的 known_hosts 复检，且不省 askpass；本轮不做（见 §6/STATUS）。
+- **exec/run 的 ControlMaster 复用**：控制 socket 是同用户认证旁路、绕开 exec 的 known_hosts 复检，且不省 askpass；本版不做（见 §6/STATUS）。

@@ -4,8 +4,8 @@
 > dsh-chamber「删除已归档会话内容」宿主域（wire `archiveCleanup/{probe,purge}`）、
 > 归档管理器交互与 purge 后会话列表收敛的权威契约；未完成门禁见 docs/progress/STATUS.md。
 >
-> 承接并修订原 `docs/progress/todo/12-todo-archived-sessions.md`（归档单向、不可见、
-> 上游无 delete/unarchive wire 的事实核实见 git 历史）；该 todo 的方案 B
+> 承接并修订原 archived-sessions todo（文件已删除；归档单向、不可见、
+> 上游无 delete/unarchive wire 的事实核实见 git 历史）；原 todo 的方案 B
 > （控制面/主进程特权层直删）继续冻结（§2 边界 5），上游 wire 草案移入
 > `docs/progress/TODO.md` A§3。方案以「实例进程内的 chamber 宿主域」
 > 替代 B 的位置（理由见 §2）。
@@ -680,7 +680,7 @@ generic throw（无 status 透出）；503 `instance_unavailable` 有专类特�
   `workspace/unarchiveSession`，幂等、非破坏、无确认级）；**浏览过滤（`ArchivedFilter` 镜像）已于
   2026 对齐轮落地**（design 06 §3.4：列表与搜索同规则），管理器仍是批量维护面；rail/窄栏与移动端
   不做（范围声明见头部）。
-- **Rejected alternatives（入口呈现，本轮）**：① 保留垃圾桶字形——入口打开的是查看/恢复/删除三合一面，
+- **Rejected alternatives（入口呈现）**：① 保留垃圾桶字形——入口打开的是查看/恢复/删除三合一面，
   垃圾桶为删除代言，误述动作；② 用 `IconArchiveCheckOutlineRegular`/`IconArchiveOffOutlineRegular`——
   两枚已是视图筛选轴（仅显示/隐藏已归档）的既有字形；③ 保留 `action.purgeArchived` 键只换值——键名与
   动作相反，且 `SidebarKey` 是编译期键集，别名只会变成死键；④ 簇内再加一枚独立「归档管理器」钮——
@@ -732,9 +732,9 @@ src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **构建期�
 **D. desktop 分发/打包面**：`plugin-sync.ts`（CLIENT_GRAPH/GIT_WORKTREE/
 ARCHIVE_CLEANUP 常量 + `seedRemoteChamberHostPackages` + main.ts
 `chamberHostPackageSeeds`/`localChamberHostPackageSources`/打包路径）、
-`scripts/build-host-graph-package.mjs`（packages 数组含第三包 → desktop `dist/` 内嵌包源）、
-`test/plugins/plugin-sync.test.ts`（含并入的 seed 模板/回滚锁）/ `test/transport/ssh-provider-endpoint-auth.test.ts` /
-`test/gateway/gateway-chamber-apply-materialize.test.ts`（上传清单 fixture）。**门禁面**：根
+`packages/desktop/scripts/build-host-graph-package.mjs`（packages 数组含第三包 → desktop `dist/` 内嵌包源）、
+`test/plugins/plugin-sync.test.ts`（含并入的 seed 模板/回滚锁）/ `test/transport/ssh-provider-endpoint-auth.test.ts`。
+**门禁面**：根
 `package.json`（`build:host-*` 并入 `build:host-packages`、
 `typecheck:host-archive-cleanup`、`test:host-archive-cleanup` 别名）、
 `.github/workflows/ci.yml` 与 `release.yml` 的逐包 typecheck/test/host-build 步骤、
@@ -934,7 +934,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.2.2-rc.1 66491b05
 
 ## 11. 风险与上游收敛
 
-- **上游收敛（unarchive 已落地 0.1.7；sessions.delete 仍是未来）**：收敛路径**机制化**——上游 wire 随 vendor
+- **上游收敛（unarchive 由上游提供；sessions.delete 仍未提供）**：收敛路径**机制化**——上游 wire 随 vendor
   bump 出现即登记为独立 STATUS 跟踪项：客户端 wrapper 单点切到官方 wire（批量编排），宿主
   包按发行周期从 seed 清单退役，双协议不永久并存；§3 命名空间与官方分离保证切换无碰撞；
 - **seam 退役**：上游 wire 落地即退役 `state`/`setState`/`enqueueOperation` 三个私有面 +

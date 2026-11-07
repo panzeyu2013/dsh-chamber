@@ -209,7 +209,7 @@ flavor 皆不可得**（单 renderer 架构）。
   complete/ask/request）；
 - `docs/progress/STATUS.md`（进度唯一记录）。
 
-## 6. 完整桥修订（2026-12）
+## 6. 完整桥修订
 
 > 本节补写选中来源设置面的实现契约；权威分类仍以 §2（D1 固定入口 / D3 两组不交叉 / D4 会话待办区 / D5 性能与内存）为准，
 > §1 的壳形态描述保持。落点均在 `packages/dsh-chamber-client-ui-settings-bridge/src/client/`。

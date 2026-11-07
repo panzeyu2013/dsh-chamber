@@ -27,7 +27,7 @@
 > 故装面保守；卸面的事实（B₀ 与 S）都是本仓常量/注册表，可离线判定，因此照常放行。放开装面
 > 的前提 = 给 ssh 增加远端 family 读（扩 exec 面），须按 §7.2 的 exec 白名单纪律单独评审。
 
-> **实现状态（2026-09 C 分层裁决，已落地为本仓基线）**：chamber 无用户插件写面——
+> **当前基线**：chamber 无用户插件写面——
 > 本文的**写面半边已退役并从代码删除**：远端/本地插件的安装（apply add）、卸载（apply
 > remove）、物化（materialize / `file:` 导入）、撤销（undo journal）、npm 搜索、gateway
 > 的 install/remove/undo/tasks/materialize 路由与桌面 `gateway_plugin_apply` /
@@ -204,13 +204,11 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
 - `desktop_ssh_plugin_apply` 的 **registry add/remove** 同样须主进程确认——远端安装是持久执行面，与
   本地安装同类；取消返回 `{ok:true,cancelled:true}`（`SshPluginApplyIpcResult` 含该变体，镜像三处
   同步）。空 add/remove 的 apply 是 **no-op**（`applyPlugins` 仅在存在变更时重启），脚本无法借
-  plugin_apply 触发无变更重启。**当前实现状态**：确认链位于 gateway
-  `gateway_plugin_apply`/undo 与 ssh `ssh_plugin_undo`；ssh 端 plugin_apply / seed_host_graph /
-  materialize_add(_pick) 的主进程对话框尚未落地（gateway materialize 按设计为「pick 即意图」）——本节
-  的确认要求是契约（决策 14 桌面通道纪律），该缺口登记为开放项（design 21 §7）。
+  plugin_apply 触发无变更重启。写面 IPC（`desktop_ssh_plugin_apply`、gateway apply/undo、ssh undo）已随顶部基线
+  退役，本节的确认要求保留为历史契约；该确认缺口随写面退役关闭。
 - `desktop_local_plugin_list` 的依赖值投影脱敏：materialize 类（file:/link:/相对/绝对/`~/`）值掩码为
   `file:<hidden>`（保持双端 materialize 分类与名称匹配语义），本地绝对路径不回显 renderer。主进程
-  内部仍持有完整 manifest（`resolveLocalMaterializeDirectory` 等不受影响）。**当前实现状态**：ssh 远端
+  内部仍持有完整 manifest（`resolveLocalMaterializeDirectory` 等不受影响）。ssh 远端
   清单（SSH_PLUGIN_LIST）已由 `redactRemotePluginManifest` 掩码（与 gateway readManifest 同纪律）；
   本地清单（LOCAL_PLUGIN_LIST）仍原样透传（本地 file: 绝对路径可经 IPC 进 renderer，
   `redactLocalPluginManifest` 零生产调用点）——已知偏差，登记于 design 21 §1 决策 18 与 §7。

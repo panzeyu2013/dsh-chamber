@@ -170,7 +170,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 ### D4 唤醒恢复与连接活性
 
-> **单一所有者（会话链重构，Phase A + B1–B3 已落地）**：本节的判定与记忆不再散落在各执行器里。
+> **单一所有者（会话链重构）**：本节的判定与记忆不再散落在各执行器里。
 > ① **载波**：四条替换入口收敛为 `RemoteStreamMuxClient.requestCarrierRebuild`，判定由共享 reducer
 > （`packages/dsh-stream-state` 的 `reduceCarrier`/`decideRebuild` + `tables.json`）持有，执行器执行返回的
 > effects，并只消费包给出的两个纯谓词（`earliestRebuildAt` 的窗口时刻、`isEvidenceBackedRebuild` 的
@@ -242,7 +242,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 | 方案 | 为什么否 |
 |---|---|
-| 保留各执行器的分散判定，只在其上加锁 | 锁只能串行化同一进程内的调用；被否是因为它锁不住**跨模块不变量**（同一时限两份记账、同一阈值两处取值、同一载波两个所有者）——本轮三类症状都出自这类不变量 |
+| 保留各执行器的分散判定，只在其上加锁 | 锁只能串行化同一进程内的调用；被否是因为它锁不住**跨模块不变量**（同一时限两份记账、同一阈值两处取值、同一载波两个所有者）——本次三类症状都出自这类不变量 |
 | Swift 与 TS 各写一份载波契据、各自维护 | 漂移无法机器检出；载波阈值由纯 TS 包所有，Swift 的 `CarrierDecision` 只镜像所需决策，由 `scripts/gates/verify-stream-state-swift-parity.mjs` 与 `verify-ladder-table-parity.mjs` 钉住。Swift 窗口恢复由原生 `RendererHangWatchdog` 和 `RendererRecoveryPolicy` 所有。 |
 | 把 DOM 适配与提示运行壳也收进纯包 | 纯包必须零 import（`packages/dsh-stream-state/scripts/test.mjs` 会红）；DOM 面是各宿主特有的、与「单一所有者」判据无关——已退役的 mobile 适配包约 9 成行数正由此构成 |
 | 把所有等待形状都换成原语 | `host-graph` 的异步探测重试环表达不了（`waitForCondition` 的谓词是同步的），`journal-stream` 的 `AbortSignal.timeout` 已是标准原语；故逐站记录「不迁」而非硬套 |
@@ -543,7 +543,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
     钟**（评审发现的次生反例）——拒：会让新错误第一帧就出提示、跳过自己的 grace，改为
     `recoveredSinceHeal` 回合标记。
   - **未闭合**：`openState === 'open'` 但静默的半死形态仍无自动杠杆（无 applied cursor
-    水位时与合法长静默不可区分），收口两条：宿主侧流级 keepalive 仍未做；「让 carrier 失败永不终局」已落地（见下条）；自动重开的**实机验收未做**（判据 = 真机抖动后自查恢复，且 `local closed (upstream close, …)` 的频率不再随浏览器卡顿波动），阶梯阈值（8s/20s/120s/≤3）与 `presented` 判据的近似（document 级 `[data-chat-flow]` 存在性，非「实际可见」）同样待真机校准
+    水位时与合法长静默不可区分），收口两条：宿主侧流级 keepalive 仍未做；「让 carrier 失败永不终局」的收口见下条；自动重开的**实机验收未做**（判据 = 真机抖动后自查恢复，且 `local closed (upstream close, …)` 的频率不再随浏览器卡顿波动），阶梯阈值（8s/20s/120s/≤3）与 `presented` 判据的近似（document 级 `[data-chat-flow]` 存在性，非「实际可见」）同样待真机校准
 
 - **载体故障的可见面（提示已退役，用户裁决）**：治因 = `packages/dsh-api-gateway/src/client/remote-stream.ts` 在活世代下用有界退避（250ms 起翻倍、10s 封顶，与连接车道自身 `backoffMaxMs` 同值）重开而不逃逸为 `gateway/internal`——**不变**；事实面 = 该包 `$stream` 工厂组合 `carrierFailed` 成有界页面事实
   `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连）——**保留，诊断用**；**已退役 = open-in 的用户提示**：座席不再监听该页面事实，纯决策不再有 `carrier-churn` 通知与 `carrierChurnMs` 窗口，chip 不再以 `role="status"` 显示「对话流正在重新连接…」，`streamHealth.carrierChurn` 文案与 `LADDER_TABLES.streamHealth.carrierChurnMs` 一并删除。
@@ -644,7 +644,7 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
 **覆盖缺口（B1 后收窄）**：`loading` 面已走回分类器并由 `open-stall` 驱动 resync（仅 `openInFlight === false` 的停放态），
 不可读/masked 面（`observed === null` ⇒ 健康状态 `missing`）仍拿不到打开证据，也没有自动档，只剩显式失败文案；
 这是「上游没有的手动出口一律退役」的直接代价（用户裁决），不是自动档的遗漏。
-  - **unary 引导通道（评审证伪修正）**：此前「内容只有一个来源 = 宿主对 `session/follow` 的开帧快照，不存在 unary 引导通道」的论断**是错的**：`session/page` 在宿主是**冷读**（`sourceFor(..., false)`，不激活 Agent），而 `session/control` baseline 为每个 listed 会话给出 `projections[sid].asOfSeq`（= `cursorBefore(session.seq)` = `session.seq - 1`），是**合法 `throughSeq`**；`session/list` 行也带 `asOfSeq`（仅缓存行水位）。当前 pinned 客户端**没有** unary→窗口写入者（`eventSource` 只由 journal 变更管线写，`page` 只在已开启后的 `prepend` 里用）。**裁决：本轮未采纳**（收益 = 不依赖 follow 开帧，是触屏档唯一可能的自动内容引导；代价 = 与 follow 共用同一个宿主 `sourceFor`、**救不了宿主卡死**，只救「开帧在宿主→页面之间丢失」类，且属**非契约窗口写入面**），作为候选登记在上游提案 §4.3。
+  - **unary 引导通道（评审证伪修正）**：此前「内容只有一个来源 = 宿主对 `session/follow` 的开帧快照，不存在 unary 引导通道」的论断**是错的**：`session/page` 在宿主是**冷读**（`sourceFor(..., false)`，不激活 Agent），而 `session/control` baseline 为每个 listed 会话给出 `projections[sid].asOfSeq`（= `cursorBefore(session.seq)` = `session.seq - 1`），是**合法 `throughSeq`**；`session/list` 行也带 `asOfSeq`（仅缓存行水位）。当前 pinned 客户端**没有** unary→窗口写入者（`eventSource` 只由 journal 变更管线写，`page` 只在已开启后的 `prepend` 里用）。**裁决：未采纳**（收益 = 不依赖 follow 开帧，是触屏档唯一可能的自动内容引导；代价 = 与 follow 共用同一个宿主 `sourceFor`、**救不了宿主卡死**，只救「开帧在宿主→页面之间丢失」类，且属**非契约窗口写入面**），作为候选登记在上游提案 §4.3。
   - **已知近似（评审 B5/B6）**：① 桌面 `open` 臂一律 `action='none'`/`notice=null`（静默 socket 不发任何页面事实，提示已退役）⇒ 已开启会话的静默截断在页面上**没有任何信号/按钮**（teardown 升级让恢复在 ~20 s 内发生，但那段窗口无信号；全仓已无手动按钮，本条不再有例外差别）；② header chip 的 `presented` 是 document 级 `[data-chat-flow]` 近似，renderer 的非活动来源靠 CSS visibility 保活 ⇒ 隐藏实例可能对用户没在看的 `error` 会话执行自动 `resync()`（rc.2 唯一自动杠杆）；`loading` 的停放态（`openInFlight === false`）按 B1 由页面级 `open-stall` 走 resync，在飞 `loading` 不被跨越，隐藏 header 因此也不会对在飞 `loading` 执行任何自动动作。
   - **手动出口退役（用户裁决）**：chip 的「重新加载 / 重建对话通道」与失败遮罩上的同名
     按钮（`SessionStreamHealthChip.tsx`、`components/InstanceView.tsx`）整体移除，纯决策的
@@ -664,7 +664,7 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
        - `components/InstanceView.tsx` + 新纯模块 `frame-coalescer.ts`：相位采样的"每次变更排一帧"改为**合并采样**（首帧一次 + 间隔合并 + 尾部必采，`SURFACE_SAMPLE_MIN_INTERVAL_MS = 100`）——boot 窗口里原本等于每帧一次 React 同步 commit，语义不变（遮罩判定只依赖最终相位）。
        - Swift 壳：`RendererCrashAttribution`（纯值）+ `MainWindowController` 接线——崩溃行现在带「距上次加载完成 X.XXs（boot 窗口内/已稳定）+ 本窗口第 N 次崩溃」，恢复落地再记一条「崩溃后 X.XXs 重载完成」。归因量是静默崩溃唯一能被事后判定的依据。
 
-- **仍开放的实机验收与 soak（独立于上述已落地修复）**：① Swift 壳流式中点开 ×20（真机走查页面侧卡死是否复现）；
+- **仍开放的实机验收与 soak（独立于上述修复）**：① Swift 壳流式中点开 ×20（真机走查页面侧卡死是否复现）；
   ② soak 采集 mux churn——`control-plane.log` 的 `browser close` 频率、
   `dsh-chamber:stream-forensics`/`dsh-chamber:stream-carrier-failed` 页面事实。
 
@@ -689,7 +689,7 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
      （`dsh-chamber.evidence-log.v1`）的判定账本，控制台行
      `[chamber:evidence] <verdict> booked=<bool> <owner> {…}`。
      消费面：mux 基线（`session/list` deadline）、gateway facts 流建连 deadline（不再无条件
-     `markStale`）、权威读 `readBounded`（`onDispatched` 证明派发：未派发 ⇒ `unscheduled` booked=false 并重读一次；已派发超时仍 book `deadline`；两次都未派发 ⇒ 本轮不落任何判定）、
+     `markStale`）、权威读 `readBounded`（`onDispatched` 证明派发：未派发 ⇒ `unscheduled` booked=false 并重读一次；已派发超时仍 book `deadline`；两次都未派发 ⇒ 本次不落任何判定）、
      boot 图 `fetchWithRetry`、侧栏权威探针；boot 时由 `main.tsx` 安装探针。
       **派发记账补全（2026-10）**：`packages/dsh-chamber-client-core/src/http-budget.ts` 是页面级
       同源 unary/bundle 派发的唯一所有者（条件有界队列——上界只约束带 `queueDeadlineAt` 的调用方、local 保留槽、bundle 子帽、fail-open、
@@ -719,7 +719,7 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
      有界 defer 下限（30 s）+ 事件驱动重臂（下一次真实 list 变更或 `connection/reset`）。
   4. **Rejected alternatives**：① **抬高 deadline / 增加重试**——throttle 窗口是秒级到分钟级，
      抬到多少都可能先到期，且真故障的发现时间被同步拉长；要判的是「这条观测是否有效」，不是「等更久」。
-     ② **只静默重试、不落账**——事后无法回答「刚才那 5 s 是来源没答还是页面没被调度」，正是本轮
+     ② **只静默重试、不落账**——事后无法回答「刚才那 5 s 是来源没答还是页面没被调度」，正是本次
      排查看不到的东西。③ **只信 `document.visibilityState`**——WKWebView 失焦时它仍是 `visible`，
      那正是旧判定失效的根因；rAF 心跳缺口才是正面证据。④ **壳侧总预算 / 超时照常载入**——时间的
      所有者只能是控制面状态机，壳不设第二时基（前一轮裁决）。⑤ **调大 5s/30s 期限或新增

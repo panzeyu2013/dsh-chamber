@@ -95,10 +95,10 @@ bash install-gateway.sh
 - 认证Gateway接入 — 部署gateway后将其作为 `gateway` 来源接入，共享token / 登录密码按需配置，默认HTTPS
 - 统一侧边栏多来源导航 — 本地 + 远程各实例的session/workspace在同一dsh原生侧边栏按来源分组、平等列出（远程带颜色徽标）；单击打开、双击重命名
 - 侧边栏折叠 / 拖拽 / 强调色 — 来源级折叠开关一键收拢该来源workspace列表；server分组可拖拽排序（跨实例持久化）；来源/workspace带柔和强调色条
-- Git Worktree生命周期 — 侧边栏按实例展示仓库拓扑并闭环创建worktree → workspace → session；删除采用Git-first可重试事务：主工作树/locked/运行中目标硬阻断，dirty目标须显式勾选「丢弃未提交更改」后才以force移除（分支与已提交内容保留），可选删除本地分支
+- Git Worktree生命周期 — 工作树是源仓库内的Git checkout：每个仓库用自己的 `<repo>/.agents/worktrees` 池（首次创建写一份忽略自身的 `.gitignore`，源仓库 `git status` 保持干净）；创建不再注册workspace，侧栏在主检出下派生一枚 `kind:'checkout'` 行（分支名标题，该checkout内新建的会话按 `workingDirectory` 归到这一行）；删除只走path-based `git worktree remove`：主检出/locked/运行中/状态未知硬阻断，dirty须显式确认「丢弃未提交更改」后才force（分支与已提交内容保留），对话框可选同时删除本地分支、或归档该checkout内的会话（默认关闭）
 - 多实例并行（N-ctx） — 一个窗口内多个dsh shell共存，随时切换活动实例
 - open-in打开注册表 — 会话头部统一打开面：本地来源在Finder/文件管理器显示目录；本地或SSH远程来源可拉起VS Code（本地 `vscode://file/`、远程Remote-SSH）；支持 `dsh-chamber://` 深链
-- 远端浏览器 — 右栏「浏览器」页签为dsh + SSH来源提供地址栏：远端 `127.0.0.1`/`localhost` 端口经SSH转发到该来源专属的 `127.0.0.n` 后交给系统浏览器；公网http(s) 走既有链接腿。面板不内嵌页面、不做gateway隧道，也没有共享 `127.0.0.1` 回退
+- 远端浏览器 — 右栏「浏览器」页签是上游 `ui-sidebar-browser` iframe 路径的忠实 fork（DOM/CSS/文案/8语言/地址解析/历史/多标签/快捷键/标题/sandbox开关/store逐字同源）：任意 http(s) URL 直接内嵌 iframe（含 https 与任意 host）；唯一分支 = SSH 来源且目标主机恰为 `127.0.0.1`，先摘该来源的 forward 租约、以主进程合成的 alias `frameUrl` 作 iframe src（地址栏/历史保留逻辑 URL，代理页的 external 出口用 alias 并在租约解析中/失败时禁用），关页签即释放。桌面 CSP 放行 `blob:`/loopback/alias/`http:`/`https:`；不做 gateway 隧道、不做共享 `127.0.0.1` 回退、不做原生子视图
 - 桌面通知 — 会话完成 / 提问 / 审批时推送桌面通知，点击直达会话；设置「通知」分组可开关
 - 桌面端更新 — stable与beta配置和feed独立；静默检查，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
 - 睡眠/后台常驻 — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（macOS）；OS唤醒即时重连；保持唤醒开关
@@ -125,6 +125,7 @@ bash install-gateway.sh
 |[docs/deploy/remote-dsh-instance.md](docs/deploy/remote-dsh-instance.md)|远程dsh实例的systemd持久化说明|
 |[CONTRIBUTING.md](CONTRIBUTING.md)|贡献指南（测试/Commit/PR契约）|
 |[AGENTS.md](AGENTS.md)|开发约束（常驻仓库规则）|
+|[docs/AGENTS.md](docs/AGENTS.md)|文档标准（分层 / 写作 / 篇幅 / 文档门）|
 |[CHANGELOG.md](CHANGELOG.md)|版本变更记录|
 |[docs/design/01-overview.md](docs/design/01-overview.md)|设计入口：收拢原则、范围、移除映射|
 |[docs/progress/STATUS.md](docs/progress/STATUS.md)|完成状态、剩余偏差与验证记录|

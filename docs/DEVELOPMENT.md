@@ -12,7 +12,7 @@
 │ Electron 窗口（单 frame，loadURL 控制面 origin）                        │
 │ └─ dsh 官方前端（源码复用）                                             │
 │     ├─ 自研侧边栏插件：dsh 原生侧边栏内多来源会话导航 + chamberBridge     │
-│     ├─ Git worktree 客户端插件：实例内拓扑 + 安全创建/删除 saga           │
+│     ├─ Git worktree 客户端插件：仓库内 checkout 行 + 创建/删除           │
 │     ├─ 桥接宿主（entry 级 React）：首屏 = 本地实例纯 dsh shell           │
 │     └─ N-ctx：每实例一个 dsh shell，经 /api/i/<id>/* 同源访问            │
 ├───────────────────────────────────────────────────────────────────────┤
@@ -35,37 +35,18 @@
 
 一句话：控制面负责连接管理、每实例同源反代与静态前端服务；渲染层是dsh官方前端源码复用自建（单窗口单frame、N-ctx多实例）；桌面壳以 `dsh|gateway`×`ssh|http` 接入远程实例；显式启动的gateway在默认认证的公网边界后复用同一宿主核心。
 
-Git worktree由chamber-bundled client插件与每实例内host插件配对；控制面/桌面只分发host包并挂loader row，不解析Git事实、不经SSH执行Git。
+Git worktree由chamber-bundled client插件与每实例内host插件配对（P5b：工作树是源仓库内 `.agents/worktrees` 的 checkout，官方 forge bundle 与本插件共用同一个池）；控制面/桌面只分发host包并挂loader row，不解析Git事实、不经SSH执行Git。
 
 设计权威在 `docs/design/`（01为入口，05为v1表面/架构契约），包职责与约束在 `AGENTS.md`「Runtime Boundaries」——本文件只做一行级导航。
 
-|包|职责（一行）|
-|-|-|
-|`packages/control-plane`|连接管理器核心：web profile宿主托管、host包seed/overlay、管理REST、每实例反代、静态前端服务|
-|`packages/renderer`|自建dsh前端（源码复用）：入口构建、纯dsh首屏桥接宿主、N-ctx编排、启动图清单|
-|`packages/desktop`|Electron壳：单frame、正交目标/传输provider、远端ready-time host包分发、实例注册表、IPC、运行时管理与原生边缘|
-|`packages/cli`|CLI薄壳（serve/status/connections/host logs）|
-|`packages/gateway`|独立认证server形态（design 17）：强制认证公网边界+单本地dsh反代+运行时管理/凭据面板/种子注册表|
-|`packages/dsh-runtime`|desktop/gateway共用的纯Node dsh版本树、安装、激活、探针与两阶段回滚核心；状态仍归两宿主|
-|`packages/dsh-client-connection`|官方连接客户端仓库内拷贝+ base路径补丁|
-|`packages/dsh-client-web`|官方web shell仓库内拷贝+ boot.ts N-ctx模块表共享seam|
-|`packages/dsh-chamber-client-ui-sidebar`|自研侧边栏插件：多来源会话导航+ chamberBridge（替换官方ui-sidebar注册）|
-|`packages/dsh-chamber-client-ui-settings-connections`|自研连接设置插件（本地实例卡+远程主机CRUD/连接/systemd/日志）|
-|`packages/dsh-chamber-client-ui-settings-bridge`|自研设置壳插件（shadow官方SettingsRoot注册，服务器下拉+固定连接导航项）|
-|`packages/dsh-chamber-client-ui-layout`|自研ui-layout壳fork（layout store替换，持久化sidebarWidth）|
-|`packages/dsh-chamber-seed-client-graph`|宿主侧包：经Typert Remote只读暴露实例的客户端插件boot图|
-|`packages/dsh-chamber-client-ui-git`|chamber内建Git worktree客户端：sidebar座位、每实例拓扑、创建/删除saga；不直接执行Git|
-|`packages/dsh-chamber-client-ui-open-in`|chamber内建open-in客户端插件（官方客户端半的超集并替换其注册）：会话头部utilities槽打开按钮——本地应用目录+本地/远程VS Code，主进程OpenInApp注册表+ `dsh-chamber://` 深链|
-|`packages/dsh-chamber-client-ui-browser`|chamber内建远端浏览器客户端插件（design 28，client-only、非seed）：右栏Browser页签 + 地址栏 + 每来源forward列表；除http外全部来源出现（local只保留本机打开、dsh/gateway+ssh走转发），不内嵌页面、不做gateway隧道，打开腿归主进程 `forward.openInBrowser`|
-|`packages/dsh-chamber-seed-git-worktree`|实例内host包：按workspace/agent权威校验并执行受限、本地-only Git worktree生命周期|
-|`packages/dsh-chamber-seed-archive-cleanup`|实例内host包：已归档会话内容清理 `archiveCleanup/{probe,purge}`（只删不读、幂等；design 24）|
-|`packages/dsh-chamber-seed-open-in`|实例内host包（仅本地形态）：上游 `dsh-host-open-in-app` 的fork，经 `openInApp/*` Typert Remote提供本机应用目录、真实bundle图标与拉起（design 20 §6）|
+包职责、边界与约束的唯一家是根 [`AGENTS.md`](../AGENTS.md)「Runtime Boundaries」；各包契约见 `packages/*/README.md`。本文件不复制包表，只保留上面的架构图。
 
 ## 2. 环境搭建
 
 ### 2.1 要求
 
 - Node.js 24+（推荐LTS；TypeScript源码经Node原生类型擦除直接运行，见 `.nvmrc`）
+- Swift 工具链（仅 `verify:stream-state-swift-parity` 需要；缺失时该门失败，可显式 `DSH_CHAMBER_SWIFT_PARITY_SKIP=1` 跳过）
 - pnpm≥11（包管理器；锁文件 `pnpm-lock.yaml`）
 - git
 - macOS（`dist:desktop:mac` 打包dmg/zip需要）
@@ -125,7 +106,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows
 
 > Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
 
-### Windows 支持矩阵（design 23,推进中）
+### Windows 支持矩阵（design 23）
 
 |面|状态|
 |-|-|
@@ -136,16 +117,16 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows
 |桌面能力(M3)|AUMID/托盘候选收敛/preload loud失败已接;实机矩阵待执行|
 |决策解锁(M4)|登录自启、深链注册、open-in本地路径、SSH密码门引导已解锁(代码);NSIS卸载Run清理include已接|
 |已知限制|未签名(SmartScreen);SSH密码禁用(keys/Pageant);运行时mutation只读;0700/0600以icacls/ACL表达|
-|权威记录|`docs/design/23-windows-support.md`、`docs/progress/TODO.md`（含基线口径）|
+|权威记录|`docs/design/23-windows-support.md`；开放实机门禁与进度归 `docs/progress/STATUS.md`|
 
 ## 5. CI 与发布
 
-- `.github/workflows/ci.yml`：每次push/PR跑纯验证链（frozen install →根/gateway/runtime/host包/client插件typecheck→控制面/runtime/desktop/gateway/renderer/client/host单测〔含 `test:git`、`test:host-git`〕→ workflow action SHA门禁（`release-preflight --actions-only`起）→ smoke〔未捆绑运行时SKIP〕→ renderer/host/desktop子构建→ gateway打包安装冒烟〔`pack` →临时prefix安装→ `gateway --help`〕），不产出发布包；桌面打包与真实smoke在 `release.yml`（tag/手动触发）。
+- `.github/workflows/ci.yml`：`main` 分支推送与 PR 跑验证链（纯验证，不产出发布包）。**代码变更**跑 frozen install → 根/gateway/runtime/host包/client插件 typecheck → 控制面/runtime/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ workflow action SHA 门禁（`release-preflight --actions-only`）→ smoke〔未捆绑运行时 SKIP〕→ renderer/host/desktop 子构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕；**纯文档变更**只跑 file-only 门（判类见下条），不跑 install/typecheck/单测/构建。macOS 腿 `test-macos`（Swift 构建/测试）与 `test-macos-pack`（darwin 锁+打包脚本套件即 `test:macos`，compiled sidecar / native GUI 装配 / Electron 产物门）在 macos-latest 跑；Windows 腿 `test-windows`（PR 与 main 推送）与 `test-windows-pack`（仅 main 推送）在 windows-2022 跑。桌面打包与真实 smoke 在 `release.yml`（tag/手动触发）。
 - `.github/workflows/release.yml`：产出可分发版本——推送 `v*` tag（或手动运行，版本输入不带 `v`，可选dry-run）。发布版本仅限canonical stable `X.Y.Z` 与beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他prerelease fail closed；stable用默认desktop打包配置且只发布 `latest.yml`/`latest-mac.yml`，beta用独立 `packages/desktop/electron-builder.beta.yml` 且只发布 `beta.yml`/`beta-mac.yml`，两通道资产互斥。正式流程先建draft，构建macOS arm64（v1仅Apple Silicon）与Windows x64，完成上述macOS fail-closed校验后才翻转公开；dry-run全程零Release写入。版本断言经 `release-preflight --versions-only` 动态覆盖根、全部非fork chamber包及三个fork基线；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。`validation` job 在本地链与构建之后、第三方声明校验之前运行发布提交的 CI 证明（刻意放在重活之后：证明轮询该 SHA 的 ci.yml 运行，先做本地校验可与等待重叠；`scripts/release/verify-release-ci-proof.mjs`：该commit在 `main` 上须有一条已完成且成功的 `ci.yml` push运行，`test`、`test-windows`、`test-windows-pack`、`test-macos`、`test-macos-pack` 五个job都success（两条契约腿各自拆出一个并行的打包job：排练/装配步骤仍被证明按名字钉住，删掉或判类跳过一样红灯）；运行中有界等待，失败或未经main一律fail closed）；本地链（gateway/runtime typecheck+tests、关键control-plane/desktop/renderer/plugin/CLI/policy门禁）在它之前完成；`build-gateway` 只在GitHub Release发布经干净临时前缀安装冒烟的 `.tgz` 与同名 `.tgz.sha256`，npm publish/dist-tag延后。
-- 发布机械门禁（起）：`pnpm run release:preflight <版本>`（`scripts/release/release-preflight.mjs`）——版本统一性（含fork副本与安装器dsh常量）、changelog中英对等、i18n、workflow action SHA上游可解析、冲突标记、git干净、frozen install、test:release-workflow；发布checklist §1.5/§7要求commit前与push前各跑一次。
+- 发布机械门禁：`pnpm run release:preflight <版本>`（`scripts/release/release-preflight.mjs`）——版本统一性（含fork副本与安装器dsh常量）、changelog中英对等、i18n、workflow action SHA上游可解析、冲突标记、git干净、frozen install、test:release-workflow；发布checklist §2/§7要求commit前与push前各跑一次。
 - 发布流程（优化）：本地preflight +全量测试套件（精确发布提交）→
   commit+tag→workflow_dispatch dry_run先行（新增/修改的workflow/脚本路径/action SHA必须先dry-run验证过一次）→正式tag push。详细步骤见发布checklist。
-- 推送路径的判类：`ci.yml` 的linux链按事件分档——分支push/PR：纯文档变更（`docs/**`、根级prose白名单；判类器 `scripts/gates/classify-ci-changes.mjs`）只跑file-only门（action SHA门禁、上游触点登记表/anchors、release-workflow策略、工具单测（i18n 与设计 token 是 local-only 门，只在本地 check:static 跑，见 scripts/gates/gate-surfaces.json 的 surfaces.ci=false）），跳过install/typecheck /单测/构建/打包冒烟与windows腿；代码变更全跑。tag push：`ci.yml` 没有tag触发（CI触发策略修订）——发布改为证明而非重跑：`release.yml` 的 `validation` 跑 `verify-release-ci-proof.mjs`，要求该提交在 `main` 上已有成功的完整 `ci.yml` 运行（linux `test`、`test-windows`+`test-windows-pack`、`test-macos`+`test-macos-pack` 各腿连同其承载步都绿），运行中有限等待、失败即阻断。旧形态（linux链让位、windows腿在tag上照跑）既重复windows运行，又留下漏洞——给不在 `main` 上的提交打tag会跳过整条linux链；该漏洞现由证明堵住。release.yml与ci.yml的门禁对齐契约仍由 `release-workflow-policy.test.mjs` 从ci.yml派生断言（往ci.yml加门禁而忘了release.yml会直接红灯）。判类器fail-safe：无法证明是prose一律按代码跑；prose白名单被policy test冻结，放宽须显式改该测试。
+- 推送路径的判类：`ci.yml` 的linux链按事件分档——分支push/PR：纯文档变更（`docs/**`、根级prose白名单；判类器 `scripts/gates/classify-ci-changes.mjs`）只跑 file-only 门（`ci.test.pre`/`post` 生成块的全部步骤，单源见 `scripts/gates/gate-surfaces.json`：action SHA、上游触点、workflow 策略、工具单测、i18n 等（pre 块在 install 前、post 块在 install 后）；md-links/test-wiring/styles/no-dead-exports 仍是 local-only，只在本地 check:static 跑），跳过install/typecheck /单测/构建/打包冒烟与windows腿；代码变更全跑。tag push：`ci.yml` 没有tag触发（CI触发策略修订）——发布改为证明而非重跑：`release.yml` 的 `validation` 跑 `verify-release-ci-proof.mjs`，要求该提交在 `main` 上已有成功的完整 `ci.yml` 运行（linux `test`、`test-windows`+`test-windows-pack`、`test-macos`+`test-macos-pack` 各腿连同其承载步都绿），运行中有限等待、失败即阻断。旧形态（linux链让位、windows腿在tag上照跑）既重复windows运行，又留下漏洞——给不在 `main` 上的提交打tag会跳过整条linux链；该漏洞现由证明堵住。release.yml与ci.yml的门禁对齐契约仍由 `release-workflow-policy.test.mjs` 从ci.yml派生断言（往ci.yml加门禁而忘了release.yml会直接红灯）。判类器fail-safe：无法证明是prose一律按代码跑；prose白名单被policy test冻结，放宽须显式改该测试。
 - `ci.yml` 用 `concurrency: ci-${{ github.ref }}` 串行化同ref的推送，且**只**取消PR的旧运行：分支推送排队——纯文档推送若取消前一轮，会让被跟随的代码提交失去验证（判类器已让文档推送不跑重活，但没有"零验证"档）。`release.yml` 保持 `release-publish`+`cancel-in-progress: false`，绝不取消可能已建draft的发布。
 -两个workflow都在install之前按 `harness.commit` 固定提交引导vendor源码树。
 
@@ -162,19 +143,25 @@ packages/
   dsh-runtime/              desktop/gateway 共用的纯 Node dsh 运行时管理核心
   dsh-client-connection/    被修改的 dsh 源码 #1（base 路径补丁）
   dsh-client-web/           被修改的 dsh 源码 #2（boot.tsx N-ctx seam）
+  dsh-chamber-client-core/  共享chamber客户端内核（source-only；多来源投影 / 页面级加载内核 / unary / 多路复用通道 / settings座席）
+  dsh-chamber-wire/         host↔client中性wire契约（session-state / json-guards / mux-frame；零运行时依赖）
+  dsh-stream-state/         纯函数、无时钟的session/stream生命周期状态（design 14 §D4）
+  dsh-api-gateway/          官方api-gateway客户端半的第二实现fork（G43；按fork重放）
   dsh-chamber-client-ui-sidebar/    自研侧边栏插件：多来源会话导航 + chamberBridge
   dsh-chamber-client-ui-layout/     自研 ui-layout 壳 fork（持久化 sidebarWidth）
   dsh-chamber-client-ui-settings-connections/
                             自研连接设置插件
   dsh-chamber-client-ui-settings-bridge/
                             自研设置壳插件
+  dsh-chamber-client-ui-settings-plugin-manager/
+                            设置页 plugin manager section（design 05；不占侧栏面板）
   dsh-chamber-seed-client-graph/    自研宿主侧 host 包（只读暴露客户端插件 boot 图）
   dsh-chamber-client-ui-git/
                             Git worktree 客户端（sidebar + coordinator + saga）
   dsh-chamber-client-ui-open-in/
                             open-in 客户端插件（会话头部本地应用 / VS Code 打开）
   dsh-chamber-client-ui-browser/
-                            远端浏览器客户端插件（右栏 Browser + 每来源 forward 列表；非 seed）
+                            远端浏览器客户端插件（右栏内嵌 iframe 浏览器：上游 ui-sidebar-browser 的忠实 fork；非 seed）
   dsh-chamber-seed-open-in/
                             实例内 open-in host Remote（本机应用目录 + 图标 + 拉起；仅本地形态）
   dsh-chamber-seed-git-worktree/
@@ -185,7 +172,7 @@ docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
   progress/                 STATUS.md——唯一进度记录；TODO.md——未排期计划（A 上游/B 平台/C 功能/D 工程）；
                             deviations.md——双 flavor 偏差
-  checklists/               操作清单（发布 / dsh 升级 / 打包完整性）
+  checklists/               操作清单（发布 / dsh 升级 / 打包完整性 / GUI 验收 / 远端浏览器 / 会话权威校准 / 上游触点）
   *.en-US.md                各根文档的英文镜像
 scripts/
   install-gateway.sh        Gateway 一键安装器（用户/运维面；入口 docs/deploy/deploy-gateway.md）
@@ -205,30 +192,7 @@ vendor/
 
 ## 7. 脚本
 
-|脚本|说明|
-|-|-|
-|`pnpm run dev:control-plane`|启动控制面（管理REST+静态前端），端口17500|
-|`pnpm run dev:desktop`|Electron壳：完整窗口（控制面+ dsh前端+桌面壳）|
-|`pnpm run acceptance:gui`|GUI验收（`--live` 只读探测／`--attach`／`--dev` 走查）；流程见 `docs/checklists/gui-acceptance-checklist.md`，边界见 `scripts/gui-acceptance/README.md`|
-|`pnpm run test:gui-acceptance`|工具箱纯判据层单测（= `test:scripts:gui-acceptance`；CI跑；GUI驱动层不进CI）|
-|`pnpm run test:scripts`|`scripts/` 下全部单测单入口（组：gates/upstream/release/gui-acceptance；清单与命名规则见 `scripts/README.md` §分类规则3，兼容别名见同条）|
-|`pnpm run build:renderer`|构建dsh前端bundle|
-|`pnpm run build:host-graph`|构建host-graph包（esbuild）|
-|`pnpm run build:host-git`|构建实例内Git worktree host包（esbuild）|
-|`pnpm run build:host-packages`|依次构建host-graph / host-git-worktree / host-archive-cleanup / host-open-in四个宿主包|
-|`pnpm run build:desktop`|四个host包+ renderer +控制面编译/host包复制+ preload+dsh封装|
-|`pnpm run typecheck:git`|类型检查Git worktree客户端插件|
-|`pnpm run typecheck:browser`|类型检查远端浏览器客户端插件（design 28）|
-|`pnpm run typecheck:host-git`|类型检查实例内Git worktree host包|
-|`pnpm run test:git`|运行Git worktree客户端插件测试|
-|`pnpm run test:browser`|运行远端浏览器客户端插件测试（design 28）|
-|`pnpm run test:host-git`|运行Git host core生命周期与安全守卫测试|
-|`pnpm run dist:desktop:mac`|打包macOS应用（dmg+zip）|
-|`pnpm run dist:desktop:win`|打包Windows应用（仅nsis；须在Windows上运行）|
-|`pnpm run cli -- <args>`|仓库内CLI薄壳（serve/status/connections/host logs）|
-|`pnpm run verify:i18n`|EN ↔中文对漂移时报错（同步后用 `-- --write` 重新记录）|
-|`pnpm run verify:styles`|上游设计token合规门（S1未声明 `--dsw-*` 引用/ S2命名空间越界/ S3 0.5px发丝线/ S4字面量fallback/S5边框+阴影配对/ S6死声明/ S7全圆角配对），扫全部chamber包与可承载CSS的文件类型|
-|`pnpm run gen:notices`|按已安装依赖树重新生成THIRD_PARTY_NOTICES.md（根中文+ docs/英文镜像）|
+脚本清单以根 [`package.json`](../package.json) 的 `scripts` 为准（本文件不复制）；按改动面选门见 [`CONTRIBUTING.md`](../CONTRIBUTING.md) 与 [`docs/AGENTS.md`](AGENTS.md) §5，构建/发布链见 §4–§5。
 
 ## 8. 文档导航
 
@@ -237,10 +201,16 @@ vendor/
 |[README.md](../README.md)|用户使用（功能/安装/部署/FAQ）|
 |本文件 `docs/DEVELOPMENT.md`|开发：架构/构建/打包/CI/发布|
 |[CONTRIBUTING.md](../CONTRIBUTING.md)|贡献流程（测试/Commit/PR契约）|
-|[AGENTS.md](../AGENTS.md)|常驻仓库规则（包职责/硬性约束/STATUS记录要求）|
+|[AGENTS.md](../AGENTS.md)|常驻仓库规则（Purpose/Hard Facts/执行流/包职责）|
+|[docs/AGENTS.md](AGENTS.md)|文档标准（分层/写作/篇幅预算/文档门/评审检查表）|
+|[.agents/skills/](../.agents/skills/)|可复用工作流：chamber-doc / chamber-pre-push / chamber-code-review|
 |[CHANGELOG.md](../CHANGELOG.md)|版本变更记录|
 |[docs/design/01-overview.md](design/01-overview.md)|设计入口与收拢原则|
 |[docs/progress/STATUS.md](progress/STATUS.md)|进度总览（唯一进度记录）|
 |[docs/checklists/release-checklist.md](checklists/release-checklist.md)|发布前Checklist（版本/changelog/测试/构建/tag/CI）|
 |[docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md)|dsh版本更新前Checklist（pin一致性/fork rebase/锁文件/回归）|
 |[docs/checklists/packaging-closure-checklist.md](checklists/packaging-closure-checklist.md)|打包完整性Checklist（模块闭包vs build.files、构建链产物、打包态冒烟）|
+|[docs/checklists/gui-acceptance-checklist.md](checklists/gui-acceptance-checklist.md)|GUI 验收流程（跑什么 / 看什么 / 留什么证据）|
+|[docs/checklists/remote-browser-acceptance.md](checklists/remote-browser-acceptance.md)|右栏浏览器 v2 验收程序（本机 CDP + 真机双 flavor）|
+|[docs/checklists/session-authority-calibration.md](checklists/session-authority-calibration.md)|会话事实单一权威的真机校准（design 14 §D4）|
+|[docs/checklists/upstream-touchpoints.md](checklists/upstream-touchpoints.md)|上游触点登记与每 tag 保鲜循环（registry 生成视图；§2/§9 禁手改）|

@@ -161,7 +161,7 @@ pnpm install --lockfile-only
 pnpm install --frozen-lockfile
 pnpm run typecheck:browser
 pnpm run build:renderer
-pnpm run build:preload
+pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run build:sidecar
 pnpm run test:swift      # darwin
 pnpm run test:macos      # darwin
