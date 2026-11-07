@@ -111,6 +111,11 @@ packages/desktop/resources/primary-runtime/**
 !packages/desktop/resources/primary-runtime/README.md
 release/primary-runtime-cache/**
 
+# Office skill assets: generated at build time from the pinned upstream skill package,
+# never committed (only the directory README is tracked).
+packages/desktop/resources/office-skills/**
+!packages/desktop/resources/office-skills/README.md
+
 # Transient staging dirs around the python payload assembly (prepare-python-payload.mjs
 # removes them via try/finally; a hard kill mid-build can leave one behind — never committed).
 packages/desktop/resources/.primary-runtime-staging-*/

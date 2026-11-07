@@ -1,9 +1,9 @@
 /**
  * prepare-python-payload.test.mjs —— python 载荷 machinery 的行为与纪律用例（C5）。
  *
- * 覆盖五件事：
- *  ① 锁是唯一版本/摘要来源：结构校验、未出货目标拒绝、与 build-sidecar 的
- *     PINNED_NODE_SHA256 锁步、脚本里不得出现写死的 64 位摘要；
+ * 覆盖六件事：
+ *  ① 锁是唯一版本/摘要来源：结构校验、未出货目标拒绝、node 版本/摘要不再有 sidecar
+ *     第二 pin、脚本里不得出现写死的 64 位摘要；
  *  ② 最小解包器（tar.gz / zip，node 内置）在真实布局（符号链接、权限位、
  *     dist-info）上工作，并在越出载荷根 / CRC 不符 / 未知安装 scheme 时拒绝；
  *  ③ --dry-run 的离线保证：零 fetch、零写盘；真实路径的落位布局 + runtime.json +
@@ -13,6 +13,10 @@
  *     （下载侧与缓存复用侧各一条）；
  *  ⑤ CLI（main 级）：不带 --target 时按宿主解析目标（不得被显式 --target 守卫误拦，
  *     D1），显式未登记 target 仍要响亮拒绝。
+ *  ⑥ full 载荷的 pnpm 半边（--with-pnpm 隐含 --with-node）：版本单源（desktop
+ *     dependencies.pnpm）、构建机 node_modules/pnpm 的解析/拷贝/外平台原生包 prune、
+ *     manifest legacy components.pnpm、payloadDigest 纳入 pnpm 版本、--verify 对
+ *     components.node/pnpm 的构件核查。默认行为必须保持 python-only。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,44 +28,59 @@ import { fileURLToPath } from 'node:url'
 import { deflateRawSync, gzipSync } from 'node:zlib'
 import {
   DEFAULT_OUT_DIR,
+  DESKTOP_PNPM_VERSION,
   LOCK_PATH,
   PAYLOAD_FORMAT,
   REGISTERED_TARGETS,
   DESKTOP_VERSION,
   assertLock,
+  acceptsNpmPlatform,
   crc32,
+  desktopPnpmVersion,
   extractTarGz,
   extractWheel,
   fetchVerifiedArchive,
+  foreignPnpmNativePackages,
   formatPlan,
   materialize,
   nodeArchiveName,
+  nodeBinaryRelative,
   parseArgs,
   parseLock,
   payloadManifest,
   payloadPlan,
+  pnpmBinaryRelative,
+  pnpmDirectoryRelative,
   pythonArchiveName,
   pythonArchiveUrl,
+  resolvePnpmSource,
   resolveTarget,
   safeEntryPath,
   sha256Hex,
   verifyPayload,
 } from './prepare-python-payload.mjs'
-import { DEFAULT_NODE_VERSION, PINNED_NODE_SHA256, nodeArchiveName as sidecarNodeArchiveName } from './build-sidecar.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const SCRIPT_SOURCE = readFileSync(path.join(SCRIPT_DIR, 'prepare-python-payload.mjs'), 'utf8')
 const LOCK_TEXT = readFileSync(LOCK_PATH, 'utf8')
 const LOCK = parseLock(LOCK_TEXT, LOCK_PATH)
 
-/** 临时工作目录（每个用例自建，结束即删）。 */
+/** 临时工作目录（每个用例自建，结束即删；异步回调要等 promise 落定再删）。 */
 function withTempDir(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-python-payload-test-'))
+  const cleanup = () => rmSync(dir, { recursive: true, force: true })
+  let result
   try {
-    return fn(dir)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+    result = fn(dir)
+  } catch (error) {
+    cleanup()
+    throw error
   }
+  if (result !== null && typeof result === 'object' && typeof result.then === 'function') {
+    return result.finally(cleanup)
+  }
+  cleanup()
+  return result
 }
 
 /** tar 头（ustar，含校验和字段——readTar 只读字段，测试写的是真格式）。 */
@@ -164,6 +183,46 @@ function fakePythonArchive() {
   ])
 }
 
+/** 夹具 node 归档（extractNodePayload 只取 <root>/bin/node 与 <root>/LICENSE）。 */
+function fakeNodeArchive() {
+  const root = 'node-v' + LOCK.nodeVersion + '-darwin-arm64'
+  return buildTarGz([
+    { name: root + '/bin/node', data: '#!/bin/sh\nexit 0\n', mode: 0o755 },
+    { name: root + '/LICENSE', data: 'Node.js LICENSE\n', mode: 0o644 },
+  ])
+}
+
+/**
+ * 夹具 pnpm 包：版本必须等于 desktop dependencies.pnpm（单一来源），并带齐
+ * prune 需要的外平台 optional 原生包（@reflink 的 darwin-arm64 / darwin-x64 /
+ * win32-x64）与一个无 os/cpu 约束的普通包。只造 prune/拷贝真正读取的文件。
+ */
+function fakePnpmSource(dir, options = {}) {
+  const version = options.version ?? DESKTOP_PNPM_VERSION
+  const root = path.join(dir, 'pnpm')
+  const writeJson = (relative, value) => {
+    const target = path.join(root, relative)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, JSON.stringify(value, undefined, 2) + '\n')
+  }
+  writeJson('package.json', { name: 'pnpm', version, bin: { pnpm: 'bin/pnpm.mjs' }, main: 'bin/pnpm.mjs' })
+  if (options.bin !== false) {
+    mkdirSync(path.join(root, 'bin'), { recursive: true })
+    writeFileSync(path.join(root, 'bin', 'pnpm.mjs'), '#!/usr/bin/env node\nconsole.log("pnpm fixture")\n')
+  }
+  writeJson('dist/node_modules/plain/package.json', { name: 'plain', version: '1.0.0' })
+  writeJson('dist/node_modules/@reflink/reflink/package.json', { name: '@reflink/reflink', version: '0.1.19' })
+  writeJson('dist/node_modules/@reflink/reflink-darwin-arm64/package.json',
+    { name: '@reflink/reflink-darwin-arm64', version: '0.1.19', os: ['darwin'], cpu: ['arm64'] })
+  writeJson('dist/node_modules/@reflink/reflink-darwin-x64/package.json',
+    { name: '@reflink/reflink-darwin-x64', version: '0.1.19', os: ['darwin'], cpu: ['x64'] })
+  writeJson('dist/node_modules/@reflink/reflink-win32-x64-msvc/package.json',
+    { name: '@reflink/reflink-win32-x64-msvc', version: '0.1.19', os: ['win32'], cpu: ['x64'] })
+  mkdirSync(path.join(root, 'dist', 'node_modules', '.bin'), { recursive: true })
+  writeFileSync(path.join(root, 'dist', 'node_modules', '.bin', 'abbrev'), '#!/bin/sh\n')
+  return root
+}
+
 /** wheel 文件名 → dist-info 目录名（PEP 427/503 的测试侧推导）。 */
 function distInfoOfWheel(url) {
   const fileName = new URL(url).pathname.split('/').pop()
@@ -182,14 +241,19 @@ function fakeWheel(url) {
   ])
 }
 
-/** 以真实锁为骨架、把摘要换成本用例夹具摘要的锁（URL 清单不变）。 */
-function fixtureLock() {
+/**
+ * 以真实锁为骨架、把摘要换成本用例夹具摘要的锁（URL 清单不变）。
+ * @param options.includeNode - 同时伪造 node 归档摘要（pnpm 用例隐含 node）。
+ */
+function fixtureLock(options = {}) {
   const lock = JSON.parse(LOCK_TEXT)
   const pythonBytes = fakePythonArchive()
+  const nodeBytes = options.includeNode === true ? fakeNodeArchive() : undefined
   const wheelBytes = new Map()
   const digestOf = (bytes) => sha256Hex(bytes)
   for (const artifact of Object.values(lock.targets)) {
     artifact.pythonSha256 = digestOf(pythonBytes)
+    if (nodeBytes !== undefined) artifact.nodeSha256 = digestOf(nodeBytes)
     for (const wheel of artifact.wheels) {
       wheelBytes.set(wheel.url, fakeWheel(wheel.url))
       wheel.sha256 = digestOf(wheelBytes.get(wheel.url))
@@ -199,15 +263,18 @@ function fixtureLock() {
     wheelBytes.set(wheel.url, fakeWheel(wheel.url))
     wheel.sha256 = digestOf(wheelBytes.get(wheel.url))
   }
-  return { lock, pythonBytes, wheelBytes }
+  return { lock, pythonBytes, nodeBytes, wheelBytes }
 }
 
 /** 只认夹具 URL 的 fetch 替身（计调用次数，便于断言 dry-run 零联网）。 */
-function fixtureFetch(pythonBytes, wheelBytes) {
+function fixtureFetch(pythonBytes, wheelBytes, nodeBytes = undefined) {
   const calls = []
   const impl = async (url) => {
     calls.push(url)
-    const bytes = url.includes('cpython-') ? pythonBytes : wheelBytes.get(url)
+    let bytes
+    if (url.includes('cpython-')) bytes = pythonBytes
+    else if (url.includes('/node-v')) bytes = nodeBytes
+    else bytes = wheelBytes.get(url)
     if (bytes === undefined) return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) }
     return { ok: true, status: 200, arrayBuffer: async () => bytes }
   }
@@ -268,7 +335,7 @@ test('① 目标解析与 URL 派生（上游同式）', () => {
   )
 })
 
-test('① 计划：条目来自锁，node 可选且与 build-sidecar 表锁步', () => {
+test('① 计划：条目来自锁，node 可选；pnpm 版本进入 components 与 payloadDigest', () => {
   const plan = payloadPlan(LOCK, 'mac-arm64')
   assert.equal(plan.format, PAYLOAD_FORMAT)
   assert.equal(plan.entries.length, 1 + LOCK.targets['mac-arm64'].wheels.length + LOCK.wheels.length)
@@ -276,22 +343,42 @@ test('① 计划：条目来自锁，node 可选且与 build-sidecar 表锁步',
   assert.equal(plan.sitePackages, 'dependencies/python/lib/python3.12/site-packages')
   assert.ok(plan.entries.every((entry) => /^[0-9a-f]{64}$/u.test(entry.sha256)))
   assert.equal(plan.entries.filter((entry) => entry.kind === 'node').length, 0)
+  assert.equal(plan.pnpm, null, '默认仍是 python-only')
+  assert.equal(plan.components.node, undefined)
+  assert.equal(plan.components.pnpm, undefined)
 
   const withNode = payloadPlan(LOCK, 'mac-arm64', { includeNode: true })
   const nodeEntry = withNode.entries.find((entry) => entry.kind === 'node')
   assert.ok(nodeEntry !== undefined)
   assert.equal(nodeEntry.sha256, LOCK.targets['mac-arm64'].nodeSha256)
+  assert.equal(withNode.components.node, LOCK.nodeVersion)
 
-  for (const [target, arch] of [['mac-arm64', 'arm64']]) {
-    const name = nodeArchiveName(LOCK, target)
-    assert.equal(name, sidecarNodeArchiveName(DEFAULT_NODE_VERSION, arch), 'node 归档名必须与 build-sidecar 同式')
-    assert.equal(LOCK.nodeVersion, DEFAULT_NODE_VERSION, '锁的 nodeVersion 必须等于 build-sidecar 的默认 pin')
-    assert.equal(LOCK.targets[target].nodeSha256, PINNED_NODE_SHA256[name], 'node 摘要必须与 PINNED_NODE_SHA256 锁步')
-  }
+  // node 版本/摘要的唯一来源是载荷锁：Swift 单 Node 后 build-sidecar 不再另存 pin
+  // （本用例因此不再 import build-sidecar；锁字段自证归档名与摘要形状）。
+  assert.match(LOCK.nodeVersion, /^\d+\.\d+\.\d+$/u)
+  assert.equal(nodeArchiveName(LOCK, 'mac-arm64'), 'node-v' + LOCK.nodeVersion + '-darwin-arm64.tar.gz')
+  assert.match(LOCK.targets['mac-arm64'].nodeSha256, /^[0-9a-f]{64}$/u)
+  assert.equal(nodeBinaryRelative('darwin'), 'dependencies/node/bin/node')
+  assert.equal(nodeBinaryRelative('win32'), 'dependencies/node/bin/node.exe')
+
+  // --with-pnpm 隐含 --with-node（plan 层也保持该不变式，不依赖调用方）。
+  const pnpm = { source: path.join(path.sep, 'build', 'node_modules', 'pnpm'), version: DESKTOP_PNPM_VERSION }
+  const withPnpm = payloadPlan(LOCK, 'mac-arm64', { pnpm })
+  assert.equal(withPnpm.components.pnpm, DESKTOP_PNPM_VERSION)
+  assert.equal(withPnpm.components.node, LOCK.nodeVersion, '--with-pnpm 隐含 --with-node')
+  assert.equal(withPnpm.pnpm.version, DESKTOP_PNPM_VERSION)
+  assert.equal(withPnpm.pnpm.source, pnpm.source)
+  assert.equal(withPnpm.entries.filter((entry) => entry.kind === 'node').length, 1)
+  assert.equal(pnpmDirectoryRelative(), 'dependencies/pnpm')
+  assert.equal(pnpmBinaryRelative(), 'dependencies/pnpm/bin/pnpm.mjs')
+
   const digest = payloadPlan(LOCK, 'mac-arm64').payloadDigest
   assert.match(digest, /^[0-9a-f]{64}$/u)
   assert.equal(digest, payloadPlan(LOCK, 'mac-arm64', { includeNode: true }).payloadDigest,
-    '载荷身份只覆盖 python/wheel（node 由 build-sidecar 另行捆绑，不参与 python 身份）')
+    'node 归档不改变载荷身份（python-only 与 --with-node 共用同一 python 身份）')
+  assert.notEqual(withPnpm.payloadDigest, digest, 'pnpm 版本必须进入 payloadDigest')
+  assert.equal(withPnpm.payloadDigest, payloadPlan(LOCK, 'mac-arm64', { pnpm: { ...pnpm } }).payloadDigest,
+    '同一 pnpm 版本 ⇒ 同一身份（可复现）')
 })
 
 test('① 摘要唯一来源：脚本内不得写死 64 位 hex（只能读锁）', () => {
@@ -553,15 +640,27 @@ test('③ verifyPayload：错版本 dist-info / 缺 pythonPackages 都必须红�
   })
 })
 
-test('⑤ CLI 参数：未知参数拒绝，--dry-run/--target/--verify 解析', () => {
+test('⑤ CLI 参数：未知参数拒绝，--dry-run/--target/--verify 解析；--with-pnpm 隐含 node', () => {
   assert.throws(() => parseArgs(['--nope']), /未知参数/u)
   assert.throws(() => parseArgs(['--target']), /缺少取值/u)
   const options = parseArgs(['--dry-run', '--target', 'mac-arm64'])
   assert.equal(options.dryRun, true)
   assert.equal(options.target, 'mac-arm64')
+  assert.equal(options.withNode, false)
+  assert.equal(options.withPnpm, false)
   assert.equal(parseArgs(['--verify', '/x']).verifyDir, path.resolve('/x'))
   assert.equal(parseArgs([]).outDir, null)
   assert.equal(DEFAULT_OUT_DIR.endsWith(path.join('resources', 'primary-runtime')), true)
+
+  // --with-pnpm 隐含 --with-node（默认 python-only 不受影响）。
+  const withPnpm = parseArgs(['--with-pnpm', '--pnpm-source', '/build/pnpm'])
+  assert.equal(withPnpm.withPnpm, true)
+  assert.equal(withPnpm.withNode, true, '--with-pnpm 必须隐含 --with-node')
+  assert.equal(withPnpm.pnpmSource, path.resolve('/build/pnpm'))
+  assert.equal(parseArgs(['--with-node']).withNode, true)
+  assert.equal(parseArgs(['--with-node']).withPnpm, false)
+  // --pnpm-source 只在 --with-pnpm 下有意义：单独出现响亮拒绝，不静默忽略。
+  assert.throws(() => parseArgs(['--pnpm-source', '/build/pnpm']), /--pnpm-source 只与 --with-pnpm/u)
 })
 
 test('⑤ CLI（main 级）：不带 --target 时按宿主解析，显式未登记 target 仍拒绝', () => {
@@ -632,6 +731,20 @@ test('⑥ 载荷 manifest 可被上游 parsePrimaryRuntime 解析（四个变体
   assert.equal(withNode.arch, 'arm64')
   assert.equal(withNode.components.numpy, LOCK.pythonPackages.numpy.replace(/[-_.]+/gu, '-') === 'numpy' ? LOCK.pythonPackages.numpy : withNode.components.numpy)
   assert.equal(withNode.components.pandas, LOCK.pythonPackages.pandas)
+  assert.equal(withNode.components.pnpm, undefined, 'python-only/--with-node 的 manifest 不声明 pnpm')
+
+  // full 载荷：legacy components 带 pnpm 版本 + layout.pnpm，仍是上游可解析的 legacy 形态。
+  const withPnpm = payloadManifest(LOCK, 'mac-arm64', {
+    pnpm: { source: path.join(path.sep, 'build', 'node_modules', 'pnpm'), version: DESKTOP_PNPM_VERSION },
+  })
+  assert.equal(upstreamAccepts(withPnpm), true, '带 components.pnpm 的 legacy manifest 必须解析通过')
+  assert.equal(withPnpm.components.pnpm, DESKTOP_PNPM_VERSION)
+  assert.equal(withPnpm.components.node, LOCK.nodeVersion, '--with-pnpm 隐含 node 组件')
+  assert.equal(withPnpm.layout.pnpm, 'dependencies/pnpm/bin/pnpm.mjs')
+  assert.equal(withPnpm.layout.node, 'dependencies/node/bin/node')
+  assert.equal(withPnpm.payloadDigest, payloadPlan(LOCK, 'mac-arm64', {
+    pnpm: { source: path.join(path.sep, 'build', 'node_modules', 'pnpm'), version: DESKTOP_PNPM_VERSION },
+  }).payloadDigest, 'manifest 与 plan 的摘要同源')
 
   const legacyConsistent = JSON.parse(JSON.stringify(withNode))
   assert.equal(upstreamAccepts(legacyConsistent), true, '变体 1：legacy + numpy/pandas 同源 → 通过')
@@ -680,4 +793,238 @@ test('⑦ 锁 provenance 的 upstreamCommit 与 harness.commit 一致（pin 升�
   assert.notEqual(pin, undefined, 'harness.commit carries the pin line')
   assert.equal(JSON.parse(LOCK_TEXT).provenance.upstreamCommit, pin,
     'primary-runtime lock 记录的是当前 pin；升级后必须同行更新')
+})
+/**
+ * ⑧ full 载荷的 pnpm 半边。
+ *
+ * seam 选择：不依赖构建机真实 node_modules/pnpm——resolvePnpmSource / materialize 都接受
+ * 显式 source，CLI 用 --pnpm-source 注入夹具包；默认查找路径（packages/desktop →
+ * 仓库根 node_modules/pnpm）只用注入的 desktopDir/repoRoot 临时树验证优先级。
+ */
+const FIXTURE_PNPM_SOURCE = path.join(path.sep, 'fixture', 'node_modules', 'pnpm')
+
+test('⑧ pnpm 版本单源：desktop dependencies.pnpm；解析/版本漂移/入口缺失一律拒绝', () => {
+  // 单一来源：DESKTOP_PNPM_VERSION 直接读取 desktop package.json。
+  assert.equal(desktopPnpmVersion(), DESKTOP_PNPM_VERSION)
+  assert.equal(
+    JSON.parse(readFileSync(path.join(SCRIPT_DIR, '..', 'package.json'), 'utf8')).dependencies.pnpm,
+    DESKTOP_PNPM_VERSION,
+  )
+  withTempDir((dir) => {
+    const source = fakePnpmSource(dir)
+    const resolved = resolvePnpmSource({ source })
+    assert.equal(resolved.version, DESKTOP_PNPM_VERSION)
+    assert.equal(resolved.source, source)
+
+    // 版本漂移：绝不让两个版本的 pnpm 混进载荷。
+    const driftDir = path.join(dir, 'drift')
+    const drift = fakePnpmSource(driftDir, { version: '0.0.1' })
+    assert.throws(() => resolvePnpmSource({ source: drift }), /版本漂移/u)
+
+    // 缺入口 bin/pnpm.mjs。
+    const noBinDir = path.join(dir, 'no-bin')
+    const noBin = fakePnpmSource(noBinDir, { bin: false })
+    assert.throws(() => resolvePnpmSource({ source: noBin }), /bin\/pnpm\.mjs/u)
+
+    // 显式 source 不存在 / 不是 pnpm 包。
+    assert.throws(() => resolvePnpmSource({ source: path.join(dir, 'nope') }), /--pnpm-source/u)
+    const wrongNameDir = path.join(dir, 'wrong-name')
+    fakePnpmSource(wrongNameDir)
+    writeFileSync(path.join(wrongNameDir, 'pnpm', 'package.json'),
+      JSON.stringify({ name: 'not-pnpm', version: DESKTOP_PNPM_VERSION }))
+    assert.throws(() => resolvePnpmSource({ source: path.join(wrongNameDir, 'pnpm') }), /不是 pnpm 包/u)
+    assert.ok(source.length > 0)
+  })
+})
+
+test('⑧ pnpm 默认查找：desktop node_modules/pnpm 优先于仓库根候选', () => {
+  withTempDir((dir) => {
+    const desktopDir = path.join(dir, 'desktop')
+    const repoRoot = path.join(dir, 'repo')
+    const repoCandidate = fakePnpmSource(path.join(repoRoot, 'node_modules'))
+    // 只有仓库根候选：命中它。
+    const onlyRepo = resolvePnpmSource({ desktopDir, repoRoot })
+    assert.equal(onlyRepo.source, repoCandidate)
+    // desktop 候选也出现后：desktop 优先（pnpm 是 desktop 的直接依赖）。
+    const desktopCandidate = fakePnpmSource(path.join(desktopDir, 'node_modules'))
+    const both = resolvePnpmSource({ desktopDir, repoRoot })
+    assert.equal(both.source, desktopCandidate)
+    // 全缺：响亮给出候选路径与 --pnpm-source 提示。
+    assert.throws(
+      () => resolvePnpmSource({ desktopDir: path.join(dir, 'empty-desktop'), repoRoot: path.join(dir, 'empty-repo') }),
+      /找不到构建机 pnpm 包[\s\S]*--pnpm-source/u,
+    )
+  })
+})
+
+test('⑧ acceptsNpmPlatform：与上游 npm-platform.ts 的 os/cpu 语义一致', () => {
+  assert.equal(acceptsNpmPlatform(undefined, 'darwin'), true)
+  assert.equal(acceptsNpmPlatform(['darwin'], 'darwin'), true)
+  assert.equal(acceptsNpmPlatform(['darwin'], 'linux'), false)
+  assert.equal(acceptsNpmPlatform(['!darwin'], 'darwin'), false)
+  assert.equal(acceptsNpmPlatform(['!darwin'], 'linux'), true)
+  assert.equal(acceptsNpmPlatform(['any'], 'win32'), true)
+  assert.equal(acceptsNpmPlatform(['darwin', 'arm64'], 'arm64'), true)
+  assert.throws(() => acceptsNpmPlatform('darwin', 'darwin'), /arrays of strings/u)
+  assert.throws(() => acceptsNpmPlatform([1], 'darwin'), /arrays of strings/u)
+})
+
+test('⑧ 默认仍 python-only：不带 --with-pnpm/--with-node 不落 dependencies/pnpm', async () => {
+  // parseArgs 默认两 flag 均 false（见 ⑤），plan 层也保持 components 无 pnpm、无 node 条目。
+  const plan = payloadPlan(LOCK, 'mac-arm64')
+  assert.equal(plan.pnpm, null)
+  assert.equal(plan.entries.filter((entry) => entry.kind === 'node').length, 0)
+  const { lock, pythonBytes, wheelBytes } = fixtureLock()
+  const { impl } = fixtureFetch(pythonBytes, wheelBytes)
+  await withTempDir(async (dir) => {
+    const outDir = path.join(dir, 'primary-runtime')
+    const result = await materialize({ lock, target: 'mac-arm64', outDir, cacheDir: path.join(dir, 'cache'), fetchImpl: impl })
+    assert.equal(result.manifest.components.pnpm, undefined)
+    assert.equal(result.manifest.components.node, undefined)
+    assert.equal(existsSync(path.join(outDir, 'dependencies', 'pnpm')), false)
+    assert.equal(verifyPayload(outDir).ok, true)
+  })
+})
+
+test('⑧ pnpm 落位：dereference 拷贝 + 外平台原生包 prune + manifest/digest/verify', async () => {
+  const { lock, pythonBytes, wheelBytes, nodeBytes } = fixtureLock({ includeNode: true })
+  await withTempDir(async (dir) => {
+    const pnpmSource = fakePnpmSource(path.join(dir, 'build'))
+    const pnpm = resolvePnpmSource({ source: pnpmSource })
+    const outDir = path.join(dir, 'primary-runtime')
+    const { impl, calls } = fixtureFetch(pythonBytes, wheelBytes, nodeBytes)
+    const result = await materialize({
+      lock, target: 'mac-arm64', outDir, cacheDir: path.join(dir, 'cache'), fetchImpl: impl, pnpm,
+    })
+    assert.equal(calls.length, 2 + lock.targets['mac-arm64'].wheels.length + lock.wheels.length,
+      'node + python + wheels；pnpm 来自构建机，不下载')
+    const pnpmDir = path.join(outDir, pnpmDirectoryRelative())
+    assert.equal(readFileSync(path.join(pnpmDir, 'bin', 'pnpm.mjs'), 'utf8'), readFileSync(path.join(pnpmSource, 'bin', 'pnpm.mjs'), 'utf8'))
+    assert.equal(JSON.parse(readFileSync(path.join(pnpmDir, 'package.json'), 'utf8')).version, DESKTOP_PNPM_VERSION)
+    assert.equal(existsSync(path.join(pnpmDir, 'dist', 'node_modules', '@reflink', 'reflink-darwin-arm64')), true)
+    assert.equal(existsSync(path.join(pnpmDir, 'dist', 'node_modules', '@reflink', 'reflink')), true, '无 os/cpu 约束的包必须保留')
+    assert.equal(existsSync(path.join(pnpmDir, 'dist', 'node_modules', 'plain')), true, '普通包必须保留')
+    assert.equal(existsSync(path.join(pnpmDir, 'dist', 'node_modules', '.bin')), true, '.bin 不是包但整包拷贝保留')
+    assert.deepEqual(foreignPnpmNativePackages(pnpmDir, 'darwin', 'arm64'), [])
+    for (const pruned of ['reflink-darwin-x64', 'reflink-win32-x64-msvc']) {
+      assert.equal(existsSync(path.join(pnpmDir, 'dist', 'node_modules', '@reflink', pruned)), false, pruned + ' 必须被 prune')
+    }
+
+    const manifest = JSON.parse(readFileSync(path.join(outDir, 'runtime.json'), 'utf8'))
+    assert.equal(manifest.payload, 'complete')
+    assert.equal(manifest.components.pnpm, DESKTOP_PNPM_VERSION)
+    assert.equal(manifest.components.node, lock.nodeVersion, '--with-pnpm 隐含 node 组件')
+    assert.equal(manifest.layout.pnpm, pnpmBinaryRelative())
+    assert.equal(manifest.layout.node, nodeBinaryRelative('darwin'))
+    assert.equal(manifest.payloadDigest, result.manifest.payloadDigest)
+    assert.equal(manifest.payloadDigest, payloadPlan(lock, 'mac-arm64', { pnpm }).payloadDigest)
+    const check = verifyPayload(outDir)
+    assert.equal(check.ok, true, check.problems.join('；'))
+    // --verify 的 CLI 路径（release.yml 打包后复核同一命令）也必须对 full 载荷绿。
+    const cliVerify = spawnSync(process.execPath, [path.join(SCRIPT_DIR, 'prepare-python-payload.mjs'), '--verify', outDir], { encoding: 'utf8' })
+    assert.equal(cliVerify.status, 0, cliVerify.stderr)
+    assert.match(cliVerify.stdout, /载荷完整/u)
+
+    // 幂等：第二次落位命中缓存（fetch 不再被调用），pnpm 从源重拷。
+    const second = fixtureFetch(pythonBytes, wheelBytes, nodeBytes)
+    await materialize({
+      lock, target: 'mac-arm64', outDir, cacheDir: path.join(dir, 'cache'), fetchImpl: second.impl,
+      pnpm: resolvePnpmSource({ source: pnpmSource }),
+    })
+    assert.equal(second.calls.length, 0, '缓存命中后不得再联网')
+    assert.equal(verifyPayload(outDir).ok, true)
+  })
+})
+
+test('⑧ verify：components.node/pnpm 声明时缺件/版本漂移/夹带外平台必须红（fail-closed）', async () => {
+  const { lock, pythonBytes, wheelBytes, nodeBytes } = fixtureLock({ includeNode: true })
+  await withTempDir(async (dir) => {
+    const pnpmSource = fakePnpmSource(path.join(dir, 'build'))
+    const outDir = path.join(dir, 'primary-runtime')
+    const pnpm = resolvePnpmSource({ source: pnpmSource })
+    const build = async () => {
+      const { impl } = fixtureFetch(pythonBytes, wheelBytes, nodeBytes)
+      await materialize({
+        lock, target: 'mac-arm64', outDir, cacheDir: path.join(dir, 'cache'), fetchImpl: impl,
+        pnpm: resolvePnpmSource({ source: pnpmSource }),
+      })
+    }
+    await build()
+    assert.equal(verifyPayload(outDir).ok, true)
+
+    // ① 缺 pnpm 入口。
+    rmSync(path.join(outDir, 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'))
+    const missingBin = verifyPayload(outDir)
+    assert.equal(missingBin.ok, false)
+    assert.ok(missingBin.problems.some((problem) => problem.includes('components.pnpm')), missingBin.problems.join('；'))
+    await build()
+
+    // ② pnpm package.json 版本与 components.pnpm 不一致。
+    writeFileSync(path.join(outDir, 'dependencies', 'pnpm', 'package.json'),
+      JSON.stringify({ name: 'pnpm', version: '0.0.1' }))
+    const drift = verifyPayload(outDir)
+    assert.equal(drift.ok, false)
+    assert.ok(drift.problems.some((problem) => problem.includes('components.pnpm')), drift.problems.join('；'))
+    await build()
+
+    // ③ 夹带外平台原生包（prune 漏掉的回归）。
+    const foreignDir = path.join(outDir, 'dependencies', 'pnpm', 'dist', 'node_modules', '@reflink', 'reflink-win32-x64-msvc')
+    mkdirSync(foreignDir, { recursive: true })
+    writeFileSync(path.join(foreignDir, 'package.json'),
+      JSON.stringify({ name: '@reflink/reflink-win32-x64-msvc', os: ['win32'], cpu: ['x64'] }))
+    const foreign = verifyPayload(outDir)
+    assert.equal(foreign.ok, false)
+    assert.ok(foreign.problems.some((problem) => problem.includes('夹带')), foreign.problems.join('；'))
+    await build()
+
+    // ④ components.node 声明了 node 但二进制缺失。
+    rmSync(path.join(outDir, nodeBinaryRelative('darwin')))
+    const missingNode = verifyPayload(outDir)
+    assert.equal(missingNode.ok, false)
+    assert.ok(missingNode.problems.some((problem) => problem.includes('components.node')), missingNode.problems.join('；'))
+    await build()
+    assert.equal(verifyPayload(outDir).ok, true)
+
+    // ⑤ node 无执行位：--verify 是发布腿的第二道门，必须自己红（不只靠 build-sidecar）。
+    const nodeFile = path.join(outDir, nodeBinaryRelative('darwin'))
+    rmSync(nodeFile)
+    writeFileSync(nodeFile, 'node', { mode: 0o644 })
+    const nonExecutable = verifyPayload(outDir)
+    assert.equal(nonExecutable.ok, false)
+    assert.ok(nonExecutable.problems.some((problem) => problem.includes('可执行位')), nonExecutable.problems.join('；'))
+    await build()
+    assert.equal(verifyPayload(outDir).ok, true)
+  })
+})
+
+test('⑧ CLI：--with-pnpm/--pnpm-source 的 dry-run 不写盘；默认 python-only 计划不含 pnpm', () => {
+  const cliPath = path.join(SCRIPT_DIR, 'prepare-python-payload.mjs')
+  const runCli = (args) => spawnSync(process.execPath, [cliPath, ...args], { encoding: 'utf8' })
+  withTempDir((dir) => {
+    const source = fakePnpmSource(path.join(dir, 'build'))
+    const outDir = path.join(dir, 'out')
+    const dryRun = runCli(['--dry-run', '--target', 'mac-arm64', '--with-pnpm', '--pnpm-source', source, '--out', outDir])
+    assert.equal(dryRun.status, 0, dryRun.stderr)
+    assert.ok(dryRun.stdout.includes('pnpm: ' + DESKTOP_PNPM_VERSION), 'dry-run 计划必须打印 pnpm 版本与来源')
+    assert.match(dryRun.stdout, /"pnpm":/u, 'components 必须声明 pnpm 版本')
+    assert.equal(existsSync(outDir), false, '--dry-run 不得写盘')
+
+    // 默认（无 --with-pnpm/--with-node）仍 python-only：计划里没有 pnpm/node 载荷。
+    const plain = runCli(['--dry-run', '--target', 'mac-arm64', '--out', outDir])
+    assert.equal(plain.status, 0, plain.stderr)
+    assert.doesNotMatch(plain.stdout, /"pnpm":/u)
+    assert.equal(plain.stdout.includes('[node]'), false, '默认计划不得有 node 下载条目')
+    assert.match(plain.stdout, /pnpm: 未启用/u)
+    assert.equal(existsSync(outDir), false)
+
+    // 版本漂移 / 源缺失：--with-pnpm 在动网络之前就响亮失败。
+    const drift = fakePnpmSource(path.join(dir, 'drift'), { version: '0.0.1' })
+    const badVersion = runCli(['--dry-run', '--target', 'mac-arm64', '--with-pnpm', '--pnpm-source', drift])
+    assert.equal(badVersion.status, 1)
+    assert.match(badVersion.stderr, /版本漂移/u)
+    const missingSource = runCli(['--dry-run', '--target', 'mac-arm64', '--with-pnpm', '--pnpm-source', path.join(dir, 'nope')])
+    assert.equal(missingSource.status, 1)
+    assert.match(missingSource.stderr, /--pnpm-source/u)
+    assert.ok(source.length > 0)
+  })
 })

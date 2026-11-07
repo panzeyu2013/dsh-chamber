@@ -56,6 +56,7 @@ import {
   type SeedEntry,
 } from './host-graph-seed.ts'
 import { resolveLocalHostGraphOverlay, seedDshHomeDefaults } from './local-host-seeding.ts'
+import type { StartupPluginCapabilities } from './startup-plugin-rows.ts'
 import { withControlLogFile } from './log-file.ts'
 import type { Logger } from './types.ts'
 import { applyHttpServerLimits, createLimitedServer, HTTP_SERVER_LIMITS, installConnectionSoftCap, installHeaderDeadline, isSoftCapRefusedSocket, type HttpServerLimits } from './http-limits.ts'
@@ -212,6 +213,15 @@ export interface ControlPlaneOptions {
    *  seed lifecycle. This row is `localOnly`: the local profile is the only shape
    *  that receives it. */
   hostOpenInPackageSourceDir?: string
+  /**
+   * Local startup upstream plugin rows (Swift): the resource capability roots the
+   * sidecar entry resolves — the primary-runtime payload and the office-skills assets
+   * it ships as siblings of `sidecar.js`. Absent = no upstream startup row is mounted
+   * (Electron/CLI/tests). Every spawn re-plans the two rows: each is gated
+   * independently on its resources (missing resources = diagnosed skip, never a spawn
+   * failure), and a row the user profile patch already mounts is skipped.
+   */
+  startupPluginCapabilities?: StartupPluginCapabilities
   /**
    * Seed registry: additional chamber seed entries beyond the four base host
    * packages — the seam for browser-side client plugins in hosted frontends. No
@@ -570,6 +580,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       safeMode,
       // 宿主期望集必须跟随本次实际 seed 的条目，否则 host 包缺失时 exact-set 裁决会误判激活失败。
       onSeededProbeDomains: domains => { seededProbeDomains = domains },
+      // Swift 本地启动装配：payload + office-skills 能力根；每 spawn 重新门控（缺资源
+      // 只诊断跳过，不阻塞 spawn）。缺省 = 不挂任何上游行。
+      ...(options.startupPluginCapabilities === undefined
+        ? {}
+        : { startupPluginCapabilities: options.startupPluginCapabilities }),
     })
   }
 

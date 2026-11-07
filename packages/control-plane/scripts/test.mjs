@@ -153,6 +153,12 @@ const GROUPS = {
   // plugins: 宿主图种子、cordis insert 渲染与受保护插件集合判定
   'plugins': [
     'test/plugins/host-graph-seed.test.ts',
+    // Swift 本地启动装配：本地 spawn 的 --patch overlay 追加的上游插件行
+    // （primary-runtime/workspace-dependencies + office-skills）planner/renderer：
+    // 资源独立门控、installed/pnpm source 双 workspace 布局、payload 平台/架构锁、
+    // 用户 profile 冲突复用、golden bytes 与非法输入抛错。
+    // 纯 node（node:fs/node:path + 本地 cordis-inserts parser），无需 node_modules。
+    'test/plugins/startup-plugin-rows.test.ts',
     // 新 host 域的接线锁步（audit arch-03 P1-1）：以 CHAMBER_HOST_PACKAGES 为驱动，
     // 断言 desktop 两 flavor 的 sourceDir 映射、dsh-runtime 的探针常量与
     // runtime-probes 的每域分支都覆盖注册表；漏登记任一处即红，且远端映射缺键

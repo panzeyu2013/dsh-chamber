@@ -77,7 +77,13 @@ The recording rules — what to add, remove or update, and the prohibited narrat
 
 - Assemble the sidecar payload and the app with `pnpm run build:sidecar` then
   `pnpm run build:swift-app` (`build:sidecar` takes `--out`/`--dry-run` plus its `--skip-*`
-  switches — it has no `--no-sign`; `build:swift-app` takes `--dry-run`/`--no-sign`/`--out`).
+  switches plus `--require-python`/`--require-node`/`--require-pnpm`/`--require-office-assets` — it has no
+  `--no-sign`; `build:swift-app` takes `--dry-run`/`--no-sign`/`--out`).
+  Prepare the local capability resources first: `node packages/desktop/scripts/prepare-python-payload.mjs
+  --target mac-arm64 --with-node --with-pnpm` and `node packages/desktop/scripts/prepare-office-assets.mjs`;
+  `build:swift-app` now fails closed without `sidecar/primary-runtime/dependencies/node/bin/node` and the
+  eight `office-skills` files. Push CI only builds the `--skip-node` assembly; the full payload chain runs
+  in the release dry-run.
   Native artifacts ship from the same tag as the Electron ones, so a signed build must pass the
   assembly's own `codesign --verify --deep --strict` and the bundle must stay free of symlinks that
   escape it.

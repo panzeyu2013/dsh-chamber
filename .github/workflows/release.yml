@@ -1028,9 +1028,11 @@ jobs:
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
 
-      - name: Prepare python payload (mac-arm64 — sha256 from the lock)
-        # C5：与 Electron 腿同一份锁与同一份落点内容（build:sidecar 拷进装配目录）。
-        run: node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64
+      - name: Prepare primary-runtime payload + office assets (mac-arm64 — sha256 from the lock)
+        # C5：本地 Apple Silicon 全量载荷（node+pnpm+python）与 Office 资产；build:sidecar 拷进装配目录。
+        run: |
+          node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm
+          node packages/desktop/scripts/prepare-office-assets.mjs
       # SwiftPM 构建缓存：原生壳 .app 装配前的 swift build 与测试编译共用 macos/.build。
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -1131,10 +1133,11 @@ jobs:
           wait "$SWIFT_BUILD_PID" || { echo "::error::parallel lane failed: swift build -c release"; LANE_FAILURES=1; }
           wait "$BUNDLE_DSH_PID" || { echo "::error::parallel lane failed: bundle:dsh"; LANE_FAILURES=1; }
           test -z "$LANE_FAILURES" || exit 1
-          # 真实 Node 捆绑（官方 tar.gz + SHA-256 校验；命名必须是 node）。
-          # C5：显式 --arch arm64（架构是参数而非 runner 宿主架构）；--require-python 让
-          # python 载荷缺件 fail-closed（缺件时默认只 warn，发布腿不允许）。
-          pnpm run build:sidecar --arch arm64 --require-python
+          # Swift 单 Node：sidecar 不再自带 Node，primary-runtime 的 node 随装配进入
+          # Contents/Resources/sidecar/primary-runtime，sidecar.js 由它启动。
+          # C5：显式 --arch arm64（架构是参数而非 runner 宿主架构）；--require-* 让
+          # payload/资产缺件 fail-closed（缺件时默认只 warn，发布腿不允许）。
+          pnpm run build:sidecar --arch arm64 --require-python --require-node --require-pnpm --require-office-assets
           if [[ -n "${KEYCHAIN_FILE:-}" ]]; then
             security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
           fi
@@ -1188,12 +1191,14 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Verify python payload inside the native app (mac-arm64)
-        # C5：python 载荷随 sidecar 装配进 Contents/Resources/sidecar/primary-runtime。
+      - name: Verify primary-runtime payload + office assets inside the native app (mac-arm64)
+        # C5：payload（python/node/pnpm）与 office-skills 随 sidecar 装配进 Contents/Resources/sidecar。
         run: |
           set -euo pipefail
           node packages/desktop/scripts/prepare-python-payload.mjs --verify \
             "macos/release/dsh-chamber.app/Contents/Resources/sidecar/primary-runtime"
+          node packages/desktop/scripts/prepare-office-assets.mjs --verify \
+            "macos/release/dsh-chamber.app/Contents/Resources/sidecar/office-skills"
       - name: Notarize + staple native app; start dmg notarization (release only)
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
@@ -1717,11 +1722,13 @@ jobs:
           DRY_RUN="${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
-          # 装配面结构断言：sidecar 的捆绑 Node（dsh-chamber-helper）基名、sidecar 入口 + 装配
-          # package.json、control-plane 相对入口、四个 host 包、打包 shim、
-          # renderer dist（装配面少任何一个，.app 都能上传成功）。
-          test -x "$APP/Contents/Resources/sidecar/dsh-chamber-helper"
-          test "$(basename "$APP/Contents/Resources/sidecar/dsh-chamber-helper")" = "dsh-chamber-helper"
+          # 装配面结构断言：primary-runtime 的 Node（sidecar.js 由它启动，Swift 单 Node）、
+          # payload 元数据、sidecar 入口 + 装配 package.json、control-plane 相对入口、
+          # 四个 host 包、打包 shim、renderer dist（装配面少任何一个，.app 都能上传成功）。
+          test -f "$APP/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node"
+          test -x "$APP/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node"
+          test -f "$APP/Contents/Resources/sidecar/primary-runtime/runtime.json"
+          test -f "$APP/Contents/Resources/sidecar/office-skills/office/SKILL.md"
           test -f "$APP/Contents/Resources/sidecar/sidecar.js"
           test -f "$APP/Contents/Resources/sidecar/package.json"
           test -f "$APP/Contents/Resources/sidecar/dist/control-plane/index.js"
@@ -1742,7 +1749,7 @@ jobs:
           # 架构断言——build-sidecar 缺省 darwin-arm64 而 swift build 跟随
           # 宿主；两者不一致的 .app 能签名打包、运行时才崩。
           APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/dsh-chamber")"
-          NODE_ARCHS="$(lipo -archs "$APP/Contents/Resources/sidecar/dsh-chamber-helper")"
+          NODE_ARCHS="$(lipo -archs "$APP/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node")"
           echo "archs: app=$APP_ARCHS node=$NODE_ARCHS"
           [[ " $APP_ARCHS " == *" arm64 "* ]] || { echo "::error::native .app 不是 arm64：$APP_ARCHS"; exit 1; }
           [[ " $NODE_ARCHS " == *" arm64 "* ]] || { echo "::error::捆绑 node 不是 arm64：$NODE_ARCHS"; exit 1; }
@@ -1767,7 +1774,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$ZIP_APP"
           [[ " $(lipo -archs "$ZIP_APP/Contents/MacOS/dsh-chamber") " == *" arm64 "* ]] \
             || { echo "::error::zip 内 .app 不是 arm64"; exit 1; }
-          [[ " $(lipo -archs "$ZIP_APP/Contents/Resources/sidecar/dsh-chamber-helper") " == *" arm64 "* ]] \
+          [[ " $(lipo -archs "$ZIP_APP/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node") " == *" arm64 "* ]] \
             || { echo "::error::zip 内捆绑 node 不是 arm64"; exit 1; }
           if [[ "$DRY_RUN" != "true" ]]; then
             # 公证步把 dmg 提交留在后台，与 appcast 步重叠。上面的结构/zip 校验

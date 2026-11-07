@@ -269,7 +269,7 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 |W-19/W-20|HostEdges 原生腿（SwiftEdgeHostLegs：对话/面板/文件/通知）|design 25 §5 E1–E20、§4.5|
 |W-21|窗口/菜单/通知/深链/渲染器恢复（MainWindowController/RendererRecovery）|design 25 §4.5、§5|
 |W-22/W-25|更新 v1（blocked-available）→ Sparkle 预研/实现（S-01）|design 25 §7|
-|W-23/W-24|sidecar 打包（内建 node + dist/web）与 .app 组装/Info.plist/ATS|design 25 §3.2、§4.3|
+|W-23/W-24|sidecar 打包（payload node + dist/web）与 .app 组装/Info.plist/ATS|design 25 §3.2、§4.3|
 |W-26/W-27|CI（`test-macos`）与发布产物（`-native` 命名、appcast、回滚）|design 25 §8.4|
 |W-28…W-32|M5 实机门禁与验收|design 25 §8.5；开放状态见 STATUS|
 

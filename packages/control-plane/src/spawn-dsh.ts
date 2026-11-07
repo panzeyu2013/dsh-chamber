@@ -438,19 +438,20 @@ async function terminateAndProveQuiet(
 }
 
 /**
- * Basenames a bundled runtime may carry. `dsh-chamber-helper` is the Swift
- * sidecar assembly's name for its bundled Node — single source
- * `scripts/lib/sidecar-assembly.mjs`; design 25 §4.3 A5 is deliberately
- * inverted so monitors attribute the control plane and every managed host to
- * the app instead of a generic `node` row. The plain names stay for dev/CI
- * (`--skip-node` runs the caller's interpreter) and for Electron, which never
- * bundles a Node binary. `build-sidecar.test.mjs` locks this set to the JS
- * constant by asserting the bundled basename takes the direct branch.
+ * Basenames a bundled runtime may carry. The Swift sidecar assembly's single Node
+ * lives INSIDE the primary-runtime payload and is deliberately NOT renamed: its
+ * basename is `node` (`node.exe` on win32) — mirrored from
+ * `scripts/lib/sidecar-assembly.mjs`'s `PAYLOAD_NODE_BASENAME` (a package source cannot
+ * import a repo script; the constant and this table must move together). The sidecar process
+ * and every managed dsh host therefore share this one interpreter; monitors attribute
+ * them through the app's child-process relation (design 25 §4.3 A5), never a bespoke
+ * basename. The plain names cover that Swift shape and dev/CI (`--skip-node` runs the
+ * caller's interpreter, also spelled `node`); Electron never bundles a Node binary and
+ * takes its own branch before this set is consulted.
  */
 const BUNDLED_NODE_BASENAMES: ReadonlySet<string> = new Set([
   'node',
   'node.exe',
-  'dsh-chamber-helper',
 ])
 
 /**

@@ -25,6 +25,19 @@
 它不是普通 control-plane 的公网开关：普通 Desktop control-plane 仍 loopback-only、匿名、
 只负责连接管理与同源反代，网络能力只在 `packages/gateway` 显式运行时存在。
 
+**本地专属能力边界（Office / 受管 Python）**：`@deepseek-ai/dsh-skill-office` 与
+`@deepseek-ai/dsh-tool-workspace-dependencies` 的启动行只由**本地宿主**提供——本地 Swift
+sidecar entry 把随 app 分发的 `primary-runtime`（python+node+pnpm 全量载荷）与
+`office-skills` 资产作为 capabilities 交给控制面，本地 spawn 的 `--patch` overlay 追加
+第二段 `- insert:` 行；payload 只读，工具首次调用才安装到
+`<DSH_HOME>/dsh-runtimes/dsh-primary-runtime`，app 内文件不改。**Gateway 与经 SSH 接入的
+远程实例不提供这些能力**：不传 capabilities、不随包、不做 payload provisioning，agent 侧
+没有 Office 技能与 `load_workspace_dependencies`（技能正文按兜底语义回退用户环境并如实
+报缺依赖）。该取舍同时明确：不加版本闸门、不绑定 dsh 版本（本地仍允许切换，启动行只按
+资源存在 + active workspace 装有这两个包门控）。本地/远程能力边界登记在
+`docs/progress/STATUS.md` §4.2「本地 vs 远程能力边界（Office / 受管 Python 仅本地）」；
+本设计不引入服务器侧对应能力，重开条件见该行。
+
 ### 1.1 传输安全责任划分（本设计的总原则）
 
 - **Gateway 与桌面端都只提供 HTTP 语义**；HTTPS、穿透、隧道全部由**用户自建**（TLS

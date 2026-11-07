@@ -47,7 +47,7 @@ function writeFakePnpmEntry(root: string): string {
 test('pnpmShimScript: POSIX wrapper quotes every word and exports the node env', () => {
   const script = pnpmShimScript({
     platform: 'darwin',
-    nodeFile: '/Applications/dsh chamber.app/sidecar/dsh-chamber-helper',
+    nodeFile: '/Applications/dsh chamber.app/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node',
     nodeArgs: ['--expose-internals'],
     nodeEnv: { ELECTRON_RUN_AS_NODE: '1' },
     pnpmEntry: "/sidecar/pnpm's dir/pnpm.cjs",
@@ -58,7 +58,7 @@ test('pnpmShimScript: POSIX wrapper quotes every word and exports the node env',
   // Hardcoded, never assembled from posixQuote: a broken quoting function must fail here.
   assert.equal(
     lines.includes(
-      `exec '/Applications/dsh chamber.app/sidecar/dsh-chamber-helper' '--expose-internals' '/sidecar/pnpm'\\''s dir/pnpm.cjs' "$@"`,
+      `exec '/Applications/dsh chamber.app/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node' '--expose-internals' '/sidecar/pnpm'\\''s dir/pnpm.cjs' "$@"`,
     ),
     true,
   )

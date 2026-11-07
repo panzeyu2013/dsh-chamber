@@ -111,6 +111,15 @@ test('state 根派生单源：sidecar 两文件不再裸 join <userData>/state�
     'createControlPlane 的 stateDir 必须来自 shell-core.stateRootDir')
   assert.match(entry, /pnpmEntry: headless!\.pnpmEntry/u,
     'sidecar 必须把随包 pnpm 入口交给控制面（design 02 §3.1）')
+  // 启动装配能力根：打包态就是 sidecar 目录（payload/office-skills 是 sidecar.js 的 sibling），
+  // dev 态是 packages/desktop/resources；两行由控制面独立门控。这是打包布局与接线最近的一处
+  // 文本锁（Swift 侧布局由 build-sidecar/build-swift-app 断言，此处锁 TS 传参面）。
+  assert.ok(entry.includes("const sidecarResourceDir = isPackagedSidecarRuntime() ? moduleDir : path.join(moduleDir, 'resources')"),
+    'sidecar-entry 的资源根必须按打包/dev 两态派生')
+  assert.ok(entry.includes("primaryRuntimeDir: path.join(sidecarResourceDir, 'primary-runtime')"),
+    '启动行必须接 primary-runtime capability')
+  assert.ok(entry.includes("officeSkillsDir: path.join(sidecarResourceDir, 'office-skills')"),
+    '启动行必须接 office-skills capability')
   // 时序：host-root 租约 → 无头 ctx 装配 → plane 构造（构造期自取 state-root
   // 并启动时 reaper）→ plane.start()。任何一步提前都会把写者身份留到写之后。
   const leaseAt = entry.indexOf('acquireHostRootLease(args.userDataDir')

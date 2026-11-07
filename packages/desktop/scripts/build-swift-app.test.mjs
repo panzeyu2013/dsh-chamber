@@ -16,8 +16,9 @@
  *     可执行位、资源包（只含 bridge-shim.js）、Info.plist 版本/图标/ATS、图标；
  *  ⑤b/⑤c 本地化 fail-closed：缺 .lproj（纯函数）+ 内容级（0 字节/截断/缺 .lproj
  *     的真实装配腿负例，plutil 解析；0 字节 .strings 不得 EXIT=0 报完成）；
- *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud（顶层 node* 一律拒绝）+ 缺 helper /
- *     无执行位 loud；
+ *  ⑥ sidecar 装配拷贝：payload Node / office-skills 结构锚点进 .app；顶层旧布局
+ *     残留（node 前缀条目 / dsh-chamber-helper）一律拒绝；缺 payload Node / 无执行位 /
+ *     缺 office 资产都 loud；
  *  ⑥b/⑥c 注入式 DMG 执行器：调用参数与步骤序列、--no-dmg 不调用、失败 loud 冒泡
  *     （Finder 布局步不真造 DMG）；
  *  ⑥d sidecar 版本相等 fail-closed：装配腿 .app 内 sidecar/package.json version
@@ -27,7 +28,7 @@
  *  ⑨ entitlements 文件合法 plist 且为最小集；
  *  ⑩ 逃出 bundle 的绝对符号链接 → 归一化后真实 codesign 校验通过；
  *  ④b Mach-O magic 全集（含 FAT_MAGIC_64）+ readdir 失败 fail closed；
- *  ⑪ 架构断言：同宿主通过、--arch 反向 loud、.app 与捆绑 node 无交集 loud；
+ *  ⑪ 架构断言：同宿主通过、--arch 反向 loud、.app 与 payload node 无交集 loud；
  *  ⑫ lipo 输出解析（x86_64/arm64e/旧版 Non-fat 文案）；
  *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil
  *    往返；不走 Finder 布局——那一步只在发布路径与实机里跑，见测试内注释）；
@@ -104,11 +105,13 @@ import {
   findSparkleFramework,
   shouldCopyWebDistEntry,
   sparkleFeedChannel,
+  isBundledPayloadNode,
 } from '../../../macos/scripts/build-swift-app.mjs'
 // 滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
 // 计划的通道 URL 形状（build-swift-app.mjs 也从它导入）。
 import { NATIVE_BETA_ROLLING_TAG } from '../../../scripts/release/release-artifacts.mjs'
-import { BUNDLED_NODE_BASENAME } from '../../../scripts/lib/sidecar-assembly.mjs'
+import { PAYLOAD_NODE_RELATIVE, payloadNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
+import { OFFICE_SKILL_FILES } from './prepare-office-assets.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
@@ -130,7 +133,8 @@ function tempOut() {
  */
 function fakeMachO(dir, name, arch) {
   const target = path.join(dir, name)
-  // 源码走 stdin：sidecar 目录里不能留下 node.c（A5 基名断言只接受 node）。
+  mkdirSync(path.dirname(target), { recursive: true })
+  // 源码走 stdin：sidecar 目录里不能留下 node.c。
   execFileSync(
     'cc',
     ['-x', 'c', ...(arch === undefined ? [] : ['-arch', arch]), '-o', target, '-'],
@@ -140,9 +144,10 @@ function fakeMachO(dir, name, arch) {
   return target
 }
 
-/** 写一个最小可用的 sidecar 装配目录（真实 Mach-O node + sidecar.js/package.json）。
- *  package.json 必须携带**壳版本**：装配腿现在按它做版本相等断言（缺 version /
- *  版本漂移都 loud），夹具要给出真实 build:sidecar 产物的形状。 */
+/** 写一个最小可用的 sidecar 装配目录（真实 Mach-O payload node + sidecar.js /
+ *  package.json / office-skills 结构锚点）。package.json 必须携带**壳版本**：
+ *  装配腿按它做版本相等断言（缺 version / 版本漂移都 loud），夹具要给出真实
+ *  build:sidecar 产物的形状。单 Node 裁决：Node 在 primary-runtime payload 里。 */
 function writeFakeSidecar(dir, nodeArch) {
   writeFileSync(path.join(dir, 'sidecar.js'), '// fake')
   writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
@@ -151,7 +156,13 @@ function writeFakeSidecar(dir, nodeArch) {
     private: true,
     type: 'module',
   }, null, 2))
-  fakeMachO(dir, BUNDLED_NODE_BASENAME, nodeArch)
+  fakeMachO(dir, PAYLOAD_NODE_RELATIVE, nodeArch)
+  const officeSkills = path.join(dir, 'office-skills')
+  for (const relative of OFFICE_SKILL_FILES) {
+    const target = path.join(officeSkills, relative)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, '# ' + relative + '\n')
+  }
   return dir
 }
 
@@ -426,6 +437,16 @@ test('④b dryRunPlanReport：feed/公钥成对、https、.xml、精确产物名
   )
 })
 
+test('④ payload node 签名判定：只有装配内唯一 Node 拿 node entitlements', () => {
+  const sidecarDir = '/tmp/fake.app/Contents/Resources/sidecar'
+  const payloadNode = path.join(sidecarDir, PAYLOAD_NODE_RELATIVE)
+  assert.equal(isBundledPayloadNode(payloadNode, sidecarDir), true)
+  // 顶层 helper/其他同名文件 / 其他 sidecar 目录都不算（精确路径，不靠基名猜）。
+  assert.equal(isBundledPayloadNode(path.join(sidecarDir, 'node'), sidecarDir), false)
+  assert.equal(isBundledPayloadNode(path.join(sidecarDir, 'dsh-chamber-helper'), sidecarDir), false)
+  assert.equal(isBundledPayloadNode('/tmp/other/primary-runtime/dependencies/node/bin/node', sidecarDir), false)
+})
+
 test('④ codesignArgs argv：选项先于 --sign，ad-hoc/hardened 分支互斥', () => {
   const adhoc = codesignArgs({ identity: '-' }, '/tmp/x.app', '/tmp/e.plist')
   assert.deepEqual(adhoc, [
@@ -654,7 +675,7 @@ test('⑤c 本地化内容 fail-closed：0 字节 / 缺 .lproj 的真实装配�
   }
 })
 
-test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
+test('⑥ sidecar 拷贝：payload Node / office 资产进 .app；旧布局 node* 反例 loud', async () => {
   const out = tempOut()
   const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-'))
   try {
@@ -665,18 +686,22 @@ test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
     const layout = appLayout(out)
     assert.ok(existsSync(path.join(layout.sidecarDir, 'sidecar.js')))
     assert.ok(existsSync(path.join(layout.sidecarDir, 'package.json')))
-    const bundled = path.join(layout.sidecarDir, BUNDLED_NODE_BASENAME)
-    assert.ok(existsSync(bundled), '捆绑 helper 必须随装配进 .app（P2）')
-    assert.ok((statSync(bundled).mode & 0o111) !== 0, '捆绑 helper 必须可执行')
+    // 单 Node 裁决：唯一 Node 在 primary-runtime payload 内（顶层没有 helper）。
+    const payloadNode = payloadNodePath(layout.sidecarDir)
+    assert.ok(existsSync(payloadNode), 'payload node 必须随装配进 .app（单 Node）')
+    assert.ok((statSync(payloadNode).mode & 0o111) !== 0, 'payload node 必须可执行')
+    assert.ok(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office', 'SKILL.md')),
+      'office 技能资产必须随装配进 .app')
+    assert.ok(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office', 'references', 'sidecar.md')))
     assert.ok(result.layout)
 
-    // 反例：顶层 node* 条目（改名前的 node / 版本化文件名）→ A5 loud。
-    writeFileSync(path.join(sidecar, 'node-v24.18.1'), 'not a real node')
+    // 反例：顶层 node*/dsh-chamber-helper（旧布局残留）→ loud。
+    writeFileSync(path.join(sidecar, 'dsh-chamber-helper'), 'not a real node')
     await assert.rejects(
       runBuildSwiftApp(parseBuildSwiftAppArgs([
         '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
       ]), { log: () => {}, error: () => {} }),
-      /不得出现 node\*/,
+      /不得出现 node\*\/dsh-chamber-helper/,
     )
   } finally {
     rmSync(out, { recursive: true, force: true })
@@ -701,7 +726,7 @@ test('⑥ 缺 sidecar.js 的装配目录 loud', async () => {
   }
 })
 
-test('⑥ 缺捆绑 helper / 无执行位 → loud（runtime 不再静默回落 PATH）', async () => {
+test('⑥ 缺 payload Node / 无执行位 / 缺 office 资产 → loud（runtime 不再静默回落 PATH）', async () => {
   const out = tempOut()
   const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-nonode-'))
   const argv = (dir) => parseBuildSwiftAppArgs([
@@ -710,17 +735,37 @@ test('⑥ 缺捆绑 helper / 无执行位 → loud（runtime 不再静默回落 
   try {
     writeFileSync(path.join(sidecar, 'sidecar.js'), '// fake')
     writeFileSync(path.join(sidecar, 'package.json'), '{}')
+    // ① payload 内没有 Node → loud（单 Node 后顶层 helper 不再被接受）。
     await assert.rejects(
       runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
-      /缺少捆绑 Node/,
-      '没有 node 的 sidecar 曾经能签名并打包成功（P2）',
+      /缺 payload Node/,
+      '没有 payload node 的 sidecar 曾经能签名并打包成功（P2）',
     )
-    const node = path.join(sidecar, BUNDLED_NODE_BASENAME)
+    // ② Node 在但无可执行位 → loud。
+    const node = path.join(sidecar, PAYLOAD_NODE_RELATIVE)
+    mkdirSync(path.dirname(node), { recursive: true })
     writeFileSync(node, '#!/bin/sh\n')
     chmodSync(node, 0o644)
     await assert.rejects(
       runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
       /没有可执行位/,
+    )
+    chmodSync(node, 0o755)
+    // ③ Node 就绪后，office 技能资产缺失同样 fail-closed。
+    await assert.rejects(
+      runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
+      /缺 office 技能资产/,
+    )
+    // ④ 补上 office 锚点后到达版本相等断言（package.json 无 version → loud），
+    //    证明装配断言的顺序与真实产物形状一致。
+    for (const relative of OFFICE_SKILL_FILES) {
+      const target = path.join(sidecar, 'office-skills', relative)
+      mkdirSync(path.dirname(target), { recursive: true })
+      writeFileSync(target, '# ' + relative + '\n')
+    }
+    await assert.rejects(
+      runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
+      /缺 version/,
     )
   } finally {
     rmSync(out, { recursive: true, force: true })
@@ -911,6 +956,9 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
     // 不得打印「实体化 undefined 处」。
     assert.ok(!logs.some((line) => line.includes('undefined')), `归一化日志不得含 undefined：${logs.join('\n')}`)
     assert.ok(logs.some((line) => /符号链接归一化 \d+ 处/.test(line)), '真实链接被处理时必须打印实际计数')
+    // 单 Node 裁决：嵌套签名遍历必须真的覆盖 payload node（它带 node entitlements）。
+    assert.ok(logs.some((line) => /嵌套 Mach-O 已签名 \d+ 个（含 payload node/.test(line)),
+      '签名遍历必须覆盖 payload node（单 Node 后唯一需要 JIT 权限的嵌套二进制）')
 
     // ① 不得有逃出 bundle 的链接
     const bundBin = path.join(layout.sidecarDir, 'vendor', 'dsh', 'node_modules', '.bin')
@@ -929,7 +977,7 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
   }
 })
 
-test('⑪ 架构：同宿主通过；--arch 反向 loud；.app 与 node 无交集 loud（P4）', async (t) => {
+test('⑪ 架构：同宿主通过；--arch 反向 loud；.app 与 payload node 无交集 loud（P4）', async (t) => {
   const binary = path.join(buildOutputDir('release'), MODULE_NAME)
   if (!existsSync(binary)) {
     t.skip('缺少 swift build 产物（先 swift build -c release）')
@@ -946,7 +994,7 @@ test('⑪ 架构：同宿主通过；--arch 反向 loud；.app 与 node 无交�
     writeFakeSidecar(same)
     await assert.doesNotReject(
       runBuildSwiftApp(argv(same), { log: () => {}, error: () => {} }),
-      '宿主架构一致的 .app + 捆绑 node 必须通过',
+      '宿主架构一致的 .app + payload node 必须通过',
     )
     // 显式 --arch 反向：两个产物都不含它 → loud（App 检查先触发）。
     const opposite = hostArchs.includes('arm64') ? 'x64' : 'arm64'

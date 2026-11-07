@@ -3,17 +3,21 @@
  * build-sidecar.mjs —— Swift flavor sidecar 打包（design 25 §3.2/§4.3）
  *
  * 产物布局（design 25 §3.2「sidecar 装配目录约定」）：
- *   <out>/dsh-chamber-helper       捆绑的官方 Node（基名由
- *                                  scripts/lib/sidecar-assembly.mjs 单源给定；
- *                                  design 25 §4.3 A5 已反转——spawn-dsh 的
- *                                  纯 Node 分支认 {node,node.exe,dsh-chamber-helper}，
- *                                  命名 helper 是为了让监控按基名把控制面与
- *                                  宿主进程归属到 app，而不是泛化的 node）
  *   <out>/sidecar.js               esbuild 打包的 sidecar 入口（含 shell-core
  *                                  全家 + sidecar-ctx + node-edges + dsh-runtime）
  *   <out>/dist/control-plane/…     build:control-plane 的编译产物（运行时经
  *                                  control-plane-module 的相对动态 import
  *                                  加载——包外裸说明符在打包态不可解析）
+ *   <out>/primary-runtime/         全量 payload（python/node/pnpm）的拷贝；
+ *   <out>/office-skills/           office 技能资产的拷贝（8 个 markdown）。
+ *                                  **单 Node 裁决（swift-impl-contract）**：不再
+ *                                  下载/固定/重命名独立 Node，也没有
+ *                                  `dsh-chamber-helper`——装配内唯一的 Node 就是
+ *                                  payload 的
+ *                                  `primary-runtime/dependencies/node/bin/node`
+ *                                  （Swift 用它启动 sidecar.js，托管 dsh 用同一
+ *                                  process.execPath；进程名就是 node，归因按
+ *                                  design 25 §4.3 A5 的应用派生关系，不靠基名）。
  *
  * 步骤：
  *   1. tsc -p tsconfig.sidecar.build.json —— 编译闭包校验（noEmit；Electron-free
@@ -24,18 +28,19 @@
  *      target=node22；external：@dsh-chamber/control-plane / electron /
  *      ./dist/control-plane/index.js——三者都在运行期由装配目录解析）；
  *   3. 拷贝 dist/control-plane → <out>/dist/control-plane；
- *   4. Node 捆绑：官方 tar.gz 下载（或 --node-archive 离线提供）→ SHA-256 校验
- *      （默认版本摘要固定在仓库 PINNED_NODE_SHA256；未固定版本回退
- *      SHASUMS256.txt 并响亮说明）→ 解出 bin/node → 落位
- *      <out>/<BUNDLED_NODE_BASENAME>（0755）→ **基名断言**。
+ *   4. payload 门控（不再下载 Node）：python 载荷整目录拷贝 → 按需断言
+ *      `dependencies/node/bin/node`（--require-node）与
+ *      `dependencies/pnpm/bin/pnpm.mjs`（--require-pnpm）→ office 技能资产拷贝
+ *      （--require-office-assets 时缺件 fail-closed）。
  *
- * 离线/无网：--skip-node 跳过第 4 步（供 dev/CI 校验）；--dry-run 只打印计划与
+ * 离线/无网：--skip-node 表达「本次不要求 payload node」（dev/CI 的
+ * compiled-sidecar smoke 用调用者 node 启动 sidecar.js）；--dry-run 只打印计划与
  * 输入校验，不写盘、不联网。
  * **--skip-* 的诚实语义**：<out> 是持久装配目录，跳过必须产生
  * **缺位**，而不是继承既有的产物——每个 skip 开关在开工前清掉自己的目标
- * （helper / sidecar.js / vendor+dsh / dist），否则残留的 helper/vendor 会留在
- * 装配里被 .app 一起签名发布，而构建日志却声称「已跳过」。改名前的 `node`
- * 在开工时清除一次（旧装配目录是持久目录）。
+ * （sidecar.js / vendor+dsh / dist / office-skills），否则残留产物会留在
+ * 装配里被 .app 一起签名发布，而构建日志却声称「已跳过」。改名前的 `node` 与
+ * 旧的 `dsh-chamber-helper` 在开工时清除一次（旧装配目录是持久目录）。
  * **缺源的诚实语义**：不跳过的源缺失不是可降级状态——vendor/dsh
  * 或 pnpm 源不存在时在**任何写盘之前** fail closed（既有产物绝不冒充构建结果）；
  * pnpm 源还必须是仓库 pin 的版本（desktop dependencies.pnpm，Electron 侧同源）。
@@ -48,14 +53,10 @@
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import {
-  chmodSync,
-  copyFileSync,
   cpSync,
-  createReadStream,
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -65,114 +66,16 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { createHash } from 'node:crypto'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyPayload } from './prepare-python-payload.mjs'
+import { verifyOfficeAssets } from './prepare-office-assets.mjs'
 import { isCliEntry, runCliTool } from '../../../scripts/lib/cli.mjs'
-import { BUNDLED_NODE_BASENAME, bundledNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
+import { payloadNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
 const repoRoot = path.resolve(desktopDir, '..', '..')
-
-/** 缺省 Node 版本：与 desktop Electron 43.4.0 内置 Node 大版本对齐；
- *  exact minor 以安装态 process.versions.node 核实。 */
-export const DEFAULT_NODE_VERSION = '24.18.1'
-
-/**
- * Electron pin → 该 Electron 发布内置的 Node 版本。
- *
- * 为什么是表而不是「执行 Electron 二进制读 process.versions.node」：后者在
- * 没有 Electron dist 的机器（CI 的每条腿；electron 无 postinstall，
- * DSH_CHAMBER_ELECTRON=1 是桌面开发的显式物化开关）只能响亮 SKIP——于是
- * 「装配捆绑 node == Electron 内置 node」这条断言在 CI 恒真跳过，版本漂移
- * 没有门禁兜底。表把映射变成无条件断言：desktop manifest 的**精确** Electron
- * pin 必须命中一行，且该行的 node 版本必须等于 DEFAULT_NODE_VERSION。
- * 升级 Electron 或 Node 而不动此表 = 构建在动网络之前失败（见
- * assertElectronNodePin；二进制在场时 build-sidecar.test.mjs 仍会实测交叉验证
- * 表值，两者互为证据）。
- */
-export const ELECTRON_NODE_PINS = {
-  '43.4.0': '24.18.1',
-}
-/** v1 只发 arm64（design 25 §10 决策 6）。 */
-export const DEFAULT_ARCH = 'arm64'
-
-/**
- * 仓库内固定的官方 Node 归档 SHA-256（design 25 §4.3 A5 的信任基座）。
- *
- * 为什么固定：联网按 `SHASUMS256.txt` 取摘要时，信任落在下载回来的那份
- * 文本上（同一通道可被替换），构建可复现性也依赖网络内容。摘要钉进仓库后，默认
- * 路径只下载归档、与表比对（fail-closed），不读网络摘要；未列出的版本
- * （`--node-version`）回退 SHASUMS256.txt，并**响亮说明**「该版本未固定」——
- * 「没固定」绝不伪装成「已校验」。
- *
- * 来源与维护：摘要逐字取自 https://nodejs.org/dist/v<version>/SHASUMS256.txt。
- * 默认 DEFAULT_NODE_VERSION 的两个 darwin 归档（arm64/x64）都必须在本表内；
- * 升级默认版本时在同一提交更新本表（build-sidecar.test.mjs 的门禁会红）。
- */
-export const PINNED_NODE_SHA256 = {
-  'node-v24.18.1-darwin-arm64.tar.gz': 'eb02f7fab96d3d67de40c5ec8566096fcb4c2026728787683ae5a97eb612b941',
-  'node-v24.18.1-darwin-x64.tar.gz': '6fb20fceacbb157c2f95825b80df4a454a0f6d81cdcd7bb81eeae9147e0e76ec',
-}
-
-/**
- * 给定 Node 归档的期望摘要（纯函数，单测不联网）。
- * - `--node-sha256`（override）优先，但与仓库固定值冲突时 **throw**：同一版本的
- *   官方归档内容不可变，出现不同摘要只可能是固定值写错或包被替换——绝不静默采纳；
- * - 无 override 且表内有该归档 → 用固定值（不读网络摘要）；
- * - 表内没有 → `{ digest: null, source: 'network' }`，调用方回退 SHASUMS256.txt 并说明。
- * @param {string} archiveName - `node-v<ver>-darwin-<arch>.tar.gz`
- * @param {string | null} override - 调用方显式摘要（已归一化小写）或 null
- * @param {Record<string, string>} pins - 固定表（测试可注入）
- * @returns {{ digest: string | null, source: 'override' | 'pinned' | 'network' }}
- */
-export function resolvePinnedNodeDigest(archiveName, override, pins = PINNED_NODE_SHA256) {
-  const pinned = Object.prototype.hasOwnProperty.call(pins, archiveName) ? pins[archiveName] : null
-  if (override !== null) {
-    if (pinned !== null && pinned !== override) {
-      throw new Error(
-        `--node-sha256 与仓库固定摘要不一致（${archiveName}）：固定 ${pinned}，传入 ${override}`
-        + '——官方归档内容不可变，请先核对固定值（或先更新 PINNED_NODE_SHA256）',
-      )
-    }
-    return { digest: override, source: 'override' }
-  }
-  if (pinned !== null) return { digest: pinned, source: 'pinned' }
-  return { digest: null, source: 'network' }
-}
-
-/**
- * 默认 Node pin 的机械锁步：PINNED_NODE_SHA256 必须**恰好**覆盖
- * DEFAULT_NODE_VERSION 的两个 darwin 归档，且每条为小写 64 位 hex。
- * 升级 DEFAULT_NODE_VERSION 却漏改/多留摘要行时，构建在动网络之前失败——
- * 「版本 + SHA 一起更新」从此是断言而非注释。
- * @param {Record<string, string>} [pins] - 摘要表（测试可注入）。
- * @param {string} [version] - 默认 Node 版本（测试可注入）。
- * @returns {string[]} 已断言的表键（排序后）。
- */
-export function assertNodePinTable(pins = PINNED_NODE_SHA256, version = DEFAULT_NODE_VERSION) {
-  const expected = [nodeArchiveName(version, 'arm64'), nodeArchiveName(version, 'x64')]
-  const keys = Object.keys(pins)
-  for (const key of keys) {
-    if (!expected.includes(key)) {
-      throw new Error(
-        `PINNED_NODE_SHA256 含非默认版本条目 ${key}（默认 ${version}）——升级 DEFAULT_NODE_VERSION 时必须同步整表`,
-      )
-    }
-    if (!/^[0-9a-f]{64}$/.test(pins[key])) {
-      throw new Error(`${key} 的固定摘要必须是小写 64 位 hex，实际 ${JSON.stringify(pins[key])}`)
-    }
-  }
-  for (const name of expected) {
-    if (!Object.prototype.hasOwnProperty.call(pins, name)) {
-      throw new Error(`PINNED_NODE_SHA256 缺少默认归档 ${name}（DEFAULT_NODE_VERSION=${version} 的两个 darwin 归档都必须固定）`)
-    }
-  }
-  return [...keys].sort()
-}
 
 /** chamber host 包（design 09/08/24）——打包态必须随 sidecar 装配，否则
  *  sidecar-ctx 的 hostPackageSourceDir 在 .app 内向上找不到 `packages/<pkg>`
@@ -212,9 +115,6 @@ export function assertHostPackageArtifacts(hostPackages, resolveSourceDir) {
 export function sidecarLayout(outDir) {
   return {
     outDir,
-    // 捆绑 Node 的落位名是 sidecar-assembly.mjs 的单源常量（改名让监控把
-    // app 派生的控制面/宿主进程按基名归属到 app，见 design 25 §4.3 A5 反转）。
-    node: bundledNodePath(outDir),
     entry: path.join(outDir, 'sidecar.js'),
     packageJson: path.join(outDir, 'package.json'),
     dist: path.join(outDir, 'dist'),
@@ -226,9 +126,16 @@ export function sidecarLayout(outDir) {
     vendorDsh: path.join(outDir, 'vendor', 'dsh'),
     pnpm: path.join(outDir, 'pnpm'),
     pnpmEntry: path.join(outDir, 'pnpm', 'bin', 'pnpm.cjs'),
-    // python 载荷（C5）：与 Electron 侧 extraResources 同布局同内容——
-    // <out>/primary-runtime 随 build-swift-app 拷进 Contents/Resources/sidecar。
+    // primary-runtime 全量 payload（python/node/pnpm）：与 Electron 侧
+    // extraResources 同布局同内容——<out>/primary-runtime 随 build-swift-app 拷进
+    // Contents/Resources/sidecar。**装配内唯一的 Node 就在它里面**：单 Node 裁决
+    // 取消了独立 dsh-chamber-helper，Swift 用 payload node 启动 sidecar.js。
     primaryRuntime: path.join(outDir, 'primary-runtime'),
+    payloadNode: payloadNodePath(outDir),
+    payloadPnpmEntry: path.join(outDir, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'),
+    // office 技能资产（8 个 markdown）：与 Electron extraResources 同布局，
+    // 随 build-swift-app 进 Contents/Resources/sidecar/office-skills。
+    officeSkills: path.join(outDir, 'office-skills'),
   }
 }
 
@@ -257,58 +164,6 @@ export function resolvePnpmPin(manifest = JSON.parse(readFileSync(path.join(desk
 
 /** 构建期望的内嵌 pnpm 版本（Electron 侧同一来源，见 after-pack）。 */
 export const PNPM_PINNED_VERSION = resolvePnpmPin()
-
-/**
- * desktop manifest 的 Electron pin（单源）。**必须是精确版本**：范围说明符
- * （`^43.4.0`）会让锁文件解析出的实际 Electron 漂出 ELECTRON_NODE_PINS 的键，
- * 那时表就锚不住任何东西——所以范围/空值直接 fail closed。
- * @param {object} [manifest] - desktop package.json（测试可注入）。
- * @returns {string} 精确 Electron 版本。
- */
-export function resolveElectronPin(manifest = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))) {
-  const version = manifest !== null && typeof manifest === 'object' && manifest.devDependencies !== undefined
-    ? manifest.devDependencies.electron
-    : undefined
-  if (typeof version !== 'string' || version === '') {
-    throw new Error('desktop package.json 缺少 devDependencies.electron —— Electron↔Node pin 无来源（G37）')
-  }
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-    throw new Error(
-      `desktop devDependencies.electron 必须是精确版本，实际 ${JSON.stringify(version)}`
-      + '——范围说明符下锁文件解析出的版本会漂移，ELECTRON_NODE_PINS 无法锚定（G37）',
-    )
-  }
-  return version
-}
-
-/** 构建期望的 Electron pin（module 级读取，与 PNPM_PINNED_VERSION 同姿态）。 */
-export const ELECTRON_PINNED_VERSION = resolveElectronPin()
-
-/**
- * Electron pin ↔ 捆绑 node 版本的机械锁步：pin 必须在 ELECTRON_NODE_PINS
- * 表内，且表里的 node 版本必须等于 DEFAULT_NODE_VERSION。任何一条不满足都在
- * 构建开始（动网络之前）失败——这是「装配 node == Electron 内置 node」
- * 断言在 CI 的形态（不依赖 Electron 二进制是否在场）。
- * @param {string} electronVersion - desktop manifest 的精确 Electron pin。
- * @param {{ nodeVersion?: string, pins?: Record<string, string> }} [options] - 测试可注入。
- * @returns {string} 该 Electron 的 node 版本。
- */
-export function assertElectronNodePin(electronVersion, { nodeVersion = DEFAULT_NODE_VERSION, pins = ELECTRON_NODE_PINS } = {}) {
-  const pinned = Object.prototype.hasOwnProperty.call(pins, electronVersion) ? pins[electronVersion] : undefined
-  if (pinned === undefined) {
-    throw new Error(
-      `Electron ${electronVersion} 不在 ELECTRON_NODE_PINS 表内（G37）——`
-      + '升级 desktop devDependencies.electron 时必须在 build-sidecar.mjs 同步该 Electron 的 node 版本',
-    )
-  }
-  if (pinned !== nodeVersion) {
-    throw new Error(
-      `Electron ${electronVersion} 内置 node ${pinned} != 捆绑 pin ${nodeVersion}`
-      + '（D6/G37：sidecar 捆绑 node 必须与出货 Electron 的 node 一致；同步 DEFAULT_NODE_VERSION 与 ELECTRON_NODE_PINS）',
-    )
-  }
-  return pinned
-}
 
 /**
  * 拷贝目录树并**原样保留符号链接**（含相对拼写）。
@@ -508,68 +363,48 @@ export function copyPnpm(sourceDir, destDir, { expectedVersion = PNPM_PINNED_VER
   return true
 }
 
-export function nodeArchiveName(version, arch) {
-  return `node-v${version}-darwin-${arch}.tar.gz`
-}
 
-export function nodeDistUrl(version, fileName) {
-  return `https://nodejs.org/dist/v${version}/${fileName}`
-}
-
-export function nodeMemberPath(version, arch) {
-  return `node-v${version}-darwin-${arch}/bin/node`
-}
-
-/** SHASUMS256.txt → 目标文件的校验和（找不到 → null）。 */
-export function parseShasums(text, fileName) {
-  for (const line of String(text).split('\n')) {
-    const match = /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line.trim())
-    if (match !== null && match[2].trim() === fileName) return match[1]
+/**
+ * 拷贝 office 技能资产（缺源时返回 false，与 copyVendorDsh/copyPnpm 同姿态）。
+ * 替换式落位：先清目标（跳过 = 缺位），拷贝后断言 office/SKILL.md；发布腿用
+ * --require-office-assets 把缺件升级为 fail-closed。
+ * @param {string} sourceDir - 资产源（prepare:office-assets 的产物目录）。
+ * @param {string} destDir - 装配目标 <out>/office-skills。
+ * @param {{ requireAssets?: boolean }} [options] - true = 缺件 fail-closed（发布腿）。
+ * @returns {boolean} 源完整并已拷贝。
+ */
+export function copyOfficeAssets(sourceDir, destDir, { requireAssets = false } = {}) {
+  const assets = verifyOfficeAssets(sourceDir)
+  if (!assets.ok && requireAssets) {
+    throw new Error(`--require-office-assets 但 office 技能资产不可用（${sourceDir}）：${assets.problems.join('；')}`)
   }
-  return null
-}
-
-/** SHA-256 校验（导出以便单测：不匹配必须 throw；只比手写假摘要时
- *  任何 64 位 hex 都「通过」，校验逻辑回归不会被发现）。 */
-export async function verifySha256(file, expected) {
-  const actual = await sha256File(file)
-  if (actual !== expected) {
-    throw new Error(`Node 归档 SHA-256 不匹配（期望 ${expected}，实际 ${actual}）`)
+  rmSync(destDir, { recursive: true, force: true })
+  if (!assets.ok) return false
+  copyTree(sourceDir, destDir)
+  if (!existsSync(path.join(destDir, 'office', 'SKILL.md'))) {
+    throw new Error(`office 技能资产拷贝不完整：${path.join(destDir, 'office', 'SKILL.md')}`)
   }
-  return actual
-}
-
-export async function sha256File(file) {
-  return await new Promise((resolve, reject) => {
-    const hash = createHash('sha256')
-    const stream = createReadStream(file)
-    stream.on('error', reject)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('end', () => resolve(hash.digest('hex')))
-  })
-}
-
-/** A5 断言：捆绑 Node 的基名必须是 BUNDLED_NODE_BASENAME（spawn-dsh 基名表的前提）。 */
-export function assertBundledNodeBasename(nodePath) {
-  const base = path.basename(nodePath)
-  if (base !== BUNDLED_NODE_BASENAME) {
-    throw new Error(
-      `捆绑 Node 基名必须是 '${BUNDLED_NODE_BASENAME}'（design 25 §4.3 A5 反转：resolveNodeExecutable 的纯 Node 分支只在 basename(execPath) ∈ {node,node.exe,${BUNDLED_NODE_BASENAME}} 时直用 process.execPath）；实际 '${base}'`,
-    )
-  }
+  return true
 }
 
 export function parseBuildSidecarArgs(argv) {
   const options = {
     outDir: path.join(desktopDir, 'release', 'sidecar'),
     dryRun: false,
+    // 单 Node 裁决：--skip-node 只表达「本次不要求 payload node」（dev/CI 的
+    // compiled-sidecar smoke 用调用者 node 启动 sidecar.js），不再有独立 Node 下载。
     skipNode: false,
+    requireNode: false,
+    requirePnpm: false,
     skipBundle: false,
     skipHostPackages: false,
     skipVendor: false,
     skipPython: false,
     requirePython: false,
+    skipOfficeAssets: false,
+    requireOfficeAssets: false,
     pythonPayloadDir: path.join(desktopDir, 'resources', 'primary-runtime'),
+    officeAssetsDir: path.join(desktopDir, 'resources', 'office-skills'),
     vendorDshDir: path.join(desktopDir, 'vendor', 'dsh'),
     pnpmDir: path.join(desktopDir, 'node_modules', 'pnpm'),
     // 仅当调用方**显式**传入源目录时才在 dry-run 里严格校验：默认路径在
@@ -577,10 +412,11 @@ export function parseBuildSidecarArgs(argv) {
     // 由 release 腿的 bundle:dsh 物化）——严格校验会让 push CI 必红。
     vendorDshExplicit: false,
     pnpmExplicit: false,
-    nodeVersion: DEFAULT_NODE_VERSION,
-    nodeSha256: null,
-    nodeArchive: null,
-    arch: process.arch === 'x64' ? 'x64' : DEFAULT_ARCH,
+    officeAssetsExplicit: false,
+    // payload 目标架构声明（--arch 保留以兼容发布腿 argv）：payload 存在时与
+    // runtime.json 的 platform/arch 比对；payload node 的真实架构由
+    // build-swift-app 的 lipo 断言覆盖（单 Node 后 node 就在 payload 里）。
+    arch: null,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -592,12 +428,20 @@ export function parseBuildSidecarArgs(argv) {
     if (arg === '--out') options.outDir = path.resolve(next())
     else if (arg === '--dry-run') options.dryRun = true
     else if (arg === '--skip-node') options.skipNode = true
+    else if (arg === '--require-node') options.requireNode = true
+    else if (arg === '--require-pnpm') options.requirePnpm = true
     else if (arg === '--skip-bundle') options.skipBundle = true
     else if (arg === '--skip-host-packages') options.skipHostPackages = true
     else if (arg === '--skip-vendor') options.skipVendor = true
     else if (arg === '--skip-python') options.skipPython = true
     else if (arg === '--require-python') options.requirePython = true
+    else if (arg === '--skip-office-assets') options.skipOfficeAssets = true
+    else if (arg === '--require-office-assets') options.requireOfficeAssets = true
     else if (arg === '--python-payload') options.pythonPayloadDir = path.resolve(next())
+    else if (arg === '--office-assets') {
+      options.officeAssetsDir = path.resolve(next())
+      options.officeAssetsExplicit = true
+    }
     else if (arg === '--vendor-dsh') {
       options.vendorDshDir = path.resolve(next())
       options.vendorDshExplicit = true
@@ -606,18 +450,24 @@ export function parseBuildSidecarArgs(argv) {
       options.pnpmDir = path.resolve(next())
       options.pnpmExplicit = true
     }
-    else if (arg === '--node-version') options.nodeVersion = next()
-    else if (arg === '--node-sha256') options.nodeSha256 = next().toLowerCase()
-    else if (arg === '--node-archive') options.nodeArchive = path.resolve(next())
     else if (arg === '--arch') {
       const arch = next()
       // 架构白名单（对照 build-swift-app.mjs 的同款校验）：拼错或空值会一路
-      // 传进 node 归档名与 lipo 断言，失败点距参数很远。
+      // 传进 payload 目标断言与发布腿产物，失败点距参数很远。
       if (arch !== 'arm64' && arch !== 'x64') throw new Error(`--arch 只接受 arm64|x64，收到：${arch}`)
       options.arch = arch
     }
     else if (arg === '--help' || arg === '-h') options.help = true
     else throw new Error(`未知参数：${arg}`)
+  }
+  for (const [skip, require, label] of [
+    ['skipNode', 'requireNode', 'node'],
+    ['skipPython', 'requirePython', 'python'],
+    ['skipOfficeAssets', 'requireOfficeAssets', 'office-assets'],
+  ]) {
+    if (options[skip] === true && options[require] === true) {
+      throw new Error('--skip-' + label + ' 与 --require-' + label + ' 互斥：skip 表达「本次不要求」')
+    }
   }
   return options
 }
@@ -638,22 +488,85 @@ export function buildPlan(options) {
     steps.push(`[3d] 拷贝内置 dsh 工作区 → ${layout.vendorDsh}（${VENDOR_DSH_FILES.join(' / ')} + node_modules）`)
     steps.push(`[3e] 拷贝内嵌 pnpm → ${layout.pnpm}（package.json + bin/pnpm.{cjs,mjs} + dist）`)
   }
-  if (options.skipNode) steps.push('[4] 跳过 Node 捆绑（--skip-node）')
+  // 单 Node 裁决：不再有「Node 捆绑」步骤；装配内唯一的 Node 来自 payload。
+  if (options.skipPython) steps.push('[4] 跳过 python 载荷（--skip-python）')
   else {
-    const archive = nodeArchiveName(options.nodeVersion, options.arch)
-    steps.push(
-      options.nodeArchive !== null
-        ? `[4] Node 捆绑：本地 ${options.nodeArchive} → SHA-256 校验 → ${layout.node}`
-        : `[4] Node 捆绑：${nodeDistUrl(options.nodeVersion, archive)} → SHA-256 校验 → ${layout.node}`,
-    )
-  }
-  if (options.skipPython) steps.push('[4b] 跳过 python 载荷（--skip-python）')
-  else {
-    steps.push(`[4b] python 载荷：${options.pythonPayloadDir} → ${layout.primaryRuntime}`
+    steps.push(`[4] python 载荷：${options.pythonPayloadDir} → ${layout.primaryRuntime}`
       + (options.requirePython ? '（--require-python：缺件 fail-closed）' : '（未准备则跳过；发布腿用 --require-python）'))
   }
-  steps.push(`[5] 断言：${path.basename(layout.node)} 基名 + 产物存在`)
+  if (options.skipNode) steps.push('[4a] 跳过 payload node 要求（--skip-node：dev/CI 用调用者 node 启动 sidecar.js）')
+  else if (options.requireNode) steps.push(`[4a] 断言 payload node：${layout.payloadNode}（--require-node：缺件 fail-closed）`)
+  else steps.push(`[4a] payload node：${layout.payloadNode}（未要求；发布腿用 --require-node）`)
+  if (options.requirePnpm) steps.push(`[4b] 断言 payload pnpm：${layout.payloadPnpmEntry}（--require-pnpm：缺件 fail-closed）`)
+  else steps.push(`[4b] payload pnpm：${layout.payloadPnpmEntry}（未要求；发布腿用 --require-pnpm）`)
+  if (options.arch !== null) {
+    steps.push(`[4c] payload 目标架构：darwin-${options.arch}（与 runtime.json 比对；payload node 的真实架构由 build-swift-app lipo 断言）`)
+  }
+  if (options.skipOfficeAssets) steps.push('[4d] 跳过 office 技能资产（--skip-office-assets）')
+  else {
+    steps.push(`[4d] office 技能资产：${options.officeAssetsDir} → ${layout.officeSkills}`
+      + (options.requireOfficeAssets ? '（--require-office-assets：缺件 fail-closed）' : '（未准备则跳过；发布腿用 --require-office-assets）'))
+  }
+  steps.push('[5] 断言：sidecar.js / dist/control-plane / package.json 产物存在')
   return steps
+}
+
+/**
+ * payload 内 node/pnpm 的按需断言（纯函数，导出以便单测）。单 Node 裁决后装配
+ * **不下载任何 Node**：--require-node/--require-pnpm 只核对
+ * prepare-python-payload 产出的 payload 是否真的带齐（--with-node / --with-pnpm）。
+ * @param {string} payloadDir - primary-runtime 目录（源或装配拷贝）。
+ * @param {{ requireNode?: boolean, requirePnpm?: boolean, skipNode?: boolean }} [options]
+ * @returns {{ ok: boolean, node: string, pnpm: string, problems: string[] }}
+ */
+export function verifyPayloadNodeAndPnpm(payloadDir, options = {}) {
+  const node = path.join(payloadDir, 'dependencies', 'node', 'bin', 'node')
+  const pnpm = path.join(payloadDir, 'dependencies', 'pnpm', 'bin', 'pnpm.mjs')
+  const problems = []
+  if (options.skipNode !== true && options.requireNode === true) {
+    if (!existsSync(node)) {
+      problems.push('缺 payload node：' + node + '（prepare-python-payload 需 --with-node）')
+    } else if (!statSync(node).isFile()) {
+      problems.push('payload node 不是常规文件：' + node)
+    } else if ((statSync(node).mode & 0o111) === 0) {
+      problems.push('payload node 没有可执行位：' + node
+        + '（mode ' + (statSync(node).mode & 0o777).toString(8) + '）')
+    }
+  }
+  if (options.requirePnpm === true && !existsSync(pnpm)) {
+    problems.push('缺 payload pnpm：' + pnpm + '（prepare-python-payload 需 --with-pnpm）')
+  }
+  return { ok: problems.length === 0, node, pnpm, problems }
+}
+
+/**
+ * payload 目标架构断言（--arch 保留的语义）：runtime.json 存在且 complete 时，
+ * platform 必须是 darwin、arch 必须等于声明的 --arch——防止把别的目标架构的
+ * payload 装进 macOS .app（单 Node 后 payload node 的真实架构由 build-swift-app
+ * 的 lipo 断言复核）。payload 未准备时返回 null（是否要求由 --require-* 决定）。
+ * @param {string} payloadDir - primary-runtime 目录。
+ * @param {string | null} arch - 声明的目标架构（--arch）。
+ * @returns {string | null} 已断言的 payload arch。
+ */
+export function assertPayloadTarget(payloadDir, arch) {
+  if (arch === null || arch === undefined) return null
+  const manifestPath = path.join(payloadDir, 'runtime.json')
+  if (!existsSync(manifestPath)) return null
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  } catch (error) {
+    throw new Error('payload runtime.json 不是合法 JSON（' + manifestPath + '）：'
+      + (error instanceof Error ? error.message : String(error)))
+  }
+  if (manifest.payload !== 'complete') return null
+  if (manifest.platform !== 'darwin') {
+    throw new Error('payload 目标平台不是 darwin：' + JSON.stringify(manifest.platform) + '（' + manifestPath + '）')
+  }
+  if (manifest.arch !== arch) {
+    throw new Error('payload 目标架构 ' + JSON.stringify(manifest.arch) + ' != --arch ' + arch + '（' + manifestPath + '）')
+  }
+  return manifest.arch
 }
 
 function resolveEsbuild() {
@@ -662,33 +575,6 @@ function resolveEsbuild() {
   )
   const viteEntry = requireFromRenderer.resolve('vite')
   return createRequire(viteEntry).resolve('esbuild')
-}
-
-async function fetchText(url, timeoutMs = 30_000) {
-  const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), timeoutMs)
-  try {
-    const response = await fetch(url, { signal: abort.signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status}（${url}）`)
-    return await response.text()
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function fetchToFile(url, target, timeoutMs = 300_000) {
-  const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), timeoutMs)
-  try {
-    const response = await fetch(url, { signal: abort.signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status}（${url}）`)
-    const buffer = Buffer.from(await response.arrayBuffer())
-    const { writeFileSync } = await import('node:fs')
-    writeFileSync(target, buffer)
-    return buffer.length
-  } finally {
-    clearTimeout(timer)
-  }
 }
 
 async function bundleSidecar(layout) {
@@ -715,91 +601,6 @@ async function bundleSidecar(layout) {
   return result
 }
 
-/** A5 归档成员断言（导出以便单测；member = 期望的归档内路径）。 */
-export function assertNodeArchiveMembers(archivePath, member, stdout) {
-  const listing = stdout !== undefined
-    ? { status: 0, stdout }
-    : spawnSync('tar', ['-tzf', archivePath], {
-        encoding: 'utf8',
-        // maxBuffer 显式放大：官方 node 归档清单约 0.8 MiB（5892 项
-        // / 817 KB），默认 1 MiB 余量过小——超限会误报失败（fail-closed 但噪声）。
-        maxBuffer: 64 * 1024 * 1024,
-      })
-  if (listing.status !== 0) {
-    throw new Error(`无法列出 Node 归档成员（exit ${listing.status}）：${listing.stderr ?? ''}`)
-  }
-  const members = String(listing.stdout).split('\n').map((line) => line.trim()).filter(Boolean)
-  if (!members.includes(member)) {
-    throw new Error(`Node 归档缺少成员 ${member}（design 25 §4.3 A5；实际成员 ${members.length} 个）`)
-  }
-  // 注意：member 的基名恒为 node（nodeMemberPath 构造），故"归档内存在基名为
-  // node 的成员"由成员存在性蕴含——不重复断言。基名的真正检查点在解包后
-  // （bundleNode 对落盘文件再断言一次）。
-  return members
-}
-
-async function bundleNode(options, layout, log) {
-  const archiveName = nodeArchiveName(options.nodeVersion, options.arch)
-  const staging = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-node-'))
-  try {
-    let archivePath = options.nodeArchive
-    if (archivePath === null) {
-      archivePath = path.join(staging, archiveName)
-      log(`[build-sidecar] 下载 ${nodeDistUrl(options.nodeVersion, archiveName)}`)
-      await fetchToFile(nodeDistUrl(options.nodeVersion, archiveName), archivePath)
-    } else if (!existsSync(archivePath)) {
-      throw new Error(`--node-archive 不存在：${archivePath}`)
-    }
-
-    let expected = options.nodeSha256
-    const pin = resolvePinnedNodeDigest(archiveName, expected)
-    if (pin.digest !== null) {
-      expected = pin.digest
-      log(`[build-sidecar] Node 归档摘要：${pin.source === 'pinned' ? '仓库固定表 PINNED_NODE_SHA256' : '--node-sha256'}（不读网络摘要）`)
-    } else {
-      // 未固定的版本：退回官方 SHASUMS256.txt，并响亮说明信任落在下载回来的内容上。
-      log(`[build-sidecar] ${archiveName} 未在仓库固定——回退 SHASUMS256.txt（v${options.nodeVersion}）；建议把该版本钉进 PINNED_NODE_SHA256`)
-      const shasums = await fetchText(nodeDistUrl(options.nodeVersion, 'SHASUMS256.txt'))
-      expected = parseShasums(shasums, archiveName)
-      if (expected === null) throw new Error(`SHASUMS256.txt 未包含 ${archiveName}`)
-    }
-    await verifySha256(archivePath, expected)
-
-    const member = nodeMemberPath(options.nodeVersion, options.arch)
-    // A5 真实检查点：列出归档成员，确认**归档里
-    // 确实存在**一个基名为 node 的成员，且期望成员路径在其中。
-    // maxBuffer 显式放大：官方 node 归档清单约 0.8 MiB（5892 项
-    // / 817 KB），默认 1 MiB 余量过小——超限会误报失败（fail-closed 但噪声）。
-    const listing = spawnSync('tar', ['-tzf', archivePath], {
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    })
-    if (listing.status !== 0) {
-      throw new Error(`无法列出 Node 归档成员（exit ${listing.status}）：${listing.stderr ?? ''}`)
-    }
-    assertNodeArchiveMembers(archivePath, member, listing.stdout)
-    const extract = spawnSync(
-      'tar',
-      ['-xzf', archivePath, '-C', staging, '--strip-components=2', member],
-      { encoding: 'utf8' },
-    )
-    if (extract.status !== 0) {
-      throw new Error(`解包 Node 失败（exit ${extract.status}）：${extract.stderr ?? ''}`)
-    }
-    const extracted = path.join(staging, 'node')
-    if (!existsSync(extracted)) throw new Error(`解包后未找到 ${extracted}`)
-    if (path.basename(extracted) !== 'node') {
-      throw new Error(`解包成员基名必须是 node（nodeMemberPath 的固定形状）：${extracted}`)
-    }
-    copyFileSync(extracted, layout.node)
-    chmodSync(layout.node, 0o755)
-    assertBundledNodeBasename(layout.node)
-    log(`[build-sidecar] Node v${options.nodeVersion} → ${layout.node}（基名断言通过）`)
-  } finally {
-    rmSync(staging, { recursive: true, force: true })
-  }
-}
-
 export async function runBuildSidecar(options, io = {}) {
   // 注入的 io 允许是部分实现（现有测试只给 log/error）；缺项回落控制台。
   // 否则「干净 checkout 缺 vendor/dsh 或 pnpm」的 warn 分支会 io.warn is not
@@ -809,28 +610,12 @@ export async function runBuildSidecar(options, io = {}) {
   const plan = buildPlan(options)
   for (const step of plan) io.log(`  ${step}`)
 
-  // Node pin 表与 DEFAULT_NODE_VERSION 的锁步：版本升级漏改/多留摘要
-  // 行时在动网络之前失败，而不是下载后再由摘要不匹配报错。
-  assertNodePinTable()
-
-  // Electron pin ↔ 捆绑 node 的锁步：这条断言不依赖 Electron 二进制
-  // （读取二进制的断言在 CI 恒 SKIP），升级 Electron/Node 而未同步表即在构建开始失败。
-  assertElectronNodePin(ELECTRON_PINNED_VERSION)
-
   // 输入校验（dry-run 同样执行）。
   const tsconfig = path.join(desktopDir, 'tsconfig.sidecar.build.json')
   const sidecarEntry = path.join(desktopDir, 'sidecar-entry.ts')
-  // 摘要冲突先于任何耗时工作失败：--node-sha256 与仓库固定值不一致时，下载/打包
-  // 几十 MB 归档之后再报错是纯粹的浪费（判定与 bundleNode 同一纯函数，语义不分叉）。
-  if (!options.skipNode && options.nodeSha256 !== null) {
-    resolvePinnedNodeDigest(nodeArchiveName(options.nodeVersion, options.arch), options.nodeSha256)
-  }
   // dry-run 的「输入校验」必须真的校验：只打印计划的实现会让
-  // `--node-archive /nope --vendor-dsh /nope` 也报"输入校验通过"。
+  // `--office-assets /nope --vendor-dsh /nope` 也报"输入校验通过"。
   if (options.dryRun) {
-    if (options.nodeArchive !== null && !existsSync(options.nodeArchive)) {
-      throw new Error(`--node-archive 不存在：${options.nodeArchive}`)
-    }
     // 显式传入的源缺失 = 调用方写错路径 → 抛；默认源缺失 = 干净 checkout 的
     // 正常形态 → warn（release 腿在 build:sidecar 之前跑 bundle:dsh）。
     const vendorPresent = existsSync(path.join(options.vendorDshDir, 'package.json'))
@@ -842,6 +627,24 @@ export async function runBuildSidecar(options, io = {}) {
       }
       if (!payload.ok) {
         io.warn(`[build-sidecar] 警告：python 载荷未准备（${payload.problems[0]}）——发布腿必须 --require-python`)
+      }
+    }
+    // 单 Node：node/pnpm 要求只核对 payload 内容（不下载任何 Node）。
+    const components = verifyPayloadNodeAndPnpm(options.pythonPayloadDir, options)
+    if (!components.ok) {
+      throw new Error(`payload node/pnpm 不可用（${options.pythonPayloadDir}）：${components.problems.join('；')}`)
+    }
+    assertPayloadTarget(options.pythonPayloadDir, options.arch)
+    if (!options.skipOfficeAssets) {
+      if (options.officeAssetsExplicit && !existsSync(options.officeAssetsDir)) {
+        throw new Error(`--office-assets 源不存在：${options.officeAssetsDir}`)
+      }
+      const assets = verifyOfficeAssets(options.officeAssetsDir)
+      if (!assets.ok && options.requireOfficeAssets) {
+        throw new Error(`--require-office-assets 但 office 技能资产不可用（${options.officeAssetsDir}）：${assets.problems.join('；')}`)
+      }
+      if (!assets.ok) {
+        io.warn(`[build-sidecar] 警告：office 技能资产未准备（${assets.problems[0]}）——发布腿必须先跑 prepare:office-assets`)
       }
     }
     if (!options.skipVendor) {
@@ -894,9 +697,11 @@ export async function runBuildSidecar(options, io = {}) {
 
   mkdirSync(layout.outDir, { recursive: true })
 
-  // 0. 改名迁移：旧装配目录里的 <out>/node 会被 build-swift-app 原样拷进
-  // .app，清掉它（本脚本是装配目录的唯一写入者）。
+  // 0. 迁移清理：旧布局的独立 Node 产物（<out>/node 与 dsh-chamber-helper）会被
+  // build-swift-app 原样拷进 .app 一起签名发布；单 Node 裁决后它们不再被任何运行期
+  // 解析（装配内唯一的 Node 在 payload 里），必须从持久装配目录清掉。
   rmSync(path.join(layout.outDir, 'node'), { force: true })
+  rmSync(path.join(layout.outDir, 'dsh-chamber-helper'), { force: true })
   // skip 的诚实语义（见文件头）：每个被跳过的目的地先清空，跳过 = 缺位。
   if (options.skipBundle) rmSync(layout.entry, { force: true })
   if (options.skipHostPackages) rmSync(layout.dist, { recursive: true, force: true })
@@ -904,10 +709,11 @@ export async function runBuildSidecar(options, io = {}) {
     rmSync(layout.vendorDsh, { recursive: true, force: true })
     rmSync(layout.pnpm, { recursive: true, force: true })
   }
-  if (options.skipNode) rmSync(layout.node, { force: true })
-  // python 载荷与 node 同款诚实语义：跳过 = 清空缺位（持久 <out> 里的旧载荷会被
-  // build-swift-app 原样拷进 .app 一起签名发布）。
+  // --skip-node 不再产/清任何独立 Node（单 Node）：它只表达「不要求 payload node」。
+  // python 载荷的跳过 = 清空缺位（持久 <out> 里的旧载荷会被 build-swift-app 原样
+  // 拷进 .app 一起签名发布）；payload 里的 node/pnpm 随之一起缺位。
   if (options.skipPython) rmSync(layout.primaryRuntime, { recursive: true, force: true })
+  if (options.skipOfficeAssets) rmSync(layout.officeSkills, { recursive: true, force: true })
   // tsc emit 遗留：本脚本的 tsc 步是 noEmit，不生成它；该目录必须消失（否则
   // electron-builder 的 dist/** glob 会把无人消费的编译产物打进 Electron 包）。
   clearLegacySidecarEmit(path.join(desktopDir, 'dist', 'sidecar'))
@@ -990,14 +796,9 @@ export async function runBuildSidecar(options, io = {}) {
     io.log(`[build-sidecar] pnpm → ${layout.pnpm}`)
   }
 
-  // 4. Node 捆绑（可选）。
-  if (options.skipNode) {
-    io.log('[build-sidecar] 跳过 Node 捆绑（--skip-node）')
-  } else {
-    await bundleNode(options, layout, io.log)
-  }
-
-  // 4b. python 载荷（可选；发布腿用 --require-python 让缺件变红）。
+  // 4. python 载荷（可选；发布腿用 --require-python 让缺件变红）。单 Node 裁决后，
+  // payload 同时是 node（--with-node）与 pnpm（--with-pnpm）的唯一来源，
+  // --require-node/--require-pnpm 因此核对**拷贝后的装配目录**（与源同一内容）。
   if (options.skipPython) {
     io.log('[build-sidecar] 跳过 python 载荷（--skip-python）')
   } else {
@@ -1014,11 +815,50 @@ export async function runBuildSidecar(options, io = {}) {
     }
   }
 
-  // 5. 终态断言。
-  if (existsSync(layout.node)) {
-    assertBundledNodeBasename(layout.node)
-    const mode = statSync(layout.node).mode & 0o777
-    if (mode !== 0o755) throw new Error(`捆绑 Node 权限应为 0755，实际 ${mode.toString(8)}`)
+  // 4a/4b. payload node/pnpm 门控（只核对内容，不下载任何 Node）。
+  const components = verifyPayloadNodeAndPnpm(layout.primaryRuntime, options)
+  if (!components.ok) {
+    throw new Error(`payload node/pnpm 不可用（${layout.primaryRuntime}）：${components.problems.join('；')}`)
+  }
+  if (options.skipNode) {
+    io.log('[build-sidecar] 跳过 payload node 要求（--skip-node：dev/CI 用调用者 node 启动 sidecar.js）')
+  } else if (existsSync(components.node)) {
+    io.log(`[build-sidecar] payload node → ${components.node}`)
+  } else {
+    io.log(`[build-sidecar] payload node 未就绪（${components.node}）——发布腿必须 --require-node`)
+  }
+  if (existsSync(components.pnpm)) {
+    io.log(`[build-sidecar] payload pnpm → ${components.pnpm}`)
+  } else {
+    io.log(`[build-sidecar] payload pnpm 未就绪（${components.pnpm}）——发布腿必须 --require-pnpm`)
+  }
+  assertPayloadTarget(layout.primaryRuntime, options.arch)
+
+  // 4c. office 技能资产（可选；发布腿用 --require-office-assets 让缺件变红）。
+  // 缺件默认只跳过：本地/未 prepare 的装配不应因此失败，但 release 腿先跑
+  // prepare:office-assets 并用 --require-office-assets 把缺件变成红。
+  if (options.skipOfficeAssets) {
+    io.log('[build-sidecar] 跳过 office 技能资产（--skip-office-assets）')
+  } else {
+    const copied = copyOfficeAssets(options.officeAssetsDir, layout.officeSkills, {
+      requireAssets: options.requireOfficeAssets,
+    })
+    if (copied) {
+      io.log(`[build-sidecar] office 技能资产 → ${layout.officeSkills}`)
+    } else {
+      io.log(`[build-sidecar] office 技能资产未准备，跳过（先把 assets 准备到 ${options.officeAssetsDir}）——发布腿必须 --require-office-assets`)
+    }
+  }
+
+  // 5. 终态断言：装配产物必须真的落盘（--skip-* 的缺位已在上面显式产生）。
+  if (!options.skipBundle && !existsSync(layout.entry)) {
+    throw new Error(`装配产物缺失：sidecar.js（${layout.entry}）`)
+  }
+  for (const [label, file] of [
+    ['dist/control-plane/index.js', layout.controlPlaneEntry],
+    ['package.json', layout.packageJson],
+  ]) {
+    if (!existsSync(file)) throw new Error(`装配产物缺失：${label}（${file}）`)
   }
   io.log(`[build-sidecar] 完成：${layout.outDir}`)
   return { dryRun: false, layout }
@@ -1029,10 +869,11 @@ if (isCliEntry(import.meta.url)) {
     label: 'build-sidecar',
     usage: [
       '用法：build-sidecar.mjs [--out <dir>] [--dry-run] [--arch <arm64|x64>]',
-      '       [--skip-node] [--skip-bundle] [--skip-host-packages] [--skip-vendor] [--skip-python]',
-      '       [--vendor-dsh <dir>] [--pnpm-dir <dir>]',
-      '       [--node-version <v>] [--node-sha256 <hex>（覆盖仓库固定摘要，冲突即拒绝）]',
-      '       [--node-archive <tar.gz>] [--python-payload <dir>] [--require-python] [--help]',
+      '       [--skip-node（不要求 payload node，dev/CI 用调用者 node）]',
+      '       [--skip-bundle] [--skip-host-packages] [--skip-vendor] [--skip-python]',
+      '       [--skip-office-assets] [--vendor-dsh <dir>] [--pnpm-dir <dir>]',
+      '       [--python-payload <dir>] [--office-assets <dir>]',
+      '       [--require-python] [--require-node] [--require-pnpm] [--require-office-assets] [--help]',
     ],
     parse: parseBuildSidecarArgs,
     run: runBuildSidecar,
