@@ -11,13 +11,13 @@ dist-ssr/
 release/
 build/
 # scripts/release 是发布链源码，不是构建产物：上面的 release/ 规则会误伤它
-# （2026-12 目录整理后暴露），必须显式反选回来。
+# （目录整理后暴露），必须显式反选回来。
 !scripts/release/
 !scripts/release/**
 *.tgz
 # 构建期生成；clean checkout 用 pnpm run build:artifacts 自举。dsh-runtime /
 # 四个 seed 的 dist 曾在全局 dist/ 规则下用反选行 tracked 进仓，
-# 2026-12「产物移出 git」后不再反选（C8 仍按 src 重建-比对它们的新鲜度）。
+# 「产物移出 git」后不再反选（C8 仍按 src 重建-比对它们的新鲜度）。
 
 # Local runtime state (control-plane data, audit log, dsh host state)
 data/
@@ -62,6 +62,13 @@ packages/renderer/src/generated/
 
 # Agent memory
 .graymatter/
+
+# Agent runtime state (local agent harness: stores, worktrees, caches). Only
+# .agents/skills/ is repository content and must stay committable.
+/.agents/store/
+/.agents/worktrees/
+/.agents/xdg-cache/
+/.agents/xdg-data/
 
 # Local toolchain scratch (dev environment bootstrap: corepack cache / pnpm store / npm cache)
 .tooling/
