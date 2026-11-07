@@ -26,7 +26,7 @@
 ## 0. 摘要（给决策者的三分钟版）
 
 - **路线 A**：Swift/AppKit 只做"壳"（窗口、WKWebView、菜单/托盘/通知/角标/深链/对话框/外部打开），**壳内不承载业务**；业务 = control-plane + desktop 纯 Node 模块，打包为 sidecar 子进程（B 桥 stdio JSON-RPC）；Web UI 100% 复用，仅把 preload 的 `window.dshChamber` 换成 shim（A 桥）。
-- **可行性**：真实依赖 Electron 仅 main.ts、electron-edges.ts、preload.cts、updater.ts 4 文件；其余纯 Node 模块零 import、测试直接 `node *.test.ts` 可跑（`transport-manager.ts:56` 仅注释；`electron-free-gate.test.ts` 传递闭包断言）；控制面经 `createControlPlane(options)` 握手（`control-plane/src/index.ts:159-227`）；dsh 实例是 Node 进程（`spawn-dsh.ts` → `process.execPath`，基名表含捆绑名 `dsh-chamber-helper`，§4.3）；桥接面 58 个 `ipcMain.handle` + 9 push，键集单源 `ipc-events.ts` 的 `IPC_CHANNELS`（67 键），`ipc-surface-mirror.test.ts` / `bridge-manifest.json` / `bridge-shim-surface.test.ts` 锁步（§4.4.3）。
+- **可行性**：真实依赖 Electron 仅 main.ts、electron-edges.ts、preload.cts、updater.ts 4 文件；其余纯 Node 模块零 import、测试直接 `node *.test.ts` 可跑（`transport-manager.ts:56` 仅注释；`electron-free-gate.test.ts` 传递闭包断言）；控制面经 `createControlPlane(options)` 握手（`control-plane/src/index.ts:159-227`）；dsh 实例是 Node 进程（`spawn-dsh.ts` → `process.execPath`；Swift 单 Node 的捆绑基名表 = `{node,node.exe}`，payload 的 `primary-runtime/dependencies/node/bin/node` 直用，§4.3）；桥接面 58 个 `ipcMain.handle` + 9 push，键集单源 `ipc-events.ts` 的 `IPC_CHANNELS`（67 键），`ipc-surface-mirror.test.ts` / `bridge-manifest.json` / `bridge-shim-surface.test.ts` 锁步（§4.4.3）。
 - **工作量（人-日）**：M0 1–2 → M1 5–10 → M2 10–15 → M3 15–20 → M4 10–15 → M5 5–10，合计 **46–72 人-日（9–14 人周）**；Electron 版并行保留，Win/Linux 不受影响。
 - **不做**：不重写 UI（luochenw/deepseek-harness-macos 全原生 = 3–6 人月 + parity 维护）；不在 Swift 重写宿主服务（summer-521/deepseek-harness-swift ≈900KB Swift + 自研 JS desktop-host = 路线 B，见 §2）；不碰 gateway。
 - **决策点**：双壳**共存**还是**替换**；bundle id 区分（通知授权身份）；更新「v1 blocked-available + v2 Sparkle」；双线防漂移（§4.4.3 / §9 R1）。
@@ -42,14 +42,14 @@
 | A1/A2/A11 | "4 个文件依赖 Electron"笔误；23.5k/21k 行口径高估 | §0/§4.2 口径（P1 拆分后重测）：真实依赖 Electron 4 文件（main.ts/electron-edges.ts/preload.cts/updater.ts）≈6.7k——打磨轮当时为 3 文件（electron-edges.ts 是 P1 新 seam）；纯 Node 业务模块零 import（electron-free-gate 传递闭包） |
 | A3 | "port 从 17500 起试"与现状不符 | §3.3 改：**打包固定 17500 无退避**（`shell-core.ts:426-441` 的 resolveControlPlanePort）；dev 从 17520 起 bind 探测首个空闲端口（200 个候选），或按 `DSH_CHAMBER_SHELL_PORT` > `DSH_CHAMBER_CP_PORT` 钉死（Swift 侧 ControlPlanePort.swift）；控制面 EADDRINUSE 即失败；**dsh 实例**从 17510 起 +1 ≤5 次 |
 | A4 | Supervisor backoff 误引 "5×500ms"（那是 renderer-ready 握手语义） | §3.3 改：sidecar 重启退避另立；renderer 恢复 = 500ms 延迟 + 60s 窗口 ≤3 次 + 15s unresponsive（main.ts:1178-1267）参数化 |
-| A5/4.3 | spawn-dsh 纯 Node 分支有 basename 门；Electron 分支另带 --expose-internals | §4.3 写明基名表（{node,node.exe,dsh-chamber-helper}）+ 解析断言测试；Swift 捆绑 `Resources/sidecar/dsh-chamber-helper` 即满足（A5 反转的理由见 §4.3 Rejected alternatives） |
+| A5/4.3 | spawn-dsh 纯 Node 分支有 basename 门；Electron 分支另带 --expose-internals | §4.3 改**单 Node**：唯一 Node = payload 的 `primary-runtime/dependencies/node/bin/node`（不重命名，基名 `node`）；`resolveNodeExecutable` 纯 Node 分支对 `{node,node.exe}` 直用 `process.execPath`；进程归因改按应用派生子进程关系；旧的独立 Node / `dsh-chamber-helper` 退场（理由见 §4.3 Rejected alternatives） |
 | A6 | "13 命名空间"实为 4 标量 + 9 命名空间 | §4.4.1 全篇改口径（companion 同） |
 | A7 | "macOS 无 argv 扫描"不实（open-url + argv 防御双路径，main.ts:1479-1482/1687） | §4.5 改写 |
 | A8 | Electron 从未 setApplicationMenu（Cmd+C/V 靠默认菜单） | §5 E3 现状列改正，Swift 结论不变（W2 必修） |
 | A9 | §6.1/§6.4 验证项编号 E1/E2 与 §5 边沿表撞车 | 更名 **U1**（userData 实根）/ **S1**（safeStorage 判别单测） |
 | A10 | E8 对话框归属错引 design 24；desktop_pick_directory 已不存在 | E8 = 插件源 folder\|.tgz 一体化 picker（design 21 §6.5 / 13 §5.8）；**删除无消费方的 pickDirectory()** |
 | A13 | userData 清单漏 ssh-plugin-journal 与 *.corrupt | §6.1 补全（ssh-plugin-journal 已随写面退役删除，见 design 13 实现状态） |
-| B1/B13 | 资源/打包路径 seam 缺失；sidecar 打包双路径解析未写 | §4.1 HostEdges 补 `resolveResource`/`isPackaged` 能力位（≈15 处直拼点 P1 参数化）；§3.2 补 sidecar 打包布局同构（tsc 产物 + dist/web + host 包 + dsh-chamber-helper/pnpm） |
+| B1/B13 | 资源/打包路径 seam 缺失；sidecar 打包双路径解析未写 | §4.1 HostEdges 补 `resolveResource`/`isPackaged` 能力位（≈15 处直拼点 P1 参数化）；§3.2 补 sidecar 打包布局同构（tsc 产物 + dist/web + host 包 + `primary-runtime/` 全量 payload（node/pnpm/python）+ `office-skills/`；单 Node 在 payload 内） |
 | B2 | §6.3 互斥锁设计缺陷（pidfile stale 模式正是 STATUS 判死刑的；未提 Electron 侧同落地；二次 flock 自锁） | §6.3 改 **flock(LOCK_EX\|LOCK_NB)** + 双 flavor 同实现 + fd 常驻 + 复验不二次 flock |
 | B3 | HostEdges 缺渲染器可用性门 | §4.1 补 `webViewLoading()`/`webViewContentAlive()`（或事件状态机进 core）；就绪握手"返回 false → 渲染端有界重试"语义保留 |
 | B4 | BoundedActiveNotifications 持 Electron Notification 宿主对象，不能进 core | 对象登记/淘汰属 electron-edges；core 只留 click 回执绑定 + 有界 ACK 队列/去重/限速 |
@@ -143,7 +143,7 @@ Node 侧。移植条件因此罕见：**把壳换掉，业务与测试资产原�
 │    gateway-secrets.json, chamber-settings.json, audit-log.jsonl, │
 │    dsh-runtime trees, 日志}                                  │
 └───────────────┬─────────────────────────────────────────────┘
-                │ spawn（resolveNodeExecutable 纯 Node 分支）
+                │ spawn（resolveNodeExecutable 纯 Node 分支：payload node，基名 node）
         ┌───────▼────────┐        ┌──────────────────────┐
         │ dsh web profile │  …N 个  │ 远程宿主（ssh/gateway） │
         │ 实例（Node）     │        │ 经系统 ssh / HTTP      │
@@ -151,15 +151,18 @@ Node 侧。移植条件因此罕见：**把壳换掉，业务与测试资产原�
 ```
 
 - **Swift 壳**不 import 业务模块，只是"边缘执行器 + 传输层护栏 + 窗口"；业务状态全在 sidecar。
-- **sidecar** = 打包产物，传输恒为 **stdio**（未实现的 `--socket` 不作接口面）。实参同 `sidecar-entry.ts`：
-  `dsh-chamber-helper sidecar.js --user-data-dir <dir> [--dsh-path <dir>] [--web-dist-dir <dir>] [--host-graph-dir <dir>]
+- **sidecar** = 打包产物，传输恒为 **stdio**（未实现的 `--socket` 不作接口面）。启动命令 = **payload Node**：
+  `<sidecar>/primary-runtime/dependencies/node/bin/node <sidecar>/sidecar.js`（单 Node：没有独立的
+  `dsh-chamber-helper`）。实参同 `sidecar-entry.ts`：
+  `--user-data-dir <dir> [--dsh-path <dir>] [--web-dist-dir <dir>] [--host-graph-dir <dir>]
   [--host-git-dir <dir>] [--host-archive-dir <dir>] [--host-open-in-dir <dir>] [--port <n>]
   [--native-updater <feed|off>]`
   （pnpm/host 路径由内部布局解析，无 `--pnpm-dir`）。stdout/stderr 不混业务：**入口把存量
   console.log/console.debug 重定向到 stderr**（main.ts 业务日志如端口行 :1787、will-quit 完成串 :1673——实机
   门禁断言该串），否则 B 桥首发即撞非协议行；fail-loud 只针对重定向后泄漏；stderr 是唯一日志通道（`~/Library/Logs/` 或 userData/logs）。**sidecar stderr 透传行另有独立有界落盘** `<userData>/logs/sidecar.log`（`ShellLog.sidecar.configureSidecar` + `BridgeClient.sidecarLogSink`；**规格**：单文件 256 KiB、单份轮转 `sidecar.log.1`（名按实例文件名派生）、目录 0700 / 文件 0600、写失败静默退 stdout——同 design 02 §3.8 控制面 sink 的权限纪律、保留量更小）。**壳自身日志** `<userData>/logs/shell.log`（`ShellLog.shared`，同 256 KiB / 单份 `.1` / 0700-0600）记启动、sidecar spawn/退出、导航失败、更新相位与退出链关键行（经 `shellLog` 同写），是 T-25「原生壳本地 dump」的主角（由 `native-shell.log` 改名，见 deviations T-17）。**两链关系**：控制面 `<stateDir>/logs/control-plane.log` 是 WS splice 归因行的**权威**去向（两 flavor 都有，`createControlPlane` 无条件包装，02 §3.8）；`sidecar.log` 是原生壳**兜底**（覆盖控制面 sink 建立前的 stderr，如 fatal 启动输出；同批 console 行存两份）。**flavor 偏差（已登记 deviations）**：Electron 1 份 `control-plane.log`（2 MiB × 3 = 6 MiB），原生壳 2 份（另有 `sidecar.log` 256 KiB × 2 轮转环 = 512 KiB），合计 6 MiB + 512 KiB。
 - dsh 实例与控制面关系不变（05 §7.5：`PlaneHandle.startLocal()` 预启动、按需 spawn、reaper）；**迁移后 dsh
-  子进程 Node = sidecar 自身可执行文件**（`dsh-chamber-helper`，§4.3）。
+  子进程 Node = sidecar 自身可执行文件**（即 payload Node `primary-runtime/dependencies/node/bin/node`；
+  `spawn-dsh` 经 `process.execPath` 直用，§4.3）。
 - **资源路径注入**：Swift 无 isPackaged/resourcesPath 概念，sidecar-entry 以参数注入 .app 内路径：builtin dsh
   workspace（Resources/sidecar/vendor/dsh）、webDistDir（**Resources/dist/web**，由 AppDelegate 按候选解析：resourceURL/dist/web → sidecar/dist/web）、
   四个宿主包 sourceDir（Resources/sidecar/dist/<pkg>；含 localOnly 的 open-in）、pnpm
@@ -189,15 +192,16 @@ packages/desktop/scripts/emit-bridge-manifest.mjs # IPC 通道 manifest → Swif
 
 sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是双 flavor 宿主（Electron entry `main.ts` 保留；
 `sidecar-entry.ts` 及 host-edge 适配在 §4.1）。sidecar 打包布局 = **编译产物 `dist/control-plane/` + host 包
-`dist/dsh-chamber-seed-*/` + 内嵌 `vendor/dsh/` 与 `pnpm/` + 捆绑 `node`**；renderer 产物 `dist/web` 属 .app 的
+`dist/dsh-chamber-seed-*/` + 内嵌 `vendor/dsh/` 与 `pnpm/` + `primary-runtime/`（全量 payload：node/pnpm/python）
++ `office-skills/`**；renderer 产物 `dist/web` 属 .app 的
 `Contents/Resources/dist/web`（不在 sidecar 目录内）。复用 build-control-plane.mjs 的"双路径解析"（打包态 import
 编译产物、dev/测试走 pnpm 符号链接，control-plane-module.ts:5-30 注释）——sidecar 与 Electron 共享
 `packages/desktop/dist/control-plane`；**host 包不同源**：Electron 走 `build-host-graph-package.mjs` 产的
 `dist/host-*-package`，sidecar 直接读 `packages/dsh-chamber-seed-*/{package.json,dist/index.js}` 拷进自己的
 `dist/dsh-chamber-seed-*/`（两条腿别混目录名）。
 
-**装配目录（`scripts/build-sidecar.mjs` 的 `sidecarLayout`，:156-172）**：
-`<out>/{dsh-chamber-helper, sidecar.js, package.json, dist/control-plane/, dist/dsh-chamber-seed-*/, vendor/dsh/, pnpm/}`。要点：
+**装配目录（`scripts/build-sidecar.mjs` 的 `sidecarLayout`）**：
+`<out>/{sidecar.js, package.json, dist/control-plane/, dist/dsh-chamber-seed-*/, vendor/dsh/, pnpm/, primary-runtime/, office-skills/}`。要点：
 - `sidecar.js` = esbuild 入口（shell-core 全家 + sidecar-ctx + node-edges + dsh-runtime）；
   `@dsh-chamber/control-plane`、`electron` 与 `./dist/control-plane/index.js` 为运行期外部；
 - 装配目录必须带 `package.json`（`{type:'module'}` + chamber 版本）——shell-core 模块级 `version` 读取
@@ -216,8 +220,21 @@ sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是双 flavor 宿�
 - **运行期标记**：Swift Supervisor 装配态 spawn 注入 `DSH_CHAMBER_SIDECAR_COMPILED=1`
   （`control-plane-module.isPackagedSidecarRuntime`）→ control-plane 走相对编译入口；装配目录无 node_modules，
   裸说明符不可解析。
-- Node 捆绑落位 `<out>/dsh-chamber-helper`（基名 = `scripts/lib/sidecar-assembly.mjs` 的 `BUNDLED_NODE_BASENAME`，§4.3 A5 反转），SHA-256 校验后才落盘（摘要来源 = 仓库固定表，
-  见 §4.3）。
+- **单 Node（无 dsh-chamber-helper）**：装配内唯一的 Node 在 `primary-runtime/dependencies/node/bin/node`
+  （payload 的 node 半边；路径单源 = `scripts/lib/sidecar-assembly.mjs` 的 `PAYLOAD_NODE_RELATIVE`/`payloadNodePath`）。
+  装配目录顶层没有 `node`/`dsh-chamber-helper`；`build-sidecar` 在开工时清理这两个旧布局产物，`build-swift-app`
+  对顶层 `node`/`node.exe`/`dsh-chamber-helper` 旧布局条目一律 loud（fail-closed）。Node 版本与 sha256 的唯一来源 =
+  `primary-runtime-lock.json` 的 `nodeVersion`/`nodeSha256`（随 payload 下载校验；sidecar 不再有独立 pin，§4.3）。
+- **payload（`primary-runtime/`）**：`runtime.json` + `dependencies/{node,pnpm,python}`，由
+  `prepare-python-payload --with-node --with-pnpm` 生成（`--with-pnpm` 隐含 `--with-node`；默认仍 python-only，
+  Electron/gateway 现行为不变）。`--require-python`/`--require-node`/`--require-pnpm` 三个门各自 fail-closed；
+  `--skip-node` 只表达「本次不要求 payload node」（dev/CI 的 compiled-sidecar smoke 用调用者 node 启动 sidecar.js）。
+  pnpm = 构建机 `node_modules/pnpm`（版本单源 = desktop `dependencies.pnpm`）整包拷到 `dependencies/pnpm`，
+  按目标 platform/arch prune 外平台原生包，入口 `bin/pnpm.mjs`。
+- **office-skills/**：8 个 markdown（7×SKILL.md + `office/references/sidecar.md`），与 primary-runtime 平级；
+  `--require-office-assets` 缺件 fail-closed。Office 能力**只在本地 Swift 实例**提供（范围裁决：Electron flavor 不接线、
+  Electron 发布腿与 ci.yml 排练不做 Office 改动），故只有 Swift 装配链携带该目录；仓库内
+  `packages/desktop/resources/office-skills/` 只是构建期落点（.gitignore 忽略资产、只提交 README）。
 
 **`.app` 装配（W-24 定稿，`macos/scripts/build-swift-app.mjs`）**：
 `<App>.app/Contents/{Info.plist, MacOS/dsh-chamber, Resources/{icon.icns, DSHChamber_DSHChamber.bundle, sidecar/, dist/web}}`。约束：
@@ -225,12 +242,13 @@ sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是双 flavor 宿�
   bundle root」；`Bundle.module` 只查 `Bundle.main.bundleURL`（= .app 根）与构建目录，故打包态改用
   `ChamberResources`（resourceURL → bundleURL → 可执行目录）；
 - **entitlements plist 不能带 XML 注释**（codesign 的 AMFIUnserializeXML 报解析失败）；壳侧最小集 =
-  `disable-library-validation`（加载装配目录内独立签名的 Node（`dsh-chamber-helper`）与运行时安装的未签名原生模块），该捆绑运行时另加
-  `allow-jit` / `allow-unsigned-executable-memory`；
+  `disable-library-validation`（加载装配目录内独立签名的 payload Node（`primary-runtime/dependencies/node/bin/node`）
+  与运行时安装的未签名原生模块）；该 payload Node 另加 `allow-jit` / `allow-unsigned-executable-memory`
+  （`entitlements.node.plist`，`build-swift-app` 按精确路径 `isBundledPayloadNode` 给嵌套签名）；
 - **control-plane 只能经 `control-plane-module` facade 取**：装配目录无 node_modules，裸说明符
   `@dsh-chamber/control-plane` 会 `ERR_MODULE_NOT_FOUND`；facade 在装配态加载
   `<sidecar>/dist/control-plane/index.js`。
-签名顺序 = 嵌套 node 先、主 app 后；Developer ID 带 hardened runtime（公证前置），ad-hoc 不带；正式发布仍缺
+签名顺序 = 嵌套 payload Node（及 .node 原生模块）先、主 app 后；Developer ID 带 hardened runtime（公证前置），ad-hoc 不带；正式发布仍缺
 Apple 凭据（外部阻断）。
 
 ### 3.3 启动序列（状态机）
@@ -244,7 +262,7 @@ Apple 凭据（外部阻断）。
    且无日志；文件级损坏 = loud + 不动作**；合法文件——含缺 debug 键的——按文件值经同一个
    `setDebugMode` 腿应用），回读**暂存**，等 sidecar ready 帧后再上报——一次汇总在 §5.1.1 的
    ready 门里。
-2. Supervisor：spawn `dsh-chamber-helper sidecar.js`；sidecar 完成今日 main.ts 的启动职责（目录锁在 sidecar 内复验
+2. Supervisor：spawn `<sidecar>/primary-runtime/dependencies/node/bin/node <sidecar>/sidecar.js`；sidecar 完成今日 main.ts 的启动职责（目录锁在 sidecar 内复验
    但不二次 flock）→ `createControlPlane`
    （**端口由 Swift 解析后以 `--port` 注入**：打包态固定 17500、无退避
    （main.ts:253-281，EADDRINUSE 即 loud 失败）；dev 态按 `DSH_CHAMBER_SHELL_PORT` >
@@ -372,14 +390,45 @@ interface HostEdges {
 
 ### 4.3 Node 运行时分发（sidecar 的运行时底座）
 
-- **捆绑**：fetch 固定版本官方 Node（arm64 + x86_64，或按 §10 决策 6 单一架构/universal），SHA-256 校验后进
-  `.app/Contents/Resources/sidecar/dsh-chamber-helper`。**摘要的信任基座在仓库内**（`build-sidecar.mjs` 的
-  `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本两个 darwin 归档必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本（`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得呈现为「已校验」；升级默认版本 = 同一提交更新该表（`build-sidecar.test.mjs` 会红）。**基名 = `dsh-chamber-helper`**（单一来源 `scripts/lib/sidecar-assembly.mjs` 的 `BUNDLED_NODE_BASENAME`）：`resolveNodeExecutable`（`spawn-dsh.ts#resolveNodeExecutable`）的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe,dsh-chamber-helper}` 时直用 process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'（系统版本不可控）；`build-sidecar.test.mjs` 断言归档成员名 + 解包后基名 + 该基名命中直用分支（与 JS 常量锁步，A5 反转）。Electron 分支 = execPath + ELECTRON_RUN_AS_NODE=1 + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的 runtimeNodeExecutor 同构，`host-assembly.ts:824`）。
-- **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；pnpm 11.21.0 已随 desktop 依赖，改由 sidecar 目录内嵌 + 注入；宿主插件管理器的供给见 02 §3.1（入口仍由各 flavor 解析后交给控制面，控制面按宿主 PATH 决定是否前置 wrapper）。
+- **单 Node（payload）**：Swift flavor 只有一份 Node——primary-runtime payload 的
+  `dependencies/node/bin/node`（payload 形状见 design 18）。sidecar.js 由它启动
+  （`<sidecar>/primary-runtime/dependencies/node/bin/node <sidecar>/sidecar.js`），托管 dsh 实例使用同一
+  `process.execPath`（`spawn-dsh.ts#resolveNodeExecutable` 的纯 Node 分支对基名 `{node,node.exe}` 直用，否则
+  才回落 PATH/knownNodeLocations）。路径单源 = `scripts/lib/sidecar-assembly.mjs` 的
+  `PAYLOAD_NODE_RELATIVE`/`payloadNodePath`；没有独立的 `dsh-chamber-helper`，`build-sidecar` 也不再有第二份
+  Node 下载/摘要表（旧 `PINNED_NODE_SHA256`/`DEFAULT_NODE_VERSION`/`--node-version`/`--node-sha256`/
+  `--node-archive` 已删除；Electron flavor 的 Electron↔Node pin 锁步断言随之从 sidecar 构建退场）。
+- **版本与完整性**：Node 归档版本/`sha256` 唯一来源 = `packages/desktop/primary-runtime-lock.json` 的
+  `nodeVersion`/`nodeSha256`（`prepare-python-payload --with-node` 按锁下载并逐件校验；`--dry-run` 离线只校验布局）。
+  `build:sidecar --require-node` 只做常规文件 + 可执行位校验，不另立 pin；升级 lock 的 `nodeVersion` = 全链路行为变化
+  （payload node、托管 dsh、签名/公证都要重验）。
+- **进程归因（design 25 §4.3 A5 再反转）**：payload Node 不重命名（保持上游官方 payload 的字面名 `node`，工具装到
+  DSH_HOME 后返回的也是该布局）；监控不再依赖特制基名把进程归属到 app，而是按**应用派生的子进程关系**（app 的
+  spawn 树）归属——这是**设计约定，不是自动探针**（本仓未实现进程归因探针，按名字/启动树归属由系统监控工具侧承担）。
+  `spawn-dsh` 的捆绑 Node 基名表收敛为 `{node,node.exe}`；Electron 分支仍走 `process.execPath` +
+  `ELECTRON_RUN_AS_NODE=1` + `--expose-internals`（dsh loader 的 node-addon-require-builtin 需要；updater 的
+  runtimeNodeExecutor 同构，`host-assembly.ts:824`）。
+- **签名**：payload Node 是 .app 内的嵌套 Mach-O。`build-swift-app` 的全嵌套遍历对它单独签名，并只对它使用
+  `entitlements.node.plist`（`allow-jit`/`allow-unsigned-executable-memory`；判定 = 精确路径
+  `isBundledPayloadNode`，不靠基名猜测）；壳侧最小集保持 `disable-library-validation`（加载装配目录内独立签名 Node
+  与运行时安装的未签名原生模块）。签名顺序 = 嵌套 payload Node/.node 原生模块先、主 app 后；
+  `codesign --verify --deep --strict` 仍是装配期 fail-closed 门。
+- **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；
+  pnpm 11.21.0 已随 desktop 依赖，两份同源供给：sidecar 目录内嵌 `<sidecar>/pnpm`（运行时安装 / 宿主插件管理器，
+  02 §3.1 的 pnpm shim）与 payload `primary-runtime/dependencies/pnpm`（工具/受管宿主侧，入口 `bin/pnpm.mjs`）。
+  宿主插件管理器的供给见 02 §3.1（入口仍由各 flavor 解析后交给控制面，控制面按宿主 PATH 决定是否前置 wrapper）。
 - **dsh-runtime 默认执行器恒纯 Node**（{file: process.execPath}，runtime-installer.ts:777）。
-- Node 版本策略：与 desktop 的 Electron 内置 Node 大版本对齐或取 LTS（决策 6）。
 
-**Rejected alternatives（捆绑 Node 的基名，A5 反转）**：① 继续叫 `node`（原 A5）——监控按可执行文件基名标注进程，app 派生的控制面与每个托管 dsh 宿主都显示为泛化 `node`，无法与应用归属对齐，否；② 只改进程标题/argv[0]、不落盘改名——实测 `exec -a <name>` 后进程名仍是可执行文件基名（`lsof` COMMAND），否；③ 符号链接出第二个名字——实测 exec 符号链接解析回目标基名（`ln -s /bin/sleep sym-probe` 运行后进程名是 `sleep`），否；④ 构建期硬链接或运行时复制——实测硬链接能保留新名字（`ln orig hl-probe` 运行后进程名是 `hl-probe`），但 bundle 会同时携带 `node` 与 helper 两个目录项，守卫、发布断言与「旧名是否合法」的兼容叙事都要为此开口子，收益仅是省下改名本身；运行时复制则把 120MB 运行时写到 bundle 之外，封签与更新叙事都变复杂——两者皆否；⑤ 只改 Swift 侧落位名、`spawn-dsh` 基名表不动——纯 Node 分支会回落 PATH/knownNodeLocations，托管宿主改用系统 node（版本不可控），否。结论 = 构建期落位名固定为 `dsh-chamber-helper`：命名单源在 `scripts/lib/sidecar-assembly.mjs`，`spawn-dsh` 的基名表加入该名（`node`/`node.exe` 留给 dev/CI `--skip-node` 与从不捆绑 Node 的 Electron），`build-sidecar` 在开工时清掉旧布局 `<out>/node`，`build-swift-app` 拒绝任何顶层 `node*` 条目。
+**Rejected alternatives（单 Node 合并，取代旧 A5「改名 helper」方案）**：① 保留独立 `dsh-chamber-helper`（旧 A5 反转的
+落位名）+ payload 再带一份 Node——同一 .app 两份 ~110MB 运行时、两条版本/摘要轴与两套签名面，且「payload full =
+node+pnpm+python」裁决已把 Node 收进 payload，否；② 给 payload Node 造第二个名字（构建期硬链接/符号链接/重命名）——
+布局必须与上游官方 payload 一致（工具把 payload 装到 DSH_HOME 后返回的是 `dependencies/node/bin/node` 布局），
+改名制造布局偏差；旧 A5 实测的理由（bundle 多目录项、封签与更新叙事复杂）同样成立，否；③ 保留 helper 作
+`--python-only` 过渡双轨——契约不留长期双轨：回滚 = 整批 revert 或限时演练 `--python-only`（payload 只 python，
+不挂 Node 相关能力），不保留 helper 代码路径，否；④ 只改监控规则、不改启动链（继续让进程名 `node` 的多个进程混在
+一起再按名字区分）——单 Node 后启动树是确定的，按**应用派生子进程关系**归属即可，不需要「靠名字」第二条判别轴，否。
+结论 = 唯一 Node = payload `dependencies/node/bin/node`（不重命名；`build-sidecar` 清理旧 `<out>/node` /
+`<out>/dsh-chamber-helper`，`build-swift-app` 拒绝任何顶层 `node`/`node.exe`/`dsh-chamber-helper` 旧布局条目；`sidecar.js` 由它启动）。
 
 ### 4.4 桥接设计（本方案的信任核心）
 
@@ -941,8 +990,8 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
   ssh-passwords.json；gateway-secrets.json；audit-log.jsonl；ssh-instances.json（引用前 grep 现取）。
 - 旧版 Electron 保留物 `*.corrupt`（A13）在 Swift 首启前决定处置（预期：保留禁用，不主动清理）。
 - 验证项 **U1**（实机）：Swift 计算的根与 Electron 打包实根一致（编号避开 §5 E 表，A9）。**实施现状**：`PackagedLayout`
-  已按 `isPackaged` 解析——装配态 userData 与 Electron `app.getPath('userData')` 同根，helper/sidecar/vendor-dsh/
-  web-dist 全 bundle-relative；`DSH_CHAMBER_SHELL_*` 仍优先，dev 态保持 `dsh-chamber-dev` 隔离。**代码侧已闭合**
+  已按 `isPackaged` 解析——装配态 userData 与 Electron `app.getPath('userData')` 同根，payload-node/sidecar/vendor-dsh/
+  web-dist 全 bundle-relative（唯一 Node 在 primary-runtime payload 内）；`DSH_CHAMBER_SHELL_*` 仍优先，dev 态保持 `dsh-chamber-dev` 隔离。**代码侧已闭合**
   （`PackagedLayoutTests` + `chamber-lock.test.ts` ⑦ 跨语言 lockstep），残余仅为 **C2 实机门禁**（互斥成立前提是
   Electron 侧装的是含锁的构建；实测：本机 /Applications 旧构建无 `chamber-lock`，不会持锁）。
 
@@ -1157,9 +1206,12 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
   嵌套形态（dev `swift run`）。备选 ① 显式 `--build-system native`（已 deprecated、且管不到 dev/test 与
   `swift run`）、② 重指 `macos/.build/release` 到 native 产物（只治标、两种形态照旧）——都被否。
 - 更新 v1 blocked-available（§7）；v2 Sparkle 按决策 3 未排期。sidecar 打包布局 = `dist/control-plane/` + host 包
-  `dist/dsh-chamber-seed-*/` + 内嵌 `vendor/dsh`/`pnpm` + 捆绑 `node`（§3.2）；build-swift-app.mjs；CI：GitHub
-  Actions macOS runner（swift build + XCTest + 打包 + ad-hoc/Developer ID + notarize——mac 发布缺 Apple 凭据阻断，
-  Swift 版同门禁）；图标/资源复用（icon.icns 平移）。
+  `dist/dsh-chamber-seed-*/` + 内嵌 `vendor/dsh`/`pnpm` + `primary-runtime/` 全量 payload（node/pnpm/python）+
+  `office-skills/`（§3.2）。构建链 = `prepare-python-payload --with-node --with-pnpm` + `prepare-office-assets` +
+  `build:sidecar --require-python --require-node --require-pnpm --require-office-assets`（缺件 fail-closed），打包后
+  `--verify` 复核 payload（node/pnpm/python）与 office 8 文件内容；`build-swift-app.mjs` 装配断言 payload Node 与
+  office 结构、拒绝旧布局 node/node.exe/dsh-chamber-helper；CI：GitHub Actions macOS runner（swift build + XCTest + 打包 + ad-hoc/
+  Developer ID + notarize——mac 发布缺 Apple 凭据阻断，Swift 版同门禁）；图标/资源复用（icon.icns 平移）。
 
 ### 8.5 P4 实机门禁矩阵（1–2 人周）
 
@@ -1190,7 +1242,9 @@ WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
   门禁；mirror + bridge-manifest 双锁步（含 `bridge-shim-surface.test.ts`）；同 tag 双壳发布。
 - R2 **WKWebView 差异**：渲染引擎/权限模型/devtools 不同；无 backgroundThrottling/unresponsive 等价物（C1/B5）；无网页
   Notification 预拒绝 API（B10）；存储独立 jar（C2）。P0 先行证伪（G1–G5 + C1/C2）。
-- R3 **Node 捆绑与架构**：arm64/x86_64 × 两 flavor 的 CI 成本（决策 6）。
+- R3 **Node 版本与架构**：单 Node 后不再有独立 sidecar Node pin——版本/摘要随 `primary-runtime-lock.json`
+  （`nodeVersion` pin 在锁内，见 §4.3），升级 lock 是全链路行为变更（payload node/托管 dsh/签名公证重验）；
+  arm64-only v1（x86_64/universal 未出货，决策 6 剩余项）。
 - R4 **通知授权身份变更**：新 bundle id → 用户需重新授权通知。
 - R5 **目录并发互斥**：§6.3 flock 为仓库首个跨进程锁，协议需新定义（格式/诊断字段/双进程复验）；与进程内围栏正交。
 - R6 **旧 safeStorage 密文迁移**：Swift flavor 首启遇旧 gateway 凭据不可解密——"保留禁用待重录"（S1 单测）。
@@ -1214,7 +1268,8 @@ WKWebView parity 清单（W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴
 3. **更新路线**：v1 blocked-available 诚实形态 → v2 Sparkle（推荐）；或 v1 直接 Sparkle。
 4. **仓库落位**：`macos/`（SwiftPM，推荐）vs `packages/swift-shell`。
 5. **原生 UI 渐进**（路线 B/C）：本文不覆盖；HostEdges 边界即未来接缝，侵蚀需另立设计。
-6. **Node 版本与架构**：与 Electron 43 内置 Node 大版本对齐 vs LTS；arm64-only vs universal2。
+6. **Node 版本与架构**：Swift 单 Node 已把版本/摘要收敛到 `primary-runtime-lock.json`（`nodeVersion`；具体值与
+   Electron 43 内置 Node 的大版本对齐关系以该锁为唯一来源）；是否维持该对齐/LTS 与 arm64-only vs universal2 仍待签核。
 7. **静态凭据加密**：v1 诚实 0600 明文（推荐）；或提前排 Keychain 协助加密 edge。
 
 ### Rejected alternatives（架构调整）

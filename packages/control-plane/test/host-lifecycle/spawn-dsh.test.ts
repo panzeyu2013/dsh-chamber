@@ -657,14 +657,17 @@ test('resolvePlainNodeExecutable: the well-known install roots are the last anch
 
 test('resolvePlainNodeExecutable: a non-Electron process whose own basename IS node returns itself', () => {
   const root = tempDir()
+  // Swift single-Node: the payload node is NOT renamed — its basename is 'node', and the
+  // sidecar + every managed dsh host run on it (design 25 §4.3 A5 is child-process based).
+  const payloadNode = '/opt/sidecar/primary-runtime/dependencies/node/bin/node'
   assert.equal(resolvePlainNodeExecutable({
     electron: undefined,
-    execPath: '/opt/sidecar/dsh-chamber-helper',
+    execPath: payloadNode,
     platform: 'linux',
     env: { PATH: join(root, 'empty') },
     knownLocations: [],
     home: root,
-  }), '/opt/sidecar/dsh-chamber-helper', 'the bundled sidecar node is a real node (Swift flavour)')
+  }), payloadNode, 'the payload sidecar node is a real node (Swift single-Node flavour)')
   assert.equal(resolvePlainNodeExecutable({
     electron: undefined,
     execPath: '/usr/bin/node',
@@ -673,6 +676,16 @@ test('resolvePlainNodeExecutable: a non-Electron process whose own basename IS n
     knownLocations: [],
     home: root,
   }), '/usr/bin/node')
+  // The retired helper basename no longer takes the direct branch: only the caller's node
+  // may run dsh, and a bare PATH miss stays null rather than guessing.
+  assert.equal(resolvePlainNodeExecutable({
+    electron: undefined,
+    execPath: '/opt/sidecar/dsh-chamber-helper',
+    platform: 'linux',
+    env: { PATH: join(root, 'empty') },
+    knownLocations: [],
+    home: root,
+  }), null, 'the retired dsh-chamber-helper basename is not a bundled node any more')
 })
 
 test('spawnDsh: a host PATH that already resolves pnpm and node is handed to the child untouched', async () => {

@@ -334,14 +334,26 @@ function ensureSeedTargetParent(dshHome: string, packageName: string, relative: 
  * plane's own layout, never a silent skip. `inserts` defaults to the client-graph row;
  * production passes OFFICIAL_OPEN_IN_DISABLE as `disables` exactly when the chamber
  * open-in host package is seeded, so the superseded official host half is never mounted.
+ *
+ * `startupOverlayText` is the rendered startup block (startup-plugin-rows.ts: one more
+ * top-level `- insert:` patch object with upstream package names + config), appended
+ * AFTER the chamber rows and their disables. The empty string keeps the legacy bytes
+ * byte-for-byte; a disable/startup-only overlay is valid, so the array renderer is only
+ * consulted when it owns at least one row.
  */
 export function buildPatchOverlay(
   stateDir: string,
   inserts: readonly HostPackageInsert[] = [HOST_GRAPH_INSERT],
   disables: readonly CordisDisablePatch[] = [],
+  startupOverlayText = '',
 ): string {
   const path = join(stateDir, HOST_GRAPH_PATCH_FILENAME)
-  const content = renderCordisOverlay(inserts, disables)
+  const content = (inserts.length > 0 || disables.length > 0
+    ? renderCordisOverlay(inserts, disables)
+    : '') + startupOverlayText
+  // Same failure the array renderer raised for a wholly empty overlay: an empty patch
+  // file would look like "this spawn passes --patch" while mounting nothing.
+  if (content === '') throw new Error('cordis overlay render: overlay requires at least one row')
   ensurePrivateDirectoryNoFollow(stateDir, 0o700, { existingMode: 'preserve' })
   if (readSeedTarget(path) === content) return path
   atomicWritePrivateFileNoFollow(path, content, { mode: 0o600 })

@@ -8,8 +8,8 @@
  *
  *   1. resolves the assembly and LOUDLY skips when it is absent (never a silent
  *      pass — a missing native artifact must be visible in the run summary);
- *   2. launches the shipped `sidecar.js` with the bundled node (or the running
- *      node), waits for the real `ready` frame over the NDJSON B bridge, drives
+ *   2. launches the shipped `sidecar.js` with the payload node (or the running
+ *      interpreter for `--skip-node`), waits for the real `ready` frame over the NDJSON B bridge, drives
  *      `dsh-chamber:info` + `dsh-chamber:settings-get`, and probes the
  *      control-plane HTTP surface (`/health`, the origin fence, and the shell
  *      index + declared assets against the resolved web dist: explicit

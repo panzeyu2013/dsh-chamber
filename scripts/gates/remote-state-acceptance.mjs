@@ -8,7 +8,7 @@
  * 假结论。
  *
  * 本脚本因此做四件事：
- *   1. 按组跑**可跑的**测试文件（默认用 bundled node，可 --node 覆盖）；
+ *   1. 按组跑**可跑的**测试文件（默认用装配 payload node，缺件时回退调用者 node；可 --node 覆盖）；
  *   2. 逐文件分类：pass / fail / blocked（ERR_MODULE_NOT_FOUND、vendor 树未物化、
  *      或显式 skip 环境变量），blocked 一律列名并标注「CI 权威」；
  *   3. 打印验收表 + 写 JSON 报告；**只要存在真失败即 exit 1**，blocked 不判绿也
@@ -32,7 +32,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const LOADER = 'packages/gateway/test/session-state/workspace-loader.mjs'
 
 /**
- * Default interpreter: the assembly's bundled node when it is a real file, else
+ * Default interpreter: the assembly's payload node when it is a real file, else
  * the node running this script.
  */
 function defaultNode() {

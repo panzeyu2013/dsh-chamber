@@ -124,6 +124,28 @@ assert.match(gatewayBuild, /Upload gateway package to the draft release/)
 // order must be pinned.
 assert.match(swiftBuild, /pnpm run build:sidecar/)
 assert.match(swiftBuild, /pnpm run build:swift-app --out macos\/release/)
+// 单 Node / 全量 payload（swift-impl-contract §2.5）：Swift 腿必须 prepare
+// python+node+pnpm 全量 payload 与 office 资产，build:sidecar 的四个 --require-*
+// 把任一缺件变成 fail-closed，打包后按装配路径 --verify 复核内容。
+assert.ok(
+  swiftBuild.includes('node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm'),
+  'the Swift leg must prepare the full payload (--with-node --with-pnpm)',
+)
+assert.ok(swiftBuild.includes('node packages/desktop/scripts/prepare-office-assets.mjs'),
+  'the Swift leg must prepare the office skill assets')
+assert.ok(
+  swiftBuild.includes('pnpm run build:sidecar --arch arm64 --require-python --require-node --require-pnpm --require-office-assets'),
+  'the sidecar assembly must fail closed on python/node/pnpm/office assets',
+)
+assert.ok(
+  swiftBuild.includes('node packages/desktop/scripts/prepare-python-payload.mjs --verify')
+  && swiftBuild.includes('"macos/release/dsh-chamber.app/Contents/Resources/sidecar/primary-runtime"'),
+  'the packaged primary-runtime payload must be verified inside the native app',
+)
+assert.ok(
+  swiftBuild.includes('node packages/desktop/scripts/prepare-office-assets.mjs --verify')
+  && swiftBuild.includes('"macos/release/dsh-chamber.app/Contents/Resources/sidecar/office-skills"'),
+  'the packaged office skills must be verified inside the native app')
 assert.ok(swiftBuild.includes('--app-name dsh-chamber'))
 assert.ok(swiftBuild.includes('--artifact-basename "dsh-chamber-${VERSION}-macos-arm64"'),
   'the uploaded .zip/.dmg basename must be exact (a -native substring is not enough)')
@@ -257,11 +279,21 @@ assert.ok(swiftBuild.includes('spctl --assess --type execute --verbose=4 "$ZIP_A
   'spctl must assess the app inside the zip')
 assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/MacOS/dsh-chamber"'),
   'the .app binary architecture must be asserted')
-assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/Resources/sidecar/dsh-chamber-helper"'),
-  'the bundled node architecture must be asserted')
-assert.ok(
-  swiftBuild.includes('test "$(basename "$APP/Contents/Resources/sidecar/dsh-chamber-helper")" = "dsh-chamber-helper"'),
-  'the bundled runtime basename must be asserted (design 25 §4.3 A5 inverted: dsh-chamber-helper)')
+// 单 Node 裁决（swift-impl-contract §2.3/§2.5）：装配内唯一 Node = primary-runtime
+// payload 的 node（不重命名、无 dsh-chamber-helper）；office 资产与 payload 元数据
+// 同属装配面结构断言；上传 zip 内的 .app 也要复核 node 架构。
+assert.ok(swiftBuild.includes('test -x "$APP/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node"'),
+  'the payload node (the single Node, no helper) must be executable inside the .app')
+assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/primary-runtime/runtime.json"'),
+  'the packaged primary-runtime must carry its runtime.json metadata')
+assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/office-skills/office/SKILL.md"'),
+  'the packaged office-skills assets must ship with the native app')
+assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node"'),
+  'the payload node architecture must be asserted')
+assert.ok(swiftBuild.includes('lipo -archs "$ZIP_APP/Contents/Resources/sidecar/primary-runtime/dependencies/node/bin/node"'),
+  'the payload node architecture must be asserted inside the uploaded zip .app too')
+assert.doesNotMatch(swiftBuild, /dsh-chamber-helper/,
+  'the single-Node ruling removed dsh-chamber-helper from the native release leg')
 // Closure: the .app must carry the sidecar entrypoint, assembly package.json, the control-plane relative entry and all four host packages.
 assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/package.json"'))
 assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/control-plane/index.js"'))

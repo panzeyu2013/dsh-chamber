@@ -14,17 +14,19 @@
  *       en.lproj/zh-Hans.lproj         ← 本地化：从资源包平移出来的
  *         Localizable.strings，**必须落在 Contents/Resources 根**（Bundle.main 与
  *         系统框架的本地化解析层）；缺席即装配期 fail（assertLocalizationsPresent）
- *       sidecar/{dsh-chamber-helper,sidecar.js,package.json,dist/…} ← build-sidecar 产物
+ *       sidecar/{primary-runtime/, office-skills/, sidecar.js, package.json, dist/…}
+ *                                     ← build-sidecar 产物（单 Node 裁决：装配内唯一的
+ *                                     Node 在 primary-runtime/dependencies/node/bin/node）
  *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服；
  *                                       过滤 *.map 与 .vite/，与 Electron build.files
  *                                       逐条对齐）
  *
- * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带可执行捆绑 Node
- * （dsh-chamber-helper，见 scripts/lib/sidecar-assembly.mjs）与 sidecar.js，且
- * sidecar/package.json 版本必须等于壳版本——都在 build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 Node，lipo；
- * build-sidecar 缺省 darwin-arm64 而 swift build 跟随宿主——不一致的 .app 能
- * 签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
- * （sidecar/dsh-chamber-helper，Developer ID 时带 hardened runtime + node 权限）→ 主签名
+ * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带 primary-runtime
+ * payload 内的可执行 Node（`primary-runtime/dependencies/node/bin/node`，单 Node 裁决：
+ * 没有独立 dsh-chamber-helper）与 sidecar.js、office-skills 资产，且
+ * sidecar/package.json 版本必须等于壳版本——都在 build 时断言）→ 架构一致性断言（.app 可执行 vs payload Node，lipo；
+ * 不一致的 .app 能签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
+ * （sidecar/primary-runtime/dependencies/node/bin/node，Developer ID 时带 hardened runtime + node 权限）→ 主签名
  * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（dmg.mjs：可写镜像 +
  * Finder 布局 + UDZO，卷内含 /Applications 快捷方式、背景箭头与图标定位）。
  *
@@ -71,7 +73,9 @@ import { isCliEntry, runCliTool } from '../../scripts/lib/cli.mjs'
 // build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与
 // sidecar 装配同源，绝不允许两份实现漂移。
 import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/build-sidecar.mjs'
-import { BUNDLED_NODE_BASENAME, bundledNodePath } from '../../scripts/lib/sidecar-assembly.mjs'
+import { payloadNodePath } from '../../scripts/lib/sidecar-assembly.mjs'
+// office 资产清单单源（8 个 markdown；生成器 = prepare:office-assets）。
+import { OFFICE_SKILL_FILES } from '../../packages/desktop/scripts/prepare-office-assets.mjs'
 // beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
 // 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
 import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts.mjs'
@@ -348,6 +352,18 @@ export function assertSidecarVersionMatchesShell(
   return manifest.version
 }
 
+/**
+ * 嵌套 Mach-O 是否为装配内唯一的 payload Node（需要 JIT/可写可执行内存权限的
+ * 唯一一种嵌套二进制，design 25 §3.2「捆绑 node 另加」）。纯函数，单测直测：
+ * 签名循环按它决定是否带 entitlements.node.plist。
+ * @param {string} file - 待签名的嵌套文件绝对路径。
+ * @param {string} sidecarDir - .app 内 sidecar 目录。
+ * @returns {boolean}
+ */
+export function isBundledPayloadNode(file, sidecarDir) {
+  return path.resolve(file) === path.resolve(payloadNodePath(sidecarDir))
+}
+
 export function renderInfoPlist(template, values) {
   let rendered = template
   for (const [key, value] of Object.entries(values)) {
@@ -594,6 +610,9 @@ export function dryRunPlanReport(options) {
     `app=${layout.appDir}`,
     `可执行=${layout.executable}`,
     `sidecar=${options.sidecarDir}（${existsSync(options.sidecarDir) ? '存在' : '缺失'}）`,
+    // 单 Node 裁决：计划的证据面必须直说「唯一 Node 在 payload 里」与 office 资产。
+    `payload-node=${payloadNodePath(options.sidecarDir)}（${existsSync(payloadNodePath(options.sidecarDir)) ? '就绪' : '缺失（先 prepare payload + build:sidecar）'}）`,
+    `office-skills=${path.join(options.sidecarDir, 'office-skills')}（${existsSync(path.join(options.sidecarDir, 'office-skills', 'office', 'SKILL.md')) ? '就绪' : '缺失（先 prepare:office-assets）'}）`,
     options.skipWebDist
       ? 'web-dist=（--skip-web-dist 跳过）'
       : `web-dist=${options.webDistDir}（${existsSync(path.join(options.webDistDir, 'index.html')) ? '就绪' : '缺失'}）`,
@@ -955,33 +974,50 @@ export async function runBuildSwiftApp(
     }
     io.log(`[build-swift-app] sidecar → ${layout.sidecarDir}`)
     // 前置断言（build:sidecar 已保证，这里防手工/外部装配目录带回旧布局）：
-    // 改名后捆绑运行时叫 BUNDLED_NODE_BASENAME，顶层任何 node* 条目都是过期
-    // 产物（含改名前的 `node`）——它们会让 .app 带上运行时不再解析的死重，
-    // 而 build-sidecar 的改名清理只覆盖它自己的装配目录。
+    // 单 Node 裁决后装配里唯一的 Node 在 primary-runtime payload 内（不重命名）；
+    // 顶层的 `node` / `dsh-chamber-helper` 都是旧布局死重——它们会让 .app 带上
+    // 运行时不再解析的二进制，而 build-sidecar 的迁移清理只覆盖它自己的装配目录。
     const { readdirSync } = await import('node:fs')
     for (const entry of readdirSync(layout.sidecarDir)) {
-      if (entry.startsWith('node')) {
+      if (entry === 'node' || entry === 'node.exe' || entry === 'dsh-chamber-helper') {
         throw new Error(
-          `sidecar 顶层不得出现 node* 条目（design 25 §4.3 A5 反转：捆绑 Node 名为 '${BUNDLED_NODE_BASENAME}'）：发现 '${entry}'`,
+          `sidecar 顶层不得出现 node/node.exe/dsh-chamber-helper 旧布局条目（单 Node 裁决：唯一 Node 在 `
+          + `primary-runtime/dependencies/node/bin/node）：发现 '${entry}'`,
         )
       }
     }
     if (!existsSync(path.join(layout.sidecarDir, 'sidecar.js'))) {
       throw new Error(`sidecar 装配目录缺少 sidecar.js：${layout.sidecarDir}`)
     }
-    // 没有捆绑 Node 时 runtime 会静默回落 PATH 上的系统 node——
-    // 签名与打包都会成功，但发布物的运行时依赖构建机环境。存在性与可执行位
-    // 必须在这里 fail closed（--skip-sidecar/--dry-run 才允许缺位）。
-    const bundledNode = bundledNodePath(layout.sidecarDir)
-    if (!existsSync(bundledNode)) {
-      throw new Error(`sidecar 装配目录缺少捆绑 Node（${BUNDLED_NODE_BASENAME}）：${bundledNode}（runtime 会回落到 PATH 上的系统 node；先跑 build:sidecar，或用 --skip-sidecar）`)
+    // 缺 payload Node 时 runtime 会静默回落 PATH 上的系统 node——签名与打包
+    // 都会成功，但发布物的运行时依赖构建机环境。存在性与可执行位必须在这里
+    // fail closed（--skip-sidecar/--dry-run 才允许缺位）。
+    const payloadNode = payloadNodePath(layout.sidecarDir)
+    if (!existsSync(payloadNode)) {
+      throw new Error(
+        `sidecar 装配目录缺 payload Node：${payloadNode}`
+        + '（先跑 prepare-python-payload --with-node 与 build:sidecar --require-node，或用 --skip-sidecar）',
+      )
     }
-    const nodeStat = statSync(bundledNode)
+    const nodeStat = statSync(payloadNode)
     if (!nodeStat.isFile()) {
-      throw new Error(`捆绑 node 不是常规文件：${bundledNode}`)
+      throw new Error(`payload node 不是常规文件：${payloadNode}`)
     }
     if ((nodeStat.mode & 0o111) === 0) {
-      throw new Error(`捆绑 node 没有可执行位：${bundledNode}（mode ${(nodeStat.mode & 0o777).toString(8)}）`)
+      throw new Error(`payload node 没有可执行位：${payloadNode}（mode ${(nodeStat.mode & 0o777).toString(8)}）`)
+    }
+    // office 技能资产与 payload 平级：装配面必须带齐（8 文件清单的完整核对由
+    // prepare-office-assets --verify / build:sidecar --require-office-assets 负责；
+    // 这里断结构锚点，防手工装配目录漏拷整棵 office-skills）。
+    const officeSkills = path.join(layout.sidecarDir, 'office-skills')
+    const missingOfficeAssets = OFFICE_SKILL_FILES.filter(
+      (relative) => !existsSync(path.join(officeSkills, relative)),
+    )
+    if (missingOfficeAssets.length > 0) {
+      throw new Error(
+        `sidecar 装配目录缺 office 技能资产：${missingOfficeAssets.join(', ')}`
+        + '（先跑 prepare-office-assets 与 build:sidecar --require-office-assets）',
+      )
     }
     // 版本相等（fail-closed）：sidecar/package.json version 与壳版本同源，
     // 运行时把它当 shellVersion（override/activation journal 的判别基准）却从不
@@ -1000,14 +1036,15 @@ export async function runBuildSwiftApp(
     throw new Error(`.app 可执行架构不含 ${options.arch}：${layout.executable}（实际 ${appArchs.join('/')}）`)
   }
   if (!options.skipSidecar) {
-    const nodeArchs = machOArchs(bundledNodePath(layout.sidecarDir))
+    // 单 Node 裁决：架构比对的对象是 payload 内的唯一 Node（不再是顶层 helper）。
+    const nodeArchs = machOArchs(payloadNodePath(layout.sidecarDir))
     if (options.arch !== null && !nodeArchs.includes(options.arch)) {
-      throw new Error(`捆绑 node 架构不含 ${options.arch}：实际 ${nodeArchs.join('/')}`)
+      throw new Error(`payload node 架构不含 ${options.arch}：实际 ${nodeArchs.join('/')}`)
     }
     if (!appArchs.some((arch) => nodeArchs.includes(arch))) {
       throw new Error(
-        `.app 可执行与捆绑 node 架构无交集（.app ${appArchs.join('/')} ≠ node ${nodeArchs.join('/')}）`
-        + '——build:sidecar 的 --arch 必须与 swift build 的宿主架构一致',
+        `.app 可执行与 payload node 架构无交集（.app ${appArchs.join('/')} ≠ node ${nodeArchs.join('/')}）`
+        + '——swift build 的宿主架构与 payload 目标架构（--target mac-<arch>）必须一致',
       )
     }
   }
@@ -1052,21 +1089,22 @@ export async function runBuildSwiftApp(
     io.log('[build-swift-app] 跳过签名（--no-sign）')
   } else {
     // 嵌套原生代码必须先签（公证要求 app 内所有 Mach-O 都已签名）：
-    // 自带 node + vendor/dsh/node_modules 下的 .node/dylib。Resources 不是
-    // codesign 的「已知嵌套位置」，不会被主签名自动覆盖。
+    // payload 内的唯一 Node + vendor/dsh/node_modules 下的 .node/dylib。Resources
+    // 不是 codesign 的「已知嵌套位置」，不会被主签名自动覆盖。
     const nodeEntitlements = path.join(macosDir, 'entitlements.node.plist')
     const nested = findNestedMachOFiles(layout.appDir).filter(
       (file) => file !== layout.executable,
     )
     for (const file of nested) {
-      // 只有捆绑的 node 需要 JIT/可写可执行内存权限（design 25 §3.2「捆绑 node
+      // 只有 payload Node 需要 JIT/可写可执行内存权限（design 25 §3.2「捆绑 node
       // 另加」）；其余嵌套原生模块（.node/dylib）用裸 hardened runtime 签名，
-      // 避免无谓放大权限面。
-      const isNode = path.basename(file) === BUNDLED_NODE_BASENAME
-      run('codesign', codesignArgs(options, file, isNode ? nodeEntitlements : undefined), io)
+      // 避免无谓放大权限面。判定 = 精确路径匹配（装配内唯一 Node，基名就是 node，
+      // 不依赖名字猜测——vendor 树里同名文件不会误得 JIT 权限）。
+      run('codesign', codesignArgs(options, file,
+        isBundledPayloadNode(file, layout.sidecarDir) ? nodeEntitlements : undefined), io)
     }
     if (nested.length > 0) {
-      io.log(`[build-swift-app] 嵌套 Mach-O 已签名 ${nested.length} 个（含自带 node 与 .node 原生模块）`)
+      io.log(`[build-swift-app] 嵌套 Mach-O 已签名 ${nested.length} 个（含 payload node 与 .node 原生模块）`)
     }
     // 嵌套 bundle（Sparkle.framework 及其 Updater.app / XPCServices）：必须按
     // 由深到浅单独签名——只签内部可执行文件不产生 framework 自己的封存，

@@ -1320,3 +1320,179 @@ test('hostGraphPlane({safeMode:true}).startLocal(): 宿主包 seeding 整体跳�
     await plane.stop()
   }
 })
+// ---------------------------------------------------------------------------
+// Swift local startup upstream rows: the rendered startup block is a second
+// top-level `- insert:` patch object appended AFTER the chamber rows; the resolver
+// composes startup-only / combined overlays and keeps the "file exists ⟺ this spawn
+// passes it" invariant when the rows disappear. Pure-module pins (the planner/renderer
+// suite owns the gate matrix).
+// ---------------------------------------------------------------------------
+
+/** A workspace + payload + office-assets fixture the startup planner accepts. */
+interface StartupPluginFixture {
+  readonly workspace: string
+  readonly primaryRuntimeDir: string
+  readonly officeSkillsDir: string
+  readonly capabilities: { readonly primaryRuntimeDir: string; readonly officeSkillsDir: string }
+}
+
+function writeStartupPluginFixture(dir: string): StartupPluginFixture {
+  const workspace = join(dir, 'workspace')
+  const primaryRuntimeDir = join(dir, 'primary-runtime')
+  const officeSkillsDir = join(dir, 'office-skills')
+  mkdirSync(join(primaryRuntimeDir, 'dependencies', 'python', 'bin'), { recursive: true })
+  mkdirSync(join(primaryRuntimeDir, 'dependencies', 'python', 'lib', 'python3.12', 'site-packages'), { recursive: true })
+  mkdirSync(join(primaryRuntimeDir, 'dependencies', 'node', 'bin'), { recursive: true })
+  writeFileSync(join(primaryRuntimeDir, 'runtime.json'), JSON.stringify({ platform: process.platform, arch: process.arch, python: '3.12.14' }))
+  writeFileSync(join(primaryRuntimeDir, 'dependencies', 'python', 'bin', 'python3'), '#!/usr/bin/env python3\n')
+  writeFileSync(join(primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node'), '#!/usr/bin/env node\n')
+  for (const skill of ['office', 'office-docx', 'office-pptx', 'office-xlsx', 'office-render', 'office-recalculate', 'office-export-pdf']) {
+    mkdirSync(join(officeSkillsDir, skill), { recursive: true })
+    writeFileSync(join(officeSkillsDir, skill, 'SKILL.md'), '---\ndescription: ' + skill + '\n---\n')
+  }
+  mkdirSync(join(officeSkillsDir, 'office', 'references'), { recursive: true })
+  writeFileSync(join(officeSkillsDir, 'office', 'references', 'sidecar.md'), '# sidecar\n')
+  for (const name of ['dsh-tool-workspace-dependencies', 'dsh-skill-office']) {
+    const packageDir = join(workspace, 'node_modules', '@deepseek-ai', name)
+    mkdirSync(packageDir, { recursive: true })
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/' + name }))
+  }
+  const kitDir = join(workspace, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
+  mkdirSync(join(kitDir, 'lib'), { recursive: true })
+  writeFileSync(join(kitDir, 'lib', 'cli.js'), 'export {}\n')
+  return {
+    workspace,
+    primaryRuntimeDir,
+    officeSkillsDir,
+    capabilities: { primaryRuntimeDir, officeSkillsDir },
+  }
+}
+
+/** The exact startup block the Swift planner produces for the fixture above. */
+function expectedStartupBlock(fixture: StartupPluginFixture, dshHome: string): string {
+  return '- insert:\n'
+    + "    - id: chamber-workspace-dependencies\n      name: '@deepseek-ai/dsh-tool-workspace-dependencies'\n      config:\n"
+    + `        source: '${fixture.primaryRuntimeDir}'\n`
+    + `        root: '${join(dshHome, 'dsh-runtimes', 'dsh-primary-runtime')}'\n`
+    + "    - id: chamber-office-skills\n      name: '@deepseek-ai/dsh-skill-office'\n      config:\n"
+    + `        assetRoot: '${fixture.officeSkillsDir}'\n`
+    + `        node: '${join(fixture.primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node')}'\n`
+    + `        cli: '${join(fixture.workspace, 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js')}'\n`
+}
+
+test('buildPatchOverlay: the 4th startupOverlayText appends after the chamber rows; 3-arg bytes stay canonical', t => {
+  const dir = tempDir(t)
+  const path = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  const startup = "- insert:\n    - id: chamber-office-skills\n      name: '@deepseek-ai/dsh-skill-office'\n      config:\n        assetRoot: '/tmp/office'\n        cli: false\n"
+  buildPatchOverlay(dir, [HOST_GRAPH_INSERT], [], startup)
+  assert.equal(readFileSync(path, 'utf8'), EXPECTED_OVERLAY + startup,
+    'the startup block is the overlay array\'s second patch object')
+  buildPatchOverlay(dir)
+  assert.equal(readFileSync(path, 'utf8'), EXPECTED_OVERLAY,
+    'the legacy 3-arg call keeps the canonical bytes byte-for-byte')
+})
+
+test('buildPatchOverlay: startup-only and disable+startup overlays are valid patch lists', t => {
+  const dir = tempDir(t)
+  const path = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  const startup = "- insert:\n    - id: chamber-workspace-dependencies\n      name: '@deepseek-ai/dsh-tool-workspace-dependencies'\n      config:\n        source: '/tmp/runtime'\n        root: '/tmp/root'\n"
+  const startupOnly = buildPatchOverlay(dir, [], [], startup)
+  assert.equal(readFileSync(startupOnly, 'utf8'), startup,
+    'startup-only: the chamber insert renderer is skipped, not called with an empty list')
+  buildPatchOverlay(dir, [], [OFFICIAL_OPEN_IN_DISABLE], startup)
+  assert.equal(readFileSync(path, 'utf8'), OFFICIAL_OPEN_IN_DISABLE_ROW + startup,
+    'the id-targeted disable stays ahead of the startup insert object')
+  assert.throws(
+    () => buildPatchOverlay(dir, [], [], ''),
+    /overlay requires at least one row/,
+    'a wholly empty overlay still fails with the historical message',
+  )
+})
+
+test('resolveLocalHostGraphOverlay: startup capabilities alone yield a startup-only overlay', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const fixture = writeStartupPluginFixture(dir)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    startupPluginCapabilities: fixture.capabilities,
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(readFileSync(overlay as string, 'utf8'), expectedStartupBlock(fixture, dshHome),
+    'the startup block is rendered as the overlay\'s second top-level insert object')
+  assert.ok(!readFileSync(overlay as string, 'utf8').includes('client-graph'),
+    'startup-only: no chamber seed rows are invented')
+})
+
+test('resolveLocalHostGraphOverlay: startup rows append after the chamber insert bundle', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const fixture = writeStartupPluginFixture(dir)
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    startupPluginCapabilities: fixture.capabilities,
+    log() {},
+    warn() {},
+  })
+  const text = readFileSync(overlay as string, 'utf8')
+  assert.ok(text.startsWith(EXPECTED_OVERLAY), text)
+  assert.ok(text.indexOf('client-graph') < text.indexOf('chamber-workspace-dependencies'), text)
+  assert.ok(text.includes("id: chamber-office-skills"), text)
+})
+
+test('resolveLocalHostGraphOverlay: startup rows disappearing clear the previous overlay', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const fixture = writeStartupPluginFixture(dir)
+  const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  const first = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    startupPluginCapabilities: fixture.capabilities,
+    log() {},
+    warn() {},
+  })
+  assert.equal(first, stale, 'the startup rows need a --patch file')
+  const second = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    log() {},
+    warn() {},
+  })
+  assert.equal(second, null, 'with no capability roots the spawn passes no --patch')
+  assert.equal(existsSync(stale), false,
+    'a leftover overlay would report rows this spawn does not mount')
+})
+
+test('resolveLocalHostGraphOverlay: safe mode suppresses startup rows and clears the overlay', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const fixture = writeStartupPluginFixture(dir)
+  const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  writeFileSync(stale, expectedStartupBlock(fixture, dshHome))
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    startupPluginCapabilities: fixture.capabilities,
+    safeMode: true,
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, null, '安全模式不传 --patch')
+  assert.equal(existsSync(stale), false, '安全模式必须清掉遗留 overlay')
+})

@@ -8,7 +8,7 @@
 - [ ] 新增主进程模块时，把「已进 `build.files`」写进该模块头注释或PR描述。
 - [ ] 核对 `main.ts` 的全部运行时路径引用：preload（`dist/preload.cjs`，无 `preload.cts` 回退）、`dist/control-plane/index.js`、图标/tray、crashReporter目录、`existsSync`/`readFileSync` 引用的打包内文件。
 - [ ] 核对 `preload.cts` 本地依赖闭包（有跨文件import时 `dist/preload.cjs` 必须包含）。
-- [ ] 核对 `extraResources`：`vendor/dsh` 两段（manifest三件套 + `node_modules/**`）与 `bundle-dsh.mjs` 产物、`spawn-dsh.ts` 的运行时解析路径一致。
+- [ ] 核对 `extraResources`：`vendor/dsh` 两段（manifest三件套 + `node_modules/**`）与 `bundle-dsh.mjs` 产物、`spawn-dsh.ts` 的运行时解析路径一致；Electron 腿另核 `resources/primary-runtime → primary-runtime` 段（默认 python-only payload）与 `prepare-python-payload` 落点一致、打包后 `--verify`（C5；Office 资产只随 Swift 腿，不在 Electron extraResources）。
 - [ ] 上游client-plugin闭包抽样：afterPack断言 `resources/vendor/dsh/node_modules/@deepseek-ai/` 下 `dsh-client-ui-sidebar-right`（sidebarRight行唯一provider）/ `dsh-client-resources` / `dsh-client-ui-chat` 三个包的 `package.json` 都在（`after-pack-adhoc-sign.mjs` 的 `PACKAGED_CLIENT_CLOSURE_SAMPLE`）—— `node_modules/**` 是无界glob，缺一个上游包时安装/打包全绿、前端只在运行期静默少一行；启动期 `runtime-tree-check.ts` 对已安装树做同一抽样，缺件大声 `console.error`。
 
 ## 2. 构建链产物（改构建脚本后必查）
@@ -33,7 +33,7 @@
 
 ### 3.1 原生壳（`macos/`）专属检查
 
-- [ ] `build:sidecar` 载荷完整：`dsh-chamber-helper`（官方tar + SHA校验；基名单源 `scripts/lib/sidecar-assembly.mjs`，改名前的 `node` 会 fail-closed）、`dist/web`、四个host包、`vendor/dsh`、内嵌 `pnpm` 全部就位（缺项fail-closed；`--skip-*` 只用于本地试跑）。**P5b 不删 sidecar**：它仍是 Swift flavor 的 control-plane/node 来源。
+- [ ] `build:sidecar` 载荷完整：`sidecar.js`、`package.json`、`dist/control-plane`、四个host包、`vendor/dsh`、内嵌 `pnpm`、`primary-runtime/`（全量 payload：python/node/pnpm；`--require-python`/`--require-node`/`--require-pnpm` 缺件 fail-closed）与 `office-skills/`（8 个 markdown；`--require-office-assets`）全部就位（缺项fail-closed；`--skip-*` 只用于本地试跑，`--skip-node` = 本次不要求 payload node）。**单 Node**：装配内唯一 Node = `primary-runtime/dependencies/node/bin/node`（无 `dsh-chamber-helper`；旧顶层 `node*`/helper 开工清理、`build-swift-app` 装配期拒绝）；Node 版本/摘要唯一来源 = `packages/desktop/primary-runtime-lock.json`。**P5b 不删 sidecar**：它仍是 Swift flavor 的 control-plane/node 来源。
 - [ ] `build:swift-app` 装配：`Contents/Resources/sidecar`、`Sparkle.framework` 嵌入 `Contents/Frameworks`、rpath指向 `@executable_path/../Frameworks`、bundle内无逃逸符号链接、`codesign --verify --deep --strict` 通过；资源包形态随后端（native 扁平 / swiftbuild `Contents/Resources`）由装配归一为扁平，缺 `bridge-shim.js` 即 loud；`--dry-run` 必须能报出解析后的路径/feed/产物名计划。
 - [ ] 产物命名与形态：`dsh-chamber-<ver>-macos-arm64.{dmg,zip}` 与Electron产物共存不覆盖；两侧release腿按精确产物名验证/上传（不再 `find|head` 或glob），避免复用输出目录带入旧版本。
 - [ ] 更新腿装配：`CFBundleShortVersionString`/`CFBundleVersion` 与tag一致，且beta与同基版本正式号不同、单调；`SUFeedURL` 按通道注入；`SUPublicEDKey` 与appcast签发私钥**必须成对**（公钥在而私钥缺、私钥在而公钥缺都是发布 FAIL；只有两把都缺才是 loud 降级「更新腿关闭」）；beta appcast的beta条目enclosure指向滚动release上真实存在的zip与`*.delta`（先传归档后传appcast），合并进来的final条目在beta腿指向版本固定的`releases/download/v<正式版tag>/`（不用会被后续正式版移走的`releases/latest`），stable刷新后则改指滚动前缀（两条路径不同）；滚动appcast同时带当前beta与最新final条目（没有keyed final时loud降级）。
@@ -49,7 +49,7 @@
 - [ ] **forge bundle + 六个依赖包（七个 package.json）**：启用 opt-in 前也随 `vendor/dsh` 出厂——`@deepseek-ai/dsh-experimental-forge-bundle` 及其依赖 `dsh-experimental-worktree` / `dsh-experimental-tool-worktree` / `dsh-experimental-forge` / `dsh-experimental-forge-github` / `dsh-experimental-forge-session` / `dsh-experimental-client-ui-forge` 的 `package.json` 在 Electron `resources/vendor/dsh/node_modules/@deepseek-ai/` 与 Swift `Contents/Resources/sidecar/vendor/dsh/node_modules/@deepseek-ai/` **两侧都要存在**（同 tag；缺包时 P5b 启用才在运行期失败，打包门必须提前红）。
 - [ ] **patch 与 overlay**：`dsh-experimental-forge-bundle/cordis.patch.yml` 的顶层 `worktree`/`tool-worktree`/`forge`/`forge-github`/`forge-session` 与 `optional-forge-panel` 组（`isolate:{worktrees:true}` 内的 `forge-worktree`+`client-ui-forge`）形状与 pin 一致；本地 `--patch` 只在实例已启用该 bundle 时带 `forge-github disabled`（未启用 = 幂等跳过，不产出宿主启动失败）。
 - [ ] **node PATH shim（Electron）**：打包态 + Finder 启动下 `withNodePath` 在 control-plane 私有 state 的 shim 目录物化可执行 `node`（或 host PATH 已解析真实 node），诊断无 `node-unavailable`；overlay/profile 内**没有** `process.execPath` 或本机 node 绝对路径；远程部署不携带本机路径（bundle 默认 `node` + 部署方 PATH）。
-- [ ] **Swift node**：sidecar 自带 node 可直接跑通 `create_worktree` 实际创建；P5b 在 Swift 与 Electron 两壳内各跑一次四项 UI/同池三条/node 创建（design 08 §7.3）。
+- [ ] **Swift node**：sidecar 使用 payload 的 `primary-runtime/dependencies/node/bin/node`（单 Node，无独立 helper；`build:sidecar --require-node` 已断存在/可执行）可直接跑通 `create_worktree` 实际创建；P5b 在 Swift 与 Electron 两壳内各跑一次四项 UI/同池三条/node 创建（design 08 §7.3）。
 
 ## 4. 快速清单速查（`build.files` 复核用）
 

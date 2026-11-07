@@ -11,10 +11,15 @@
  * 本脚本负责前半段：解析锁 → 按 URL 下载 → 逐件 sha256 校验 → 解到载荷布局 → 写
  * runtime.json；后半段（安装 + 路径暴露）属上游 desktop-host app，本仓不运行它。
  *
- * 与本仓既有 node 载荷的关系：node 归档的版本与摘要不在本脚本另立一份，而是与
- * packages/desktop/scripts/build-sidecar.mjs 的 PINNED_NODE_SHA256 前置锁步
- * （prepare-python-payload.test.mjs）；锁里的 nodeArchive/nodeSha256 只是同一事实的
- * 声明面（并供 mac x64 腿取一份已验证的 x64 node）。
+ * node / pnpm（--with-node / --with-pnpm；后者隐含前者）：
+ * - node：归档版本与 sha256 只在 primary-runtime-lock.json 声明（单一来源）；Swift 单
+ *   Node 裁决后 sidecar 不再另存 pin，payload 的 dependencies/node/bin/node 是唯一宿主
+ *   与工具 Node（build-sidecar 只做存在性校验，见 swift-impl-contract）。
+ * - pnpm：来源是构建机 node_modules/pnpm（版本必须等于 desktop package.json 的
+ *   dependencies.pnpm——同一版本单源），整包 dereference 拷到 dependencies/pnpm，并按
+ *   目标 platform/arch prune dist/node_modules 下 os/cpu 不符的 optional 原生包（移植
+ *   上游 scripts/primary-runtime/prepare.ts 的 prunePnpmForeignNativePackages，纯 fs）。
+ * - 默认仍是 python-only：Electron/gateway 的现行为不变。
  *
  * 离线纪律：--dry-run 只解析锁 + 校验布局与目标，**不联网、不写盘**（无网环境的默认
  * 证据）；真实下载只在本脚本被显式调用时发生（发布腿 / 显式构建腿），默认构建链不触发。
@@ -23,13 +28,14 @@
  *
  * CLI：
  *   node scripts/prepare-python-payload.mjs --dry-run [--target mac-arm64]
- *   node scripts/prepare-python-payload.mjs [--target <t>] [--out <dir>] [--cache <dir>] [--with-node]
+ *   node scripts/prepare-python-payload.mjs [--target <t>] [--out <dir>] [--cache <dir>] [--with-node] [--with-pnpm]
  *   node scripts/prepare-python-payload.mjs --verify <dir>
  * 退出码：0 成功；1 失败（锁不合法 / 摘要不匹配 / 载荷不完整）。
  */
 import { createHash } from 'node:crypto'
 import {
-  chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
+  chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -46,10 +52,12 @@ export const DEFAULT_OUT_DIR = path.join(DESKTOP_DIR, 'resources', 'primary-runt
 export const DEFAULT_CACHE_DIR = path.join(DESKTOP_DIR, 'release', 'primary-runtime-cache')
 /** 载荷清单格式（布局语义改变时递增）。 */
 export const PAYLOAD_FORMAT = 1
+/** 桌面包清单（应用版本与 pnpm 依赖版本的单一来源）。 */
+export const DESKTOP_MANIFEST = JSON.parse(readFileSync(path.join(DESKTOP_DIR, 'package.json'), 'utf8'))
 /** 桌面应用版本：runtime.json 的 `desktopVersion`（上游 parsePrimaryRuntime 必填）。 */
-export const DESKTOP_VERSION = JSON.parse(
-  readFileSync(path.join(DESKTOP_DIR, 'package.json'), 'utf8'),
-).version
+export const DESKTOP_VERSION = DESKTOP_MANIFEST.version
+/** pnpm 版本唯一来源：desktop package.json 的 dependencies.pnpm（构建机 pnpm 必须同版本）。 */
+export const DESKTOP_PNPM_VERSION = desktopPnpmVersion()
 /** runtime.json 的两种状态：complete = 真实载荷；absent = 未准备（只有说明文件）。 */
 export const PAYLOAD_COMPLETE = 'complete'
 export const PAYLOAD_ABSENT = 'absent'
@@ -169,7 +177,7 @@ export function pythonArchiveUrl(lock, target) {
     + lock.pythonRelease + '/' + encodeURIComponent(name)
 }
 
-/** node 归档名（与 build-sidecar 的 nodeArchiveName 同式）。 */
+/** node 归档名（与上游锁 target 的 nodeArchive 同式）。 */
 export function nodeArchiveName(lock, target) {
   return 'node-v' + lock.nodeVersion + '-' + lock.targets[target].nodeArchive
 }
@@ -190,6 +198,21 @@ export function pythonBinaryRelative() {
   return path.posix.join('dependencies', 'python', 'bin', 'python3')
 }
 
+/** node 解释器在载荷内的相对路径（win32 用 node.exe；本仓当前只出货 darwin）。 */
+export function nodeBinaryRelative(platform = 'darwin') {
+  return path.posix.join('dependencies', 'node', 'bin', platform === 'win32' ? 'node.exe' : 'node')
+}
+
+/** pnpm 包在载荷内的落点（整包，含 bin/ 与 dist/）。 */
+export function pnpmDirectoryRelative() {
+  return path.posix.join('dependencies', 'pnpm')
+}
+
+/** pnpm 入口在载荷内的相对路径（断言存在，且被 payload node 执行：node bin/pnpm.mjs）。 */
+export function pnpmBinaryRelative() {
+  return path.posix.join(pnpmDirectoryRelative(), 'bin', 'pnpm.mjs')
+}
+
 /** wheel URL 的文件名（上游锁不记文件名，由 URL 派生）。 */
 export function wheelFileName(url) {
   const name = new URL(url).pathname.split('/').pop()
@@ -199,15 +222,18 @@ export function wheelFileName(url) {
 
 /**
  * 载荷身份（与上游 primaryRuntimePayloadDigest 同思路：只由锁定的输入决定，不含时间戳；
- * 改锁任一构件 = 新摘要）。
+ * 改锁任一构件或 pnpm 版本 = 新摘要）。
+ * @param pnpmVersion - 本次落位的 pnpm 版本（python-only 传 undefined；JSON 省略该键，
+ *   因此既有 python-only 载荷身份不变）。
  */
-export function payloadDigest(lock, target) {
+export function payloadDigest(lock, target, pnpmVersion) {
   return createHash('sha256').update(JSON.stringify({
     format: PAYLOAD_FORMAT,
     target,
     pythonVersion: lock.pythonVersion,
     pythonRelease: lock.pythonRelease,
     nodeVersion: lock.nodeVersion,
+    pnpm: pnpmVersion,
     artifact: lock.targets[target],
     wheels: lock.wheels,
     pythonPackages: lock.pythonPackages,
@@ -219,11 +245,15 @@ export function payloadDigest(lock, target) {
  * @param lock - 已校验的锁。
  * @param target - 目标键。
  * @param options.includeNode - 是否连带 node 载荷（默认否：python 载荷不需要 node）。
+ * @param options.pnpm - 已解析的 pnpm 源 { source, version }；非 null 时隐含 includeNode
+ *   （--with-pnpm 隐含 --with-node）并让 components 带上 pnpm 版本、摘要纳入它。
  */
 export function payloadPlan(lock, target, options = {}) {
   const artifact = lock.targets[target]
+  const pnpm = options.pnpm ?? null
+  const includeNode = options.includeNode === true || pnpm !== null
   const entries = []
-  if (options.includeNode === true) {
+  if (includeNode) {
     entries.push({ kind: 'node', archive: nodeArchiveName(lock, target), url: nodeDistUrl(lock, target), sha256: artifact.nodeSha256 })
   }
   entries.push({
@@ -242,12 +272,14 @@ export function payloadPlan(lock, target, options = {}) {
     arch: REGISTERED_TARGETS[target].arch,
     components: {
       python: lock.pythonVersion,
-      ...(options.includeNode === true ? { node: lock.nodeVersion } : {}),
+      ...(includeNode ? { node: lock.nodeVersion } : {}),
+      ...(pnpm === null ? {} : { pnpm: pnpm.version }),
       // legacy 形态必需：值只从 pythonPackages 派生（见 legacyDistributionVersions）。
       ...legacyDistributionVersions(lock.pythonPackages),
     },
     pythonPackages: lock.pythonPackages,
-    payloadDigest: payloadDigest(lock, target),
+    pnpm: pnpm === null ? null : { version: pnpm.version, source: pnpm.source },
+    payloadDigest: payloadDigest(lock, target, pnpm === null ? undefined : pnpm.version),
     sitePackages: sitePackagesRelative(lock),
     pythonBinary: pythonBinaryRelative(),
     entries,
@@ -291,7 +323,12 @@ export function payloadManifest(lock, target, options = {}) {
     components: plan.components,
     pythonPackages: plan.pythonPackages,
     payloadDigest: plan.payloadDigest,
-    layout: { python: plan.pythonBinary, sitePackages: plan.sitePackages },
+    layout: {
+      python: plan.pythonBinary,
+      sitePackages: plan.sitePackages,
+      ...(plan.components.node === undefined ? {} : { node: nodeBinaryRelative(plan.platform) }),
+      ...(plan.pnpm === null ? {} : { pnpm: pnpmBinaryRelative() }),
+    },
   }
 }
 
@@ -589,6 +626,180 @@ export function extractNodePayload(buffer, destination) {
   return written
 }
 
+/** 跟随符号链接的常规文件判定（目录/悬空链接都算 false；--verify 用）。 */
+export function isRegularFile(target) {
+  try {
+    return statSync(target).isFile()
+  } catch {
+    return false
+  }
+}
+
+/** 跟随符号链接的目录判定（pnpm 源在 workspace 里常是链接）。 */
+export function isDirectory(target) {
+  try {
+    return statSync(target).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * pnpm 版本唯一来源：desktop package.json 的 dependencies.pnpm。
+ * 与 Electron after-pack / build-sidecar 的 pnpm pin 同一处声明（本仓不再另立表）。
+ */
+export function desktopPnpmVersion(manifest = DESKTOP_MANIFEST) {
+  const version = manifest?.dependencies?.pnpm
+  if (typeof version !== 'string' || version === '') {
+    throw new Error('desktop package.json 缺 dependencies.pnpm——pnpm 版本必须以它为唯一来源')
+  }
+  return version
+}
+
+/** 构建机 pnpm 包的候选目录（pnpm 是 @dsh-chamber/desktop 的直接依赖）。 */
+export function pnpmSourceCandidates(options = {}) {
+  const desktopDir = options.desktopDir ?? DESKTOP_DIR
+  const repoRoot = options.repoRoot ?? path.resolve(DESKTOP_DIR, '..', '..')
+  return [
+    path.join(desktopDir, 'node_modules', 'pnpm'),
+    path.join(repoRoot, 'node_modules', 'pnpm'),
+  ]
+}
+
+/**
+ * 解析并校验构建机 pnpm 包：显式 --pnpm-source 优先，否则按候选目录取第一个存在的。
+ * 版本必须等于 desktop dependencies.pnpm（单一来源），且必须有 bin/pnpm.mjs。
+ * @returns {{ source: string, version: string }} 已校验的 pnpm 包目录与版本。
+ */
+export function resolvePnpmSource(options = {}) {
+  const expectedVersion = options.expectedVersion ?? desktopPnpmVersion()
+  const explicit = options.source ?? null
+  const candidates = pnpmSourceCandidates(options)
+  let source
+  if (explicit !== null) {
+    source = path.resolve(explicit)
+    if (!isDirectory(source)) throw new Error('--pnpm-source 指向的 pnpm 包不存在：' + source)
+  } else {
+    source = candidates.find((candidate) => isDirectory(candidate)) ?? null
+    if (source === null) {
+      throw new Error('找不到构建机 pnpm 包（依次尝试：' + candidates.join(' / ') + '）'
+        + '——请先在仓库根 pnpm install，或用 --pnpm-source <dir> 显式注入')
+    }
+  }
+  const manifestPath = path.join(source, 'package.json')
+  if (!isRegularFile(manifestPath)) throw new Error('pnpm 源缺 package.json：' + manifestPath)
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  } catch (error) {
+    throw new Error('pnpm 源 package.json 不是合法 JSON（' + manifestPath + '）：' + (error instanceof Error ? error.message : String(error)))
+  }
+  if (manifest.name !== 'pnpm') {
+    throw new Error('pnpm 源不是 pnpm 包：' + manifestPath + '（name=' + JSON.stringify(manifest.name) + '）')
+  }
+  const version = manifest.version
+  if (typeof version !== 'string' || version === '') throw new Error('pnpm 源 package.json 缺 version：' + manifestPath)
+  if (version !== expectedVersion) {
+    throw new Error('pnpm 版本漂移：构建机 pnpm=' + String(version) + ' != desktop dependencies.pnpm='
+      + String(expectedVersion) + '（单一来源；请 pnpm install 对齐，绝不让两个版本的 pnpm 混进载荷）')
+  }
+  const binary = path.join(source, 'bin', 'pnpm.mjs')
+  if (!isRegularFile(binary)) throw new Error('pnpm 源缺 bin/pnpm.mjs（载荷入口）：' + binary)
+  return { source, version }
+}
+
+/**
+ * npm 的 os/cpu 约束判定（与上游 scripts/npm-platform.ts 的 acceptsNpmPlatform 同义）：
+ * undefined = 不限；数组必须是字符串；'!x' 显式排除；'any'（仅单独出现）全收。
+ */
+export function acceptsNpmPlatform(value, current) {
+  if (value === undefined) return true
+  if (!Array.isArray(value) || !value.every((tag) => typeof tag === 'string')) {
+    throw new Error('npm platform constraints must be arrays of strings')
+  }
+  let accepted = value.every((tag) => tag.startsWith('!'))
+  for (const tag of value) {
+    if (tag === '!' + current) return false
+    if (tag === current || (tag === 'any' && value.length === 1)) accepted = true
+  }
+  return accepted
+}
+
+/** pnpm dist/node_modules 的直接子包目录（含一层 @scope 展开；.bin 不是包）。 */
+function pnpmBundledPackageDirectories(pnpmDir) {
+  const modules = path.join(pnpmDir, 'dist', 'node_modules')
+  if (!isDirectory(modules)) throw new Error('pnpm 包缺 dist/node_modules：' + modules + '（布局与 prune 实现不一致）')
+  const directories = []
+  for (const entry of readdirSync(modules, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === '.bin') continue
+    const entryPath = path.join(modules, entry.name)
+    if (entry.name.startsWith('@')) {
+      for (const scoped of readdirSync(entryPath, { withFileTypes: true })) {
+        if (scoped.isDirectory()) directories.push(path.join(entryPath, scoped.name))
+      }
+      continue
+    }
+    directories.push(entryPath)
+  }
+  return directories
+}
+
+/**
+ * pnpm 包 dist/node_modules 下 os/cpu 与目标平台不符的 optional 原生包（只读探测，--verify 用）。
+ * 上游 prepare.ts 的 prunePnpmForeignNativePackages 同一判定：嵌套 node_modules 与 libc
+ * 不检查（pnpm 11 既无嵌套原生包，也无 Linux 变体随包）。
+ */
+export function foreignPnpmNativePackages(pnpmDir, platform, arch) {
+  const foreign = []
+  for (const directory of pnpmBundledPackageDirectories(pnpmDir)) {
+    const manifestPath = path.join(directory, 'package.json')
+    let manifest
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    } catch (error) {
+      throw new Error('pnpm 内嵌包缺/坏 package.json（' + manifestPath + '）：' + (error instanceof Error ? error.message : String(error)))
+    }
+    let admitted
+    try {
+      admitted = acceptsNpmPlatform(manifest.os, platform) && acceptsNpmPlatform(manifest.cpu, arch)
+    } catch (error) {
+      throw new Error('pnpm 内嵌包 ' + manifestPath + ' 的 os/cpu 字段非法：' + (error instanceof Error ? error.message : String(error)))
+    }
+    if (!admitted) foreign.push(directory)
+  }
+  return foreign
+}
+
+/**
+ * 按目标平台/架构 prune pnpm 内的外平台原生包（移植上游 prunePnpmForeignNativePackages）。
+ * @returns {string[]} 被删除的包目录（日志/测试证据）。
+ */
+export function prunePnpmForeignNativePackages(pnpmDir, platform, arch) {
+  const foreign = foreignPnpmNativePackages(pnpmDir, platform, arch)
+  for (const directory of foreign) rmSync(directory, { recursive: true, force: true })
+  return foreign
+}
+
+/**
+ * 把构建机 pnpm 包 dereference 拷进载荷并断言入口/版本——绝不让链接或版本漂移进包。
+ * @returns {{ version: string }} 已落位的 pnpm 版本。
+ */
+export function copyPnpmIntoPayload(sourceDir, destination, options = {}) {
+  const expectedVersion = options.expectedVersion ?? desktopPnpmVersion()
+  const { source, version } = resolvePnpmSource({ source: sourceDir, expectedVersion })
+  rmSync(destination, { recursive: true, force: true })
+  mkdirSync(path.dirname(destination), { recursive: true })
+  // dereference：workspace 的 node_modules/pnpm 是链接，产物必须是普通文件树（与上游 cp 一致）。
+  cpSync(source, destination, { recursive: true, dereference: true })
+  const binary = path.join(destination, 'bin', 'pnpm.mjs')
+  if (!isRegularFile(binary)) throw new Error('pnpm 拷贝不完整：缺 ' + binary)
+  const copied = JSON.parse(readFileSync(path.join(destination, 'package.json'), 'utf8'))
+  if (copied.version !== version) {
+    throw new Error('pnpm 拷贝版本漂移：源 ' + String(version) + '，产物 ' + String(copied.version))
+  }
+  return { version }
+}
+
 /**
  * 解释器基线发行版：python-build-standalone 的 install_only 载荷自带 pip，而上游
  * `scripts/primary-runtime/smoke.py`（第 28–30 行）把期望集合定义为
@@ -673,6 +884,50 @@ export function verifyPayload(dir) {
       problems.push('site-packages 多出未登记发行版 ' + directory + '（载荷与锁不一致）')
     }
   }
+  // 声明了 node/pnpm 的载荷必须真有对应构件，且 pnpm 版本与清单一致、不夹带外平台原生包。
+  const components = manifest.components !== null && typeof manifest.components === 'object' ? manifest.components : {}
+  const platform = typeof manifest.platform === 'string' ? manifest.platform : 'darwin'
+  if (components.node !== undefined) {
+    const nodeBinary = path.join(dir, typeof manifest.layout?.node === 'string' ? manifest.layout.node : nodeBinaryRelative(platform))
+    if (!isRegularFile(nodeBinary)) {
+      problems.push('components.node 声明了 node ' + String(components.node) + '，但缺 ' + nodeBinary)
+    } else if ((statSync(nodeBinary).mode & 0o111) === 0) {
+      problems.push('components.node 声明的 node 没有可执行位：' + nodeBinary)
+    }
+  }
+  if (components.pnpm !== undefined) {
+    const pnpmDir = path.join(dir, pnpmDirectoryRelative())
+    const pnpmBinary = path.join(dir, typeof manifest.layout?.pnpm === 'string' ? manifest.layout.pnpm : pnpmBinaryRelative())
+    if (!isRegularFile(pnpmBinary)) {
+      problems.push('components.pnpm 声明了 pnpm ' + String(components.pnpm) + '，但缺 ' + pnpmBinary)
+    }
+    const pnpmManifestPath = path.join(pnpmDir, 'package.json')
+    if (!isRegularFile(pnpmManifestPath)) {
+      problems.push('components.pnpm 声明了 pnpm，但缺 ' + pnpmManifestPath)
+    } else {
+      try {
+        const pnpmManifest = JSON.parse(readFileSync(pnpmManifestPath, 'utf8'))
+        if (pnpmManifest.version !== components.pnpm) {
+          problems.push('pnpm package.json version=' + JSON.stringify(pnpmManifest.version)
+            + ' != components.pnpm=' + JSON.stringify(components.pnpm))
+        }
+      } catch (error) {
+        problems.push('pnpm package.json 不是合法 JSON（' + pnpmManifestPath + '）：' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    const registered = typeof manifest.target === 'string' ? REGISTERED_TARGETS[manifest.target] : undefined
+    if (registered !== undefined && isDirectory(pnpmDir)) {
+      try {
+        const foreign = foreignPnpmNativePackages(pnpmDir, registered.platform, registered.arch)
+        if (foreign.length > 0) {
+          problems.push('pnpm 夹带 ' + registered.platform + '/' + registered.arch + ' 不匹配的原生包：'
+            + foreign.map((foreignDir) => path.relative(pnpmDir, foreignDir)).join(' / '))
+        }
+      } catch (error) {
+        problems.push('pnpm 原生包平台核验失败：' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+  }
   return {
     ok: problems.length === 0,
     state: problems.length === 0 ? PAYLOAD_COMPLETE : 'incomplete',
@@ -688,6 +943,7 @@ export function verifyPayload(dir) {
  * @param options.outDir - 落位目录（先在同级 staging 组装，最后整体替换）。
  * @param options.dryRun - true = 只算计划，不联网、不写盘。
  * @param options.fetchImpl - 注入的 fetch（测试用；dry-run 下保证零调用）。
+ * @param options.pnpm - 已解析的 pnpm 源 { source, version }（非 null 时隐含 includeNode）。
  * @returns {{ dryRun: boolean, plan: object, manifest?: object, files?: number }}
  */
 export async function materialize(options) {
@@ -695,7 +951,10 @@ export async function materialize(options) {
   const lock = assertLock(options.lock)
   const target = options.target ?? resolveTarget(lock, options.platform, options.arch)
   if (!Object.prototype.hasOwnProperty.call(lock.targets, target)) throw new Error('锁缺 targets.' + target)
-  const plan = payloadPlan(lock, target, { includeNode: options.includeNode === true })
+  // pnpm 版本再以 desktop dependencies.pnpm 复核一次（单一来源；调用方传错不得静默落位）。
+  const pnpm = options.pnpm === null || options.pnpm === undefined ? null
+    : resolvePnpmSource({ source: options.pnpm.source, expectedVersion: desktopPnpmVersion() })
+  const plan = payloadPlan(lock, target, { includeNode: options.includeNode === true, pnpm })
   if (options.dryRun === true) {
     log('[python-payload] dry-run：锁/布局校验通过（target=' + target + '，entries=' + String(plan.entries.length)
       + '，downloads=0，writes=0）；未联网、未写盘')
@@ -715,7 +974,17 @@ export async function materialize(options) {
       else if (entry.kind === 'node') files += extractNodePayload(archive.bytes, path.join(staging, 'dependencies'))
       else throw new Error('未知载荷条目：' + String(entry.kind))
     }
-    const manifest = payloadManifest(lock, target, { includeNode: options.includeNode === true })
+    if (plan.pnpm !== null) {
+      const copied = copyPnpmIntoPayload(plan.pnpm.source, path.join(staging, pnpmDirectoryRelative()), {
+        expectedVersion: plan.pnpm.version,
+      })
+      const pruned = prunePnpmForeignNativePackages(
+        path.join(staging, pnpmDirectoryRelative()), plan.platform, plan.arch,
+      )
+      log('[python-payload] pnpm ' + copied.version + ' 已落位（prune ' + String(pruned.length)
+        + ' 个 ' + plan.platform + '/' + plan.arch + ' 不匹配的原生包）')
+    }
+    const manifest = payloadManifest(lock, target, { includeNode: options.includeNode === true, pnpm })
     writeFileSync(path.join(staging, 'runtime.json'), JSON.stringify(manifest, undefined, 2) + '\n')
     const check = verifyPayload(staging)
     if (!check.ok) {
@@ -734,16 +1003,16 @@ export async function materialize(options) {
 
 const USAGE = [
   '用法：',
-  '  node scripts/prepare-python-payload.mjs --dry-run [--target mac-arm64]',
-  '  node scripts/prepare-python-payload.mjs [--target <t>] [--out <dir>] [--cache <dir>] [--with-node]',
+  '  node scripts/prepare-python-payload.mjs --dry-run [--target mac-arm64] [--with-node] [--with-pnpm]',
+  '  node scripts/prepare-python-payload.mjs [--target <t>] [--out <dir>] [--cache <dir>] [--with-node] [--with-pnpm] [--pnpm-source <dir>]',
   '  node scripts/prepare-python-payload.mjs --verify <dir>',
 ].join('\n')
 
-/** 解析 CLI 参数（未知参数 = 失败；--dry-run 不写盘不联网）。 */
+/** 解析 CLI 参数（未知参数 = 失败；--dry-run 不写盘不联网；--with-pnpm 隐含 --with-node）。 */
 export function parseArgs(argv) {
   const options = {
-    dryRun: false, target: null, outDir: null, cacheDir: null, withNode: false,
-    verifyDir: null, lockPath: LOCK_PATH, help: false,
+    dryRun: false, target: null, outDir: null, cacheDir: null, withNode: false, withPnpm: false,
+    pnpmSource: null, verifyDir: null, lockPath: LOCK_PATH, help: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -754,6 +1023,8 @@ export function parseArgs(argv) {
     }
     if (arg === '--dry-run') options.dryRun = true
     else if (arg === '--with-node') options.withNode = true
+    else if (arg === '--with-pnpm') options.withPnpm = true
+    else if (arg === '--pnpm-source') options.pnpmSource = path.resolve(next())
     else if (arg === '--target') options.target = next()
     else if (arg === '--out') options.outDir = path.resolve(next())
     else if (arg === '--cache') options.cacheDir = path.resolve(next())
@@ -761,6 +1032,10 @@ export function parseArgs(argv) {
     else if (arg === '--verify') options.verifyDir = path.resolve(next())
     else if (arg === '--help' || arg === '-h') options.help = true
     else throw new Error('未知参数：' + arg)
+  }
+  if (options.withPnpm) options.withNode = true
+  if (options.pnpmSource !== null && !options.withPnpm) {
+    throw new Error('--pnpm-source 只与 --with-pnpm 一起用（python-only 载荷不带 pnpm）')
   }
   return options
 }
@@ -771,7 +1046,13 @@ export function formatPlan(plan, options = {}) {
     '[python-payload] target: ' + plan.target + '（' + plan.platform + '/' + plan.arch + '）',
     '[python-payload] components: ' + JSON.stringify(plan.components),
     '[python-payload] payloadDigest: ' + plan.payloadDigest,
-    '[python-payload] 布局：' + plan.pythonBinary + '；site-packages=' + plan.sitePackages,
+    '[python-payload] 布局：' + plan.pythonBinary + '；site-packages=' + plan.sitePackages
+      + (plan.components.node === undefined ? '' : '；node=' + nodeBinaryRelative(plan.platform))
+      + (plan.pnpm === null ? '' : '；pnpm=' + pnpmBinaryRelative()),
+    plan.pnpm === null
+      ? '[python-payload] pnpm: 未启用（--with-pnpm 打开后随 node 一起落位）'
+      : '[python-payload] pnpm: ' + plan.pnpm.version + ' ← ' + plan.pnpm.source
+        + '（dependencies/pnpm，按 ' + plan.platform + '/' + plan.arch + ' prune 外平台原生包）',
   ]
   for (const entry of plan.entries) {
     lines.push('[python-payload]   [' + entry.kind + '] ' + entry.archive + ' sha256=' + entry.sha256.slice(0, 12)
@@ -803,7 +1084,8 @@ async function main() {
       + '（x64 腿 2026-12 暂时移除，见 docs/progress/STATUS.md）')
   }
   const target = options.target ?? resolveTarget(lock)
-  const plan = payloadPlan(lock, target, { includeNode: options.withNode })
+  const pnpm = options.withPnpm ? resolvePnpmSource({ source: options.pnpmSource }) : null
+  const plan = payloadPlan(lock, target, { includeNode: options.withNode, pnpm })
   for (const line of formatPlan(plan, { outDir: options.outDir ?? DEFAULT_OUT_DIR })) console.log(line)
   if (options.dryRun) {
     console.log('[python-payload] dry-run：锁/布局校验通过；未联网、未写盘')
@@ -815,6 +1097,7 @@ async function main() {
     outDir: options.outDir ?? DEFAULT_OUT_DIR,
     cacheDir: options.cacheDir ?? DEFAULT_CACHE_DIR,
     includeNode: options.withNode,
+    pnpm,
     log: (line) => { console.log(line) },
   })
   return 0

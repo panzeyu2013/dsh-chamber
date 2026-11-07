@@ -36,6 +36,8 @@ final class PackagedLayoutTests: XCTestCase {
             "sidecarDir: path.join(resourcesDir, 'sidecar')",
             "webDist: path.join(resourcesDir, 'dist', 'web')",
             "path.join(layout.sidecarDir, 'sidecar.js')",
+            "payloadNodePath(layout.sidecarDir)",
+            "office-skills",
             "vendor/dsh",
         ] {
             XCTAssertTrue(script.contains(anchor),
@@ -43,7 +45,9 @@ final class PackagedLayoutTests: XCTestCase {
         }
         XCTAssertEqual(PackagedLayout.sidecarDir(resourcesDir: resources), resources + "/sidecar")
         XCTAssertEqual(PackagedLayout.sidecarScript(resourcesDir: resources), resources + "/sidecar/sidecar.js")
-        XCTAssertEqual(PackagedLayout.nodeBinary(resourcesDir: resources), resources + "/sidecar/dsh-chamber-helper")
+        XCTAssertEqual(PackagedLayout.nodeBinary(resourcesDir: resources),
+                       resources + "/sidecar/primary-runtime/dependencies/node/bin/node",
+                       "单 Node 裁决：唯一 Node 在 primary-runtime payload 里（无 dsh-chamber-helper）")
         XCTAssertEqual(PackagedLayout.dshWorkspace(resourcesDir: resources), resources + "/sidecar/vendor/dsh")
         XCTAssertEqual(PackagedLayout.webDistDir(resourcesDir: resources), resources + "/dist/web")
         XCTAssertEqual(PackagedLayout.userDataDir(home: "/Users/tester"),
@@ -51,9 +55,10 @@ final class PackagedLayoutTests: XCTestCase {
     }
 
     /// node 解析不得有「另一个 app 的 Electron 二进制」fail-open 缺省——
-    /// 每一层都要求可执行，否则抛精确错误（调用方 fatalStartup）。
+    /// 每一层都要求可执行，否则抛精确错误（调用方 fatalStartup）。单 Node 裁决后
+    /// 装配态的自带 node 是 primary-runtime payload 内的唯一 Node。
     func testResolveNode() {
-        let bundled = resources + "/sidecar/dsh-chamber-helper"
+        let bundled = resources + "/sidecar/primary-runtime/dependencies/node/bin/node"
         // env 优先（显式路径须可执行）
         XCTAssertEqual(try? PackagedLayout.resolveNode(
             env: ["DSH_CHAMBER_SHELL_NODE_BIN": "/custom/node"], resourcesDir: resources,

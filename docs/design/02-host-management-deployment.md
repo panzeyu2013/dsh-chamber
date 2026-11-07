@@ -193,7 +193,8 @@ rows，不改变官方 web profile 的其它组合层。
 - **node 可执行解析**（`resolveNodeExecutable`，spawn-dsh.ts）：控制面可运行在纯 node
   （standalone serve / 测试）或 Electron 主进程（desktop），而 GUI（Finder）启动的打包 App
   PATH 极简（`/usr/bin:/bin:/usr/sbin:/sbin`），`spawn('node', …)` 必挂 ENOENT。解析序：
-  - 纯 node → `process.execPath`（就是运行中的 node）；
+  - 纯 node（含 Swift sidecar 的 payload node；基名 `node`/`node.exe` 由 `BUNDLED_NODE_BASENAMES` 直用）→
+    `process.execPath`（就是运行中的 node）；
   - Electron → `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（官方生产机制；依赖 `runAsNode`
     fuse，electron-builder 默认开启——**不得关闭该 fuse**），并前置 `--expose-internals`：dsh
     的 cordis loader 经 `node-addon-require-builtin` 取 `internal/modules/esm/loader`，该
@@ -203,7 +204,8 @@ rows，不改变官方 web profile 的其它组合层。
     构建时收录的版本（当前表内为 43.0.0 / 44.0.0 / 44.7.0 / 45.0.0-alpha.6）。桌面 Electron pin 不在表内时
     宿主子进程直接 exit 1（`unsupported Electron runtime fingerprint`）——Electron flavor 的托管宿主
     可用性因此由 **Electron pin × addon 版本**共同决定，任一侧升级都要实机复核；纯 node 路径
-    （含 Swift sidecar 的 `Resources/sidecar/dsh-chamber-helper`）不受该白名单约束。
+    （含 Swift sidecar 的 `<Resources>/sidecar/primary-runtime/dependencies/node/bin/node`——单 Node，基名 `node`）
+    不受该白名单约束。
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
 - **随包 pnpm 供给**（`withPnpmShim`，pnpm-shim.ts）：上游插件管理器在**托管宿主进程**里

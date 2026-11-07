@@ -279,7 +279,7 @@ search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 
 |D3 更新路线|v1 `blocked-available` 由 Sparkle 2 取代（D-1 = B）|design 25 §7|
 |D4 仓库落位|`macos/`（SwiftPM，同 design 25 §3.2 布局）|design 25 §3.2|
 |D5 原生 UI 渐进（路线 B/C）|不做；HostEdges 边界即未来接缝|design 25 §5|
-|D6 Node 版本/架构/来源|构建期 fetch 固定版本 + SHA-256 校验（`DEFAULT_NODE_VERSION` 24.18.1，大版本对齐 Electron 43.4.0 内置 Node）；v1 arm64-only|`packages/desktop/scripts/build-sidecar.mjs`|
+|D6 Node 版本/架构/来源|Swift 单 Node：`prepare-python-payload --with-node` 从 `primary-runtime-lock.json` 取版本 + SHA-256，装配内唯一 Node 在 payload（不再由 build-sidecar fetch/固定）；v1 arm64-only|`packages/desktop/scripts/prepare-python-payload.mjs`、`packages/desktop/primary-runtime-lock.json`|
 |D7 静态凭据加密|不做：诚实 0600 明文 + 旧 safeStorage「保留禁用待重录」|design 25 §6|
 
 #### 1.2 待验收门禁
@@ -310,7 +310,7 @@ search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 
 |W-19/W-20|HostEdges 原生腿（SwiftEdgeHostLegs：对话/面板/文件/通知）|design 25 §5 E1–E20、§4.5|
 |W-21|窗口/菜单/通知/深链/渲染器恢复（MainWindowController/RendererRecovery）|design 25 §4.5、§5|
 |W-22|更新 v1（blocked-available）→ 由 Sparkle 取代|design 25 §7|
-|W-23/W-24|sidecar 打包（内建 node + dist/web）与 .app 组装/Info.plist/ATS|design 25 §3.2、§4.3|
+|W-23/W-24|sidecar 打包（payload node + dist/web）与 .app 组装/Info.plist/ATS|design 25 §3.2、§4.3|
 |W-25|Sparkle 预研 → S-01 实现|design 25 §7|
 |W-26/W-27|CI（ci.yml `test-macos`）与发布产物（`-native` 命名、appcast、回滚）|design 25 §8.4|
 |W-28…W-32|M5 实机门禁与验收|design 25 §8.5；开放状态见 STATUS|

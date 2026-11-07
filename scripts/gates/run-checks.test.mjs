@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,8 +26,8 @@ import { loadGateRegistry } from './gate-registry.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
 import { smokeDecision } from './compiled-sidecar-smoke.mjs'
 import {
-  BUNDLED_NODE_BASENAME,
   DEFAULT_SIDECAR_DIR,
+  payloadNodePath,
   resolveNodeBinary,
   resolveSidecarDir,
 } from '../lib/sidecar-assembly.mjs'
@@ -483,7 +483,7 @@ test('smokeDecision: disabled is a skip, enabled with a missing artifact is a fa
   assert.equal(smokeDecision({ ...base, entryExists: false }).action, 'fail')
   assert.equal(smokeDecision({ ...base, controlPlaneExists: false }).action, 'fail')
 })
-test('resolveSidecarDir honors the environment override; resolveNodeBinary prefers the bundled helper', () => {
+test('resolveSidecarDir honors the environment override; resolveNodeBinary prefers the payload node', () => {
   assert.equal(resolveSidecarDir({}, '/repo'), DEFAULT_SIDECAR_DIR)
   assert.equal(resolveSidecarDir({ DSH_CHAMBER_SIDECAR_DIR: '/tmp/assembly' }, '/repo'), '/tmp/assembly')
   assert.equal(
@@ -493,8 +493,11 @@ test('resolveSidecarDir honors the environment override; resolveNodeBinary prefe
   assert.equal(resolveNodeBinary('/nonexistent-assembly-dir', '/usr/bin/node'), '/usr/bin/node')
   const dir = mkdtempSync(join(tmpdir(), 'dsh-smoke-node-'))
   try {
-    writeFileSync(join(dir, BUNDLED_NODE_BASENAME), '#!/bin/sh\n')
-    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), join(dir, BUNDLED_NODE_BASENAME))
+    // 单 Node 裁决：装配内唯一 Node = primary-runtime payload 的 node（不是顶层 helper）。
+    const payloadNode = payloadNodePath(dir)
+    mkdirSync(dirname(payloadNode), { recursive: true })
+    writeFileSync(payloadNode, '#!/bin/sh\n')
+    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), payloadNode)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

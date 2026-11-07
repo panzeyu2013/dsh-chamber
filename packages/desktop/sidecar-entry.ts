@@ -405,6 +405,10 @@ async function handleInboundLine(line: string): Promise<void> {
 }
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+/** 本地启动装配的资源根目录：打包态 = sidecar 目录本身（build-sidecar 把
+ *  primary-runtime/office-skills 作为 sidecar.js 的 sibling 装配）；dev 态 Swift 直接运行
+ *  本文件，资源在 packages/desktop/resources/（与 Electron dev 同源）。 */
+const sidecarResourceDir = isPackagedSidecarRuntime() ? moduleDir : path.join(moduleDir, 'resources')
 /** 内建 dsh 工作区：显式 --dsh-path 优先；打包形态恒不探测仓库；dev 形态按 main.ts
  * 候选顺序回退（共享 resolveSidecarBuiltinDshWorkspace，两侧不可能漂移）。 */
 const dshPath = resolveSidecarBuiltinDshWorkspace({
@@ -553,6 +557,12 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
     ...(args.hostArchiveDir !== null ? { hostArchiveCleanupPackageSourceDir: args.hostArchiveDir } : {}),
     // open-in 是 localOnly 行：只喂本地播种（远端 seed 表永不携带它）。
     ...(args.hostOpenInDir !== null ? { hostOpenInPackageSourceDir: args.hostOpenInDir } : {}),
+    // Swift 本地启动装配：payload 与 office-skills 是 sidecar 目录的 sibling（打包态），
+    // dev 态取 packages/desktop/resources；两行各自门控，缺失只诊断不阻塞 spawn。
+    startupPluginCapabilities: {
+      primaryRuntimeDir: path.join(sidecarResourceDir, 'primary-runtime'),
+      officeSkillsDir: path.join(sidecarResourceDir, 'office-skills'),
+    },
     getDshWorkspacePath: () => spawnGates.getDshWorkspacePath(),
     canStartLocal: () => spawnGates.canStartLocal(),
     canExposeLocal: () => spawnGates.canExposeLocal(),

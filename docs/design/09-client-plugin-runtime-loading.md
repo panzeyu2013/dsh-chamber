@@ -209,6 +209,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
 | `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeCoveredRows` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows` 与 `findUnsatisfiableExternalDependencies` 判定，AppWebEntry 构造前预加载额外 bundle，`loadModuleBundle` 依赖注入可测）+ `chamber-covered.ts`（去重集）+ `required-extra-rows.ts`（首屏 inject 并集派生 + 缺失服务点名，§3.2）+ `root-takeover-watch.ts`（页面根接管安全网，`main.tsx` 入口安装）；页面级一次性加载与 rev 认领由共享 kernel（shared face `client-plugin-loader.ts`）维护 |
 | `packages/dsh-client-web`（拷贝包） | `boot.ts` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |
 | 方案 A 附加 | host 包 `packages/dsh-chamber-seed-client-graph`（Remote `clientGraph/graph` 暴露图）+ 控制面 `host-graph-seed.ts`（seed 宿主包进 profile + 物化 `--patch` overlay，`packages/control-plane`）；打包态分发：desktop main 传 `hostGraphPackageSourceDir = pkgDir/dist/host-graph-package`（asar 内，`build-host-graph-package.mjs` 产出、electron-builder `files` 含 `dist/**/*`），开发态走 repo 源码树 |
+| 本地启动行（Swift） | 控制面 `startup-plugin-rows.ts`（两条上游 insert 的 allowlist/门控/渲染）+ `host-graph-seed.ts` 第 4 参 `startupOverlayText` + `local-host-seeding.ts` 接入（每 spawn plan）+ `index.ts` 的 `startupPluginCapabilities` option；`packages/desktop/sidecar-entry.ts` 按打包/dev 派生资源根并传 capabilities（Electron main / gateway 不接线） |
 | 官方/宿主/vendor | 文件零改动（**唯一例外**是 §3.6 的构建期 vendor 补丁集：不改文件、只在我们自己的 vite transform 里按精确锚点改写，上游漂移即构建失败） |
 
 ### 3.5 加载契约（端点、seed 与去重集）
@@ -247,6 +248,45 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   已运行的本地实例在下一次重启按官方插件集变更节奏生效。同一 spawn gate 的首次 `settings.yaml` 默认值复用
   owner-private O_EXCL writer：`dsh-home` 最终目录必须真实，既有 settings leaf（含用户 symlink）只视为
   "已有配置"、绝不打开写入，不用递归 mkdir + 普通 `writeFileSync` 穿越 owned root。
+- **本地启动行（Swift 本地 only；上游两行 insert）**：本地 spawn 除 chamber host 行外，同一
+  `--patch` overlay 追加**两条上游插件行**（固定 allowlist 在
+  `packages/control-plane/src/startup-plugin-rows.ts`）：
+  `chamber-workspace-dependencies` → `@deepseek-ai/dsh-tool-workspace-dependencies`
+  （config `{source: <primary-runtime 目录>, root: <DSH_HOME>/dsh-runtimes/dsh-primary-runtime}`）
+  与 `chamber-office-skills` → `@deepseek-ai/dsh-skill-office`（config
+  `{assetRoot: <office-skills 目录>, node?: <payload node>, cli: <workspace>/node_modules/…/lib/cli.js | false}`）。
+  两行仍是 loader patch：作为同一 overlay 文件的**第二个顶层 `- insert:` 对象**追加在 chamber 行与
+  id-targeted disables 之后（`buildPatchOverlay` 的第 4 参 `startupOverlayText`；零行渲染为空串，
+  legacy 字节逐字不变；只有启动行/disable 的 overlay 也合法）。capability 根只由 Swift
+  `sidecar-entry` 解析并传控制面（打包态 `<sidecar>/primary-runtime`、`<sidecar>/office-skills`；
+  dev `packages/desktop/resources/*`）；Electron main / CLI / gateway 不传 capabilities ⇒ 不挂任何行
+  （Electron 分支未来移除、本轮不接线；gateway 保持原状）。每次 spawn 重新 plan（与 chamber 行同一
+  幂等重写路径），资源在两次 spawn 间被删/更新都会如实反映。
+- **启动行门控、config 与身份纪律**：每行**独立** fail-open——capability 未提供或目录不存在 = 普通
+  log 跳过；目录存在但资源不完整 = **warn 后跳过该行**（绝不发半行、绝不为此让 spawn 失败）。
+  workspace-dependencies 需 payload `runtime.json` 可解析且 `platform/arch` 等于宿主、
+  `dependencies/python/bin/python3` 是文件、存在任一 `lib/pythonX.Y/site-packages`，且 ACTIVE
+  workspace（`<workspace>/node_modules` 或 `<workspace>/apps/cli/node_modules` 两种布局）装该包；
+  office 需 7 个技能目录的 `SKILL.md` + `office/references/sidecar.md` 全在，且 workspace 装
+  `@deepseek-ai/dsh-skill-office`。`node` 只在 payload 带 Node 且 `runtime.json` 的 platform/arch 与本机一致时写入（Swift 打包态
+  恒有；python-only 载荷，或 `--skip-node` 且未 prepare full payload 的装配没有，上游回退
+  `process.execPath`；跨平台 dev 载荷即便带 node 也不交给技能）；`cli` 恒写（workspace 直接安装或 skill-office 包内 `node_modules` 的 LibreOffice Kit CLI 都算找到；
+  找不到时显式 `false` = 能力声明，不让三个操作技能指向不存在路径）。渲染期是唯一校验点：
+  id/name 与每行 config key 都过 allowlist、required keys、值必须是绝对路径且无控制字符，违规 throw
+  （不写半份 overlay）。`root` 固定 `<DSH_HOME>/dsh-runtimes/dsh-primary-runtime`——官方「只读源 →
+  首次工具调用复制到 DSH_HOME」语义，见 design 18 §4.2。**无 electronHost 参数、无 dsh 版本闸门/
+  绑定**：本地允许切换 dsh 版本，行只按「资源存在 + active workspace 装有两个包」门控。
+- **dev 未 prepare 的预期噪音**：`resources/{primary-runtime,office-skills}` 的 committed README 让两个能力根在 dev 恒存在，但资源不完整 ⇒ 每次 spawn 各出一条 warn（打包缺陷语义）。这是 dev 预期噪音；发布腿由 `--require-*` fail-closed，真机问题不会被它掩盖。
+- **profile 冲突 = 跳过**：用户 `profiles/web/cordis.patch.yml` 已含同 id 或同 name 的行 ⇒ 跳过该
+  启动行（loader 身份全局，重复 id/name 会让下次 boot 失败；复用用户行、不改写它）。判定复用
+  同一 loader-patch 解析器（`parseLoaderRows`）：按 id 或 name 命中即视为 profile 已拥有该行。
+- **Rejected alternatives（启动行）**：① 用宿主 env/PATH 暴露 payload（`DSH_*`/PATH 注入）——改每实例
+  宿主环境、不可观测，且与官方工具「不改 PATH/不注入 env」的契约冲突，故选 loader insert 的绝对路径
+  config；② 版本闸门 / 把行绑定构建 pin 的 dsh 版本——本地允许切版本，闸门会把资源存在退化成版本
+  矩阵；③ 依赖 electronHost 提供 node/cli（Electron 独有 seam）——Swift 无 Electron，会产出半配置
+  行，改为「payload 有 node 就传、cli 缺失显式 false」；④ 远程（gateway/SSH）也挂行——远程不随包/
+  不做 provisioning（local vs remote 偏差登记见 STATUS）；⑤ 另发 chamber seed 包包装上游插件——
+  上游包已在 active workspace 安装、loader 可直接 insert name，额外 seed 包只增加分发面与版本双写。
 - **远程实例 seed（设计 13 M2）**：远端 `$DSH_HOME` 经 `seedRemoteChamberHostPackages`（exec write-file
   原语）把宿主包落到平铺 fallback `profiles/node_modules`（跨 `dsh plugin` pnpm 操作持久）+
   `cordis.patch.yml` 列表 insert（= 官方插件集变更节奏：重启后生效，seed 不重启远端）。接线：desktop main

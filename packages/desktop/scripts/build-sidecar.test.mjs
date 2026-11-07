@@ -2,24 +2,25 @@
  * build-sidecar.test.mjs —— sidecar 打包脚本单测（design 25 §3.2/§4.3）
  *
  * 覆盖：
- *  ① 参数解析与布局（缺省 out、各开关、未知参数 loud）；
- *  ② 计划文本（--skip-node/--skip-bundle 的步骤差异）；
- *  ③ Node 归档命名/URL/成员路径 + SHASUMS256.txt 解析；
- *  ③b 摘要固定（PINNED_NODE_SHA256）：默认版本两架构全覆盖、pin/override/冲突/
- *     未固定四种判定（纯函数，不联网）；
- *  ③c Electron pin → 内置 node 的固定表（无 Electron 二进制也无条件断言，
- *     漂移臂 loud）与 vendor/dsh 版本 + 平台装配断言（拷贝前 fail-closed）；
- *  ④ SHA-256 流式计算与不匹配检测；
- *  ⑤ **A5 断言**：捆绑 Node 基名必须是 BUNDLED_NODE_BASENAME
- *     （dsh-chamber-helper）——正例通过、反例 loud；并实证 resolveNodeExecutable
- *     的纯 Node 分支以 basename 为前提（helper 基名 → 直用 execPath；其他基名
- *     → 回落，不直用）；
- *  ⑥ --dry-run 真实子进程：输入校验通过、不写盘、不联网（exit 0）；
- *  ⑦ normalizeSymlinks：树内绝对链接→相对、树外链接→实体化、悬空→loud、
- *     幂等（cpSync 会把相对链接绝对化，bundle 因此过不了 codesign）；
- *  ⑧ copyTree：cpSync(verbatimSymlinks) 只搬链接，实体化全部交给 normalizeSymlinks；
- *  ⑨b --skip-* 的诚实语义：跳过 = 缺位，不继承既有装配；
- *  ⑨c tsc emit 目录（dist/sidecar）被清掉，不被 electron-builder 打包。
+ *  ① 参数解析与布局（缺省 out、各开关、--skip-node 与 --require-node 互斥、
+ *     未知参数 loud；**单 Node 裁决**：布局不再有独立 helper/node 字段，装配内
+ *     唯一的 Node 在 primary-runtime payload 里）；
+ *  ② 计划文本（payload node/pnpm/target arch/office 与 --skip-* 的步骤差异）；
+ *  ③ payload 门控纯函数：verifyPayloadNodeAndPnpm（node 存在 + 可执行位、pnpm
+ *     入口）与 assertPayloadTarget（runtime.json 的 platform/arch 比对）；
+ *  ③e 内嵌 pnpm 版本 pin：单源 desktop dependencies.pnpm + 构建期 fail-closed；
+ *  ③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）；
+ *  ④ office 技能资产：copyOfficeAssets 替换式落位 / 缺源跳过 = 缺位 /
+ *     --require-office-assets fail-closed（8 文件清单来自单源常量）；
+ *  ⑤ 单 Node 归因：resolveNodeExecutable 对 basename=node 的 execPath 直用
+ *     （design 25 §4.3 A5 再反转；helper 基名随单 Node 裁决退场）；
+ *  ⑥ 真实装配（--skip-node/--skip-vendor）与 --dry-run 子进程：输入校验通过、
+ *     不写盘、不联网；
+ *  ⑦ normalizeSymlinks：树内绝对链接→相对、树外链接→实体化、悬空→loud、幂等；
+ *  ⑧ copyTree：cpSync(verbatimSymlinks) 只搬链接，实体化交给 normalizeSymlinks；
+ *  ⑨b --skip-* 的诚实语义：跳过 = 缺位（含旧布局 helper/node 的迁移清理）；
+ *  ⑨c tsc emit 目录（dist/sidecar）被清掉，不被 electron-builder 打包；
+ *  ⑨d host 包产物 fail-closed；G6 缺源 fail-closed；G39 vendor 版本/平台断言。
  * 不联网、不下载 Node、不写仓库外路径（dry-run 无副作用）。
  */
 import { test } from 'node:test'
@@ -43,80 +44,81 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  DEFAULT_NODE_VERSION,
-  ELECTRON_NODE_PINS,
-  ELECTRON_PINNED_VERSION,
   HOST_PACKAGES,
-  PINNED_NODE_SHA256,
   PNPM_PINNED_VERSION,
-  assertBundledNodeBasename,
-  assertElectronNodePin,
   assertHostPackageArtifacts,
-  assertNodeArchiveMembers,
-  assertNodePinTable,
+  assertPayloadTarget,
+  buildPlan,
   clearLegacySidecarEmit,
+  copyOfficeAssets,
   copyPnpm,
   copyTree,
-  normalizeSymlinks,
   copyVendorDsh,
-  buildPlan,
-  nodeArchiveName,
-  nodeDistUrl,
-  nodeMemberPath,
+  normalizeSymlinks,
   parseBuildSidecarArgs,
-  parseShasums,
-  resolveElectronPin,
-  resolvePinnedNodeDigest,
   resolvePnpmPin,
   runBuildSidecar,
-  sha256File,
-  verifySha256,
-  verifyVendorDshRuntime,
   sidecarLayout,
+  verifyPayloadNodeAndPnpm,
+  verifyVendorDshRuntime,
 } from './build-sidecar.mjs'
+// office 资产的 8 文件清单与在场判定单源 = prepare-office-assets.mjs（装配侧不另抄一份）。
+import { OFFICE_SKILL_FILES, verifyOfficeAssets } from './prepare-office-assets.mjs'
 import { platformExecutableName, resolveElectronPackageDir, sharedDistDirFor } from './electron-shared.mjs'
-import { BUNDLED_NODE_BASENAME } from '../../../scripts/lib/sidecar-assembly.mjs'
+import { payloadNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
 const script = path.join(here, 'build-sidecar.mjs')
 
-/**
- * Host-derived default arch: parseBuildSidecarArgs mirrors the machine
- * (x64 host → x64 archive, everything else → arm64 DEFAULT_ARCH) exactly like
- * build-sidecar.mjs. Hardcoding arm64 would read an x64 Mac as a false red.
- */
-const HOST_ARCH = process.arch === 'x64' ? 'x64' : 'arm64'
-
 /** vendor/dsh 的平台前缀（装配断言读它；实际形如 darwin-arm64）。 */
+const HOST_ARCH = process.arch === 'x64' ? 'x64' : 'arm64'
 const HOST_PLATFORM = `${process.platform}-${HOST_ARCH}`
 
-/** The desktop manifest — single source for the pnpm pin asserted below. */
-const DESKTOP_MANIFEST = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
-
-test('① 参数解析：缺省值、开关与错误', () => {
+test('① 参数解析：缺省值、单 Node 开关与错误', () => {
   const defaults = parseBuildSidecarArgs([])
   assert.equal(defaults.outDir, path.join(desktopDir, 'release', 'sidecar'))
   assert.equal(defaults.dryRun, false)
-  assert.equal(defaults.skipNode, false)
-  assert.equal(defaults.nodeVersion, DEFAULT_NODE_VERSION)
-  // The default arch follows the HOST (x64 → x64), not a hardcoded arm64.
-  assert.equal(defaults.arch, HOST_ARCH)
-  assert.equal(defaults.nodeSha256, null)
+  assert.equal(defaults.skipNode, false, '单 Node：--skip-node 只表达「不要求 payload node」')
+  assert.equal(defaults.requireNode, false)
+  assert.equal(defaults.requirePnpm, false)
+  assert.equal(defaults.skipOfficeAssets, false)
+  assert.equal(defaults.requireOfficeAssets, false)
+  assert.equal(defaults.arch, null, '缺省不猜目标架构；payload 存在时按 --arch 比对')
+  assert.equal(defaults.pythonPayloadDir, path.join(desktopDir, 'resources', 'primary-runtime'))
+  assert.equal(defaults.officeAssetsDir, path.join(desktopDir, 'resources', 'office-skills'))
 
   const parsed = parseBuildSidecarArgs([
-    '--out', '/tmp/x', '--dry-run', '--skip-node', '--skip-bundle',
-    '--node-version', '24.9.0', '--node-sha256', 'AB'.repeat(32), '--arch', 'x64',
+    '--out', '/tmp/x', '--dry-run', '--skip-node', '--skip-bundle', '--skip-office-assets', '--arch', 'x64',
   ])
   assert.equal(parsed.outDir, '/tmp/x')
   assert.equal(parsed.dryRun, true)
   assert.equal(parsed.skipNode, true)
   assert.equal(parsed.skipBundle, true)
-  assert.equal(parsed.nodeVersion, '24.9.0')
-  assert.equal(parsed.nodeSha256, 'ab'.repeat(32), 'sha256 归一化为小写')
+  assert.equal(parsed.skipOfficeAssets, true)
   assert.equal(parsed.arch, 'x64')
-  // Negative arm: --arch is a whitelist — an explicit bad value must fail
-  // loudly rather than flow into the archive name and the lipo assertion.
+  // 发布腿的四个 --require-*（python 既有 + 单 Node 的 node/pnpm/office）。
+  const required = parseBuildSidecarArgs([
+    '--require-python', '--require-node', '--require-pnpm', '--require-office-assets',
+  ])
+  assert.equal(required.requirePython, true)
+  assert.equal(required.requireNode, true)
+  assert.equal(required.requirePnpm, true)
+  assert.equal(required.requireOfficeAssets, true)
+  // 显式源路径只在调用方给路径时严格校验（默认源缺失只 warn）。
+  const sources = parseBuildSidecarArgs(['--office-assets', '/tmp/office-assets'])
+  assert.equal(sources.officeAssetsDir, '/tmp/office-assets')
+  assert.equal(sources.officeAssetsExplicit, true)
+  // 互斥：--skip-node 与 --require-node 同时出现是调用方自相矛盾。
+  assert.throws(() => parseBuildSidecarArgs(['--skip-node', '--require-node']), /互斥/)
+  assert.throws(() => parseBuildSidecarArgs(['--skip-python', '--require-python']), /互斥/)
+  assert.throws(() => parseBuildSidecarArgs(['--skip-office-assets', '--require-office-assets']), /互斥/)
+  // 单 Node 裁决后旧的独立 Node 下载参数必须消失（防止发布腿沿用过时 argv）。
+  assert.throws(() => parseBuildSidecarArgs(['--node-archive', '/tmp/node.tar.gz']), /未知参数/)
+  assert.throws(() => parseBuildSidecarArgs(['--node-version', '24.9.0']), /未知参数/)
+  assert.throws(() => parseBuildSidecarArgs(['--node-sha256', 'ab'.repeat(32)]), /未知参数/)
+  // Negative arm: --arch is a whitelist — an explicit bad value must fail loudly
+  // rather than flow into the payload target assertion and the release artifacts.
   assert.throws(() => parseBuildSidecarArgs(['--arch', 'ia32']), /--arch 只接受 arm64\|x64/)
   assert.equal(parseBuildSidecarArgs(['--arch', 'arm64']).arch, 'arm64')
   assert.equal(parseBuildSidecarArgs(['--arch', 'x64']).arch, 'x64')
@@ -124,122 +126,53 @@ test('① 参数解析：缺省值、开关与错误', () => {
   assert.throws(() => parseBuildSidecarArgs(['--out']), /缺少取值/)
 })
 
-test('① 布局：helper / sidecar.js / package.json / dist/control-plane / host 包', () => {
+test('① 布局：单 Node 在 payload 里（无 helper 字段）+ sidecar.js / dist / office-skills', () => {
   const layout = sidecarLayout('/tmp/out')
   assert.equal(layout.outDir, '/tmp/out')
-  assert.equal(layout.node, path.join('/tmp/out', BUNDLED_NODE_BASENAME))
   assert.equal(layout.entry, '/tmp/out/sidecar.js')
   assert.equal(layout.packageJson, '/tmp/out/package.json')
   assert.equal(layout.dist, '/tmp/out/dist')
   assert.equal(layout.controlPlaneDist, '/tmp/out/dist/control-plane')
   assert.equal(layout.controlPlaneEntry, '/tmp/out/dist/control-plane/index.js')
   assert.equal(layout.hostPackageDist('dsh-chamber-seed-client-graph'), '/tmp/out/dist/dsh-chamber-seed-client-graph')
+  // 单 Node 裁决：装配目录顶层的独立 node/helper 字段消失了，唯一 Node 在 payload。
+  assert.equal(Object.prototype.hasOwnProperty.call(layout, 'node'), false,
+    '独立 helper/node 字段已随单 Node 裁决移除')
+  assert.equal(layout.primaryRuntime, '/tmp/out/primary-runtime')
+  assert.equal(layout.payloadNode, '/tmp/out/primary-runtime/dependencies/node/bin/node')
+  assert.equal(layout.payloadNode, payloadNodePath('/tmp/out'),
+    'payload node 路径单源 = scripts/lib/sidecar-assembly.mjs')
+  assert.equal(layout.payloadPnpmEntry, '/tmp/out/primary-runtime/dependencies/pnpm/bin/pnpm.mjs')
+  assert.equal(layout.officeSkills, '/tmp/out/office-skills')
 })
 
-test('② 计划文本反映开关', () => {
-  const base = parseBuildSidecarArgs([])
-  const full = buildPlan(base).join('\n')
+test('② 计划文本反映单 Node 开关', () => {
+  const full = buildPlan(parseBuildSidecarArgs(['--arch', 'arm64'])).join('\n')
   assert.match(full, /esbuild 打包 sidecar-entry\.ts/)
-  // The plan URL carries the host-derived arch, never a hardcoded arm64.
-  assert.match(
-    full,
-    new RegExp('Node 捆绑：https://nodejs\\.org/dist/v' + DEFAULT_NODE_VERSION.replace(/\./g, '\\.')
-      + '/node-v' + DEFAULT_NODE_VERSION.replace(/\./g, '\\.') + '-darwin-' + HOST_ARCH + '\\.tar\\.gz'),
-  )
   assert.match(full, /写装配 package\.json/)
+  assert.match(full, /\[4\] python 载荷/)
+  assert.match(full, /\[4a\] payload node：.*primary-runtime\/dependencies\/node\/bin\/node/)
+  assert.match(full, /\[4b\] payload pnpm：.*primary-runtime\/dependencies\/pnpm\/bin\/pnpm\.mjs/)
+  assert.match(full, /\[4c\] payload 目标架构：darwin-arm64/)
+  assert.match(full, /\[4d\] office 技能资产：.*→ .*office-skills/)
+  // 单 Node 裁决：计划里不得再出现独立 Node 下载/摘要/helper 字样。
+  assert.doesNotMatch(full, /nodejs\.org|SHA-256 校验|Node 捆绑|dsh-chamber-helper/)
 
-  const skipped = buildPlan(parseBuildSidecarArgs(['--skip-node', '--skip-bundle'])).join('\n')
+  const skipped = buildPlan(parseBuildSidecarArgs([
+    '--skip-node', '--skip-bundle', '--skip-office-assets',
+  ])).join('\n')
   assert.match(skipped, /跳过 esbuild 打包/)
-  assert.match(skipped, /跳过 Node 捆绑/)
+  assert.match(skipped, /\[4a\] 跳过 payload node 要求/)
+  assert.match(skipped, /\[4d\] 跳过 office 技能资产/)
+  assert.doesNotMatch(skipped, /payload 目标架构/)
   assert.doesNotMatch(skipped, /nodejs\.org/)
 
-  const offline = buildPlan(parseBuildSidecarArgs(['--node-archive', '/tmp/node.tar.gz'])).join('\n')
-  assert.match(offline, /本地 \/tmp\/node\.tar\.gz/)
-})
-
-test('③ Node 归档命名/URL/成员路径与 SHASUMS 解析', () => {
-  assert.equal(nodeArchiveName('24.18.1', 'arm64'), 'node-v24.18.1-darwin-arm64.tar.gz')
-  assert.equal(
-    nodeDistUrl('24.18.1', 'node-v24.18.1-darwin-arm64.tar.gz'),
-    'https://nodejs.org/dist/v24.18.1/node-v24.18.1-darwin-arm64.tar.gz',
-  )
-  assert.equal(nodeMemberPath('24.18.1', 'arm64'), 'node-v24.18.1-darwin-arm64/bin/node')
-
-  const shasums = [
-    'aaaa'.repeat(16) + '  node-v24.18.1-linux-x64.tar.gz',
-    'bbbb'.repeat(16) + '  node-v24.18.1-darwin-arm64.tar.gz',
-    'cccc'.repeat(16) + ' *node-v24.18.1-darwin-x64.tar.gz',
-    'DDDD'.repeat(16) + '  node-v24.18.1-darwin-uppercase.tar.gz',
-    '',
-  ].join('\n')
-  assert.equal(parseShasums(shasums, 'node-v24.18.1-darwin-arm64.tar.gz'), 'bbbb'.repeat(16))
-  assert.equal(parseShasums(shasums, 'node-v24.18.1-darwin-x64.tar.gz'), 'cccc'.repeat(16))
-  assert.equal(parseShasums(shasums, 'missing.tar.gz'), null)
-  assert.equal(
-    parseShasums(shasums, 'node-v24.18.1-darwin-uppercase.tar.gz'), null,
-    '非小写 hex 不是合法 sha256（真实 SHASUMS256.txt 恒小写）')
-  assert.equal(parseShasums('garbage', 'node-v24.18.1-darwin-arm64.tar.gz'), null)
-})
-
-test('③b Node 归档摘要固定在仓库：默认版本两架构全覆盖 + 覆盖/冲突语义', () => {
-  // 固定表：默认版本的两个 darwin 归档都必须在表内、都是小写 64-hex——升级
-  // DEFAULT_NODE_VERSION 时本门禁先红（摘要必须与官方 SHASUMS256.txt 同步）。
-  for (const arch of ['arm64', 'x64']) {
-    const name = nodeArchiveName(DEFAULT_NODE_VERSION, arch)
-    assert.ok(Object.prototype.hasOwnProperty.call(PINNED_NODE_SHA256, name),
-      `默认 Node 版本 ${DEFAULT_NODE_VERSION} 的 ${arch} 归档必须钉进 PINNED_NODE_SHA256`)
-    assert.match(PINNED_NODE_SHA256[name], /^[0-9a-f]{64}$/,
-      `${name} 的固定摘要必须是小写 64 位 hex`)
-  }
-
-  const arm = nodeArchiveName(DEFAULT_NODE_VERSION, 'arm64')
-
-  // 未传 --node-sha256：用仓库固定值，来源标记 pinned（调用方据此不读网络摘要）。
-  assert.deepEqual(resolvePinnedNodeDigest(arm, null),
-    { digest: PINNED_NODE_SHA256[arm], source: 'pinned' })
-
-  // 显式传入且与固定值一致：走 override（同样不读网络摘要）。
-  assert.deepEqual(resolvePinnedNodeDigest(arm, PINNED_NODE_SHA256[arm]),
-    { digest: PINNED_NODE_SHA256[arm], source: 'override' })
-
-  // 显式传入却与固定值冲突：loud 拒绝（同一版本的官方归档内容不可变，只可能是
-  // 固定值写错或包被替换——绝不静默采纳）。
-  assert.throws(() => resolvePinnedNodeDigest(arm, 'f'.repeat(64)),
-    /与仓库固定摘要不一致/)
-
-  // 未固定的版本（--node-version 升级但表未更新）：digest=null ⇒ 调用方回退
-  // SHASUMS256.txt 并响亮说明，绝不把「没固定」当「已校验」。
-  assert.deepEqual(resolvePinnedNodeDigest(nodeArchiveName('24.9.0', 'arm64'), null),
-    { digest: null, source: 'network' })
-  assert.deepEqual(resolvePinnedNodeDigest(nodeArchiveName('24.9.0', 'arm64'), 'a'.repeat(64)),
-    { digest: 'a'.repeat(64), source: 'override' }, '未固定版本允许显式摘要')
-
-  // 注入表：判定完全由传入的表决定（测试与未来多版本表可替换来源）。
-  assert.deepEqual(resolvePinnedNodeDigest('x.tar.gz', null, { 'x.tar.gz': 'b'.repeat(64) }),
-    { digest: 'b'.repeat(64), source: 'pinned' })
-
-  // 表 ↔ DEFAULT_NODE_VERSION 的锁步是构建期断言（runBuildSidecar 在
-  // 动网络之前调用），不是注释——多留旧版本行、少一个 arch、摘要写错都 loud。
-  assert.deepEqual(assertNodePinTable(), [...Object.keys(PINNED_NODE_SHA256)].sort())
-  assert.throws(
-    () => assertNodePinTable({ ...PINNED_NODE_SHA256, 'node-v24.9.0-darwin-arm64.tar.gz': 'a'.repeat(64) }),
-    /非默认版本条目/,
-  )
-  assert.throws(
-    () => assertNodePinTable({ ...PINNED_NODE_SHA256, [nodeArchiveName(DEFAULT_NODE_VERSION, 'x64')]: 'A'.repeat(64) }),
-    /小写 64 位 hex/,
-  )
-  const missingArm = { ...PINNED_NODE_SHA256 }
-  delete missingArm[nodeArchiveName(DEFAULT_NODE_VERSION, 'arm64')]
-  assert.throws(() => assertNodePinTable(missingArm), /缺少默认归档/)
-  // 注入版本同样成立（版本与两个 arch 摘要一起给才通过）。
-  assert.deepEqual(
-    assertNodePinTable({
-      'node-v1.2.3-darwin-arm64.tar.gz': 'a'.repeat(64),
-      'node-v1.2.3-darwin-x64.tar.gz': 'b'.repeat(64),
-    }, '1.2.3'),
-    ['node-v1.2.3-darwin-arm64.tar.gz', 'node-v1.2.3-darwin-x64.tar.gz'],
-  )
+  const required = buildPlan(parseBuildSidecarArgs([
+    '--require-node', '--require-pnpm', '--require-office-assets',
+  ])).join('\n')
+  assert.match(required, /（--require-node：缺件 fail-closed）/)
+  assert.match(required, /（--require-pnpm：缺件 fail-closed）/)
+  assert.match(required, /（--require-office-assets：缺件 fail-closed）/)
 })
 
 test('③e 内嵌 pnpm 版本 pin：单源 desktop dependencies.pnpm + 构建期 fail-closed（G18）', () => {
@@ -273,78 +206,27 @@ test('③e 内嵌 pnpm 版本 pin：单源 desktop dependencies.pnpm + 构建期
   }
 })
 
-test('④ sha256File 流式摘要 + verifySha256 真值/不匹配', async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-sha-'))
-  try {
-    const file = path.join(dir, 'payload.bin')
-    writeFileSync(file, 'dsh-chamber')
-    // 真值 = sha256("dsh-chamber")（勿手写假摘要——假期望值会让
-    // 「任何 64 位 hex 都通过」，校验回归不可见）。
-    const real = '857528dee81128d5a6156b79a167c06a91b36e9c28fcf7be286210b6d7c7d6cf'
-    assert.equal(await sha256File(file), real)
-    assert.equal(await verifySha256(file, real), real)
-    await assert.rejects(
-      verifySha256(file, 'f'.repeat(64)),
-      /SHA-256 不匹配/,
-    )
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test('④b A5 归档成员断言：合成 tar 三例 + stdout 注入', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-a5-'))
-  try {
-    const member = 'node-v24.18.1-darwin-arm64/bin/node'
-    const makeArchive = (name, entries) => {
-      const root = path.join(dir, name)
-      for (const entry of entries) {
-        const full = path.join(root, entry)
-        mkdirSync(path.dirname(full), { recursive: true })
-        writeFileSync(full, 'fake')
-      }
-      const archive = path.join(dir, `${name}.tgz`)
-      execFileSync('tar', ['-czf', archive, '-C', root, 'node-v24.18.1-darwin-arm64'])
-      return archive
-    }
-    const good = makeArchive('good', [member])
-    assert.deepEqual(assertNodeArchiveMembers(good, member).length > 0, true)
-
-    const badName = makeArchive('badname', ['node-v24.18.1-darwin-arm64/bin/node-v24.18.1'])
-    assert.throws(() => assertNodeArchiveMembers(badName, member), /缺少成员/)
-
-    const missing = makeArchive('missing', ['node-v24.18.1-darwin-arm64/lib/x'])
-    assert.throws(() => assertNodeArchiveMembers(missing, member), /缺少成员/)
-
-    // tar 不可用/非归档 → 响亮失败（fail-closed）
-    const notArchive = path.join(dir, 'not.tgz')
-    writeFileSync(notArchive, 'not a tar')
-    assert.throws(() => assertNodeArchiveMembers(notArchive, member), /无法列出 Node 归档成员/)
-
-    // 纯 stdout 注入路径（不依赖真实 tar）：成员存在 → 通过；不存在 → loud。
-    assert.deepEqual(assertNodeArchiveMembers('unused', member, `${member}\nother\n`), [member, 'other'])
-    assert.throws(
-      () => assertNodeArchiveMembers('unused', member, 'node-v24.18.1-darwin-arm64/bin/node-v24.18.1\n'),
-      /缺少成员/,
-      'member 不在 stdout 时应报缺少成员',
-    )
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
 test('③c dry-run 真校验输入源（显式缺失即抛 / 默认缺失 warn）且不写盘', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-dry-'))
   try {
     const out = path.join(dir, 'out')
-    // 正常 dry-run（源齐备）→ 计划可生成
+    // 正常 dry-run → 计划可生成（单 Node：payload node 默认不要求）。
     const plan = buildPlan(parseBuildSidecarArgs(['--dry-run', '--out', out])).join('\n')
-    assert.match(plan, /\[4\] Node 捆绑/)
+    assert.match(plan, /\[4a\] payload node/)
     assert.equal(existsSync(out), false, 'dry-run 不得创建输出目录')
-    // 缺 --node-archive 源 → 抛（不得静默"校验通过"）
+    // 显式 --office-assets 源缺失 → 抛（不得静默"校验通过"）
     await assert.rejects(
-      runDryRun(['--dry-run', '--out', out, '--node-archive', path.join(dir, 'missing.tgz')]),
-      /--node-archive 不存在/,
+      runDryRun(['--dry-run', '--out', out, '--office-assets', path.join(dir, 'missing-assets')]),
+      /--office-assets 源不存在/,
+    )
+    // --require-node / --require-pnpm 在 payload 未准备时必须 fail-closed（不下载 Node）。
+    await assert.rejects(
+      runDryRun(['--dry-run', '--out', out, '--require-node']),
+      /payload node\/pnpm 不可用/,
+    )
+    await assert.rejects(
+      runDryRun(['--dry-run', '--out', out, '--require-pnpm']),
+      /payload node\/pnpm 不可用/,
     )
     // **显式**传入的 vendor 源缺失 → 抛（调用方路径写错）
     await assert.rejects(
@@ -434,15 +316,113 @@ test('③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）
   }
 })
 
-test('⑤ A5：捆绑 Node 基名断言（正例通过、反例 loud）', () => {
-  assert.doesNotThrow(() => assertBundledNodeBasename(`/tmp/sidecar/${BUNDLED_NODE_BASENAME}`))
-  assert.throws(
-    () => assertBundledNodeBasename('/tmp/sidecar/node-v24.18.1'),
-    /基名必须是/,
-  )
+test('③f payload 门控纯函数：node/pnpm 存在性 + 可执行位 + target 架构', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-payload-'))
+  try {
+    const payload = path.join(dir, 'primary-runtime')
+    // 未准备：默认不要求 → ok；--require-node/--require-pnpm 各自报缺件（不下载 Node）。
+    assert.equal(verifyPayloadNodeAndPnpm(payload, {}).ok, true)
+    const nodeRequired = verifyPayloadNodeAndPnpm(payload, { requireNode: true })
+    assert.equal(nodeRequired.ok, false)
+    assert.match(nodeRequired.problems.join('\n'), /缺 payload node：.*dependencies\/node\/bin\/node/)
+    const pnpmRequired = verifyPayloadNodeAndPnpm(payload, { requirePnpm: true })
+    assert.match(pnpmRequired.problems.join('\n'), /缺 payload pnpm：.*dependencies\/pnpm\/bin\/pnpm\.mjs/)
+    // --skip-node 表达「不要求 payload node」：即使 plan 期注入了 requireNode 也放行
+    // （argparse 层已把 --skip-node 与 --require-node 判为互斥）。
+    assert.equal(verifyPayloadNodeAndPnpm(payload, { skipNode: true, requireNode: true }).ok, true)
+    // 补齐 node（先无执行位）→ 可执行位必须被断言；pnpm 入口存在即过。
+    const nodeBin = path.join(payload, 'dependencies', 'node', 'bin')
+    mkdirSync(nodeBin, { recursive: true })
+    writeFileSync(path.join(nodeBin, 'node'), '#!/bin/sh\n')
+    chmodSync(path.join(nodeBin, 'node'), 0o644)
+    assert.match(verifyPayloadNodeAndPnpm(payload, { requireNode: true }).problems.join('\n'), /没有可执行位/)
+    chmodSync(path.join(nodeBin, 'node'), 0o755)
+    const pnpmEntry = path.join(payload, 'dependencies', 'pnpm', 'bin', 'pnpm.mjs')
+    mkdirSync(path.dirname(pnpmEntry), { recursive: true })
+    writeFileSync(pnpmEntry, '// pnpm')
+    const complete = verifyPayloadNodeAndPnpm(payload, { requireNode: true, requirePnpm: true })
+    assert.equal(complete.ok, true)
+    assert.equal(complete.node, path.join(nodeBin, 'node'))
+    assert.equal(complete.pnpm, pnpmEntry)
+
+    // 目录冒充 payload node：本门必须自己拒绝（build-swift-app 的 isFile 是更晚一道门）。
+    rmSync(path.join(nodeBin, 'node'), { force: true })
+    mkdirSync(path.join(nodeBin, 'node'))
+    const dirNode = verifyPayloadNodeAndPnpm(payload, { requireNode: true })
+    assert.equal(dirNode.ok, false)
+    assert.match(dirNode.problems.join('\n'), /不是常规文件/)
+    rmSync(path.join(nodeBin, 'node'), { recursive: true, force: true })
+    writeFileSync(path.join(nodeBin, 'node'), '#!/bin/sh\n', { mode: 0o755 })
+
+    // target 架构：无 --arch / 无 runtime.json → 跳过（null）。
+    assert.equal(assertPayloadTarget(payload, null), null)
+    assert.equal(assertPayloadTarget(payload, 'arm64'), null)
+    const manifest = path.join(payload, 'runtime.json')
+    const writeManifest = (value) => writeFileSync(manifest, JSON.stringify(value))
+    writeManifest({ payload: 'complete', platform: 'darwin', arch: 'arm64' })
+    assert.equal(assertPayloadTarget(payload, 'arm64'), 'arm64')
+    assert.throws(() => assertPayloadTarget(payload, 'x64'), /payload 目标架构 "arm64" != --arch x64/)
+    writeManifest({ payload: 'complete', platform: 'linux', arch: 'arm64' })
+    assert.throws(() => assertPayloadTarget(payload, 'arm64'), /目标平台不是 darwin/)
+    writeManifest({ payload: 'absent', platform: 'linux' })
+    assert.equal(assertPayloadTarget(payload, 'arm64'), null, '未准备/占位载荷不做目标断言')
+    writeFileSync(manifest, 'not json')
+    assert.throws(() => assertPayloadTarget(payload, 'arm64'), /不是合法 JSON/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
-test('⑤ A5 实证：resolveNodeExecutable 纯 Node 分支以 basename 为唯一前提', () => {
+/** 造 8 个 office 资产文件（与 OFFICE_SKILL_FILES 同形；omit 用于缺件用例）。 */
+function writeOfficeAssetsFixture(root, { omit = [] } = {}) {
+  for (const relative of OFFICE_SKILL_FILES) {
+    if (omit.includes(relative)) continue
+    const target = path.join(root, relative)
+    mkdirSync(path.dirname(target), { recursive: true })
+    writeFileSync(target, '# ' + relative + '\nfixture asset\n')
+  }
+  return root
+}
+
+test('④ office 技能资产：替换式落位 / 缺源跳过 = 缺位 / --require-office-assets fail-closed', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-office-'))
+  try {
+    assert.equal(OFFICE_SKILL_FILES.length, 8, 'office 资产清单必须恰好 8 个文件')
+    const source = writeOfficeAssetsFixture(path.join(dir, 'assets'))
+    const sourceStatus = verifyOfficeAssets(source)
+    assert.equal(sourceStatus.ok, true)
+    assert.equal(sourceStatus.checked, 8, '8 个资产文件都必须被核对')
+    const absentStatus = verifyOfficeAssets(path.join(dir, 'nope'))
+    assert.equal(absentStatus.ok, false)
+    assert.match(absentStatus.problems.join('\n'), /缺文件：office\/SKILL\.md/)
+    const partialStatus = verifyOfficeAssets(
+      writeOfficeAssetsFixture(path.join(dir, 'partial'), { omit: ['office-xlsx/SKILL.md'] }))
+    assert.equal(partialStatus.ok, false)
+    assert.match(partialStatus.problems.join('\n'), /office-xlsx\/SKILL\.md/)
+
+    const dest = path.join(dir, 'out', 'office-skills')
+    // 上一轮残留不得留下：替换式落位。
+    mkdirSync(path.join(dest, 'stale'), { recursive: true })
+    writeFileSync(path.join(dest, 'stale', 'x.txt'), 'stale\n')
+    assert.equal(copyOfficeAssets(source, dest), true)
+    for (const relative of OFFICE_SKILL_FILES) {
+      assert.ok(existsSync(path.join(dest, relative)), relative + ' 应拷贝')
+    }
+    assert.equal(existsSync(path.join(dest, 'stale')), false, '替换式落位不得残留旧成员')
+    // 缺源默认跳过：返回 false 且目标清空（跳过 = 缺位，不继承既有装配）。
+    assert.equal(copyOfficeAssets(path.join(dir, 'missing'), dest), false)
+    assert.equal(existsSync(dest), false, '缺源跳过必须产生缺位')
+    // 发布腿的 fail-closed 开关：同一个缺源 loud。
+    assert.throws(
+      () => copyOfficeAssets(path.join(dir, 'missing'), dest, { requireAssets: true }),
+      /--require-office-assets 但 office 技能资产不可用/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('⑤ 单 Node 归因：resolveNodeExecutable 对 basename=node 的 execPath 直用', () => {
   const scriptBody = `
     Object.defineProperty(process, 'execPath', { value: process.argv[1], configurable: true });
     const { resolveNodeExecutable } = await import('@dsh-chamber/control-plane');
@@ -454,10 +434,12 @@ test('⑤ A5 实证：resolveNodeExecutable 纯 Node 分支以 basename 为唯�
     { cwd: desktopDir, encoding: 'utf8' },
   ).trim())
 
-  // 正例：捆绑基名 → 直用 execPath、零额外 args/env（control-plane 的基名表
-  // 必须含 scripts/lib/sidecar-assembly.mjs 的这个常量）。
-  const direct = run(`/tmp/assembled-sidecar/${BUNDLED_NODE_BASENAME}`)
-  assert.deepEqual(direct, { file: `/tmp/assembled-sidecar/${BUNDLED_NODE_BASENAME}`, args: [], env: {} })
+  // 正例：payload node 的基名就是 node（单 Node 裁决不重命名）→ 直用 execPath、
+  // 零额外 args/env。归因改由应用派生的子进程关系承担（design 25 §4.3 A5 再反转），
+  // 不再依赖 grep 基名表；spawn-dsh 侧对 {node,node.exe} 的直用分支保留（task-10 域）。
+  const payloadNode = '/tmp/assembled-sidecar/primary-runtime/dependencies/node/bin/node'
+  const direct = run(payloadNode)
+  assert.deepEqual(direct, { file: payloadNode, args: [], env: {} })
   // 反例：其他基名 → 绝不直用（回落 PATH/known locations，系统 node 版本不可控）。
   const fallback = run('/tmp/assembled-sidecar/system-node')
   assert.notEqual(fallback.file, '/tmp/assembled-sidecar/system-node')
@@ -511,12 +493,17 @@ test('⑥ --dry-run 子进程：输入校验通过、无写盘、无联网', asy
   }
 })
 
-test('⑨b --skip-* 产生缺位：不继承上一轮装配的 helper / sidecar.js / vendor / pnpm / host 包', async () => {
+test('⑨b --skip-* 产生缺位：旧 helper/node 迁移清理 + skip 不继承既有装配', async () => {
   const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-skip-'))
   try {
-    // 既有完整装配的遗留（含改名前的 host 包目录）。
-    writeFileSync(path.join(out, BUNDLED_NODE_BASENAME), 'stale helper')
-    chmodSync(path.join(out, BUNDLED_NODE_BASENAME), 0o755)
+    // 既有装配的遗留：旧布局的独立 Node（改名前的 node 与 dsh-chamber-helper）、
+    // sidecar.js、vendor、pnpm、旧 host 包目录。
+    writeFileSync(path.join(out, 'dsh-chamber-helper'), 'stale helper')
+    chmodSync(path.join(out, 'dsh-chamber-helper'), 0o755)
+    writeFileSync(path.join(out, 'node'), 'stale node')
+    chmodSync(path.join(out, 'node'), 0o755)
+    mkdirSync(path.join(out, 'office-skills', 'office'), { recursive: true })
+    writeFileSync(path.join(out, 'office-skills', 'office', 'SKILL.md'), 'stale office')
     writeFileSync(path.join(out, 'sidecar.js'), '// stale bundle')
     mkdirSync(path.join(out, 'vendor', 'dsh'), { recursive: true })
     writeFileSync(path.join(out, 'vendor', 'dsh', 'package.json'), '{"name":"dsh"}')
@@ -526,13 +513,17 @@ test('⑨b --skip-* 产生缺位：不继承上一轮装配的 helper / sidecar.
     writeFileSync(path.join(out, 'dist', 'dsh-host-client-graph', 'index.js'), 'stale\n')
 
     await runBuildSidecar(parseBuildSidecarArgs([
-      '--out', out, '--skip-node', '--skip-bundle', '--skip-vendor', '--skip-host-packages',
+      '--out', out, '--skip-node', '--skip-bundle', '--skip-vendor', '--skip-host-packages', '--skip-office-assets',
     ]), { log: () => {}, error: () => {} })
     const layout = sidecarLayout(out)
-    assert.equal(existsSync(layout.node), false, '--skip-node 必须产生缺位（旧的 helper 不得留下被一起签名发布）')
+    // 单 Node 裁决：旧的顶层 node / dsh-chamber-helper 必须被迁移清理清掉。
+    assert.equal(existsSync(path.join(out, 'dsh-chamber-helper')), false,
+      '旧布局的 dsh-chamber-helper 必须清掉（单 Node 后不再被任何运行期解析）')
+    assert.equal(existsSync(path.join(out, 'node')), false, '改名前的顶层 node 必须清掉')
     assert.equal(existsSync(layout.entry), false, '--skip-bundle 必须产生缺位')
     assert.equal(existsSync(layout.vendorDsh), false, '--skip-vendor 必须清掉旧 vendor/dsh')
     assert.equal(existsSync(layout.pnpm), false, '--skip-vendor 必须清掉旧 pnpm')
+    assert.equal(existsSync(layout.officeSkills), false, '--skip-office-assets 必须清掉旧 office 资产')
     assert.equal(existsSync(path.join(layout.dist, 'dsh-host-client-graph')), false,
       '--skip-host-packages 不得让旧 host 包目录残留')
     // dist 仍由 control-plane 重建（它是唯一的合法成员）。
@@ -641,52 +632,6 @@ function findElectronBinary() {
   return null
 }
 
-test('G18 装配捆绑 node 的版本 == DEFAULT_NODE_VERSION（装配存在时机械断言）', () => {
-  const bundled = path.join(desktopDir, 'release', 'sidecar', BUNDLED_NODE_BASENAME)
-  if (!existsSync(bundled)) {
-    console.log('SKIP: 本机无 sidecar 装配 helper（release-only 产物；ci.yml test-macos 用 --skip-node 构建装配）——'
-      + 'PINNED_NODE_SHA256 ↔ DEFAULT_NODE_VERSION 的表锁步已在 ③b 无条件断言')
-    return
-  }
-  const version = execFileSync(bundled, ['--version'], { encoding: 'utf8' }).trim().replace(/^v/, '')
-  assert.equal(version, DEFAULT_NODE_VERSION,
-    '装配的 node 版本必须等于 DEFAULT_NODE_VERSION（与 Electron 同一 pin；升级版本需同步表与注释）')
-})
-
-test('G37 Electron pin → node 版本是固定表（无 Electron 二进制也必须断言）', () => {
-  // 执行 Electron 二进制读 process.versions.node 的断言在没有 dist 时只能响亮
-  // SKIP——而 CI 每条腿都没有 Electron dist（electron 无 postinstall），所以它在
-  // CI 恒跳过。表把映射变成无条件断言：desktop 的精确 Electron pin 必须命中一行，
-  // 且该行 node 版本必须等于 DEFAULT_NODE_VERSION；升级任一 pin 都会红。
-  const electronPin = resolveElectronPin(DESKTOP_MANIFEST)
-  assert.equal(electronPin, DESKTOP_MANIFEST.devDependencies.electron)
-  assert.equal(ELECTRON_PINNED_VERSION, electronPin, 'module 级 pin 与 manifest 同源')
-  assert.equal(ELECTRON_NODE_PINS[electronPin], DEFAULT_NODE_VERSION,
-    `ELECTRON_NODE_PINS[${electronPin}] 必须等于 DEFAULT_NODE_VERSION`)
-  assert.equal(assertElectronNodePin(electronPin), DEFAULT_NODE_VERSION)
-  // 漂移臂：未知 Electron / 表值不等于捆绑 pin / 范围说明符，都必须 loud。
-  assert.throws(() => assertElectronNodePin('99.0.0'), /不在 ELECTRON_NODE_PINS 表内/)
-  assert.throws(() => assertElectronNodePin(electronPin, { pins: { [electronPin]: '0.0.1' } }),
-    /内置 node 0\.0\.1 != 捆绑 pin/)
-  assert.throws(() => resolveElectronPin({ devDependencies: { electron: '^43.4.0' } }),
-    /必须是精确版本/)
-  assert.throws(() => resolveElectronPin({ devDependencies: {} }), /缺少 devDependencies\.electron/)
-
-  // 二进制在场时（桌面开发机 / DSH_CHAMBER_ELECTRON=1）仍实测交叉验证表值——
-  // 表是 CI 的门，实测是表本身的证据；缺二进制不跳过上面的断言。
-  const electronBinary = findElectronBinary()
-  if (electronBinary === null) {
-    console.log('note: Electron dist 未物化——表断言已执行（G37）；物化后本用例会再实测一次')
-    return
-  }
-  const version = execFileSync(electronBinary, ['-p', 'process.versions.node'], {
-    encoding: 'utf8',
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-  }).trim()
-  assert.equal(version, ELECTRON_NODE_PINS[electronPin],
-    `Electron 内置 node ${version} != 表值 ${ELECTRON_NODE_PINS[electronPin]}（D6/G37：表是错的）`)
-})
-
 test('G39 vendor/dsh 版本 + 平台装配断言：漂移的 vendor 树在拷贝前 fail-closed', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-vendor-runtime-'))
   try {
@@ -725,35 +670,7 @@ test('G39 vendor/dsh 版本 + 平台装配断言：漂移的 vendor 树在拷贝
   }
 })
 
-test('G18 Node 捆绑离线端到端：SHA 校验 → 解包 → 基名/0755 断言真的执行（不再只有 --skip-node）', async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-node-e2e-'))
-  try {
-    const version = '0.0.1-fake'
-    const arch = HOST_ARCH
-    const member = `node-v${version}-darwin-${arch}/bin/node`
-    const root = path.join(dir, `node-v${version}-darwin-${arch}`)
-    mkdirSync(path.join(root, 'bin'), { recursive: true })
-    writeFileSync(path.join(root, 'bin', 'node'), '#!/bin/sh\necho fake-node\n')
-    const archive = path.join(dir, nodeArchiveName(version, arch))
-    execFileSync('tar', ['-czf', archive, '-C', dir, `node-v${version}-darwin-${arch}`])
-    const digest = await sha256File(archive)
-
-    const out = path.join(dir, 'out')
-    await runBuildSidecar(parseBuildSidecarArgs([
-      '--out', out, '--skip-bundle', '--skip-host-packages', '--skip-vendor',
-      '--node-version', version, '--arch', arch, '--node-archive', archive, '--node-sha256', digest,
-    ]), { log: () => {}, error: () => {} })
-    const layout = sidecarLayout(out)
-    assert.equal(readFileSync(layout.node, 'utf8'), '#!/bin/sh\necho fake-node\n')
-    assert.equal(statSync(layout.node).mode & 0o777, 0o755, '落位 Node 必须是 0755')
-    assert.ok(assertNodeArchiveMembers(archive, member).includes(member))
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
 /** 跑 dry-run 的输入校验路径（不写盘、不联网）。 */
-/** 跑真实的 dry-run 校验路径（runBuildSidecar 的 dry-run 分支）。 */
 async function runDryRun(argv, warnings = []) {
   await runBuildSidecar(parseBuildSidecarArgs(argv), {
     log() {},

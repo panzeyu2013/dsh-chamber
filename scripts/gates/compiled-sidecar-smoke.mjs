@@ -3,8 +3,8 @@
  * compiled-sidecar-smoke.mjs —— executed-assembly gate.
  *
  * The sidecar assembly (`packages/desktop/release/sidecar`) is what Swift ships:
- * a bundled `node`, the esbuild-bundled `sidecar.js` and the compiled
- * `dist/control-plane`. The JS suites spawn the
+ * the payload `node` (or the running interpreter for `--skip-node`), the
+ * esbuild-bundled `sidecar.js` and the compiled `dist/control-plane`. The JS suites spawn the
  * TypeScript source, and the packaging suites only assert the files exist, so a
  * bundle that cannot boot (broken external, missing compiled entry, unresolved
  * bare specifier) can ship unseen.

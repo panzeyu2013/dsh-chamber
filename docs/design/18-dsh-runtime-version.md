@@ -651,6 +651,99 @@ chamber-settings.json，非秘密）：
   office 技能只随 sdk-app 挂载），本版不扩大保留面；若将来 chamber 托管其它
   profile，需按运行时读者清单重新评估。
 
+### 4.2 内建 primary-runtime 载荷（Swift 本地：python + node + pnpm + office-skills）
+
+> 本节描述的是**随 app 分发的只读工具链载荷**，与 §3/§4 的「dsh 运行时版本树」是两份不同的
+> 东西：前者供上游 `load_workspace_dependencies`（Office/文档处理依赖）使用，后者是可切换的
+> dsh 宿主运行树。两者唯一的版本交集是 pnpm 版本（根 `package.json` 的 `packageManager`
+> 是声明单源、desktop `dependencies.pnpm` 是镜像，见 §4/§9.2），落点与消费者完全不同。范围 =
+> **本地 Swift flavor**
+> （design 25 §3.2 的 sidecar 装配）；remote（gateway/SSH）不随包、不做 provisioning（local vs
+> remote 偏差见 `docs/progress/STATUS.md`）。
+
+- **内容与布局（对齐上游 full payload）**：`primary-runtime/` = `runtime.json` +
+  `dependencies/{python,node,pnpm}`（python-only 载荷只有 `dependencies/python`）；`office-skills/`
+  是它的 **sibling** 目录。
+  `dependencies/python` 为 CPython + 平台轮子（`bin/python3` 与
+  `lib/pythonX.Y/site-packages`，site-packages 的发行版精确集合 = 锁声明的发行版 ∪
+  `{pip}` 解释器基线）；`dependencies/node` 为独立 Node（`bin/node` + `LICENSE` +
+  `node_modules/README.txt` 占位，npm/headers 不落位）；`dependencies/pnpm` 为构建机 pnpm
+  包整包（`bin/pnpm.mjs` 入口 + `dist/**`）。
+- **生成器与 flag（`packages/desktop/scripts/prepare-python-payload.mjs`）**：默认
+  **python-only**；`--with-node` 增加 Node；`--with-pnpm` 增加 pnpm 并**隐含
+  `--with-node`。两条发布腿刻意不同：Swift 腿跑 `--with-node --with-pnpm`（打包 Node 启动
+  sidecar 与托管 dsh，见 design 25 §3.2/§4.3）；Electron 腿保持默认 python-only（该分支未来
+  移除、本轮不接线）。`--dry-run` 只解析锁与布局，不联网、不写盘。
+- **版本/摘要单源**：Node 归档版本 + sha256、CPython 与 wheel 坐标全部来自
+  `packages/desktop/primary-runtime-lock.json`；pnpm 版本由生成器读 desktop
+  `package.json` 的 `dependencies.pnpm`（仓库级声明单源是根 `package.json` 的
+  `packageManager`，`pnpm-pin` 门禁把 desktop/gateway/workflow 等镜像与它锁步），并与 §4/§9.2
+  的内嵌 pnpm 是同一 pin。pnpm 字节来自构建机 `<desktop>/node_modules/pnpm`（回退仓库根
+  `node_modules/pnpm`；`--pnpm-source` 可显式注入）。源必须是 name=pnpm、版本与单源相等、含
+  `bin/pnpm.mjs`，任一不满足 fail-closed；拷贝用 dereference（workspace 链接实体化为普通
+  文件树）。
+- **pnpm 平台裁剪（prune）**：拷贝后删除 `dependencies/pnpm/dist/node_modules` 下
+  `os`/`cpu` 与目标平台不符的 optional 原生包（上游
+  `scripts/primary-runtime/prepare.ts` 的 `prunePnpmForeignNativePackages` 同语义：只查
+  直接子包与一层 `@scope`，不查嵌套 `node_modules` 与 `libc`；`!x` 排除与 `any` 规则同
+  npm）。目标 platform/arch 由目标键决定（当前 `mac-arm64` → darwin/arm64）；`--verify`
+  反向复查，发现外平台原生包即红。
+- **manifest（保持上游可解析的 legacy `components` 形态）**：`format/payload/target`（本仓
+  `--verify` 用）+ `platform/arch/desktopVersion` + `components{python,node?,pnpm?,numpy,
+  pandas}` + `pythonPackages` + `payloadDigest` + `layout{python,sitePackages,node?,pnpm?}`。
+  `components.pnpm` 只在 payload 带 Node 时出现（上游 `parsePrimaryRuntime` 的硬要求）；
+  `numpy`/`pandas` 只从 `pythonPackages` 派生（两处各写一份会被上游按 inconsistent 拒绝）；
+  `format/payload/target/layout` 是 chamber 私有字段，上游解析器不读。
+- **payloadDigest**：sha256 over `{format, target, pythonVersion, pythonRelease, nodeVersion,
+  pnpm?, artifact, wheels, pythonPackages}`——只由锁输入与 pnpm 版本决定、不含时间戳；改任一
+  构件或 pnpm 版本即新身份。node 版本/摘要始终参与身份（升级 Node 会刷新摘要，包括
+  python-only 载荷；python-only 与 `--with-node` 因同一公式同一入参而相同），`--with-pnpm` 额外
+  纳入 pnpm 版本。该字段写进 `runtime.json`，并随上游
+  canonical manifest 的等值比较参与安装复用判定。
+- **完整性判定（`--verify`，发布门）**：`runtime.json` format/payload/target 合法、python
+  解释器与 site-packages 在场、每个锁定发行版精确命中同名同版本 `dist-info` 且无未登记发行版
+  （`pip` 基线放行）；当 `components.node/pnpm` 声明时再核 `dependencies/node/bin/node`
+  （常规文件 + 可执行位）、`dependencies/pnpm/bin/pnpm.mjs` + `package.json` 版本一致 + 无外平台原生包。
+- **官方安装语义（app 内只读源）**：载荷消费者是上游
+  `@deepseek-ai/dsh-tool-workspace-dependencies`，由本地启动行以 `config
+  {source: <primary-runtime 目录>, root: <DSH_HOME>/dsh-runtimes/dsh-primary-runtime}` 挂载
+  （design 09 §3.5；本地 `<DSH_HOME>` = `<stateDir>/dsh-home`）。首次
+  `load_workspace_dependencies` 调用由上游 `installPrimaryRuntime` 复制到 `root`（保留
+  python 相对别名、其余链接实体化），返回**安装后**的绝对路径与发行版版本；app 内文件不被
+  修改，后续调用按 canonical manifest 等值复用。**不改 PATH、不注入 env**，路径只经工具返回值
+  显式交给模型。
+- **office-skills sibling（`packages/desktop/scripts/prepare-office-assets.mjs`）**：上游
+  `@deepseek-ai/dsh-skill-office` 的 8 个资产（7 个技能目录的 `SKILL.md` +
+  `office/references/sidecar.md`）按 vendor pin 的两条候选源顺序落位
+  （`vendor/harness-packages/@deepseek-ai/dsh-skill-office/assets` →
+  `vendor/harness-checkout/packages/skill/skill-office/assets`）；逐文件 temp+rename、保留
+  committed `README.md`、清非期望顶层残留；`--verify` 校验 8 文件在场、源可用时逐文件
+  sha256。它与 payload **独立门控**（任一缺失只缺自己的启动行）。托管运行树 prune 仍会裁掉
+  **包内**技能 Markdown（§4.1），所以本地启动行必须注入外部 `assetRoot`——这份 sibling 就是
+  外部资产。
+- **Swift 装配（`build-sidecar` → `build-swift-app`）**：`build-sidecar` 把
+  `resources/primary-runtime` 拷到 `<sidecar>/primary-runtime`、把
+  `resources/office-skills` 拷到 `<sidecar>/office-skills`（两者与 `sidecar.js` 平级，
+  随整个 sidecar 目录进 `Contents/Resources/sidecar/`）；`--require-python` 用上面的
+  `--verify` 把缺件变红，`--require-node`/`--require-pnpm` 只核对 payload 内的
+  `dependencies/node/bin/node`（含可执行位）与 `dependencies/pnpm/bin/pnpm.mjs`——**装配不再
+  下载/固定/重命名独立 Node**，`--skip-node` 只表达「本次不要求 payload node」（dev/CI 用
+  调用者 node 启动 sidecar.js）。`build-swift-app` 再断 payload Node 存在/可执行、office
+  8 文件齐全、payload Node 与 .app 可执行架构有交集（`lipo`），并在签名遍历里对该嵌套
+  Mach-O 单独使用 Node entitlements（唯一带 node 权限的嵌套二进制）。
+- **发布腿（Swift only）**：release.yml Swift 腿顺序 = `prepare-python-payload --target
+  mac-arm64 --with-node --with-pnpm` → `prepare-office-assets` → `build:sidecar
+  --arch arm64 --require-python --require-node --require-pnpm --require-office-assets` →
+  `build:swift-app` → 对打包后的 `Contents/Resources/sidecar/primary-runtime` 与
+  `.../office-skills` 再跑 `--verify`。Electron 腿保持原样（默认 python-only +
+  extraResources + 打包后 `--verify`）。
+- **拒绝方案**：① 两个 flavor 共用 full payload——Electron 分支未来移除、当前无启动行消费者，
+  多带 node/pnpm 只增体积（保持 python-only）；② `--with-pnpm` 不隐含 node——上游
+  `parsePrimaryRuntime` 要求 pnpm 必须在有 node 时才合法，半配置会被拒绝；③ pnpm 从 npm
+  registry 另下 tarball——构建机已有与单源同版本的自有依赖，另立下载面只会引入第二版本源与
+  校验轴；④ 运行时解压到 app 内目录——app 不可写、破坏签名，官方语义就是复制到
+  `DSH_HOME`；⑤ 远程（gateway/SSH）也 provisioning——远程实例不随包，见上范围声明。
+
 ## 5. 数据流与 UX
 
 ```
@@ -810,6 +903,11 @@ interface RuntimeHostAdapter {
 ### 9.2 内嵌 pnpm 承载
 
 - 内嵌 pnpm 版本与放置同 §4（禁止系统 pnpm 漂移），desktop 维持 extraResources 副本；
+- **两处 pnpm 不混用**：本节与 §4 的「内嵌 pnpm」服务 dsh 运行时安装器 / 插件管理器的
+  PATH 供给；§4.2 的 primary-runtime 载荷内另有一份 `dependencies/pnpm`（供
+  `load_workspace_dependencies` 工具，只在 Swift 本地装配里）。两者共用同一版本
+  （根 `package.json` 的 `packageManager` 是声明单源，desktop `dependencies.pnpm` 镜像由
+  `pnpm-pin` 门禁锁步），但落点、打包过滤器与消费者不同；
 - gateway 新增**钉版本运行时依赖** `pnpm@11.21.0`（与 desktop 同源）。
   pack 后 npm 安装把 pnpm 装入依赖树（解压 ~37MB，运行前不删 artifacts——与
   extraResources 裁剪版不同，属已知取舍）；pack/install smoke 必须覆盖
@@ -1022,6 +1120,8 @@ S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只
   生命周期与 install 子进程回收，§4）；设计 02 §3.5/§3.6（健康/restart-exhausted，
   §3.4 回退分支的宿主）；设计 09 §3.5/§4（版本漂移容忍，纵深防御）；设计 13（远端插件
   管理，远端 dsh 版本无关）；设计 05 §5（「dsh 运行时」per-server 设置段注册）。
+- design 25 §3.2/§4.3（Swift sidecar 装配目录、payload Node 启动链与进程归因）、
+  design 09 §3.5（本地启动行：payload/office-skills 能力根、门控、root、profile 冲突）。
 - 正交事项（非本设计范围，记录在案）：更新带宽差分优化（design 11 §6 遗留，
   electron-builder 差分/blockmap 重评估）——可独立评估。
 

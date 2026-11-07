@@ -24,6 +24,12 @@ import {
 import { planHostLogBridge } from './host-log-bridge.ts'
 import { isSafeModeEnabled } from './safe-mode.ts'
 import {
+  planStartupPluginRows,
+  renderStartupPluginInserts,
+  type StartupPluginCapabilities,
+  type StartupPluginRow,
+} from './startup-plugin-rows.ts'
+import {
   createPrivateFileExclusiveNoFollow,
   ensurePrivateDirectoryNoFollow,
 } from './private-file.ts'
@@ -80,6 +86,15 @@ export interface LocalHostGraphOverlayInput {
   readonly bundleRowDisables?: readonly BundleRowDisableTarget[]
   /** The resolved seed registry entries (the four base host packages + extras). */
   readonly entries: readonly SeedEntry[]
+  /**
+   * Local startup upstream plugin rows (Swift only): the resource roots the sidecar
+   * entry resolves (payload + office-skills). Each capability is gated independently
+   * and appended to the same `--patch` overlay as a second top-level `- insert:`
+   * object with absolute-path config — a missing payload/assets tree emits NO row for
+   * that capability (diagnosed, never fatal), and a row the user profile patch already
+   * owns is skipped. Absent = this deployment mounts no upstream startup row.
+   */
+  readonly startupPluginCapabilities?: StartupPluginCapabilities
   /** Informational sink (the plane's logger in production). */
   readonly log?: (message: string) => void
   /** Warning sink (absent/stub seed sources). */
@@ -143,6 +158,13 @@ function profileBundleLayer(dshHome: string): string[] {
  * bundle-row-disables.ts: an unenabled bundle is an idempotent skip, an enabled one whose row
  * cannot be proven is fail-closed). Those disables are NOT insert identities and are emitted
  * even when the profile patch owns every chamber row.
+ *
+ * Local startup upstream rows (Swift) ride the same overlay as a SECOND top-level
+ * `- insert:` object (startup-plugin-rows.ts): the primary-runtime/workspace-dependencies
+ * row and the office-skills row, each carrying absolute-path config. The capability roots
+ * come from the sidecar entry; each row is gated independently on its resources and skipped
+ * (with a diagnostic) when absent, and a row the profile patch already owns is skipped.
+ * A startup-only overlay is a valid `--patch` too.
  *
  * The no-overlay paths REMOVE a leftover overlay file, keeping the desktop probe's invariant:
  * the file exists exactly when the spawn about to run passes it.
@@ -215,7 +237,29 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
     targets: input.bundleRowDisables,
     log,
   })
-  if (available.length === 0 && bundleDisables.length === 0) {
+  // The user profile patch is read ONCE here: the startup rows' reuse decision and the
+  // chamber rows' identity reconciliation below must see the same layer.
+  const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
+  const profilePatch = existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null
+  // Startup upstream rows (Swift local-only): gated per capability root, appended to this
+  // same overlay. Planner failures are limited to relative capability roots (programming
+  // errors); a missing payload/assets tree or a user-owned row is a diagnosed skip.
+  let startupRows: StartupPluginRow[] = []
+  if (input.startupPluginCapabilities !== undefined) {
+    if (input.dshWorkspacePath === undefined || input.dshWorkspacePath === null) {
+      log('startup plugin rows: workspace path is unresolved; skipped')
+    } else {
+      startupRows = planStartupPluginRows({
+        capabilities: input.startupPluginCapabilities,
+        workspacePath: input.dshWorkspacePath,
+        dshHome,
+        profilePatch,
+        log,
+        warn,
+      })
+    }
+  }
+  if (available.length === 0 && bundleDisables.length === 0 && startupRows.length === 0) {
     clearHostGraphPatchOverlay(stateDir)
     return null
   }
@@ -229,11 +273,11 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   }
   // Loader identities are global across the profile patch and this overlay: reuse an exact
   // user-owned row, but fail before any write when an id/name is duplicated or bound differently.
-  const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
-  const overlayInserts = missingHostPackageInserts(
-    existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null,
-    available.map(entry => entry.insert),
-  )
+  // The canonical renderer rejects an empty row list, so a startup/disable-only overlay skips
+  // the chamber reconciliation entirely (there is no chamber insert to place).
+  const overlayInserts = available.length === 0
+    ? []
+    : missingHostPackageInserts(profilePatch, available.map(entry => entry.insert))
   for (const entry of available) {
     if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
       log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
@@ -248,9 +292,11 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
     ...(available.some(entry => entry.insert.id === HOST_OPEN_IN_INSERT_ID) ? [OFFICIAL_OPEN_IN_DISABLE] : []),
     ...bundleDisables,
   ]
-  if (overlayInserts.length === 0 && disables.length === 0) {
+  if (overlayInserts.length === 0 && disables.length === 0 && startupRows.length === 0) {
     clearHostGraphPatchOverlay(stateDir)
     return null
   }
-  return buildPatchOverlay(stateDir, overlayInserts, disables)
+  // The startup block is the overlay's second top-level `- insert:` object, appended after
+  // the chamber rows and their id-targeted disables; zero rows render as '' (legacy bytes).
+  return buildPatchOverlay(stateDir, overlayInserts, disables, renderStartupPluginInserts(startupRows))
 }

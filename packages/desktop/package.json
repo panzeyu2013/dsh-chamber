@@ -13,6 +13,8 @@
     "prepare:python-payload": "node scripts/prepare-python-payload.mjs",
     "prepare:python-payload:dry-run": "node scripts/prepare-python-payload.mjs --dry-run",
     "verify:python-payload": "node scripts/prepare-python-payload.mjs --verify resources/primary-runtime",
+    "prepare:office-assets": "node scripts/prepare-office-assets.mjs",
+    "verify:office-assets": "node scripts/prepare-office-assets.mjs --verify resources/office-skills",
     "dist": "node ./node_modules/electron-builder/cli.js",
     "dist:mac": "node ./node_modules/electron-builder/cli.js --mac",
     "dist:win": "node ./node_modules/electron-builder/cli.js --win --x64",
