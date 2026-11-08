@@ -134,7 +134,8 @@
 ### 11. 座席声明应可转移
 
 - 现象：`sidebar.session.row.leading/hover` 只能由注册所有者声明，实际渲染者不是它；chamber 自建侧栏不能转交
-  声明 ⇒ 官方 schedule 行标记/悬停任务列表不渲染。现有解法 = 构建期删上游两行、chamber 自声明并渲染。
+  声明 ⇒ 官方 schedule 行标记/悬停任务列表必须经本仓自声明座席才渲染（现解法 = 构建期删上游三行、chamber
+  自声明并渲染，vendor 补丁 13；occupant 只对本实例求值，外来源行仍不渲染）。
 - 改法：①声明可委托/指定 renderer；②提升为页面级座席（同 id 幂等合并）。退出：上游落地后删 vendor 补丁。
 
 ### 12. workspace 删除的 order/remove 应原子化
@@ -219,11 +220,14 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 - **品牌/文案/workspace 卡**：mark 保持 chamber `BrandWordmark`（rail 用上游 FishLogo）、name 洞空回退；搜索 aria 用 `search.sessions.aria`、workspace 复制用 `action.copy`；workspace 卡维持标题+路径+创建时间，不加会话数行。
 - **Windows 标题栏（ARCHIVED，Windows/Electron 冻结归档）**：随 design 23 复活时照抄 `[data-windows-titlebar]`；属性由 win32 preload 写入。
 - **路径/命中盒/菜单密度**：绝对路径不缩写；clear 钮 18px；`compact`（24px/11px，比列表行矮 2px），抬到 26px 用 `Menu.listClassName`。
-- **布局/交互**：26px 行/13px 标题/20px 命中盒、动作簇 4px/20px、来源 accent、折叠动画删除、`RowHoverCard` 自持、vibrancy 门、`sidebar.workspaces` 只声明、`toggle.badge` 不做、品牌蓝点、默认 manual（B1）、flat/tree/归档过滤 per-source、`data-chamber-row`、归档两段式、面板轴入口按来源下挂。
+- **布局/交互**：26px 行/13px 标题/20px 命中盒、动作簇 4px/20px、来源 accent、折叠动画删除、`RowHoverCard` 自持、vibrancy 门、`sidebar.workspaces` 只声明、`toggle.badge` 不做、品牌蓝点、默认 manual（B1）、flat/tree/归档过滤 per-source、`data-chamber-row`、归档两段式、面板轴入口按来源下挂（owning=真身；其它已挂载来源=页面级 `panel-axis` 发布；未挂载且 connected=默认组合回落；回落字形表须随上游新 panellist 注册者维护）。
 - **会话卡状态行 0–1**：不兜底 `status.idle`。
 
 #### 15.3 清洁项（非裁决）
 
+- 面板轴 boot 竞态 + teardown re-arm（`sidebar/src/client/index.ts` 的 pendingPanelId / arm / tryResolve
+  与 cleanup 回灌状态机）目前只有源码文本锁、无行为单测；候选 = 仿 panel-source 抽成纯叶子 + 假 observable
+  覆盖「先发布空轴、后注册」与「壳拆除窗口收下再 re-arm」两个窗口。
 - 六个小图标命中盒无几何锁；`RowHoverCard.onClickCapture` 无源码锁；marquee 两条分支未覆盖；`row-render-cost`
   的 13 faces 等号与 key==deps 对账是有意收紧。
 - C15 `TIMING_PAIRS` 只锁原子默认，两处 `openDelayMs={800}` 是生效值却无锁；design 06 两条上游锚待符号化。

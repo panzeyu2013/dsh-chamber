@@ -121,18 +121,45 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   都由本条的独立分节取代；① 的完整教训见 §5 容纳层。
 - **来源级面板轴**（`sidebar.panellist`，实现面见 design 06 §4.7）：**实例自有/第三方注册的
   面板入口按其所属来源下挂**——宽态在该 source 的 server 头内（视图选项左侧、共用头部动作簇的
-  hover 揭示；静息 `display:none`），rail 态保留上游全局面板字形行，每个条目任一时刻恰好挂载
-  一次。上游座席契约本身把按钮的呈现判给侧栏所有者（"the sidebar owns the button"，pin 的
+  hover 揭示；静息 `display:none`），rail 态保留上游全局面板字形行。上游座席契约本身把按钮的
+  呈现判给侧栏所有者（"the sidebar owns the button"，pin 的
   `packages/client/ui-sidebar/src/client/contract/slots.ts`），注册者只提供
   `id/order/label` 与 owner props 的图标，故这是外壳权限内的排布、不是对上游契约的偏离：
   本仓只改"哪里画"。注册仍归各实例自己的 ctx（每实例一个 slots registry），"哪台启用、哪台有
-  入口"由该实例的 profile 决定，chamber 不注册任何自己的面板。
+  入口"由该实例的 profile 决定（已挂载实例按 profile 真身；未挂载来源的默认组合回落见下），
+  chamber 不注册任何自己的面板。
+  **跨壳两种事实来源（N-ctx）**：每个已挂载壳的侧栏把自己的 `sidebar.panellist` 快照发布到页面级
+  单例（`dsh-chamber-client-core` 的 `panel-axis.ts`：`{id, order, label}`；空数组 = 已挂载但
+  无入口；键缺席 = 未挂载），任意壳的侧栏据此在**其它来源**的 server 头渲染入口（每个 server 头
+  按来源订阅快照：快照换代但该来源未变时 React 直接 bail out，后台壳挂载/注册不惊动整张列表，
+  `memo(ServerSection)`/`memo(SessionRow)` 保持有效——不把整张快照塞进 section 共用 context）。
+  已发布来源用该来源自己的 `{id, order, label}`（字形经本仓的已知面板回落字形表；未知 id
+  不渲染，见 design 06 §4.7）。非活动来源入口与 header/rail 同一条**激活门**（托管停机/瞬态
+  不可激活的来源不渲染——点击第一步就是切来源，不得承诺 header 自己拒绝的切换）。点击 = 切到
+  该来源 + 发出一次性 panel-select 意图，由目标来源自己的壳在它的
+  `ctx.layout.selectPanel` 上执行（目标壳未挂载时意图先存页面级 pending，挂载后消费，15s TTL；
+  注册晚于挂载（first-screen 侧栏 vs extra-row panellist）时意图挂起至注册或 TTL，不因“此刻
+  未注册”被丢；壳释放/换代也不擦在飞意图——core pending 保留，本壳清理把未解决的挂起 re-arm
+  回 core。`consumePanelSelect` 返回**原始点击时刻**，挂起/回灌/下一次 consume 都沿用它，跨代
+  不重置 15s 上限）。**未挂载**但已连接的来源没有注册事实可读：按 pin 默认组合
+  （`packages/bundle/web-app/cordis.patch.yml` 无条件挂载 `ui-schedule`）回落一个 chamber 自有的
+  时钟快捷键（文案转录自上游 `schedule.manager` 的 `panel` 键），点击同样走「切来源 + 意图」，
+  意图挂起至该来源的面板注册到达或 15s TTL 到期（boot 期间意图不会因“此刻还未注册”被丢；
+  注册不到即随 TTL 静默过期，判定只在面板轴变化时发生）——这是**默认组合假设**，不是注册事实。owning 来源仍用本壳 ctx
+  的 `renderSlot` 真身（选中态、注册者字形、locale 全部真实）；非活动来源的回落入口没有本页
+  选中态。真实注册的渲染仍每条目恰好一次（owning 头 / rail）；跨来源回落是 chrome，不是第二次
+  注册渲染。
   **Rejected alternatives**：① 维持上游全局轴——入口与它所属的来源脱钩，在多来源侧栏里成为全局
   chrome，与本条"侧栏服务于来源导航"的取向冲突；② 拦截/改写插件的注册——注册 key 写死在插件里、
   extra row 不经过 chamber 的构建期补丁面、把包 covered 进 composite 会让客户端半身对所有实例恒在
   并破坏按 profile 的 opt-in；③ 壳自建任务页——违反"不重实现执行面"，内容必然与上游漂移；
   ④ 36px 面板行下挂在来源头与浏览区之间（早期实现）——占一行高度、把入口从头部动作簇割出，
-  2026-09 用户裁决改为头内紧凑入口并删除该行。
+  2026-09 用户裁决改为头内紧凑入口并删除该行；⑤ 只渲染 owning 来源（旧实现）——多来源侧栏里
+  非活动来源的入口在切换前不可达（2026-11 用户反馈），与"入口按所属来源下挂"的取向冲突；
+  ⑥ 跨壳 React portal（把目标壳的真实 occupant 传送到活动侧栏）——两棵 React root 的挂载/卸载
+  顺序与隐藏壳生命周期互相约束，且回落字形已能表达入口；⑦ 对**已挂载的**非活动来源也硬编码单一"定时任务"
+  动作而不消费该来源的注册元数据——把默认组合写死进侧栏，该实例 profile 关掉面板时按钮仍承诺
+  一个不存在的面板（未挂载来源没有注册事实可读，才允许默认组合回落）。
   面板点击的官方埋点（`sidebar_menu_click`）有意未复制，见 design 06 §4.7。
 - 当前活动来源以视觉强调（如行高亮/侧边标记），与其余来源同列表呈现。
 - 来源分组头可**点击**（非当前来源）→ 切到该来源 shell（不打开会话；见 §2.2）。
@@ -294,7 +321,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   验证时保留断言等于陈述一个没有证据的事实，而清位 + 可见提示是「不知道」的诚实表达，且恢复路径
   无条件幂等；已知残余 = 宿主其实仍在跑、只是读路径坏掉时用户会暂时看不到运行环（由横幅的
   「重新加载」收口；「重新连接」只对仍持有壳的来源有效——已释放来源的该出口是 no-op，见 STATUS ⑭）。
-- **会话投影事实跨代际保留（标签 + 稀疏日程标记；2026-10 实机修复）**：连接代际变化（陈旧重连臂 / 权威 ladder / 宿主侧断开 /
+- **会话投影事实跨代际保留（标签；2026-10 实机修复）**：连接代际变化（陈旧重连臂 / 权威 ladder / 宿主侧断开 /
   崩溃重载）都会让 pinned 客户端执行 `handleConnected()` 并 `clear()` 每个会话的投影 store；在
   `session/list` 回包重放 `title` 之前，生产端行缺 `title`，官方标签阶梯退到 cwd basename（实测
   远程 SSH/gateway 源目录名闪现 0.6–0.8s；本地 loopback 的该窗口 ≈ 本地 `session/list` 往返，控制面同路径实测 p50 ≈ 92ms、p95 ≈ 130ms（n=30））。提交面用一条规则
@@ -303,9 +330,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   `app-hooks/use-bridge-subscriptions.ts` + unary 提交 `app-hooks/use-aggregate-refresh.ts`）共用，
   既覆盖代际清空窗口，也覆盖 unary 兜底行未带 title 的弱标签（已释放/未挂载来源没有 producer 会来恢复）。
   只丢了标签的降级推送与 current 逐字节相同，被签名去重门整条吃掉（不重渲染）；其它字段同时缺席时仍会提交一次
-  重渲染，但标签保持正确。**同瞬时的 schedule 标记**：投影 store 清空会同时丢 `hasActiveSchedule`，该稀疏标记随同一次
-  「title 缺席」一并携带——真正的 schedule 结束必带 title（命中「新 title 恒胜」的早退），因此绝不会被错保。**硬边界
-  （无定时器、无状态）**：行 `updatedAt` 比上一份前进即视为宿主已重读该会话仍无 title，携带立即停止（回落官方派生
+  重渲染，但标签保持正确。**硬边界（无定时器、无状态）**：行 `updatedAt` 比上一份前进即视为宿主已重读该会话仍无 title，携带立即停止（回落官方派生
   标签）；无前进的休眠行保留最后已知事实，直到重新见到 title / 行退役 / 整页重载——墙钟上限只会把已知名字换成目录名，
   信息量更差。vendor 清空行为本身不改（新代际作废旧投影是其既有语义）。**Rejected alternatives**：
   ① 放宽/关闭重连臂——代际变化有多个独立来源（陈旧臂 300s、权威 ladder 190s、宿主/网络断开、崩溃重载、

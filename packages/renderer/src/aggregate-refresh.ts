@@ -26,15 +26,13 @@ export function isFallbackDerivedView(current: InstanceAggregate | undefined): b
  * clear every session projection store (`handleConnected`), and only the next
  * `session/list` response re-applies the values; in that window the pushed
  * rows carry no durable `title` — the official ladder
- * (`title ?? basename(cwd) ?? id`) falls back to the project directory name —
- * and lose the sparse `hasActiveSchedule` marker, so the sidebar would flash
- * both. The same rule covers a unary fallback row that arrived without its
- * title projection.
+ * (`title ?? basename(cwd) ?? id`) falls back to the project directory name,
+ * so the sidebar would flash the directory name. The same rule covers a unary
+ * fallback row that arrived without its title projection.
  *
- * Semantics: a non-empty incoming `title` ALWAYS wins (rename / new session,
- * and a genuine schedule-off keeps its title too, so the marker is never kept
- * against it); a row with no previous row, or whose previous row also carried
- * no title, passes through untouched; a row that disappeared drops its memory
+ * Semantics: a non-empty incoming `title` ALWAYS wins (rename / new session);
+ * a row with no previous row, or whose previous row also carried no title,
+ * passes through untouched; a row that disappeared drops its memory
  * with it (the caller's `previous` IS the memory). Identity-preserving when
  * nothing is carried (an allocation optimization, not the dedupe's cause: the
  * commit gate compares CONTENT signatures, so a push whose only degradation was
@@ -83,9 +81,6 @@ export function retainSessionLabels(
       ...row,
       title,
       displayTitle,
-      // Sparse: only a previously observed active schedule is restored, and only
-      // inside the same transient that lost the title.
-      ...(prev.hasActiveSchedule === true ? { hasActiveSchedule: true as const } : {}),
     }
   })
   return carried ? merged : next

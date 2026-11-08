@@ -141,8 +141,9 @@
 - **悬停卡 tooltip 抑制**：`TooltipSuppression` 未导出 ⇒ 卡片与 tooltip 同现；退役 = 上游导出或自持 tooltip。
 - **`HoverCard` pointerleave 竞态**：leave 不 arm ⇒ 卡片机器自持 `hover-intent`。
 - **`sidebar.workspaces` 保留声明但不渲染**：撤销会让官方/第三方注册静默消失；上游归档/恢复/过滤为死件；两行座席由 vendor 补丁 13 删除、本仓自声明（design 09 §3.6）。
-- **A1 座席 id**：注册台账每实例 ctx 一份；同 registry 同 id 抛错，两个 registry 互不干扰 ⇒「同页两实例必抛」不可复现；待实机复核 `schedule-mark`/`schedules`。
-- **面板轴**：`ui-schedule` 页面级 localStorage 键、30s 无 visibility 门、点击埋点未复制；宽态入口盒形/aria 分组/重挂载偏差见 design 06 §4.7。
+- **A1 座席 id**：注册台账每实例 ctx 一份；同 registry 同 id 抛错，两个 registry 互不干扰 ⇒「同页两实例必抛」不可复现；待实机复核 `schedule-mark`（owning occupant）与 `schedules` 面板入口（owning 真身 + 外来源回落）。
+- **面板轴**：`ui-schedule` 页面级 localStorage 键、30s 无 visibility 门、点击埋点未复制；宽态入口盒形/aria 分组/重挂载偏差见 design 06 §4.7。**跨壳回落**：已挂载来源读页面级 `panel-axis` 发布、未挂载且 connected 来源按 pin 默认组合回落；回落档无 selected 态、未知面板 id 不渲染（pin 升级新增 panellist 注册者须补 `remote-panel-axis.tsx` 字形表并上报待裁）、选中意图 TTL 自点击起算（consume 返回原点击时刻，跨代不重置；激活失败后 TTL 内同来源重激活仍可能消费旧意图并开面板——每来源一条上限，已接受取舍；壳释放/换代不擦在飞意图）、不可激活来源（托管停机/瞬态）不渲染外来源入口（与 header/rail 激活门一致）；待实机目检 A/B 来源 hover 的时钟入口与点击（切来源 + 打开该来源面板）。
+- **外来源行无活动定时任务标记**：上游 occupant 只读本实例 Host 任务目录（`schedule/catalog`），chamber 不按来源拉 catalog；旧 `hasActiveSchedule` 会话投影回落链随 pin 移除 `schedule` projection 已删除（design 06 §4.3）。版本歪斜的旧远端宿主（仅缺 identity 方法的极旧宿主会被要求升级，design 27 §3.2）若仍在会话投影里带 `schedule`，chamber 也**有意不读**——恢复需按来源拉 catalog（未做）。判据 = 外来源行与搜索结果行零足迹、owning 行首标记仍由上游 occupant 渲染。
 - **删除 workspace 两帧**：宿主 order/remove 非原子 + client `installOrder` 沉底 ⇒ 行先滑尾；本仓删除意图补偿；外部删除仍复现；上游原子化后退役。
 - **平台腿**：Windows `[data-windows-titlebar]` 未抄 ⇒ 侧栏形态不同（排期，非功能选择）。
 - **壳外拖拽**：补丁后壳外 drag 不再 `preventDefault`，落点导航拦截由 Electron/Swift 两壳各自提供（第三方壳需自带，否则拖入只产生浏览器默认行为）。
@@ -190,7 +191,7 @@
 - **归档**：成功不就地提示 + 筛选降级（未知集禁用整轴）；两段式旧宿主降级（第二调上抛，不做版本探测）；已知代价 = 墓碑撤下后筛选禁用至挂载。
 - **运行时/桌面**：Electron 二进制惰性安装；内建版本行引导；dsh 设置面偏差（registry/https-only/周期检查/prune/`RUNTIME_RESTART`）；apply-now 纯投影门；探针契约残余；0.1.2 线降级（硬阻断/芯片隐藏/cookie 30 天/帧校验/`agentPresets`/unary 兜底/首屏整源降级/gateway ready 不蕴含托管就绪）；代理 300MiB；C3 composite 代际；C4 settings 簇；plugin localOnly 不检测；prune 保留 `docs/` 运行时文档（任意深度；`docs/` 内附属物目录与包内技能 Markdown 仍被裁，design 18 §3.7/§4.1）。
 - **视觉/交互**：标题墨色不照官方；动作簇 4px；会话行键盘不可达；命中盒 <24px；`gap: 4px`；漏事件补丁未落；动作簇键盘入口/roving tabindex 待裁。
-- **会话投影**：标签 + `hasActiveSchedule` 跨代际保留（0.6–0.8s；`updatedAt` 前进即停）。
+- **会话投影**：标签跨代际保留（0.6–0.8s；`updatedAt` 前进即停）。
 - **P5b 工作树统一（开放取舍）**：①**Swift 保留**原生壳与 sidecar；Node 统一取 primary-runtime payload（单 Node 裁决，sidecar.js 与托管 dsh 同一 `process.execPath`，进程名 `node`；不再有独立 `dsh-chamber-helper`）；Electron 分支未来移除、不在本裁决内（`process.execPath` 不被改写），不做 sidecar 移除或回退形态；②forge bundle **opt-in**（默认关、启用/关闭需重启，GitHub provider disabled），不预置进 profile；③旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**；升级前逐树 `workspace.delete`（归档需保留的会话）+ `git worktree remove/prune` 是 **0.4.4 一次性历史迁移**的前提（design 08 §7.4），后续版本不再作为发布前提；④filters 与 forge 两步 parity，接受 LFS/clean-smudge 降级（checkout 为指针文件，需手动 `git lfs pull`）；⑤restore 仅 forge record（seed 树无 restore）；⑥`checkoutOrder` 只在本机 localStorage 持久化、不跨实例同步；⑦同一 checkout 允许 0..N 会话共享 HEAD/index（无默认提示、无硬锁）；⑧只发布池内 checkout，池外手工树不可见。判据 = design 08 §3/§5/§7。
 - **上游并存**：experimental worktree 默认关**仍真**（P5b 为 opt-in，需在实例插件页开启并重启）；P5b 下 forge 与 seed 共用 `<repo>/.agents/worktrees` 池，checkout 由 design 08 的派生行呈现，官方 `create_worktree` 工具与 composer 都复用同一池（“其产物由 design 08 接管、不复用 create”的旧裁决不再适用）；GitHub provider 由 overlay disabled；cua 不接入。
 - **设置/账户**：设置壳自绘 chrome/源壳必须挂载/离线占位/body portal；上游对齐轮偏差（首启门、`sectionsEmpty`、失败屏深引、`Switch` 属性、业务蓝、schedule 事实、状态标记/Dock/通知）；桌面账户登录不可闭环（`/oauth/callback` 未反代；待做与边界见 [TODO.md](TODO.md) C§1）；`__dshChamberAccountOverlay` 与安全网互搏（待裁）。

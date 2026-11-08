@@ -85,10 +85,13 @@ test('the source header arms .sourceActionsVisible from keyboard focus', () => {
 })
 
 test('the owning header is not focusable: the fold toggle is the panel-axis entry Tab path', () => {
-  // The panel-axis entry only mounts in the OWNING source's header, and that header
-  // is deliberately not activatable (hence role/tabIndex are dropped) — so its Tab
-  // path must be the unconditional fold toggle, whose focusin bubbles to the
-  // header's onFocus, which arms .sourceActionsVisible.
+  // Both panel-axis entry forms mount inside a source header: the owning entry
+  // (PanelHeaderEntry, this ctx's registrations) in the ACTIVE source's header and
+  // the foreign-source entry (ForeignPanelHeaderEntry, the page-level axis or the
+  // pin's default composition) in every NON-ACTIVE source's header. The owning
+  // header is deliberately not activatable (hence role/tabIndex are dropped) — so
+  // the Tab path of BOTH forms must be the unconditional fold toggle, whose focusin
+  // bubbles to the header's onFocus, which arms .sourceActionsVisible.
   // Whitespace-collapsed: the return expression must run into the function's own
   // closing brace, so a trailing '||' cannot hide behind a line break — and a
   // formatting-only refactor cannot false-red either.
@@ -106,11 +109,14 @@ test('the owning header is not focusable: the fold toggle is the panel-axis entr
     'the reveal handler lives on the header element itself, before its children')
   const clusterAt = header.indexOf('cc.sourceActions,')
   const entryAt = header.indexOf('<PanelHeaderEntry')
+  const foreignAt = header.indexOf('<ForeignPanelHeaderEntry')
   const headerClose = header.indexOf('</header>')
   assert.ok(foldAt !== -1 && clusterAt > foldAt && entryAt > clusterAt,
-    'the fold toggle precedes the action cluster, and the entry sits inside it')
-  assert.ok(headerClose > entryAt,
-    'the cluster and the entry stay inside the header element (hover/focus containment)')
+    'the fold toggle precedes the action cluster, and the owning entry sits inside it')
+  assert.ok(foreignAt > clusterAt,
+    'the foreign-source entry rides the same action cluster (same reveal path)')
+  assert.ok(headerClose > entryAt && headerClose > foreignAt,
+    'the cluster and BOTH entry forms stay inside the header element (hover/focus containment)')
 })
 
 test('no stylesheet flips these hooks on :focus-visible again', () => {

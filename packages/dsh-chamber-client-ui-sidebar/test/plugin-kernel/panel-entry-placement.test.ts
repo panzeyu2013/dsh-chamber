@@ -1,14 +1,27 @@
 /**
- * Panel-axis placement lock (design 05 §2 / design 06 §4.7): the WIDE column
- * renders each `sidebar.panellist` registration as a compact action inside the
- * header of the source that owns it — in the same hover-revealed cluster as the
- * view options and to their left — while the collapsed rail keeps the upstream
- * global glyph row (`PanelRow`). The wide mount is gated to the OWNING (active)
- * source's header (`server.id === chamberInstanceId`, the same gate the retired
- * row carried): every projected source renders a section, but the panel ledger
- * belongs to this shell's ctx, so ungated it would appear N times and click into
- * the active shell's layout. Exactly one mount per entry at any time; the
- * retired section-level row container stays retired.
+ * Panel-axis placement lock (design 05 §2 / design 06 §4.7) — TWO wide forms since
+ * the N-ctx foreign-source axis landed (the foreign form is truth-tiered: page-level
+ * published entries, else the connected-only default-composition fallback):
+ *
+ * - WIDE column, OWNING (active) source: each `sidebar.panellist` registration of
+ *   THIS ctx renders as a compact action inside that source's header
+ *   (`PanelHeaderEntry`) — the same hover-revealed cluster as the view options and
+ *   to their left. The mount is gated by `server.id === chamberInstanceId` (the
+ *   same gate the retired row carried): every projected source renders a section,
+ *   but the ledger belongs to this shell's ctx, so ungated it would appear N times
+ *   and click into the active shell's layout.
+ * - WIDE column, NON-ACTIVE sources: the source's OWN entries render in that same
+ *   cluster (`ForeignPanelHeaderEntry`) — the page-level panel-axis snapshot for
+ *   mounted sources (each mounted shell publishes its real {id,order,label}) or the
+ *   pin's default-composition fallback for connected-but-unmounted sources
+ *   (`remote-panel-axis.ts`). The glyph is supplied by the caller and NO
+ *   `renderSlot('sidebar.panellist' …)` binding is used for the foreign form: this
+ *   shell cannot render another ctx's registration, so the two slot bindings stay
+ *   exactly two (owning entry + rail row).
+ * - Collapsed rail: the upstream global glyph row (`PanelRow`) for THIS ctx.
+ *
+ * Exactly one mount per form in the whole client tree; the retired section-level
+ * row container stays retired.
  *
  * WHY source text: this package runs under plain node (no DOM/React), so the
  * placement contract is pinned the way seat-position.test.ts pins the
@@ -99,7 +112,16 @@ test('the global axis is rail-only and the wide entry renders inside the owning 
   const entry = header.indexOf('<PanelHeaderEntry')
   const viewOptions = header.indexOf('cc.sortActive')
   assert.ok(actions !== -1 && entry > actions && viewOptions > entry,
-    'the entry renders inside .sourceActions, left of the view-options button')
+    'the owning entry renders inside .sourceActions, left of the view-options button')
+
+  // The FOREIGN-source form mounts at exactly one site too, in the SAME action
+  // cluster and left of the view-options button (the header renders both forms
+  // side by side: owning first, then the non-active sources' entries).
+  assert.equal((header.match(/<ForeignPanelHeaderEntry/g) ?? []).length, 1,
+    'exactly one foreign-source entry mount site')
+  const foreignMount = header.indexOf('<ForeignPanelHeaderEntry')
+  assert.ok(foreignMount > entry && viewOptions > foreignMount,
+    'the foreign entry rides the same cluster, left of the view-options button')
 })
 
 test('the wide mount is connection-independent: neither the header nor its cluster is connection-gated', () => {
@@ -134,7 +156,9 @@ test('the axis mounts exactly once per form in the whole client tree and leaves 
   const occurrences = (pattern: RegExp): number =>
     clientSources.reduce((sum, source) => sum + (source.match(pattern) ?? []).length, 0)
   assert.equal(occurrences(/<PanelHeaderEntry/g), 1,
-    'exactly one wide mount in the whole client tree (a new file cannot add another)')
+    'exactly one owning wide mount in the whole client tree (a new file cannot add another)')
+  assert.equal(occurrences(/<ForeignPanelHeaderEntry/g), 1,
+    'exactly one foreign-source wide mount in the whole client tree')
   assert.equal(occurrences(/<PanelRow/g), 1,
     'exactly one rail mount in the whole client tree')
   assert.equal(occurrences(/<ServerSectionPanels/g), 0,

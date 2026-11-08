@@ -3,8 +3,11 @@
  * declares `sidebar.session.row.leading` itself, so it must render that seat at the
  * upstream address — BEFORE the row title. vendor ui-workspace rows/Rows.tsx renders
  * the seat (or the status dots) in the leading `.slot` ahead of the title; a
- * regression here would silently move the official schedule mark to the
- * title-trailing position and break the A1 geometry alignment.
+ * regression here would silently move the official occupant (ui-schedule's schedule
+ * mark, when that plugin is in the roster) to the title-trailing position and break
+ * the A1 geometry alignment. The chamber's own fallback marker is retired: the pin
+ * carries no `schedule` session projection (the mark reads the Host catalog), so the
+ * seat is owning-source-only and passes no `opts.fallback`.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -31,4 +34,16 @@ test('the leading seat carries the upstream blank-row guard', () => {
   assert.ok(guard !== -1, 'the non-blank guard must exist')
   assert.ok(seat !== -1, 'the leading seat call site must exist')
   assert.ok(guard < seat, 'the guard must wrap the leading seat expression')
+})
+
+test('the leading seat is owning-source-only and passes no fallback marker', () => {
+  // 外来源的 sessionId 交给 occupant 只会查空；chamber 不再有自有标记可回落，
+  // 故座席只在本实例行上求值，且调用点不带 opts（fallback 参数已从契约删除）。
+  const owning = rows.indexOf('server.id === chamberInstanceId')
+  const seat = rows.indexOf("'sidebar.session.row.leading'")
+  assert.ok(owning !== -1, 'the owning-source gate must exist')
+  assert.ok(owning < seat, 'the owning-source gate must wrap the leading seat')
+  assert.match(rows, /renderSessionSeat\(\s*'sidebar\.session\.row\.leading',\s*\{ sessionId: session\.id \}\)/,
+    'the leading seat takes only the occurrence owner — no fallback opts')
+  assert.doesNotMatch(rows, /schedule\.active|SessionScheduleIndicator/, 'the retired fallback marker must not come back')
 })

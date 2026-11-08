@@ -850,8 +850,8 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
       }
       setAggregates(prev => {
         const current = prev[sourceId]
-        // 代际清空窗口（vendor clear 投影 store）里缺 title 的行不得回退已知投影事实（标签 + 稀疏
-        // schedule 标记；规则与硬边界见 retainSessionLabels）。只丢这些事实的推送与 current 内容签名相同，被去重门吃掉。
+        // 代际清空窗口（vendor clear 投影 store）里缺 title 的行不得回退已知投影事实（标签；
+        // 规则与硬边界见 retainSessionLabels）。只丢这些事实的推送与 current 内容签名相同，被去重门吃掉。
         const retained = current !== undefined && current.state === 'ok'
           ? { ...snapshot, sessions: retainSessionLabels(current.sessions, snapshot.sessions) }
           : snapshot

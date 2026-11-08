@@ -60,8 +60,8 @@
    （**本地命中仍显示**——内容搜索失败不吞本地元数据命中；文案为「仅显示名称匹配」）；
   空 → `search.noMatches`；`hasMore` → `search.hasMore`（n=20 取常量）。
   **结果树可访问名**：`role="tree"` + `search.results.aria`
-  （浏览树同批补名，§7 a11y）；命中行在标题后渲染活动定时任务标记（上游 search 变体同址；
-  会话行座席在标题之前，§4.3）。
+  （浏览树同批补名，§7 a11y）；命中行不渲染 chamber 自有 schedule 标记（上游 search 变体
+  已不存在；活动 schedule 标记只在 owning 行首座席由上游 occupant 渲染，§4.3）。
 - **取舍**：聚合拉取失败（`aggregateError`）的来源隐藏搜索入口（标题无法
   解析，与"错误行替换列表"一致）；已挂载来源标题随 store 事件即时更新；
   仅未挂载或 reconnect baseline 不完整的来源可能在 30s 兜底窗口内暂显兜底名。
@@ -628,17 +628,25 @@
     **武装/解除事实 = 官方 `completionUnread` 位 ∪ 修正臂**（§4.1/§4.2；通知边沿继续走运行位，未变）。
     判据按此钉住：蓝点必须存在、
     `StateDot state="done"` 不得回归、运行环仍是官方 ongoing。
-  - **活动定时任务标记**：会话行在行首座席（标题之前）渲染本仓的 `SessionScheduleIndicator`
-    （官方 occupant 缺席时的回落；座席转移见 §3.4/checklist §4.6）；搜索结果行仍在标题之后
-    （`ServerSectionSearch.tsx`）渲染同形标记（16px 闹钟字形 + `role="img"`，可访问名与
-    title 都是本地化 `schedule.active`，行本身仍是唯一动作），事实 = 该会话
-    `projectionValues.schedule` 非空（`derive.ts hasActiveScheduleOf`）。上游同事实源自共享
-    Host 任务目录（`ui-schedule/src/client/SessionScheduleMark.tsx`；旧 `ActiveScheduleIndicator`
-    的退役登记在 checklist §4.6 行 412）。**稀疏字段**：只有真有活动定时
-    任务的行发布 `hasActiveSchedule`，且该位纳入 `instanceSnapshotSignature`
-    （否则置位/清位重发布同一份字节会被 producer 去重闸吞掉、标记冻结在首见值）；
-    未挂载来源的 unary 兜底行读 `projections.values` 的同一事实；无定时任务的行
-    零足迹。
+  - **活动定时任务标记（owning 来源，上游 occupant）**：行首座席（标题之前）由上游
+    `ui-schedule` 的 `SessionScheduleMark` occupant 渲染（座席声明权本仓代持，见 §4.4 /
+    design 09 §3.6 / checklist §4.6）；事实来自该实例自己的 Host 任务目录（`schedule/catalog`，
+    `ui-schedule/src/client/session-schedule-state.ts`）。chamber **不再有**自己的
+    schedule 回落标记：现行 pin 的宿主不再把 `schedule` 投进会话投影
+    （`SessionProjectionMap` 无该键），旧的 `projectionValues.schedule` 回落链
+    （`hasActiveScheduleOf` / `SessionScheduleIndicator` / 搜索行同形标记 /
+    `instanceSnapshotSignature` 稀疏位 / 跨连接代际保留）已随之删除。外来源行与
+    搜索结果行因此都没有定时任务标记；**不**按来源拉 catalog 恢复（那需要新的 per-source
+    wire 读面，未做），版本歪斜的旧远端宿主即便仍送旧 `schedule` 投影也**有意不读**。
+    无定时任务的行零足迹不变。
+    **Rejected alternatives（回落链删除）**：① 只为版本歪斜的旧远端宿主保留旧投影
+    回落——现行 pin 的路径在基线上不可达，只剩签名/wire 行事实/跨代际保活的维护成本，且旧宿主
+    本身处在升级窗口（降级/自愈提示升级）；② 按来源拉 `schedule/catalog` 恢复外来源标记——
+    需要新的 per-source wire 读面与 N 份目录查询，与「侧栏不新增执行面/读通道」的取向冲突，
+    未做；③ 留着死代码等上游把 `schedule` 放回会话投影——无证据的预测，且把「当前不可达」伪装成
+    能力。判据 = 现行 pin 的 vendor 证据（`SessionProjectionMap` 无 schedule 键、ui-schedule 读
+    Host catalog）+ 外来源行零足迹；恢复条件 = 上游把标记事实放回会话投影或提供外来源读面
+    （checklist §4.6 的 `Rows.tsx` 行首/悬停座席行的升 pin 触发）。
   - **待交互（pending）**：不与运行中同形——槽加宽至 14px，按类型渲染**可辨识
     图标徽标**（会话在等用户，必须一眼可辨，ask-user 是动机场景）：`question` = 问号（business 蓝）、`plan-review` = 清单（business
     蓝）、`approval` = 警示三角（warn 琥珀）。
@@ -766,18 +774,16 @@
   与降级保行）、`packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts`
   （`stepRowHint` 是 `facts-row-hint` 的唯一 guard 调用点；两个 teardown 调 `withdrawSource`）、
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
-  runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、`ServerSectionRows.tsx`/`RowHoverCard.tsx`
-  （A1 座席渲染：行首 `renderSlot('sidebar.session.row.leading')` 以自有 `.scheduleIndicator` 为 fallback、悬停卡内容位
+  runningSubagents 分支 + `.railDotButton`）、`ServerSectionRows.tsx`/`RowHoverCard.tsx`
+  （A1 座席渲染：行首 `renderSlot('sidebar.session.row.leading')`（仅 owning 来源）与悬停卡内容位
   渲染 `sidebar.session.row.hover`；两席由本仓侧栏的 `children` 声明，上游注册里的三行（当前 pin 起含 `sidebar.session.row.trailing`）
   由 vendor 补丁删除，`trailing` 不采纳（已决，见 §10）——座席所有权转移，design 09 §3.6 第四类第二形态）、
-  `packages/dsh-chamber-client-core/src/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
-  `instanceSnapshotSignature`；goal 的 `parseGoalFact`/`retainGoalFacts`/
+  `packages/dsh-chamber-client-core/src/derive.ts`（goal 的 `parseGoalFact`/`retainGoalFacts`/
   `applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、
   `packages/dsh-chamber-client-core/src/session-row-state.ts`（goal 三值 + 两个谓词 + `sessionRowState` 压制后 state 的
   零依赖叶模块）、`client/goal-activation.ts`（事件制 activation 缓存 + 有界重试；缓存上限
   `MAX_ACTIVATION_CACHE = 2000`，LRU 淘汰 + warn-once + `evictedCount` 诊断；不调
-  `goals/get`）、`packages/dsh-chamber-client-core/src/instance-api.ts`（unary 兜底行读 `projections.values` 同一
-  事实）、`packages/dsh-chamber-client-core/src/session-row-window.ts`（`sessionRowWindow` + `sessionRowDisclosure`）、
+  `goals/get`）、`packages/dsh-chamber-client-core/src/session-row-window.ts`（`sessionRowWindow` + `sessionRowDisclosure`）、
   `locales.ts`（`status.waitingApproval/planReview/waitingAnswer/completed` +
   `status.subagentsRunning.one/other`）。
 
@@ -959,35 +965,69 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 
 **契约与 Rejected alternatives 见 design 05 §2「来源级面板轴」**；本节只记实现面与副作用。
 
-- **宽态**：入口渲染在 owning source 的 server 头内——`ServerSectionHeader.tsx` 的
-  `.sourceActions` 动作簇首位（视图选项左侧），由 `server.id === chamberInstanceId` 门控
-  （每个来源都会渲染 section，`panels` 却属于本壳 ctx，故只在 owning/活动来源头里挂载一次；
-  与旧 36px 行同一道门，否则会 N 份且点击落回本壳面板），每个 `sidebar.panellist` 注册渲染成一个 20px
-  `.actionIcon` 按钮（`PanelHeaderEntry`，`sidebar-root-chrome.tsx`）：`usePanelInfo` 只订阅
-  自己条目的选中态，`renderSlot('sidebar.panellist', { size: 14, active }, { only: id })` 取
-  注册者的字形，点击经 `selectPanel(id)` 转发 `ctx.layout.selectPanel`。它随簇静息
-  `display:none`（hover / 键盘焦点 / 视图选项菜单或搜索胶囊展开才显形）——2026-09 用户裁决
-  「可以接受 display:none 保持静止不可见」。
+- **宽态（两个形态：owning 真身 / 非 owning 回落；后者再分「已发布投影」与「默认组合」两种事实来源）**：入口渲染在该来源自己的 server 头内——`ServerSectionHeader.tsx` 的
+  `.sourceActions` 动作簇首位（视图选项左侧），随簇静息 `display:none`（hover / 键盘焦点 /
+  视图选项菜单或搜索胶囊展开才显形；2026-09 用户裁决「可以接受 display:none 保持静止不可见」）。
+  - **owning 来源（本壳 ctx 的真身）**：`server.id === chamberInstanceId` 分支上，每个
+    `sidebar.panellist` 注册渲染成一个 20px `.actionIcon` 按钮（`PanelHeaderEntry`，
+    `sidebar-root-chrome.tsx`）：`usePanelInfo` 只订阅自己条目的选中态，
+    `renderSlot('sidebar.panellist', { size: 14, active }, { only: id })` 取注册者的字形，
+    点击经 `selectPanel(id)` 转发 `ctx.layout.selectPanel`。
+  - **其它已挂载来源（页面级投影）**：每个已挂载壳的侧栏把本 ctx 的 `sidebar.panellist` 快照
+    （`{id, order, label}`；空数组 = 已挂载但无入口）发布到 `panel-axis.ts` 页面级单例。
+    **每个 server 头按来源订阅**该快照（`useSyncExternalStore(subscribePanelAxes, () =>
+    getPanelAxesSnapshot()[server.id])`：未变时返回同一数组引用、React bail out；不放进 section
+    共用 context，否则后台壳的挂载/面板注册会换 ctxValue 令行/section memo 白算）。header 据此
+    在非 owning 来源头渲染 `ForeignPanelHeaderEntry`（同 20px `.actionIcon`、
+    同 tooltip 形态、**无选中态 / 无 `aria-current`**）。字形来自本仓的已知面板回落字形表
+    （`remote-panel-axis.tsx`：`schedules` → 上游 `TaskManagerIcon` 同一 `IconClockOutlineRegular`
+    时钟字形，14px = 宽态入口请求的 size、与 owning 真身 `renderSlot` 的 size 一致；
+    未知 id 不渲染——见下方残余）。**激活门**：点击链第一步是 `requestActivateSource`，故与
+    header/rail 的激活门一致——托管停机/瞬态（`sourceHeaderActivatable=false`）的来源不渲染
+    外来源入口（其壳可能仍挂载、页面级轴仍发布，但 header 本身拒绝该切换，入口不得承诺）；
+    已发布档不带 `connected` 门，但同样受该激活门约束。点击 = `requestActivateSource(sourceId)` +
+    `requestPanelSelect({ sourceId, panelId })`：目标来源自己的壳在它的
+    `ctx.layout.selectPanel` 上执行（只在该壳已注册该 id 时；目标壳未挂载时意图存页面级
+    pending，挂载后消费——注册晚于挂载（first-screen 侧栏 vs extra-row panellist）时意图挂起
+    至注册或 `PANEL_SELECT_INTENT_TTL_MS` = 15s 到期，不因“此刻未注册”被丢；壳释放/换代也不
+    擦在飞意图）。`consumePanelSelect` 把**原始点击时刻**一并交出：壳内挂起、清理回灌与下一次
+    consume 都沿用该时刻，跨壳换代不会把 15s 上限续期（TTL 自点击起算）。
+  - **未挂载但已连接的来源（默认组合回落）**：没有该来源的注册事实可读，按 pin 默认组合
+    （`packages/bundle/web-app/cordis.patch.yml` 无条件挂载 `ui-schedule`）渲染一条 chamber
+    自有时钟快捷键（label 转录自上游 `schedule.manager` 的 `panel` 键）；点击同样走
+    「切来源 + 意图」，意图挂起至该来源的面板注册到达或 15s TTL 到期（boot 竞态下不会因
+    “此刻还未注册”被丢）；注册不到即随 TTL 静默过期（判定只在面板轴变化时发生，没有独立的
+    「挂载完成」检查点）。**这一档带 `server.connected` 门**（断开来源无法切换，诚实不承诺）；
+    已发布档不带 connected 门、但受上面的激活门约束。
 - **rail 态**：分组不渲染，保留上游全局面板字形行（`SidebarRoot.tsx` 的
   `!wide && panels.length > 0` 守卫；18px 字形、tooltip、`aria-current` 与上游 rail 形态逐字一致；
   `PanelRow` 的上游 wide 半支（16px / title / disabled tooltip）随入口进头部成为死分支，
-  2026-10 清理时删除而非留作不可达代码）
-  ⇒ 每个条目任一时刻**恰好挂载一次**（位置锁：`test/plugin-kernel/panel-entry-placement.test.ts`）。
+  2026-10 清理时删除而非留作不可达代码）。**宽态**每个侧栏 DOM 内每条**有回落字形**的注册
+  **恰好一个**入口（owning 真身或跨来源回落二者之一；未知面板 id 见下方残余）；**rail 只渲染
+  本 ctx 的字形行**（跨来源入口仅宽态；位置锁：`test/plugin-kernel/panel-entry-placement.test.ts`
+  与 `test/plugin-kernel/foreign-panel-axis.test.ts`）。
 - **折叠只收浏览区**（搜索胶囊 / 来源级 git 提示 / 工作区列表）：入口在来源头内，折叠不隐藏它；
   折叠钮只有 `aria-expanded`、**无 `aria-controls`**，故不构成「受控区域已折叠却仍渲染其内容」的矛盾。
-- **可达性（既有约束 + 一个新依赖）**：侧栏由活动来源的 ctx 渲染、ledger 只含该 ctx 的注册，
-  因此入口只在**拥有它的来源成为活动视图**时可见（全局轴时代同样如此）。另：宽态入口还要求该来源
+- **可达性**：owning 来源的入口是其注册真身；其它来源在两种条件下可达——已挂载来源读页面级
+  投影（该来源自己的元数据），未挂载但 connected 的来源走默认组合回落。宽态入口仍要求该来源
   已进入 App 的 `servers` 投影；来源不在投影时 App 的 `InstanceView`（含侧栏）**整个不渲染**
   （`packages/renderer/src/App.tsx` 的 viewId 门），不是「只有入口缺失」，rail 轴不受影响
   （自愈，不设回退轴——那会重新引入双挂载）。
-- **断连来源**：入口仍渲染（「注册即在」，**有意不过 `connected` 门**；随头部动作簇 hover 揭示），
-  点开的页面自呈该 Host 的失败态——与其余头部动作的 connected 门不同，是对「断连来源只渲染
-  header + 状态」的**有意例外**。
-- **语言**：label thunk 由该实例自己的 locale 解析（per-ctx），与页面语言归属一致。
+- **断连来源**：owning 来源的入口仍渲染（「注册即在」，**有意不过 `connected` 门**；随头部动作簇
+  hover 揭示），点开的页面自呈该 Host 的失败态——与其余头部动作的 connected 门不同，是对
+  「断连来源只渲染 header + 状态」的**有意例外**。页面级投影档的键存在即代表该壳已挂载并发布过
+  轴：连接状态**从不回收壳**（`shell.ts` 的 "Connection state never reaps a shell"；design 05 §4.1
+  keep-all），**链路断连**的已挂载来源仍保留入口（`headerActivatable` 仍为真、可切换），点击只切
+  来源（目标前端自呈失败态）；**托管停机/瞬态**不可激活的来源按上面的**激活门**不渲染外来源入口
+  （只保留 owning 真身）；只有壳释放（手动/硬上限/压力阀/来源退役）才 `retirePanelAxis` 并退回
+  默认档；默认组合回落档带 connected 门。
+- **语言**：owning 条目 label thunk 由该实例自己的 locale 解析（per-ctx）；其它已挂载来源用该
+  来源自己发布时解析的 label（同一页面语言，per-ctx 解析）；未挂载来源的默认回落文案转录自
+  上游 `panel` 键（本仓 zh/en 字典）。
 - **形态与已知副作用**：
-  - 盒形：宽态入口用 `.actionIcon`（20px 命中盒 / 14px 字形 / tertiary 墨色，hover 只变色），
-    选中态 `.actionPanelActive` 用品牌浅底（`.sortActive` 同族 token）；不复用上游 36px
-    `.panelRow` 行几何（该行只在 rail 保留）。
+  - 盒形：宽态入口（两种）都用 `.actionIcon`（20px 命中盒 / 14px 字形 / tertiary 墨色，hover
+    只变色）；仅 owning 真身用 `.actionPanelActive` 品牌浅底（`.sortActive` 同族 token）。
+    不复用上游 36px `.panelRow` 行几何（该行只在 rail 保留）。
   - 静息不可见：入口与视图选项同簇，不 hover 时不占位；代价是「注册即在」只在 hover / 键盘
     可达路径上兑现（owning 头自身**不可聚焦**——`sourceHeaderActivatable` 对活动来源为 false；
     真实键盘路径是恒在且可聚焦的折叠钮：Tab 落到它，focusin 冒泡置位 `.sourceActionsVisible`，
@@ -1000,10 +1040,19 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   - **wide↔rail 重挂载**：入口的两个站点父级不同，收起/展开会卸载→重挂（上游是同一元素）⇒ 键盘
     焦点若正停在该入口，折叠后落回 `document.body`（需重新 Tab）。入口组件无状态，无可见状态丢失；
     接受，不为此改结构（rail 不渲染 section，单站点方案在本仓不成立）。
-  - 位置锁按**源码文本**钉：入口在 `.sourceActions` 内、`cc.sortActive`（视图选项）之前，
+  - **跨壳回落的残余**：① 未知面板 id（上游新增 registrant / 第三方面板）在非活动来源头不渲染，
+    需 pin 升级时补 `remote-panel-axis.tsx` 的字形表或上报待裁；② 未挂载来源的默认组合假设在该
+    实例 profile 关闭 `ui-schedule` 时不成立——点击只切来源、面板不打开（意图被目标壳丢弃），
+    已发布档一挂载即纠正为真实轴；③ 回落入口没有本页选中态（`aria-current` 只在真身）；
+    ④ 意图 TTL **自点击起算**（`consumePanelSelect` 返回原点击时刻，壳内挂起/清理回灌/下一次
+    consume 都沿用，跨代不重置）：激活失败后它在 TTL 内仍可能被同来源一次重激活消费并开面板
+    （每来源一条上限，已接受取舍）；壳释放/换代**不会**擦掉在飞意图（core pending 保留 + 壳清理
+    把本壳未解决的挂起 re-arm 回 core，保留原 TTL、已过期即丢弃）。
+  - 位置锁按**源码文本**钉：两种入口都在 `.sourceActions` 内、`cc.sortActive`（视图选项）之前；
     `ServerSectionPanels.tsx` 已删除且 `ServerSection.tsx` 不含任何面板轴挂载点（本包无 DOM）；
-    「不过 `connected` 门」另有一条同文件锁——header 元素到入口之间无 `server.connected`，
-    且动作簇以无条件兄弟节点打开（含 section 的 header 站点）。
+    「owning 入口不过 `connected` 门」另有一条同文件锁——header 元素到 owning 入口之间无
+    `server.connected`，且动作簇以无条件兄弟节点打开（含 section 的 header 站点）；跨来源回落档的
+    `connected` 只允许出现在「无页面级投影」的分支里。
   - `ui-schedule` 的**点击埋点**（上游 `selectPanel` 对 `plugins`/`schedules` 发
     `sidebar_menu_click{menu_name}`）**有意未复制**：它是遥测而非 UI 行为，且桌面壳是否上报
     产品分析是既有开放裁决（STATUS 遥测条）。若将来要逐字对齐，落点是
@@ -1013,7 +1062,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   section 增高约 38–42px、把入口从头部动作簇割出来，拖拽中点与滚动回退锚都随之位移）——2026-09
   用户裁决删除；② 常驻显示在状态点旁——用户明确接受静息 `display:none`；③ 全局轴 + 分组内双渲染
   ——一条注册两个入口，上游只有一行；④ rail 不显示——丢掉上游「折叠后仍可达」；⑤ 26px 密度变体
-  ——本批明确维持上游 rail 几何。
+  ——本批明确维持上游 rail 几何；⑥ 只渲染 owning 来源（旧实现）——非活动来源入口不可达；
+  ⑦ 跨壳 React portal——两棵 root 的生命周期互相约束；⑧ 对**已挂载的**非活动来源也硬编码单一
+  动作而不读该来源的注册元数据——默认组合写死进侧栏，profile 关掉面板时承诺不存在的面板
+  （未挂载来源没有注册事实可读，才允许默认组合回落）。
 
 ## 5. 已知取舍与开放项
 
@@ -1119,10 +1171,11 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `{name}` 参数化可访问名（pin 的行钮按上游用行菜单长名，是这条政策的**有意例外**，判据在
   `test/session-rows/session-row-actions.test.ts`）、**pin 面形态与行级漏斗**（同文件：座席顺序 100/200、静息标记的
   稀疏集合事实、`pin` 行错误键、in-flight 守卫与 toggle 方向）、上游 pin 形态/座席/文案/线协议的源码 lockstep
-  （`test/session-state/vendor-session-fact-contract.test.ts`）、活动定时任务标记的位置、`data-git-action`
+  （`test/session-state/vendor-session-fact-contract.test.ts`）、`data-git-action`
   属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边
   （`test/session-rows/session-row-window.test.ts` 的 disclosure 窗口、`test/plugin-kernel/panel-source.test.ts`
-  的 `createSnapshotStore` 投影与通知纪律）。
+  的 `createSnapshotStore` 投影与通知纪律、`test/plugin-kernel/foreign-panel-axis.test.ts`
+  的跨壳发布/回落与一次性 selectPanel 意图）。
 - **同一时刻至多一层 chamber Modal（对称门）**：
   官方 `Modal` **没有焦点陷阱**（vendor
   `ui-primitives/src/Modal.tsx`：一层 body portal 遮罩 + 每个打开实例各自一个

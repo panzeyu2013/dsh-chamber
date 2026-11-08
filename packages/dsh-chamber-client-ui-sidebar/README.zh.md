@@ -15,15 +15,28 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - `sidebar.brand.mark` / `sidebar.brand.name`——左上品牌行；chamber 字标保持
   mark 回退，name 孔位无占用时不渲染内容（rail 同样渲染 mark 孔位）。
 - `sidebar.panellist`（list）——**来源级**主面板入口。`src/client/panel-source.ts`
-  把槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
-  变化时通知）。**宽态**在 owning source 的 server 头内渲染紧凑入口
+  把**本** ctx 的槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时
+  解析、仅在变化时通知）。**宽态**在每个来源自己的 server 头内渲染紧凑入口
   （`PanelHeaderEntry`：20px 动作盒，与视图选项同一 hover 揭示簇、排在其左侧——
   折叠来源头仍在，入口不随浏览区收起），**rail 态**保留上游全局面板字形行
-  （`PanelRow`）；两种形态都调 `ctx.layout.selectPanel(id)`，每个条目任一时刻
-  恰好挂载一次。上游出厂为空列表，故入口默认不可见；投影由
+  （`PanelRow`）。每个已挂载壳把自己的快照发布到页面级 `panel-axis` 单例
+  （client-core），所以**非活动**来源的头（本仓自建列表把全部来源渲染在同一份
+  侧栏里）也显示该来源自己的入口（每个 server 头按来源订阅：与本来源无关的发布不触发
+  重渲染，侧栏行 memo 不被破坏）：已挂载来源用真实 `{id, order, label}`；只有
+  尚未挂载且**已连接**时，才回落一条 chamber 自有的时钟快捷键（对应 pin 默认组合
+  的 `schedules` 面板，文案转录上游 `schedule.manager.panel`）。owning 来源保留
+  真身槽位渲染（`PanelHeaderEntry`：`renderSlot` 字形、选中态、
+  `ctx.layout.selectPanel`）；外来源入口是 `ForeignPanelHeaderEntry`（同 20px
+  盒与 tooltip、字形经 `src/client/remote-panel-axis.tsx` 的已知面板回落表、无选中
+  态），点击发 `chamberBridge.requestActivateSource` + 一次性
+  `requestPanelSelect` 意图，由目标来源自己的壳在它自己的
+  `ctx.layout.selectPanel` 上执行（跨 boot 时先挂起，15s TTL 自点击起算，原始时刻
+  跨壳换代保留）。header 自身不可激活的来源（托管停机/瞬态）不提供任何外来源入口——
+  点击的第一步就是那次激活。未知面板 id 在外来源头不渲染——pin 升级带来新 panellist
+  注册者时必须补回落字形表并在变更里上报（design 05 §2 / design 06 §4.7）。投影由
   `test/plugin-kernel/panel-source.test.ts` 钉死，位置由
-  `test/plugin-kernel/panel-entry-placement.test.ts` 钉死（design 05 §2 /
-  design 06 §4.7）。
+  `panel-entry-placement.test.ts` 钉死，跨来源轴由 `foreign-panel-axis.test.ts`
+  钉死。
 
 ## 结构
 
@@ -43,19 +56,22 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
   空态提示。**一处有意例外**：owning（活动）来源断开时，它的 `sidebar.panellist`
-  入口仍留在头部动作簇里——条目存在与否只取决于注册者是否注册，与连接态无关
-  （design 06 §4.7）。
+  入口仍留在头部动作簇里——真身存在与否只取决于注册者是否注册，与连接态无关
+  （design 06 §4.7）。非活动来源的已发布入口同守「注册即在」（页面级键只在它的壳
+  挂载期间存在）；未挂载来源的默认组合回落时钟带 connected 门（断开时无可切换
+  目标）。
 - 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用**chamber
   品牌蓝点**（`.stateCompleted`，6px 实心）——与固定待办条带同一枚标记，**不取**
   官方 `StateDot` 的 `done` 绿：该色与来源头连接状态绿点同 token
   （`--dsw-alias-state-success-primary`），"会话完成未读"与"服务器已连接"会同色
   （2026-09 用户裁决；沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1 T10 官方绿点 →
   本轮回到蓝点，06 §4.3）；不渲染
-  相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。行所属
-  会话的 `schedule` 投影非空时，在**行首座席（标题之前）**渲染官方 active-Schedule
-  标记（16px 闹钟字形、`role="img"`、可访问名 `schedule.active`）；搜索结果行仍在
-  标题与尾随单元格之间渲染。该事实稀疏，其余行的几何一字不动。状态点优先级与当前会话高亮
-  （全局单选）见下方"第三轮（设计 06）"。
+  相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。owning 来源的
+  **行首座席（标题之前）**渲染官方 active-Schedule occupant（ui-schedule 的 catalog 版
+  SessionScheduleMark）；chamber 不保留回落标记——现行 pin 的宿主不再把 `schedule`
+  投进会话投影（事实在 Host 任务目录），基于旧投影的回落链已删除。外来源会话行与
+  搜索结果行因此都不带定时任务标记。状态点优先级与当前会话高亮（全局单选）见下方
+  "第三轮（设计 06）"。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
   localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。组头 folder 字形同样
   自带状态——展开=开启文件夹 / 折叠=闭合文件夹（上游 `ui-workspace`
@@ -131,7 +147,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   2026-09-11 对齐轮曾改成官方默认（40px 行 / 14px 标签）与 `dense`（34px），
   比我们自己 26px 的列表行整整大一圈，故恢复；`closeOnPointerLeave` 保留。
   来源头内建控件（视图选项/添加工作区/搜索/归档管理器）改骑官方 `Tooltip`（不再借用原生
-  `title`）；每条已注册的 `sidebar.panellist` 入口另加一枚紧凑动作、沿用同形 Tooltip，
+  `title`）；每个 `sidebar.panellist` 入口（owning 来源的真身 / 已挂载外来源的已发布
+  条目 / 未挂载来源的默认回落时钟）各加一枚紧凑动作、沿用同形 Tooltip，
   添加工作区用官方 project-add 字形；触发钮
   打开三轴视图选项菜单（portal + `align="end"`、`viewOptions.label`）。浏览树带上可访问名
   `section.sessions`，与搜索结果树一致。

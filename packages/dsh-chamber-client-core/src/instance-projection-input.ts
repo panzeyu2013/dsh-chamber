@@ -36,7 +36,8 @@ export interface ProjectionSessionBaseline {
     running?: boolean
     blank?: boolean
     updatedAt?: number
-    /** The row's projection bag; read for the active-Schedule fact only. */
+    /** The row's projection bag; read for the goal fact and the effective
+     *  working directory (checkout placement) only. */
     projectionValues?: Readonly<Record<string, unknown>>
   }>
   phase?: string

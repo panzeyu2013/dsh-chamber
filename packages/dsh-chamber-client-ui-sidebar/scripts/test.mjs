@@ -166,6 +166,8 @@ export const GROUPS = {
     { file: 'test/plugin-kernel/panel-source.test.ts', nodeArgs: ['--import', './test/support/vendor-register.mjs'] },
     // 面板轴位置锁（design 06 §4.7）：宽态进 owning source 的头动作簇（视图选项左侧）、rail 保留全局字形行，恰好一次。
     'test/plugin-kernel/panel-entry-placement.test.ts',
+    // 非活动来源的面板轴回落（N-ctx 两档真相 + 页面级发布/选中意图接线 + 字形/默认组合/文案锁）。
+    'test/plugin-kernel/foreign-panel-axis.test.ts',
     'test/plugin-kernel/settings-shell.test.ts',
   ],
   // archive-purge: the archive/purge flow, its tombstones and the producer/retention wiring

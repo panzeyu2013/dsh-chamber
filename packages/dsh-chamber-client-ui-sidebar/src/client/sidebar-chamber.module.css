@@ -391,8 +391,8 @@
 /* 静息置顶标记（上游 Rows.module.css 的 .pinIndicator）：居中的 14px 实心针、caption 墨色，
    落在状态槽之后的行右缘；hover / 菜单开启时与状态槽一起换出——下方 hide 规则与状态槽选择器
    成对（上游把标记放在 time 单元之后同样成对隐藏）。两处与上游不同，都是跟随本仓结构：
-   ①不贡献 margin——本仓 .sessionRow 自带 6px gap（上游 row gap 为 0，那 6px 就是它的全部间距，
-   scheduleIndicator 同样不减 margin）；②盒宽 20（上游 16）跟齐本仓 .actionIcon 的 20px 动作盒，
+   ①不贡献 margin——本仓 .sessionRow 自带 6px gap（上游 row gap 为 0，那 6px 就是它的全部间距）；
+   ②盒宽 20（上游 16）跟齐本仓 .actionIcon 的 20px 动作盒，
    否则 14px 字形在 hover 换入时会横跳 2px（上游两个盒都是 16px 才使「落回静息位」成立）。 */
 .pinSlot {
   flex: none;
@@ -441,30 +441,6 @@
   border-radius: 50%;
   corner-shape: round;
   background: var(--dsw-static-deepseek-450);
-}
-
-/* Active-Schedule marker: the official
-   ActiveScheduleIndicator box — a 16px alarm-clock glyph in a 16x20 flex-none
-   slot, tertiary ink (vendor ui-workspace Rows.module.css .scheduleIndicator).
-   DELIBERATE deviation, documented: upstream also sets `margin-right: 6px`
-   (its search heading has no gap, and its search variant trades that margin
-   for a 4px left one). Chamber's .sessionRow and .searchResultHeading already
-   carry their own 6px gap, so the marker contributes NO margin here — adding
-   upstream's margin on top would double the gap and break the hand-fixed
-   chamber row pitch (26px row / 3px padding / gap 6). The 20px box height
-   matches the row's action cluster, so a scheduled row keeps the same 26px
-   height and no other row's pitch moves (the marker is absent, i.e. zero
-   footprint, for every session without an active schedule). POSITION: the marker
-   sits BEFORE the title, at the upstream `.slot` address (the official seat is
-   rendered there too, patch 13); the row's state dot stays in the trailing slot. */
-.scheduleIndicator {
-  display: inline-flex;
-  flex: none;
-  width: 16px;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  color: var(--dsw-alias-label-tertiary);
 }
 
 /* .stateCompleted (see its own rule below): the

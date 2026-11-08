@@ -568,7 +568,7 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   （pin 0.2.2-alpha.2 起 leading/trailing 带 `inline: true`），而 chamber 壳
   自建多来源列表、**永不挂载**该注册（`sidebar.workspaces` 洞只声明不调用，I-4 锁禁止渲染该字面量）⇒ 座席只能由
   注册所有者声明，chamber 无法转交（重复声明即抛）。补丁删除上游的三行声明，chamber 侧栏在自己的 `children` 里声明
-  并渲染 leading/hover 两席（`trailing` 不采纳：上游的行尾插件图标能力在 chamber 缺位；`inline` 是 span/div 渲染提示，chamber 行几何仍用 div）（`renderSlot` 的 `fallback` 让自有 Schedule 标记与 occupant 永不并现）。无官方布局回落（无 chamber 壳时
+  并渲染 leading/hover 两席（`trailing` 不采纳：上游的行尾插件图标能力在 chamber 缺位；`inline` 是 span/div 渲染提示，chamber 行几何仍用 div）（行首 Schedule 标记即上游 occupant 本身；chamber 已无自有标记回落——旧 `hasActiveSchedule` 投影事实随 pin 移除，回落链删除见 design 06 §4.3）。无官方布局回落（无 chamber 壳时
   座席未声明），故用 `noRetireForm`；上游若提供座席转交/共享 API 则删除该条。座席是 `scope: root` 的 list 座席，
   声明与注册都随各自 ctx：occupant 用固定 id 注册（`ui-schedule` = `schedule-mark`），`ui-slots` 对**同一 registry**
   内同 id 同优先级的第二条注册抛错，而 N-ctx 下每个实例 boot 各持一份 registry（每 ctx 一个 `SlotRegistry`）⇒

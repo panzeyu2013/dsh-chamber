@@ -23,14 +23,14 @@ import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeRep
 import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
 import type { ArchivedSessionMetaRow } from './aggregate-types.ts'
-import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle, workingDirectoryOf } from './session-display.ts'
+import { basenameOf, sessionDisplayTitle, workingDirectoryOf } from './session-display.ts'
 import type { ProjectionSessionBaseline, ProjectionWorkspaceBaseline } from './instance-projection-input.ts'
 // Checkout row synthesis (design 08 PR2) is a pure leaf; derive owns visibility
 // and the ONE session-row builder, the leaf owns placement/identity.
 import { checkoutWorkspaceOf, planCheckoutPlacements } from './checkout-placement.ts'
 import type { RepoGitLayout } from './workspace-git-flags.ts'
 
-export { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './session-display.ts'
+export { basenameOf, sessionDisplayTitle } from './session-display.ts'
 export type { ArchivedSessionMetaRow } from './aggregate-types.ts'
 
 // `blankGhostUntil` is CROSS-BOUNDARY shared state — armed by the sidebar
@@ -437,7 +437,7 @@ export function projectRuntimeFacts(
       running?: boolean
       origin?: 'subagent'
       updatedAt?: number
-      /** The store row's `projectionValues` — read for `goal` (and schedule above). */
+      /** The store row's `projectionValues` — read for the goal fact. */
       projectionValues?: Readonly<Record<string, unknown>>
       retainedBy?: Readonly<Record<string, number>> /** rc.2 row ownership counts: `mainView` = presented. */
     }>
@@ -720,9 +720,6 @@ export function projectInstanceSnapshot(
         ...(typeof row.updatedAt === 'number' ? { updatedAt: row.updatedAt } : {}),
         running: resolveSessionRunning(statusRunning, sessionId, row.running),
         blank: row.blank === true,
-        // Sparse — the fact rides the row only when the session actually owns
-        // an active schedule, so every other row's snapshot bytes stay untouched.
-        ...(hasActiveScheduleOf(row.projectionValues) ? { hasActiveSchedule: true as const } : {}),
         // Official display label: the mounted vendor store already resolved it;
         // the resolver's cwd/id ladder applies only if a producer drops it.
         displayTitle: sessionDisplayTitle({
@@ -928,11 +925,6 @@ export function instanceSnapshotSignature(
       // at its first-seen label.
       d: row.displayTitle,
       b: row.blank,
-      // The schedule fact MUST ride the signature: otherwise a session gaining
-      // or losing its schedule republishes identical bytes and the dedupe gate
-      // suppresses the update. `undefined` serializes away, so schedule-less
-      // rows keep their bytes.
-      h: row.hasActiveSchedule,
       o: row.origin,
       t: row.title,
       c: row.cwd,
@@ -1081,9 +1073,7 @@ export function factRecordSignature(record: object, omit: readonly string[] = []
  *   publish so source-owned child contexts retire synchronously;
  * - `updatedAt` is part of the session row (updated = manual order + activity
  *   promotion), so a last-activity tick re-publishes the projection;
- * - the runtime portion is restricted to sessions visible in the projection;
- * - the per-session active-Schedule marker can flip ALONE, so the row carries
- *   it.
+ * - the runtime portion is restricted to sessions visible in the projection.
  * The App layer gates chamberBridge.publish on this signature, and the sidebar
  * subscription re-checks it as defense in depth.
  */
@@ -1173,13 +1163,8 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           blank: x.blank === true,
           // Render-relevant: updated-mode ordering derives from it.
           updatedAt: x.updatedAt ?? null,
-          // The active-Schedule marker is RENDERED right after the row title and
-          // can flip while nothing else changes, so it must move this signature;
-          // non-sparse on purpose — this row is a change detector, never persisted,
-          // so a stable false is free.
-          hasActiveSchedule: x.hasActiveSchedule === true,
-          // RENDERED like the schedule marker: a pin-only change must move this
-          // publish gate (App hook + sidebar-root-projection compare it), or the marker freezes.
+          // A pin-only change must move this publish gate (App hook +
+          // sidebar-root-projection compare it), or the marker freezes.
           pinned: x.pinned === true,
           // 归档筛选把归档行放进/移出投影：这一位变化必须移动发布闸，否则切到
           // show/only 后壳里仍是旧行集（design 06 §3.4）。
@@ -1672,8 +1657,8 @@ export function findReusableBlankSession(
 /**
  * ONE rendered session row, shared by workspace-member, checkout and stray
  * groups. The row shape must not drift by parent (the sidebar renders the same
- * component): display label, blank/schedule/archived/pinned facts are computed
- * here for every caller.
+ * component): display label, blank/archived/pinned facts are computed here for
+ * every caller.
  */
 function sessionProjectionRow(
   session: SessionRow,
@@ -1696,8 +1681,6 @@ function sessionProjectionRow(
     // Sparse: only blank (provisional new-session) rows carry it, so the
     // sidebar can render the localized New Session label.
     ...(session.blank ? { blank: true } : {}),
-    // The active-Schedule fact rides into the row the sidebar renders (sparse).
-    ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
     // 归档行在 show/only 下进入投影（default 已被 sessionVisible 滤掉）；稀疏标记，
     // 行形态与动作（置灰/不可开/归档钮翻转为恢复）由侧栏消费（design 06 §3.4）。
     ...(archivedIds.has(session.sessionId) ? { archived: true as const } : {}),

@@ -25,7 +25,7 @@ import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 import { clearPendingClick, noteSessionRowClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
 import { HOVER_GATE_ATTR } from './hover-motion-gate.ts'
 import { RowHoverCard } from './RowHoverCard.tsx'
-import { ServerSectionRenameForm, SessionScheduleIndicator } from './server-section-controls.tsx'
+import { ServerSectionRenameForm } from './server-section-controls.tsx'
 import { dragOverState, rowHalf } from './server-section-model.ts'
 import { useTitleMarquee } from './session-title-marquee.ts'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
@@ -309,25 +309,15 @@ const SessionRow = memo(function SessionRow({
     >
       {/* 座席转移（补丁 13）：座席只在**本实例**（当前页面 ctx 的拥有者）的行上求值——
           occupant（官方 ui-schedule 的 schedule-mark / 卡片任务列表）读的是本实例 Host 的
-          catalog，把外来源 sessionId 交给它只会查空并压掉回落；外来源行因此直接走自有标记
-          （与 A1 前一致）。位置与上游 Rows.tsx 的 `.slot` 同址——**标题之前**（状态位与它互斥的
-          上游语义里两者共用一个 slot；本仓的状态槽在行尾，故这里只放座席）。自有标记只在活动
-          Schedule 投影存在时作为 occupant 缺席的回落，两者永不并现。
+          catalog，把外来源 sessionId 交给它只会查空，故外来源行不求值（不传 fallback、没有
+          自有标记：pin 的 SessionProjectionMap 已无 schedule 键，标记事实来自 Host catalog）。
+          位置与上游 Rows.tsx 的 `.slot` 同址——**标题之前**（状态位与它互斥的上游语义里两者
+          共用一个 slot；本仓的状态槽在行尾，故这里只放座席）。
           上游同址守卫照搬（Rows.tsx: `!row.archived && !row.blank`）：本仓行数据带稀疏 archived
           标记（归档筛选落地后），两半都照搬——归档行与空白占位行的行首座席都不求值
           （上游「归档/空白行槽留空」同语义）。 */}
-      {session.archived !== true && session.blank !== true
-        && (server.id === chamberInstanceId
-          ? renderSessionSeat(
-            'sidebar.session.row.leading',
-            { sessionId: session.id },
-            session.hasActiveSchedule === true
-              ? { fallback: <SessionScheduleIndicator label={t('schedule.active')} /> }
-              : undefined,
-          )
-          : session.hasActiveSchedule === true
-            ? <SessionScheduleIndicator label={t('schedule.active')} />
-            : null)}
+      {session.archived !== true && session.blank !== true && server.id === chamberInstanceId
+        && renderSessionSeat('sidebar.session.row.leading', { sessionId: session.id })}
       <span ref={titleRef} className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
       {/* 空白（新建）行是临时占位：kebab（含 fork/归档）作用于不存在的内容，整簇隐藏。 */}
       {session.blank !== true && (

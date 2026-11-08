@@ -25,7 +25,7 @@ export { isChannelClassDiagnostic, recheckPluginGraphDiagnostic } from './plugin
 export type * from './settings-shell.ts'
 export { SETTINGS_SHELL_ENTRY_ID, SETTINGS_SHELL_SHADOW_PRIORITY, classifySettingsSeatOccupant, settingsSeatTakeoverMessage } from './settings-shell.ts'
 export type * from './derive.ts'
-export { BLANK_GHOST_GRACE_MS, SEARCH_QUERY_MAX_CODE_UNITS, armBlankGhost, basenameOf, canonicalPathKey, deriveArchivedSessions, deriveLocalSearchMatches, deriveServerWorkspaces, gapSignature, groupArchivedRows, hasActiveScheduleOf, increasedForkTitle, instanceSnapshotSignature, mergeRuntimeFacts, mergeSearchResults, nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, projectInstanceSnapshot, projectRuntimeFacts, reconciledSessionOrder, relativeTimeBucket, runningRingVisible, runtimeReportSignature, sanitizeSearchQuery, serversProjectionSignature, sessionDisplayTitle, sourceAccentColor, workspaceAccentStyle } from './derive.ts'
+export { BLANK_GHOST_GRACE_MS, SEARCH_QUERY_MAX_CODE_UNITS, armBlankGhost, basenameOf, canonicalPathKey, deriveArchivedSessions, deriveLocalSearchMatches, deriveServerWorkspaces, gapSignature, groupArchivedRows, increasedForkTitle, instanceSnapshotSignature, mergeRuntimeFacts, mergeSearchResults, nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, projectInstanceSnapshot, projectRuntimeFacts, reconciledSessionOrder, relativeTimeBucket, runningRingVisible, runtimeReportSignature, sanitizeSearchQuery, serversProjectionSignature, sessionDisplayTitle, sourceAccentColor, workspaceAccentStyle } from './derive.ts'
 // Checkout-row placement leaf (design 08 PR2): derive owns visibility, this leaf
 // owns identity/placement. `orderCheckoutRows`/`checkoutRowId` stay on the
 // ./checkout-placement subpath (the sidebar drag consumes them there).
@@ -118,3 +118,10 @@ export { onClientGraphResyncRequest, requestClientGraphResync } from './plugin-r
 // 释放命令。只有一个运行时符号经桶导出；快照/事实/释放类型走同批的 `export type *` 面。
 export type * from './resident-store.ts'
 export { residentBridge } from './resident-store.ts'
+// 页面级面板轴（N-ctx 多实例）：每个挂载壳的侧栏发布本 ctx 的 sidebar.panellist 条目快照，
+// 任意壳的侧栏读取它（非活动来源的 server 头也显示该来源自己的面板入口）；选中是「切到目标
+// 来源后由目标壳自己执行 selectPanel」的一次性意图通道（目标壳未挂载时 pending + TTL）。
+// 唯一生产消费者是 sidebar 包（发布/订阅/选中意图）；测试直接 import './panel-axis.ts'
+// （本模块的内部复位面不经桶导出）。
+export type * from './panel-axis.ts'
+export { PANEL_SELECT_INTENT_TTL_MS, consumePanelSelect, getPanelAxesSnapshot, onPanelSelectRequest, publishPanelAxis, requestPanelSelect, retirePanelAxis, subscribePanelAxes } from './panel-axis.ts'

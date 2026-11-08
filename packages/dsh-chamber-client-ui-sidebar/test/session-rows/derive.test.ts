@@ -24,7 +24,6 @@ import {
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
   groupArchivedRows,
-  hasActiveScheduleOf,
   instanceSnapshotSignature,
   mergeRuntimeFacts,
   mergeSearchResults,
@@ -570,7 +569,7 @@ test('an accounted fork child renders in its workspace even while an unrelated g
 
 // =====================================================================
 // Consolidated projection contracts: the key invariants of
-// merge-runtime-facts / workspace-membership / schedule-label-reuse /
+// merge-runtime-facts / workspace-membership / label-reuse /
 // source-ordering / search-and-archive. The retained assertions are the
 // fail-closed, cross-source and upstream-alignment ones.
 // =====================================================================
@@ -861,7 +860,7 @@ test('P5: subagent activity is tri-state, and a stale report downgrades running 
   assert.equal(merged?.stale, true)
 })
 
-// ---- labels / schedule / blank reuse ----
+// ---- labels / blank reuse ----
 
 test('sessionDisplayTitle follows title → cwd basename → id; basenameOf keeps the trailing-segment contract', () => {
   assert.equal(sessionDisplayTitle({ title: 'Real', sessionId: 'sid' }), 'Real')
@@ -871,15 +870,6 @@ test('sessionDisplayTitle follows title → cwd basename → id; basenameOf keep
   assert.equal(basenameOf('/Users/x/project/'), 'project')
   assert.equal(basenameOf('C:\\Users\\x\\project'), 'project')
   assert.equal(basenameOf('/'), '/')
-})
-
-test('hasActiveScheduleOf is true only for a non-empty schedule array', () => {
-  assert.equal(hasActiveScheduleOf(undefined), false)
-  assert.equal(hasActiveScheduleOf({}), false)
-  assert.equal(hasActiveScheduleOf({ schedule: [] }), false)
-  assert.equal(hasActiveScheduleOf({ schedule: [{ id: 'sch1' }] }), true)
-  assert.equal(hasActiveScheduleOf({ schedule: 'sch1' }), false)
-  assert.equal(hasActiveScheduleOf({ schedule: null }), false)
 })
 
 test('findReusableBlankSession mirrors connectWorkspace and reuse stays off without an authoritative archive set', () => {
@@ -1052,32 +1042,6 @@ test('producer projects listComplete from the official list store phase (source 
   const producer = stripComments(readFileSync(fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
   assert.match(producer, /baseReport\.listComplete = snapshot\.phase === 'ready'/)
   assert.match(producer, /const snapshot = sessionsList\.getSnapshot\(\)/)
-})
-
-test('round-3 restore: the schedule fact reaches the snapshot, the signature and the rows', () => {
-  const projected = projectInstanceSnapshot(
-    { items: [workspace('w1', 'Work', ['scheduled', 'plain'])], archivedSessionIds: [], state: 'idle', phase: 'ready' },
-    {
-      ids: ['scheduled', 'plain'],
-      phase: 'ready',
-      byId: {
-        scheduled: { id: 'scheduled', title: 'With schedule', running: false, blank: false, projectionValues: { schedule: [{ id: 'sch1' }] } },
-        plain: { id: 'plain', title: 'No schedule', running: false, blank: false, projectionValues: { schedule: [] } },
-      },
-    },
-  )
-  assert.deepEqual(projected?.sessions.map(row => row.hasActiveSchedule), [true, undefined], 'sparse: present only when active')
-  const idle = snapshot([workspace('w1', 'Work', ['s1'])], [session('s1', 5, { title: 'One' })])
-  const armed = snapshot([workspace('w1', 'Work', ['s1'])], [{ ...session('s1', 5, { title: 'One' }), hasActiveSchedule: true }])
-  assert.notEqual(instanceSnapshotSignature(idle), instanceSnapshotSignature(armed), 'a schedule change must republish')
-  const derived = deriveOf(
-    [workspace('w1', 'Work', ['in-ws'])],
-    [{ ...session('in-ws', 5, { title: 'In workspace' }), hasActiveSchedule: true }, { ...session('stray', 6, { title: 'Stray' }), hasActiveSchedule: true }],
-  )
-  assert.equal(derived[0]?.sessions[0]?.hasActiveSchedule, true, 'workspace rows carry the fact')
-  assert.equal(derived[1]?.sessions[0]?.hasActiveSchedule, true, 'the ungrouped stray carries the fact too')
-  const plainRow = deriveOf([workspace('w1', 'Work', ['plain'])], [session('plain', 5, { title: 'Plain' })])
-  assert.equal('hasActiveSchedule' in (plainRow[0]?.sessions[0] ?? {}), false, 'an ordinary row stays key-free')
 })
 
 test('round-3 restore: label fallbacks, vendor displayTitle and label/reuse signature moves', () => {
@@ -1295,7 +1259,7 @@ test('round-3 restore: deriveLocalSearchMatches title/workspace legs, hidden row
   assert.deepEqual(recency.map(row => row.sessionId), ['b', 'c', 'a'], 'hits order by recency with the id tiebreak')
 })
 
-test('round-3 restore: archive metadata, overflow hasMore and the schedule-only signature flip', () => {
+test('round-3 restore: archive metadata and overflow hasMore', () => {
   const overflow = mergeSearchResults(
     [{ sessionId: 'l1', snippet: '' }, { sessionId: 'l2', snippet: '' }],
     { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false }, 2, new Set(['l1', 'l2', 'r1']), true)
@@ -1327,11 +1291,6 @@ test('round-3 restore: archive metadata, overflow hasMore and the schedule-only 
   assert.deepEqual(unordered[0]?.rows.map(row => row.sessionId), ['early', 'late'])
   const mounted = projectInstanceSnapshot({ items: [workspace('w1', 'w1')], archivedSessionIds: [], state: 'idle', phase: 'ready' }, { ids: [], byId: {}, phase: 'ready' })
   assert.equal(mounted?.archiveSetKnown, true, 'an empty mounted archive set is authoritative')
-  const scheduleSig = (armed: boolean) => serversProjectionSignature([server('local', {
-    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, blank: false, updatedAt: 5, hasActiveSchedule: armed }] }],
-  })] as never)
-  assert.notEqual(scheduleSig(false), scheduleSig(true), 'a schedule-only flip moves the publish gate')
-  assert.equal(scheduleSig(false), scheduleSig(false), 'reverting restores identical bytes')
 })
 
 test('round-3 restore: mergeRuntimeFacts overlay keeps the armed union and sparse fills', () => {

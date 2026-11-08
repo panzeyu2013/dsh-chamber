@@ -14,7 +14,7 @@ import { DirectoryBrowseError } from './directory-browse-error.ts'
 // module builds unary rows, derive.ts resolves mounted-store titles, and the
 // two must share one rule without value-importing each other (every remaining
 // edge between instance-api/derive/aggregate-store is type-only).
-import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle, workingDirectoryOf } from './session-display.ts'
+import { basenameOf, sessionDisplayTitle, workingDirectoryOf } from './session-display.ts'
 import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
 } from './instance-mutation-values.ts'
@@ -679,9 +679,6 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient, signal?: 
     if (typeof hints?.asOfSeq === 'number' && Number.isFinite(hints.asOfSeq)) {
       row.projectionAsOfSeq = hints.asOfSeq
     }
-    // The unary row publishes registered projections (`projections.values`), so
-    // the schedule fact rides exactly as in the mounted-store path.
-    if (hasActiveScheduleOf(summary?.projections?.values)) row.hasActiveSchedule = true
     return [row]
   })
   // cwd-derived workspace groups: visible sessions grouped by canonical cwd,

@@ -1123,13 +1123,13 @@ test('retainSessionLabels + commitAggregatePull: the unary weak label is restore
 })
 
 test('retainSessionLabels: a commit that DOES happen (other fields degraded) still keeps the name', () => {
-  // The live clear window also drops projection-derived fields (e.g. the active
-  // schedule). The signature then differs and the App really commits — the name
+  // The live clear window also downgrades the row's timestamp/projection-derived
+  // fields. The signature then differs and the App really commits — the name
   // guarantee must not depend on the dedupe gate.
   const previous: InstanceAggregate = {
     state: 'ok',
     workspaces: [],
-    sessions: [{ ...titledRow('s1', 'Real name', '/root/projects/photo'), hasActiveSchedule: true }],
+    sessions: [titledRow('s1', 'Real name', '/root/projects/photo')],
     archivedSessionIds: [],
     archiveSetKnown: true,
     error: null,
@@ -1143,21 +1143,9 @@ test('retainSessionLabels: a commit that DOES happen (other fields degraded) sti
     sessions: retainSessionLabels(previous.sessions, degraded.sessions),
   }
   assert.notEqual(instanceSnapshotSignature(retained), instanceSnapshotSignature(previous),
-    'the schedule/updatedAt loss still commits')
+    'the updatedAt advance still commits')
   assert.equal(retained.sessions[0].title, 'Real name')
   assert.equal(retained.sessions[0].displayTitle, 'Real name')
-})
-
-test('retainSessionLabels: the sparse schedule marker is restored in the same transient as the title', () => {
-  // A projection-store clear wipes title AND the schedule bag together; a
-  // genuine schedule-off always keeps its title (returns as-is), so the marker
-  // is only ever restored inside the title-loss transient.
-  const previous = [{ ...titledRow('s1', 'Real name', '/root/projects/photo'), hasActiveSchedule: true }]
-  const retained = retainSessionLabels(previous, [clearedRow('s1', '/root/projects/photo', 'photo')])
-  assert.equal(retained[0].title, 'Real name')
-  assert.equal(retained[0].hasActiveSchedule, true)
-  const off = [titledRow('s1', 'Real name', '/root/projects/photo')]
-  assert.equal(retainSessionLabels(previous, off), off, 'a titled row always wins: schedule-off is never kept against it')
 })
 
 test('retainSessionLabels: durable new activity ends the carry (the hard bound)', () => {

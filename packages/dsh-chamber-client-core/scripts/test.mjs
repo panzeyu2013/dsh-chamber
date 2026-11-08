@@ -35,6 +35,12 @@ const GROUPS = {
   resident: [
     'test/resident-store.test.ts',
   ],
+  // panel-axis: the page-level panel ledger (N-ctx multi-instance sidebar) — the
+  // per-source published entries, the stable frozen snapshot the shells read, and
+  // the one-shot select intent the target shell consumes after boot (TTL-bounded).
+  'panel-axis': [
+    'test/panel-axis.test.ts',
+  ],
   // runtime: the unary producer's workingDirectory fact (unmounted/cold source).
   runtime: [
     'test/instance-api-working-directory.test.ts',

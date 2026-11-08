@@ -85,6 +85,8 @@ export function SidebarRoot({
   // （ServerSectionHeader 的 PanelHeaderEntry）、rail 态供下方的全局面板轴；
   // selector hook 把行重渲染限制在自身选中态。
   const panels = (usePanels as PanelsHook)(snapshot => snapshot)
+  // 页面级面板轴由每个 ServerSectionHeader 按来源订阅（不在本壳统一订阅：那会让后台壳的
+  // 挂载/面板注册换掉整份 ctxValue，使 memo(ServerSection)/memo(SessionRow) 白算）。
   // 本包的 typecheck program 经 loose ambient seam 解析 slots 渲染共享：seam 的 renderSlot 是
   // 3 参，但内联 opts（{entryKey?, only?, fallback?}）不含 RenderOpts 的 hookContext，故下面两个
   // cast 是类型层提升、绝不改变运行时（运行时签名是 (key, owner, opts)，按 key 分发）。面板入口渲染
@@ -94,11 +96,11 @@ export function SidebarRoot({
     owner: { wide: boolean },
     opts: { hookContext: SidebarWorkspaceGitContext },
   ) => ReactNode
-  // 同一次 cast 的第二个面：会话行两座席（补丁 13 转由本壳声明）。
+  // 同一次 cast 的第二个面：会话行两座席（补丁 13 转由本壳声明）。座席只渲染 occupant，
+  // 本壳不再传 opts（自有回落标记已随 schedule 投影链退役）。
   const renderSessionSeat = renderSlot as (
     key: 'sidebar.session.row.leading' | 'sidebar.session.row.hover',
     owner: { sessionId: string },
-    opts?: { fallback?: ReactNode },
   ) => ReactNode
   // 跨切面状态由各主题 hook 持有；每个 hook 无条件按固定顺序调用，effect 顺序稳定。
   const { wide, column, lastWideWidth, pointerInside, setPointerInside, cancelLinger, armLinger } =

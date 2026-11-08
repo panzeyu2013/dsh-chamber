@@ -17,18 +17,35 @@ The shell declares and renders the three holes the alpha.2 official
   chamber wordmark stays the mark fallback and the name hole renders nothing
   when unoccupied (the rail renders the mark hole too).
 - `sidebar.panellist` (list) — **source-scoped** main-panel entries.
-  `src/client/panel-source.ts` mirrors the slot ledger into `{id, order, label}`
-  metadata (label thunks are resolved at read time, notifications fire only on
-  change). The WIDE column renders one compact `PanelHeaderEntry` per entry
-  inside the header of the source whose ctx registered it — in the same
-  hover-revealed action cluster as the view options and to their left, so the
-  header stays the WIDE entry's only mount site and a folded source keeps it — and
-  the collapsed RAIL keeps the upstream global glyph row (`PanelRow`); a click
-  calls `ctx.layout.selectPanel(id)` in either case, so every entry mounts
-  exactly once. Upstream ships an empty list, so the entry is invisible by
-  default; the projection is pinned by `test/plugin-kernel/panel-source.test.ts`
-  and the placement by `test/plugin-kernel/panel-entry-placement.test.ts`
-  (design 05 §2 / design 06 §4.7).
+  `src/client/panel-source.ts` mirrors THIS ctx's slot ledger into
+  `{id, order, label}` metadata (label thunks resolved at read time,
+  notifications fire only on change). The WIDE column renders each entry as a
+  compact action in the header of the source that owns it — in the same
+  hover-revealed action cluster as the view options and to their left, so a
+  folded source keeps it — while the collapsed RAIL keeps the upstream global
+  glyph row (`PanelRow`). Every mounted shell publishes its own snapshot to the
+  page-level `panel-axis` singleton (client-core), so a NON-active source's
+  header (this self-built list renders every source in one sidebar) renders that
+  source's own entries too: real `{id, order, label}` for a mounted source (each
+  source header subscribes per source, so a publish for an unrelated source bails
+  out and the sidebar's row memo stays intact); a not-yet-mounted but CONNECTED
+  source gets one chamber fallback clock shortcut for the pin's default
+  `schedules` panel (label transcribed from upstream `schedule.manager.panel`).
+  The owning source keeps
+  the true slot rendering (`PanelHeaderEntry`: `renderSlot` glyph, selected
+  state, `ctx.layout.selectPanel`); foreign entries are
+  `ForeignPanelHeaderEntry` (same 20px box and tooltip, known-glyph fallback via
+  `src/client/remote-panel-axis.tsx`, no selected state) and their click sends
+  `chamberBridge.requestActivateSource` plus a one-shot `requestPanelSelect`
+  intent that the target source's own shell executes on its own
+  `ctx.layout.selectPanel` (pending across a boot, 15 s TTL measured from the
+  click; the original instant survives shell handoffs). A source whose header is
+  itself not activatable (managed down / transient) offers no foreign entry at
+  all — the click's first step is that activation. Unknown panel ids draw
+  nothing on a foreign header — a pin upgrade that adds a panellist registrant
+  must extend the fallback glyph map (design 05 §2 / design 06 §4.7). Projection is pinned by `test/plugin-kernel/panel-source.test.ts`,
+  placement by `panel-entry-placement.test.ts`, the cross-source axis by
+  `foreign-panel-axis.test.ts`.
 
 ## Structure
 
@@ -56,8 +73,12 @@ The shell declares and renders the three holes the alpha.2 official
   sources render header + status icon only (dot/spinner, phase on
   hover/aria, no status text); all disconnected → empty hint. One deliberate
   exception: the owning source's `sidebar.panellist` entries stay in its
-  header's action cluster while it is disconnected — an entry exists iff its
-  registrant registered it, independent of connection state (design 06 §4.7).
+  header's action cluster while it is disconnected — the true registration
+  exists iff its registrant registered it, independent of connection state
+  (design 06 §4.7). A foreign source's published entries follow the same
+  "registered is enough" rule (the page-level key exists only while its shell
+  is mounted); the unmounted-source fallback clock is connected-gated (nothing
+  to switch to otherwise).
 - Live sessions carry a running dot (`sessions.list.running`), and a
   completed-but-unread session carries the **chamber brand-blue dot**
   (`.stateCompleted`, 6 px solid) — the same mark the pinned session-todo strip
@@ -67,13 +88,14 @@ The shell declares and renders the three holes the alpha.2 official
   connected" painted the same green (2026-09 user decision; history: brand-blue
   dot ≤0.2.4 → official `done` green in 0.3.0-beta.1 (T10) → brand blue again,
   06 §4.3); no relative time cell is rendered (06 §4.3 —
-  `relativeTimeBucket` stays as a shared tool only). A row whose session
-  carries an active
-  `schedule` projection renders the official active-Schedule marker (16 px
-  alarm glyph, `role="img"`, localized `schedule.active` accessible name)
-  in the leading seat before its title; the search-result rows still render it
-  between the title and the trailing cells. The fact is sparse, so every other
-  row's geometry is untouched. State-dot
+  `relativeTimeBucket` stays as a shared tool only). For the owning source, the
+  transferred `sidebar.session.row.leading` seat renders the official
+  active-Schedule occupant (ui-schedule's catalog-based SessionScheduleMark)
+  before the title; chamber keeps no fallback schedule indicator — the pinned
+  host no longer projects `schedule` into session projections (the fact lives
+  in the Host task catalog), so the old projection-based fallback chain was
+  deleted. Rows of foreign sources and search-result rows therefore carry no
+  schedule mark. State-dot
   priority and the current-session highlight (single-selection) are described
   under "Chamber third round (design 06)" below.
 - Workspace groups fold via the header chevron (session-count badge); fold
@@ -178,8 +200,10 @@ The shell declares and renders the three holes the alpha.2 official
   rows / 14px labels) and `dense` (34px), which read a full size larger than
   our own 26px rows; `closeOnPointerLeave` stays. The source header's built-in
   controls (view options / add workspace / search / archive manager) ride the
-  `Tooltip` instead of a borrowed native `title`; a registered
-  `sidebar.panellist` entry adds one compact action with the same Tooltip form;
+  `Tooltip` instead of a borrowed native `title`; every `sidebar.panellist`
+  entry (the owning source's true entry, a mounted foreign source's published
+  entry, or the unmounted-source fallback clock) adds one compact action with
+  the same Tooltip form;
   add-workspace draws the official project-add glyph, and the trigger opens the
   three-axis View Options
   menu (portal + `align="end"`, `viewOptions.label`). The browse tree carries the

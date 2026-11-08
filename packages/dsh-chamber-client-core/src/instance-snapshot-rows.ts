@@ -58,13 +58,6 @@ export interface SessionRow {
    */
   displayTitle?: string
   /**
-   * The session owns at least one ACTIVE schedule (upstream
-   * `SessionNode.hasActiveSchedule`, derived from `projectionValues.schedule`).
-   * SPARSE: present only when true, so the snapshot signature stays
-   * byte-identical for schedule-less sessions.
-   */
-  hasActiveSchedule?: boolean
-  /**
    * 投影块的序列空间（上游 `SessionProjectionHints.kind`）。`sequenced` = 宿主 live
    * registry 为已连接会话产出，`asOfSeq` 可与同一连接的 baseline/帧比较；`cached` =
    * 纯列表从**持久化投影缓存**读到的块，`asOfSeq` 是那条存储记录自己的水位，

@@ -11,6 +11,16 @@ import { indexSubagentDescendants } from '@dsh-chamber/dsh-chamber-client-core/s
 // a source fact.
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
 import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+// 页面级面板轴（N-ctx）：发布本壳 ctx 的 `sidebar.panellist` 快照、消费「切到目标来源后选中
+// 该来源自己的面板」的一次性意图（目标来源未挂载时由 core 侧 pending，挂载后消费，TTL 见 core）。
+import {
+  PANEL_SELECT_INTENT_TTL_MS,
+  consumePanelSelect,
+  onPanelSelectRequest,
+  publishPanelAxis,
+  requestPanelSelect,
+  retirePanelAxis,
+} from '@dsh-chamber/dsh-chamber-client-core'
 import type { SidebarRootInjected, SidebarWorkspaceGitContext } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { SidebarLeadingControls } from './SidebarLeadingControls.tsx'
@@ -197,6 +207,95 @@ export function apply(ctx: ClientContext): void {
   )
   // 顺序：在注册存在后发布（可能已填充的）面板列表，首帧即可见。
   syncPanels()
+
+  // 页面级面板轴发布（N-ctx）：本壳 ctx 的注册快照按 chamberInstanceId 发布到页面单例，
+  // 任意挂载壳的侧栏都能在「非活动来源」的 server 头渲染该来源自己的入口。空数组是合法
+  // 事实（已挂载但无面板注册），与 panel-source 的快照语义一致；壳卸载时退役该来源轴。
+  ctx.effect(() => {
+    const instanceId = (ctx as any).chamberInstanceId as string | undefined
+    if (instanceId === undefined) return () => {}
+    const publish = (): void => { publishPanelAxis(instanceId, panels.source.getSnapshot()) }
+    // 首次发布填补「订阅生效前」的窗口（syncPanels() 已在上面跑过一次）。
+    publish()
+    const off = panels.source.subscribe(publish)
+    return () => {
+      off()
+      retirePanelAxis(instanceId)
+    }
+  }, 'dsh-chamber: page panel-axis publication')
+
+  // 页面级面板选中意图消费（N-ctx）：另一来源 server 头的点击 = 激活该来源 + 一次性
+  // `selectPanel` 意图，由目标来源自己的壳执行（本壳绝不替别的 ctx 选面板）。意图可能先于
+  // 目标壳挂载到达（core 侧 pending，TTL 15s），故挂载时先消费一次；监听器只认本来源。
+  // 只对**已注册**面板调用 selectPanel：上游对未注册 id 会 throw。
+  //
+  // **boot 竞态（first-screen vs extra row）**：本侧栏是 first-screen 同步注册，而
+  // ui-schedule 等 panellist 注册者是宿主图的 extra row，在 collectExtraRows 之后才 apply。
+  // 因此目标壳 boot 时本 effect 先跑、`panels.source` 仍为空——此时绝不能把刚消费到的意图
+  // 当成「未注册」丢弃（那正是「点击未挂载来源的时钟」主路径：切来源后打开面板）。意图先
+  // 落到本地挂起，并订阅面板轴：注册到达时由那次变化唤醒重试；只有超过 core 的 TTL 才丢弃
+  // （不挂计时器，轴变化时判定——面板轴没有变化就没有可执行的对象）。
+  ctx.effect(() => {
+    const instanceId = (ctx as any).chamberInstanceId as string | undefined
+    if (instanceId === undefined) return () => {}
+    const selectIfRegistered = (panelId: string): void => {
+      try {
+        ctx.layout.selectPanel(panelId as Parameters<typeof ctx.layout.selectPanel>[0])
+      } catch (error) {
+        console.error('[dsh-chamber] panel select failed:', error)
+      }
+    }
+    // 未注册面板的挂起意图（至多一条）：armedAt 是最近一次武装的单调钟毫秒。
+    let pendingPanelId: string | undefined
+    let armedAt = 0
+    const tryResolve = (): void => {
+      const panelId = pendingPanelId
+      if (panelId === undefined) return
+      if (performance.now() - armedAt > PANEL_SELECT_INTENT_TTL_MS) {
+        pendingPanelId = undefined
+        return
+      }
+      // 面板尚未注册（extra row 还没 apply）：保持挂起，等面板轴的下一次变化。
+      if (!panels.source.getSnapshot().some(panel => panel.id === panelId)) return
+      pendingPanelId = undefined
+      selectIfRegistered(panelId)
+    }
+    /**
+     * 武装一条意图并立即尝试一次（面板已注册的常规路径当场命中）。`at` 是**原始点击时刻**：
+     * 挂载时从 core pending 继承（consume 把原 at 一并交出），监听器收到的新点击才用当前时刻——
+     * 这样跨壳换代不会把 TTL 上限续期（早先的挂起若已超时，tryResolve 直接丢弃）。
+     */
+    const arm = (panelId: string, at = performance.now()): void => {
+      pendingPanelId = panelId
+      armedAt = at
+      tryResolve()
+    }
+    const pending = consumePanelSelect(instanceId)
+    if (pending !== undefined) arm(pending.panelId, pending.at)
+    // 面板注册/改 label 是 boot 竞态的唯一解药：先订阅，挂起意图等这次变化。
+    const offPanels = panels.source.subscribe(tryResolve)
+    const offSelect = onPanelSelectRequest((request) => {
+      if (request.sourceId !== instanceId) return
+      // 本监听器已接收该意图：清掉 core 的 pending（改由本地挂起，boot 竞态下等待注册），
+      // 避免目标壳下次挂载时重复执行。监听器路径是**本次新点击**：用当前时刻重新计时。
+      consumePanelSelect(instanceId)
+      arm(request.panelId)
+    })
+    return () => {
+      // 先摘监听：re-arm 若还活着本壳监听器，会被自己同步消费并再次落入本地挂起。
+      offPanels()
+      offSelect()
+      // 本壳收下但未解决的挂起意图交还 core：壳在异步释放/换代窗口里不能把用户点击一起带走，
+      // 目标来源下一次 apply 的 consumePanelSelect 会取走（每来源一条）。回灌**保留原 TTL**
+      // （以 armedAt 作为 requestPanelSelect 的注入时钟，不重置为新的 15s）；已超时的意图直接
+      // 丢弃——TTL 外绝不落到之后的手工激活上。
+      if (pendingPanelId !== undefined) {
+        const remaining = PANEL_SELECT_INTENT_TTL_MS - (performance.now() - armedAt)
+        if (remaining > 0) requestPanelSelect({ sourceId: instanceId, panelId: pendingPanelId }, armedAt)
+        pendingPanelId = undefined
+      }
+    }
+  }, 'dsh-chamber: page panel-select intent')
 
   // macOS 折叠（darwin + layout collapsed）下框架整列隐藏（宽 0 + `overflow:hidden`），
   // rail 的展开开关与 New Session 一起被裁掉，鼠标失去重开控件；rc.2 AppFrame 仅在该状态

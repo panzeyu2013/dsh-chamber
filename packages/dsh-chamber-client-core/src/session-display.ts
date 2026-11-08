@@ -1,6 +1,6 @@
 /**
  * Session display primitives: trailing-segment basename, the display-title
- * ladder and the active-Schedule projection test.
+ * ladder and the working-directory projection.
  *
  * PURE + ZERO-IMPORT on purpose: every consumer may value-import this leaf.
  * The wire client (instance-api, which builds unary rows) and the projection
@@ -8,28 +8,6 @@
  * rule, and neither module may value-import the other — their remaining edges
  * (derive/aggregate-store ← instance-api types) are type-only.
  */
-
-/**
- * Active-Schedule fact of one session.
- *
- * Mirrors the official derivation verbatim — upstream reads the session's
- * registered `schedule` projection and asks whether anything is active:
- * `(session.projectionValues?.schedule?.length ?? 0) > 0`
- * (upstream derives the same fact from the shared Host task catalog:
- * ui-schedule/src/client/SessionScheduleMark.tsx).
- * The value is unknown-typed here (a wire projection bag), so the array test
- * replaces upstream's optional chaining on a typed `readonly ScheduleRecord[]`:
- * absent / not-an-array / empty all mean "no active schedule" — never a claim
- * about the future, only about the projection the list row carried.
- * @param projectionValues - the row's `projectionValues` bag (mounted store) or `projections.values` (unary wire), or undefined.
- * @returns true when the bag carries a non-empty `schedule` array.
- */
-export function hasActiveScheduleOf(
-  projectionValues: Readonly<Record<string, unknown>> | undefined,
-): boolean {
-  const schedule = projectionValues?.schedule
-  return Array.isArray(schedule) && schedule.length > 0
-}
 
 /**
  * Effective working-directory projection of one session — the alpha.2

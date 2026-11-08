@@ -5,7 +5,7 @@
  * per-source source-note live region and the folded open-failure hoist. Shell
  * state comes from useSidebarSection().
  */
-import { useMemo, useState, type RefObject } from 'react'
+import { useMemo, useState, useSyncExternalStore, type RefObject } from 'react'
 import clsx from 'clsx'
 import {
   IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular, IconArchiveOutlineRegular,
@@ -18,14 +18,26 @@ import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-core/aggregate-st
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { MANAGED_RUNTIME_TRANSIENT_STATES } from '@dsh-chamber/dsh-chamber-client-core/managed-runtime'
 import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
+// 非活动来源的面板轴（N-ctx）：点击 = 切到目标来源 + 一次性面板选中意图，由目标来源自己的
+// 壳消费（本壳不替别的 ctx 调 selectPanel）；未挂载来源的默认组合回落见 remote-panel-axis.ts。
+// 页面级快照在本组件按来源订阅（见下方 useSyncExternalStore）：不把整张页面快照放进 section
+// 共用 context——否则每个后台壳的挂载/面板注册都会换 ctxValue，令 memo(ServerSection)/
+// memo(SessionRow) 全部白算。
+import {
+  getPanelAxesSnapshot, requestPanelSelect, subscribePanelAxes, type PagePanelAxisEntry,
+} from '@dsh-chamber/dsh-chamber-client-core'
 import type { PrewarmIntent } from '@dsh-chamber/dsh-chamber-client-core/prewarm-intent'
 import { collapseSearch, expandSearch, type SourceSearchState } from '@dsh-chamber/dsh-chamber-client-core/search-state'
 import { sourceBootGapNote } from './source-boot-gap.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
 import { sourceAccentStyle, useSidebarSection } from './sidebar-context.ts'
-import { PanelHeaderEntry } from './sidebar-root-chrome.tsx'
+import { ForeignPanelHeaderEntry, PanelHeaderEntry } from './sidebar-root-chrome.tsx'
+import { defaultForeignPanelEntries, foreignPanelGlyph } from './remote-panel-axis.tsx'
 import { sourceHeaderActivatable, sourceHeaderTitle, sourceStatusKind, sourceStatusLabelKey } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
+
+/** 非活动来源入口的共享空列表：owning 分支与未发布且未连接的分支共用，避免每次渲染新建数组。 */
+const NO_FOREIGN_PANELS: readonly PagePanelAxisEntry[] = []
 
 export interface ServerSectionHeaderProps {
   server: ChamberServerAggregate
@@ -79,6 +91,25 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
   // 可激活入口判定与 title/aria 文案（托管 dsh 停机时说明原因，而不是"切换到该实例"）。
   const headerActivatable = sourceHeaderActivatable(server, chamberInstanceId)
   const headerTitle = sourceHeaderTitle(server, chamberInstanceId, t)
+  // 页面级面板轴的**按来源**订阅：getSnapshot 返回该来源自己的稳定数组引用（未发布 =
+  // undefined），快照变化但本来源未变时 React 直接 bail out——只有受影响的 header 重渲染，
+  // 后台壳的挂载/注册不会惊动整张列表（行 memo 与 section memo 保持有效）。
+  const foreignPanelAxis = useSyncExternalStore(
+    subscribePanelAxes,
+    () => getPanelAxesSnapshot()[server.id],
+  )
+  // 默认组合回落条目按词典 memo：header 在 hover/搜索等局部状态变化时会重渲染，不必每次新建数组。
+  const fallbackPanels = useMemo(() => defaultForeignPanelEntries(t), [t])
+  // 非活动来源的面板轴入口：已挂载来源优先用页面级发布的真实条目（键存在即已发布，空数组
+  // = 已挂载但无面板，故空数组不得回落到默认档）；未挂载但 connected 的来源按 pin 默认组合
+  // 回落一个 chamber 自有时钟入口（断开无法切换，故默认档有 connected 门；已发布档没有——
+  // 条目存在与否只取决于该来源自己的注册者）。
+  // **激活门**：点击链第一步是 requestActivateSource，故与 header/rail 的激活门一致——托管
+  // 停机/瞬态（sourceHeaderActivatable=false）的来源不渲染外来源入口；否则会承诺一个
+  // header 自己都拒绝的切换（即使其壳仍挂载、页面级轴仍在发布）。owning 分支不受影响（注册即在）。
+  const foreign = server.id !== chamberInstanceId && headerActivatable
+    ? (foreignPanelAxis ?? (server.connected ? fallbackPanels : NO_FOREIGN_PANELS))
+    : NO_FOREIGN_PANELS
   // 头部控件用官方 Tooltip（不是借来的原生 title=）；触发器打开三轴视图选项菜单，
   // 气泡与可访问名都报 viewOptions.label，活动排序只由 .sortActive 着色承载。
   // 视图选项三轴的当前值（上游 ViewOptionsMenu 的 selectedIds）：分组 / 排序 / 筛选。
@@ -329,6 +360,28 @@ export function ServerSectionHeader({ server, sourceFolded, search, query, serve
                         }}
                       />
                     ))}
+                    {/* 非活动来源自己的面板轴入口（页面级发布 / 未挂载默认组合回落）。每个来源的
+                        section 都在本壳里渲染，但上面的 owning 分支只能承载本壳 ctx 的条目；别的
+                        来源的面板属于它们自己的 ctx（面板 id 指向各自实例 layout 的 main 键），
+                        故这里点击 = 先切到该来源，再武装一次性 selectPanel 意图，让目标来源自己的
+                        壳执行选择（未挂载时 core 侧 pending，TTL 15s，挂载后消费）。未知面板 id
+                        不渲染：既没有本壳可用的字形，也没有可 renderSlot 的注册。 */}
+                    {foreign.map(entry => {
+                      const glyph = foreignPanelGlyph(entry.id)
+                      return glyph === undefined ? null : (
+                        <ForeignPanelHeaderEntry
+                          key={entry.id}
+                          label={entry.label}
+                          glyph={glyph}
+                          onSelect={() => {
+                            if (suppressClickRef.current) return
+                            clearPendingClick()
+                            chamberBridge.requestActivateSource(server.id)
+                            requestPanelSelect({ sourceId: server.id, panelId: entry.id })
+                          }}
+                        />
+                      )
+                    })}
                     {/* 每来源视图选项菜单（上游 ViewOptionsMenu 三段形态）：分组方式 / 排序方式 /
                         筛选会话，各带 label 与 selectedIds 勾选；静息态由 tooltip + aria-label
                         + sortActive 着色承载（hover 才显形）。密度保持本仓 compact 档

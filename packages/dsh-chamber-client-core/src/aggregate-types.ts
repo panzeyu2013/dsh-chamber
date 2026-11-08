@@ -83,14 +83,6 @@ export interface ChamberServerWorkspace {
     updatedAt?: number
     blank?: boolean
     /**
-     * The session owns at least one active
-     * schedule — projected from the session's `schedule` projection
-     * (`derive.ts hasActiveScheduleOf`, upstream ui-schedule SessionScheduleMark)
-     * so the row can render the official active-Schedule marker. Sparse: absent
-     * means no active schedule.
-     */
-    hasActiveSchedule?: boolean
-    /**
      * 归档行标记（稀疏）：show/only 筛选下归档行进入导航投影时携带；置灰、不可开、
      * 不可拖、pin 面消失、归档钮翻转为「恢复」由侧栏消费（design 06 §3.4）。
      */

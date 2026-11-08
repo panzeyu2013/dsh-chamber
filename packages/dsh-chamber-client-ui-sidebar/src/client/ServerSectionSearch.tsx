@@ -1,7 +1,7 @@
 /**
  * Per-source search surface of the ServerSection subtree: the capsule input
- * row and the search-results tree (projection-label / running-bit /
- * active-schedule lookups); the section owns the shared controller mirror.
+ * row and the search-results tree (projection-label / running-bit / archived
+ * lookups); the section owns the shared controller mirror.
  */
 import { Fragment } from 'react'
 import type { RefObject } from 'react'
@@ -13,7 +13,6 @@ import type { SearchRow } from '@dsh-chamber/dsh-chamber-client-core/instance-ap
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 import { clearSearch, setSearchQuery, type SourceSearchState } from '@dsh-chamber/dsh-chamber-client-core/search-state'
 import { SEARCH_QUERY_MAX_CODE_UNITS } from '@dsh-chamber/dsh-chamber-client-core/derive'
-import { SessionScheduleIndicator } from './server-section-controls.tsx'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
@@ -101,23 +100,12 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                 }
                 return false
               }
-              // 同一投影查询给 active-Schedule 事实（上游当前 pin 只在会话行的行首座席渲染该标记，
-              // 搜索行不渲染；本仓搜索行保留旧代同址形态——有意分歧，见 checklist §4.6 第 7 行）；
-              // 查不到 ⇒ false——不在可见投影内不构成对该会话日程的断言。
-              // 归档位同样来自投影（show/only 下归档行在投影内）；查不到 ⇒ false。
+              // 归档位来自投影（show/only 下归档行在投影内）；查不到 ⇒ false。
               const projectedArchived = (sessionId: string): boolean => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
                   if (session === undefined) continue
                   return session.archived === true
-                }
-                return false
-              }
-              const projectedHasActiveSchedule = (sessionId: string): boolean => {
-                for (const workspace of server.workspaces) {
-                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
-                  if (session === undefined) continue
-                  return session.hasActiveSchedule === true
                 }
                 return false
               }
@@ -162,12 +150,6 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
                                       {stateDot}
                                     </span>
                                     <span className={cc.searchResultTitle}>{resolved.title}</span>
-                                    {/* 旧代上游在标题后渲染该标记（当前 pin 的搜索行已不渲染），
-                                        本行保留该形态且没有额外的 blank 门——blank（临时新会话）
-                                        行已被查询本身排除在内容搜索外。 */}
-                                    {projectedHasActiveSchedule(item.sessionId) && (
-                                      <SessionScheduleIndicator label={t('schedule.active')} />
-                                    )}
                                   </span>
                                   {resolved.workspaceLabel !== undefined && (
                                     <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>

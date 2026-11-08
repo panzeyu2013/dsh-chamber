@@ -134,3 +134,43 @@ export function PanelHeaderEntry({
     </Tooltip>
   )
 }
+
+/**
+ * One FOREIGN source's panel entry as a source-header action: the non-active source's own
+ * panel-axis registrations (the page-level publication, client-core `panel-axis`) or the
+ * pin's default-composition fallback (`remote-panel-axis.ts`). Same box and reveal
+ * discipline as {@link PanelHeaderEntry} — it rides the header's `.sourceActions` cluster
+ * and the compact 20px `.actionIcon` — but the glyph is supplied by the caller (this
+ * shell cannot render another ctx's slot registration through its own binding) and there
+ * is NO selected state: this page can never know which panel another source currently has
+ * open, so no `active` / `aria-current` is faked (the click means "switch there and
+ * select", not "this is selected"). The header's suppress-click / pending-click gate
+ * wraps the click at the CALL SITE (ServerSectionHeader), exactly like the owning entry.
+ */
+export function ForeignPanelHeaderEntry({
+  label,
+  glyph,
+  onSelect,
+}: {
+  label: string
+  glyph: ReactNode
+  onSelect: () => void
+}) {
+  return (
+    <Tooltip label={label} side="bottom" delayMs={500}>
+      <button
+        type="button"
+        className={cc.actionIcon}
+        aria-label={label}
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelect()
+        }}
+      >
+        <span className={css.panelGlyph} aria-hidden="true">
+          {glyph}
+        </span>
+      </button>
+    </Tooltip>
+  )
+}

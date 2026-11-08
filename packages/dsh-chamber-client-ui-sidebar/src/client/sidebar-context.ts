@@ -196,12 +196,12 @@ export interface SidebarSectionContextValue {
   ) => ReactNode
   /** chamber patch 13: the two session-row seats this shell declares (the leading
    *  status seat and the hover-card seat) rendered with the official occurrence
-   *  share. `opts.fallback` renders when no occupant elects, so the shell's own
-   *  Schedule mark is the fallback and can never double with an occupant. */
+   *  share. The shell passes no fallback: the chamber's own Schedule mark retired
+   *  with the schedule projection chain (the pin exposes no `schedule` session
+   *  projection), so a seat renders only its occupant. */
   renderSessionSeat: (
     key: 'sidebar.session.row.leading' | 'sidebar.session.row.hover',
     owner: { sessionId: string },
-    opts?: { fallback?: ReactNode },
   ) => ReactNode
   /** Source-scoped panel entries of THIS ctx (design 05 §2): an entry belongs to
    *  the source whose ctx registered it, so the wide column renders it as a

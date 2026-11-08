@@ -3,6 +3,10 @@
 export const zh = {
   'session.new': '新会话',
   'panels.label': '全局面板',
+  // 非活动来源/未挂载来源的面板轴回落 tooltip（ui-schedule 的时钟入口）：转录上游
+  // ui-schedule task-manager-locales.ts 的 `panel` 文案（zh 第 215 行「自动化任务」；
+  // 词表本身在 vendor 只读树，本包不 import 上游插件字典）。
+  'panel.schedules': '自动化任务',
   'session.new.label': '新建会话',
   // 上游 workspace 头的 `+` tooltip 用独立键 `actions.newSession`（vendor ui-workspace 字典逐字：
   // zh「新会话」/ en "New session"）；与 `session.new` 同值、与 `session.new.label` 形近，但键与值都照上游。
@@ -209,8 +213,6 @@ export const zh = {
   'status.planReview': '计划待审',
   'status.waitingAnswer': '等待回答',
   'status.completed': '已完成',
-  // 活动定时任务标记：文案取上游 ui-workspace locales.ts schedule.active，标记渲染在行标题之后。
-  'schedule.active': '有活动定时任务',
   'status.subagentsRunning.one': '{n} 个子代理运行中',
   'status.subagentsRunning.other': '{n} 个子代理运行中',
   'todo.title': '会话待办',
@@ -253,6 +255,8 @@ export type SidebarKey = keyof typeof zh
 export const en = {
   'session.new': 'New Session',
   'panels.label': 'Global panels',
+  // 同上，逐字转录上游 ui-schedule task-manager-locales.ts `panel`（en 第 49 行）。
+  'panel.schedules': 'Automation tasks',
   'session.new.label': 'New session',
   'actions.newSession': 'New session',
   'navigation.label': 'Sidebar',
@@ -413,7 +417,6 @@ export const en = {
   'status.planReview': 'Plan awaiting review',
   'status.waitingAnswer': 'Waiting for answer',
   'status.completed': 'Completed',
-  'schedule.active': 'Has active scheduled task',
   'status.subagentsRunning.one': '{n} subagent running',
   'status.subagentsRunning.other': '{n} subagents running',
   'todo.title': 'Session todo',

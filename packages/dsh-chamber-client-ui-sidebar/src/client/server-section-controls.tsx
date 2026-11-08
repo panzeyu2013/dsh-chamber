@@ -1,27 +1,9 @@
 /** Small shared JSX leaves of the chamber sidebar ServerSection subtree: the
- *  active-Schedule marker and the inline rename form shared by the workspace
- *  header and the session rows. */
+ *  inline rename form shared by the workspace header and the session rows. */
 import clsx from 'clsx'
-import { IconAlarmClockOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { clearPendingClick } from '@dsh-chamber/dsh-chamber-client-core/pending-click'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
-
-/**
- * Non-interactive active-Schedule marker: a markup/token mirror of the official
- * occupant of `sidebar.session.row.leading` — `ui-schedule` 的 `SessionScheduleMark.tsx`
- * （旧代锚 `ActiveScheduleIndicator` 已随上游换代退役；本注释与 checklist §4.6 同步复核）。
- * 本仓形态（有意分歧，行首座席内渲染）：`role="img"` span，本地化 `schedule.active` 同时作
- * 无障碍名与原生 title，字形 16px 闹钟；上游是 12px 时钟 + 视觉隐藏计数标签。渲染仍只由
- * `hasActiveSchedule` 决定，外层行仍是唯一动作。
- */
-export function SessionScheduleIndicator({ label }: { label: string }) {
-  return (
-    <span className={cc.scheduleIndicator} role="img" aria-label={label} title={label}>
-      <IconAlarmClockOutlineRegular size={16} />
-    </span>
-  )
-}
 
   // The rename edit UI, rendered in place at the renamed entity: 'sessionRow'
   // swaps a session row's slot; 'workspaceHeader' embeds the form INSIDE the header

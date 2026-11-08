@@ -248,7 +248,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
           mountedSources.getSnapshot()[instanceId] === true,
           authoritativeArchiveSetRef.current[instanceId],
         )
-        // unary 兜底行可能未带 title 投影（弱标签）：已推送来源的权威标签/日程标记不得被它覆盖；
+        // unary 兜底行可能未带 title 投影（弱标签）：已推送来源的权威标签不得被它覆盖；
         // 未推送/已回收来源没有 producer 会来恢复，同样保留上一份已知投影事实（硬边界见规则本体）。
         const next = current !== undefined && current.state === 'ok'
           ? { ...committed, sessions: retainSessionLabels(current.sessions, committed.sessions) }

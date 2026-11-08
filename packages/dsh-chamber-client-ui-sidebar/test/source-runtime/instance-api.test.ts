@@ -1215,26 +1215,6 @@ test('the pin/unpin accessors post the official workspace envelopes', async () =
   assert.deepEqual(second.payload, { args: { request: { sessionId: 's1' } } })
 })
 
-// The unary fallback publishes the session's
-// registered projections (`projections.values` — the same block `titleOf`
-// reads), so an unmounted source's rows carry the active-Schedule fact exactly
-// like the mounted-store projection (derive.ts projectInstanceSnapshot) does.
-test('fetchInstanceSnapshot carries the active-Schedule fact from the wire projections block', async () => {
-  const client = listClient([
-    summary({ sessionId: 'scheduled', projections: { values: { schedule: [{ id: 'sch1' }] } } }),
-    summary({ sessionId: 'idle-empty', projections: { values: { schedule: [] } } }),
-    summary({ sessionId: 'no-bag' }),
-    // Defensive: a non-array projection value is not an active set.
-    summary({ sessionId: 'odd', projections: { values: { schedule: 'sch1' } } }),
-  ])
-  const snapshot = await fetchInstanceSnapshot(client as never)
-  const byId = new Map(snapshot.sessions.map(row => [row.sessionId, row]))
-  assert.equal(byId.get('scheduled')?.hasActiveSchedule, true, 'a non-empty schedule marks the row')
-  assert.equal('hasActiveSchedule' in (byId.get('idle-empty') ?? {}), false, 'an empty schedule stays key-free')
-  assert.equal('hasActiveSchedule' in (byId.get('no-bag') ?? {}), false, 'a missing bag stays key-free')
-  assert.equal('hasActiveSchedule' in (byId.get('odd') ?? {}), false, 'a non-array value stays key-free')
-})
-
 test('purge: every runtime fetch wording (wrapped by 实例不可达) keeps the may-still-run copy', async () => {
   // The browser/undici failure text is wrapped before classification, so the raw
   // TypeError arm is unreachable here: the wrapped path must carry the vocabulary.
