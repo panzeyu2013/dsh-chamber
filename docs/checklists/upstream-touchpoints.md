@@ -17,6 +17,17 @@
 |covered / factory|`chamber-covered.ts` 的两个集合（factory ⊆ covered，chamber-entry锁步断言；含 `ui-dockkit`、`client-file-upload` 的covered factory与 `session-log-export`（deferred）、两个有意跳过id（hmr/directory-picker-native））|
 |种子域|`clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`、`openInApp/probe`（C7双门）|
 
+### 0.1 改动层索引（owner map；只做链接，不复述判据）
+
+> “本仓对上游的改动”按**机制**分四层，物理位置跟着机制走；每层的内容与判据归其 owner，本表只回答“在哪、谁登记、何时生效、哪道门把关”。新增一类“改上游”的机制 = 新层，必须同批在此登记 owner 与登记源；[`types/vendor-modules.d.ts`](../../types/vendor-modules.d.ts) 不在此表——它不改上游任何字节，只是编译期消费面（登记见 §3 的 deep-import 与 roster）。
+
+|层|改谁|owner（内容位置）|单一登记源|生效方式|门|
+|---|---|---|---|---|---|
+|依赖补丁|第三方 npm 包（node-pty / pi-ai / exceljs…），不改 dsh 源码|仓内 `patches/`（根/dev 腿）；运行期腿由 `bundle:dsh` 从 vendor pin 生成|[`registry.json`](../../scripts/upstream/registry.json) 的 `patches` 字段 + 根 [`pnpm-workspace.yaml`](../../pnpm-workspace.yaml) 的 `patchedDependencies`|根 `pnpm install`；封装期由 [`upstream-patches.mjs`](../../packages/desktop/scripts/upstream-patches.mjs) stage 到工作目录|[`registry.test.mjs`](../../scripts/upstream/registry.test.mjs)、[`upstream-patches.test.mjs`](../../packages/desktop/scripts/upstream-patches.test.mjs)|
+|构建期源码补丁|dsh 上游客户端源码（vendor 树，磁盘零写入）|[`vendor-patches.mjs`](../../packages/renderer/scripts/vendor-patches.mjs)（代码即注册表）|同文件 `VENDOR_PATCHES`（退役断言 `RETIRED_PATCHES`）|renderer 构建期 vite `deepseekSource().transform` 内存改写|C9（[`verify-upstream-touchpoints.mjs`](../../scripts/upstream/verify-upstream-touchpoints.mjs)）+ [`vendor-patches.test.mjs`](../../packages/renderer/scripts/vendor-patches.test.mjs) + `verify-vendor-patch-applied`|
+|in-repo fork 副本|上游源码/契约的常驻拷贝|`packages/dsh-client-connection`、`dsh-client-web`、`dsh-api-gateway`；chamber-named：`dsh-chamber-client-ui-layout` / `-sidebar`、`dsh-chamber-seed-open-in`|[`registry.json`](../../scripts/upstream/registry.json) 的 `entries`（`fork.*` / `seed.*`，逐文件 `classify`）|workspace 包被 renderer / 宿主按包名消费|C1/C2/C3/C5/C10 + 预检 [`preflight-vendor-pin.mjs`](../../scripts/upstream/preflight-vendor-pin.mjs)|
+|运行时页面适配|代理给浏览器的上游 index 文档（一行 `<script>`）|[`html-inject.ts`](../../packages/gateway/src/html-inject.ts)|同文件常量 + [design 17](../design/17-server-side-gateway.md) §10.5（fail-soft，无 JSON 登记）|gateway 代理上游前端响应时注入|[`gateway-proxy.test.ts`](../../packages/gateway/test/proxy/gateway-proxy.test.ts)|
+
 ## 1. 标记约定（每文件分类）
 
 |标记|含义|机器校验|
