@@ -15,7 +15,7 @@ node scripts/dev/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
 pnpm install
 pnpm run dev:control-plane               # 仅控制面（现行默认开发面）
 pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift 壳构建链（现行出货；需要 macOS）
-# ARCHIVED（Electron 冻结；复活参考）：pnpm run dev:desktop   # 完整窗口（控制面 + dsh 前端 + 桌面壳）
+# ARCHIVED（Electron 冻结，命令已从脚本面移除，不得直接执行；复活步骤见 docs/progress/electron-frozen.md §6）
 ```
 
 ## 测试
@@ -36,14 +36,14 @@ node scripts/gates/run-checks.mjs full --list       # full = static + typecheck 
 不要求为每次提交跑全量；按改动面选最小证据，选择依据是 `scripts/gates/gate-surfaces.json` 与 `docs/progress/STATUS.md` §1.6：
 
 ```bash
-pnpm run check:static        # 静态 / 政策门（含 i18n、md-links、test-wiring、styles 等；除 i18n 外均本地）
+pnpm run check:static        # 静态 / 政策门（含 i18n、md-links、test-wiring、styles 等；local-only = md-links / test-wiring / styles / no-dead-exports，其余随 CI / pre-install 生成块）
 pnpm run check:tests         # 全部包测试（与 ci.yml 同源）
 pnpm run check:typecheck     # 客户端插件与宿主包类型检查
 pnpm run check:full          # = static + typecheck + tests（跨面改动 / 诊断 CI 时才跑）
 ```
 
 - 只看不跑：`node scripts/gates/run-checks.mjs <mode> --list` 打印该模式的门计划，不执行。
-- macOS / Swift / Windows 腿不在 linux 模式内：`test:swift`、`test:macos` 与 Windows 打包 / 清单门须在对应平台验证；linux 全绿不证明它们。
+- macOS / Swift 腿不在 linux 模式内：`test:swift`、`test:macos` 须在 macOS 验证；linux 全绿不证明它们。Windows/Linux 桌面腿随 Electron 冻结（`docs/progress/electron-frozen.md`），不再作为现行验证义务。
 - 纯文档改动的验证命令以 `docs/AGENTS.md` 第 5 节为准（md-links / i18n / registry 三件套；改语对时另跑 `--write` 重录）。
 - 改动涉及运行时、认证、协议或桌面壳行为时，请补充或更新聚焦测试——静态检查不能证明运行时正确性；无法执行的验证在 PR 的 Validation 里写明原因。
 
@@ -83,7 +83,16 @@ docs: document the commit message convention
 ## 范围纪律
 
 - 凡dsh宿主、插件生态或复用的dsh前端已提供的能力，控制面只做**接入或服务，绝不重造**。
-- 被移出范围的域（walkthrough、通知中心/历史、终端渲染/输入、web预览、MCP、薄壳聊天UI、控制面会话运行时等）以任何形式**不得**回流。已定稿的有界例外：设计08的实例内Git worktree插件；设计17的独立gateway（shell/host职责/种子注册表）；设计18的共享dsh运行时管理核心；设计19的Electron原生通知边缘投影；设计20的可信open-in边缘能力（含仅本地形态的实例内host域 `openInApp`，边界见design 20 §6.3）；设计24的实例内归档清理宿主域 `archiveCleanup/{probe,purge}`（只删不读、运行中整棵跳过、幂等；最窄边界见design 24 §2）；设计28的右栏浏览器客户端插件（remote-browser：忠实 fork 上游 `ui-sidebar-browser` 的 iframe 路径，唯一差异是 SSH 反代的 `frameUrl` 与租约生命周期；最窄边界见 design 28 §16.9/§16.11）。它们不得把执行面、session消费者、通知历史或事实权威带进 `packages/control-plane` 或renderer。
+- 被移出范围的域（walkthrough、通知中心/历史、终端渲染/输入、web预览、MCP、薄壳聊天UI、控制面会话运行时等）以任何形式**不得**回流。已定稿的有界例外：
+  - 设计08的实例内Git worktree插件
+  - 设计17的独立gateway（shell/host职责/种子注册表）
+  - 设计18的共享dsh运行时管理核心
+  - 设计19的桌面原生通知投影（Swift `UNUserNotificationCenter`；Electron 呈现腿归档）
+  - 设计20的可信open-in边缘能力（含仅本地形态的实例内host域 `openInApp`，边界见design 20 §6.3）
+  - 设计24的实例内归档清理宿主域 `archiveCleanup/{probe,purge}`（只删不读、运行中整棵跳过、幂等；最窄边界见design 24 §2）
+  - 设计28的右栏浏览器客户端插件（remote-browser：忠实 fork 上游 `ui-sidebar-browser` 的 iframe 路径，唯一差异是 SSH 反代的 `frameUrl` 与租约生命周期；最窄边界见 design 28 §16.9/§16.11）。
+
+  它们不得把执行面、session消费者、通知历史或事实权威带进 `packages/control-plane` 或renderer。
 - 任何新领域功能提案先回答：dsh原生、插件生态或宿主web前端是否已覆盖？有 → 不开发。
 
 ## Pull Requests

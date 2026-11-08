@@ -167,14 +167,14 @@ type NotificationKind = 'complete' | 'ask' | 'request'
   「可投递行」（`identityConfirmed === false`：观察者快照跳过 + `virtualRuntimeReport`
   跳过，双保险），基线/added 确认后同拍发布——否则 `added` 丢失窗口里子代理的
   status→idle 会合成 host 域 observed 完成并发出真横幅。
-- **P3 单入口修订**：生产裁决的唯一入口是 `packages/renderer/src/notification-projection.ts` 的
+- **P3 单入口**：生产裁决的唯一入口是 `packages/renderer/src/notification-projection.ts` 的
   `reconcile(state, observation)`——`completion-observation.ts` 把壳运行时 report 与 facts 快照两条
   独立到达的通道合并成每 (source, session) 一份可序列化观测；`App.tsx`（facts 轨）与
   `use-bridge-subscriptions.ts`（壳 report 轨）都只经 `observeSource` + `applyObservationBatch` 进入
   （接线锁 `test/wiring/session-authority-wiring.test.ts`），通知组装与 IPC 仍是 App 的单一
   `emitSessionNotification` 出口；`observeSource`/`applyObservationBatch` 是唯一的观测入口，
-  边沿只有这一套实现。通知路径的 `usableFacts` 抑制分支与 App 内的第二完成循环已删除。
-- 旧 planner 孤岛已删除、无现役等价物（等价语义见 `completion-observation.ts`/`reconcile`；两条无主语义见 STATUS 取舍）。
+  边沿只有这一套实现。通知路径没有 `usableFacts` 抑制分支，也不存在 App 内第二完成循环。
+- 不存在 old-planner 路径（聚合语义见 `completion-observation.ts`/`reconcile`；两条无主语义见 STATUS 取舍）。
 
 #### 3.2.1 goal 三值事实与两个门（P1/P2a/P2b）
 
@@ -253,7 +253,7 @@ interface GoalFact {
   `connection/reset` 整体清空缓存、丢弃死代的订阅并按 attempts 预算**重新订阅**（新代
   重获完整预算），且 `sync()` 重报。解析值一旦变化必须 `sync()` 重报——否则 App 的
   身份去重会冻结 activation（§3.2.1 签名纪律）。
-- **禁止 `goals/get`（R3 逐行核实）**：宿主该 lookup 的 agent 解析被覆写为
+- **禁止 `goals/get`（逐行核实）**：宿主该 lookup 的 agent 解析被覆写为
   `resolveAgent → resume`，对冷会话等于**拉起 agent（写面）**，违反 design 17 §10.7
   「没有任何写面」；且 lookup 已保证 agent live，该 wire 永不返回
   `GOAL_AGENT_NOT_LIVE`，原「按错误码分级」的前提不成立。
@@ -293,7 +293,7 @@ identity）；账本不读、不存它——`CompleteLedgerOptions.bootToken` �
 每份观测 = 来源代 `generation`、`running` 三值、`subagents` 三值、goal 三值
 （`GoalFact | null | 'unknown'`）、可选 `candidate`（`{ kind?, watermark?, evidence:
 'shell-edge' | 'facts-watermark', completionSeq? }`；`kind` 缺省 = complete，承载 #12 的
-ask/request；`completionSeq` 由 R1 的宿主锚继承给出）、
+ask/request；`completionSeq` 由完成身份统一的宿主锚继承给出）、
 `baseline`、`boot: 'same' | 'fresh'`、可选 `factsMemory`（已吸收水位）。边沿所需的
 prev 位不在观测里（F26 已删 `prevRunning`/`prevGoalPhase`），由观测层 per-session
 转移记忆（`shellRunning`/`shellPending`；壳行的 `completed` 位**不参与**——通道行从不携带它，
@@ -350,7 +350,7 @@ boot 值闩锁的**合并字段**（原独立 `bootReported` 已删，二者机�
   是**内容水位**（记忆/围栏用），把 `updatedAt` 的活动前进也算成更高水位；候选若用它，
   「一条老完成 + 新活动」或权威运行位抖动就会被重提成一次新完成（实测假通知的形状）。
   observer 域的 `reconstructed` 时刻不在 host 域（不作完成证据：不发通知，也不产生完成点——完成点的唯一权威是官方位），同样不作证据。
-- **候选的可判性门（R2，2026-09）**：候选门是**逐观察 provenance**，不是快照级 liveness。
+- **候选的可判性门**：候选门是**逐观察 provenance**，不是快照级 liveness。
   `factsCompletionOf` 非 undefined 已证明这一行是 host 域、observed 的 `turn/end`——**事件型证据**
   自带判别符，`verdict !== 'ok'`（基线超时/宽限期内）只说明「此刻问不到宿主」，不能推翻一条已经
   读到的完成；把它当快照门会让窗口内已观察到的完成必须等恢复批才发（延迟上界 = 降级窗口长度，
@@ -360,7 +360,7 @@ boot 值闩锁的**合并字段**（原独立 `bootReported` 已删，二者机�
   候选 + 围栏）。**状态型证据不受影响**：running 位权威仍按 `factsUsable` 走；`factsContradictsIdle`
   反证守卫按**原始行**的最后已知运行位判（降级窗口亦然，W2）——状态是"现在如何"的主张，必须
   由活着的通道背书，事件是"发生过什么"。
-- **完成身份统一（R1，2026-09）**：同一物理完成在两条轨道上产出**同一个** `host:turn/<seq>`：
+- **完成身份统一**：同一物理完成在两条轨道上产出**同一个** `host:turn/<seq>`：
   facts 候选带 `lastTurnEnd.seq`（既有 W2，§3.2.7 ⑧）；壳完成边沿在原始 facts 行带**新鲜** host 域
   observed 完成时继承同一个 seq（`shellEdgeCompletionSeq`），同批 facts 已用带锚候选发过该完成时
   壳边沿不再重复发。继承必须过**两道门**，缺一即漏发：① 完成水位严格新于「已见水位与已消费水位的
@@ -377,7 +377,7 @@ boot 值闩锁的**合并字段**（原独立 `bootReported` 已删，二者机�
   观察命中，身份门失效 ⇒ 重复。
   **残留边界**：无锚完成在两条轨道上身份不同（页内 nonce vs 水位/宿主 seq），跨通道最坏一次重复
   （与 §3.2.7 ⑥/⑦ 同源）；同一无锚边沿跨页重放也会得到新 nonce（行内无身份可回解，durable receipt
-  是唯一网），同样最坏一次重复、绝不漏发。R2 与 R1 对 P2a/P2b 是**源无关**的：gateway 镜像解析同样
+  是唯一网），同样最坏一次重复、绝不漏发。候选门与完成身份统一对 P2a/P2b 是**源无关**的：gateway 镜像解析同样
   投影 `lastTurnEnd`。
 - **G5** facts 候选的水位必须相对 pending 吸收位与已通知位**严格前进**；壳候选已被
   armed ⇒ 无候选（同一次完成的延迟 completed 边沿不得再出）。无 pending 且壳已 armed 的
@@ -386,7 +386,7 @@ boot 值闩锁的**合并字段**（原独立 `bootReported` 已删，二者机�
   单调记水位（防止重新 running 解除武装后重提旧完成）；水位**严格更高 ⇒ 新完成**，照常消费
   并 emit（`consumeCompleteCandidate` 顺带把界推进到本次消费水位）。没有水位界的旧无界
   入口（`setArmed`）保持原汇合语义。这条界是无 running=true 解除武装出口的 facts-only
-  来源不被首次 arm 永久吞发的边界。**恢复批重播种（F30 精度）**：复位谓词 = 本批**显式携带**
+  来源不被首次 arm 永久吞发的边界。**恢复批重播种**：复位谓词 = 本批**显式携带**
   facts 输入、`usable=false`（stale/degraded/serviceable=false）**且来源级易失旗标
   `shellCompleteSinceFacts` 为真**——该旗标是「自上次可用 facts 批以来，壳轨确实 emit
   过无水位 complete」的单义证据，由 `applyObservationBatch` 依 reconcile 结果判定
@@ -433,7 +433,7 @@ goal.updatedAt)`；`notified` 单调只升。**settleFence（A2/A3-3/B3-1 边界
 releaseDeferred（#13）、基线/首见 outcome 的静默结清无水位路径——为该会话置一次性栏
 `{ boundary, seededSince? }`，`boundary` = 置栏观测当时该会话**已吸收**的 facts 水位
 （`observation.factsMemory`，不可知 = 0）。栏对 facts 候选的裁决按序：
-① `W ≤ boundary`（含 `W == boundary`，R5 用例钉扎）⇒ 必为被守卫的同一完成，
+① `W ≤ boundary`（含 `W == boundary`；用例钉扎）⇒ 必为被守卫的同一完成，
 吞并推进 `notified`；② 否则
 `seededSince !== undefined && W > seededSince` ⇒ 播种只到 ≤ boundary，这是被守卫完成
 的首次上报，吞并推进 `notified`；③ 否则（严格高于 boundary 且无播种补偿）⇒ 真正的新
@@ -505,7 +505,7 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
   durable 表在首帧写盘删除（不可恢复）；结算那一拍重跑剪枝 effect，易失轨不在此门内。
   **无桥形态（F11）**：`durableUnreadPruneAllowed` 把桥面 `'absent'`（500ms 探测预算耗尽仍无
   `desktopSsh`，浏览器/dev 直开）**视同已结算**放行（无远程来源，`live={local}` 即完整权威集合）；
-  预算内缺席（`'pending'`）与有桥未结算同样关门。**探测的长尾形态（2026-02 性能修订）**：
+  预算内缺席（`'pending'`）与有桥未结算同样关门。**探测的长尾形态**：
   500ms x 5 预算耗尽后不再停探，而是降频 30s 继续探——`'absent'` 判定与剪枝门语义一字不变，
   只把"迟到桥"的采纳延迟上界从"永不再试"收到 30s；否决的替代「预算耗尽即永久停探」：迟到挂载的
   `desktopSsh` 此后永不被采纳，更糟的是剪枝门已在"无桥"错觉下按 `live={local}` 删过远端
@@ -614,61 +614,23 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
 10. **pending 延迟全部完成通知**：会让普通来源失去即时性；压制须由 goal 身份/相位触发。
 11. **蓝点不武装（只在通知层压制）**：呈现/待办/徽标会与通知分叉；改为蓝点照常武装、六面同一呈现谓词压制（§3.2.5）。
 
-#### 3.2.7 开放项
+#### 3.2.7 开放项与已知边界
 
-1. **只读 activation 读**：上游提案或 chamber seed 插件（替换 §3.2.2 的 unknown-hold 静默窗口）。
-2. **实机验收与上游读**：打包态实机走查（§4）与本项第 1 条仍是剩余面。
-3. **侧边栏 goal 指示与 schedule/job 续跑扩展**：本期只做压制/标题/六面一致；续跑类来源（schedule/job）不在收敛器输入内（范围决策见 `docs/progress/STATUS.md`）。
+- **只读 activation 读**：上游提案或 chamber seed 插件（替换 §3.2.2 的 unknown-hold 静默窗口）——开放项见 `docs/progress/STATUS.md`。
+- **实机验收**：打包态实机判据见 §4 与 `docs/checklists/gui-acceptance-checklist.md`。
+- **侧边栏 goal 指示与 schedule/job 续跑扩展**：收敛器只做压制/标题/六面一致；续跑类来源（schedule/job）不在输入内（范围决策见 `docs/progress/STATUS.md`）。
 
-**已知边界/取舍（同步登记、逐条与实现核对；原第②条「ssh-instances 注册表损坏剪远端 durable 键」已随 F13/F16/A4/F19 闭合注销——degraded 期间不剪不落盘、补偿写不落空表、重启仍 degraded，契约见 05 §7.4 与 §3.2.4）**：
+**已知边界/取舍（契约）**：
 
-- ① **无桥形态剪枝门视为已结算（F11 已修）**：500ms 预算耗尽仍无 `desktopSsh` ⇒ `bridgeVerdict='absent'`
-  视同已结算放行（`live={local}` 完整）；预算内缺席与有桥未结算关门。实现见 §3.2.4。
-- ③ **reload 时两通道皆缺席的会话无 forget 事件**：`forgotten` 只对本代**观测过**的会话产生；历史缺席
-  留到下次 boot 的 7 天年龄卫生或来源级 `prune`（重现则按播种消费）。有界、不产生错误通知。
-- ④ **silent-settle 无水位 pending 仍置栏（保守）**：基线/首见 outcome 静默结清在 `pending.watermark`
-  缺席时同样置栏（boundary = 当时已吸收水位）；只吞同一次完成的下一条 facts 候选，不改「离线不补发」。
-- ⑤ **P1/P2a/P2b 保留边纪律统一（F14 已收口）**：三路一律「绑定 id 与投影/基线不符时保留待匹配」；
-  P1 边每会话至多一条、新事件覆盖，只在会话/行离开、显式 no-goal、`reset()`/`dispose()` 清除，
-  绑定守卫保证不落到别的 goal；P2a（design 17 §10.7）/P2b（§3.5）同规。第三 goalId drop 出口与
-  `awaitingBaselineOf` 已删。
-- ⑥ **跨批围栏重复（V5-B 已登记边界）**：触发链——facts 不可用期壳边沿通知 C1 并置栏（boundary=0）→
-  新回合 running 观测在**另一批**先到、该批无 `fenceSeed`，围栏按 #1 清掉 → facts 恢复批的 C4-X2 播种
-  登记无栏可依（no-op）→ facts 侧迟到的被守卫完成水位按 rule ③ 判成新完成再通知一次。用例
-  `completion-observation.test.ts` 的 `KNOWN-BOUNDARY(C4-X2 cross-batch)` / `(I1 fence cross-batch)`
-  各钉 2 个物理完成 / 3 条通知；主进程 5s 去重 claim 键为五元组（§3.3），两条投递身份 eventKey 不同
-  故不被吞。为何不做跨批围栏存活、计数式启发为何被否决见 §3.2.8；当前以有界重复接受。
-  **2026-09 R1/R2 收窄**：本项只在完成**无锚**时成立（facts 行缺席或只有已见旧行）；一旦原始行带
-  新鲜 host 域 observed 完成，壳边沿继承同一 `turn/end.seq`，两轨身份相等、不再重复。
-- ⑦ **facts 输入缺席（纯壳批）不触发复位补偿（F30 登记，开放边界）**：触发链——来源已有可用 facts 批
-  （`factsSeeded=true`）→ 某批 facts 输入**缺席**（与显式不可用不同）→ 壳轨 emit 无水位 complete 置栏
-  （`shellCompleteSinceFacts=true`，但无「不可用窗口」可复位）→ 恢复的首个可用批因 `factsSeeded` 仍真
-  而是非播种批、不登记 `fenceSeed`/`seededSince` → facts 侧同一完成水位高于栏 boundary，rule ③ 放行 ⇒
-  同一物理完成双发（壳 1 + facts 1；claim 键各带 eventKey，5s 去重不吞）。与 ⑥ 差别：⑥ 的栏被跨批
-  running 清掉，本项栏还在、只是恢复批无从补种。**建议修法**（未实施）：把「facts 缺席 → 可用」并入
-  非可用窗口，按 `shellNotifiedSinceFacts` 对确实通知过的会话再次播种补偿；影响面 = 该窗口内恰有一次
-  壳轨通知的来源会话，每条重复一条横幅（会话事实与蓝点不受影响）。
-  **2026-09 R1/R2 收窄**：有锚完成（原始行带新鲜 host 域 observed 完成）经壳边沿继承同一
-  `turn/end.seq`，两轨身份相等；无锚完成改发页内 nonce——失败方向从此固定为「最多一次重复」，
-  不再有共享常量身份造成的静默漏发。
-
-- ⑧ **运行身份的生产者（W2，2026-09 已落）**：facts 完成候选现在携带宿主 `turn/end.seq`
-  （`completion-observation.ts` 取 `factsRow.lastTurnEnd.seq`，非负安全整数才带），运行身份因此可产出
-  `host:turn/<seq>`（`notificationIdentityOf` 的 `host-turn` 分支——此前**只有消费没有生产者**，
-  所有完成都落回水位族）。seq 随候选进 durable `pending`（`PendingCompletion.completionSeq`，
-  `sanitizeNotificationPayload` 逐字段保留）并在释放时进入通知 ⇒ 延迟/被压制的完成也不会丢身份。
-  缺席（宿主不带 seq / 非法值）时形状与修复前**逐字一致**（水位族回退，无回归）。
-  **残留边界（2026-09 R1 收窄）**：壳边沿完成原本没有 host 事件 id，因此 ⑥/⑦ 的跨批重复不受
-  本项影响；R1 起壳边沿在原始 facts 行带**新鲜** host 域 observed 完成时继承同一个 seq（§3.2.3），
-  有锚完成的两轨身份相等、⑥/⑦ 对其闭合；仍无锚的完成（facts 行缺席/只有已见旧行）改发页内
-  nonce（唯一），只保留有界重复、不再共享常量身份——共享常量导致的**静默漏发**路径已消。
-  v5 载荷（`{v:5,records}`）不含 pending 段，故本次不动影子面。
-  **实机已证实（2026-09）**：本地 mux `session/follow` 快照的 `turn/end` 记录恒带宿主 `seq`——生产者的数据面
-  是线上现实，`notifiedRuns` 的 `host:turn%2F` 前缀只是它的下游读数（逐值证据见方案 §8）。
-- ⑨ **页内非事件的页代判别符（ask/request）**：`PAGE_GENERATION` 取自 CSPRNG 的 53 位安全整数（跨页必不同、
-  页内稳定），页内事件由 `localEventSequence` 区分。墙钟两条性质都不满足（同毫秒两次加载会撞、NTP 会回拨），
-  故身份模块的 `Date.now()` 预算为 **0**——行为面由 `notification-identity.test.ts` 的 CSPRNG
-  页代/跨页唯一性用例覆盖（原 W5 源码门随未读模型删除）。
+- ① **无桥形态剪枝门视为已结算**：500ms 预算耗尽仍无 `desktopSsh` ⇒ `bridgeVerdict='absent'` 视同已结算放行（`live={local}` 完整）；预算内缺席与有桥未结算关门。实现见 §3.2.4。
+- ② **ssh-instances 注册表损坏不剪远端 durable 键**：degraded 期间不剪不落盘、补偿写不落空表、重启仍 degraded（契约见 05 §7.4 与 §3.2.4）。
+- ③ **reload 时两通道皆缺席的会话无 forget 事件**：`forgotten` 只对本代**观测过**的会话产生；历史缺席留到下次 boot 的 7 天年龄卫生或来源级 `prune`（重现则按播种消费）。有界、不产生错误通知。
+- ④ **silent-settle 无水位 pending 仍置栏（保守）**：基线/首见 outcome 静默结清在 `pending.watermark` 缺席时同样置栏（boundary = 当时已吸收水位）；只吞同一次完成的下一条 facts 候选，不改「离线不补发」。
+- ⑤ **P1/P2a/P2b 保留边纪律统一**：三路一律「绑定 id 与投影/基线不符时保留待匹配」；P1 边每会话至多一条、新事件覆盖，只在会话/行离开、显式 no-goal、`reset()`/`dispose()` 清除，绑定守卫保证不落到别的 goal；P2a（design 17 §10.7）/P2b（§3.5）同规。第三 goalId drop 出口与 `awaitingBaselineOf` 不存在。
+- ⑥ **跨批围栏重复**：触发链——facts 不可用期壳边沿通知 C1 并置栏（boundary=0）→ 新回合 running 观测在**另一批**先到、该批无 `fenceSeed`，围栏按 #1 清掉 → facts 恢复批的 C4-X2 播种登记无栏可依（no-op）→ facts 侧迟到的被守卫完成水位按 rule ③ 判成新完成再通知一次。用例 `completion-observation.test.ts` 的 `KNOWN-BOUNDARY(C4-X2 cross-batch)` / `(I1 fence cross-batch)` 各钉 2 个物理完成 / 3 条通知；主进程 5s 去重 claim 键为五元组（§3.3），两条投递身份 eventKey 不同故不被吞。为何不做跨批围栏存活、计数式启发为何被否决见 §3.2.8；当前以有界重复接受。本项只在完成**无锚**时成立（facts 行缺席或只有已见旧行）；一旦原始行带新鲜 host 域 observed 完成，壳边沿继承同一 `turn/end.seq`，两轨身份相等、不再重复。
+- ⑦ **facts 输入缺席（纯壳批）不触发复位补偿**：触发链——来源已有可用 facts 批（`factsSeeded=true`）→ 某批 facts 输入**缺席**（与显式不可用不同）→ 壳轨 emit 无水位 complete 置栏（`shellCompleteSinceFacts=true`，但无「不可用窗口」可复位）→ 恢复的首个可用批因 `factsSeeded` 仍真而是非播种批、不登记 `fenceSeed`/`seededSince` → facts 侧同一完成水位高于栏 boundary，rule ③ 放行 ⇒ 同一物理完成双发（壳 1 + facts 1；claim 键各带 eventKey，5s 去重不吞）。与 ⑥ 差别：⑥ 的栏被跨批 running 清掉，本项栏还在、只是恢复批无从补种。修法与影响面见 `docs/progress/STATUS.md`。有锚完成（原始行带新鲜 host 域 observed 完成）经壳边沿继承同一 `turn/end.seq`，两轨身份相等；无锚完成改发页内 nonce——失败方向固定为「最多一次重复」，不再有共享常量身份造成的静默漏发。
+- ⑧ **运行身份的生产者**：facts 完成候选携带宿主 `turn/end.seq`（`completion-observation.ts` 取 `factsRow.lastTurnEnd.seq`，非负安全整数才带），运行身份因此可产出 `host:turn/<seq>`（`notificationIdentityOf` 的 `host-turn` 分支）。seq 随候选进 durable `pending`（`PendingCompletion.completionSeq`，`sanitizeNotificationPayload` 逐字段保留）并在释放时进入通知 ⇒ 延迟/被压制的完成也不会丢身份；缺席（宿主不带 seq / 非法值）时回退水位族。**残留边界**：壳边沿完成没有 host 事件 id（只有 facts 候选带 seq），因此 ⑥/⑦ 的跨批重复不受本项影响；壳边沿在原始 facts 行带**新鲜** host 域 observed 完成时继承同一个 seq（§3.2.3），有锚完成的两轨身份相等、⑥/⑦ 对其闭合；仍无锚的完成（facts 行缺席/只有已见旧行）改发页内 nonce（唯一），只保留有界重复、不再共享常量身份。v5 载荷（`{v:5,records}`）不含 pending 段，故不动影子面。
+- ⑨ **页内非事件的页代判别符（ask/request）**：`PAGE_GENERATION` 取自 CSPRNG 的 53 位安全整数（跨页必不同、页内稳定），页内事件由 `localEventSequence` 区分。墙钟两条性质都不满足（同毫秒两次加载会撞、NTP 会回拨），故身份模块的 `Date.now()` 预算为 **0**——行为面由 `notification-identity.test.ts` 的 CSPRNG 页代/跨页唯一性用例覆盖。
 
 #### 3.2.8 Rejected alternatives（完成身份与跨批围栏）
 
@@ -677,9 +639,8 @@ running 批之后重放更早的批，其 `keepFence` 早已随原批过去、�
 2. **计数式启发**（保留 N 次/等下一候选）：同样误吞真实新完成，且把丢发概率换成可调猜测参数。
 3. **本地伪造完成身份**（按水位区间/时间窗）：否决——本地输入只有水位，任何身份都是猜测；正确出口是
    上游只读「完成身份」面，落地前接受有界重复（§3.2.7 ⑥ 用例钉住时序与吞栏边界）。
-   **已改判并改（W2，2026-09）**：宿主事件序是**上游只读面**、不是本地伪造——`turn/end.seq`
-   本就是 host 域判别符，候选带上它（§3.2.7 ⑧），身份 = `host:turn/<seq>`；
-   壳边沿在**无新鲜未借出的锚**时仍无此判别符（有则继承，见 §3.2.3 R1），跨批重复照 §3.2.7 ⑥/⑦ 有界接受。
+   **宿主事件序**：宿主 `turn/end.seq` 是**上游只读面**、不是本地伪造——候选带上它（§3.2.7 ⑧），身份 = `host:turn/<seq>`；
+   壳边沿在**无新鲜未借出的锚**时仍无此判别符（有则继承，见 §3.2.3 完成身份统一），跨批重复照 §3.2.7 ⑥/⑦ 有界接受。
 4. **用内容水位当候选**（`completionWatermark = max(completedAt, updatedAt)`）：**已改判并改**。
    内容水位把「用户内容更新」与「运行位抖动」都算成更高水位，于是同一次老完成被反复重提
    （实测假通知的生产者）；候选只认 host 域 observed 的 `completedAt`（§3.2.3 候选证据门），
@@ -916,7 +877,7 @@ interface ChamberSettings {
     证据，事实刷新由 30s `reconcile()` 的 `session/list` 基线承担；真失败（close/error、end/error
     帧、握手超时）仍按 1s→30s 有界退避换代。旧行为每次换代都会关 socket + 置 `baselineTrusted=false`
     + 清 stable + `emit()` 整表，即每 45s 一次周期性全量失效（离线实测 8 分钟换代 9 次、寿命精确
-    45.0s，且每条命只收到一帧 `ready`）。**实测更正（2026-09-27）**：`$events` 的边沿事实**有
+    45.0s，且每条命只收到一帧 `ready`）。**实测更正**：`$events` 的边沿事实**有
     投递**，「本机只收 ready、事实全部来自 HTTP 基线」的记录作废：按观察者同款帧订阅 4 分钟收到
     18 帧 `api-session/status`、13 `added`、5 `removed`；与真实完成对齐的两次投递
     （`badge write` +7ms、`retire` +21ms）证明稳态完成由状态边沿即时触发、不必等 30s HTTP 基线。
@@ -924,7 +885,7 @@ interface ChamberSettings {
     facts 行变化可提示一次有界 unary 聚合刷新，但仅对**尚未 mounted** 的来源生效；已发布完整
     官方 ctx 快照的来源由该推送持续维护，提示不得再为同一来源发起重复 `session/list`。来源撤回
     mounted 状态后，后续 facts 提示重新允许补读。
-    **事实权威门（2026-10）**：`packages/renderer/src/host/facts-authority.ts` 是"哪个平面可以代表
+    **事实权威门**：`packages/renderer/src/host/facts-authority.ts` 是"哪个平面可以代表
     来源事实能力"的唯一所有者。判据 = 该来源的 runtime producer 行在场、**该来源自身连接可用**
     （投影里的 `connected`；断连来源的 producer 行只是上次已知状态，不能靠它压制 observer）
     且 `stale !== true`
@@ -1002,7 +963,7 @@ interface ChamberSettings {
   会话重新播种（吸收水位、不产候选）；其余 facts-only 会话照常按水位严格前进通知（否则永久
   丢发），从未播种来源的恢复批仍按 G2 对全体会话播种。无壳轨/壳轨在场但从未通知的形态不再
   触发复位（COR-1 收窄），详见 §3.2.3 G5。
-  **已闭合契约（F24）**：此前登记的「运行中由 `ok` 转 404 时旧行随空行集消失」
+  **已闭合契约**：曾登记的「运行中由 `ok` 转 404 时旧行随空行集消失」
   不再是开放项——`buildEmptySnapshot` 只在**首探 404** 出口使用；曾探到协议载荷后的 404
   一律走「保留既有行 + 标不可用」出口（上二分），无壳来源不被整体遗忘、held pending 不被清，
   404→ok 恢复为权威行集。**被否决的替代**：404 一律清成空权威集——它把无壳来源唯一的在场
@@ -1117,7 +1078,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   合并后的完成析取（`projectBadgeCount(correctionArms, runtimeFacts, archivedSessions)` 的
   `row.completed`）、goal/subagent 压制位与归档行排除集——`pending` 字段**不进**
   `projectBadgeCount`（它只决定窗口内的 pending 徽标）。
-- **归档行排除（2026-11）**：归档会话**不计数**。归档行在任何**视觉**呈现面上都不呈现
+- **归档行排除**：归档会话**不计数**。归档行在任何**视觉**呈现面上都不呈现
   「完成未读」——列表/搜索/悬停卡的状态槽留空（design 06 §3.4；诊断属性/a11y 名的同源缺口
   已登记在 design 06 §3.4/STATUS §1.2），待办区显式排除
   （§8.1），且归档行不可打开（点击只提示），用户无法通过查看把它清掉；计入 Dock 会留下
@@ -1188,11 +1149,11 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   「跳过」会把写**永久锁死**（每次都读回不一致、却每次都不写 ⇒ `applied:false` 死循环）；
   同值判定必须取**写后读回**值，`applied = readback == intent`。
 - *「跨通道别名表」*（`notification-outbox` 的 `{hostKey → canonical run id}` 关联窗）：
-  **已删除**（2026-09）。它存在的理由是「facts 完成没有宿主域判别符、只能按 host 时间关联」；
+  **已删除**。它存在的理由是「facts 完成没有宿主域判别符、只能按 host 时间关联」；
   身份换成 `completionSeq`（宿主 `turn/end.seq`）之后，带序的完成各**有自己的身份**，别名
   既不需要也不该赢。跨族关联由候选阶段的一次 `absorbCandidate` 与 outbox 的
   `associateCompletion` 完成；残留的存量键（`…outbox.aliases.v1`）在 outbox 构造时一次性
-  `removeItem`，失败方向仍是**重复而非丢失**（§3.2.7 ⑥/⑦）。**删除时的复核结论**：生产
+  `removeItem`，失败方向仍是**重复而非丢失**（§3.2.7 ⑥/⑦）。**删除结论**：生产
   facts intent 从不携带 `hostObservedAt`（只有壳边写它），旧 `hostKeyOf(facts)` 只能是
   `seq:<seq>`、壳边是 `at:<updatedAt>`——两族键**从不相等**，即这张表对 facts↔壳跨通道去重
   **从未生效**。因此删除不是「拿掉一层保护」，而是删掉一个从未兑现的承诺。
@@ -1217,67 +1178,8 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
 
 ## 4. 验证门与实机验收
 
-- `test:desktop`：chamber-settings 新键 normalize/validate/corrupt 用例；notifications
-  覆盖裁决链 enabled/kind/mode/requireHidden、claim/rate/active hard cap、honest
-  show/failed/timeout/hostile error、严格 `local | dsh-<raw-id> | gateway-<raw-id>` 来源
-  （`ssh-<raw-id>` 仅 legacy 输入别名，归一为 `dsh-<raw-id>`）、opaque proof
-  校验与 same-id replacement、active-only Map churn、notification-open
-  retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；badge 校验/裁决/平台门用例。
-- `test:renderer-shell`：`notification-projection` 单点裁决单测（两条证据、水位/武装两轨去重、首报播种、
-  INV1/#7 hold 与水位吸收、#2/#4 flush 与一次性标题、#3/#10/#11 drop/fail-open（#3 可达
-  origin 仅 `goal-none`/`goal-paused`/`goal-changed` 三个，旧 `goal-drop` 兜底已删）、
-  #9 直接 outcome、#12 ask/request 直通、#13 G4 释放、G1–G5、settleFence/结算守卫（围栏
-  边界含 `W == boundary` 必吞的 R5 钉扎）
-  （含 releaseDeferred 已被通知时的 settle-guard、boot=fresh 的 `forgetGoalKnown` 回归）、
-  INV6 幂等、TL1/TL2 窗口）；
-  `completion-observation` 观测组装单测（壳/facts 权威合并、候选归属、壳边沿语义
-  ——complete 次序与同 tick 去重、ask/request 值变化（含直切）、首报播种、断连重连的重放
-  不重复（注意**不是**「断连补发」，见 §3.5）、
-  baseline 空首帧与 `baselineDone` 合并后 pageBoot 只到首批（D4）、facts-only
-  subagentCount、C4-X3 stale 壳批不产 complete/ask/request 边沿（含 stale true→false
-  不补发）、C4-X2 恢复播种批对无 observed 水位行两种形态（行非 observed / 被 I1 挡下）
-  及行完全缺席也登记围栏（含无栏 no-op 对照、同批 `keepFence` 清栏豁免、跨批
-  `KNOWN-BOUNDARY` 各一条 2 完成/3 条钉住）、I1 不吸收水位与候选可重提、
-  代际门与批次落盘，含 `FORGOTTEN_SESSION_LIMIT + 1` 会话的 FIFO 越界用例）；
-  `complete-ledger`（账本状态/围栏边界 + 撤回/卫生，含 forgetSession/withdraw
-  同步清 goalKnown）与 `notification-store`（pending/outcomes 增量与清洗、旧 `unread.v4`/v2
-  一次性迁移与旧键清理）用例；
-  `badge-count` 投影用例（goal 与子代理压制、stale 守卫）；`frame-locale` 锁住
-  三条 goal 标题 key 与 App 调用点；`session-authority-wiring` 锁住唯一 reconcile 接线；
-  `unread-prune-roster-gate` 锁住 durable 剪枝门（degraded 与 rosterIncomplete 同档
-  优先否决、无桥缺席视同已结算、健康探针不可用 fail-closed，F13/F16/A4/V5-A）；
-  `session-facts-source` 的 legacy 404 二分用例：首探 404 空权威
-  （`404 producer: the probe delivers an EMPTY legacy snapshot (not undefined) so mode legacy is reachable`：
-  `rows` 空 / `cursor` 0 / `stale=false` / `serviceable=false`、`legacy` 档位可达）与
-  ok→404 保留既有行/游标并标不可用——持续 404 不清行、**同一用例内**再断言网关
-  恢复协议载荷后新快照重新成为权威行集（404→ok 自愈），恢复不是独立用例
-  （`404 after a good snapshot keeps the rows as presence evidence: unavailable legacy, never an authoritative empty set`）。
-- `test:sidebar`：`projectRuntimeFacts` 的 subagent 行排除与官方位透传/稀疏用例；
-  `completion-arm`（五条不变式 + 边界表逐行 + 官方位为真时臂无意义）；`goal-facts`（三值
-  解析/最后已知/activation 合并/身份签名）、`goal-activation`（事件制、有界重试、
-  触发矩阵、绑定 id 与投影不符时保留待匹配——含「第三个 goalId 期间保留、投影回到匹配 id
-  仍应用」的 F14 回归、缓存上限 2000/LRU/warn-once/`evictedCount` 诊断回归、
-  禁 `goals/get` 源文本锁）、`session-row-state`（两个门与压制后
-  state）与 `todo-attention` 的 goal 压制用例。
-- `test:control-plane`：wire 叶子 `packages/dsh-chamber-wire/src/session-state.ts`
-  的可选 capability（`session-state.goal` 绝不进 BASE/缺失不降级）与 `session-mux` 的 goal 白名单投影/
-  activation 路由用例。`test:gateway`：`session-state` 的 goal 合并/持久化（activation
-  剥除）、ready 边沿清空、goal 加法字段的 wire 往返与 capability 宣告。
-- `test:settings-bridge`：通知设置纯函数（模块 `notifications-settings.ts`；用例在
-  `test/settings/settings-groups.test.ts`：缺省回落/partial patch/未知键过滤/默认值
-  镜像）+ 通知失败原因映射（`test/settings/notify-test-result.test.ts`：成功不带原因、
-  失败保留宿主/OS 原文、空串不制造假原因、reject 路径同样如实）+ 既有套件（入口解析
-  不变——通知组不新增固定入口）。
-- `verify:i18n` 无 DRIFTED（settings-bridge 命名空间配对由
-  `typecheck:settings-bridge` 编译期强制）；`typecheck`；`build:renderer`；
-  **ARCHIVED（Electron 冻结）** `dist:desktop:mac` 打包态通知冒烟；现行 = Swift .app 打包态通知冒烟。
-- 最终 HEAD 的验证证据按 `CONTRIBUTING.md`/PR 模板给出；`docs/progress/STATUS.md`
-  只记未完成与取舍，不记测试计数。
-
-**实机验收（未完成）**：macOS 通知权限的打包态走查（拒绝态 → 设置页原因 +
-「打开系统设置」→ 用户打开后重试成功这条闭环，代码面完成）；文案定稿、
-打包态三形态（关窗/托盘/后台）+ 点击打开会话 + 窗口重建；徽标 macOS Dock 打包态
-三态（武装/解除/退役 + 重载与退出清零）；Windows 任务栏 overlay 门控（design 23 已冻结归档，不排期）。
+- **验证门**：`test:desktop`（chamber-settings 新键 + notifications 覆盖裁决链/未读徽标）、`test:renderer-shell`（`notification-projection` / `completion-observation` / `complete-ledger` / `notification-store` / `badge-count` / `session-authority-wiring`）、`test:sidebar`（`completion-arm` / `goal-facts` / `goal-activation` / `session-row-state` / `todo-attention`）、`test:control-plane` / `test:gateway`（`session-state` capability 与 `session-mux` 投影）、`test:settings-bridge`（通知设置纯函数与失败原因映射），加 `verify:i18n` / `typecheck` / `build:renderer` 与 Swift `.app` 打包态通知冒烟（Electron 腿 ARCHIVED，见 `../progress/electron-frozen.md`）。门清单与用例登记的单源 = `scripts/gates/gate-surfaces.json`；最终 HEAD 的验证证据按 `CONTRIBUTING.md` / PR 模板给出。
+- **实机验收**：macOS 通知权限的打包态闭环（拒绝态 → 设置页原因 +「打开系统设置」→ 用户打开后重试成功）、文案定稿、打包态三形态（关窗/托盘/后台）+ 点击打开会话 + 窗口重建、徽标 macOS Dock 打包态三态（武装/解除/退役 + 重载与退出清零）；判据与未完成项归 `docs/checklists/gui-acceptance-checklist.md` 与 `docs/progress/STATUS.md`。Windows 任务栏 overlay 门控随 design 23 冻结归档，不排期。
 
 ### 4.1 拒绝态的可见性与恢复入口（含被否决方案）
 

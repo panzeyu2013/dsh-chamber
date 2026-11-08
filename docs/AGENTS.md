@@ -15,14 +15,15 @@
 | [`docs/checklists/`](checklists/release-checklist.md) | 仅 procedure：按序执行、可勾选的验证步骤 | 版本值（tag / commit / 基线快照）、某次发布的叙述、门禁计数 |
 | [`docs/progress/STATUS.md`](progress/STATUS.md) | 唯一进度记录，只记 open 项（未完成 / 待验收 / 待裁 / 接受 + 判据与指针） | 不写什么、如何增删改见 [`progress/README.md`](progress/README.md) |
 | [`docs/progress/TODO.md`](progress/TODO.md) | 未排期计划与想法（A 上游 / B 平台 / C 功能 / D 工程 + 触发 / 范围 / 退出） | 进度状态、验收结果 |
-| [`docs/progress/deviations.md`](progress/deviations.md) | 双 flavor 差异结论与证据（S/T/P/G/D） | 待办计划；open 项进度只在 STATUS |
+| [`docs/progress/deviations.md`](progress/deviations.md) | 冻结前的双 flavor 差异结论与证据（S/T/P/G/D；冻结后只读历史参考） | 待办计划；open 项进度只在 STATUS |
+| [`docs/progress/electron-frozen.md`](progress/electron-frozen.md) | Electron flavor 冻结唯一登记面：范围 / 归档清单 / 仍共享契约 / 禁用面 / 复活清单（历史参考） | 进度状态、计划细节、完成叙事 |
 | [`progress/README.md`](progress/README.md) | 进度体系规则、状态词、更新与回写流程 | 业务内容 |
 | [`docs/deploy/`](deploy/deploy-gateway.md) | 运维操作手册（Gateway 部署、远程 dsh 实例持久化） | 设计理由（归 design）、发布叙述 |
 | [`packages/*/README.md`](../packages/control-plane/README.md) | 包契约：职责、边界（做什么 / 不做什么）、主要模块、测试入口、已知限制 | 设计全文、其他包事项、可机械查到的清单 |
-| 生成块 / GENERATED | 机器单源的投影（[`registry.json`](../scripts/upstream/registry.json) → `registry-views.mjs --write`） | 手改；只改单源再重生成 |
+| 生成块 / GENERATED | 机器单源的两个投影（[`registry.json`](../scripts/upstream/registry.json) → `registry-views.mjs --write`；[`gate-surfaces.json`](../scripts/gates/gate-surfaces.json) → `gate-workflow-views.mjs` 的 workflow 标记块） | 手改；只改单源再重生成 |
 | [`README.md`](../README.md)、[`CHANGELOG.md`](../CHANGELOG.md)、`docs/*.en-US.md` | 用户面与双语镜像 | 内部进度 / 决策叙述 |
 
-放置规则：决策 → design；进度 → STATUS；未排期 → TODO；运维 → deploy；包契约 → 包 README；常驻规则 → 根 AGENTS.md；文档规则 → 本文件。
+放置规则：决策 → design；进度 → STATUS；未排期 → TODO；运维 → deploy；包契约 → 包 README；常驻规则 → 根 AGENTS.md；文档规则 → 本文件；冻结范围 / 归档清单 / 复活清单 → `progress/electron-frozen.md`。
 
 ## 2. 写作规则
 
@@ -69,6 +70,7 @@
    pnpm run verify:i18n                             # 改过双语对时的结构 / 哈希检查
    node scripts/gates/run-checks.mjs static --list   # 该模式还要跑哪些门
    ```
+   > `--write` 只是重录记录；它不证明两侧语义等价——译文准确性是 review-only 义务（§6），结构对等也只覆盖骨架（标题层级 / 围栏 / 表格 / 注释）。
 5. **PR 证据**：Validation 表写实际执行的命令与结果（含 `verify-md-links` 报告文档数）、未验证什么；契约类改动写「被否方案」；纯文档 PR 仍需列出跑过的门。
 
 ## 6. review-only 义务（绿灯 ≠ 满足）

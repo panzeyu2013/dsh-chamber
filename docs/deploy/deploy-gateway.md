@@ -43,7 +43,7 @@ GitHub Releases全部可用版本**（稳定/预发布标记、发布日期、ga
 
 ## 3. 从直连 dsh 迁移到 Gateway（无缝延续旧数据）
 
-> 适用场景：此前按 [remote-dsh-instance.md](remote-dsh-instance.md) 以systemd直连部署dsh（数据在单元运行账号的 `~/.dsh`），现改由同一服务器的Gateway托管，旧会话 / 工作区 / 设置延续。
+> 适用场景：已按 [remote-dsh-instance.md](remote-dsh-instance.md) 以systemd直连部署dsh（数据在单元运行账号的 `~/.dsh`），现改由同一服务器的Gateway托管，旧会话 / 工作区 / 设置延续。
 
 先明确两件事，避免误以为数据丢失：
 

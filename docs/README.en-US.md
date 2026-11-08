@@ -43,7 +43,7 @@ The macOS installer comes from [GitHub Releases](https://github.com/panzeyu2013/
 
 - macOS (Apple Silicon): `dsh-chamber-<version>-macos-arm64.dmg`
 
-Currently 0.4.x: stable and beta channels are independent; Settings → Update can subscribe to preview (beta) updates (a user preference, off by default; once enabled it persists across app updates). See [CHANGELOG.en-US.md](CHANGELOG.en-US.md) for changes.
+Version and channel policy live in [CHANGELOG.en-US.md](CHANGELOG.en-US.md) and on GitHub Releases: stable and beta channels are independent; Settings → Update can subscribe to preview (beta) updates (a user preference, off by default; once enabled it persists across app updates).
 
 ### 2 · Open the app
 
@@ -104,7 +104,7 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 - Desktop notifications — native notifications for session completion/question/approval, clicking opens the session; toggle in Settings "Notifications"
 - Desktop updates — stable and beta use separate configs and feeds; Settings → Update can subscribe to preview (beta) updates (a user preference, off by default; beta builds also stay on the stable channel until the switch is on); silent checks, download after confirmation, install on quit (low-noise, no dialogs)
 - Sleep / background persistence — closing can hide to tray and keep running (or quit with confirmation); launch at login (macOS); reconnect on OS wake; keep-awake toggle
-- Chamber settings page — fixed Settings-shell entries: Connections / General; chamber-global and per-instance settings strictly separate
+- Chamber settings page — fixed Settings-shell entries: Connections / Desktop; chamber-global and per-instance settings strictly separate
 - Backend version tolerance — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash)
 
 ## FAQ
@@ -130,7 +130,7 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 |[docs/AGENTS.md](AGENTS.md)|Documentation standard (layering / writing / budgets / doc gates)|
 |[CHANGELOG.en-US.md](CHANGELOG.en-US.md)|Version history|
 |[design/01-overview.md](design/01-overview.md)|Design entry: consolidation principles, scope, removals|
-|[progress/STATUS.md](progress/STATUS.md)|Status, remaining deviations & validation record|
+|[progress/STATUS.md](progress/STATUS.md)|The single progress record: open items / criteria / pointers|
 |[README.md](../README.md)|中文README|
 
 ## Related projects

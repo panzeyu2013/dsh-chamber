@@ -59,7 +59,7 @@
 |系统浏览器出口（上游语义）：fixture `/embed-xfo`（XFO DENY）→ 上游**不承诺** XFO/TLS 失败探测（不要求 refusing/失败条）；external 按钮存在且可点、装载时**不自动开**、点击后 `window.open(逻辑地址或代理页 alias,'_blank','noopener,noreferrer')` 恰一次；代理页 external 用 `frame.externalUrl`（alias；解析中/attach 失败为 null 禁用），direct 用 target.url；观察到的上游失败条仅作证据|`W-15`|design 28 §16.7/§16.11|
 |关 tab 即释放：关页签后上游 BrowserBody/iframe 移除、无 pending（`aria-busy`/重建观察窗）；有 forward 时 alias 端口 ECONNREFUSED（未知不算已释放）；local 直连无 forward，不做 list 探针|`W-15b`|design 28 §16.5/§16.11|
 |壳 CSP frame-src 合同：desktop v2 精确源集（`blob:`+2 loopback+253 alias+裸 `http:`/`https:`，头≤8KB）PASS；v1 默认 `frame-src blob:` INFO（gateway 不放宽）；`'self'`/`*`/`data:`/通配/部分 alias/削弱 `frame-ancestors` FAIL|`SH-7`|design 28 §16.3/§16.11|
-|打包态 smoke：已构建 `release/<platform>-unpacked` 后运行 `packaged-ssh-smoke.mjs`（Xvfb 可）→ W-13…W-15b 真跑，含 W-14b 真实 SSH alias iframe；产物 report+shots；需要 display，不碰真实 userData/~/.ssh|`PKG-1`|design 28 §16.9/§16.11；scripts/gui-acceptance/README.md|
+|**ARCHIVED（Electron CDP 腿）** 打包态 smoke：已构建 `release/<platform>-unpacked` 后运行 `packaged-ssh-smoke.mjs`（Xvfb 可）→ W-13…W-15b 真跑，含 W-14b 真实 SSH alias iframe；现行 Swift `.app` 按 §4.2 真机/打包态执行；产物 report+shots；需要 display，不碰真实 userData/~/.ssh|`PKG-1`|design 28 §16.9/§16.11；scripts/gui-acceptance/README.md|
 |内嵌腿严格档：上述 `W-13`…`W-15b` 与 SH-7 的 v1 短头，未执行（INFO）一律改判 FAIL|`--require-embed`|plan §5 L4|
 
 `W-4` 控件**不带 `aria-expanded`**（上游只有会翻转的 `aria-label`）：按 `pickRailToggle`（`checks.mjs`）结构定位、用官方frame属性判效果；`W-4a` 判来源级整列表收拢（几何须可见），写偏好、只跑一次性实例。v2 内嵌腿的写入边界同 `W-4a`（含 W-13 前置的“建一次性工作区/会话”，只在 `--dev`）：`--dev` 允许开/关右栏与页签（布局状态），`--attach` 默认不代开、记 INFO；`--attach --attach-create-session` 只用于一次性/打包态 smoke；`W-14b` 只在活动来源是 ssh 且给 `--embed-port` 时驱动（给出端口即授权其持久化页签逻辑目标）。`W-15` 的 witness 会拦截产品触发的 `a[target=_blank]` 点击，因此验收运行不会真的弹出系统浏览器。
@@ -71,7 +71,7 @@
 - 首帧与切换：骨架→内容无FOUC/双骨架；侧栏、设置面在浅/深色下都不漏底、不叠字（design 06 §4.6）。
 - 设置面：导航高亮跟随、来源下拉显示当前来源、每页标题与分组层级正确（design 05 §5）。
 - 会话头视图 More/折叠（`entry-customization` 面）：先在实例里建/选一个工作区（一次性实例无工作区时会先拉起目录选择器）；打开含 ≥2 个视图的会话，窄列下被折叠的视图出现在 More 菜单；点「浏览」后设置面打开在「插件管理」分节；右栏 guide More 的「浏览」同一落点；侧栏 panel More 在桌面复合体**不出现**、gateway 官方侧栏出现（design 05 §5 / STATUS §4.2）。
-- 移动端 More/标签（触屏档）：会话头 More 命中盒 ≥44×44、长标签按上游 88px 省略、菜单行 44px 底线；判据 = `pnpm run acceptance:mobile` + 目检（design 17 §18.6；移动布局由上游前端提供）。
+- 移动端 More/标签（触屏档）：会话头 More 命中盒 ≥44×44、长标签按上游 88px 省略、菜单行 44px 底线；判据 = 真机抽检 + 目检（design 17 §18.6 真机项；移动布局由上游前端提供）。
 - 多来源侧栏：分组归属（来源 → 工作区 → 会话）、状态点、待办条带与角标不串行（design 05/06）。
 - 失败呈现：任何降级/不可达是否如实显示（比「没坏」更重要，design 03 §3.3）。
 - 插件刷新收敛（机械腿未覆盖：需真实安装流；判据 design 09 §3.7 / 15 §6）：装/启/卸一个 bundle 后不按 Cmd+R，
@@ -96,9 +96,9 @@
 |孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune）。判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测|design 06 §7、§11；design 08 §3.4、§6.4|
 |归档管理器与force清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§6、§13|
 |gateway形态（生产TLS、`/chamber/*`、移动端）|design 17、21 §9|
-|移动端Web面（**CDP 设备模拟半边**见 §0 的移动走查；真机触控档、安全区、键盘只能真机）|design 17 §18.6；机器侧 `pnpm run acceptance:mobile`|
+|移动端Web面（真机触控档、安全区、键盘只能真机；CDP 设备模拟半边见 §0 已标 ARCHIVED 的机械 B-mobile 行）|design 17 §18.6；机器侧 = native 真机/目检（§4.2）|
 |v2 内嵌面（Swift .app 一次；Electron 打包态随冻结归档）：远端 dsh+ssh / gateway+ssh 的 loopback 页面内嵌与关 tab 释放、上游 iframe BrowserBody 的 system-browser 出口（上游不承诺 XFO/TLS 失败 UI）、https 证书错误不绕过、跨源 cookie/登录、弹窗/下载/键盘焦点、远端页面不能改 chamber 状态|design 28 §16.8/§16.9；Swift 真机矩阵 design 25 §8.5|
-|Linux桌面 / Windows首版|design 22 §7、23|
+|**ARCHIVED（随 Electron 冻结）** Linux桌面 / Windows首版|design 22 §7、23（ARCHIVED）|
 
 ### 4.1 I-15 矩阵执行序（归并记录）
 

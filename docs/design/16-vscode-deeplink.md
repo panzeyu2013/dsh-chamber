@@ -165,7 +165,7 @@ vscode handler 为第一个实现；未来"在终端打开/浏览器打开"等�
   写进协议注册（executable+script 形态仅属 `process.defaultApp` 开发启动，已门控）；打包态 electron-builder
   `protocols: [{ schemes: ['dsh-chamber'] }]` 自动生成 mac `CFBundleURLTypes` / linux desktop `MimeType` / Windows 注册表项。
 - dev 深链测试：`electron-dev.mjs` 支持透传 argv 注入（URL 作为冷启动 argv），不依赖真实 OS 协议事件。
-- Windows（design 23 已解锁）：打包态同走无参数 `setAsDefaultProtocolClient`（注册表项写入为实证项，同目标幂等）；
+- Windows（design 23；**Electron/Windows 腿已随冻结归档**）：打包态同走无参数 `setAsDefaultProtocolClient`（注册表项写入为实证项，同目标幂等）；
   `open-url` 为 mac 专属事件，win/linux 由 `second-instance` argv + 冷启动 argv 扫描投递。
 
 ## 5. VS Code 可用性探测（默认口径）
@@ -322,7 +322,7 @@ detectVscodeAvailability(platform): { available: boolean }
 语义）、`typecheck`、`typecheck:open-in`、`test:sidebar` 回归、`build:renderer`、`verify:i18n`（无 DRIFTED）。精确冻结
 HEAD 的测试数字与分发证据只见 `docs/progress/STATUS.md`（设计文档只定义验证门，不登记数字）。
 **实机验收（未完成；不能由 Linux 构建替代）**：macOS 深链冷/热启动、打包态协议注册、N-ctx、local 源、VS Code 缺失、
-sshPort 非 22、托盘/退出在途、Windows 打包态深链冷/热启动（design 23 的 real-runner 矩阵）。
+sshPort 非 22、托盘/退出在途（Windows 打包态深链冷/热启动属 design 23 real-runner 矩阵，**ARCHIVED**）。
 
 ## 10. 边界与实施期核实项
 
@@ -333,7 +333,7 @@ sshPort 非 22、托盘/退出在途、Windows 打包态深链冷/热启动（de
   getter 每次实探；
 - 深链到不存在的路径 → VS
   Code 自会报错/开空目录（文案明示"不做路径校验"）；
-- Windows（design 23）：打包态协议注册走无参 `setAsDefaultProtocolClient`（§4.3），注册表项写入仍属**实证项**（同目标幂等）；
+- Windows（design 23；**Windows 腿 ARCHIVED**）：打包态协议注册走无参 `setAsDefaultProtocolClient`（§4.3），注册表项写入仍属**实证项**（同目标幂等）；
 - a11y：aria-label / tooltip / 键盘聚焦（click-through opt-in 条目必须可聚焦）。
 
 **已如实记录的剩余边界（仍然成立）**：

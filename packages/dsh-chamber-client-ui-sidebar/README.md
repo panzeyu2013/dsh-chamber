@@ -53,11 +53,9 @@ The shell declares and renders the three holes the alpha.2 official
   registered remote instance) renders in ONE equal list, grouped by source
   only. Source header = label + connection-status badge (active source
   highlighted); remote sources carry a stable accent derived from the source
-  id (hue hash), local keeps the default ink (the old header identity DOT is
-  gone — user feedback; identity rides the fold-glyph accent, the
-  active left inset and the rail dots); the rail renders the source color dots
-  (one named, operable button per source since the 2026-09-11 upstream
-  alignment — see Interactions).
+  id (hue hash), local keeps the default ink; identity rides the fold-glyph
+  accent, the active left inset and the rail dots; the rail renders the source
+  color dots as one named, operable button per source (see Interactions).
 - Sessions outside every workspace trail in one synthetic ungrouped bucket at
   the source's end (sessions only, no workspace actions); blank rows surface
   only while they are the source's current session (rendered as "New Session")
@@ -85,17 +83,14 @@ The shell declares and renders the three holes the alpha.2 official
   renders. It deliberately does NOT use the official `StateDot` `done` tone:
   that tone's `--dsw-alias-state-success-primary` is the very token of the
   source header's connection dot, so "session finished, unread" and "server
-  connected" painted the same green (2026-09 user decision; history: brand-blue
-  dot ≤0.2.4 → official `done` green in 0.3.0-beta.1 (T10) → brand blue again,
-  06 §4.3); no relative time cell is rendered (06 §4.3 —
-  `relativeTimeBucket` stays as a shared tool only). For the owning source, the
-  transferred `sidebar.session.row.leading` seat renders the official
-  active-Schedule occupant (ui-schedule's catalog-based SessionScheduleMark)
-  before the title; chamber keeps no fallback schedule indicator — the pinned
-  host no longer projects `schedule` into session projections (the fact lives
-  in the Host task catalog), so the old projection-based fallback chain was
-  deleted. Rows of foreign sources and search-result rows therefore carry no
-  schedule mark. State-dot
+  connected" would paint the same green (06 §4.3); no relative time cell is
+  rendered (06 §4.3 — `relativeTimeBucket` stays as a shared tool only). For
+  the owning source, the transferred `sidebar.session.row.leading` seat renders
+  the official active-Schedule occupant (ui-schedule's catalog-based
+  SessionScheduleMark) before the title; chamber keeps no fallback schedule
+  indicator — the pinned host does not project `schedule` into session
+  projections (the fact lives in the Host task catalog). Rows of foreign
+  sources and search-result rows therefore carry no schedule mark. State-dot
   priority and the current-session highlight (single-selection) are described
   under "Chamber third round (design 06)" below.
 - Workspace groups fold via the header chevron (session-count badge); fold
@@ -169,8 +164,8 @@ The shell declares and renders the three holes the alpha.2 official
   the dialog when it opens and returns to the opener when it closes; a source
   that vanishes or disconnects drops the armed confirm — EXCEPT while a reported
   failure is on screen, whose in-dialog `role="alert"` is then the only
-  explanation left and therefore stays until the user dismisses the dialog
-  (2026-09-11 review-fix). At most ONE chamber
+  explanation left and therefore stays until the user dismisses the dialog.
+  At most ONE chamber
   Modal layer is ever up, and that guarantee is a SYMMETRIC GATE on the
   openers, not a claim about the mask: the official Modal has no focus trap, so
   the nav stays tabbable behind every mask — the always-rendered orphan badge
@@ -195,10 +190,9 @@ The shell declares and renders the three holes the alpha.2 official
   entry point survives its own expansion.
 - Menus and header controls keep upstream's interaction but chamber's density:
   all three row/header menus (session kebab, workspace kebab, view options) pass
-  primitive's `compact` form — the v0.2.4 behaviour, restored after the
-  2026-09-11 alignment round had switched them to the official default (40px
-  rows / 14px labels) and `dense` (34px), which read a full size larger than
-  our own 26px rows; `closeOnPointerLeave` stays. The source header's built-in
+  primitive's `compact` form; the official default (40px rows / 14px labels)
+  and `dense` (34px) are deliberately not used, since they read a full size
+  larger than our own 26px rows; `closeOnPointerLeave` stays. The source header's built-in
   controls (view options / add workspace / search / archive manager) ride the
   `Tooltip` instead of a borrowed native `title`; every `sidebar.panellist`
   entry (the owning source's true entry, a mounted foreign source's published
@@ -351,7 +345,7 @@ session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and
   `orderServersForDisplay` (stored order first, unknown ids skipped,
   unlisted ids trail in projection order — a new source appears at the
   bottom until dragged).
-- View-preference persistence (06 §3, 2026-08 revision): fold state and the
+- View-preference persistence (06 §3): fold state and the
   ungrouped order live in ONE shared live store under one localStorage key
   (`dsh-chamber.sidebar.v1`, `packages/dsh-chamber-client-core/src/view-prefs.ts`) — a single vite-shared
   in-memory instance across every ctx's sidebar (`getViewPrefs`/
@@ -367,8 +361,7 @@ session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and
   running-subagent ring, the completed dots, then the polled running pulse);
   the pending map is the official ui-session pending-interactions registry
   (the same authoritative source the official ui-workspace tree consumes via
-  `useSessionPendingInteraction`; 0.1.2 removed
-  `SessionSummary.pendingInteraction`, wired 2026-09);
+  `useSessionPendingInteraction`);
   each source's own ctx reports its
   `sessions.list` projection (including the vendor lineage index's running
   subagent count per parent) through the generation-safe producer returned by
@@ -384,7 +377,7 @@ session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and
 
 - Logo row (wide/rail), New Session (rides this ctx's runtime action — always
   the current source), the wide/rail fold state machine (slide + class-driven
-  crossfade; the entrance animations are retired — design 06 §7), the pointer-followed scrollbar discipline, the foot
+  crossfade; no entrance animations — design 06 §7), the pointer-followed scrollbar discipline, the foot
   (`sidebar.footer.action` + `sidebar.settings`), i18n namespace `sidebar` (zh key source; `src/client/locales.ts`).
 - The macOS top strip (`.topStrip`): the hiddenInset titlebar floats the traffic
   lights over the column's top edge, so the strip reserves that band and carries
@@ -414,13 +407,14 @@ session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and
  `packages/dsh-chamber-client-core/src/gateway-runtime.ts` +
  `gateway-runtime-poll.ts`, reached through the
  `@dsh-chamber/dsh-chamber-client-core` `.` face (source-only; vite consumers
- bundle the real source). R4 P3 moved it out of this package and deleted
- `src/shared/`.
+ bundle the real source).
 - Consumer packages (settings-bridge, connections, git, layout, renderer)
   typecheck the REAL client-core sources through the node_modules workspace
- link + the client-core package exports: P4-4 (2026-09) deleted the handwritten
-  ambient mirrors (`src/ambient/*.d.ts`) — drift is impossible by construction
- now that the consumers compile this one source.
+ link + the client-core package exports; no handwritten ambient mirror exists,
+ so drift is impossible by construction now that the consumers compile this one
+ source.
 - The settings-bridge `remoteRuntimeStatusView` view mapping and its
   SettingsBridgeKey coupling stay in settings-bridge; nothing in this face
   imports settings-bridge.
+
+Test: `node ./scripts/test.mjs`.

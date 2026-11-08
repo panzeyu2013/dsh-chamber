@@ -6,7 +6,7 @@
 > chamber seed 保留为仓库级管理 rail（snapshot/create/enter/remove）；官方
 > `@deepseek-ai/dsh-experimental-forge-bundle`（P5b，opt-in）提供 agent 的
 > `create_worktree` 工具与 composer/restore UI，两套创建引擎共用同一个池、同一套行/放置。
-> 旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**，清空是 0.4.4 一次性历史迁移的前提（§7.4）；后续发布不再作为前提。
+> 旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**（§7.4；0.4.4 一次性历史迁移的清空前提——历史证据，不随本仓 pin 移动）。
 > 未完成门禁见 `docs/progress/STATUS.md`；实现分期见 `.tmp/worktree-union-plan/11-final-design.md`（过程文档）。
 
 ## 1. 边界与部署形态
@@ -28,11 +28,8 @@
 6. **P5b opt-in**：forge bundle 默认不启用；用户在实例前端 Plugins → More 开启
    “Change requests & worktrees”，启用/关闭需重启。chamber 不预置该 bundle，也不以
    自定义 profile 冒充默认（§7.2）。
-7. **node 已保证，不做回退形态**：Electron 由 control-plane 的 PATH shim / string-only
-   解析提供 `node`（绝不写 `process.execPath`）；Swift 用 sidecar 自带 node；远程用
-   bundle 默认的 `node` + 部署方 PATH。缺失 = fail-fast + 诊断，不设计 E1/E2 回退。
-8. **Swift 原生壳与 sidecar 保留**：不删、不迁 sidecar；node 分 flavor，P5b 在 Swift 与
-   Electron 两壳内都要验收（§7.3）。
+7. **node 已保证，不做回退形态**：Swift 用 sidecar 自带 node（Electron 归档参考由 control-plane 的 PATH shim / string-only 解析提供 `node`，绝不写 `process.execPath`）；远程用 bundle 默认的 `node` + 部署方 PATH。缺失 = fail-fast + 诊断，不设计 E1/E2 回退。
+8. **Swift 原生壳与 sidecar 是唯一出货形态**：P5b 在 Swift 壳内验收（§7.3；Electron 冻结归档，不再作为验收形态——见 `../progress/electron-frozen.md`）。
 9. **worktree 是目录，不是权限边界（上游语义）**：上游 `workingDirectory.set` 的契约是
    “切换目录，不改变现有进程或权限”；`sandboxPolicy` 的 `workspaceRoot` 始终取
    `session.header.cwd`（会话原始 workspace），池内 checkout 只有落在该根之下才可写。
@@ -98,7 +95,7 @@ Typert carrier 把普通业务异常归并为 `internal`，故所有方法都在
 - **只发布池内 checkout**：未注册 checkout 只有落在
   `<mainPath>/.agents/worktrees/` 之下才进入客户端 layout；池外未注册 worktree（包括旧
   `$DSH_HOME/worktrees` 残留、外部工具手工建的树）既不成行、也不变成 missing 行——
-  “不检测、不提示”是 0.4.4 一次性迁移的前提之一（§7.4），后续发布只保留该形态为基线。已注册 workspace 仍按 workspace 行关联
+  “不检测、不提示”是基线形态（§7.4；0.4.4 一次性历史迁移的前提——历史证据，不随本仓 pin 移动）。已注册 workspace 仍按 workspace 行关联
   （`workspaceId` 非空）；主 checkout 未注册时该 repo 没有派生行（§3.2）。
 - **孤儿/关联诊断**：注册 workspace 路径不可解析时，host 在快照 `errors` 里加一条逐行诊断
   （路径消失 = `path-unavailable`，兜底码 `workspace-path-failed`，带 `workspaceId`）；
@@ -296,8 +293,7 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与
   hover / 键盘焦点（`.rowActionsVisible`）揭示时 `inline-flex`，所以状态词静息不可见、随
   `+`/复制/删除一起换入，揭示前后动作簇位置不变（design 06 §7）。删除阻断理由
   （dirty/locked）仍由这条揭示面（状态词 + 删除钮 title）与删除对话框的 dirty 确认承载。
-  **取舍**：①静息文本胶囊（0.4.4 曾采纳，**已退役**：静息常驻噪声，用户裁决 hover-only；
-  上一轮「静息可读」的反馈记录保留在 git 历史里）；②状态词与动作簇分两处 state-slot 换出
+  **取舍**：①静息文本胶囊（否决：静息常驻噪声，用户裁决 hover-only）；②状态词与动作簇分两处 state-slot 换出
   （否决：同一行两套揭示路径，且静态计数徽标仍是行尾、机制重复）；③静息只留一个无文本
   色点/图标（否决：又引入一个需 hover 才解释的符号；上游静息形态本身就是中性分支字形）。
   会话行**不画** checkout 分支 glyph。命中盒=视觉盒（20px 动作钮的 24px 偏差与主行同一既有
@@ -655,17 +651,11 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - **filters**：forge 与 seed 使用同一两段 + 枚举 + required 语义（§2.3）；LFS/clean-smudge
   降级登记，发布说明写明手动 `git lfs pull`。
 
-### 7.3 Swift 保留与 node 分 flavor
+### 7.3 Swift 腿与 node 来源
 
-- **保留 Swift 原生壳与 sidecar**：不做 sidecar 移除，不改 design 25 的宿主结构；node 分
-  flavor——Swift 用 sidecar 自带的 node，Electron 用 PATH shim/string-only
-  `resolvePlainNodeExecutable()`（不写 `process.execPath`）。两 flavor 各自保证。
-- **P5b 双形态验收**：Swift 壳内与 Electron 壳内都要跑同一套 P0——四项 UI、同池三条、node
-  实际创建（打包态/Finder）；Swift 的 node 来自 sidecar，不额外注入。
-- **门禁**：不得删除/弱化既有门禁（`release-workflow-policy.test.mjs`、`gate-surfaces.json`、
-  `package.json`、`compiled-sidecar-smoke.mjs`、`remote-state-acceptance.mjs`、
-  `gui-acceptance/native.mjs`、`release.yml` 的 Swift 腿、packaging-closure 的 Swift 段）；
-  新增套件按 `gate-surfaces.json` 注册表登记；只加“P5b 双形态”验收。
+- **Swift 原生壳 + sidecar 是唯一出货形态**：node 来自 sidecar 自带（Electron 归档参考用 PATH shim/string-only `resolvePlainNodeExecutable()`，不写 `process.execPath`）；不改 design 25 的宿主结构。
+- **P5b 验收**：Swift 打包态（Finder 启动）跑 P0——四项 UI、同池三条、node 实际创建。
+- **门禁**：不得删除/弱化既有门禁（`release-workflow-policy.test.mjs`、`gate-surfaces.json`、`package.json`、`compiled-sidecar-smoke.mjs`、`remote-state-acceptance.mjs`、`gui-acceptance/native.mjs`、`release.yml` 的 Swift 腿、packaging-closure 的 Swift 段）；新增套件按 `gate-surfaces.json` 注册表登记；只加 Swift 腿 P5b 验收。
 
 ### 7.4 旧池发布前提与回滚
 
@@ -675,8 +665,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
      保留的会话**——归档是用户选择，不是删除前置）；
   2. 再对每棵树 `git worktree remove <path>`（必要时 `--force` 处理 dirty）并
      `git worktree prune`；**不是删目录**（删目录只会留下 admin 记录）。
-  P5b 是一次性历史迁移（随 P5b 那次正式发布执行，见 CHANGELOG）：CHANGELOG 发布说明与 STATUS 写明；从更早版本直接升级者按本节操作，之后的发布 checklist 不再把旧池清空列为阻断项。snapshot 只报池内，旧根残留
-  不变成行（§2.1）。升级前验证：升级后旧路径不出现在任何来源的 checkout 行，源仓库
+  旧池清空是一次性历史迁移（0.4.4，历史证据，不随本仓 pin 移动）：从更早版本直接升级者按本节操作，现行发布 checklist 不以旧池清空为阻断项；snapshot 只报池内，旧根残留不变成行（§2.1）。升级前验证：升级后旧路径不出现在任何来源的 checkout 行，源仓库
   `git worktree list` 无旧根。
 - **view-prefs 清理**：回滚/升级脚本清 `__checkout__` 前缀键与 `checkoutOrder`；正常升级
   无需迁移（旧键若存在，渲染侧跳过未知 path，体积可忽略）。
@@ -684,7 +673,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 
 ### 7.5 验收矩阵（V1–V21）
 
-合并/PR 门 = V1/V2/V3/V4/V5/V6/V16 的 dev Electron 子集 + PR CI + build:renderer；其余是发布门
+合并/PR 门 = V1/V2/V3/V4/V5/V6/V16 的 dev Swift 子集 + PR CI + build:renderer；其余是发布门
 （尤其 V8–V15、V17–V21）。未跑项按 STATUS 开账，不能用“代码已合”代替。
 
 | ID | 场景 | 判据 | 门 |
@@ -706,10 +695,10 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 | V15 | 源 workspace 删除 | 行消失，不出现幽灵 | Release |
 | V16 | 拖动/折叠/树/pin | 族内拖动、刷新保持；fold/tree/pin 一致 | Merge |
 | V17 | 窄栏/flat/空态/status-unknown | 无动作/不渲染行/空态/保守健康 | Release |
-| V18 | node 实际创建 | Electron 打包+Finder、Swift sidecar 各建一次 | Release |
+| V18 | node 实际创建 | Swift 打包态 + Finder 各建一次（node 来自 sidecar） | Release |
 | V19 | LFS/clean-smudge/required | 指针降级可解释，手动 git lfs pull 后可用 | Release |
 | V20 | 主 checkout 未注册/池注册 | 无行/无入口；池注册以 workspace 行存在 | Release |
-| V21 | Swift+Electron 双形态 | 各跑四项 UI、同池三条、node 创建 | Release |
+| V21 | Swift 腿完整验收 | 四项 UI、同池三条、node 创建（Electron 归档参考，不验收） | Release |
 
 ## 8. Rejected alternatives（统一模型与 P5b）
 

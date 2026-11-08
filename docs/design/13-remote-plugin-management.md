@@ -2,8 +2,8 @@
 
 > **ssh 后端插件编排；范围 = `{kind:'dsh', transport:'ssh'}` 目标**。
 > 本设计是 ssh 后端插件管理既有行为的权威（经桌面主进程 + provider exec 通道驱动远端 `dsh plugin`
-> CLI，并做 chamber 宿主包的 ready-time 分发；此前散落于 05 §7.4/§7.6、03 §2.2 与 STATUS 的契约
-> 实体在此补全）；模型与双后端契约的收敛权威在 design 21 §3，未完成门禁见 docs/progress/STATUS.md。
+> CLI，并做 chamber 宿主包的 ready-time 分发；契约实体以本文为准（05 §7.4/§7.6、03 §2.2 与
+> STATUS 引用本文））；模型与双后端契约的收敛权威在 design 21 §3，未完成门禁见 docs/progress/STATUS.md。
 > **范围（连接模型 v2，17 §2/§9.1）**：只服务 `{kind:'dsh', transport:'ssh'}` 目标——gateway
 > 目标（http/ssh）没有插件写面；只保留桌面同步的 seed cache 与 `/chamber/plugins/installed`
 > 读投影，不经本 exec 通道。只做
@@ -125,19 +125,17 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
 - 贯穿 schema（`TransportInstanceSpec.remoteDshHome`）/ 状态投影 / IPC / 双 ambient 类型；所有远端
   路径从它派生（白名单、shell 安全值，见 §7.2）；
 - 编辑 `remoteDshHome` 是 transport + exec identity 的 generation 边界：旧隧道、重连/探针与 exec
-  child 先被撤销，迟到的多步 exec spawn、日志、投影与结果均被 generation fence 丢弃，原先非 idle
-  的连接再用新路径重启；
+  child 先被撤销，迟到的多步 exec spawn、日志、投影与结果均被 generation fence 丢弃，非 idle
+  的连接按新路径重启；
 - ENOENT 在原始 stderr 上分类：`.ssh*` 命名的 remoteDshHome 不再因整行脱敏而把"文件不存在"误判为
   ssh 故障。
 
 ## 5. IPC 面（preload 白名单，05 §7.4）
 
-- 远程：`desktop_ssh_plugin_list`、`desktop_ssh_plugin_apply`（add/remove/restart）、
-  `desktop_ssh_seed_host_graph`、`desktop_ssh_plugin_materialize_add`（`add file:`）、
-  `desktop_ssh_plugin_materialize_add_pick`；
-- 本地：`desktop_local_plugin_list/add/remove` + `desktop_local_plugin_add_file`（本地路径包/归档
-  物化——取代已删除的 `desktop_pick_directory` 通道）；
-- 其他：`desktop_npm_search`（npm 搜索，best-effort）。
+- 远程：`desktop_ssh_plugin_list`（只读清单）、`desktop_ssh_seed_host_graph`（宿主包补种）；
+- 本地：`desktop_local_plugin_list`（只读清单）；
+- gateway：`desktop_gateway_plugin_sync`（seed-cache 手动同步，design 21 §6.11）。
+- **已退役（不存在，不要恢复）**：写面 `desktop_ssh_plugin_apply` / `desktop_ssh_plugin_materialize_add(_pick)`、`desktop_local_plugin_add/remove/add_file`、`desktop_npm_search`——写面退役依据见顶部基线，发布叙事见 `CHANGELOG.md`。
 
 ## 6. UI（连接设置页 · 插件管理）
 
@@ -154,7 +152,7 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
   同一个过滤（`applicableChamberPackages`）同时供给 ssh 的两个目标级门（`sshChamberGates`：
   needs-seed / restart-pending），因为远端探针对 `localOnly` 行合成 `installed:false`
   （**一次远端调用都不发**，"没问"不等于"远端没有"）。main 进程侧凡判定「那台机器上该有什么」的路径
-  （手动注入预检、ready-time 注入日志、桌面侧 gateway 上传源清单 `main.ts` 的
+  （手动注入预检、ready-time 注入日志、桌面侧 gateway 上传源清单 `host-assembly.ts` 的
   `localChamberHostPackageSources`）一律读 `portableChamberHostPackageSeeds`，绝不读完整注册表投影
   （`sourceDir` 为空的 localOnly 行会被误判为"构建产物缺失"；出货判定另用
   `builtChamberHostPackageSeeds`，空 `sourceDir` 先被拒——否则 `join('','dist','index.js')` 会落到
@@ -166,7 +164,7 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
   清单有/无 × installed/patched/live × seed-cache 漂移/缺项/整盘缺/未读 × 空 expected）。**数据源
   矩阵是契约**：LOCAL 目标的 expected 与本地列都读它自己的 profile 清单（`localList.chamber`），
   gateway/http/ssh 读桌面本机清单投影（ssh 一份来自 `loadSync` 已取的本地清单，gateway/http 一份来自
-  专用的本地清单读取；此前 ssh 的本地列恒为「未知」、探测失败还会清空表格），ssh 在远端
+  专用的本地清单读取），ssh 在远端
   探测成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。gateway 不再有
   packaged client plugin（mobile 适配包已退役），因此客户端插件行为零；不渲染 unknown 行，也绝不
   显示写死的包名。
@@ -191,7 +189,7 @@ host 包塞进普通插件 manifest schema。Git 客户端以每实例 `gitWorkt
   gateway / http 直连四来源按后端能力矩阵渲染同一组件，分叉仅在数据源与动作分发（design 21 §3）。
   ssh 面的同步差异/添加/已安装列表逐行移除/撤销最近变更行为在合体中逐字节保留；gateway 添加双通道
   （registry spec 直装 + 文件夹/归档直推）接线、「变更记录」区不在 UI 渲染（后端 journal/备份保留）、
-  恢复撤销仅 gateway；http 直连只读不变。本节与 §5 IPC 面仍为 ssh/远端行为的权威契约。
+  恢复撤销仅 gateway；http 直连只读不变。§5 是现行只读通道的权威清单；本节按顶部基线区分：读面条目现行，写面条目为历史契约记录（无对应实现）。
 
 ## 7. 安全
 

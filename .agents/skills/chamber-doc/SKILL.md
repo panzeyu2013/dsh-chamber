@@ -20,10 +20,9 @@ description: Use when creating, editing, moving, restructuring, or auditing dsh-
 
 1. 读 `docs/AGENTS.md` 第 1 节，给这条事实找唯一家。找不到就 grep 现有 owner：`grep -rn "<特征短语>" docs packages`。
 2. 只改 owner：design / 单源 / 脚本 → 生成块 → 引用页。不要从引用页反向改 owner。
-3. 一段一行；链接代替复述；不手抄清单目录（包清单、门清单、触点表指向单源）。
-4. 双语对同批改另一侧，结构签名必须一致（标题层级、围栏数、表格数、注释数），术语沿用既有译文。
-5. 移动 / 改名时同批修相对链接与锚点：锚点用 GitHub slug 或显式 `<a id>`。
-6. 验证（只读、可离线）：
+3. 写作规则（一段一行 / 链接代替复述 / 禁手抄目录 / 当前版本值单源）与双语结构要求以 [`docs/AGENTS.md`](../../../docs/AGENTS.md) §2 为准，本 skill 不复述。
+4. 移动 / 改名时按 [`docs/AGENTS.md`](../../../docs/AGENTS.md) §5 第 3 步同批修相对链接与锚点（锚点用 GitHub slug 或显式 `<a id>`）。
+5. 验证（只读、可离线）：
 
 ```bash
 node scripts/gates/verify-md-links.mjs          # 相对链接与锚点，退出 0
@@ -32,7 +31,7 @@ pnpm run verify:i18n                             # 双语结构/哈希差异（�
 node scripts/gates/run-checks.mjs static --list  # 该模式还要跑哪些门
 ```
 
-7. 重录双语记录用 `pnpm run verify:i18n -- --write`（该门只支持整份记录重录，没有按对写入）；并行批次若约定由协调者统一重录 `docs/i18n-record.json`，不要抢同一次写。
+6. 重录双语记录用 `pnpm run verify:i18n -- --write`（该门只支持整份记录重录，没有按对写入）；并行批次若约定由协调者统一重录 `docs/i18n-record.json`，不要抢同一次写。
 
 ## 陷阱
 

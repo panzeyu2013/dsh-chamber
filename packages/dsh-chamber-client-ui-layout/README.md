@@ -69,3 +69,5 @@ The renderer's `chamber-entry.ts` registers this package's `/client` in the
 composite boot in place of the official layout; `vite.config.mjs` aliases
 `@dsh-chamber/dsh-chamber-client-ui-layout(/client)` to this source tree and resolves
 the vendor deep subpaths through the `deepseekSource` plugin.
+
+Test: `node ./scripts/test.mjs`.

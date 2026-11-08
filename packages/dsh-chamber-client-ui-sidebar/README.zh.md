@@ -44,7 +44,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   实例）在**同一张平列表**里仅按来源分组呈现：来源组头（标签 + 连接状态
   徽标，当前来源高亮）→ workspace 组 → session 行。远程来源按来源 id 派生
   稳定 accent 色（hue 哈希）；本地来源用默认色。rail 渲染来源色点
-  （2026-09-11 上游对齐起为每个来源一个命名的可操作按钮，见「交互」）。
+  （每个来源一个命名的可操作按钮，见「交互」）。
 - 不属任何 workspace 的游离会话落在来源末位合成的一个**未分组**桶（仅
   session 行，无 workspace 操作）；blank 行只在它们**既是该来源当前会话、
   又真的被投影**期间进入列表（以 "New Session" 呈现）——该来源还有指向
@@ -64,12 +64,11 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   品牌蓝点**（`.stateCompleted`，6px 实心）——与固定待办条带同一枚标记，**不取**
   官方 `StateDot` 的 `done` 绿：该色与来源头连接状态绿点同 token
   （`--dsw-alias-state-success-primary`），"会话完成未读"与"服务器已连接"会同色
-  （2026-09 用户裁决；沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1 T10 官方绿点 →
-  本轮回到蓝点，06 §4.3）；不渲染
+  （2026-09 用户裁决，06 §4.3）；不渲染
   相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。owning 来源的
   **行首座席（标题之前）**渲染官方 active-Schedule occupant（ui-schedule 的 catalog 版
-  SessionScheduleMark）；chamber 不保留回落标记——现行 pin 的宿主不再把 `schedule`
-  投进会话投影（事实在 Host 任务目录），基于旧投影的回落链已删除。外来源会话行与
+  SessionScheduleMark）；chamber 不保留回落标记——现行 pin 的宿主不把 `schedule`
+  投进会话投影（事实在 Host 任务目录）。外来源会话行与
   搜索结果行因此都不带定时任务标记。状态点优先级与当前会话高亮（全局单选）见下方
   "第三轮（设计 06）"。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
@@ -127,8 +126,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   （按行的内联错误行照旧保留，但被删行已卸载后它无处可显，上游同样在对话框里报失败）。
   打开时焦点落进对话框、
   关闭时回到开启者；来源消失或断开即撤销已武装的确认——**除非**对话框里正显示一条已报告
-  的失败：那条 `role="alert"` 此时是仅存的解释，故随对话框保留到用户自行关闭
-  （2026-09-11 review-fix）。任何时刻最多只有**一层**
+  的失败：那条 `role="alert"` 此时是仅存的解释，故随对话框保留到用户自行关闭。
+  任何时刻最多只有**一层**
   chamber Modal，而这条保证是加在**开启点**上的**对称闸门**、不是关于遮罩的说法：官方
   Modal 没有焦点陷阱，nav 在每一层遮罩之后仍可 Tab 到（含始终渲染的孤儿徽标与它旁边的
   常驻清理钮、来源头控件）——因此四个开启点（武装本确认、武装归档活动确认、打开归档管理器、打开添加工作区浏览器）在其余任
@@ -143,9 +142,9 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   展开后**同一个**控件给 `sessions.collapse` 并上报 `aria-expanded`——隐藏计数
   取自与展开无关的窗口，故收起入口不会被自己的那次展开吃掉。
 - 菜单与来源头控件：交互按上游、**密度按 chamber**。三个菜单（session kebab /
-  workspace kebab / 视图选项）一律用原语的 `compact` 形态——这是 v0.2.4 的行为，
-  2026-09-11 对齐轮曾改成官方默认（40px 行 / 14px 标签）与 `dense`（34px），
-  比我们自己 26px 的列表行整整大一圈，故恢复；`closeOnPointerLeave` 保留。
+  workspace kebab / 视图选项）一律用原语的 `compact` 形态；官方默认（40px 行 /
+  14px 标签）与 `dense`（34px）比我们自己 26px 的列表行整整大一圈，故不用；
+  `closeOnPointerLeave` 保留。
   来源头内建控件（视图选项/添加工作区/搜索/归档管理器）改骑官方 `Tooltip`（不再借用原生
   `title`）；每个 `sidebar.panellist` 入口（owning 来源的真身 / 已挂载外来源的已发布
   条目 / 未挂载来源的默认回落时钟）各加一枚紧凑动作、沿用同形 Tooltip，
@@ -255,7 +254,7 @@ pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-
   id 键控）；锚点数学为带单测的 `nextServerOrder` 纯函数，渲染序经
   `orderServersForDisplay` 应用（存储序优先、未知 id 跳过、未列出 id 按
   投影序尾随——新来源出现在列表底部直到被拖走）。
-- **视图偏好持久化（06 §3，2026-08 修订）**：折叠状态与未分组序存于单键
+- **视图偏好持久化（06 §3）**：折叠状态与未分组序存于单键
   localStorage（`dsh-chamber.sidebar.v1`，`packages/dsh-chamber-client-core/src/view-prefs.ts`）之上的
   **共享实时存储**——vite shared chunk 下所有 ctx 的侧边栏共享同一内存
   实例（`getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs`），写透
@@ -267,8 +266,7 @@ pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-
   三角，优先级高于实时子 agent 运行环、已完成圆点与轮询运行脉冲）走
   运行时事实通道：pending 映射取自官方 ui-session pending-interactions
   注册表（与官方 ui-workspace 树经 `useSessionPendingInteraction` 消费的
-  同一权威源；0.1.2 移除 `SessionSummary.pendingInteraction` 后于 2026-09
-  接线）；每个来源自己的 ctx 把 `sessions.list` 投影（含 vendor
+  同一权威源）；每个来源自己的 ctx 把 `sessions.list` 投影（含 vendor
   血缘索引的每父会话运行中子 agent 计数）经
   `chamberBridge.registerInstanceRuntimeProducer(sourceId, sourceFingerprint)` 返回的
   generation-safe producer 上报，App 层合并进
@@ -279,7 +277,7 @@ pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-
 ## 保留的官方外壳几何
 
 - logo 行（wide/rail）、New Session（走本 ctx 的运行时动作——恒为当前来源）、
-  wide/rail 折叠状态机（滑动 + 类驱动的交叉淡化；入场动画整组已退役，见 design 06 §7）、跟随指针的滚动条
+  wide/rail 折叠状态机（滑动 + 类驱动的交叉淡化；无入场动画，见 design 06 §7）、跟随指针的滚动条
   纪律、foot（`sidebar.footer.action` + `sidebar.settings`）。
 - macOS 顶部带（`.topStrip`）：隐藏标题栏下红绿灯浮在列顶，故该带预留这一条并
   把面板开关停在带内（上游 ui-sidebar 同形：52px 带、负 margin 抵消 root 内距，
@@ -303,11 +301,12 @@ pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-
  `packages/dsh-chamber-client-core/src/gateway-runtime.ts` +
  `gateway-runtime-poll.ts`，经
   `@dsh-chamber/dsh-chamber-client-core` 的 `.`
- 面到达（免构建；vite 消费者打真实源码）。R4 P3 已将其迁出本包并删除
- `src/shared/`。
+ 面到达（免构建；vite 消费者打真实源码）。
 - 消费包（settings-bridge/connections/git/layout/renderer）经 node_modules
  workspace 链接 + client-core package exports 对**真实 client-core 源码**
-  做 typecheck：P4-4（2026-09）删除手写 ambient 镜像（`src/ambient/*.d.ts`）——消费方直接
+  做 typecheck；无手写 ambient 镜像，消费方直接
   编译这一份源码后漂移在构造上不可能。
 - settings-bridge 的 `remoteRuntimeStatusView` 视图映射与其 SettingsBridgeKey
   耦合留在 settings-bridge；本面不 import settings-bridge。
+
+测试：`node ./scripts/test.mjs`。

@@ -5,7 +5,7 @@
 > = 归档参考**；**Swift 腿更新链现行**（Sparkle，版本单源 = `macos/Package.swift`，契约见
 > [`25-macos-swift-native-shell.md`](25-macos-swift-native-shell.md) §7）。原文保留，不删除。
 
-> **dsh-chamber 应用本体更新；macOS/Windows/Linux 按运行形态门控**——本文是应用更新通道的权威行为契约：GitHub Releases feed、后台静默检查、settings 低调提示、用户明确确认后才下载、退出时安装 + 界面内「重启并安装」、beta → stable 通道模型与发布侧纪律；未完成门禁见 `docs/progress/STATUS.md`。
+> **归档参考（Electron / electron-updater 半边）**：本文保留归档腿的既有行为与发布侧纪律（GitHub Releases feed、后台静默检查、settings 低调提示、用户明确确认后才下载、退出时安装 + 界面内「重启并安装」、beta → stable 通道模型）；**现行更新契约见 [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) §7（Sparkle）**；未完成门禁见 `docs/progress/STATUS.md`。
 
 ## 1. 需求与动机（当前形态）
 
@@ -16,12 +16,12 @@
 
 | 项 | 当前形态 | 证据 |
 |---|---|---|
-| 更新器依赖 | `electron-updater`（desktop dependencies） | `packages/desktop/package.json` |
-| 主进程更新代码 | `packages/desktop/updater.ts` 控制器 + `main.ts` trustedIpc handler + preload `update` 面 | 同左 |
+| 更新器依赖 | `electron-updater`（desktop dependencies；**Electron 更新腿归档参考**——共享控制器的纯函数仍被 Swift `update-headless.ts` 复用，见 [`../progress/electron-frozen.md`](../progress/electron-frozen.md) §2） | `packages/desktop/package.json` |
+| 更新代码 | `packages/desktop/updater.ts` 共享控制器（纯函数被 Swift 腿复用）+ `electron/main.ts` trustedIpc handler（**归档面**）+ `electron/preload.cts` `update` 面（**归档面**） | 同左 |
 | 更新产物 | mac target = `dmg` + `zip`（dmg 留首装、不产 update-info：`writeUpdateInfo: false`）；win `nsis` `differentialPackage: false` + `useZip: false`（不发 blockmap、保 7z 高压缩） | desktop `build` 配置 |
 | 发布 feed | build 走 `--publish=always`（`GH_TOKEN`）把产物含 feed 上传进 draft release；`--publish=never` **不生成** update-info yml | `.github/workflows/release.yml` |
 | 签名 | macOS 正式发布强制 Developer ID + 公证 + stapler + spctl；Windows 未签名（SmartScreen 提示，§7 的明确让步） | release.yml、§7 |
-| 版本 | 根 `dsh-chamber` + 全部 `@dsh-chamber/*` 包一致 bump（20 个）；三个 fork 副本保持上游基线版本 | `release-preflight.mjs`、§8 |
+| 版本 | 根 `dsh-chamber` + 全部非 fork `@dsh-chamber/*` 包一致 bump（包清单与数量不手抄：`release-preflight.mjs --versions-only` 动态发现，见 §8）；三个 fork 副本保持上游基线版本 | `release-preflight.mjs`、§8 |
 
 
 ## 2. 目标与边界
@@ -49,7 +49,7 @@
   退出腿在清理超时走 `app.exit(1)` 时会跳过 onQuit 安装等），因此 `downloaded`
   状态行提供**「重启并安装」**主按钮（IPC `dsh-chamber:update-restart` →
   `updater.restartAndInstall()` → electron-updater `quitAndInstall()`）。平台范围：**macOS + Windows**；**Linux 一律不提供**（AppImageUpdater 点击瞬间原位替换并同步拉起新实例，新实例必被仍存活的老实例吸收——自动重启结构性落空；Linux 保留退出腿）。门：`downloaded` + 安装未被阻塞（mac 签名），主进程在 IPC 边界再强制一次（与 `download()` 同纪律）；成功即 fire-and-forget（单飞闸不复位），同步失败不回退 phase（保持 `downloaded` 原位重试），`error` 事件（含 arm 后异步失败）释放单飞闸；arm 后宽限期未退出由 no-event watchdog（`restartWatchdogMs`，默认 60s）释放单飞并给如实文案。重启失败经一次性 `restartFailureText` carry（脱敏）呈现，phase 保持 `downloaded` 并渲染重启专用失败行 + 原位重试。
-    **关窗次序不变量（缺陷修复）**：`quitAndInstall` **先关闭全部窗口、关完才退出，不走正常退出序列开头**（Electron 43.4.0 typings `AutoUpdater#before-quit-for-update` 明文「`before-quit` 不会在所有窗口关闭前发出」；43.4.0/darwin 探针证实 `before-quit-for-update` 与窗口 `close` 都在 `quitAndInstall()` 内部、早于 `before-quit`）。而「关窗到托盘」（design 14 D1，默认 `hide-to-tray`）以 `quitRequested`（`before-quit` 置位，即关窗**之后**）为放行条件——退出腿的关窗会被 hide 吞掉：页面消失、进程永久留存、更新永不安装。故控制器在 `quitAndInstall()` 前同步回调 `onQuitAndInstallArmed`，主进程在该回调武装 `updaterQuitArmed`（关窗在该调用内部，返回后再置位已晚；拒绝路径不回调，无「假武装」），武装期间 `shouldHideToTray` 恒 false；重启失败或停滞（`restartFailureText` / 相位离开 `downloaded`）立即撤回，并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面；窗口若**重建**，同一次 `UPDATE_STATE_CHANGED` 推送会落在还没装监听的 renderer 上，靠 renderer 挂载时的 `UPDATE_STATE` pull 补齐）。回归契约（main.ts + 武装标志生命周期）+ `test/local-state/chamber-settings.test.ts`（含 `shouldUpdaterQuitTakeOver` 真值表）+ `test/desktop-shell/updater-restart-install.test.ts`（native 退出事件必须把停滞 watchdog **重锚**——不是清除：它是该路径单飞闸唯一释放者，清掉会「永远 restart in progress」，重锚则既不中途误报停滞、又保证腿走不完时仍有如实文案与就地重试）；真实 macOS 端到端仍是实机门禁（§9）。
+    **关窗次序不变量（缺陷修复）**：`quitAndInstall` **先关闭全部窗口、关完才退出，不走正常退出序列开头**（Electron 43.4.0 typings `AutoUpdater#before-quit-for-update` 明文「`before-quit` 不会在所有窗口关闭前发出」；43.4.0/darwin 探针证实 `before-quit-for-update` 与窗口 `close` 都在 `quitAndInstall()` 内部、早于 `before-quit`）。而「关窗到托盘」（design 14 D1，默认 `hide-to-tray`）以 `quitRequested`（`before-quit` 置位，即关窗**之后**）为放行条件——退出腿的关窗会被 hide 吞掉：页面消失、进程永久留存、更新永不安装。故控制器在 `quitAndInstall()` 前同步回调 `onQuitAndInstallArmed`，主进程在该回调武装 `updaterQuitArmed`（关窗在该调用内部，返回后再置位已晚；拒绝路径不回调，无「假武装」），武装期间 `shouldHideToTray` 恒 false；重启失败或停滞（`restartFailureText` / 相位离开 `downloaded`）立即撤回，并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面；窗口若**重建**，同一次 `UPDATE_STATE_CHANGED` 推送会落在还没装监听的 renderer 上，靠 renderer 挂载时的 `UPDATE_STATE` pull 补齐）。回归契约（`electron/main.ts`（归档面）+ 武装标志生命周期）+ `test/local-state/chamber-settings.test.ts`（含 `shouldUpdaterQuitTakeOver` 真值表）+ `test/desktop-shell/updater-restart-install.test.ts`（native 退出事件必须把停滞 watchdog **重锚**——不是清除：它是该路径单飞闸唯一释放者，清掉会「永远 restart in progress」，重锚则既不中途误报停滞、又保证腿走不完时仍有如实文案与就地重试）；真实 macOS 端到端仍是实机门禁（§9）。
   **原生退出桥与兜底（同一条缺陷的另一半）**：控制器订阅原生 autoUpdater 的 `before-quit-for-update`（在 `quitAndInstall()` 内部、关窗之前发出——43.4.0/darwin 实测），经 `onNativeUpdaterQuitting` 回调宿主：①**每次**原生退出都重新武装关窗豁免（覆盖「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；②宿主在宽限期（5s）后若进程仍未进入退出序列（`before-quit` 未到）就自行 `app.quit()`，走正常 before-quit/will-quit 清理完成退出。**此刻自退安全**：该事件只在 Squirrel 完成 staging 后发出（MacUpdater 仅在 `squirrelDownloadedUpdate` 或原生 `update-downloaded` 之后才调原生 quitAndInstall），退出即安装。**「原生腿关窗后走不到 `before-quit`」仍是未复测的观察**：typing 只保证 `before-quit` 不在所有窗口关闭前发出；兜底两种情形都安全（`before-quit` 会到时 `quitRequested` 已置位，`shouldUpdaterQuitTakeOver` 返回 false），§9 实机门禁顺带记录。原生 autoUpdater 的解析严格门控在 Electron 运行时内（`process.versions.electron`）且仅在宿主提供回调时进行：`electron` 说明符在普通 node 下解析到 npm 包，dist 缺失时会触发 ~100MB 二进制下载（实测踩中），绝不允许出现在测试路径上。
   **退出腿与重启腿对 `app.exit(1)` 的语义不同**：超时强制退出只跳过退出腿的 onQuit 安装；重启腿 NSIS 安装器已 detached 先行、AppImage 已原位替换，安装照常完成；用户不点击则退出时安装仍开启。
 - **macOS 签名前置（非 UX 分支）**：Squirrel.Mac（electron-updater mac 安装器）**要求有效 Developer ID 代码签名**。正式发布强制签名/公证/stapler/spctl，失败阻断公开；`updater.ts` 启动时仍以 `codesign -dv` 探测签名 authority（读 stderr、异步免阻塞启动），非正式 ad-hoc 包置 `installBlockedReason`，settings 响亮提示手动安装，**绝不假装自动安装可用**。dry-run ad-hoc 资产不上传/公开。
@@ -118,7 +118,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
     （`UpdateState.revision` 每次状态推进 +1、IPC 载荷 `{ revision }`、主进程拒收过期回答并重推当前状态，
     见 §5），**不引入任何对话框**：护栏只在协议层。
   - 触发条件已到（原「若出现 channel/feed 错配事故再评估」）：多窗口/重载后的旧回答可作用于新状态、
-    通道与版本后缀双源推导——两条都是纯正确性缺口，故本批落地。
+    通道与版本后缀双源推导——两条都是纯正确性缺口，已由本设计收口。
 
 ## 5. 更新数据流与 UX
 
@@ -171,7 +171,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于根 `dsh-chamber` + **20 个** `@dsh-chamber/*` 包（infra 9：desktop/control-plane/renderer/cli/dsh-runtime/gateway/client-core/wire/stream-state + 4 个宿主种子包 client-graph/git-worktree/archive-cleanup/open-in + **7 个客户端插件包** sidebar/layout/settings-connections/settings-bridge/settings-plugin-manager/git/open-in），发版时**一致 bump**（semver 比较；`main.ts` 读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用 `release-preflight.mjs --versions-only` 数据驱动扫描器**：根 + 全部 20 个 `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；三个 fork 副本（`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）必须保持上游基线版本（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动；具体值只从 `harness.commit` 所指源码树读）；发布 checklist §1/§1.5 与该硬门同口径。vendored dsh 源码线由 `harness.commit` 单一来源钉住——插件版本只在 chamber 侧参与 workspace 解析，不与 dsh 源逐位对齐、也不参与比较/展示。
+- chamber 版本分布于根 `dsh-chamber` + 全部非 fork `@dsh-chamber/*` 包（包清单与数量不手抄：扫描口径 = `release-preflight.mjs --versions-only` 数据驱动动态发现，新增包自动纳入），发版时**一致 bump**（semver 比较；共享装配 `shell-core.ts` 读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用同一扫描器**：根 + 全部非 fork `@dsh-chamber/*` 包必须等于目标版本；三个 fork 副本（`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）必须保持上游基线版本（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动；具体值只从 `harness.commit` 所指源码树读）；发布 checklist §1/§1.5 与该硬门同口径。vendored dsh 源码线由 `harness.commit` 单一来源钉住——插件版本只在 chamber 侧参与 workspace 解析，不与 dsh 源逐位对齐、也不参与比较/展示。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、
   `ssh-passwords.json`（schema v2 endpoint binding）、`gateway-secrets.json`
   （schema v3 target binding 桌面凭据存储：
@@ -188,7 +188,6 @@ mac/win/linux 实机检查
   与「确认前不下载 → 下载 → 退出时安装 → 重启并安装」端到端、打包态实测一次
   「升级 → 重启 → 更新缓存被自动清空」、真实同步失败路径下的 `quitAndInstall`、
   以及 mac 原生 quit 语义断言清单（窗口**真正关闭**而非隐藏到托盘；剩余待实机确证 = **签名正式包**端到端：will-quit 清理日志先于新版本启动、无孤儿进程、退出码 0、新版本自动启动、staging 失败下的文案与窗口恢复）。仓库转私有、百分比灰度评估（§4）同样登记在那里；beta 通道开关形态已裁为**设置项**（Swift 腿落地，契约见 design 25 §7；Electron 冻结腿仍仅环境变量）。
-- 涉及面：`packages/desktop`（`main.ts`、`preload.cts`、`updater.ts`、
-  `package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳
+- 涉及面：`packages/desktop`（`electron/main.ts`（归档面）、`electron/preload.cts`（归档面）、共享 `updater.ts` / `shell-core.ts`、`package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳
   `__general` 视图内的 `UpdateSection` + `update-store` + `update-gate`）、
   `.github/workflows/release.yml`。

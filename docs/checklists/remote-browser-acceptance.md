@@ -51,7 +51,7 @@ node scripts/gui-acceptance/run.mjs --attach --require-embed --embed-port <remot
 4. release 后：子进程退出、ledger 清空、askpass lease 释放恰好一次；无密码/URL 进日志环。
 5. 测试结束删除临时用户/容器；不得改真实 `/etc/shadow`。
 
-## C. Windows（真机）
+## C. Windows（真机；**ARCHIVED：随 Electron 冻结，不执行**）
 
 1. 真实 `ssh` + 密钥/agent 源；确认 launcher 的 `spawn` 为 `shell:false`、`detached:false`、`pgid:null`。
 2. 启动 forward；确认 CIM 查询得到 `CreationDate`/完整 `CommandLine`，ledger 的 start-time 与 probe 三元匹配。
@@ -119,10 +119,7 @@ node scripts/gui-acceptance/run.mjs --attach --require-embed --embed-port <remot
    地址、**收到 fixture 的 postMessage**；上游 fork 已删除 attached 行 UI，租约由 alias+postMessage+关 tab 后
    alias 不可达共同证明。前置缺失时终端 loud SKIP（INFO），`--require-embed` 改判 FAIL——**不得**用无 SSH 的运行
    冒充这条腿。`--attach` 跑完后手动关闭该浏览器页签以释放这条 forward；释放判据见 W-15b 与 L5。
-   **打包态**：已构建 `release/<platform>-unpacked` 时运行
-   `xvfb-run -a node scripts/gui-acceptance/packaged-ssh-smoke.mjs --binary <packaged executable>`；
-   它用同一 SSH fixture 预置一次性 userData/ssh-agent、启动打包可执行并跑 W-13…W-15b（含本步 W-14b），
-   不碰真实 userData/~/.ssh。
+   **打包态**：Swift `.app` 真机/打包态按 E2 第 7 步与 [gui-acceptance-checklist.md](gui-acceptance-checklist.md) §4.2 执行（含本步 W-14b）；Electron 打包态随 flavor 冻结归档，复活后再补跑。
 4. **W-15 系统浏览器出口（上游语义，`--dev`）**：fixture `/embed-xfo`（`X-Frame-Options: DENY`）→ 上游
    **不承诺** XFO/TLS 失败探测（不要求 refusing/失败条）；断言 iframe 尝试了该显式 http 地址、external 按钮存在
    且可点、装载时**不自动打开**、点击后 `window.open(逻辑地址,'_blank','noopener,noreferrer')` 恰一次（witness
@@ -168,8 +165,7 @@ pnpm run test:macos      # darwin
 pnpm run check:full
 ~~~
 
-期望：锁文件无 diff；新包/chunk budget 通过；bridge manifest **58/9/67**（invoke/push/total，v2 不新增通道）；
-surface 11/63/54/9；packaging closure **100**（根模块数）；GUI walkthrough 通过（v2 内嵌腿见 E2）。
+期望：锁文件无 diff；新包/chunk budget 通过；A 桥计数以 `packages/desktop/bridge-manifest.json` 的 `counts` 为准（v2 不新增通道），shim surface 计数以 `node scripts/gates/verify-shim-payload-shape.mjs` 的 `EXPECTED_SURFACE` 为准；打包闭包根模块数复核命令见 [packaging-closure-checklist.md](packaging-closure-checklist.md) §4。
 
 ## 验收记录
 

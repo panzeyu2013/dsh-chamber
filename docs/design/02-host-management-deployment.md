@@ -253,8 +253,9 @@ rows，不改变官方 web profile 的其它组合层。
   自启 handoff（`handoffBrowser = openBrowser && !launchedThroughSsh`）；③ `host/open-in-app`
   在 SSH 标记下不解析任何本机应用（`resolveOpenInAppApps` 返回空表）——**该
   消费者与我们无关**：本地打开面由实例进程内的 chamber host 包提供（设计 20 §2.2/§6，
-  fork & supersede），官方宿主行保持挂载但永不被调用，故标记回到「仅目录选择 pin」的唯一
-  目的。其余环境继承控制面；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**（覆盖继承，
+  fork & supersede）；官方宿主行由 local-host-seeding 在 seed 生效时以 overlay `disabled`
+  停用（`OFFICIAL_OPEN_IN_DISABLE`，`packages/control-plane/src/host-graph-seed.ts`），故标记
+  回到「仅目录选择 pin」的唯一目的。其余环境继承控制面；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**（覆盖继承，
   控制面私有宿主 home，与系统用户 `~/.dsh` 不共享）；Electron 分支额外注入
   `ELECTRON_RUN_AS_NODE=1`。
 - **首启默认（seedDshHomeDefaults，index.ts）**：未初始化的 `<stateDir>/dsh-home` 同时无
@@ -649,14 +650,11 @@ exec 起停目标按 `serviceName` 在该单元与 `dsh.service` 间选择（03 
 `packages/control-plane/src/win-probes.ts`(design 23):身份 = PowerShell CIM(命令行/PPID)、端口归属
 = netstat、树终止 = `taskkill /T /F` + CIM 残余后代清扫;reaper/spawn-dsh 平台自适应接线,全部
 fail-closed(不可证即保留/拒绝)。残余让步(妥协 F1/C6-C8):无 SIGTERM 握手 → 硬终止 + 事务恢复;身份
-证明依赖 PowerShell 与同行权限可读 CommandLine。**（Windows 腿已随 Electron 冻结归档、不发布）**Windows 契约腿
-原为 ci.yml `test-windows`（该 job 已删除，原文见 git 历史）；win32-only 集成测试见
-`win32-lifecycle.integration.test.ts`（冻结保留，不在默认测试组）。
+证明依赖 PowerShell 与同行权限可读 CommandLine。**（Windows 腿已随 Electron 冻结归档、不发布）**win32-only 集成测试见 `win32-lifecycle.integration.test.ts`（冻结保留，不在默认测试组）。
 
 ### 5.2 起始端口选择
 
-本地默认起始端口（17510）与控制面端口（17500）相邻；是否可配 / 每实例偏移未定——先以
-"固定起始端口 + P+1 重试 + 记录仲裁"。
+起始端口经 `DSH_CHAMBER_DSH_PORT_BASE` 覆盖（缺省 17510；非法值 loud 一次后回落，不提供每实例偏移），固定起点 + P+1 有界退让 + pid 记录仲裁，形态与依据见 §2.2。
 
 ### 5.3 trusted-host 与反代 Host 头
 

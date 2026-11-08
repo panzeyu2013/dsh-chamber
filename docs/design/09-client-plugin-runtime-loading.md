@@ -32,7 +32,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
 
 - 任何**已装进 profile 的 `dsh.client` 包** → chamber 前端**按实例运行时加载**：
   装法维持官方语义（profile 装包 + `cordis.patch.yml` 加行），宿主图变化后
-  chamber 前端自然看到新插件（插件集变化在宿主重启生效）。**修订（§3.7 活实例热同步）**：
+  chamber 前端自然看到新插件（插件集变化在宿主重启生效）。**页面侧取图与活实例热同步（§3.7）**：
   chamber 是常驻窗口，页面侧 client 插件集在**窗口 boot** 时取一次（宿主图每 boot 取一次、
   bundle 那时执行；模块表按 id first-load-wins）；用户发起的重启 = 宿主重启本身，
   **不再附带窗口重载**——装/卸由 §3.7 热同步接管（宿主 hmr 报 `applied` 即把新 entry 挂进
@@ -84,7 +84,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   `shortcuts`——provider 仅 `dsh-client-shortcuts`——随该包 **转为 covered** 消除（它是唯一 default-export
   class 的客户端行：复合入口挂默认绑定、factory 回同一 class）；alpha.3 起 `ui-session`/`ui-workspace` 的
   inject 新增 `remoteAccess`——provider 仅新行 `dsh-api-remote-access`——随该行**转为 covered（首屏 factory）**
-  消除（其 `./remote` 面由 typert 生成器的自挂载附加集产出：生成 roster 26 = 装配 25 + 自挂载 1；alpha.4 起装配表新增 `plugin-market` ⇒ roster 27 = 装配 26 + 自挂载 1；pin 0.2.2-alpha.2 起装配表新增 `dsh-client-ui-trajectory` ⇒ roster 28 = 装配 27 + 自挂载 1，见 §3.5）；
+  消除（其 `./remote` 面由 typert 生成器的自挂载附加集产出；roster 计数与装配表以 §3.5 的 vendor 单源为准——历史证据：`plugin-market` 与 `dsh-client-ui-trajectory` 分别自 alpha.4 / pin 0.2.2-alpha.2 起加入装配表，不随本仓 pin 移动）；
   渲染期 `useResource` 座 `resources` 因
   「非任何复合插件的 inject、且不可能单独缺失」不再登记）。**第二个运行期消费者（design 28）**：右栏
   Browser 插件在 `apply` 里按来源早退后才用 `ctx.inject(['sidebarRightTabs'], …)` **等**注册表出现
@@ -116,10 +116,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   汇道投递（`bootInstanceShell` 的 `options.onRepublish`，InstanceView 接的就是传给
   `onStateChange` 的处理器；`onState` 是视图本地 setter，只发它则 App 的 `shellStates` 镜像收不到，
   横幅/投射/自愈全瞎）；未 settle 的
-  判词按 boot 序号暂存、settle 补放。事实**身份 = kind + 载荷**（同日修订）：延迟簇失败曾与探针判词共用
-  `required-services-missing`，`reportSettledDegrade` 的「同 kind 即重复」会静默丢弃第二条；现延迟
-  簇有自己的 kind（`deferred-registration-failed` + 失败 id 集），探针载荷带结构化
-  `services`/`injectedBy`。`chamber-entry.ts` 的 `assertRequiredExtraRowServices`
+  判词按 boot 序号暂存、settle 补放。事实**身份 = kind + 载荷**：延迟簇失败与探针判词各有独立 kind（`deferred-registration-failed` + 失败 id 集 vs 探针载荷的结构化 `services`/`injectedBy`）——共用 kind 时 `reportSettledDegrade` 的「同 kind 即重复」会静默丢弃第二条。
   （名字不变；纯判定在 `required-extra-rows.ts`）在 5s 内探测**派生并集**里仍未被 provide 的服务，点名
   「服务 + 注入它的已注册插件」，并经 shell 的 `chamberReportBootDegraded` 上报（**仍是诊断，不是启动
   门**：gateway/移动形态可合法不加载该行）。
@@ -130,13 +127,7 @@ plugin inventory 只读（`dsh-host-plugin-inventory` 仅 `list()`），都不�
   `packages/dsh-client-web/src/boot.ts` 另含版本容忍规则）。**延迟簇成员同样进名单并被探测**
   `registerDeferred` 在每行 chunk 装载、`ctx.plugin(...)` 之后把
   该行**自己导出的** `inject` 面按同一套归一化推进同一份名单，确有行挂载时
-  `probeRearm.reArm?.()` 重新武装一轮探测（探针在"干净判词"上会停）。此前延迟簇被排除（其 chunk
-  尚未求值，且延迟拆分不变式称其 inject 成员已固定在首屏服务内），导致 **11 个只出现延迟面里的成员
-  无人探测**——`remote.goals` / `remote.skills` / `remote.messageFeedback` /
-  `remote.sessionFeedback` / `remote.agentPresets` / `remote.credentials` / `remote.llm` /
-  `remote.pluginInventory` / `remote.fileReferences` / `remote.sessionReferenceResolver`（由首屏
-  api-gateway / api-remotes 提供）与 `settingsSchema`（首屏 ui-settings 提供）；某延迟家族 provider
-  从未激活时该家族只会**无声 pending**。探它们安全：每个延迟成员的 provider 都是**首屏复合插件**、绝非另一个延迟家族，重新武装不可能把"尚未求值
+  `probeRearm.reArm?.()` 重新武装一轮探测（探针在"干净判词"上会停）。延迟拆分的 inject 成员并非全部固定在首屏服务内：只出现在延迟面里的成员（`remote.goals` / `remote.skills` / `remote.messageFeedback` / `remote.sessionFeedback` / `remote.agentPresets` / `remote.credentials` / `remote.llm` / `remote.pluginInventory` / `remote.fileReferences` / `remote.sessionReferenceResolver`（由首屏 api-gateway / api-remotes 提供）与 `settingsSchema`（首屏 ui-settings 提供））同样进名单——否则某延迟家族 provider 从未激活时该家族只会**无声 pending**。探它们安全：每个延迟成员的 provider 都是**首屏复合插件**、绝非另一个延迟家族，重新武装不可能把"尚未求值的兄弟 chunk"误判成"服务缺失"；跨行失败隔离不变（一行坏掉只赔自己那族的探针覆盖并响亮 console.error，不阻断后续行挂载，失败行改由 id 走失败诊断）。
   的兄弟 chunk"误判成"服务缺失"；跨行失败隔离不变（一行坏掉只赔自己那族的探针覆盖并响亮 console.error，
   不阻断后续行挂载，失败行改由 id 走失败诊断）。`register` 仍用挂载 fiber 的 inject 面作**见证**，但覆盖面
   **窄于一整类漂移**：cordis 解出的注入表与这里推导的是**同一个表达式**（`Inject.resolve(plugin.inject)`，
@@ -305,13 +296,13 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   `@deepseek-ai/dsh-client-modules`（shell 内核收编该 entry，二次 provide `modules` 冲突）——完整名单与
   逐条理由见 `chamber-covered.ts` 注释；
   ③ **有意跳过的宿主行**（covered、无 factory、永不加载）：directory-picker-native——理由见
-  `chamber-covered.ts` 条目注释；官方桌面账户家族 alpha.3 起迁出该名单（见下「有意跳过名单」③）。独立成
+  `chamber-covered.ts` 条目注释；官方桌面账户家族不在该名单（见下「有意跳过名单」③）。独立成
   叶模块（chamber-entry.ts 仅 re-export）以免 shell.ts 把模块表交接与整棵复合插件图拉进主 chunk。与 §3.2
   的 union-table 修复锁步：`COVERED_FACTORIES`（首屏静态导入族的 factory 注册）中每个 id 必须在覆盖集内
   （执行期断言）。**P5b 的 forge 客户端行同理不进覆盖集**：`@deepseek-ai/dsh-experimental-client-ui-forge`
 （`forge-panel`）由启用后的宿主图 extra row 加载；`forge-github` 行被本地 overlay disabled 后不产生
-该行的客户端 entry（以 P5b 壳内 P0 实测为准）。alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。rc.2 同理：新徽标行 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`（官方 web-app 行，占 `conversation.input.model.label` 单槽，chamber 无同槽占用者）不进覆盖集、由宿主图加载；其 create-time require 只有 `react/jsx-runtime` 与 ui-primitives（后者由复合 factory 应答），不需要 factory 或 disable 行。pin 0.2.2-alpha.2 同样按此判定：闭包新增的 `dsh-client-ui-action-cards` / `dsh-client-ui-creation-recommendations` / `dsh-client-ui-plugin-recommendations` / `dsh-message-quotes` / `dsh-cua` 都由宿主图 extra row 载入、不进覆盖集；该代的唯一例外是 `dsh-client-ui-file-drag`——`ui-chat` 根 inject 与 `ui-attachment` 的 `inject = ['slots', 'fileDrag']` 直接依赖它，缺行会让会话链停在 PENDING，故按 shortcuts/remoteAccess 先例升为**首屏 covered factory**。判定规则：一行是否升 covered 只看「是否被首屏根 inject 强制依赖」，不看它有没有自己的产品面。
-  **pin 0.2.2-alpha.3 的 roster 裁决与 Rejected alternatives**：`dsh-client-ui-context-menu` 升首屏 covered——它经
+  该行的客户端 entry（以 P5b 壳内 P0 实测为准）。alpha.4 新增的**可选客户端行不进覆盖集**：`dsh-client-ui-plugin-market`（可选组合包 `dsh-experimental-plugin-market-bundle`，shipped profile 默认关）不在 `CHAMBER_COVERED_IDS`——启用该组合包时经宿主图 extra row 加载，其 `plugins.tab` 页签由 chamber 占位页声明承接（design 05 §5）。rc.2 同理：新徽标行 `@deepseek-ai/dsh-client-ui-deepseek-model-label-1017`（官方 web-app 行，占 `conversation.input.model.label` 单槽，chamber 无同槽占用者）不进覆盖集、由宿主图加载；其 create-time require 只有 `react/jsx-runtime` 与 ui-primitives（后者由复合 factory 应答），不需要 factory 或 disable 行。闭包新增行同样按此判定（历史证据：pin 0.2.2-alpha.2 的一批新增行，不随本仓 pin 移动）：`dsh-client-ui-action-cards` / `dsh-client-ui-creation-recommendations` / `dsh-client-ui-plugin-recommendations` / `dsh-message-quotes` / `dsh-cua` 都由宿主图 extra row 载入、不进覆盖集；该批的唯一例外是 `dsh-client-ui-file-drag`——`ui-chat` 根 inject 与 `ui-attachment` 的 `inject = ['slots', 'fileDrag']` 直接依赖它，缺行会让会话链停在 PENDING，故按 shortcuts/remoteAccess 先例升为**首屏 covered factory**。判定规则：一行是否升 covered 只看「是否被首屏根 inject 强制依赖」，不看它有没有自己的产品面。
+  **`dsh-client-ui-context-menu` 升首屏 covered 的裁决与 Rejected alternatives**：它经
   `provideRoot` 提供 `useContextMenu` 根标准 prop、并以 `ctx.provide('contextMenus')` 提供 cordis 服务；被覆盖的
   `ui-chat`/`ui-deliverables` 在渲染期直接解构该 prop，`ui-workspace`/`ui-sidebar-right`/`ui-open-in-app` 的 inject
   集合含 `contextMenus`，属同一判定。被否方案：①按延迟簇加载 + 探针——`required-extra-rows` 的探针只报不门，且
@@ -335,12 +326,12 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   **宿主通道本身可用，且已由 §3.7 的 chamber 订阅者经页面通道消费**（控制面按 `instanceId` 打开上游 `GET <target>/plugins/events`，页面侧不再自建按实例前缀的订阅）（`packages/renderer/src/chamber-covered.ts#=literal:The official HMR entry`，page-own 无 factory）；②
   `@deepseek-ai/dsh-client-ui-cordis` **有意不由复合入口注册、也不进覆盖集**——它按宿主图 extra row
   加载（`packages/renderer/src/chamber-entry.ts#=literal:ui-cordis is deliberately not`；`host-graph.test.ts` 固定「未覆盖 ⇒ extra」）；③ 官方**桌面专属**账户家族
-  `@deepseek-ai/dsh-client-ui-settings-account`（alpha.2 处置）在覆盖集内但**不加载**——它的 apply 以 `'dshDesktop' in
+  `@deepseek-ai/dsh-client-ui-settings-account`在覆盖集内但**不加载**——它的 apply 以 `'dshDesktop' in
   globalThis` 为门（两 flavor 为官方快捷键/更新座位必须暴露的载体，S-52/S-54），而官方 **web** 形态正是靠
   无该载体早退；本页载体恒在，于是它在没有桌面宿主面时也激活。其 `shell.overlay` 的 `desktop-onboarding`
   座位会 portal 全屏浮层到 `document.body` 并把 `#root` 置 0/inert；浮层状态由桌面
   **account/configForms** 事实驱动（本页没有宿主表单把它结算）⇒ 它停在「正在加载设置…」不消（实测整页被
-  接管 ≥30s），冷启动时全部实例视图 + 侧边栏都被它夺走。**alpha.3 处置 = 已接入**：构建期 vendor 补丁
+  接管 ≥30s），冷启动时全部实例视图 + 侧边栏都被它夺走。**当前处置 = 已接入**：构建期 vendor 补丁
   （`vendor-patches.mjs` 的 chamber 行为条目）把该行的桌面分支门控为
   `if (desktop && (globalThis as {...}).__dshChamberAccountOverlay === true)`，`chamber-entry` 的 DEFERRED
   集群加载该行（covered+deferred），设置页的 account section 与 sign-in/quota/launcher 座位照常注册；
@@ -407,7 +398,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   假定复合入口已求值（其 prefetch 失败由复合路径上报）、覆盖集外 id 不裁决。与 rev 冲突并存时单条诊断位归
   冲突，该 boot 事实仍进 console.error（不得因另一行冲突而静默）。
 - **页面根接管安全网（`root-takeover-watch.ts`，页面入口安装）**：外来 `shell.overlay` 座位可以把
-  `#root` 置 0 + inert 并占满全屏（桌面专属账户家族 alpha.2 实测如此，见上「有意跳过名单」③）。alpha.3 起该行已加载、仅其桌面浮层被构建期补丁默认关闭；
+  `#root` 置 0 + inert 并占满全屏（见上「有意跳过名单」③）；该行已加载、仅其桌面浮层被构建期补丁默认关闭；
   安全网是「上游 id 移动 / 换家族」这一残余风险的对症兜底，**签名故意窄**：只认 #root 的**内联**
   `style.opacity` 解析为 0（pin 内唯一写入者是该家族；样式表/类名置 0、`visibility`/`display` 隐藏、整体替换
   #root 元素、`calc()`/`var()` 写法都不触发），纯 `inert` 是合法对话框——本页被加载的家族里只有
@@ -434,7 +425,9 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   产物写入 chamber-owned `renderer/src/generated/typert/`，Vite 的通用 `/remote` resolver 只消费这些产物。
   当前 27 个 contribution（`EXPECTED_MOUNT_PACKAGES` 挂载序表 + import 选择集合，含 file/session/workspace reference）由独立锁步测试
   固定，避免手抄包表滞后到 Rollup 才报缺模块；vendor 始终只读。
-- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway 移动入口的合法无图形态。**取消不是来源事实**：`AbortError` 与 WebKit 的 `Fetch is aborted`（被取代的挂载、我们自己的拆除、页面被系统节流）不落任何缺口判定——同一预算内重试，预算走完仍只有取消则无图 boot + 命名诊断，重挂交给既有的图回归探测（判定归 `packages/dsh-stream-state` 的 `classifyObservation` 单一所有者；真实通道失败仍照旧上浮，取消不得掩掉它）。**自愈臂是事实、不是时刻**：结算时相位未到 ready 也把臂留成 pending，由随后第一个 ready 世代偿还（`dsh-stream-state` 的 `healPending`），每个 ready 世代至多一次。**Rejected alternatives（取消分类与自愈臂）**：把取消一律读成通道失败（缺口粘在来源上，实机形态就是「只剩空壳、只有重载能救」）；把取消读成成功（404 的 `not-injected` 与「从未得到回答」不再可分）；只在结算当刻相位已 ready 才 arm（冷启动/重连竞赛里永久丢失臂）；无上限按 ready 世代重挂（把一次瞬态缺口放大成重挂循环）。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**重建/替换竞态恢复（一轮有界恢复）**：上游 rev 是文件元数据派生的构建标识（推导与根治见 §5「vendor 侧根治」；**重建/替换**该文件才变，纯重启不变）⇒ 取图与加载之间被改写（dev 重建/重装）的行在旧 URL 上 404，一般瞬时 404 同样落此；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧 rev URL 已失效，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`artifactRevision` 改为对 bundle 字节求内容哈希即可让同内容跨安装/跨宿主的 rev 一致、假 `instance-version-conflict` 整类消失（§5，提案 §10）；恢复轮只覆盖「文件被改写与取图的竞态」。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
+- **失败降级与诊断语义（模块 C）**：图**通道**失败（fetch 网络错 / 非 2xx / 图畸形 / 行缺 id/url/rev）→ 降级为无额外插件继续 boot + console.error，并经 renderer-local chamberBridge 上报用户可见诊断（404/方法缺失 = `not-injected`，其余 = `graph-unreachable`；复合 bundle 仍提供完整官方壳，仅丢失 profile 新装插件；畸形图响亮报错，不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默。**（W3）**：**除 404 外的通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，判定在 `renderer/src/source-readiness.ts` 的 `graphGapKindFor`），由 App 的非阻断 boot-gap 横幅说明并沿用「每个 ready 世代自动重挂一次」；`not-injected`（HTTP 404 或通道答 method 缺失）仍是 gateway 移动入口的合法无图形态。**取消不是来源事实**：`AbortError` 与 WebKit 的 `Fetch is aborted`（被取代的挂载、我们自己的拆除、页面被系统节流）不落任何缺口判定——同一预算内重试，预算走完仍只有取消则无图 boot + 命名诊断，重挂交给既有的图回归探测（判定归 `packages/dsh-stream-state` 的 `classifyObservation` 单一所有者；真实通道失败仍照旧上浮，取消不得掩掉它）。**自愈臂是事实、不是时刻**：结算时相位未到 ready 也把臂留成 pending，由随后第一个 ready 世代偿还（`dsh-stream-state` 的 `healPending`），每个 ready 世代至多一次。
+
+  **Rejected alternatives（取消分类与自愈臂）**：把取消一律读成通道失败（缺口粘在来源上，实机形态就是「只剩空壳、只有重载能救」）；把取消读成成功（404 的 `not-injected` 与「从未得到回答」不再可分）；只在结算当刻相位已 ready 才 arm（冷启动/重连竞赛里永久丢失臂）；无上限按 ready 世代重挂（把一次瞬态缺口放大成重挂循环）。**bundle 加载**失败**不降级**——响亮失败、该实例 boot 报错呈现（§4 fail-loud）。**重建/替换竞态恢复（一轮有界恢复）**：上游 rev 是文件元数据派生的构建标识（推导与根治见 §5「vendor 侧根治」；**重建/替换**该文件才变，纯重启不变）⇒ 取图与加载之间被改写（dev 重建/重装）的行在旧 URL 上 404，一般瞬时 404 同样落此；故 `collectExtraRows` 对普通失败行重拉一次宿主图（同一 503 预算）并按 fresh URL 重载，仍失败才响亮失败（DOM script **超时**不进恢复轮：迟到 load 收敛成功、迟到 error 允许重试）；恢复成功的行以 fresh url/rev 返回（旧 rev URL 已失效，不得作为可加载源下发）。**根治在上游（vendor 只读，登记不修）**：`artifactRevision` 改为对 bundle 字节求内容哈希即可让同内容跨安装/跨宿主的 rev 一致、假 `instance-version-conflict` 整类消失（§5，提案 §10）；恢复轮只覆盖「文件被改写与取图的竞态」。**分层**：`loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败；预加载成功后内核不再为额外行发起新加载，只剩 materialize/apply 失败，按下一条降级。
 - **额外行 apply 失败降级（模块 D）**：额外行**加载成功但 entry 未能 apply**（materialize 出非插件对象——如壳种子词表把某包静态注册、后端新增其 client half 后 seed 遮蔽 factory 导致的 "invalid plugin"；注册进本壳未声明的槽；重复安装壳已提供的服务）→ **降级不致命**：
   console.error + status 'failed'，shell 照常 boot（boot.ts 对 extraRows 逐行容错 + sweep 排除）。理由：复合
   bundle 固定一个 dsh client 版本，"后端 dsh 版本 ≠ 壳版本"时新/旧核心行与壳不兼容是**正常条件**（特性缺席），
@@ -495,8 +488,8 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   原文。产物侧栅栏 = `verify-vendor-patch-applied.mjs` 的 sourcemap 断言（每个注册文件必须在某个产出的
   `.map` 里既有 `sourcesContent` 又有映射段），随 `build:renderer` 在 CI 执行，所以丢 map 是**失败**而
   不是一条警告。
-- 落点（当前：18 个文件 / 47 处锚点，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
-  校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余 7 个文件属下三/四/五类：实测帧成本 1（`assembly.ts`）/ 逻辑缺陷 1（`use-chat-reading.ts`）/ 多实例正确性 3（`ui-workspace/navigation.ts` + `ui-attachment/drop-events.ts` + `ui-attachment/ComposerAttachments.tsx`）/ 座席所有权转移 1（`ui-workspace/index.ts`）/ chamber 壳行为门 1（`ui-settings-account/index.ts`，overlay + desktopOnboardingVisible 双门控））：① `ui-chat` 的
+- 落点（文件数与锚点数以 `packages/renderer/scripts/vendor-patches.mjs` 的注册表为单源，逐锚点由触点表 C9 与 `packages/renderer/scripts/vendor-patches.test.mjs`
+  校验；下列圈号 ①–⑪ 是 URL 类，每个圈号对应**一个**文件，其余文件属下三/四/五类：实测帧成本 1（`assembly.ts`）/ 逻辑缺陷 1（`use-chat-reading.ts`）/ 多实例正确性 3（`ui-workspace/navigation.ts` + `ui-attachment/drop-events.ts` + `ui-attachment/ComposerAttachments.tsx`）/ 座席所有权转移 1（`ui-workspace/index.ts`）/ chamber 壳行为门 1（`ui-settings-account/index.ts`，overlay + desktopOnboardingVisible 双门控））：① `ui-chat` 的
   `chat/AssistantMarkdown.tsx` 读取新增 root 标准
   **prop** `chamberFileApiBase`（chamber layout fork 经 `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的
   `ctx.chamberBasePath`），`pathImages` 以 `new URL(chamberFileApiBase + '/', document.baseURI)` 作为上游
@@ -562,18 +555,17 @@ N-ctx 页面只有一个 `document.baseURI`（控制面根），per-entry 前缀
   store 里的外来值仍在）。store 在 vendor service 内构造、键模块私有，chamber 包无法从外部改键；补丁从
   per-entry `ctx.chamberBasePath` 取 scope（缺失即回落上游未 scoped 行为），键变为
   `dsh.sessions.current./api/i/<id>`。`reason` 必须写明跨实例症状与接受的取舍；上游自带 scope 后删除该条。
-- 第四类的**第三种形态（per-mount DOM containment，__DSH_HOST_PATHS__ 批次新增）**：document 级 drag/drop 事件注册表无 chamber 包拥有，scope 取监听器所属挂载自己的 `[data-instance]` 子树；该注册表的每个 document 级副作用（dragenter/dragover/dragleave/drop）加同一归属判定，无实例壳时回落上游、有壳而解析不到自身则拒绝。理由与取舍见 `vendor-patches.mjs` 头部「THIRD ADMITTED FORM」与 design 25 §5.7。
-- 第四类的**第二种形态（座席所有权转移，0.2.0 新增）**：`ui-workspace` 的 `client/index.ts` 在其
+- 第四类的**第三种形态（per-mount DOM containment）**：document 级 drag/drop 事件注册表无 chamber 包拥有，scope 取监听器所属挂载自己的 `[data-instance]` 子树；该注册表的每个 document 级副作用（dragenter/dragover/dragleave/drop）加同一归属判定，无实例壳时回落上游、有壳而解析不到自身则拒绝。理由与取舍见 `vendor-patches.mjs` 头部「THIRD ADMITTED FORM」与 design 25 §5.7。
+- 第四类的**第二种形态（座席所有权转移）**：`ui-workspace` 的 `client/index.ts` 在其
   workspace-browser 注册里声明 `sidebar.session.row.leading` / `sidebar.session.row.trailing` / `sidebar.session.row.hover` 三座席
-  （pin 0.2.2-alpha.2 起 leading/trailing 带 `inline: true`），而 chamber 壳
+  （leading/trailing 带 `inline: true`；当前 pin 见 `harness.commit`），而 chamber 壳
   自建多来源列表、**永不挂载**该注册（`sidebar.workspaces` 洞只声明不调用，I-4 锁禁止渲染该字面量）⇒ 座席只能由
   注册所有者声明，chamber 无法转交（重复声明即抛）。补丁删除上游的三行声明，chamber 侧栏在自己的 `children` 里声明
   并渲染 leading/hover 两席（`trailing` 不采纳：上游的行尾插件图标能力在 chamber 缺位；`inline` 是 span/div 渲染提示，chamber 行几何仍用 div）（行首 Schedule 标记即上游 occupant 本身；chamber 已无自有标记回落——旧 `hasActiveSchedule` 投影事实随 pin 移除，回落链删除见 design 06 §4.3）。无官方布局回落（无 chamber 壳时
   座席未声明），故用 `noRetireForm`；上游若提供座席转交/共享 API 则删除该条。座席是 `scope: root` 的 list 座席，
   声明与注册都随各自 ctx：occupant 用固定 id 注册（`ui-schedule` = `schedule-mark`），`ui-slots` 对**同一 registry**
   内同 id 同优先级的第二条注册抛错，而 N-ctx 下每个实例 boot 各持一份 registry（每 ctx 一个 `SlotRegistry`）⇒
-  「同一页面两个实例都启用 schedule bundle 必抛」在 registry 层不可复现；口径修订与仍待的实机复核见 STATUS
-  「A1 座席的 id 冲突」条，残余解 = 每实例页面级 slot id 命名空间。面板入口的落位见 design 05 §2 与 design 06 §4.7。
+  「同一页面两个实例都启用 schedule bundle 必抛」在 registry 层不可复现；口径与实机判据见 STATUS「A1 座席的 id 冲突」条，残余解 = 每实例页面级 slot id 命名空间。面板入口的落位见 design 05 §2 与 design 06 §4.7。
 - **Rejected alternatives（第三座席 `trailing`）**：①*采纳并实现行尾插件图标*——要把上游
   `sidebar.session.row.trailing` 的 occupant 语义（行尾图标、`inline: true` 的 span 几何）搬进
   chamber 自建行，与既有行几何（动作簇 4px/20px、命中盒=视觉盒）冲突，且当前没有产品需求承接
@@ -713,7 +705,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   回滚刚建的 entry 并删页面级 chunk-owner 行**（loader 属该代 ctx、随 ctx 回收，但 `modules.graphRows` 是
   页面共享表：不回滚会让后续消费者经 external 边复活已死插件的 chunk）；**无 fiber 的 entry 同样回滚**
   （它永远无法激活），否则下一帧 recheck 会再 create 一次同名 entry。诊断写同一栅栏。
-- **设置面：零重挂 + 两条收敛臂（2026-10 修订）**：设置壳订阅选中来源 ctx 的 `settings.section`
+- **设置面：零重挂 + 两条收敛臂**：设置壳订阅选中来源 ctx 的 `settings.section`
   台账（见 §4 的完整桥接边界与 design 05 §5），live 注册/移除的分区经同一 ledger 通知自然出现，
   面板**不重挂**——机制属上游 cordis `slots` 的订阅面。但「帧丢失/被页级模块表拒绝」会让面板静默停在
   旧台账（用户实测：装包后不刷新，Cmd+R 才出现），故补两条按来源的页面侧臂：
@@ -735,7 +727,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   （绝不打断在途安装/启停），事实到达时再按墙钟复核窗口死线（后台节流不延长窗口）；
   `instance-version-conflict` **不自动重载**（重启也换不掉先加载者）。
   设置面板 header（壳 chrome，**不是 nav 单元**：design 15 §1 退役的组装诊断块不复活）以 `role="status"`
-  呈现选中来源的两类**可动作**插件集事实（`restart-required` / `bundle-load-failed`）与「重新加载应用 / 重试」动作；`instance-version-conflict` 不投影、也不自动重载（boot 事实、无就地动作，唯一面 = 连接页；2026-11 取舍见 design 15 §6）；
+  呈现选中来源的两类**可动作**插件集事实（`restart-required` / `bundle-load-failed`）与「重新加载应用 / 重试」动作；`instance-version-conflict` 不投影、也不自动重载（boot 事实、无就地动作，唯一面 = 连接页；取舍见 design 15 §6）；
   手动的「重新加载应用」是有意绕开自动预算/单飞的显式用户同意（代价与候选见 STATUS 开放项）。
   单测：renderer `plugin-refresh-convergence.test.ts` + `plugin-refresh-control.test.ts`（壳侧 reload 闸门/预算/代际栅栏）+ `live-graph.test.ts`（resync）、
   settings-bridge `plugin-notice.test.ts`、settings-plugin-manager `plugin-action-tracker.test.ts`
@@ -769,7 +761,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - **远程实例的 client bundle 会运行在本地 renderer 里**——与官方模型一致（官方 web profile 同样加载宿主
   下发的一切：宿主是权威、loopback-only、v1 无认证面）；这是安全相关事实，已在 `host-graph.ts` 与模块 A
   `src/index.ts` 的模块头注释显式声明，不静默。
-- **远端 web 内容也会进入同一 shell document（design 28 v2 右栏 iframe，2026-11 用户裁决）**：跨源 iframe
+- **远端 web 内容也会进入同一 shell document（design 28 v2 右栏 iframe）**：跨源 iframe
   子 frame 不获得 preload/桥（主进程只向主 frame 注入、IPC 围栏校验 main frame），但远端页面由同一浏览器
   引擎在壳 document 的嵌套 browsing context 中渲染；renderer 侧 sandbox/属性**不是**安全边界（同 document 的
   远端插件仍可创建任意 iframe），强制边界在 main 进程（CSP `frame-src`、`will-frame-navigate`、
@@ -779,7 +771,7 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   宿主 `ClientModuleRegistry` 激活即 fail-loud，chamber 侧同样报错不静默）。
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，
   不降级。
-- **设置面不装载插件（完整桥接修订）**：桌面设置壳**不再**为选中来源二次装载任何插件行——它渲染
+- **设置面不装载插件（完整桥接形态）**：桌面设置壳**不再**为选中来源二次装载任何插件行——它渲染
   该来源自己 boot ctx 的 `settings.section` 台账与标准座（design 05 §5），故：①执行面回到
   「已打开/被面板要求挂载的来源自己的 ctx」，面板只保证该 ctx **挂在屏外也保持挂载**
   （`chamberBridge.setSettingsTarget`），关闭即撤除；②没有第二次实例化 ⇒ 没有重复注册、跨来源模块共享报告与
@@ -814,10 +806,9 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
 - **P5b forge bundle 仍是 EXPERIMENTAL（开放项）**：六个包的 patch 行 id/组形状随上游 pin 漂移；
   `forge-github` 的 id-targeted disable 以字符串寻址，升级时须由 `test:control-plane` 的 bundle-row-disables
   用例与壳内 P0 复核（未启用 = 跳过、已启用但 id/包名不成立 = fail-closed）。node 走 control-plane 的
-  PATH shim / string-only 解析（不写 `process.execPath`），Swift 用 sidecar node——两者都属于 P5b 的
-  双形态验收，不是本方案的加载面回退。filters 的两步 parity 与 LFS 降级见 design 08 §2.3。
+  PATH shim / string-only 解析（不写 `process.execPath`），Swift 用 sidecar node——都属于 P5b 的 Swift 腿验收，不是本方案的加载面回退。filters 的两步 parity 与 LFS 降级见 design 08 §2.3。
 - **插件生态成熟度**：当前第三方 `dsh.client` 包尚少，本方案是"机制先备"。
-- **远程实例部署说明（开放项）**：远端 seed 的机械编排已接线（§3.5），并入 design 02 §3.9 远端部署说明仍待做。
+- **远程实例部署说明（开放项）**：远端 seed 的机械编排见 §3.5；部署说明并入 design 02 §3.9。
 - **上游端点属主（开放项）**：`/plugins/events` 的属主是上游 HMR 宿主行（cordis.patch.yml 原文
   **always mounted**：idle until a rebuild watcher (pnpm run dev:web) actually rewrites client bundles——
   dev-only 的是 watcher，行本身常驻）。§3.7 依赖它：升级 pin 时按上游触点表
@@ -827,33 +818,9 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   sourceMappingURL）⇒ ①同内容跨宿主/跨安装 rev 通常不同（ctime；硬链接例外），页级 first-load-wins 对同 id 永久报
   `instance-version-conflict`（chamber 复用并提示，不能证明这些构建兼容）；②重建/替换才改 rev，需要一轮有界恢复。
   改为对 bundle **字节**求内容哈希即可让 ① 整类消失（§3.5，提案 §10）；vendor 只读，chamber 侧只能保留恢复轮。
-- **恢复轮前提（原「每进程 nonce」模型作废）**：运行树已核 rev = metadata hash（非 per-process nonce、非内容哈希），
-  「跨重启 URL 失效」前提不成立；§3.5 的恢复轮只覆盖「文件被改写与取图的竞态」。
-- **§3.7 实机验收**：**已验**（2026-09-27，随包实例经反代 + 隔离临时实例直连）：① `/api/i/<id>/plugins/events`
-  答 200 `text/event-stream`，首帧 `: connected` + 全量 graph（实测 65 行 → covered 47 → extra 18），真实字节经
-  `parsePluginEventFrame`/`dedupeCoveredRows`/`toExtraRows` 全部通过、URL 前缀与 12-hex rev 形状正确；
-  ② 改动在册 bundle 后活帧顺序为 `graph → rebuilt(id,rev) → graph(新 rev)`（同一连接），故「忽略 rebuilt」安全；
-  ③ 真实两帧喂 `diffLiveRows` 判出 `revChanged`（即 `restart-required` 路径）。**未验（开放项）**：经插件管理器
-  路径触发的一次真实 add/remove 帧、ssh/gateway 各一来源、卸载边界与回收期无迟到写入、宿主崩溃重启后活行存活，
-  以及 2026-10 增补的插件刷新收敛（设置面 header 事实条、**帧先于结算到达的 provenance 竞态**、5s 窗口自动重载
-  一次、独立预算、未挂载 no-op、在途动作不被自动重载打断）——见 STATUS 的实机门禁条。**pin 源码复核（E1，2026-09-27）**：rev = `framedHash('plugin-artifact', [mtimeMs, ctimeMs, size])`
-  （`vendor/harness-checkout/packages/client/modules/src/index.ts#ClientArtifactBaseline` 三元组上的私有
-  `artifactRevision()`，即 metadata hash，非内容哈希、非 per-process nonce）；
-  端点字面量 `EVENTS_ENDPOINT` = `/plugins/events`（同树 `vendor/harness-checkout/packages/client/hmr/src/events.ts#EVENTS_ENDPOINT`）；活重载触发面 =
-  `vendor/harness-checkout/packages/boot/app-boot/src/index.ts#reconcileProfilePatches`（其调用点与判词在
-  `vendor/harness-checkout/packages/boot/plugin-manager/src/index.ts`）及其返回处的
-  `application: ctx.get('hmr') !== undefined ? 'applied' : 'restart-required'`。**运行树复核**：随包 `dsh-plugin-manager` 的
-  `lib/index.js` 同一逻辑（`reconcileProfilePatches` + `application` 判词）。
-  触发面事实：活重载来自 `dsh-plugin-manager` 的 `reconcileProfilePatches`
-  （`lib/index.js` 约 :2033，`application: ctx.get("hmr") ? "applied" : "restart-required"`），**原始编辑
-  `cordis.patch.yml`/`cordis.yml` 不触发**（实测无新帧），故「装/卸即时生效」只在插件管理器/配置编辑路径成立。
-- **重载臂退役（原「保留」裁决的反转，2026-10 修订）**：`PluginDialog.restartSourceService`（ssh 服务重启）、
-  `PluginDialog.doRestartNow`（seed restart-to-apply）、受管 gateway 的 start/restart 腿**不再 arm 任何页面级
-  收尾**（`restart-window-reload.ts` 已删，design 18 §3.6 项 8）。§3.7 接管 id 集合变化；**但 rev 变化/重打包的
-  已加载行**（模块表 first-load-wins，内核报 `rev-conflict('restart')`：live 保留已挂载的旧 entry，boot 丢弃该行、
-  不把旧 factory 当作新 rev 的行 materialize）在**本页插件管理动作**路径由 §3.7 的「结算 provenance + 5s 窗口 +
-  独立预算」自动收口一次（事实条保留手动入口），不再只是手动；其它路径只上报 `restart-required`、需用户手动
-  重载页面/重启应用；无 hmr 的宿主插件管理器报 `restart-required` 时同理。
+- **恢复轮前提**：运行树 rev = metadata hash（非 per-process nonce、非内容哈希），故「跨重启 URL 失效」前提不成立；§3.5 的恢复轮只覆盖「文件被改写与取图的竞态」。
+- **§3.7 实机契约与验收指针**：`/api/i/<id>/plugins/events` 答 200 `text/event-stream`（首帧 `: connected` + 全量 graph），活帧顺序 `graph → rebuilt(id,rev) → graph(新 rev)`（同一连接，故「忽略 rebuilt」安全），真实两帧喂 `diffLiveRows` 判出 `revChanged`（即 `restart-required` 路径）。触发面 = `dsh-plugin-manager` 的 `reconcileProfilePatches`（`application: ctx.get('hmr') !== undefined ? 'applied' : 'restart-required'`）；**原始编辑 `cordis.patch.yml`/`cordis.yml` 不触发帧**，故「装/卸即时生效」只在插件管理器/配置编辑路径成立。rev 形状（pin 源码复核）：`artifactRevision()` 用 `framedHash('plugin-artifact', [mtimeMs, ctimeMs, size])`（metadata hash，非内容哈希、非 per-process nonce；`vendor/harness-checkout/packages/client/modules/src/index.ts#ClientArtifactBaseline`）；端点字面量 `EVENTS_ENDPOINT` = `/plugins/events`（`vendor/harness-checkout/packages/client/hmr/src/events.ts#EVENTS_ENDPOINT`）；活重载触发面同见 `vendor/harness-checkout/packages/boot/app-boot/src/index.ts#reconcileProfilePatches`。验收判据与未验项（插件管理器真实 add/remove 帧、ssh/gateway 各一来源、卸载边界与回收期无迟到写入、宿主崩溃重启后活行存活、插件刷新收敛：设置面 header 事实条 / 帧先于结算到达的 provenance 竞态 / 5s 窗口自动重载一次 / 独立预算 / 未挂载 no-op / 在途动作不被自动重载打断）归 `docs/progress/STATUS.md` 的实机门禁条与 `docs/checklists/gui-acceptance-checklist.md`。
+- **重载臂（负面契约）**：`PluginDialog.restartSourceService`（ssh 服务重启）、`PluginDialog.doRestartNow`（seed restart-to-apply）、受管 gateway 的 start/restart 腿都**不 arm 任何页面级收尾**（`restart-window-reload.ts` 不存在，design 18 §3.6 项 8）。§3.7 接管 id 集合变化；rev 变化/重打包的已加载行（模块表 first-load-wins，内核报 `rev-conflict('restart')`：live 保留已挂载的旧 entry，boot 丢弃该行、不把旧 factory 当作新 rev 的行 materialize）在本页插件管理动作路径由 §3.7 的「结算 provenance + 5s 窗口 + 独立预算」自动收口一次（事实条保留手动入口），其它路径只上报 `restart-required`、需用户手动重载页面/重启应用；无 hmr 的宿主插件管理器报 `restart-required` 时同理。
 - **Windows**：支持推进见 design 23（win32 验证随其 §7 矩阵实机门禁，见 STATUS）。
 
 ## 6. 相关文档
@@ -863,6 +830,6 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   arm/disarm 守同一条同 id boot 尾链与 teardown 屏障）
 - `docs/design/05-connection-manager.md` §2/§6（复合 bundle、启动图清单、N-ctx seam、host 包与 seed）：
   `__DSH_BOOT__` = 「单 entry + 每实例宿主图额外 entry」，构建链含 host 包与 seed
-- `docs/design/04-control-plane-api-data.md` §5（`__DSH_BOOT__` 单条目表述同批修订）
+- `docs/design/04-control-plane-api-data.md` §5（`__DSH_BOOT__` 单条目表述）
 - `docs/design/08-git-worktree-plugin.md`（构建期打包，与本方案互补）
 - `docs/progress/STATUS.md`（唯一进度记录；本方案未闭环的实机与开放项）

@@ -43,7 +43,7 @@ macOS安装包见 [GitHub Releases](https://github.com/panzeyu2013/dsh-chamber/r
 
 - macOS（Apple Silicon）：`dsh-chamber-<version>-macos-arm64.dmg`
 
-当前为0.4.x：stable与beta通道独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；打开后接收 beta 且偏好跨版本保留），逐版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+版本与通道策略以 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases 为准：stable 与 beta 通道独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；打开后接收 beta 且偏好跨版本保留）。
 
 ### 2 · 启动应用
 
@@ -104,7 +104,7 @@ bash install-gateway.sh
 - 桌面通知 — 会话完成 / 提问 / 审批时推送桌面通知，点击直达会话；设置「通知」分组可开关
 - 桌面端更新 — stable与beta配置和feed独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；beta 构建默认也走稳定通道，打开开关后继续接收 beta）；静默检查，确认后下载、退出时安装（低打扰、无弹窗）
 - 睡眠/后台常驻 — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（macOS）；OS唤醒即时重连；保持唤醒开关
-- Chamber设置页 — 设置壳固定入口：连接 / 通用；chamber全局设置与各实例配置严格分离
+- Chamber设置页 — 设置壳固定入口：连接 / 客户端；chamber全局设置与各实例配置严格分离
 - 后端版本容忍 — 实例后端dsh前端版本与chamber壳不同步时照常可用：壳未覆盖的额外插件行降级为「特性缺席」（绝不整boot崩溃）
 
 ## 常见问题
@@ -130,7 +130,7 @@ bash install-gateway.sh
 |[docs/AGENTS.md](docs/AGENTS.md)|文档标准（分层 / 写作 / 篇幅 / 文档门）|
 |[CHANGELOG.md](CHANGELOG.md)|版本变更记录|
 |[docs/design/01-overview.md](docs/design/01-overview.md)|设计入口：收拢原则、范围、移除映射|
-|[docs/progress/STATUS.md](docs/progress/STATUS.md)|完成状态、剩余偏差与验证记录|
+|[docs/progress/STATUS.md](docs/progress/STATUS.md)|唯一进度记录：开放项 / 判据 / 指针|
 |[docs/README.en-US.md](docs/README.en-US.md)|English README|
 
 ## 相关项目

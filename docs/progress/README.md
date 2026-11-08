@@ -37,8 +37,8 @@
 2. **进入实施/验收**：在 [STATUS.md](STATUS.md) 建条目（状态 + 判据 + 指针）；TODO 中已排期的计划细节可删除，
    只留触发条件。
 3. **状态变化**：只改 STATUS。TODO 与 deviations 不改进度状态。
-4. **双 flavor 差异**：结论与证据写 [deviations.md](deviations.md)；open 项在 STATUS 留一行指针；accepted 不重复登记。
-5. **落地或明确不做**：STATUS 删除条目（基线留 git/CHANGELOG/design）；TODO 删除计划；deviations 移入退役索引。
+4. **双 flavor 差异（冻结前历史）**：deviations 冻结后只读，不再新增/维护行；Swift-only 差异与开放项写 [STATUS.md](STATUS.md)；历史引用仍走退役索引。accepted 不重复登记。
+5. **落地或明确不做**：STATUS 删除条目（基线留 git/CHANGELOG/design）；TODO 删除计划；deviations 冻结后不再新增/维护（历史引用留退役索引）。
 6. **引用稳定**：跨文件引用用 `TODO.md A§N`、`B§N`、`C§N`、`D§N`，`deviations.md` 的 S/T/P/G/D 编号，
    或 STATUS 的条目名；编号只增不重排。
 7. **改文件必同步**：新增/移动/删除条目时同步本索引与全仓引用；`node scripts/gates/verify-md-links.mjs` 必须绿。

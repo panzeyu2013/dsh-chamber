@@ -29,15 +29,12 @@ description: Use when reviewing a dsh-chamber pull request; establishes the owni
 - 追溯契约两侧：错误、取消、所有权、清理、回滚。
 - 边界：新增导出 / 公共方法是否有当前消费者；跨包依赖是否走既有 seam；包职责是否仍与 `AGENTS.md` 的 Runtime Boundaries 一致。
 - 运行时与并发：异步取消、teardown、dispose 到静止；新增测试在回归时是否真会变红（负向对照）。
-- 平台：macOS / Swift / Windows 行为改动不能只用 linux 证据。
+- 平台：macOS / Swift 行为改动不能只用 linux 证据；Windows/Linux 桌面腿随 Electron 冻结归档（见 `docs/progress/electron-frozen.md`）。
 - 文档：纯文档 PR 也要看 md-links、i18n、registry 三项证据与改动面选门。
 
 ## review-only（脚本绿 ≠ 满足）
 
-- 「被否方案」是否真的权衡过，而不只是「考虑过」。
-- capability seam 三角色是否完整（Service Definition / Provider / Consumer）；单角色不算 seam。
-- 双语文档的翻译质量：`verify:i18n` 只证明结构与哈希一致，不证明译文准确。
-- 文档与注释的语义准确性（prose 规则靠人读，见 `docs/AGENTS.md` 第 6 节）。
+五项 review-only 义务（被否方案、跨包边界、新 prose 语义、双语译文、文档与代码同一事实）的单源是 `docs/AGENTS.md` §6 与 PR 模板，本 skill 不复述；评审顺序、证据要求与报告格式才是本文件的职责。
 
 ## 报告
 

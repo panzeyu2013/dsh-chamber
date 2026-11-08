@@ -9,9 +9,8 @@ description: Use before pushing, opening or updating a pull request, or claiming
 
 - 门清单单一来源：`scripts/gates/gate-surfaces.json`（门 id、所属 `modes`、`surfaces.local/ci/release`、门所在 workflow 步）。根 `package.json` 只是命令入口，不是清单。
 - 查看计划（不执行）：`node scripts/gates/run-checks.mjs <mode> --list`。
-- 模式：`static` = 静态 / 政策门（含 i18n、md-links、styles 等；i18n 也在 CI 的 pre-install 生成块里跑，md-links/styles 仅本地）；`tests` = 全部包测试（与 ci.yml 同源）；`typecheck` = 客户端插件与宿主包类型检查；`full` = static + typecheck + tests（派生，不落盘）。
 - 平台门：gate registry 过滤 `platform: darwin`；linux 的模式里没有 macOS / Swift 腿，那不等于它们通过。
-- 模式之外的门见 `docs/progress/STATUS.md` §1.6（手写 host typecheck、macOS-only job、C8 重建、远端态验收、notices diff、gateway pack smoke、renderer SVG scoper、Windows manifests）。
+- 模式之外的门见 `docs/progress/STATUS.md` §1.6（清单以该条为准，本文件不复述）。
 
 ## 按改动面选证据
 
@@ -27,5 +26,5 @@ description: Use before pushing, opening or updating a pull request, or claiming
 
 - 不重复跑刚通过的门；不为「全绿」跑 `full`（除非改动跨多个面或在诊断 CI）。
 - 不把跳过说成通过：报告写实际命令与结果，区分 SKIP / 未跑 / 失败。
-- linux 的绿不能替代 macOS / Swift / Windows 腿；这些必须在对应平台跑。
+- linux 的绿不能替代 macOS / Swift 腿；这些必须在对应平台跑（Windows/Linux 桌面腿随 Electron 冻结归档，见 `docs/progress/electron-frozen.md`）。
 - 详见 `CONTRIBUTING.md` 的「测试」「提交前验证」。

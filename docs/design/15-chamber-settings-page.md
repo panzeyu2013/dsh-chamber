@@ -19,7 +19,7 @@
   「未激活/未落座/能力降级」；仍然可见的是连接页该来源卡片上的「客户端插件状态」（`pluginDiagnostic`，来自
   boot/extra-row 诊断通道）。退役依据：该报告的 subject 是单个来源、owner 是壳——既不是该来源账本里的
   `settings.section` 贡献（第一组 = 来源自己贡献了什么），也不是与服务器无关的 chamber 全局状态（第二组契约），
-  放进任何一组都破坏该组语义。**（2026-10 增补）**该事实的可操作面**不回 nav**：选中来源的插件刷新事实
+  放进任何一组都破坏该组语义。该事实的可操作面**不回 nav**：选中来源的插件刷新事实
   （restart / 挂载失败）以 header 区的 `role="status"` 事实条呈现（壳 chrome，见 §6），nav 分组语义不变；
   **跨实例冲突不在其中**（无就地动作，其面 = 连接页：每实例诊断行 + 由它打开的插件对话框，见 §6）。
 - 插件管理在连接页内（`PluginSyncModal`/`PluginAddView`，经 `desktop_ssh_plugin_*` IPC）——**不搬家**。
@@ -117,7 +117,7 @@ ChamberSettings.sessionTodo: {
 ```
 
 - 持久化：主进程 `<userData>/chamber-settings.json`（`chamber-settings.ts`：类型/默认/白名单/嵌套归一与损坏
-  校验/`validatePatch` 同 notifications 纪律；`main.ts` `applySettingsPatch` 嵌套 deep-merge，绝不全组替换）；
+  校验/`validatePatch` 同 notifications 纪律；`shell-core.ts` `applySettingsPatch` 嵌套 deep-merge，绝不全组替换）；
 - 类型镜像三处：`desktop/chamber-settings.ts`（store 权威）、`desktop/electron/preload.cts`（归档面）、`renderer/src/global.d.ts`
   （preload↔renderer 由 `test/ipc/ipc-surface-mirror.test.ts` 守护，含嵌套类型签名比对；desktop store 为手工镜像）；
 - 渲染端助手：`settings-bridge/src/client/session-todo-settings.ts`（`sessionTodoOf`/`sessionTodoPatch`/
@@ -180,13 +180,13 @@ flavor 皆不可得**（单 renderer 架构）。
 
 - 设计 11（更新）：入口并入见 D1；「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默
   检查路径）。
-- 设计 09 §5（设置面装载边界）：完整桥接修订后设置面**不装载插件**，组装诊断块随之退役；**这不是「插件提级」**
+- 设计 09 §5（设置面装载边界）：完整桥接形态下设置面**不装载插件**，组装诊断块随之退役；**这不是「插件提级」**
   （§D2 仍推迟不排期），提级指把官方 `settings.section` 的 plugins 段抬成独立入口。
 - 设计 05 §4.1（N-ctx 壳常驻）：D5 是该策略的**可见性与手动控制面**——常驻事实经页面级
   `residentBridge` 快照进入设置壳，释放意图回到 App 的唯一拆除入口；面板不持有策略（策略与纯决策在
   `resident-policy`/App 守卫，design 05 §4.1）。
 - 设计 05 §5：连接页是设置壳的**固定 nav 入口**（`__connections`，分隔线之下、不占 ledger order），**不是**
-  官方 `settings.section` 注册——id `connections` 的 host-ctx 注册已随完整桥接修订移除
+  官方 `settings.section` 注册——id `connections` 的 host-ctx 注册已随完整桥接形态移除
   （`packages/dsh-chamber-client-ui-settings-connections/src/client/index.ts` 只提供分节组件与字典命名空间）；
   该格式的注册保留给 chamber 自研分节「dsh 运行时」（设置壳在该来源自己的 boot ctx 上注册）。
 - 设计 13（插件管理）：IPC 面不动，视图维持现状。
@@ -209,7 +209,7 @@ flavor 皆不可得**（单 renderer 架构）。
   complete/ask/request）；
 - `docs/progress/STATUS.md`（进度唯一记录）。
 
-## 6. 完整桥修订
+## 6. 完整桥接形态
 
 > 本节补写选中来源设置面的实现契约；权威分类仍以 §2（D1 固定入口 / D3 两组不交叉 / D4 会话待办区 / D5 性能与内存）为准，
 > §1 的壳形态描述保持。落点均在 `packages/dsh-chamber-client-ui-settings-bridge/src/client/`。
@@ -219,7 +219,7 @@ flavor 皆不可得**（单 renderer 架构）。
 - **源下拉（N 源切换）**：行集来自 `chamberBridge` 投影（`bridge-servers.ts`；渲染签名 `serverProjectionSignature` 含 `sourceFingerprint` 与连接页所渲染的诊断字段，时间戳刷新被抑制），可搜索（label + id）、离线来源可选（进入不可达占位 + 连接管理入口）；默认选中 hosting instance → 首个 connected → 首行。切换来源不改当前分节：chamber 全局 id 优先，服务端分节 id 离开新来源台账时回落首行（`nav-active.ts`）。面板打开期间 `chamberBridge.setSettingsTarget(selectedId)` 让 App 保证该来源壳挂载（未挂载则后台挂载、不切 active view）并排除出回收路径，关闭/卸载即撤除。
 - **渲染绑定座位**：条目 kit = 该 ctx 的标准座 + `t`（该来源 locale face 的命名空间绑定，按 revision 缓存）+ 条目自己的 `useStore`/`actions`（`store.create()` per entry 缓存）+ `renderSlot`（仅 root list/keyed；未声明或非 root 子座抛 `BridgeAssemblyError`）+ 条目 `inject` 面 + owner props；缺席的座保持缺席，绝不伪造空 observable。每个槽渲染点恒有 `[data-slot="<key>"]` 锚点（`display:contents`），胜出条目、fallback、占用但无胜出者的死单元与未声明槽都在内渲染，死单元给 `[data-slot-error]`（`cell-dispatch.ts`）；每个出口由 `BridgeEntryBoundary containAll` 收口，外来条目的渲染/装配错误永不 abdicate chamber shell。
 - **staged 保存与权威分类**：各分节的保存语义由条目自己的 store/组件持有（官方分节的草稿→校验→提交原样保留；桥只物化 `useStore`/`actions`/`inject`，不拦截、不重实现、不代持）。chamber 全局 `__general` 仍是主进程 `chamber-settings.json` 的乐观 overlay（`settings-store.ts`：同帧可见、失败回滚、最新保存替换在途）；`__connections` 为草稿（`connection-form.ts` 的 `HostDraft`，秘密字段仅瞬时）→ 渲染端校验 → 一次 `desktop_ssh_save_connection` 事务提交，失败以 `formError`/字段错误行如实呈现；凭据只以 `sshPasswordSet`/`tokenSet`/`passwordSet` 存在性投影回读、清除恒为 clear-only（`clear-credential.ts`，凭据值永不进 renderer）。三组权威（chamber 全局 / 选中实例自己 ctx / 连接注册表与凭据）互不交叉。
-- **每来源插件刷新事实与收敛（2026-10 增补）**：选中来源的 `pluginDiagnostic`（chamber-owned 事实，与 boot/extra-row 诊断同源）在面板 **header** 区投影成一条 `role="status"` 事实条（`plugin-notice.ts` 纯投影）：`restart-required` → 「有插件变更尚未生效」+「重新加载应用」；`bundle-load-failed` → 原文 + 「重试」（按来源请求一次 client 图重同步：client-core 的页面请求缝 `requestClientGraphResync`，App 转发给该来源壳）。**`instance-version-conflict` 不投影到事实条**：它是 boot 事实、无就地动作（任何重载都换不掉先加载者，故也不自动重载），唯一面是连接页（该实例诊断行 + 由它打开的插件对话框横幅/hint；problem 语气 + 完整 message，含两端 release 与对齐指引）。通道类事实（`not-injected`/`graph-unreachable`）仍归连接页与降级横幅，此处不重复；`ok` 不渲染。收敛策略（结算 provenance + 每结算一次重订阅 + 5s 有界窗口 + 独立预算重载）与单测/实机判据见 design 09 §3.7；事实条只在选中来源 **connected** 且当前分节属于该来源自己的台账时渲染（**connected 之外的第二道门槛**：`__connections`/`__general` 两个 chamber 全局固定分节不渲染——那里的 header 不属于任何服务端来源；离线来源走不可达占位）。
-- **取舍（2026-11，冲突事实条退役）**：候选 = ①事实条保留并加一次性 dismiss（按来源/指纹的 ack 状态，页面重载后复发）；②生产端不再上报 `instance-version-conflict`（删掉连接页唯一诊断面，并破坏 design 09 §3.7 的跨实例复用语义）；③事实条每页面会话只显示一次（保留因果提示，但启动后仍打扰）。现取 ④从 header 投影移除、事实留在连接页：唯一同时满足「不反复出现」「不引入新状态」「不损失诊断内容」的形态；代价 = 设置页内不再有「本来源为什么可能少了分节」的因果提示，需到连接页查阅。
+- **每来源插件刷新事实与收敛**：选中来源的 `pluginDiagnostic`（chamber-owned 事实，与 boot/extra-row 诊断同源）在面板 **header** 区投影成一条 `role="status"` 事实条（`plugin-notice.ts` 纯投影）：`restart-required` → 「有插件变更尚未生效」+「重新加载应用」；`bundle-load-failed` → 原文 + 「重试」（按来源请求一次 client 图重同步：client-core 的页面请求缝 `requestClientGraphResync`，App 转发给该来源壳）。**`instance-version-conflict` 不投影到事实条**：它是 boot 事实、无就地动作（任何重载都换不掉先加载者，故也不自动重载），唯一面是连接页（该实例诊断行 + 由它打开的插件对话框横幅/hint；problem 语气 + 完整 message，含两端 release 与对齐指引）。通道类事实（`not-injected`/`graph-unreachable`）仍归连接页与降级横幅，此处不重复；`ok` 不渲染。收敛策略（结算 provenance + 每结算一次重订阅 + 5s 有界窗口 + 独立预算重载）与单测/实机判据见 design 09 §3.7；事实条只在选中来源 **connected** 且当前分节属于该来源自己的台账时渲染（**connected 之外的第二道门槛**：`__connections`/`__general` 两个 chamber 全局固定分节不渲染——那里的 header 不属于任何服务端来源；离线来源走不可达占位）。
+- **取舍（冲突事实条退役）**：候选 = ①事实条保留并加一次性 dismiss（按来源/指纹的 ack 状态，页面重载后复发）；②生产端不再上报 `instance-version-conflict`（删掉连接页唯一诊断面，并破坏 design 09 §3.7 的跨实例复用语义）；③事实条每页面会话只显示一次（保留因果提示，但启动后仍打扰）。现取 ④从 header 投影移除、事实留在连接页：唯一同时满足「不反复出现」「不引入新状态」「不损失诊断内容」的形态；代价 = 设置页内不再有「本来源为什么可能少了分节」的因果提示，需到连接页查阅。
 - **`settings.launcher` 座（壳 chrome 渲染点）**：上游 `ui-settings` 声明的 single 座由官方 `SettingsRoot` 在触发行渲染（无注册者回落普通设置按钮），owner props `{ wide, settingsOpen, openSettings, openOnboarding, settingsShortcut? }`——`settingsOpen` 的 false→true 边沿 = 一次进入设置，`settingsShortcut` 未绑定即缺席，`openOnboarding(id)` 直达该 id 的注册步骤。chamber 壳遮蔽官方 shell 后，触发行由 `SettingsShell.tsx` 自绘 trigger（`aria-haspopup="dialog"`/`aria-expanded`，关闭后焦点还给触发器）；打开面板与 `settings.onboarding` 协调器（`onboarding.ts`）分别是 `openSettings`/`openOnboarding` 动作面的对应实现。
 - **与 §2 的关系**：本节不改写 D1/D2/D3/D4——固定入口 `__connections`/`__general`（`FIXED_SECTION_IDS`）、两组永不交叉、会话待办区设置契约继续以 §2 为准；本节只补写「选中来源设置面的数据来源、座位与写路径」。连接页自身仍是设置壳的固定 nav 入口（不经官方 host-ctx `settings.section` 注册，见 §3）。

@@ -6,10 +6,7 @@
 
 ## 内容与两份 flavor 的差别
 
-**python-only（默认；Electron 打包腿）**：`runtime.json` + `dependencies/python/**`（CPython 解释器
-+ 平台轮子/site-packages）。Electron 经 `build.extraResources` 投递到
-`<resourcesPath>/primary-runtime`；本仓 Electron 分支当前没有启动行消费者（该分支未来移除，本轮
-不接线）。
+**python-only（默认；Electron 打包腿已冻结归档，不接启动行）**：`runtime.json` + `dependencies/python/**`（CPython 解释器 + 平台轮子/site-packages）。Electron 经 `build.extraResources` 投递到 `<resourcesPath>/primary-runtime`（归档参考；现行 full 载荷服务 Swift 本地腿）。
 
 **full（Swift 本地腿）**：`prepare-python-payload.mjs --with-node --with-pnpm` 追加 node/pnpm；
 `build:sidecar` 把它拷到 `<sidecar>/primary-runtime`（与 `<sidecar>/office-skills`、`sidecar.js`

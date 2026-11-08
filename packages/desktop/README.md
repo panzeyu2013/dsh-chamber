@@ -7,7 +7,7 @@
 > 清单见 [`../../docs/progress/electron-frozen.md`](../../docs/progress/electron-frozen.md)；归档目录说明见
 > `electron/ARCHIVED.md`。
 
-dsh-chamber 的 Electron 壳（v4 连接管理器形态，冻结归档）：单 frame 加载控制面 origin 上的 dsh 官方前端；主进程承担正交目标/传输管理（`dsh|gateway × ssh|http`）、实例注册表、write-only 凭据事务与 IPC。
+dsh-chamber 的 Electron 壳（v4 连接管理器形态，**ARCHIVED 归档参考**；现行出货面是 Swift 原生壳）：单 frame 加载控制面 origin 上的 dsh 官方前端；归档的主进程承担正交目标/传输管理（`dsh|gateway × ssh|http`）、实例注册表、write-only 凭据事务与 IPC。
 
 ## 目录
 
@@ -15,7 +15,9 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态，冻结归档）：单 
 - `host-assembly.ts` — **两 flavor 共享的宿主装配单一实现**（`createHostAssembly(deps)`：运行时启动前导 / 凭据存储 / gateway 会话 / transportManager / host 包 seed / `publishRegistryTransition` / runtime 启动事务宿主 / ctx / 启动尾部 / 回收腿）。`electron/main.ts`（Electron，归档）与 `sidecar-ctx.ts`（Swift sidecar）只保留各自的 edge 差异注入；差异全部在依赖参数层，装配体内无 flavor 分支。
 - `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 `test/ipc/ipc-surface-mirror.test.ts` 守卫）
 - `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/index.js` 自包含 esbuild 产物），导出 `createControlPlane`、共享协议工具（rpc-envelope / cordis-inserts）与 wire plugin-manifest 读算法（parsePluginManifest / readManifestVersion / isMaterializedValue）
-- `updater.ts` — 更新控制器（设计 11）：stable 走 GitHub provider；beta 按应用自身版本自动锁定，经有界 Releases API 选择最高 canonical published beta 后切 exact-tag Generic feed（发现失败绝不回退 `latest*`）；静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
+- `update-headless.ts` — **Swift 现行更新控制器**（headless sidecar）：共享 `update-discovery.ts` 的有界查询 + 原生腿（Sparkle）check 转发、revision 护栏、idle 看门狗与可选 `update-journal.ts` 取证；Electron-free（只 import `updater.ts` 的纯函数）
+- `update-schedule.ts` — 静默检查节奏单源（首检延迟 / 周期 / 失败退避 / 抖动常量，两 flavor 共用）
+- `updater.ts` — **Electron 归档更新控制器**（设计 11；`update-headless.ts` 复用其纯函数）：stable 走 GitHub provider；beta 按应用自身版本自动锁定，经有界 Releases API 选择最高 canonical published beta 后切 exact-tag Generic feed（发现失败绝不回退 `latest*`）；静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `electron/preload.cts`（**归档**）— 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
 - `renderer-trust.ts` — IPC 围栏（`createTrustedIpc`：sender/frame/origin 校验，语义不变抛 `ipc_sender_forbidden`）+ 渲染进程 URL 信任判定
 - `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 可选传输 argv / stderr 分类 / 可选 exec + verifyUp；缺省为无子进程的 direct-endpoint 模式，SSH provider 才拥有本地隧道）
@@ -87,7 +89,7 @@ pnpm run dist:desktop
   `npx --yes pnpm@<同一版本>` 兜底（版本从 `packageManager` 读取，不手抄），不解析浮动 major tag。
 - pnpm 11 两个坑（bundle-dsh 已处理）：① 默认拦截依赖构建脚本 → 生成的 `pnpm-workspace.yaml` 用 `allowBuilds` 白名单放行 node-pty/koffi/protobufjs/@google/genai/@deepseek-ai/dsh-subprocess-local（原生模块）；② 默认发布年龄策略可能过滤指定版本 → 临时 workspace 使用 `minimumReleaseAge: 0`，但输入仍必须是精确 semver，不引入浮动解析。
 - **安装后清理运行期不需要的内容**（`pruneRuntimeArtifacts`）：node-pty 的构建源料（deps/third_party/src/scripts/typings/binding.gyp）与**异平台**预编译归档——运行时按 build/Release → build/Debug → `prebuilds/<platform>` 顺序加载，因此**保留当前平台的 prebuilds 子目录**，只删其余平台；mistralai/openai 的 TS 源码/示例/测试；全树 `*.d.ts`/`*.d.cts`/`*.d.mts`/`*.map`；文档/许可/测试类文件（`*.md`、README/CHANGELOG/LICENSE、`*.test.*`）——**例外：`docs/` 下的 Markdown 保留**（任意深度、目录名大小写不敏感；`docs/` 内的 `test`/`examples` 等附属物目录仍整目录删除），插件管理器的 bundle 详情页在运行期读 locale `meta.detail` 指名的文档（`bundle-dsh` 在 prune 前后核对声明目标，删掉即封装失败）。正确性由安装后冒烟与上述核对兜底。
-- 控制面 spawn 入口统一为 `<node> <workspace>/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web`（`resolveDshEntry` + `resolveNodeExecutable`，spawn-dsh.ts）。node 可执行不假设在 PATH 上：Electron 主进程内用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（另前置 `--expose-internals`，dsh loader 需要），纯 node 环境用 `process.execPath`，兜底 PATH 搜索——打包 App 从 Finder 启动时 PATH 极简，裸 `spawn('node')` 会 ENOENT。
+- 控制面 spawn 入口统一为 `<node> <workspace>/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web`（`resolveDshEntry` + `resolveNodeExecutable`，spawn-dsh.ts）。node 可执行不假设在 PATH 上：Electron 主进程（**归档**）内用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（另前置 `--expose-internals`，dsh loader 需要），纯 node 环境用 `process.execPath`，兜底 PATH 搜索——打包 App 从 Finder 启动时 PATH 极简，裸 `spawn('node')` 会 ENOENT。
 - 封装完成后 `vendor/dsh/package.json` 记录实际解析到的精确版本（`dependencies["@deepseek-ai/dsh"]`）、封装平台（`dsh.platform`）与裁剪规则版本（`dsh.pruneRevision`）；已封装且**平台、版本与裁剪规则一致**时再次 bundle 跳过（跨平台复用会打进错误平台的原生二进制，自动重封装；裁剪规则一变也重封，旧规则裁出的树不会被当成已完成），`--force` 刷新当前 pin。重新封装期间保留 last-known-good 目录；只有安装、裁剪、版本核验与 smoke 全部通过后才交换目录，交换失败自动回滚，进程中断后的下次运行会恢复备份。
 
 ### build:control-plane：打包态控制面打包（scripts/build-control-plane.mjs）
@@ -140,7 +142,7 @@ pnpm run dist:desktop
 
 - **打包态**：`userData = appData + app.getName()`；`app.getName()` 取 package.json 的**顶层** `productName`、其次 `name`。本仓顶层没有 `productName`（`build.productName` 只命名 .app/DMG）→ 目录名是包名：macOS `~/Library/Application Support/@dsh-chamber/desktop`（2026-09 实机核实；Windows/Linux 同推导）。Swift 壳同根（`PackagedLayout.userDataDir`，由 `chamber-lock.test.ts` ⑦ lockstep 断言钉住）。
 - **dev 态**：`electron-dev.mjs` 显式传 `--user-data-dir=packages/desktop/.dev-user-data`（gitignored）——**dev 与打包态目录不同、状态互不共享**（注册表/密码/目录各自独立）。
-- userData 下内容：`ssh-instances.json`、`ssh-passwords.json`（schema v2 binding）、`gateway-secrets.json`（schema v3 binding；safeStorage 优先、诚实 0600 plaintext fallback）与 `state/` + Electron 自身缓存。
+- userData 下内容：`ssh-instances.json`、`ssh-passwords.json`（schema v2 binding）、`gateway-secrets.json`（schema v3 binding；safeStorage 优先、诚实 0600 plaintext fallback）与 `state/`（Electron 自身缓存为归档参考）。
 - **不在 userData 下**：askpass 助手位于 `os.tmpdir()/dsh-chamber-ssh-<pid>-<random>/`；独立控制面默认 `~/.dsh-chamber` 或 `$DSH_CHAMBER_STATE`。
 
 ### IPC 清单（preload 白名单）

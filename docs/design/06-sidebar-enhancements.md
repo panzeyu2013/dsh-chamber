@@ -257,7 +257,7 @@
   `[SIDEBAR_MIN, SIDEBAR_MAX]` 拖拽范围 [264,420]，从未拖过回退
   `SIDEBAR_DEFAULT`），每次拖拽 `setSidebar` 经 `updateViewPrefs` 写回同键
   `dsh-chamber.sidebar.v1`，所有 live boot 的 store 订阅并即时采纳（宽度尾写见下条）；替换官方
-  ui-layout 注册（见 05 §6）。**宽度尾写（2026-02 性能修订）**：拖拽期仍是 150ms 防抖尾写
+  ui-layout 注册（见 05 §6）。**宽度尾写**：拖拽期仍是 150ms 防抖尾写
   （拖动热路径不落盘），但窗口 `pagehide`／`beforeunload` 会立即 flush 待写宽度并取消定时器
   （同一笔尾写恰好一次）——否则关窗会丢掉最后一次拖拽。**Rejected alternatives**：把防抖缩到 0
   （拖动期每帧写盘，写放大回到热路径）；只在 `beforeunload` 里同步写（WKWebView 的 unload 路径
@@ -297,7 +297,7 @@
 
 ### 3.3 代码落点
 
-- **渲染结构（性能修订，2026 对齐轮收尾）**：侧栏 context 的动作经 `useStableHandlers` 冻结身份
+- **渲染结构**：侧栏 context 的动作经 `useStableHandlers` 冻结身份
   （每属性缓存闭包、调用转发到每次渲染刷新的 ref），状态字段逐项进依赖——于是 `memo(ServerSection)` /
   `memo(SessionRow)` 真正生效；per-source 账号序**每渲染每工作区只算一次**（resetKey 与 walk 共用同一
   缓存），flat 账号只对账/分区一次且仅在 flat 态构建（walk 直接渲染 `flatSessions`）；工作区拖拽环境
@@ -346,7 +346,7 @@
   无法通过查看清除的幻影提醒。**诊断面缺口（已登记）**：`data-chamber-session-state`/
   `data-chamber-state-source` 与行 `title`/`aria-label` 仍按未含 archived 的派生报状态
   （见 STATUS §1.2）。
-- **归档警示**（上游 `RowActionToast` 的 section 内实例化，2026-10 收敛）：只剩「点击归档行
+- **归档警示**（上游 `RowActionToast` 的 section 内实例化）：只剩「点击归档行
   不可打开」一态（`toast.archivedNotOpenable`），落**触发来源**的 section 内、折叠门内、per-shell
   瞬态，3s 自动消失（上游 Toast 默认 hold；`sidebar-root-notices.ts`）。alpha.3 起同一 per-source
   瞬态通道承载 SessionId 菜单（§4）的复制反馈两态（`toast.sessionIdCopied` / `toast.sessionIdCopyFailed`）：
@@ -413,7 +413,7 @@
 
 ### 4.1 事实来源（每 ctx 运行时）
 
-- **两个官方事实面，别混**（2026-01 校正）：
+- **两个官方事实面，别混**：
   - `ctx.sessions.list`（ObservableSnapshot）行字段就是客户端 store 行
     （`projectList()` 之后）：`id`、`displayTitle`、`running`、`blank`、
     `updatedAt`、`retainedBy`，稀疏的 `title`/`cwd`/`parentId`/`origin`/
@@ -560,12 +560,12 @@
   级事实随断连失效）；臂在无上报时冻结，重连后按新上报重新对账。
 - **通道字段与判定面**：每条上报另带 `listComplete?: boolean`（vendor list store
   `phase === 'ready'`，即本客户端至少成功拉过一次基线——臂「缺席即删除」的唯一门控）
-  与 `stale?: boolean`（断连/主机不可达时仍可附加的只读事实，R14）。**stale 只走渲染面**：
+  与 `stale?: boolean`（断连/主机不可达时仍可附加的只读事实）。**stale 只走渲染面**：
   overlay 的 `isFactsUsable` 保留 stale 行（读取只读事实 + 标 stale），而完成观测
   （通知候选）走更严的 `isFactsDecisionUsable`（额外 `!stale`）——载体已断的行不得
   当证据；臂的武装证据同样要求 `!stale`。facts 行/水位**不参与**完成点武装（对齐后
   无水位概念），只服务通知候选与渲染；`todo-attention` 对断连来源只渲染
-  `runtime.stale === true` 的事实（R14 方案 A）。
+  `runtime.stale === true` 的事实（方案 A）。
 - **facts 快照的行级输入**：`SessionFactsSnapshot.baselines` 从 wire
   `diagnostics.baselines` 闩锁——该值的单一来源是 **store** 的「成功且完整基线」计数
   （每次成功 `applyBaseline` 递增，**含 poll 档**；mux 自己的 reconcile 计数另放
@@ -624,8 +624,7 @@
     （`sidebar-chamber.module.css` `.statusOk`），同侧栏里"会话完成未读"与
     "服务器已连接"会同色，故**不用官方 done 色**；它与运行中同属
     品牌蓝（`--dsh-state-ongoing` 同为 `--dsw-static-deepseek-450`），但 6px 实心点
-    与官方 10px 八格追逐环可区分。沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1 官方 `done` 绿点 → **品牌蓝点**；
-    **武装/解除事实 = 官方 `completionUnread` 位 ∪ 修正臂**（§4.1/§4.2；通知边沿继续走运行位，未变）。
+    与官方 10px 八格追逐环可区分。**武装/解除事实 = 官方 `completionUnread` 位 ∪ 修正臂**（§4.1/§4.2；通知边沿继续走运行位，未变）。
     判据按此钉住：蓝点必须存在、
     `StateDot state="done"` 不得回归、运行环仍是官方 ongoing。
   - **活动定时任务标记（owning 来源，上游 occupant）**：行首座席（标题之前）由上游
@@ -685,7 +684,7 @@
 - **不再显示相对时间**：session 行不渲染"xx 前"时间单元格（`time.*` locale 键
   **保留供 hover 卡相对时间使用**；`relativeTimeBucket` 纯函数保留为共享工具）。
   相对时间列**暂不回归**（多来源密度 + 行尾状态槽取代时间列）；若未来回归需
-  同步修订 05 §2.1 的文案。
+  与 05 §2.1 的文案一致。
 - **当前会话高亮 = 全局单选**：`server.runtime?.current` 命中即高亮，但仅限
   **拥有当前可见 ctx 的来源**（渲染侧 `server.id === chamberInstanceId` 门控）
   ——各来源壳内"切换前最后一个"会话不全部高亮，全局只有一个高亮（正在查看的
@@ -708,7 +707,7 @@
   可选落 `data-chamber-goal-active`；`suppressedBy` 区分 `'goal'`（activation 已知）与
   `'unknown'`（activation 未知，静默窗口与通知层 unknown-hold 同态）。pending 档不标
   suppressedBy（等待输入不是压制）。
-- **运行位解析：镜像官方规则、一处解析（2026-01，`resolveSessionRunning`）**：官方
+- **运行位解析：镜像官方规则、一处解析（`resolveSessionRunning`）**：官方
   `dsh-client-ui-workspace` 的会话节点自己就写着 `running: status?.running ?? s.running`
   ——ui-session 实时 `sessionStatus` 投影优先、会话列表行兜底，且 `false` 是**真实观测**
   （`??` 承重）。chamber 的每个运行位消费点因此走**同一个实现**
@@ -824,11 +823,11 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   （官方 copy：`{n} 个子代理运行中` / `{n} subagent(s) running`）。
 - **可呈现性三值（P5）**：计数只说明「索引在场时算出了几个运行中的后代」，
   不是「正在干活」的证据。父行改带 `subagentActivity: none | running | unknown`：
-  索引缺席或来源 stale（R14）时读数是 `unknown`，中性呈现——不点亮子代理圆环/播报，
+  索引缺席或来源 stale 时读数是 `unknown`，中性呈现——不点亮子代理圆环/播报，
   也不据此压制 completed/running 读数与待办条目；`runningSubagents` 保持稀疏计数供诊断。
   守卫单源 = `packages/dsh-chamber-client-core/src/session-row-state.ts` 的 `subagentActivityOf`（行读数、圆点、待办共用）；
   上游完整性信号落地后删除本地 fallback（见 `docs/progress/TODO.md` A§7）。
-- **facts-only 源的 `subagentCount` 只在谱系已认证时是 busy 证据（I-12 修正 R2-G）**：
+- **facts-only 源的 `subagentCount` 只在谱系已认证时是 busy 证据（I-12）**：
   gateway/SSH facts 行的 `subagentCount` 是「在场子会话数」（宿主投影/谱系索引的
   cross-section），默认不是「正在干活」的证据。`completion-observation.ts` 只把**壳通道**的
   `runningSubagents + subagentActivity` 当运行证据；facts-only 行要成为运行证据须命中源侧认证——
@@ -959,7 +958,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `<style>`（同内容，随各自 fiber 移除，良性重复）。①（document 级 drop 扇出）已按「构建期
   vendor 补丁 + 按落点壳 containment」落地：drop/dragenter/dragover/dragleave 四副作用同归属、
   隐藏壳不再入稿或叠遮罩（design 25 §5.7，残余见 S-56）；④ 的 portal 逃逸仍未修（任意打开态
-  在程序化切换后盖在别的视图上），其中 `ui-attachment` 的 N 层遮罩已随本批 containment 消除。
+  在程序化切换后盖在别的视图上），其中 `ui-attachment` 的 N 层遮罩已随 containment 消除。
 
 ### 4.7 面板轴（`sidebar.panellist` 的宽态落点）
 
@@ -967,7 +966,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 
 - **宽态（两个形态：owning 真身 / 非 owning 回落；后者再分「已发布投影」与「默认组合」两种事实来源）**：入口渲染在该来源自己的 server 头内——`ServerSectionHeader.tsx` 的
   `.sourceActions` 动作簇首位（视图选项左侧），随簇静息 `display:none`（hover / 键盘焦点 /
-  视图选项菜单或搜索胶囊展开才显形；2026-09 用户裁决「可以接受 display:none 保持静止不可见」）。
+  视图选项菜单或搜索胶囊展开才显形；用户裁决「可以接受 display:none 保持静止不可见」）。
   - **owning 来源（本壳 ctx 的真身）**：`server.id === chamberInstanceId` 分支上，每个
     `sidebar.panellist` 注册渲染成一个 20px `.actionIcon` 按钮（`PanelHeaderEntry`，
     `sidebar-root-chrome.tsx`）：`usePanelInfo` 只订阅自己条目的选中态，
@@ -1002,7 +1001,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
 - **rail 态**：分组不渲染，保留上游全局面板字形行（`SidebarRoot.tsx` 的
   `!wide && panels.length > 0` 守卫；18px 字形、tooltip、`aria-current` 与上游 rail 形态逐字一致；
   `PanelRow` 的上游 wide 半支（16px / title / disabled tooltip）随入口进头部成为死分支，
-  2026-10 清理时删除而非留作不可达代码）。**宽态**每个侧栏 DOM 内每条**有回落字形**的注册
+  清理时删除而非留作不可达代码）。**宽态**每个侧栏 DOM 内每条**有回落字形**的注册
   **恰好一个**入口（owning 真身或跨来源回落二者之一；未知面板 id 见下方残余）；**rail 只渲染
   本 ctx 的字形行**（跨来源入口仅宽态；位置锁：`test/plugin-kernel/panel-entry-placement.test.ts`
   与 `test/plugin-kernel/foreign-panel-axis.test.ts`）。
@@ -1059,10 +1058,9 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 的 `selectPanel`
     （实际可达的只有 `schedules → 'cron'` 一条，`plugins` 面板在本仓已迁设置页）。
 - **Rejected alternatives**（实现面）：① 36px 面板行挂在来源头与浏览区之间（早期实现；行高使
-  section 增高约 38–42px、把入口从头部动作簇割出来，拖拽中点与滚动回退锚都随之位移）——2026-09
-  用户裁决删除；② 常驻显示在状态点旁——用户明确接受静息 `display:none`；③ 全局轴 + 分组内双渲染
+  section 增高约 38–42px、把入口从头部动作簇割出来，拖拽中点与滚动回退锚都随之位移）——用户裁决删除；② 常驻显示在状态点旁——用户明确接受静息 `display:none`；③ 全局轴 + 分组内双渲染
   ——一条注册两个入口，上游只有一行；④ rail 不显示——丢掉上游「折叠后仍可达」；⑤ 26px 密度变体
-  ——本批明确维持上游 rail 几何；⑥ 只渲染 owning 来源（旧实现）——非活动来源入口不可达；
+  ——本仓明确维持上游 rail 几何；⑥ 只渲染 owning 来源（旧实现）——非活动来源入口不可达；
   ⑦ 跨壳 React portal——两棵 root 的生命周期互相约束；⑧ 对**已挂载的**非活动来源也硬编码单一
   动作而不读该来源的注册元数据——默认组合写死进侧栏，profile 关掉面板时承诺不存在的面板
   （未挂载来源没有注册事实可读，才允许默认组合回落）。
@@ -1120,21 +1118,12 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   挂载；chamber 的打开意图三闸门只消除**用户可感的中间态**，不阻止那次 create。
   偏差登记见 design 05 §2.2.1「登记残余」与 STATUS「远端宿主上的空白会话残留」，
   根治提案见 `docs/progress/TODO.md` A§1。
-- **完成未读对齐的明确放弃（仍成立，发布说明素材）**——下列能力是「官方位唯一
-  权威」的代价，逐条登记（判定/生命周期与上游相同，偏差只在呈现）：
-  - **重载即忘**：官方位是 ctx 内存 Set，桌面 reload/重启后全空；chamber 不再有
-    durable 账本，也不做任何恢复或播种。
-  - **未挂载来源的官方完成位仍缺席**：无 ctx 即无官方 `completionUnread`（「正在阅读」的
-    解除语义也只存在于挂载 ctx）；但受控的**判定侧读回退**——facts-only provenance 的
-    来源由修正臂按逐行 host 运行边沿补蓝点、facts 候选补完成通知（§4.1/§4.2、
-    design 19 §3.2/§3.5），只在**无 ctx 上报**时生效。
-  - **手机读不再清桌面**：跨端读回执（原 mobile 端 `read-watermark` + gateway
-    `POST /chamber/session-state/read|read-all`）随权威切换整体退役；桌面点/角标
-    只由本端阅读解除。
-  - **「全部已读」入口消失**：来源级批量已读（桥/菜单/文案）整体删除。
-  - **facts 水位不再参与武装**：observer 域 `completedAt` 不武装未读（无水位、无
-    播种、无时间域概念；facts 只服务通知候选与渲染）。无壳路径的 `beforeBaseline` 支也只用
-    host running 边沿 + status 首发位，不引入 observer 戳。
+- **完成未读对齐的明确放弃**——下列能力是「官方位唯一权威」的代价，逐条登记（判定/生命周期与上游相同，偏差只在呈现）：
+  - **重载即忘**：官方位是 ctx 内存 Set，桌面 reload/重启后全空；chamber 没有 durable 账本，也不做任何恢复或播种。
+  - **未挂载来源的官方完成位缺席**：无 ctx 即无官方 `completionUnread`（「正在阅读」的解除语义也只存在于挂载 ctx）；受控的**判定侧读回退**——facts-only provenance 的来源由修正臂按逐行 host 运行边沿补蓝点、facts 候选补完成通知（§4.1/§4.2、design 19 §3.2/§3.5），只在**无 ctx 上报**时生效。
+  - **手机读不清桌面**：跨端读回执（`read-watermark`、gateway `POST /chamber/session-state/read|read-all`）不存在；桌面点/角标只由本端阅读解除。
+  - **没有「全部已读」入口**：来源级批量已读（桥/菜单/文案）不存在。
+  - **facts 水位不参与武装**：observer 域 `completedAt` 不武装未读（无水位、无播种、无时间域概念；facts 只服务通知候选与渲染）；无壳路径的 `beforeBaseline` 支也只用 host 运行边沿 + status 首发位，不引入 observer 戳。
 - **有壳来源在 shell 首次观察之前的完成仍无官方位**（与上游相同）：官方位只在已挂载
   ctx 里产生。该窗口只在**没有 facts 载体**时才是完成的盲区：P2a 镜像 / P2b 观察者与
   挂载无关，被观察到的 host 运行边沿 + facts 候选可补完成点与通知（§4.1/§4.2）；采样粒度
@@ -1383,7 +1372,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`）——双击窗口内列表绝不位移。
 - **会话状态指示**：固定 10px 行尾状态槽——常态空、运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束
   未读 = **chamber 品牌蓝点** `.stateCompleted`（6px 实心；官方 `done` 绿点因与来源头连接绿点同 token
-  被否，沿革见 §4.3）；**待交互 = 14px 图标徽标**（问号/清单/警示三角；几何与配色契约见 §4.3）。token：
+  被否，理由见 §4.3）；**待交互 = 14px 图标徽标**（问号/清单/警示三角；几何与配色契约见 §4.3）。token：
   运行/completed = `--dsw-static-deepseek-450`（同一品牌蓝，形状区分），pending 徽标用
   `--dsw-alias-state-{business,warn}-primary`。状态槽非身份标记（身份由来源头折叠字形 accent + 激活左
   内边线 + rail 按钮/色点承担；连接状态点/转圈保留在头部右端）。
@@ -1451,7 +1440,13 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   `sessionRowsExpanded` 与签名里的 `expanded` 输入重叠——保留是为了让窗口规则只由 `sessionRowWindowMotionKey`
   定义（这里不手写窗口语义），行为上无影响；`prefers-reduced-motion: reduce` 整体跳过；每次动画 `finish` 即 `cancel()`，静止态永远是元素自身样式。
   回归锁：`test/session-rows/animated-rows.test.ts`（移植体与 pin 住的上游逐字一致 + 常量/key 契约/门控）。
-- **行位移期间的指针门控（`hover-motion-gate.ts` + `data-hover-gate`）**：一次提交把某 keyed 行搬到**静止指针**下时，浏览器会为该行合成 boundary 事件——本机 headless Chromium 149 实测：提交后 t≈347ms 收到 `pointerover`/`pointerenter`/`mouseover`/`mouseenter`（`clientX/Y` 与按下时相同，同期 0 个 `pointermove`），随后 `:hover` 也命中它。于是三条"指针进入"路径在用户并未指向该行时被触发：① `:hover` 揭示树（整行洗色占该行盒 93.19% 像素 + 文件夹→chevron + 计数徽标换 `+`/kebab + git 占位者换入）——即「删除会话时对应的 workspace 闪一下」；② `RowHoverCard` 的 `onPointerEnter` → 800ms 停留后卡片自己弹开；③ 会话标题跑马灯 `onPointerEnter` → 标题自己开始爬行。修法是**门控而非改动画**：机器在提交后的 layout 阶段（早于本帧 hover 更新，故 `matches(':hover')` 仍是位移前的真相）用 `getAnimations({ subtree: true })` 取候选，只给**本帧正在位移且扫描时不在 `:hover`** 的 keyed 行加 `data-hover-gate`（机器不读指针坐标；这正是本帧会 latch `:hover` 的那批）；下一个真实 `pointermove`（坐标变化）或 `pointerdown` 摘门控，并对仍在指针下的行补一次 `pointerover` 让 React 重算 enter（`pointerenter/leave` 不冒泡，React 由 `pointerover/out` 合成），卡片与跑马灯语义不丢。样式侧只给**行级** `:hover` 揭示加 `:not([data-hover-gate])` 条件（含 `more:` 披露行；归档管理器、JS 揭示半边 `:has(.rowActionsVisible)`、未分组桶的 transparent 复位都不在面内；重命名态的**抑制**规则不是揭示面，但其 hover 半边必须带同一条款——`:not()` 计一个额外伪类，不带上就会被 `(0,5,0)` 的揭示反超、改名中仍交换字形）；门控行仍可点击、kebab 与键盘揭示照旧。**实测边界**：退出克隆体不是本现象成因（后继组头的标题行框与克隆体重叠始于 t≈60ms，彼时克隆体透明度已 ≤0.215，t≥83ms 像素差 ≤maxΔ7），故动画器移植体与常量一律不动；残余 = 常驻可见控件的子元素级 hover（`.foldToggle:hover` 的墨色台阶、`.orphanBadge:hover`）与原生 `title` 提示不可门控；另一类 = **无 key 的行表面**（来源表头 `.sourceHeader:hover .sourceActions`、面板行 `.panelRow:hover`、git 未注册行 `.unregisteredRow:hover`、归档管理器组头 `.archiveManagerGroupHeader:hover`）在相邻 section 因折叠/增删行瞬时变高变矮（无动画）时被搬到静止指针下，机器只认带 `data-row-key` 的动画目标、看不见它们——两类一并登记为已知边界，实机复核与 STATUS 第 ⑤ 项同看。回归锁：`test/session-rows/hover-motion-gate.test.ts`（纯判定真值表 + 机器/接线/样式条款漂移锁）与 `test/visual-lock/git-occupant-rest-flow.test.ts`、`test/session-rows/session-row-actions.test.ts` 的揭示选择器对拍（容器与动作两侧必须同时带门控，漏一侧即红）。
+- **行位移期间的指针门控（`hover-motion-gate.ts` + `data-hover-gate`）**：一次提交把某 keyed 行搬到**静止指针**下时，浏览器会为该行合成 boundary 事件——本机 headless Chromium 149 实测：提交后 t≈347ms 收到 `pointerover`/`pointerenter`/`mouseover`/`mouseenter`（`clientX/Y` 与按下时相同，同期 0 个 `pointermove`），随后 `:hover` 也命中它。于是三条"指针进入"路径在用户并未指向该行时被触发：
+  - ① `:hover` 揭示树（整行洗色占该行盒 93.19% 像素 + 文件夹→chevron + 计数徽标换 `+`/kebab + git 占位者换入）——即「删除会话时对应的 workspace 闪一下」；
+  - ② `RowHoverCard` 的 `onPointerEnter` → 800ms 停留后卡片自己弹开；
+  - ③ 会话标题跑马灯 `onPointerEnter` → 标题自己开始爬行。
+  修法是**门控而非改动画**：机器在提交后的 layout 阶段（早于本帧 hover 更新，故 `matches(':hover')` 仍是位移前的真相）用 `getAnimations({ subtree: true })` 取候选，只给**本帧正在位移且扫描时不在 `:hover`** 的 keyed 行加 `data-hover-gate`（机器不读指针坐标；这正是本帧会 latch `:hover` 的那批）；下一个真实 `pointermove`（坐标变化）或 `pointerdown` 摘门控，并对仍在指针下的行补一次 `pointerover` 让 React 重算 enter（`pointerenter/leave` 不冒泡，React 由 `pointerover/out` 合成），卡片与跑马灯语义不丢。样式侧只给**行级** `:hover` 揭示加 `:not([data-hover-gate])` 条件（含 `more:` 披露行；归档管理器、JS 揭示半边 `:has(.rowActionsVisible)`、未分组桶的 transparent 复位都不在面内；重命名态的**抑制**规则不是揭示面，但其 hover 半边必须带同一条款——`:not()` 计一个额外伪类，不带上就会被 `(0,5,0)` 的揭示反超、改名中仍交换字形）；门控行仍可点击、kebab 与键盘揭示照旧。
+
+  **实测边界**：退出克隆体不是本现象成因（后继组头的标题行框与克隆体重叠始于 t≈60ms，彼时克隆体透明度已 ≤0.215，t≥83ms 像素差 ≤maxΔ7），故动画器移植体与常量一律不动；残余 = 常驻可见控件的子元素级 hover（`.foldToggle:hover` 的墨色台阶、`.orphanBadge:hover`）与原生 `title` 提示不可门控；另一类 = **无 key 的行表面**（来源表头 `.sourceHeader:hover .sourceActions`、面板行 `.panelRow:hover`、git 未注册行 `.unregisteredRow:hover`、归档管理器组头 `.archiveManagerGroupHeader:hover`）在相邻 section 因折叠/增删行瞬时变高变矮（无动画）时被搬到静止指针下，机器只认带 `data-row-key` 的动画目标、看不见它们——两类一并登记为已知边界，实机核验与 STATUS 第 ⑤ 项同看。回归锁：`test/session-rows/hover-motion-gate.test.ts`（纯判定真值表 + 机器/接线/样式条款漂移锁）与 `test/visual-lock/git-occupant-rest-flow.test.ts`、`test/session-rows/session-row-actions.test.ts` 的揭示选择器对拍（容器与动作两侧必须同时带门控，漏一侧即红）。
 - **Rejected alternatives（行位移动效）**：①*深引 vendor 源码*（`@deepseek-ai/dsh-client-ui-primitives/src/AnimatedRows.tsx`）——registry C16 的 vendor 直穿只收「相对 import + `export function` 符号」，而原件是 `export class`，登记进 `vendorSourceConsumers` 会红；改用裸包说明符则绕开 C16 的双向登记（无登记的 vendor 直穿本仓不允许）。②*只加 CSS transition*——CSS 做不出退出克隆（被删除的行没有元素可过渡）与"仅重排才动"的 FLIP 测量，也表达不了 armed/ready/resetKey 门控。③*不做*——在 workspace 上点 `+` 新建会话时整列瞬移，正是要修的观感。④*把每个工作区的渲染行数（`renderCount`）直接放进 resetKey*（首版实现，已被替换）——`total ≤ visibleFirst` 且未展开时 `renderCount === total`，于是任何行增删（新建行出现、归档、ghost 到期）都会改键、把入场动画取消掉，且数组形状让「新增 workspace」也退化为 settle；被「只有被钳制的组按 id 贡献分量」取代。⑤*由渲染层手写窗口语义*（在键里自己判断 >200 / 当前行位置）——同一规则就有了第二份实现，`sessionRowWindow` 一改就漂移；被抽出纯函数 `sessionRowWindowMotionKey` 取代。
 - **Rejected alternatives（行位移指针门控）**：①*改退出克隆体的画序*（给 `.workspaceList` 加 `z-index`，或把覆盖层挂进列表）——实测克隆体不是成因（重叠时间线与透明度见上），改了只把叠影从"盖住"变成"透出"，还要调用方耦合 vendor 未导出的覆盖层结构。②*改 vendor 动画器退出段*——`AnimatedRows` 是逐字移植体（byte-fidelity 锁 + registry/design 登记成本），且同样不针对成因。③*容器级 `pointer-events: none` 锁*——会吞掉门控行上的真实点击（门控行必须仍是可点目标）。④*只把揭示延后到动画结束*——仍是"无指令揭示"，且会把位移前已悬停的行打断成"闪掉再回来"。
 
@@ -1521,14 +1516,7 @@ observable 显式传播。
 
 ### 8.3 设置（chamber 全局，客户端页新组）
 
-`sessionTodo` 嵌套块（`ChamberSessionTodoSettings`：`enabled/onComplete/onAsk/
-onRequest`），**默认全开**——被动呈现（空时零占用），区别于通知的 opt-in 默认关。
-客户端页「运行」与「通知」组之间新增「会话待办区」组：主开关（无边框披露行）+ 展开后
-三类事件开关（卡片内行，通知组同节奏）。持久化在主进程 chamber-settings.json（白名单
-+ 嵌套校验 + 损坏保留纪律同 notifications；main `applySettingsPatch` 嵌套 deep-merge）；
-三处类型镜像（preload ↔ renderer 由 ipc-surface-mirror 守护；desktop store 手工镜像
-——与 notifications 同纪律同缺口）。侧边栏经 `packages/dsh-chamber-client-core/src/todo-prefs.ts` 只读订阅
-（get + onChanged；值域校验 + 未知键过滤 + 未水合回落默认——漂移最坏退化为默认，绝不假 off/假 on 之外的状态）。
+`sessionTodo` 嵌套块（`ChamberSessionTodoSettings`）由客户端页「运行」与「通知」组之间的「会话待办区」组编辑（主开关 + 展开后三类事件开关；卡片内行、与通知组同节奏）。侧栏交互事实：待办区被动呈现、空时零占用（区别于通知的 opt-in 默认关）；设置值经 `packages/dsh-chamber-client-core/src/todo-prefs.ts` 只读订阅（get + onChanged；值域校验 + 未知键过滤 + 未水合回落默认——漂移最坏退化为默认，绝不假 off/假 on 之外的状态）。设置组形态、默认值、持久化与类型镜像契约归 design 15 §D4。
 
 ### 8.4 代码落点
 
@@ -1540,8 +1528,7 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
   在 `ChamberListBoundary` **之内**——region 渲染错误纪律覆盖待办区）。打开经
   SidebarRoot 守卫回调（拖拽尾随 click 抑制 + 同会话内联重命名保护），来源色点复用
   `packages/dsh-chamber-client-core/src/derive.ts sourceAccentColor`（列表/rail/待办共用）；
-- 设置面：`desktop/chamber-settings.ts`（类型/默认/校验）、`desktop/electron/main.ts`
-  （归档面 deep-merge）、`desktop/electron/preload.cts`（归档面）+ `renderer/src/global.d.ts`（镜像）、
+- 设置面：`desktop/chamber-settings.ts`（类型/默认/校验）、`desktop/shell-core.ts`（共享装配，`applySettingsPatch` 嵌套 deep-merge）、`desktop/electron/preload.cts`（归档面）+ `renderer/src/global.d.ts`（镜像）、
   `settings-bridge`（`session-todo-settings.ts` 助手 + `GeneralView` 新组 +
   `settings-store.ts` 乐观 overlay 嵌套合并扩展 + zh/en 各 6 键）、sidebar
   zh/en 各 5 键（`todo.*`）。
@@ -1583,7 +1570,7 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 
 ## 9. Rejected alternatives（完成未读：官方位 + 修正臂）
 
-被否路线台账（评审判据：任何让 chamber 独立产生完成状态、引入第二时钟/第二水位、或
+被否路线台账（判据：任何让 chamber 独立产生完成状态、引入第二时钟/第二水位、或
 复制官方规则的方案都落在此列）。契约与边界表见 §4.1–§4.3。
 
 1. **保留 durable 账本**（App 落盘状态机）：旧实机「点卡死、点击不消」的成因；与上游
@@ -1648,7 +1635,7 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 > P5b 起新 checkout 不再注册 workspace；本节只覆盖**旧 registered worktree / 普通 workspace** 的历史
 > 形态。旧 `$DSH_HOME/worktrees` 池按发布前提清空（design 08 §7.4），不产生新的孤儿行。
 
-背景（2026-09 用户报告）：注册 workspace 的路径消失后，行显示 `orphaned` 的「已消失」徽标。若该
+背景：注册 workspace 的路径消失后，行显示 `orphaned` 的「已消失」徽标。若该
 工作树的 Git 记录也已被外部 prune，快照里没有对应 worktree 行，**Git occupant 整块不渲染**
 （`SidebarWorkspaceGitLine.tsx` 读到 `gitFactsForWorkspace` 为空即 `return null`）——行上没有任何 Git 侧删除
 控件；worktree 行又按 §7 / design 08 §3.2 没有 kebab，于是「已消失」徽标曾是唯一出口。被否方案：

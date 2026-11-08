@@ -8,8 +8,8 @@ store 持久化 / 地址解析 / 历史 / sandbox 开关 / 失败条 / restore �
 租约拿 main 构造的 `frameUrl` 作为 iframe src，代理页的 system-browser 出口用同一
 alias（不是本机不可达的远端逻辑地址；租约解析中/失败时出口禁用）。
 
-> 上游 Electron webview 载体（`electron/` + `dshDesktop.browser`）刻意不 fork：本仓
-> 两个 flavor（Electron/Swift）都走 iframe 路径（design 28 `16.8），壳里没有该桥。
+> 上游 Electron webview 载体（`electron/` + `dshDesktop.browser`）刻意不 fork：Electron
+> 归档参考与现行 Swift 腿都走 iframe 路径（design 28 `16.8），壳里没有该桥。
 > `pnpm install` 后 `typecheck:browser` 的类型豁免见 `tsconfig.json` 的
 > `erasableSyntaxOnly: false` 注释（上游源码逐字复用，随包由 vite/esbuild 打包）。
 

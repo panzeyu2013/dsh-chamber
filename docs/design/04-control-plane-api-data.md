@@ -236,7 +236,7 @@ upgrade：/api/page-channel      精确路径匹配，不属于 /api/i/* 面
 | `upstream_failed` | 瞬态 | 5xx、401/403/408/425/429、3xx/未分类、超帧、非 SSE 200 |
 | `upstream_timeout` | 瞬态 | 响应头期限内未收到头 |
 
-> 旧宿主 404 的客户端行为随之改变：此前按瞬态重试，现在按永久 `upstream_rejected` 不重试。
+> 宿主 404 的客户端行为：按永久 `upstream_rejected` 不重试（旧客户端的瞬态重试是兼容差异，非本设计行为）。
 
 - **gateway 形态不挂载该端点**（26 §2）：gateway 的 upgrade 面只认 `/api/remote.mux` 与 `/api/i/*`，
   该路径被明确拒绝；将来若移动端要用这三族，须在 gateway 升级分发注册同一端点（17 §9）。

@@ -361,45 +361,12 @@ chamber-settings.json，非秘密）：
    `restartLocal`，§9.3 只定义事务），非白名单终态由 `shell-ipc-runtime.ts` 的
    "did not reach ready" 响亮拒绝；gateway 腿保留
    `pollGatewayReady`（1s/120s）的 202 + status 轮询，超时/失败按分类器如实投影。
-   **窗口重载退役（2026-10 修订：残余类恢复有界收口）**：此前「重启 = 宿主重启 + 一次窗口重载」的
-   page-owned completion（`restart-window-reload.ts`，按来源单飞、卸载不取消）已随客户端插件热重载的
-   直接修复整体移除：**新装/卸载**由 design 09 §3.7 的活实例热同步接管（宿主 hmr 报 `applied` 即把该行
-   挂进/移出活 ctx），重启入口不再动页面；**已加载 id 的重建（rev 变化）仍换不掉实现**
-   （模块表按 id first-load-wins），`restart-required` 只上报事实（同页重 boot 时该行被丢弃、实例照常
-   启动；live 保留已挂载的旧实现）。2026-10 裁决：该残余类不再只靠
-   用户手动——**用户在本页发起的插件变更结算后**，壳在有界窗口（5s）内观察到该来源的
-   `restart-required` 即按**插件刷新独立预算**（3 次/10 分钟，fail-closed，与流恢复 budget 分域）
-   自动整页重载一次；`instance-version-conflict` **不自动重载**（重启本应用也换不掉先加载者）。
-   手动入口 = 设置面板 header 事实条的「重新加载应用」（design 15 §6）。本段其余「重启入口不带
-   任何页面收尾」的接线范围不变；页面侧接线与单测见 design 09 §3.7。
-   **接线范围**：本段「重启 dsh」两种形态、gateway 卡「重启 dsh」/「启动实例」、插件对话框
-   footer 重启与全部 restart-to-apply、ssh 卡「重启实例」（仅 dsh 目标）都不再有任何页面级
-   收尾（gateway 两态仍按 `pollGatewayReady` 确认）；本地卡「启动」/写者接管、本地
-   「立即应用」/「重试应用」/「重试恢复」只执行事务本身；「重启网关服务」（systemd）
-   不改变实例插件集，**不接**。
-   **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现（模块表按 id
-   first-load-wins：重挂只会重取图、改插件集，**已加载 id 的实现**换不掉），也覆盖不了 rev 变化：宿主行 rev 是文件
-   metadata hash（`sha1(mtimeMs,ctimeMs,size)`，重启不改文件即不变，故重启本身不产生假
-   `restart-required`），真正的 `restart-required` 来自重建/重装后的文件改写，只有窗口
-   重载才能换掉旧实现；②单插件热替换（vendor 已验证的
-   `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——
-   保住来源壳状态，但要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、
-   跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③恢复整份 `restart-window-reload.ts`
-   （所有 plugin-refresh 重启入口都 arm）——被拒：那会把「重启实例」与「插件换血」重新耦合，
-   且对不改插件集的 systemd 重启路径也 arm；2026-10 收口只在「本页插件变更结算 + 该来源 restart 事实」
-   两条件同时成立时重载，独立预算、单飞、不取消于面板卸载；④「结算后 250ms 去抖再请求」——
-   未实现：一次安装流最多两次结算，每次一次重订阅的代价有界（登记为将来项，触发条件 = 实测重连
-   churn 有代价）；**帧新鲜度捷径被移除**——曾试「`lastFrameAt >= startedAt` 即跳过重订阅」，
-   但「到过一帧」≠「最终图已到」（`rebuilt` 按条目逐帧、主题可能随后冻结），会在本应自愈的
-   丢帧场景静默 stale（design 09 §3.7①）；⑤「事实条倒计时 + 取消」——把静默重载变成可中止的
-   同意，需要新增 per-source pending-reload 事实通道，未实现（STATUS 开放项）；⑥「仅手动重载」——
-   被拒：原症状正是「不自动刷新」，只解决一半诉求；⑦「仅插件分节激活时自动重载」——未实现：
-   需要新增「当前分节」事实通道，且同一 document 内其它分节仍看到陈旧插件集，未排期（登记为候选）。
+   **窗口重载（负面契约）**：重启入口不附带任何窗口重载——`restart-window-reload.ts` 的 page-owned completion 不存在。**新装/卸载**由 design 09 §3.7 的活实例热同步接管（宿主 hmr 报 `applied` 即把该行挂进/移出活 ctx）；**已加载 id 的重建（rev 变化）换不掉实现**（模块表按 id first-load-wins，`restart-required` 只上报事实；同页重 boot 时该行被丢弃、实例照常启动，live 保留已挂载的旧实现）。该残余类由**有界收口**处理：本页发起的插件变更结算后，壳在 5s 窗口内观察到该来源的 `restart-required` 即按**插件刷新独立预算**（3 次/10 分钟，fail-closed，与流恢复 budget 分域）自动整页重载一次；`instance-version-conflict` **不自动重载**（重启本应用也换不掉先加载者）。手动入口 = 设置面板 header 事实条的「重新加载应用」（design 15 §6）。页面侧接线与单测见 design 09 §3.7。
+   **接线范围**：本段「重启 dsh」两种形态、gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启与全部 restart-to-apply、ssh 卡「重启实例」（仅 dsh 目标）都**没有任何页面级收尾**（gateway 两态仍按 `pollGatewayReady` 确认）；本地卡「启动」/写者接管、本地「立即应用」/「重试应用」/「重试恢复」只执行事务本身；「重启网关服务」（systemd）不改变实例插件集，**不接**。
+   **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现，也覆盖不了 rev 变化（宿主行 rev 是文件 metadata hash `sha1(mtimeMs,ctimeMs,size)`，重启不改文件即不变；真正的 `restart-required` 来自重建/重装后的文件改写，只有窗口重载才能换掉旧实现）；②单插件热替换（vendor 已验证的 `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——保住来源壳状态，但要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③恢复整份 `restart-window-reload.ts`（所有 plugin-refresh 重启入口都 arm）——被拒：把「重启实例」与「插件换血」重新耦合，且对不改插件集的 systemd 重启路径也 arm；④「结算后 250ms 去抖再请求」——不采纳：一次安装流最多两次结算，每次一次重订阅的代价有界（触发条件 = 实测重连 churn 有代价）；⑤「事实条倒计时 + 取消」——不采纳：需要新增 per-source pending-reload 事实通道（STATUS 开放项）；⑥「仅手动重载」——被拒：不自动刷新正是主诉求，只解决一半；⑦「仅插件分节激活时自动重载」——不采纳：需要新增「当前分节」事实通道，且同一 document 内其它分节仍看到陈旧插件集（候选）。
    **两类 restart 的区分**：`installBundle` 对「已安装包」返回的 `restart-required` 是宿主级
    notice（不落页面 `pluginDiagnostic`、面板不误导），与 §3.7 的页面级 restart 事实是两类；
    后者才进本收口。
-   （原替代③「不重载只提示」当时因半自动被拒；客户端插件热重载直接修复后成为现行形态——
-   装/卸热同步、rev 变化由上述有界收口；同页重 boot 丢弃该行、live 保留已挂载旧实现。）
 
 **B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，与 settings
 块同源（桥未就绪时回落 `window.dshChamber.dshVersion`）。
@@ -564,7 +531,7 @@ chamber-settings.json，非秘密）：
   @google/genai / @deepseek-ai/dsh-subprocess-local；fs-ext 为 0.1.3 线
   session-persistence-jsonl 写租约 flock 引入），另以显式否认列表登记 pnpm 11
   `strictDepBuilds` 下必须显式写 `false` 的 build-script 依赖（`msgpackr-extract`，
-  语义 = 已评审拒绝其安装期执行脚本）——它由上游**私有桌面应用**构建面引入
+  语义 = 已拒绝其安装期执行脚本）——它由上游**私有桌面应用**构建面引入
   （`apps/desktop` 用 `msgpackr`，`msgpackr-extract` 为其可选原生加速器；上游
   `packages/**` 无依赖），运行时闭包不含（`packages/desktop/vendor/dsh/pnpm-lock.yaml`
   对 `msgpackr*` 零命中）⇒ 运行时树内是**惰性的防御性 false**而非已发生的拒绝；两个
@@ -785,11 +752,9 @@ chamber-settings.json，非秘密）：
 - **错误脱敏**：`sanitizeErrorText`（`sanitize-error.ts` 导出）共享模块导出，评估
   相对路径覆盖。
 - **出网面**：desktop 仅主进程、gateway 仅 gateway 进程访问 npm registry（§9.3），
-  控制面与 spawn 的 dsh 子进程零出网、loopback 闭环不变。**design 21 登记**：gateway
-  第三方插件安装子进程随宿主受控出网（`dsh plugin add` 的 pnpm 子进程，env 白名单 =
-  共享 `INSTALL_ENV_WHITELIST`（PATH+代理族）+ 私有目录 pins——`runtime-installer`
-  与 gateway executor 同一常量；安装代码 = gateway 用户级等价，脚本默认允许，见
-  design 21 §6.1/§6.3）。
+  控制面与 spawn 的 dsh 子进程零出网、loopback 闭环不变。第三方插件安装子进程（`dsh plugin add`
+  的 pnpm 子进程）随 design 21 写面整体退役；现行受控出网 = dsh 运行时安装
+  （`@dsh-chamber/dsh-runtime` 的 `runtime-installer`，env 白名单 `INSTALL_ENV_WHITELIST`（PATH+代理族）+ 私有目录 pins）。
 - **隐私**：不携带用户/SSH 材料；失败记录仅版本/时间戳/探测结果/脱敏路径。
 - **已接受让步**：无验证 + 自由选版本 = 壳可能跑在未重基的 dsh 上；
   不做「已验证/未验证」徽标、不区别对待版本。安全网 = §3.4 探针门控（含延迟裁决）+
@@ -809,8 +774,7 @@ chamber-settings.json，非秘密）：
   gateway `<stateDir>/dsh-runtime`，非秘密，不进 `ssh-instances.json`/registry）。
 - **「单调向前」仅对壳版本成立**：应用整包更新后回落内建（新壳重基代）；运行时版本
   失效（用户选择）非单调向前——可显式选更旧版本，失效回落带数据可读性探测保护（§3.5）。
-- **chamber 发版版本集**：根包 + 全部非 fork `@dsh-chamber/*` 包（当前 20 个）
-  统一 bump；`release-preflight.mjs` 的数据驱动扫描与 release.yml 断言集是唯一
+- **chamber 发版版本集**：根包 + 全部非 fork `@dsh-chamber/*` 包统一 bump；`release-preflight.mjs` 的数据驱动扫描与 release.yml 断言集是唯一
   权威，新增 chamber 包自动纳入。三个 fork 副本
   （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）
   保持上游基线版本。`packages/dsh-runtime` 随 chamber 版本集锁步并嵌入
@@ -846,8 +810,8 @@ packaged smoke，以及更强的 packaged fake-registry 安装 + web host + 全�
 
 ## 9. 服务端化与共享核心（gateway 宿主 + desktop 迁移）
 
-> 本节把本设计的运行时管理能力扩展到 gateway 服务端形态（修订 design 17
-> §2.1/§4/§8/§10/§11/§12/§13，S17–S20），并把实现核心从 desktop 主进程抽取为共享包。
+> 本节把本设计的运行时管理能力扩展到 gateway 服务端形态（涉及 design 17
+> §2.1/§4/§8/§10/§11/§12/§13 与 S17–S20），并把实现核心从 desktop 主进程抽取为共享包。
 > 关键代码事实：control-plane 已有运行时切换 seam
 > `getDshWorkspacePath()` / `canStartLocal()` / `canExposeLocal()`
 > （`createControlPlane` 的惰性 options，desktop `main.ts` 已完整使用）——版本切换路径
@@ -942,12 +906,7 @@ desktop 状态零交叉**（各 owner 各管其托管实例）。**单进程不�
 release 只按 token + inode 精确删除。manager dispose 先 abort 新入口、fixed-point drain
 完整 writer promise（含 installer 后 metadata tail、apply-now/F7/retry/restore/restart），
 停 host 后才删 owner；disposed manager 的 status/registry 入口直接拒绝，不能隔离或改写
-后继 owner 文件。克隆 stateDir 等违反部署纪律仍是损坏风险。**design 21 插件写互斥**：第三方插件队列 executor 挂入同一 writer 族——managed profile 单写
-者租约 `beginProfileWrite`（count 制；`assertMutationIdle` 与全部 spawn 前的
-`beforeSpawnCheckpoint`（control-plane local-connection DI 缝，desktop 不接线、
-gateway index.ts 生产接线为 profile-write 检查）双向互斥；executor 子进程 pid 记入
-journal，崩溃孤儿由下次启动 reconcile 击杀；executor 在 manager dispose 之后
-dispose（租约门封死间隙）——design 17 §4.1/§12 与 design 21 §6.3 同源表述。
+后继 owner 文件。克隆 stateDir 等违反部署纪律仍是损坏风险。**managed profile 单写者租约**：`beginProfileWrite`（count 制；`assertMutationIdle` 与全部 spawn 前的 `beforeSpawnCheckpoint`（control-plane local-connection DI 缝，desktop 不接线、gateway index.ts 生产接线为 profile-write 检查）双向互斥——design 17 §4.1/§12 同源表述。**插件写面的 executor/journal 互斥已随 design 21 的写面退役**（design 21 §6.2-§6.5）：executor 子进程 pid 记账与 dispose 顺序不再有对应实现。
 
 **解析链**（同 §3.5）：`DSH_GATEWAY_DSH_PATH`（env 恒最高）→ override
 （未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）。`--dsh-path` 从
@@ -976,7 +935,7 @@ const plane = createControlPlane({
 静态 `dshWorkspacePath` 字段保留作内建锚与 boot 日志；`runtimeTransactionWorkspace`
 在激活事务期间指向候选树，事务结束即清空。
 
-**启动顺序（design 17 §4.1 修订）**：在 `startLocal()` 之前插入运行时启动
+**启动顺序（design 17 §4.1）**：在 `startLocal()` 之前插入运行时启动
 事务（共享包 `runtime-startup`）：残留 install 清理 → 逐出 → interrupted-restore
 幂等补完 →（有 pending 时）快照 `<stateDir>/dsh-home` → 原子切指针 → 经
 `startLocal()` spawn 候选（`canExposeLocal` 隔离）→ 全量只读探针 + ≤60s 窗口 +
@@ -1042,8 +1001,7 @@ gateway **不**中止启动——管理面可轮询、托管 dsh 停机，
 `status().startupBlockedReason` 投影原因，恢复面为 `retry-apply`/`retry-restore`；
 **元数据损坏（journal/current/override corrupt、journal-mismatch）**同口径：FATAL
 不拒启 gateway，恢复面 = `POST /chamber/runtime/recover-metadata`（归档证据 + 内建锚
-探针 + 仅成功后恢复访问；失败保留持久记录可重试）。**兜底链（design 21
-§6.8）**：`restore-builtin` **不能**治愈 profile_corrupt（它与 corrupt
+探针 + 仅成功后恢复访问；失败保留持久记录可重试）。**兜底**：`restore-builtin` **不能**治愈 profile_corrupt（它与 corrupt
 profile 探同一 dsh-home、不随目标版本更换）——兜底 = operator runbook
 （从 `<stateDir>/dsh-runtime/snapshots/` 手工恢复 dsh-home 快照）；`start` 原语
 与 restart-exhausted 自动回退衔接（F7 auto-rollback 尾不在 start 窗口内重复触
@@ -1113,7 +1071,7 @@ S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只
 
 - `01-overview.md` §3 文档地图（本文档编号 18）；`docs/progress/STATUS.md`
   （design 18 条目：未闭环门禁与偏差登记）；
-- `17-server-side-gateway.md`（gateway 宿主的启动顺序/路由/状态目录/不变量修订，
+- `17-server-side-gateway.md`（gateway 宿主的启动顺序/路由/状态目录/不变量，
   §9 的 gateway 面）；设计 11（应用本体更新，双通道并存见 §7；版本集口径与 release.yml
   对齐）；设计 15（settings「通用」段——运行时块不在其中，见 §3.6）；设计 14（退出
   生命周期与 install 子进程回收，§4）；设计 02 §3.5/§3.6（健康/restart-exhausted，

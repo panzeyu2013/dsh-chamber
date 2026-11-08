@@ -8,7 +8,7 @@
 - **认证默认开启**：浏览器会话（cookie）+ 可选 Bearer token；`--no-auth` 是需二次确认、带安全警告的**有界例外**，不是静默默认。
 - **只代理单个本地 dsh**：`gateway-proxy.ts` 是单目标全量透传；它不承担多来源连接管理（那是控制面）。
 - **职责面**：认证壳 + 代理 + 运行时管理（`runtime-manager.ts`）+ 凭据面板 + 种子注册表 + 只读插件投影（`/chamber/plugins/installed`）+ 只读会话状态镜像；第三方插件写入面已退役（design 21），业务/会话面一律不下沉。
-- **凭据从不出现在投影里**：只经 write-only 表输入；日志与任务投影使用与 desktop 同族的 `sanitize-error` 家族清洗（设计 21 §6.3）。
+- **凭据从不出现在投影里**：只经 write-only 表输入；日志与任务投影使用与 desktop 同族的 `sanitize-error` 家族清洗（第三方插件写面已退役；错误清洗与 desktop 共用 `sanitize-error` 家族）。
 
 ## 运行与交付
 

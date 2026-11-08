@@ -1,8 +1,7 @@
 # 28 · 右栏浏览器（Browser：v2 内嵌 iframe + 系统浏览器） - 设计
 
 > **现行契约见 §16**；§1–§15 为 v1 基线契约（§5.3/§6/§7/§10 的 forward 面与 §14/§15 的 v2 增补仍适用；与 §16 冲突时以 §16 为准）。
-> **取证边界（是证据，不是结论）**：v1 时期的签名/行号/计数按当时 anchor 形状推断、以 `TODO(pin-vendor)` 标记，
-> 须按真实 pin 源复核后才算契约；v1 未验证项见 §15，v2 的开放项归 `docs/progress/STATUS.md`。
+> v1 记录中未按真实 pin 源复核的签名/行号/计数以 `TODO(pin-vendor)` 标记；v1 未验证项见 §15，开放项归 `docs/progress/STATUS.md`。
 
 ## 1. 定位与范围
 
@@ -252,8 +251,7 @@ local 源无远端分区；到 8/source 或 32 全局时 `too_many_*` 建议先�
 
 ## 11. WBS（48 P50 / 69 P90；范围 45–60）
 
-v1 计划记录（W0 决议/注册/证据 → P0 throwaway spike → S1 转发/生命周期/IPC → S2 Launcher → S3 Swift/打包；
-P50 48 / P90 69）。该计划已执行完毕、不再是现行约束；v2 的验收组织见 §16.9，历史任务表不留在工作文档。
+v1 的 WBS 与任务表归 git 历史，本设计不保留；v2 的验收组织见 §16.9。
 
 ## 12. 测试与门禁
 
@@ -352,7 +350,7 @@ design 25 的计数锁步、packaging closure 与 STATUS 的取舍登记。现�
 
 ---
 
-## 16. v2 修订（2026-11，用户裁决）：右栏内嵌 iframe + forward 生命周期
+## 16. v2 形态（2026-11 用户裁决）：右栏内嵌 iframe + forward 生命周期
 
 > 本节是**当前契约**。v2 覆盖 §1–§15 的 v1 形态：面板不再是「零渲染 + 系统浏览器」，而是右栏内嵌 iframe；local 直连、ssh 经 forward 到 alias；Electron 与 Swift 均为核心 flavor、默认开启（**Electron 腿已冻结归档，见 `../progress/electron-frozen.md`**）。
 >
@@ -398,7 +396,7 @@ design 25 的计数锁步、packaging closure 与 STATUS 的取舍登记。现�
 - controller 持 `Map<recordId, consumer>`；abort/dispose 释放全部；attach-first；同 recordId 跳过 detach；attach 失败保留旧页。
 - 切 tab / 切 session / 收起右栏：不动作（keepMounted）——不重建 SSH、不丢页面。
 - 关 tab / session 删除 / 插件 scope dispose（隐藏源壳回收、来源退役）：release(consumer)；最后 consumer → 关 listener；consumers 空时无论 state 删记录；force-close 丢弃 consumers。
-- reload / renderer crash：`shell-core.onRendererLifecycle` 单漏斗 → `revokeForwardRenderer(event)` → main 关闭全部 attached record；新文档按持久化 tab 懒 re-attach。**触发必须限定主 frame 文档**：Electron `did-start-loading` 也会被子 frame（iframe）加载触发，main 以 `win.webContents.isLoadingMainFrame()` 过滤；否则 remote-loopback attach 会在 iframe 导航时立即 revoke 自己的 listener（W-14b 实证缺陷，已回归锁）。
+- reload / renderer crash：`shell-core.onRendererLifecycle` 单漏斗 → `revokeForwardRenderer(event)` → main 关闭全部 attached record；新文档按持久化 tab 懒 re-attach。**触发必须限定主 frame 文档**：Electron `did-start-loading` 也会被子 frame（iframe）加载触发，main 以 `win.webContents.isLoadingMainFrame()` 过滤；否则 remote-loopback attach 会在 iframe 导航时立即 revoke 自己的 listener（W-14b 回归锁）。
 - in-flight 守卫：renderer dispose 后 late-settle 的 request 立即 release(consumer)；main `revokeGeneration` 入场记、await 后校验，变化则关新 record 返回 `forward_stale`。
 - 应用退出：`disposeForwardService` stopAll（3s 硬顶）；kill -9：下次启动 reaper（fail-closed 不变）。
 - source 删除/retarget：`retireSource` 关全部 + alias tombstone + 清 local/alias origin 数据（Electron `clearStorageData`/cookies；Swift 单列）。
@@ -437,7 +435,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })
 
 ### 16.8 双 flavor：Swift 是核心版本（不再默认关）
 
-- **Swift 默认内嵌**，与 Electron 同批实现/验收。
+- **Swift 默认内嵌**；Electron 腿已冻结归档（[`../progress/electron-frozen.md`](../progress/electron-frozen.md)），验收口径随归档保留。
 - `navigationDecision` 增子 frame 分支：`isMainFrame == false` 且 `{http,https}` 且 host ∈ {`127.0.0.1`,`localhost`,`127.0.0.2–254`} → `.allow`；保留「同源非壳文档任何 frame cancel」；blob 子 frame 与 `about:blank` 放行；主 frame 真值表不变。
 - ATS：`NSAllowsArbitraryLoadsInWebContent = true`（只放宽 Web 内容；主文档仍受既有 ATS + `NSAllowsLocalNetworking` + `NSExceptionDomains{localhost,127.0.0.1}`）；不改 `NSAllowsArbitraryLoads=false`。同步 `ShellStartupTests`（plist 断言）、`build-swift-app.test.mjs`、`after-pack-adhoc-sign.mjs` 的既有断言。
 - 下载：`!isMainFrame && shouldPerformDownload` → `.cancel`（现静默落盘）；弹窗 `createWebViewWith` deny 不变；权限 deny 不变。
@@ -454,7 +452,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })
   - L2 源静态锁：sandbox 精确 token、referrerpolicy、title、`data-sidebar-browser-frame`+name、单 iframe、src 只来自 main/local 校验；sidebar-tabs keepMounted 结构面。
   - L3 假 DOM 表达式；L4 CDP 走查：W-13 面板、W-14a **local iframe 真跑**、W-14b remote（--attach 真实 ssh 或 --dev ssh-fixture）、W-15 系统浏览器出口、W-15b 关 tab→面板移除+端口不可达（local 无 forward，不做 list 探针）、SH-7。
   - L5 headless 真 sshd（attach→alias→detach→端口不可达；reload/crash 重放；reaper）。
-  - L6 双 flavor 真机/打包态：跨源 cookie/登录、XFO、证书错误、弹窗/下载、键盘/焦点、拖拽/分栏、隐藏源壳回收、kill -9、Windows taskkill/CIM；打包态本机 smoke = `scripts/gui-acceptance/packaged-ssh-smoke.mjs`（已构建 release payload + SSH fixture，跑 W-13…W-15b）。
+  - L6 Swift 真机/打包态（Electron 归档参考）：跨源 cookie/登录、XFO、证书错误、弹窗/下载、键盘/焦点、拖拽/分栏、隐藏源壳回收、kill -9；打包态本机 smoke（Electron CDP 腿，已归档）= `scripts/gui-acceptance/packaged-ssh-smoke.mjs`，现行 Swift `.app` 按 `gui-acceptance-checklist.md` §4.2 真机/打包态执行（W-13…W-15b）。
   - 负例 AC-S1…S12 逐条落 W/checklist；AC-S7 P0。
   - 门禁：check:static+tests+typecheck；test:browser/desktop/control-plane/renderer-shell；verify:*；file-budgets；packaging closure（根模块 100）；darwin `test:swift`/`test:macos`；bridge 数字校正（58/9/67）。
 
@@ -465,7 +463,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })
 - 风险登记：第三方 cookie/登录退化、XFO/TLS 不可探测、localhost 同 host cookie jar、iframe 内新窗/下载被 sandbox 拦、隐藏 session 占配额、隐藏源壳回收重载、kill -9 窗口、站点数据无手动清除、Swift/Electron 失败可见性不对等。
 - 被否决替代（仍否决）：gateway 隧道、共享 `127.0.0.1` 回退、通用 URL IPC、原生子视图（WebContentsView/Swift 子 WKWebView）、每 tab 独立 WebContents 作为 v2 主线（保留为 iframe 不可行时的备选，另案）。
 
-### 16.11 上游对齐修订（2026-11 用户二次裁决，覆盖冲突面）
+### 16.11 上游对齐（2026-11 用户二次裁决，覆盖冲突面）
 
 **契约**：右栏「浏览器」= 上游官方 `@deepseek-ai/dsh-client-ui-sidebar-browser`（当前 pin 见 `harness.commit`）iframe 路径的 chamber fork。UI/DOM/CSS/文案/快捷键/多标签/地址解析/历史/持久化/sandbox 开关/失败条/restore 全部逐字同源；**唯一行为差异 = SSH 反代（iframe src 解析 + 代理页 system-browser 出口的 alias 投影）**。
 
@@ -478,27 +476,3 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })
 - Swift：同行为——navigationDecision 子 frame 允许任意 http(s)（仍拒非 web/credentials，blob/about:blank/about:srcdoc 保留；Electron `isAllowedBrowserFrameUrl` 同分支）；ATS `NSAllowsArbitraryLoadsInWebContent=true` 已覆盖；下载/弹窗/权限 deny 不变。**子 frame 发起的 `target=_blank` 不转系统外链**（Electron 既有 window-open 腿按 URL 转系统；Swift 在引擎外多拒一层）——两 flavor 都拒绝新窗口，这是 Swift 有意更严的一处差异，真机矩阵按「iframe 内新窗被拒」验收。
 - 生命周期/安全面其余不变：consumer refcount、attach-first、revokeGeneration、主 frame 限定 revoke、release 加固、argv host-key 锁步、alias 分配与 tombstone、`Sec-Fetch-Site` 加固、无新 IPC 通道。
 - 被否决/退役：自研 launcher/远端转发列表/自定义 refusing 面板（与上游不一致，退役）；https 一律系统浏览器（退役，改为 iframe）；固定三 token sandbox（退役，改为上游 sandbox）；加载官方包再打 vendor patch（与 fork 同等侵入且跨仓补丁维护成本更高，未采用）。
-
----
-
-## 附录 A · 与 report-v4 / Round-2 审核的对照
-
-| report-v4 §0 锁定决策 | 本文落点 | 差异（如有） |
-|---|---|---|
-| 1. 地址栏 + 远端 loopback 分区 + 系统浏览器 | §1、§4 | 增加 https 透传与 `127.0.0.2–254`/`[::1]`/`app-origin` 的显式拒绝 |
-| 2. 仅 dsh+ssh；kind 派生；不加 `chamberTargetKind` | §1.4、§2 D2 | **本次放宽**为“除 http 外全部来源”（local / dsh+ssh / gateway+ssh）；kind 仍派生，未加 boot fact |
-| 3. 新包 `dsh-chamber-client-ui-browser`（deferred row） | §5.1、§5.2 | 导出 inject 固定为 `slots`/`locale`；`sidebarRightTabs` 由 apply 内 `ctx.inject` 等出现（一次性 `ctx.get` 与宿主行赛跑，被否） |
-| 4. browserNamespace + 127.0.0.2–254 + 永不 127.0.0.1 + 无共享回退 | §6.2、§6.3、§9.2 | 增加 alias `2..254` 的持久分配表与 tombstone（顺序无关） |
-| 5. 公网走链接腿；远端走 main 构造 URL 的 openInBrowser | §8.1、§8.2 | openInBrowser 返回 `ok/error`，独立 per-source 预算（5/60s） |
-| 6. 无 pin/retry/subscribe；source 拥有生命周期；轮询 list | §2 D6、§6.7、§7 | 增加 `confirmation_late` 的“迟到即 release”语义 |
-| 7. 45–60 P50；W0/P0 后重估 | §11 | P50 48 / P90 69；任务级表归 git 历史 |
-
-| Round-2 blocking（A/B/C/D） | 处置 |
-|---|---|
-| renderer module + synthetic id 不可行（A/B B1） | 新包（D3）；W0 用 pin 源复核包布局审计 |
-| 地址栏 host/scheme 未定义（A/B B2/B3） | §4 显式判定表 + https 透传 + 其余拒绝 |
-| alias 身份键不存在（C B1 / B B4） | 持久 browserNamespace + 持久分配表 + tombstone（§6.2/§6.3） |
-| Host 回退共享可诱导降级（C B2 / B B5） | v1 删除回退臂（§9.2）；不做“清除站点数据”承诺 |
-| pin/retry/subscribe 无 API、openInBrowser 无返回（A/B B4 / D I1） | 去掉前三个；`{ok}`/`{error}` + 独立预算（§7/§8.2） |
-| 生命周期冻结文件（A B3 / B I11 / D B2） | 7 个新根模块 + flavor 退出链钩子 + transport `setSourceRetiredListener`；棘轮文件零净增（§6.1） |
-| 计数面/门禁未写死（D B3/B4） | §12 + w0-wbs §4/§6 的目标计数与 manifest 归属 |

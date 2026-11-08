@@ -2,11 +2,12 @@
 
 English | [中文](README.zh.md)
 
-Chamber's self-built **Connections** settings section plugin (design 05 §5): it
-registers the 连接 / Connections entry into the dsh settings panel's
-`settings.section` slot (`id: 'connections'`, order 30, after agent-presets).
-The section is the chamber connection manager's in-app administration face —
-no host frames, no dsh runtime objects.
+Chamber's self-built **Connections** settings section (design 05 §5): the
+settings shell renders it through its fixed nav id `__connections`
+(`src/client/index.ts`), so this package owns only the dictionary namespace and
+the section component and registers no host-ctx `settings.section`. The section
+is the chamber connection manager's in-app administration face — no host
+frames, no dsh runtime objects.
 
 ## Content
 
@@ -62,3 +63,5 @@ The dsh design language: CSS modules + `--dsw-alias-*` tokens + ui-primitives
 
 Owns the `dsh-chamber.settings.connections` dictionary namespace (zh key
 source; `src/locales.ts`).
+
+Test: `node ./scripts/test.mjs`.

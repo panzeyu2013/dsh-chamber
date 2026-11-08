@@ -2,7 +2,7 @@
 
 > **契约（fork & supersede）**——本文是「统一打开面」的契约与形态。
 > 官方**宿主半**（`@deepseek-ai/dsh-host-open-in-app`）**fork 进本仓**成 seed 包在实例内服务本机
-> 目录/图标/拉起；官方**客户端半**（`@deepseek-ai/dsh-client-ui-open-in-app`）自 0.1.7 起随官方行
+> 目录/图标/拉起；官方**客户端半**（`@deepseek-ai/dsh-client-ui-open-in-app`）随官方行
 > **加载**（D2：右栏文档文件级 open/reveal 由 per-instance 通道解析；deliverables 文件动作读 owner 的鉴权路由
 > `api/present.open|changes.open`，该路由在 N-ctx 下由 ui-deliverables 带 per-entry 前缀发出，见 design 09 §3.6），
 > 但其 header 席位在本页 inert（apps/icon/open 探针是 document-relative，落在控制面 SPA origin）；
@@ -63,14 +63,11 @@
    （`src/index.ts:50-76`），`directory-picker-auto` 无 Config（`src/index.ts:62-69`）
    ⇒ 本地目录要非空只能去掉标记，而标记也是 picker pin（远程实例靠它，design 02 §3.9 的 systemd 行），
    故被迫改 spawn env + `--no-open` + pin overlay（含上游没有的 `disabled:` 行）。
-2. **官方客户端半的探针路由是 document-relative**（当时记作 `hostBase()`/`location.origin`，该符号在现行 pin
-   已不存在）。`packages/client/ui-open-in-app/src/client/controller.ts` 取 `OPEN_IN_APP_APPS_ROUTE`/
+2. **官方客户端半的探针路由是 document-relative**（历史证据，不随本仓 pin 移动：某版 pin 记作 `hostBase()`/`location.origin`，现行 pin 已无该符号）。`packages/client/ui-open-in-app/src/client/controller.ts` 取 `OPEN_IN_APP_APPS_ROUTE`/
    `OPEN_IN_APP_OPEN_ROUTE`（`packages/host/open-in-app/src/shared.ts` 的 `*_PATH.slice(1)`）；`iconUrl` 是根相对路径
    （同包 `src/client/index.ts` 的 `iconUrl` 构造）——N-ctx 壳下页面 origin 是控制面 ⇒
-   header 探针/图标 404、席位渲染 null。当时的结论（「拉进复合才不会 404」）已被 §2.2/D2 取代：官方行照常
-   加载，deliverables 文件动作的 owner 路由由 ui-deliverables 侧带 per-entry 前缀（design 09 §3.6），header 仍 inert。
-3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
-   （`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已跟随当前 pin**
+   header 探针/图标 404、席位渲染 null。因此本设计选择 **fork & supersede**：官方客户端行照常加载（D2），deliverables 文件动作的 owner 路由由 ui-deliverables 侧带 per-entry 前缀（design 09 §3.6），header 席位仍 inert；官方宿主行由 overlay `disabled` 停用（§2.2）。
+3. **效果依赖实例 runtime 的版本**：官方 open-in 行自 `dsh-v0.1.3-alpha.2` 才存在（历史证据，不随本仓 pin 移动；`packages/renderer/src/chamber-covered.ts#=literal:The official open-in client row is NOT skipped any more`）；本仓**运行时锚与源码 pin 都已跟随当前 pin**
    （运行时线单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs` 兜底由运行时锁派生）⇒ 非主要理由。fork & supersede 不依赖该行。
 
 **补注（第 2 条的机器级复活）**：上游那条"目录/图标由承载页面的 host 回答"的不变量，在**机器级**上仍然是对的——只是本壳有 N 个 host，需要点名"哪一个是机器 host"。答案是把页面上的机器 host 钉为**本地实例**：
@@ -80,16 +77,9 @@
 
 ### 2.2 与既有 pin 的关系（不变式）
 
-- `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0` 回到**唯一原有的目的**：目录选择交互 pin（design 02
-  §3.1/§3.9、design 05 §4）。本文不新增/不删除任何 spawn env、CLI 参数或 cordis overlay 行（seed 行
-  除外，见 §6.2）；第三消费者（实例侧官方 open-in 目录）仍在，但**无人调用官方那一份**，不再是偏差。
-- **官方宿主行保持原样挂载但不被调用**（目录解析惰性，`resolutions ??=`，
-  `host/open-in-app/src/index.ts`，零成本；不引入 overlay `disabled:` 能力）；**官方客户端行自 0.1.7 起
-  加载**（D2）：文件级席位（右栏文档 open/reveal、deliverables 文件动作）生效（后者的 owner 路由带
-  per-entry 前缀，design 09 §3.6）；header 席位因 document-relative 路由落在控制面 SPA origin 而 inert，
-  故 `chamber-covered.ts` 不再登记为 page-own；
-  目录打开入口仍是 chamber `open-in`（同座、同 order、异 id，允许并存）。
-- **右键菜单里的官方 open-in 面（0.2.2-alpha.3）：文件分支真能落地，workspace 分支 inert**——
+- `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0` 回到**唯一原有的目的**：目录选择交互 pin（design 02 §3.1/§3.9、design 05 §4）。本文不新增/不删除任何 spawn env 或 CLI 参数（不引入 `--no-open`/picker pin overlay 等启动侧改动）；cordis overlay 只新增 chamber seed 行（§6.2）与官方 open-in 宿主行的 `disabled`（下条）。第三消费者（实例侧官方 open-in 目录）仍在，但官方那一份由 overlay 停用、无人调用。
+- **官方宿主行由 local-host-seeding 在 seed 生效时以 overlay `disabled` 停用**（`OFFICIAL_OPEN_IN_DISABLE`，`packages/control-plane/src/host-graph-seed.ts`；触发条件 = chamber open-in host 包真的被 seed 进本地 profile，见 `local-host-seeding.ts`）——官方 webServer 路由虽无调用者，仍会挂载成第二个 live wire authority；disabled 行骑同一条 `--patch` overlay（在任何 bundle / 用户层之后合成），用户层重新启用也会被覆盖。**官方客户端行加载**（D2）：文件级席位（右栏文档 open/reveal、deliverables 文件动作）生效（后者的 owner 路由带 per-entry 前缀，design 09 §3.6）；header 席位因 document-relative 路由落在控制面 SPA origin 而 inert，故 `chamber-covered.ts` 不再登记为 page-own；目录打开入口仍是 chamber `open-in`（同座、同 order、异 id，允许并存）。
+- **右键菜单里的官方 open-in 面：文件分支真能落地，workspace 分支 inert**——
   covered 的 `ui-context-menu` 带来官方的 `ui-open-in-app` 菜单贡献，两条分支落地形态不同：
   文件/图片分支走 `remote.session`（`canOpenWorkspacePath` / `workspacePathApplications` /
   `openWorkspacePath`，`open-path.ts`），本壳的 `remote` 已按 `chamberBasePath=/api/i/<id>` 发
@@ -169,8 +159,7 @@
   **插件侧不再持有 connection 载波**（只消费自己 ctx 上的事实）；
 - 载荷/响应形状校验在 `src/client/local-catalog.ts` 逐项执行，**两层信封都在该模块内解开**：`callUnary` 回答**传输层**结果（先读 `{ok:true,value}` / `{ok:false,error}`），
   宿主域载体嵌在其 `value` 里（同 `archiveCleanup` 的 `decodeDomainResult`、git 客户端约定），再读
-  `{ok:true,value}|{ok:false,error:{code,message}}`——只解一层在生产恒得空目录（单测喂的是域载体本身，
-  故当时全绿）；页级读取锁步由 `packages/renderer/test/lifecycle/page-read-path-lockstep.test.ts` 用
+  `{ok:true,value}|{ok:false,error:{code,message}}`——只解一层在生产恒得空目录（单测喂的是域载体本身，覆盖不到该形态）；页级读取锁步由 `packages/renderer/test/lifecycle/page-read-path-lockstep.test.ts` 用
   **真实实例客户端**兜住。域载体 `apps` 必须是字符串数组（坏条目/重复只丢自己，不抹合法 sibling），
   形状不明一律 fail-closed；本地实例未就绪⇒目录为空、按钮诚实隐藏（fail-closed），不阻塞 main 池与 boot；
 - 图标缓存与预取归**页级** `src/client/machine-catalog.ts`（成败都缓存，缺失图标不重复请求；跨来源只取
@@ -299,7 +288,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
    派生、`sourceDir` 指向同步缓存目录（`gateway/src/index.ts:333-343`），未同步 ⇒ 目录为空 ⇒ 按既有
    "缺产物优雅跳过、不写悬挂 loader 行"规则处理；
 5. `scripts/upstream/verify-upstream-touchpoints.mjs`：**C7** 文本哨兵（gateway 域值集 ↔ runtime 列表）、
-   **C8** 产物清单加入 `packages/dsh-chamber-seed-open-in/dist/index.js`（host dist ×4，共 6 组）并同步头注、
+   **C8** 产物清单加入 `packages/dsh-chamber-seed-open-in/dist/index.js`（host dist 组，数量以 `scripts/upstream/verify-upstream-touchpoints.mjs` 的产物清单为准）并同步头注、
    **C2** tag 重放自动纳入（按 registry 的 `upstream` 集合，advisory）；**C6 排除表不动**：本 fork
    **不 shadow vendor 包名**，上游 `packages/host/open-in-app` 必须留在 vendor 树作 diff 锚（加进
    `EXCLUDED_UPSTREAM_DIRS` 会让 C1 失去上游对照）；
@@ -347,18 +336,18 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 
 ### 7.2 官方没有、我们有的
 
-| # | 能力 | 现状 |
+| # | 能力 | 契约 |
 |---|---|---|
-| 1 | 远程 ssh 来源：VS Code Remote URL（主进程构造，权威 IPC + 来源代 proof） | 已有 |
-| 2 | 每来源独立记忆 + 记忆值可用性降级 | 已有 |
-| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts`（`.instance-view` 隐藏/断开即关闭） | **收窄**（原 chamber-owned `AccessibleAppMenu` 不再保留） |
-| 4 | 与启动标记解耦：任何 runtime 版本、任何 chamber 形态下本地目录都可用 | 本设计 |
-| 5 | 远程 provider 家族（Insiders / Cursor / Windsurf / JetBrains Gateway / `ssh://` 终端） | todo（S1，每个新增项需一次实机 scheme 验证） |
-| 6 | 远程**文件级**打开（只是 URL 构造；本地仍目录限定） | todo（S2） |
-| 7 | 无应用来源的诚实出口（复制远端路径 / 复制 `ssh user@host` / 复制深链，零执行面） | **收窄**：只保留「复制路径」——侧栏既有 `HoverCard` 复制模式 + 会话行已带 `SessionRow.cwd`，零新 IPC；复制 ssh 命令/深链不做（理由见 `docs/progress/STATUS.md` §1.4「open-in/Git/深链/只读镜像」） |
-| 8 | 多入口共用同一执行管线（侧栏会话行右键、快捷键；`runOpenInLaunch` 已是单一管线） | **不做**（理由与证据见 `docs/progress/STATUS.md` §1.4「open-in/Git/深链/只读镜像」） |
-| 9 | 拉起失败原因**用户可见**（`Tooltip` 就地呈现域错误/传输异常，随 error 装饰清除） | 已有 |
-| 10 | 官方 Files 页签目录座席 `sidebar.right.tab.files.actions`（官方 `ui-open-in-app` 占座，但读 document-relative `open-in-app/*` ⇒ N-ctx 下落控制面 SPA 回退、渲染 null）由本插件以自有 id `open-in` 同槽占座：owner `{ absolutePath }` 直取文件树显示目录，per-source 目录/记忆照旧；残余风险 = 官方条若复活会同槽双条 | 本设计（`test/ui-lock/files-seat-declaration.test.ts` + `test/launch-flow/open-in-path.test.ts`） |
+| 1 | 远程 ssh 来源：VS Code Remote URL（主进程构造，权威 IPC + 来源代 proof） | 可 |
+| 2 | 每来源独立记忆 + 记忆值可用性降级 | 可 |
+| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts`（`.instance-view` 隐藏/断开即关闭） | 可（官方 `Menu`；chamber-owned `AccessibleAppMenu` 不存在） |
+| 4 | 与启动标记解耦：任何 runtime 版本、任何 chamber 形态下本地目录都可用 | 可 |
+| 5 | 远程 provider 家族（Insiders / Cursor / Windsurf / JetBrains Gateway / `ssh://` 终端） | 不可（候选见 `docs/progress/TODO.md` C§3；每个新增项需一次实机 scheme 验证） |
+| 6 | 远程**文件级**打开（只是 URL 构造；本地仍目录限定） | 不可（候选见 `docs/progress/TODO.md` C§3） |
+| 7 | 无应用来源的诚实出口（复制远端路径 / 复制 `ssh user@host` / 复制深链，零执行面） | 部分：只保留「复制路径」——侧栏既有 `HoverCard` 复制模式 + 会话行已带 `SessionRow.cwd`，零新 IPC；复制 ssh 命令/深链不可（理由见 `docs/progress/STATUS.md` §1.4「open-in/Git/深链/只读镜像」） |
+| 8 | 多入口共用同一执行管线（侧栏会话行右键、快捷键；`runOpenInLaunch` 已是单一管线） | 不可（理由与证据见 `docs/progress/STATUS.md` §1.4「open-in/Git/深链/只读镜像」） |
+| 9 | 拉起失败原因**用户可见**（`Tooltip` 就地呈现域错误/传输异常，随 error 装饰清除） | 可 |
+| 10 | 官方 Files 页签目录座席 `sidebar.right.tab.files.actions`（官方 `ui-open-in-app` 占座，但读 document-relative `open-in-app/*` ⇒ N-ctx 下落控制面 SPA 回退、渲染 null）由本插件以自有 id `open-in` 同槽占座：owner `{ absolutePath }` 直取文件树显示目录，per-source 目录/记忆照旧；残余风险 = 官方条若复活会同槽双条 | 可（`test/ui-lock/files-seat-declaration.test.ts` + `test/launch-flow/open-in-path.test.ts`） |
 
 ### 7.3 明确不做
 
@@ -429,7 +418,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 | 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | **网关侧**的 `/chamber/plugins` 投影与 PUT 名单由注册表派生 ⇒ 该 localOnly 行自动出现（只要只有桌面在上传，该行 `version` 恒 null；这是 API 投影，插件页不在非本地目标列出它——桌面侧的上传**源清单**是另一回事，见 §6.2 第 6 条）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
 | 注册表锁步 | `test/plugin-inventory/chamber-rows.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行（非本地目标不再列 localOnly 行后，第三方区对该行只余分类这一道网，故把分类也钉进同一门） |
 | 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
-| 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（open-in 包本身不新增补丁；deliverables owner 路由的 per-entry 前缀见 design 09 §3.6）+ 新 fork 的 C1/C3/C5（registry 的 `seed.*` 条目 + `versionAnchor: 'chamber'` 豁免，见 §10） |
+| 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist 重建-比对）+ C9（open-in 包本身不新增补丁；deliverables owner 路由的 per-entry 前缀见 design 09 §3.6）+ 新 fork 的 C1/C3/C5（registry 的 `seed.*` 条目 + `versionAnchor: 'chamber'` 豁免，见 §10） |
 
 ## 10. 已知边界与实机验收
 
@@ -440,9 +429,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   fork 面（advisory）。**版本锚已豁免**：C5 规则是 `fork/package.json.version == 上游同文件版本`——三个
   既有 copy 包即如此携带上游版本（实测随 pin；值见 `harness.commit` 所指源码树），seed 包随 chamber 发版 bump（与
   `dsh-runtime`/其他 seed 一致）；registry 每条登记 `versionAnchor: 'upstream' | 'chamber'`（既有三条 =
-  upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 与之一致。实测：
-  `✓ [seed-open-in] C1/C3: pure=3 patched=4 own=10 dropped=7`、`✓ C7 … openInApp/probe`、
-  `✓ C8 生成物与 src 一致（6 组）`。（被否决的替代：携带上游版本的 copy 包 + seed 包装包——需把
+  upstream、本 fork = chamber），C5 只比对 `upstream`；脚本头注、C5 日志文案与触点表 §4 与之一致；分类计数不手抄——以 `node scripts/upstream/verify-upstream-touchpoints.mjs` 的输出与 `docs/checklists/upstream-touchpoints.md` §4 的登记为准。（被否决的替代：携带上游版本的 copy 包 + seed 包装包——需把
   `packages/host/open-in-app` 从 vendor 树排除（破坏 C1 锚）并新增"seed 引 copy 包源码"构建边。）分歧逐条
   写在 `patched`/`dropped` 原因里并复述于包首页；
 - **图标传输**：`openInApp/icon` 以 base64 走 RPC（有界大小 + 客户端缓存）；若日后受 CSP/体积所限，
@@ -456,7 +443,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
   （`canOpenNativePath` / `openNativePath` / `runNativeCommand` / `NativeCommandRunner`；0.1.7-rc.2 起还包括
   Linux desktop-entry/icon helper `desktopEntryFields`/`desktopDataDirectories`/`desktopApplicationIcon`）
   与 `@deepseek-ai/dsh-subprocess`（`scrubbedParentEnv`）；`runNativeCommand` 是模块导入而非注入服务，
-  故只需 `subprocess` 一个注入（供 `resolveExecutable`）。**最低 runtime = 0.2.0-rc.1（已抬；原 WebKit 归一化载体随之删除，见 design 17 §10.5）**：
+  故只需 `subprocess` 一个注入（供 `resolveExecutable`）。**最低 runtime = 0.2.0-rc.1**（该代次携带引擎无关判定，WebKit 归一化载体随之删除，见 design 17 §10.5）：
   旧内置 runtime 不再声明兼容（0.1.7-rc.2 起的新导出在更旧 runtime 不存在，seed 装载期会 loud 失败——刻意不跳过）；
 - **未实机验证项**：真实 bundle 图标在四种前端（Finder/Terminal/iTerm/Cursor）下的一致性、无应用环境
   （Linux headless/容器）下的空目录表现、`localOnly` 行在插件管理页的呈现；

@@ -3,10 +3,7 @@
 > 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；进度、验收门与取舍在 [STATUS.md](STATUS.md)，
 > [deviations.md](deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`。
 >
-> **版本范围（2026-11 用户裁决）**：唯一出货 flavor = macOS Swift 原生壳；**Electron flavor 已冻结归档、
-> 不删除文件、可复活**（Windows/Linux 桌面腿随之冻结、不发布）。本文件中 Electron / Windows v1 计划
-> 一律标「冻结，不排期」，只在复活时执行（见 [electron-frozen.md](electron-frozen.md) §6）；A/C/D 的
-> Swift 与上游内容不受影响。
+> **版本范围与冻结清单**：唯一出货 flavor = macOS Swift 原生壳；Electron/Windows/Linux 桌面腿冻结、不发布（本文件相关计划一律标「冻结，不排期」，只在复活时执行）。范围、共享契约、禁用面与复活清单见 [electron-frozen.md](electron-frozen.md) §1/§6 与根 [`AGENTS.md`](../../AGENTS.md)。
 > 四部分：A 上游（A 类）、B 平台（B 类）、C 功能（C 类）、D 工程（D 类）。文中 `§N` 指本部分内编号；
 > 跨部分引用写 `A§N` / `B§N` / `C§N` / `D§N`。
 > 条目内的「剩余 / 未做 / 待…」是**计划范围**，不是进度状态；状态以 [STATUS.md](STATUS.md) 为准。
@@ -251,10 +248,9 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 
 ## B. 平台与外部门禁（B 类）
 
-> 阻塞来源 = 真机 / runner / 凭据 / 产物；每条须真实 macOS 或 Windows 验证。契约见 design 25、design 23。
+> 阻塞来源 = 真机 / runner / 凭据 / 产物；每条的现行验证面 = macOS Swift 腿（Windows 仅在复活后适用）。契约见 design 25、design 23（ARCHIVED）。
 >
-> **范围（2026-11）**：只有 macOS Swift 腿继续排期；Windows v1 与 Electron 腿已随 Electron flavor 冻结归档
-> （[electron-frozen.md](electron-frozen.md)），B§2 仅在复活时执行。
+> **范围**：只有 macOS Swift 腿继续排期；Windows v1 与 Electron 腿冻结归档（见 [electron-frozen.md](electron-frozen.md)），B§2 仅在复活时执行。
 
 ### 1. macOS Swift 原生壳 v1
 
@@ -273,7 +269,7 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 #### 1.3 WBS 任务号索引（W-01…W-32 → 契约落点）
 |任务|内容|契约落点|
 |---|---|---|
-|W-01…W-05|M0 决策签核与文档同步；Swift 壳脚手架；A 桥雏形（shim/MessageHandler/TrustGuard）；P0 竖切（FrameCodec/BridgeClient/sidecar-stub）|design 25 §0.1、§3.2、§4.4、§8.1|
+|W-01…W-05|M0 决策签核与文档同步；Swift 壳脚手架；A 桥雏形（shim/MessageHandler/TrustGuard）；P0 竖切（FrameCodec/BridgeClient/sidecar-stub）|design 25 §3.2、§4.4、§8.1|
 |W-06…W-08|P0 走查与门禁（G1–G5、C1/C2 判定）|design 25 §8.1|
 |W-09…W-13|core seam（node-edges/shell-core、IPC 面镜像、core 禁 electron 门）；sidecar 入口与 stdio JSON-RPC（sidecar-entry/sidecar-ctx/bridge manifest 管道）|design 25 §3.2、§4.1|
 |W-14/W-15|Electron 零回归证明（分层 gate）；SidecarSupervisor（退避重启 + 退出码分级）与目录锁|design 25 §4.1、§3.3、§6.3、§8.2|
@@ -290,11 +286,9 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 > 契约与决策：`docs/design/23-windows-support.md`（ARCHIVED）。本文只留未实现/外部门禁、基线登记口径与取舍；
 > 每条须真实 Windows/CI 验证才算完成。
 >
-> **冻结归档（2026-11 用户裁决）**：Windows 桌面腿随 Electron flavor 冻结、**不发布、不排期**；本节所有
-> 里程碑 / 基线登记 / 实机矩阵只在用户重开范围、按 [electron-frozen.md](electron-frozen.md) §6 复活时执行。
-> 原文保留作为复活基线，不删除。
+> **冻结归档**：Windows 桌面腿随 Electron flavor 冻结、不发布、不排期（见 [electron-frozen.md](electron-frozen.md)）；本节只在按 §6 复活时执行，原文保留为复活基线。
 
-#### 2.1 外部门禁（需真实 Windows runner / 实机 / 产物）
+#### 2.1 外部门禁（需真实 Windows runner / 实机 / 产物；**冻结原表，复活后执行**）
 
 - M0：push 后 `test-windows` 首跑绿（连续 3 次）；按 §2.2 基线口径把首份真实数据填入下表。
 - M0.5：上游 `@deepseek-ai/dsh` win32-x64 最小复现 spawn + ready（阻断级 R1）；NSIS 是否写
@@ -318,7 +312,7 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 - 遗留低优（记录在案）：supervisor win32 sendSignal 无宽限重试（方向 fail-closed）；双模块解析器重复
   （win-probes/windows-process 互注 + 双端 CI 测试）；decideDeepLink platform 入参保留为显式契约。
 
-#### 2.2 基线登记口径（M0 首跑后填写）
+#### 2.2 基线登记口径（M0 首跑后填写；**冻结基线，复活后填写**）
 
 > 用途：Windows 首版修复前基线。第一次 `test-windows` CI 腿跑绿后，把每个测试在 win32 的 pass/skip 集合与每个
 > 平台门控的拒绝行为填入下表；此后每个里程碑的 win32 测试变化必须对照本表归因（diff = 预期解锁集，不允许
@@ -428,7 +422,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 #### 1.3 门禁与用法
 
-- 证据选择：`node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看计划）；模式名与 ci.yml/release 一致，例外（手写 host typecheck、macOS 腿、C8 rebuild、remote-state acceptance、notices diff、gateway pack smoke、SVG scoper、Windows manifest）见 STATUS §1.6。
+- 证据选择：`node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看计划）；模式名与 ci.yml/release 一致；模式之外的门及其归属以 `docs/progress/STATUS.md` §1.6 为准（本文件不复述清单）。
 - 门成员资格单源 = `scripts/gates/gate-surfaces.json`（loader `gate-registry.mjs`，`run-checks` 只派生模式）；`ci.yml`/`release.yml` 的 static 步骤由 `gate-workflow-views.mjs` 从 registry 生成（四个标记块 + `--check` 保鲜）；不变量与生成视图细节归该单源；文档写作规则见 `docs/AGENTS.md`。
 - 本重构三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`（只降不升，清单与阈值以 `scripts/gates/file-budgets.json` 为准）、`verify:no-dead-exports`（零消费者导出即红）；执行面见 STATUS §1.6。
 

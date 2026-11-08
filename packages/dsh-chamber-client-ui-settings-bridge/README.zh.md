@@ -2,21 +2,20 @@
 
 [English](README.md) | 中文
 
-chamber 自研**设置壳**插件（2026-08 设计讨论；**完整桥接**修订）：以
+chamber 自研**设置壳**插件：以
 **保留的 shadow 优先级**（`-1000`，shared face `settings-shell.ts`）向
 `sidebar.settings` 槽注册「设置 / Settings」壳，从而**遮蔽官方 SettingsRoot**——
 绝不冲突：官方入口仍在账上，其 `settings.*` 子声明依然有效。chamber 侧边栏监视
 该槽的 cell winner，若有注册者低于保留区间（即顶掉设置壳）则 console 报告。
 
-## 完整桥接（修订）
+## 完整桥接
 
 面板渲染**选中来源自己的设置面**——该来源自己 boot cordis 上下文的
 `settings.section` 台账，配该上下文自己渲染器绑定的标准座
 （`settings-source-face.ts`）。不再有第二次挂载、不再有服务桩：在实例自身前端里
 active 的第三方插件在这里同样 active，用的是真 `remote`（WS 事件流）、实时的
 settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanelInfo` /
-`useResource` 座。被取代的旧做法（在脱离的子上下文里挂一份缩小版插件集）正是
-「设置未激活：缺少服务」「根座未落座」「能力降级」这些报告的来源，随它一并删除。
+`useResource` 座。
 
 一个来源可渲染需要两半，均按实例发布：桥接插件的 `apply`（每个实例 boot ctx 一次）
 发布该 ctx 的 `slots` 台账、`locale` 面与权威 `chamberSourceFingerprint`；该实例的
@@ -29,8 +28,7 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 ## 行为
 
 - 服务器下拉选择；配置列渲染该实例自己的分节，**与该实例自己的前端完全同形**
-  （图标 + 标签；台账的 `registrant` 戳在上游仅用于诊断、不渲染——本仓曾经的
-  「插件」来源标记已于 2026-09-11 退役）。gateway
+  （图标 + 标签；台账的 `registrant` 戳在上游仅用于诊断、不渲染）。gateway
   来源自己的台账额外带 per-server「dsh 运行时」段——由本包在**该实例自己的 ctx**
   上注册（design 18 §3.6/§9.3，代理 `/chamber/runtime`，版本选择/应用/回滚/重启）；
   其能力由投影事实推导，投影畸形时只报告（`console.error`）不抛错。
@@ -38,9 +36,8 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
   占位与连接管理入口，且**不触发**挂载。
 - 固定的 chamber 全局「连接」「客户端」导航入口：连接页渲染 chamber 包的
   settings-connections 分区；客户端页渲染 chamber 全局运行设置（design 14
-  D7/15，退出确认/自启/防休眠 + design 11 更新状态）。第二个入口在 2026-09-11
-  上游对齐前叫「通用」：官方分节才叫 通用设置/General，故 chamber 全局的桌面
-  客户端页与其导航单元统一改名 `客户端` / `Desktop`（两者共用一个字典键）。
+  D7/15，退出确认/自启/防休眠 + design 11 更新状态）。官方分节才叫 通用设置/General；
+  chamber 全局的桌面客户端页与其导航单元名为 `客户端` / `Desktop`（两者共用一个字典键）。
 - 本壳同时统筹**自己所属 boot ctx** 的 `settings.onboarding` 首启阶段（对齐上游
   SettingsRoot）：当该 ctx 当前会话为空（absent）或仍是 blank 时，挂载按 order
   排序、尚未完成的第一个步骤；步骤自身组件（注册在该 ctx）自己负责就绪判定、
@@ -48,8 +45,8 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
   来源：它由该 ctx 自己的 sessions 座（`props.useSessions`）与该 ctx 自己的台账
   驱动——否则两个挂载中的壳选中同一来源时会重复挂载同一步骤；同时以 App 发布的
   active-view 事实为门（同一时刻挂载着多个实例壳，而首启对话框是文档级的）。该门只管
-  **挂载**：完成集的重置只跟 sessions 事实（2026-09-11 review-fix F1——一次普通切视图
-  不再清掉用户已走完或已显式推迟的步骤）。登记残留：完成集是组件局部的，壳被**重新
+  **挂载**：完成集的重置只跟 sessions 事实（一次普通切视图
+  不会清掉用户已走完或已显式推迟的步骤）。登记残留：完成集是组件局部的，壳被**重新
   挂载**仍会从头再跑一遍；收口需要能跨挂载存活的每实例状态。
 - 每个桥接出口都渲染在官方 `[data-slot="<key>"]` 锚点里（`display: contents`；
   包装随**出口**而非分发结果），因此按槽子元素寻址的官方样式表——General 的
@@ -59,7 +56,7 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 - 控件与共享符号一律来自上游：开关是 `ui-primitives` 的 `Switch`（36×20，
   label 必填；披露行的 `aria-expanded`/`aria-controls` 由本包写到**原语自己的**
   `role="switch"` 节点上——`src/client/disclosure-attrs.ts`，因为原语没有属性透传、
-  而无 role 的包装盒根本不支持 `aria-expanded`，2026-09-11 review-fix F3）；
+  而无 role 的包装盒根本不支持 `aria-expanded`）；
   每个动作胶囊与每个确认对话框都来自 `ui-primitives`（`Button`，以及
   「dsh 运行时」段确认所用的 `Modal`——标题 + 描述 + outline 取消 + 错误色确认，
   动作在途时给出 aria-live 的 pending 行）；导航投影用上游导出的
@@ -73,9 +70,8 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
   确认只启动一个 runner——**启动前先按 live 事实复验**被武装的请求，门在对话框打开
   期间关上的动作会被丢弃并如实报错、绝不落到 wire 上；gateway 侧动作另有 **12 分钟**
   墙钟上限（= 11 分钟状态轮询预算 + 1 分钟余量），因为 pending 期间对话框按设计忽略
-  取消/Escape/遮罩——2026-09-11 review-fix F2/F4b）。此前的分裂（桌面形态用原生确认、
-  gateway 形态用
-  `window.confirm`）已移除：原生 chrome 既套不上面板的 `--dsw-alias-*` 词汇，也
+  取消/Escape/遮罩）。桌面形态用原生确认、gateway 形态用
+  `window.confirm` 都不可行：原生 chrome 既套不上面板的 `--dsw-alias-*` 词汇，也
   不属于这个多壳文档，而 gateway 形态根本没有原生对话框。确认由哪一层负责其余部分
   不变——本地 apply-now 事务仍由本地运行时面自己确认，面板不会二次追问。
 - 配置事实留在目标宿主：无 chamber 侧持久化、无新控制面 API。
@@ -84,15 +80,15 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 ## 共享 gateway-runtime split（design 21 §5.2）
 
 - gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪轮询）
-  已迁出本包进入 client-core 内核（`@dsh-chamber/dsh-chamber-client-core`；
+  驻 client-core 内核（`@dsh-chamber/dsh-chamber-client-core`；
  `packages/dsh-chamber-client-core/src/gateway-runtime*.ts`，经核心 `.` 面到达）；
   本包在其 gateway dsh-runtime 段回引该内核，并经 node_modules workspace 链接 +
  client-core package exports 对真实 client-core 源做
-  typecheck（P4-4：手写 ambient 镜像 `src/ambient/chamber-bridge.d.ts` 已删除）。
+  typecheck；无手写 ambient 镜像（`src/ambient/chamber-bridge.d.ts`）。
 - 本包只保留本地视图映射：`remoteRuntimeStatusView` /
   `RemoteRuntimeStatusView`（SettingsBridgeKey 耦合）驻
   `src/client/gateway-runtime-api.ts`。
-## keyed 插槽与全量隔离（2026-08）
+## keyed 插槽与全量隔离
 
 - bridge 出口支持 root+keyed（`settings.plugin.item`，entryKey 分发 +
   fallback，镜像官方 scoped-slots 契约）：命中 key 的 winner 渲染；key 被占用但
@@ -108,3 +104,5 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 持有 `dsh-chamber.settings.bridge` 字典命名空间（zh 键源；
 `src/locales.ts`）；为内嵌连接分区 bind `dsh-chamber.settings.connections`
 命名空间。
+
+测试：`node ./scripts/test.mjs`。

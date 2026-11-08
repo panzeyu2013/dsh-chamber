@@ -48,7 +48,7 @@
 | `packages/desktop/host-assembly.ts` | 两 flavor 共享的宿主装配单一实现（`createHostAssembly(deps)`） | `main.ts`（冻结）与 `sidecar-ctx.ts`（现行）只注入各自 edge 差异；不得因冻结而拆回两套 |
 | `packages/desktop/{shell-assembly-ctx,shell-ipc-*,runtime-startup-host,host-registry-transition,host-exit,node-edges,sidecar-entry,sidecar-ctx}.ts` | sidecar / 共享业务装配 | Swift 腿现行代码 |
 | `packages/desktop/updater.ts` 的纯函数 | 更新控制器共享叶 | Swift `update-headless.ts` 直接复用（见 §2）；改动需双 flavor（Electron 冻结时只保证 Swift 腿 + 纯函数契约） |
-| `packages/desktop/bridge-manifest.json` + `macos/Sources/DSHChamber/Generated/BridgeManifest.swift` + `macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js` | A 桥 manifest 三生成物（`scripts/emit-bridge-manifest.mjs` 产出） | Swift 白名单 / shim 的通道单源；生成器仍读 `ipc-events.ts` 与 `MAIN_SIDE_FILES`（含归档的 `electron/main.ts` / `electron-edges.ts`，见 §5 白名单政策） |
+| `packages/desktop/bridge-manifest.json` + `macos/Sources/DSHChamber/Generated/BridgeManifest.swift` + `macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js` | A 桥 manifest 三生成物（`packages/desktop/scripts/emit-bridge-manifest.mjs` 产出） | Swift 白名单 / shim 的通道单源；生成器仍读 `ipc-events.ts` 与 `MAIN_SIDE_FILES`（含归档的 `electron/main.ts` / `electron-edges.ts`，见 §5 白名单政策） |
 | `scripts/gates/verify-electron-artifacts.mjs`、`packages/desktop/scripts/electron-shared.mjs` | 归档件，但被**共享测试/工具只读引用** | 登记为只读依赖：`verify-electron-artifacts.mjs` 的纯判定函数仍被 `run-checks.test.mjs` 与 `after-pack-adhoc-sign.test.mjs` 引用（执行面 `--check-dir` 默认不跑）；`electron-shared.mjs` 仍被 renderer 构建路径契约 / `test:macos` 打包套件与 FROZEN `electron-shared.test.mjs` 引用。改这两个文件先确认引用方仍按只读语义使用 |
 | `packages/desktop/bridge-manifest.test.ts`、`bridge-shim.test.ts` 生成物锁步；`electron-free-gate.test.ts` 的 core 零 electron import；`bridge-shim-surface.test.ts` / `ipc-surface-mirror.test.ts` 等镜像测试 | 契约锁步 | 冻结不等于放弃锁步：**生成物 == 提交物、Swift 白名单 == manifest、core 家族零 electron import** 必须继续绿；白名单项按 §5 豁免「两侧相等 / 每通道恰用一次」。镜像类测试以 `test.mjs` 的 FROZEN 清单为准：被冻结的镜像测试其契约结论由生成物 + Swift 侧测试承接，不得静默失去校验 |
 | `packages/control-plane` / `packages/renderer` / `packages/dsh-chamber-*` / `packages/dsh-runtime` / `packages/gateway` / `packages/cli` / `macos/` | 现行包 | 与 Electron 无关的出货面 |
@@ -92,7 +92,7 @@
 ### 5.2 Swift-only A 桥 additions 政策
 
 只存在于 Swift shim、不需要 Electron preload / 主进程注册的通道（含命名空间 / 方法）必须登记在
-**`packages/desktop/bridge-swift-only-additions.json`**，由 `scripts/emit-bridge-manifest.mjs` 合入
+**`packages/desktop/bridge-swift-only-additions.json`**，由 `packages/desktop/scripts/emit-bridge-manifest.mjs` 合入
 manifest（方向必需），并豁免「两侧必须相等 / 每通道恰用一次」类锁步检查。默认空表时生成物逐字节不变。
 
 **schema（当前初始 `entries: []`）**：
@@ -115,7 +115,7 @@ manifest（方向必需），并豁免「两侧必须相等 / 每通道恰用一
 }
 ```
 
-规则（实现 = `scripts/emit-bridge-manifest.mjs` 的 `loadSwiftOnlyAdditions` / `validateSwiftOnlyAdditions`，
+规则（实现 = `packages/desktop/scripts/emit-bridge-manifest.mjs` 的 `loadSwiftOnlyAdditions` / `validateSwiftOnlyAdditions`，
 violation 一律 loud 拒绝）：`channel` / `key` 必须与 `ipc-events.ts` 的 `IPC_CHANNELS` 常量一致（通道名单一
 来源）；`key` 必须满足 `^[A-Z][A-Z0-9_]*$`；`direction` 必填且 ∈ {invoke,push}；`namespace` / `method` /
 `reason` 为非空字符串；同一 key/channel 不得重复登记；**main 侧注册文件对该 key 的引用必须为零**
@@ -136,13 +136,12 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
    `packages/desktop/electron/` 路径）；git 操作需用户明确要求。**不删除历史文档**。
    冻结落地后应打一个 tag（如 `electron-frozen-<日期>`）指向冻结前的最后一个提交；若尚未打，
    取本批变更的父提交。
-3. **对齐 Electron pin（复活基线 = 44.7.0）**：当前 pin `43.4.0` 不在 node-addon-require-builtin
-   指纹表内（表内 = 43.0.0 / 44.0.0 / 44.7.0 / 45.0.0-alpha.6；design 02 §3.1、STATUS §三），宿主会
-   `exit 1`。复活时 pin 对齐表内版本（建议 44.7.0，最新稳定），同批同步：
+3. **对齐 Electron pin**：当前 pin 见 `packages/desktop/package.json` 的 `electron` devDependency；若该 pin 不在 node-addon-require-builtin 的指纹表内（表以该包源码为准；design 02 §3.1、STATUS §三），宿主会
+   `exit 1`。复活时 pin 对齐表内最新稳定版本，同批同步：
    `packages/desktop/package.json` 的 `electron` devDependency、`scripts/build-sidecar.mjs` 的
    `ELECTRON_NODE_PINS` + `DEFAULT_NODE_VERSION` + `PINNED_NODE_SHA256`、`pnpm-lock.yaml`
    （G37 / `build-sidecar.test.mjs` 的 lockstep 断言会红，必须同批改）。
-4. **恢复装配（先确认已就位，再补真正缺失项）**：已就位（冻结批已落地，不用改）——`packages/desktop/package.json`
+4. **恢复装配（先确认已就位，再补真正缺失项）**：已就位（不用改）——`packages/desktop/package.json`
    的 `main` = `electron/main.ts`，`build.files` 已含 `electron/**/*.ts` / `electron/**/*.cts`，
    `scripts/main-side-files.mjs` 的 `MAIN_SIDE_FILES` 已指 `electron/`，`scripts/build-sidecar.mjs` 的
    `electron` external 与 `tsconfig.sidecar.build.json` / `tsconfig.preload.build.json` 的 exclude/include 已对齐。

@@ -2,10 +2,10 @@
 
 [English](README.md) | 中文
 
-chamber 自研**连接设备页**设置分区插件（设计 05 §5）：向 dsh 设置面板的
-`settings.section` 槽注册「连接 / Connections」入口（`id: 'connections'`，
-order 30，排在 agent-presets 之后）。本分区是 chamber 连接管理器的应用内
-管理面——不消费宿主帧，不触碰 dsh 运行时对象。
+chamber 自研**连接设备页**设置分区（设计 05 §5）：设置壳经固定 nav id
+`__connections` 渲染本分区（`src/client/index.ts`），故本包只拥有词典命名
+空间与 section 组件，**不向** host-ctx 注册 `settings.section`。本分区是
+chamber 连接管理器的应用内管理面——不消费宿主帧，不触碰 dsh 运行时对象。
 
 ## 内容
 
@@ -51,3 +51,5 @@ order 30，排在 agent-presets 之后）。本分区是 chamber 连接管理器
 
 持有 `dsh-chamber.settings.connections` 字典命名空间（zh 键源；
 `src/locales.ts`）。
+
+测试：`node ./scripts/test.mjs`。

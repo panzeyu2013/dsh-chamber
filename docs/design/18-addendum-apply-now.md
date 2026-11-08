@@ -27,7 +27,7 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 ### 1.3 可行性依据（机制事实）
 - 激活事务是任意时刻可调的纯 async 函数 `applyPendingVersion`，副作用全经 `ApplyDeps`，与启动序列零硬耦合；
 - 两个宿主早已在运行中执行完整激活事务：desktop `RUNTIME_RESET_BUILTIN`/`RUNTIME_RETRY_APPLY`/F7、gateway `restoreBuiltin`；
-- 状态机已建模 `pending --apply-start--> applying` 与生命周期投影边，此前从未被用户动作触发；
+- 状态机已建模 `pending --apply-start--> applying` 与生命周期投影边（常规用户动作不直接触发该边）；
 - durable journal 幂等补完不依赖「下次启动」（`snapshot-store` marker 相位机即普通函数）；
 - 停机窗口与串行化现成：`stop()` epoch writer 屏障、健康单飞、`restartLocal` 单飞、spawn-dsh SIGTERM→1s→SIGKILL。
 

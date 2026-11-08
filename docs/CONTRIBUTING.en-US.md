@@ -15,7 +15,7 @@ node scripts/dev/ensure-harness-vendor.mjs   # must run before pnpm install
 pnpm install
 pnpm run dev:control-plane               # control plane only (the current default dev surface)
 pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift shell build chain (the shipped artifact; needs macOS)
-# ARCHIVED (Electron frozen; revival reference): pnpm run dev:desktop   # full window (control plane + dsh frontend + desktop shell)
+# ARCHIVED (Electron frozen; the command was removed from the script surface and must not be run; revival steps: docs/progress/electron-frozen.md §6)
 ```
 
 ## Testing
@@ -36,14 +36,14 @@ Pick the mode for the change surface; gates outside the modes (macOS / Swift leg
 Do not run the full suite for every commit; select the minimum evidence for the change surface from `scripts/gates/gate-surfaces.json` and `docs/progress/STATUS.md` §1.6:
 
 ```bash
-pnpm run check:static        # static / policy gates (includes i18n, md-links, test-wiring, styles, etc.; all except i18n are local-only)
+pnpm run check:static        # static / policy gates (includes i18n, md-links, test-wiring, styles, etc.; local-only = md-links / test-wiring / styles / no-dead-exports, the rest run via CI / pre-install generated blocks)
 pnpm run check:tests         # all package tests (same set as ci.yml)
 pnpm run check:typecheck     # client-plugin and host-package type checks
 pnpm run check:full          # = static + typecheck + tests (cross-surface changes / CI diagnosis only)
 ```
 
 - Plan only, no execution: `node scripts/gates/run-checks.mjs <mode> --list` prints that mode's gate plan.
-- macOS / Swift / Windows legs are not inside the linux modes: `test:swift`, `test:macos`, and the Windows packaging/manifest gates must run on their platform; a green linux run does not prove them.
+- macOS / Swift legs are not inside the linux modes: `test:swift` and `test:macos` must run on macOS; a green linux run does not prove them. The Windows/Linux desktop legs are frozen with Electron (`docs/progress/electron-frozen.md`) and are no longer a current validation duty.
 - Validation for documentation-only changes is listed in `docs/AGENTS.md` §5 (md-links / i18n / registry; re-record with `--write` when a bilingual pair changed).
 - For changes touching runtime, auth, protocol, or desktop-shell behavior, add or update focused tests — static checks alone do not prove runtime correctness; state any validation you could not run in the pull request's Validation section.
 
@@ -83,7 +83,16 @@ One logical change per commit; split commits that bundle unrelated changes.
 ## Scope Discipline
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is attached or served, never re-implemented.
-- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) must not return in any form. Ratified bounded exceptions only: Design 08's in-instance Git worktree plugin; Design 17's separately invoked gateway (shell + host duties + seed registry); Design 18's shared dsh runtime-management core; Design 19's Electron-native notification edge projection; Design 20's trusted open-in edge capability (including its local-shape in-instance host domain `openInApp`, boundaries in design 20 §6.3); Design 24's in-instance archive-cleanup host domain `archiveCleanup/{probe,purge}` (delete-only, whole-subtree skip while running, idempotent; narrowest boundaries in design 24 §2); Design 28's right-sidebar browser client plugin (remote-browser: a faithful fork of upstream `ui-sidebar-browser`'s iframe path whose only difference is the SSH reverse-proxied `frameUrl` and its lease lifecycle; narrowest boundaries in design 28 §16.9/§16.11). None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
+- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) must not return in any form. Ratified bounded exceptions only:
+  - Design 08's in-instance Git worktree plugin
+  - Design 17's separately invoked gateway (shell + host duties + seed registry)
+  - Design 18's shared dsh runtime-management core
+  - Design 19's desktop native notification projection (Swift `UNUserNotificationCenter`; the Electron presentation leg is archived)
+  - Design 20's trusted open-in edge capability (including its local-shape in-instance host domain `openInApp`, boundaries in design 20 §6.3)
+  - Design 24's in-instance archive-cleanup host domain `archiveCleanup/{probe,purge}` (delete-only, whole-subtree skip while running, idempotent; narrowest boundaries in design 24 §2)
+  - Design 28's right-sidebar browser client plugin (remote-browser: a faithful fork of upstream `ui-sidebar-browser`'s iframe path whose only difference is the SSH reverse-proxied `frameUrl` and its lease lifecycle; narrowest boundaries in design 28 §16.9/§16.11).
+
+  None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
 - For any new domain feature, ask first whether dsh native, the plugin ecosystem, or the host web frontend already covers it; if so, don't build.
 
 ## Pull Requests
