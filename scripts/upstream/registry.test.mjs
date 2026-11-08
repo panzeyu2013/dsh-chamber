@@ -6,13 +6,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CRITERIA_IDS } from './touchpoint-criteria.mjs'
 import {
   criteriaPartition, loadRegistry, validateRegistry, verifierForks,
 } from './registry.mjs'
+import { desktopSeatAuditFindings, parseDesktopSeatAudit } from './desktop-seat-audit.mjs'
 import { INDEX_BLOCK, applyBlocks, checkBlocks, renderBlocks } from './registry-views.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -346,4 +347,49 @@ test('根安装腿 patch 通道：本仓 pnpm-workspace.yaml 与 registry.patche
       patch.file + ' 必须与 vendor pin 逐字节一致',
     )
   }
+})
+
+/** §4.5 桌面 seat 审计表 ↔ registry `apps/desktop/src` mirror 条目的双向覆盖网（verify-registry ⑤E）。
+ * 这些负向对照保证：删一行/改分类/路径漂移/registry 清单漏项都会红，而不是只有正向样本绿。 */
+const ROOT = join(HERE, '..', '..')
+const checklistPath = join(ROOT, 'docs', 'checklists', 'upstream-touchpoints.md')
+const checklistText = readFileSync(checklistPath, 'utf8')
+const seatFindings = (text = checklistText, data = registry) => desktopSeatAuditFindings(text, data, { exists: existsSync, resolvePath: (token) => join(ROOT, token) })
+
+test('§4.5 桌面 seat 审计：真实表与 registry 双向覆盖且对照路径全部存在', () => {
+  const parsed = parseDesktopSeatAudit(checklistText)
+  assert.deepEqual(parsed.problems, [])
+  assert.ok(parsed.rows.length >= 55, '§4.5 表行数过少（覆盖面静默缩小）')
+  assert.deepEqual(seatFindings(), [])
+})
+
+test('§4.5 审计网负向：重复行 / 未知分类 / 断路径 / registry 漂移均红', () => {
+  const lines = checklistText.split('\n')
+  const seatLineIndex = lines.findIndex((line) => line.includes('`startup-error.ts`'))
+  assert.notEqual(seatLineIndex, -1, '§4.5 表必须包含 startup-error.ts 行（负向对照的锚）')
+  const duplicated = [...lines.slice(0, seatLineIndex + 1), lines[seatLineIndex], ...lines.slice(seatLineIndex + 1)].join('\n')
+  assert.ok(seatFindings(duplicated).some((finding) => finding.includes('上游文件重复')), '重复上游文件行必须红')
+  const badClass = checklistText.replace('| `startup-error.ts` | mirror |', '| `startup-error.ts` | bogus |')
+  assert.ok(seatFindings(badClass).some((finding) => finding.includes('未知分类')), '未知分类必须红')
+  const brokenPath = checklistText.replace(
+    lines[seatLineIndex],
+    lines[seatLineIndex].replace('packages/desktop/startup-error.ts', 'packages/desktop/does-not-exist.ts'),
+  )
+  assert.ok(seatFindings(brokenPath).length > 0, '对照点断路径必须红')
+  const drifted = JSON.parse(JSON.stringify(registry))
+  for (const entry of drifted.entries) {
+    if (entry.id === 'mirror.dsh-desktop-native-chrome-seats') {
+      entry.evidence = entry.evidence.replace('crash-report,startup-error', 'crash-report')
+    }
+  }
+  assert.ok(
+    seatFindings(checklistText, drifted).some((finding) => finding.includes('表 mirror 行 startup-error.ts 未被任何 registry 条目覆盖')),
+    'registry 清单漏掉表 mirror 行必须红',
+  )
+  const missingEntry = JSON.parse(JSON.stringify(registry))
+  missingEntry.entries = missingEntry.entries.filter((entry) => entry.id !== 'mirror.dsh-desktop-update-chain')
+  assert.ok(
+    seatFindings(checklistText, missingEntry).some((finding) => finding.includes('表 mirror 行 update-schedule.ts 未被任何 registry 条目覆盖')),
+    '删掉 registry seat 条目必须红',
+  )
 })

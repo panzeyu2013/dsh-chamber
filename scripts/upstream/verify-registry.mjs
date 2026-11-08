@@ -15,6 +15,9 @@
  *      B. `chamberNamedForks` ↔ `versionAnchor: chamber` 条目（在 schema 校验里）；
  *      C. `excludedUpstreamDirs` ↔ `scripts/dev/ensure-harness-vendor.mjs` 的 EXCLUDED 集合
  *         （那份清单是独立维护的，删 registry 条目而不改它 = 红）；
+ *      E. `docs/checklists/upstream-touchpoints.md` §4.5 桌面 seat 审计表 ↔ registry
+ *         `apps/desktop/src` mirror 条目的「覆盖文件」清单双向一致，且表内 chamber
+ *         对照点路径存在（desktop-seat-audit.mjs；非 C 编号）；
  *   ⑥ 生成块：`generatedBlocks` 声明的每块存在且与渲染结果逐字节一致。
  *
  * 失败信息必须给出下一步命令（写 canonical / 重生成 / 修数据），不停在"红了"。
@@ -30,6 +33,7 @@ import { CRITERIA } from './touchpoint-criteria.mjs'
 import {
   REGISTRY_PATH, classifiedEntries, readRegistrySource, renderRegistryText, validateRegistry,
 } from './registry.mjs'
+import { desktopSeatAuditFindings } from './desktop-seat-audit.mjs'
 import { CHECKLIST_PATH, checkBlocks } from './registry-views.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -165,6 +169,13 @@ function main(argv) {
     if (!globMatches(pattern, ROOT)) fail(`pins.forkAnchors 的 glob 没有命中任何文件: ${pattern}`)
   }
 
+  // ⑤E §4.5 桌面 seat 审计表 ↔ registry `apps/desktop/src` mirror 条目双向覆盖
+  // （纯逻辑在 desktop-seat-audit.mjs；非 C 编号：守的是人工台账覆盖面与对照路径，
+  // 不参与 C1–C16 判据集）。
+  for (const finding of desktopSeatAuditFindings(checklist, registry, { exists: existsSync, resolvePath: (token) => join(ROOT, token) })) {
+    fail('⑤E ' + finding)
+  }
+
   // ⑥ 生成块
   for (const finding of checkBlocks(checklist, registry)) fail(finding)
 
@@ -174,7 +185,7 @@ function main(argv) {
     process.exitCode = 1
     return
   }
-  console.log(`✓ verify-registry: schema/canonical/引用/网/生成块 全绿（${registry.entries.length} 条目，判据 ${Object.keys(CRITERIA).length} 个）`)
+  console.log(`✓ verify-registry: schema/canonical/引用/网（含 §4.5 seat 审计 ⑤E）/生成块 全绿（${registry.entries.length} 条目，判据 ${Object.keys(CRITERIA).length} 个）`)
 }
 
 /** deviations.md 的两种行形态：S/T/P 表行 + G/D 项目符号。 */
