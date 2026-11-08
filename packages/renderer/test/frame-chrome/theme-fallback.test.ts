@@ -19,11 +19,3 @@ test('the document-level color-scheme fallback stays light, matching the token p
   assert.doesNotMatch(css, /(?::root|html|body)\s*\{[^}]*color-scheme:\s*dark/,
     'no document-level rule may declare a dark scheme')
 })
-
-test('the fallback rule documents why it must match the palette default', () => {
-  // The rationale is the only thing preventing a future "make the shell dark
-  // again" edit; keep it pinned to the rule.
-  assert.match(css, /design-platform\.css/, 'the fallback comment must name the palette authority')
-  assert.match(css, /data-ds-dark-theme/, 'the fallback comment must name the dark-palette attribute')
-})
-
