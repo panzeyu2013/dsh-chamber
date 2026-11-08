@@ -50,7 +50,7 @@
    测试按一级目录归入 `gates` / `upstream` / `release` / `gui-acceptance` 四组（`lib/` 与 `dev/` 的共享实现单测随 `gates` 组运行——共享 runner 的回归锁）。运行：`pnpm run test:scripts`
    （全组）或 `pnpm run test:scripts:<组>`；每个文件仍须被根脚本可达（`pnpm run verify:test-wiring`）。
    执行走与包清单同一个有界池（`runEntries`）：清单顺序 transcript、首败即停、零测试守卫同语义；
-   只有 `release-workflow-policy.test.mjs`（自定义 harness，不注册 node:test）在 `RAW_STATUS_TESTS` 登记为按退出码判定。
+   全部测试都进入 `node:test`（共享零测试守卫）；如需自定义 harness 按退出码判定，必须在 `RAW_STATUS_TESTS` 显式登记（当前为空，无默认可选）。
    根 `package.json` 保留 `test:upgrade-tools`（= upstream 组）/ `test:release-workflow`（= release 组）/
    `test:gui-acceptance`（= gui-acceptance 组）三个兼容别名，供 CI、release 链与既有文档引用。
 5. **引用一律写仓库根相对路径**（`scripts/<类>/<二级>/<文件>`）；移动脚本时同步更新引用方——根 `package.json`、`.github/workflows/*.yml`、`docs/**`、其他脚本的相对 `import`、以及 `harness.commit` 这类文件头注释。

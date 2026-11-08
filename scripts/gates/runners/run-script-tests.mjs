@@ -136,7 +136,9 @@ export const GROUPS = {
  * The list is explicit: a new file cannot opt out of the guard silently.
  */
 export const RAW_STATUS_TESTS = new Set([
-  'scripts/release/preflight/release-workflow-policy.test.mjs',
+  // 当前为空：所有 scripts 测试都进入 node:test，共享零测试守卫可见。
+  // 逃生口保持显式：新增自定义 harness 必须在此登记（并同步 scripts/README.md），
+  // 不能让文件静默绕过守卫。
 ])
 
 /**
