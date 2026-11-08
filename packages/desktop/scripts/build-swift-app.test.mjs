@@ -110,6 +110,8 @@ import {
   sparkleFeedChannel,
   sparkleChannelFeedsProblem,
   isBundledPayloadNode,
+  isBundledLibreOfficeHelper,
+  assertBundledLibreOfficeHelperEntitlements,
 } from '../../../macos/scripts/build-swift-app.mjs'
 // 滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
 // 计划的通道 URL 形状（build-swift-app.mjs 也从它导入）。
@@ -449,6 +451,45 @@ test('④ payload node 签名判定：只有装配内唯一 Node 拿 node entitl
   assert.equal(isBundledPayloadNode(path.join(sidecarDir, 'node'), sidecarDir), false)
   assert.equal(isBundledPayloadNode(path.join(sidecarDir, 'dsh-chamber-helper'), sidecarDir), false)
   assert.equal(isBundledPayloadNode('/tmp/other/primary-runtime/dependencies/node/bin/node', sidecarDir), false)
+})
+
+test('④ LibreOffice kit native helper 签名判定：只匹配运行时线引擎包里的 bin/libreoffice-kit', () => {
+  const sidecarDir = '/tmp/fake.app/Contents/Resources/sidecar'
+  const helper = (arch) => path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
+    'libreoffice-kit-darwin-' + arch, 'bin', 'libreoffice-kit')
+  assert.equal(isBundledLibreOfficeHelper(helper('arm64'), sidecarDir), true)
+  assert.equal(isBundledLibreOfficeHelper(helper('x64'), sidecarDir), true)
+  // eslint-disable-next-line no-script-url
+  assert.equal(isBundledLibreOfficeHelper(path.join(sidecarDir, 'libreoffice-kit'), sidecarDir), false)
+  assert.equal(isBundledLibreOfficeHelper(path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
+    'libreoffice-kit-darwin-arm64', 'program', 'LibreOfficeDev.app', 'Contents', 'MacOS', 'soffice'), sidecarDir), false)
+  assert.equal(isBundledLibreOfficeHelper('/tmp/other/vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/libreoffice-kit', sidecarDir), false)
+})
+
+test('④ LibreOffice helper 签后断言：缺 allow-jit 即 fail-closed，注入 runner 覆盖负例', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-libreoffice-helper-'))
+  try {
+    const sidecarDir = path.join(dir, 'sidecar')
+    const helper = path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
+      'libreoffice-kit-darwin-arm64', 'bin', 'libreoffice-kit')
+    // 未装引擎：不调用 runner、不抛（引擎存在性由 build-sidecar 断言）。
+    let calls = 0
+    assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => { calls++; return { status: 0 } })
+    assert.equal(calls, 0)
+    mkdirSync(path.dirname(helper), { recursive: true })
+    writeFileSync(helper, 'fake')
+    assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => {
+      calls++
+      return { status: 0, stdout: '<plist><key>com.apple.security.cs.allow-jit</key><true/></plist>' }
+    })
+    assert.equal(calls, 1, '装有 helper 时必须核验它的 entitlements')
+    assert.throws(() => assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => ({ status: 0, stdout: '' })),
+      /LibreOffice helper 缺 allow-jit entitlement/)
+    assert.throws(() => assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => ({ status: 1, stderr: 'bad' })),
+      /LibreOffice helper 缺 allow-jit entitlement/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('④ codesignArgs argv：选项先于 --sign，ad-hoc/hardened 分支互斥', () => {
@@ -913,17 +954,27 @@ test('⑦ ad-hoc 签名 + codesign 校验通过', async (t) => {
 })
 
 test('⑦ entitlements 文件是合法 plist 且含最小集', () => {
-  for (const file of ['entitlements.plist', 'entitlements.node.plist']) {
+  for (const file of ['entitlements.plist', 'entitlements.node.plist', 'entitlements.jit.plist']) {
     const full = path.join(macosDir, file)
     assert.ok(existsSync(full), `${file} 应存在`)
     const lint = spawnSync('plutil', ['-lint', full], { encoding: 'utf8' })
     assert.equal(lint.status, 0, `${file}: ${lint.stdout}${lint.stderr}`)
     const text = readFileSync(full, 'utf8')
-    assert.ok(text.includes('com.apple.security.cs.disable-library-validation'))
+    if (file === 'entitlements.plist') {
+      assert.ok(text.includes('com.apple.security.cs.disable-library-validation'))
+    }
   }
-  // 壳不继承 Electron 的 JIT 权限（那是 V8 需求）。
+  // 壳不继承 Electron 的 JIT 权限（那是 V8 需求）；payload Node 与 LibreOffice helper 各自最小集。
   assert.ok(!readFileSync(path.join(macosDir, 'entitlements.plist'), 'utf8').includes('allow-jit'))
-  assert.ok(readFileSync(path.join(macosDir, 'entitlements.node.plist'), 'utf8').includes('allow-jit'))
+  const node = readFileSync(path.join(macosDir, 'entitlements.node.plist'), 'utf8')
+  assert.ok(node.includes('com.apple.security.cs.allow-jit'))
+  assert.ok(node.includes('com.apple.security.cs.allow-unsigned-executable-memory'))
+  assert.ok(node.includes('com.apple.security.cs.disable-library-validation'))
+  const jit = readFileSync(path.join(macosDir, 'entitlements.jit.plist'), 'utf8')
+  assert.ok(jit.includes('com.apple.security.cs.allow-jit'))
+  // helper 只要 UNO bridge 的 JIT，不给可写可执行内存 / 关库校验（与上游 jit-entitlements 对齐）。
+  assert.ok(!jit.includes('allow-unsigned-executable-memory'))
+  assert.ok(!jit.includes('disable-library-validation'))
 })
 
 test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 codesign 校验通过', async (t) => {

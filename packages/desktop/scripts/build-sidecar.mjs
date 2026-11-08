@@ -291,6 +291,41 @@ export function verifyVendorDshRuntime(vendorDir, platform = process.platform) {
       `vendor/dsh 平台漂移：期望 ${platform}-*，实际 ${JSON.stringify(runtimeManifest.dsh?.platform)}（G39）`,
     )
   }
+  // LibreOffice 引擎载荷完整性（G39 延伸）：dsh 运行时闭包必须带 kit 闭包与
+  // 目标平台引擎包——缺引擎不会让构建变红，只会在运行期让 office 的
+  // convert/recalculate/render 静默降级（cli:false），故构建期 fail-closed。
+  const kitDir = path.join(vendorDir, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
+  if (!existsSync(kitDir)) {
+    throw new Error(
+      'vendor/dsh 缺 @deepseek-ai/libreoffice-kit 闭包——office 能力会静默不可用（若确为旧 pin，先升级 pin 并重建 runtime）'
+      + '（G39/LibreOffice 载荷断言）',
+    )
+  }
+  {
+    const enginePackage = runtimeManifest.dsh.platform.startsWith('linux-')
+      ? 'libreoffice-kit-wasm'
+      : `libreoffice-kit-${runtimeManifest.dsh.platform}`
+    const engineDir = path.join(vendorDir, 'node_modules', '@deepseek-ai', enginePackage)
+    const prebuildsPath = path.join(engineDir, 'prebuilds.json')
+    let engineManifest = null
+    try {
+      engineManifest = JSON.parse(readFileSync(prebuildsPath, 'utf8'))
+    } catch {
+      engineManifest = null
+    }
+    const engineKind = engineManifest?.engine?.kind
+    const engineEntry = engineKind === 'native' ? engineManifest?.engine?.executable
+      : engineKind === 'wasm' ? engineManifest?.engine?.loader
+        : undefined
+    if (!existsSync(engineDir) || engineManifest === null
+      || typeof engineEntry !== 'string' || engineEntry === ''
+      || !existsSync(path.join(engineDir, engineEntry))) {
+      throw new Error(
+        `vendor/dsh 缺少目标平台的 LibreOffice 引擎：${enginePackage}（期望 ${engineDir}，其 prebuilds.json 声明 native executable 或 wasm loader 且文件在场）`
+        + '——G39/LibreOffice 载荷断言',
+      )
+    }
+  }
   return { version: recordedVersion, platform: runtimeManifest.dsh.platform }
 }
 

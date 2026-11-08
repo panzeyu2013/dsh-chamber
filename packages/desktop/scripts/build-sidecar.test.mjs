@@ -270,6 +270,19 @@ test('③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）
     }))
     writeFileSync(path.join(vendorSrc, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'),
       JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.0' }))
+    // LibreOffice kit 闭包 + 宿主平台引擎：verifyVendorDshRuntime 要求 kit 在场且引擎文件可执行面在场。
+    const kitSrc = path.join(vendorSrc, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
+    mkdirSync(kitSrc, { recursive: true })
+    writeFileSync(path.join(kitSrc, 'package.json'), JSON.stringify({ name: '@deepseek-ai/libreoffice-kit', version: '0.1.5' }))
+    const hostLinux = HOST_PLATFORM.startsWith('linux-')
+    const hostEngineName = hostLinux ? 'libreoffice-kit-wasm' : 'libreoffice-kit-' + HOST_PLATFORM
+    const hostEngineDir = path.join(vendorSrc, 'node_modules', '@deepseek-ai', hostEngineName)
+    const hostEngineEntry = hostLinux ? 'assets/soffice.cjs' : 'bin/libreoffice-kit'
+    mkdirSync(path.join(hostEngineDir, path.dirname(hostEngineEntry)), { recursive: true })
+    writeFileSync(path.join(hostEngineDir, 'prebuilds.json'), JSON.stringify({
+      engine: { kind: hostLinux ? 'wasm' : 'native', [hostLinux ? 'loader' : 'executable']: hostEngineEntry },
+    }))
+    writeFileSync(path.join(hostEngineDir, hostEngineEntry), hostLinux ? '// wasm loader\n' : '#!/bin/sh\n')
     writeFileSync(path.join(vendorSrc, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
     writeFileSync(path.join(vendorSrc, 'pnpm-workspace.yaml'), 'packages: []')
     writeFileSync(path.join(vendorSrc, 'node_modules', 'x', 'index.js'), 'module.exports=1')
@@ -638,11 +651,24 @@ test('G39 vendor/dsh 版本 + 平台装配断言：漂移的 vendor 树在拷贝
     const vendor = path.join(dir, 'vendor')
     const dshDir = path.join(vendor, 'node_modules', '@deepseek-ai', 'dsh')
     mkdirSync(dshDir, { recursive: true })
+    const kitDir = path.join(vendor, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
+    mkdirSync(kitDir, { recursive: true })
+    writeFileSync(path.join(kitDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/libreoffice-kit', version: '0.1.5' }))
+    const writeEngine = (platform) => {
+      const isLinux = platform.startsWith('linux-')
+      const engineName = isLinux ? 'libreoffice-kit-wasm' : 'libreoffice-kit-' + platform
+      const engineDir = path.join(vendor, 'node_modules', '@deepseek-ai', engineName)
+      mkdirSync(isLinux ? path.join(engineDir, 'assets') : path.join(engineDir, 'bin'), { recursive: true })
+      const entry = isLinux ? 'assets/soffice.cjs' : 'bin/libreoffice-kit'
+      writeFileSync(path.join(engineDir, 'prebuilds.json'), JSON.stringify({ engine: { kind: isLinux ? 'wasm' : 'native', [isLinux ? 'loader' : 'executable']: entry } }))
+      writeFileSync(path.join(engineDir, entry), isLinux ? '// wasm loader\n' : '#!/bin/sh\n')
+    }
     const writeTree = (version, platform) => {
       writeFileSync(path.join(vendor, 'package.json'), JSON.stringify({
         name: 'dsh', dependencies: { '@deepseek-ai/dsh': version }, dsh: { platform },
       }))
       writeFileSync(path.join(dshDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+      writeEngine(platform)
     }
     const dest = path.join(dir, 'out', 'vendor', 'dsh')
     writeTree('0.2.0', 'darwin-arm64')
@@ -665,6 +691,59 @@ test('G39 vendor/dsh 版本 + 平台装配断言：漂移的 vendor 树在拷贝
     writeTree('0.2.0', 'darwin-arm64')
     rmSync(path.join(dshDir, 'package.json'))
     assert.throws(() => verifyVendorDshRuntime(vendor, 'darwin'), /vendor\/dsh 装配不完整/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('G39b vendor/dsh 的 LibreOffice 引擎载荷断言：缺目标引擎即 fail-closed', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-vendor-office-'))
+  try {
+    const vendor = path.join(dir, 'vendor')
+    mkdirSync(path.join(vendor, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true })
+    writeFileSync(path.join(vendor, 'package.json'), JSON.stringify({
+      name: 'dsh', dependencies: { '@deepseek-ai/dsh': '0.2.2-rc.1' }, dsh: { platform: 'darwin-arm64' },
+    }))
+    writeFileSync(path.join(vendor, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'),
+      JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.1' }))
+    const kit = path.join(vendor, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
+    mkdirSync(kit, { recursive: true })
+    writeFileSync(path.join(kit, 'package.json'), JSON.stringify({ name: '@deepseek-ai/libreoffice-kit', version: '0.1.5' }))
+    const engine = path.join(vendor, 'node_modules', '@deepseek-ai', 'libreoffice-kit-darwin-arm64')
+    assert.throws(() => verifyVendorDshRuntime(vendor, 'darwin'), /缺少目标平台的 LibreOffice 引擎/)
+    mkdirSync(path.join(engine, 'bin'), { recursive: true })
+    writeFileSync(path.join(engine, 'prebuilds.json'), '{}')
+    assert.throws(() => verifyVendorDshRuntime(vendor, 'darwin'), /缺少目标平台的 LibreOffice 引擎/,
+      'prebuilds.json 缺 engine 声明仍须 fail-closed')
+    writeFileSync(path.join(engine, 'prebuilds.json'), JSON.stringify({ engine: { kind: 'native', executable: 'bin/libreoffice-kit' } }))
+    assert.throws(() => verifyVendorDshRuntime(vendor, 'darwin'), /缺少目标平台的 LibreOffice 引擎/,
+      '声明了 native executable 但文件不在场仍须 fail-closed')
+    writeFileSync(path.join(engine, 'bin', 'libreoffice-kit'), '#!/bin/sh\n')
+    assert.equal(verifyVendorDshRuntime(vendor, 'darwin').version, '0.2.2-rc.1')
+
+    // win32 引擎的可执行面是 .exe：断言按 prebuilds.json 的 engine.executable，而不是硬编码 bin/libreoffice-kit。
+    writeFileSync(path.join(vendor, 'package.json'), JSON.stringify({
+      name: 'dsh', dependencies: { '@deepseek-ai/dsh': '0.2.2-rc.1' }, dsh: { platform: 'win32-x64' },
+    }))
+    const win = path.join(vendor, 'node_modules', '@deepseek-ai', 'libreoffice-kit-win32-x64')
+    mkdirSync(path.join(win, 'bin'), { recursive: true })
+    writeFileSync(path.join(win, 'prebuilds.json'), JSON.stringify({ engine: { kind: 'native', executable: 'bin/libreoffice-kit.exe' } }))
+    assert.throws(() => verifyVendorDshRuntime(vendor, 'win32'), /缺少目标平台的 LibreOffice 引擎/)
+    writeFileSync(path.join(win, 'bin', 'libreoffice-kit.exe'), 'MZ')
+    assert.equal(verifyVendorDshRuntime(vendor, 'win32').platform, 'win32-x64')
+
+    // linux 目标用 wasm 引擎：按 prebuilds.json 的 loader 断言，不要求 native executable。
+    writeFileSync(path.join(vendor, 'package.json'), JSON.stringify({
+      name: 'dsh', dependencies: { '@deepseek-ai/dsh': '0.2.2-rc.1' }, dsh: { platform: 'linux-x64' },
+    }))
+    const wasm = path.join(vendor, 'node_modules', '@deepseek-ai', 'libreoffice-kit-wasm')
+    mkdirSync(path.join(wasm, 'assets'), { recursive: true })
+    writeFileSync(path.join(wasm, 'prebuilds.json'), JSON.stringify({ engine: { kind: 'wasm', loader: 'assets/soffice.cjs' } }))
+    assert.throws(() => verifyVendorDshRuntime(vendor, 'linux'), /缺少目标平台的 LibreOffice 引擎/)
+    writeFileSync(path.join(wasm, 'assets', 'soffice.cjs'), '// wasm loader\n')
+    assert.equal(verifyVendorDshRuntime(vendor, 'linux').platform, 'linux-x64')
+    rmSync(path.join(wasm, 'assets', 'soffice.cjs'))
+    assert.throws(() => verifyVendorDshRuntime(vendor, 'linux'), /缺少目标平台的 LibreOffice 引擎/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

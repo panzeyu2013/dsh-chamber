@@ -25,6 +25,7 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 - [ ] 根 `package.json` 与全部 `@dsh-chamber/*` 包version = 目标版本（新增包自动纳入）。
 - [ ] 三个fork副本（`dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）= 上游基线版本，不随发布版本。
 - [ ] dsh运行时版本常量三源一致：`scripts/install-gateway.sh` 的 `DSH_CHAMBER_DSH_VERSION`、`release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、`packages/gateway/package.json` 的 `dshAnchorVersion`。
+- [ ] pin 对齐门：执行 [`pin-alignment-checklist.md`](pin-alignment-checklist.md) 全绿（`node scripts/release/verify-pin-alignment.mjs` 退出 0；漂移 = 阻断，允许的例外与登记方式见该清单 §0/§5）。
 
 ## 2. 机械门禁：release:preflight
 
@@ -66,6 +67,7 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 
 - [ ] Sparkle更新密钥：公钥有而私钥缺 = FAIL；**私钥有而公钥缺 = FAIL**（否则发布「带签名appcast却检查不到更新」的包，且下一次发布会把它的zip当作产不出delta的基线）；私钥有而appcast缺 = FAIL；两把都缺 = loud降级（照常出包，客户端看不到更新）。EdDSA与Developer ID/公证互不替代。资产：stable = `appcast-swift.xml`（enclosure 走 `releases/latest/download/`，含 `*.delta`）；beta = 滚动tag `appcast-swift-beta` 的 `appcast-swift-beta.xml`——其中 beta 条目 enclosure 走滚动下载目录；从已发布 stable feed 合并进来的 final 条目在 **beta 腿**走**版本固定**前缀 `releases/download/v<正式版tag>/`，而 stable 发布**刷新滚动 feed**时该 final 条目改走**滚动**前缀——两条路径前缀不同，不要互相「修正」；`*.zip` 与 `*.delta` 都必须在 feed 之前上传（S-36；draft 上也一样——appcast 在归档之后才上传）。**同一 beta 号重跑**：滚动 release 上同名 zip 必须与本次构建字节一致才允许覆盖（发布腿用 `cmp` 判定），字节不同 = FAIL 并要求提升 beta 号（已发布 feed 的签名指向的字节不能变）。基线还要求旧 zip 自带 `SUPublicEDKey`（解包主 app 的 `Info.plist` 判定，无公钥的归档既不产 delta 也不写放弃标记）。`generate_appcast` 可能按体积规则（delta > 7/8 整包）主动放弃某个增量包：那是 loud warning + 该基线本次走整包，不是链路失败。
 - [ ] 正式腿缺Developer ID/公证凭据 → 创建或变更draft前fail-closed；构建后签名 / stapler / spctl任一失败阻断finalize。Swift腿同纪律：staple先于归档、zip解包后复核codesign/stapler/spctl与arm64。
+- [ ] LibreOffice kit 原生 helper 的嵌套签名带 `com.apple.security.cs.allow-jit`（且仅该项；裸 hardened runtime = FAIL，契约见 design 25 §3.2）：`codesign -d --entitlements :- "<App>.app/Contents/Resources/sidecar/vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-<arch>/bin/libreoffice-kit"` 输出含该项；再跑一次 `capabilities` 与一次真实 convert 冒烟（helper 引导期 SIGTRAP/SIGABRT = 签名面缺权，不是输入问题）。
 - [ ] dmg 公证后台等待：dmg 提交与 appcast 重叠，verify 轮询状态文件（**900s 上限**，PID 消失且无状态即 fail-fast，超时/非零即阻断）后才 staple/validate，upload 在其后；首次带此改动的正式发布确认「dmg 状态出现 → verify 等到 → staple/validate」链路实际走通。
 - [ ] dry-run强制unset全部签名/公证环境与 `GH_TOKEN`，只产ad-hoc包：不建/改Release、不上传资产。Windows首版未签名（design 11 §7的让步），不把sha512称作签名。
 

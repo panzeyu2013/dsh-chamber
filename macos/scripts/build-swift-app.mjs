@@ -26,7 +26,7 @@
  * 没有独立 dsh-chamber-helper）与 sidecar.js、office-skills 资产，且
  * sidecar/package.json 版本必须等于壳版本——都在 build 时断言）→ 架构一致性断言（.app 可执行 vs payload Node，lipo；
  * 不一致的 .app 能签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
- * （sidecar/primary-runtime/dependencies/node/bin/node，Developer ID 时带 hardened runtime + node 权限）→ 主签名
+ * （sidecar/primary-runtime/dependencies/node/bin/node 与 LibreOffice kit 的 native helper，Developer ID 时带 hardened runtime + 各自最小权限：payload Node 用 entitlements.node.plist，LibreOffice helper 用仅 allow-jit 的 entitlements.jit.plist）→ 主签名
  * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（dmg.mjs：可写镜像 +
  * Finder 布局 + UDZO，卷内含 /Applications 快捷方式、背景箭头与图标定位）。
  *
@@ -363,6 +363,41 @@ export function assertSidecarVersionMatchesShell(
  */
 export function isBundledPayloadNode(file, sidecarDir) {
   return path.resolve(file) === path.resolve(payloadNodePath(sidecarDir))
+}
+
+/**
+ * 嵌套 Mach-O 是否为 dsh 运行时线里 LibreOffice kit 的原生 helper
+ * （`vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-<arch>/bin/libreoffice-kit`）。
+ * 该 helper 需要且只需要 JIT（`allow-jit`）：LibreOffice 的 C++/binary UNO bridge
+ * 在运行期生成机器码（LibreOffice core 的 hardened_runtime.xcent.in 原文；
+ * 上游 desktop 同样只给 helper jit-entitlements.plist）。纯函数，签名循环按它
+ * 决定是否带 entitlements.jit.plist。
+ * @param {string} file - 待签名的嵌套文件绝对路径。
+ * @param {string} sidecarDir - .app 内 sidecar 目录。
+ * @returns {boolean}
+ */
+export function isBundledLibreOfficeHelper(file, sidecarDir) {
+  const relative = path.relative(path.resolve(sidecarDir), path.resolve(file)).split(path.sep).join('/')
+  return /^vendor\/dsh\/node_modules\/@deepseek-ai\/libreoffice-kit-darwin-(?:arm64|x64)\/bin\/libreoffice-kit$/u.test(relative)
+}
+
+/**
+ * 装配后核验 LibreOffice kit 原生 helper 的 `allow-jit` entitlement（fail-closed）。
+ * 只检查实际落位的引擎包；未装对应引擎时跳过（引擎存在性由 build-sidecar 断言）。
+ * @param {string} sidecarDir - .app 内 sidecar 目录。
+ * @param {(command: string, args: readonly string[]) => { status: number | null, stdout?: string, stderr?: string }} [runner]
+ * @returns {void}
+ */
+export function assertBundledLibreOfficeHelperEntitlements(sidecarDir, runner = quiet) {
+  for (const engine of ['libreoffice-kit-darwin-arm64', 'libreoffice-kit-darwin-x64']) {
+    const helper = path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai', engine, 'bin', 'libreoffice-kit')
+    if (!existsSync(helper)) continue
+    const result = runner('codesign', ['-d', '--entitlements', ':-', helper])
+    const text = `${result.stdout ?? ''}${result.stderr ?? ''}`
+    if (result.status !== 0 || !text.includes('com.apple.security.cs.allow-jit')) {
+      throw new Error(`LibreOffice helper 缺 allow-jit entitlement（design 25 §3.2）：${helper}`)
+    }
+  }
 }
 
 export function renderInfoPlist(template, values) {
@@ -941,8 +976,12 @@ export async function runBuildSwiftApp(
 
   const templatePath = path.join(macosDir, 'Info.plist.template')
   const entitlements = path.join(macosDir, 'entitlements.plist')
+  const nodeEntitlements = path.join(macosDir, 'entitlements.node.plist')
+  const jitEntitlements = path.join(macosDir, 'entitlements.jit.plist')
   if (!existsSync(templatePath)) throw new Error(`缺少 Info.plist 模板：${templatePath}`)
-  if (!existsSync(entitlements)) throw new Error(`缺少 entitlements：${entitlements}`)
+  for (const file of [entitlements, nodeEntitlements, jitEntitlements]) {
+    if (!existsSync(file)) throw new Error(`缺少 entitlements：${file}`)
+  }
 
   const outputDir = buildOutputDir(options.config)
   const binarySource = path.join(outputDir, MODULE_NAME)
@@ -1173,21 +1212,25 @@ export async function runBuildSwiftApp(
     // 嵌套原生代码必须先签（公证要求 app 内所有 Mach-O 都已签名）：
     // payload 内的唯一 Node + vendor/dsh/node_modules 下的 .node/dylib。Resources
     // 不是 codesign 的「已知嵌套位置」，不会被主签名自动覆盖。
-    const nodeEntitlements = path.join(macosDir, 'entitlements.node.plist')
     const nested = findNestedMachOFiles(layout.appDir).filter(
       (file) => file !== layout.executable,
     )
     for (const file of nested) {
-      // 只有 payload Node 需要 JIT/可写可执行内存权限（design 25 §3.2「捆绑 node
-      // 另加」）；其余嵌套原生模块（.node/dylib）用裸 hardened runtime 签名，
-      // 避免无谓放大权限面。判定 = 精确路径匹配（装配内唯一 Node，基名就是 node，
-      // 不依赖名字猜测——vendor 树里同名文件不会误得 JIT 权限）。
-      run('codesign', codesignArgs(options, file,
-        isBundledPayloadNode(file, layout.sidecarDir) ? nodeEntitlements : undefined), io)
+      // 两类二进制例外，其余嵌套原生模块（.node/dylib）一律裸 hardened runtime：
+      // ① payload Node：JIT + 可写可执行内存（V8）；② LibreOffice kit 原生 helper：
+      // 仅 allow-jit（LibreOffice C++/binary UNO bridge 运行期生成机器码；上游 desktop
+      // 同样只给 helper jit-entitlements.plist）。判定 = 精确路径匹配，不靠基名猜测，
+      // 避免 vendor 树里同名文件误得权限。
+      const entitlements = isBundledPayloadNode(file, layout.sidecarDir)
+        ? nodeEntitlements
+        : isBundledLibreOfficeHelper(file, layout.sidecarDir) ? jitEntitlements : undefined
+      run('codesign', codesignArgs(options, file, entitlements), io)
     }
     if (nested.length > 0) {
-      io.log(`[build-swift-app] 嵌套 Mach-O 已签名 ${nested.length} 个（含 payload node 与 .node 原生模块）`)
+      io.log(`[build-swift-app] 嵌套 Mach-O 已签名 ${nested.length} 个（含 payload node、LibreOffice helper 与 .node 原生模块）`)
     }
+    // helper 的 JIT 权限是引擎可用性的前置：签完立即核验，缺失 fail-closed。
+    assertBundledLibreOfficeHelperEntitlements(layout.sidecarDir)
     // 嵌套 bundle（Sparkle.framework 及其 Updater.app / XPCServices）：必须按
     // 由深到浅单独签名——只签内部可执行文件不产生 framework 自己的封存，
     // 主签名后 --verify 会报 unsealed contents（Sparkle 嵌入实测）。

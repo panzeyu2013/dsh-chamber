@@ -252,11 +252,15 @@ sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是宿主核心包�
   `disable-library-validation`（加载装配目录内独立签名的 payload Node（`primary-runtime/dependencies/node/bin/node`）
   与运行时安装的未签名原生模块）；该 payload Node 另加 `allow-jit` / `allow-unsigned-executable-memory`
   （`entitlements.node.plist`，`build-swift-app` 按精确路径 `isBundledPayloadNode` 给嵌套签名）；
+- **LibreOffice kit helper 的签名面**：vendor 运行时线里的原生 helper（`<sidecar>/vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-<arch>/bin/libreoffice-kit`）只带 `com.apple.security.cs.allow-jit` 一项权限（`macos/entitlements.jit.plist`；`build-swift-app` 按精确路径给嵌套签名，签名后立即用 `codesign -d --entitlements` 核验、缺失 fail-closed，与上游 desktop 的 `jit-entitlements.plist` 同口径），其余嵌套 Mach-O（`.node`/`dylib` 与除该 helper 外的引擎内二进制）保持裸 hardened runtime。理由：LibreOffice 的 C++/binary UNO bridge 运行期生成机器码（LibreOffice `sysui/desktop/macosx/hardened_runtime.xcent.in` 的注释即此；上游 `fix(desktop): unpack and verify native Office conversion` 提交为对拍依据——历史证据 `54d46ad4d4`，不随本仓 pin 移动）。缺该权限时 helper 在引擎引导即 SIGTRAP 后 SIGABRT，CLI 报 `LibreOffice helper returned an invalid response`。
+- **构建期引擎断言**：`build:sidecar` 在拷贝 `vendor/dsh` 前对运行时清单做 fail-closed 断言——运行时闭包带 `@deepseek-ai/libreoffice-kit` 时，目标平台引擎包必须在场（linux 目标为 `libreoffice-kit-wasm`；darwin/win32 为 `libreoffice-kit-<platform>`，其 `prebuilds.json` 的 `engine.executable` 是实际可执行面），缺引擎即失败（G39；判据 = `build-sidecar` 的 G39/G39b 用例）。
 - **control-plane 只能经 `control-plane-module` facade 取**：装配目录无 node_modules，裸说明符
   `@dsh-chamber/control-plane` 会 `ERR_MODULE_NOT_FOUND`；facade 在装配态加载
   `<sidecar>/dist/control-plane/index.js`。
-签名顺序 = 嵌套 payload Node（及 .node 原生模块）先、主 app 后；Developer ID 带 hardened runtime（公证前置），ad-hoc 不带；正式发布仍缺
+签名顺序 = 嵌套 Mach-O（payload Node、LibreOffice kit helper、.node/dylib）→ 嵌套 bundle（Sparkle / LibreOfficeDev.app 等，由深到浅）→ 主 app；Developer ID 带 hardened runtime（公证前置），ad-hoc 不带；正式发布仍缺
 Apple 凭据（外部阻断）。
+
+**Rejected alternatives（LibreOffice kit helper 的权限面）**：① helper 裸 hardened runtime（修复前实现）——引擎在 UNO bridge bootstrap 阶段崩溃（SIGTRAP → SIGABRT），否；② 给 helper 复用 `entitlements.node.plist`（`allow-jit` + `allow-unsigned-executable-memory` + `disable-library-validation`）——权限面大于需要，也与上游「helper 只带 JIT」的判据相悖，否；③ 只给 `disable-library-validation`——helper 不加载未签名库，缺的是 JIT，不解决引导崩溃，否。结论 = 只给 `com.apple.security.cs.allow-jit` 一项。
 
 ### 3.3 启动序列（状态机）
 
@@ -418,10 +422,10 @@ interface HostEdges {
 - **签名**：payload Node 是 .app 内的嵌套 Mach-O。`build-swift-app` 的全嵌套遍历对它单独签名，并只对它使用
   `entitlements.node.plist`（`allow-jit`/`allow-unsigned-executable-memory`；判定 = 精确路径
   `isBundledPayloadNode`，不靠基名猜测）；壳侧最小集保持 `disable-library-validation`（加载装配目录内独立签名 Node
-  与运行时安装的未签名原生模块）。签名顺序 = 嵌套 payload Node/.node 原生模块先、主 app 后；
-  `codesign --verify --deep --strict` 仍是装配期 fail-closed 门。
+  与运行时安装的未签名原生模块）。签名顺序 = 嵌套 Mach-O（payload Node、LibreOffice kit helper、.node/dylib）→ 嵌套 bundle（Sparkle / LibreOfficeDev.app 等，由深到浅）→ 主 app（与 §3.2 同序）；
+  `codesign --verify --deep --strict` 仍是装配期 fail-closed 门。嵌套签名面另含 vendor 运行时线的 LibreOffice kit helper（只带 `com.apple.security.cs.allow-jit`；判定同为精确路径，理由与被否方案见 §3.2）。
 - **必须绑 Node**：dsh 实例本身是 Node 进程（vendor dsh 由 pnpm 安装），控制面 spawn 它、dsh-runtime 安装它；
-  pnpm 11.21.0 已随 desktop 依赖，两份同源供给：sidecar 目录内嵌 `<sidecar>/pnpm`（运行时安装 / 宿主插件管理器，
+  钉版本 `pnpm`（版本单源 = 根 `package.json` 的 `packageManager`）已随 desktop 依赖，两份同源供给：sidecar 目录内嵌 `<sidecar>/pnpm`（运行时安装 / 宿主插件管理器，
   02 §3.1 的 pnpm shim）与 payload `primary-runtime/dependencies/pnpm`（工具/受管宿主侧，入口 `bin/pnpm.mjs`）。
   宿主插件管理器的供给见 02 §3.1（入口仍由各 flavor 解析后交给控制面，控制面按宿主 PATH 决定是否前置 wrapper）。
 - **dsh-runtime 默认执行器恒纯 Node**（{file: process.execPath}，runtime-installer.ts:777）。
@@ -1092,7 +1096,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
     `deltaFrom`、要么 Sparkle 为 (新构建号, 它) 写了放弃标记 `*.ignore`，两者都不是即点名 FAIL
     （逐条归因才挡得住「多 branch / 多条 feed 的标记互相顶替」，且全部被放弃时门禁也不退化）；此外 verify 会用 `SPARKLE_PUBLIC_ED_KEY` 对**本版本 zip 与每个 delta 逐条做 Ed25519
     真验签**（`--signatures-dir` 提供真实字节）——只查「签名存在」挡不住密钥轮换后那个任何公钥都验不过的
-    签名（真实 Sparkle 2.10.0 复现：旧包内嵌 A、新包/签名用 B 时 delta 签名两边都不成立）。**Sparkle 主动放弃 ≠ 链路退化**：它按体积
+    签名（真实 Sparkle 复现——版本见 `macos/Package.swift`：旧包内嵌 A、新包/签名用 B 时 delta 签名两边都不成立）。**Sparkle 主动放弃 ≠ 链路退化**：它按体积
     规则（delta > 7/8 整包）放弃时只在收件缓存写 `*.ignore`、stdout 无提示——发布腿据此把那些基线降级为
     loud 警告 + 整包下载，只有「没有放弃标记却没产出 delta」才 FAIL（否则体积规则会误红正式发布）。**enclosure 必须可解析**：beta 生成时
     `--download-url-prefix` 指向滚动 tag，当前 beta zip 与本次新 delta 先传滚动 release 再传 appcast（S-36）；
