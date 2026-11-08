@@ -14,6 +14,10 @@ build/
 # （目录整理后暴露），必须显式反选回来。
 !scripts/release/
 !scripts/release/**
+# docs/checklists/release 是发布流程源码（checklist），不是构建产物：同一 release/
+# 规则会误伤它（此前这两个文件从未被 tracked，md-links 一直红），显式反选。
+!docs/checklists/release/
+!docs/checklists/release/**
 *.tgz
 # 构建期生成；clean checkout 用 pnpm run build:artifacts 自举。dsh-runtime /
 # 四个 seed 的 dist 曾在全局 dist/ 规则下用反选行 tracked 进仓，
