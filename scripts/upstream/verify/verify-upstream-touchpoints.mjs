@@ -1,0 +1,1158 @@
+#!/usr/bin/env node
+/**
+ * verify-upstream-touchpoints.mjs — 上游触点保鲜门（docs/checklists/
+ * upstream-touchpoints.md 的机器侧）。
+ *
+ * 只读，唯一例外是默认模式的 C8（就地重建-还原生成物，见该条）；依赖只有 node
+ * 内置模块 + 同目录四个 helper（artifact-gate.mjs /
+ * verify-upstream-touchpoints-args.mjs / verify-upstream-touchpoints-hover.mjs /
+ * plugin-protection-gate.mjs）。
+ * exit-code 语义：0 全部通过（或 --help）/ 1 有门硬失败 / 2 用法错误。
+ *   C1  纯文件字节恒等（fork 副本中未登记补丁的文件必须与上游锚逐字节一致）
+ *       —— 对 shadow 副本与 chamber-named fork（如 seed-open-in）同等生效
+ *   C2  --tags <old> <new>：上游两 tag 间全部已登记 fork 面（registry 分类条目全表，含非 shadow
+ *       的 seed-open-in）的重放差异报告（advisory）
+ *   C3  完整性：fork 每文件有分类（pure/patched/own），上游每文件有裁决
+ *       （mirrored/dropped）；漏分类/新文件漏裁决 = 硬失败
+ *   C4  roster：typert remote 挂载顺序 == 单表（`EXPECTED_MOUNT_PACKAGES`；
+ *       import 选择无顺序语义，按集合与该表相等）、covered/factory 存在性、
+ *       删包 fail-loud（存在性哨兵列表）
+ *   C5  过期锚扫描：shadow fork 的 package.json 版本 == 上游同文件版本
+ *       （versionAnchor: "chamber" 的 fork 豁免——见 registry 的 seed 条目）；
+ *       submodule HEAD == harness.commit
+ *   C6  EXCLUDED 上游存在性（ensure-harness-vendor 排除的三个 shadow fork 源目录；
+ *       非 shadow 的 fork（如 seed-open-in）必须留在 vendor 树作 C1 锚）
+ *   C7  种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 ==
+ *       dsh-runtime HOST_DOMAIN_PROBE_NAMES 列表（文本双门；运行时已有 fail-loud）
+ *   C8  构建期生成物 == src（确定性重建-比对，硬失败）：host dist ×4 +
+ *       dsh-runtime dist（5 组）；重建后字节不同 = 产物陈旧。
+ *       写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory（fresh checkout
+ *       会误报）
+ *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
+ *       注册的每处 expect 必须在 pin 住的上游文件里恰好命中一次——重锚后
+ *       上游文本一漂移即红，避免「补丁静默失效」
+ *   C10 版本锚一致性 + 活版本字面量白名单（硬失败）：运行时版本从**已提交**的
+ *       `packages/desktop/vendor/dsh/pnpm-lock.yaml`（`@deepseek-ai/dsh` 的
+ *       specifier）单一来源读出，六锚 / 三 fork 副本必须等于它；同目录
+ *       `packages/desktop/vendor/dsh/package.json` 被 gitignore、属派生本地状态，
+ *       仅在其存在时与锁文件交叉校验；生产源码（非注释、非测试、非产物）里出现
+ *       任何其他 dsh 版本字面量即红——历史叙述只能留在注释里
+ *   C11 运行时线族集合（硬失败，design 21 §6.11）：受保护集合的 F 分量只有一个
+ *       权威来源——**已提交**的运行时锁文件闭包（`@deepseek-ai/*` 名字集合）。
+ *       必须含核心（dsh/dsh-base/dsh-web-app）、**不得**含 dev/test 与源码线 harness 段；
+ *       官方 opt-in（`dsh-experimental-*`）按**登记白名单**放行（运行时根包自己声明
+ *       的 opt-in 依赖确实属于 F）：未登记名字红（取错来源/上游新提升），已登记名字
+ *       不再出现也红（上游移除/改名）。实例树物化时另做等价性交叉校验（允许差集 =
+ *       其他平台 `node-addon-system-*` / `libreoffice-kit-*`；离开闭包的名字不再豁免）
+ *   C12 profile 契约锚（硬失败）：上游源码仍以 `dsh.profile.bundles` 承载层列表、
+ *       以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
+ *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。四个锚点文件
+ *       （app-boot profile.ts / plugin-manager operations.ts / CLI plugin.ts / official-bundles bundles.ts）都必须可读：
+ *       树部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为 note
+ *   C13 播种注册表结构（硬失败）：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
+ *       `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（S 分量与播种机制脱节即红）
+ *   C14 plugin-row 单源 + manifest 三方镜像（硬失败）：行形状的唯一声明在 wire 的
+ *       `./plugin-row` 面（字段集与 role 并集 = 预期锚），五个消费方
+ *       （control-plane / client-core face / preload / renderer / settings-connections）
+ *       只许 import/type 引用——本地重声明 / 引用面漂移 / 单源字段缺失都红；
+ *       manifest 宿主接口另做 `plugin-sync.ts`（producer）↔ `preload.cts` ↔
+ *       `renderer/src/global.d.ts` 字段集对照（ipc-surface-mirror 只覆盖后两者）
+ *   C15 悬停卡自持移植的上游退役门（硬失败）：chamber 的
+ *       `RowHoverCard` + client-core `src/hover-intent.ts` 取代 vendor `HoverCard`，退役
+ *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结
+ *       pin** 上读 ① 竞态两侧形状仍在——CLOSE：HoverCard 组件内 onPointerLeave 的
+ *       **每一个** arm 调用的守卫必须是已提交 open 本身或含 open 的 `&&` 合取（顶层
+ *       `||` 析取即红：`open || intentRef.current` / `open || true` 是 ref-intent 修复，
+ *       不是已知形状）；OPEN：以 `openDelayMs` 为延迟的 dwell 定时器回调只把 phase
+ *       置为 `'open'`，至多把该 `setTimeout` 赋值目标的 ref 清成 `null`（其他成员写即
+ *       红）、不复查指针在场（同名 setter 的预览淡出关闭回调投影后同形，故定时器按
+ *       延迟而非回调识别）；注释与字符串/模板先中和，诱饵无法伪证——与
+ *       ② 时间常数逐值锁步（POINTER_GRACE_MS == HOVER_CLOSE_GRACE_MS、
+ *       openDelayMs 默认 == HOVER_OPEN_DELAY_MS，取值必须唯一——零命中/多值都红），
+ *       任一不成立即红——上游修掉竞态那天必须做退役/再登记裁决（判定逻辑纯函数，
+ *       单测随 args 测试同文件）
+ *   C16 vendor 源消费者（硬失败）：`packages/<pkg>/src` 里任何「相对 import 出包到
+ *       `vendor/`」必须与 registry 的 `vendorSourceConsumers` 双向一致——登记的
+ *       (consumer, vendorFile) 必须真实存在且符号集合逐条相等，每个符号在 vendor
+ *       文件里仍是 `export function`，未登记的 vendor 相对 import 一律红。判定逻辑
+ *       纯函数在 verify-upstream-touchpoints-vendor.mjs，负控随
+ *       verify-upstream-touchpoints-args.test.mjs 在 test:upgrade-tools 跑。
+ *
+ * 登记纪律：单一来源 = scripts/upstream/registry/registry.json（本文件启动即读它）。给某个文件打 chamber 补丁 = 在 entry.classify.patched 里登记
+ * （含原因）；新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure 文件
+ * 的修改都会在此硬失败——升级/重锚后改 registry，并跑 registry-views.mjs --write 重生成
+ * docs/checklists/upgrade/upstream-touchpoints.md 的 GENERATED 块（每 tag 维护循环见文档 §7）。
+ *
+ * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
+ *   node scripts/upstream/verify/verify-upstream-touchpoints.mjs            # C1/C3–C16
+ *   node scripts/upstream/verify/verify-upstream-touchpoints.mjs --no-artifact-rebuild
+ *   node scripts/upstream/verify/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
+ *   node scripts/upstream/verify/verify-upstream-touchpoints.mjs --help
+ *
+ * 参数守卫：默认模式会**就地重建并还原**生成物（唯一写盘
+ * 路径），因此任何未知参数/位置参数都由 verify-upstream-touchpoints-args.mjs
+ * 判为用法错误并 exit 2——一个拼错的 flag 不得被静默忽略并照跑全量写盘门。
+ */
+
+import { createHash } from 'node:crypto'
+import {
+  closeSync, existsSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+} from 'node:fs'
+import { dirname, join, relative, sep } from 'node:path'
+import { tmpdir } from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { spawn, spawnSync } from 'node:child_process'
+import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
+import {
+  familyFindings, manifestMirrorFindings, pluginRowSingleSourceFindings, profileContractFindings,
+  PLUGIN_ROW_CONSUMERS, PLUGIN_ROW_SINGLE_SOURCE, runtimeFamilyNames, seedRegistryFindings,
+} from './plugin-protection-gate.mjs'
+import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
+import { HOVER_PORT_SOURCES, hoverPortVerdict } from './verify-upstream-touchpoints-hover.mjs'
+import { relativeVendorImports, vendorSourceVerdict } from './verify-upstream-touchpoints-vendor.mjs'
+import { loadRegistry, validateRegistry, verifierForks } from '../registry/registry.mjs'
+import { resolveEsbuildPath } from '../../lib/esbuild.mjs'
+import { ARTIFACT_REBUILD_GROUPS } from '../../lib/build-artifacts.mjs'
+
+const ROOT = fileURLToPath(new URL('../../..', import.meta.url))
+const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
+const PIN_FILE = join(ROOT, 'harness.commit')
+
+/**
+ * Repo-relative path in the `/`-separated form every registry key uses.
+ *
+ * `relative()` returns the PLATFORM separator, so on Windows the walk output
+ * (`src\api-path.ts`) never matches the `/`-keyed `own`/`patched`/`dropped`
+ * tables, `within()` prefixes or the C10 `ALLOWED` allowlist — C1/C3 then
+ * reports every file as "未登记补丁 / 未登记 dropped / 未登记 own" and the
+ * Windows leg hard-fails while the Linux leg on the same commit stays green.
+ * Same normalization `preflight-vendor-pin.mjs` already applies.
+ * @param {string} from - absolute base directory.
+ * @param {string} to - absolute target path.
+ * @returns {string} - `/`-separated relative path.
+ */
+const repoRel = (from, to) => relative(from, to).split(sep).join('/')
+
+// ---------------------------------------------------------------------------
+// 触点登记：单一来源 = scripts/upstream/registry/registry.json
+// 生成视图（checklist §2/§9 的 GENERATED 块）由 registry-views.mjs 产出；
+// 本文件不内嵌登记表（避免'两侧同源、维护时同步'的手抄）。
+// ---------------------------------------------------------------------------
+
+/**
+ * registry 读取失败或 schema 校验不过必须响亮失败（exit 1），绝不静默降级成空登记表——
+ * 空表会让 C1/C3/C5/C6 全部'通过'，把覆盖面消失伪装成绿灯。
+ */
+function loadRegistryOrExit() {
+  try {
+    const registry = loadRegistry()
+    const findings = validateRegistry(registry)
+    if (findings.length > 0) {
+      console.error('✗ registry.json schema 校验失败（触点登记单一来源）:')
+      for (const finding of findings) console.error('  - ' + finding)
+      console.error('  下一步: node scripts/upstream/registry/verify-registry.mjs（会给出完整失败面）')
+      process.exit(1)
+    }
+    return registry
+  } catch (error) {
+    console.error('✗ 无法读取 scripts/upstream/registry/registry.json（触点登记单一来源）: ' + error.message)
+    process.exit(1)
+  }
+}
+
+/** C4 roster 存在性哨兵：covered 关键 id 删除即硬失败（删包保护）。 */
+const COVERED_SENTINELS = [
+  '@deepseek-ai/dsh-client-connection',
+  '@deepseek-ai/dsh-api-gateway',
+  '@deepseek-ai/dsh-client-modules',
+  '@deepseek-ai/dsh-client-ui-renderer',
+  '@deepseek-ai/dsh-client-hmr',
+  // desktop-only account family: covered and LOADED from the DEFERRED cluster with
+  // its desktop overlay gated off by the build-time vendor patch — deleting this id
+  // removes the account settings section (design 09 §3.5).
+  '@deepseek-ai/dsh-client-ui-settings-account',
+  // D2: the official open-in CLIENT row is deliberately UNCOVERED (it loads from
+  // the host graph for its file-level seats), so it must not be sentineled here —
+  // its chamber replacement below is the surface this sentinel protects.
+  '@dsh-chamber/dsh-chamber-client-ui-open-in',
+]
+
+// ---------------------------------------------------------------------------
+
+/** Hard-failure counter; `fail()` owns it so no violation can be logged without failing the run. */
+let hardFails = 0
+
+function fail(message) {
+  console.error(`✗ ${message}`)
+  hardFails += 1
+  process.exitCode = 1
+}
+
+function warn(message) {
+  console.warn(`⚠ ${message}`)
+}
+
+function readPin() {
+  const line = readFileSync(PIN_FILE, 'utf8').split('\n')
+    .map((l) => l.trim())
+    .find((l) => l !== '' && !l.startsWith('#'))
+  if (line === undefined) throw new Error(`缺少固定提交文件 ${PIN_FILE}`)
+  return line
+}
+
+/** 收集目录下文件（排除 node_modules/lib 与给定排除前缀）。 */
+function collectFiles(root, excludePrefixes = []) {
+  const out = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      const rel = repoRel(root, full)
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === 'lib' || entry.name === '.git'
+          || excludePrefixes.some((p) => rel === p || rel.startsWith(`${p}/`))) continue
+        walk(full)
+      } else if (!rel.endsWith('.tsbuildinfo')) {
+        out.push(rel)
+      }
+    }
+  }
+  walk(root)
+  return out.sort()
+}
+
+function within(rel, prefixes) {
+  return prefixes.some((p) => (p.endsWith('/') ? rel.startsWith(p) : rel === p))
+}
+
+// ---------------------------------------------------------------------------
+// 0 —— 参数守卫（在任何门、任何写盘动作之前）
+//
+// 守卫必须最先执行：默认模式的 C8 会就地重建-还原生成物，而 `--help` 与用法
+// 错误都必须在不碰任何文件的前提下返回。判定逻辑单测在
+// verify-upstream-touchpoints-args.test.mjs（纯函数 + 子进程回归）。
+// ---------------------------------------------------------------------------
+const args = parseVerifyArgs(process.argv.slice(2))
+
+if (args.help) {
+  console.log(VERIFY_USAGE)
+  process.exit(0)
+}
+
+if (args.errors.length > 0) {
+  console.error('✗ verify-upstream-touchpoints: 参数用法错误（未执行任何门、未写盘）:')
+  for (const error of args.errors) console.error(`  - ${error}`)
+  console.error(`\n${VERIFY_USAGE}`)
+  process.exit(USAGE_EXIT_CODE)
+}
+
+/**
+ * registry 在两道参数守卫之后才读：`--help`（exit 0）与用法错误（exit 2）
+ * 必须在不依赖 registry.json、也不碰任何文件的前提下返回；
+ * 读取失败/ schema 不过 = exit 1（响亮，绝不降级成空登记表）。
+ */
+// vendor 子模块未物化时给可读错误：裸 ENOENT 不可读，且 C1/C6/C9/C16 都需要 pin 树
+// （`--help` 与用法错误已在上方先行返回，不依赖 vendor）。
+if (!existsSync(join(SUBMODULE, 'packages'))) {
+  console.error('✗ verify-upstream-touchpoints: vendor/harness-checkout 未物化（submodule 为空）——先 `git submodule update --init --depth 1`（或用主 checkout 的 vendor 树）再跑；该门需要 pin 树做 C1/C6/C9/C16 判定。')
+  process.exit(1)
+}
+
+const REGISTRY = loadRegistryOrExit()
+
+/**
+ * forks[].rel 相对仓库根；upstream 相对 submodule 根。
+ * ownNotes/droppedNotes 是纯文档字段，不进 verifier：
+ * - patched: { <相对 fork 文件>: 原因 } —— 允许与上游不一致的 chamber 补丁面
+ * - own:     fork 自有文件（上游无对应物），ownPrefix 覆盖整目录（如 test/）
+ * - dropped: 上游文件有意不镜像（exact 或 prefix）
+ */
+const FORKS = verifierForks(REGISTRY)
+
+/** ensure-harness-vendor EXCLUDED（fork 影子覆盖的上游包）——C6 存在性哨兵。 */
+const EXCLUDED_UPSTREAM_DIRS = REGISTRY.excludedUpstreamDirs
+
+
+/** 按目录前缀登记、且承诺「只承载数据文件」的 dropped 面：上游一旦往里放代码/类型，
+ *  前缀登记就会把它静默吞掉，必须改成按文件重裁（registry 的 droppedNotes 里写着同一句
+ *  人工承诺；这里把它变成门）。`tests/` 不在此列——它本来就是代码。 */
+const DATA_ONLY_DROPPED_PREFIXES = ['locale/']
+/** 代码/类型文件（含 ESM/CJS 与 TS 的 .mts/.cts）：出现在纯数据面即需重裁。 */
+const CODE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/u
+
+/** C8 advisory 模式：绝不写盘（CI install 前那段就是靠它）。 */
+const noArtifactRebuild = args.noArtifactRebuild
+/** C2 的 tag 区间（advisory），由守卫保证「恰好两个值」。 */
+const tagRange = args.tags
+
+const pin = readPin()
+
+// C1/C3 —— 逐 fork 分类校验
+for (const fork of FORKS) {
+  const forkRoot = join(ROOT, fork.rel)
+  const upRoot = join(SUBMODULE, fork.upstream)
+  const droppedExact = fork.dropped.filter((p) => !p.endsWith('/'))
+  const droppedPrefix = fork.dropped.filter((p) => p.endsWith('/'))
+  const upstreamFiles = existsSync(upRoot)
+    ? collectFiles(upRoot)
+    : []
+  const forkFiles = existsSync(forkRoot)
+    ? collectFiles(forkRoot)
+    : []
+  const ownKeys = new Set(Object.keys(fork.own))
+  const patchedKeys = new Set(Object.keys(fork.patched))
+  let pure = 0
+  let violations = []
+  // 前缀登记的纯数据面：上游若把代码/类型放进该目录，前缀会把新文件整批吞掉，
+  // 所以这里先于逐个文件的分类判定把它判红（判据见 DATA_ONLY_DROPPED_PREFIXES）。
+  for (const prefix of droppedPrefix.filter((p) => DATA_ONLY_DROPPED_PREFIXES.includes(p))) {
+    for (const f of upstreamFiles) {
+      if (!within(f, [prefix])) continue
+      if (CODE_FILE_RE.test(f)) {
+        violations.push(`dropped 前缀 ${prefix} 登记为纯数据面，但上游出现了代码/类型文件（须按文件重裁）: ${f}`)
+      }
+    }
+  }
+  for (const f of upstreamFiles) {
+    if (droppedExact.includes(f) || within(f, droppedPrefix)) continue
+    if (!forkFiles.includes(f)) {
+      violations.push(`上游文件未镜像且未登记 dropped: ${f}`)
+      continue
+    }
+    const forkFile = join(forkRoot, f)
+    const upFile = join(upRoot, f)
+    if (readFileSync(forkFile).equals(readFileSync(upFile))) {
+      pure += 1
+    } else if (!patchedKeys.has(f)) {
+      violations.push(`与上游不一致且未登记补丁（pure 面被改）: ${f}`)
+    }
+  }
+  for (const f of forkFiles) {
+    // dropped 的语义是「上游文件有意不镜像」：fork 里出现 dropped 登记面下的文件说明登记过期/覆盖了真实文件。
+    if (droppedExact.includes(f) || within(f, droppedPrefix)) {
+      violations.push(`fork 里有落在 dropped 登记面下的文件（dropped 语义是上游文件不存在）: ${f}`)
+    }
+    if (!upstreamFiles.includes(f)) {
+      const isOwnFile = ownKeys.has(f) || within(f, [...(fork.ownPrefix ?? [])])
+      if (!isOwnFile) {
+        violations.push(`fork 自有文件未登记 own: ${f}`)
+      }
+    }
+  }
+  for (const f of patchedKeys) {
+    if (!forkFiles.includes(f)) violations.push(`patched 登记文件不存在: ${f}`)
+  }
+  const upPkg = JSON.parse(readFileSync(join(upRoot, 'package.json'), 'utf8'))
+  const forkPkg = JSON.parse(readFileSync(join(forkRoot, 'package.json'), 'utf8'))
+  if (violations.length > 0) {
+    fail(`[${fork.name}] C1/C3 违规 ${violations.length} 项（pure 面被改 / 未登记补丁 / 上游文件漏裁决）:`)
+    for (const v of violations) console.error(`    - ${v}`)
+  } else {
+    console.log(`✓ [${fork.name}] C1/C3: pure=${pure} patched=${patchedKeys.size} own=${forkFiles.length - pure - patchedKeys.size} dropped=${fork.dropped.length}`)
+  }
+  // Version anchor: the three shadow copies carry the UPSTREAM version (they
+  // stand in for the upstream package of the same name). A fork that lives
+  // under its own chamber name and ships with chamber releases opts out
+  // (`versionAnchor: 'chamber'`) — its bytes/classification are still pinned
+  // by C1/C3, only the version equality is waived.
+  if ((fork.versionAnchor ?? 'upstream') === 'upstream' && upPkg.version !== forkPkg.version) {
+    fail(`C5 [${fork.name}] fork 版本 ${forkPkg.version} != 上游 ${upPkg.version}（过期锚——升级/重锚后应同步）`)
+  }
+}
+
+// C5 —— submodule HEAD == 声明 pin
+{
+  const head = spawnSync('git', ['-C', SUBMODULE, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
+  if (head.status !== 0 || head.stdout.trim() !== pin) {
+    fail(`C5 submodule HEAD != harness.commit（${pin.slice(0, 12)}）——请走 update-vendor.mjs`)
+  } else {
+    console.log(`✓ C5 锚: harness.commit = ${pin.slice(0, 12)}，shadow fork 版本与上游一致`)
+  }
+}
+
+// C6 —— EXCLUDED 上游目录存在性
+{
+  let missing = 0
+  for (const dir of EXCLUDED_UPSTREAM_DIRS) {
+    if (!existsSync(join(SUBMODULE, dir))) {
+      missing += 1
+      fail(`C6 EXCLUDED 上游目录缺失: ${dir}`)
+    }
+  }
+  if (missing === 0) console.log(`✓ C6 EXCLUDED 上游目录 ×${EXCLUDED_UPSTREAM_DIRS.length} 存在`)
+}
+
+// C4 —— roster
+{
+  const coveredSrc = readFileSync(join(ROOT, 'packages/renderer/src/chamber-covered.ts'), 'utf8')
+  const readList = (marker) => {
+    const seg = coveredSrc.split(marker)[1]
+    const m = seg.match(/=\s*\[([\s\S]*?)\n\]/)
+    return m[1].split('\n').filter((l) => /^\s+'@/.test(l)).map((l) => l.trim().match(/'([^']+)'/)[1])
+  }
+  const covered = readList('export const CHAMBER_COVERED_IDS')
+  const factory = readList('export const CHAMBER_COVERED_FACTORY_IDS')
+  const factorySet = new Set(factory)
+  const factoryOutside = factory.filter((id) => !covered.includes(id))
+  const dupCovered = covered.filter((id, i) => covered.indexOf(id) !== i)
+  let rosterFails = 0
+  for (const sentinel of COVERED_SENTINELS) {
+    if (!covered.includes(sentinel)) {
+      rosterFails += 1
+      fail(`C4 covered 哨兵缺失（删包?）: ${sentinel}`)
+    }
+  }
+  if (factoryOutside.length > 0) {
+    rosterFails += 1
+    fail(`C4 factory id 不在 covered 内: ${factoryOutside.join(', ')}`)
+  }
+  if (dupCovered.length > 0) {
+    rosterFails += 1
+    fail(`C4 covered 重复 id: ${dupCovered.join(', ')}`)
+  }
+  if (rosterFails === 0) {
+    console.log(`✓ C4 covered=${covered.length} factory=${factory.length}（factory ⊆ covered，哨兵齐）`)
+  } else {
+    fail(`C4 roster 校验 ${rosterFails} 项失败（covered/factory 存在性、哨兵或锁步断言）`)
+  }
+
+  const assemblyEntry = join(ROOT, 'vendor/harness-packages/@deepseek-ai/dsh-api-remotes/src/client/index.ts')
+  if (!existsSync(assemblyEntry)) {
+    fail(`C4 找不到上游装配面 ${relative(ROOT, assemblyEntry)} — 该面被删除/改名时必须重审 typert 契约（不能静默跳过）`)
+  } else {
+    // pathToFileURL, never a raw path: Node's ESM loader only accepts file:/
+    // data:/node: URLs, and a bare Windows path reads as the scheme 'd:' —
+    // `import('D:\\a\\…')` crashed this gate instantly on the test-windows leg
+    // (ERR_UNSUPPORTED_ESM_URL_SCHEME) while staying green on POSIX.
+    const { remotePackagesFromAssembly, remoteMountPackages, EXPECTED_MOUNT_PACKAGES } = await import(
+      pathToFileURL(join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')).href
+    )
+    let remotes
+    let mounted
+    try {
+      remotes = remotePackagesFromAssembly(readFileSync(assemblyEntry, 'utf8'))
+      mounted = remoteMountPackages(readFileSync(assemblyEntry, 'utf8'))
+    } catch (error) {
+      fail(`C4 装配面解析失败（上游结构漂移）: ${error.message}`)
+      remotes = undefined
+    }
+    if (remotes !== undefined) {
+    // Mount ORDER is runtime-significant and pinned by the single table
+    // (EXPECTED_MOUNT_PACKAGES). The import selection has no order semantics:
+    // it is judged as a SET against the same table, so an import added without
+    // a mount (漏挂载) is caught even when the mount array still matches.
+    const expected = [...EXPECTED_MOUNT_PACKAGES]
+    const selection = new Set(remotes)
+    const mountedSet = new Set(mounted)
+    if (mounted.length !== expected.length || mounted.some((name, index) => name !== expected[index])) {
+      fail(`C4 apply() 挂载数组 = ${JSON.stringify(mounted)}（期望 ${JSON.stringify(expected)}）——上游挂载序变更需重审 typert 契约`)
+    } else if (selection.size !== mountedSet.size || [...selection].some((name) => !mountedSet.has(name))) {
+      fail(`C4 选择面与挂载面集合不等：import=${JSON.stringify([...selection])} mounted=${JSON.stringify([...mountedSet])}`)
+    } else {
+      console.log(`✓ C4 remote assembly 契约 = ${mounted.length}（挂载顺序 == 表；import 选择集合 == 挂载集合）`)
+    }
+    }
+  }
+}
+
+// C7 —— 种子域锁步（文本双门）
+{
+  const gatewaySrc = readFileSync(join(ROOT, 'packages/gateway/src/plugins.ts'), 'utf8')
+  const runtimeSrc = readFileSync(join(ROOT, 'packages/dsh-runtime/src/activation-gate.ts'), 'utf8')
+  // 限定到各自声明块内提取，避免同文件其他字符串常量干扰。
+  const blockOf = (src, startMarker, endMarker) => {
+    const start = src.indexOf(startMarker)
+    if (start === -1) return ''
+    const rest = src.slice(start)
+    const end = rest.indexOf(endMarker)
+    return end === -1 ? rest : rest.slice(0, end)
+  }
+  const mapBlock = blockOf(gatewaySrc, 'HOST_PACKAGE_PROBE_DOMAINS:', '}')
+  // 两种形态同门：① 字面表（逐行 `'<name>': '<domain>'`）；②
+  // 注册表派生表（`Object.fromEntries(CHAMBER_HOST_PACKAGES.map(...))`）——
+  // 派生形态的值唯一来源是控制面注册表，故改读 host-graph-seed.ts 的
+  // `{ insert: …, probe: { method: '<domain>' } }` 行（与 chamber-seed-drift
+  // 客户端镜像测试同一提取口径）。派生表在 gateway 模块加载时另有 fail-loud
+  // 运行时门（mappedProbeDomains vs HOST_DOMAIN_PROBE_NAMES），本门是文本哨兵。
+  const mapValues = mapBlock.includes('CHAMBER_HOST_PACKAGES')
+    ? [...readFileSync(join(ROOT, 'packages/control-plane/src/host-graph-seed.ts'), 'utf8')
+        .matchAll(/\{ insert: HOST_[A-Z_]+_INSERT, probe: \{ method: '([^']+)'/g)].map((m) => m[1])
+    : [...mapBlock.matchAll(/'([^']+)':\s*'([^']+)'/g)].map((m) => m[2])
+  const listBlock = blockOf(runtimeSrc, 'HOST_DOMAIN_PROBE_NAMES = [', '] as const')
+  const listEntries = [...listBlock.matchAll(/'([^']+)'/g)].map((m) => m[1])
+  const gatewaySet = new Set(mapValues)
+  const runtimeSet = new Set(listEntries)
+  if (mapValues.length !== gatewaySet.size || listEntries.length !== runtimeSet.size
+    || gatewaySet.size !== runtimeSet.size
+    || [...gatewaySet].some((v) => !runtimeSet.has(v))) {
+    fail('C7 种子域漂移：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 != dsh-runtime HOST_DOMAIN_PROBE_NAMES（两侧同改）')
+  } else {
+    console.log(`✓ C7 种子域锁步: ${[...gatewaySet].join(', ')}`)
+  }
+}
+
+// C8 —— 生成物陈旧（确定性重建-比对）
+//
+// An mtime comparison is a paper gate: on a fresh checkout every file carries
+// the checkout time, so a committed-but-stale bundle is never detected, while
+// a freshly built tree could report a false positive
+// when the artifact was written a millisecond before its own source. Both
+// build scripts are deterministic (esbuild, fixed target/externals, LF-only
+// build-time artifacts), so the gate rebuilds each artifact
+// group in place and byte-compares against the bytes captured first, then
+// restores them verbatim — the repo is left unchanged, and the only observable
+// effect is the artifact mtime. A mismatch is a hard failure: the working-tree
+// artifact no longer matches its source. `--no-artifact-rebuild` keeps the
+// advisory mtime behavior for environments without esbuild.
+{
+  // Single source: scripts/lib/build-artifacts.mjs — the same manifest
+  // ensure-artifacts.mjs bootstraps and docs/checklists/upgrade/upstream-touchpoints.md
+  // §5 registers. C8 re-runs each group's own build script.
+  const groups = ARTIFACT_REBUILD_GROUPS
+  if (noArtifactRebuild) {
+    // Advisory fallback: mtime is unreliable on fresh checkouts — say so.
+    const stale = []
+    for (const group of groups) {
+      for (const artifact of group.outputs) {
+        const artifactPath = join(ROOT, artifact)
+        if (!existsSync(artifactPath)) continue
+        const srcDir = join(ROOT, artifact.split('/dist/')[0].split('/lib/')[0], 'src')
+        if (!existsSync(srcDir)) continue
+        let newest = 0
+        const walk = (d) => {
+          for (const entry of readdirSync(d, { withFileTypes: true })) {
+            const full = join(d, entry.name)
+            if (entry.isDirectory()) {
+              if (entry.name !== 'node_modules' && entry.name !== 'lib' && entry.name !== 'dist') walk(full)
+            } else {
+              newest = Math.max(newest, statSync(full).mtimeMs)
+            }
+          }
+        }
+        walk(srcDir)
+        if (statSync(artifactPath).mtimeMs < newest) stale.push(artifact)
+      }
+    }
+    if (stale.length > 0) warn(`C8 生成物 mtime 落后（advisory；fresh checkout 会误报，请用默认重建门）: ${stale.join(', ')}`)
+    else console.log('✓ C8 生成物 mtime 新鲜（advisory 模式）')
+  } else {
+    // Serialize the in-place rebuild: two concurrent runs would interleave
+    // write/restore and leave rebuilt (uncommitted) bytes behind. The lock is
+    // an exclusive file in the OS temp dir, keyed by the repo path.
+    const lockPath = join(
+      tmpdir(),
+      `dsh-chamber-c8-${createHash('sha256').update(ROOT).digest('hex').slice(0, 16)}.lock`,
+    )
+    let lockFd
+    let lockTaken = false
+    let lockBlocked = false
+    for (let attempt = 0; attempt < 2 && !lockTaken; attempt += 1) {
+      try {
+        lockFd = openSync(lockPath, 'wx')
+        writeFileSync(lockFd, `${process.pid}\n`)
+        lockTaken = true
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+        // A killed gate cannot clean its own lock (process.exit bypasses
+        // finally): take over when the recorded PID is gone.
+        const recorded = Number.parseInt(`${readFileSync(lockPath, 'utf8')}`.trim(), 10)
+        let alive = false
+        if (Number.isInteger(recorded) && recorded > 0) {
+          try { process.kill(recorded, 0); alive = true } catch { alive = false }
+        }
+        if (alive) {
+          lockBlocked = true
+          fail(`C8 无法重建：另一个 C8 重建正在运行（pid ${recorded}，${lockPath}）——不能证明产物新鲜度，稍后重跑`)
+          break
+        }
+        rmSync(lockPath, { force: true })
+      }
+    }
+    // Every path that leaves the lock un-taken must be a hard failure.
+    // A live holder already reported itself via fail(); anything else (the lock
+    // stolen between rm and retry, or a stale file whose PID is gone) must not
+    // fall through this no-op branch and end the run green WITHOUT rebuilding
+    // the artifacts the gate exists to verify.
+    if (!lockTaken) {
+      if (lockBlocked !== true) {
+        fail(`C8 无法取得重建锁（${lockPath}）——产物新鲜度未被验证，请稍后重跑`)
+      }
+    } else {
+      // Snapshot/restore/compare live in scripts/upstream/verify/artifact-gate.mjs so the
+      // decision logic is unit-tested (see artifact-gate.test.mjs).
+      const artifactDirs = (group) => [...new Set(group.outputs.map(output => dirname(join(ROOT, output))))]
+      let inFlight = undefined
+      let child = undefined
+      const onSignal = (signal) => {
+        try { child?.kill('SIGTERM') } catch { /* already gone */ }
+        if (inFlight !== undefined) {
+          try { inFlight() } catch (error) { console.error(`C8 信号恢复失败: ${error.message}`) }
+        }
+        try { rmSync(lockPath, { force: true }) } catch { /* best effort */ }
+        process.exit(signal === 'SIGINT' ? 130 : 143)
+      }
+      process.on('SIGINT', () => onSignal('SIGINT'))
+      process.on('SIGTERM', () => onSignal('SIGTERM'))
+      // Async spawn (not spawnSync): the event loop must stay free so a signal
+      // during a rebuild is handled immediately — restore, kill the child, exit.
+      const BUILD_TIMEOUT_MS = 300_000
+      const runBuild = (script) => new Promise((resolve) => {
+        const proc = spawn(process.execPath, [script], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
+        child = proc
+        let stderr = ''
+        let timedOut = false
+        const timer = setTimeout(() => {
+          timedOut = true
+          try { proc.kill('SIGKILL') } catch { /* already gone */ }
+        }, BUILD_TIMEOUT_MS)
+        proc.stderr.on('data', (chunk) => { stderr += chunk })
+        proc.on('error', (error) => {
+          clearTimeout(timer)
+          child = undefined
+          resolve({ status: -1, stderr: error.message })
+        })
+        proc.on('close', (status) => {
+          clearTimeout(timer)
+          child = undefined
+          resolve({ status: timedOut ? -1 : status, stderr: timedOut ? `${stderr}\nbuild timed out after ${BUILD_TIMEOUT_MS}ms` : stderr })
+        })
+      })
+      const stale = []
+      const skipped = []
+      try {
+        for (const group of groups) {
+          const paths = group.outputs.map((output) => join(ROOT, output))
+          const missing = group.outputs.filter((_, index) => !existsSync(paths[index]))
+          if (missing.length > 0) {
+            stale.push(...missing.map((output) => `${output}（缺失）`))
+            continue
+          }
+          let snapshots
+          try {
+            snapshots = new Map(artifactDirs(group).map(dir => [dir, snapshotDir(dir)]))
+          } catch (error) {
+            stale.push(`${group.script} 的产物不可读：${error.message}`)
+            continue
+          }
+          inFlight = () => { for (const [dir, files] of snapshots) restoreDir(dir, files) }
+          try {
+            const run = await runBuild(group.script)
+            if (run.status !== 0) {
+              const detail = `${run.stderr ?? ''}`.trim().split('\n').pop() ?? `exit ${run.status}`
+              skipped.push(`${group.script}（构建不可用：${detail}）`)
+              continue
+            }
+            stale.push(...compareOutputs(
+              group.outputs,
+              ROOT,
+              snapshots,
+              (abs, dir) => relative(dir, abs),
+            ))
+          } finally {
+            // Restore the whole artifact directory verbatim (extra files
+            // removed, originals written back) — the gate must not leave a
+            // modified working tree, even on a build failure.
+            inFlight()
+            inFlight = undefined
+          }
+        }
+      } finally {
+        closeSync(lockFd)
+        rmSync(lockPath, { force: true })
+      }
+      for (const note of skipped) warn(`C8 跳过：${note}`)
+      const verdict = artifactGateVerdict({ stale, skipped })
+      if (!verdict.ok) fail(verdict.message)
+      else console.log(`✓ C8 构建期生成物与 src 一致（重建-比对，${groups.length} 组）`)
+    }
+  }
+}
+
+// C9 —— vendor 源码补丁锚 + 退役判定（design 09 §3.6；硬失败）
+{
+  const { VENDOR_PATCHES, checkRetiredPatches, checkVendorPatchSources, vendorPatchRegistryProblems } = await import(
+    pathToFileURL(join(ROOT, 'packages/renderer/scripts/vendor-patches.mjs')).href
+  )
+  const registryProblems = vendorPatchRegistryProblems()
+  if (registryProblems.length > 0) {
+    fail(`C9 vendor 补丁登记表不完整（每条须恰好给 retireCheck 或 noRetireForm）: ${registryProblems.join('; ')}`)
+  }
+  const retired = checkRetiredPatches()
+  for (const entry of retired) {
+    if (!entry.ok) fail(`C9 退役补丁 ensure 断言失败（上游修复回退/漂移，drift I-7）: ${entry.vendorFile} — ${entry.detail}`)
+  }
+  const results = checkVendorPatchSources()
+  const editCount = VENDOR_PATCHES.reduce((total, patch) => total + patch.edits.length, 0)
+  const drifted = results.filter(result => result.verdict === 'drift')
+  const candidates = results.filter(result => result.verdict === 'retire-candidate')
+  if (drifted.length > 0) {
+    fail(`C9 vendor 补丁锚漂移（重锚后需按新 pin 重导补丁）: ${drifted.map(b => `${b.vendorFile} — ${b.detail}`).join('; ')}`)
+  }
+  if (candidates.length > 0) {
+    fail('C9 vendor 补丁 retire-candidate（上游已带修复形状；仍 release-blocking，remediation = 移入 RETIRED_PATCHES 的 ensure 断言区，并在同批删除补丁与产物 marker）: '
+      + candidates.map(b => `${b.vendorFile} — ${b.detail}`).join('; '))
+  }
+  if (drifted.length === 0 && candidates.length === 0) {
+    if (results.length === 0) warn('C9 未注册任何 vendor 补丁（如确已全部退役可忽略）')
+    else console.log(`✓ C9 vendor 补丁锚: ${results.length} 文件 / ${editCount} 处锚点全部唯一命中；退役 ensure 断言 ${retired.length} 条`)
+  }
+}
+
+// C10 —— 版本锚一致性 + 活版本字面量白名单（硬失败）
+{
+  // 运行时版本必须读成 dsh 的 x.y.z-预发布 形态。
+  const VERSION_SHAPE = /^[0-9]+\.[0-9]+\.[0-9]+-(?:alpha|beta|rc)\.[0-9]+$/
+  // 活字面量扫描刻意不写成「任意 x.y.z-预发布」：chamber 自身版本（0.4.x-beta）与
+  // 依赖的 node-pty@1.2.0-beta.15 都会命中。集合 = 当前世代（读自锁文件）+ 历史
+  // 世代表（只增不改，用来抓「忘了跟锚」的旧字面量）。
+  // 扫描用「世系形态」而不是世代白名单：白名单会让表外世代（0.1.6-rc.2、0.2.0-rc.2…）静默通过。
+  // chamber 自身的清单版本（0.4.x-beta）在扫描时按根 package.json 版本过滤。
+  const ROOT_VERSION_PATH = join(ROOT, 'package.json')
+  // SINGLE SOURCE = the TRACKED bundle lockfile (`bundle:dsh` regenerates it;
+  // the sibling package.json is gitignored and absent in a fresh checkout).
+  // When that manifest does exist locally it must agree, so a hand-edited
+  // workdir cannot silently disagree with the anchored line.
+  const lockPath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')
+  const lockText = existsSync(lockPath) ? readFileSync(lockPath, 'utf8') : ''
+  const lockMatch = /'@deepseek-ai\/dsh':\n\s+specifier: (\S+)\n\s+version: (\S+)/.exec(lockText)
+  const current = lockMatch?.[1]
+  const manifestPath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'package.json')
+  const manifestVersion = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, 'utf8'))?.dependencies?.['@deepseek-ai/dsh']
+    : undefined
+  if (typeof current !== 'string' || !VERSION_SHAPE.test(current)) {
+    fail(`C10 无法从 packages/desktop/vendor/dsh/pnpm-lock.yaml 读出运行时版本（得到 ${JSON.stringify(current)}）`)
+  } else if (manifestVersion !== undefined && manifestVersion !== current) {
+    // The manifest is DERIVED local state (gitignored, rewritten by
+    // `bundle:dsh`); a mismatch means this worktree has not rebundled yet, not
+    // that the anchored line is wrong. The tracked lockfile stays the
+    // authority, so this is loud but advisory.
+    warn(`C10 本工作目录的 bundle 清单 ${manifestVersion} 落后于锁文件 ${current}（派生本地状态；跑 bundle:dsh 刷新即可，不影响锚）`)
+    console.log(`✓ C10 版本锚 = ${current}（单一来源 = bundle 锁文件；六锚 + 3 fork 一致）`)
+  } else {
+    const ownVersion = existsSync(ROOT_VERSION_PATH)
+      ? JSON.parse(readFileSync(ROOT_VERSION_PATH, 'utf8')).version
+      : undefined
+    const DSH_VERSION_RE = /0\.[0-9]+\.[0-9]+-(?:alpha|beta|rc)\.[0-9]+(?![0-9.])/g
+    // The scanner is pinned to the 0.x lineage on purpose (chamber's own
+    // 0.4.x-beta.*, node-pty's 1.2.x-beta.* and the SemVer examples in the shell
+    // would otherwise flood the scan). A pin outside that lineage must fail loudly
+    // here rather than scanning silently empty and passing on the REQUIRED fallback.
+    if (!DSH_VERSION_RE.test(current)) {
+      DSH_VERSION_RE.lastIndex = 0
+      fail(`C10 活字面量扫描的世系形态未覆盖当前 pin ${current}（DSH_VERSION_RE 只认 0.x 预发布）——先扩展正则再升级`)
+    }
+    DSH_VERSION_RE.lastIndex = 0
+    const dshLiterals = (text) => [...text.matchAll(DSH_VERSION_RE)]
+      .map((m) => m[0])
+      .filter((v) => v !== ownVersion)
+    // Files MAY carry a live dsh version literal — each entry is an anchor or a
+    // named diagnostic constant; a value != the pinned runtime version fails.
+    // anchor:true  → 每处活字面量必须等于 current（锚/单一来源/fork 基线）
+    // anchor:false → 具名诊断常量（上限 1 处，值本身是历史事实，例如「身份探针自哪一代起注册」）
+    const ALLOWED = new Map([
+      ['packages/desktop/vendor/dsh/package.json', { anchor: true, reason: 'bundle 工作目录清单（gitignored；本地存在时与锁文件交叉校验）' }],
+      ['packages/desktop/scripts/bundle-dsh.mjs', { anchor: true, reason: '运行时线锚 1/6（bundle 兜底常量）' }],
+      ['packages/desktop/vendor/dsh/pnpm-lock.yaml', { anchor: true, reason: '运行时版本的**单一来源**（C10 的 current 读自此处；bundle:dsh 生成且已提交）' }],
+      ['.github/workflows/release.yml', { anchor: true, reason: '运行时线锚 3/6（release env）' }],
+      ['scripts/install-gateway.sh', { anchor: true, reason: '运行时线锚 4/6（gateway 安装默认值）' }],
+      ['packages/gateway/package.json', { anchor: true, reason: '运行时线锚 5/6（dshAnchorVersion）' }],
+      ['scripts/release/preflight/release-preflight.mjs', { anchor: true, reason: '运行时线锚 6/6（FORK_VERSION）' }],
+      ['packages/dsh-client-connection/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
+      ['packages/dsh-client-web/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
+      ['packages/dsh-api-gateway/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
+      ['packages/control-plane/src/rpc-envelope.ts', { anchor: false, reason: 'HOST_IDENTITY_METHOD_SINCE：身份探针「自哪一代起注册」的唯一常量（历史事实，不等于 current）' }],
+      ['packages/dsh-runtime/src/runtime-probes.ts', { anchor: false, reason: '上条常量的跨包镜像（本包不依赖控制面）' }],
+    ])
+    const REQUIRED = [
+      'packages/desktop/scripts/bundle-dsh.mjs',
+      '.github/workflows/release.yml',
+      'scripts/install-gateway.sh',
+      'packages/gateway/package.json',
+      'scripts/release/preflight/release-preflight.mjs',
+      'packages/desktop/vendor/dsh/pnpm-lock.yaml',
+    ]
+    // Live-literal extraction: TS/JS via esbuild (comments stripped, strings
+    // preserved); yml/sh/json via a line scan that drops `#`/`//` comments.
+    // Shared lookup (scripts/lib/esbuild.mjs): returns undefined when the tree
+    // is absent, which is what the advisory mode below turns into an explicit
+    // partial-check statement instead of a silent green.
+    const esbuildEntry = resolveEsbuildPath(ROOT)
+    let transformSync
+    if (esbuildEntry !== undefined) {
+      const esbuild = await import(pathToFileURL(esbuildEntry).href)
+      transformSync = esbuild.transformSync
+    }
+    /** Drop line and block comments outside JSON strings. */
+    const stripJsonComments = (text) => {
+      let out = ''
+      let quote = false
+      let i = 0
+      while (i < text.length) {
+        const ch = text[i]
+        const next = text[i + 1]
+        if (quote) {
+          out += ch
+          if (ch === '\\') { out += next ?? ''; i += 2; continue }
+          if (ch === '"') quote = false
+          i += 1
+          continue
+        }
+        if (ch === '"') { quote = true; out += ch; i += 1; continue }
+        if (ch === '/' && next === '/') {
+          while (i < text.length && text[i] !== '\n') i += 1
+          continue
+        }
+        if (ch === '/' && next === '*') {
+          i += 2
+          while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1
+          i += 2
+          continue
+        }
+        out += ch
+        i += 1
+      }
+      return out
+    }
+
+    // Derived LOCAL state that a fresh checkout never has: the scan polices
+    // production source/scripts/config only, so walking it would make a clean local
+    // worktree red on literals inside an old packaged app or a dev dsh-home
+    // checkout. CI is unaffected because none of it exists there.
+    // .gitignore is the single source for that set, so ask git for it — and use
+    // ONLY that answer when git provided one. `--exclude-per-directory=.gitignore`
+    // (not `--exclude-standard`) keeps the set down to the repo's own ignore
+    // files: the standard form also swallows `.git/info/exclude` and the
+    // developer's global `core.excludesFile`, which would make a local run scan
+    // FEWER files than CI and hide an unregistered literal from the gate that
+    // exists to catch exactly that. The static list below is only the fallback
+    // for a git-less run (it documents the paths that motivated the rule).
+    // Ignored FILES are skipped in the general file branch only —
+    // `packages/desktop/vendor/dsh/package.json` is ignored yet deliberately
+    // scanned by the bundle-manifest cross-check above.
+    const IGNORED_LOCAL_ROOTS = [
+      'packages/desktop/release/', // electron-builder output (packaged app)
+      'packages/desktop/.dev-user-data/', // dev-mode isolated app data (dsh-home worktrees, caches)
+      'packages/renderer/.cache/', // renderer tooling cache (generated tsconfig)
+    ]
+    /** repo-relative ignored paths ('dir/' entries included), or null when git is unavailable. */
+    const gitIgnored = (() => {
+      const result = spawnSync(
+        'git',
+        ['-C', ROOT, 'ls-files', '--others', '--ignored', '--exclude-per-directory=.gitignore', '--directory'],
+        { encoding: 'utf8' },
+      )
+      if (result.status !== 0 || typeof result.stdout !== 'string') return null
+      return new Set(result.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== ''))
+    })()
+    const isIgnoredDir = (rel) => (gitIgnored === null
+      ? IGNORED_LOCAL_ROOTS.some((prefix) => `${rel}/`.startsWith(prefix))
+      : gitIgnored.has(`${rel}/`))
+    const isIgnoredFile = (rel) => gitIgnored !== null && gitIgnored.has(rel)
+    if (gitIgnored === null) warn('C10：git 不可用，本地派生状态按静态兜底清单排除（.gitignore 仍是单一来源）')
+    const candidates = []
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        const rel = repoRel(ROOT, full)
+        if (entry.isDirectory()) {
+          if (isIgnoredDir(rel)) continue
+          if (['node_modules', 'dist', 'lib', '.git', 'docs', 'coverage', 'generated'].includes(entry.name)) continue
+          if (rel.startsWith('packages/desktop/vendor/') && entry.name !== 'dsh') continue
+          if (rel === 'packages/desktop/vendor/dsh' || rel.startsWith('packages/desktop/vendor/dsh/')) {
+            // only the runtime manifest + lockfile are scanned below
+            if (entry.name !== 'dsh') continue
+            for (const inner of ['package.json', 'pnpm-lock.yaml']) {
+              const innerPath = join(full, inner)
+              if (existsSync(innerPath)) candidates.push(innerPath)
+            }
+            continue
+          }
+          walk(full)
+          continue
+        }
+        if (!/\.(ts|tsx|mjs|js|yml|yaml|json|sh)$/.test(entry.name)) continue
+        if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.test.mjs')) continue
+        if (rel.includes('/test/') || rel.includes('/test-fixtures/')) continue
+        if (rel === 'pnpm-lock.yaml') continue
+        if (isIgnoredFile(rel)) continue
+        candidates.push(full)
+      }
+    }
+    for (const dir of ['packages', 'scripts', '.github']) {
+      const full = join(ROOT, dir)
+      if (existsSync(full)) walk(full)
+    }
+    if (existsSync(join(ROOT, 'package.json'))) candidates.push(join(ROOT, 'package.json'))
+
+    const liveLiterals = (file) => {
+      const src = readFileSync(file, 'utf8')
+      const rel = repoRel(ROOT, file)
+      if (/\.(ts|tsx|mjs|js)$/.test(file)) {
+        if (transformSync === undefined) return undefined // esbuild unavailable: report a skip
+        const code = transformSync(src, {
+          loader: file.endsWith('.tsx') ? 'tsx' : file.endsWith('.ts') ? 'ts' : 'js',
+          minifyWhitespace: true,
+          legalComments: 'none',
+        }).code
+        return dshLiterals(code)
+      }
+      // yml/sh (`#`) and jsonc (`//`, `/* */`) comments are stripped with a
+      // string-aware scan so a comment can never masquerade as a live literal.
+      const stripped = file.endsWith('.json')
+        ? stripJsonComments(src)
+        : src.split('\n').map((line) => line.replace(/#.*$/, '')).join('\n')
+      return dshLiterals(stripped)
+    }
+
+    const unregistered = []
+    const stale = []
+    const skipped = []
+    const seen = new Map()
+    for (const file of candidates) {
+      const rel = repoRel(ROOT, file)
+      const found = liveLiterals(file)
+      if (found === undefined) {
+        skipped.push(rel)
+        continue
+      }
+      if (found.length === 0) continue
+      seen.set(rel, [...new Set(found)])
+      const rule = ALLOWED.get(rel)
+      if (rule === undefined) {
+        unregistered.push(`${rel} → ${[...new Set(found)].join(', ')}`)
+        continue
+      }
+      if (!rule.anchor) {
+        // Named diagnostic constant: exactly one literal, value is a recorded
+        // historical fact (not the pin) — more than one means it proliferated.
+        if (found.length > 1) {
+          stale.push(`${rel} → ${found.length} 处版本字面量（具名常量上限 1 处：${rule.reason}）`)
+        }
+        continue
+      }
+      for (const value of new Set(found)) {
+        if (value !== current) stale.push(`${rel} → ${value}（应为 ${current}；${rule.reason}）`)
+      }
+    }
+    for (const rel of REQUIRED) {
+      if (!seen.has(rel)) {
+        // A required anchor with NO literal is also drift (it must pin the version).
+        const full = join(ROOT, rel)
+        const raw = existsSync(full) ? readFileSync(full, 'utf8') : ''
+        if (!raw.includes(current)) stale.push(`${rel} → 未出现运行时版本 ${current}`)
+      }
+    }
+    if (unregistered.length > 0) {
+      fail(`C10 未登记的「活」dsh 版本字面量（生产源码/脚本/配置里不应硬编码版本；历史叙述请留在注释里，或登记到 C10 白名单并说明理由）: ${unregistered.join('; ')}`)
+    } else if (stale.length > 0) {
+      fail(`C10 版本锚不一致: ${stale.join('; ')}`)
+    } else if (skipped.length > 0) {
+      // The degraded form must never read as a full pass. Default mode
+      // fails (the tree is not installed); the CI pre-install step passes
+      // --no-artifact-rebuild, which is the one documented exemption — and even
+      // there the summary says PARTIAL instead of printing the ✓ line.
+      const detail = `C10 降级：esbuild 不可用，${skipped.length} 个 TS/JS 文件未做活字面量扫描（只校验了 ${REQUIRED.length} 个 REQUIRED 锚的原文包含）`
+      if (noArtifactRebuild) {
+        warn(`${detail}——--no-artifact-rebuild 显式豁免（CI install 前的 advisory 步骤）`)
+        console.log('C10 PARTIAL（advisory）: 版本锚原文包含已校验；活字面量扫描未执行')
+      } else {
+        fail(`${detail}——请先 pnpm install，或显式传 --no-artifact-rebuild 接受部分检查`)
+      }
+    } else {
+      console.log(`✓ C10 版本锚 = ${current}（六锚 + 3 fork 一致；生产源码无未登记版本字面量，扫描 ${candidates.length} 文件）`)
+    }
+  }
+}
+
+// C11–C14 —— 受保护集合与代耦合的保鲜门（design 21 §6.11；判据纯函数在
+// plugin-protection-gate.mjs，负例测试在 plugin-protection-gate.test.mjs）
+{
+  const reportFindings = (gate, label, { violations, notes }) => {
+    if (violations.length > 0) {
+      fail(`${gate} ${label}: ${violations.join('; ')}`)
+    } else {
+      console.log(`✓ ${gate} ${label}`)
+    }
+    for (const note of notes) console.log(`  · ${note}`)
+  }
+
+  // C11 —— 运行时线族集合（F 的唯一权威 = 已提交的运行时锁文件闭包）
+  const runtimeLockPath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')
+  const runtimeTreePath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'node_modules', '@deepseek-ai')
+  const sourceTreePath = join(ROOT, 'vendor', 'harness-packages', '@deepseek-ai')
+  const runtimeLockText = existsSync(runtimeLockPath) ? readFileSync(runtimeLockPath, 'utf8') : null
+  const familyNames = runtimeLockText === null ? [] : runtimeFamilyNames(runtimeLockText)
+  const listScope = (dir) => (existsSync(dir)
+    ? readdirSync(dir).map((name) => `@deepseek-ai/${name}`).sort()
+    : null)
+  const c11 = familyFindings({
+    names: familyNames,
+    treeNames: listScope(runtimeTreePath),
+    sourceTreeNames: listScope(sourceTreePath),
+    lockfileText: runtimeLockText,
+  })
+  reportFindings('C11', `运行时线族集合 = ${familyNames.length} 个 @deepseek-ai/*（核心在场；dev/test 包不在 F 内；官方 opt-in 按登记白名单）`, c11)
+
+  // C12 —— profile 契约锚（上游源码；子模块未物化时由 C1/C3/C5 响亮失败）
+  const profileSourcePath = join(SUBMODULE, 'packages', 'boot', 'app-boot', 'src', 'profile.ts')
+  const bundlesSourcePath = join(SUBMODULE, 'packages', 'util', 'official-bundles', 'src', 'bundles.ts')
+  const managerSourcePath = join(SUBMODULE, 'packages', 'boot', 'plugin-manager', 'src', 'operations.ts')
+  const pluginSourcePath = join(SUBMODULE, 'apps', 'cli', 'src', 'plugin.ts')
+  const c12 = profileContractFindings({
+    profileSource: existsSync(profileSourcePath) ? readFileSync(profileSourcePath, 'utf8') : null,
+    bundlesSource: existsSync(bundlesSourcePath) ? readFileSync(bundlesSourcePath, 'utf8') : null,
+    managerSource: existsSync(managerSourcePath) ? readFileSync(managerSourcePath, 'utf8') : null,
+    pluginSource: existsSync(pluginSourcePath) ? readFileSync(pluginSourcePath, 'utf8') : null,
+  })
+  reportFindings('C12', 'profile 契约锚（bundles 层列表 / dsh.bundle.patch 声明 / web 模板默认 / hoisted + 不自动装 peer）', c12)
+
+  // C13 —— 播种注册表结构（S 分量与播种机制一一对应）
+  const seedSourcePath = join(ROOT, 'packages', 'control-plane', 'src', 'host-graph-seed.ts')
+  const c13 = seedRegistryFindings({
+    seedSource: existsSync(seedSourcePath) ? readFileSync(seedSourcePath, 'utf8') : '',
+  })
+  reportFindings('C13', '播种注册表（HOST_*_PACKAGE_NAME ↔ HOST_*_INSERT ↔ CHAMBER_HOST_PACKAGES）', c13)
+
+  // C14 —— plugin-row 单源 + manifest 宿主接口三方字段集镜像。
+  // ① wire `./plugin-row` 是行形状的唯一声明：字段集 = 预期，且五个消费方
+  //    （control-plane / client-core face / preload / renderer / settings-connections）
+  //    只有 import/type 引用——本地重声明、引用面漂移、单源字段缺失都硬失败；
+  // ② 宿主 manifest 接口仍做 producer ↔ preload ↔ renderer 字段集对照。
+  const manifestSources = {
+    producerSource: join(ROOT, 'packages', 'desktop', 'plugin-sync.ts'),
+    preloadSource: join(ROOT, 'packages', 'desktop', 'electron', 'preload.cts'),
+    rendererSource: join(ROOT, 'packages', 'renderer', 'src', 'global.d.ts'),
+  }
+  const c14Host = manifestMirrorFindings(Object.fromEntries(
+    Object.entries(manifestSources).map(([key, file]) => [key, existsSync(file) ? readFileSync(file, 'utf8') : '']),
+  ))
+  const c14Row = pluginRowSingleSourceFindings({
+    singleSource: existsSync(join(ROOT, PLUGIN_ROW_SINGLE_SOURCE.path))
+      ? readFileSync(join(ROOT, PLUGIN_ROW_SINGLE_SOURCE.path), 'utf8')
+      : '',
+    consumers: Object.fromEntries(PLUGIN_ROW_CONSUMERS.map((consumer) => {
+      const file = join(ROOT, consumer.source)
+      return [consumer.side, existsSync(file) ? readFileSync(file, 'utf8') : '']
+    })),
+  })
+  const c14 = {
+    violations: [...c14Host.violations, ...c14Row.violations],
+    notes: [...c14Host.notes, ...c14Row.notes],
+  }
+  reportFindings('C14', 'plugin-row 单源 + manifest 三方字段集镜像（wire ./plugin-row = 唯一声明；control-plane/client-core/preload/renderer/settings-connections 只引用不重声明）', c14)
+}
+
+// C15 —— 悬停卡自持移植的上游退役门（硬失败，design 06 §7）
+//
+// chamber 的侧栏行卡片用自己的 `RowHoverCard` + client-core `src/hover-intent.ts` 取代
+// vendor 的 `ui-primitives HoverCard`：vendor 原子以**上一次已提交的 `open`**
+// 决定是否 arm 宽限关闭（`HoverCard.tsx` 的 `onPointerLeave` =
+// `clearTimer()` + `if (open) armClose()`），dwell 定时器触发到 React 提交之间
+// 落下的 pointerleave 什么都不 arm，卡片随后挂载而指针已经离开 ⇒ 再无事件能关掉
+// 它。vendor 只读，故修正落在本包；退役条件只有一个
+// ——「上游修掉该竞态」。pin 的 preview/inline 相位机把开卡语句从 setOpen(true)
+// 换成 setPhase('open')，但既不复查指针在场、onPointerLeave 也逐字未变 ⇒ 竞态仍在，
+// 偏差继续保留，以下判据已按相位机形态重新裁决。本门把该条件变成机器判据，读的是
+// **冻结 pin**：
+//   ① 竞态两侧形状仍在——CLOSE：arm 的守卫必须是已提交 open 本身或含 open 的 `&&`
+//      合取（顶层 `||` 析取即红：`open || intentRef.current` / `open || true` 是修复
+//      而非已知形状；裸 arm 与 ref/其他标志守卫同样红）；OPEN：以 openDelayMs 为
+//      延迟的 dwell 定时器回调只 setPhase('open')（至多把该 setTimeout 赋值目标的
+//      ref 清成 null，其他成员写即红），回调里多出任何其他语句（最小修复
+//      `if (!insideRef.current) return` 就是一句）即红；
+//   ①c post-commit 关闭/相位（fail-closed）：组件体内的 useEffect/useLayoutEffect/
+//      useInsertionEffect 回调若调用 close()/setPhase(...)（宽限 arm 也算），就必须
+//      逐字命中白名单化的 pinned 形状（冻结 pin 的预览淡出 / owner-disable / Escape），
+//      其余一律判红——「提交后复查指针在场再关闭」可让 ①/①b 一字不改而竞态已消失，
+//      而把指针事实挪到模块作用域/helper 即可绕过按 `*.current` 读取的旧判据，故不再
+//      以 ref 读取为前提（见 verify-upstream-touchpoints-hover.mjs 的
+//      postCommitDismissalRecheck / PINNED_POST_COMMIT_DISMISSALS）；
+//   ② 两侧时间常数逐值锁步（POINTER_GRACE_MS == HOVER_CLOSE_GRACE_MS、
+//      openDelayMs 内联默认 == HOVER_OPEN_DELAY_MS）——移植声称行为等价，
+//      单侧改动即漂移；
+//   ③ 任一不成立即红：上游修掉竞态那天，维护者必须做退役/再登记裁决。
+// 判定逻辑是纯函数（verify-upstream-touchpoints-hover.mjs）；单测与 args 测试同
+// 文件（verify-upstream-touchpoints-args.test.mjs——那是 CI `test:upgrade-tools`
+// 已挂的 sibling 测试文件，新开测试文件不会进 CI）。登记行见
+// docs/checklists/upgrade/upstream-touchpoints.md §4/§6。
+//
+// 防伪纪律：形状与常数都读**去注释 + 去字符串/
+// 模板字面量**后的代码投影（诱饵字符串/注释不能伪证）；形状判定限定在 HoverCard
+// 组件体内、并对每个 arm 调用点单独判定（同语句里无关的 `open &&` 不算守卫）；
+// 常数取值必须唯一（零命中=漂移，多值=歧义，都硬失败）。
+{
+  const readSource = (rel, base) => {
+    const full = join(base, rel)
+    return existsSync(full) ? { path: rel, text: readFileSync(full, 'utf8') } : { path: rel, text: null }
+  }
+  const verdict = hoverPortVerdict({
+    upstreamHoverCard: readSource(HOVER_PORT_SOURCES.upstreamHoverCard, SUBMODULE),
+    upstreamPointerGrace: readSource(HOVER_PORT_SOURCES.upstreamPointerGrace, SUBMODULE),
+    chamberHoverIntent: readSource(HOVER_PORT_SOURCES.chamberHoverIntent, ROOT),
+  })
+  if (verdict.ok) console.log(verdict.summary)
+  else for (const failure of verdict.failures) fail(failure)
+}
+
+// C16 —— vendor 源消费者清单（registry.vendorSourceConsumers）与真实相对 import
+// 双向一致（硬失败，只读）：被审计的缺陷是「未登记」，不是「引用了 vendor」。
+{
+  const vendorConsumers = REGISTRY.vendorSourceConsumers
+  const vendorImports = []
+  const vendorSources = {}
+  /** 生产源面 = packages/<pkg>/src/**（不含 test/dist/lib/vendor），与 P7 的 A 判据同面。 */
+  const walkProductionSources = (dir) => {
+    const out = []
+    const walk = (current) => {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const full = join(current, entry.name)
+        if (entry.isDirectory()) {
+          if (['node_modules', 'test', 'tests', 'dist', 'lib', 'coverage'].includes(entry.name)) continue
+          walk(full)
+        } else if (/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(entry.name)) {
+          out.push(full)
+        }
+      }
+    }
+    if (existsSync(dir)) walk(dir)
+    return out
+  }
+  const packagesDir = join(ROOT, 'packages')
+  if (existsSync(packagesDir)) {
+    for (const pkg of readdirSync(packagesDir)) {
+      for (const full of walkProductionSources(join(packagesDir, pkg, 'src'))) {
+        vendorImports.push(...relativeVendorImports(repoRel(ROOT, full), readFileSync(full, 'utf8')))
+      }
+    }
+  }
+  for (const entry of Array.isArray(vendorConsumers) ? vendorConsumers : []) {
+    const full = join(ROOT, entry.vendorFile)
+    vendorSources[entry.vendorFile] = existsSync(full) ? readFileSync(full, 'utf8') : null
+  }
+  const verdict = vendorSourceVerdict({ entries: vendorConsumers, imports: vendorImports, vendorSources })
+  if (verdict.ok) console.log(verdict.summary)
+  else for (const failure of verdict.failures) fail(failure)
+}
+
+// C2 —— tag 重放报告（advisory）
+{
+  if (tagRange !== null) {
+    const [oldTag, newTag] = tagRange
+    const dirs = FORKS.map((f) => f.upstream)
+    const result = spawnSync('git', ['-C', SUBMODULE, 'diff', '--stat', oldTag, newTag, '--', ...dirs], { encoding: 'utf8' })
+    console.log(`\n[C2] 上游 ${oldTag} → ${newTag} 触点面差异（advisory）：`)
+    console.log(result.stdout.trim() || '  （无差异）')
+    for (const f of FORKS) {
+      const added = spawnSync('git', ['-C', SUBMODULE, 'diff', '--name-status', oldTag, newTag, '--', `${f.upstream}/package.json`], { encoding: 'utf8' })
+      console.log(`[C2] ${f.name} package.json: ${added.stdout.trim().split('\n')[0] || 'unchanged'}`)
+    }
+    console.log('[C2] 提示：按 docs/checklists/upgrade/upstream-touchpoints.md §7 循环逐面裁决（重放/登记/契约复验）。')
+  }
+}
+
+if (hardFails > 0 || (process.exitCode ?? 0) !== 0) {
+  process.exitCode = 1
+  console.error(`\n✗ verify-upstream-touchpoints: ${hardFails} 项硬失败——见上。`)
+} else {
+  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C16）')
+}

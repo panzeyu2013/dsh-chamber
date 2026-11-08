@@ -30,7 +30,7 @@
  *
  * Consumers (ARCHIVED with the Electron flavor — 2026-11):
  *   - packages/desktop/scripts/electron-dev.mjs (dev launcher, auto-ensure);
- *   - scripts/dev/ensure-electron.mjs (former root postinstall; the postinstall
+ *   - scripts/dev/bootstrap/ensure-electron.mjs (former root postinstall; the postinstall
  *     hook was removed when Electron was frozen — revival only).
  * A per-worktree node_modules/electron/dist (status 'legacy') is still
  * reused automatically when present — offline machines that already

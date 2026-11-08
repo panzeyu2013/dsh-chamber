@@ -97,7 +97,7 @@ packages/desktop/scripts/emit-bridge-manifest.mjs # IPC 通道 manifest → Swif
 
 - sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是宿主核心包（Electron entry `main.ts` 保留为冻结归档（`packages/desktop/electron/main.ts`），不随默认开发演进；`sidecar-entry.ts` 及 host-edge 适配见 §4.1）。sidecar 打包布局 = **编译产物 `dist/control-plane/` + host 包 `dist/dsh-chamber-seed-*/` + 内嵌 `vendor/dsh/` 与 `pnpm/` + `primary-runtime/`（全量 payload：node/pnpm/python）+ `office-skills/`**；renderer 产物 `dist/web` 属 .app 的 `Contents/Resources/dist/web`（不在 sidecar 目录内）。复用 build-control-plane.mjs 的「双路径解析」（打包态 import 编译产物、dev/测试走 pnpm 符号链接，`control-plane-module.ts` 注释）——sidecar 与 Electron 共享 `packages/desktop/dist/control-plane`；**host 包不同源**：Electron 走 `build-host-graph-package.mjs` 产的 `dist/host-*-package`，sidecar 直接读 `packages/dsh-chamber-seed-*/{package.json,dist/index.js}` 拷进自己的 `dist/dsh-chamber-seed-*/`（两条腿别混目录名）。
 - **装配目录**（`packages/desktop/scripts/build-sidecar.mjs` 的 `sidecarLayout`）：`<out>/{sidecar.js, package.json, dist/control-plane/, dist/dsh-chamber-seed-*/, vendor/dsh/, pnpm/, primary-runtime/, office-skills/}`。要点：`sidecar.js` = esbuild 入口（shell-core 全家 + sidecar-ctx + node-edges + dsh-runtime）；`@dsh-chamber/control-plane`、`electron` 与 `./dist/control-plane/index.js` 为运行期外部；装配目录必须带 `package.json`（`{type:'module'}` + chamber 版本）——shell-core 模块级 `version` 读取（`new URL('./package.json', import.meta.url)`）与 ESM 判定依赖它。
-- **四个 chamber host 包**（`packages/dsh-chamber-seed-{client-graph,git-worktree,archive-cleanup,open-in}`）：拷贝进 `<out>/dist/<同名>/`，Swift 侧按 `--host-graph-dir/--host-git-dir/--host-archive-dir/--host-open-in-dir` 注入同一基名（`BuildSidecar.HOST_PACKAGES` 单源；`sidecar-ctx` 的 `hostPackageSourceDir` dev 兜底按同名在 `packages/` 探测）——`scripts/release/packaging-manifest-lockstep.test.mjs` 在 build-sidecar / control-plane / 根构建链 / `HOST_PACKAGE_BUILD_ROWS` / AppDelegate 五处锁步，改名/加包要一起改。
+- **四个 chamber host 包**（`packages/dsh-chamber-seed-{client-graph,git-worktree,archive-cleanup,open-in}`）：拷贝进 `<out>/dist/<同名>/`，Swift 侧按 `--host-graph-dir/--host-git-dir/--host-archive-dir/--host-open-in-dir` 注入同一基名（`BuildSidecar.HOST_PACKAGES` 单源；`sidecar-ctx` 的 `hostPackageSourceDir` dev 兜底按同名在 `packages/` 探测）——`scripts/release/preflight/packaging-manifest-lockstep.test.mjs` 在 build-sidecar / control-plane / 根构建链 / `HOST_PACKAGE_BUILD_ROWS` / AppDelegate 五处锁步，改名/加包要一起改。
 - **open-in 是 localOnly 行**（[20-open-in-registry.md](../desktop/20-open-in-registry.md) §6）：随 .app 分发、只喂本地实例播种（`sidecar-entry --host-open-in-dir` → control-plane 的 `hostOpenInPackageSourceDir`）；远端（SSH）种子表永不携带它（`sidecar-ctx` 远端种子仍三项可移植行，`portableChamberHostPackageSeeds` 按 registry 的 `localOnly` 过滤，与 Electron 侧 `chamberHostSourceDirs` 同源）——加进远端 seed 会把本地形态专属域上传到别人的机器。
 - **运行期标记**：Swift Supervisor 装配态 spawn 注入 `DSH_CHAMBER_SIDECAR_COMPILED=1`（`control-plane-module.isPackagedSidecarRuntime`）→ control-plane 走相对编译入口；装配目录无 node_modules，裸说明符不可解析。
 - **单 Node（无 dsh-chamber-helper）**：装配内唯一的 Node 在 `primary-runtime/dependencies/node/bin/node`（payload 的 node 半边；路径单源 = `scripts/lib/sidecar-assembly.mjs` 的 `PAYLOAD_NODE_RELATIVE`/`payloadNodePath`）。装配目录顶层没有 `node`/`dsh-chamber-helper`；`build-sidecar` 在开工时清理这两个旧布局产物，`build-swift-app` 对顶层 `node`/`node.exe`/`dsh-chamber-helper` 旧布局条目一律 loud（fail-closed）。Node 版本与 sha256 的唯一来源 = `primary-runtime-lock.json` 的 `nodeVersion`/`nodeSha256`（随 payload 下载校验；sidecar 不再有独立 pin，§3.3）。
@@ -128,7 +128,7 @@ packages/desktop/scripts/emit-bridge-manifest.mjs # IPC 通道 manifest → Swif
 
 ### 4.1 main.ts 拆分：core / host-edge 契约
 
-现状：`main.ts` 已拆为纯编排；业务装配与 Electron 边沿调用分别在 `shell-core.ts` / `host-edges.ts` / `host-assembly.ts`（行数预算见 `scripts/gates/file-budgets.json`）。拆分原则：**只做搬运与参数化，不改语义、不重排状态机**。目标形态：
+现状：`main.ts` 已拆为纯编排；业务装配与 Electron 边沿调用分别在 `shell-core.ts` / `host-edges.ts` / `host-assembly.ts`（行数预算见 `scripts/gates/registry/file-budgets.json`）。拆分原则：**只做搬运与参数化，不改语义、不重排状态机**。目标形态：
 
 - `shell-core.ts`（Electron-free）：原样搬入全部业务装配、invoke 处理器体（含 info）+ 事件源（语义校验原地保留）、退出状态机、深链 intent 队列、通知 click 有界 ACK 队列/去重/限速（notifications.ts 纯逻辑 + main.ts 队列语义）、资源路径参数化收口。
 - `HostEdges` 依赖注入面（下述）。判定标准：core 对 `electron` 零 import（CI lint 门禁，electron-free-gate.test.ts）；Electron 版全部桌面测试继续绿。
@@ -456,7 +456,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 
   此外 verify 会用 `SPARKLE_PUBLIC_ED_KEY` 对本版本 zip 与每个 delta 逐条做 Ed25519 真验签（`--signatures-dir` 提供真实字节）——只查「签名存在」挡不住密钥轮换后那个任何公钥都验不过的签名。**Sparkle 主动放弃 ≠ 链路退化**：它按体积规则（delta > 7/8 整包）放弃时只在收件缓存写 `*.ignore`、stdout 无提示——发布腿据此把那些基线降级为 loud 警告 + 整包下载，只有「没有放弃标记却没产出 delta」才 FAIL。**enclosure 必须可解析**：beta 生成时 `--download-url-prefix` 指向滚动 tag，当前 beta zip 与本次新 delta 先传滚动 release 再传 appcast（S-36）；stable 不传前缀（形状除新增 `<sparkle:deltas>` 外不变），delta 随 draft 上传。**stable appcast 从不发布到滚动 release**；S-23 刷新只把 final zip + stable delta 推到滚动 release（先归档后 feed），并覆盖滚动 beta feed。
 
-  **S-23 改法**：beta feed 的 final 条目由 `scripts/release/merge-native-feed.mjs` 从已发布 stable feed 复制并改挂版本固定前缀 `releases/download/<stable-tag>/`（缺 stable feed 时保留上次滚动 feed 里的 final 条目，绝不删可见性）；stable 发布时以「已发布滚动 feed 的 beta 条目 + 本次 final 条目（URL 改写为滚动前缀）」合并刷新滚动 feed。**两个前缀是契约**：beta 期抄来的 final 走版本固定前缀（`releases/latest` 会被后续正式版移走 ⇒ 404），stable 刷新后的 final 走滚动前缀；beta.N 见 beta.N+1 与后发 final（S-22/S-23）。契约：`UpdateController.restartAndInstallAsync?()` 为原生腿提供异步面（IPC 处理器优先用它），Electron 的同步实现与页面契约不变。
+  **S-23 改法**：beta feed 的 final 条目由 `scripts/release/feed/merge-native-feed.mjs` 从已发布 stable feed 复制并改挂版本固定前缀 `releases/download/<stable-tag>/`（缺 stable feed 时保留上次滚动 feed 里的 final 条目，绝不删可见性）；stable 发布时以「已发布滚动 feed 的 beta 条目 + 本次 final 条目（URL 改写为滚动前缀）」合并刷新滚动 feed。**两个前缀是契约**：beta 期抄来的 final 走版本固定前缀（`releases/latest` 会被后续正式版移走 ⇒ 404），stable 刷新后的 final 走滚动前缀；beta.N 见 beta.N+1 与后发 final（S-22/S-23）。契约：`UpdateController.restartAndInstallAsync?()` 为原生腿提供异步面（IPC 处理器优先用它），Electron 的同步实现与页面契约不变。
 - **同版本重跑**：滚动 release 是公开面，重跑时先比对同名 zip 的字节——一致才允许覆盖（幂等重跑），不一致直接 FAIL 并提示提升 beta 号（否则已发布 feed 的签名指向的字节变了，客户端先验签失败）。
 - **公证重叠**：.app 与 .dmg 各自需要 Apple 票据，但 dmg 提交在 .app 装订、zip/dmg 生成之后转入后台，与随后的 appcast 生成（staging + delta）重叠；verify 步轮询状态文件（900s 上限；PID 消失且无状态即 fail-fast）后才 staple/validate dmg，超时或非零即 fail-closed。dmg 失败会在 appcast 之后、upload 之前才报出（appcast 只落盘，不提前上传）。这不是跳过 dmg 公证，也不改变「.app staple 先于最终归档」的顺序。
 - **draft 面顺序**：appcast 在 zip/delta 之后才上传到 draft（S-36 的「归档先于 feed」不再依赖「draft 不可见」）。
@@ -480,7 +480,7 @@ P0 判定全过才继续：**G1** 主界面（多实例/会话/设置页）在 W
 
 A 桥 P0 判定：`macos/` 最小壳加载控制面 origin 的壳文档（`/`），dev 后端 = `sidecar-entry.ts`（`DSH_CHAMBER_SHELL_*` 可覆盖 userData/port/dsh path）；`info`、`desktop_ssh_instances_get`、`desktop_ssh_status_changed` 推送与通知 click 真实回环接通。
 
-自动化门：`node scripts/gates/run-checks.mjs static`（含 electron-free-gate / bridge-manifest / bridge-shim / bridge-shim-surface / ipc-surface-mirror 等锁步）+ `test:desktop` + `test:macos`（darwin 锁断言与打包脚本套件）+ `swift build`/XCTest；侧车协议面由 `sidecar-stdio.test.ts` 的假 Swift 驱动冒烟全通道（写 Swift 前先用现有 JS 测试资产钉住 B 桥协议）。
+自动化门：`node scripts/gates/runners/run-checks.mjs static`（含 electron-free-gate / bridge-manifest / bridge-shim / bridge-shim-surface / ipc-surface-mirror 等锁步）+ `test:desktop` + `test:macos`（darwin 锁断言与打包脚本套件）+ `swift build`/XCTest；侧车协议面由 `sidecar-stdio.test.ts` 的假 Swift 驱动冒烟全通道（写 Swift 前先用现有 JS 测试资产钉住 B 桥协议）。
 
 ### 8.2 测试分层
 

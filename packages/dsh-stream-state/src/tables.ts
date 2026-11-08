@@ -83,7 +83,7 @@ export const CARRIER_ENV = {
  * sidebar's authority probe (the former fact-reconcile receipt chain), the
  * renderer's authority escalation (the former liveness guard) and the open-in
  * stream-health chip.
- * `scripts/gates/verify-ladder-table-parity.mjs` keeps the collection honest in both
+ * `scripts/gates/checks/verify-ladder-table-parity.mjs` keeps the collection honest in both
  * directions: each retired declaration/leaf literal must stay absent from its module
  * (the table is the authority), and every named consumer must reference
  * `LADDER_TABLES.<ladder>` in code - a module that starts carrying its own copy

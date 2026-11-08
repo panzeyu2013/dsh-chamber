@@ -159,11 +159,11 @@ selection scope、I-12 谱系压制）；剩余 = 打包态/真机各跑一次�
 
 |块|规模|退役触发|
 |---|---|---|
-|`dsh-chamber-seed-archive-cleanup/src`（+~2490 测试）|~1560 行|`scripts/upstream/capabilities.json` → `sessions.delete(sessionId).retireWhen`|
+|`dsh-chamber-seed-archive-cleanup/src`（+~2490 测试）|~1560 行|`scripts/upstream/verify/capabilities.json` → `sessions.delete(sessionId).retireWhen`|
 |归档管理器逐条展开|~711 行|`sessions.deleteMany/bulk.retireWhen`|
 |purge 墓碑机制|~588 行|同单条 delete|
 
-判据门：`node scripts/upstream/verify-capabilities.mjs`（上游落地即红，红即退役）。
+判据门：`node scripts/upstream/verify/verify-capabilities.mjs`（上游落地即红，红即退役）。
 
 #### 14.3 工程环境债
 
@@ -400,7 +400,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 ## D. 工程债（D 类）
 
 > 阻塞来源 = 工程优先级（重构/性能/门禁）；未排期。范围 = `packages/**`；行数单一来源 =
-> `scripts/gates/file-budgets.json`；核心指标 = 消除补丁式修改（根因、单源、先锁后删）。
+> `scripts/gates/registry/file-budgets.json`；核心指标 = 消除补丁式修改（根因、单源、先锁后删）。
 
 ### 1. 结构性重构与清理
 
@@ -410,7 +410,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 |---|---|---|---|
 |1|三处 state/ref 镜像：`packages/dsh-chamber-client-ui-sidebar/src/client/sidebar-root-projection.ts`（serversRef）、`packages/renderer/src/components/InstanceView.tsx`（activeRef/settledRef）、`packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx`（confirmLaunchRef）|未收口；其余镜像的基线在 git 历史与各 host store 注释|渲染值走 useSyncExternalStore 小 store（单源）、事件回调读 store 的 getSnapshot()，删 ref 镜像；不引入状态库/新包|
 |2|settings 两分支合流：`DshRuntimeSection` 的 gateway/local 共享 controller|未动|runtime-management / 设置桥套件绿；先补 parity 测试再合并|
-|3|逐包棘轮收尾：file-budgets.json 只降不升（含新叶、`kind:ceiling` 单列与 FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|目标与缺口一律看 node scripts/gates/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**未决**：新模块仍需人工登记；host-assembly 成对抽取与 transport exec 的取舍见 STATUS §三|
+|3|逐包棘轮收尾：file-budgets.json 只降不升（含新叶、`kind:ceiling` 单列与 FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|目标与缺口一律看 node scripts/gates/checks/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**未决**：新模块仍需人工登记；host-assembly 成对抽取与 transport exec 的取舍见 STATUS §三|
 |4|§1.5 的审计开放项|未动|各自条目内|
 |5|`packages/desktop/host-assembly.ts` 的 `sm.onStatusChanged` 订阅回调（~204 行，28 个自由变量）→ 与 `onVerified` 成对抽成同一工厂|未动|判据见 STATUS §三（预计 −158 行）；file-budgets 记为 FROZEN|
 |6|App 残余编排的依赖容器化（`retireSources`+`refreshRemotes`+`JSX` 共 ≈75 个自由标识符）|未决：逐字搬会得到 ≈75 字段的入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
@@ -422,9 +422,9 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 #### 1.3 门禁与用法
 
-- 证据选择：`node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看计划）；模式名与 ci.yml/release 一致；模式之外的门及其归属以 `docs/progress/STATUS.md` §1.6 为准（本文件不复述清单）。
-- 门成员资格单源 = `scripts/gates/gate-surfaces.json`（loader `gate-registry.mjs`，`run-checks` 只派生模式）；`ci.yml`/`release.yml` 的 static 步骤由 `gate-workflow-views.mjs` 从 registry 生成（四个标记块 + `--check` 保鲜）；不变量与生成视图细节归该单源；文档写作规则见 `docs/AGENTS.md`。
-- 本重构三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`（只降不升，清单与阈值以 `scripts/gates/file-budgets.json` 为准）、`verify:no-dead-exports`（零消费者导出即红）；执行面见 STATUS §1.6。
+- 证据选择：`node scripts/gates/runners/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看计划）；模式名与 ci.yml/release 一致；模式之外的门及其归属以 `docs/progress/STATUS.md` §1.6 为准（本文件不复述清单）。
+- 门成员资格单源 = `scripts/gates/registry/gate-surfaces.json`（loader `gate-registry.mjs`，`run-checks` 只派生模式）；`ci.yml`/`release.yml` 的 static 步骤由 `gate-workflow-views.mjs` 从 registry 生成（四个标记块 + `--check` 保鲜）；不变量与生成视图细节归该单源；文档写作规则见 `docs/AGENTS.md`。
+- 本重构三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`（只降不升，清单与阈值以 `scripts/gates/registry/file-budgets.json` 为准）、`verify:no-dead-exports`（零消费者导出即红）；执行面见 STATUS §1.6。
 
 #### 1.4 边界与不做
 
@@ -470,14 +470,14 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 ### 2. 产物新鲜度守卫（G2/G3/G5/G7/G8；未排期）
 
-> 现有守卫：`desktop/dist/control-plane/**`、`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。本节只留仍无守卫的产物与最小守卫建议；开放状态见 STATUS §1.5「发布/CI」的产物新鲜度项，design 21 §7 登记。
+> 现有守卫：`desktop/dist/control-plane/**`、`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。本节只留仍无守卫的产物与最小守卫建议；开放状态见 STATUS §1.5「发布/CI」的产物新鲜度项，design 21 §7 登记。
 
 #### 2.1 仍无守卫的产物
 
 |产物|生成者|提交？|当前守卫|陈旧后果|
 |---|---|---|---|---|
 |`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`（**ARCHIVED**：Electron 冻结，保留为复活参考；其测试在 FROZEN 组））|忽略|只有路径契约文本断言（`packages/desktop/scripts/electron-shared.test.mjs`，FROZEN 组）与 CI 的 scoper 标记断言|打包发行旧前端壳（IPC 名/槽位可能漂移；Electron 打包已冻结）|
-|`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`packages/desktop/scripts/build-host-graph-package.mjs`（各 seed 包 `dist` cpSync）|忽略|只有行序/outDir 断言（`scripts/release/packaging-manifest-lockstep.test.mjs`）|打包 seed 旧宿主包|
+|`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`packages/desktop/scripts/build-host-graph-package.mjs`（各 seed 包 `dist` cpSync）|忽略|只有行序/outDir 断言（`scripts/release/preflight/packaging-manifest-lockstep.test.mjs`）|打包 seed 旧宿主包|
 |vendor `allowBuilds` 锁步（根 `pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）|人工同步|提交|无|新增原生依赖漏登或漏 deny 会静默漂移|
 
 `dist/` 整族在 `.gitignore`：干净 checkout 的「缺失」是正常态——首批 host/dsh-runtime 产物须先由

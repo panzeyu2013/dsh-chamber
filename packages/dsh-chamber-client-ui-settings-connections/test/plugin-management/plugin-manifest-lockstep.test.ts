@@ -25,7 +25,7 @@ import {
 } from '../../../dsh-chamber-wire/src/plugin-manifest.ts'
 // The retired write-face name set has ONE owner (the dead-export gate), which
 // also scans every shipped surface; this suite keeps the local read-face lock.
-import { RETIRED_PLUGIN_WRITE_FACE_NAMES } from '../../../../scripts/gates/verify-no-dead-exports.mjs'
+import { RETIRED_PLUGIN_WRITE_FACE_NAMES } from '../../../../scripts/gates/checks/verify-no-dead-exports.mjs'
 
 test('client-core face is a pass-through: the same function objects as the wire source', () => {
   assert.equal(faceIsMaterializedValue, wireIsMaterializedValue)

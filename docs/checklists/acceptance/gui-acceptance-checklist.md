@@ -5,7 +5,7 @@
 - Owner：改动 author 出证据，评审复核；真机项由验收人执行
 - Timebox：机械 A ≤15 分钟；机械 B / 目检 ≤1 小时；打包态真机另计（按 §4 分组）
 - 退出标准：机械腿无 FAIL（INFO 逐条解释）；目检逐条一句结论（含「未判」）；打包态/真机项有可复核证据
-- 自动化入口：`pnpm run acceptance:gui`、`node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`、`pnpm run acceptance:mobile`（ARCHIVED）
+- 自动化入口：`pnpm run acceptance:gui`、`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`、`pnpm run acceptance:mobile`（ARCHIVED）
 - 证据：PR 附 `gui-live-report.md`（或 `.json`）与 `gui-walkthrough-report.json` + 关键截图；未判项显式登记
 
 > 本清单**不是**判据副本：判据权威在 `docs/design/`（契约）与 [`../../progress/STATUS.md`](../../progress/STATUS.md)（开放实机门禁）；本文件只固定流程——跑什么、看什么、留什么证据。判据要改就改 design/STATUS。工具箱 [`scripts/gui-acceptance/`](../../../scripts/gui-acceptance/README.md) 的说明、已登记容忍与边界见其 README；放宽容忍先改那里，不在工具箱里猜。
@@ -129,7 +129,7 @@
 |本机 .app|`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）|`.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/primary-runtime/dependencies/node/bin/node` 可执行、`sidecar/office-skills/office/SKILL.md`、`Sparkle.framework`|产物路径 + `du`/`hdiutil attach` 结论|
 |Swift 套件|`pnpm run test:swift`|executed>0、failures==0、**skipped==0**（G23 no-skip 纪律）|runner 收尾行|
 |macOS JS 腿|`pnpm run test:macos`|darwin 锁断言 + 打包脚本套件；skipped>0 即红|退出码|
-|headless 装配验收|`node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）|N-1…N-5、N-6、N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM）；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO|`.tmp/gui-acceptance/gui-native-report.*`|
+|headless 装配验收|`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）|N-1…N-5、N-6、N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM）；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO|`.tmp/gui-acceptance/gui-native-report.*`|
 |B 桥载荷 parity|`pnpm run verify:shim-payload`（macOS 腿）|preload ↔ shim 的成员/通道/载荷键一致|脚本收尾行|
 
 **只能真机（工具箱不可替代）**：更新通道订阅（design 25 §7：稳定构建开/关订阅后的后台检查与 beta 发现、beta 构建默认只收正式版、打开订阅后继续 beta、final 收口后偏好保留、构建缺两条通道 feed URL 时开关禁用+原因；逐项记录 `[shell] Sparkle 更新通道=…` 日志与设置行状态）、`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在 design 25 §8（§8.1 门定义、§8.5 实机矩阵）与 `scripts/perf/README.md`，本节只固定怎么跑与留什么。**v2 内嵌另见 design 28 §16.8**：子 frame 导航白名单、`NSAllowsArbitraryLoadsInWebContent`（只放宽 Web 内容）与子 frame 下载 cancel 的 plist/导航断言由该节规定，真机矩阵仍按 design 25 §8.5 执行（Swift 无 CDP，iframe 内键盘/焦点/证书错误只能真机判）。

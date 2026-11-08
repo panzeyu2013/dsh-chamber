@@ -324,7 +324,7 @@ prune_version_trees() {
 # --- 纯校验/比较逻辑的单一实现--------------------------------
 # 这些判定是纯字符串/数值逻辑，程序文本是唯一实现：
 # install-gateway.sh 以单文件分发（curl 下来即跑），不允许 side-car 文件，因此
-# 逻辑内嵌于此；scripts/gates/install-gateway-pure.test.mjs 直接从本文件抽取
+# 逻辑内嵌于此；scripts/gates/checks/install-gateway-pure.test.mjs 直接从本文件抽取
 # 这段文本在 node:vm 里执行——测的就是发出去的那份代码。改判定必须同批改测试。
 INSTALL_GATEWAY_PURE_JS=$(cat <<'INSTALL_GATEWAY_PURE_JS_EOF'
 const OPS = {}

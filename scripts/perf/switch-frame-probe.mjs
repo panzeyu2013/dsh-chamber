@@ -12,7 +12,7 @@
  *
  * 两条腿：
  *  - **Leg A**（CI 主判据面）：页面内注入 rAF 采样器（`switchFrameProbeInstall/Read`，
- *    与 gui-acceptance/walkthrough.mjs 的探针体例同款；采样器只读 DOM，不进业务代码），
+ *    与 gui-acceptance/drivers/walkthrough.mjs 的探针体例同款；采样器只读 DOM，不进业务代码），
  *    每 4 帧记一次 `{visibleView, veil, veilBg(computed), phase, at}`；
  *  - **Leg B**（实机像素证据，`--screencast`）：`Page.startScreencast` PNG 帧，
  *    用零依赖 `scripts/lib/png-ink.mjs` 对内容区（`[data-conversation-scroll]`，
@@ -29,7 +29,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { CdpSession, discoverPageTarget } from '../gui-acceptance/cdp.mjs'
+import { CdpSession, discoverPageTarget } from '../gui-acceptance/drivers/cdp.mjs'
 import { decodePng, isFlat, regionStats } from '../lib/png-ink.mjs'
 import { applyRequireSwitch, switchFrameVerdict } from '../../packages/renderer/scripts/switch-frame-verdict.ts'
 

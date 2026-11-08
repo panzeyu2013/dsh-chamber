@@ -1,0 +1,395 @@
+/**
+ * registry.test.mjs — registry 单一来源的锁步测试：上游触点判据表不漂移、
+ * 判据分区不重不漏、verifierForks 形状/顺序/计数为"故意改才动"的 golden（删一个 fork 或改一份分类都必须在这里可见）、
+ * 校验器抓退化（未知判据 / 分区缺口 / accepted 缺理由 / upstream=null 语义）、生成块 extract/apply/check 往返。
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { CRITERIA_IDS } from './touchpoint-criteria.mjs'
+import {
+  criteriaPartition, loadRegistry, validateRegistry, verifierForks,
+} from './registry.mjs'
+import { desktopSeatAuditFindings, parseDesktopSeatAudit } from './desktop-seat-audit.mjs'
+import { INDEX_BLOCK, applyBlocks, checkBlocks, renderBlocks } from './registry-views.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const VERIFIER = readFileSync(join(HERE, '../verify/verify-upstream-touchpoints.mjs'), 'utf8')
+const registry = loadRegistry()
+const clone = () => JSON.parse(JSON.stringify(registry))
+
+test('C1–C16 判据表恰好 16 个 id，且每个都出现在 verifier 源码里', () => {
+  assert.equal(CRITERIA_IDS.length, 16)
+  for (const id of CRITERIA_IDS) {
+    // 词边界，不是子串：`includes('C1')` 会被 'C10'/'C15' 满足，删掉实现只剩文本也能绿。
+    assert.match(VERIFIER, new RegExp('\\b' + id + '\\b', 'u'), '判据 ' + id + ' 在 verify-upstream-touchpoints.mjs 里没有独立出现（判据表与实现漂移）')
+  }
+})
+
+test('新增不变量：shadow/chamber-named 二选一、判据下限、退役形态豁免', () => {
+  const dropExclusion = clone()
+  dropExclusion.excludedUpstreamDirs = dropExclusion.excludedUpstreamDirs.filter((dir) => dir !== 'packages/api/gateway')
+  assert.ok(
+    validateRegistry(dropExclusion).some((message) => message.includes('恰好属于一类')),
+    '删掉 upstream 的 exclusion 而不改 vendor 清单，必须在 schema 层红（覆盖面不得静默消失）',
+  )
+
+  const retyped = clone()
+  retyped.entries[3].type = 'fork'
+  retyped.chamberNamedForks = []
+  assert.ok(validateRegistry(retyped).some((message) => message.includes('恰好属于一类')), 'seed 改型 + 清空 chamberNamedForks 必须红')
+
+  // 触点补登：chamber-named fork 可以是 type=fork（两个 UI fork），合法；
+  // 但不得借未分类类型（seam/mirror/artifact/seat）绕过 C1/C3 —— 那等于覆盖静默消失。
+  assert.deepEqual(validateRegistry(clone()), [], 'chamber-named 的 fork 条目（UI 两项）必须合法')
+  const namedSeat = clone()
+  namedSeat.entries[5].type = 'seat'
+  assert.ok(
+    validateRegistry(namedSeat).some((message) => message.includes('分类条目')),
+    'chamberNamedForks 里的条目改成未分类类型必须红',
+  )
+
+  const emptied = clone()
+  emptied.criteriaCodeOnly = [...new Set([...emptied.criteriaCodeOnly, ...emptied.entries[0].criteria])]
+  emptied.entries[0].criteria = []
+  assert.ok(validateRegistry(emptied).some((message) => message.includes('criteria 为空')), '判据可整体挪进 criteriaCodeOnly 时必须红')
+
+  const retired = clone()
+  Object.assign(retired.entries[0], { upstream: null, upstreamFormer: 'packages/client/connection', status: 'accepted', rationale: '退役演练' })
+  assert.deepEqual(validateRegistry(retired), [], '退役形态（upstream=null + upstreamFormer）必须豁免二选一不变量')
+})
+
+test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下桶间搬家 / 锚点改指他处"）', () => {
+  // mirror 条目不是文件级分类（无 classify）：值锁只覆盖 fork/seed 的桶形状。
+  const shape = registry.entries
+    .filter((entry) => entry.classify !== undefined)
+    .map((entry) => [
+    entry.id,
+    Object.keys(entry.classify.patched).sort(),
+    Object.keys(entry.classify.own).sort(),
+    [...(entry.classify.ownPrefix ?? [])],
+    [...(entry.classify.dropped ?? [])],
+  ])
+  // 值锁：api-gateway 桶按合并后的 registry 重算（载波重试纯函数 / 页面事实 / 静默看门狗策略 /
+  // 生命周期取证事实 / journal 补丁 / 仓内测试清单）；形状变化必须同批改本哈希。
+  // locale 面按目录前缀登记：一个 "locale/" 覆盖该目录下全部语言文件（C1/C3 的 dropped 接受
+  // 尾斜杠前缀，见 verify-upstream-touchpoints 的 within()），上游再加语言不再逐文件追加。
+  // 有 locale 目录的五个 fork/seed（connection、api-gateway、seed-open-in、layout、ui-sidebar）因此
+  // 各少一条 dropped 记录；client-web 的镜像里从来没有 locale 目录（其 dropped 计数不变）。
+  // seed-open-in / client-web 的 own 含 scripts/test.mjs（测试清单统一委托共享 runner）；
+  // client-web 另以 own 登记 extra-chunk-owners.ts（design 09 动态 chunk 边界）。
+  // layout（chamber-named 副本）的 frame 面按深引 vendor 源、不镜像；死 tsdown.config.ts 由 P6 删除后归
+  // dropped；ui-sidebar 的 src/client/panel-pins.ts 不镜像（本壳不声明 sidebar.panellist.actions，无消费面）。
+  // 计数以本文件下方 verifierForks 的 deepEqual 为唯一来源，注释不重复计数。
+  assert.equal(
+    createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
+    'b24e1f3262ee2801',
+    '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
+  )
+  assert.deepEqual(
+    registry.entries.flatMap((entry) => entry.symbols),
+    [
+      'src/api-path.ts#resolveInstanceBasePath',
+      'src/boot.ts#AppWebEntry',
+      'src/client/index.ts#apply',
+      'src/client/journal-stream.ts#RemoteJournalStream',
+      'src/client/remote-retry-policy.ts#remoteStreamRetryDelayMs',
+      'src/client/remote-retry-policy.ts#streamOpeningKey',
+      'src/client/remote-stream.ts#RemoteStream',
+      'src/client/stream-auth.ts#isRemoteStreamAuthCloseCode',
+      'src/client/stream-carrier-fact.ts#createCarrierFailureReporter',
+      'src/client/stream-client.ts#RemoteStreamMuxClient',
+      'src/client/stream-forensics.ts#createStreamForensicsReporter',
+      'src/client/stream-stall-policy.ts#decideStreamStallAction',
+      'src/core.ts#OpenInAppError',
+      'src/client/document-theme.ts#createDocumentThemeProjector',
+      'src/client/index.ts#apply',
+      'src/client/store-core.ts#createLayoutStore',
+      'src/client/stores.ts#trackLayoutInstance',
+      'src/client/theme-cache.ts#resolveSourceThemeCache',
+      'src/client/SidebarRoot.tsx#SidebarRoot',
+      'packages/dsh-chamber-wire/src/session-state.ts#SessionStateGoalActivationEvent',
+      'packages/dsh-chamber-wire/src/session-state.ts#SessionStateGoalFact',
+      'packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact',
+      'packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#CONTRACT_STATUS_WRITE_METHODS',
+      'packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#detectStatusWriteFace',
+      'packages/desktop/ipc-events.ts#IPC_CHANNELS',
+      'packages/desktop/shortcuts-bridge.ts#DESKTOP_SHORTCUTS_CHANNELS',
+      'packages/desktop/shortcuts-bridge.ts#DesktopShortcutsBridge',
+      'packages/desktop/shortcuts-bridge.ts#desktopKeyEvent',
+      'packages/desktop/chamber-lock.ts#acquireChamberLock',
+      'packages/desktop/fatal-report.ts#CONSOLE_RING_BYTES',
+      'packages/desktop/shell-locale.ts#resolveShellLocale',
+      'packages/desktop/startup-error.ts#planStartupRecovery',
+      'packages/desktop/update-confirmation.ts#parseConfirmationRevision',
+      'packages/desktop/update-headless.ts#selectLatestReleaseVersion',
+      'packages/desktop/update-journal.ts#updateJournalState',
+      'packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS',
+      'packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON',
+      "packages/control-plane/src/page-channel.ts#=literal:const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'",
+      'packages/renderer/src/live-graph.ts#parsePluginEventFrame',
+    ],
+    '符号锚是逐条 golden：改指向必须同批改本断言',
+  )
+})
+
+test('判据分区：entries.criteria ∪ criteriaCodeOnly == C1–C16，不重不漏', () => {
+  const { used, codeOnly } = criteriaPartition(registry)
+  assert.deepEqual([...new Set([...used, ...codeOnly])].sort(), [...CRITERIA_IDS].sort())
+  assert.equal(used.filter((id) => codeOnly.includes(id)).length, 0)
+})
+
+test('dropped 与 droppedNotes 双向覆盖：每条 dropped 有理由，每个理由键命中至少一条 dropped', () => {
+  // 只做数据面断言：匹配语义与 preflight/views 的四份实现保持一致（exact / 尾斜杠前缀 / * 通配不跨 /）。
+  const globToRe = (key) => new RegExp('^' + key.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*') + '$')
+  const matches = (key, path) => key.endsWith('/')
+    ? path.startsWith(key)
+    : key.includes('*') ? globToRe(key).test(path) : key === path
+  const problems = []
+  for (const entry of registry.entries) {
+    if (entry.classify === undefined) continue
+    const dropped = entry.classify.dropped ?? []
+    const notes = entry.classify.droppedNotes ?? {}
+    for (const path of dropped) {
+      if (!Object.keys(notes).some((key) => matches(key, path))) problems.push(entry.id + ': dropped 无理由: ' + path)
+    }
+    for (const key of Object.keys(notes)) {
+      if (!dropped.some((path) => matches(key, path))) problems.push(entry.id + ': droppedNotes 键未命中任何 dropped: ' + key)
+    }
+  }
+  assert.deepEqual(problems, [])
+})
+test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类计数、版本锚', () => {
+  const forks = verifierForks(registry)
+  assert.deepEqual(forks.map((fork) => fork.name), ['connection', 'client-web', 'api-gateway', 'seed-open-in', 'layout', 'ui-sidebar'])
+  assert.deepEqual(forks.map((fork) => fork.rel), [
+    'packages/dsh-client-connection',
+    'packages/dsh-client-web',
+    'packages/dsh-api-gateway',
+    'packages/dsh-chamber-seed-open-in',
+    'packages/dsh-chamber-client-ui-layout',
+    'packages/dsh-chamber-client-ui-sidebar',
+  ])
+  assert.deepEqual(
+    forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
+    [[10, 4, 4, 3], [9, 4, 1, 5], [8, 8, 1, 11], [4, 4, 1, 7], [5, 5, 1, 12], [11, 1, 3, 6]],
+  )
+  assert.equal(forks[3].versionAnchor, 'chamber')
+  assert.equal(forks[4].versionAnchor, 'chamber')
+  assert.equal(forks[5].versionAnchor, 'chamber')
+  for (const fork of forks.slice(0, 3)) assert.equal(fork.versionAnchor, undefined)
+})
+
+test('校验器抓退化：未知判据 / 分区缺口 / accepted 缺理由 / upstream=null 语义 / id 重复', () => {
+  const unknown = clone(); unknown.entries[0].criteria = ['C99']
+  assert.ok(validateRegistry(unknown).some((item) => item.includes('C99')))
+
+  const gap = clone(); gap.criteriaCodeOnly = gap.criteriaCodeOnly.filter((id) => id !== 'C15')
+  assert.ok(validateRegistry(gap).some((item) => item.includes('未被任何条目或 criteriaCodeOnly 覆盖')))
+
+  const noRationale = clone(); noRationale.entries[0].status = 'accepted'
+  assert.ok(validateRegistry(noRationale).some((item) => item.includes('rationale')))
+
+  const retired = clone(); retired.entries[0].upstream = null
+  assert.ok(validateRegistry(retired).some((item) => item.includes('upstreamFormer')))
+
+  const duplicate = clone(); duplicate.entries[1].id = duplicate.entries[0].id
+  assert.ok(validateRegistry(duplicate).some((item) => item.includes('重复')))
+
+  // 这些退化每一条都必须被 schema 抓住（否则改了也不红）。
+  const noSymbols = clone(); noSymbols.entries[0].symbols = []
+  assert.ok(validateRegistry(noSymbols).some((item) => item.includes('symbols 为空')))
+
+  const duplicateName = clone(); duplicateName.entries[3].name = duplicateName.entries[1].name
+  assert.ok(validateRegistry(duplicateName).some((item) => item.includes('name 重复')))
+
+  const missingPatched = clone(); delete missingPatched.entries[0].classify.patched
+  assert.ok(validateRegistry(missingPatched).some((item) => item.includes('classify.patched')))
+
+  const seedAnchor = clone(); seedAnchor.entries[3].versionAnchor = 'upstream'
+  assert.ok(validateRegistry(seedAnchor).some((item) => item.includes('type=seed 必须 versionAnchor=chamber')))
+
+  // C16 登记块自身不得被写坏：空符号 / 重复登记 / 非 vendor 目标必须在 schema 层红。
+  const emptySymbols = clone(); emptySymbols.vendorSourceConsumers[0].symbols = []
+  assert.ok(validateRegistry(emptySymbols).some((item) => item.includes('symbols 必须是非空字符串数组')))
+  const duplicateVendor = clone()
+  duplicateVendor.vendorSourceConsumers.push(JSON.parse(JSON.stringify(duplicateVendor.vendorSourceConsumers[0])))
+  assert.ok(validateRegistry(duplicateVendor).some((item) => item.includes('重复登记')))
+  const notVendor = clone(); notVendor.vendorSourceConsumers[0].vendorFile = 'packages/x/src/y.ts'
+  assert.ok(validateRegistry(notVendor).some((item) => item.includes('vendorFile 必须是 vendor/')))
+  const notPackaged = clone(); notPackaged.vendorSourceConsumers[0].consumer = 'vendor/x.ts'
+  assert.ok(validateRegistry(notPackaged).some((item) => item.includes('consumer 必须是 packages/')))
+})
+
+test('符号锚下限：每个 fork/seed 至少一条，且总数被 pin（清空探针 = 测试红）', () => {
+  const total = registry.entries.reduce((sum, entry) => sum + (entry.symbols ?? []).length, 0)
+  assert.equal(total, 39, '符号锚总数是 golden：增删锚点必须同批改本断言（D15 机械化方向不可被清空）')
+  for (const entry of registry.entries) {
+    if (entry.type === 'fork' || entry.type === 'seed') assert.ok(entry.symbols.length >= 1, entry.id + ' 缺符号锚')
+  }
+})
+
+test('生成块：声明与渲染面一一对应、往返、缺标记/未声明标记/改内容都能抓到', () => {
+  const index = renderBlocks(registry).get(INDEX_BLOCK).split('\n')
+  assert.equal(index.length, registry.entries.length + 2)
+
+  const fixture = {
+    schema: 1,
+    entries: [{
+      id: 'fork.x', type: 'fork', name: 'x', ours: 'pkg/x', upstream: 'packages/x',
+      classify: { patched: { 'a.ts': '[patch-mod] 说明' }, own: {}, ownPrefix: [], dropped: [] },
+      criteria: ['C1'], deviations: [], relatedGates: [], symbols: ['a.ts#f'], evidence: 'e', status: 'aligned',
+    }],
+    generatedBlocks: ['touchpoints.fork-mirror.x', INDEX_BLOCK],
+  }
+  const marker = (id, body) => '<!-- GENERATED:registry:' + id + ':begin -->\n' + body + '\n<!-- GENERATED:registry:' + id + ':end -->'
+  const doc = 'head\n' + marker('touchpoints.fork-mirror.x', 'stale') + '\n' + marker(INDEX_BLOCK, 'stale') + '\ntail\n'
+
+  assert.ok(checkBlocks(doc, fixture).length > 0, '内容陈旧必须红')
+  const applied = applyBlocks(doc, fixture)
+  assert.equal(applied.error, null)
+  assert.deepEqual(checkBlocks(applied.text, fixture), [])
+
+  const missing = 'head\n' + marker(INDEX_BLOCK, 'stale') + '\n'
+  assert.ok(checkBlocks(missing, fixture).some((item) => item.includes('恰好一对')))
+
+  // 删声明 / 未声明标记不得让保鲜静默关闭。
+  const emptied = { ...fixture, generatedBlocks: [] }
+  assert.ok(checkBlocks(doc, emptied).some((item) => item.includes('渲染面存在未声明的块')))
+  const bogus = doc + marker('touchpoints.bogus', 'x') + '\n'
+  assert.ok(checkBlocks(bogus, fixture).some((item) => item.includes('未声明的 GENERATED 块标记')))
+  assert.notEqual(applyBlocks(bogus, fixture).error, null, '--write 不得在存在未声明标记时静默成功')
+  assert.notEqual(applyBlocks(doc, emptied).error, null, '--write 不得在未声明全部视图时静默成功')
+})
+
+test('patches 登记与 vendor pin 的 patchedDependencies 逐条一致（上游 patch 集合变化必须同批改）', () => {
+  const vendorWs = readFileSync(join(HERE, '../../../vendor/harness-checkout/pnpm-workspace.yaml'), 'utf8')
+  const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(vendorWs)?.[0]
+  assert.ok(block !== undefined, 'vendor pin 的 pnpm-workspace.yaml 必须带 patchedDependencies')
+  const vendorSet = [...block.matchAll(/^ {2}["']?([^"':\n]+)["']?: (patches\/[^\n]+)$/gmu)]
+    .map((match) => match[1] + ' -> ' + match[2])
+    .sort()
+  const registrySet = registry.patches.map((patch) => patch.spec + ' -> ' + patch.file).sort()
+  assert.deepEqual(registrySet, vendorSet, 'registry.patches 必须逐条镜像 vendor pin 的 patch 集合')
+  assert.ok(registry.patches.some((patch) => patch.runtimeClosure), '至少一条落在运行期闭包（否则 patch 通道没接上）')
+})
+
+test('runtimeClosure 与提交的运行期锁一致：true 当且仅当运行期图内该包带 patch_hash', () => {
+  // The flag is a claim about the RUNTIME leg, not about the root/dev leg: both
+  // workspace files list every patch, only the runtime lock proves which ones
+  // actually resolve in the shipped graph (the rest are allowUnusedPatches
+  // exemptions). A stale flag would mislead the next pin upgrade, so derive it.
+  const lockPath = join(HERE, '../../../packages/desktop/vendor/dsh/pnpm-lock.yaml')
+  const lock = readFileSync(lockPath, 'utf8')
+  const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(lock)?.[0]
+  assert.ok(block !== undefined, '运行期锁必须带 patchedDependencies')
+  const hashes = new Map(
+    [...block.matchAll(/^ {2}["']?([^"':\n]+)["']?: ([0-9a-f]{64})$/gmu)].map((match) => [match[1], match[2]]),
+  )
+  const body = lock.replace(block, '')
+  const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  for (const patch of registry.patches) {
+    const at = patch.spec.lastIndexOf('@')
+    const name = patch.spec.slice(0, at)
+    const inGraph = new RegExp("^ {2}[\"']?" + escapeRegExp(name) + '@', 'mu').test(body)
+    const hash = hashes.get(patch.spec)
+    const patched = hash !== undefined && lock.includes(patch.spec + '(patch_hash=' + hash + ')')
+    assert.equal(inGraph, patched,
+      patch.spec + ' 在运行期图内却没有 patch_hash（allowUnusedPatches 静默窗口，§17-C）')
+    assert.equal(patch.runtimeClosure, patched,
+      patch.spec + ' 的 runtimeClosure 必须等于运行期锁是否带 patch_hash（flag 说的是运行期腿，不是根/dev 腿）')
+  }
+})
+
+test('patches 抓退化：坏 specifier / 坏文件路径 / 重复 spec 一律红', () => {
+  const badSpec = clone(); badSpec.patches[0].spec = 'not-a-spec'
+  assert.ok(validateRegistry(badSpec).some((item) => item.includes('patches[0].spec')))
+  const badFile = clone(); badFile.patches[0].file = 'patches/../escape.patch'
+  assert.ok(validateRegistry(badFile).some((item) => item.includes('patches[0].file')))
+  const duplicate = clone(); duplicate.patches[1].spec = duplicate.patches[0].spec
+  assert.ok(validateRegistry(duplicate).some((item) => item.includes('重复')))
+  const empty = clone(); empty.patches = []
+  assert.ok(validateRegistry(empty).some((item) => item.includes('patches 必须是非空数组')))
+  const wrongClosure = clone(); wrongClosure.patches[0].runtimeClosure = 'yes'
+  assert.ok(validateRegistry(wrongClosure).some((item) => item.includes('runtimeClosure')))
+})
+
+test('根安装腿 patch 通道：本仓 pnpm-workspace.yaml 与 registry.patches 一致，字节同 vendor pin', () => {
+  const rootWs = readFileSync(join(HERE, '../../../pnpm-workspace.yaml'), 'utf8')
+  const block = /^patchedDependencies:\n(?: {2}.*\n)+/mu.exec(rootWs)?.[0]
+  assert.ok(block !== undefined, '根 workspace 必须带 patchedDependencies（§17-C dev 腿）')
+  const rootSet = [...block.matchAll(/^ {2}["']?([^"':\n]+)["']?: (patches\/[^\n]+)$/gmu)]
+    .map((match) => match[1] + ' -> ' + match[2])
+    .sort()
+  assert.deepEqual(rootSet, registry.patches.map((patch) => patch.spec + ' -> ' + patch.file).sort(),
+    '根安装腿的 patch 集合必须与 registry.patches 逐条一致')
+  assert.match(rootWs, /^allowUnusedPatches: true$/mu, '图外条目由 allowUnusedPatches 豁免（不被 pnpm 拒绝）')
+  const overridesBlock = /^overrides:\n(?: {2}.*\n)+/mu.exec(rootWs)?.[0]
+  assert.ok(overridesBlock !== undefined, '根 workspace 必须带 overrides（补丁版本契约：patch 键声明即解析约束）')
+  const overrides = new Map(
+    [...overridesBlock.matchAll(/^ {2}['"]?([^'":\n]+)['"]?: ['"]?([^'"\s#]+)['"]?\s*$/gmu)]
+      .map((match) => [match[1], match[2]]),
+  )
+  for (const patch of registry.patches) {
+    const at = patch.spec.lastIndexOf('@')
+    const name = patch.spec.slice(0, at)
+    const version = patch.spec.slice(at + 1)
+    assert.equal(overrides.get(name), version,
+      '根 overrides 必须把 ' + name + ' 钉到补丁版本 ' + version + '（否则该补丁在根腿静默不生效）')
+  }
+  for (const patch of registry.patches) {
+    assert.deepEqual(
+      readFileSync(join(HERE, '../../..', patch.file)),
+      readFileSync(join(HERE, '../../../vendor/harness-checkout', patch.file)),
+      patch.file + ' 必须与 vendor pin 逐字节一致',
+    )
+  }
+})
+
+/** §4.5 桌面 seat 审计表 ↔ registry `apps/desktop/src` mirror 条目的双向覆盖网（verify-registry ⑤E）。
+ * 这些负向对照保证：删一行/改分类/路径漂移/registry 清单漏项都会红，而不是只有正向样本绿。 */
+const ROOT = join(HERE, '../../..')
+const checklistPath = join(ROOT, 'docs', 'checklists', 'upgrade', 'upstream-touchpoints.md')
+const checklistText = readFileSync(checklistPath, 'utf8')
+const seatFindings = (text = checklistText, data = registry) => desktopSeatAuditFindings(text, data, { exists: existsSync, resolvePath: (token) => join(ROOT, token) })
+
+test('§4.5 桌面 seat 审计：真实表与 registry 双向覆盖且对照路径全部存在', () => {
+  const parsed = parseDesktopSeatAudit(checklistText)
+  assert.deepEqual(parsed.problems, [])
+  assert.ok(parsed.rows.length >= 55, '§4.5 表行数过少（覆盖面静默缩小）')
+  assert.deepEqual(seatFindings(), [])
+})
+
+test('§4.5 审计网负向：重复行 / 未知分类 / 断路径 / registry 漂移均红', () => {
+  const lines = checklistText.split('\n')
+  const seatLineIndex = lines.findIndex((line) => line.includes('`startup-error.ts`'))
+  assert.notEqual(seatLineIndex, -1, '§4.5 表必须包含 startup-error.ts 行（负向对照的锚）')
+  const duplicated = [...lines.slice(0, seatLineIndex + 1), lines[seatLineIndex], ...lines.slice(seatLineIndex + 1)].join('\n')
+  assert.ok(seatFindings(duplicated).some((finding) => finding.includes('上游文件重复')), '重复上游文件行必须红')
+  const badClass = checklistText.replace('| `startup-error.ts` | mirror |', '| `startup-error.ts` | bogus |')
+  assert.ok(seatFindings(badClass).some((finding) => finding.includes('未知分类')), '未知分类必须红')
+  const brokenPath = checklistText.replace(
+    lines[seatLineIndex],
+    lines[seatLineIndex].replace('packages/desktop/startup-error.ts', 'packages/desktop/does-not-exist.ts'),
+  )
+  assert.ok(seatFindings(brokenPath).length > 0, '对照点断路径必须红')
+  const drifted = JSON.parse(JSON.stringify(registry))
+  for (const entry of drifted.entries) {
+    if (entry.id === 'mirror.dsh-desktop-native-chrome-seats') {
+      entry.evidence = entry.evidence.replace('crash-report,startup-error', 'crash-report')
+    }
+  }
+  assert.ok(
+    seatFindings(checklistText, drifted).some((finding) => finding.includes('表 mirror 行 startup-error.ts 未被任何 registry 条目覆盖')),
+    'registry 清单漏掉表 mirror 行必须红',
+  )
+  const missingEntry = JSON.parse(JSON.stringify(registry))
+  missingEntry.entries = missingEntry.entries.filter((entry) => entry.id !== 'mirror.dsh-desktop-update-chain')
+  assert.ok(
+    seatFindings(checklistText, missingEntry).some((finding) => finding.includes('表 mirror 行 update-schedule.ts 未被任何 registry 条目覆盖')),
+    '删掉 registry seat 条目必须红',
+  )
+})

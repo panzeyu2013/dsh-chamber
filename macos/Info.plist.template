@@ -76,7 +76,7 @@
          Promise.withResolvers（A3-1），该 API 自 Safari 17.4 / macOS 14.4 才存在；
          13.x 与 14.0–14.3 会在构造期 TypeError。Electron 自带 V8 不受影响，但同一
          支持矩阵只有一个下限（不做 polyfill，2026-12 用户裁决）。三处一致性由
-         scripts/release/release-workflow-policy.test.mjs 钉住。 -->
+         scripts/release/preflight/release-workflow-policy.test.mjs 钉住。 -->
     <key>LSMinimumSystemVersion</key>
     <string>14.4</string>
     <!-- S-46：标准 About 面板（orderFrontStandardAboutPanel）的版权行。

@@ -24,14 +24,14 @@ const GROUPS = {
   lifecycle: [
     {
       file: 'test/lifecycle/client-apply.test.ts',
-      nodeArgs: ['--import', '../../scripts/dev/test-connection-register.mjs'],
+      nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-connection-register.mjs'],
     },
   ],
   // recovery: the sleep/wake recovery triggers and the per-source recovery policy.
   recovery: [
     {
       file: 'test/recovery/liveness-triggers.test.ts',
-      nodeArgs: ['--import', '../../scripts/dev/test-connection-register.mjs'],
+      nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-connection-register.mjs'],
     },
     'test/recovery/recovery-policy.test.ts',
   ],

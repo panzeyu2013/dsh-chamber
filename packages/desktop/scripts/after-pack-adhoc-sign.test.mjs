@@ -27,7 +27,7 @@ import {
 } from './after-pack-adhoc-sign.mjs';
 // The executed-artifact gate discovers a staged product itself; its discovery
 // helper is asserted here so the packaging suite keeps it covered.
-import { MAC_APP_ENV, resolvePackagedMacApp } from '../../../scripts/gates/verify-electron-artifacts.mjs';
+import { MAC_APP_ENV, resolvePackagedMacApp } from '../../../scripts/gates/checks/verify-electron-artifacts.mjs';
 // Cross-module pin lockstep: the Swift sidecar assembly reads the same
 // desktop manifest field, so a drift between the two builds fails HERE.
 import { PNPM_PINNED_VERSION } from './build-sidecar.mjs';

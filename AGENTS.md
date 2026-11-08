@@ -29,7 +29,7 @@ This file is an action guide, not a record: purpose, hard facts, and the flows w
 ### Before a dsh (upstream) upgrade
 
 - Execute `docs/checklists/upgrade/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in `docs/checklists/upgrade/upstream-touchpoints.md` §7.
-- The upstream-touchpoint registry has **one machine source**: `scripts/upstream/registry.json` (paths, per-file classification, criterion ids, deviation ids, reasons). `scripts/upstream/verify-upstream-touchpoints.mjs` reads it (C1/C3–C16; C2 is advisory under `--tags`), and `docs/checklists/upgrade/upstream-touchpoints.md` §2/§9 are its **generated views** — the `<!-- GENERATED:registry:… -->` blocks are hand-edit forbidden (`node scripts/upstream/registry-views.mjs --write` regenerates them; `verify:registry` is the freshness gate). `verify:registry` and `verify:anchors` (symbol anchors + the legacy `file:line` budget, which may only go down) are ordinary gates in `check:static` and on both CI paths.
+- The upstream-touchpoint registry has **one machine source**: `scripts/upstream/registry/registry.json` (paths, per-file classification, criterion ids, deviation ids, reasons). `scripts/upstream/verify/verify-upstream-touchpoints.mjs` reads it (C1/C3–C16; C2 is advisory under `--tags`), and `docs/checklists/upgrade/upstream-touchpoints.md` §2/§9 are its **generated views** — the `<!-- GENERATED:registry:… -->` blocks are hand-edit forbidden (`node scripts/upstream/registry/registry-views.mjs --write` regenerates them; `verify:registry` is the freshness gate). `verify:registry` and `verify:anchors` (symbol anchors + the legacy `file:line` budget, which may only go down) are ordinary gates in `check:static` and on both CI paths.
 - `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, baseline snapshots or per-tag delta logs. The current anchor's single sources are `harness.commit` (source line), `packages/desktop/vendor/dsh/pnpm-lock.yaml` (runtime line) and each fork's `package.json`; a tag's upgrade narrative goes to the `CHANGELOG.md` release section, and still-open deviations to STATUS.
 
 ### Before changing the Swift native shell (`macos/`)
@@ -40,7 +40,7 @@ This file is an action guide, not a record: purpose, hard facts, and the flows w
 ### Before a pull request
 
 Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`; complete the template with concrete, current evidence for the final PR HEAD. A change that alters a design contract, a cross-package boundary, or shipped behavior adds a short **Rejected alternatives** section to the owning design doc under [`docs/design/`](./docs/design/INDEX.md) (domain subdirectories) — a **review duty, not a gate**; a green gate never means this one was satisfied.
-Pick evidence with `node scripts/gates/run-checks.mjs <static|tests|typecheck|full>` (`--list` shows the plan): a local pass is the same evidence for every gate the selected mode contains (darwin-only gates are absent from a linux run). Gates outside the modes are enumerated in `docs/progress/STATUS.md` §1.6.
+Pick evidence with `node scripts/gates/runners/run-checks.mjs <static|tests|typecheck|full>` (`--list` shows the plan): a local pass is the same evidence for every gate the selected mode contains (darwin-only gates are absent from a linux run). Gates outside the modes are enumerated in `docs/progress/STATUS.md` §1.6.
 
 ## Runtime Boundaries
 
@@ -71,7 +71,7 @@ Pick evidence with `node scripts/gates/run-checks.mjs <static|tests|typecheck|fu
 
 ## Hard Facts
 
-- `vendor/harness-packages` is a read-only symlink tree into the pinned submodule `vendor/harness-checkout`; upgrade the pin only via `scripts/upstream/update-vendor.mjs <tag>`, never by editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are ours to change (see Runtime Boundaries).
+- `vendor/harness-packages` is a read-only symlink tree into the pinned submodule `vendor/harness-checkout`; upgrade the pin only via `scripts/upstream/pin/update-vendor.mjs <tag>`, never by editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are ours to change (see Runtime Boundaries).
 - Do not run git or GitHub commands unless the user explicitly asks.
 - This repository installs **no git hooks**, and adding one is a decision to raise rather than a convenience to add: `core.hooksPath` is not carried by a clone. The cheap checks live as ordinary gates instead — `pnpm run check:static` runs that set (registration: STATUS, 范围决策).
 - Credentials and connection secrets never enter the renderer, logs or any persistence layer — only the documented transient write-only form inputs (design 05 §8, design 17).

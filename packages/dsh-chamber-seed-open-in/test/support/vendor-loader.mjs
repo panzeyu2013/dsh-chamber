@@ -6,7 +6,7 @@
  * only after a full workspace build — so the two host adapters the forked
  * resolver imports statically cannot resolve in a plain `node test/…` run.
  * Both are replaced with fail-loud stand-ins (the repo's established pattern:
- * `scripts/dev/test-connection-loader.mjs` + `…/fixtures/schemastery-stub.mjs`),
+ * `scripts/dev/test-loaders/test-connection-loader.mjs` + `…/fixtures/schemastery-stub.mjs`),
  * while every other specifier resolves normally. Never used by the build, the
  * bundle, or the typecheck.
  */

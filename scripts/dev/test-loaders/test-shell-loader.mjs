@@ -1,0 +1,50 @@
+/**
+ * Test-only ESM loader shared by the packages/renderer/test/lifecycle/shell*.test.ts
+ * split.
+ *
+ * The renderer has no install-tree copy of the dsh workspace packages (their
+ * `lib/` types/bundles are not built in the source-only vendor tree), so
+ * `@deepseek-ai/dsh-client-web` — which shell.ts imports — cannot resolve on
+ * its own. node:test's `mock.module` cannot mock an unresolvable specifier
+ * either (it resolves the real module first), so this loader maps the bare
+ * specifier to the committed fixture (`packages/renderer/test-fixtures/
+ * dsh-client-web.mjs`), which exposes a controllable AppWebEntry face.
+ *
+ * Registered via `--import` in the test:renderer-shell script (node >= 22:
+ * `node --import ./scripts/dev/test-loaders/test-shell-register.mjs ...`). Never used by the
+ * build or typecheck.
+ */
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+/** Whether the bare client-core specifier is replaced by the narrow shim (shell suite
+ *  default). Web-only mode (see test-dsh-web-register.mjs) leaves the real barrel in
+ *  place for tests whose module graph already loads it. */
+let shimClientCore = true
+
+/** @param {{ shimClientCore?: boolean }} [data] registration data from `register`. */
+export function initialize(data) {
+  shimClientCore = data?.shimClientCore !== false
+}
+
+const FIXTURE_URL = pathToFileURL(
+  fileURLToPath(new URL('../../../packages/renderer/test-fixtures/dsh-client-web.mjs', import.meta.url)),
+).href
+/** shell.ts 的 client-core barrel 消费面（chamberBridge + describeThrown）：重导出真实
+ *  实现的最小 shim，避免整桶把 source-only 的 dsh 包拖进隔离测试。 */
+const CORE_SHARED_URL = pathToFileURL(
+  fileURLToPath(new URL('../../../packages/renderer/test-fixtures/client-core-shared.mjs', import.meta.url)),
+).href
+
+/** @type {import('node:module').ResolveHook} */
+export async function resolve(specifier, context, nextResolve) {
+  if (specifier === '@deepseek-ai/dsh-client-web') {
+    return { url: FIXTURE_URL, shortCircuit: true }
+  }
+  // Resolve to the two-symbol shim instead of the client-core barrel: the
+  // barrel also links the source-only dsh connection/runtime packages that this
+  // isolated Node test intentionally does not install or execute.
+  if (shimClientCore && specifier === '@dsh-chamber/dsh-chamber-client-core') {
+    return { url: CORE_SHARED_URL, shortCircuit: true }
+  }
+  return nextResolve(specifier, context)
+}

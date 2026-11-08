@@ -255,7 +255,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 ### 7.3 Swift 腿与 node 来源
 - **Swift 原生壳 + sidecar 是唯一出货形态**：node 来自 sidecar 自带（Electron 归档参考用 PATH shim/string-only `resolvePlainNodeExecutable()`，不写 `process.execPath`）；不改 design 25 的宿主结构。
 - **P5b 验收**：Swift 打包态（Finder 启动）跑 P0——四项 UI、同池三条、node 实际创建。
-- **门禁**：不得删除/弱化既有门禁（`release-workflow-policy.test.mjs`、`gate-surfaces.json`、`package.json`、`compiled-sidecar-smoke.mjs`、`remote-state-acceptance.mjs`、`gui-acceptance/native.mjs`、`release.yml` 的 Swift 腿、packaging-closure 的 Swift 段）；新增套件按 `gate-surfaces.json` 注册表登记；只加 Swift 腿 P5b 验收。
+- **门禁**：不得删除/弱化既有门禁（`release-workflow-policy.test.mjs`、`gate-surfaces.json`、`package.json`、`compiled-sidecar-smoke.mjs`、`remote-state-acceptance.mjs`、`gui-acceptance/drivers/native.mjs`、`release.yml` 的 Swift 腿、packaging-closure 的 Swift 段）；新增套件按 `gate-surfaces.json` 注册表登记；只加 Swift 腿 P5b 验收。
 
 ### 7.4 旧池发布前提与回滚
 - **不迁移、不检测、不提示**：旧 `$DSH_HOME/worktrees/<repo>-<hash>/<name>` 池不转成新池、不扫描、不显示 missing/提示。用户必须**在升级前**逐树清理：

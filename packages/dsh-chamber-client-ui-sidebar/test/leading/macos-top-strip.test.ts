@@ -75,7 +75,7 @@ test('the darwin transparency rules keep the pinned upstream bodies', (context) 
       context.skip('vendor tree absent; explicit DSH_CHAMBER_VENDOR_ABSENT=skip')
       return
     }
-    assert.fail('vendor/harness-checkout 未物化：先跑 scripts/dev/ensure-harness-vendor.mjs 再跑本测试'
+    assert.fail('vendor/harness-checkout 未物化：先跑 scripts/dev/bootstrap/ensure-harness-vendor.mjs 再跑本测试'
       + '（显式 DSH_CHAMBER_VENDOR_ABSENT=skip 才跳过）。')
   }
   // design 25 §5.6：这三组规则是「窗口 vibrancy 从侧栏列透出」的承重面，页面自身没有像素判据

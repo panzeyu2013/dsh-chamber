@@ -30,7 +30,7 @@
 - **只写当前状态**：历史、演进、被否方案归 git / `CHANGELOG.md` 发布节 / design 的「被否方案」；不写「本轮 / 批次 / 已落地」叙述。
 - **一段一行**：段落不物理折行；表格、列表、代码块保持自身格式。
 - **链接代替复述**：引用设计、脚本、单源、索引时给相对链接；锚点用 GitHub slug 或显式 `<a id>`（`verify:md-links` 校验）。
-- **禁止手抄目录**：包 / 门 / 脚本 / 阶段 / 触点清单一律指向单源（[`gate-surfaces.json`](../scripts/gates/gate-surfaces.json)、[`registry.json`](../scripts/upstream/registry.json)、[`package.json`](../package.json)、[`checklists/README.md`](./checklists/README.md)），正文只写「去哪看」。
+- **禁止手抄目录**：包 / 门 / 脚本 / 阶段 / 触点清单一律指向单源（[`gate-surfaces.json`](../scripts/gates/registry/gate-surfaces.json)、[`registry.json`](../scripts/upstream/registry/registry.json)、[`package.json`](../package.json)、[`checklists/README.md`](./checklists/README.md)），正文只写「去哪看」。
 - **进度状态词只属 STATUS**：其他文档不写条目的进度状态词（待做 / 待验收 / 待裁 / 接受；流程动作词如「上报待裁」不在此限）；需要时链接 STATUS 条目。
 - **当前版本值只留单源**：tag / commit / 锁文件版本作为现行值不进 design/checklists；引用时指向 `harness.commit`、`packages/desktop/vendor/dsh/pnpm-lock.yaml` 或对应 `package.json`。历史证据例外：为论证契约引用不可变的上游 commit/tag 时标注「历史证据，不随本仓 pin 移动」。
 - **不写规格语**：已实现的东西不写「应 / 计划 / 迁移步骤」；未实现的想法放 TODO，设计取舍放 design/ADR。
@@ -47,15 +47,15 @@
 ## 5. 文档变更流程
 
 1. **定位层**：按 §1/§2 找到唯一家；不确定时先找 owner 文档 / 单源 / ADR。
-2. **改 owner 先于改投影**：先改 design / 单源 / 脚本，再改生成的 GENERATED 块（`node scripts/upstream/registry-views.mjs --write`），最后改引用页与索引。
+2. **改 owner 先于改投影**：先改 design / 单源 / 脚本，再改生成的 GENERATED 块（`node scripts/upstream/registry/registry-views.mjs --write`），最后改引用页与索引。
 3. **移动 / 改名 / 删除**：同批修所有相对链接、锚点与索引（`docs/INDEX.md`、`design/INDEX.md`、`checklists/README.md`）；被取代的 design 在索引标 `superseded` 并链接新文档，冻结的标 `archived`。
 4. **验证**（只读、可离线）：
 
    ```bash
-   node scripts/gates/verify-md-links.mjs           # 相对链接与锚点，退出 0
-   node scripts/upstream/registry-views.mjs --check # GENERATED 块与 registry.json 一致
-   node scripts/gates/verify-i18n.mjs               # 改过双语对时的结构 / 哈希检查
-   node scripts/gates/run-checks.mjs static --list   # 该模式还要跑哪些门
+   node scripts/gates/checks/verify-md-links.mjs           # 相对链接与锚点，退出 0
+   node scripts/upstream/registry/registry-views.mjs --check # GENERATED 块与 registry.json 一致
+   node scripts/gates/checks/verify-i18n.mjs               # 改过双语对时的结构 / 哈希检查
+   node scripts/gates/runners/run-checks.mjs static --list   # 该模式还要跑哪些门
    ```
 
    `--write` 只重录记录，不证明两侧语义等价；结构对等只覆盖骨架，译文准确性是 review-only。

@@ -1,8 +1,8 @@
 /**
  * Sidecar assembly resolution — ONE implementation for the call sites:
- *   - scripts/gates/compiled-sidecar-smoke.mjs
- *   - scripts/gui-acceptance/native.mjs
- *   - scripts/gates/remote-state-acceptance.mjs
+ *   - scripts/gates/checks/compiled-sidecar-smoke.mjs
+ *   - scripts/gui-acceptance/drivers/native.mjs
+ *   - scripts/gates/checks/remote-state-acceptance.mjs
  *   - macos/scripts/build-swift-app.mjs / packages/desktop/scripts/build-sidecar.mjs
  *
  * Semantics: the assembly's single Node lives INSIDE the primary-runtime payload

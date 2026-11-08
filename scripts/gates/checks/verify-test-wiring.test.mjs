@@ -1,0 +1,265 @@
+/**
+ * Unit tests for the test-wiring gate.
+ *
+ * The gate's failure mode is "everything green while a test never runs", so the
+ * cases below pin both directions: a wired file must pass in each of the three
+ * wiring forms the repository uses, and an unreferenced file must fail — even
+ * when another package happens to carry a same-named file.
+ */
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  collectTestFiles,
+  findDuplicateGroupKeys,
+  findSwiftTestScript,
+  findUnwiredSwiftTests,
+  findUnwiredTests,
+  parseSwiftTestTargets,
+  rootEntryPoints,
+  swiftWiringProblems,
+  IGNORED_DIRECTORIES,
+  TEST_FILE_PATTERN,
+  TEST_WIRING_IGNORED_DIRECTORIES,
+  UNWIRED_ALLOWLIST,
+} from './verify-test-wiring.mjs'
+/** Build the wiring evidence shape the gate consumes. */
+function evidenceOf({ root = '', packages = {} } = {}) {
+  return { root, byPackage: new Map(Object.entries(packages)) }
+}
+test('a repeated manifest group key is reported as a shadow', () => {
+  // A repeated manifest group key shadows the earlier populated one: the lock's path matches the wiring text while the group never runs.
+  const source = [
+    'const GROUPS = {',
+    "  'alpha': [",
+    "    'test/alpha/one.test.ts',",
+    '  ],',
+    "  'visual-lock': [",
+    "    'test/visual-lock/real-lock.test.ts',",
+    '  ],',
+    "  'visual-lock': [",
+    '  ],',
+    '}',
+  ].join('\n')
+  assert.deepEqual(findDuplicateGroupKeys(source), ['visual-lock'])
+  assert.deepEqual(findDuplicateGroupKeys("const GROUPS = {\n  'alpha': [\n  ],\n}"), [])
+  assert.deepEqual(findDuplicateGroupKeys(''), [])
+  assert.deepEqual(findDuplicateGroupKeys(undefined), [])
+})
+test('pattern accepts the two test extensions and nothing else', () => {
+  assert.equal(TEST_FILE_PATTERN.test('a.test.ts'), true)
+  assert.equal(TEST_FILE_PATTERN.test('a.test.mjs'), true)
+  assert.equal(TEST_FILE_PATTERN.test('a.spec.ts'), false)
+  assert.equal(TEST_FILE_PATTERN.test('a.test.js'), false)
+})
+test('collectTestFiles scans scripts/release but keeps the release ignore under packages', () => {
+  // The shared repo walk ignores the name `release` (electron-builder output);
+  // inheriting it under scripts/ silently dropped every scripts/release/*.test.mjs
+  // from the corpus (619 scanned while the full on-disk set was larger). The packages/ root keeps
+  // the shared union: after a local dist, packages/desktop/release/ is build output.
+  const root = mkdtempSync(join(tmpdir(), 'test-wiring-release-'))
+  try {
+    for (const directory of ['scripts/release', 'scripts/release-output', 'scripts/node_modules', 'packages/alpha/.dev-user-data', 'packages/desktop/release/unpacked']) {
+      mkdirSync(join(root, directory), { recursive: true })
+    }
+    writeFileSync(join(root, 'scripts/release/policy.test.mjs'), '')
+    writeFileSync(join(root, 'scripts/release-output/keep.test.mjs'), '')
+    writeFileSync(join(root, 'scripts/node_modules/skip.test.mjs'), '')
+    writeFileSync(join(root, 'packages/alpha/.dev-user-data/skip.test.ts'), '')
+    writeFileSync(join(root, 'packages/desktop/release/unpacked/leftover.test.mjs'), '')
+    assert.deepEqual(collectTestFiles(root), [
+      'scripts/release-output/keep.test.mjs',
+      'scripts/release/policy.test.mjs',
+    ])
+    assert.equal(TEST_WIRING_IGNORED_DIRECTORIES.has('release'), false, 'release is this gate\'s own source directory')
+    assert.equal(TEST_WIRING_IGNORED_DIRECTORIES.has('node_modules'), true, 'the rest of the shared union still applies')
+    assert.equal(IGNORED_DIRECTORIES.has('release'), true, 'the packages root keeps the electron-builder output ignore')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+test('a package-relative path in the owning package script counts as wired', () => {
+  const verdict = findUnwiredTests({
+    testFiles: ['packages/alpha/test/one.test.ts'],
+    evidence: evidenceOf({ packages: { alpha: 'node test/one.test.ts' } }),
+  })
+  assert.deepEqual(verdict.unwired, [])
+  assert.equal(verdict.corpusSize, 1)
+})
+test('a file list inside the package helper script counts when it names the package-relative path', () => {
+  const verdict = findUnwiredTests({
+    testFiles: ['packages/alpha/test/two.test.ts'],
+    evidence: evidenceOf({ packages: { alpha: "const FILES = ['test/two.test.ts']" } }),
+  })
+  assert.deepEqual(verdict.unwired, [])
+})
+test('a basename-only, echo or substring mention does not wire a file it does not name', () => {
+  const file = ['packages/alpha/test/smoke.test.ts']
+  // A bare basename does not resolve to test/smoke.test.ts from the package root.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: "const FILES = ['smoke.test.ts']" } }) }).unwired,
+    file,
+  )
+  // An echo of the basename is prose, not wiring.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: 'echo smoke.test.ts' } }) }).unwired,
+    file,
+  )
+  // A substring of another path (my-smoke.test.ts) is not the file either.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: 'node test/my-smoke.test.ts' } }) }).unwired,
+    file,
+  )
+  // The path that DOES resolve is the positive control for the three negatives.
+  assert.deepEqual(
+    findUnwiredTests({ testFiles: file, evidence: evidenceOf({ packages: { alpha: 'node test/smoke.test.ts' } }) }).unwired,
+    [],
+  )
+})
+test('a root manifest reference wires a package test file', () => {
+  const verdict = findUnwiredTests({
+    testFiles: ['packages/alpha/test/smoke.test.ts'],
+    evidence: evidenceOf({ root: 'node packages/alpha/test/smoke.test.ts' }),
+  })
+  assert.deepEqual(verdict.unwired, [])
+})
+test('an unreferenced file is reported even when another package has the same basename', () => {
+  const verdict = findUnwiredTests({
+    testFiles: ['packages/alpha/test/shared.test.ts', 'packages/beta/test/shared.test.ts'],
+    evidence: evidenceOf({ packages: { alpha: 'node test/shared.test.ts', beta: 'node test/other.test.ts' } }),
+  })
+  assert.deepEqual(verdict.unwired, ['packages/beta/test/shared.test.ts'])
+})
+test('a repository-level test file needs a root reference, not a package reference', () => {
+  const verdict = findUnwiredTests({
+    testFiles: ['scripts/dev/gate.test.mjs'],
+    evidence: evidenceOf({ root: 'node --test scripts/dev/other.test.mjs', packages: { alpha: 'gate.test.mjs' } }),
+  })
+  assert.deepEqual(verdict.unwired, ['scripts/dev/gate.test.mjs'])
+})
+test('root entry points are followed, deduped, and never a test file itself', () => {
+  // The scripts suites delegate their file list to one runner: without following
+  // it every scripts test reads as unwired. A `node --test <file>` form or a
+  // direct test path must not add evidence, or a test's own prose could name
+  // another test and hide a real gap.
+  assert.deepEqual(
+    rootEntryPoints({
+      'test:scripts': 'node scripts/gates/runners/run-script-tests.mjs',
+      'test:scripts:release': 'node scripts/gates/runners/run-script-tests.mjs --group release',
+      'test:direct': 'node --test scripts/upstream/one.test.mjs',
+      'test:bare': 'node scripts/upstream/two.test.mjs',
+      preinstall: 'node scripts/dev/bootstrap/ensure-harness-vendor.mjs',
+      weird: 42,
+    }),
+    ['scripts/gates/runners/run-script-tests.mjs', 'scripts/dev/bootstrap/ensure-harness-vendor.mjs'],
+  )
+  assert.deepEqual(rootEntryPoints(undefined), [])
+  assert.deepEqual(rootEntryPoints({}), [])
+})
+test('an allowlisted file is accepted and reported separately', () => {
+  const verdict = findUnwiredTests({
+    testFiles: ['packages/alpha/test/parked.test.ts'],
+    evidence: evidenceOf({ packages: { alpha: '' } }),
+    allowlist: [{ path: 'packages/alpha/test/parked.test.ts', reason: 'driven by an external harness' }],
+  })
+  assert.deepEqual(verdict.unwired, [])
+  assert.deepEqual(verdict.allowlisted, ['packages/alpha/test/parked.test.ts'])
+})
+test('the shipped allowlist stays empty unless a reviewer adds a justified entry', () => {
+  for (const entry of UNWIRED_ALLOWLIST) {
+    assert.ok(entry.reason.length >= 20, `${entry.path} needs a substantive reason`)
+  }
+})
+// macOS/Swift corpus (G24): Package.swift testTarget ↔ files ↔ gate entry
+test('parseSwiftTestTargets: default Tests/<name> path and explicit path', () => {
+  const targets = parseSwiftTestTargets(`
+        .testTarget(
+            name: "DSHChamberTests",
+            dependencies: ["DSHChamber"]
+        ),
+        .testTarget(
+            name: "HelperTests",
+            path: "Tests/Custom",
+            dependencies: []
+        )
+`)
+  assert.deepEqual(targets, [
+    { name: 'DSHChamberTests', path: 'Tests/DSHChamberTests' },
+    { name: 'HelperTests', path: 'Tests/Custom' },
+  ])
+  assert.deepEqual(parseSwiftTestTargets('no test targets here'), [])
+})
+test('findUnwiredSwiftTests: files outside the testTarget path or without func test* are unwired', () => {
+  const targets = [{ name: 'T', path: 'macos/Tests/T' }]
+  const files = {
+    'macos/Tests/T/GoodTests.swift': 'final class GoodTests: XCTestCase {\n    func testA() {}\n}\n',
+    'macos/Tests/T/Helper.swift': 'func helper() {}\n',
+    'macos/Tests/Stray/StrayTests.swift': 'final class StrayTests: XCTestCase {\n    func testB() {}\n}\n',
+  }
+  const verdict = findUnwiredSwiftTests({
+    testFiles: Object.keys(files),
+    targets,
+    readFile: file => files[file] ?? null,
+  })
+  assert.deepEqual(verdict.unwired, [
+    {
+      path: 'macos/Tests/T/Helper.swift',
+      reason: 'no func test* declaration (XCTest would not discover it)',
+    },
+    {
+      path: 'macos/Tests/Stray/StrayTests.swift',
+      reason: 'not under a Package.swift testTarget path (never compiled)',
+    },
+  ])
+  assert.equal(verdict.corpusSize, 3)
+  assert.deepEqual(verdict.missingTargets, [])
+})
+test('findUnwiredSwiftTests: a declared testTarget with no files is reported (empty corpus)', () => {
+  const verdict = findUnwiredSwiftTests({
+    testFiles: ['macos/Tests/T/GoodTests.swift'],
+    targets: [{ name: 'T', path: 'macos/Tests/T' }, { name: 'Gone', path: 'macos/Tests/Gone' }],
+    readFile: () => 'func testA() {}',
+  })
+  assert.deepEqual(verdict.missingTargets, ['macos/Tests/Gone'])
+})
+test('findUnwiredSwiftTests: an allowlisted helper without func test* stays accepted', () => {
+  const verdict = findUnwiredSwiftTests({
+    testFiles: ['macos/Tests/T/Helper.swift'],
+    targets: [{ name: 'T', path: 'macos/Tests/T' }],
+    readFile: () => 'func helper() {}',
+    allowlist: [{ path: 'macos/Tests/T/Helper.swift', reason: 'shared XCTest fixture, driven by GoodTests.swift' }],
+  })
+  assert.deepEqual(verdict.unwired, [])
+  assert.deepEqual(verdict.allowlisted, ['macos/Tests/T/Helper.swift'])
+})
+test('findSwiftTestScript + swiftWiringProblems: manifest ↔ run-checks lockstep', () => {
+  const script = findSwiftTestScript({ scripts: { 'test:swift': 'node scripts/gates/runners/run-swift-tests.mjs' } })
+  assert.deepEqual(script, { name: 'test:swift', command: 'node scripts/gates/runners/run-swift-tests.mjs' })
+  assert.equal(findSwiftTestScript({ scripts: { test: 'node x.test.mjs' } }), null)
+  assert.deepEqual(swiftWiringProblems({ script, runChecksText: '"command": "test:swift"' }), [])
+  assert.match(
+    swiftWiringProblems({ script: null, runChecksText: '' })[0],
+    /root package.json has no script that runs the Swift suite/,
+  )
+  assert.match(
+    swiftWiringProblems({ script, runChecksText: "['test:other']" })[0],
+    /does not reference the Swift-suite script 'test:swift'/,
+  )
+})
+test('the shipped Swift corpus, manifest script and gate entry stay in lockstep', () => {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+  const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
+  const script = findSwiftTestScript(manifest)
+  assert.ok(script !== null, 'root package.json must expose a swift test script')
+  // The darwin gate set lives in the machine source (gate-surfaces.json); run-checks
+  // only derives from it, so the wiring surface is both texts together.
+  const wiringText = readFileSync(join(repoRoot, 'scripts/gates/runners/run-checks.mjs'), 'utf8')
+    + readFileSync(join(repoRoot, 'scripts/gates/registry/gate-surfaces.json'), 'utf8')
+  assert.deepEqual(swiftWiringProblems({ script, runChecksText: wiringText }), [])
+  const targets = parseSwiftTestTargets(readFileSync(join(repoRoot, 'macos/Package.swift'), 'utf8'))
+  assert.deepEqual(targets.map(target => target.name), ['DSHChamberTests'])
+})

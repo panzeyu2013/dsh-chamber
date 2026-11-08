@@ -2,7 +2,7 @@
  * ARCHIVED（2026-11，Electron 冻结；docs/progress/electron-frozen.md）：CDP 采集公共库，
  * 需复活后的 Electron dev；现行测量 = shell.log/[shell-fps] + Safari Inspector。
  *
- * CDP 采集公共库 —— `scripts/gui-acceptance/cdp.mjs` 的薄封装：
+ * CDP 采集公共库 —— `scripts/gui-acceptance/drivers/cdp.mjs` 的薄封装：
  * 本文件只保留 perf 侧的 API 形状与采集助手，
  * 协议载波、超时与 pending 清理全部复用 gui-acceptance 的实现。
  *
@@ -12,7 +12,7 @@
  *
  * 用法见 boot-measure.mjs / switch-measure.mjs 头注。
  */
-import { CdpSession } from '../gui-acceptance/cdp.mjs'
+import { CdpSession } from '../gui-acceptance/drivers/cdp.mjs'
 import { sleep } from '../lib/cli.mjs'
 
 export async function findPageTarget(port = 9333) {

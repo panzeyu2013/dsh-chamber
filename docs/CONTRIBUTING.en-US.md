@@ -11,7 +11,7 @@ Requirements, clone, vendor bootstrap, `pnpm install`, `bundle:dsh`, running, bu
 ```bash
 git clone <REPO-URL> --recurse-submodules
 cd dsh-chamber
-node scripts/dev/ensure-harness-vendor.mjs   # must run before pnpm install
+node scripts/dev/bootstrap/ensure-harness-vendor.mjs   # must run before pnpm install
 pnpm install
 pnpm run dev:control-plane               # control plane only (the current default dev surface)
 pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift shell build chain (the shipped artifact; needs macOS)
@@ -20,20 +20,20 @@ pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift shell build c
 
 ## Testing
 
-The single source for the gate roster is `scripts/gates/gate-surfaces.json` (gate ids, their modes, and local/CI/release surface membership); the root `package.json` is only the command entry point, not the roster — do not hand-maintain a `test:*` list:
+The single source for the gate roster is `scripts/gates/registry/gate-surfaces.json` (gate ids, their modes, and local/CI/release surface membership); the root `package.json` is only the command entry point, not the roster — do not hand-maintain a `test:*` list:
 
 ```bash
-node scripts/gates/run-checks.mjs static --list     # static mode (static / policy gates)
-node scripts/gates/run-checks.mjs tests --list      # tests mode (same set as ci.yml)
-node scripts/gates/run-checks.mjs typecheck --list  # type-check mode
-node scripts/gates/run-checks.mjs full --list       # full = static + typecheck + tests
+node scripts/gates/runners/run-checks.mjs static --list     # static mode (static / policy gates)
+node scripts/gates/runners/run-checks.mjs tests --list      # tests mode (same set as ci.yml)
+node scripts/gates/runners/run-checks.mjs typecheck --list  # type-check mode
+node scripts/gates/runners/run-checks.mjs full --list       # full = static + typecheck + tests
 ```
 
 Pick the mode for the change surface; gates outside the modes (macOS / Swift legs, hand-written host typechecks, remote-state acceptance, …) are enumerated in `docs/progress/STATUS.md` §1.6. `pnpm run smoke` prints SKIP and exits 0 without a dsh install; expected, not a failure.
 
 ## Before Submitting
 
-Do not run the full suite for every commit; select the minimum evidence for the change surface from `scripts/gates/gate-surfaces.json` and `docs/progress/STATUS.md` §1.6:
+Do not run the full suite for every commit; select the minimum evidence for the change surface from `scripts/gates/registry/gate-surfaces.json` and `docs/progress/STATUS.md` §1.6:
 
 ```bash
 pnpm run check:static        # static / policy gates (includes i18n, md-links, test-wiring, styles, etc.; local-only = md-links / test-wiring / styles / no-dead-exports, the rest run via CI / pre-install generated blocks)
@@ -42,7 +42,7 @@ pnpm run check:typecheck     # client-plugin and host-package type checks
 pnpm run check:full          # = static + typecheck + tests (cross-surface changes / CI diagnosis only)
 ```
 
-- Plan only, no execution: `node scripts/gates/run-checks.mjs <mode> --list` prints that mode's gate plan.
+- Plan only, no execution: `node scripts/gates/runners/run-checks.mjs <mode> --list` prints that mode's gate plan.
 - macOS / Swift legs are not inside the linux modes: `test:swift` and `test:macos` must run on macOS; a green linux run does not prove them. The Windows/Linux desktop legs are frozen with Electron (`docs/progress/electron-frozen.md`) and are no longer a current validation duty.
 - Validation for documentation-only changes is listed in `docs/AGENTS.md` §5 (md-links / i18n / registry; re-record with `--write` when a bilingual pair changed).
 - For changes touching runtime, auth, protocol, or desktop-shell behavior, add or update focused tests — static checks alone do not prove runtime correctness; state any validation you could not run in the pull request's Validation section.

@@ -49,7 +49,7 @@
 | `packages/desktop/{shell-assembly-ctx,shell-ipc-*,runtime-startup-host,host-registry-transition,host-exit,node-edges,sidecar-entry,sidecar-ctx}.ts` | sidecar / 共享业务装配 | Swift 腿现行代码 |
 | `packages/desktop/updater.ts` 的纯函数 | 更新控制器共享叶 | Swift `update-headless.ts` 直接复用（见 §2）；改动需双 flavor（Electron 冻结时只保证 Swift 腿 + 纯函数契约） |
 | `packages/desktop/bridge-manifest.json` + `macos/Sources/DSHChamber/Generated/BridgeManifest.swift` + `macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js` | A 桥 manifest 三生成物（`packages/desktop/scripts/emit-bridge-manifest.mjs` 产出） | Swift 白名单 / shim 的通道单源；生成器仍读 `ipc-events.ts` 与 `MAIN_SIDE_FILES`（含归档的 `electron/main.ts` / `electron-edges.ts`，见 §5 白名单政策） |
-| `scripts/gates/verify-electron-artifacts.mjs`、`packages/desktop/scripts/electron-shared.mjs` | 归档件，但被**共享测试/工具只读引用** | 登记为只读依赖：`verify-electron-artifacts.mjs` 的纯判定函数仍被 `run-checks.test.mjs` 与 `after-pack-adhoc-sign.test.mjs` 引用（执行面 `--check-dir` 默认不跑）；`electron-shared.mjs` 仍被 renderer 构建路径契约 / `test:macos` 打包套件与 FROZEN `electron-shared.test.mjs` 引用。改这两个文件先确认引用方仍按只读语义使用 |
+| `scripts/gates/checks/verify-electron-artifacts.mjs`、`packages/desktop/scripts/electron-shared.mjs` | 归档件，但被**共享测试/工具只读引用** | 登记为只读依赖：`verify-electron-artifacts.mjs` 的纯判定函数仍被 `run-checks.test.mjs` 与 `after-pack-adhoc-sign.test.mjs` 引用（执行面 `--check-dir` 默认不跑）；`electron-shared.mjs` 仍被 renderer 构建路径契约 / `test:macos` 打包套件与 FROZEN `electron-shared.test.mjs` 引用。改这两个文件先确认引用方仍按只读语义使用 |
 | `packages/desktop/bridge-manifest.test.ts`、`bridge-shim.test.ts` 生成物锁步；`electron-free-gate.test.ts` 的 core 零 electron import；`bridge-shim-surface.test.ts` / `ipc-surface-mirror.test.ts` 等镜像测试 | 契约锁步 | 冻结不等于放弃锁步：**生成物 == 提交物、Swift 白名单 == manifest、core 家族零 electron import** 必须继续绿；白名单项按 §5 豁免「两侧相等 / 每通道恰用一次」。镜像类测试以 `test.mjs` 的 FROZEN 清单为准：被冻结的镜像测试其契约结论由生成物 + Swift 侧测试承接，不得静默失去校验 |
 | `packages/control-plane` / `packages/renderer` / `packages/dsh-chamber-*` / `packages/dsh-runtime` / `packages/gateway` / `packages/cli` / `macos/` | 现行包 | 与 Electron 无关的出货面 |
 
@@ -70,8 +70,8 @@
 - Electron 打包：`electron-builder` dist 脚本、`build.files` / `extraResources` 的 Electron 产物装配、
   packaging-closure 的 Electron 项。
 - Electron 更新腿：`electron-updater` 打包 / 通道封签 / 发布 feed 校验。
-- Electron 产物 smoke：`scripts/gates/verify-electron-artifacts.mjs`（ARCHIVED——断言 `dist/control-plane/index.js` 可启动应答 `/health`、`dist/preload.cjs` 在 node:vm 里可解析并暴露冻结面；默认门禁/CI/发布不再调用，`gate-surfaces.json` 已移除 `macos.electron-artifacts`）。
-- Electron-only 工具链（全部冻结；native 替代见括号）：`scripts/perf/*` 的 CDP 驱动（→ `shell.log`/`[shell-fps]` + Safari Web Inspector）、`scripts/gui-acceptance/` 的 `--dev`/`--flavor electron`/`walkthrough.mjs`/`launch.mjs`/`packaged-ssh-smoke.mjs`/`mobile-walkthrough.mjs` 的 CDP 驱动（→ `run.mjs --flavor native` 与真机/目检）、`scripts/dev/ensure-electron.mjs`（原根 `postinstall`，→ 不需要 Electron 二进制）。
+- Electron 产物 smoke：`scripts/gates/checks/verify-electron-artifacts.mjs`（ARCHIVED——断言 `dist/control-plane/index.js` 可启动应答 `/health`、`dist/preload.cjs` 在 node:vm 里可解析并暴露冻结面；默认门禁/CI/发布不再调用，`gate-surfaces.json` 已移除 `macos.electron-artifacts`）。
+- Electron-only 工具链（全部冻结；native 替代见括号）：`scripts/perf/*` 的 CDP 驱动（→ `shell.log`/`[shell-fps]` + Safari Web Inspector）、`scripts/gui-acceptance/drivers/` 的 `--dev`/`--flavor electron`/`walkthrough.mjs`/`launch.mjs`/`packaged-ssh-smoke.mjs`/`mobile-walkthrough.mjs` 与 `drivers/cdp.mjs` 的 CDP 驱动、`scripts/gui-acceptance/fixtures/ssh-fixture.mjs`（打包态 smoke 的本地 SSH fixture）、`scripts/gui-acceptance/checks/mobile-checks.mjs`（移动档纯判据层）（→ `run.mjs --flavor native` 与真机/目检）、`scripts/dev/bootstrap/ensure-electron.mjs`（原根 `postinstall`，→ 不需要 Electron 二进制）。
 - 默认测试组里的 Electron-only 测试（FROZEN 组，见 §2）。
 - Electron dev 工作流（`dev:desktop` 等）；门禁 proof 里的 Electron 打包步骤。
 - 「同 tag 双端发布」流程：Electron 冻结后不再发布，native（Swift）产物按 release.yml 的 Swift 腿独立发布。
@@ -123,7 +123,7 @@ violation 一律 loud 拒绝）：`channel` / `key` 必须与 `ipc-events.ts` �
 `shortcuts-bridge.ts` 的 `DESKTOP_SHORTCUTS_CHANNELS`）的 channel/key/namespace 冲突；空表恒 no-op（生成物
 逐字节不变）；白名单项**不得**成为 Electron 运行时路径（冻结面不为它补实现）；增加白名单项必须同批重新生成
 三件 manifest 产物并让锁步测试绿。已豁免白名单的锁步门：`emit-bridge-manifest.mjs`、`bridge-shim-surface.test.ts`、
-`ipc-surface-mirror.test.ts`、`scripts/gates/verify-shim-payload-shape.mjs`（后者要求 shim 真实现、preload 不暴露、
+`ipc-surface-mirror.test.ts`、`scripts/gates/checks/verify-shim-payload-shape.mjs`（后者要求 shim 真实现、preload 不暴露、
 manifest 已收录；空表输出逐字不变）。**首个白名单条目**会改变 manifest counts，同批还必须更新硬编码计数钉：
 `packages/desktop/bridge-manifest.test.ts`、`packages/desktop/bridge-shim.test.ts`、
 `macos/Tests/DSHChamberTests/BridgeManifestConsistencyTests.swift`（以及 A 桥 65/56/9/11 相关 payload 钉子）。
@@ -145,7 +145,7 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
    的 `main` = `electron/main.ts`，`build.files` 已含 `electron/**/*.ts` / `electron/**/*.cts`，
    `scripts/main-side-files.mjs` 的 `MAIN_SIDE_FILES` 已指 `electron/`，`scripts/build-sidecar.mjs` 的
    `electron` external 与 `tsconfig.sidecar.build.json` / `tsconfig.preload.build.json` 的 exclude/include 已对齐。
-   **真正缺失、复活时必须补**：① 根 `package.json` 的 `postinstall` / `scripts/dev/ensure-electron.mjs`（已从
+   **真正缺失、复活时必须补**：① 根 `package.json` 的 `postinstall` / `scripts/dev/bootstrap/ensure-electron.mjs`（已从
    postinstall 移除）；② `packages/desktop/package.json` 的 `dev` / `test:win32` 脚本（已移除；`build:preload`
    保留）；③ `build:desktop` 的 preload 步骤（已移除）；④ Electron/Windows/Linux CI 与发布腿（见 §6.5）；
    ⑤ 默认测试组回插 FROZEN_GROUPS（含 `frozen-scripts` 的 after-pack / before-pack / electron-shared）；
@@ -155,8 +155,8 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
 5. **恢复 CI / 发布腿**：从 git 历史取回 `ci.yml` 的 `test-windows` / `test-windows-pack` job，恢复
    `test-macos-pack` 的 Electron 打包排练 / artifact 校验步；`release.yml` 三条 Electron 发布腿去掉
    job 级 `if: ${{ false }}`、把 ARCHIVED 头注改回现行发布说明（`finalize-release` 的 needs/条件复原）；
-   `scripts/release/verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS`、
-   `scripts/gates/gate-surfaces.json` / `run-checks.mjs`、`scripts/release/release-workflow-policy.test.mjs`
+   `scripts/release/preflight/verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS`、
+   `scripts/gates/registry/gate-surfaces.json` / `run-checks.mjs`、`scripts/release/preflight/release-workflow-policy.test.mjs`
    的断言同批改（见 `docs/checklists/release/release-checklist.md` / `packaging-closure-checklist.md`）。
 6. **恢复默认测试组**：FROZEN 组并回 `test`（`packages/desktop/scripts/test.mjs`），
    `verify-test-wiring` 仍绿；确认 Electron-only 测试文件在 `test-manifest.mjs` 中仍登记。
@@ -172,7 +172,7 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
    **docs/checklists/upgrade/upstream-touchpoints.md 的生成视图**（`registry-views.mjs --write` 重生成）、
    根 `tsconfig.json` 的 include（把 `packages/desktop/electron/**/*.ts` 加回，见 §6.4 ⑦），
    以及本文件自身（改 active 或删除）。
-10. **验证**：`node scripts/gates/run-checks.mjs full`（Linux 上 Windows 腿不在模式内，见 STATUS §1.6）、
+10. **验证**：`node scripts/gates/runners/run-checks.mjs full`（Linux 上 Windows 腿不在模式内，见 STATUS §1.6）、
     `pnpm run test:macos`、Electron dev 手跑、release dry-run；跑不了或跳过项如实登记。
 
 ## 7. 政策指针
@@ -187,4 +187,4 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
 - Swift-only A 桥白名单：`packages/desktop/bridge-swift-only-additions.json`（政策见 §5.2）。
 - 发布流程归档标注：`docs/checklists/release/release-checklist.md` / `packaging-closure-checklist.md`（ARCHIVED 条目）；
   `.github/workflows/ci.yml` / `release.yml` 的 ARCHIVED 文案；发布证明脚本 =
-  `scripts/release/verify-release-ci-proof.mjs`。
+  `scripts/release/preflight/verify-release-ci-proof.mjs`。

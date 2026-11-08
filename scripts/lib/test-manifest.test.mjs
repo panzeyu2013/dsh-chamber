@@ -22,7 +22,7 @@ import {
   referenceResolvesToFile, resolveJobs, runEntries, selectManifest, spawnCaptured, standaloneTestFiles,
   wiringPathReferences,
 } from './test-manifest.mjs'
-import { roundRobinSchedule } from '../gates/run-checks.mjs'
+import { roundRobinSchedule } from '../gates/runners/run-checks.mjs'
 
 test('collectEntries: normalizes paths and { file, nodeArgs } entries in declaration order', () => {
   const entries = collectEntries({

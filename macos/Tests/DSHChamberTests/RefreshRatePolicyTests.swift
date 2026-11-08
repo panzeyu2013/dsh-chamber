@@ -127,7 +127,7 @@ final class RefreshRatePolicyTests: XCTestCase {
         XCTAssertEqual(RefreshRatePreference(cValue: .displayRate), .displayRate)
     }
 
-    /// 真实 SPI 路径的金丝雀。**不能用 XCTSkip**：scripts/gates/run-swift-tests.mjs 把任何
+    /// 真实 SPI 路径的金丝雀。**不能用 XCTSkip**：scripts/gates/runners/run-swift-tests.mjs 把任何
     /// skip 判为整条 macOS 腿失败（XCTSkip 计数必须为 0），降级信号会被误报成门禁违规。
     /// 因此这里两条分支都是硬断言：SPI 在就必须关得动；SPI 不在就断言"诚实降级"语义成立，
     /// 并打印显式信号供 SPI 退役判据核对。两条分支 skipped 都为 0。

@@ -14,9 +14,9 @@
     "verify:python-payload": "node scripts/prepare-python-payload.mjs --verify resources/primary-runtime",
     "prepare:office-assets": "node scripts/prepare-office-assets.mjs",
     "verify:office-assets": "node scripts/prepare-office-assets.mjs --verify resources/office-skills",
-    "test": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs",
-    "test:frozen": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs --frozen",
-    "test:macos": "node ../../scripts/dev/ensure-artifacts.mjs && node ./scripts/test.mjs --macos"
+    "test": "node ../../scripts/dev/bootstrap/ensure-artifacts.mjs && node ./scripts/test.mjs",
+    "test:frozen": "node ../../scripts/dev/bootstrap/ensure-artifacts.mjs && node ./scripts/test.mjs --frozen",
+    "test:macos": "node ../../scripts/dev/bootstrap/ensure-artifacts.mjs && node ./scripts/test.mjs --macos"
   },
   "dependencies": {
     "@dsh-chamber/control-plane": "workspace:^",

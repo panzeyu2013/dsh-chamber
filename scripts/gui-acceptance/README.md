@@ -13,22 +13,38 @@
 > WKWebView UI 没有 CDP，界面走查只能真机/目检。显式传 `--flavor electron` 会打印 ARCHIVED 警告并走
 > 归档驱动（`launch.mjs` / `walkthrough.mjs` / `packaged-ssh-smoke.mjs` 文件头注释与本节一致）。
 
+按角色分三个二级目录：`checks/`（纯判据层，无 IO）、`drivers/`（驱动/入口层）、`fixtures/`（in-process 替身）。
+
+### `checks/` — 纯判据层（CI 单测可跑）
+
+| 文件 | 用途 |
+|---|---|
+| `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
+| `checks.test.mjs` | `checks.mjs` 的单测（`pnpm run test:scripts:gui-acceptance`，CI 跑） |
+| `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
+| `probe.test.mjs` | `probe.mjs` 的 registry 解析单测（`--live` 的 MX 扫描来源） |
+| `mobile-checks.mjs` | 移动档的**纯判据层**（含脱敏）：判据全部是纯函数，无 IO |
+| `mobile-checks.test.mjs` | `mobile-checks.mjs` 的单测（`pnpm run test:gui-acceptance` 一并跑） |
+
+### `drivers/` — 驱动 / 入口层
+
 | 文件 | 用途 |
 |---|---|
 | `run.mjs` | 单一入口：`--live` / `--attach`（`--flavor native`）；`--dev` 与 `--flavor electron` = **ARCHIVED** 复活参考 |
-| `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
 | `native.mjs` | `--flavor native`：驱动**原生壳 spawn 的 sidecar 装配**（ready/B 桥/控制面 HTTP），或 `--attach` 探测运行中的原生壳控制面；WKWebView UI 不可驱动（没有 CDP 端点）。`--require-assembly` 是机器门形态：装配缺失（以及 N-6 找不到 web dist）记 FAIL 而非 SKIP/INFO（ci.yml 的 native 装配启动门用它）。`--web-dist <dir>` 给出 N-6 要判的 renderer 产物目录（未给时探测 `sidecarDir/dist/web` → `sidecarDir/../dist/web`） |
 | `walkthrough.mjs` | **ARCHIVED（Electron CDP 腿）** CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡；v2 内嵌腿 `W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`（上游 ui-sidebar-browser iframe fork DOM/行为）：右栏 guide kind browser + BrowserBody 结构、local fixture 真跑 + postMessage、remote alias 端到端、系统浏览器出口（上游不承诺 XFO 探测）、关 tab 释放；`W-13` 前先经**既有 UI** 确保一个可见 Session：冷实例走 new-session 快捷控件，仍无工作区时走 hero 工作区入口 → 浏览式目录对话框，选中本次 `--out` 下的 `workspace` 目录（dsh 空态选工作区即生成空白会话）） |
-| `fixture.mjs` | v2 内嵌腿的 in-process HTTP fixture（127.0.0.1 随机端口）：`/` 标记页（`parent.postMessage` 证明跨源文档真的运行了）与 `/embed-xfo`（同页 + `X-Frame-Options: DENY`，`W-15` 的负例；上游不把该拒绝投影成失败 UI）；另含 `probeTcpReachable`（`W-15b` 的 alias 端口不可达判据，`node:net` 直连，ECONNREFUSED 才算已释放） |
 | `launch.mjs` | **ARCHIVED（Electron `--dev`）** 一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
 | `packaged-ssh-smoke.mjs` | **ARCHIVED（Electron 打包态 CDP）** 打包态（已构建 `release/<platform>-unpacked`）的 W-13…W-15b smoke：`startSshFixture` 预置一次性 userData/ssh-agent → 启动打包可执行 → 普通 CDP 走查（含 W-14b 真实 SSH alias iframe）；需要显示（Xvfb 即可），不碰真实 userData/~/.ssh |
 | `cdp.mjs` | **ARCHIVED（CDP 仅 Electron 腿）** 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
-| `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
-| `checks.test.mjs` | `checks.mjs` 的单测（`pnpm run test:scripts:gui-acceptance`，CI 跑） |
 | `mobile-walkthrough.mjs` | **ARCHIVED（Electron CDP 驱动；真机移动验收见 checklist）** 移动档 CDP 走查（独立 CLI；`pnpm run acceptance:mobile` 同义）：设备尺寸/触控模拟 + 几何断言 + M-8 WS 帧采集（`--ws-frames off\|summary\|full`；**先脱敏后截断**，截断帧在摘要/帧文件里标注原始长度）+ M-9 覆盖层只读探查 + M-10 未预期请求/渲染层 error **真判定**（容忍表在 `checks.mjs`）。`--require-run` 把「没目标/没会话/未激活」的 INFO 改判 FAIL；**M-8/M-9/M-10 不走这道门**（M-8 是观察项、M-9 的只读扫描完成即算执行、M-10 由容忍表直接判）。`connect`/`evaluate` 失败也走 fail-soft：照样写报告、关会话。**不接受 `--mobile`**（那是桌面走查的档位名） |
 | `mobile-walkthrough.test.mjs` | 走查**驱动层**的脱敏/降级单测（`pnpm run test:gui-acceptance` 一并跑）：凭据不出现在 stdout 与任何产物、fail-soft（无目标/connect 失败/采集中断）、M-8/M-9/M-10 的判定接线与报告行序、设备尺寸跟随 `--width/--height/--dpr` |
-| `mobile-checks.mjs` | 移动档的**纯判据层**（含脱敏）：判据全部是纯函数，无 IO |
-| `mobile-checks.test.mjs` | `mobile-checks.mjs` 的单测（`pnpm run test:gui-acceptance` 一并跑） |
+
+### `fixtures/` — in-process 替身
+
+| 文件 | 用途 |
+|---|---|
+| `fixture.mjs` | v2 内嵌腿的 in-process HTTP fixture（127.0.0.1 随机端口）：`/` 标记页（`parent.postMessage` 证明跨源文档真的运行了）与 `/embed-xfo`（同页 + `X-Frame-Options: DENY`，`W-15` 的负例；上游不把该拒绝投影成失败 UI）；另含 `probeTcpReachable`（`W-15b` 的 alias 端口不可达判据，`node:net` 直连，ECONNREFUSED 才算已释放） |
+| `ssh-fixture.mjs` | **ARCHIVED（Electron CDP 腿）** 打包态 smoke 的本地 SSH fixture（一次性 userData/ssh-agent） |
 
 移动档的两层与桌面档同构：`mobile-walkthrough.mjs` 只采集事实（CDP + DOM 表达式），
 判定与脱敏都在 `mobile-checks.mjs`。真机抽检不可省（见 `docs/progress/STATUS.md`
@@ -60,14 +76,14 @@ pnpm run acceptance:gui -- --dev --require-hover   # 悬停腿必须真实执行
 pnpm run acceptance:gui -- --dev --electron-arg=--no-sandbox   # 一次性实例：W-13/W-14a/W-15/W-15b 真跑（local fixture）
 pnpm run acceptance:gui -- --attach --require-embed --embed-port 8080   # 远端真实 SSH 源：W-14b 端到端，且内嵌腿必须真实执行
 pnpm run acceptance:gui -- --attach --attach-create-session           # 一次性/打包态 smoke：显式允许经既有 UI 建工作区/会话后再跑 W-13…W-15b（默认 --attach 不写真实实例状态）
-xvfb-run -a node scripts/gui-acceptance/packaged-ssh-smoke.mjs \
+xvfb-run -a node scripts/gui-acceptance/drivers/packaged-ssh-smoke.mjs \
   --binary packages/desktop/release/linux-unpacked/dsh-chamber-electron   # 打包态 W-13…W-15b（含 W-14b 真实 SSH fixture）
 pnpm run acceptance:gui -- --live --sources gateway-a,gateway-b   # 显式指定要扫的远程来源
 pnpm run acceptance:gui -- --live --plane http://127.0.0.1:17540 --registry <isolated-userData>/ssh-instances.json  # MX 来源与该平面同源
 pnpm run acceptance:gui -- --flavor native   # 原生 flavor：自起 sidecar 装配 → 走查 → SIGTERM 关闭
 pnpm run acceptance:gui -- --flavor native --attach --plane http://127.0.0.1:17500   # 探测运行中的原生壳控制面
 pnpm run acceptance:gui -- --flavor native --web-dist packages/desktop/dist/web    # 让 N-6 判真实 renderer 产物（壳 index + 声明资源）
-node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web   # 机器门：装配缺失或 N-6 缺 web dist 即 FAIL（ci.yml 用这一形态；该步内先 build:renderer）
+node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web   # 机器门：装配缺失或 N-6 缺 web dist 即 FAIL（ci.yml 用这一形态；该步内先 build:renderer）
 pnpm run acceptance:mobile                   # 移动档 CDP 走查（需一个开着 --remote-debugging-port 的实例；默认 9333）
 pnpm run acceptance:mobile -- --cdp-port 9333 --require-run   # 声明「该腿必须真实执行」：INFO 一律改判 FAIL（M-8/M-9/M-10 不走这道门）
 pnpm run acceptance:mobile -- --url http://127.0.0.1:17500 --auth-token-env DSH_MOBILE_AUTH_TOKEN   # 认证 gateway（凭据只从环境变量读，值永不打印）
@@ -124,7 +140,7 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
   **不是静默通过**。`pnpm run test:gui-acceptance`（纯判据层）不构建 sidecar 装配，所以那里必定是这条
   loud skip 路径；本地/发布验收先构建装配即可得到真实走查。
 - **机器门（G33）**：CI 的 `test-macos-pack` 在 `Compiled sidecar smoke` 之后跑
-  `pnpm run build:renderer` + `node scripts/gui-acceptance/run.mjs --flavor native --require-assembly
+  `pnpm run build:renderer` + `node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly
   --web-dist packages/desktop/dist/web`——它**要求**上一步刚构建的 sidecar 装配在场（缺失即 FAIL，退出码 1），
   并且 N-6 必须真的对 renderer 产物执行（找不到 web dist 同样 FAIL）：启动链与"壳 index + 声明资源"
   两条机器验证都不会因为丢了构建前置而变绿。renderer 构建放在该步内，是因为这个 job 在它之前没有任何

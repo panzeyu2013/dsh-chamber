@@ -2,13 +2,13 @@
 
 - 阶段：upstream upgrade
 - 触发：改 pin / 升级 dsh，或任何触点结构（fork 副本、深引、契约镜像、covered/assembly 行、生成物）变化
-- Owner：触点登记 owner（`scripts/upstream/registry.json`）与升级负责人
+- Owner：触点登记 owner（`scripts/upstream/registry/registry.json`）与升级负责人
 - Timebox：预检 + 审计 ≤2 小时；扩散到具体面按该面 owner 另计
 - 退出标准：§6 门全绿（C1/C3–C16；C8 按模式）、§2/§9 生成块与 registry 一致、§7 八步收口
-- 自动化入口：`scripts/upstream/verify-upstream-touchpoints.mjs`、`registry-views.mjs --check/--write`、`verify-registry.mjs`、`check-anchors.mjs`、`preflight-vendor-pin.mjs`
+- 自动化入口：`scripts/upstream/verify/verify-upstream-touchpoints.mjs`、`registry-views.mjs --check/--write`、`verify-registry.mjs`、`check-anchors.mjs`、`preflight-vendor-pin.mjs`
 - 证据：门输出与 C2 报告；升级叙述发版时写 `CHANGELOG.md`，开放偏差进 `docs/progress/STATUS.md`
 
-> 登记 dsh-chamber 对上游 dsh（deepseek-harness）的全部接触面（fork 纯度、深引 vendor、契约镜像、covered/assembly 行、生成物）与升级 tag 后的保鲜闭环。**单一来源 = `scripts/upstream/registry.json`**（路径 / 分类 / 判据 id / 偏差 id / 原因）；§2/§9 的表格即其生成视图（`<!-- GENERATED:registry:… -->` 块**禁止**手改；重生成 `node scripts/upstream/registry-views.mjs --write`，保鲜门 `node scripts/upstream/verify-registry.mjs`）；`verify-upstream-touchpoints.mjs` 启动即读同一份。
+> 登记 dsh-chamber 对上游 dsh（deepseek-harness）的全部接触面（fork 纯度、深引 vendor、契约镜像、covered/assembly 行、生成物）与升级 tag 后的保鲜闭环。**单一来源 = `scripts/upstream/registry/registry.json`**（路径 / 分类 / 判据 id / 偏差 id / 原因）；§2/§9 的表格即其生成视图（`<!-- GENERATED:registry:… -->` 块**禁止**手改；重生成 `node scripts/upstream/registry/registry-views.mjs --write`，保鲜门 `node scripts/upstream/registry/verify-registry.mjs`）；`verify-upstream-touchpoints.mjs` 启动即读同一份。
 > 机械门：C1–C16（C11–C14 插件受保护集合门、C15 悬停卡移植退役门、C16 vendor 源消费者双向门；CI 两条腿 Bootstrap 后 pre-install 跑 `--no-artifact-rebuild`（C1/C3–C16，C8 advisory）、post-install 跑完整门（C8 重建-比对硬失败）；C2 本地 advisory）。基准值不在本表：pin 单一来源 `harness.commit`（== submodule gitlink）、运行时锚 `packages/desktop/vendor/dsh/pnpm-lock.yaml` 的 `@deepseek-ai/dsh`、fork 版本各 `package.json`（对拍门 = C5/C10）。本表只登记结构性触点与判据。
 
 ## 0. 结构速查（只登记结构与判据，不记录版本值）
@@ -29,9 +29,9 @@
 
 |层|改谁|owner（内容位置）|单一登记源|生效方式|门|
 |---|---|---|---|---|---|
-|依赖补丁|第三方 npm 包（node-pty / pi-ai / exceljs…），不改 dsh 源码|仓内 `patches/`（根/dev 腿）；运行期腿由 `bundle:dsh` 从 vendor pin 生成|[`registry.json`](../../../scripts/upstream/registry.json) 的 `patches` 字段 + 根 [`pnpm-workspace.yaml`](../../../pnpm-workspace.yaml) 的 `patchedDependencies`|根 `pnpm install`；封装期由 [`upstream-patches.mjs`](../../../packages/desktop/scripts/upstream-patches.mjs) stage 到工作目录|[`registry.test.mjs`](../../../scripts/upstream/registry.test.mjs)、[`upstream-patches.test.mjs`](../../../packages/desktop/scripts/upstream-patches.test.mjs)|
-|构建期源码补丁|dsh 上游客户端源码（vendor 树，磁盘零写入）|[`vendor-patches.mjs`](../../../packages/renderer/scripts/vendor-patches.mjs)（代码即注册表）|同文件 `VENDOR_PATCHES`（退役断言 `RETIRED_PATCHES`）|renderer 构建期 vite `deepseekSource().transform` 内存改写|C9（[`verify-upstream-touchpoints.mjs`](../../../scripts/upstream/verify-upstream-touchpoints.mjs)）+ [`vendor-patches.test.mjs`](../../../packages/renderer/scripts/vendor-patches.test.mjs) + `verify-vendor-patch-applied`|
-|in-repo fork 副本|上游源码/契约的常驻拷贝|`packages/dsh-client-connection`、`dsh-client-web`、`dsh-api-gateway`；chamber-named：`dsh-chamber-client-ui-layout` / `-sidebar`、`dsh-chamber-seed-open-in`|[`registry.json`](../../../scripts/upstream/registry.json) 的 `entries`（`fork.*` / `seed.*`，逐文件 `classify`）|workspace 包被 renderer / 宿主按包名消费|C1/C2/C3/C5/C10 + 预检 [`preflight-vendor-pin.mjs`](../../../scripts/upstream/preflight-vendor-pin.mjs)|
+|依赖补丁|第三方 npm 包（node-pty / pi-ai / exceljs…），不改 dsh 源码|仓内 `patches/`（根/dev 腿）；运行期腿由 `bundle:dsh` 从 vendor pin 生成|[`registry.json`](../../../scripts/upstream/registry/registry.json) 的 `patches` 字段 + 根 [`pnpm-workspace.yaml`](../../../pnpm-workspace.yaml) 的 `patchedDependencies`|根 `pnpm install`；封装期由 [`upstream-patches.mjs`](../../../packages/desktop/scripts/upstream-patches.mjs) stage 到工作目录|[`registry.test.mjs`](../../../scripts/upstream/registry/registry.test.mjs)、[`upstream-patches.test.mjs`](../../../packages/desktop/scripts/upstream-patches.test.mjs)|
+|构建期源码补丁|dsh 上游客户端源码（vendor 树，磁盘零写入）|[`vendor-patches.mjs`](../../../packages/renderer/scripts/vendor-patches.mjs)（代码即注册表）|同文件 `VENDOR_PATCHES`（退役断言 `RETIRED_PATCHES`）|renderer 构建期 vite `deepseekSource().transform` 内存改写|C9（[`verify-upstream-touchpoints.mjs`](../../../scripts/upstream/verify/verify-upstream-touchpoints.mjs)）+ [`vendor-patches.test.mjs`](../../../packages/renderer/scripts/vendor-patches.test.mjs) + `verify-vendor-patch-applied`|
+|in-repo fork 副本|上游源码/契约的常驻拷贝|`packages/dsh-client-connection`、`dsh-client-web`、`dsh-api-gateway`；chamber-named：`dsh-chamber-client-ui-layout` / `-sidebar`、`dsh-chamber-seed-open-in`|[`registry.json`](../../../scripts/upstream/registry/registry.json) 的 `entries`（`fork.*` / `seed.*`，逐文件 `classify`）|workspace 包被 renderer / 宿主按包名消费|C1/C2/C3/C5/C10 + 预检 [`preflight-vendor-pin.mjs`](../../../scripts/upstream/pin/preflight-vendor-pin.mjs)|
 |运行时页面适配|代理给浏览器的上游 index 文档（一行 `<script>`）|[`html-inject.ts`](../../../packages/gateway/src/html-inject.ts)|同文件常量 + [design 17](../../design/gateway/17-server-side-gateway.md) §10.5（fail-soft，无 JSON 登记）|gateway 代理上游前端响应时注入|[`gateway-proxy.test.ts`](../../../packages/gateway/test/proxy/gateway-proxy.test.ts)|
 
 ## 1. 标记约定（每文件分类）
@@ -58,9 +58,9 @@
 > 其它裁决规则（沿用既有口径）：版本值只认 `harness.commit` / 运行时锁文件 / 各fork `package.json`，
 > 本表与生成块都不记录版本值；`status: accepted` 必须带 `rationale`（理由随条目走）。
 > `authority: chamber` 的条目必须带非空 `retireWhen`（一句可判的退役触发），其余 authority 不得携带——
-> 校验在 `scripts/upstream/registry.mjs`，能力面的对应触发由 `node scripts/upstream/verify-capabilities.mjs` 在命中时打印。
+> 校验在 `scripts/upstream/registry/registry.mjs`，能力面的对应触发由 `node scripts/upstream/verify/verify-capabilities.mjs` 在命中时打印。
 > 符号锚（`registry.entries[].symbols`）写作 `path#symbol`（退化 `path#=literal:<唯一子串>`），
-> path先按该条目的 `ours` 解析、再退回仓库根；解析门 = `node scripts/upstream/check-anchors.mjs`。
+> path先按该条目的 `ours` 解析、再退回仓库根；解析门 = `node scripts/upstream/anchors/check-anchors.mjs`。
 
 ## 2. fork-mirror 登记（逐 fork）
 
@@ -278,7 +278,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 
 ## 3. deep-import 与 roster 登记
 
-- renderer深引vendor：`@deepseek-ai/*` 一律经vite workspace→src别名与 `paths`；node测试经桩loader（`scripts/dev/test-connection-loader.mjs` 等）——不新增裸运行时vendor依赖。
+- renderer深引vendor：`@deepseek-ai/*` 一律经vite workspace→src别名与 `paths`；node测试经桩loader（`scripts/dev/test-loaders/test-connection-loader.mjs` 等）——不新增裸运行时vendor依赖。
 - 上游 pnpm patch 集合（§17-C，registry `patches`）：集合与字节由 vendor pin 拥有（`vendor/harness-checkout/pnpm-workspace.yaml` 的 `patchedDependencies` + `patches/*`）；**根/dev 腿按字节镜像到仓内 `patches/` 与根 `pnpm-workspace.yaml`**（`registry.test.mjs` 逐条断言 bytes 等同），运行期腿由 `bundle-dsh` 从 vendor 取；`bundle-dsh` 逐字生成到运行期 workspace、把 patch 文件拷进 work 目录，runtime `pnpm-lock.yaml` 记录 specifier→patch hash（`allowUnusedPatches` 只豁免不在运行期闭包的条目）。集合漂移 = 可重锚触点：`registry.test.mjs` 对 pin 逐条对拍、`upstream-patches.test.mjs` 对 runtime lock 对拍，两者同时红。
 - vendor源直穿登记（门 = C16 + `verify:package-boundaries` 的A判据）：生产源里唯一的「相对 import 出包到 `vendor/`」必须逐条登记在 registry 的 `vendorSourceConsumers`（consumer / vendorFile / symbols / reason / retiresWhen）；C16 双向判定——登记与真实 import 必须同时存在、符号集合逐条相等、每个符号在 vendor 文件里仍是 `export function`，未登记的 vendor 相对 import 一律红；A 门按**同一块**放行，不维护第二份白名单。当前唯一行 = renderer `src/host-graph.ts` ← dsh-client-modules `src/client/manifest.ts`（`optionalStringArray` / `stripClientSuffix`），退役条件写在该条目的 `retiresWhen`（上游把符号放上公开 `./client` 面即删登记、改走包说明符）。
 - covered/factory：`packages/renderer/src/chamber-covered.ts` 的 `CHAMBER_COVERED_IDS` / `CHAMBER_COVERED_FACTORY_IDS`（chamber-entry执行期断言map == 列表）；新增官方client行先裁决（消费 / 镜像 / 替换）再登记covered，删包fail-loud哨兵在C4。
@@ -481,11 +481,11 @@ command-manager-entry / duration-env / device-info.ts。
 
 ## 6. 保鲜自动化
 
-`node scripts/upstream/verify-upstream-touchpoints.mjs`（除C8在正常路径下「重建-比对后原样还原」外只读；中断/并发/额外产物路径由整目录快照 + SIGINT/SIGTERM处理器 + `wx` 独占锁兜底）：
+`node scripts/upstream/verify/verify-upstream-touchpoints.mjs`（除C8在正常路径下「重建-比对后原样还原」外只读；中断/并发/额外产物路径由整目录快照 + SIGINT/SIGTERM处理器 + `wx` 独占锁兜底）：
 - registry单一来源与生成闭环（`registry.json` 为唯一机器来源）：三道命令：
-  - `node scripts/upstream/registry-views.mjs --check|--write`：生成物保鲜（本表 §2/§9的GENERATED块）；手改生成块 ⇒ `verify-registry` 红。
-  - `node scripts/upstream/verify-registry.mjs`：schema / canonical / 引用存在性 / deviations id / 覆盖面网（§2.x标题 ↔ 条目、`chamberNamedForks` ↔ `versionAnchor: chamber`、`excludedUpstreamDirs` ↔ `ensure-harness-vendor` 的EXCLUDED、§4.5 seat 审计表 ↔ `apps/desktop/src` mirror 条目的覆盖文件清单 ⑤E）/ 生成块字节一致。
-  - `node scripts/upstream/check-anchors.mjs`：registry符号锚可解析 + 遗留 `文件:行` 锚预算棘轮（`anchors-budget.json`，只降不升）；`--report` 出漂移与测试面三分类，`--fix --file <md> [--apply]` 只回写「同行唯一可解析符号」的锚点、拒绝生成块。
+  - `node scripts/upstream/registry/registry-views.mjs --check|--write`：生成物保鲜（本表 §2/§9的GENERATED块）；手改生成块 ⇒ `verify-registry` 红。
+  - `node scripts/upstream/registry/verify-registry.mjs`：schema / canonical / 引用存在性 / deviations id / 覆盖面网（§2.x标题 ↔ 条目、`chamberNamedForks` ↔ `versionAnchor: chamber`、`excludedUpstreamDirs` ↔ `ensure-harness-vendor` 的EXCLUDED、§4.5 seat 审计表 ↔ `apps/desktop/src` mirror 条目的覆盖文件清单 ⑤E）/ 生成块字节一致。
+  - `node scripts/upstream/anchors/check-anchors.mjs`：registry符号锚可解析 + 遗留 `文件:行` 锚预算棘轮（`anchors-budget.json`，只降不升）；`--report` 出漂移与测试面三分类，`--fix --file <md> [--apply]` 只回写「同行唯一可解析符号」的锚点、拒绝生成块。
 - 参数守卫与退出码（措辞与脚本头注同源）：默认模式会就地重建并还原构建期生成物（唯一写盘路径），因此任何未知参数/位置参数都由 `verify-upstream-touchpoints-args.mjs` 判为用法错误——`--help`/`-h` = 打印权威用法文本、exit 0，不跑任何门、不写盘；未知参数（如拼错的 `--no-artifact-rebuid`）、位置参数、重复flag或 `--tags` 缺值 = exit 2（用法错误）且不先跑门；门硬失败 = exit 1；全部通过 = exit 0。拼错的flag以前被静默忽略并照跑全量写盘门，故这里响亮失败而非容错。判定逻辑是纯函数（单测 `verify-upstream-touchpoints-args.test.mjs`）。
 - C1 pure字节恒等 / C3完整性（fork每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5过期锚扫描 / C6 EXCLUDED存在性 —— CI在Bootstrap后fail-loud；
@@ -500,7 +500,7 @@ command-manager-entry / duration-env / device-info.ts。
 - C15悬停卡自持移植的上游退役门（硬失败；形状、常数与防伪判据见 §4行：①CLOSE侧每个 `onPointerLeave` arm 的守卫必须是已提交 `open` 本身或含 `open` 的合取（顶层 `||` 析取即红——`open || intentRef.current`/`open || true` 是修复而非已知形状），②OPEN侧以 `openDelayMs` 为延迟的dwell回调只 `setPhase('open')`、至多把该定时器赋值目标的 ref 清成 `null`（其他成员写即红）、不复查指针在场，③组件体内 post-commit 回调（`useEffect`/`useLayoutEffect`/`useInsertionEffect`）fail-closed：执行关闭/相位动作的回调必须逐字命中白名单化的 pinned 形状（预览淡出 / owner-disable / Escape），其余一律判红——只锁前两项、或只查回调内的 `*.current` 读取，会在上游把指针事实挪到模块作用域/helper 或在 commit/effect 层修好那天静默放行，④`POINTER_GRACE_MS`/`openDelayMs` ↔ `HOVER_CLOSE_GRACE_MS`/`HOVER_OPEN_DELAY_MS` 逐值锁步；判定为纯函数，单测随 `verify-upstream-touchpoints-args.test.mjs` 在 `test:upgrade-tools` 跑；pin树未物化时与C1同样响亮失败）—— CI与本地均跑（CI分pre/post-install两段）。
 - C16 vendor源消费者清单与真实相对 import 双向一致（硬失败，只读，CI两段都跑；判定纯函数在 `verify-upstream-touchpoints-vendor.mjs`，负控随 `verify-upstream-touchpoints-args.test.mjs` 在 `test:upgrade-tools`/`test:scripts` 跑）：registry `vendorSourceConsumers` 与 `packages/<pkg>/src` 的真实相对 import 双向一致——登记的 (consumer, vendorFile) 必须仍被 import **且**符号集合逐条相等，每个符号在 vendor 文件里仍是 `export function`，未登记的 vendor 相对 import（或孤儿登记）即红；A 门（`pnpm run verify:package-boundaries`）读同一 registry 块放行；退役条件写在条目的 `retiresWhen`。登记行见 §3。
 - C2 `--tags <old> <new>`：tag间全部已登记fork面的重放差异报告（advisory；C2遍历registry的分类条目（fork/seed），故三条shadow副本与 `seed-open-in` 都在内），升级前先跑。
-- `scripts/upstream/preflight-vendor-pin.mjs <tag>`（只读，§7第0步）：覆盖三个 shadow fork 面（C2 另遍历全部 fork/seed 条目，chamber-named fork 的增量见 §2.5–§2.7 与升级清单 §3）——
+- `scripts/upstream/pin/preflight-vendor-pin.mjs <tag>`（只读，§7第0步）：覆盖三个 shadow fork 面（C2 另遍历全部 fork/seed 条目，chamber-named fork 的增量见 §2.5–§2.7 与升级清单 §3）——
   额外报深引vendor seam文件、上游包集合增删、新增client行、运行时npm状态，以及两类
   「被吞掉的新增面」：dropped 面变化（带 drop 理由）与名词差集（上游新增而本仓副本
   没有的导出 / `@Remote` 方法 / 点号座席键）；
@@ -513,13 +513,13 @@ command-manager-entry / duration-env / device-info.ts。
 >
 > 顺序硬约束：`pnpm install` 必须在 `ensure-harness-vendor.mjs`（或根 `preinstall`）之后——先install再bootstrap以0退出但只装20/304个workspace项目（vendor依赖缺失），随后 `build:renderer` 才报 `Rollup failed to resolve import "lexical"`。CI的linux/win两条腿都已是 `Bootstrap → install`。
 
-0. 预检（动pin之前）：`node scripts/upstream/preflight-vendor-pin.mjs <tag> --offline` —— 一次给出「fork pure/replay + **dropped 面变化（带 registry 的 drop 理由）** + 深引vendor seam文件 + 上游包增删 + 新增client行 + 运行时npm状态 + **名词差集**」；`--fail-on-replay` 可当硬门。（C2只报fork面，本脚本另覆盖seam与roster面；dropped 面变化与名词差集是「上游新功能被 chamber 改写吞掉」的两个预检口；名词差集只报不判，dropped 的测试/配置/README/文案数据 噪声面只报不计。）
-0.5. 结构登记改动只改 `scripts/upstream/registry.json`，然后
-   `node scripts/upstream/registry-views.mjs --write` 重生成 §2/§9的块，
-   `node scripts/upstream/verify-registry.mjs` 必须绿（手改生成块或漏改registry都红）。
+0. 预检（动pin之前）：`node scripts/upstream/pin/preflight-vendor-pin.mjs <tag> --offline` —— 一次给出「fork pure/replay + **dropped 面变化（带 registry 的 drop 理由）** + 深引vendor seam文件 + 上游包增删 + 新增client行 + 运行时npm状态 + **名词差集**」；`--fail-on-replay` 可当硬门。（C2只报fork面，本脚本另覆盖seam与roster面；dropped 面变化与名词差集是「上游新功能被 chamber 改写吞掉」的两个预检口；名词差集只报不判，dropped 的测试/配置/README/文案数据 噪声面只报不计。）
+0.5. 结构登记改动只改 `scripts/upstream/registry/registry.json`，然后
+   `node scripts/upstream/registry/registry-views.mjs --write` 重生成 §2/§9的块，
+   `node scripts/upstream/registry/verify-registry.mjs` 必须绿（手改生成块或漏改registry都红）。
 1. 读C2报告逐面裁决；仍open的偏差登记进 `docs/progress/STATUS.md`——本表只更新结构登记行，
    不记版本值、不加「追踪 <tag>」行；
-2. `node scripts/upstream/update-vendor.mjs <tag>`（原子升级 + 锁文件重生成）；
+2. `node scripts/upstream/pin/update-vendor.mjs <tag>`（原子升级 + 锁文件重生成）；
 3. C2触点报告（`--tags old new`）→ 逐文件裁决：重放 [pure]/[patch-*] 或改登记；
 4. fork重放 + 版本标记同步（三副本 → 新版本）；
 5. roster pass：covered/factory存在性、typert契约、新增官方行裁决；**侧栏新增内容面必须提请用户裁决，不得默认拒绝**——上游若在侧栏（`sidebar.*` 任一键：会话行/工作区行/页脚/设置/面板入口等）新增声明、新增占用者，或把内容注册进「已声明但本壳未渲染」的键，逐条列出并交用户裁决采纳/跳过/替换；默认处置只有一条：**上报待裁**，不得以「本壳不渲染」为由拒绝或静默丢弃（键仍被声明 ⇒ 第三方 `inject` 不会失败，面却不会出现，静默即漏裁决）。差集取法：`grep -rhoE "'sidebar\.[a-z.]+" vendor/harness-checkout/packages/client/ui-*/src/client/index.ts | sort -u` 对 chamber 侧栏 `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 的声明表 + 各渲染点，逐键判定「已渲染 / 未渲染待裁」；裁决结果按 §2.7 登记行或 `STATUS.md` 偏差条落账；
@@ -539,11 +539,11 @@ command-manager-entry / duration-env / device-info.ts。
 - 镜像新上游wire / 契约（→ §4）；
 - 新增再生物（→ §5）；
 - covered/factory/assembly行变化（→ §3）；
-- 触点/分类/契约结构变化 ⇒ 改 `scripts/upstream/registry.json` 并重生成 §2/§9（`verify-registry` 是硬门）；
+- 触点/分类/契约结构变化 ⇒ 改 `scripts/upstream/registry/registry.json` 并重生成 §2/§9（`verify-registry` 是硬门）；
 - 新增文档锚点一律写符号锚 `path#symbol`；遗留 `文件:行` 锚只降不升（`check-anchors` 预算棘轮）。
 
 ## 9. 触点总表（生成）
-> 由 `scripts/upstream/registry.json` 生成；机械索引，表格**禁止**手改；散文在本表之外。
+> 由 `scripts/upstream/registry/registry.json` 生成；机械索引，表格**禁止**手改；散文在本表之外。
 
 <!-- GENERATED:registry:touchpoints.index:begin -->
 | id | 类型 | 上游 | 我方 | 判据 | 偏差 / 门 | 状态 |

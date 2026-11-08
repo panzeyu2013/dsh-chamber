@@ -41,7 +41,7 @@
 5. **落地或明确不做**：STATUS 删除条目（基线留 git/CHANGELOG/design）；TODO 删除计划；deviations 冻结后不再新增/维护（历史引用留退役索引）。
 6. **引用稳定**：跨文件引用用 `TODO.md A§N`、`B§N`、`C§N`、`D§N`，`deviations.md` 的 S/T/P/G/D 编号，
    或 STATUS 的条目名；编号只增不重排。
-7. **改文件必同步**：新增/移动/删除条目时同步本索引与全仓引用；`node scripts/gates/verify-md-links.mjs` 必须绿。
+7. **改文件必同步**：新增/移动/删除条目时同步本索引与全仓引用；`node scripts/gates/checks/verify-md-links.mjs` 必须绿。
 
 ### 常见同步点
 

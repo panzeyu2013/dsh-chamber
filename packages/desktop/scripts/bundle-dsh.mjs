@@ -27,7 +27,7 @@ import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, ups
  * pnpm 11 默认拦截依赖构建脚本（node-pty 等原生模块需要），通过
  * pnpm-workspace.yaml 的 allowBuilds 白名单放行。本脚本优先使用 PATH 上与根
  * package.json packageManager 同版本的 pnpm；PATH 版本不一致时自动以同一
- * 版本（BUNDLE_PNPM_VERSION 镜像，scripts/gates/pnpm-pin.mjs 锁步）的 npx 兜底，
+ * 版本（BUNDLE_PNPM_VERSION 镜像，scripts/gates/checks/pnpm-pin.mjs 锁步）的 npx 兜底，
  * 无需预装 pnpm；版本值不在注释里写死。
  */
 

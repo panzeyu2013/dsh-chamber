@@ -601,7 +601,7 @@ Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `s
 CI 运行 Gateway typecheck、完整测试、release workflow policy 和 pack/install CLI smoke。release workflow 的 Gateway 打包与桌面产物腿并行（同一 tag-bound SHA，不下载桌面产物），finalize-release 等全部 build 腿（含恒 skipped 的 ARCHIVED Electron 腿）后才公开，把 tgz 安装到干净临时前缀并执行 `gateway --help`，生成同名 `.tgz.sha256`，再把这两项上传同一个 GitHub draft Release。**本阶段不执行 npm publish、不持有 `NPM_TOKEN`、不维护 npm dist-tag；npm 正式分发明确延后。**版本门以数据驱动方式检查 root 与全部非 fork `@dsh-chamber/*` 包，防止发布漂移；版本只经受校验的 workflow output 进入 shell，并先校验 canonical SemVer、tag peeled commit 等于 checkout SHA。所有发布全局串行且不取消运行中事务；已公开的 GitHub Release 永不删除，只有 stale draft 可替换； dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已配置正式 secrets），使用 `--publish=never`，不创建/修改 Release、不上传任何产物，只做 ad-hoc 本地验证。正式构建不使用仓库内固定的第三方 Electron mirror。
 
 ## 16. 验收门禁
-Gateway 面的自动化门与实机门是发布 procedure 的组成部分：门的成员与落位以 `scripts/gates/gate-surfaces.json`（机器单源）与 [release-checklist](../../checklists/release/release-checklist.md) 为准，本文不重复枚举。契约性覆盖结论：
+Gateway 面的自动化门与实机门是发布 procedure 的组成部分：门的成员与落位以 `scripts/gates/registry/gate-surfaces.json`（机器单源）与 [release-checklist](../../checklists/release/release-checklist.md) 为准，本文不重复枚举。契约性覆盖结论：
 
 - **自动化**：root/Gateway/chamber 包 typecheck；Gateway config/auth/request-policy/dispatch/proxy/lifecycle/chamber-surface 与真实 socket 测试；运行时凭据面（播种四规则、legacy 迁移、stateDir 锁〔`releaseLock` 的 bytes+inode 复验、`close`/`reacquire`〕与并发删除、`gateway auth` 停机态 CLI）；dsh-runtime 共享核心（design 18 §9.5）；`frozen lockfile`、i18n、`git diff --check`、冲突标记扫描与 release workflow 的 commit/tag 绑定、公开 release 不可变、Gateway GitHub tgz+SHA256（零 npm publish）。
 - **发布前实机**：真实安装的 dsh 下 Gateway ready 后 `/`、普通 `/api`、`/api/remote.mux`（HTTP/WS）、插件 bundle 与 `/chamber/` 全部可用；生产型 TLS 反代下 publicOrigin/Host/Origin/XFF/Secure cookie/WS upgrade 与 SPKI pin 正负例；打包 Desktop 连接三形态（https+凭据 / http 明文+凭据 / http 无认证）与重启后自动连接、token/密码变更撤销既有流、N-ctx 与 gateway settings 分节差异（§3 能力表/design 18 §9.3）；macOS 发布产物签名/公证/安装；服务端 dsh runtime 安装候选 → 重启 → 探针 → 故障注入回退 → `<stateDir>/dsh-home` 数据恢复；可信网络四组合（`--bind 0.0.0.0` 明文、SSH 隧道、tailscale 等）+ 401/421/403 负例；运行时凭据轮换与停机态 `gateway auth` 恢复链路。判据与勾选项见 [release-checklist](../../checklists/release/release-checklist.md) 与 [gui-acceptance](../../checklists/acceptance/gui-acceptance-checklist.md)。
@@ -656,7 +656,7 @@ PWA 安装资产由上游 web 入口提供（标识见 §18）；gateway 不注�
 4. **safe-area/full-bleed**：上游不做 edge-to-edge；chamber 接受浏览器内缩。若要 full-bleed，作为独立 feature 立项，带自己的真机验收。
 
 ### 18.6 验收门禁
-- **ARCHIVED（Electron CDP 驱动）** `pnpm run acceptance:mobile`（`scripts/gui-acceptance/mobile-walkthrough.mjs`）：设备模拟走查随 Electron flavor 冻结归档，不作为现行移动门；复活见 [electron-frozen](../../progress/electron-frozen.md)。
+- **ARCHIVED（Electron CDP 驱动）** `pnpm run acceptance:mobile`（`scripts/gui-acceptance/drivers/mobile-walkthrough.mjs`）：设备模拟走查随 Electron flavor 冻结归档，不作为现行移动门；复活见 [electron-frozen](../../progress/electron-frozen.md)。
 - 真机抽检：iPhone Safari（键盘/图标/tap）、Android Chrome、iPad 834（确认接受上游 56px rail）。
 - 静态门：`verify:package-boundaries`、`verify:no-dead-exports`、`verify:registry` （移动锚点门已随包删除；ladder parity 门仍覆盖剩余页面阶梯，不再作为移动门）。
 - 若未来新增移动端本地补丁，必须重新登记能力面/锚点门与真机验收，不得直接复活旧包。

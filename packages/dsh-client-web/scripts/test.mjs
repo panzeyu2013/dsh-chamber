@@ -23,7 +23,7 @@ export const GROUPS = {
   ],
   // configureContext resolves the upstream module surface through the vendor register.
   context: [
-    { file: 'test/configure-context.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-client-web-register.mjs'] },
+    { file: 'test/configure-context.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-client-web-register.mjs'] },
   ],
 }
 

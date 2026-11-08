@@ -1,10 +1,10 @@
 # Upstream dsh (deepseek-harness) commit pinned for the build-time vendor tree
 # (vendor/harness-packages/@deepseek-ai) — the declarative twin of the gitlink
 # recorded in the git submodule at vendor/harness-checkout. Read by
-# scripts/dev/ensure-harness-vendor.mjs, which HARD-FAILS when the submodule
+# scripts/dev/bootstrap/ensure-harness-vendor.mjs, which HARD-FAILS when the submodule
 # HEAD differs from this pin (single source of truth: the submodule; this file
 # is the independent declaration that --check enforces equality against).
-# Upgrade ONLY via `node scripts/upstream/update-vendor.mjs <tag>` — never by hand.
+# Upgrade ONLY via `node scripts/upstream/pin/update-vendor.mjs <tag>` — never by hand.
 # Keep in sync with pnpm-lock.yaml: bumping without regenerating the lockfile
 # makes `pnpm install --frozen-lockfile` fail (intended reproducibility guard).
 66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db

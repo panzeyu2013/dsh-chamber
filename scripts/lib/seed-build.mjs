@@ -12,7 +12,7 @@
  *
  * Determinism: `absWorkingDir` is the package root (esbuild renders source
  * comments relative to it), so the built artifact is byte-identical from
- * any caller CWD. C8 in scripts/upstream/verify-upstream-touchpoints.mjs
+ * any caller CWD. C8 in scripts/upstream/verify/verify-upstream-touchpoints.mjs
  * rebuilds and byte-compares the four artifacts.
  *
  * esbuild is resolved through the renderer's vite tree (the

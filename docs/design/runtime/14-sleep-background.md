@@ -54,7 +54,7 @@
 >
 > 上游宿主携带首帧期限后，才轮到重新评估**客户端期限本身**是否退役。② **页面生命周期**：六个账本由**单世代注册表**（`sourceId → {epoch, incarnation, state}`，`packages/dsh-stream-state`）的投影持有——指纹变化只在权威 roster 刷新处 `reincarnate` 换代，事件携带捕获的 epoch（错代丢弃），退役经 `retainSourceIds` 出表；App 侧只剩活视图（P4：删 `incarnationKey`/`retainSources` 键式记录面）；③ **露屏**：遮罩分类与会话面持有合为一次 `decidePresentation`；帧带 `veil`（released/held/actionable）与绝对 `releaseAtMonoMs`，   只有 `planVeilTimer` 能把期限换算成定时器（held 必 >0ms；非 held/坏钟 = `null` = 不挂），hero/settling 越 70s 外层保险即 `actionable` 揭示租客、   absent/unknown 走 2s 兜底、未 settle 过了反馈窗给可操作面（P2：删除「越界后 0ms 重臂仍不出租客」的旧形态；`unknown` 不再折进 hero）。
 >
-> **Rejected alternatives（遮罩定时器形状）**：曾保留数值哨兵表达"不挂"（`0`=非 held、`Infinity`=坏钟）——`0` 是有限数，调用方的 `!Number.isFinite` 守卫放它过去并挂出 0ms 定时器，在"每次渲染读钟 + tick 是本 effect 自身依赖"的形状下自激（实测 3.4e4 次/秒安装、等量清理、主线程 48% 在 WebKit 定时器堆），且两个哨兵是同一操作语义的两种写法；故改为 `number | null` 单义出口，由类型系统强制调用方处理"不挂"。④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账（B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；⑤ **阈值**：三条阶梯的值集中于 `tables.json` 的 `ladders`（`authority` / `streamHealth` / `delivery`），   消费方直接读表（producer probe、App escalation、open-in）；`scripts/gates/verify-ladder-table-parity.mjs`   保留为「未来本地声明」的漂移守卫（自测见同目录 `.test.mjs`）。
+> **Rejected alternatives（遮罩定时器形状）**：曾保留数值哨兵表达"不挂"（`0`=非 held、`Infinity`=坏钟）——`0` 是有限数，调用方的 `!Number.isFinite` 守卫放它过去并挂出 0ms 定时器，在"每次渲染读钟 + tick 是本 effect 自身依赖"的形状下自激（实测 3.4e4 次/秒安装、等量清理、主线程 48% 在 WebKit 定时器堆），且两个哨兵是同一操作语义的两种写法；故改为 `number | null` 单义出口，由类型系统强制调用方处理"不挂"。④ **等待形状**：`withDeadline` / `waitForCondition` / `retryDelayMs` / `createSingleFlight` 四个原语替换手写计时器记账（B6 七站点中 W1/W2/W3/W5/W6 已迁；W4 不做，W7 因异步探测不适用）；⑤ **阈值**：三条阶梯的值集中于 `tables.json` 的 `ladders`（`authority` / `streamHealth` / `delivery`），   消费方直接读表（producer probe、App escalation、open-in）；`scripts/gates/checks/verify-ladder-table-parity.mjs`   保留为「未来本地声明」的漂移守卫（自测见同目录 `.test.mjs`）。
 >
 > 阶梯**调度半**（tier/cooldown/配额/窗口/证据门）由   包内 `planLadder` 单源持有；**边界**：open-in 的具象 `resync()`、producer 权威执行端的 I/O 仍在宿主，   引擎只持调度（字段级注记见 `ladder.ts` 的工厂）。⑥ **时间与账本**：`src/time.ts` 是「可用钟/滚动窗口」的唯一所有者——NaN/±Inf/回拨只保守持有（never release/0ms），   `rebuildsAt`/dispatch 账本只在窗口内保留；适配器不再各自比较时间戳（G-B/G-C/G-F）。⑦ **取证**：包内 `forensics.ts` 是唯一常驻环形缓冲（默认 cap 256，记录时脱敏，非有限时间戳保守为 0）；api-gateway 的   `StreamForensicsReporter` 记录每次载波决策（含 `carrier-rebuild`/`carrier-throttled` 事实），request/snapshot 触发面（`dsh-chamber:stream-forensics-request` → 逐条 snapshot）随页面终局账本退役而失去生产   dispatcher/listener，保留为调试导出面并登记在 STATUS；live 页事件不变（P5）。
 >
@@ -69,7 +69,7 @@
 | 方案 | 为什么否 |
 |---|---|
 | 保留各执行器的分散判定，只在其上加锁 | 锁只能串行化同一进程内的调用；被否是因为它锁不住**跨模块不变量**（同一时限两份记账、同一阈值两处取值、同一载波两个所有者）——本次三类症状都出自这类不变量 |
-| Swift 与 TS 各写一份载波契据、各自维护 | 漂移无法机器检出；载波阈值由纯 TS 包所有，Swift 的 `CarrierDecision` 只镜像所需决策，由 `scripts/gates/verify-stream-state-swift-parity.mjs` 与 `verify-ladder-table-parity.mjs` 钉住。Swift 窗口恢复由原生 `RendererHangWatchdog` 和 `RendererRecoveryPolicy` 所有。 |
+| Swift 与 TS 各写一份载波契据、各自维护 | 漂移无法机器检出；载波阈值由纯 TS 包所有，Swift 的 `CarrierDecision` 只镜像所需决策，由 `scripts/gates/checks/verify-stream-state-swift-parity.mjs` 与 `verify-ladder-table-parity.mjs` 钉住。Swift 窗口恢复由原生 `RendererHangWatchdog` 和 `RendererRecoveryPolicy` 所有。 |
 | 把 DOM 适配与提示运行壳也收进纯包 | 纯包必须零 import（`packages/dsh-stream-state/scripts/test.mjs` 会红）；DOM 面是各宿主特有的、与「单一所有者」判据无关——已退役的 mobile 适配包约 9 成行数正由此构成 |
 | 把所有等待形状都换成原语 | `host-graph` 的异步探测重试环表达不了（`waitForCondition` 的谓词是同步的），`journal-stream` 的 `AbortSignal.timeout` 已是标准原语；故逐站记录「不迁」而非硬套 |
 

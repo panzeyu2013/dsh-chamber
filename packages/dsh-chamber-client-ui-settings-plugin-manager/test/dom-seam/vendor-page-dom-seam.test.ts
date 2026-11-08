@@ -19,7 +19,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
-/** pin 住的 vendor 链接树（`scripts/dev/ensure-harness-vendor.mjs` 建链）。 */
+/** pin 住的 vendor 链接树（`scripts/dev/bootstrap/ensure-harness-vendor.mjs` 建链）。 */
 const VENDOR_PAGE_DIR = fileURLToPath(new URL('../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-plugin-manager/src/client/', import.meta.url))
 const MISSING = !existsSync(VENDOR_PAGE_DIR)
 const OPT_OUT = process.env.DSH_CHAMBER_VENDOR_ABSENT === 'skip'

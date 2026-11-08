@@ -5,7 +5,7 @@
 - Owner：发布负责人（脚本归 scripts owner）
 - Timebox：≤30 分钟（全部是只读校验器；失败时归位另计）
 - 退出标准：§2 验证器退出 0、§3 镜像与生成投影一致、§4 文档面扫描无未登记当前值
-- 自动化入口：`node scripts/release/verify-pin-alignment.mjs`（已接入 `release:preflight` 完整腿与 `release.yml` 的 `validation-metadata` job）、`verify-workflow-action-pins.mjs`、`verify-md-links.mjs`、`verify:i18n`
+- 自动化入口：`node scripts/release/preflight/verify-pin-alignment.mjs`（已接入 `release:preflight` 完整腿与 `release.yml` 的 `validation-metadata` job）、`verify-workflow-action-pins.mjs`、`verify-md-links.mjs`、`verify:i18n`
 - 证据：验证器退出码 + 逐项输出；失败按 §5 处置并在 PR 描述登记
 
 > 本文件是**程序**，不是记录：不写版本号、commit、锁值或基线快照。当前值只在单源里读——源码线 `harness.commit`、运行时线 `packages/desktop/vendor/dsh/pnpm-lock.yaml`、Swift 本地能力载荷 `packages/desktop/primary-runtime-lock.json`、pnpm 与产品版本在各 `package.json`。
@@ -19,13 +19,13 @@
 
 ## 1. 前置：单源就位（只读）
 
-- [ ] vendor 子模块指向 `harness.commit`：`node scripts/dev/ensure-harness-vendor.mjs --check`（HEAD == pin、链接集合 == 锁文件 importer 集合）。
+- [ ] vendor 子模块指向 `harness.commit`：`node scripts/dev/bootstrap/ensure-harness-vendor.mjs --check`（HEAD == pin、链接集合 == 锁文件 importer 集合）。
 - [ ] 锁文件与 pin 同批：`pnpm install --frozen-lockfile` 通过（pin 已动而锁未重生成时此步失败，属预期门）。
-- [ ] 校验器可运行：`node scripts/release/verify-pin-alignment.mjs`（只读文件、不联网；输出对齐表）。
+- [ ] 校验器可运行：`node scripts/release/preflight/verify-pin-alignment.mjs`（只读文件、不联网；输出对齐表）。
 
 ## 2. 机器门：验证器（阻断项）
 
-- [ ] `node scripts/release/verify-pin-alignment.mjs` 退出 0（vendor 在场时阻断发布）。它逐项比对（值都在脚本里从单源读取，本清单不抄）：
+- [ ] `node scripts/release/preflight/verify-pin-alignment.mjs` 退出 0（vendor 在场时阻断发布）。它逐项比对（值都在脚本里从单源读取，本清单不抄）：
   - `harness.commit` ↔ `primary-runtime-lock.json` 的 `provenance.upstreamCommit`；
   - primary-runtime 全字段（`nodeVersion` / `nodeSha256`、`pythonVersion` / `pythonRelease` / `pythonTarget` / `pythonSha256`、`pythonPackages`、`wheels`）↔ `vendor/harness-checkout/scripts/primary-runtime/lock.json`；
   - pnpm 单源（根 `package.json` 的 `packageManager`）↔ 根锁 importer、desktop / gateway `dependencies.pnpm`、`bundle-dsh.mjs` 的 `BUNDLE_PNPM_VERSION`、`ci.yml` / `release.yml` 的 `pnpm/action-setup` `version:`；
@@ -36,8 +36,8 @@
 
 ## 3. 内部镜像与生成投影
 
-- [ ] pnpm 镜像门：`node scripts/gates/verify-workflow-action-pins.mjs` 绿（一个声明单源，全部 action / 包 / 脚本镜像逐项相等）。
-- [ ] dsh 版本锚的一致性与升级收口归 [`dsh-upgrade-checklist.md`](./dsh-upgrade-checklist.md) §2；本清单只确认自上次升级以来没有手改任一锚（`node scripts/release/release-preflight.mjs <版本> --versions-only` 会硬断言）。
+- [ ] pnpm 镜像门：`node scripts/gates/checks/verify-workflow-action-pins.mjs` 绿（一个声明单源，全部 action / 包 / 脚本镜像逐项相等）。
+- [ ] dsh 版本锚的一致性与升级收口归 [`dsh-upgrade-checklist.md`](./dsh-upgrade-checklist.md) §2；本清单只确认自上次升级以来没有手改任一锚（`node scripts/release/preflight/release-preflight.mjs <版本> --versions-only` 会硬断言）。
 - [ ] 生成投影按锁重生成：`pnpm run gen:notices` 后 `git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md` 为空（或改动已在发布提交内）；双语与 i18n 记录按 [`../release/release-checklist.md`](../release/release-checklist.md) §3 收口。
 - [ ] vendor 符号链接树与锁 importer 集合一致（§1 的 `--check` 已覆盖；重建后重跑）。
 
@@ -55,7 +55,7 @@ grep -rnE --include='*.md' "(${PIN:0:12}|${DSH}|${NODE}|${PNPM})" docs/ AGENTS.m
 ```
 
 - [ ] 命中逐条判断：`CHANGELOG.md` / `docs/CHANGELOG.en-US.md`、生成投影（`THIRD_PARTY_NOTICES*`）、`docs/progress/STATUS.md` 的 open 记录、以及 design 里明确标注「历史证据（不随本仓 pin 移动）」的不可变上游坐标属允许；其余「当前值」改成指向单源。
-- [ ] `node scripts/gates/verify-md-links.mjs` 退出 0（相对链接与锚点）。
+- [ ] `node scripts/gates/checks/verify-md-links.mjs` 退出 0（相对链接与锚点）。
 - [ ] `pnpm run verify:i18n` 全 `consistent`（改过双语对时先 `pnpm run verify:i18n -- --write` 重录）。
 
 ## 5. 失败处置

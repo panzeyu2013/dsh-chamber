@@ -4,11 +4,11 @@
  * 'pnpm run build:artifacts').
  *
  * Consumers (all import this module; none re-declares a path):
- *  - scripts/dev/ensure-artifacts.mjs - bootstrap/--check by ARTIFACTS (path list)
+ *  - scripts/dev/bootstrap/ensure-artifacts.mjs - bootstrap/--check by ARTIFACTS (path list)
  *    and the aggregate BUILD_ARTIFACTS_COMMAND;
- *  - scripts/upstream/verify-upstream-touchpoints.mjs C8 - deterministic
+ *  - scripts/upstream/verify/verify-upstream-touchpoints.mjs C8 - deterministic
  *    rebuild-and-byte-compare per group (script + output paths);
- *  - scripts/gates/verify-artifact-freshness.mjs cites C8 as the owner of the
+ *  - scripts/gates/checks/verify-artifact-freshness.mjs cites C8 as the owner of the
  *    seed-dist freshness invariant (it no longer keeps a second seed list).
  *
  * A group is one build script and its outputs: the script is what C8 re-runs,

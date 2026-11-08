@@ -18,7 +18,7 @@ import { stripComments } from '../../../scripts/dev/test-support/source-text.ts'
  * import selection has no runtime order semantics: callers compare its SET
  * against this same table (single source — the lockstep test
  * `typert-remote-contract.test.mjs` and the upgrade touchpoint gate
- * `scripts/upstream/verify-upstream-touchpoints.mjs` C4). A same-length swap
+ * `scripts/upstream/verify/verify-upstream-touchpoints.mjs` C4). A same-length swap
  * (one package added while another is removed, or a reorder) must not pass
  * silently; an upstream change is one edit here plus the package contract
  * assertions.

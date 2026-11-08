@@ -128,7 +128,7 @@ ssh 读面与 gateway/local 同形：`readManifest` = `plugin_list` IPC（cat �
 
 ### 6.9 工程默认与配额
 
-读面不设任务面/队列/上传配额；受保护集合判定模型层单一实现 + C11–C14 上游保鲜门（§6.11；判据散文与代码判据同步，结构数据单一来源 = `scripts/upstream/registry.json`，[`upstream-touchpoints.md`](../../checklists/upgrade/upstream-touchpoints.md) §2/§9 由其生成）；profile 读的掩码/行投影与本地同判据（§6.11.5）。
+读面不设任务面/队列/上传配额；受保护集合判定模型层单一实现 + C11–C14 上游保鲜门（§6.11；判据散文与代码判据同步，结构数据单一来源 = `scripts/upstream/registry/registry.json`，[`upstream-touchpoints.md`](../../checklists/upgrade/upstream-touchpoints.md) §2/§9 由其生成）；profile 读的掩码/行投影与本地同判据（§6.11.5）。
 
 ### 6.10 明确不做
 
@@ -183,7 +183,7 @@ P(instance) = B₀ ∪ S ∪ F
 
 #### 6.11.6 抗漂移门禁（C11–C14）
 
-判据纯函数 `scripts/upstream/plugin-protection-gate.mjs`，登记在 [`upstream-touchpoints.md`](../../checklists/upgrade/upstream-touchpoints.md) §6，负例测试随 `pnpm run test:upgrade-tools`：
+判据纯函数 `scripts/upstream/verify/plugin-protection-gate.mjs`，登记在 [`upstream-touchpoints.md`](../../checklists/upgrade/upstream-touchpoints.md) §6，负例测试随 `pnpm run test:upgrade-tools`：
 
 | 门 | 断言 | 红意味着 |
 |---|---|---|
@@ -205,7 +205,7 @@ P(instance) = B₀ ∪ S ∪ F
 - **代不匹配默认阻断**（跨代试验需显式 override 入口，v1 未提供）、**闭包豁免只从官方 scope 的直接依赖起步且 walk 只展开官方节点**（收紧；第三方夹带官方名、官方层经第三方中介均报 `outside-family`）。
 - **bundles-only 层只走 CLI**（§6.11.5 读面投影契约的必然结果）：只在 live `dsh.profile.bundles` 而不在依赖表里的层不成行，页内无移除入口（CLI `dsh plugin remove` 照旧可用），但仍会被 Loader 挂载；上游 `reconcilePlugins` 只从依赖表补层、模板自带组合 "never touched"，故只可能命中手工编辑过 profile 的历史条目。放开条件 = 页内补一条只读的 bundles-only 行。
 
-**现行细节补遗（单源已列之外的契约级事实）**：本模型只服务 `{kind:'dsh', transport:'ssh'}` 的 ssh 插件面与 gateway 读/供给面；spec/name 白名单族的唯一来源仍是 `packages/control-plane/src/plugin-spec.ts`（desktop 经 facade 消费，ssh-provider 不得重声明——parity 测试锁）。读面清单/行投影的供给：远端 `cordis.patch.yml` 只做 loader insert（`plugin-sync.seedRemoteChamberHostPackages`，绝不经插件模型写面）；readManifest 的 `dependencies` 形状 = `{name, spec}`（spec 为掩码后字符串），`rows` = 依赖表逐行投影（§6.11.5）。插件刷新状态由宿主插件管理器报告 `application:'applied'` / `restart-required`；页面侧热同步（含 `restart-window-reload` 不存在、rev 变化需手动重载）见 [09](../client/09-client-plugin-runtime-loading.md) §3.7。供给面 IPC 结果类型 `GatewayPluginSyncIpcResult`（renderer `global.d.ts` 镜像）承载 `{ok:true,uploaded,skipped}|{ok:false,error}`。上游保鲜门脚本 = `scripts/upstream/verify-upstream-touchpoints.mjs`（C11–C14），判据纯函数 `plugin-protection-gate.mjs`；P 的分量示例（`@deepseek-ai/dsh-base@…` 等）见 §6.11.1。`familySource` 取值 = `'runtime' | 'none'`（缺省 runtime；ssh 恒 none）；F 读不到时降级到 `B₀ ∪ S`（只收紧不放松）。
+**现行细节补遗（单源已列之外的契约级事实）**：本模型只服务 `{kind:'dsh', transport:'ssh'}` 的 ssh 插件面与 gateway 读/供给面；spec/name 白名单族的唯一来源仍是 `packages/control-plane/src/plugin-spec.ts`（desktop 经 facade 消费，ssh-provider 不得重声明——parity 测试锁）。读面清单/行投影的供给：远端 `cordis.patch.yml` 只做 loader insert（`plugin-sync.seedRemoteChamberHostPackages`，绝不经插件模型写面）；readManifest 的 `dependencies` 形状 = `{name, spec}`（spec 为掩码后字符串），`rows` = 依赖表逐行投影（§6.11.5）。插件刷新状态由宿主插件管理器报告 `application:'applied'` / `restart-required`；页面侧热同步（含 `restart-window-reload` 不存在、rev 变化需手动重载）见 [09](../client/09-client-plugin-runtime-loading.md) §3.7。供给面 IPC 结果类型 `GatewayPluginSyncIpcResult`（renderer `global.d.ts` 镜像）承载 `{ok:true,uploaded,skipped}|{ok:false,error}`。上游保鲜门脚本 = `scripts/upstream/verify/verify-upstream-touchpoints.mjs`（C11–C14），判据纯函数 `plugin-protection-gate.mjs`；P 的分量示例（`@deepseek-ai/dsh-base@…` 等）见 §6.11.1。`familySource` 取值 = `'runtime' | 'none'`（缺省 runtime；ssh 恒 none）；F 读不到时降级到 `B₀ ∪ S`（只收紧不放松）。
 
 ## 7. 决策遗留 / 开放项
 
@@ -216,8 +216,8 @@ P(instance) = B₀ ∪ S ∪ F
 - **`GET /chamber/plugins/installed` 只读**：不施加 `runtime_busy` 退避（客户端无需短退避重试）。
 - **实机 E2E 矩阵（ssh+gateway 双通道）**：发布前按 §9 执行；archive-pick 的 Windows/Linux 腿随桌面腿冻结（[`electron-frozen.md`](../../progress/electron-frozen.md)），不在范围。
 - **已发布 gateway 发行树的 `dist/index.js` 可能仍是旧的 executor env pin**（重装/重打包即复发）：正式修复须随 HEAD 版本树部署后按 §9 矩阵复跑。
-- **打包与产物面**：`packages/desktop/dist/web/**` 与 `dist/host-*-package/**` 由 packaging closure 与产物新鲜度守卫覆盖；`scripts/gates/compiled-sidecar-smoke.mjs` 以编译 sidecar 启动应答打印 `SMOKE PASS`（冒烟门）；`pnpm-workspace.yaml` 的 `allowBuilds` 只约束依赖构建脚本、不扩到 chamber workspace 包。
-- **产物新鲜度守卫覆盖面**：`packages/desktop/dist/control-plane/**` 与 `packages/gateway/dist/**` 有「存在但缺当前标记 ⇒ 失败」的标记守卫（缺失才按需构建，绝不静默自愈）；`scripts/gates/verify-artifact-freshness.mjs`（非注册门：tests/CI 在构建前跑、无产物可比；发布 checklist 在构建后以 `--require-compare` 手动跑一次）覆盖 `dist/preload.cjs`、`renderer/src/generated/**` 与 `gateway/dist/index.js`（包自身 `scripts/build.mjs` 临时副本重建后逐字节比对）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 的新鲜度由 C8 独占（清单单一来源 `scripts/lib/build-artifacts.mjs`）；`verify-electron-artifacts.mjs` 执行编译产物冒烟。仍未落地的最小守卫建议（G2/G3/G5/G7/G8；G1 `verify:test-wiring`）见 [`TODO.md`](../../progress/TODO.md) D§2。
+- **打包与产物面**：`packages/desktop/dist/web/**` 与 `dist/host-*-package/**` 由 packaging closure 与产物新鲜度守卫覆盖；`scripts/gates/checks/compiled-sidecar-smoke.mjs` 以编译 sidecar 启动应答打印 `SMOKE PASS`（冒烟门）；`pnpm-workspace.yaml` 的 `allowBuilds` 只约束依赖构建脚本、不扩到 chamber workspace 包。
+- **产物新鲜度守卫覆盖面**：`packages/desktop/dist/control-plane/**` 与 `packages/gateway/dist/**` 有「存在但缺当前标记 ⇒ 失败」的标记守卫（缺失才按需构建，绝不静默自愈）；`scripts/gates/checks/verify-artifact-freshness.mjs`（非注册门：tests/CI 在构建前跑、无产物可比；发布 checklist 在构建后以 `--require-compare` 手动跑一次）覆盖 `dist/preload.cjs`、`renderer/src/generated/**` 与 `gateway/dist/index.js`（包自身 `scripts/build.mjs` 临时副本重建后逐字节比对）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 的新鲜度由 C8 独占（清单单一来源 `scripts/lib/build-artifacts.mjs`）；`verify-electron-artifacts.mjs` 执行编译产物冒烟。仍未落地的最小守卫建议（G2/G3/G5/G7/G8；G1 `verify:test-wiring`）见 [`TODO.md`](../../progress/TODO.md) D§2。
 - **gateway 拒绝码→本地化文案映射未做**（已知偏差，见 §7）：范围是现行读面错误码；预置未用键待归口接线或删除（§6.6）。
 - **受保护名的只读行覆盖**：`packages/gateway/test/chamber-surface/chamber-installed.test.ts`（受保护名仍分类为 protected/只读）+ ssh 侧既有链路单测，见 §6.11 矩阵。
 - **bundle 层「是否已生效」无诚实信号**（§6.6）：无同名 Loader entry 一律中性，刚装未重启与已生效同呈现；闭合路径 = 新增宿主面事实（各 bundle 的 `dsh.bundle.patch` 的 `insert[].name`），渲染端拿它与 Loader 快照求交后才谈得上「生效中 / 重启后生效」——属新宿主面，需单独评审。
@@ -225,7 +225,7 @@ P(instance) = B₀ ∪ S ∪ F
 ## 8. 与既有文档的关系
 
 - [13](./13-remote-plugin-management.md) 是 ssh 后端既有行为的权威契约；本文是模型与双后端读面契约的收敛权威（§3）——ssh 读面（只读已安装列表、受保护集合 `B₀ ∪ S`、清单掩码）落在 13 §4/§6/§7。
-- 受保护集合与代耦合的上游保鲜门 C11–C14 登记在 [`upstream-touchpoints.md`](../../checklists/upgrade/upstream-touchpoints.md) §6（机器侧判据 `scripts/upstream/plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`；升级流程引用在 [`dsh-upgrade-checklist.md`](../../checklists/upgrade/dsh-upgrade-checklist.md) §0/§6）——与本文 §6.11 同源，改动时三侧同步。
+- 受保护集合与代耦合的上游保鲜门 C11–C14 登记在 [`upstream-touchpoints.md`](../../checklists/upgrade/upstream-touchpoints.md) §6（机器侧判据 `scripts/upstream/verify/plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`；升级流程引用在 [`dsh-upgrade-checklist.md`](../../checklists/upgrade/dsh-upgrade-checklist.md) §0/§6）——与本文 §6.11 同源，改动时三侧同步。
 - [17](./17-server-side-gateway.md)：§3 能力表含第三方插件管理行与 dsh 直连（ssh/http）不挂载 dsh-runtime 分节；`/chamber/plugins/*` 写面与 §10 编排面剥离后的存活面一致。
 - [18](../runtime/18-dsh-runtime-version.md)：§6 出网面登记「安装子进程随宿主受控出网」；§9.3 含 `start` 原语行、connections 入口与 restart-exhausted 自动回退衔接。
 - [05](../control-plane/05-connection-manager.md) §5：内容清单（日志命名、重启/启动按钮、单一模型视图与已安装列表、恢复提示行）；[02](../runtime/02-host-management-deployment.md)：seed 与 spawn 语义（§2.4）。
@@ -235,7 +235,7 @@ P(instance) = B₀ ∪ S ∪ F
 - B/C：`test:connections`（投影/门控/结果分类）、`typecheck:connections`、`verify:i18n`（仅 README 对）；共享模块：`test:sidebar` + `test:settings-bridge`（随迁/拆 split/清单同步；renderer-shell 无迁移项）；模型层（纯 node 无依赖）：后端分派表（含不支持组合）与 `pollGatewayReady` 用例。
 - **受保护集合矩阵（§6.11；纯函数，本地与 gateway 双跑）**：读面 `protected` 判定（name ∈ P ⇒ protected）；来源可信性（解析器矛盾 ⇒ 拒来源；树枚举不要求版本事实，空目录树可作 F）；内建锚仅活动运行时与内建线同版时使用（`shouldPreferPinnedRuntimeLockfile`；env 覆盖兜底仅自身解析失败时生效，`'user'` 不享受）；B₀ 与 live bundles 分离；P 不可派生的降级（行照投、protected 全 false）；路径/registry 值判据（`file:`/`link:`/相对/绝对/`~/`/`C:\` = materialize；`~1.2.0`/`^`/`>=`/`1.x`/dist-tag/workspace/npm 别名/git·url = registry）。
 - **读面投影**：`rows` 三端形状（role/protected）+ 本地 `localPluginList` 行集 = 依赖表（`dependencies: {}` ⇒ 空行集；自己声明的组合/播种名仍是行，role/保护位逐一断言）+ 掩码在 `dependencies` 与 `rows[].spec` 两通道一致 + wire 孪生字段集与行类型（producer↔preload↔renderer，C14 判据含字段名 + role 字面量并集负例）+ rows 缺失按显式空投影（不回退、不列行）+ 受保护行与 bundle 层行均保持状态格中性。
-- **上游保鲜门 C11–C14**：`scripts/upstream/plugin-protection-gate.test.mjs`（真实仓库正向断言 + 改坏派生来源/契约/注册表/镜像的负例），随 `pnpm run test:upgrade-tools` 进 CI。
+- **上游保鲜门 C11–C14**：`scripts/upstream/verify/plugin-protection-gate.test.mjs`（真实仓库正向断言 + 改坏派生来源/契约/注册表/镜像的负例），随 `pnpm run test:upgrade-tools` 进 CI。
 - gateway 读面/动作面子矩阵：`GET /chamber/plugins/installed` 的 200/404/500/405 与投影形状（`packages/gateway/test/chamber-surface/chamber-installed.test.ts`）、掩码两通道、`profile_corrupt` 诚实投影、停机实例照常 200/404；`POST /chamber/runtime/start` 停机态门 + 恢复门不被绕过 + 202/poll + 失败诚实。
 - 恢复面：start 闭环（停机 → start → ready）、`profile_corrupt` 诚实投影 + operator runbook、故障注入（坏插件 boot 失败 → restart-exhausted → start 恢复）。
 - desktop：gateway-provider/plugin-sync（上传 + 取消 no-op + SPKI/`--no-auth`/隧道 Host 四态）、ipc-surface-mirror/golden + main handler 清单、`gateway_plugin_sync` 失败显式化；ssh 已安装列表只读投影单测。

@@ -28,7 +28,7 @@
  * Also pins the shared vendor-resolution seam of the four seed tsconfigs:
  * they all EXTEND one base (`tsconfig.seed-base.json`) and declare no paths
  * of their own (the version↔lockfile half of the seam is gated by
- * scripts/upstream/lockfile-store-path-mappings.test.mjs, which scans
+ * scripts/upstream/pin/lockfile-store-path-mappings.test.mjs, which scans
  * `packages/<pkg>/tsconfig*.json`).
  */
 

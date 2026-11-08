@@ -5,10 +5,10 @@
 - Owner：浏览器面改动 author 出自动化证据；真机项由验收人执行
 - Timebox：自动化 ≤10 分钟；真机（D/E2.7）≤1 小时
 - 退出标准：§A 全绿 + §E2 机器腿全绿；真机项按 §E2.7 / §D 留证；FAIL/INFO 逐条记录
-- 自动化入口：`node --test packages/desktop/test/forward/*.test.ts`、`pnpm run test:gui-acceptance`、`node scripts/gates/verify-shim-payload-shape.mjs`、`node packages/dsh-chamber-client-ui-browser/scripts/test.mjs`
+- 自动化入口：`node --test packages/desktop/test/forward/*.test.ts`、`pnpm run test:gui-acceptance`、`node scripts/gates/checks/verify-shim-payload-shape.mjs`、`node packages/dsh-chamber-client-ui-browser/scripts/test.mjs`
 - 证据：每条给「命令 + 平台 + 源类型 + 结果（PASS/FAIL/INFO 原因）+ 截图/报告路径」；INFO 不等于通过
 
-> 本文件只固定流程与留痕：判据权威 = design 28 §16（机器腿判据在 `scripts/gui-acceptance/checks.mjs`）；自动化证据与真机步骤分开。不记录版本号、批次日志或完成叙事。
+> 本文件只固定流程与留痕：判据权威 = design 28 §16（机器腿判据在 `scripts/gui-acceptance/checks/checks.mjs`）；自动化证据与真机步骤分开。不记录版本号、批次日志或完成叙事。
 
 ## 0. 前置
 
@@ -22,13 +22,13 @@
 
 ~~~sh
 node --test packages/desktop/test/forward/*.test.ts
-node scripts/gates/verify-test-wiring.mjs
-node scripts/gates/verify-no-dead-exports.mjs
-node scripts/gates/verify-import-cycles.mjs
-node scripts/gates/verify-file-budgets.mjs
-node scripts/gates/verify-package-boundaries.mjs
-node scripts/gates/verify-shim-payload-shape.mjs
-node scripts/gates/verify-md-links.mjs
+node scripts/gates/checks/verify-test-wiring.mjs
+node scripts/gates/checks/verify-no-dead-exports.mjs
+node scripts/gates/checks/verify-import-cycles.mjs
+node scripts/gates/checks/verify-file-budgets.mjs
+node scripts/gates/checks/verify-package-boundaries.mjs
+node scripts/gates/checks/verify-shim-payload-shape.mjs
+node scripts/gates/checks/verify-md-links.mjs
 
 # v2 内嵌腿（纯判据 + 假 DOM；CI）：W-13/14a/14b/15/15b/SH-7 的判定层
 pnpm run test:gui-acceptance
@@ -36,7 +36,7 @@ pnpm run test:gui-acceptance
 # 原生壳界面按真机/目检执行（gui-acceptance-checklist §4）；确需复活时按 electron-frozen.md §6 显式传 --flavor electron。
 # v2 远端端到端：本机 ssh fixture 同为归档 CDP 驱动；真实 ssh 源按本文 L5 真机矩阵执行（原生命令见 §L5）
 # 或真实 ssh 源 + 已人工预开的斜签：--require-embed 把未执行的内嵌腿改判 FAIL
-node scripts/gui-acceptance/run.mjs --attach --require-embed --embed-port <remote-loopback-port>
+node scripts/gui-acceptance/drivers/run.mjs --attach --require-embed --embed-port <remote-loopback-port>
 ~~~
 
 - `forward-real-ssh.test.ts`：临时 sshd + 真实 `ssh -N -L` + alias HTTP 取回 + release；key-auth，Linux/root。
@@ -118,7 +118,7 @@ pnpm run test:macos      # darwin
 pnpm run check:full
 ~~~
 
-期望：锁文件无 diff；新包/chunk budget 通过；A 桥计数以 `packages/desktop/bridge-manifest.json` 的 `counts` 为准（v2 不新增通道），shim surface 计数以 `node scripts/gates/verify-shim-payload-shape.mjs` 的 `EXPECTED_SURFACE` 为准；打包闭包根模块数复核命令见 [packaging-closure-checklist.md](../release/packaging-closure-checklist.md) §4。
+期望：锁文件无 diff；新包/chunk budget 通过；A 桥计数以 `packages/desktop/bridge-manifest.json` 的 `counts` 为准（v2 不新增通道），shim surface 计数以 `node scripts/gates/checks/verify-shim-payload-shape.mjs` 的 `EXPECTED_SURFACE` 为准；打包闭包根模块数复核命令见 [packaging-closure-checklist.md](../release/packaging-closure-checklist.md) §4。
 
 ## 验收记录
 

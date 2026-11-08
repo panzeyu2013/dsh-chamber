@@ -34,7 +34,7 @@ import {
   renderSwiftManifest,
   validateSwiftOnlyAdditions,
 } from '../../scripts/emit-bridge-manifest.mjs'
-import { comparePayloadShapes, compareRuntimePayloads } from '../../../../scripts/gates/verify-shim-payload-shape.mjs'
+import { comparePayloadShapes, compareRuntimePayloads } from '../../../../scripts/gates/checks/verify-shim-payload-shape.mjs'
 
 const IPC_SOURCE = `const IPC_CHANNELS = {
   ALPHA: 'dsh-chamber:alpha',

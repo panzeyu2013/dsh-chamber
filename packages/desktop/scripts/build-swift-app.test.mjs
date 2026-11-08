@@ -115,7 +115,7 @@ import {
 } from '../../../macos/scripts/build-swift-app.mjs'
 // 滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
 // 计划的通道 URL 形状（build-swift-app.mjs 也从它导入）。
-import { NATIVE_BETA_ROLLING_TAG } from '../../../scripts/release/release-artifacts.mjs'
+import { NATIVE_BETA_ROLLING_TAG } from '../../../scripts/release/preflight/release-artifacts.mjs'
 import { PAYLOAD_NODE_RELATIVE, payloadNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
 import { OFFICE_SKILL_FILES } from './prepare-office-assets.mjs'
 

@@ -2,7 +2,7 @@ name: CI
 
 on:
   # Branch pushes and PRs only: a release PROVES its commit passed here.
-  # release.yml's validation runs scripts/release/verify-release-ci-proof.mjs, which
+  # release.yml's validation runs scripts/release/preflight/verify-release-ci-proof.mjs, which
   # requires a completed, successful ci.yml push run on main whose linux and
   # macOS legs all passed. The Windows/Linux desktop legs are ARCHIVED with the
   # Electron flavor (2026-11; docs/progress/electron-frozen.md).
@@ -32,7 +32,7 @@ jobs:
   test:
     # Branch pushes and PRs only — no tag trigger exists (see `on:` above).
     # release.yml's validation mirrors this chain (the alignment contract is
-    # asserted in scripts/release/release-workflow-policy.test.mjs) and proves its
+    # asserted in scripts/release/preflight/release-workflow-policy.test.mjs) and proves its
     # commit ran it here, on main, with this job and the macOS legs green
     # (verify-release-ci-proof.mjs names every required job explicitly).
     runs-on: ubuntu-latest
@@ -58,7 +58,7 @@ jobs:
           CI_BEFORE: ${{ github.event.before }}
           CI_AFTER: ${{ github.sha }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/gates/classify-ci-changes.mjs
+        run: node scripts/gates/registry/classify-ci-changes.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.28.5
@@ -72,7 +72,7 @@ jobs:
       # The script verifies submodule HEAD == harness.commit (fail-closed on
       # drift) and is idempotent (no-op when the link set is unchanged).
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       # GENERATED:gates:ci.test.pre:begin
       # Documentation pair consistency: structure + hash record; cheap, no install needed (also invoked by release-preflight).
       - name: Documentation pair consistency (zh/en)
@@ -83,7 +83,7 @@ jobs:
         run: pnpm run verify:workflow-yaml
       # Upstream touchpoint registry C1/C3-C16 (advisory mode: reads, never rebuilds artifacts). File-only, runs before the install for fail-fast.
       - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
-        run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
+        run: node scripts/upstream/verify/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       # GENERATED:gates:ci.test.pre:end
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
@@ -97,7 +97,7 @@ jobs:
       # (missing esbuild) is a loud warning, never a silent pass.
       - name: Build-time artifacts match sources (C8 rebuild gate)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/upstream/verify-upstream-touchpoints.mjs
+        run: node scripts/upstream/verify/verify-upstream-touchpoints.mjs
       # The lockfile is the deterministic contract between the committed
       # workspace members and the resolution result; a non-frozen install
       # must never silently rewrite it (pnpm 11 prunes symlinked-member
@@ -118,16 +118,16 @@ jobs:
         run: pnpm run verify:file-budgets
       # Capability alignment: a chamber-consumed vendor probe that disappears or a landed upstream replacement turns this red.
       - name: Upstream capability alignment (chamber-behind / upstream-landed)
-        run: node scripts/upstream/verify-capabilities.mjs
+        run: node scripts/upstream/verify/verify-capabilities.mjs
       - name: Remote-state fault-injection matrix
-        run: node scripts/gates/remote-state-injection-matrix.mjs
+        run: node scripts/gates/checks/remote-state-injection-matrix.mjs
       - name: Stream-state differential replay (recorded vectors, drift = failure)
         run: node scripts/refactor/equivalence.mjs
       # Cross-language lockstep for the stream-state tables (Swift mirror compiles Foundation-only, in a temp dir).
       - name: Stream-state Swift parity (cross-language lockstep)
-        run: node scripts/gates/verify-stream-state-swift-parity.mjs
+        run: node scripts/gates/checks/verify-stream-state-swift-parity.mjs
       - name: Ladder-table parity (B4 lockstep over the four recovery ladders)
-        run: node scripts/gates/verify-ladder-table-parity.mjs
+        run: node scripts/gates/checks/verify-ladder-table-parity.mjs
       - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
         run: pnpm run verify:upstream-lifecycle-contract
       - name: Architecture package boundaries
@@ -147,27 +147,27 @@ jobs:
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
-        run: node scripts/release/release-preflight.mjs --actions-only
+        run: node scripts/release/preflight/release-preflight.mjs --actions-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # One entry for the package test set: the same mode is what
       # `pnpm run check:tests` runs locally, so the push path and a developer's
       # terminal cannot drift. Adding or renaming a package suite means editing
-      # scripts/gates/run-checks.mjs once; `pnpm run test:scripts:release` keeps
+      # scripts/gates/runners/run-checks.mjs once; `pnpm run test:scripts:release` keeps
       # release validation aligned with what this step runs.
       - name: Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/gates/run-checks.mjs tests
+        run: node scripts/gates/runners/run-checks.mjs tests
       # 计划的统一验收矩阵：
       # 它按 --node 指定的解释器逐文件跑，
       # 因此 CI 用自带 node；vendor 与 node_modules 在此都已就位，blocked 项应全部转绿。
       - name: Remote-state acceptance matrix
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
+        run: node scripts/gates/checks/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
       # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
       - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/gates/run-checks.mjs typecheck
+        run: node scripts/gates/runners/run-checks.mjs typecheck
       # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
       # dsh runtime — normal here, since only
       # packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
@@ -210,7 +210,7 @@ jobs:
       # resource scoper code survived the build here, where the artifact exists.
       - name: Renderer page bundle carries the SVG scope code
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/gates/assert-scoper-artifact.mjs
+        run: node scripts/gates/checks/assert-scoper-artifact.mjs
       # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
       # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup /
       # dsh-chamber-seed-open-in — dist/index.js): their esbuild entry/external
@@ -234,7 +234,7 @@ jobs:
       # stale committed file fails the push.
       - name: Third-party notices current
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/release/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
+        run: node scripts/release/notices/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
       - name: Gateway package build and installed CLI smoke
         if: steps.classify.outputs.code == 'true'
         run: |
@@ -267,7 +267,7 @@ jobs:
           # exist locally.
           fetch-depth: 0
       - name: Verify workflow action pins
-        run: node scripts/gates/verify-workflow-action-pins.mjs
+        run: node scripts/gates/checks/verify-workflow-action-pins.mjs
       # Same classifier as test: a prose-only branch push skips the
       # macOS runner (Swift build + packaging suites) entirely. Releases prove
       # THIS job's success on main through verify-release-ci-proof.mjs.
@@ -277,7 +277,7 @@ jobs:
           CI_BEFORE: ${{ github.event.before }}
           CI_AFTER: ${{ github.sha }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/gates/classify-ci-changes.mjs
+        run: node scripts/gates/registry/classify-ci-changes.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.28.5
@@ -287,7 +287,7 @@ jobs:
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
       - name: Assert lockfile not rewritten
@@ -330,7 +330,7 @@ jobs:
       # package.json) so the CI contract does not depend on a script alias.
       - name: Swift tests (release configuration, XCTSkip == 0)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/gates/run-swift-tests.mjs
+        run: node scripts/gates/runners/run-swift-tests.mjs
       # JS↔Swift bridge lockstep: the committed bridge-manifest.json /
       # BridgeManifest.swift must equal a regeneration, the shim surface must
       # match preload, and the payload SHAPE at every method call site must
@@ -343,7 +343,7 @@ jobs:
           node packages/desktop/bridge-manifest.test.ts
           node packages/desktop/bridge-shim.test.ts
           node packages/desktop/bridge-shim-surface.test.ts
-          node scripts/gates/verify-shim-payload-shape.mjs
+          node scripts/gates/checks/verify-shim-payload-shape.mjs
 
   # macOS packaging half of the leg, split out of `test-macos` so the two run on
   # their own runners in parallel: the native-sidecar assembly gates and the
@@ -368,7 +368,7 @@ jobs:
           # exist locally.
           fetch-depth: 0
       - name: Verify workflow action pins
-        run: node scripts/gates/verify-workflow-action-pins.mjs
+        run: node scripts/gates/checks/verify-workflow-action-pins.mjs
       # The same change classifier as the core mac leg: a prose-only push skips
       # the packaging chain too (ci.yml owns no tag path; the proof watches this
       # job on main).
@@ -378,7 +378,7 @@ jobs:
           CI_BEFORE: ${{ github.event.before }}
           CI_AFTER: ${{ github.sha }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/gates/classify-ci-changes.mjs
+        run: node scripts/gates/registry/classify-ci-changes.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.28.5
@@ -388,7 +388,7 @@ jobs:
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
       - name: Assert lockfile not rewritten
@@ -438,7 +438,7 @@ jobs:
         if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages
-          DSH_CHAMBER_SIDECAR_COMPILED=1 node scripts/gates/compiled-sidecar-smoke.mjs
+          DSH_CHAMBER_SIDECAR_COMPILED=1 node scripts/gates/checks/compiled-sidecar-smoke.mjs
       # Native GUI acceptance gate: the native assembly the packaged Swift shell
       # spawns must actually launch and serve. This step drives the sidecar built
       # by the step above (the
@@ -459,7 +459,7 @@ jobs:
         if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run build:renderer
-          node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web
+          node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web
       # Packaging dry runs (no network / no real Node download): the sidecar
       # assembly plan and the .app assembly plan validate their inputs.
       - name: Packaging dry runs (sidecar + .app)

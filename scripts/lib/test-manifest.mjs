@@ -225,7 +225,7 @@ function normalizeJoinedPath(base, reference) {
  * The reference is resolved lexically against the directory that declares it
  * ('' = the repository root, a package-relative dir for a package manifest or
  * helper) and compared with the file's own '/'-joined path. This is the ONE
- * criterion the standalone exemption below and scripts/gates/verify-test-wiring.mjs
+ * criterion the standalone exemption below and scripts/gates/checks/verify-test-wiring.mjs
  * share, so a bare basename substring, an `echo` mention and another package's
  * same-named file can never wire a file they do not name.
  * @param {string} reference - the reference text (quotes already irrelevant: the

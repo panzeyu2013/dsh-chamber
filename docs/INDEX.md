@@ -46,8 +46,8 @@
 ## 包契约与其它
 
 - 各包职责与测试入口：[`packages/*/README.md`](../packages/control-plane/README.md)（包清单以 `packages/` 目录为准，不在此手抄）。
-- 生成块单源：[`scripts/upstream/registry.json`](../scripts/upstream/registry.json) → `registry-views.mjs`；[`scripts/gates/gate-surfaces.json`](../scripts/gates/gate-surfaces.json) → `gate-workflow-views.mjs`。
-- 双语镜像：`docs/*.en-US.md` 与中文主档成对，结构由 [`verify-i18n`](../scripts/gates/verify-i18n.mjs) 校验。
+- 生成块单源：[`scripts/upstream/registry/registry.json`](../scripts/upstream/registry/registry.json) → `registry-views.mjs`；[`scripts/gates/registry/gate-surfaces.json`](../scripts/gates/registry/gate-surfaces.json) → `gate-workflow-views.mjs`。
+- 双语镜像：`docs/*.en-US.md` 与中文主档成对，结构由 [`verify-i18n`](../scripts/gates/checks/verify-i18n.mjs) 校验。
 
 ## 双语镜像
 

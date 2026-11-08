@@ -1,0 +1,499 @@
+/**
+ * Test-wiring gate: every `*.test.ts` / `*.test.mjs` under `packages/` and
+ * `scripts/` (the roots this gate walks) must be reachable from a script that
+ * actually runs, so a newly added test cannot sit
+ * on disk while the aggregate command stays green with less coverage than it
+ * claims.
+ *
+ * Why the check is shaped this way:
+ * - Scope is the owning package, plus the root manifest. A package's test file
+ *   may legitimately be wired by the root manifest (`packages/control-plane/
+ *   test/smoke.test.ts` is the root `smoke` script), so root references count
+ *   for every package.
+ * - A reference only counts when it RESOLVES to the file: a path-shaped token
+ *   (a script argument or a quoted file-list entry) is resolved against the
+ *   scope that declares it — the package dir for package evidence, the repo
+ *   root for root evidence — and compared with the file's own path. The
+ *   criterion is the shared one in `scripts/lib/test-manifest.mjs`
+ *   (`referenceResolvesToFile`), so the standalone exemption in the package
+ *   lockstep and this gate can never drift. A bare basename substring, an
+ *   `echo` mention or another package's same-named file does not wire.
+ * - An empty corpus is a failure: a gate that scans nothing has not passed.
+ *
+ * Usage:
+ *   node scripts/gates/checks/verify-test-wiring.mjs            # gate (exit 1 on unwired)
+ *   node scripts/gates/checks/verify-test-wiring.mjs --list     # report, never fails
+ */
+
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+// ONE wiring criterion for the repo-wide gate and the per-package lockstep
+// (scripts/lib/test-manifest.mjs): a reference wires a file only when it
+// RESOLVES to that file's own path.
+import { referenceResolvesToFile, wiringPathReferences } from '../../lib/test-manifest.mjs'
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+
+/** Repository directories that are scanned for test files. */
+export const TEST_SCAN_ROOTS = ['packages', 'scripts']
+
+// ONE ignore set + one walk for every gate that scans the repository
+// (scripts/lib/walk.mjs; P2-17 of the 13-scripts audit).
+import { IGNORED_DIRECTORIES, walkFiles } from '../../lib/walk.mjs'
+
+export { IGNORED_DIRECTORIES, walkFiles }
+
+/**
+ * Directory names this gate never descends into FOR THE `scripts/` SCAN ROOT.
+ * The shared walk ignores the name `release` because electron-builder writes its
+ * output there at the repo root, but the scripts root legitimately contains a
+ * source directory with that name: `scripts/release/` holds the release-policy tests.
+ * Filtering the shared union here is the same caller-side discipline
+ * run-script-tests.mjs documents (SCRIPT_TEST_IGNORED_DIRECTORIES): inheriting the
+ * union silently dropped those files from the corpus (619 scanned instead of the full on-disk set).
+ * The `packages/` root KEEPS the shared union: a local `npm run dist` creates
+ * `packages/desktop/release/` (electron-builder output), and scanning build output as
+ * source test files would report phantom unwired tests.
+ */
+export const TEST_WIRING_IGNORED_DIRECTORIES = new Set(
+  [...IGNORED_DIRECTORIES].filter(name => name !== 'release'),
+)
+
+/** Wiring forms accepted for one test file. */
+export const TEST_FILE_PATTERN = /\.test\.(?:ts|mjs)$/u
+
+/**
+ * macOS/Swift test surface (G24): `swift test` discovers XCTest cases by
+ * convention, so a file renamed off the Package.swift testTarget path — or a
+ * file whose methods stopped being named `func test*` — silently stops running
+ * while every JS gate stays green. The Swift corpus is therefore scanned with
+ * the same both-directions lockstep as packages/scripts: every file on disk
+ * must be inside a declared testTarget AND test-bearing, every declared
+ * testTarget must have files, and the root manifest must expose a Swift-suite
+ * script the gate entry (`run-checks.mjs`) actually references.
+ */
+export const SWIFT_TEST_SCAN_ROOT = 'macos/Tests'
+export const SWIFT_TEST_FILE_PATTERN = /\.swift$/u
+export const SWIFT_TEST_FUNC_PATTERN = /\bfunc\s+test[A-Za-z0-9_]*\s*\(/u
+
+/**
+ * Test files intentionally kept out of every script, each with the reason for
+ * the exemption. Adding an entry requires the same justification a reader
+ * would need to trust the gate stays meaningful.
+ * @type {readonly { path: string, reason: string }[]}
+ */
+export const UNWIRED_ALLOWLIST = []
+
+/**
+ * Collect test files from each scan root.
+ * @param {string} repoRoot - repository root.
+ * @returns {string[]} repository-relative test file paths, sorted.
+ */
+export function collectTestFiles(repoRoot) {
+  const files = []
+  for (const scanRoot of TEST_SCAN_ROOTS) {
+    const absolute = join(repoRoot, scanRoot)
+    if (!existsSync(absolute)) continue
+    // scripts/ keeps its own `release` source dir; packages/ keeps the shared
+    // union so electron-builder output under packages/desktop/release/ is not read
+    // as source test files.
+    const ignoredDirs = scanRoot === 'scripts' ? TEST_WIRING_IGNORED_DIRECTORIES : IGNORED_DIRECTORIES
+    for (const path of walkFiles(absolute, candidate => TEST_FILE_PATTERN.test(candidate), {
+      ignoredDirs,
+    })) {
+      files.push(relative(repoRoot, path).split(sep).join('/'))
+    }
+  }
+  return files.sort()
+}
+
+/**
+ * Collect every Swift file under macos/Tests.
+ * @param {string} repoRoot - repository root.
+ * @returns {string[]} repository-relative Swift file paths, sorted.
+ */
+export function collectSwiftTestFiles(repoRoot) {
+  const absolute = join(repoRoot, SWIFT_TEST_SCAN_ROOT)
+  if (!existsSync(absolute)) return []
+  return walkFiles(absolute, candidate => SWIFT_TEST_FILE_PATTERN.test(candidate))
+    .map(path => relative(repoRoot, path).split(sep).join('/'))
+    .sort()
+}
+
+/**
+ * Parse the test targets declared in macos/Package.swift. The path defaults to
+ * `Tests/<name>` (SwiftPM's convention) and is relative to the package root.
+ * @param {string} packageSwiftText - Package.swift content.
+ * @returns {{ name: string, path: string }[]} declared test targets in file order.
+ */
+export function parseSwiftTestTargets(packageSwiftText) {
+  const targets = []
+  for (const match of String(packageSwiftText ?? '').matchAll(/\.testTarget\(([\s\S]*?)\n\s*\)/gu)) {
+    const name = /name:\s*"([^"]+)"/u.exec(match[1])?.[1]
+    if (name === undefined) continue
+    const path = /path:\s*"([^"]+)"/u.exec(match[1])?.[1] ?? `Tests/${name}`
+    targets.push({ name, path })
+  }
+  return targets
+}
+
+/**
+ * Escape one literal for use inside a RegExp.
+ * @param {string} value - literal text.
+ * @returns {string} escaped text.
+ */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/**
+ * Read the root manifest's Swift-suite script. Both wiring forms count: a raw
+ * `swift test ...` command and a delegation to run-swift-tests.mjs.
+ * @param {unknown} manifest - parsed root package.json.
+ * @returns {{ name: string, command: string } | null} the first matching script.
+ */
+export function findSwiftTestScript(manifest) {
+  const scripts = manifest !== null && typeof manifest === 'object' ? manifest.scripts : undefined
+  if (scripts === null || typeof scripts !== 'object') return null
+  for (const [name, command] of Object.entries(scripts)) {
+    if (typeof command !== 'string') continue
+    if (/\bswift\s+test\b/u.test(command) || /run-swift-tests\.mjs/u.test(command)) {
+      return { name, command }
+    }
+  }
+  return null
+}
+
+/**
+ * Lockstep between macos/Tests and the gate entry: the manifest must expose a
+ * Swift-suite script, and run-checks.mjs must reference that exact script name
+ * so a darwin `check:tests`/`check:full` really reaches it.
+ * @param {object} input - wiring evidence.
+ * @param {{ name: string, command: string } | null} input.script - `findSwiftTestScript` output.
+ * @param {string} input.runChecksText - scripts/gates/runners/run-checks.mjs content.
+ * @returns {string[]} problems, empty when the wiring is complete.
+ */
+export function swiftWiringProblems({ script, runChecksText }) {
+  if (script === null) {
+    return ['root package.json has no script that runs the Swift suite (swift test / run-swift-tests.mjs)']
+  }
+  const referenced = new RegExp(`['"]${escapeRegExp(script.name)}['"]`, 'u').test(String(runChecksText ?? ''))
+  if (!referenced) {
+    return [`scripts/gates/runners/run-checks.mjs does not reference the Swift-suite script '${script.name}' on darwin`]
+  }
+  return []
+}
+
+/**
+ * Decide which Swift test files XCTest can never discover, in both directions.
+ * @param {object} input - collected inputs.
+ * @param {string[]} input.testFiles - repository-relative Swift file paths.
+ * @param {{ name: string, path: string }[]} input.targets - repo-relative testTarget paths.
+ * @param {(relativePath: string) => string | null} input.readFile - Swift source reader.
+ * @param {readonly { path: string, reason: string }[]} [input.allowlist] - accepted exceptions.
+ * @returns {{ unwired: { path: string, reason: string }[], allowlisted: string[], corpusSize: number, missingTargets: string[] }} verdict.
+ */
+export function findUnwiredSwiftTests({ testFiles, targets, readFile, allowlist = UNWIRED_ALLOWLIST }) {
+  const allowlistedPaths = new Set(allowlist.map(entry => entry.path))
+  const unwired = []
+  const allowlisted = []
+  for (const file of testFiles) {
+    if (allowlistedPaths.has(file)) {
+      allowlisted.push(file)
+      continue
+    }
+    const inTarget = targets.some(target => file === target.path || file.startsWith(target.path + '/'))
+    if (!inTarget) {
+      unwired.push({ path: file, reason: 'not under a Package.swift testTarget path (never compiled)' })
+      continue
+    }
+    const text = readFile(file)
+    if (text === null) {
+      unwired.push({ path: file, reason: 'unreadable' })
+      continue
+    }
+    if (!SWIFT_TEST_FUNC_PATTERN.test(text)) {
+      unwired.push({ path: file, reason: 'no func test* declaration (XCTest would not discover it)' })
+    }
+  }
+  const missingTargets = targets
+    .filter(target => !testFiles.some(file => file === target.path || file.startsWith(target.path + '/')))
+    .map(target => target.path)
+  return { unwired, allowlisted, corpusSize: testFiles.length, missingTargets }
+}
+
+/**
+ * Read every string a manifest contributes as wiring evidence.
+ * @param {string} manifestPath - absolute `package.json` path.
+ * @returns {string} concatenated script text, empty when unreadable.
+ */
+function manifestScripts(manifestPath) {
+  if (!existsSync(manifestPath)) return ''
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    const scripts = manifest !== null && typeof manifest === 'object' ? manifest.scripts : undefined
+    if (scripts === null || typeof scripts !== 'object') return ''
+    return Object.values(scripts).filter(value => typeof value === 'string').join('\n')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Read every `.mjs`/`.mts` helper beside a package that may carry a file list.
+ * @param {string} directory - absolute directory to read.
+ * @returns {string} concatenated text of helper modules.
+ */
+function helperText(directory) {
+  if (!existsSync(directory)) return ''
+  const parts = []
+  for (const path of walkFiles(directory, candidate => /\.(?:mjs|mts|ts)$/u.test(candidate))) {
+    try {
+      parts.push(readFileSync(path, 'utf8'))
+    } catch {
+      /* unreadable helper contributes no wiring evidence */
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
+ * Extract the tool entry points a root manifest invokes via `node <scripts/…mjs>`.
+ *
+ * A declared entry point is wiring evidence: the scripts suites delegate their
+ * file list to `scripts/gates/runners/run-script-tests.mjs`, whose whole purpose is to
+ * name every test. Test files themselves are never followed — their prose could
+ * name an unrelated test and turn a real gap green.
+ * @param {unknown} scripts - a package.json `scripts` map.
+ * @returns {string[]} unique repository-relative entry point paths, manifest order.
+ */
+export function rootEntryPoints(scripts) {
+  if (scripts === null || typeof scripts !== 'object') return []
+  const found = []
+  for (const command of Object.values(scripts)) {
+    if (typeof command !== 'string') continue
+    for (const match of command.matchAll(/\bnode\s+(scripts\/[^\s'"]+\.mjs)/gu)) {
+      if (match[1].endsWith('.test.mjs')) continue
+      if (!found.includes(match[1])) found.push(match[1])
+    }
+  }
+  return found
+}
+
+/**
+ * Read the root manifest's declared entry points as wiring text.
+ * @param {string} repoRoot - repository root.
+ * @returns {string} concatenated entry point text, empty when none is readable.
+ */
+function rootEntryPointText(repoRoot) {
+  const manifestPath = join(repoRoot, 'package.json')
+  if (!existsSync(manifestPath)) return ''
+  let scripts
+  try {
+    scripts = JSON.parse(readFileSync(manifestPath, 'utf8'))?.scripts
+  } catch {
+    /* an unreadable root manifest contributes no evidence */
+    return ''
+  }
+  const parts = []
+  for (const path of rootEntryPoints(scripts)) {
+    try {
+      parts.push(readFileSync(join(repoRoot, path), 'utf8'))
+    } catch {
+      /* an unreadable entry point contributes no evidence */
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
+ * Build the wiring-evidence map keyed by the package that owns each test file.
+ * @param {string} repoRoot - repository root.
+ * @param {string[]} testFiles - repository-relative test file paths.
+ * @returns {{ root: string, byPackage: Map<string, string> }} wiring texts.
+ */
+export function wiringEvidence(repoRoot, testFiles) {
+  // Root evidence is the root manifest plus the tool entry points it declares:
+  // every repository-level test file is wired from a root script, and reading
+  // `scripts/**` wholesale would let an unrelated gate's prose count as wiring.
+  const root = [
+    manifestScripts(join(repoRoot, 'package.json')),
+    rootEntryPointText(repoRoot),
+  ].join('\n')
+  const byPackage = new Map()
+  const packages = new Set()
+  for (const file of testFiles) {
+    const segments = file.split('/')
+    if (segments[0] === 'packages' && segments.length > 2) packages.add(segments[1])
+  }
+  for (const name of packages) {
+    const directory = join(repoRoot, 'packages', name)
+    byPackage.set(name, [
+      manifestScripts(join(directory, 'package.json')),
+      helperText(join(directory, 'scripts')),
+    ].join('\n'))
+  }
+  return { root, byPackage }
+}
+
+/**
+ * Decide which test files no script reaches.
+ *
+ * A file is wired when a path-shaped reference in one of its scopes resolves to
+ * it: the owning package's evidence (package manifest scripts + helper sources,
+ * resolved against `packages/<pkg>`) or the root evidence (root manifest
+ * scripts + declared entry points, resolved against the repository root). The
+ * criterion is shared with the package lockstep in scripts/lib/test-manifest.mjs
+ * — a bare basename substring, an `echo` mention or another package's
+ * same-named file does not wire.
+ * @param {object} input - collected inputs.
+ * @param {string[]} input.testFiles - repository-relative test file paths.
+ * @param {{ root: string, byPackage: Map<string, string> }} input.evidence - wiring texts.
+ * @param {readonly { path: string, reason: string }[]} [input.allowlist] - accepted exceptions.
+ * @returns {{ unwired: string[], allowlisted: string[], corpusSize: number }} verdict.
+ */
+export function findUnwiredTests({ testFiles, evidence, allowlist = UNWIRED_ALLOWLIST }) {
+  const allowlistedPaths = new Set(allowlist.map(entry => entry.path))
+  const unwired = []
+  const allowlisted = []
+  for (const file of testFiles) {
+    if (allowlistedPaths.has(file)) {
+      allowlisted.push(file)
+      continue
+    }
+    const segments = file.split('/')
+    const scopes = [{ text: evidence.root, scopeDir: '' }]
+    if (segments[0] === 'packages' && segments.length > 2) {
+      scopes.push({ text: evidence.byPackage.get(segments[1]) ?? '', scopeDir: 'packages/' + segments[1] })
+    }
+    const wired = scopes.some(({ text, scopeDir }) => text !== ''
+      && wiringPathReferences(text).some(reference => referenceResolvesToFile(reference, scopeDir, file)))
+    if (!wired) unwired.push(file)
+  }
+  return { unwired, allowlisted, corpusSize: testFiles.length }
+}
+
+/**
+ * Detect repeated group keys in a test manifest.
+ *
+ * A manifest groups its files under a top-level `'name': [` key, and a JavaScript
+ * object literal keeps the LAST value of a repeated key: a path listed under an
+ * earlier duplicate never runs while `wiringEvidence` still matches its text, so
+ * the gate would report it as wired. Unique keys are what make the text-match
+ * verdict trustworthy.
+ * @param {string} source - manifest source text.
+ * @returns {string[]} keys declared more than once, in first-seen order.
+ */
+export function findDuplicateGroupKeys(source) {
+  const counts = new Map()
+  for (const match of String(source ?? '').matchAll(/^ {2}["']([^"']+)["']: \[/gmu)) {
+    counts.set(match[1], (counts.get(match[1]) ?? 0) + 1)
+  }
+  return [...counts].filter(([, count]) => count > 1).map(([key]) => key)
+}
+
+/** Render the allowlist as a reviewer-visible report line. */
+function describeAllowlist(allowlist) {
+  return allowlist.map(entry => `  - ${entry.path} — ${entry.reason}`).join('\n')
+}
+
+/** Read a UTF-8 file, or null when it is absent/unreadable. */
+function readTextOrNull(path) {
+  if (!existsSync(path)) return null
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+function main() {
+  const listOnly = process.argv.includes('--list')
+  const testFiles = collectTestFiles(REPO_ROOT)
+  const evidence = wiringEvidence(REPO_ROOT, testFiles)
+  const { unwired, allowlisted, corpusSize } = findUnwiredTests({ testFiles, evidence })
+
+  // macOS/Swift corpus (G24): files ↔ Package.swift testTargets, plus the
+  // manifest ↔ run-checks lockstep around the Swift-suite script.
+  const swiftFiles = collectSwiftTestFiles(REPO_ROOT)
+  const packageSwift = readTextOrNull(join(REPO_ROOT, 'macos', 'Package.swift')) ?? ''
+  const swiftTargets = parseSwiftTestTargets(packageSwift).map(target => ({
+    ...target,
+    path: 'macos/' + target.path,
+  }))
+  const swiftVerdict = findUnwiredSwiftTests({
+    testFiles: swiftFiles,
+    targets: swiftTargets,
+    readFile: file => readTextOrNull(join(REPO_ROOT, file)),
+  })
+  const swiftScript = findSwiftTestScript(
+    JSON.parse(readTextOrNull(join(REPO_ROOT, 'package.json')) ?? '{}'),
+  )
+  const swiftProblems = [
+    ...swiftVerdict.unwired.map(entry => `${entry.path} — ${entry.reason}`),
+    ...swiftVerdict.missingTargets.map(path => `${path} — declared testTarget has no Swift file (empty test target)`),
+    ...swiftWiringProblems({
+      script: swiftScript,
+      // The darwin gate set is declared in the machine source (gate-surfaces.json);
+      // run-checks only derives from it now, so both texts are the wiring surface.
+      runChecksText: (readTextOrNull(join(REPO_ROOT, 'scripts', 'gates', 'runners', 'run-checks.mjs')) ?? '')
+        + (readTextOrNull(join(REPO_ROOT, 'scripts', 'gates', 'registry', 'gate-surfaces.json')) ?? ''),
+    }),
+  ]
+  if (swiftTargets.length === 0) swiftProblems.push('macos/Package.swift declares no testTarget — nothing would compile')
+  if (swiftVerdict.corpusSize === 0) swiftProblems.push('macos/Tests holds no Swift test files — a gate that scans nothing has not passed')
+
+  // Manifest shadows: a repeated group key never runs its earlier list.
+  const manifestShadows = []
+  const scannedPackages = new Set()
+  for (const file of testFiles) {
+    const segments = file.split('/')
+    if (segments[0] !== 'packages' || segments.length < 3 || scannedPackages.has(segments[1])) continue
+    scannedPackages.add(segments[1])
+    const manifest = join(REPO_ROOT, 'packages', segments[1], 'scripts', 'test.mjs')
+    const text = readTextOrNull(manifest)
+    if (text === null) continue
+    for (const key of findDuplicateGroupKeys(text)) {
+      manifestShadows.push(`packages/${segments[1]}/scripts/test.mjs — group '${key}' is declared twice (JS keeps the last value, so the earlier list never runs)`)
+    }
+  }
+
+  if (corpusSize === 0) {
+    console.error('test wiring: no test files found — a gate that scans nothing has not passed')
+    process.exit(1)
+  }
+  if (allowlisted.length > 0) {
+    console.log(`test wiring: ${allowlisted.length} allowlisted file(s):`)
+    console.log(describeAllowlist(UNWIRED_ALLOWLIST))
+  }
+  if (listOnly) {
+    console.log(`test wiring: ${corpusSize} test file(s), ${unwired.length} unwired`)
+    for (const file of unwired) console.log(`  - ${file}`)
+    console.log(`swift wiring: ${swiftVerdict.corpusSize} Swift test file(s) in ${swiftTargets.length} testTarget(s), ${swiftProblems.length} problem(s)`)
+    for (const problem of swiftProblems) console.log(`  - ${problem}`)
+    return
+  }
+  if (unwired.length > 0 || swiftProblems.length > 0 || manifestShadows.length > 0) {
+    if (unwired.length > 0) {
+      console.error(`test wiring: ${unwired.length} test file(s) are on disk but no script runs them:`)
+      for (const file of unwired) console.error(`  - ${file}`)
+      console.error('Add each file to its package `test` script (or the owning file list), or record a justified allowlist entry.')
+    }
+    if (manifestShadows.length > 0) {
+      console.error(`test wiring: ${manifestShadows.length} shadowed group list(s) — the file looks wired but never runs:`)
+      for (const shadow of manifestShadows) console.error(`  - ${shadow}`)
+    }
+    if (swiftProblems.length > 0) {
+      console.error(`swift test wiring: ${swiftProblems.length} problem(s) — XCTest would not run every file:`)
+      for (const problem of swiftProblems) console.error(`  - ${problem}`)
+      console.error('Keep macos/Tests inside Package.swift testTargets with func test* declarations, and reference the Swift-suite script from run-checks.mjs.')
+    }
+    process.exit(1)
+  }
+  console.log(`test wiring: ${corpusSize} test file(s) all wired by a script`)
+  console.log(`swift wiring: ${swiftVerdict.corpusSize} Swift test file(s) wired via ${swiftScript?.name ?? '?'}`)
+}
+
+const isEntry = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
+if (isEntry) main()

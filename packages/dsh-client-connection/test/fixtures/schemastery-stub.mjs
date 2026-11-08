@@ -1,6 +1,6 @@
 /**
  * Fail-loud schemastery stand-in for node unit tests that import the
- * connection client chain (see scripts/dev/test-connection-loader.mjs).
+ * connection client chain (see scripts/dev/test-loaders/test-connection-loader.mjs).
  *
  * Module evaluation builds the exported schema constants (`src/index.ts`
  * Config, `src/recovery-config.ts` ConnectionRecoveryConfigSchema,

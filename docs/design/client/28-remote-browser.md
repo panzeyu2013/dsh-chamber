@@ -132,8 +132,8 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })
 - L2 源静态锁：sandbox 精确 token、referrerpolicy、title、`data-sidebar-browser-frame`、单 iframe、src 只来自 main/local 校验；sidebar-tabs keepMounted 结构面。**L3** 假 DOM 表达式。
 - L4 CDP 走查：W-13 面板、W-14a **local iframe 真跑**、W-14b remote（--attach 真实 ssh 或 --dev ssh-fixture）、W-15 系统浏览器出口（上游 external 出口语义）、W-15b 关 tab→面板移除+端口不可达（local 无 forward，不做 list 探针）、SH-7。
 - L5 headless 真 sshd（attach→alias→detach→端口不可达；reload/crash 重放；reaper）。
-- L6 Swift 真机/打包态（Electron 归档参考）：跨源 cookie/登录、XFO、证书错误、弹窗/下载、键盘/焦点、拖拽/分栏、隐藏源壳回收、kill -9；打包态本机 smoke（Electron CDP 腿，已归档）= `scripts/gui-acceptance/packaged-ssh-smoke.mjs`，现行 Swift `.app` 按 `gui-acceptance-checklist.md` §4.2 真机/打包态执行（W-13…W-15b）。
-- 门禁：本地 `check:static` + `check:tests`（file-budgets 零增长/已裁决 raise、test-wiring、包边界、死导出、import 循环、typecheck、desktop/renderer-shell 测试）；打包/真机 `build:renderer`、`build:sidecar`、`build:swift-app`、`test:swift`/`test:macos`、`test:sidecar:compiled`、`acceptance:gui`、`verify:shim-payload`（Electron/Windows 冻结腿不跑）；发布前 `release-preflight` + packaging closure（根模块 100）；门禁集合以 `scripts/gates/run-checks.mjs` 为机器单源，本节不重复枚举；bridge 数字校正（58 invoke / 9 push / 67）；forward 面测试 = `packages/desktop/test/forward/`。
+- L6 Swift 真机/打包态（Electron 归档参考）：跨源 cookie/登录、XFO、证书错误、弹窗/下载、键盘/焦点、拖拽/分栏、隐藏源壳回收、kill -9；打包态本机 smoke（Electron CDP 腿，已归档）= `scripts/gui-acceptance/drivers/packaged-ssh-smoke.mjs`，现行 Swift `.app` 按 `gui-acceptance-checklist.md` §4.2 真机/打包态执行（W-13…W-15b）。
+- 门禁：本地 `check:static` + `check:tests`（file-budgets 零增长/已裁决 raise、test-wiring、包边界、死导出、import 循环、typecheck、desktop/renderer-shell 测试）；打包/真机 `build:renderer`、`build:sidecar`、`build:swift-app`、`test:swift`/`test:macos`、`test:sidecar:compiled`、`acceptance:gui`、`verify:shim-payload`（Electron/Windows 冻结腿不跑）；发布前 `release-preflight` + packaging closure（根模块 100）；门禁集合以 `scripts/gates/runners/run-checks.mjs` 为机器单源，本节不重复枚举；bridge 数字校正（58 invoke / 9 push / 67）；forward 面测试 = `packages/desktop/test/forward/`。
 
 ## 10. 回退 / 迁移
 

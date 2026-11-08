@@ -1,0 +1,734 @@
+{
+  "schema": 1,
+  "pins": {
+    "sourceLine": "harness.commit",
+    "runtimeLine": "packages/desktop/vendor/dsh/pnpm-lock.yaml",
+    "forkAnchors": [
+      "packages/*/package.json"
+    ]
+  },
+  "authorityEnum": [
+    "chamber",
+    "upstream"
+  ],
+  "chamberNamedForks": [
+    "packages/dsh-chamber-client-ui-layout",
+    "packages/dsh-chamber-client-ui-sidebar",
+    "packages/dsh-chamber-seed-open-in"
+  ],
+  "excludedUpstreamDirs": [
+    "packages/api/gateway",
+    "packages/client/connection",
+    "packages/client/web"
+  ],
+  "criteriaCodeOnly": [
+    "C10",
+    "C11",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C4",
+    "C7",
+    "C8",
+    "C9"
+  ],
+  "vendorSourceConsumers": [
+    {
+      "consumer": "packages/renderer/src/host-graph.ts",
+      "vendorFile": "vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts",
+      "symbols": [
+        "optionalStringArray",
+        "stripClientSuffix"
+      ],
+      "reason": "boot-graph wire validators are upstream's own (never a hand-rolled copy); plain-node tests cannot resolve @deepseek-ai/* and the module is browser-safe with zero runtime imports",
+      "retiresWhen": "dsh-client-modules exports optionalStringArray on its public ./client face"
+    }
+  ],
+  "patches": [
+    {
+      "spec": "@botiverse/oar@0.67.0",
+      "file": "patches/@botiverse__oar@0.67.0.patch",
+      "runtimeClosure": false,
+      "note": "oar 委派（experimental subagent-oar）依赖；上游 build/dev 图依赖，不在运行期闭包（allowUnusedPatches 豁免；运行期锁只登记补丁、无该包快照）；补丁随上游 pin 重锚"
+    },
+    {
+      "spec": "@earendil-works/pi-ai@1.3.0",
+      "file": "patches/@earendil-works__pi-ai@1.3.0.patch",
+      "runtimeClosure": true,
+      "note": "pi-ai 流式修复：delta 期间不解析参数（toolcall partial 保持 {}），并回放 Gemini thought_signature（写入 block.thoughtSignature + convertMessages 透传 extra_content.google.thought_signature）；运行期闭包内的依赖（runtime lock 记录 patch_hash）；补丁随上游 pin 重锚"
+    },
+    {
+      "spec": "@electron/osx-sign@1.3.3",
+      "file": "patches/@electron__osx-sign@1.3.3.patch",
+      "runtimeClosure": false,
+      "note": "打包签名工具面；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "@fortune-sheet/core@1.0.4",
+      "file": "patches/@fortune-sheet__core@1.0.4.patch",
+      "runtimeClosure": false,
+      "note": "excel 预览依赖；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "@fortune-sheet/react@1.0.4",
+      "file": "patches/@fortune-sheet__react@1.0.4.patch",
+      "runtimeClosure": false,
+      "note": "excel 预览依赖；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "@yao-pkg/pkg@6.21.0",
+      "file": "patches/@yao-pkg__pkg@6.21.0.patch",
+      "runtimeClosure": false,
+      "note": "打包工具面；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "app-builder-lib@26.17.0",
+      "file": "patches/app-builder-lib@26.17.0.patch",
+      "runtimeClosure": false,
+      "note": "打包工具面（DMG ULMO 格式校验，build host 执行）；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "exceljs@4.4.0",
+      "file": "patches/exceljs@4.4.0.patch",
+      "runtimeClosure": false,
+      "note": "excel 载荷依赖；不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "lexical@0.49.0",
+      "file": "patches/lexical@0.49.0.patch",
+      "runtimeClosure": false,
+      "note": "ui-conversation 编辑器（Lexical）依赖，上游 devDependencies；随上游 pin 补丁集进入本仓，不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "mdast-util-gfm-autolink-literal@2.0.1",
+      "file": "patches/mdast-util-gfm-autolink-literal@2.0.1.patch",
+      "runtimeClosure": false,
+      "note": "Markdown GFM 自动链接解析（client 面）；随上游 pin 补丁集进入本仓，不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "micromark-extension-gfm-autolink-literal@2.1.0",
+      "file": "patches/micromark-extension-gfm-autolink-literal@2.1.0.patch",
+      "runtimeClosure": false,
+      "note": "Markdown GFM 自动链接扩展（client 面）；随上游 pin 补丁集进入本仓，不在运行期闭包（allowUnusedPatches 豁免）"
+    },
+    {
+      "spec": "node-pty@1.2.0-beta.15",
+      "file": "patches/node-pty@1.2.0-beta.15.patch",
+      "runtimeClosure": true,
+      "note": "DSH_NODE_PTY_SPAWN_HELPER；运行期与 dev/根两条安装腿都已记录 patch_hash（根 workspace 副本在仓内 patches/）"
+    }
+  ],
+  "generatedBlocks": [
+    "touchpoints.fork-mirror.api-gateway",
+    "touchpoints.fork-mirror.client-web",
+    "touchpoints.fork-mirror.connection",
+    "touchpoints.fork-mirror.layout",
+    "touchpoints.fork-mirror.seed-open-in",
+    "touchpoints.fork-mirror.ui-sidebar",
+    "touchpoints.index"
+  ],
+  "entries": [
+    {
+      "id": "fork.dsh-client-connection",
+      "type": "fork",
+      "name": "connection",
+      "ours": "packages/dsh-client-connection",
+      "upstream": "packages/client/connection",
+      "versionAnchor": "upstream",
+      "classify": {
+        "patched": {
+          "README.i18n.yaml": "[own-divergent] chamber 冻结说明面（不随 pin 追上游 README；当前字节是上游文本的 chamber 裁减/改写版，非逐字副本：en 删 installConnection 内部段、zh 另有数段改写；上游文档更新有意不镜像）",
+          "README.md": "[own-divergent] chamber 冻结英文说明面（同 README.i18n.yaml；当前字节非上游逐字副本）",
+          "README.zh.md": "[own-divergent] chamber 冻结中文说明面（同 README.i18n.yaml；当前字节非上游逐字副本）",
+          "package.json": "[patch-mod] 追加 chamber test 脚本 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
+          "src/api-path.ts": "[patch-mod] 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §6）",
+          "src/client/connection.ts": "[patch-mod] erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明 + 若干上游 JSDoc 压缩删除；其余逐字节上游（重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable）",
+          "src/client/index.ts": "[patch-mod] 当前代重锚：apply(ctx) 读 entry Context 的 chamberBasePath → installConnection({basePath}) → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出；上游的 installConnection/ConnectionInstallOptions/transport.rpc 原样保留",
+          "src/client/rpc.ts": "[patch-mod] 当前代重锚：WebConnectionRpcOptions + basePath 前缀拼装（stock 保持上游 document-relative 路由；上游二进制响应/uplink 原样保留）+ 502/504 带 details.phase=after-body 时抛出「可能已生效」文案（普通 Error + 稳定 message；design 27 §3.5；有界 fail-soft 读取，未知形态保持原 transport 文案）",
+          "tsconfig.client.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护）",
+          "tsconfig.host.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（src/peer.ts、src/client/rpc.ts、src/client/random-uuid.ts）"
+        },
+        "own": {
+          "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
+          "tsconfig.check-base.json": "chamber erasable-only 校验构面",
+          "tsconfig.check-client.json": "chamber erasable-only 校验构面（files 与 client 同步）",
+          "tsconfig.check-host.json": "chamber erasable-only 校验构面（files 与 host 同步）"
+        },
+        "ownPrefix": [
+          "src/client/carrier-assembly.ts",
+          "src/client/liveness-triggers.ts",
+          "src/client/recovery-policy.ts",
+          "test/"
+        ],
+        "ownNotes": {
+          "src/client/carrier-assembly.ts": "chamber 载波装配纯策略（basePath 扇出）",
+          "src/client/liveness-triggers.ts": "chamber sleep/wake 活性触发（design 14；原生 reconnect + 离线门 + 唤醒事件旁路）",
+          "src/client/recovery-policy.ts": "chamber 每来源恢复时序策略（远端 45s/5s，本地保持上游默认）",
+          "test/": "chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures（含 schemastery/fixture/recovery-config 桩 loader））"
+        },
+        "dropped": [
+          "locale/",
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
+          "tests/": "chamber 无 tsdown / 不镜像上游测试",
+          "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游测试"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5",
+        "C6"
+      ],
+      "deviations": [],
+      "relatedGates": [],
+      "symbols": [
+        "src/api-path.ts#resolveInstanceBasePath"
+      ],
+      "evidence": "node scripts/upstream/verify/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "fork.dsh-client-web",
+      "type": "fork",
+      "name": "client-web",
+      "ours": "packages/dsh-client-web",
+      "upstream": "packages/client/web",
+      "versionAnchor": "upstream",
+      "classify": {
+        "patched": {
+          "README.i18n.yaml": "[own-divergent] chamber README 对的哈希记录",
+          "README.md": "[own-divergent] chamber 说明（boot kernel 差异/维护约定），非上游镜像",
+          "README.zh.md": "[own-divergent] 同 README.md（中文镜像）",
+          "package.json": "[patch-mod] 描述/测试脚本/deps·peerDeps 面差异 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
+          "src/boot.ts": "[patch-mod] N-ctx boot kernel（extraRows / __ModuleLoader__ / configureContext / 异步 dispose）",
+          "src/index.ts": "[patch-mod] 入口差异（module-system 宿主接线）",
+          "src/platform.ts": "[patch-mod] PLATFORM_MODULES/静态表 chamber 接线（C3 偏差：ui-primitives 不 seed）",
+          "src/seed.ts": "[patch-mod] seed 行 chamber 接线（extraRows/__ModuleLoader__；C3 偏差同步）",
+          "tsconfig.json": "[patch-mod] chamber 构面（vendor paths/检查面）"
+        },
+        "own": {
+          "scripts/test.mjs": "chamber 测试清单委托共享 runner（scripts/lib/test-manifest.mjs）：3 文件表 + configure-context 的 vendor register 参数",
+          "src/boot-rows.ts": "chamber 每实例 boot-rows（design 09 module D）",
+          "src/boot-tolerance.ts": "chamber boot 容忍/恢复（design 09）",
+          "src/extra-chunk-owners.ts": "chamber extra rows 的包内动态 chunk owner 登记/撤销（design 09）"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（boot-tolerance/boot-rows/configure-context + fixtures）"
+        },
+        "dropped": [
+          "src/apply-injections.ts",
+          "src/boot-client.ts",
+          "src/mount.ts",
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "src/apply-injections.ts": "上游当前代的 index 注入表解释器，服务 apps/web 的 __DSH_BOOT_READY__/Host rows；chamber 不消费（index.ts 刻意不导出 applyIndexInjections，package.json 也无 ./injections 子路径），注入面由 host boot graph + N-ctx kernel 接管",
+          "src/boot-client.ts": "上游当前代抽出的 bootClient/assertEntriesActive 组合；chamber kernel 在 src/boot.ts 内联 boot 建 entry+await+audit 半边并叠加 extraRows 合并 + boot-tolerance 容忍；entries.start/sync 协调半边在 chamber 无消费者（其唯一消费者 HMR 行被覆盖集 skip，见 chamber-covered.ts）",
+          "src/mount.ts": "上游当前代抽出的 mountClient；chamber kernel 的 mountApp 已含同一 uiRenderer inject 挂载并附 15s 超时兜底",
+          "tests/": "chamber 无 tsdown / 不镜像上游测试（dropped 噪声面：变化只报不计失败，见 preflight 的 isDroppedNoise）",
+          "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游打包配置（dropped 噪声面）"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5",
+        "C6"
+      ],
+      "deviations": [],
+      "relatedGates": [],
+      "symbols": [
+        "src/boot.ts#AppWebEntry"
+      ],
+      "evidence": "node scripts/upstream/verify/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "fork.dsh-api-gateway",
+      "type": "fork",
+      "name": "api-gateway",
+      "ours": "packages/dsh-api-gateway",
+      "upstream": "packages/api/gateway",
+      "versionAnchor": "upstream",
+      "classify": {
+        "patched": {
+          "package.json": "[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ chamber test 脚本 + 删除死发布面 files/main/types（本仓不构建 lib、无发布路径；exports 面保持上游 lib 目标供 renderer 按包名消费；版本行随上游推进）",
+          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4）+ 生命周期取证通道 dsh-chamber:stream-forensics（generation 就绪/丢失；卡死排查）",
+          "src/client/journal-stream.ts": "[patch-mod] 静默看门狗（design 14 §D4 卡死排查）：已开启的 journal 静默 ≥45s 时开一条旁路 sibling follow、只比对 opening cursor，仅当宿主确已前进才替换物理世代（新 opening 以 replace 全窗口收敛）；不设盲空闲重启；探针节奏按无进展次数放宽至 90s 上限（探针自身失败/超时同样放宽）；prepend 用户读带 60s 期限",
+          "src/client/remote-stream.ts": "[patch-mod] 载波重试策略：活连接世代下的后续载波失败改走有界退避重开，不再逃逸为终局 gateway/internal（design 14 §D4；退避纯函数在同包 own 文件 remote-retry-policy.ts，patch 形状由 test/patch-lock 钉住）；4401/4403 的 RemoteStreamAuthError 映射为终态 gateway/auth（P1-3）",
+          "src/client/stream-client.ts": "[patch-mod] per-entry basePath（流载波 URL 拼装）+ 开帧发送前校验（socket 已被替换/正在关闭 ⇒ 载波失败，杜绝 RFC 6455 静默丢弃）+ 逻辑流首帧期限（单档 30s，按 endpoint+payload 摘要识别请求与连续超时计数，失败 inbox 走既有退避重开）+ 静默 socket 升级（首帧期限到期而当前 socket 本次尝试期间一帧未收 ⇒ replaceSocket() 换掉物理 socket，与连接泵 reconnect() 共用拆除道，不再在同一条静默载波上重发）+ socket 丢失后自行重排重连（1s 起、连接泵下令的重连不计失败、真实失败翻倍封顶 10s、成功即复位）+ WebSocket 握手期限 30s + socket 生命周期取证（lost/reconnect/attempt-failed/disposed/opening-timeout/socket-silent）+ teardown 分支：逻辑流在其整个生命期内该 socket 零帧且生命期 ≥ 表值 SILENT_TEARDOWN_MIN_MS（15s）⇒ 同一条换 socket 升级（覆盖 20s 探针 abort 早于 30s 预算的已开启会话形态）+ 非 OPEN socket（closed/closing/CONNECTING）绕过 60s rebuild 窗并按 50ms 下限防抖 + **证据型**拒绝在窗口边做一次延迟替换（可到达的两条腿：opening 期限——拒绝 reason 可为零帧派生的 socketNoFrame 或 openingStall；teardown 的 teardownNoFrame。执行器 arm 与 carrier-throttle-expired/carrier-rebuild 的取证都取 reducer 的裁决 reason（不取请求侧字面量）。handshakeTimeout 在 union 里但本驱动无发射点：握手到期只 reject 连接候选，pre-OPEN 走 non-OPEN bypass 或泵的 maintain 退避），lane 拒绝不排期（启发式不是载波证据；排期它会把每窗口一次的上限变成健康载波上 60s 一次重建；分类由 dsh-stream-state 的穷尽表 + isEvidenceBackedRebuild 持有（reducer 包拥有策略，执行器只问一次）） + carrier-throttled/throttle-expired/carrier-rebuild-bypass 取证",
+          "src/remote-error-codes.ts": "[patch-mod] P1-3 auth close 词表：登记 gateway/auth{closeCode}，供 remote-stream 把 4401/4403 映射为终态 gateway/auth（不重试）",
+          "tsconfig.client.json": "[patch-mod] chamber client 构面（files 表随新增 client 文件同步）",
+          "tsconfig.json": "[patch-mod] chamber 构面（files 表随新增 client 文件同步）"
+        },
+        "own": {
+          "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
+          "src/client/remote-retry-policy.ts": "chamber 载波退避纯函数（retry first/base/max 与无世代等待上限）+ 可中止等待 + 开帧身份键 streamOpeningKey + mux 自查重连重排区间 1s/10s（零 import，可脱离 vendor 图行为单测）；首帧期限、静默 teardown 下限与 WebSocket 握手期限均已单源于 @dsh-chamber/dsh-stream-state 的 tables.ts，本文件不再持有副本",
+          "src/client/stream-auth.ts": "chamber auth-close 判定叶（4401/4403 分类 + RemoteStreamAuthError 契约；零 import，可脱离 vendor 图单测）",
+          "src/client/stream-carrier-fact.ts": "chamber 载波故障页面事实（有界计数 + dsh-chamber:stream-carrier-failed；零 import，可注入 dispatch 单测）",
+          "src/client/stream-forensics.ts": "chamber 流生命周期取证事实（有界计数 + dsh-chamber:stream-forensics：socket lost/reconnect/disposed/silent、opening-timeout、generation ready/lost（detail 带 endpoint、streamId、waitedMs、best-effort sessionId）；零 import，可注入 dispatch 单测）",
+          "src/client/stream-stall-policy.ts": "chamber 静默看门狗纯决策（阈值 + probe/wait 判定；零 import，可脱离 vendor 图行为单测）",
+          "tsconfig.check-base.json": "chamber erasable-only 校验构面（files 与 client 同步）",
+          "tsconfig.check-client.json": "chamber erasable-only 校验构面（files 与 client 同步）"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（退避真值表 + 可中止等待 + 载波事实契约 + patch 源文本锁 + 载波自救行为用例 test/behavior/mux-self-heal.test.ts）"
+        },
+        "dropped": [
+          "README.i18n.yaml",
+          "README.md",
+          "README.zh.md",
+          "locale/",
+          "src/access.ts",
+          "src/index.ts",
+          "src/stream-server.ts",
+          "src/types.ts",
+          "tests/",
+          "tsconfig.host.json",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "README*": "上游 README 不携带（fork 描述在 package.json）",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
+          "src/access.ts": "上游新增的 host-half RBAC 策略文件（gateway 宿主侧 decide/allows）；本仓 fork 只取 client half（与 src/index.ts、src/stream-server.ts、src/types.ts 同口径不复制）。",
+          "src/index.ts": "上游 host 插件入口（chamber 不镜像 host 半）",
+          "src/stream-server.ts": "上游 host 半流服务器（dropped）",
+          "src/types.ts": "上游 host/aux 类型文件（源码与 inert ./types 子路径均已移除）",
+          "tests/": "chamber 无 tsdown / 不镜像上游测试（dropped 噪声面：变化只报不计失败）",
+          "tsconfig.host.json": "host 构面不镜像",
+          "tsdown.config.ts": "chamber 不构建 lib / 不镜像上游打包配置（dropped 噪声面）"
+        }
+      },
+      "authority": "chamber",
+      "retireWhen": "上游 client 半自带 per-entry base path 与 chamber 现有三件流可靠性（carrier retry / opening deadline + silent-socket upgrade / journal stall watchdog）后，本 fork 与 G43 一起退役：pin 升级改为整体替换，不再重放。",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5",
+        "C6"
+      ],
+      "deviations": [
+        "G43"
+      ],
+      "relatedGates": [
+        "packages/dsh-api-gateway/test/behavior/client-unary-result.test.ts",
+        "packages/dsh-api-gateway/test/behavior/client-uplink-support.test.ts",
+        "packages/dsh-api-gateway/test/behavior/mux-self-heal.test.ts",
+        "packages/dsh-api-gateway/test/behavior/stream-auth-close.test.ts",
+        "packages/dsh-api-gateway/test/patch-lock/base-path-normalization-lock.test.ts",
+        "packages/dsh-api-gateway/test/patch-lock/journal-stall-watchdog-lock.test.ts",
+        "packages/dsh-api-gateway/test/patch-lock/remote-stream-carrier-retry-lock.test.ts",
+        "test:api-gateway",
+        "typecheck:api-gateway",
+        "typecheck:connection",
+        "verify:upstream-lifecycle-contract"
+      ],
+      "symbols": [
+        "src/client/index.ts#apply",
+        "src/client/journal-stream.ts#RemoteJournalStream",
+        "src/client/remote-retry-policy.ts#remoteStreamRetryDelayMs",
+        "src/client/remote-retry-policy.ts#streamOpeningKey",
+        "src/client/remote-stream.ts#RemoteStream",
+        "src/client/stream-auth.ts#isRemoteStreamAuthCloseCode",
+        "src/client/stream-carrier-fact.ts#createCarrierFailureReporter",
+        "src/client/stream-client.ts#RemoteStreamMuxClient",
+        "src/client/stream-forensics.ts#createStreamForensicsReporter",
+        "src/client/stream-stall-policy.ts#decideStreamStallAction"
+      ],
+      "evidence": "node scripts/upstream/verify/verify-upstream-touchpoints.mjs；升级裁决点：descriptor 带 uplink 半边时复核 client-uplink-support.test.ts 的 ClientStreamHandle/ClientUplinkQueue 契约——上游 terminal/attach 取 invocation.uplink()、官方客户端用 handle.send()，故保持接线（send/end 到所选载波、dispose 发 cancel，终止帧已到时除外），不得退回 fail-loud；mux-self-heal.test.ts 钉住生成 handle 的 open→item/end 线序、dispose→cancel 与终止帧例外；实机 attach/重连验收仍是 open 项（见 docs/progress/STATUS.md，G43）。client-unary-result.test.ts 钉住 unary 的 descriptor.result.decode 与 abort 竞态（成功/错误答复两侧）。",
+      "status": "open"
+    },
+    {
+      "id": "seed.dsh-chamber-seed-open-in",
+      "type": "seed",
+      "name": "seed-open-in",
+      "ours": "packages/dsh-chamber-seed-open-in",
+      "upstream": "packages/host/open-in-app",
+      "versionAnchor": "chamber",
+      "classify": {
+        "patched": {
+          "package.json": "[patch-mod] chamber seed package（自有名字/版本/构建入口；upstream 名与发布面不复制）",
+          "src/index.ts": "[patch-mod] typert 门面取代 webServer 路由 + Config schema + SSH 休眠门（design 20 §6.1）",
+          "src/shared.ts": "[patch-mod] wire 契约家：上游三条 webServer 路由常量 → typert Remote 方法名 + 域载体（design 20 §4.1/§6.1）",
+          "tsconfig.json": "[patch-mod] chamber 构面（vendor paths + 本包 files）"
+        },
+        "own": {
+          "dist/index.js": "chamber 构建期生成产物（不提交；clean checkout 由 pnpm run build:artifacts 自举；C8 逐字节重建-比对；上游无对应文件）",
+          "scripts/build.mjs": "chamber esbuild 产物构建",
+          "scripts/test.mjs": "chamber 测试清单委托共享 runner（scripts/lib/test-manifest.mjs）：文件表 + core.test.ts 的 transform-types/vendor-stub 加载参数",
+          "src/core.ts": "chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门）"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（域契约 + 载荷拒绝矩阵 + vendor stub loader）"
+        },
+        "dropped": [
+          "README.i18n.yaml",
+          "README.md",
+          "README.zh.md",
+          "locale/",
+          "src/internals.ts",
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "README*": "上游 README 不携带（fork 描述在 package.json/源码首页）",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
+          "src/internals.ts": "上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）",
+          "tests/": "上游测试不镜像（本包 test/ 覆盖域契约）",
+          "tsdown.config.ts": "上游打包配置（本包走 scripts/build.mjs）"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5"
+      ],
+      "deviations": [],
+      "relatedGates": [],
+      "symbols": [
+        "src/core.ts#OpenInAppError"
+      ],
+      "evidence": "node scripts/upstream/verify/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "seed.dsh-chamber-client-ui-layout",
+      "type": "seed",
+      "name": "layout",
+      "ours": "packages/dsh-chamber-client-ui-layout",
+      "upstream": "packages/client/ui-layout",
+      "versionAnchor": "chamber",
+      "classify": {
+        "patched": {
+          "README.md": "[own-divergent] chamber fork 说明（动机/形状/深引 frame 面），非上游镜像",
+          "package.json": "[patch-mod] chamber 自有包名/版本/测试脚本/deps·peerDeps 面（上游发布面与类型入口不复制；版本行不随上游）",
+          "src/client/index.ts": "[patch-mod] 上游 client index 逐字副本上的 chamber 增量：store 换本包 stores.ts（共享+持久侧栏宽度，design 06）+ 根 standard prop chamberFileApiBase（design 09 §3.6）+ 活动视图门控的文档级 theme 投影；frame/service/columns/theme-presenter 深引 vendor 源，inject 面、注册顺序与 priority 不变",
+          "src/client/stores.ts": "[patch-mod] vendor 每 boot 未持久 store → 本包共享/持久 store：view-prefs 播种与写回（150ms 尾随去抖）+ 跨 boot 订阅采纳（关闭态不回开/同值不循环）；右栏与窄屏覆盖保持 transient（design 06）",
+          "tsconfig.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + rootDir ../.. + 排除 vendor；上游 project references 不镜像"
+        },
+        "own": {
+          "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
+          "src/client/document-theme.ts": "chamber 活动视图门控的文档级主题投影（design 06 §4.6；teardown 不回撤、未知活动源 fail-open）",
+          "src/client/store-core.ts": "chamber 布局 store 纯核心工厂（注入式 env；八动作，node 可直测）",
+          "src/client/theme-cache.ts": "chamber 页面级按源主题快照缓存 + 冷切换 prime 决策（design 06 §4.6）",
+          "src/vendor-modules.d.ts": "repo 级共享 ambient vendor 面的 /// <reference> 存根；全部 dsh specifier 面已合并到 types/vendor-modules.d.ts（vendor 源树无构建类型输出）"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（layout-store：共享/持久/采纳/去抖；document-theme：活动视图门控与 prime 决策）"
+        },
+        "dropped": [
+          "README.i18n.yaml",
+          "README.zh.md",
+          "locale/",
+          "src/client/AppFrame.module.css",
+          "src/client/AppFrame.tsx",
+          "src/client/DocumentTitle.tsx",
+          "src/client/columns.ts",
+          "src/client/service.ts",
+          "src/client/theme-presenter.ts",
+          "src/css-modules.d.ts",
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "README.i18n.yaml": "上游 README 对的哈希记录不携带（fork 说明在 README.md/package.json）",
+          "README.zh.md": "中文 README 不镜像（chamber 说明只有一份）",
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
+          "src/client/AppFrame.module.css": "frame 样式不镜像：深引 vendor 源",
+          "src/client/AppFrame.tsx": "frame 不镜像：深引 vendor 源（三列网格/拖拽/列解算仍是上游实现）",
+          "src/client/DocumentTitle.tsx": "上游同包文件，本 fork 不镜像（vendor 树内保留）",
+          "src/client/columns.ts": "列几何不镜像：深引 vendor 源并以其常数钉 clamp 范围",
+          "src/client/service.ts": "LayoutController/ILayout/PanelInfo 面深引 vendor 源",
+          "src/client/theme-presenter.ts": "文档级投影仍用 vendor ThemePresenter（本包只加活动视图门控）",
+          "src/css-modules.d.ts": "本包不编译 vendor CSS module；实际 specifier 的 ambient 面在 src/vendor-modules.d.ts",
+          "tests/": "上游 tsdown spec 不镜像（本包 test/ 覆盖 store 与 theme 决策）",
+          "tsdown.config.ts": "死配置：本仓不构建 lib、引用不存在的 tsdown.client.ts，已删除"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5"
+      ],
+      "deviations": [],
+      "relatedGates": [
+        "packages/dsh-chamber-client-ui-layout/test/document-theme.test.ts",
+        "packages/dsh-chamber-client-ui-layout/test/layout-store.test.ts",
+        "test:layout",
+        "typecheck:layout"
+      ],
+      "symbols": [
+        "src/client/document-theme.ts#createDocumentThemeProjector",
+        "src/client/index.ts#apply",
+        "src/client/store-core.ts#createLayoutStore",
+        "src/client/stores.ts#trackLayoutInstance",
+        "src/client/theme-cache.ts#resolveSourceThemeCache"
+      ],
+      "evidence": "node scripts/upstream/verify/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "fork.dsh-chamber-client-ui-sidebar",
+      "type": "fork",
+      "name": "ui-sidebar",
+      "ours": "packages/dsh-chamber-client-ui-sidebar",
+      "upstream": "packages/client/ui-sidebar",
+      "versionAnchor": "chamber",
+      "classify": {
+        "patched": {
+          "README.i18n.yaml": "[own-divergent] chamber README 对的哈希记录",
+          "README.md": "[own-divergent] chamber 多来源侧栏说明，非上游镜像",
+          "README.zh.md": "[own-divergent] 同 README.md（中文镜像）",
+          "package.json": "[patch-mod] chamber 包名/版本/测试脚本（版本行走 chamber 发布）",
+          "src/client/SidebarRoot.module.css": "[patch-mod] 重实现样式（多来源列表/行悬停卡/归档管理器/来源信号灯）；当前 pin 上游已包含 More 菜单样式（`.moreAnchor` 锚点包装、`.panelRow[aria-expanded='true']` 悬停底色、`.moreMenu` 288px + 视口上限）并把 `.panelList` 行距 4px→2px；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 06 §4.7；docs/progress/STATUS.md §4.2）；当前 pin 上游在本文件发布 `--dsh-sidebar-*` 变量契约与几何（inline-padding 8px、row-padding 12px、label-gap 6px、paint-inset 3px），本仓壳自持 12px inline padding 但发布其余三个词（消费方是随包出货的 ui-workspace/ui-settings-* CSS；这些组件在 `.root` 子树挂载就需要定义，缺失会让整条 calc/`gap` 声明失效——稳态它们不在场，当前只修官方 settings 壳的回落路径）",
+          "src/client/SidebarRoot.tsx": "[patch-mod] 重实现：多来源会话列表（按工作区分组、搜索/排序/归档管理器/悬停卡片/来源信号灯）替换上游单来源 workspaces 浏览器；面板轴：宽态入口由每个来源自己的 server 头动作簇渲染（ServerSectionHeader：owning 来源用本壳 PanelHeaderEntry 真身；非活动来源经页面级 panel-axis 投影渲染 ForeignPanelHeaderEntry，未挂载且 connected 时回落 pin 默认组合的时钟快捷键），本文件的 sidebar.panellist 轴降为 rail-only（design 05 §2 / 06 §4.7）；当前 pin 上游已包含条目 analytics（`officialEntry` 把 plugins/schedules 映射为 plugin/cron，经注入的 `trackEntryClick` 上报 `sidebar_menu_click`，panel 行与 New Session 以 position=sidebar/titlebar 区分）与 More 启动器 `PanelMoreMenu`（`Menu` 里渲染 `sidebar.panellist.actions`、按 `entryPins` 过滤未固定行且 FIXED_PANEL_ID 恒显示）；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 05 §2 / 06 §4.7；docs/progress/STATUS.md §4.2）",
+          "src/client/contract/slots.ts": "[patch-mod] chamber 座位契约（owner props 同名但按多来源扩展）；承接 ui-workspace 的 `sidebar.session.row.{leading,hover}` SlotMap 合并（座席所有权转移，vendor 补丁 13）；sidebar.panellist 的来源级措辞与面板选择器别名 PanelSelectorHook（= SnapshotSelectorHook<PanelInfo>）；当前 pin 上游已包含 `sidebar.panellist.actions` 洞与 `SidebarPanelActionEntry`/`SidebarPanelActionsOwnerProps`（entries/onOpen/onPinnedChange/onDismiss）、注入面 `setPinned` 与 `trackEntryClick`（`ProductEventMap['sidebar_menu_click']`）、hooks 的 `entryPins`/`entryActions` 快照，并把该洞并入根组件 props 的 slot 并集；本仓决定：不采纳（侧栏 More/条目 analytics 面，该洞与 panel-pins 一并 dropped），采纳时须整包重放该文件（design 05 §2 / 06 §4.7；docs/progress/STATUS.md §4.2）",
+          "src/client/index.ts": "[patch-mod] apply：注册 chamber 侧栏 + 面板轴投影（sidebar.panellist 镜像 → 页面级 panel-axis 发布，供任意壳的非活动来源头渲染该来源自己的入口；一次性 selectPanel 意图由目标来源自己的壳消费；rail 供字形轴）+ workspace navigation 服务 + shell.leading 席位由本包 SidebarLeadingControls（上游同形 clone）占座；座席所有权转移后续：本包自行声明并渲染 `sidebar.session.row.{leading,hover}`（原声明由 vendor 补丁 13 删除）；当前 pin 上游在本文件接入 `createPanelPins` 与 `entryActions`（由 `entriesOfSlot('sidebar.panellist.actions')` 派生）、子洞表登记该洞、注入面加 `setPinned`/`trackEntryClick`（原 `selectPanel` 内的 plugins/schedules 上报移入 PanelRow），并导出两个新 owner 类型；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 06 §4.7；docs/progress/STATUS.md §4.2）",
+          "src/client/locales.ts": "[patch-mod] chamber 文案表（含上游没有的工作区/来源操作）；当前 pin 上游已包含 `panels.more`（zh「更多」/ en「More」）一条 More 菜单文案；本仓决定：不采纳（侧栏 More/条目 analytics 面），采纳时须整包重放该文件（design 05 §2 / 06 §4.7；docs/progress/STATUS.md §4.2）",
+          "src/index.ts": "[patch-mod] 包入口差异（module-system 宿主接线 + chamber 构面导出）",
+          "tsconfig.json": "[patch-mod] chamber 构面（vendor paths/检查面）"
+        },
+        "own": {
+          "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）"
+        },
+        "ownPrefix": [
+          "scripts/",
+          "src/",
+          "test/"
+        ],
+        "ownNotes": {
+          "scripts/": "chamber 自有脚本（测试 manifest 与清单守卫）",
+          "src/": "chamber 自有实现（多来源聚合、面板轴（panel-source 镜像 + ServerSectionHeader 头内紧凑入口）、来源降级、归档管理器、工作区变更/拖拽排序、client-plugin load kernel、席位 chrome、按上游逐字移植的 keyed-row FLIP 动画器 rows/animated-rows.* 等）",
+          "test/": "chamber 自有测试（按域分组：session-rows/session-state/source-runtime/plugin-kernel…）"
+        },
+        "dropped": [
+          "locale/",
+          "src/client/HeaderLeadingControls.module.css",
+          "src/client/HeaderLeadingControls.tsx",
+          "src/client/panel-pins.ts",
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "locale/": "上游 fork 文案目录整体不镜像（chamber 侧文案与多来源界面自有实现，该 fork 无 locale 消费面）——按目录前缀登记，免逐语言追加；该目录只承载发布面文案数据，若上游把代码/类型放进此目录需重裁。",
+          "src/client/HeaderLeadingControls.module.css": "该组件的内部样式；上游文件不镜像、也不被消费——同一 shell.leading 席位由本包 SidebarLeadingControls.module.css（上游同形 clone）实现",
+          "src/client/HeaderLeadingControls.tsx": "上游组件不镜像、不被源码路径消费；同一 shell.leading 席位由本包 SidebarLeadingControls.tsx 注册占座（src/client/index.ts；vendor-modules.d.ts 只声明本包用到的类型面）",
+          "src/client/panel-pins.ts": "上游新增的面板固定/排序铺线（内存 store，无持久化）：chamber 未声明 sidebar.panellist.actions 洞、也不渲染上游的 More 菜单，故该文件无消费面——登记 dropped 以免 C1/C3 判为漏裁决（采纳 More 时整包再消费）",
+          "tests/": "上游测试/快照不镜像（chamber 有自建 test/）",
+          "tsdown.config.ts": "chamber 不构建 lib/（沿用上游模板形状但 chamber 树不产出该产物）"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5"
+      ],
+      "deviations": [],
+      "relatedGates": [
+        "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/foreign-panel-axis.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-entry-placement.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-source.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/archived-filter.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/flat-list.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/pin-partition.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/view-options-menu.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-rows/workspace-tree.test.ts"
+      ],
+      "symbols": [
+        "src/client/SidebarRoot.tsx#SidebarRoot"
+      ],
+      "evidence": "node scripts/upstream/verify/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "mirror.dsh-api-session-controller-goal",
+      "type": "mirror",
+      "ours": "packages/control-plane",
+      "upstream": "packages/api/session-controller",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/control-plane/test/protocol/session-mux.test.ts",
+        "packages/renderer/test/session-state/source-mux-facts-goal.test.ts"
+      ],
+      "symbols": [
+        "packages/dsh-chamber-wire/src/session-state.ts#SessionStateGoalActivationEvent",
+        "packages/dsh-chamber-wire/src/session-state.ts#SessionStateGoalFact",
+        "packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact"
+      ],
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验",
+      "status": "accepted",
+      "rationale": "goal wire 无自动化 vendor 源锁步：语义漂移只会保持 unknown（不误报），但白名单字段必须重锚；接受人工复验而非新增 C 编号门。边界事实（判据在 vendor 的 session-controller types.ts 的 one-update-per-event 注释，随 pin 移动而非随本句漂移）：session/control 与 session/observeProjections 的帧由每键一帧改为每事件一帧 changes[]；chamber 只读 unary session/list 与 $events、不解析这两条 $stream，将来接 adapter 必须按「引入该帧形态的那一代」upgrade-guide/projection-event-frames 迁移（本 pin 已含该代：`SessionProjectionUpdate` 即 changes[] 形态；chamber 不解析该流）（版本值不写进本文件）"
+    },
+    {
+      "id": "mirror.dsh-session-status-write-face",
+      "type": "mirror",
+      "ours": "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts",
+      "upstream": "packages/api/session-controller",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/dsh-chamber-client-ui-sidebar/test/session-state/status-write-face.test.ts",
+        "packages/dsh-chamber-client-ui-sidebar/test/session-state/vendor-session-fact-contract.test.ts"
+      ],
+      "symbols": [
+        "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#CONTRACT_STATUS_WRITE_METHODS",
+        "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#detectStatusWriteFace"
+      ],
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步复验 pin 住的 ISessions 契约；契约长出 status 写面即扩 CONTRACT_STATUS_WRITE_METHODS 并翻转探测（vendor-session-fact-contract.test.ts 的契约锁先红）。",
+      "status": "accepted",
+      "rationale": "tier-3 写回押在「上游公开但非 ISessions 契约」的 ClientSessions.handleSessionStatus 上：探测三分（contract / concrete+WARN-once / none 只读阶梯）把这一事实收成一个可测叶面，契约一旦长出写面即按 contract 支走，不再依赖具体成员名（I-10）。"
+    },
+    {
+      "id": "mirror.dsh-desktop-carrier-seats",
+      "type": "mirror",
+      "ours": "packages/desktop",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [
+        "S-56"
+      ],
+      "relatedGates": [
+        "macos/Tests/DSHChamberTests/HostPathCatalogTests.swift",
+        "packages/desktop/test/ipc/bridge-shim-document.test.ts",
+        "packages/desktop/test/ipc/bridge-shim-host-paths.test.ts",
+        "packages/desktop/test/ipc/desktop-carrier-surface.test.ts",
+        "packages/desktop/upstream-seats.test.ts",
+        "packages/renderer/test/frame-chrome/host-path-scope.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/ipc-events.ts#IPC_CHANNELS"
+      ],
+      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / macOS 窗口 chrome（darwin 分支逐值：hiddenInset、trafficLightPosition 16,18、vibrancy sidebar、visualEffectState active、backgroundColor #00000000）/ native theme 观察者 / dshDesktop protocolVersion 1 + deviceInfo 按需读 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52；darwin 收口 S-53/S-54）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。__DSH_HOST_PATHS__（apps/desktop/src/preload-app.ts）：Electron 镜像 webUtils.getPathForFile；Swift 腿因 WebKit 不暴露 DOM File 路径，以 HostPathCatalog.swift + bridge-shim 的「事件批次 × 拖拽板快照」相关性实现，两端共用文档根 data-chamber-painted-source 范围门控（屏上来源由 renderer 发布）。",
+      "status": "accepted",
+      "rationale": "官方共享 UI 的桌面判定与 dshDesktop 载体：Electron 半（preload.cts）随 2026-11 冻结归档作参考，Swift bridge-shim 与共享契约同形承载；native theme 通道改用 chamber 前缀。browser/webview 租客与 preload-menu 臂不采用（见 §4.5 审计表）。"
+    },
+    {
+      "id": "mirror.dsh-desktop-shortcuts-seat",
+      "type": "mirror",
+      "ours": "packages/desktop/shortcuts-bridge.ts",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/desktop/test/ipc/desktop-shortcuts-bridge.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/shortcuts-bridge.ts#DESKTOP_SHORTCUTS_CHANNELS",
+        "packages/desktop/shortcuts-bridge.ts#DesktopShortcutsBridge",
+        "packages/desktop/shortcuts-bridge.ts#desktopKeyEvent"
+      ],
+      "evidence": "覆盖文件：apps/desktop/src/{keyboard,keybindings}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核 before-input-event 决策表 / scopedDesktop 门 / revision 化偏好事务与 userData/keybindings.json 存储位置（§4.5 审计表 keyboard/keybindings 行）。",
+      "status": "accepted",
+      "rationale": "官方键盘桥的上游协议实现从运行树加载而非重写；chamber 只镜像决策表、投递门与偏好事务，main.ts 的 before-input-event glue 是同席位接线点。"
+    },
+    {
+      "id": "mirror.dsh-desktop-native-chrome-seats",
+      "type": "mirror",
+      "ours": "packages/desktop",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/desktop/chamber-lock.test.ts",
+        "packages/desktop/shell-locale.test.ts",
+        "packages/desktop/test/desktop-shell/fatal-report.test.ts",
+        "packages/desktop/test/desktop-shell/startup-recovery.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/chamber-lock.ts#acquireChamberLock",
+        "packages/desktop/fatal-report.ts#CONSOLE_RING_BYTES",
+        "packages/desktop/shell-locale.ts#resolveShellLocale",
+        "packages/desktop/startup-error.ts#planStartupRecovery"
+      ],
+      "evidence": "覆盖文件：apps/desktop/src/{locale,tray,single-instance,quit-confirmation,fatal-recovery,crash-report,startup-error}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核原生 chrome 语义；有意差异（崩溃报告不轮转只追加、退出检查面收窄为本地实例运行中、跨 flavor O_EXLOCK 加层）见 §4.5 审计表对应行。",
+      "status": "accepted",
+      "rationale": "原生 chrome 席位（typed locale / 托盘 / 单实例 / 退出确认 / 致命恢复 / 崩溃报告）语义镜像上游；差异点：S-43 恢复框默认项与 Esc 落安全项、托盘仅打包态且图标存在时创建、崩溃报告不轮转。"
+    },
+    {
+      "id": "mirror.dsh-desktop-update-chain",
+      "type": "mirror",
+      "ours": "packages/desktop",
+      "upstream": "apps/desktop/src",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/desktop/test/desktop-shell/updater-attention.test.ts",
+        "packages/desktop/test/desktop-shell/updater-channel-seal.test.ts",
+        "packages/desktop/test/desktop-shell/updater-main-wiring.test.ts",
+        "packages/desktop/test/desktop-shell/updater-revision.test.ts",
+        "packages/desktop/test/desktop-shell/updater-watchdog.test.ts",
+        "packages/desktop/test/ipc/shell-ipc-update.test.ts",
+        "packages/desktop/update-journal.test.ts",
+        "packages/desktop/update-schedule.test.ts"
+      ],
+      "symbols": [
+        "packages/desktop/update-confirmation.ts#parseConfirmationRevision",
+        "packages/desktop/update-headless.ts#selectLatestReleaseVersion",
+        "packages/desktop/update-journal.ts#updateJournalState",
+        "packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS",
+        "packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON"
+      ],
+      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts）。上游把 schedule 的时长解析抽出 duration-env.ts（语义不变；本仓非法 env 告警回退的行为不动）；登录 shell 环境在 §4.6 手工移植登记行，不做镜像声明（该行是它的落点，不逐行见 §4.5），逐行见 §4.5 审计表；本次复审采纳其两个可借鉴点（自建载体，design 11 §4）：构建期通道封签（electron-builder.beta.yml 的 extraMetadata → 打包 package.json 运行期读回）与确认回答的 revision 护栏（新增 packages/desktop/update-confirmation.ts）",
+      "status": "accepted",
+      "rationale": "上游有完整 electron-updater 链；chamber 自建更新链按相位/注意力/presentation 归类/journal 语义镜像其形状（§22.3.5），ours = updater.ts / update-schedule.ts / update-journal.ts / update-headless.ts + preload.cts 的 update 臂。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），update-dialog/overlay 与 mandatory-update 家族是上游 Desktop 的产品面（design 11 §2 无弹窗硬约束）。已翻案采纳其两个可借鉴点（自建载体，不改「无弹窗」契约）：构建期通道封签（extraMetadata → 运行期读回，脱开版本后缀单源）与确认回答的 revision 护栏（IPC 载荷 { revision }，过期回答 loud 拒绝 + 重推状态）。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
+    },
+    {
+      "id": "mirror.dsh-client-hmr-events-endpoint",
+      "type": "mirror",
+      "ours": "packages/renderer/src/live-graph.ts",
+      "upstream": "packages/client/hmr",
+      "authority": "upstream",
+      "criteria": [],
+      "deviations": [],
+      "relatedGates": [
+        "packages/control-plane/test/page-channel/page-channel-flow.test.ts",
+        "packages/renderer/test/lifecycle/live-graph.test.ts"
+      ],
+      "symbols": [
+        "packages/control-plane/src/page-channel.ts#=literal:const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'",
+        "packages/renderer/src/live-graph.ts#parsePluginEventFrame"
+      ],
+      "evidence": "路径自动化锁步：packages/control-plane/test/page-channel/page-channel-flow.test.ts 断言 vendor 的 EVENTS_ENDPOINT 与 packages/control-plane/src/page-channel.ts 的 PLUGIN_GRAPH_SSE_PATH 逐字节一致（design 26 把该路由的抓取搬到控制面侧，所以该路由的 chamber 消费方有两个：控制面抓取 + live-graph 解析帧）。帧形状仍是人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验宿主半身注册的 exact GET/HEAD /plugins/events 路由（连接即一帧全量 graph；rebuilt 会 compose+notifyGraphChanged，带新 rev 的 graph 帧随到）与 chamber 订阅者（design 09 §3.7）的消费形状",
+      "status": "accepted",
+      "rationale": "上游端点属主是 always-mounted 的 HMR 宿主行（dev-only 的只是 rebuild watcher）；chamber 只消费 graph 帧做装/卸同步、不加载官方客户端半身，无自动锁步面（C16 vendorSourceConsumers 只认 vendor 源码相对导入）。端点被移除/改名时 chamber 静默退回现状（机会性契约），故接受人工复验而非新增 C 编号门；端点**路径**这一半已被上面的 flow 用例自动锁步，人工复验只覆盖帧形状与宿主半身的注册语义"
+    }
+  ],
+  "notes": "machine facts only; prose lives in docs/checklists/upgrade/upstream-touchpoints.md"
+}

@@ -17,7 +17,7 @@ description: Use when reviewing a dsh-chamber pull request; establishes the owni
 - 契约类改动（design 契约、跨包边界、已发货行为）未在 owning design 补「被否方案」短节。
 - 测试语义变更没有解释旧行为为何过时；或只改实现不同步测试 / 只改测试不改实现。
 - `docs/progress/STATUS.md` 未同批同步：新 open 项进 STATUS 并带判据与指针；落地项从 STATUS 删除（基线留 git / `CHANGELOG.md` / design）；未排期想法进 `TODO.md`。
-- 上游触点改动未登记 `scripts/upstream/registry.json` 或未重生成 GENERATED 块（CI C1/C3 硬失败；手改生成块 `verify:registry` 硬失败）。
+- 上游触点改动未登记 `scripts/upstream/registry/registry.json` 或未重生成 GENERATED 块（CI C1/C3 硬失败；手改生成块 `verify:registry` 硬失败）。
 - 文档与代码不是同一事实：命令、默认值、错误文案与源码 / 运行时不符；或文档声明的门禁跑法已过期。
 - 新 prose 有推理过程、历史叙述、手抄目录、过期状态词（按 `docs/AGENTS.md` 第 2 / 4 节）。
 - Validation 只写命令名无结果，或把静态检查当作运行时 / 平台正确性证据。

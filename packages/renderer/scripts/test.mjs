@@ -75,11 +75,11 @@ export const GROUPS = {
     // mounted 来源表单一 store（mark/withdraw/retire/prune + 三处旧副本不得复活）。
     'test/lifecycle/mounted-sources-store.test.ts',
     // The shell *.test.ts split is served from test/support/shell-harness.ts and needs the
-    // dsh-client-web fixture loader (see scripts/dev/test-shell-loader.mjs); the --import
+    // dsh-client-web fixture loader (see scripts/dev/test-loaders/test-shell-loader.mjs); the --import
     // specifier resolves from the package root (spawn cwd).
-    { file: 'test/lifecycle/shell.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
-    { file: 'test/lifecycle/shell-tail-wait-teardown.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
-    { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
+    { file: 'test/lifecycle/shell.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
+    { file: 'test/lifecycle/shell-tail-wait-teardown.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
+    { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
     // 呈现事实的 vendor 源文本锁：shell 的 openSession 路由 + rc.2 retainedBy 计数。
     'test/lifecycle/vendor-presented-fact-contract.test.ts',
@@ -186,7 +186,7 @@ export const GROUPS = {
     // 该文件运行时导入 use-bridge-subscriptions.ts，其模块图（2026-10 起）经 shell.ts
     // 触达 @deepseek-ai/dsh-client-web：只需 web-only 夹具负载器，不能用替换 client-core
     // 的 shell shim（本测试已加载真实 barrel）。
-    { file: 'test/wiring/unread-prune-roster-gate.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-dsh-web-register.mjs'] },
+    { file: 'test/wiring/unread-prune-roster-gate.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-dsh-web-register.mjs'] },
   ],
   // warm: 常驻壳策略（N-ctx 壳常驻 v1.1）——硬上限/输入保护/压力分档的纯判定、快照纯构建器
   // （含已释放行与隐藏事实门控），以及输入席位/常驻阀接线的源码锁（无 DOM 可跑的部分）。

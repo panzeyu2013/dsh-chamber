@@ -43,7 +43,7 @@ let package = Package(
         // 该 API 自 Safari 17.4 / macOS 14.4 才存在（13.x 与 14.0–14.3 会 TypeError）。
         // SwiftPM 的 .macOS 只能写 major，故这里写 .v14；**精确 14.4 下限由
         // macos/Info.plist.template 的 LSMinimumSystemVersion 承担**，三处一致性由
-        // scripts/release/release-workflow-policy.test.mjs 钉住。
+        // scripts/release/preflight/release-workflow-policy.test.mjs 钉住。
         .macOS(.v14)
     ],
     dependencies: [

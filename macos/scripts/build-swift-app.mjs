@@ -79,7 +79,7 @@ import { payloadNodePath } from '../../scripts/lib/sidecar-assembly.mjs'
 import { OFFICE_SKILL_FILES } from '../../packages/desktop/scripts/prepare-office-assets.mjs'
 // beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
 // 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
-import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts.mjs'
+import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/preflight/release-artifacts.mjs'
 // 样式化 DMG（Finder 背景箭头 + 图标定位 + /Applications 快捷
 // 方式）的**单一实现**。正式发布腿（release.yml 公证步）调用同文件的 CLI——
 // 两处各写一份必然漂移，实现与背景资产都收敛在 macos/scripts/dmg.mjs。

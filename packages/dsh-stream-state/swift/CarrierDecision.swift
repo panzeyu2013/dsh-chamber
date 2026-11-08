@@ -7,7 +7,7 @@
 //  a threshold fixed on one side silently stays wrong on the other. This file is
 //  the SWIFT side of the shared table: it reads the same
 //  `packages/dsh-stream-state/tables.json` the TS package projects, and the parity
-//  gate (`scripts/gates/verify-stream-state-swift-parity.mjs`) fails when either
+//  gate (`scripts/gates/checks/verify-stream-state-swift-parity.mjs`) fails when either
 //  side drifts.
 //
 //  PURITY. Foundation only, no AppKit/WebKit: this file must compile and run on

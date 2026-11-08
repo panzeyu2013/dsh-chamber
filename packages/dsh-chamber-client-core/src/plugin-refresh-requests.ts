@@ -7,7 +7,7 @@
  * these requests are page-level, not per-instance facts. They share the aggregate
  * store's ONE fan-out discipline through the exported `createChannel` (never a second
  * bus implementation), and they exist outside aggregate-store.ts so that file's god-file
- * ratchet (scripts/gates/file-budgets.json) is not raised for a stateless request seam.
+ * ratchet (scripts/gates/registry/file-budgets.json) is not raised for a stateless request seam.
  *
  * Contract: one-way requests. The App layer relays the request to the mounted shell, which
  * owns the resync and the plugin-refresh reload budget (`document-reload-budget.ts`); this

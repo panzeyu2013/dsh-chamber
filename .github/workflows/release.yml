@@ -124,7 +124,7 @@ jobs:
           # Validate before writing the value to GITHUB_OUTPUT or interpolating
           # it into later shell steps. Manual workflow inputs are data, never
           # shell syntax or output-file control records.
-          if ! node scripts/release/release-semver.mjs channel "$VERSION" >/dev/null; then
+          if ! node scripts/release/preflight/release-semver.mjs channel "$VERSION" >/dev/null; then
             echo "::error::release version must be canonical SemVer without build metadata"
             exit 1
           fi
@@ -177,7 +177,7 @@ jobs:
         # baseline. Do not replace this with a hard-coded package list.
         env:
           VERSION: ${{ steps.get_version.outputs.version }}
-        run: node scripts/release/release-preflight.mjs "$VERSION" --versions-only
+        run: node scripts/release/preflight/release-preflight.mjs "$VERSION" --versions-only
 
       - name: Extract CHANGELOG section for the release body
         # The release page must show OUR changelog entry (CHANGELOG.md), not
@@ -312,7 +312,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       # GENERATED:gates:release.validation.pre:begin
       # Documentation pair consistency: structure + hash record; cheap, no install needed (also invoked by release-preflight).
       - name: Documentation pair consistency (zh/en)
@@ -323,7 +323,7 @@ jobs:
         run: pnpm run verify:workflow-yaml
       # Upstream touchpoint registry C1/C3-C16 (advisory mode: reads, never rebuilds artifacts). File-only, runs before the install for fail-fast.
       - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
-        run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
+        run: node scripts/upstream/verify/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       # GENERATED:gates:release.validation.pre:end
       - run: pnpm install --frozen-lockfile
       # 构建期产物不入 git：C8 默认模式先快照再就地重建-比对，clean checkout
@@ -334,7 +334,7 @@ jobs:
       # untracked build-time bundles in place, byte-compares, restores. Needs
       # node_modules/esbuild, hence post-install.
       - name: Build-time artifacts match sources (C8 rebuild gate)
-        run: node scripts/upstream/verify-upstream-touchpoints.mjs
+        run: node scripts/upstream/verify/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
       # GENERATED:gates:release.validation.post:begin
@@ -350,16 +350,16 @@ jobs:
         run: pnpm run verify:file-budgets
       # Capability alignment: a chamber-consumed vendor probe that disappears or a landed upstream replacement turns this red.
       - name: Upstream capability alignment (chamber-behind / upstream-landed)
-        run: node scripts/upstream/verify-capabilities.mjs
+        run: node scripts/upstream/verify/verify-capabilities.mjs
       - name: Remote-state fault-injection matrix
-        run: node scripts/gates/remote-state-injection-matrix.mjs
+        run: node scripts/gates/checks/remote-state-injection-matrix.mjs
       - name: Stream-state differential replay (recorded vectors, drift = failure)
         run: node scripts/refactor/equivalence.mjs
       # Cross-language lockstep for the stream-state tables (Swift mirror compiles Foundation-only, in a temp dir).
       - name: Stream-state Swift parity (cross-language lockstep)
-        run: node scripts/gates/verify-stream-state-swift-parity.mjs
+        run: node scripts/gates/checks/verify-stream-state-swift-parity.mjs
       - name: Ladder-table parity (B4 lockstep over the four recovery ladders)
-        run: node scripts/gates/verify-ladder-table-parity.mjs
+        run: node scripts/gates/checks/verify-ladder-table-parity.mjs
       - name: Upstream lifecycle contract (first-frame bound retirement tripwire)
         run: pnpm run verify:upstream-lifecycle-contract
       - name: Architecture package boundaries
@@ -378,23 +378,23 @@ jobs:
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
-        run: node scripts/release/release-preflight.mjs --actions-only
+        run: node scripts/release/preflight/release-preflight.mjs --actions-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Same single entries the push path runs: the package test set and
-      # the client typecheck set are named once in scripts/gates/run-checks.mjs, so
+      # the client typecheck set are named once in scripts/gates/runners/run-checks.mjs, so
       # `pnpm run test:scripts:release` proves validation and ci.yml cannot drift
       # from each other by comparing these two commands.
       - name: Package unit tests (single entry)
-        run: node scripts/gates/run-checks.mjs tests
+        run: node scripts/gates/runners/run-checks.mjs tests
       # 计划的统一验收矩阵：
       # ci.yml 的同一门，release validation 必须跑 push 路径跑的每个门
       # （release-workflow-policy 门机械对齐 ci.yml 的门集合）。blocked 不判绿也不判红，
       # 只有真失败 exit 1，所以这里不会因环境缺件而误红。
       - name: Remote-state acceptance matrix
-        run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
+        run: node scripts/gates/checks/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
       - name: Client plugin type checks (single entry)
-        run: node scripts/gates/run-checks.mjs typecheck
+        run: node scripts/gates/runners/run-checks.mjs typecheck
       # Shared runtime core build: the gateway tarball packs it, so a broken
       # runtime build must fail here rather than inside the packaging leg.
       - name: Shared runtime core build (gateway tarball prerequisite)
@@ -406,7 +406,7 @@ jobs:
       # The page bundle exists only after this build; keep the scoper gate on the
       # release validation path instead of deferring it to the macOS packaging lane.
       - name: Renderer page bundle carries the SVG scope code
-        run: node scripts/gates/assert-scoper-artifact.mjs
+        run: node scripts/gates/checks/assert-scoper-artifact.mjs
       # Desktop packaging sub-steps shared with the shipped Swift sidecar —
       # ci.yml's "Desktop build sub-steps" gate: a release must not be the first
       # place a broken control-plane/host-package build surfaces. The Electron
@@ -428,12 +428,12 @@ jobs:
         env:
           RELEASE_SHA: ${{ github.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/release/verify-release-ci-proof.mjs --sha "$RELEASE_SHA"
+        run: node scripts/release/preflight/verify-release-ci-proof.mjs --sha "$RELEASE_SHA"
       # Third-party notices must track the installed dependency set; a stale
       # committed file blocks the release (ci.yml's "Third-party notices
       # current"). Regenerating alone is not a gate — the diff assertion is.
       - name: Third-party notices current
-        run: node scripts/release/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
+        run: node scripts/release/notices/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
 
 
   # Fast release-authority checks that must pass BEFORE a draft release exists.
@@ -458,13 +458,13 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - name: Verify workflow action pins
-        run: node scripts/gates/verify-workflow-action-pins.mjs
+        run: node scripts/gates/checks/verify-workflow-action-pins.mjs
       - name: Verify workflow YAML scalars
-        run: node scripts/gates/verify-workflow-yaml-scalars.mjs
+        run: node scripts/gates/checks/verify-workflow-yaml-scalars.mjs
       - name: Pin alignment (payload / pnpm / runtime)
-        run: node scripts/release/verify-pin-alignment.mjs
+        run: node scripts/release/preflight/verify-pin-alignment.mjs
       - name: Assert lockfile not rewritten
         run: |
           pnpm install --frozen-lockfile
@@ -504,7 +504,7 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
@@ -598,7 +598,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
@@ -868,7 +868,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
@@ -961,7 +961,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
@@ -1041,7 +1041,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        run: node scripts/dev/ensure-harness-vendor.mjs
+        run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
@@ -1130,7 +1130,7 @@ jobs:
           # so the explicit rebuild is only needed when a reused workspace already
           # had artifacts and ensure:artifacts therefore did nothing (saves ~16s).
           NEED_HOST_BUILD=0
-          if node scripts/dev/ensure-artifacts.mjs --check >/dev/null 2>&1; then
+          if node scripts/dev/bootstrap/ensure-artifacts.mjs --check >/dev/null 2>&1; then
             NEED_HOST_BUILD=1
           else
             pnpm run ensure:artifacts
@@ -1146,7 +1146,7 @@ jobs:
           pnpm run build:renderer
           # scoper 标记门：没有它「构建把 scoper 摇掉」的产物可以一路装配进正式 .app
           # （源产物先断一次）。
-          node scripts/gates/assert-scoper-artifact.mjs
+          node scripts/gates/checks/assert-scoper-artifact.mjs
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           wait "$SWIFT_BUILD_PID" || { echo "::error::parallel lane failed: swift build -c release"; LANE_FAILURES=1; }
           wait "$BUNDLE_DSH_PID" || { echo "::error::parallel lane failed: bundle:dsh"; LANE_FAILURES=1; }
@@ -1318,7 +1318,7 @@ jobs:
         # 产出 <sparkle:deltas> 并签名 → 本步只上传 appcast，归档在下一步按「归档 → feed」
         # 顺序发布（每个被引用的 enclosure 都必须可下载）。
         # beta feed 的 final 条目从**已发布 stable feed** 复制
-        # （scripts/release/merge-native-feed.mjs），不把 stable zip 放进 beta 收件目录；
+        # （scripts/release/feed/merge-native-feed.mjs），不把 stable zip 放进 beta 收件目录；
         # 取不到 stable feed 时保留上次滚动 feed 的 final 条目——beta 客户端始终能看到对应
         # 正式版（beta 遇到对应正式版允许升级到正式版）。
         # stable 通道不传前缀——appcast-swift.xml 与 enclosure 形状逐字节不变（只多出
@@ -1649,7 +1649,7 @@ jobs:
           fi
           # 逐条真验签（Ed25519 over 归档字节）：只断言「签名存在」挡不住密钥轮换后
           # 「任何公钥都验不过」的签名。
-          node scripts/release/verify-native-appcast.mjs "$VERSION" "/tmp/appcast-out/${APPCAST}" \
+          node scripts/release/feed/verify-native-appcast.mjs "$VERSION" "/tmp/appcast-out/${APPCAST}" \
             --signatures-dir "$STAGE_DIR" --public-key "$SPARKLE_PUBLIC_ED_KEY" ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}
           # beta feed 的 final 条目从**已发布 stable feed** 复制（缺 stable
           # feed 时保留上次滚动 feed 的 final 条目）；stable zip 绝不进 beta 收件目录——两通道
@@ -1697,7 +1697,7 @@ jobs:
             # 与 generate_appcast 的 --maximum-versions 同口径：合并会把旧 feed 里的 beta 条目
             # 也并进来（staging 少收归档时旧 beta 不许消失），但 feed 长度仍须有限。
             MERGE_ARGS+=(--beta-item-limit "$MAX_VERSIONS")
-            MERGE_OUTPUT="$(node scripts/release/merge-native-feed.mjs ${MERGE_ARGS[@]+"${MERGE_ARGS[@]}"})"
+            MERGE_OUTPUT="$(node scripts/release/feed/merge-native-feed.mjs ${MERGE_ARGS[@]+"${MERGE_ARGS[@]}"})"
             echo "$MERGE_OUTPUT"
             # 合并必须**只增不减**：beta 条目丢失 = 滚动通道上旧 beta 的可见性静默消失，
             # 而 verify 只看「本版本条目 + final 条目」，看不到条目数变化。
@@ -1721,7 +1721,7 @@ jobs:
             else
               FINAL_ARGS+=(--expect-final-item)
             fi
-            node scripts/release/verify-native-appcast.mjs "$VERSION" "/tmp/appcast-out/${APPCAST}" \
+            node scripts/release/feed/verify-native-appcast.mjs "$VERSION" "/tmp/appcast-out/${APPCAST}" \
               --signatures-dir "$STAGE_DIR" --public-key "$SPARKLE_PUBLIC_ED_KEY" \
               ${FINAL_ARGS[@]+"${FINAL_ARGS[@]}"} ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}
           fi
@@ -1763,7 +1763,7 @@ jobs:
           test -f "$APP/Contents/Resources/dist/web/index.html"
           # 只断 index.html 会把「空壳 .app」放行——切源白屏
           # 的修复必须出现在**真正装进 .app 的字节**里（与装配脚本内部的同一道门呼应）。
-          node scripts/gates/assert-scoper-artifact.mjs \
+          node scripts/gates/checks/assert-scoper-artifact.mjs \
             "$APP/Contents/Resources/dist/web/assets"
           # 打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/package.json"
@@ -1778,7 +1778,7 @@ jobs:
           [[ " $NODE_ARCHS " == *" arm64 "* ]] || { echo "::error::捆绑 node 不是 arm64：$NODE_ARCHS"; exit 1; }
           # release-artifacts 清单是真实消费者——要上传的 native 文件名
           # 必须逐字等于清单（碰撞断言因此观察到真实版本号）。
-          node scripts/release/release-artifacts.mjs "$VERSION" --check-dir macos/release
+          node scripts/release/preflight/release-artifacts.mjs "$VERSION" --check-dir macos/release
           # 只断言精确产物名（BASE = artifactBasename）——输出目录可能并存
           # 旧版本归档，glob 断言会被它们满足，上传也会把它们一起带走。
           test -f "${BASE}.dmg"
@@ -1967,7 +1967,7 @@ jobs:
                   [[ -f "$ARCHIVE" ]] || continue
                   gh release upload "$ROLLING_TAG" "$ARCHIVE" --clobber
                 done
-                node scripts/release/merge-native-feed.mjs \
+                node scripts/release/feed/merge-native-feed.mjs \
                   --beta /tmp/rolling-feed/appcast-swift-beta.xml \
                   --stable "$STABLE_APPCAST" \
                   --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/" \
@@ -1980,7 +1980,7 @@ jobs:
                 fi
                 # 刷新后的滚动 appcast 必须宣传本版本（final 条目）且保留
                 # beta 条目——只 test -f 证明不了 final 真的在。
-                node scripts/release/verify-native-appcast.mjs "$VERSION" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml \
+                node scripts/release/feed/verify-native-appcast.mjs "$VERSION" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml \
                   --signatures-dir /tmp/appcast-in-stable --public-key "$SPARKLE_PUBLIC_ED_KEY" --expect-final-item
                 gh release upload "$ROLLING_TAG" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml --clobber
                 echo "stable 发布已刷新滚动 beta appcast：final $VERSION 对 beta 客户端可见"

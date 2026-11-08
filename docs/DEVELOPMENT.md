@@ -67,15 +67,15 @@ cd dsh-chamber
 
 已clone而未带 `--recurse-submodules` 时用 `git submodule update --init` 物化（submodule是240包大仓库，全量拉取较慢；`--depth 1` 浅拉即可——gitlink固定commit）。
 
-`vendor/harness-packages` 是被gitignore的符号链接目录：每个dsh包一个同名符号链接，指向固定commit的git submodule（`vendor/harness-checkout`，gitlink =上游commit，单一事实来源、无任何回退：不读环境变量、不复用兄弟检出、不从codeload下载）。它永不提交，必须在 `pnpm install` 之前建立（`pnpm-workspace.yaml` 经它解析未修改的dsh包）。`scripts/dev/ensure-harness-vendor.mjs` 引导：硬校验submodule HEAD == `harness.commit`（不一致即失败）、幂等差量建链（集合未变时零操作）、断言链接集合与锁文件vendor importer集合一致；`--check` 只校验不写盘。全新克隆后需在 `pnpm install` 之前运行一次：
+`vendor/harness-packages` 是被gitignore的符号链接目录：每个dsh包一个同名符号链接，指向固定commit的git submodule（`vendor/harness-checkout`，gitlink =上游commit，单一事实来源、无任何回退：不读环境变量、不复用兄弟检出、不从codeload下载）。它永不提交，必须在 `pnpm install` 之前建立（`pnpm-workspace.yaml` 经它解析未修改的dsh包）。`scripts/dev/bootstrap/ensure-harness-vendor.mjs` 引导：硬校验submodule HEAD == `harness.commit`（不一致即失败）、幂等差量建链（集合未变时零操作）、断言链接集合与锁文件vendor importer集合一致；`--check` 只校验不写盘。全新克隆后需在 `pnpm install` 之前运行一次：
 
 ```bash
 git submodule update --init   # 物化 submodule（CI 由 checkout submodules: true 完成）
-node scripts/dev/ensure-harness-vendor.mjs
+node scripts/dev/bootstrap/ensure-harness-vendor.mjs
 pnpm install
 ```
 
-升级上游pin**只**能走 `node scripts/upstream/update-vendor.mjs <tag>`（原子流程：fetch+校验tag →切submodule →更新 `harness.commit` →差量建链→重生成锁文件→ frozen验证），不要手工改gitlink/`harness.commit`。`pnpm-workspace.yaml` 设 `verifyDepsBeforeRun: false`：pnpm run不再隐式install（防非frozen install改写锁文件），依赖变更须显式 `pnpm install`；CI在frozen install后另有 `git diff --exit-code -- pnpm-lock.yaml` 漂移断言。
+升级上游pin**只**能走 `node scripts/upstream/pin/update-vendor.mjs <tag>`（原子流程：fetch+校验tag →切submodule →更新 `harness.commit` →差量建链→重生成锁文件→ frozen验证），不要手工改gitlink/`harness.commit`。`pnpm-workspace.yaml` 设 `verifyDepsBeforeRun: false`：pnpm run不再隐式install（防非frozen install改写锁文件），依赖变更须显式 `pnpm install`；CI在frozen install后另有 `git diff --exit-code -- pnpm-lock.yaml` 漂移断言。
 
 `.npmrc` 是 gitignored 的本地配置；正式构建不提交第三方镜像，始终使用官方源（Electron 归档面的本地镜像仅调试用，见 [progress/electron-frozen.md](./progress/electron-frozen.md)）。
 
@@ -123,10 +123,10 @@ pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复�
 
 ## 5. CI 与发布
 
-> **（Electron 冻结，2026-11）** 现行 CI = `ci.yml` 的 `test` / `test-macos` / `test-macos-pack`；现行发布 = `release.yml` 的 `build-swift` + `build-gateway`（三条 Electron 发布腿为 job 级恒 false 条件、恒 skipped）。门禁落位与 job 名单以 [release-checklist.md](./checklists/release/release-checklist.md)、[.github/workflows/](../.github/workflows) 与 `scripts/gates/gate-surfaces.json` 为准，本文件不复制。
+> **（Electron 冻结，2026-11）** 现行 CI = `ci.yml` 的 `test` / `test-macos` / `test-macos-pack`；现行发布 = `release.yml` 的 `build-swift` + `build-gateway`（三条 Electron 发布腿为 job 级恒 false 条件、恒 skipped）。门禁落位与 job 名单以 [release-checklist.md](./checklists/release/release-checklist.md)、[.github/workflows/](../.github/workflows) 与 `scripts/gates/registry/gate-surfaces.json` 为准，本文件不复制。
 
-- `.github/workflows/ci.yml`：分支 push/PR 跑验证链（代码变更全跑；纯文档只跑 file-only 门，判类器 `scripts/gates/classify-ci-changes.mjs`）；macOS 腿 `test-macos`（Swift 构建/测试）与 `test-macos-pack`（`test:macos` + compiled sidecar / native GUI 装配）在 macos-latest 跑。
-- `.github/workflows/release.yml`：`v*` tag 或手动触发产出可分发版本（仅 stable `X.Y.Z` 与 beta `X.Y.Z-beta.N`）；发布正文 = `CHANGELOG.md` 的 `## [<version>]` 段；`validation` 跑 `scripts/release/verify-release-ci-proof.mjs` 证明该提交在 `main` 上有成功 `ci.yml` 运行；`build-gateway` 发布经干净前缀冒烟的 `.tgz` 与同名 `.sha256`。
+- `.github/workflows/ci.yml`：分支 push/PR 跑验证链（代码变更全跑；纯文档只跑 file-only 门，判类器 `scripts/gates/registry/classify-ci-changes.mjs`）；macOS 腿 `test-macos`（Swift 构建/测试）与 `test-macos-pack`（`test:macos` + compiled sidecar / native GUI 装配）在 macos-latest 跑。
+- `.github/workflows/release.yml`：`v*` tag 或手动触发产出可分发版本（仅 stable `X.Y.Z` 与 beta `X.Y.Z-beta.N`）；发布正文 = `CHANGELOG.md` 的 `## [<version>]` 段；`validation` 跑 `scripts/release/preflight/verify-release-ci-proof.mjs` 证明该提交在 `main` 上有成功 `ci.yml` 运行；`build-gateway` 发布经干净前缀冒烟的 `.tgz` 与同名 `.sha256`。
 - 发布机械门禁：`pnpm run release:preflight <版本>`（版本统一性、changelog 双语、i18n、actions SHA、冲突标记、git 干净、frozen install、test:release-workflow）；commit 前与 push 前各跑一次（发布 checklist §2/§7）。
 - 发布流程：本地 preflight + 精确提交全量套件 → commit+tag → `workflow_dispatch` dry-run（新增/修改的 workflow、脚本路径、action SHA 必须先过一次）→ 正式 tag push；详细步骤与 proof/判类口径见发布 checklist。
 - 两个 workflow 均在 install 前按 `harness.commit` 引导 vendor；`ci.yml` 以 `concurrency` 串行化同 ref 的推送，`release.yml` 不取消可能已建 draft 的发布。

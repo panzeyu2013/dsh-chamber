@@ -16,7 +16,7 @@
  * injection, so the rule is driven here through a tiny element double (the repo
  * runs node:test without a DOM). The entry wiring is guarded at the artifact level by
  * packages/desktop/scripts/build-swift-app.test.mjs (assembled chunk marker,
- * fail-closed) and scripts/gates/assert-scoper-artifact.mjs (post-build page chunk).
+ * fail-closed) and scripts/gates/checks/assert-scoper-artifact.mjs (post-build page chunk).
  *
  * LIMITS: this spec proves the rename plan, the boundary rules and the
  * installer pipeline; it does not rasterize, so the engine behaviour above

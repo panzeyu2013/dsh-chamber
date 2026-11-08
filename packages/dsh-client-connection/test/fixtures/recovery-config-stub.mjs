@@ -1,6 +1,6 @@
 /**
  * Recovery-config stand-in for the dsh-client-connection apply-seam test (see
- * scripts/dev/test-connection-loader.mjs).
+ * scripts/dev/test-loaders/test-connection-loader.mjs).
  *
  * The real `src/recovery-config.ts` builds a schemastery schema at module load
  * and validates through it; the vendored schemastery is source-only, so the

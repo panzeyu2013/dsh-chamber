@@ -4,8 +4,8 @@
  * `@deepseek-ai/dsh-client-web` face shell.ts consumes.
  *
  * The renderer has no install-tree copy of the dsh workspace packages, so the
- * bare specifier cannot resolve in plain node; `scripts/dev/test-shell-loader.mjs`
- * maps it here (registered via `--import scripts/dev/test-shell-register.mjs` in
+ * bare specifier cannot resolve in plain node; `scripts/dev/test-loaders/test-shell-loader.mjs`
+ * maps it here (registered via `--import scripts/dev/test-loaders/test-shell-register.mjs` in
  * the test:renderer-shell script). The fixture mirrors the ambient face of
  * vendor-modules.d.ts (AppWebEntry + ensureWebModuleSystem) with test knobs;
  * it is test-only — the build/typecheck never load it.

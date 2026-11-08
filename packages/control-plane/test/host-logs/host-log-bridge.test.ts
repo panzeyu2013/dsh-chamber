@@ -595,7 +595,7 @@ test('cordis contract: the pinned LoggerService still matches what the generated
     // This leg must FAIL when the pinned source is absent (a skip would let the
     // API bet go unchecked), but a raw ENOENT says nothing about what to do.
     assert.fail(`the pinned Cordis source is required by this contract test (${cordisLogger}): ${String(error)}`
-      + ' — initialize the vendor submodule (node scripts/dev/ensure-harness-vendor.mjs)')
+      + ' — initialize the vendor submodule (node scripts/dev/bootstrap/ensure-harness-vendor.mjs)')
   }
   // (1) the facts the bridge's single mount path rests on: `exporter()` registers
   // through `this.ctx.effect(...)` (so the disposer IS collected by the calling

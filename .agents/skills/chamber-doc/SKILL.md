@@ -25,10 +25,10 @@ description: Use when creating, editing, moving, restructuring, or auditing dsh-
 5. 验证（只读、可离线）：
 
 ```bash
-node scripts/gates/verify-md-links.mjs          # 相对链接与锚点，退出 0
-node scripts/upstream/registry-views.mjs --check # GENERATED 块与 registry.json 一致
+node scripts/gates/checks/verify-md-links.mjs          # 相对链接与锚点，退出 0
+node scripts/upstream/registry/registry-views.mjs --check # GENERATED 块与 registry.json 一致
 pnpm run verify:i18n                             # 双语结构/哈希差异（改了对才跑）
-node scripts/gates/run-checks.mjs static --list  # 该模式还要跑哪些门
+node scripts/gates/runners/run-checks.mjs static --list  # 该模式还要跑哪些门
 ```
 
 6. 重录双语记录用 `pnpm run verify:i18n -- --write`（该门只支持整份记录重录，没有按对写入）；并行批次若约定由协调者统一重录 `docs/i18n-record.json`，不要抢同一次写。

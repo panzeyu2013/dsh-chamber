@@ -5,11 +5,11 @@
 - Owner：design 14 §D4 owner（执行 = 验收人）
 - Timebox：2–4 小时（每来源各一轮 A–E；ssh 写回时延另计）
 - 退出标准：§5 判据全满足（A/B/D 位掉落 + 通知恰好一条；C 零误写回；配额内无 reconnect 风暴）
-- 自动化入口：`node scripts/gates/verify-ladder-table-parity.mjs`（阈值表锁步）、`packages/dsh-stream-state/tables.json` 的 `ladders.authority`
+- 自动化入口：`node scripts/gates/checks/verify-ladder-table-parity.mjs`（阈值表锁步）、`packages/dsh-stream-state/tables.json` 的 `ladders.authority`
 - 证据：t0/t1/t2 时间线 + `recent` ring + 控制面日志（落 STATUS 的仅开放项，不记完成叙事）
 
 > 本文件是**程序**，不是记录：不写版本号、提交、基线快照或轮次台账。
-> 校准数值的单一来源是 `packages/dsh-stream-state/tables.json` 的 `ladders.authority`（probeAfterMs / probeCoalesceMs / probeWindowMs / maxProbesPerWindow / reconnectAfterMs / reconnectCooldownMs / maxReconnects / noticeAfterMs）；改值 = design 14 §D4 的 BEHAVIOR_CHANGES 条目，必须同步 TS 字面量（`src/tables.ts`）与该 JSON，并跑 `node scripts/gates/verify-ladder-table-parity.mjs`。
+> 校准数值的单一来源是 `packages/dsh-stream-state/tables.json` 的 `ladders.authority`（probeAfterMs / probeCoalesceMs / probeWindowMs / maxProbesPerWindow / reconnectAfterMs / reconnectCooldownMs / maxReconnects / noticeAfterMs）；改值 = design 14 §D4 的 BEHAVIOR_CHANGES 条目，必须同步 TS 字面量（`src/tables.ts`）与该 JSON，并跑 `node scripts/gates/checks/verify-ladder-table-parity.mjs`。
 
 ## 1. 目的
 

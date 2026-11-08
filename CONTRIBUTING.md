@@ -11,7 +11,7 @@
 ```bash
 git clone <REPO-URL> --recurse-submodules
 cd dsh-chamber
-node scripts/dev/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
+node scripts/dev/bootstrap/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
 pnpm install
 pnpm run dev:control-plane               # 仅控制面（现行默认开发面）
 pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift 壳构建链（现行出货；需要 macOS）
@@ -20,20 +20,20 @@ pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift 壳构建链�
 
 ## 测试
 
-门清单的单一来源是 `scripts/gates/gate-surfaces.json`（门的 id、所属模式、在本地 / CI / 发布面上的归属）；根 `package.json` 只是命令入口，不是清单本身——不要手抄 `test:*` 清单：
+门清单的单一来源是 `scripts/gates/registry/gate-surfaces.json`（门的 id、所属模式、在本地 / CI / 发布面上的归属）；根 `package.json` 只是命令入口，不是清单本身——不要手抄 `test:*` 清单：
 
 ```bash
-node scripts/gates/run-checks.mjs static --list     # static 模式（静态 / 政策门）
-node scripts/gates/run-checks.mjs tests --list      # tests 模式（与 ci.yml 同源）
-node scripts/gates/run-checks.mjs typecheck --list  # 类型检查模式
-node scripts/gates/run-checks.mjs full --list       # full = static + typecheck + tests
+node scripts/gates/runners/run-checks.mjs static --list     # static 模式（静态 / 政策门）
+node scripts/gates/runners/run-checks.mjs tests --list      # tests 模式（与 ci.yml 同源）
+node scripts/gates/runners/run-checks.mjs typecheck --list  # 类型检查模式
+node scripts/gates/runners/run-checks.mjs full --list       # full = static + typecheck + tests
 ```
 
 按改动面选模式；模式之外的门（macOS / Swift 腿、手写 host typecheck、远端态验收等）见 `docs/progress/STATUS.md` §1.6。`pnpm run smoke` 未安装dsh时打印SKIP并退出0，属正常而非失败。
 
 ## 提交前验证
 
-不要求为每次提交跑全量；按改动面选最小证据，选择依据是 `scripts/gates/gate-surfaces.json` 与 `docs/progress/STATUS.md` §1.6：
+不要求为每次提交跑全量；按改动面选最小证据，选择依据是 `scripts/gates/registry/gate-surfaces.json` 与 `docs/progress/STATUS.md` §1.6：
 
 ```bash
 pnpm run check:static        # 静态 / 政策门（含 i18n、md-links、test-wiring、styles 等；local-only = md-links / test-wiring / styles / no-dead-exports，其余随 CI / pre-install 生成块）
@@ -42,7 +42,7 @@ pnpm run check:typecheck     # 客户端插件与宿主包类型检查
 pnpm run check:full          # = static + typecheck + tests（跨面改动 / 诊断 CI 时才跑）
 ```
 
-- 只看不跑：`node scripts/gates/run-checks.mjs <mode> --list` 打印该模式的门计划，不执行。
+- 只看不跑：`node scripts/gates/runners/run-checks.mjs <mode> --list` 打印该模式的门计划，不执行。
 - macOS / Swift 腿不在 linux 模式内：`test:swift`、`test:macos` 须在 macOS 验证；linux 全绿不证明它们。Windows/Linux 桌面腿随 Electron 冻结（`docs/progress/electron-frozen.md`），不再作为现行验证义务。
 - 纯文档改动的验证命令以 `docs/AGENTS.md` 第 5 节为准（md-links / i18n / registry 三件套；改语对时另跑 `--write` 重录）。
 - 改动涉及运行时、认证、协议或桌面壳行为时，请补充或更新聚焦测试——静态检查不能证明运行时正确性；无法执行的验证在 PR 的 Validation 里写明原因。

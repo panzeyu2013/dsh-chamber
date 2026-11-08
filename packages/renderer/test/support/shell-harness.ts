@@ -2,7 +2,7 @@
  * Shared harness for the packages/renderer/test/lifecycle/shell*.test.ts:
  * the fixture knobs, the shell.ts module surface and the fetch/window/DOM stubs
  * every part reaches for. Test-only; the dynamic import runs under the shell
- * test loader (`--import ../../scripts/dev/test-shell-register.mjs`).
+ * test loader (`--import ../../scripts/dev/test-loaders/test-shell-register.mjs`).
  *
  * Parts: shell.test.ts, shell-tail-wait-teardown.test.ts, session-open-poll.test.ts.
  */
