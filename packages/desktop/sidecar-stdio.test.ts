@@ -70,7 +70,7 @@ interface Driver {
   close(): Promise<number | null>
 }
 
-function startDriver(): Promise<Driver> {
+function startDriver(options: { extraArgs?: string[] } = {}): Promise<Driver> {
   return new Promise((resolve, reject) => {
     const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-test-'))
     // DSH_SIDECAR_TEST_NO_UPDATE_CHECK（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS
@@ -81,10 +81,14 @@ function startDriver(): Promise<Driver> {
     // ready frame reports it. A fixed 17xxx port is a global resource this suite
     // does not own: concurrent test processes (and anything else on a shared
     // host) bind it too, and the loser dies with EADDRINUSE before ready.
-    const child: ChildProcessWithoutNullStreams = spawn(nodePath, [sidecarPath, '--user-data-dir', userDataDir, '--port', '0'], {
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+    const child: ChildProcessWithoutNullStreams = spawn(
+      nodePath,
+      [sidecarPath, '--user-data-dir', userDataDir, '--port', '0', ...(options.extraArgs ?? [])],
+      {
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    )
     const rl = createInterface({ input: child.stdout })
     let nextId = 1
     const pending = new Map<number, { resolve(v: { ok: boolean; result?: unknown; error?: string }): void }>()
@@ -605,6 +609,57 @@ test('W-22 更新控制器：真实态 + blocked-available 契约', async () => 
   assert.deepEqual(download.result, { ok: false, error: 'no update available' })
   const restart = await driver.invoke('dsh-chamber:update-restart', { revision: projection.revision })
   assert.deepEqual(restart.result, { ok: false, error: '原生壳不支持自动更新安装（请手动下载新版本）' })
+})
+
+test('v4 beta 订阅：spawn flag 门 + settings-set 接受/拒绝 + 实时通道投影', async () => {
+  if (!nodeAvailable) return
+  // 无 --native-updater-beta 的构建（默认 driver）：通道 URL 对不可用 → 能力门关、
+  // 开启订阅被响亮拒绝、通道保持 stable。
+  const closedSettings = await driver.invoke('dsh-chamber:settings-get', null, 4000)
+  assert.ok(closedSettings.ok)
+  const closedStatus = closedSettings.result as {
+    settings?: Record<string, unknown>
+    supported?: Record<string, unknown>
+  }
+  assert.equal(closedStatus.supported?.betaUpdatesSupported, false,
+    '未声明 --native-updater-beta 的构建不得宣称可订阅 beta')
+  assert.equal('betaUpdates' in (closedStatus.settings ?? {}), false, '缺省未设置')
+  const rejected = await driver.invoke('dsh-chamber:settings-set', { patch: { betaUpdates: true } })
+  assert.deepEqual(rejected.result, { error: 'beta update channel is unavailable in this build' })
+  const closedState = await driver.invoke('dsh-chamber:update-state', null, 4000)
+  assert.equal((closedState.result as Record<string, unknown>).channel, 'stable')
+
+  // 声明 --native-updater sparkle + --native-updater-beta 的构建：能力门开；
+  // settings-set 落盘后 sidecar 的 commit 钩子必须把生效通道实时推到 beta，再关回 stable。
+  const open = await startDriver({ extraArgs: ['--native-updater', 'sparkle', '--native-updater-beta'] })
+  try {
+    const openSettings = await open.invoke('dsh-chamber:settings-get', null, 8000)
+    assert.ok(openSettings.ok)
+    const openStatus = openSettings.result as {
+      settings?: Record<string, unknown>
+      supported?: Record<string, unknown>
+    }
+    assert.equal(openStatus.supported?.betaUpdatesSupported, true,
+      '两条通道 URL 已注入的 Swift 构建必须开放订阅门')
+    assert.equal((await open.invoke('dsh-chamber:update-state', null, 4000)).result !== undefined, true)
+    const before = await open.invoke('dsh-chamber:update-state', null, 4000)
+    assert.equal((before.result as Record<string, unknown>).channel, 'stable', '默认未订阅 = stable')
+
+    const enabled = await open.invoke('dsh-chamber:settings-set', { patch: { betaUpdates: true } })
+    assert.ok(enabled.ok, '能力门开的构建必须接受 betaUpdates=true：' + JSON.stringify(enabled))
+    assert.equal(((enabled.result as Record<string, unknown>).settings as Record<string, unknown>).betaUpdates, true)
+    const beta = await open.invoke('dsh-chamber:update-state', null, 4000)
+    assert.equal((beta.result as Record<string, unknown>).channel, 'beta',
+      'settings commit 钩子必须把生效通道实时推成 beta')
+
+    const disabled = await open.invoke('dsh-chamber:settings-set', { patch: { betaUpdates: false } })
+    assert.ok(disabled.ok)
+    const stable = await open.invoke('dsh-chamber:update-state', null, 4000)
+    assert.equal((stable.result as Record<string, unknown>).channel, 'stable', '关闭订阅即回到 stable')
+  } finally {
+    const code = await open.close()
+    assert.equal(code, EXIT_GRACEFUL, 'extra sidecar 必须优雅退出')
+  }
 })
 
 test('S-19/S-21 __host.nativeUpdatePhase：Sparkle 阶段进同一 update-state 投影并推送', async () => {

@@ -1182,10 +1182,15 @@ jobs:
           else
             SPARKLE_FEED="$SPARKLE_FEED_STABLE"
           fi
+          # 更新通道（纯用户偏好）的构建期入口：**两种通道的构建都注入两条 URL**
+          # （stable + 滚动 beta）——运行期按设置页开关 / DSH_CHAMBER_UPDATE_CHANNEL
+          # 二选一，版本后缀不决定通道；SUFeedURL 仍是按通道选的发布链烤值（appcast
+          # 按归档内嵌 feed 分组，不能改）。两条 URL 必须成对，且必须与 feed/公钥
+          # 成对：build-swift-app 的 dry-run 对半配置 fail-closed。
           SPARKLE_ARGS=()
           if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
-            SPARKLE_ARGS=(--sparkle-feed "$SPARKLE_FEED" --sparkle-public-key "$SPARKLE_PUBLIC_ED_KEY")
-            echo "Sparkle auto-update wired (feed=$SPARKLE_FEED)"
+            SPARKLE_ARGS=(--sparkle-feed "$SPARKLE_FEED" --sparkle-public-key "$SPARKLE_PUBLIC_ED_KEY" --sparkle-stable-feed "$SPARKLE_FEED_STABLE" --sparkle-beta-feed "$SPARKLE_FEED_BETA")
+            echo "Sparkle auto-update wired (feed=$SPARKLE_FEED, stable-feed=$SPARKLE_FEED_STABLE, beta-feed=$SPARKLE_FEED_BETA)"
           else
             echo "::warning::SPARKLE_PUBLIC_ED_KEY absent — native auto-update stays disabled in this build"
           fi

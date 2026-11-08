@@ -14,6 +14,8 @@
  *   download()/restartAndInstall() 无腿显式拒绝、有腿按相位门转发；确认动作带 revision
  *   护栏（回答快照过期即拒绝，与 Electron 同源 isStaleConfirmation）。检查/下载静默挂起由
  *   idle 看门狗收敛，可选取证日志见 update-journal.ts。
+ * - 更新通道 = **纯偏好**（v4）：beta 仅当 env 硬覆盖或（偏好 betaUpdates=true 且本构建两条
+ *   通道 URL 可用）；版本后缀不参与（beta 构建默认 stable 通道），见 resolveEffectiveUpdateChannel。
  * - Electron-free：只 import updater.ts 的纯函数。
  */
 import {
@@ -77,14 +79,35 @@ export function selectLatestReleaseVersion(
   return selectReleaseCandidate(releases, channel)?.version ?? null
 }
 
-/** 通道判定（与 updater.ts 同语义：内建 beta 版本或 DSH_CHAMBER_UPDATE_CHANNEL=beta）。 */
+/**
+ * 生效更新通道（design 11 §3.2 / design 25 §7，v4 **纯偏好**表）——Swift 壳、sidecar 与
+ * UI 同一张表：beta 当且仅当 env `DSH_CHAMBER_UPDATE_CHANNEL === 'beta'`，或（本构建的
+ * 通道 URL 对可用 AND 偏好 `betaUpdates === true`）；否则 stable。
+ *
+ * **版本后缀不参与判定**（v4 删除）：beta 构建默认也是 stable 通道——开关关闭时只收正式版，
+ * 该系列的 final 发布时仍会被推送过来；两条 feed URL 都构建期注入，运行期由本表二选一。
+ *
+ * `betaSubscriptionAvailable` 是「本构建是否真的带两条通道 URL」的宿主事实（原生腿在场时 = 壳传了
+ * `--native-updater-beta`，即 stable/beta URL 都通过形状判据；无原生腿的 dev GitHub 发现 =
+ * 恒 true）。显式 false 时偏好不能把通道拉成 beta（唯一例外是 env 硬覆盖）。缺省（undefined）
+ * = true：保持「只加 beta」的推导——关闭必须显式 false。
+ */
+export function resolveEffectiveUpdateChannel(
+  env: Record<string, string | undefined> = process.env,
+  opts: { betaUpdates?: boolean; betaSubscriptionAvailable?: boolean } = {},
+): 'stable' | 'beta' {
+  if (env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta') return 'beta'
+  const betaSubscriptionAvailable = opts.betaSubscriptionAvailable !== false
+  return betaSubscriptionAvailable && opts.betaUpdates === true ? 'beta' : 'stable'
+}
+
+/** 通道判定的旧导出面（v4 起 **env-only**：只有 DSH_CHAMBER_UPDATE_CHANNEL=beta 能把无偏好
+ *  调用拉到 beta；版本后缀不再参与）。委托 resolveEffectiveUpdateChannel
+ *  （betaSubscriptionAvailable=true、无 preference）——调用点不需要通道 URL/preference 事实。 */
 export function resolveHeadlessChannel(
-  version: string,
   env: Record<string, string | undefined> = process.env,
 ): 'stable' | 'beta' {
-  return /^\d+\.\d+\.\d+-beta\.(0|[1-9]\d*)$/.test(version) || env.DSH_CHAMBER_UPDATE_CHANNEL === 'beta'
-    ? 'beta'
-    : 'stable'
+  return resolveEffectiveUpdateChannel(env, { betaSubscriptionAvailable: true })
 }
 
 /** 原生壳更新器桥：安装腿由壳内 Sparkle 承担（appcast + EdDSA + 标准更新窗口）。
@@ -106,13 +129,13 @@ export interface HeadlessUpdateControllerDeps {
   logger: { log: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void }
   /** 注入的 fetch（测试用假响应；缺省 = 全局 fetch）。 */
   request?: typeof fetch
-  /** 通道覆盖（缺省按 version/env 推导）。 */
+  /** 通道覆盖（缺省按 env 推导，见 resolveHeadlessChannel——v4 纯偏好表）。 */
   channel?: 'stable' | 'beta'
   /** 单次检查超时（缺省 10s，与 resolveGithubBetaFeed 同值）。 */
   timeoutMs?: number
   /** 原生更新器桥（缺省 = 无原生安装腿：保持 blocked-available，见类型注释）。 */
   nativeUpdater?: NativeUpdaterBridge
-  /** 节奏/取证环境（默认 process.env；测试注入）。 */
+  /** 节奏/取证/通道环境（默认 process.env；测试注入）。 */
   env?: Record<string, string | undefined>
   /** 退避抖动随机源（默认 Math.random；测试注入固定值）。 */
   random?: () => number
@@ -124,12 +147,16 @@ export interface HeadlessUpdateController extends UpdateController {
   stop(): void
   /** 原生（Sparkle）阶段入站投影（冻结接口）——见实现注释。 */
   applyNativePhase(input: NativeUpdatePhaseInput): void
+  /** 生效通道同步（settings 的 betaUpdates 偏好变更时由装配侧 commit 钩子调用）：
+   *  仅当通道真的变化才更新 state.channel 并推一次（revision 自增）；相位不动，
+   *  同值 no-op（绝不空推一帧）。 */
+  setChannel(channel: 'stable' | 'beta'): void
 }
 
 /** 构造 Swift flavor 更新控制器（UpdateController 契约，无 Electron 依赖）。 */
 export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDeps): HeadlessUpdateController {
   const request = deps.request ?? globalThis.fetch
-  const channel = deps.channel ?? resolveHeadlessChannel(deps.version)
+  const channel = deps.channel ?? resolveHeadlessChannel(deps.env ?? process.env)
   const timeoutMs = deps.timeoutMs ?? 10_000
   // 与 Electron 同源的上游节奏策略（update-schedule.ts）+ 可选取证日志
   // （DSH_DESKTOP_UPDATE_JOURNAL_DIR）：两个 flavor 的节奏常量自此只有一处。
@@ -354,6 +381,15 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     }
   }
 
+  /** 生效通道同步（装配侧 settings commit 钩子入口）：同值 no-op；变化则更新
+   *  state.channel 并推一次（revision 自增）。相位不动——通道切换不重置已下载/安装
+   *  中的流程（下载/安装门的语义由相位与 installBlockedReason 决定，见上方注释）。 */
+  function setChannel(nextChannel: 'stable' | 'beta'): void {
+    if (nextChannel === state.channel) return
+    deps.logger.log('[updater-headless] 更新通道切换：' + state.channel + ' → ' + nextChannel)
+    setState({ channel: nextChannel })
+  }
+
   return {
     state: () => ({ ...state }),
     subscribe(listener) {
@@ -424,6 +460,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       void runScheduledCheck()
     },
     applyNativePhase,
+    setChannel,
     async checkNow() {
       // 与 Electron 同契约：返回值恒 {ok:true}，真实结果由 update-state 推送判定；
       // 原生腿在场时 runCheck 走冻结边 kind=check，页面只认壳推送的相位。

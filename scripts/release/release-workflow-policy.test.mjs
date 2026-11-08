@@ -382,6 +382,24 @@ assert.ok(swiftBuild.includes('releases/download/${SPARKLE_BETA_ROLLING_TAG}/app
   'beta builds must inject the rolling tag\'s beta appcast')
 assert.ok(swiftBuild.includes(`SPARKLE_BETA_ROLLING_TAG: ${NATIVE_BETA_ROLLING_TAG}`),
   'the rolling tag must be defined once (build-swift job env) and match release-artifacts.mjs')
+// 更新通道（design 25，纯用户偏好）：**两种通道的构建都注入两条 URL**
+// （stable + 滚动 beta）——运行期按设置页开关 / DSH_CHAMBER_UPDATE_CHANNEL 二选一，
+// 版本后缀不决定通道；SUFeedURL 仍是按通道选的发布链烤值。两条 URL 必须成对，
+// 且只能与 feed/公钥一起注入（build-swift-app 的 dry-run 对半配置 fail-closed），
+// 装配脚本必须真的解析/注入两条——否则发布腿传了也只是无声无息。
+const sparkleArgsLine = swiftBuild.split('\n').find((line) => line.includes('SPARKLE_ARGS=(--sparkle-feed'))
+assert.ok(sparkleArgsLine !== undefined, 'the Swift assembly step must build its Sparkle argv')
+assert.ok(sparkleArgsLine.includes('--sparkle-stable-feed "$SPARKLE_FEED_STABLE"'),
+  'both channel builds must pass the stable feed URL (the runtime channel is a pure user preference)')
+assert.ok(sparkleArgsLine.includes('--sparkle-beta-feed "$SPARKLE_FEED_BETA"'),
+  'both channel builds must pass the rolling beta feed URL (the runtime channel is a pure user preference)')
+assert.ok(sparkleArgsLine.includes('--sparkle-public-key "$SPARKLE_PUBLIC_ED_KEY"'),
+  'the channel URL pair must be injected only together with the Sparkle feed/public-key pair')
+assert.ok(swiftAssembler.includes("'--sparkle-stable-feed'") && swiftAssembler.includes("'--sparkle-beta-feed'"),
+  'build-swift-app must parse both --sparkle-stable-feed and --sparkle-beta-feed (otherwise the workflow argv throws unknown-argument)')
+assert.ok(swiftAssembler.includes('SPARKLE_STABLE_FEED_URL: options.sparkleStableFeed')
+  && swiftAssembler.includes('SPARKLE_BETA_FEED_URL: options.sparkleBetaFeed'),
+  'the assembler must inject both parsed channel feeds into Info.plist (DSHChamber*FeedURL)')
 
 // stable 与 beta 的收件目录/feed/上传面**完全分开**——generate_appcast 按
 // 归档内嵌 SUFeedURL 的文件名分组，两通道归档同目录 + -o 会直接失败 multiple appcasts found
@@ -1034,6 +1052,16 @@ assert.match(
   nativeInfoPlistTemplate,
   /<key>LSMinimumSystemVersion<\/key>\s*<string>14\.4<\/string>/,
   'the native .app must carry the exact LSMinimumSystemVersion 14.4 (the release floor)')
+// 更新通道的 plist 注入点（design 25）：两个键 + 占位符是装配腿唯一写入口；
+// 空串 = 未注入（通道切换不可用）。这些断言也防止占位符被改名后装配腿静默留字面量。
+assert.match(
+  nativeInfoPlistTemplate,
+  /<key>DSHChamberStableFeedURL<\/key>\s*<string>__SPARKLE_STABLE_FEED_URL__<\/string>/,
+  'the native plist must carry the stable feed injection point (DSHChamberStableFeedURL)')
+assert.match(
+  nativeInfoPlistTemplate,
+  /<key>DSHChamberBetaFeedURL<\/key>\s*<string>__SPARKLE_BETA_FEED_URL__<\/string>/,
+  'the native plist must carry the beta feed injection point (DSHChamberBetaFeedURL)')
 assert.match(
   swiftPackageManifest,
   /\.macOS\(\.v14\)/,

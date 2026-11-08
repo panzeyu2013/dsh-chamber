@@ -37,6 +37,9 @@
  *  ⑰ CFBundleVersion 映射：beta.N → X.Y.Z.N、final → X.Y.Z.final 标记，
  *     同 base 的 beta.N < beta.N+1 < final 且 beta 与 final 不同；
  *  ⑱ --dry-run 计划断言：feed/公钥成对、https、.xml、精确产物名；不写盘；
+ *  ⑮b 更新通道 feed URL（纯用户偏好）：--sparkle-stable-feed/--sparkle-beta-feed
+ *     解析 / Info.plist 双键注入 / 成对规则（只给一条 FAIL、都缺=旧构建）与
+ *     stable releases/latest、beta 滚动 tag 形状的 dry-run fail-closed；
  *  ⑲ sidecar 符号链接归一化日志不含 undefined（copyTree 无返回值）；
  *  ⑳ 缺图标 fail closed（装配与 dry-run 两处）；㉑ dist/web 过滤
  *     （*.map / .vite 不进 .app，规则与 Electron build.files 对齐）。
@@ -105,6 +108,7 @@ import {
   findSparkleFramework,
   shouldCopyWebDistEntry,
   sparkleFeedChannel,
+  sparkleChannelFeedsProblem,
   isBundledPayloadNode,
 } from '../../../macos/scripts/build-swift-app.mjs'
 // 滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
@@ -1449,6 +1453,128 @@ test('⑮ Sparkle 装配面：plist 注入 + 计划文本 + 框架定位（S-01 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('⑮b 更新通道 feed URL（纯用户偏好）：--sparkle-stable-feed/--sparkle-beta-feed 解析 / Info.plist 双键注入 / dry-run 成对与形状 fail-closed', async () => {
+  const rollingBetaFeed = 'https://github.com/o/r/releases/download/' + NATIVE_BETA_ROLLING_TAG + '/appcast-swift-beta.xml'
+  const stableFeed = 'https://github.com/o/r/releases/latest/download/appcast-swift.xml'
+
+  // 模板：两个注入点（键 + 占位符）必须存在；未注入时两条都必须是空串（壳据此判
+  // 通道切换不可用），绝不残留占位符——占位符会被壳当成形状非法的 URL。
+  const template = readFileSync(path.join(macosDir, 'Info.plist.template'), 'utf8')
+  assert.match(template,
+    /<key>DSHChamberStableFeedURL<\/key>\s*<string>__SPARKLE_STABLE_FEED_URL__<\/string>/,
+    'Info.plist.template 必须携带 DSHChamberStableFeedURL 的装配期注入点')
+  assert.match(template,
+    /<key>DSHChamberBetaFeedURL<\/key>\s*<string>__SPARKLE_BETA_FEED_URL__<\/string>/,
+    'Info.plist.template 必须携带 DSHChamberBetaFeedURL 的装配期注入点')
+  const rendered = renderInfoPlist(template, {
+    VERSION: '9.9.9', BUNDLE_VERSION: '9.9.9.999999999',
+    SPARKLE_FEED_URL: stableFeed, SPARKLE_PUBLIC_ED_KEY: 'abc=',
+    SPARKLE_STABLE_FEED_URL: '', SPARKLE_BETA_FEED_URL: '',
+  })
+  assert.ok(!rendered.includes('__SPARKLE_STABLE_FEED_URL__') && !rendered.includes('__SPARKLE_BETA_FEED_URL__'),
+    '占位符不得残留进产物')
+  assert.match(rendered, /<key>DSHChamberStableFeedURL<\/key>\s*<string><\/string>/,
+    '未注入通道 URL 时 stable 键必须是空串')
+  assert.match(rendered, /<key>DSHChamberBetaFeedURL<\/key>\s*<string><\/string>/,
+    '未注入通道 URL 时 beta 键必须是空串')
+  const injected = renderInfoPlist(template, {
+    VERSION: '9.9.9', BUNDLE_VERSION: '9.9.9.999999999',
+    SPARKLE_FEED_URL: stableFeed, SPARKLE_PUBLIC_ED_KEY: 'abc=',
+    SPARKLE_STABLE_FEED_URL: stableFeed, SPARKLE_BETA_FEED_URL: rollingBetaFeed,
+  })
+  assert.ok(injected.includes('<string>' + stableFeed + '</string>'),
+    '--sparkle-stable-feed 的值必须写进 DSHChamberStableFeedURL')
+  assert.ok(injected.includes('<string>' + rollingBetaFeed + '</string>'),
+    '--sparkle-beta-feed 的值必须写进 DSHChamberBetaFeedURL')
+
+  // 参数解析：缺省两条都空；显式值原样保留（stable 与 beta 是独立参数）。
+  const defaults = parseBuildSwiftAppArgs([])
+  assert.equal(defaults.sparkleStableFeed, '')
+  assert.equal(defaults.sparkleBetaFeed, '')
+  const parsed = parseBuildSwiftAppArgs([
+    '--sparkle-feed', stableFeed, '--sparkle-public-key', 'abc=',
+    '--sparkle-stable-feed', stableFeed, '--sparkle-beta-feed', rollingBetaFeed,
+  ])
+  assert.equal(parsed.sparkleStableFeed, stableFeed)
+  assert.equal(parsed.sparkleBetaFeed, rollingBetaFeed)
+
+  // 纯校验：null = 可接受；只给一条 / 无更新面 / 明文 / 非 .xml / 版本固定 tag → 文案。
+  assert.equal(sparkleChannelFeedsProblem(stableFeed, 'abc=', '', ''), null,
+    '两条都缺 = 合法旧构建（通道切换不可用）')
+  assert.equal(sparkleChannelFeedsProblem(stableFeed, 'abc=', stableFeed, rollingBetaFeed), null)
+  assert.match(sparkleChannelFeedsProblem(stableFeed, 'abc=', stableFeed, '') ?? '', /成对配置/)
+  assert.match(sparkleChannelFeedsProblem(stableFeed, 'abc=', '', rollingBetaFeed) ?? '', /成对配置/)
+  assert.match(sparkleChannelFeedsProblem('', '', stableFeed, rollingBetaFeed) ?? '', /--sparkle-feed/)
+  assert.match(sparkleChannelFeedsProblem(stableFeed, '', stableFeed, rollingBetaFeed) ?? '', /--sparkle-feed/)
+  // stable 形状：https / .xml / releases/latest（版本固定 tag 不行）。
+  assert.match(sparkleChannelFeedsProblem(stableFeed, 'abc=',
+    'http://github.com/o/r/releases/latest/download/appcast-swift.xml', rollingBetaFeed) ?? '', /https/)
+  assert.match(sparkleChannelFeedsProblem(stableFeed, 'abc=',
+    'https://x/feed.json', rollingBetaFeed) ?? '', /\.xml/)
+  assert.match(sparkleChannelFeedsProblem(stableFeed, 'abc=',
+    'https://github.com/o/r/releases/download/v9.9.9/appcast-swift.xml', rollingBetaFeed) ?? '',
+  /releases\/latest/)
+  // beta 形状：滚动 tag（版本固定 tag 不行）。
+  assert.match(sparkleChannelFeedsProblem(stableFeed, 'abc=', stableFeed,
+    'https://github.com/o/r/releases/download/v0.3.2-beta.1/appcast-swift-beta.xml') ?? '',
+  /滚动 tag/)
+
+  // dry-run 计划：两条都注入 → 行内标注两 URL；都缺 → 合法且行内说明切换不可用。
+  const planArgs = ['--out', '/tmp/dsh-plan',
+    '--artifact-basename', 'dsh-chamber-9.9.9-macos-arm64',
+    '--sparkle-feed', stableFeed, '--sparkle-public-key', 'abc=']
+  const withChannels = dryRunPlanReport(parseBuildSwiftAppArgs([...planArgs,
+    '--sparkle-stable-feed', stableFeed, '--sparkle-beta-feed', rollingBetaFeed]))
+  const channelLines = withChannels.lines.join('\n')
+  assert.ok(channelLines.includes('sparkle-channels：stable=' + stableFeed), 'dry-run 必须打印 stable 通道 URL')
+  assert.ok(channelLines.includes('beta=' + rollingBetaFeed), 'dry-run 必须打印 beta 通道 URL')
+  const legacy = dryRunPlanReport(parseBuildSwiftAppArgs(planArgs))
+  assert.match(legacy.lines.join('\n'), /sparkle-channels=（未注入 stable\/beta 通道 URL：.*切换不可用/,
+    '两条都缺时必须说明通道切换不可用（允许装配，旧构建行为）')
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([...planArgs, '--sparkle-stable-feed', stableFeed])),
+    /成对配置/, '只给 stable 通道 URL 必须 loud')
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([...planArgs, '--sparkle-beta-feed', rollingBetaFeed])),
+    /成对配置/, '只给 beta 通道 URL 必须 loud')
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([
+      '--sparkle-stable-feed', stableFeed, '--sparkle-beta-feed', rollingBetaFeed])),
+    /--sparkle-feed/, '通道 URL 不得脱离 Sparkle feed/公钥单独注入')
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([...planArgs,
+      '--sparkle-stable-feed', 'https://github.com/o/r/releases/download/v9.9.9/appcast-swift.xml',
+      '--sparkle-beta-feed', rollingBetaFeed])),
+    /releases\/latest/, '版本固定 tag 的 stable URL 必须被拒')
+
+  // CLI --dry-run：发布腿形状（两条都传）退出 0 且打印双通道行；只传一条非零退出。
+  const out = tempOut()
+  try {
+    const stdout = execFileSync(process.execPath, [script, '--dry-run', '--out', out,
+      '--sparkle-feed', stableFeed, '--sparkle-public-key', 'abc=',
+      '--sparkle-stable-feed', stableFeed, '--sparkle-beta-feed', rollingBetaFeed, '--skip-build'], {
+      cwd: macosDir, encoding: 'utf8',
+    })
+    assert.match(stdout, /sparkle-channels：stable=.*appcast-swift\.xml/)
+    const half = spawnSync(process.execPath, [script, '--dry-run', '--out', out,
+      '--sparkle-feed', stableFeed, '--sparkle-public-key', 'abc=',
+      '--sparkle-beta-feed', rollingBetaFeed, '--skip-build'], {
+      cwd: macosDir, encoding: 'utf8',
+    })
+    assert.notEqual(half.status, 0, half.stdout + half.stderr)
+    assert.match(half.stdout + half.stderr, /成对配置/)
+    // 只给稳定更新面（无通道 URL）= 合法旧构建：退出 0 + 说明切换不可用。
+    const legacyOut = execFileSync(process.execPath, [script, '--dry-run', '--out', out,
+      '--sparkle-feed', stableFeed, '--sparkle-public-key', 'abc=', '--skip-build'], {
+      cwd: macosDir, encoding: 'utf8',
+    })
+    assert.match(legacyOut, /sparkle-channels=（未注入 stable\/beta 通道 URL/)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
 
 test('⑯ Sparkle 嵌入装配：framework 就位 + 链接/ rpath + 无逃逸符号链接 + 深度校验', async (t) => {
   // 依赖解析成功（SwiftPM 制品在 .build/artifacts）才跑；没解析的环境跳过而不是假绿。

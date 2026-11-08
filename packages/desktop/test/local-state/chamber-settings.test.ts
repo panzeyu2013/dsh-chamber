@@ -30,6 +30,7 @@ import {
   verifyLaunchAtLoginReadBack,
   writeSettingsFile,
   type ChamberSettings,
+  type ChamberSettingsSupported,
 } from '../../chamber-settings.ts';
 import { applyDebugRuntime, installIpcHandlers, type ShellAssemblyCtx } from '../../shell-core.ts';
 import { IPC_CHANNELS } from '../../ipc-events.ts';
@@ -83,7 +84,13 @@ function settingsMethodStub(prefix: string): (..._args: never[]) => never {
  */
 function installSettingsHarness(
   leaves: SettingsSetLeaves,
-  opts: { persist?: (next: ChamberSettings) => void; initial?: ChamberSettings } = {},
+  opts: {
+    persist?: (next: ChamberSettings) => void
+    initial?: ChamberSettings
+    /** 设置页能力门事实：betaUpdates 门 = Swift flavor + beta 通道开关（构建期 beta feed）。 */
+    flavor?: 'electron' | 'swift'
+    nativeBetaChannelSwitch?: boolean
+  } = {},
 ): SettingsHarness {
   const persistCalls: ChamberSettings[] = [];
   const pushes: { channel: string; payload: unknown }[] = [];
@@ -109,7 +116,7 @@ function installSettingsHarness(
 
   const ctxReal: Record<string, unknown> = {
     hostFacts: {
-      flavor: 'electron',
+      flavor: opts.flavor ?? 'electron',
       controlPlaneUrl: 'http://127.0.0.1:1',
       platform: process.platform,
       trayPresent: () => true,
@@ -123,6 +130,8 @@ function installSettingsHarness(
       persist: persistImpl,
     },
     isQuitting: () => false,
+    // beta 通道开关事实（ShellAssemblyCtx）：缺省 false = 不可用（安全的一侧）。
+    nativeBetaChannelSwitch: opts.nativeBetaChannelSwitch === true,
     setKeepAwake: leaves.setKeepAwake,
     setLoginItem: leaves.setLoginItem,
     // 叶片注入即记录：debug 副作用路径（含「空块补丁不得驱动腿」）必须可观测。
@@ -877,11 +886,11 @@ test('P-12: a persisted strict-rejected origin is preserved as corrupt (read pat
 test('computeSupported: launchAtLogin on all shipping platforms; closeToTray follows tray availability, always on darwin', () => {
   // design 21: win32 launchAtLogin is supported (HKCU Run key). debugInspectable
   // 缺省 flavor = electron → false（Electron 腿本版不接线调试面）。
-  assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true, badgeSupported: false, debugInspectable: false });
-  assert.deepEqual(computeSupported('win32', false), { launchAtLogin: true, closeToTray: false, badgeSupported: false, debugInspectable: false });
-  assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true, badgeSupported: true, debugInspectable: false });
-  assert.deepEqual(computeSupported('linux', true), { launchAtLogin: true, closeToTray: true, badgeSupported: true, debugInspectable: false });
-  assert.deepEqual(computeSupported('linux', false), { launchAtLogin: true, closeToTray: false, badgeSupported: true, debugInspectable: false });
+  assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true, badgeSupported: false, debugInspectable: false, betaUpdatesSupported: false });
+  assert.deepEqual(computeSupported('win32', false), { launchAtLogin: true, closeToTray: false, badgeSupported: false, debugInspectable: false, betaUpdatesSupported: false });
+  assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true, badgeSupported: true, debugInspectable: false, betaUpdatesSupported: false });
+  assert.deepEqual(computeSupported('linux', true), { launchAtLogin: true, closeToTray: true, badgeSupported: true, debugInspectable: false, betaUpdatesSupported: false });
+  assert.deepEqual(computeSupported('linux', false), { launchAtLogin: true, closeToTray: false, badgeSupported: true, debugInspectable: false, betaUpdatesSupported: false });
   // Swift 原生壳（WKWebView isInspectable）才把调试门打开。
   assert.equal(computeSupported('darwin', true, 'swift').debugInspectable, true);
 });
@@ -1146,4 +1155,84 @@ test('S-08 decideMainWindowClose: a close that would quit is deferred until the 
   // Confirmed quit + armed update: still a real close.
   assert.equal(decideMainWindowClose({
     behavior: 'quit', recoveryAvailable: false, quitRequested: true, quitConfirmed: true, updateRestartArmed: true }), 'close');
+});
+
+// ---------------------------------------------------------------------------
+// betaUpdates（design 11 §3.2 / design 25 §7）：可选偏好 / 持久化 / 能力门
+// ---------------------------------------------------------------------------
+
+test('betaUpdates: 可选布尔偏好——validatePatch 严格、normalize 只认布尔、缺省保持「未设置」', () => {
+  assert.deepEqual(validatePatch({ betaUpdates: true }), { ok: true, patch: { betaUpdates: true } });
+  assert.deepEqual(validatePatch({ betaUpdates: false }), { ok: true, patch: { betaUpdates: false } });
+  assert.deepEqual(validatePatch({ betaUpdates: 'true' }), { ok: false, error: 'betaUpdates must be a boolean' });
+  // 缺省 = 「未设置」，不是 false：一次读盘绝不把「未表态」落成「明确关闭」。
+  assert.equal('betaUpdates' in normalizeSettings({}), false);
+  assert.equal(normalizeSettings({ betaUpdates: true }).betaUpdates, true);
+  assert.equal(normalizeSettings({ betaUpdates: false }).betaUpdates, false);
+  assert.equal('betaUpdates' in normalizeSettings({ betaUpdates: 'yes' }), false, '非布尔回落「未设置」');
+});
+
+test('readSettingsFile/writeSettingsFile: betaUpdates 往返保留；出现非布尔即整文件损坏（*.corrupt 保留）', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-beta-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeSettingsFile(file, { ...DEFAULT_CHAMBER_SETTINGS, betaUpdates: true });
+    const roundTrip = readSettingsFile(file);
+    assert.equal(roundTrip.state, 'ok');
+    assert.equal(roundTrip.settings.betaUpdates, true);
+    // 关闭态也能往返（false 与「未设置」是两种事实，绝不混同）。
+    writeSettingsFile(file, { ...DEFAULT_CHAMBER_SETTINGS, betaUpdates: false });
+    const closed = readSettingsFile(file);
+    assert.equal(closed.state, 'ok');
+    assert.equal(closed.settings.betaUpdates, false);
+
+    // 出现时必须布尔，否则整文件判 corrupt（与既有布尔键同规；Swift StartupSettings 同一判据）。
+    for (const malformed of [{ betaUpdates: 1 }, { betaUpdates: null }, { betaUpdates: 'true' }]) {
+      writeFileSync(file, JSON.stringify(malformed), 'utf8');
+      const read = readSettingsFile(file);
+      assert.equal(read.state, 'corrupt', JSON.stringify(malformed) + ' 必须判损坏');
+      assert.equal('betaUpdates' in read.settings, false, '损坏时整文件不采信（无偏好）');
+      assert.ok(existsSync(`${file}.corrupt`), '损坏文件保留为 *.corrupt（可逆取证）');
+      rmSync(`${file}.corrupt`, { force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('computeSupported: betaUpdatesSupported 是调用方事实（Swift 壳 + 注入 beta feed），缺省 false', () => {
+  assert.equal(computeSupported('darwin', true, 'swift', true).betaUpdatesSupported, true);
+  assert.equal(computeSupported('darwin', true, 'swift').betaUpdatesSupported, false, '缺省 = 不支持（安全的一侧）');
+  // 与既有门同一形状：字段恒在（可选只是一种跨版本读法）。
+  assert.equal(computeSupported('linux', false).betaUpdatesSupported, false);
+  assert.equal(computeSupported('win32', true, 'electron').betaUpdatesSupported, false);
+});
+
+test('S-E settings-set: betaUpdates=true 在无 beta feed 的构建上被响亮拒绝；false 永远允许', async () => {
+  const leaves = { setKeepAwake: async () => {}, setLoginItem: async () => ({ ok: true as const }) };
+  const unsupported = installSettingsHarness(leaves);
+  const rejected = await unsupported.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { betaUpdates: true } });
+  assert.deepEqual(rejected, { error: 'beta update channel is unavailable in this build' });
+  assert.equal(unsupported.holder().betaUpdates, undefined, '被拒绝的偏好绝不落入 holder');
+  assert.equal(unsupported.persistCalls.length, 0, '被拒绝的偏好绝不持久化');
+
+  // 关闭永远允许（即便能力门为 false——绝不把用户锁在 beta 里）。
+  const off = await unsupported.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { betaUpdates: false } });
+  assert.equal(settingsOf(off).betaUpdates, false);
+  assert.equal(unsupported.holder().betaUpdates, false);
+
+  // 能力门为真的构建（Swift 壳 + --native-updater-beta）：true 被接受、持久化并推送。
+  const supported = installSettingsHarness(leaves, { flavor: 'swift', nativeBetaChannelSwitch: true });
+  const status = await supported.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal((status as { supported: ChamberSettingsSupported }).supported.betaUpdatesSupported, true);
+  const accepted = await supported.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { betaUpdates: true } });
+  assert.equal(settingsOf(accepted).betaUpdates, true);
+  assert.equal(supported.holder().betaUpdates, true);
+  assert.equal(supported.persistCalls.at(-1)?.betaUpdates, true);
+  assert.ok(supported.pushes.length > 0, '成功应用必须推送 settings-changed');
+
+  // Electron flavor 恒 false：即便有人误传 beta 通道开关，组合门也必须挡住。
+  const electron = installSettingsHarness(leaves, { flavor: 'electron', nativeBetaChannelSwitch: true });
+  const electronStatus = await electron.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal((electronStatus as { supported: ChamberSettingsSupported }).supported.betaUpdatesSupported, false);
 });

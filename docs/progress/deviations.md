@@ -58,7 +58,7 @@
 |T-01|页面桥|preload + contextBridge（隔离world）|documentStart注入shim + window.webkit.messageHandlers|两侧契约（通道/形状/错误码）一致；A桥面按命名空间逐成员程序化比对。accepted|
 |T-02|IPC编码|结构化克隆|JSON（envelope ≤4MiB，深度512/NaN拒绝）|协议可见形状相同；超限行为见S-18。accepted|
 |T-03|宿主进程|Electron main + electron-updater|Swift壳 + Node sidecar（stdio NDJSON JSON-RPC）|宿主语言不同；sidecar复用core注册体；runtime core吃同一提交物。accepted|
-|T-04|更新实现|electron-updater（latest-mac.yml/beta-mac.yml）|headless控制器（GitHub releases查询）+ Sparkle 2（appcast-swift.xml + EdDSA）|D-1=B后安装腿由Sparkle承担；两端更新源/密钥独立；发现单源化成立（S-21），beta滚动通道enclosure可下载且beta可见final（S-22/S-36）；节奏差异见S-37会话依赖残余。accepted|
+|T-04|更新实现|electron-updater（latest-mac.yml/beta-mac.yml）|headless控制器（GitHub releases查询）+ Sparkle 2（appcast-swift.xml + EdDSA）|D-1=B后安装腿由Sparkle承担；两端更新源/密钥独立；发现单源化成立（S-21），beta滚动通道enclosure可下载且beta可见final（S-22/S-36）；节奏差异见S-37会话依赖残余。Swift 腿另有持久 `betaUpdates` 订阅偏好（纯用户偏好通道，两条 feed URL 构建期注入、版本后缀不参与判定；契约 design 25 §7）；Electron 冻结腿不消费该设置（只认封签/env）。accepted|
 |T-05|签名与entitlements|Developer ID + 公证 + stapler/spctl；主app entitlements含JIT/unsigned-exec-memory/disable-library-validation|dry-run为ad-hoc；主app仅disable-library-validation，捆绑node单独JIT entitlements|凭据门禁两侧fail-closed、属外部依赖；主壳不需要JIT是有意最小权限。accepted|
 |T-06|目录锁|Darwin O_EXLOCK加O_NONBLOCK（`chamber-lock.ts:33,88-175`）|flock(LOCK_EX/LOCK_NB)（`SidecarSupervisor.swift:32,60-144`）|同一 .dsh-chamber.lock；锁文件仅诊断，内核锁是唯一裁决（design 25 §6.3）。accepted|
 |T-07|打包布局|electron-builder（asar/extraResources；vendor/dsh版本一致断言）|.app + Contents/Resources/sidecar（内建node + dist/web；.modules.yaml断言）|锁步由packaging-manifest + build-swift-app断言；两侧断言并集才完整；web dist过滤与vendor/dsh断言由装配门禁覆盖（G39/G40 resolved）。accepted|

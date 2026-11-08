@@ -6,7 +6,9 @@
 //  在 main.ts:1428-1438 读 <userData>/chamber-settings.json 并应用
 //  keepAwake/launchAtLogin；启动期 reconcile 归 Swift 宿主
 //  （sidecar-ctx.ts:506-511），否则持久化的 keep-awake 重启后静默失效。
-//  本文件实现 keepAwake 一项（settings UI 同一 setKeepAwake 宿主腿）。
+//  本文件实现 keepAwake / launchAtLogin / debug.enabled / betaUpdates 四个启动期
+//  读取器（各自消费腿：setKeepAwake / setLoginItem / setDebugMode /
+//  AppUpdater.applyBetaUpdates）。
 //
 //  语义（与 chamber-settings.ts readSettingsFile 对齐）：
 //  - 缺文件 = 默认（keepAwake off），无日志噪音；
@@ -107,6 +109,54 @@ public enum StartupSettings {
               let record = object as? [String: Any] else { return nil }
         guard let debug = record["debug"] as? [String: Any] else { return nil }
         guard let raw = debug["enabled"] else { return nil }
+        return isBoolean(raw) ? ((raw as? NSNumber)?.boolValue ?? false) : nil
+    }
+
+    /// 读取 <userDataDir>/chamber-settings.json 的 betaUpdates（设置 → 通用 →
+    /// 更新区「接收预览版（beta）更新」的启动对偶）。缺文件 → .missing（未订阅、
+    /// 无日志）；损坏 → .corrupt（loud + 未订阅——绝不猜一个值去切更新通道）；
+    /// 键缺失 = false（Electron 默认同值）。文件级纪律与 readKeepAwake 完全同一套
+    /// （含 no-follow、inode 稳定性、重复键与编码拒绝）。
+    public static func readBetaUpdates(userDataDir: String) -> BetaUpdatesReadOutcome {
+        switch readValidatedData(userDataDir: userDataDir) {
+        case .missing:
+            return .missing
+        case .corrupt(let reason):
+            return .corrupt(reason: reason)
+        case .ok(let data):
+            switch validatedSettingsRecord(fromJSON: data) {
+            case .corrupt(let reason):
+                // 整文件不可信 → 不采信其中任一键（与 readDebugEnabled /
+                // readLaunchAtLogin 的 .corrupt 同纪律）。
+                return .corrupt(reason: reason)
+            case .ok:
+                return .ok(decodeBetaUpdates(fromJSON: data) ?? false)
+            }
+        }
+    }
+
+    /// beta 订阅启动读取结果（与 keepAwake 的 ReadOutcome / DebugReadOutcome 同形）。
+    public enum BetaUpdatesReadOutcome: Equatable {
+        /// 文件不存在 → 未订阅（不动作、无日志）。
+        case missing
+        /// 读取失败 / JSON / 形状损坏 → loud + 未订阅。
+        case corrupt(reason: String)
+        /// 合法文件 → betaUpdates（缺键 = false）。
+        case ok(Bool)
+
+        /// 只有「合法文件」才有可用的持久意图；missing/corrupt 都读作「未订阅」
+        /// （调用方按 false 处理，绝不猜值）。
+        public var betaUpdatesValue: Bool? {
+            if case .ok(let value) = self { return value }
+            return nil
+        }
+    }
+
+    /// 已校验字节 → betaUpdates（纯函数，单测直测；缺键/非布尔 → nil）。
+    public static func decodeBetaUpdates(fromJSON data: Data) -> Bool? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let record = object as? [String: Any] else { return nil }
+        guard let raw = record["betaUpdates"] else { return nil }
         return isBoolean(raw) ? ((raw as? NSNumber)?.boolValue ?? false) : nil
     }
 
@@ -224,7 +274,8 @@ public enum StartupSettings {
                 return "windowCloseBehavior 非法"
             }
         }
-        for key in ["launchAtLogin", "keepAwake", "quitConfirmation", "vscodeOpenInNewWindow"] {
+        for key in ["launchAtLogin", "keepAwake", "quitConfirmation", "vscodeOpenInNewWindow",
+                    "betaUpdates"] {
             if let value = record[key], !isBoolean(value) { return "\(key) 非布尔值" }
         }
         if let origin = record["registryOrigin"] {

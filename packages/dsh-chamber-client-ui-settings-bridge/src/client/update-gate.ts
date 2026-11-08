@@ -45,3 +45,42 @@ export function updateRestartAvailable(
 export function updateCheckPlatformBlocked(installBlockedReason: string | null | undefined): boolean {
   return installBlockedReason === 'auto-update is not supported on this platform'
 }
+
+/**
+ * 「接收预览版（beta）更新」开关的呈现真值表（design 11 §3.2 / design 25 §7）——
+ * 纯函数，组件只做文案与描边映射。
+ *
+ * 通道 = **纯用户偏好**（v4）：壳推送的 `update.channel` 只由「env 封签 OR 偏好
+ * `betaUpdates === true` 且本构建两条 feed URL 可用」裁决；版本后缀**不**参与
+ * （beta 构建默认也是稳定通道，开关关闭时只收正式版）。开关值因此回读壳推送的
+ * 生效通道，不是 settings 里的期望值回声，页面绝不自行再推一遍。
+ *
+ * 三态优先级（高 → 低）：
+ *  - `unsupported`：宿主能力事实（Swift 原生壳且两条通道 URL 均已注入）不为真——
+ *    缺字段按「不支持」读，绝不呈现一个永远无效的开关；
+ *  - `unavailable`：更新面尚未水合（桥未就绪 / 无更新面）——未知不等于可用，
+ *    禁用且不给出「不支持」的错误断言；
+ *  - 否则可用：普通开关 = 当前生效通道是否 beta（默认关）。
+ */
+export interface BetaUpdatesUpdateLike {
+  channel: 'stable' | 'beta'
+}
+
+export interface BetaUpdatesSwitchState {
+  checked: boolean
+  disabled: boolean
+  reason: null | 'unsupported' | 'unavailable'
+}
+
+export function betaUpdatesSwitchState(input: {
+  update: BetaUpdatesUpdateLike | null
+  supported: boolean
+}): BetaUpdatesSwitchState {
+  if (input.supported !== true) {
+    return { checked: input.update?.channel === 'beta', disabled: true, reason: 'unsupported' }
+  }
+  if (input.update === null) {
+    return { checked: false, disabled: true, reason: 'unavailable' }
+  }
+  return { checked: input.update.channel === 'beta', disabled: false, reason: null }
+}

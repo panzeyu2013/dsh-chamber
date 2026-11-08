@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { updateCheckDisabled, updateCheckPlatformBlocked, updateRestartAvailable } from '../../src/client/update-gate.ts';
+import { betaUpdatesSwitchState, updateCheckDisabled, updateCheckPlatformBlocked, updateRestartAvailable } from '../../src/client/update-gate.ts';
 import { classifyBlockedReason, NATIVE_SHELL_BLOCKED_REASON } from '../../src/client/blocked-reason.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,63 @@ test('updateRestartAvailable: linux never offers the restart action (AppImage si
   // Even a completed download on an installable linux shape (AppImage) keeps
   // only the quit-install leg — updater.restartAndInstall() refuses linux too.
   assert.equal(updateRestartAvailable('downloaded', null, 'linux'), false);
+});
+
+// --- 「接收预览版（beta）更新」开关门（design 11 §3.2 / design 25 §7；v4 = 纯偏好通道） ---
+
+test('betaUpdatesSwitchState: 能力门优先——宿主说不支持时禁用并报 unsupported', () => {
+  // 缺字段/宿主事实为假 = 该构建没有可切换的两条通道 feed URL（非原生壳，或构建期未成对注入）。
+  assert.deepEqual(
+    betaUpdatesSwitchState({ update: null, supported: false }),
+    { checked: false, disabled: true, reason: 'unsupported' },
+  );
+  // 历史推送里已有 beta 通道时 checked 仍只回读相位事实，但纪律仍是禁用。
+  assert.deepEqual(
+    betaUpdatesSwitchState({ update: { channel: 'beta' }, supported: false }),
+    { checked: true, disabled: true, reason: 'unsupported' },
+  );
+});
+
+test('betaUpdatesSwitchState: 更新面未水合/不可用时禁用并报 unavailable（未知不等于可用）', () => {
+  assert.deepEqual(
+    betaUpdatesSwitchState({ update: null, supported: true }),
+    { checked: false, disabled: true, reason: 'unavailable' },
+  );
+});
+
+test('betaUpdatesSwitchState: 可用构建上开关 = 壳推送的生效通道（普通开关，默认关）', () => {
+  assert.deepEqual(
+    betaUpdatesSwitchState({ update: { channel: 'stable' }, supported: true }),
+    { checked: false, disabled: false, reason: null },
+  );
+  assert.deepEqual(
+    betaUpdatesSwitchState({ update: { channel: 'beta' }, supported: true }),
+    { checked: true, disabled: false, reason: null },
+  );
+});
+
+test('betaUpdatesSwitchState: v4 纯偏好——纯门不看安装版本后缀（beta 构建也是普通开关）', () => {
+  // 契约 v4 删除了「X.Y.Z-beta.N → beta」：门只收 update/supported 两个事实，版本后缀
+  // 不再产生特殊态。源码锚：纯门里不得重新出现版本形状/后缀判定或 preview-build 态。
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const gate = readFileSync(path.resolve(here, '../../src/client/update-gate.ts'), 'utf8');
+  assert.doesNotMatch(gate, /-beta\./, 'update-gate.ts 不得重新引入版本后缀通道判定（v4）');
+  assert.doesNotMatch(gate, /preview-build/, 'update-gate.ts 不得保留 preview-build 特殊态（v4）');
+});
+
+test('beta 订阅开关：UpdateSection 只做文案映射，决策走纯门，三个词条都被消费', () => {
+  // 与「调试模式」行同款结构锚（没有渲染测试框架）：钉住接线与「无死词条 / 无特殊态」，
+  // 行为面由上面的真值表覆盖。能力门读的是宿主事实 supported.betaUpdatesSupported。
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const updateSection = readFileSync(path.resolve(here, '../../src/client/UpdateSection.tsx'), 'utf8');
+  assert.match(updateSection, /status\?\.supported\.betaUpdatesSupported === true/);
+  assert.match(updateSection, /betaUpdatesSwitchState\(\{ update, supported \}\)/);
+  assert.match(updateSection, /applySettingsPatch\(\{ betaUpdates: next \}\)/);
+  assert.match(updateSection, /<BetaUpdatesRow t=\{t\} \/>/);
+  assert.doesNotMatch(updateSection, /updateBetaUpdatesPreviewBuild|preview-build/, 'v4 不得保留 beta 构建特殊态');
+  for (const key of ['updateBetaUpdatesLabel', 'updateBetaUpdatesDesc', 'updateBetaUpdatesUnsupported']) {
+    assert.match(updateSection, new RegExp("t\\('" + key + "'"), key + ' 未被 UpdateSection 消费');
+  }
 });
 
 test('原生壳 blocked reason：分类、跨包锁步与未知原因诚实透传（2026-09 模块评审 E）', () => {

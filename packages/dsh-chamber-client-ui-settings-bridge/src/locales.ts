@@ -147,6 +147,12 @@ export const zh = {
   updateReleaseLink: '前往下载页',
   // 更新动作被主进程拒绝（过期回答 / 载荷非法 / 相位门）：必须可见，绝不静默无反应。
   updateActionRefused: '本次操作未生效（更新状态已变化或该操作被拒绝）；请按当前状态重试',
+  // 「接收预览版（beta）更新」订阅开关（design 11 §3.2 / design 25 §7）：通道 = 纯用户偏好
+  // （v4）——开关值来自壳推送的生效更新通道；版本后缀不参与（beta 构建也是普通开关，
+  // 默认关）；本构建没有可用通道时禁用并说明原因。
+  updateBetaUpdatesLabel: '接收预览版（beta）更新',
+  updateBetaUpdatesDesc: '开启后接收 beta 版本；关闭时只收正式版',
+  updateBetaUpdatesUnsupported: '当前构建没有可用的 beta 通道：需要原生壳构建，且构建时注入两条通道 feed',
   dshRuntimeTitle: 'dsh 运行时',
   // 与 dshRuntimeTitle 同文案是刻意的：nav 标签与段标题复用同一短名。
   runtimeNav: 'dsh 运行时',
@@ -463,6 +469,13 @@ export const en: Record<keyof typeof zh, string> = {
   updateReleaseLink: 'Go to download page',
   // A refused update action (stale answer / malformed payload / phase gate) must be visible.
   updateActionRefused: 'The action did not take effect (the update state changed or it was refused); retry from the current state',
+  // 「Receive preview (beta) updates」subscription (design 11 §3.2 / design 25 §7): the channel
+  // is pure user preference (v4) — the switch reflects the effective channel pushed by the shell;
+  // the version suffix no longer participates (a beta build is an ordinary switch, default off);
+  // a build without usable channel URLs is disabled with the reason.
+  updateBetaUpdatesLabel: 'Receive preview (beta) updates',
+  updateBetaUpdatesDesc: 'When on, receive beta builds; when off, only stable releases',
+  updateBetaUpdatesUnsupported: 'The beta channel is unavailable in this build: it requires the native shell with both channel feeds injected at build time',
   dshRuntimeTitle: 'dsh runtime',
   // Same copy as dshRuntimeTitle on purpose: nav label and section title share the short name.
   runtimeNav: 'dsh runtime',

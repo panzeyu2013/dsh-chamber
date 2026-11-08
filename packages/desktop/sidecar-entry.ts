@@ -75,6 +75,10 @@ function parseArgs(argv: readonly string[]): {
   port: number | null
   /** 原生更新器形态：sparkle = 壳声明了 Sparkle 安装腿；null = 无原生安装腿（dev/dry-run/未配置 feed）。 */
   nativeUpdater: string | null
+  /** 裸 flag（无值）：壳声明**两条通道 URL 都已注入且形状可用**（Info.plist
+   *  DSHChamberStableFeedURL + DSHChamberBetaFeedURL；沿用 beta 名字避免连锁改名）。
+   *  只影响设置页 betaUpdates 能力门与 sidecar 侧的生效通道；缺省 = false。 */
+  nativeUpdaterBeta: boolean
 } {
   const get = (flag: string): string | null => {
     const i = argv.indexOf(flag)
@@ -95,6 +99,7 @@ function parseArgs(argv: readonly string[]): {
     hostOpenInDir: get('--host-open-in-dir'),
     port: portRaw === null ? null : Number(portRaw),
     nativeUpdater: get('--native-updater'),
+    nativeUpdaterBeta: argv.includes('--native-updater-beta'),
   }
 }
 const args = parseArgs(process.argv.slice(2))
@@ -485,6 +490,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
       openIn: args.hostOpenInDir,
     },
     nativeUpdater,
+    nativeBetaChannelSwitch: args.nativeUpdaterBeta,
   })
   ctx = headless.ctx
 

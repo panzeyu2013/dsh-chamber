@@ -908,7 +908,10 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
   function chamberSettingsStatus(): ChamberSettingsStatus {
     const status: ChamberSettingsStatus = {
       settings: settingsIO.current(),
-      supported: computeSupported(hostFacts.platform, hostFacts.trayPresent(), hostFacts.flavor),
+      // beta 门不是 flavor 的直接函数：Swift 壳还必须在构建期注入两条通道 feed URL（sidecar 收到
+      // --native-updater-beta）；Electron 冻结装配恒 false。组合门在 core，纯函数只回填事实。
+      supported: computeSupported(hostFacts.platform, hostFacts.trayPresent(), hostFacts.flavor,
+        hostFacts.flavor === 'swift' && deps.ctx.nativeBetaChannelSwitch === true),
     };
     if (debugRuntime !== undefined) status.debugRuntime = debugRuntime;
 

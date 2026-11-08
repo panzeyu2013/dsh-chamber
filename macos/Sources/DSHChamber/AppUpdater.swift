@@ -41,6 +41,15 @@ import Sparkle
 ///   用户可见的「已下载，退出时安装」仍由 Sparkle 标准 resumable 路径承担：
 ///   标准窗内下载完成后可选择立即安装/退出时安装，阶段经 didDownloadUpdate →
 ///   downloaded 投到页面。
+/// - 更新通道 = **纯用户偏好**（v4，无版本后缀项）：Info.plist 的两条通道 URL
+///   （stable appcast + 滚动 beta appcast）由 build-swift-app 的
+///   --sparkle-stable-feed / --sparkle-beta-feed **成对**注入到所有 native 构建
+///   （含 beta 构建）。生效通道 = env DSH_CHAMBER_UPDATE_CHANNEL=beta，或（设置页
+///   订阅 betaUpdates === true 且两条通道 URL 可用）→ beta，否则 stable；版本后缀
+///   不参与——beta 构建默认也走 stable 通道（开关关闭时只收正式版，该系列 final
+///   发布时仍会被推过来）。feedURLString 按通道返回对应 URL：stable 通道回
+///   DSHChamberStableFeedURL（beta 构建烤的 SUFeedURL 是 beta appcast，必须显式
+///   换回稳定 feed），两条 URL 都缺失的旧构建回 nil 走 SUFeedURL。
 ///
 /// 为什么是 appcast，且为什么 feed 指向我们自己的 release 资产：
 /// - **协议**：Sparkle 只理解 appcast——一份签名 XML，条目携带版本、最低系统
@@ -68,6 +77,31 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         let publicKey: String
         let automaticChecks: Bool
         let checkInterval: TimeInterval?
+        /// stable 通道 feed（Info.plist 的 DSHChamberStableFeedURL，构建期由
+        /// build-swift-app --sparkle-stable-feed 注入）。beta 构建的 SUFeedURL 烤的
+        /// 是 beta appcast，stable 通道必须显式换回该 URL；缺键 / 空白占位 = 未注入
+        /// （旧构建），此时 stable 通道走 SUFeedURL。
+        let stableFeedURL: String?
+        /// beta 通道 feed（Info.plist 的 DSHChamberBetaFeedURL，构建期由
+        /// build-swift-app --sparkle-beta-feed 注入；缺键 / 空白占位 = 未注入）。
+        /// 两条 URL **成对**注入才有运行期通道切换（判据见 betaSubscriptionProblem）。
+        let betaFeedURL: String?
+
+        /// 显式 init 只为给两条通道 URL 缺省值 nil：既有纯值构造（测试 / 未来的
+        /// 装配输入）不必知道通道切换面的存在。
+        init(feedURL: String,
+             publicKey: String,
+             automaticChecks: Bool,
+             checkInterval: TimeInterval?,
+             stableFeedURL: String? = nil,
+             betaFeedURL: String? = nil) {
+            self.feedURL = feedURL
+            self.publicKey = publicKey
+            self.automaticChecks = automaticChecks
+            self.checkInterval = checkInterval
+            self.stableFeedURL = stableFeedURL
+            self.betaFeedURL = betaFeedURL
+        }
     }
 
     /// Info.plist → 配置；缺键 / 空白串 → nil（= 更新不可用）。
@@ -77,11 +111,20 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
               let key = (info["SUPublicEDKey"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty
         else { return nil }
+        // 两条通道 URL 是**成对**的可选注入面：模板的空串占位 / 缺键都读作「未注入」。
+        // 成对判定（含形状）归 betaSubscriptionProblem——解析层只做 trim + 空串折叠，绝不
+        // 在这里预判通道可用性。
+        func channelFeed(_ key: String) -> String? {
+            let raw = (info[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return raw?.isEmpty == false ? raw : nil
+        }
         return Configuration(
             feedURL: feed,
             publicKey: key,
             automaticChecks: (info["SUEnableAutomaticChecks"] as? Bool) ?? false,
-            checkInterval: (info["SUScheduledCheckInterval"] as? NSNumber)?.doubleValue
+            checkInterval: (info["SUScheduledCheckInterval"] as? NSNumber)?.doubleValue,
+            stableFeedURL: channelFeed("DSHChamberStableFeedURL"),
+            betaFeedURL: channelFeed("DSHChamberBetaFeedURL")
         )
     }
 
@@ -111,6 +154,98 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     /// startUpdater 调用）。纯函数，单测直测。
     static func shouldForceLaunchBackgroundCheck(configuration: Configuration?, startUpdater: Bool) -> Bool {
         startUpdater && (configuration?.automaticChecks ?? false)
+    }
+
+    // MARK: - 更新通道（v4 纯偏好单表，与 TS update-headless 同值）
+
+    /// 生效更新通道（值类型；Sparkle 的 feed 选择面）。
+    enum UpdateChannel: String, Equatable {
+        case stable
+        case beta
+    }
+
+    /// env 显式 beta 覆盖（`DSH_CHAMBER_UPDATE_CHANNEL === 'beta'`，精确匹配；
+    /// 纯函数，单测直测）。
+    static func envRequestsBeta(_ environment: [String: String]) -> Bool {
+        environment["DSH_CHAMBER_UPDATE_CHANNEL"] == "beta"
+    }
+
+    /// 生效通道（v4 = **纯用户偏好**，契约 §2 的唯一表；纯函数，单测直测；与 TS
+    /// update-headless.resolveEffectiveUpdateChannel 同值）：
+    /// 1. env 显式 beta —— 恒最强、只加不减；
+    /// 2. 两条通道 URL 可用 且 设置页订阅 betaUpdates === true → beta；
+    /// 3. 其余 stable。**版本后缀不参与**：beta 构建默认也走 stable 通道（开关关闭
+    ///    时只收正式版，该系列 final 发布时仍会被推过来）。与 TS
+    ///    update-headless.resolveEffectiveUpdateChannel 的入参集合一致（无版本参数）。
+    static func resolveUpdateChannel(betaUpdates: Bool?,
+                                     betaSubscriptionAvailable: Bool,
+                                     envBeta: Bool) -> UpdateChannel {
+        if envBeta { return .beta }
+        return (betaSubscriptionAvailable && betaUpdates == true) ? .beta : .stable
+    }
+
+    /// 通道切换是否可用（纯函数，单测直测）：两条通道 URL（stable + beta）**都**
+    /// 注入且形状合法才算可用；nil = 可切换；非 nil = 不可用的**真实原因**（loud
+    /// 日志、壳→sidecar flag 与设置页能力门共用同一个判据）。
+    ///
+    /// 运行期只校验 https + 非空 host；「stable 必须是 releases/latest/download/
+    /// appcast-swift.xml、beta 必须是滚动 tag 路径」属于装配期契约，由
+    /// build-swift-app 的 dry-run 校验（壳只校验自己会信的形态，坏形状折成切换
+    /// 不可用，绝不把更新面一起关掉）。
+    static func betaSubscriptionProblem(for configuration: Configuration?) -> String? {
+        guard let configuration else {
+            return "更新器未装配（native-updater-unavailable）"
+        }
+        guard let stableFeedURL = configuration.stableFeedURL else {
+            return "装配未注入 DSHChamberStableFeedURL（两条通道 URL 必须成对注入）"
+        }
+        guard let betaFeedURL = configuration.betaFeedURL else {
+            return "装配未注入 DSHChamberBetaFeedURL（两条通道 URL 必须成对注入）"
+        }
+        guard isUsableFeedURL(stableFeedURL) else {
+            return "DSHChamberStableFeedURL 形状非法（\(stableFeedURL)）"
+        }
+        guard isUsableFeedURL(betaFeedURL) else {
+            return "DSHChamberBetaFeedURL 形状非法（\(betaFeedURL)）"
+        }
+        return nil
+    }
+
+    /// 通道 feed 的运行期形状判据（与 SUFeedURL 同规）：https + 非空 host。纯函数。
+    static func isUsableFeedURL(_ raw: String) -> Bool {
+        guard let url = URL(string: raw),
+              url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false
+        else { return false }
+        return true
+    }
+
+    /// 当前安装版本（Info.plist 的 CFBundleShortVersionString；缺键 / 空白 →
+    /// "0.0.0"）。纯函数，单测直测；v4 起只用于日志/取证，不参与通道判定。
+    static func appVersion(from info: [String: Any]) -> String {
+        guard let raw = info["CFBundleShortVersionString"] as? String else { return "0.0.0" }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "0.0.0" : trimmed
+    }
+
+    /// feed 选择决策（纯函数，单测直测；SPUUpdaterDelegate
+    /// `feedURLString(for:)` 只转调本函数）：
+    /// - stable 通道 且 stable URL 已注入且形状合法 → stable URL（beta 构建烤的
+    ///   SUFeedURL 是 beta appcast，必须显式换回稳定 feed）；
+    /// - beta 通道 且 通道 URL 对可用 → beta URL；
+    /// - 其余 nil = 走 Info.plist 的 SUFeedURL（旧构建 / 未注入 / 形状坏）。
+    static func resolvedFeedURL(channel: UpdateChannel,
+                                configuration: Configuration?) -> String? {
+        guard let configuration else { return nil }
+        switch channel {
+        case .stable:
+            guard let stableFeedURL = configuration.stableFeedURL,
+                  isUsableFeedURL(stableFeedURL) else { return nil }
+            return stableFeedURL
+        case .beta:
+            guard betaSubscriptionProblem(for: configuration) == nil else { return nil }
+            return configuration.betaFeedURL
+        }
     }
 
     /// 原生更新动作的 kind（冻结语义）：check = 用户发起的检查；
@@ -172,6 +307,14 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     private var controller: SPUStandardUpdaterController?
     private var phaseProjector = NativeUpdatePhaseProjector()
 
+    /// 当前生效更新通道（start 落初值；applyBetaUpdates 重算；能力面之外只影响
+    /// Sparkle 的 feed 选择，单测可读）。
+    private(set) var channel: UpdateChannel = .stable
+
+    /// 当前安装版本（start 从 Info.plist 的 CFBundleShortVersionString 取；
+    /// applyBetaUpdates 重算通道时据此判「beta 构建」；缺省 "0.0.0"）。
+    private(set) var appVersion: String = "0.0.0"
+
     /// 装配/启动失败的真实原因：配置形状非法或 startUpdater 抛错时非 nil，
     /// isAvailable 随之为 false，能力面与动作拒绝都携带它。
     private(set) var availabilityError: String?
@@ -191,9 +334,12 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     private override init() { super.init() }
 
     /// 装配期启动（applicationDidFinishLaunching 调用；必须主线程）。
+    /// betaUpdates = 启动期从 chamber-settings.json 读到的订阅偏好（缺省 false =
+    /// 未订阅 / 文件缺失或损坏——损坏由调用方 loud 记录，本层按未订阅处理）。
     @discardableResult
     func start(info: [String: Any] = Bundle.main.infoDictionary ?? [:],
-               startUpdater: Bool = true) -> Bool {
+               startUpdater: Bool = true,
+               betaUpdates: Bool = false) -> Bool {
         guard let configuration = Self.configuration(from: info) else {
             shellLog("[shell] Sparkle 更新不可用：Info.plist 缺 SUFeedURL/SUPublicEDKey"
                 + "（dev 或未配置密钥的装配）——「检查更新…」保持禁用")
@@ -206,6 +352,18 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
             shellLog("[shell] Sparkle 更新不可用：配置错误——\(error)")
             return false
         }
+        // 生效通道在 startUpdater 之前落状态：Sparkle 的 feedURLString 委托可能在
+        // 启动 / 首个周期里被询问，晚赋值会让第一次检查仍打 SUFeedURL（订阅失效
+        // 一次）。通道 URL 对不可用时 resolve 恒 stable（订阅不生效，下面 loud）。
+        let version = Self.appVersion(from: info)
+        let subscriptionProblem = Self.betaSubscriptionProblem(for: configuration)
+        let channel = Self.resolveUpdateChannel(
+            betaUpdates: betaUpdates,
+            betaSubscriptionAvailable: subscriptionProblem == nil,
+            envBeta: Self.envRequestsBeta(ProcessInfo.processInfo.environment))
+        self.configuration = configuration
+        self.appVersion = version
+        self.channel = channel
         let controller = SPUStandardUpdaterController(startingUpdater: false,
                                                      updaterDelegate: self,
                                                      userDriverDelegate: self)
@@ -222,15 +380,23 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
                 try controller.updater.start()
             } catch {
                 availabilityError = error.localizedDescription
+                // 回滚装配态：启动失败绝不留下「配置已装配」的形状（与既有语义
+                // 一致——失败后 configuration 仍为 nil）。
+                self.configuration = nil
                 shellLog("[shell] Sparkle 启动失败（绝不谎报可用）：\(error.localizedDescription)")
                 return false
             }
         }
         self.controller = controller
-        self.configuration = configuration
         availabilityError = nil
         shellLog("[shell] Sparkle 更新已装配（feed=\(configuration.feedURL)，"
             + "自动检查=\(configuration.automaticChecks)）")
+        shellLog("[shell] Sparkle 更新通道=\(channel.rawValue)（betaUpdates=\(betaUpdates)）"
+            + (betaSubscriptionProblem.map { "——通道切换不可用：\($0)" } ?? ""))
+        if betaUpdates, let betaSubscriptionProblem {
+            shellLog("[shell] 警告：已订阅预览版更新，但本构建的通道 URL 对不可用"
+                + "（\(betaSubscriptionProblem)）——按稳定通道处理")
+        }
         if Self.shouldForceLaunchBackgroundCheck(configuration: configuration, startUpdater: startUpdater) {
             // 每启动一次的后台检查（不弹窗）。放在下一个 runloop 周期，让
             // startUpdater 排定的 startUpdateCycle 先跑：它按持久化的
@@ -241,6 +407,33 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
             }
         }
         return true
+    }
+
+    /// 设置页「接收预览版（beta）更新」的运行期生效入口（settings-changed 钩子
+    /// 重读 chamber-settings.json 后调用）。重算生效通道；只有通道**变化**才动
+    /// Sparkle：空闲期立即发起一次**后台**检查（不弹标准窗、不降级），忙态
+    /// （检查/下载/安装中）重置周期让下一次调度按新 feed 重新开始。
+    /// enabled 但本构建的通道 URL 对不可用 → 响亮拒绝（绝不假装切换）。
+    func applyBetaUpdates(_ enabled: Bool) {
+        let problem = Self.betaSubscriptionProblem(for: configuration)
+        if enabled, let problem {
+            shellLog("[shell] 警告：拒绝订阅预览版更新——本构建的通道 URL 对不可用（\(problem)）")
+        }
+        let next = Self.resolveUpdateChannel(
+            betaUpdates: enabled,
+            betaSubscriptionAvailable: problem == nil,
+            envBeta: Self.envRequestsBeta(ProcessInfo.processInfo.environment))
+        guard next != channel else { return }
+        channel = next
+        shellLog("[shell] Sparkle 更新通道=\(next.rawValue)（betaUpdates=\(enabled)）"
+            + (problem.map { "——通道切换不可用：\($0)" } ?? ""))
+        guard let controller else { return }
+        if controller.updater.canCheckForUpdates {
+            controller.updater.checkForUpdatesInBackground()
+        } else {
+            // Sparkle 官方建议在更新器设置变化后重置周期（不重入进行中的会话）。
+            controller.updater.resetUpdateCycle()
+        }
     }
 
     /// 用户发起的检查（App 菜单「检查更新…」；页面更新按钮经 edge 走同一入口）。
@@ -428,6 +621,13 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     }
 
     // MARK: - SPUUpdaterDelegate
+
+    /// Sparkle 询问本次检查用哪条 feed（动态 feed URL 的官方入口）：按生效通道返回
+    /// 注入的通道 URL（stable → DSHChamberStableFeedURL、beta → DSHChamberBetaFeedURL）；
+    /// 未注入 / 形状坏 / 旧构建 → nil = 用 Info.plist 的 SUFeedURL。
+    func feedURLString(for updater: SPUUpdater) -> String? {
+        Self.resolvedFeedURL(channel: channel, configuration: configuration)
+    }
 
     /// Sparkle **实际选择**的下载产物名：命中增量包时是 `*.delta`，回退整包时是 zip。
     /// 单独成函数以便单测钉住观测面。

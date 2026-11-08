@@ -131,7 +131,7 @@
 |headless 装配验收|`node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）|N-1…N-5、N-6、N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM）；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO|`.tmp/gui-acceptance/gui-native-report.*`|
 |B 桥载荷 parity|`pnpm run verify:shim-payload`（macOS 腿）|preload ↔ shim 的成员/通道/载荷键一致|脚本收尾行|
 
-**只能真机（工具箱不可替代）**：`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、
+**只能真机（工具箱不可替代）**：更新通道订阅（design 25 §7：稳定构建开/关订阅后的后台检查与 beta 发现、beta 构建默认只收正式版、打开订阅后继续 beta、final 收口后偏好保留、构建缺两条通道 feed URL 时开关禁用+原因；逐项记录 `[shell] Sparkle 更新通道=…` 日志与设置行状态）、`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、
 C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、
 macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在
 design 25 §8（§8.1 门定义、§8.5 实机矩阵）与 `scripts/perf/README.md`，本节只固定怎么跑与留什么。**v2 内嵌另见 design 28 §16.8**：

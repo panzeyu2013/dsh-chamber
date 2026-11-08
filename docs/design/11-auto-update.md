@@ -80,6 +80,7 @@
   - 有新版时一行状态：「新版本 vY（stable/beta）」+ **「更新」按钮**（点击 →
     后台下载；状态行随之变为 下载中… → 已下载，退出时安装）；不点击 → 永不下载；
     **mac 未签名时不提供「更新」按钮**（mac 下载即喂 Squirrel，未签名必进 error 循环）——只给手动安装提示 + 下载页链接；
+  - **通道订阅**：Swift 原生腿在「客户端」更新组内提供一行「接收预览版（beta）更新」开关（纯用户偏好；仅两条通道 feed URL 已注入的构建可用，beta 构建默认关闭、打开后继续接收 beta）。契约见 design 25 §7；Electron 冻结腿不提供。
   - 已下载（安装可用）时：「已下载，退出时安装」+ **「重启并安装」按钮（仅 macOS/Windows——Linux 任何形态不提供，AppImage 单实例竞态）**：
     点击 → `dsh-chamber:update-restart` →
     `quitAndInstall`（退出/安装/重启，走正常清理路径）；安装被阻塞（mac 签名）时不提供该按钮——只给手动安装提示 + 下载页链接；重启在途渲染专用行（「正在重启并安装…」），重启失败渲染专用失败行 + 原位重试；
@@ -103,7 +104,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 ## 4. 滚动/灰度：通道模型（beta → stable）
 
 - **stable（默认）**：读最新正式 release 的 `latest.yml` / `latest-mac.yml`。
-- **beta**：**优先读构建期封签的通道**——beta 构建经 `electron-builder.beta.yml` 的 `extraMetadata.dshChamberUpdateChannel` 写进打包 `package.json`（`packages/desktop/electron/main.ts` 读回，`normalizeSealedChannel` + `resolveChannel` 解析），制品因此自证通道、与版本号后缀解耦；无封签（dev / stable / Swift 腿）时 canonical `X.Y.Z-beta.N` 应用按自身版本自动进入 beta；开发/显式 opt-in 仍可用 `DSH_CHAMBER_UPDATE_CHANNEL=beta`（**恒最强，只能加 beta 不能去 beta**，语义与封签前一致）。封签与版本后缀不一致 = 误配制品，**封签为准并 loud 记录**。消费侧只从最高规范 published beta 的精确 tag 读 `beta.yml` / `beta-mac.yml`；发现失败 fail closed，不尝试 `latest*`；settings 部分标注「beta 通道」。Swift 腿在原生腿在场时安装发现走 Sparkle appcast（T-04），封签只落 Electron 腿，Swift 腿维持版本后缀推导（同一版本串下事实等价，无用户可感差异）。
+- **beta**：**优先读构建期封签的通道**——beta 构建经 `electron-builder.beta.yml` 的 `extraMetadata.dshChamberUpdateChannel` 写进打包 `package.json`（`packages/desktop/electron/main.ts` 读回，`normalizeSealedChannel` + `resolveChannel` 解析），制品因此自证通道、与版本号后缀解耦；无封签（dev / stable / Swift 腿）时 canonical `X.Y.Z-beta.N` 应用按自身版本自动进入 beta；开发/显式 opt-in 仍可用 `DSH_CHAMBER_UPDATE_CHANNEL=beta`（**恒最强，只能加 beta 不能去 beta**，语义与封签前一致）。封签与版本后缀不一致 = 误配制品，**封签为准并 loud 记录**。消费侧只从最高规范 published beta 的精确 tag 读 `beta.yml` / `beta-mac.yml`；发现失败 fail closed，不尝试 `latest*`；settings 部分标注「beta 通道」。Swift 腿在原生腿在场时安装发现走 Sparkle appcast（T-04）；**封签只落 Electron 腿**——Swift 腿的生效通道是**纯用户偏好**：`DSH_CHAMBER_UPDATE_CHANNEL=beta`（恒最强，仅加 beta）或持久订阅偏好 `betaUpdates`（设置页开关，缺省关闭）→ beta feed，否则 stable feed；**版本后缀不参与通道判定**。两条 feed URL 均在构建期注入、运行期经 Sparkle `feedURLString` 二选一（契约见 design 25 §7）。
 - **发布侧**：beta = 版本精确匹配 canonical `X.Y.Z-beta.N`（如 `0.2.0-beta.1`）→ 独立
   `electron-builder.beta.yml` 显式产 `beta*.yml`；stable 用默认配置只产 `latest*.yml`；`alpha`、`rc` 与其他 prerelease 一律版本门禁拒绝。GitHub Release 的 prerelease 标志由已校验的 canonical beta 版本推导（非 workflow 输入——tag-push 时输入为空，按输入推导会把 beta feed 发到非 prerelease release，稳定客户端会把该 release 当最新并 404 在 latest.yml）；验证通过后发正式版本（`latest*.yml`）——「先内测、后提升」，契合既有 draft → finalize 手动节奏。
 - **明确不做（v1）**：百分比灰度（按客户端分桶）——需自托管 feed 侧实现；用户规模达到再评估。
@@ -186,7 +187,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 mac/win/linux 实机检查
   与「确认前不下载 → 下载 → 退出时安装 → 重启并安装」端到端、打包态实测一次
   「升级 → 重启 → 更新缓存被自动清空」、真实同步失败路径下的 `quitAndInstall`、
-  以及 mac 原生 quit 语义断言清单（窗口**真正关闭**而非隐藏到托盘；剩余待实机确证 = **签名正式包**端到端：will-quit 清理日志先于新版本启动、无孤儿进程、退出码 0、新版本自动启动、staging 失败下的文案与窗口恢复）。仓库转私有、beta 通道开关形态（仅环境变量 vs 设置项）、百分比灰度评估（§4）同样登记在那里。
+  以及 mac 原生 quit 语义断言清单（窗口**真正关闭**而非隐藏到托盘；剩余待实机确证 = **签名正式包**端到端：will-quit 清理日志先于新版本启动、无孤儿进程、退出码 0、新版本自动启动、staging 失败下的文案与窗口恢复）。仓库转私有、百分比灰度评估（§4）同样登记在那里；beta 通道开关形态已裁为**设置项**（Swift 腿落地，契约见 design 25 §7；Electron 冻结腿仍仅环境变量）。
 - 涉及面：`packages/desktop`（`main.ts`、`preload.cts`、`updater.ts`、
   `package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳
   `__general` 视图内的 `UpdateSection` + `update-store` + `update-gate`）、

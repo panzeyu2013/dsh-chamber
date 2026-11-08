@@ -35,8 +35,9 @@
  * 分步跳过。
  *
  * --dry-run：不写盘，但把**已解析的计划**（app/可执行/产物名/feed/公钥
- * 成对性）全部打印并做一致性断言（dryRunPlanReport）——ci.yml 的 packaging dry
- * run 声称 "validate their plans and layouts"，必须真的校验计划而非只打印存在性。
+ * 成对性、stable/beta 双通道 feed 形状）全部打印并做一致性断言
+ * （dryRunPlanReport）——ci.yml 的 packaging dry run 声称 "validate their plans
+ * and layouts"，必须真的校验计划而非只打印存在性。
  *
  * CFBundleVersion：Sparkle 以它（而非 CFBundleShortVersionString）做版本
  * 比较，映射见 bundleVersionFor：稳定版 X.Y.Z → X.Y.Z.999999999，beta
@@ -429,6 +430,14 @@ export function parseBuildSwiftAppArgs(argv) {
     // 声明 --native-updater）。
     sparkleFeed: '',
     sparklePublicKey: '',
+    // 更新通道的两条 feed URL（design 25，纯用户偏好通道）：稳定 appcast 与滚动
+    // beta appcast。所有 native 构建（含 beta 构建）都成对注入；运行期按设置页
+    // 开关 / DSH_CHAMBER_UPDATE_CHANNEL 二选一，版本后缀不决定通道。两条都空 =
+    // 本构建未注入通道 URL（通道切换不可用，运行期退回 SUFeedURL = 旧构建行为）。
+    // 只给一条 = 半配置，dry-run loud；给 URL 对时还要求上面的 Sparkle feed/公钥
+    // 已配置（两条通道复用同一更新面）。
+    sparkleStableFeed: '',
+    sparkleBetaFeed: '',
   }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -459,6 +468,8 @@ export function parseBuildSwiftAppArgs(argv) {
     else if (arg === '--dry-run') options.dryRun = true
     else if (arg === '--sparkle-feed') options.sparkleFeed = next()
     else if (arg === '--sparkle-public-key') options.sparklePublicKey = next()
+    else if (arg === '--sparkle-stable-feed') options.sparkleStableFeed = next()
+    else if (arg === '--sparkle-beta-feed') options.sparkleBetaFeed = next()
     else if (arg === '--swift-args') options.swiftArgs = next().split(' ').filter(Boolean)
     else if (arg === '--help' || arg === '-h') options.help = true
     else throw new Error(`未知参数：${arg}`)
@@ -491,6 +502,56 @@ export function assemblePlan(options) {
 export function sparkleFeedChannel(feed) {
   if (feed.endsWith('/appcast-swift-beta.xml')) return 'beta'
   if (feed.endsWith('/appcast-swift.xml')) return 'stable'
+  return null
+}
+
+/**
+ * 双通道 feed URL（design 25，纯用户偏好通道）的注入面校验（纯函数，单测直测）：
+ * 返回 null = 可接受；返回错误文案 = dry-run 必须 loud。
+ *
+ * 规则：
+ * - --sparkle-stable-feed 与 --sparkle-beta-feed 必须**成对**出现：都缺 = 合法
+ *   （本构建未注入通道 URL，运行期退回 SUFeedURL，通道切换不可用，计划行说明）；
+ *   只给一条 = 半配置（壳会以为有可切换通道），绝不产出。
+ * - 给 URL 对时必须已有 Sparkle 更新面（--sparkle-feed/--sparkle-public-key 成对）：
+ *   两条通道复用同一 EdDSA 公钥，没有更新面的通道 URL 只是死配置。
+ * - 形状（https / .xml / 通道路径）：stable 必须落在 releases/latest 的
+ *   appcast-swift.xml（稳定客户端的唯一解析面）；beta 必须是滚动 tag
+ *   （NATIVE_BETA_ROLLING_TAG）的 appcast-swift-beta.xml——版本固定 tag 会让
+ *   beta.N 永远看不到 beta.N+1。
+ */
+export function sparkleChannelFeedsProblem(feed, key, stableFeed, betaFeed) {
+  if (stableFeed === '' && betaFeed === '') return null
+  if (stableFeed === '' || betaFeed === '') {
+    const missing = stableFeed === '' ? '--sparkle-stable-feed' : '--sparkle-beta-feed'
+    return '通道 feed URL 必须成对配置：缺 ' + missing
+      + '（两条通道 URL 一起注入才有运行期切换；只给一条 = 半配置）'
+  }
+  if (feed === '' || key === '') {
+    return '通道 feed URL（--sparkle-stable-feed/--sparkle-beta-feed）必须与 '
+      + '--sparkle-feed/--sparkle-public-key 成对配置（两条通道复用同一 Sparkle 更新面与 EdDSA 公钥）'
+  }
+  if (!/^https:\/\//.test(stableFeed)) {
+    return `--sparkle-stable-feed 必须是 https URL（Sparkle 拒绝明文 feed）：${stableFeed}`
+  }
+  if (!/\.xml($|[?#])/.test(stableFeed)) {
+    return `--sparkle-stable-feed 必须指向 .xml appcast：${stableFeed}`
+  }
+  if (!stableFeed.endsWith('/releases/latest/download/appcast-swift.xml')) {
+    return '稳定 feed 必须是 releases/latest/download/appcast-swift.xml'
+      + `（beta 才走滚动 tag ${NATIVE_BETA_ROLLING_TAG}）：${stableFeed}`
+  }
+  if (!/^https:\/\//.test(betaFeed)) {
+    return `--sparkle-beta-feed 必须是 https URL（Sparkle 拒绝明文 feed）：${betaFeed}`
+  }
+  if (!/\.xml($|[?#])/.test(betaFeed)) {
+    return `--sparkle-beta-feed 必须指向 .xml appcast：${betaFeed}`
+  }
+  if (!betaFeed.endsWith(`/releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml`)) {
+    return `beta feed 必须指向滚动 tag ${NATIVE_BETA_ROLLING_TAG}`
+      + `（releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml）`
+      + `——版本固定 tag 会让 beta.N 永远看不到 beta.N+1：${betaFeed}`
+  }
   return null
 }
 
@@ -549,6 +610,11 @@ export function shouldCopyWebDistEntry(relativePath) {
  * - 通道 URL 形状：appcast-swift-beta.xml 必须落在滚动 tag
  *   （NATIVE_BETA_ROLLING_TAG）上——版本固定 tag 会让 beta.N 看不到 beta.N+1；
  *   appcast-swift.xml 必须落在 releases/latest（稳定客户端的唯一解析面）；
+ * - 双通道 feed URL（--sparkle-stable-feed / --sparkle-beta-feed）必须成对：
+ *   都缺 = 合法旧构建（运行期退回 SUFeedURL，通道切换不可用，计划行说明）；
+ *   只给一条 = FAIL；给 URL 对时还要求 feed/公钥已配置，且形状为
+ *   releases/latest 的 stable appcast 与滚动 tag 的 beta appcast
+ *   （sparkleChannelFeedsProblem）；
  * - 产物名必须逐字来自 --artifact-basename（发布腿据此上传精确路径）。
  * @returns {{ layout: object, lines: string[] }} 供调用方逐行打印。
  */
@@ -556,6 +622,8 @@ export function dryRunPlanReport(options) {
   const layout = appLayout(options.outDir, options.appName, options.artifactBasename)
   const feed = options.sparkleFeed
   const key = options.sparklePublicKey
+  const stableFeed = options.sparkleStableFeed
+  const betaFeed = options.sparkleBetaFeed
   if ((feed === '') !== (key === '')) {
     throw new Error(
       'dry-run：--sparkle-feed 与 --sparkle-public-key 必须成对配置'
@@ -583,6 +651,12 @@ export function dryRunPlanReport(options) {
       `dry-run：稳定 feed 必须是 releases/latest/download/appcast-swift.xml`
       + `（beta 才走滚动 tag ${NATIVE_BETA_ROLLING_TAG}）：${feed}`,
     )
+  }
+  // 双通道：两条通道 URL 一起注入才有运行期切换（只给一条 = 壳误以为有可切换
+  // 通道）；URL 对依赖 Sparkle 更新面成对；形状规则见纯函数（单测直测）。
+  const channelFeedsProblem = sparkleChannelFeedsProblem(feed, key, stableFeed, betaFeed)
+  if (channelFeedsProblem !== null) {
+    throw new Error('dry-run：' + channelFeedsProblem)
   }
   for (const [kind, file] of [['zip', layout.zipPath], ['dmg', layout.dmgPath]]) {
     if (path.dirname(file) !== layout.outDir || path.basename(file) !== `${options.artifactBasename}.${kind}`) {
@@ -638,6 +712,9 @@ export function dryRunPlanReport(options) {
         : channel === 'stable'
           ? 'sparkle-channel=stable（releases/latest）'
           : 'sparkle-channel=（未识别 appcast 名；仅做 https/.xml 形状校验）',
+    stableFeed === '' && betaFeed === ''
+      ? 'sparkle-channels=（未注入 stable/beta 通道 URL：运行期通道切换不可用，退回 SUFeedURL（旧构建）；更新面照常可用）'
+      : `sparkle-channels：stable=${stableFeed}；beta=${betaFeed}（stable/beta 两种构建都注入，运行期按偏好二选一）`,
     `app-name=${options.appName}；artifact-basename=${options.artifactBasename}`,
   ]
   return { layout, lines }
@@ -937,6 +1014,11 @@ export async function runBuildSwiftApp(
     // 空串 = 更新不可用（AppUpdater 把空值判为未配置）；两键任一为空都不算配置。
     SPARKLE_FEED_URL: options.sparkleFeed,
     SPARKLE_PUBLIC_ED_KEY: options.sparklePublicKey,
+    // 更新通道入口（纯用户偏好）：两条 URL 一起注入才有运行期切换；空串 = 未
+    // 注入（AppUpdater 把空/非法值判为通道切换不可用，设置页开关禁用并给原因）。
+    // SUFeedURL 保持发布链烤值，是两条通道 URL 都缺失时的回退。
+    SPARKLE_STABLE_FEED_URL: options.sparkleStableFeed,
+    SPARKLE_BETA_FEED_URL: options.sparkleBetaFeed,
   })
   writeFileSync(layout.infoPlist, plist)
   const lint = quiet('plutil', ['-lint', layout.infoPlist])
@@ -1158,6 +1240,7 @@ if (isCliEntry(import.meta.url)) {
       '       [--sidecar <dir>] [--icon <icns>] [--web-dist <dir>] [--skip-build]',
       '       [--skip-sidecar] [--skip-web-dist] [--no-sign] [--no-zip] [--no-dmg] [--dry-run]',
       '       [--sparkle-feed <url>] [--sparkle-public-key <ed25519>] [--swift-args "<args>"]',
+      '       [--sparkle-stable-feed <url>] [--sparkle-beta-feed <url>]（更新通道 URL；两条成对）',
     ],
     parse: parseBuildSwiftAppArgs,
     run: runBuildSwiftApp,

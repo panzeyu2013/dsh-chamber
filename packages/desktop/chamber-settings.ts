@@ -80,6 +80,10 @@ export interface ChamberSettings {
   sessionTodo: ChamberSessionTodoSettings
   /** 调试模式（见 ChamberDebugSettings）：宿主口（Swift isInspectable）副作用叶。 */
   debug: ChamberDebugSettings
+  /** 接收预览版（beta）更新（design 11 §3.2 / design 25 §7）：**可选**——缺省 = 未设置
+   *  （读作未订阅）；false = 明确关闭；true = 订阅。只在两条通道 feed URL 成对注入的
+   *  Swift 原生壳构建生效；v4 起版本后缀不参与通道判定（纯用户偏好）。 */
+  betaUpdates?: boolean
 }
 
 /** 系统内存快照（“resident” 阀门的输入，D4；非秘密、只读投影）。
@@ -118,15 +122,19 @@ export interface ChamberSettingsStatus {
 
 /** 平台能力门的投影（ChamberSettingsStatus.supported 的形状；提为命名接口是为了
  *  与 preload/renderer 的镜像面逐字段对齐——嵌套字面量在镜像守卫里会被摊平）。
- *  后两个门是**可选**字段（跨版本契约，不是遗漏）：缺字段 = 主进程早于该门的版本。
+ *  后三个门是**可选**字段（跨版本契约，不是遗漏）：缺字段 = 主进程早于该门的版本。
  *  消费端读法必须是不对称的——`badgeSupported` 缺失按「支持」，`debugInspectable`
- *  缺失按「不支持」（禁用开关并给原因），因为呈现一个无效开关比少一个入口更糟。
- *  生产端 computeSupported 恒发两个键。 */
+ *  与 `betaUpdatesSupported` 缺失按「不支持」（禁用开关并给原因），因为呈现一个无效
+ *  开关比少一个入口更糟。生产端 computeSupported 恒发三个键。 */
 export interface ChamberSettingsSupported {
   launchAtLogin: boolean
   closeToTray: boolean
   badgeSupported?: boolean
   debugInspectable?: boolean
+  /** 「接收预览版更新」开关的能力门（design 11 §3.2）：只有 Swift 原生壳且构建期注入
+   * 了成对的通道 feed URL（sidecar 收到 --native-updater-beta）才为 true；Electron 冻结装配恒
+   *  false。可选：缺字段 = 早于本门的主进程 → 消费端按「不支持」读。 */
+  betaUpdatesSupported?: boolean
 }
 
 /** 调试模式的实测回读（宿主腿的诚实应答）：`inspectable` 是宿主真正处于可检查
@@ -174,6 +182,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'notifications',
   'sessionTodo',
   'debug',
+  'betaUpdates',
 ];
 
 /** Normalize a registry origin (design 18 M4): a valid https:// URL with no
@@ -454,6 +463,9 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   if (record.debug !== undefined) {
     base.debug = normalizeDebugSettings(record.debug);
   }
+  // beta 偏好可选：缺省保持「未设置」（绝不把缺省落成 false，否则一次读盘就把
+  // 「未表态」变成「明确关闭」，未来默认值无法演进）。
+  if (typeof record.betaUpdates === 'boolean') base.betaUpdates = record.betaUpdates;
   return base;
 }
 
@@ -469,7 +481,7 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   if (record.windowCloseBehavior !== undefined
     && record.windowCloseBehavior !== 'hide-to-tray'
     && record.windowCloseBehavior !== 'quit') return false;
-  for (const key of ['launchAtLogin', 'keepAwake', 'quitConfirmation', 'vscodeOpenInNewWindow'] as const) {
+  for (const key of ['launchAtLogin', 'keepAwake', 'quitConfirmation', 'vscodeOpenInNewWindow', 'betaUpdates'] as const) {
     if (record[key] !== undefined && typeof record[key] !== 'boolean') return false;
   }
   // Once persisted, an invalid trust anchor is corruption, not a silent switch back to the public default registry.
@@ -619,17 +631,22 @@ export function closeToTrayRecoveryAvailable(
  *  WKWebView.isInspectable (Safari Web Inspector), which only the Swift native
  *  shell has — the Electron leg wires no debug surface in this version, so its
  *  switch is disabled with a reason rather than offering a switch that can never
- *  take effect. */
+ *  take effect. `betaUpdatesSupported` is the beta-channel gate (design 11 §3.2): it is
+ *  the caller's fact (Swift native shell AND a build-time channel feed URL pair), NOT
+ *  derivable from the flavor alone — an Electron build and a beta-feed-less Swift
+ *  build both must disable the switch. Default false = the safe asymmetry. */
 export function computeSupported(
   platform: NodeJS.Platform,
   trayAvailable: boolean,
   flavor: 'electron' | 'swift' = 'electron',
+  betaUpdatesSupported = false,
 ): ChamberSettingsSupported {
   return {
     launchAtLogin: true,
     closeToTray: closeToTrayRecoveryAvailable(platform, trayAvailable),
     badgeSupported: platform === 'darwin' || platform === 'linux',
     debugInspectable: flavor === 'swift',
+    betaUpdatesSupported,
   };
 }
 

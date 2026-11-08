@@ -247,6 +247,11 @@ export interface ShellAssemblyCtx {
   // 侧）。I 组 UPDATE_* 注册体与状态 push 订阅共用同一实例；装配侧在
   // installIpcHandlers 之后调 updater.start()（保持「先订阅后 start」序）。 */
   updateController: UpdateController
+  /** beta 通道开关事实（design 11 §3.2 / design 25 §7）：Swift sidecar 的壳传了
+   *  `--native-updater-beta`（= 两条通道 feed URL 成对注入且形状可用）才是 true；Electron 冻结
+   *  装配不传 → false。设置页 betaUpdates 能力门 = hostFacts.flavor === 'swift' 且
+   *  本字段为 true（chamber-settings.computeSupported 的第四参）。 */
+  nativeBetaChannelSwitch: boolean
   // —— J 组 6 个 runtime 注册体（RUNTIME_STATE /
   // RUNTIME_RESTART / RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
   // RUNTIME_CLEAR_FAILURE）的装配依赖。控制器现实例、fence 现实例、动作门与

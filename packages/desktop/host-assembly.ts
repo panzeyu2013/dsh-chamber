@@ -89,6 +89,9 @@ export interface HostAssemblyDeps {
   /** runtime 安装器/sidecar 的 pnpm 入口（flavor 经 pnpm-launcher 解析后注入）。 */
   pnpmEntry: string
   updateController: ShellAssemblyCtx['updateController']
+  /** beta 通道开关（Swift sidecar 的 --native-updater-beta = 构建期两条通道 feed URL 成对注入；
+   *  Electron 冻结装配不传 → false）→ ShellAssemblyCtx.nativeBetaChannelSwitch。 */
+  nativeBetaChannelSwitch?: boolean
   /** 更新退出腿撤回叶（Electron 真实实现；Swift v1 显式 no-op）；reason 由 core 提供，必须原样转发。 */
   disarmUpdaterQuit(reason: string): void
   /** 退出确认的「更新已下载待装」豁免判据（Electron = downloaded 且 !blocked；Swift = downloaded/installing）。 */
@@ -1054,6 +1057,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     },
     syncGatewayChamberPluginsFor,
     updateController: deps.updateController,
+    nativeBetaChannelSwitch: deps.nativeBetaChannelSwitch === true,
     runtimeController: runtimeInstance,
     runtimeOperationBusy: () => runtimeState.operation !== null,
     runtimeWriterFence,

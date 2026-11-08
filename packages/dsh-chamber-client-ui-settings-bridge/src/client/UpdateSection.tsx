@@ -17,7 +17,7 @@ import { debugFactsCard, debugFactsCardVisible, debugStatusKind, debugSupported,
 import {
   getUpdateState, subscribeUpdateState, requestUpdateCheck, requestUpdateDownload, requestUpdateRestart, requestOpenReleasePage,
 } from './update-store.ts'
-import { updateCheckDisabled, updateCheckPlatformBlocked, updateRestartAvailable } from './update-gate.ts'
+import { betaUpdatesSwitchState, updateCheckDisabled, updateCheckPlatformBlocked, updateRestartAvailable } from './update-gate.ts'
 import { classifyBlockedReason } from './blocked-reason.ts'
 import css from './SettingsShell.module.css'
 
@@ -315,6 +315,63 @@ function DebugModeRow({ t }: { t: UpdateTranslate }) {
   )
 }
 
+/**
+ * 「接收预览版（beta）更新」行（放在「更新」section 内；design 11 §3.2 / design 25 §7）：
+ * 主 switch + 行内说明。通道 = 纯用户偏好（v4）——开关值来自壳推送的**生效更新
+ * 通道**（`update.channel`），不是 settings 期望值的回声；版本后缀不参与，beta
+ * 构建也只是普通开关。呈现决策全部在 update-gate.ts 的纯门里（能力不可用的构建
+ * 禁用并给原因、更新面未水合时禁用）。保存走 settings 桥的乐观补丁；失败必须可见，
+ * 绝不静默假装成功。
+ */
+function BetaUpdatesRow({ t }: { t: UpdateTranslate }) {
+  const status = useSyncExternalStore(subscribeSettings, getSettingsStatus)
+  const update = useSyncExternalStore(subscribeUpdateState, getUpdateState)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const hydrated = status !== null
+  // 能力门（host facts）：仅 Swift 原生壳且两条通道 feed URL 均已注入时为 true；缺字段 =
+  // 早于该门的主进程 → 按「不支持」读（禁用 + 原因），绝不呈现一个可能无效的开关。
+  const supported = status?.supported.betaUpdatesSupported === true
+  const switchState = betaUpdatesSwitchState({ update, supported })
+
+  const onToggle = useCallback((next: boolean) => {
+    setSaveError(null)
+    setSaving(true)
+    void applySettingsPatch({ betaUpdates: next })
+      .then((result) => {
+        if (!result.ok) setSaveError(result.error)
+      })
+      .finally(() => setSaving(false))
+  }, [])
+
+  return (
+    <>
+      <label className={clsxRow(switchState.disabled)}>
+        <div className={css.generalCardText}>
+          <span className={css.generalFieldLabel}>{t('updateBetaUpdatesLabel')}</span>
+          {/* 未水合时能力事实未知：不得断言「当前构建不支持」（与「调试模式」行同规）。 */}
+          <p className={css.generalHint}>
+            {switchState.reason === 'unsupported' && hydrated
+              ? t('updateBetaUpdatesUnsupported')
+              : t('updateBetaUpdatesDesc')}
+          </p>
+        </div>
+        <span className={css.generalSwitchBox}>
+          <Switch
+            checked={switchState.checked}
+            label={t('updateBetaUpdatesLabel')}
+            disabled={switchState.disabled || saving}
+            onChange={onToggle}
+          />
+        </span>
+      </label>
+      {saveError !== null && (
+        <p className={css.generalError} aria-live="polite">{t('generalSaveFailed', { error: saveError })}</p>
+      )}
+    </>
+  )
+}
+
 /** 行容器与 GeneralView 的披露行同词汇（未水合/不可用时整行变淡）。 */
 function clsxRow(disabled: boolean): string {
   return disabled ? `${css.generalSwitchRow} ${css.generalDisabled}` : css.generalSwitchRow
@@ -414,6 +471,8 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
       {actionRefused && (
         <p className={css.generalError} aria-live="polite">{t('updateActionRefused')}</p>
       )}
+      {/* 接收预览版（beta）更新：订阅开关（design 11 / design 25 §7）。 */}
+      <BetaUpdatesRow t={t} />
       {/* 调试模式：与更新同组（用户裁决落点）。开关默认关；开启 = 显式降低信任边界。 */}
       <DebugModeRow t={t} />
     </div>

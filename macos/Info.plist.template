@@ -150,6 +150,21 @@
     <string>__SPARKLE_FEED_URL__</string>
     <key>SUPublicEDKey</key>
     <string>__SPARKLE_PUBLIC_ED_KEY__</string>
+    <!-- 更新通道（design 25）：稳定 appcast 与滚动 beta appcast 的完整 URL 由
+         build-swift-app 的 sparkle-stable-feed / sparkle-beta-feed 参数在装配期
+         成对注入（两条 URL 只有都注入才有运行期切换；都为空 = 旧构建，通道切换
+         不可用）。通道是**纯用户偏好**：所有 native 构建（含 beta 构建）都带两条
+         URL，运行期按设置页开关或 DSH_CHAMBER_UPDATE_CHANNEL 二选一，版本后缀
+         不决定通道。SUFeedURL 保持发布链烤值（appcast 按归档内嵌 feed 分组生成，
+         不能改烤值），是两条通道 URL 都缺失时的回退。空串 = 未注入——设置页
+         「接收预览版更新」开关禁用并说明原因，更新面本身（SUFeedURL/
+         SUPublicEDKey）照常可用。两条 feed 共用同一 EdDSA 公钥；它们与上面两键
+         必须成对注入（装配脚本 dry-run 对半配置 loud），绝不产出「开关假可用」
+         的构建。 -->
+    <key>DSHChamberStableFeedURL</key>
+    <string>__SPARKLE_STABLE_FEED_URL__</string>
+    <key>DSHChamberBetaFeedURL</key>
+    <string>__SPARKLE_BETA_FEED_URL__</string>
     <key>SUEnableAutomaticChecks</key>
     <true/>
     <key>SUScheduledCheckInterval</key>

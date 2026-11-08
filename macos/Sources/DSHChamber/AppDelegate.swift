@@ -281,9 +281,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 // 整体缺席并走「构建产物缺失」loud 路径）。
                 // 原生更新器声明：配好 feed + 公钥的装配才把安装腿
                 // 交给壳（sidecar 据此清掉「原生壳不支持自动安装」）；dev/dry-run 不传。
-                if AppUpdater.configuration(from: Bundle.main.infoDictionary ?? [:]) != nil {
+                // 两条通道 URL（stable + beta）都已注入且形状可用时再追加**裸 flag**
+                // --native-updater-beta（无值；内部 flag 名沿用 v3，避免连锁改名）：
+                // sidecar 据此判定「本构建可切 beta 通道」——设置页开关 supported
+                // 事实的上游（共享契约 §4 壳→sidecar 事实）。半配置 / 旧构建不传
+                // （开关不可用），更新面本身（SUFeedURL/SUPublicEDKey）照常可用。
+                if let updaterConfiguration = AppUpdater.configuration(
+                    from: Bundle.main.infoDictionary ?? [:]) {
                     sidecarArguments += ["--native-updater", "sparkle"]
                     shellLog("[shell] sidecar 附加 --native-updater sparkle（Sparkle 已配置）")
+                    // 通道切换是否可用 = AppUpdater.betaSubscriptionProblem 的同一判据（两条 URL
+                    // 都注入且 https/host 合法），避免 sidecar 的 supported 门与壳的真实
+                    // 可切性漂移（半配置本应被 build-swift-app dry-run fail-closed，这里
+                    // 只是运行期纵深）。
+                    if AppUpdater.betaSubscriptionProblem(for: updaterConfiguration) == nil {
+                        sidecarArguments += ["--native-updater-beta"]
+                        shellLog("[shell] sidecar 附加 --native-updater-beta（两条通道 URL 均已注入且形状可用）")
+                    }
                 }
                 if isCompiled {
                     let hostDirs: [(flag: String, name: String)] = [
@@ -604,6 +618,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // 主线程快路径：设置变更在主线程到达时当场失效，关窗
             // 不会再命中旧决定；来自 B 桥读线程的调用仍回落主线程（缓存是主线程状态）。
             if Thread.isMainThread { invalidate() } else { DispatchQueue.main.async(execute: invalidate) }
+
+            // beta 订阅意图：设置页开关落盘 chamber-settings.json 后，本钩子是唯一
+            // 运行期生效点——重读该文件并把新偏好交给 Sparkle（通道变化则后台检查 /
+            // 重置周期，见 AppUpdater.applyBetaUpdates）。Sparkle 状态与关窗缓存
+            // 同纪律：必须在主线程应用（B 桥读线程触发时回落主线程）。
+            let applyBetaPreference: () -> Void = {
+                AppUpdater.shared.applyBetaUpdates(
+                    StartupSettings.readBetaUpdates(userDataDir: stateDir).betaUpdatesValue ?? false)
+            }
+            if Thread.isMainThread {
+                applyBetaPreference()
+            } else {
+                DispatchQueue.main.async(execute: applyBetaPreference)
+            }
         }
         shellLog("[shell] 装配完成（主窗口等首个已提交内容后呈现，S-42）")
 
@@ -636,7 +664,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
             }
         }
-        AppUpdater.shared.start()
+        // beta 订阅偏好（chamber-settings.json 的 betaUpdates）在启动期读一次，
+        // 交给 Sparkle 算初始生效通道。缺文件 / 缺键 = 未订阅；损坏 = loud + 按
+        // 未订阅处理（绝不猜一个值去切通道）。
+        let betaUpdatesRead = StartupSettings.readBetaUpdates(userDataDir: stateDir)
+        if case .corrupt(let reason) = betaUpdatesRead {
+            shellLog("[shell] 警告：beta 更新订阅设置不可读（损坏：\(reason)）——按未订阅处理")
+        }
+        AppUpdater.shared.start(betaUpdates: betaUpdatesRead.betaUpdatesValue ?? false)
         // 最小主菜单（WKWebView 文本编辑快捷键路由需要）
         installMainMenu()
         // SIGTERM/SIGINT 转入标准退出链

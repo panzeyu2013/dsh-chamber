@@ -43,7 +43,7 @@ macOS安装包见 [GitHub Releases](https://github.com/panzeyu2013/dsh-chamber/r
 
 - macOS（Apple Silicon）：`dsh-chamber-<version>-macos-arm64.dmg`
 
-当前为0.4.x：stable与beta通道独立，逐版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+当前为0.4.x：stable与beta通道独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；打开后接收 beta 且偏好跨版本保留），逐版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### 2 · 启动应用
 
@@ -102,7 +102,7 @@ bash install-gateway.sh
 - open-in打开注册表 — 会话头部统一打开面：本地来源在Finder/文件管理器显示目录；本地或SSH远程来源可拉起VS Code（本地 `vscode://file/`、远程Remote-SSH）；支持 `dsh-chamber://` 深链
 - 远端浏览器 — 右栏「浏览器」页签是上游 `ui-sidebar-browser` iframe 路径的忠实 fork（DOM/CSS/文案/8语言/地址解析/历史/多标签/快捷键/标题/sandbox开关/store逐字同源）：任意 http(s) URL 直接内嵌 iframe（含 https 与任意 host）；唯一分支 = SSH 来源且目标主机恰为 `127.0.0.1`，先摘该来源的 forward 租约、以主进程合成的 alias `frameUrl` 作 iframe src（地址栏/历史保留逻辑 URL，代理页的 external 出口用 alias 并在租约解析中/失败时禁用），关页签即释放。桌面 CSP 放行 `blob:`/loopback/alias/`http:`/`https:`；不做 gateway 隧道、不做共享 `127.0.0.1` 回退、不做原生子视图
 - 桌面通知 — 会话完成 / 提问 / 审批时推送桌面通知，点击直达会话；设置「通知」分组可开关
-- 桌面端更新 — stable与beta配置和feed独立；静默检查，设置页「更新」展示，确认后下载、退出时安装（低打扰、无弹窗）
+- 桌面端更新 — stable与beta配置和feed独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；beta 构建默认也走稳定通道，打开开关后继续接收 beta）；静默检查，确认后下载、退出时安装（低打扰、无弹窗）
 - 睡眠/后台常驻 — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（macOS）；OS唤醒即时重连；保持唤醒开关
 - Chamber设置页 — 设置壳固定入口：连接 / 通用；chamber全局设置与各实例配置严格分离
 - 后端版本容忍 — 实例后端dsh前端版本与chamber壳不同步时照常可用：壳未覆盖的额外插件行降级为「特性缺席」（绝不整boot崩溃）

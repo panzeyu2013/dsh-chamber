@@ -43,7 +43,7 @@ The macOS installer comes from [GitHub Releases](https://github.com/panzeyu2013/
 
 - macOS (Apple Silicon): `dsh-chamber-<version>-macos-arm64.dmg`
 
-Currently 0.4.x: stable and beta channels are independent; see [CHANGELOG.en-US.md](CHANGELOG.en-US.md) for changes.
+Currently 0.4.x: stable and beta channels are independent; Settings → Update can subscribe to preview (beta) updates (a user preference, off by default; once enabled it persists across app updates). See [CHANGELOG.en-US.md](CHANGELOG.en-US.md) for changes.
 
 ### 2 · Open the app
 
@@ -102,7 +102,7 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 - Open-in registry — one open surface in the session header: reveal directories in Finder/file manager for local sources; launch VS Code for local (`vscode://file/`) or SSH remote (Remote-SSH) sources; supports `dsh-chamber://` deep links
 - Remote browser — the right-sidebar Browser tab is a faithful fork of upstream `ui-sidebar-browser`'s iframe path (DOM/CSS/copy/8 locales/address parsing/history/multi-tab/shortcuts/title/sandbox toggle/store verbatim): any http(s) URL is embedded directly (https and any host included); the only branch is an SSH source whose target host is exactly `127.0.0.1` — it attaches that source's forward lease first and uses main's composed alias `frameUrl` as the iframe src (address bar/history keep the logical URL; the proxied page's external exit uses the alias and is disabled while the lease resolves or fails), and closing the tab releases it. Desktop CSP allows `blob:`/loopback/alias/`http:`/`https:`; no gateway tunnel, no shared `127.0.0.1` fallback, no native child view
 - Desktop notifications — native notifications for session completion/question/approval, clicking opens the session; toggle in Settings "Notifications"
-- Desktop updates — stable and beta use separate configs and feeds; silent checks, an "Update" section in Settings, download after confirmation, install on quit (low-noise, no dialogs)
+- Desktop updates — stable and beta use separate configs and feeds; Settings → Update can subscribe to preview (beta) updates (a user preference, off by default; beta builds also stay on the stable channel until the switch is on); silent checks, download after confirmation, install on quit (low-noise, no dialogs)
 - Sleep / background persistence — closing can hide to tray and keep running (or quit with confirmation); launch at login (macOS); reconnect on OS wake; keep-awake toggle
 - Chamber settings page — fixed Settings-shell entries: Connections / General; chamber-global and per-instance settings strictly separate
 - Backend version tolerance — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash)

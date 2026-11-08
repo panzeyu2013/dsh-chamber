@@ -114,6 +114,52 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertNil(StartupSettings.decodeDebugEnabled(fromJSON: Data("{\"debug\": {\"enabled\": 1}}".utf8)))
     }
 
+    /// beta 订阅启动读取器：缺文件 = 未订阅（不动作）；缺键 = false；显式
+    /// true/false 逐字；非布尔 / 跨键损坏 = 整文件不采信（绝不猜值去切通道）。
+    func testStartupSettingsBetaUpdatesReader() throws {
+        let dir = try tempUserData()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/" + StartupSettings.fileName
+        XCTAssertEqual(StartupSettings.readBetaUpdates(userDataDir: dir), .missing)
+        try "{\"keepAwake\": true}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readBetaUpdates(userDataDir: dir), .ok(false),
+                       "键缺失 = Electron 默认 false（未订阅）")
+        for value in ["true", "false"] {
+            try "{\"betaUpdates\": \(value)}".write(toFile: path, atomically: true, encoding: .utf8)
+            XCTAssertEqual(StartupSettings.readBetaUpdates(userDataDir: dir), .ok(value == "true"))
+        }
+        // 非布尔 → 整文件校验失败 → corrupt（loud + 不动作），绝不强转。
+        try "{\"betaUpdates\": 1}".write(toFile: path, atomically: true, encoding: .utf8)
+        guard case .corrupt(let reason) = StartupSettings.readBetaUpdates(userDataDir: dir) else {
+            return XCTFail("betaUpdates 非布尔必须判损坏")
+        }
+        XCTAssertTrue(reason.contains("betaUpdates"), reason)
+        // 跨键损坏（合法 betaUpdates + 非法 keepAwake）→ 整文件不可信（同一纪律）。
+        try "{\"betaUpdates\": true, \"keepAwake\": \"on\"}"
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        guard case .corrupt = StartupSettings.readBetaUpdates(userDataDir: dir) else {
+            return XCTFail("跨键损坏必须判损坏，不得采信其中的 betaUpdates=true")
+        }
+        // 非 JSON 同样不动作。
+        try "not json".write(toFile: path, atomically: true, encoding: .utf8)
+        guard case .corrupt = StartupSettings.readBetaUpdates(userDataDir: dir) else {
+            return XCTFail("非 JSON 必须判损坏")
+        }
+        // 纯函数面：decodeBetaUpdates 只认真正的布尔（数字 1/0 不是布尔）。
+        XCTAssertEqual(StartupSettings.decodeBetaUpdates(
+            fromJSON: Data("{\"betaUpdates\": true}".utf8)), true)
+        XCTAssertEqual(StartupSettings.decodeBetaUpdates(
+            fromJSON: Data("{\"betaUpdates\": false}".utf8)), false)
+        XCTAssertNil(StartupSettings.decodeBetaUpdates(fromJSON: Data("{}".utf8)))
+        XCTAssertNil(StartupSettings.decodeBetaUpdates(
+            fromJSON: Data("{\"betaUpdates\": 1}".utf8)))
+        // 只有合法文件才有可用意图（missing/corrupt 一律 nil → 按未订阅处理）。
+        XCTAssertEqual(StartupSettings.BetaUpdatesReadOutcome.ok(true).betaUpdatesValue, true)
+        XCTAssertEqual(StartupSettings.BetaUpdatesReadOutcome.ok(false).betaUpdatesValue, false)
+        XCTAssertNil(StartupSettings.BetaUpdatesReadOutcome.missing.betaUpdatesValue)
+        XCTAssertNil(StartupSettings.BetaUpdatesReadOutcome.corrupt(reason: "x").betaUpdatesValue)
+    }
+
     /// 启动期调试模式重放决策（纯函数）：missing/corrupt 不动作；ok 走腿并取
     /// **实测回读**——腿失败或应答形状不可用一律 inspectable=false + reason，
     /// 绝不按 enabled 推断。
@@ -335,6 +381,8 @@ final class ShellStartupTests: XCTestCase {
             "{\"keepAwake\": true, \"notifications\": {\"enabled\": 1}}",
             "{\"keepAwake\": true, \"sessionTodo\": {\"enabled\": \"yes\"}}",
             "{\"keepAwake\": true, \"sessionTodo\": []}",
+            "{\"keepAwake\": true, \"betaUpdates\": 1}",
+            "{\"keepAwake\": true, \"betaUpdates\": \"yes\"}",
         ]
         for json in corruptCases {
             try json.write(toFile: path, atomically: true, encoding: .utf8)

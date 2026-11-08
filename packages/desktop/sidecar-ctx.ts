@@ -25,7 +25,7 @@ import { bundledPnpmEntryCandidates, firstExistingPnpmEntry } from './pnpm-launc
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { chamberSettingsFilePath } from './shell-core.ts'
 import type { HostMessageOptions, ShellAssemblyCtx } from './shell-core.ts'
-import { createHeadlessUpdateController, type NativeUpdaterBridge } from './update-headless.ts'
+import { createHeadlessUpdateController, resolveEffectiveUpdateChannel, type NativeUpdaterBridge } from './update-headless.ts'
 
 /** 打包布局：host 包构建产物目录 = `<sidecarDir>/dist/<packageDirName>`。 */
 export function packagedHostPackageDir(sidecarDir: string, packageDirName: string): string {
@@ -124,6 +124,9 @@ export interface HeadlessCtxInputs {
   /** 原生更新器桥。缺省 = 无原生安装腿：更新控制器保持 blocked-available，且只有此时
    *  check 走 GitHub releases 发现（声明了原生腿就交壳的 Sparkle appcast，绝不双源）。 */
   nativeUpdater?: NativeUpdaterBridge | null
+  /** beta 通道开关（壳传 --native-updater-beta = **两条通道 URL 都已注入且形状可用**）；
+   *  缺省 false。只对原生腿有意义：无原生腿（dev GitHub releases 发现）时通道切换能力恒可用。 */
+  nativeBetaChannelSwitch?: boolean
 }
 
 /**
@@ -231,6 +234,21 @@ export async function buildHeadlessCtx(
   } catch (error) {
     console.error('[sidecar] chamber settings 读取异常（回退默认值）：' + sanitizeErrorText(describeError(error)))
   }
+  // beta 通道事实（design 11 §3.2 / design 25 §7，v4 纯偏好表）：原生腿在场时，通道切换
+  // 能力由壳的 `--native-updater-beta` 声明（= Info.plist DSHChamberStableFeedURL 与
+  // DSHChamberBetaFeedURL 两条 URL 都已注入且形状可用；沿用 beta 名字避免连锁改名）；
+  // 无原生腿（dev GitHub releases 发现）时能力恒可用（偏好直接决定发现通道）。
+  const betaSubscriptionAvailable = (inputs.nativeUpdater ?? null) === null
+    ? true
+    : inputs.nativeBetaChannelSwitch === true
+  /** 偏好 true 但本构建无通道 URL 对：loud（绝不静默把「已开启」呈现成生效）。 */
+  const warnBetaPreferenceIgnored = (betaUpdates: boolean | undefined): void => {
+    if (betaUpdates === true && !betaSubscriptionAvailable) {
+      console.warn('[sidecar] betaUpdates=true 不生效：本构建的通道 URL 对不可用（壳未传 --native-updater-beta 或形状非法），生效更新通道保持 stable')
+    }
+  }
+  warnBetaPreferenceIgnored(settings.betaUpdates)
+
   // keep-awake / 登录自启的启动 reconcile 归 Swift 宿主；本 flavor 只转发 ctx 两叶
   // （async，await B 桥应答），settings 加载本身无 side-effect。
 
@@ -252,6 +270,11 @@ export async function buildHeadlessCtx(
   // 发现 + installBlockedReason 恒「原生壳不支持自动安装」。
   const updateController = createHeadlessUpdateController({
     version: chamberVersion,
+    // 初始生效通道 = env 硬覆盖 / betaUpdates 偏好 按共享表裁决（v4：版本后缀不参与）。
+    channel: resolveEffectiveUpdateChannel(process.env, {
+      betaUpdates: settings.betaUpdates,
+      betaSubscriptionAvailable,
+    }),
     nativeUpdater: inputs.nativeUpdater ?? undefined,
     logger: {
       log: (...args: unknown[]) => console.log('[updater-headless]', ...args),
@@ -276,7 +299,16 @@ export async function buildHeadlessCtx(
     edges: hostEdges,
     settings: {
       current: () => settings,
-      commit: next => { settings = next },
+      commit: next => {
+        const previousBetaUpdates = settings.betaUpdates
+        settings = next
+        // beta 偏好变更即时生效：重算生效通道（控制器内部同值 no-op——绝不空推一帧）。
+        if (next.betaUpdates !== previousBetaUpdates) warnBetaPreferenceIgnored(next.betaUpdates)
+        updateController.setChannel(resolveEffectiveUpdateChannel(process.env, {
+          betaUpdates: next.betaUpdates,
+          betaSubscriptionAvailable,
+        }))
+      },
     },
     // A 组设置副作用叶：两叶 async，await edges.sendEdge 的 B 桥应答。失败语义与
     // Electron 同步叶逐字一致——同步 throw 与 leg reject 同走 applySettingsPatch 的
@@ -349,6 +381,8 @@ export async function buildHeadlessCtx(
     hostPackageSourceDirs,
     pnpmEntry,
     updateController,
+    // 设置页 betaUpdates 能力门的事实输入（Swift 壳 + 两条通道 URL 成对注入才为 true）。
+    nativeBetaChannelSwitch: inputs.nativeBetaChannelSwitch === true,
     // 更新退出腿回撤叶：Swift v1 blocked-available 从不武装（无 quitAndInstall 腿），显式惰性 no-op。
     disarmUpdaterQuit: (_reason: string) => {},
     // 原生 Sparkle 的 downloaded/installing 等价于 Electron 的「更新已下载豁免」——退出

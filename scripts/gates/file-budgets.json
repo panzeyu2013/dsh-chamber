@@ -16,9 +16,9 @@
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 1320,
+      "lines": 1323,
       "target": 1450,
-      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)；+2（2026-11，design 28 §16 revoke 漏斗）= onRendererLifecycle 顶部的注释 1 行 + revokeForwardRenderer(event) 调用 1 行（单漏斗：Electron main 与 Swift node-edges 都汇到该入口；替代方案是两处 entry glue 各 +1 行，但那会失去单漏斗语义）",
+      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)；+2（2026-11，design 28 §16 revoke 漏斗）= onRendererLifecycle 顶部的注释 1 行 + revokeForwardRenderer(event) 调用 1 行（单漏斗：Electron main 与 Swift node-edges 都汇到该入口；替代方案是两处 entry glue 各 +1 行，但那会失去单漏斗语义）；+3（2026-11，beta 更新通道）= chamberSettingsStatus 的 supported 增加 betaUpdatesSupported 能力门（Swift 壳 + 构建期注入 beta feed 才允许订阅 beta；组合门在 core，纯函数 computeSupported 第 4 参只回填事实，Electron 恒 false）——raise 由本次 review 记录",
       "kind": "ceiling"
     },
     {
@@ -91,9 +91,9 @@
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1213,
+      "lines": 1217,
       "target": 1163,
-      "note": "Composition root: exit leg and committed registry transition extracted (B4). Frozen at its current size: the remaining onStatusChanged/onVerified pair moves four mutable maps into a third module, so it is a recorded boundary decision, not a line-count task. Target raised from the aspirational 400 to the accepted boundary (= lines while FROZEN); the raise is this note, per design 27 §6.17. +12（P0-3）= 单一 hostKey guard 装配（<userData>/ssh/known_hosts + 首用导入 ~/.ssh/known_hosts）同时注入 transport manager 与 IPC ctx。+37（P2-1）= 启动先 orphan sweep + sshOrphanStateDir 注入 + 注册/session refresh/seed 探针/插件 sync 的 socketPath 透传；+2（R2-A MAJOR-4）= configureSshSocketNamespace(runtimeBaseDir) 在 spawn 前固定 UDS 命名空间（target 仍按 FROZEN 边界记账）。"
+      "note": "Composition root: exit leg and committed registry transition extracted (B4). Frozen at its current size: the remaining onStatusChanged/onVerified pair moves four mutable maps into a third module, so it is a recorded boundary decision, not a line-count task. Target raised from the aspirational 400 to the accepted boundary (= lines while FROZEN); the raise is this note, per design 27 §6.17. +12（P0-3）= 单一 hostKey guard 装配（<userData>/ssh/known_hosts + 首用导入 ~/.ssh/known_hosts）同时注入 transport manager 与 IPC ctx。+37（P2-1）= 启动先 orphan sweep + sshOrphanStateDir 注入 + 注册/session refresh/seed 探针/插件 sync 的 socketPath 透传；+2（R2-A MAJOR-4）= configureSshSocketNamespace(runtimeBaseDir) 在 spawn 前固定 UDS 命名空间（target 仍按 FROZEN 边界记账）。+4（2026-11，beta 更新通道）= HostAssemblyDeps.nativeBetaChannelSwitch（可选；Swift sidecar 注入壳的 --native-updater-beta）+ ShellAssemblyCtx 的同名字段（Electron 冻结装配不传 → false；能力门的第二输入）——raise 由本次 review 记录"
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",

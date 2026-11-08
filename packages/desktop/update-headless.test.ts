@@ -4,7 +4,10 @@
  * 覆盖：
  *  ① selectLatestReleaseVersion：stable/beta 通道的 draft/prerelease/tag 形状
  *     严格筛选 + 版本最大值（含畸形条目跳过、超界/非数组 → null）；
- *  ② resolveHeadlessChannel：内建 beta 版本 / DSH_CHAMBER_UPDATE_CHANNEL 覆盖；
+ *  ② resolveHeadlessChannel：env-only（v4：只有 DSH_CHAMBER_UPDATE_CHANNEL=beta 把无偏好
+ *      调用拉到 beta；版本后缀不再参与）；
+ *  ②′ resolveEffectiveUpdateChannel：env 硬覆盖 / 通道 URL 对可用 / betaUpdates 偏好 的同一
+ *      张表（v4 纯偏好：版本后缀不参与；sidecar 初始通道与 settings commit 同步用）；
  *  ③ 控制器初始态：idle + installBlockedReason = 原生壳 reason；
  *  ④ 真实 check（注入假 fetch）：有更新 → available + releaseUrl（过白名单）；
  *     无更新 → up-to-date（latestVersion/releaseUrl 清空）；
@@ -18,6 +21,7 @@
  *     checking → 壳推送结果、不排静默定时器；原生腿缺席 → 既有 GitHub 检查原样；
  *  ⑰ 坏配置：能力探测原因被记录、保持 blocked，check 落 error（不停 checking）；
  *  ⑱/⑲ 确认动作的 revision 护栏：过期回答绝不转发/不接受，当前代际保持既有语义。
+ *  ⑳ setChannel：通道真变化才推一次（revision 自增、相位不动），同值 no-op。
  * 纯逻辑（无网络、无 Electron、无真实 timer 等待——⑩/⑮ 用假定时器注入）。
  */
 import { test } from 'node:test'
@@ -25,7 +29,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isAllowedReleaseUrl, STALE_CONFIRMATION_ERROR } from './updater.ts'
+import { isAllowedReleaseUrl, STALE_CONFIRMATION_ERROR, type UpdateState } from './updater.ts'
 import {
   HEADLESS_CHECK_DELAY_MS,
   HEADLESS_CHECK_INTERVAL_MS,
@@ -33,6 +37,7 @@ import {
   NATIVE_SHELL_INSTALL_BLOCKED_REASON,
   NATIVE_SHELL_RESTART_REFUSAL,
   createHeadlessUpdateController,
+  resolveEffectiveUpdateChannel,
   resolveHeadlessChannel,
   selectLatestReleaseVersion,
 } from './update-headless.ts'
@@ -85,11 +90,13 @@ test('① selectLatestReleaseVersion：非数组/超界/无候选 → null', () 
   assert.equal(selectLatestReleaseVersion([release('v1.0.0-beta.1', { prerelease: true })], 'stable'), null)
 })
 
-test('② resolveHeadlessChannel：beta 版本与 env 覆盖', () => {
-  assert.equal(resolveHeadlessChannel('0.2.2'), 'stable')
-  assert.equal(resolveHeadlessChannel('0.2.2-beta.3'), 'beta')
-  assert.equal(resolveHeadlessChannel('0.2.2', { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }), 'beta')
-  assert.equal(resolveHeadlessChannel('0.2.2', { DSH_CHAMBER_UPDATE_CHANNEL: 'stable' }), 'stable')
+test('② resolveHeadlessChannel：env-only（v4 起版本后缀不再参与）', () => {
+  assert.equal(resolveHeadlessChannel({}), 'stable')
+  assert.equal(resolveHeadlessChannel({ DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }), 'beta')
+  assert.equal(resolveHeadlessChannel({ DSH_CHAMBER_UPDATE_CHANNEL: 'stable' }), 'stable')
+  // env 精确匹配：大小写/非 beta 值都不构成 beta。
+  assert.equal(resolveHeadlessChannel({ DSH_CHAMBER_UPDATE_CHANNEL: 'BETA' }), 'stable')
+  assert.equal(resolveHeadlessChannel({ DSH_CHAMBER_UPDATE_CHANNEL: '1' }), 'stable')
 })
 
 test('③ 初始态：idle + 原生壳 blocked reason + 通道', () => {
@@ -838,4 +845,89 @@ test('⑲ 无原生腿：过期确认先于相位拒绝，当前代际保持既�
   assert.deepEqual(await controller.download(current), { ok: false, error: NATIVE_SHELL_DOWNLOAD_REFUSAL })
   assert.deepEqual(controller.restartAndInstall(current - 1), { ok: false, error: STALE_CONFIRMATION_ERROR })
   assert.deepEqual(await controller.restartAndInstallAsync!(current), { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL })
+})
+
+// --- beta 通道表（design 11 §3.2 / design 25 §7）：与 Swift / UI gate 同一张表 ---
+
+test('②′ resolveEffectiveUpdateChannel：beta 当且仅当 env 或（通道 URL 对可用 AND 偏好 true）', () => {
+  // v4 纯偏好表：版本不再是输入（签名里没有 version），beta 构建默认也是 stable 通道。
+  assert.equal(resolveEffectiveUpdateChannel({}), 'stable')
+  assert.equal(resolveEffectiveUpdateChannel({ DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }), 'beta')
+  assert.equal(resolveEffectiveUpdateChannel({ DSH_CHAMBER_UPDATE_CHANNEL: 'stable' }), 'stable')
+
+  // 偏好只在「通道 URL 对可用」时生效（只加 beta、不减 beta；关闭时只收正式版）。
+  assert.equal(resolveEffectiveUpdateChannel({}, { betaUpdates: true, betaSubscriptionAvailable: true }), 'beta')
+  assert.equal(resolveEffectiveUpdateChannel({}, { betaUpdates: true, betaSubscriptionAvailable: false }), 'stable',
+    '通道 URL 对不可用时偏好不生效')
+  assert.equal(resolveEffectiveUpdateChannel({}, { betaUpdates: false, betaSubscriptionAvailable: true }), 'stable')
+  // 缺省 betaSubscriptionAvailable = true（保持旧行为：关闭必须显式 false）。
+  assert.equal(resolveEffectiveUpdateChannel({}, { betaUpdates: true }), 'beta')
+
+  // env 硬覆盖恒最强（只加不减）：通道 URL 对不可用、偏好关闭也 beta。
+  assert.equal(resolveEffectiveUpdateChannel(
+    { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' },
+    { betaUpdates: false, betaSubscriptionAvailable: false }), 'beta')
+
+  // resolveHeadlessChannel 委托同一张表（无偏好、通道 URL 对恒可用）——旧导出面语义 = env-only。
+  for (const env of [{}, { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' }, { DSH_CHAMBER_UPDATE_CHANNEL: 'stable' }]) {
+    assert.equal(resolveHeadlessChannel(env), resolveEffectiveUpdateChannel(env, { betaSubscriptionAvailable: true }))
+  }
+
+  // 版本后缀不参与（v4 删除）：beta 版本的控制器的默认通道是 stable（0.5.0-beta.3 同理）。
+  for (const version of ['0.5.0', '0.5.0-beta.3']) {
+    const controller = createHeadlessUpdateController({ version, logger, env: {} })
+    assert.equal(controller.state().channel, 'stable', version + ' 的默认通道 = stable（纯偏好）')
+    assert.equal(controller.state().currentVersion, version)
+    controller.stop()
+  }
+  // 控制器默认通道的 env 来源 = deps.env（缺省 process.env）：env 硬覆盖仍然是 beta。
+  const envController = createHeadlessUpdateController({
+    version: '0.5.0',
+    logger,
+    env: { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' },
+  })
+  assert.equal(envController.state().channel, 'beta')
+  envController.stop()
+})
+
+test('⑳ setChannel：通道真变化才推一次（revision 自增、相位不动），同值 no-op', () => {
+  const lines: string[] = []
+  const controller = createHeadlessUpdateController({
+    version: '0.5.0',
+    logger: recordingLogger(lines),
+    request: fakeFetch([]),
+    env: {},
+  })
+  assert.equal(controller.state().channel, 'stable')
+  const initial = controller.state().revision
+  const seen: UpdateState[] = []
+  const unsubscribe = controller.subscribe((state) => seen.push(state))
+  try {
+    // 同值 no-op：绝不空推一帧（settings commit 每次都会调它）。
+    controller.setChannel('stable')
+    assert.equal(controller.state().revision, initial)
+    assert.equal(seen.length, 0)
+    assert.equal(lines.some((line) => line.includes('更新通道切换')), false)
+
+    // 变化：state.channel 更新 + 推一次（revision 自增）+ loud；相位不动。
+    controller.setChannel('beta')
+    assert.equal(controller.state().channel, 'beta')
+    assert.equal(controller.state().revision, initial + 1)
+    assert.equal(controller.state().phase, 'idle', '通道切换不重置相位')
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0]!.channel, 'beta')
+    assert.ok(lines.some((line) => line.includes('更新通道切换')), '通道切换必须 loud')
+
+    // 在飞相位（下载中）不被通道切换重置——下载/安装门由相位与 blockedReason 决定。
+    controller.applyNativePhase({ phase: 'downloading', version: '0.5.0-beta.4', error: null })
+    const before = controller.state().revision
+    controller.setChannel('stable')
+    assert.equal(controller.state().phase, 'downloading', '通道切换不重置下载中的相位')
+    assert.equal(controller.state().channel, 'stable')
+    assert.equal(controller.state().revision, before + 1)
+    assert.equal(seen.length, 3, '变化各推一次（applyNativePhase 也算一帧）')
+  } finally {
+    unsubscribe()
+    controller.stop()
+  }
 })

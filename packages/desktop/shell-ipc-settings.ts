@@ -173,6 +173,13 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
     const { patch } = payload as { patch?: unknown };
     const validated = validatePatch(patch);
     if (!validated.ok) return { error: validated.error };
+    // 「接收预览版更新」只在两条通道 feed URL 成对注入的构建里生效（Swift 原生壳 +
+    // 构建期 URL 对）：能力门不为 true 时开启开关会得到一个永远不生效的偏好——响亮拒绝；
+    // 关闭（false）永远允许（绝不把用户锁在 beta 里）。
+    if (validated.patch.betaUpdates === true
+      && chamberSettingsStatus().supported.betaUpdatesSupported !== true) {
+      return { error: 'beta update channel is unavailable in this build' };
+    }
     // Switching the runtime version source moves the trust boundary of version checks/
     // downloads/installs — require native user confirmation before applying the patch.
     const currentSettings = settingsIO.current();

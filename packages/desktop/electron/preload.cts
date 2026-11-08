@@ -372,6 +372,9 @@ export interface ChamberSettings {
   /** 调试模式：镜像同步纪律同 notifications（结构与 chamber-settings.ts 的
    *  ChamberDebugSettings 及 renderer global.d.ts 保持一致）。 */
   debug: ChamberDebugSettings
+  /** 接收预览版（beta）更新：可选（缺省 = 未设置）；镜像 desktop/chamber-settings.ts
+   *  与 renderer global.d.ts 的同名字段。 */
+  betaUpdates?: boolean
 }
 
 /** 调试模式子块：开启后 Swift 原生壳置 WKWebView.isInspectable（Safari Web
@@ -443,6 +446,9 @@ export interface ChamberSettingsSupported {
    *  同样可选：缺字段 = 早于本门的主进程 → 消费端按「不支持」读（禁用 + 原因），
    *  绝不呈现一个可能无效的开关（与 badgeSupported 的非对称读法有意不同）。 */
   debugInspectable?: boolean
+  /** 「接收预览版更新」能力门：只有 Swift 原生壳且构建期成对注入了两条通道 feed URL 才为 true；
+   *  可选，缺字段按「不支持」读（与 debugInspectable 同款非对称纪律）。 */
+  betaUpdatesSupported?: boolean
 }
 
 export interface SettingsSurface {
