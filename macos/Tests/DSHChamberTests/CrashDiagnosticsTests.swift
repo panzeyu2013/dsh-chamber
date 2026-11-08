@@ -414,7 +414,7 @@ final class CrashDiagnosticsTests: XCTestCase {
         let body = String(source[prefix.lowerBound...].prefix(1300))
         XCTAssertTrue(body.contains("utcCivilDate(epoch: epoch)"))
         XCTAssertFalse(body.contains("Formatter"))
-        let design = try repositoryFile("../docs/design/25-macos-swift-native-shell.md")
+        let design = try repositoryFile("../docs/design/desktop/25-macos-swift-native-shell.md")
         XCTAssertFalse(design.contains("gmtime_r(3)"),
                        "design 25 §5.4 的处理器调用清单不得再把 gmtime_r(3) 写成调用（B3）")
         XCTAssertTrue(design.contains("纯整数 civil-date"),
