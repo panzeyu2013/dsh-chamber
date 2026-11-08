@@ -894,7 +894,7 @@ vendor/harness-packages（pinned submodule，当前 pin dsh-v0.2.2-rc.1 66491b05
    **私有**面——实例字段 `state`（官方 live global 本体，`setState` 换的就是它）、
    `setState`（**整体替换**且 `dsh-storage-domain` 的 `global.set` **不跑 `schema.parse`**，
    0.2.0-rc.1 发行产物复核；故 zod 默认值不兜底 → 只能 read-modify-write）、`enqueueOperation`（官方串行链，集合写
-   必须在其内）。`list()` 公开可用但**本域已不再使用**（不再重建 `workspaceIds`）。
+   必须在其内）。`list()` 公开可用但**本域不使用**（不再重建 `workspaceIds`）。
    **成员 `sessionIds` 是 header 索引派生的
    getter**（启动/实时按 `sessionPersistence.list()` 重建）——内容删除后
    成员账目自动自愈，无需也不可手工改账目；

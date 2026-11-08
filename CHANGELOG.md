@@ -10,6 +10,25 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [0.4.5-beta.1] - 2026-11-08
+
+### 新增
+- **Swift 本地实例内置 Office 技能与完整 primary-runtime 载荷** —— 本地 Swift spawn 经既有 `--patch` overlay 挂载 `dsh-skill-office` 与 `dsh-tool-workspace-dependencies`，随包携带全量 `primary-runtime`（node + pnpm + python）与 `office-skills` 资产：应用内 7 个 Office 技能可见，`load_workspace_dependencies` 返回 python/node/pnpm 的绝对路径，docx 创作与 render/export-pdf 在没有系统 node/python 的机器上也能用。首次工具调用把只读载荷安装到 `<DSH_HOME>/dsh-runtimes/dsh-primary-runtime`，应用内文件不被改写；缺载荷/资产时宿主照常启动、启动行不挂，能力如实缺席。Swift 壳从此只有一份 Node（payload 内），sidecar 与托管 dsh 都运行在它上面（design 18 §4.2、design 25 §4.3/§3.2）；gateway 与已冻结的 Electron 腿不接线。这些能力只服务本地实例——gateway 与 SSH 远端实例不挂载（deviations 记录）；真机/打包态验收（无系统 node/python 的干净机器）见发布检查单。
+- **设置 → 通用新增「性能与内存」只读组（含手动释放）** —— 常驻来源表逐行显示状态（活动 / 常驻 / 启动中 / 失败 / 已释放）、隐藏时长与 DOM 节点估算，面板下方显示最近一次释放的来源与原因，并给每个来源一个两次点击确认的「释放 UI」动作；页面 JS 堆与整机内存读数只呈现平台确实可得的读数，不可得时显示「不可得」而不是猜数。释放只拆 UI 壳，不动实例进程、隧道与后台任务（design 15 §D5、design 05 §4.1）。
+- **侧栏各来源的面板入口按该来源自己的注册渲染** —— 每个已挂载壳把自己的 `sidebar.panellist` 快照发布到页面级单例（`{id, order, label}`，未知 id 隐藏），非活动来源的 header 因此显示它自己的面板条目；未挂载但仍连接的来源回落固定默认组合（时钟）。点击先激活目标来源，再把一次性 `selectPanel` 意图交给该来源自己的壳：意图跨 boot 挂起、TTL 从点击时刻起算，目标只对自己真正注册过的面板调用 selectPanel；外部来源条目共用 header/rail 的激活门、不带选中态。旧 `hasActiveSchedule` 会话投影回落链（标记、稀疏快照签名位、跨代传递与搜索行标记）随上游 pin 不再投影 `schedule` 而删除——非 owning 行不再带 schedule 标记，owning 行仍由上游座席渲染（design 05 §2、design 06 §4.3/§4.7、design 09 §3.6）。
+
+### 变更
+- **右栏「浏览器」改为上游 `ui-sidebar-browser` 内嵌 iframe 路径的忠实 fork（design 28 §16.11）** —— 0.4.4 的系统浏览器启动器整代退役：UI/DOM/CSS/文案/快捷键/多标签/地址解析/历史/持久化/sandbox 开关/失败条/restore 与 pin 的上游逐字同源（8 语言，SHA-256 冻结在包测试），唯一行为差异 = SSH 反代。任何 http(s) 地址（含 https 与任意 host）直接进 iframe；只有 target host 恰为 `127.0.0.1` 的 `dsh`/gateway+ssh 来源先 attach 该来源自己的 forward，再把 main 合成的 `frameUrl` 作为 iframe src——地址栏与历史仍显示逻辑地址，离开目标即 detach，关 tab 释放 consumer，attach 失败走上游失败条。工具栏 external 按钮走上游 `window.open`，由桌面壳既有窗口门转系统浏览器；代理页的 external URL 用 main 合成的 alias（转发解析中或失败时禁用，避免误开本机服务）。desktop CSP 放行 `blob:`/loopback/alias/`http:`/`https:`；子 frame 导航保留下载/新窗/权限围栏，XFO/TLS/frame-ancestors 失败不再投影成 refusing UI。Electron 腿已冻结，Swift 同行为（真机/打包态验收仍挂账）。local iframe 与 app 同 host 共享 cookie jar、本机其它 loopback 服务可被 local iframe 加载（与系统浏览器语义一致），均登记为取舍。
+- **N-ctx 壳改为 keep-all 常驻** —— 用户打开过的来源壳在页面生命周期内保持挂载，旧「隐藏壳最多保留 1 个 + 连续隐藏 60s 回收」机制整体删除；系统投机壳（空闲预热 / 首屏收割）仍只占 1 个后台槽。释放只剩显式路径（来源退役、boot 失败、135s 挂死、遮罩放弃、收割让位、手动释放、硬上限 12、平台内存压力阀）；active/屏上/待开/设置目标/booting 与最近 10 分钟有输入的壳永不被自动释放。内存压力阀按 30s 采样的整机可用内存分档（`constrained` 保留至多 1 个最近使用的常驻壳、`critical` 释放全部可释放壳，按档连续 2 次判定、250ms 错峰），探针失败 = unsupported 不猜。**代价**：每壳字节内存读不到（单 renderer 架构），`critical` 下后台壳里未提交的草稿可能随释放丢失，设置面板打开的持有不延伸到关闭之后（design 05 §4.1）。
+- **Electron flavor 冻结归档，唯一出货 flavor = macOS Swift 原生壳（破坏性，分发范围）** —— Electron 主进程入口/edge/preload 迁入 `packages/desktop/electron/` 归档（文件保留、可复活；范围清单与复活检查表见 `docs/progress/electron-frozen.md`）；Electron 打包/更新腿、Windows/Linux 桌面腿与 Electron-only 测试冻结，CI/发布里对应的 Electron/Windows/Linux 腿冻结（job 级跳过或删除），发布只出 Swift 与 gateway 产物，macOS Swift 用户是唯一仍收到本版的桌面用户（macOS Electron 与 Windows/Linux 用户停留在 0.4.4）。共享 sidecar 业务核心、host 契约与 Swift 腿共用的代码继续维护；贡献者的 `dev:desktop`/`dist:desktop*` 等 Electron 流程归档，恢复需用户重开范围（AGENTS.md、docs/progress/electron-frozen.md）。
+- **checkout 行的「有改动 / 已锁定 / 状态未知」只在行内动作揭示时出现** —— 状态胶囊移进 `data-git-occupant` 容器（宿主持有，静息时移出布局，hover / 键盘聚焦 `.rowActionsVisible` 时返回），静息行只留中性分支字形与计数徽标，不再常驻行尾标签；删除阻塞提示仍随揭示路径与删除对话框可见（静息行只保留中性信息；design 06 §7、design 08 §3.2）。
+
+### 修复
+- **Dock/任务栏未读角标排除归档会话** —— 角标此前把已归档会话的完成位也算进去，而归档行在窗口内永远不呈现为完成未读、也不可打开，用户无法通过阅读清除；现在 App 用与 `withPendingArchives` 同出处的归档 id 集（权威归档集 + 本页归档回声）在角标投影中扣除，蓝点与角标继续同拍，取消归档后两者一起恢复。断连来源保留既有冻结臂（无投影时排除集不可得，重连自愈；design 19 §3.7）。
+- **新建会话 / 进入 checkout 后的会话列表刷新不再等秒级揭幕** —— `requestSessionListRefresh` 增加 create/enter 理由：新建会话强制一次官方 `session.list` 重读（新 id 一个 RTT 进壳、揭幕即刻结算），`gitWorkTree/enter` 后强制一次，并在单飞刷新合并到旧基线时补一次有界重读；无理由调用者（30s tick、归档清理）行为不变（design 05 §2.2.1）。
+- **checkout 回声在宿主仍报告创建种子时保持放置** —— 宿主自会话创建起就把 `workingDirectory` 投影为源根（而非 `gitWorkTree/enter` 之后），旧逻辑把任意投影值当作放置事实，首个权威推送就退掉回声意图、新会话先落在源行头再滑入；现在只在投影值离开创建种子（规范路径比较）后退休，patch 缺失或种子相等的行回落记账路径，旧宿主无投影维持原收敛（design 08 §4.2）。
+- **checkout 删除的归档计划跳过空白会话** —— blank 位为真、无内容与持久标题的自动「新会话」占位不再被算作未命名会话并随真实工作一起归档：空白行永不作为根或闭包成员，但 fork 图仍用全量行构建以便穿过空白中间节点到达有内容的子孙；无投影元数据的冷行维持 fail-open 非空白读法（design 08 §5.4/§8）。
+
 ## [0.4.4] - 2026-11-06
 
 ### 新增

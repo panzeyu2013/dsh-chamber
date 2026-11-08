@@ -29,10 +29,9 @@ node scripts/gates/verify-md-links.mjs
 
 # v2 内嵌腿（纯判据 + 假 DOM；CI）：W-13/14a/14b/15/15b/SH-7 的判定层
 pnpm run test:gui-acceptance
-# v2 内嵌腿（需 GUI）：local fixture 真跑 + 系统浏览器出口 + 关 tab 释放（一次性实例）
-node scripts/gui-acceptance/run.mjs --dev --electron-arg=--no-sandbox
-# v2 远端端到端：本机 ssh fixture（真实 sshd + remote dsh + 回环 fixture，推荐）
-node scripts/gui-acceptance/run.mjs --dev --ssh-fixture --electron-arg=--no-sandbox
+# v2 内嵌腿（需 GUI）：local fixture 真跑 + 系统浏览器出口 + 关 tab 释放——`--dev`/CDP 腿已随 Electron 冻结归档，
+# 原生壳界面按真机/目检执行（gui-acceptance-checklist §4）；确需复活时按 electron-frozen.md §6 显式传 --flavor electron。
+# v2 远端端到端：本机 ssh fixture 同为归档 CDP 驱动；真实 ssh 源按本文 L5 真机矩阵执行（原生命令见 §L5）
 # 或真实 ssh 源 + 已人工预开的斜签：--require-embed 把未执行的内嵌腿改判 FAIL
 node scripts/gui-acceptance/run.mjs --attach --require-embed --embed-port <remote-loopback-port>
 ~~~

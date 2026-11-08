@@ -669,7 +669,11 @@ const MANIFEST_SPECIFIC_WIRING = {
     /platformFiles: \{ win32: WIN32_FILES \}/u,
   ],
   desktop: [
-    /platformFiles: \{ win32: WIN32_FILES, macos: MACOS_FILES \}/u,
+    // Electron freeze (2026-11): the default leg rides the frozen group through
+    // platformFiles.frozen, and the --frozen leg hands GROUPS back as 'rest'; both
+    // shapes are pinned so a forgotten FROZEN_GROUPS registration fails here.
+    /platformFiles: \{ win32: WIN32_FILES, macos: MACOS_FILES, frozen: flatFiles\(FROZEN_GROUPS\) \}/u,
+    /platformFiles: \{ win32: WIN32_FILES, macos: MACOS_FILES, rest: flatFiles\(GROUPS\) \}/u,
     /zeroTestAllowlist: ZERO_TEST_ALLOWLIST/u,
     /requireNoSkipsLegs: \['macos'\]/u,
     /allowPlatformFilesOutsideGroups: true/u,

@@ -63,7 +63,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release — MUST equal every chamber package and be stable X.Y.Z or canonical X.Y.Z-beta.N. Beta selects the isolated beta.yml/beta-mac.yml feed and GitHub prerelease.'
+        description: 'Version to release — MUST equal every chamber package and be stable X.Y.Z or canonical X.Y.Z-beta.N. A beta suffix selects the Swift beta channel (rolling tag appcast-swift-beta) and a GitHub prerelease; the Electron feeds are ARCHIVED (docs/progress/electron-frozen.md).'
         required: true
         type: string
       dry_run:

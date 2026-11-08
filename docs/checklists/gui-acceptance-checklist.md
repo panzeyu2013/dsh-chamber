@@ -97,7 +97,7 @@
 |归档管理器与force清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§6、§13|
 |gateway形态（生产TLS、`/chamber/*`、移动端）|design 17、21 §9|
 |移动端Web面（**CDP 设备模拟半边**见 §0 的移动走查；真机触控档、安全区、键盘只能真机）|design 17 §18.6；机器侧 `pnpm run acceptance:mobile`|
-|v2 内嵌面（Electron 打包态 + Swift .app 各一次）：远端 dsh+ssh / gateway+ssh 的 loopback 页面内嵌与关 tab 释放、上游 iframe BrowserBody 的 system-browser 出口（上游不承诺 XFO/TLS 失败 UI）、https 证书错误不绕过、跨源 cookie/登录、弹窗/下载/键盘焦点、远端页面不能改 chamber 状态|design 28 §16.8/§16.9；Swift 真机矩阵 design 25 §8.5|
+|v2 内嵌面（Swift .app 一次；Electron 打包态随冻结归档）：远端 dsh+ssh / gateway+ssh 的 loopback 页面内嵌与关 tab 释放、上游 iframe BrowserBody 的 system-browser 出口（上游不承诺 XFO/TLS 失败 UI）、https 证书错误不绕过、跨源 cookie/登录、弹窗/下载/键盘焦点、远端页面不能改 chamber 状态|design 28 §16.8/§16.9；Swift 真机矩阵 design 25 §8.5|
 |Linux桌面 / Windows首版|design 22 §7、23|
 
 ### 4.1 I-15 矩阵执行序（归并记录）

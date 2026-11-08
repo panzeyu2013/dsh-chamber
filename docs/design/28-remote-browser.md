@@ -344,8 +344,9 @@ design 25 的计数锁步、packaging closure 与 STATUS 的取舍登记。现�
 20. **local 源 iframe 与 app 同 host（127.0.0.1/localhost）共享 cookie jar**：用户裁决接受；app origin 由 frame-ancestors 'none'
     + XFO DENY 锁死，本机其它 loopback 服务可被 local iframe 加载（与系统浏览器语义一致），登记。
 21. **跨 site 第三方 cookie / SameSite 可能让认证型页面登录退化**：E1 实验结论回填；面板提示 + 系统浏览器出口，不声称所有站点可嵌。
-22. **隐藏 session 的 keepMounted tab 常驻占 8/source 配额**；隐藏非 local 源壳只保 1 个（`retention.ts`），源壳回收即释放该源
-    全部 iframe/forward，回来冷 boot 重载。
+22. **隐藏 session 的 keepMounted tab 常驻占 8/source 配额**；用户打开的源壳按 keep-all 常驻（design 05 §4.1；旧「最多 1 个
+    隐藏壳 + 连续隐藏 60s 回收」的 retention 机制已删除），只有显式释放路径（来源退役、boot 失败、硬上限 12、内存压力阀、
+    手动释放等）才拆壳；拆壳即释放该源全部 iframe/forward，回来冷 boot 重载。
 23. **kill -9 窗口、reaper fail-closed、站点数据无手动清除（删源/retarget 清；tab 关闭不清）**：沿用 v1 登记并补 v2 说明。
 24. **Swift/Electron 失败可见性不对等**（Swift 无 `did-fail-load` 对等面）、**iframe 拖拽/快捷键/焦点**需真机 W 验收。
 

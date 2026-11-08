@@ -171,7 +171,7 @@ selection scope、I-12 谱系压制）；剩余 = 打包态/真机各跑一次�
 #### 14.3 工程环境债
 
 - 下一 pin 落地「真 `WorkspaceRegistry` + 真 binding」lockstep（当前 ad-hoc 形态；CI 走 node_modules 解析）；复核 vendor 补丁 retire 与 `RETIRED_PATCHES`（2 条退役：ReasoningRow sweep、util-values 比较）。
-- `node-addon-require-builtin` 指纹表未收录当前 Electron pin ⇒ Electron flavor 托管宿主起不来；开放事实见 STATUS §三「Electron 运行时指纹」。
+- `node-addon-require-builtin` 指纹表未收录当前 Electron pin ⇒ Electron flavor 托管宿主起不来（Electron 已冻结归档，复活按 `electron-frozen.md` §6.3）；开放事实见 STATUS §三「Electron 运行时指纹」。
 
 #### 14.4 升级期检查两条闭口（待 vendor 物化）
 

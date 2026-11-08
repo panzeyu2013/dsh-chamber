@@ -260,7 +260,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   legacy 字节逐字不变；只有启动行/disable 的 overlay 也合法）。capability 根只由 Swift
   `sidecar-entry` 解析并传控制面（打包态 `<sidecar>/primary-runtime`、`<sidecar>/office-skills`；
   dev `packages/desktop/resources/*`）；Electron main / CLI / gateway 不传 capabilities ⇒ 不挂任何行
-  （Electron 分支未来移除、本轮不接线；gateway 保持原状）。每次 spawn 重新 plan（与 chamber 行同一
+  （Electron 分支已冻结归档、不接线；gateway 保持原状）。每次 spawn 重新 plan（与 chamber 行同一
   幂等重写路径），资源在两次 spawn 间被删/更新都会如实反映。
 - **启动行门控、config 与身份纪律**：每行**独立** fail-open——capability 未提供或目录不存在 = 普通
   log 跳过；目录存在但资源不完整 = **warn 后跳过该行**（绝不发半行、绝不为此让 spawn 失败）。

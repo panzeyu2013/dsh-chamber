@@ -44,7 +44,7 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 - [ ] 全量套件：`pnpm run check:full`（= `node scripts/gates/run-checks.mjs full`：static + typecheck + 全部包测试）；darwin 上 `tests` 模式按 `scripts/gates/gate-surfaces.json` 的 `macos.*` 门（platform=darwin）追加 Swift/打包腿类，CI 侧对应 ci.yml 手写的 `test-macos`（Swift 构建/测试）与 `test-macos-pack`（`test:macos`、compiled sidecar / native GUI 装配 / Electron 产物门）两个 job——它们不在生成块内，登记见 `docs/progress/STATUS.md` §1.6，且都被发布 proof 按 job 名钉住。冒烟是独立入口。上一提交的记录不算数；失败必须定位，不能用重跑代替结论。
 - [ ] full之外的发布项（**现行**）：`build:dsh-runtime`、`typecheck:host-graph` / `typecheck:host-git` / `typecheck:host-archive-cleanup` / `typecheck:host-open-in`。
 - [ ] **ARCHIVED（Windows 腿已删）** `test:win32`：Windows 桌面腿冻结后不再有 CI 入口，默认发布不执行。
-- [ ] 旧版本号残留扫描：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs` 为空（硬编码旧shellVersion会误触发壳升级路径）。
+- [ ] 旧版本号残留扫描：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs` 为空（只解释历史的注释不算；判据 = 无旧 shellVersion 赋值，否则会误触发壳升级路径）。
 - [ ] `pnpm install --frozen-lockfile` 通过；`build:renderer`、`build:host-packages`、`build:desktop` 通过。
 - [ ] 产物建成后（`build:renderer` / `build:host-packages` / `build:desktop`）跑一次 `node scripts/gates/verify-artifact-freshness.mjs --require-compare`：严格档把「一类都没比过」判红，防止 clean checkout 的 SKIP 冒充通过（该门不在 `check:full`/`tests` 内，仅本清单在构建后手动跑）。
 - [ ] **ARCHIVED（Electron 冻结）** Electron 打包完整性自检（`packaging-closure-checklist.md` §1–§2 的 Electron 部分）：`electron/main.ts` 传递 import 闭包 ⊆ `build.files`；Electron 产物齐全（`dist/preload.cjs` 等）。
@@ -74,12 +74,12 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 - [ ] `git commit -m "release(v<版本>): …"`；amend已推送提交用 `--amend --no-edit` + `--force-with-lease`。
 - [ ] `git tag -a v<版本> -m "…"`（重推前先删旧tag：`git tag -d v<版本> && git push origin :v<版本>`）。
 - [ ] dry-run先行：push分支 → Actions手动 `release.yml`（`version=<版本>`、`dry_run=true`）→ create-release断言 + validation + 全部构建腿绿。任一步失败：修复 → 本地复验 → 再dry-run。
-- [ ] 发布提交的CI证明：`validation` 硬断言该提交在 `main` 上有完整成功运行（linux `test` + `test-windows`/`test-windows-pack` + `test-macos`/`test-macos-pack`，各腿承载步全success）。本地可预检：`GITHUB_TOKEN=<token> node scripts/release/verify-release-ci-proof.mjs --sha <commit>`。
-- [ ] 正式发布：`git push origin <分支> && git push origin v<版本>` → 监控create-release → validation → build-macos/windows/linux/gateway/swift → finalize-release；确认validation的 "Set up job" 通过（action SHA解析失败在此暴露）。
+- [ ] 发布提交的CI证明：`validation` 硬断言该提交在 `main` 上有完整成功运行（linux `test` + `test-macos`/`test-macos-pack`；Windows/Linux 桌面腿已随 Electron 冻结归档，REQUIRED_JOBS 以 `scripts/release/verify-release-ci-proof.mjs` 为准，各腿承载步全success）。本地可预检：`GITHUB_TOKEN=<token> node scripts/release/verify-release-ci-proof.mjs --sha <commit>`。
+- [ ] 正式发布：`git push origin <分支> && git push origin v<版本>` → 监控create-release → validation → build-swift/build-gateway（Electron 的 build-macos/windows/linux 腿已归档、恒 skipped） → finalize-release；确认validation的 "Set up job" 通过（action SHA解析失败在此暴露）。
 
 ## 8. 发布后
 
 - [ ] Release正文 = changelog `[<version>]` 节（自动提取）。
-- [ ] CI产物齐全：Electron mac `dsh-chamber-electron-*` 与Swift `dsh-chamber-*` 的 `.dmg`/`.zip`（两族前缀互不包含，不碰撞）、win `.exe`、Gateway `.tgz` + `.tgz.sha256`；无 `.blockmap`；Gateway不经npm发布。
-- [ ] 更新源按通道存在：stable仅 `latest.yml`/`latest-mac.yml`，beta仅 `beta.yml`/`beta-mac.yml`；beta Release为prerelease且不占GitHub latest。
+- [ ] CI产物齐全（现行 Swift 腿）：Swift `dsh-chamber-*` 的 `.dmg`/`.zip`（macOS arm64）、Gateway `.tgz` + `.tgz.sha256`；无 `.blockmap`；Gateway不经npm发布。**ARCHIVED（Electron 冻结）**：Electron mac `dsh-chamber-electron-*`、win `.exe` 只在按复活清单重开范围后产出。
+- [ ] 更新源按通道存在：beta Release 为 prerelease 且不占 GitHub latest（Swift 的 stable/beta feed 见下条）。**ARCHIVED（Electron 冻结）**：`latest.yml`/`latest-mac.yml`/`beta.yml`/`beta-mac.yml` 随冻结不再产出，复活后才恢复。
 - [ ] Swift更新面齐全（原生壳）：stable tag 有 `appcast-swift.xml` + `dsh-chamber-<ver>-macos-arm64.zip` + `*.delta`，enclosure 相对 `releases/latest/download/` 逐条可下载；滚动 tag `appcast-swift-beta` 仍为 prerelease，其 `appcast-swift-beta.xml` 的每条 enclosure（当前 beta zip、新 delta、合并进来的 final zip/delta）都能下载（S-36 的公开面人工核对——目前没有脚本自动核公开 URL）。

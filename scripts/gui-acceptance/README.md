@@ -9,13 +9,13 @@
 
 > **Electron/CDP 腿冻结归档（2026-11）**：`--dev`、`--flavor electron`、`walkthrough.mjs` / `launch.mjs` /
 > `packaged-ssh-smoke.mjs` 与 `mobile-walkthrough.mjs` 的 CDP 驱动属**归档面**（复活参考，见
-> `docs/progress/electron-frozen.md`）。现行腿 = `--flavor native`（`--dev` / `--attach` 默认）与 `--live`；
+> `docs/progress/electron-frozen.md`）。现行腿 = `--flavor native` 的 `--live` / `--attach`；`--dev` 属归档面（不显式传 `--flavor electron` 时 `run.mjs` 拒绝）；
 > WKWebView UI 没有 CDP，界面走查只能真机/目检。显式传 `--flavor electron` 会打印 ARCHIVED 警告并走
 > 归档驱动（`launch.mjs` / `walkthrough.mjs` / `packaged-ssh-smoke.mjs` 文件头注释与本节一致）。
 
 | 文件 | 用途 |
 |---|---|
-| `run.mjs` | 单一入口：`--live` / `--attach` / `--dev`（默认 `--flavor native`；`--flavor electron` = **ARCHIVED** 复活参考） |
+| `run.mjs` | 单一入口：`--live` / `--attach`（`--flavor native`）；`--dev` 与 `--flavor electron` = **ARCHIVED** 复活参考 |
 | `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
 | `native.mjs` | `--flavor native`：驱动**原生壳 spawn 的 sidecar 装配**（ready/B 桥/控制面 HTTP），或 `--attach` 探测运行中的原生壳控制面；WKWebView UI 不可驱动（没有 CDP 端点）。`--require-assembly` 是机器门形态：装配缺失（以及 N-6 找不到 web dist）记 FAIL 而非 SKIP/INFO（ci.yml 的 native 装配启动门用它）。`--web-dist <dir>` 给出 N-6 要判的 renderer 产物目录（未给时探测 `sidecarDir/dist/web` → `sidecarDir/../dist/web`） |
 | `walkthrough.mjs` | **ARCHIVED（Electron CDP 腿）** CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡；v2 内嵌腿 `W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`（上游 ui-sidebar-browser iframe fork DOM/行为）：右栏 guide kind browser + BrowserBody 结构、local fixture 真跑 + postMessage、remote alias 端到端、系统浏览器出口（上游不承诺 XFO 探测）、关 tab 释放；`W-13` 前先经**既有 UI** 确保一个可见 Session：冷实例走 new-session 快捷控件，仍无工作区时走 hero 工作区入口 → 浏览式目录对话框，选中本次 `--out` 下的 `workspace` 目录（dsh 空态选工作区即生成空白会话）） |

@@ -672,8 +672,7 @@ chamber-settings.json，非秘密）：
 - **生成器与 flag（`packages/desktop/scripts/prepare-python-payload.mjs`）**：默认
   **python-only**；`--with-node` 增加 Node；`--with-pnpm` 增加 pnpm 并**隐含
   `--with-node`。两条发布腿刻意不同：Swift 腿跑 `--with-node --with-pnpm`（打包 Node 启动
-  sidecar 与托管 dsh，见 design 25 §3.2/§4.3）；Electron 腿保持默认 python-only（该分支未来
-  移除、本轮不接线）。`--dry-run` 只解析锁与布局，不联网、不写盘。
+  sidecar 与托管 dsh，见 design 25 §3.2/§4.3）；Electron 腿保持默认 python-only（该分支已冻结归档、不接线）。`--dry-run` 只解析锁与布局，不联网、不写盘。
 - **版本/摘要单源**：Node 归档版本 + sha256、CPython 与 wheel 坐标全部来自
   `packages/desktop/primary-runtime-lock.json`；pnpm 版本由生成器读 desktop
   `package.json` 的 `dependencies.pnpm`（仓库级声明单源是根 `package.json` 的
@@ -737,7 +736,7 @@ chamber-settings.json，非秘密）：
   `build:swift-app` → 对打包后的 `Contents/Resources/sidecar/primary-runtime` 与
   `.../office-skills` 再跑 `--verify`。Electron 腿保持原样（默认 python-only +
   extraResources + 打包后 `--verify`）。
-- **拒绝方案**：① 两个 flavor 共用 full payload——Electron 分支未来移除、当前无启动行消费者，
+- **拒绝方案**：① 两个 flavor 共用 full payload——Electron 分支已冻结归档、当前无启动行消费者，
   多带 node/pnpm 只增体积（保持 python-only）；② `--with-pnpm` 不隐含 node——上游
   `parsePrimaryRuntime` 要求 pnpm 必须在有 node 时才合法，半配置会被拒绝；③ pnpm 从 npm
   registry 另下 tarball——构建机已有与单源同版本的自有依赖，另立下载面只会引入第二版本源与
