@@ -89,7 +89,7 @@ const GROUPS = [
       // 通知边沿/去重的现役覆盖：completion-observation、notification-projection（reconcile）、complete-ledger、notification-outbox。
       'packages/renderer/test/aggregate/complete-ledger.test.ts',
       'packages/renderer/test/aggregate/goal-unknown-arm.test.ts',
-      'packages/renderer/test/view-runtime/retention.test.ts',
+      // keep-all 常驻（design 05 §4.1）退役了隐藏壳 retention，对应旧用例已删。
       'packages/renderer/test/view-runtime/reveal-gate.test.ts',
       'packages/renderer/test/view-runtime/switch-frame-verdict.test.ts',
       'packages/renderer/test/view-runtime/switch-frame-instruments.test.ts',

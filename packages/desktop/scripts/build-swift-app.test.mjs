@@ -701,7 +701,7 @@ test('⑥ sidecar 拷贝：payload Node / office 资产进 .app；旧布局 node
       runBuildSwiftApp(parseBuildSwiftAppArgs([
         '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
       ]), { log: () => {}, error: () => {} }),
-      /不得出现 node\*\/dsh-chamber-helper/,
+      /不得出现 node\/node\.exe\/dsh-chamber-helper/,
     )
   } finally {
     rmSync(out, { recursive: true, force: true })
