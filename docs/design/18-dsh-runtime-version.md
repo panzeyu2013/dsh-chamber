@@ -100,7 +100,7 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 ### 3.4 激活门控与回退（自由选择模型的唯一安全网）
 
 换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
-与钉住上游 0.2.2-rc.1 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 八项
+与当前 pin（`harness.commit`）的 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 八项
 （4 项官方 + 4 项 chamber 宿主域，见 `activation-gate.ts`），slash
 端点；探针响应与**会话数据量彻底解耦**——会话面探针是固定小体积身份方法）：
 
@@ -186,7 +186,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
   而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」仅在
   内建锚探针通过后显式删除。
 - **回落保护（F4）**：回落内建树后跑数据可读性探测——用户曾用较新运行时并迁移
-  过数据、内建 pin（`bundle-dsh` 兜底常量，当前 0.2.2-rc.1，不随壳版本自动移动）可能读不了新格式数据；探测失败
+  过数据、内建 pin（`bundle-dsh` 兜底常量，从运行时锁派生，不随壳版本自动移动）可能读不了新格式数据；探测失败
   → **自动恢复上一 override 树（受保护类，仍在）+ 响亮提示**。「单调向前」**仅对
   壳版本成立**（§7）。
   - **中断失效自愈（gateway/desktop 启动 F4 门）**：「durable 失效 = 回落裁决已
@@ -536,7 +536,7 @@ chamber-settings.json，非秘密）：
 ## 4. 运行期安装细节
 
 - **内嵌 pnpm（新增运行时依赖，显式声明）**：desktop dependencies 增加 `pnpm`
-  **钉精确版本 11.21.0（对齐 `BUNDLE_PNPM_VERSION`）**——AGENTS.md「不新增运行时
+  **钉精确版本（单源 = 根 `package.json` 的 `packageManager`；`BUNDLE_PNPM_VERSION` 与之一致）**——AGENTS.md「不新增运行时
   依赖」纪律的刻意偏差（同 design 11 引入 electron-updater）；**放置定案 =
   extraResources（实体盘，非 asar 内）**——规避 asar 内 .cjs 仅 Electron-node 可读、
   allowBuilds 生命周期子进程需继承 ELECTRON_RUN_AS_NODE 的整类问题；
@@ -907,7 +907,7 @@ interface RuntimeHostAdapter {
   `load_workspace_dependencies` 工具，只在 Swift 本地装配里）。两者共用同一版本
   （根 `package.json` 的 `packageManager` 是声明单源，desktop `dependencies.pnpm` 镜像由
   `pnpm-pin` 门禁锁步），但落点、打包过滤器与消费者不同；
-- gateway 新增**钉版本运行时依赖** `pnpm@11.21.0`（与 desktop 同源）。
+- gateway 新增**钉版本运行时依赖** `pnpm`（版本单源 = 根 `package.json` 的 `packageManager`，与 desktop 同源）。
   pack 后 npm 安装把 pnpm 装入依赖树（解压 ~37MB，运行前不删 artifacts——与
   extraResources 裁剪版不同，属已知取舍）；pack/install smoke 必须覆盖
   "依赖安装成功 + `gateway --help`"；
@@ -923,7 +923,7 @@ interface RuntimeHostAdapter {
 - **消费面：宿主插件管理器**（新增）：内嵌份不只服务 installer 与 `dsh plugin` CLI——上游插件
   管理器在托管宿主进程里 spawn 字面量 `pnpm`（PATH 契约），因此 desktop 与 gateway 都把入口交给
   控制面，由 `withPnpmShim`（pnpm-shim.ts）在宿主 PATH 无 pnpm 时以 wrapper 前置供给
-  （02 §3.1）：供给生效的宿主上版本恒为钉住的 11.21.0；宿主 PATH 已有 pnpm 时按 02 §3.1 逐字
+  （02 §3.1）：供给生效的宿主上版本恒为钉住的 `pnpm`（单源 = 根 `package.json` 的 `packageManager`）；宿主 PATH 已有 pnpm 时按 02 §3.1 逐字
   不动（不遮蔽），该宿主上的插件写入版本随用户自己的 pnpm，不在"不漂移"保证内；
 - 备选（不推荐）：`--pnpm-path` 注入 + PATH 探测——版本漂移违背内嵌定案。
 
@@ -1095,7 +1095,7 @@ Windows 只读口径与验证门例外同 §6（正式解锁待真实 Windows �
 - **lockfile 纪律**：新增 workspace 包与 pnpm 依赖后，按 AGENTS.md 用带 vendor 树的
   现场重新生成 lockfile 并 frozen 验证（pnpm 11 prunes
   `vendor/harness-packages/@deepseek-ai/*` importer 记录的坑）；
-- **依赖偏差登记**：gateway 新增运行时依赖 `pnpm@11.21.0`
+- **依赖偏差登记**：gateway 新增运行时依赖 `pnpm`（版本单源 = 根 `package.json` 的 `packageManager`）
   属于 AGENTS.md「不新增运行时依赖」纪律的显式偏差（与 design 11 引入
   electron-updater、design 18 桌面引入 pnpm 同性质），已在 AGENTS.md 的
   runtime dependency current set 登记。

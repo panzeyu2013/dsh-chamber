@@ -89,8 +89,8 @@ importers:
         specifier: ^6.8.9
         version: 6.8.9(supports-color@9.4.0)
       pnpm:
-        specifier: 11.21.0
-        version: 11.21.0
+        specifier: 11.28.5
+        version: 11.28.5
     devDependencies:
       '@dsh-chamber/dsh-chamber-client-core':
         specifier: workspace:^
@@ -675,8 +675,8 @@ importers:
   packages/gateway:
     dependencies:
       pnpm:
-        specifier: 11.21.0
-        version: 11.21.0
+        specifier: 11.28.5
+        version: 11.28.5
     devDependencies:
       '@dsh-chamber/control-plane':
         specifier: workspace:^
@@ -22882,11 +22882,6 @@ packages:
     resolution: {integrity: sha512-ZIfcLJC+7E7FBFnDxm9MPmt7D+DidyQ26lewieO75AdhA2ayMtsJSES0iWzqJQbcVRSrTufQoy0DR94xHue0oA==}
     engines: {node: '>=10.4.0'}
 
-  pnpm@11.21.0:
-    resolution: {integrity: sha512-UhcFvOaJkk6scvWjWHEi82JonvZXHlW6gAdv1jfBETLs/62ib61Op5xIW/3b/T1aKlsFgFp36JPeceyKbMo7sQ==}
-    engines: {node: '>=22.13'}
-    hasBin: true
-
   pnpm@11.28.5:
     resolution: {integrity: sha512-SEVj0wtMKtJ8tIqpT/KzAtvOvI/2vyiBbCWJiG4UbOf3bzVPO8GkOOb16XaMMCqgpvet2CMpA81M+BQmy8FNng==}
     engines: {node: '>=22.13'}
@@ -28812,8 +28807,6 @@ snapshots:
       '@xmldom/xmldom': 0.9.11
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
-
-  pnpm@11.21.0: {}
 
   pnpm@11.28.5: {}
 

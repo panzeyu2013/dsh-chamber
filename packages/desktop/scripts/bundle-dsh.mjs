@@ -25,9 +25,10 @@ import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, ups
  *     （dependencies["@deepseek-ai/dsh"]），可复现重建；--force 刷新当前 pin。
  *
  * pnpm 11 默认拦截依赖构建脚本（node-pty 等原生模块需要），通过
- * pnpm-workspace.yaml 的 allowBuilds 白名单放行。本脚本优先使用 PATH 上的
- * 固定 pnpm 11.21.0；PATH 版本不一致时自动以
- * `npx --yes pnpm@11.21.0` 兜底，无需预装 pnpm。
+ * pnpm-workspace.yaml 的 allowBuilds 白名单放行。本脚本优先使用 PATH 上与根
+ * package.json packageManager 同版本的 pnpm；PATH 版本不一致时自动以同一
+ * 版本（BUNDLE_PNPM_VERSION 镜像，scripts/gates/pnpm-pin.mjs 锁步）的 npx 兜底，
+ * 无需预装 pnpm；版本值不在注释里写死。
  */
 
 const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -87,7 +88,7 @@ function lockfileDshVersion() {
   return '0.2.2-rc.1';
 }
 const DEFAULT_DSH_VERSION = lockfileDshVersion();
-const BUNDLE_PNPM_VERSION = '11.21.0';
+const BUNDLE_PNPM_VERSION = '11.28.5';
 const EXACT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const VERSION = process.env.DSH_CHAMBER_DSH_VERSION ?? DEFAULT_DSH_VERSION;
 if (!EXACT_SEMVER.test(VERSION)) {

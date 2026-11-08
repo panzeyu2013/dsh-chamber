@@ -7,7 +7,7 @@
  * 与 pnpm-workspace.yaml 注释）。
  * pnpm 11 在 lockfile 需要结构性重解时（增删依赖、升降版本、pnpm add/remove/
  * update）会把这一整段 `importers:` 记录裁剪掉——即使 vendor 树在场也一样
- * （实测 pnpm 11.21.0）。裁剪后 `pnpm install --frozen-lockfile` 会立即失败
+ * （实测 pnpm 11.x）。裁剪后 `pnpm install --frozen-lockfile` 会立即失败
  * （"specifiers in the lockfile don't match specifiers in package.json"），CI
  * 每个 job 第一步就红。
  *

@@ -181,8 +181,9 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   pid/start time are diagnostics only (design 25 §6.3).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request (current
   set: `ws`, `electron-updater`, `clsx` (client UI class composition), React/Vite, the embedded
-  pinned `pnpm`, the dsh client workspace packages; `Sparkle` 2.10.0 is the Swift native shell's only
-  SwiftPM dependency — the in-app update chain, added on the user's explicit ruling "D-1 = B").
+  pinned `pnpm`, the dsh client workspace packages; `Sparkle` (pinned in `macos/Package.swift`) is the
+  Swift native shell's only SwiftPM dependency — the in-app update chain, added on the user's explicit
+  ruling "D-1 = B").
   `Electron` (devDependency) is kept as the **revival baseline for the frozen Electron flavor**
   (see `docs/progress/electron-frozen.md`), not as a dependency of the shipped Swift leg;
   `electron-updater` stays because the shared update controller imports it. `typescript` /

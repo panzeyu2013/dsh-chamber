@@ -62,7 +62,7 @@ test('dist bundles the pinned pnpm the installer local path relies on (design 18
   // Dynamic assertion: the bundled pnpm version must equal the gateway
   // manifest's dependencies.pnpm (build.mjs enforces the same guard at build
   // time; re-asserting here keeps a stale dist from slipping through the
-  // smoke). The alternative (hardcoding 11.21.0) would drift from
+  // smoke). The alternative (hardcoding the version) would drift from
   // package.json, which is the single source of truth.
   const manifest = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8')) as {
     dependencies: { pnpm: string }

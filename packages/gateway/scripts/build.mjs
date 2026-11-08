@@ -67,8 +67,8 @@ cpSync(realpathSync(pnpmSource), pnpmOut, { recursive: true, dereference: true }
 const gatewayPkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'))
 const bundledPnpm = JSON.parse(readFileSync(join(pnpmOut, 'package.json'), 'utf8'))
 // Version guard reads dependencies.pnpm from the gateway manifest at build
-// time (single source of truth — desktop's BUNDLE_PNPM_VERSION hardcodes the
-// same 11.21.0 pin): a package.json bump without a matching installed tree
+// time (single source of truth — desktop/gateway manifests and bundle-dsh's
+// BUNDLE_PNPM_VERSION carry the same pin; no version literal here): a package.json bump without a matching installed tree
 // fails loud here instead of silently shipping a mismatched pair.
 if (bundledPnpm.name !== 'pnpm' || bundledPnpm.version !== gatewayPkg.dependencies?.pnpm) {
   throw new Error(

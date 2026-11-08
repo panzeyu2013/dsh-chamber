@@ -191,6 +191,22 @@ function checkRuntimeSourceLine() {
   ok(c, `runtime dsh ${match[1]} == source baseline ${FORK_VERSION}`)
 }
 
+/** (a3) pin 对齐：source / payload / pnpm / runtime 坐标 ↔ 上游 pin 树（vendor 缺失时 SKIP）。 */
+function checkPinAlignment() {
+  const c = check('pin alignment (payload/pnpm/runtime ↔ upstream pin)')
+  const script = join(REPO_ROOT, 'scripts/release/verify-pin-alignment.mjs')
+  if (!existsSync(join(REPO_ROOT, 'vendor/harness-checkout/scripts/primary-runtime/lock.json'))) {
+    console.log(`SKIP ${c.name} — vendor/harness-checkout absent（初始化 submodule 后再跑）`)
+    return
+  }
+  const result = spawnSync(process.execPath, [script], { cwd: REPO_ROOT, encoding: 'utf8' })
+  if (result.status !== 0) {
+    fail(c, `verify-pin-alignment exited ${result.status}\n${result.stdout ?? ''}${result.stderr ?? ''}`)
+    return
+  }
+  ok(c, 'payload/pnpm/runtime pins aligned')
+}
+
 /** (b) changelog：两份 CHANGELOG 均有 `## [<version>]` 节（release.yml 提取
  *  发布正文，缺失即失败），且中英条目数相等、非空。 */
 function checkChangelog() {
@@ -501,6 +517,7 @@ async function runPreflight() {
   const ran = []
   checkVersionUniformity(); ran.push('version uniformity')
   checkRuntimeSourceLine(); ran.push('dual-line consistency')
+  checkPinAlignment(); ran.push('pin alignment')
   checkChangelog(); ran.push('changelog')
   checkI18n(); ran.push('i18n')
   if (flags.offline) {

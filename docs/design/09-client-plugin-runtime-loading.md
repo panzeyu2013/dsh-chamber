@@ -322,7 +322,7 @@ vendor terminal 插件或把其相对 chunk 打包进 chamber bundle 会形成�
   path/sessionId 的 image 目标」。被否方案：①整行跳过——该行是新增的官方面，跳过等于删掉一个可工作的功能；
   ②covered + 构建期补丁——运行期 bundle 的模块不在复合构建图里，登记补丁会被 §3.6 的「patch never applied」
   覆盖门硬失败，且要为 `remote.workspaceFiles` 再造覆盖前提。
-  **官方 `ui-sidebar-browser` 行（已核实，pin 0.2.2-rc.1）**：web profile 把它写成
+  **官方 `ui-sidebar-browser` 行（已核实，当前 pin 见 `harness.commit`）**：web profile 把它写成
   `disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"`（`dsh-web-app/cordis.patch.yml`），
   而控制面恒以 `--profile web` 起宿主（`packages/control-plane/src/spawn-dsh.ts`），实测本地实例的
   `clientGraph/graph` 也不含该行：web profile **永不加载**它，因此本族③与「有意跳过名单」都不需要
@@ -793,9 +793,9 @@ document 级副作用都要加同一归属判定、无 chamber 视图时回落�
   可选提案（`docs/progress/TODO.md` A§2），不再是完整桥接的前置条件。
 - 版本漂移：宿主图 rev 与复合 bundle 的合并是 union 语义，不要求两图同 rev（复合由 chamber 构建管、宿主图由
   实例插件集管）；壳版本落后/超前时多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使实例 boot 失败。
-- **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——当前 pin =
-  dsh `0.2.2-rc.1` / `66491b05`（`packages/desktop/vendor/dsh/
-  pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
+- **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为单一事实来源——源码线 commit 见
+  `harness.commit`，运行时线的 dsh 包版本见 `packages/desktop/vendor/dsh/
+  pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier，三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git
   submodule（gitlink = pin，升级走 `scripts/upstream/update-vendor.mjs <tag>`）。宿主 wire 只增不改——
   `commands.execute` 新增必填 `images` 参数即一例：旧壳向新宿主发命令会被网关严格参数核对拒绝或宿主崩溃，经

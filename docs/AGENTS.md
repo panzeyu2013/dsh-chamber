@@ -11,7 +11,7 @@
 | 根 [`AGENTS.md`](../AGENTS.md) | 常驻 orders：每个 session 都必须在上下文里的规则（Purpose / Hard Facts / 固定执行流），每条尽量 ≤3 行并链接其家；超长只能留链接 | 叙述、示例、某次改动过程、可机械查到的索引 |
 | [`.agents/skills/`](../.agents/skills/) | 可复用工作流：编辑 / 送检 / 评审的步骤与命令 | 设计契约、进度状态、可机械核对的清单 |
 | [`docs/DEVELOPMENT.md`](DEVELOPMENT.md) | 贡献者地图：架构总览 / 环境 / 运行 / 构建打包 / CI 发布 / 仓库结构 / 脚本索引 | 设计契约正文、进度状态、发布叙述 |
-| [`docs/design/`](design/01-overview.md) | 现行设计契约：目标、边界、数据结构、协议决定；契约变更时同一 PR 在 owning 文档补「被否方案」 | 进度状态、验收台账、版本字面值 |
+| [`docs/design/`](design/01-overview.md) | 现行设计契约：目标、边界、数据结构、协议决定；契约变更时同一 PR 在 owning 文档补「被否方案」 | 进度状态、验收台账、**当前**版本字面值（历史证据见 §2） |
 | [`docs/checklists/`](checklists/release-checklist.md) | 仅 procedure：按序执行、可勾选的验证步骤 | 版本值（tag / commit / 基线快照）、某次发布的叙述、门禁计数 |
 | [`docs/progress/STATUS.md`](progress/STATUS.md) | 唯一进度记录，只记 open 项（未完成 / 待验收 / 待裁 / 接受 + 判据与指针） | 不写什么、如何增删改见 [`progress/README.md`](progress/README.md) |
 | [`docs/progress/TODO.md`](progress/TODO.md) | 未排期计划与想法（A 上游 / B 平台 / C 功能 / D 工程 + 触发 / 范围 / 退出） | 进度状态、验收结果 |
@@ -32,7 +32,7 @@
 - **链接代替复述**：引用设计 / 脚本 / 单源时给相对链接；锚点用 GitHub slug 或显式 `<a id>`（`verify:md-links` 校验）。
 - **禁止手抄目录**：包清单、门清单、脚本清单、上游触点表一律指向单源（[`gate-surfaces.json`](../scripts/gates/gate-surfaces.json)、[`registry.json`](../scripts/upstream/registry.json)、`package.json`），正文只写「去哪看」。
 - **条目的进度状态词只属 STATUS**：其他文档不写条目的进度状态词（待做 / 待验收 / 待裁 / 接受；流程动作词如「上报待裁」不在此限）；需要时链接 STATUS 条目。
-- **版本值只留单源**：tag / commit / 锁文件版本不进 checklists；引用时指向 `harness.commit`、`packages/desktop/vendor/dsh/pnpm-lock.yaml` 或对应 `package.json`。
+- **当前版本值只留单源**：tag / commit / 锁文件版本作为**现行值**不进 checklists；引用时指向 `harness.commit`、`packages/desktop/vendor/dsh/pnpm-lock.yaml` 或对应 `package.json`。**历史证据例外**：为了论证契约而引用不可变的上游 commit/tag（如某次上游修复）允许写进 design，但必须标注「历史证据，不随本仓 pin 移动」，不得据此让读者把它当成现行 pin。
 - **不写规格语**：已实现的东西不写「应 / 计划 / 迁移步骤」；未实现的想法放 TODO，设计取舍放 design。
 - **双语规则**：中文主档与 `docs/*.en-US.md` 镜像必须结构一致（标题层级、围栏数、表格数、注释数，`verify:i18n` 校验）；改一侧必须同批改另一侧，并经 `pnpm run verify:i18n -- --write` 重录（[`docs/i18n-record.json`](i18n-record.json) 由协调者在收尾统一重录）。
 - **给确切事实**：写真实命令、路径、默认值、错误文案；不写「大概 / 应该 / 稍后补」。
@@ -54,7 +54,7 @@
 - 段落墙：一段塞多条规则与插入语；
 - 强调通胀：满篇加粗 / 大写 /「关键」；
 - 规格语：已发货文档里的应 / 计划 / 验收标准；
-- 版本字面值：checklist 或普通文档里出现 tag / commit / 锁版本；
+- 当前版本字面值：checklist 或普通文档把 tag / commit / 锁版本当**现行值**抄写（design 里标注「历史证据」的不可变上游坐标不在此列）；
 - 死链与失效锚点（`verify:md-links` 抓机械错误，评审仍要判断链接是否指向正确 owner）。
 
 ## 5. 文档变更流程

@@ -114,6 +114,7 @@ export const GROUPS = {
     'scripts/release/merge-native-feed.test.mjs',
     'scripts/release/packaging-manifest-lockstep.test.mjs',
     'scripts/release/primary-runtime-notices.test.mjs',
+    'scripts/release/verify-pin-alignment.test.mjs',
   ],
   // GUI acceptance toolbox judgement layer (the driving layer needs a display
   // and a running app, so it stays a local gate).

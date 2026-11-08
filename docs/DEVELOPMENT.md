@@ -192,7 +192,7 @@ docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
   progress/                 STATUS.md——唯一进度记录；TODO.md——未排期计划（A 上游/B 平台/C 功能/D 工程）；
                             deviations.md——双 flavor 偏差
-  checklists/               操作清单（发布 / dsh 升级 / 打包完整性 / GUI 验收 / 远端浏览器 / 会话权威校准 / 上游触点）
+  checklists/               操作清单（发布 / dsh 升级 / pin 对齐 / 打包完整性 / GUI 验收 / 远端浏览器 / 会话权威校准 / 上游触点）
   *.en-US.md                各根文档的英文镜像
 scripts/
   install-gateway.sh        Gateway 一键安装器（用户/运维面；入口 docs/deploy/deploy-gateway.md）
@@ -229,6 +229,7 @@ vendor/
 |[docs/progress/STATUS.md](progress/STATUS.md)|进度总览（唯一进度记录）|
 |[docs/checklists/release-checklist.md](checklists/release-checklist.md)|发布前Checklist（版本/changelog/测试/构建/tag/CI）|
 |[docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md)|dsh版本更新前Checklist（pin一致性/fork rebase/锁文件/回归）|
+|[docs/checklists/pin-alignment-checklist.md](checklists/pin-alignment-checklist.md)|发布前pin对齐Checklist（校验器/载荷锁步/镜像与生成投影/文档字面值）|
 |[docs/checklists/packaging-closure-checklist.md](checklists/packaging-closure-checklist.md)|打包完整性Checklist（模块闭包vs build.files、构建链产物、打包态冒烟）|
 |[docs/checklists/gui-acceptance-checklist.md](checklists/gui-acceptance-checklist.md)|GUI 验收流程（跑什么 / 看什么 / 留什么证据）|
 |[docs/checklists/remote-browser-acceptance.md](checklists/remote-browser-acceptance.md)|右栏浏览器 v2 验收程序（本机 CDP + 真机双 flavor）|

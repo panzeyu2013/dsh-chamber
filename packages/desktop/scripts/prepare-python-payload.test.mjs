@@ -778,12 +778,10 @@ test('⑥ 源锁：上游 parsePrimaryRuntime 的接受规则行仍在（改了�
 })
 
 /**
- * ⑦ pin 恒等：锁 provenance 的 upstreamCommit 必须等于 harness.commit。上游同名
- * `scripts/primary-runtime/lock.json` 跨 pin 会变（rc.3 起 nodeVersion 到 24.21.0，
- * nodeSha256 随之更换），两个 pin 间并非逐字节相同；本锁镜像的是上游字段名与
- * python 坐标，Node 载荷版本是独立轴（见 provenance.node）。因此 pin 升级时本锁
- * 必须同步移动的字段是 provenance.upstreamCommit；此前升级漏改过它——本锁把这种
- * 漏改变成红。
+ * ⑦ pin 恒等：锁 provenance 的 upstreamCommit 必须等于 harness.commit；同时本锁的
+ * node/python 坐标（含 nodeSha256）必须逐项等于上游 pin 的 scripts/primary-runtime/
+ * lock.json——本仓相对上游只允许收窄 targets（design 18 §4.2 的出货平台裁决）。
+ * pin 升级时本锁与上游锁同批移动；此前升级漏改过 provenance——本文件把这种漏改变成红。
  */
 test('⑦ 锁 provenance 的 upstreamCommit 与 harness.commit 一致（pin 升级必须同批）', () => {
   const provenance = JSON.parse(LOCK_TEXT).provenance
@@ -793,6 +791,33 @@ test('⑦ 锁 provenance 的 upstreamCommit 与 harness.commit 一致（pin 升�
   assert.notEqual(pin, undefined, 'harness.commit carries the pin line')
   assert.equal(JSON.parse(LOCK_TEXT).provenance.upstreamCommit, pin,
     'primary-runtime lock 记录的是当前 pin；升级后必须同行更新')
+})
+
+/**
+ * ⑦b 坐标对齐：本锁的 node/python 坐标逐项等于上游 pin 的 primary-runtime 锁；
+ * 唯一允许的差异是 targets 收窄到本仓真实出货平台（当前 mac-arm64，design 18 §4.2）。
+ * 上游锁路径 = vendor/harness-checkout/scripts/primary-runtime/lock.json（pin 子模块）。
+ */
+test('⑦b 锁的 node/python 坐标与上游 pin 锁逐项相等（targets 只允许 mac-arm64）', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+  const upstreamPath = path.join(repoRoot, 'vendor/harness-checkout/scripts/primary-runtime/lock.json')
+  assert.ok(existsSync(upstreamPath), 'pin 子模块未初始化：' + upstreamPath)
+  const upstream = JSON.parse(readFileSync(upstreamPath, 'utf8'))
+  const lock = JSON.parse(LOCK_TEXT)
+  assert.deepEqual(Object.keys(lock.targets).sort(), ['mac-arm64'],
+    '本仓只出货 darwin/arm64；targets 收窄属设计裁决（design 18 §4.2 provenance.targets）')
+  assert.equal(lock.nodeVersion, upstream.nodeVersion, 'nodeVersion 必须等于上游 pin 锁')
+  assert.equal(lock.pythonVersion, upstream.pythonVersion, 'pythonVersion 必须等于上游 pin 锁')
+  assert.equal(lock.pythonRelease, upstream.pythonRelease, 'pythonRelease 必须等于上游 pin 锁')
+  assert.deepEqual(lock.pythonPackages, upstream.pythonPackages, 'pythonPackages 必须与上游逐项相等')
+  assert.deepEqual(lock.wheels, upstream.wheels, '跨平台 wheels 必须与上游逐项相等（URL+sha256）')
+  const ours = lock.targets['mac-arm64']
+  const theirs = upstream.targets['mac-arm64']
+  assert.ok(theirs !== undefined, '上游 pin 锁缺 mac-arm64 目标——先对齐上游')
+  for (const field of ['nodeArchive', 'nodeSha256', 'pythonTarget', 'pythonSha256']) {
+    assert.equal(ours[field], theirs[field], 'targets.mac-arm64.' + field + ' 必须等于上游 pin 锁')
+  }
+  assert.deepEqual(ours.wheels, theirs.wheels, 'targets.mac-arm64.wheels 必须与上游逐项相等')
 })
 /**
  * ⑧ full 载荷的 pnpm 半边。

@@ -1347,7 +1347,7 @@ connection-target scope 所有的目标；重登有界（一次 + 429 退避）�
 
 运行时版本管理（design 18 §9）：`@dsh-chamber/dsh-runtime` 以 workspace devDependency
 经 `packages/gateway/scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时
-依赖 `pnpm@11.21.0`（与 desktop 同源，design 18 §9.2 D1）。pack/install smoke 必须
+依赖 `pnpm`（版本单源 = 根 `package.json` 的 `packageManager`；与 desktop 同源，design 18 §9.2 D1）。pack/install smoke 必须
 覆盖 pnpm 依赖安装成功与 `gateway --help`。gateway 不再打包任何客户端插件；
 gateway 不再产出 `host-packages/`，也没有任何 packaged client plugin（seed 只来自桌面同步）。
 

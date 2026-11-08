@@ -82,9 +82,9 @@ pnpm run dist:desktop
 
 ### bundle-dsh：dsh 运行时封装（scripts/bundle-dsh.mjs）
 
-- **dsh 运行时 = 官方发布包**：脚本把 `@deepseek-ai/dsh` 以**精确版本**（当前 `0.2.2-rc.1`）写进封装清单，再按**冻结**的 runtime 锁安装（hoisted 布局；换版本时先用 `--refresh-lockfile` 以 `--lockfile-only` 重解），装完跑 `bin.js --version` 冒烟（`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
-- 构建工具固定为 `pnpm@11.21.0`；PATH 不匹配时自动以
-  `npx --yes pnpm@11.21.0` 兜底，不解析浮动 major tag。
+- **dsh 运行时 = 官方发布包**：脚本把 `@deepseek-ai/dsh` 以**精确版本**（版本单源 = `vendor/dsh/pnpm-lock.yaml` 的解析值）写进封装清单，再按**冻结**的 runtime 锁安装（hoisted 布局；换版本时先用 `--refresh-lockfile` 以 `--lockfile-only` 重解），装完跑 `bin.js --version` 冒烟（`DSH_CHAMBER_DSH_VERSION` 只接受精确 semver 做显式升级验证，拒绝 `latest`/range/URL；`--force` 仅刷新当前精确版本）。这个 pin **只约束桌面应用内嵌的本地 runtime，不约束远程实例版本**；各远程可独立升级，连接时只检查所需协议能力是否兼容。发布包自带完整插件依赖图 + 已构建 lib，**不克隆源码、不 tsc/tsdown 构建、不需要 tsx**。
+- 构建工具固定为根 `package.json` 的 `packageManager` 指定的 pnpm；PATH 不匹配时自动以
+  `npx --yes pnpm@<同一版本>` 兜底（版本从 `packageManager` 读取，不手抄），不解析浮动 major tag。
 - pnpm 11 两个坑（bundle-dsh 已处理）：① 默认拦截依赖构建脚本 → 生成的 `pnpm-workspace.yaml` 用 `allowBuilds` 白名单放行 node-pty/koffi/protobufjs/@google/genai/@deepseek-ai/dsh-subprocess-local（原生模块）；② 默认发布年龄策略可能过滤指定版本 → 临时 workspace 使用 `minimumReleaseAge: 0`，但输入仍必须是精确 semver，不引入浮动解析。
 - **安装后清理运行期不需要的内容**（`pruneRuntimeArtifacts`）：node-pty 的构建源料（deps/third_party/src/scripts/typings/binding.gyp）与**异平台**预编译归档——运行时按 build/Release → build/Debug → `prebuilds/<platform>` 顺序加载，因此**保留当前平台的 prebuilds 子目录**，只删其余平台；mistralai/openai 的 TS 源码/示例/测试；全树 `*.d.ts`/`*.d.cts`/`*.d.mts`/`*.map`；文档/许可/测试类文件（`*.md`、README/CHANGELOG/LICENSE、`*.test.*`）——**例外：`docs/` 下的 Markdown 保留**（任意深度、目录名大小写不敏感；`docs/` 内的 `test`/`examples` 等附属物目录仍整目录删除），插件管理器的 bundle 详情页在运行期读 locale `meta.detail` 指名的文档（`bundle-dsh` 在 prune 前后核对声明目标，删掉即封装失败）。正确性由安装后冒烟与上述核对兜底。
 - 控制面 spawn 入口统一为 `<node> <workspace>/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web`（`resolveDshEntry` + `resolveNodeExecutable`，spawn-dsh.ts）。node 可执行不假设在 PATH 上：Electron 主进程内用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（另前置 `--expose-internals`，dsh loader 需要），纯 node 环境用 `process.execPath`，兜底 PATH 搜索——打包 App 从 Finder 启动时 PATH 极简，裸 `spawn('node')` 会 ENOENT。

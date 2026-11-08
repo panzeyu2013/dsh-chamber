@@ -2,18 +2,18 @@
   "provenance": {
     "structure": "vendor/harness-checkout/scripts/primary-runtime/lock.json（上游 dsh 的同名锁：nodeVersion/pythonVersion/pythonRelease/targets[]/wheels[]/pythonPackages 字段名逐一对齐）",
     "upstreamCommit": "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db",
-    "node": "本锁 nodeVersion/nodeSha256 是唯一来源（nodejs.org/dist/v24.18.1/SHASUMS256.txt 逐字）；Swift sidecar 与托管 dsh 直接使用 payload 的 node（sidecar 不再自带独立 Node，也不再有 build-sidecar 的 PINNED_NODE_SHA256 第二来源）。Node 载荷版本是独立轴：上游同 commit 的锁已到 24.21.0，本仓 registry 的 release.ts 条目明确不读上游 release 元数据，升级须单独裁决并重取 sha256",
+    "node": "nodeVersion/targets.mac-arm64.nodeSha256 镜像上游 pin 的 scripts/primary-runtime/lock.json（sha256 逐字取自上游锁：nodejs.org/dist/v24.21.0/SHASUMS256.txt）；Swift sidecar 与托管 dsh 直接使用 payload 的 node（sidecar 不再自带独立 Node，也不再有 build-sidecar 的 PINNED_NODE_SHA256 第二来源）。pin 升级时本锁与上游锁同批移动（scripts/release/verify-pin-alignment.mjs 校验）；本仓相对上游只收窄 targets（见 provenance.targets）",
     "python": "pythonVersion/pythonRelease/pythonTarget/pythonSha256/wheels 镜像上游同 commit 的锁（astral-sh/python-build-standalone release 20260901，同一构件坐标）；本仓尚未联网重下核对——首次真实构建腿会按此 sha256 fail-closed",
-    "targets": "只登记本仓真实出货的平台（darwin arm64——x64 腿 2026-12 暂时移除，见 STATUS）。win-x64 与 linux 未列入：上游有 win-x64 目标，但本仓 Windows 尚未发布（design 23 外部门禁未闭），Linux 桌面同样待门禁",
+    "targets": "只登记本仓真实出货的平台（darwin arm64——x64 腿暂不出货）。win-x64 与 linux 未列入：上游有 win-x64 目标，但本仓 Windows 尚未发布（design 23 外部门禁未闭），Linux 桌面同样待门禁",
     "wheels": "每 target 的 wheels[] 是平台相关轮子，顶层 wheels[] 是跨平台纯 py 轮子——与上游同分层"
   },
-  "nodeVersion": "24.18.1",
+  "nodeVersion": "24.21.0",
   "pythonVersion": "3.12.14",
   "pythonRelease": "20260901",
   "targets": {
     "mac-arm64": {
       "nodeArchive": "darwin-arm64.tar.gz",
-      "nodeSha256": "eb02f7fab96d3d67de40c5ec8566096fcb4c2026728787683ae5a97eb612b941",
+      "nodeSha256": "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057",
       "pythonTarget": "aarch64-apple-darwin",
       "pythonSha256": "81a359f1cfadd4da11766534c5913791cea55f26e1bb902cacd2a531bb1e4b2b",
       "wheels": [

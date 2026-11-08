@@ -198,7 +198,7 @@ docs/
   design/                   Design documents (01 is the entry point; 05 is the surface/architecture contract (v1))
   progress/                 STATUS.md — the only progress record; TODO.md — unscheduled plans (A upstream / B platform / C features / D engineering);
                             deviations.md — dual-flavor deviations
-  checklists/               Operational checklists (release / dsh upgrade / packaging integrity / GUI acceptance / remote browser / session-authority calibration / upstream touchpoints)
+  checklists/               Operational checklists (release / dsh upgrade / pin alignment / packaging integrity / GUI acceptance / remote browser / session-authority calibration / upstream touchpoints)
   *.en-US.md                English mirrors of the root docs
 scripts/
   install-gateway.sh        One-shot Gateway installer (user/ops; entry docs/deploy/deploy-gateway.md)
@@ -236,6 +236,7 @@ The script list has one home: root [`package.json`](../package.json) `scripts` (
 |[docs/progress/STATUS.md](progress/STATUS.md)|Progress overview (the only progress record)|
 |[docs/checklists/release-checklist.md](checklists/release-checklist.md)|Pre-release checklist (version/changelog/tests/build/tag/CI)|
 |[docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md)|Pre-dsh-upgrade checklist (pin consistency/fork rebase/lockfile/regression)|
+|[docs/checklists/pin-alignment-checklist.md](checklists/pin-alignment-checklist.md)|Pre-release pin-alignment checklist (verifier / payload lockstep test / mirrors and generated projections / doc literals)|
 |[docs/checklists/packaging-closure-checklist.md](checklists/packaging-closure-checklist.md)|Packaging integrity checklist (module closure vs build.files, build-chain artifacts, packaged-app smoke)|
 |[docs/checklists/gui-acceptance-checklist.md](checklists/gui-acceptance-checklist.md)|GUI acceptance procedure (what to run / look for / record)|
 |[docs/checklists/remote-browser-acceptance.md](checklists/remote-browser-acceptance.md)|Right-sidebar browser v2 acceptance (local CDP + dual-flavor real machine)|

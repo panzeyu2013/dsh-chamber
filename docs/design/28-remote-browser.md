@@ -467,7 +467,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })
 
 ### 16.11 上游对齐修订（2026-11 用户二次裁决，覆盖冲突面）
 
-**契约**：右栏「浏览器」= 上游官方 `@deepseek-ai/dsh-client-ui-sidebar-browser`（pin 0.2.2-rc.1）iframe 路径的 chamber fork。UI/DOM/CSS/文案/快捷键/多标签/地址解析/历史/持久化/sandbox 开关/失败条/restore 全部逐字同源；**唯一行为差异 = SSH 反代（iframe src 解析 + 代理页 system-browser 出口的 alias 投影）**。
+**契约**：右栏「浏览器」= 上游官方 `@deepseek-ai/dsh-client-ui-sidebar-browser`（当前 pin 见 `harness.commit`）iframe 路径的 chamber fork。UI/DOM/CSS/文案/快捷键/多标签/地址解析/历史/持久化/sandbox 开关/失败条/restore 全部逐字同源；**唯一行为差异 = SSH 反代（iframe src 解析 + 代理页 system-browser 出口的 alias 投影）**。
 
 - 同源文件（SHA-256 冻结在包测试）：`browser/{BrowserNavigation,BrowserPage,BrowserPersistence,url}.ts`、`view/{BrowserPresentation.ts,BrowserTitle.tsx,Browser.module.css}`、`locales.ts`（8 语言）、`src/index.ts`。仅 `BrowserFrame.ts`（additive `externalUrl`，代理页 system-browser 出口用 alias）、`BrowserBody.tsx`（external 按钮读 `frame.externalUrl ?? target.url`）、`IframeImpl.ts`（异步 src seam + `forwards`/externalUrl 生命周期）、`IframePresentation.ts`（document 增 url）、`pages.ts`、`definition.tsx`（仅 id）、`client/index.ts`（source gate/registry wait/resolver）与新增 `ForwardFrameResolver.ts`、`registry-wait.ts`、`shared/{source,forward-bridge}.ts` 有注释标记的 diff；`BrowserController/store` 仅 TabId 类型适配。
 - 入口/定义：kind = 上游 `browser`；`multiple: true`、`priority: 'builtin'`、guide order = 30、`browser.new` 快捷键（macOS primary+T / web primary+alt+T）；标题 = 上游 globe 图标 + 当前 host；store persist key = 上游 `dsh.sidebar-browser.v1`。`keepMounted: true`（桌面壳等价于上游 Electron carrier 的常挂载决策）。

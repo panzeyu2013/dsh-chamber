@@ -35,7 +35,7 @@ Generated with `npm run gen:notices`.
 | `micromark-util-symbol` | 2.0.1 | MIT |
 | `micromark-util-types` | 2.0.3 | MIT |
 | `node-pty` | 1.2.0-beta.15 | MIT |
-| `pnpm` | 11.21.0 | MIT |
+| `pnpm` | 11.28.5 | MIT |
 | `react` | 19.2.8 | MIT |
 | `react-dom` | 19.2.8 | MIT |
 | `shiki` | 4.4.3 | MIT |
@@ -63,7 +63,7 @@ Electron leg (2026-09).
 |---|---|---|
 | `CPython` (python-build-standalone) | 3.12.14 | PSF-2.0 |
 | `pip` (interpreter baseline, ships with CPython) | with CPython | MIT |
-| `Node.js` | 24.18.1 | MIT |
+| `Node.js` | 24.21.0 | MIT |
 | `et_xmlfile` (python distribution) | 2.0.0 | see the wheel dist-info METADATA |
 | `lxml` (python distribution) | 6.1.3 | see the wheel dist-info METADATA |
 | `numpy` (python distribution) | 2.3.5 | see the wheel dist-info METADATA |

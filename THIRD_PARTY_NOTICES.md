@@ -34,7 +34,7 @@ dsh-chamber 重新分发以下第三方包。每个包的完整许可证文本�
 | `micromark-util-symbol` | 2.0.1 | MIT |
 | `micromark-util-types` | 2.0.3 | MIT |
 | `node-pty` | 1.2.0-beta.15 | MIT |
-| `pnpm` | 11.21.0 | MIT |
+| `pnpm` | 11.28.5 | MIT |
 | `react` | 19.2.8 | MIT |
 | `react-dom` | 19.2.8 | MIT |
 | `shiki` | 4.4.3 | MIT |
@@ -61,7 +61,7 @@ electron-userland/electron-builder；双 rep 540×380@72dpi + 1080×760@144dpi�
 |---|---|---|
 | `CPython`（python-build-standalone） | 3.12.14 | PSF-2.0 |
 | `pip`（解释器基线，随 CPython 分发） | 随 CPython | MIT |
-| `Node.js` | 24.18.1 | MIT |
+| `Node.js` | 24.21.0 | MIT |
 | `et_xmlfile`（python 发行版） | 2.0.0 | 见随包 wheel 的 dist-info METADATA |
 | `lxml`（python 发行版） | 6.1.3 | 见随包 wheel 的 dist-info METADATA |
 | `numpy`（python 发行版） | 2.3.5 | 见随包 wheel 的 dist-info METADATA |

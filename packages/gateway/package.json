@@ -30,7 +30,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "pnpm": "11.21.0"
+    "pnpm": "11.28.5"
   },
   "devDependencies": {
     "@dsh-chamber/control-plane": "workspace:^",

@@ -1,7 +1,7 @@
 # @dsh-chamber/dsh-chamber-client-ui-browser
 
 Remote Browser（design 28 `16）：右侧边栏「浏览器」页签。本包是上游官方
-`@deepseek-ai/dsh-client-ui-sidebar-browser`（0.2.2-rc.1）**iframe 路径的忠实源码 fork**：
+`@deepseek-ai/dsh-client-ui-sidebar-browser`（版本随上游 pin，见根 `harness.commit`）**iframe 路径的忠实源码 fork**：
 DOM / className / 文案 / 快捷键 / 多标签 / priority / guide 顺序 / keepMounted /
 store 持久化 / 地址解析 / 历史 / sandbox 开关 / 失败条 / restore 全部与上游逐字一致；
 **唯一行为差异**是 SSH 反代——SSH 来源的远端 `127.0.0.1` 目标经既有 SSH 端口转发
@@ -15,7 +15,7 @@ alias（不是本机不可达的远端逻辑地址；租约解析中/失败时�
 
 ## 来源与同步
 
-- 上游包：`vendor/harness-checkout/packages/client/ui-sidebar-browser`（pin 0.2.2-rc.1）。
+- 上游包：`vendor/harness-checkout/packages/client/ui-sidebar-browser`（pin 见根 `harness.commit`）。
 - **逐字节 verbatim**（`test/locks/registration.test.ts` 用 SHA-256 冻结）：
   `src/client/browser/{BrowserNavigation,BrowserPage,BrowserPersistence,url}.ts`、
   `src/client/view/{BrowserPresentation.ts,BrowserTitle.tsx,Browser.module.css}`、
