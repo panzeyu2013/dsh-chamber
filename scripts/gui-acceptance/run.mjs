@@ -160,7 +160,15 @@ if (flavor === 'electron' && (values['web-dist'] || values['require-assembly']))
   process.exit(2)
 }
 
-const mode = values.dev ? 'dev' : values.attach ? 'attach' : 'live'
+// Native assembly intent: an explicit `--flavor native` or any native-only flag
+// runs the sidecar spawn walkthrough. Without such intent the historical default
+// stays `--live` (read-only probes against a RUNNING app), so `pnpm run acceptance:gui`
+// keeps its documented meaning.
+const nativeRequest = (values.flavor !== undefined && flavor === 'native')
+  || values['require-assembly'] === true
+  || values['sidecar-dir'] !== undefined
+  || values['web-dist'] !== undefined
+const mode = values.dev ? 'dev' : values.attach ? 'attach' : (values.live || !nativeRequest) ? 'live' : 'native'
 if (values['attach-create-session'] && mode !== 'attach') {
   console.error('--attach-create-session 只支持 --attach（仅用于显式的打包/一次性实例 smoke）')
   process.exit(2)
