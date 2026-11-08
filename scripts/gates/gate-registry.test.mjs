@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
-import { deriveModes, gateInvocation, loadGateRegistry, proofGateIds, validateGateRegistry } from './gate-registry.mjs'
+import { batteryPlan, deriveModes, gateInvocation, loadGateRegistry, proofGateIds, validateGateRegistry } from './gate-registry.mjs'
 
 const scripts = {
   'verify:import-cycles': 'node scripts/gates/verify-import-cycles.mjs',
@@ -179,4 +179,30 @@ test('darwin-only gates are excluded from the derivation on other platforms', ()
 test('gateInvocation renders bare scripts through pnpm and keeps explicit commands', () => {
   assert.equal(gateInvocation({ command: 'test:runtime' }), 'pnpm run test:runtime')
   assert.equal(gateInvocation({ command: 'node scripts/x.mjs --flag' }), 'node scripts/x.mjs --flag')
+})
+
+test('batteryPlan derives the release preflight unit battery from the registry (no hand-copied drift)', () => {
+  const registry = loadGateRegistry()
+  const plan = batteryPlan(registry)
+  const expectedTests = registry.gates
+    .filter(gate => gate.platform === undefined && gate.modes.includes('tests') && gate.command.startsWith('test:'))
+    .map(gate => gate.command)
+  const expectedTypechecks = registry.gates
+    .filter(gate => gate.platform === undefined && gate.modes.includes('typecheck'))
+    .map(gate => gate.command)
+  assert.deepEqual(plan.unitTests, [...new Set(expectedTests)])
+  assert.deepEqual(plan.typechecks, [...new Set(expectedTypechecks)])
+  // 平台腿不是 unit battery；审计发现的漏项必须在派生结果里，手写 host typecheck 不得混入。
+  assert.ok(!plan.unitTests.includes('test:swift') && !plan.unitTests.includes('test:macos'))
+  for (const command of ['test:client-core', 'test:browser', 'test:plugin-manager', 'test:host-open-in']) {
+    assert.ok(plan.unitTests.includes(command), command + ' 必须进入 battery（曾经手写清单漏掉）')
+  }
+  for (const command of ['typecheck:stream-state', 'typecheck:browser']) {
+    assert.ok(plan.typechecks.includes(command), command + ' 必须进入 battery（曾经手写清单漏掉）')
+  }
+  for (const command of ['typecheck:host-graph', 'typecheck:host-git', 'typecheck:host-archive-cleanup', 'typecheck:gateway']) {
+    assert.ok(!plan.typechecks.includes(command), command + ' 是 mode 外手写步，不应进入 registry 派生的 battery')
+  }
+  assert.equal(new Set(plan.unitTests).size, plan.unitTests.length)
+  assert.equal(new Set(plan.typechecks).size, plan.typechecks.length)
 })

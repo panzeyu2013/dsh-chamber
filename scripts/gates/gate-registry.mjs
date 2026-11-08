@@ -167,6 +167,23 @@ export function deriveModes(registry, { platform = process.platform } = {}) {
   return { ...modes, full: [...modes.static, ...modes.typecheck, ...modes.tests] }
 }
 
+/**
+ * The release preflight's "FULL unit battery" — package unit-test gates plus package
+ * typecheck gates, derived from the same registry instead of a hand-copied list.
+ * Platform-specific gates (e.g. test:swift / test:macos) are excluded: the battery
+ * is the unit suite, not the macOS legs.
+ * @param {object} registry - validated gate-surfaces registry.
+ * @returns {{ unitTests: string[], typechecks: string[] }} command names in registry order, deduped.
+ */
+export function batteryPlan(registry) {
+  const eligible = registry.gates.filter(gate => gate.platform === undefined && typeof gate.command === 'string')
+  const unique = list => [...new Set(list)]
+  return {
+    unitTests: unique(eligible.filter(gate => gate.modes.includes('tests') && gate.command.startsWith('test:')).map(gate => gate.command)),
+    typechecks: unique(eligible.filter(gate => gate.modes.includes('typecheck')).map(gate => gate.command)),
+  }
+}
+
 /** Gate ids that must be proven by the release CI (order preserved). */
 export function proofGateIds(registry) {
   return registry.gates.filter(gate => gate.proof === true).map(gate => gate.id)

@@ -1,6 +1,7 @@
 /**
- * Test-wiring gate: every `*.test.ts` / `*.test.mjs` in the repository must be
- * reachable from a script that actually runs, so a newly added test cannot sit
+ * Test-wiring gate: every `*.test.ts` / `*.test.mjs` under `packages/` and
+ * `scripts/` (the roots this gate walks) must be reachable from a script that
+ * actually runs, so a newly added test cannot sit
  * on disk while the aggregate command stays green with less coverage than it
  * claims.
  *

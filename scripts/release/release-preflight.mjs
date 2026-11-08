@@ -30,6 +30,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseReleaseVersion } from './release-semver.mjs'
+import { batteryPlan } from '../gates/gate-registry.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 // `git status --porcelain` always reports POSIX-separated paths, so the
@@ -468,34 +469,21 @@ function checkReleaseWorkflow() {
   ok(c, 'release workflow policy holds')
 }
 
-/** (i) NOTICE：完整单测必须在**精确 release 提交**上重跑——在上一轮提交跑绿不等于本提交绿。 */
+/**
+ * (i) NOTICE：完整单测必须在**精确 release 提交**上重跑——在上一轮提交跑绿不等于本提交绿。
+ * 命令清单不手写：从 gate-surfaces.json 派生（batteryPlan，gate-registry.mjs），
+ * 新增/移除 unit test 或 typecheck 门自动进出该清单（锁在 gate-registry.test.mjs）。
+ */
 function printFullBatteryNotice() {
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim()
-  console.log(`
-────────────────────────────────────────────────────────────────
-⚠ NOTICE — run the FULL unit battery (§3 of release-checklist.md)
-  on the EXACT release commit (current HEAD: ${head}), not on the
-  merge commit it was green on (the 0.2.0-beta regression: the battery
-  ran on eb7c22a; preload.cts changed before 0e3e8d9 → the L3
-  ipc-surface-mirror lockstep test broke and only CI caught it).
-
-  pnpm run test:control-plane
-  pnpm run test:runtime && pnpm run test:gateway && pnpm run test:desktop
-  pnpm run test:renderer-shell && pnpm run test:git && pnpm run test:host-git
-  pnpm run test:host-archive-cleanup
-  pnpm run test:sidebar && pnpm run test:layout
-  pnpm run test:settings-bridge && pnpm run test:connections
-  pnpm run test:client-web && pnpm run test:connection
-  pnpm run test:open-in && pnpm run test:cli
-  pnpm run typecheck && pnpm run typecheck:runtime
-  pnpm run typecheck:sidebar && pnpm run typecheck:layout
-  pnpm run typecheck:connections && pnpm run typecheck:settings-bridge
-  pnpm run typecheck:git && pnpm run typecheck:open-in
-  pnpm run typecheck:client-web && pnpm run typecheck:connection
-  pnpm run typecheck:api-gateway && pnpm run typecheck:host-graph
-  pnpm run typecheck:host-git && pnpm run typecheck:host-archive-cleanup
-  pnpm run typecheck:gateway
-────────────────────────────────────────────────────────────────`)
+  const plan = batteryPlan(readJson('scripts/gates/gate-surfaces.json'))
+  const lines = commands => commands.map(command => '  pnpm run ' + command).join('\n')
+  console.log('\n────────────────────────────────────────────────────────────────'
+    + '\n⚠ NOTICE — run the FULL unit battery (§3 of release-checklist.md)'
+    + '\n  on the EXACT release commit (current HEAD: ' + head + '), not on a\n  commit where it merely ran green earlier (a late change can invalidate\n  an early battery run; CI is the last resort, not the first proof).'
+    + '\n\n' + lines(plan.unitTests)
+    + '\n' + lines(plan.typechecks)
+    + '\n────────────────────────────────────────────────────────────────')
 }
 
 // ---------------------------------------------------------------------------

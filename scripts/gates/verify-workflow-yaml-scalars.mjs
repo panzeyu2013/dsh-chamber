@@ -6,10 +6,12 @@
  * the workflow files as TEXT, so they stay green on a file that GitHub refuses
  * to parse.
  *
- * The rule enforced here is the YAML constraint itself: a plain (unquoted,
- * non-block) mapping value must not contain `: ` and must not end with `:`.
- * Block scalars (`|`, `>`) and quoted values are skipped; `#` comments are not
- * values and are ignored.
+ * The rule enforced here is the YAML constraint applied to the scalar keys this
+ * gate models (`SCALAR_KEYS` below): a plain (unquoted, non-block) mapping value
+ * must not contain `: ` and must not end with `:`. Quoted values, `|` / `>`
+ * block scalars and `#` comments are skipped. The key set is deliberately narrow:
+ * block-scalar BODIES are not tracked line-by-line, so scanning arbitrary keys
+ * would flag shell text inside `run: |` as a YAML error.
  *
  * Usage:
  *   node scripts/gates/verify-workflow-yaml-scalars.mjs          # gate
@@ -23,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const WORKFLOW_DIR = join(REPO_ROOT, '.github', 'workflows')
 
-/** Keys whose value is a plain scalar we can judge. */
+/** Keys whose value is a plain scalar we can judge (narrow by design; see header). */
 export const SCALAR_KEYS = ['name', 'run', 'if', 'uses', 'with', 'env', 'id', 'shell', 'working-directory']
 
 /**

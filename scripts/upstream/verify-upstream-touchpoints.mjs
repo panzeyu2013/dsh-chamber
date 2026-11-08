@@ -250,6 +250,13 @@ if (args.errors.length > 0) {
  * 必须在不依赖 registry.json、也不碰任何文件的前提下返回；
  * 读取失败/ schema 不过 = exit 1（响亮，绝不降级成空登记表）。
  */
+// vendor 子模块未物化时给可读错误：裸 ENOENT 不可读，且 C1/C6/C9/C16 都需要 pin 树
+// （`--help` 与用法错误已在上方先行返回，不依赖 vendor）。
+if (!existsSync(join(SUBMODULE, 'packages'))) {
+  console.error('✗ verify-upstream-touchpoints: vendor/harness-checkout 未物化（submodule 为空）——先 `git submodule update --init --depth 1`（或用主 checkout 的 vendor 树）再跑；该门需要 pin 树做 C1/C6/C9/C16 判定。')
+  process.exit(1)
+}
+
 const REGISTRY = loadRegistryOrExit()
 
 /**
