@@ -1279,27 +1279,18 @@ test('the ui-chat file-image pair (AssistantMarkdown + ChatView) retires togethe
   assert.ok(VENDOR_PATCHES.some((patch) => patch.vendorFile.endsWith('AssistantNodeView.tsx')), 'the forwarding hop stays registered with the pair')
   assert.ok(VENDOR_PATCH_MARKERS.some((marker) => marker.vendorFile === undefined), 'the root prop publication marker must stay registered')
 })
-test('hand-written patch counts in README and the two docs match the registry', () => {
-  // The "12 补丁 / 26 锚点" text went stale once already; derive the numbers and fail when a
-  // doc keeps a count the registry no longer has (or drops the sentence entirely).
-  const files = VENDOR_PATCHES.length
-  const anchors = VENDOR_PATCHES.reduce((total, patch) => total + patch.edits.length, 0)
+test('vendor patch counts stay in the registry, not hand-copied in README/docs', () => {
+  // Counts drift by construction; the docs point at the single source instead of copying it.
   const docs = [
-    { path: '../README.md', pattern: /(\d+)\s*补丁\s*\/\s*(\d+)\s*锚点/u },
-    { path: '../../../docs/design/09-client-plugin-runtime-loading.md', pattern: /(\d+)\s*个文件\s*\/\s*(\d+)\s*处锚点/u },
-    { path: '../../../docs/checklists/upstream-touchpoints.md', pattern: /(\d+)\s*文件\s*\/\s*(\d+)\s*处锚点/u },
+    '../README.md',
+    '../../../docs/design/client/09-client-plugin-runtime-loading.md',
+    '../../../docs/checklists/upgrade/upstream-touchpoints.md',
   ]
-  for (const doc of docs) {
-    const text = readFileSync(fileURLToPath(new URL(doc.path, import.meta.url)), 'utf8')
-    const pattern = new RegExp(doc.pattern.source, doc.pattern.flags + 'g')
-    const matches = [...text.matchAll(pattern)]
-    assert.equal(matches.length, 1, 'the patch-count sentence must appear exactly once: ' + doc.path)
-    const match = matches[0]
-    assert.deepEqual(
-      [Number(match[1]), Number(match[2])],
-      [files, anchors],
-      'a hand-written patch count is stale: ' + doc.path,
-    )
+  for (const docPath of docs) {
+    const text = readFileSync(fileURLToPath(new URL(docPath, import.meta.url)), 'utf8')
+    assert.match(text, /vendor-patches\.mjs/u, 'the doc must point at the patch registry: ' + docPath)
+    assert.doesNotMatch(text, /\d+\s*(?:补丁|文件)\s*\/\s*\d+\s*处?锚点/u,
+      'a hand-copied patch count must stay out: ' + docPath)
   }
 })
 
