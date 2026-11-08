@@ -15,7 +15,7 @@
  *      B. `chamberNamedForks` ↔ `versionAnchor: chamber` 条目（在 schema 校验里）；
  *      C. `excludedUpstreamDirs` ↔ `scripts/dev/ensure-harness-vendor.mjs` 的 EXCLUDED 集合
  *         （那份清单是独立维护的，删 registry 条目而不改它 = 红）；
- *      E. `docs/checklists/upstream-touchpoints.md` §4.5 桌面 seat 审计表 ↔ registry
+ *      E. `docs/checklists/upgrade/upstream-touchpoints.md` §4.5 桌面 seat 审计表 ↔ registry
  *         `apps/desktop/src` mirror 条目的「覆盖文件」清单双向一致，且表内 chamber
  *         对照点路径存在（desktop-seat-audit.mjs；非 C 编号）；
  *   ⑥ 生成块：`generatedBlocks` 声明的每块存在且与渲染结果逐字节一致。

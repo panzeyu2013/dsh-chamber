@@ -23,7 +23,7 @@
 export const USAGE_EXIT_CODE = 2
 
 /** The single source of the script's usage text (`--help` and usage errors). */
-export const VERIFY_USAGE = `verify-upstream-touchpoints — 上游触点保鲜门（C1/C3–C16；docs/checklists/upstream-touchpoints.md 的机器侧）
+export const VERIFY_USAGE = `verify-upstream-touchpoints — 上游触点保鲜门（C1/C3–C16；docs/checklists/upgrade/upstream-touchpoints.md 的机器侧）
 
 用法：
   node scripts/upstream/verify-upstream-touchpoints.mjs [--no-artifact-rebuild]

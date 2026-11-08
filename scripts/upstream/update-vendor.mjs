@@ -156,7 +156,7 @@ function main() {
     const frozen = spawnSync('pnpm', ['install', '--frozen-lockfile'], { encoding: 'utf8', cwd: REPO_ROOT, stdio: 'inherit' })
     if (frozen.status !== 0) {
       fail('pnpm install --frozen-lockfile 验证失败——锁文件未稳定；若本次升级新增了 vendor 包，' +
-        '需按 docs/checklists/dsh-upgrade-checklist.md §4 手工补齐 importer 记录后再重试')
+        '需按 docs/checklists/upgrade/dsh-upgrade-checklist.md §4 手工补齐 importer 记录后再重试')
     }
     const lockAfter = sha256(LOCKFILE)
     if (lockBefore !== lockAfter) {
@@ -172,8 +172,8 @@ function main() {
     console.log('  - 若上游 workspace 集合变化，vendor/harness-packages/@deepseek-ai 链接会随 ensure 自动对齐')
     console.log('注意：提交 gitlink 前不要运行 `git submodule update`（会把 HEAD 拉回旧 gitlink）；')
     console.log('运行时线同步见 checklist §2（bundle-dsh / release.yml env / install-gateway.sh 常量）。')
-    console.log('回归：按 docs/checklists/dsh-upgrade-checklist.md §6 全量测试套件 + typecheck + 构建 + smoke')
-    console.log('触点：按 docs/checklists/upstream-touchpoints.md §7 循环重放/登记——先跑 node scripts/upstream/verify-upstream-touchpoints.mjs --tags <旧tag> <新tag>')
+    console.log('回归：按 docs/checklists/upgrade/dsh-upgrade-checklist.md §6 全量测试套件 + typecheck + 构建 + smoke')
+    console.log('触点：按 docs/checklists/upgrade/upstream-touchpoints.md §7 循环重放/登记——先跑 node scripts/upstream/verify-upstream-touchpoints.mjs --tags <旧tag> <新tag>')
   } catch (err) {
     console.error(`✗ update-vendor: ${err.message}`)
     if (oldPin !== null) {

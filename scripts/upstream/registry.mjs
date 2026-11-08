@@ -2,7 +2,7 @@
  * registry.mjs — 上游触点 registry 的加载、schema 校验与 canonical 序列化（纯逻辑）。
  *
  * 单一来源：`registry.json` 只承载**机械事实**（路径、分类、判据 id、偏差 id、
- * 一句话原因）；长散文留在 `docs/checklists/upstream-touchpoints.md`。生成视图与
+ * 一句话原因）；长散文留在 `docs/checklists/upgrade/upstream-touchpoints.md`。生成视图与
  * 触点门都从这里读，禁止第二份手抄副本。
  *
  * canonical 规则（`verify-registry.mjs` 逐字节强制，`registry-views.mjs --write` 产出）：

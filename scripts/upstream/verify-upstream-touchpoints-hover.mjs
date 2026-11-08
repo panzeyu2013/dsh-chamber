@@ -82,7 +82,7 @@
 
 /**
  * The upstream/chamber pairs the gate reads. Kept here, next to the parse, so
- * the registry in `docs/checklists/upstream-touchpoints.md` has one machine
+ * the registry in `docs/checklists/upgrade/upstream-touchpoints.md` has one machine
  * counterpart.
  */
 export const HOVER_PORT_SOURCES = {
@@ -935,14 +935,14 @@ function excerpt(text, limit = 200) {
 function unreadable(source, path) {
   return `C15 读不到 ${source} ${path}（pin 树未物化/文件被删/改名）——本门必须在冻结 pin 上判定：`
     + '先 ensure-harness-vendor（子模块物化）后重跑；若上游确实删除/改名了该文件，'
-    + '按 docs/checklists/upstream-touchpoints.md §4 的登记行重审移植并同步本门'
+    + '按 docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行重审移植并同步本门'
 }
 
 /** The shared adjudication tail of every shape-drift failure. */
 const RETIREMENT_TAIL = '上游可能已修掉「leave 落在 dwell→commit 窗口就残留」的竞态，移植的退役条件被触碰。'
   + '请裁决：退役移植（RowHoverCard/hover-intent 回到 vendor HoverCard，并同步 '
-  + 'docs/design/06-sidebar-enhancements.md §7 与 docs/progress/STATUS.md 的偏差条），'
-  + '或说明为何仍保留并更新本门与 docs/checklists/upstream-touchpoints.md §4 的登记行'
+  + 'docs/design/client/06-sidebar-enhancements.md §7 与 docs/progress/STATUS.md 的偏差条），'
+  + '或说明为何仍保留并更新本门与 docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行'
 
 /**
  * Decide C15 for one run.
@@ -1041,26 +1041,26 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
       failures.push(
         `C15 解析不到上游 ${upstreamPath} 的 ${pair.upstream.name} = <数字>（${pair.meaning}）——`
         + '形状漂移/改名：不能证明锁步即按漂移处理，核对两侧实现后更新本门与 '
-        + 'docs/checklists/upstream-touchpoints.md §4 的登记行，或退役移植',
+        + 'docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行，或退役移植',
       )
     } else if (upstreamRead.distinct.length > 1) {
       failures.push(
         `C15 上游 ${upstreamPath} 的 ${pair.upstream.name} 有多个不同赋值（${upstreamRead.distinct.join(' / ')}）——`
         + '不能判定锁步（诱饵/重复赋值），按漂移处理：核对哪一处是生效值后更新本门与 '
-        + 'docs/checklists/upstream-touchpoints.md §4 的登记行，或退役移植',
+        + 'docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行，或退役移植',
       )
     }
     if (chamberRead.distinct.length === 0 && chamberHoverIntent.text !== null) {
       failures.push(
         `C15 解析不到 chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} = <数字>（${pair.meaning}）——`
         + '移植的常数面改名/删除：若已退役移植，请同步移除本门与 '
-        + 'docs/checklists/upstream-touchpoints.md §4 的登记行；否则恢复该导出',
+        + 'docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行；否则恢复该导出',
       )
     } else if (chamberRead.distinct.length > 1) {
       failures.push(
         `C15 chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} 有多个不同赋值`
         + `（${chamberRead.distinct.join(' / ')}）——生效值不唯一，不能判定锁步：`
-        + '只保留一个默认导出，或同步更新本门与 docs/checklists/upstream-touchpoints.md §4 的登记行',
+        + '只保留一个默认导出，或同步更新本门与 docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行',
       )
     }
     if (upstreamValue !== null && chamberValue !== null && upstreamValue !== chamberValue) {
@@ -1069,7 +1069,7 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
         + ` != chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} = ${chamberValue}`
         + '——移植的前提是行为等价，两侧必须逐值一致：'
         + `要么把 chamber 的 ${pair.chamber.name} 对齐到上游的 ${upstreamValue}（再评估移植是否仍等价），`
-        + '要么退役移植（改回 vendor HoverCard）并同步 docs/checklists/upstream-touchpoints.md §4 的登记行',
+        + '要么退役移植（改回 vendor HoverCard）并同步 docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行',
       )
     }
     values[pair.chamber.name] = { upstreamValue, chamberValue }

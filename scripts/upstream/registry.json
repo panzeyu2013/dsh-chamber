@@ -587,7 +587,7 @@
         "packages/dsh-chamber-wire/src/session-state.ts#SessionStateGoalFact",
         "packages/renderer/src/source-mux-facts.ts#parseProjectedGoalFact"
       ],
-      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验",
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验",
       "status": "accepted",
       "rationale": "goal wire 无自动化 vendor 源锁步：语义漂移只会保持 unknown（不误报），但白名单字段必须重锚；接受人工复验而非新增 C 编号门。边界事实（判据在 vendor 的 session-controller types.ts 的 one-update-per-event 注释，随 pin 移动而非随本句漂移）：session/control 与 session/observeProjections 的帧由每键一帧改为每事件一帧 changes[]；chamber 只读 unary session/list 与 $events、不解析这两条 $stream，将来接 adapter 必须按「引入该帧形态的那一代」upgrade-guide/projection-event-frames 迁移（本 pin 已含该代：`SessionProjectionUpdate` 即 changes[] 形态；chamber 不解析该流）（版本值不写进本文件）"
     },
@@ -607,7 +607,7 @@
         "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#CONTRACT_STATUS_WRITE_METHODS",
         "packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts#detectStatusWriteFace"
       ],
-      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步复验 pin 住的 ISessions 契约；契约长出 status 写面即扩 CONTRACT_STATUS_WRITE_METHODS 并翻转探测（vendor-session-fact-contract.test.ts 的契约锁先红）。",
+      "evidence": "人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步复验 pin 住的 ISessions 契约；契约长出 status 写面即扩 CONTRACT_STATUS_WRITE_METHODS 并翻转探测（vendor-session-fact-contract.test.ts 的契约锁先红）。",
       "status": "accepted",
       "rationale": "tier-3 写回押在「上游公开但非 ISessions 契约」的 ClientSessions.handleSessionStatus 上：探测三分（contract / concrete+WARN-once / none 只读阶梯）把这一事实收成一个可测叶面，契约一旦长出写面即按 contract 支走，不再依赖具体成员名（I-10）。"
     },
@@ -632,7 +632,7 @@
       "symbols": [
         "packages/desktop/ipc-events.ts#IPC_CHANNELS"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / macOS 窗口 chrome（darwin 分支逐值：hiddenInset、trafficLightPosition 16,18、vibrancy sidebar、visualEffectState active、backgroundColor #00000000）/ native theme 观察者 / dshDesktop protocolVersion 1 + deviceInfo 按需读 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52；darwin 收口 S-53/S-54）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。__DSH_HOST_PATHS__（apps/desktop/src/preload-app.ts）：Electron 镜像 webUtils.getPathForFile；Swift 腿因 WebKit 不暴露 DOM File 路径，以 HostPathCatalog.swift + bridge-shim 的「事件批次 × 拖拽板快照」相关性实现，两端共用文档根 data-chamber-painted-source 范围门控（屏上来源由 renderer 发布）。",
+      "evidence": "覆盖文件：apps/desktop/src/{preload-app,preload-platform,preload-theme,preload-windows,windows-layout,ipc}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验载体面（data-platform / Windows caption 高度 40 / macOS 窗口 chrome（darwin 分支逐值：hiddenInset、trafficLightPosition 16,18、vibrancy sidebar、visualEffectState active、backgroundColor #00000000）/ native theme 观察者 / dshDesktop protocolVersion 1 + deviceInfo 按需读 + 相位映射），门 = packages/desktop/upstream-seats.test.ts（S-51/S-52；darwin 收口 S-53/S-54）+ test/ipc/*（§4.5 审计表 preload-*/windows-layout/ipc 行）。__DSH_HOST_PATHS__（apps/desktop/src/preload-app.ts）：Electron 镜像 webUtils.getPathForFile；Swift 腿因 WebKit 不暴露 DOM File 路径，以 HostPathCatalog.swift + bridge-shim 的「事件批次 × 拖拽板快照」相关性实现，两端共用文档根 data-chamber-painted-source 范围门控（屏上来源由 renderer 发布）。",
       "status": "accepted",
       "rationale": "官方共享 UI 的桌面判定与 dshDesktop 载体：Electron 半（preload.cts）随 2026-11 冻结归档作参考，Swift bridge-shim 与共享契约同形承载；native theme 通道改用 chamber 前缀。browser/webview 租客与 preload-menu 臂不采用（见 §4.5 审计表）。"
     },
@@ -652,7 +652,7 @@
         "packages/desktop/shortcuts-bridge.ts#DesktopShortcutsBridge",
         "packages/desktop/shortcuts-bridge.ts#desktopKeyEvent"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{keyboard,keybindings}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核 before-input-event 决策表 / scopedDesktop 门 / revision 化偏好事务与 userData/keybindings.json 存储位置（§4.5 审计表 keyboard/keybindings 行）。",
+      "evidence": "覆盖文件：apps/desktop/src/{keyboard,keybindings}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核 before-input-event 决策表 / scopedDesktop 门 / revision 化偏好事务与 userData/keybindings.json 存储位置（§4.5 审计表 keyboard/keybindings 行）。",
       "status": "accepted",
       "rationale": "官方键盘桥的上游协议实现从运行树加载而非重写；chamber 只镜像决策表、投递门与偏好事务，main.ts 的 before-input-event glue 是同席位接线点。"
     },
@@ -676,7 +676,7 @@
         "packages/desktop/shell-locale.ts#resolveShellLocale",
         "packages/desktop/startup-error.ts#planStartupRecovery"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{locale,tray,single-instance,quit-confirmation,fatal-recovery,crash-report,startup-error}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核原生 chrome 语义；有意差异（崩溃报告不轮转只追加、退出检查面收窄为本地实例运行中、跨 flavor O_EXLOCK 加层）见 §4.5 审计表对应行。",
+      "evidence": "覆盖文件：apps/desktop/src/{locale,tray,single-instance,quit-confirmation,fatal-recovery,crash-report,startup-error}.ts。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复核原生 chrome 语义；有意差异（崩溃报告不轮转只追加、退出检查面收窄为本地实例运行中、跨 flavor O_EXLOCK 加层）见 §4.5 审计表对应行。",
       "status": "accepted",
       "rationale": "原生 chrome 席位（typed locale / 托盘 / 单实例 / 退出确认 / 致命恢复 / 崩溃报告）语义镜像上游；差异点：S-43 恢复框默认项与 Esc 落安全项、托盘仅打包态且图标存在时创建、崩溃报告不轮转。"
     },
@@ -705,7 +705,7 @@
         "packages/desktop/update-schedule.ts#UPDATE_SCHEDULE_DEFAULTS",
         "packages/desktop/updater.ts#LINUX_UPDATE_UNSUPPORTED_REASON"
       ],
-      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts）。上游把 schedule 的时长解析抽出 duration-env.ts（语义不变；本仓非法 env 告警回退的行为不动）；登录 shell 环境在 §4.6 手工移植登记行，不做镜像声明（该行是它的落点，不逐行见 §4.5），逐行见 §4.5 审计表；本次复审采纳其两个可借鉴点（自建载体，design 11 §4）：构建期通道封签（electron-builder.beta.yml 的 extraMetadata → 打包 package.json 运行期读回）与确认回答的 revision 护栏（新增 packages/desktop/update-confirmation.ts）",
+      "evidence": "覆盖文件：apps/desktop/src/{update-coordinator,update-schedule,update-journal,update-attention,update-presentation}.ts（+ update-error/http-executor 为 different-adopted，逐行见 §4.5）。人工登记（verify-registry.mjs ⑤E 对拍本清单与 §4.5 表 mirror 行，非 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验（上游 apps/desktop/src/update-{coordinator,journal,schedule,attention,presentation,error,http-executor}.ts、preload.cts 的 update 臂与 mandatory-update-*.ts）。上游把 schedule 的时长解析抽出 duration-env.ts（语义不变；本仓非法 env 告警回退的行为不动）；登录 shell 环境在 §4.6 手工移植登记行，不做镜像声明（该行是它的落点，不逐行见 §4.5），逐行见 §4.5 审计表；本次复审采纳其两个可借鉴点（自建载体，design 11 §4）：构建期通道封签（electron-builder.beta.yml 的 extraMetadata → 打包 package.json 运行期读回）与确认回答的 revision 护栏（新增 packages/desktop/update-confirmation.ts）",
       "status": "accepted",
       "rationale": "上游有完整 electron-updater 链；chamber 自建更新链按相位/注意力/presentation 归类/journal 语义镜像其形状（§22.3.5），ours = updater.ts / update-schedule.ts / update-journal.ts / update-headless.ts + preload.cts 的 update 臂。两处明确不采用：update-http-executor 的「替换 electron-updater 传输」需要注入私有字段（Electron 升级即碎，chamber 用外部 watchdog + 忽略迟到事件），update-dialog/overlay 与 mandatory-update 家族是上游 Desktop 的产品面（design 11 §2 无弹窗硬约束）。已翻案采纳其两个可借鉴点（自建载体，不改「无弹窗」契约）：构建期通道封签（extraMetadata → 运行期读回，脱开版本后缀单源）与确认回答的 revision 护栏（IPC 载荷 { revision }，过期回答 loud 拒绝 + 重推状态）。另：T-04 —— 上游 apps/ 与 patches/ 均无 Sparkle，Swift 腿的更新链是 chamber 自建，本触点只覆盖 Electron 腿。"
     },
@@ -725,10 +725,10 @@
         "packages/control-plane/src/page-channel.ts#=literal:const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'",
         "packages/renderer/src/live-graph.ts#parsePluginEventFrame"
       ],
-      "evidence": "路径自动化锁步：packages/control-plane/test/page-channel/page-channel-flow.test.ts 断言 vendor 的 EVENTS_ENDPOINT 与 packages/control-plane/src/page-channel.ts 的 PLUGIN_GRAPH_SSE_PATH 逐字节一致（design 26 把该路由的抓取搬到控制面侧，所以该路由的 chamber 消费方有两个：控制面抓取 + live-graph 解析帧）。帧形状仍是人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验宿主半身注册的 exact GET/HEAD /plugins/events 路由（连接即一帧全量 graph；rebuilt 会 compose+notifyGraphChanged，带新 rev 的 graph 帧随到）与 chamber 订阅者（design 09 §3.7）的消费形状",
+      "evidence": "路径自动化锁步：packages/control-plane/test/page-channel/page-channel-flow.test.ts 断言 vendor 的 EVENTS_ENDPOINT 与 packages/control-plane/src/page-channel.ts 的 PLUGIN_GRAPH_SSE_PATH 逐字节一致（design 26 把该路由的抓取搬到控制面侧，所以该路由的 chamber 消费方有两个：控制面抓取 + live-graph 解析帧）。帧形状仍是人工登记（无 C 编号门）：升级 pin 时按 docs/checklists/upgrade/upstream-touchpoints.md §7 第 6 步对照 vendor 源复验宿主半身注册的 exact GET/HEAD /plugins/events 路由（连接即一帧全量 graph；rebuilt 会 compose+notifyGraphChanged，带新 rev 的 graph 帧随到）与 chamber 订阅者（design 09 §3.7）的消费形状",
       "status": "accepted",
       "rationale": "上游端点属主是 always-mounted 的 HMR 宿主行（dev-only 的只是 rebuild watcher）；chamber 只消费 graph 帧做装/卸同步、不加载官方客户端半身，无自动锁步面（C16 vendorSourceConsumers 只认 vendor 源码相对导入）。端点被移除/改名时 chamber 静默退回现状（机会性契约），故接受人工复验而非新增 C 编号门；端点**路径**这一半已被上面的 flow 用例自动锁步，人工复验只覆盖帧形状与宿主半身的注册语义"
     }
   ],
-  "notes": "machine facts only; prose lives in docs/checklists/upstream-touchpoints.md"
+  "notes": "machine facts only; prose lives in docs/checklists/upgrade/upstream-touchpoints.md"
 }

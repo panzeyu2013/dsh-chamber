@@ -38,7 +38,7 @@ const FILES = {
   hostFollow: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/web/controller.ts'),
   clientSession: join(ROOT, 'vendor/harness-checkout/packages/api/session-controller/src/client/sessions/session.ts'),
   forkOpening: join(ROOT, 'packages/dsh-api-gateway/src/client/stream-client.ts'),
-  retirementContract: join(ROOT, 'docs/design/14-sleep-background.md'),
+  retirementContract: join(ROOT, 'docs/design/runtime/14-sleep-background.md'),
 }
 
 /** The machine identifier the design contract records as its tripwire. */

@@ -352,7 +352,7 @@ test('根安装腿 patch 通道：本仓 pnpm-workspace.yaml 与 registry.patche
 /** §4.5 桌面 seat 审计表 ↔ registry `apps/desktop/src` mirror 条目的双向覆盖网（verify-registry ⑤E）。
  * 这些负向对照保证：删一行/改分类/路径漂移/registry 清单漏项都会红，而不是只有正向样本绿。 */
 const ROOT = join(HERE, '..', '..')
-const checklistPath = join(ROOT, 'docs', 'checklists', 'upstream-touchpoints.md')
+const checklistPath = join(ROOT, 'docs', 'checklists', 'upgrade', 'upstream-touchpoints.md')
 const checklistText = readFileSync(checklistPath, 'utf8')
 const seatFindings = (text = checklistText, data = registry) => desktopSeatAuditFindings(text, data, { exists: existsSync, resolvePath: (token) => join(ROOT, token) })
 

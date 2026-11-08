@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * dsh-chamber — DSH 控制面 CLI（连接管理器薄壳命令面；REST 契约见
- * docs/design/05-connection-manager.md §7.2）。serve 内嵌
+ * docs/design/control-plane/05-connection-manager.md §7.2）。serve 内嵌
  * @dsh-chamber/control-plane，SIGINT/SIGTERM 优雅退出；其余命令消费控制面
  * REST。无 auth/audit 子命令（控制面无登录面）；输出为人读表格，--json 时
  * JSON.stringify 原样输出。

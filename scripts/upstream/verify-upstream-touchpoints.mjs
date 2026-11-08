@@ -81,7 +81,7 @@
  * 登记纪律：单一来源 = scripts/upstream/registry.json（本文件启动即读它）。给某个文件打 chamber 补丁 = 在 entry.classify.patched 里登记
  * （含原因）；新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure 文件
  * 的修改都会在此硬失败——升级/重锚后改 registry，并跑 registry-views.mjs --write 重生成
- * docs/checklists/upstream-touchpoints.md 的 GENERATED 块（每 tag 维护循环见文档 §7）。
+ * docs/checklists/upgrade/upstream-touchpoints.md 的 GENERATED 块（每 tag 维护循环见文档 §7）。
  *
  * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
  *   node scripts/upstream/verify-upstream-touchpoints.mjs            # C1/C3–C16
@@ -505,7 +505,7 @@ for (const fork of FORKS) {
 // advisory mtime behavior for environments without esbuild.
 {
   // Single source: scripts/lib/build-artifacts.mjs — the same manifest
-  // ensure-artifacts.mjs bootstraps and docs/checklists/upstream-touchpoints.md
+  // ensure-artifacts.mjs bootstraps and docs/checklists/upgrade/upstream-touchpoints.md
   // §5 registers. C8 re-runs each group's own build script.
   const groups = ARTIFACT_REBUILD_GROUPS
   if (noArtifactRebuild) {
@@ -1074,7 +1074,7 @@ for (const fork of FORKS) {
 // 判定逻辑是纯函数（verify-upstream-touchpoints-hover.mjs）；单测与 args 测试同
 // 文件（verify-upstream-touchpoints-args.test.mjs——那是 CI `test:upgrade-tools`
 // 已挂的 sibling 测试文件，新开测试文件不会进 CI）。登记行见
-// docs/checklists/upstream-touchpoints.md §4/§6。
+// docs/checklists/upgrade/upstream-touchpoints.md §4/§6。
 //
 // 防伪纪律：形状与常数都读**去注释 + 去字符串/
 // 模板字面量**后的代码投影（诱饵字符串/注释不能伪证）；形状判定限定在 HoverCard
@@ -1146,7 +1146,7 @@ for (const fork of FORKS) {
       const added = spawnSync('git', ['-C', SUBMODULE, 'diff', '--name-status', oldTag, newTag, '--', `${f.upstream}/package.json`], { encoding: 'utf8' })
       console.log(`[C2] ${f.name} package.json: ${added.stdout.trim().split('\n')[0] || 'unchanged'}`)
     }
-    console.log('[C2] 提示：按 docs/checklists/upstream-touchpoints.md §7 循环逐面裁决（重放/登记/契约复验）。')
+    console.log('[C2] 提示：按 docs/checklists/upgrade/upstream-touchpoints.md §7 循环逐面裁决（重放/登记/契约复验）。')
   }
 }
 

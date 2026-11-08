@@ -8,7 +8,7 @@ import {
 } from '../../packages/control-plane/src/runtime-family.ts'
 
 /**
- * plugin-protection-gate.mjs — C11–C14 的纯判据（docs/checklists/upstream-touchpoints.md
+ * plugin-protection-gate.mjs — C11–C14 的纯判据（docs/checklists/upgrade/upstream-touchpoints.md
  * §6 的机器侧；design 21 §6.11「受保护集合与代耦合」的保鲜门）。
  *
  * 为什么单独成模块：`verify-upstream-touchpoints.mjs` 是顶层过程式程序、不可被
@@ -230,7 +230,7 @@ export function profileContractFindings({ profileSource, pluginSource, managerSo
     const lost = unreadable.reduce((sum, file) => sum + (owners.get(file) ?? 0), 0)
     violations.push(
       `C12 上游锚点所属文件读不到（${unreadable.join(', ')}）——${lost} 条锚点无法判定；`
-      + '树已部分物化，故按改名/搬移处理：核对 docs/checklists/upstream-touchpoints.md §6 的锚点登记'
+      + '树已部分物化，故按改名/搬移处理：核对 docs/checklists/upgrade/upstream-touchpoints.md §6 的锚点登记'
       + '与上游新路径后更新本门，绝不按通过处理',
     )
   }

@@ -13,7 +13,7 @@
  * **已发布 stable feed 里的最新 final 条目**复制进 beta feed。条目是 generate_appcast
  * 产出的原样 XML（enclosure 的 EdDSA 签名与条目内容绑定，逐字复制即保持有效）；本仓未开启
  * `SURequireSignedFeed`（feed 级签名），因此合并后**不需要**重签 feed。若未来开启该键，
- * 本脚本必须补 sign_update 重签（见 docs/design/25-macos-swift-native-shell.md §7）。
+ * 本脚本必须补 sign_update 重签（见 docs/design/desktop/25-macos-swift-native-shell.md §7）。
  *
  * 用法：
  *   node scripts/release/merge-native-feed.mjs --beta <beta feed> [--stable <stable feed>]

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * GUI acceptance entry point (docs/checklists/gui-acceptance-checklist.md).
+ * GUI acceptance entry point (docs/checklists/acceptance/gui-acceptance-checklist.md).
  *
  *   pnpm run acceptance:gui                     # --live: read-only probes against the RUNNING app
  *   pnpm run acceptance:gui -- --attach         # native default: probe a running native shell control plane

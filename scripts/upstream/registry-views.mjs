@@ -24,7 +24,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
 
 /** 生成块的宿主文档。 */
-export const CHECKLIST_PATH = join(ROOT, 'docs', 'checklists', 'upstream-touchpoints.md')
+export const CHECKLIST_PATH = join(ROOT, 'docs', 'checklists', 'upgrade', 'upstream-touchpoints.md')
 
 /** 块 id → 位置（文档里的段落由人写，块只替换表格本体）。 */
 export const FORK_BLOCK_PREFIX = 'touchpoints.fork-mirror.'

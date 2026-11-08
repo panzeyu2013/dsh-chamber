@@ -20,7 +20,7 @@
  * WHAT IT DOES NOT CHECK (honest coverage): the WKWebView UI itself. WKWebView
  * exposes no CDP endpoint, so the native window's DOM, hover cards and settings
  * surface cannot be driven from this toolbox; those stay real-machine
- * acceptance items (docs/checklists/gui-acceptance-checklist.md). `--attach`
+ * acceptance items (docs/checklists/acceptance/gui-acceptance-checklist.md). `--attach`
  * targets an already-running native shell's control plane through the same
  * minimal HTTP walkthrough; it still cannot attach to the web view. Attach mode
  * records N-1/N-7 as INFO — no ready frame is observed and there is no sidecar

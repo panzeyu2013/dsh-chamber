@@ -2,7 +2,7 @@
  * touchpoint-criteria.mjs — C1–C16 判据 id 表（纯数据、无副作用、零 import）。
  *
  * 用途：`scripts/upstream/registry.json` 的 `criteria` 字段与
- * `docs/checklists/upstream-touchpoints.md` §6 共用同一份 id。判据的**实现**仍在
+ * `docs/checklists/upgrade/upstream-touchpoints.md` §6 共用同一份 id。判据的**实现**仍在
  * `scripts/upstream/verify-upstream-touchpoints.mjs`（命令式，刻意不迁入数据 ——
  * 它们里有重建-比对、类型解析、竞态形状判定，数据化只会制造"假单一源"）。
  *

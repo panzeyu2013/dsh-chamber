@@ -1,6 +1,6 @@
 /**
  * Unit tests for the GUI acceptance toolbox's judgement layer (checks.mjs). The driving layers need
- * a display, app and CDP port and are local gates (docs/checklists/gui-acceptance-checklist.md), so
+ * a display, app and CDP port and are local gates (docs/checklists/acceptance/gui-acceptance-checklist.md), so
  * everything that decides pass/fail is pure and runs in CI like the other policed tools
  * (test:upgrade-tools, test:release-workflow). The walkthrough-SELECTION miniature at the end runs
  * the real page expressions against a fake DOM — their row selection decides whether W-4b judges the

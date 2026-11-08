@@ -20,7 +20,7 @@ const REGISTRY_COVERED = /覆盖文件：apps\/desktop\/src\/\{([^}]+)\}/u
 
 /**
  * 解析 §4.5 小节里的审计行（`| 上游文件 | 分类 | chamber 对照点 | 理由 |`）。
- * @param {string} checklistText - docs/checklists/upstream-touchpoints.md 全文。
+ * @param {string} checklistText - docs/checklists/upgrade/upstream-touchpoints.md 全文。
  * @returns {{ rows: {file: string, classification: string, chamber: string, reason: string}[], problems: string[] }}
  */
 export function parseDesktopSeatAudit(checklistText) {
