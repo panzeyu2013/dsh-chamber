@@ -392,10 +392,10 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         shellLog("[shell] Sparkle 更新已装配（feed=\(configuration.feedURL)，"
             + "自动检查=\(configuration.automaticChecks)）")
         shellLog("[shell] Sparkle 更新通道=\(channel.rawValue)（betaUpdates=\(betaUpdates)）"
-            + (betaSubscriptionProblem.map { "——通道切换不可用：\($0)" } ?? ""))
-        if betaUpdates, let betaSubscriptionProblem {
+            + (subscriptionProblem.map { "——通道切换不可用：\($0)" } ?? ""))
+        if betaUpdates, let subscriptionProblem {
             shellLog("[shell] 警告：已订阅预览版更新，但本构建的通道 URL 对不可用"
-                + "（\(betaSubscriptionProblem)）——按稳定通道处理")
+                + "（\(subscriptionProblem)）——按稳定通道处理")
         }
         if Self.shouldForceLaunchBackgroundCheck(configuration: configuration, startUpdater: startUpdater) {
             // 每启动一次的后台检查（不弹窗）。放在下一个 runloop 周期，让

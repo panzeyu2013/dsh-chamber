@@ -168,7 +168,8 @@ test('锁步：两个消费面只查共享的有界端点，非 2xx 各自措辞
   const feed = await resolveGithubBetaFeed(request)
   assert.equal(feed, 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.3/')
 
-  const controller = createHeadlessUpdateController({ version: '0.2.0-beta.2', logger, request })
+  // v4：版本后缀不再决定通道（beta 构建默认 stable），beta 发现必须显式注入 channel。
+  const controller = createHeadlessUpdateController({ version: '0.2.0-beta.2', channel: 'beta', logger, request })
   await controller.checkNow()
   assert.equal(controller.state().phase, 'available')
   assert.equal(controller.state().latestVersion, '0.2.0-beta.3')
