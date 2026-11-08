@@ -291,6 +291,7 @@ interface HostEdges {
 - **启动重放**：Swift 启动时按持久值经**同一条腿**应用（看门人只此一处）。回读经 `__host.debugModeApplied` 报给 sidecar，使用户打开设置页前投影已带事实。
 - **投递时机 = ready 门**：该上报只在 sidecar ready 帧之后发出（sidecar 侧 `installIpcHandlers` 先于 ready，装配前到达的入站会被 loud 拒绝），且**每次 ready 都重报**（含 sidecar 崩溃重启后的新 ready）：`debugRuntime` 是 sidecar 进程内的内存投影，而检查器状态活在 Swift 进程里——只报启动那一刻会让重启后的投影把「其实还开着」低报成「尚未应用」。重报读的是当下事实（`MainWindowController.currentInspectable()` + 设置文件里的持久意图），不是启动快照。
 - **信任边界**：开启 = 本机任意程序可读页面内容并可注入 JS；默认关、只对本机、不涉网关/隧道/远程实例，文案在开关旁明写。
+- **设置面副作用**：开启后「通用」页末尾出现只读的「性能与内存」组（常驻来源表 / 内存读数 / 手动释放；契约与挂载门见 [15](../client/15-chamber-settings-page.md) §D5），关闭即卸载。
 
 **Rejected alternatives**：① 维持 `#if DEBUG` 单一入口——正是发布包无检查器的痛点；② 单独分发 debug 构建——第二份签名/公证产物 + 用户手上永远不是 release，验证价值反降；③ 环境变量开关（`DSH_CHAMBER_SHELL_DEBUG` 一类）——打包态被硬剥离（T-11 纪律），且对 GUI 用户不可达，GUI 设置是唯一不破坏该纪律的用户面；④ 默认开、允许关——发布包默认降低信任边界，不可接受；⑤ 自建调试端口 / CDP 兼容面——WKWebView 无 CDP 实现，自造协议等于新增监听端口与长期维护面，而 `isInspectable` 直接复用 Safari 官方检查器（零新端口）。
 

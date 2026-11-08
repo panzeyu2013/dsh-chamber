@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import {
   debugFactsCard,
   debugFactsCardVisible,
+  debugOnlySectionsVisible,
   debugStatusKind,
   debugSupported,
   debugToggleDisabled,
@@ -72,6 +73,16 @@ test('debugToggleDisabled: 未水合 / 不支持 / 保存在飞 三者任一即�
   assert.equal(debugToggleDisabled({ ...open, supported: false }), true)
   // 在飞门：跨进程回读是 await，两次连点的落盘顺序不保证 → 一次只允许一个意图在途。
   assert.equal(debugToggleDisabled({ ...open, saving: true }), true)
+})
+
+test('debugOnlySectionsVisible: 只有「已水合 + 调试模式打开」才挂载调试专用区块', () => {
+  // 挂载门（不是隐藏门）：面板的订阅/DOM 节点数采集/显示时钟随挂载存在，所以关闭调试
+  // 模式必须是「不挂载」，而不是 CSS 隐藏。
+  assert.equal(debugOnlySectionsVisible({ hydrated: true, enabled: true }), true)
+  assert.equal(debugOnlySectionsVisible({ hydrated: true, enabled: false }), false)
+  // 未水合 = 开关状态未知：不先渲染一帧再撤。
+  assert.equal(debugOnlySectionsVisible({ hydrated: false, enabled: true }), false)
+  assert.equal(debugOnlySectionsVisible({ hydrated: false, enabled: false }), false)
 })
 
 test('debugSupported: 缺字段 = 早于该门的主进程 → 按不支持读（非对称契约）', () => {

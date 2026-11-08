@@ -345,7 +345,7 @@ export const chamberBridge: {
   | 135s 挂死 | 未 settle 挂载超过 `HARVEST_ABANDON_MS` | 活动/待开 → 标记失败；隐藏 → 释放 |
   | 遮罩放弃 | 遮罩「切换来源」落地后 | 释放被放弃视图（`reclaimView` 拒绝活动/待开） |
   | 收割让位 | 最后收割的温壳遇到新收割候选 | 让出后台槽（`packages/renderer/src/baseline-harvest.ts#shouldReclaimHarvestedShell`） |
-  | 手动释放 | 设置 → 通用「性能与内存」表内「释放 UI」 | 用户控制面，写抑制；见 design 15 §D5 |
+  | 手动释放 | 设置 → 通用「性能与内存」表内「释放 UI」（仅调试模式开启时可见） | 用户控制面（诊断专用面），写抑制；见 design 15 §D5 |
   | 硬上限 / 压力阀 | 自动 | 纯函数选择（见上条）；不可释放者由保护规则跳过 |
   释放 = dispose shell + 卸载 UI 壳，实例进程/隧道/后台任务不受影响；重开走冷 boot + entry 重放。
   被释放源的侧栏聚合落到 30s unary 兜底（§2.3）；完成蓝点/通知边沿不依赖挂载——无壳（facts-only
@@ -365,14 +365,14 @@ export const chamberBridge: {
 - **可见性契约（内存）**：**每壳字节不可得**——N 个壳共享同一个 renderer JS 堆与渲染进程，
   Chromium/WKWebView 都不提供按壳归属的堆读数（单 renderer 架构的已知取舍，不是待修缺陷）。可得的是
   页面级事实（`residentBridge` 快照：状态/隐藏时长/DOM 节点数/后台槽归属/设置面目标）与整机系统内存
-  （`settings.get` 的可选 `system`），由设置→通用「性能与内存」只读组呈现（design 15 §D5）。
+  （`settings.get` 的可选 `system`），由设置→通用「性能与内存」只读组呈现（design 15 §D5）——该面**仅在调试模式开启时挂载**：关闭调试模式即无面板读数（页面级快照仍在内存 store，零渲染成本），宿主回读 `inspectable` 不是它的可见性条件。
 - **性能预算**：N=5 稳态 = **无 20s 回收 tick**（条件 watchdog 只在未 settle/待收割时武装；压力阀
   30s 采样是 >1 挂载时的唯一周期任务）、**零新 IPC 通道**（resident 快照走页面级内存 store）；
-  `settings.get` 只在压力阀武装时按 30s TTL 缓存采样、面板打开时读一次；**零新渲染**（面板关闭时不渲染
+  `settings.get` 只在压力阀武装时按 30s TTL 缓存采样、面板挂载（= 调试模式开启）时读一次；**零新渲染**（面板未挂载时不渲染
   额外 UI；快照发布不触发框架重渲染，除非面板订阅）、**DOM 计数只在面板订阅时采集**（`residentBridge`
-  的订阅计数决定是否估读各壳子树的节点数；面板打开时 `requestRefresh` 补一帧完整快照）、**每次相关提交
-  只发布一次**（单一 publish effect）。释放错峰（250ms）避免 teardown 长任务与帧抖动。面板打开期间另有
-  一个 1s 显示时钟（design 15 D5），只重算隐藏时长的格式化，不读任何数据面。
+  的订阅计数决定是否估读各壳子树的节点数；面板挂载时 `requestRefresh` 补一帧完整快照）、**每次相关提交
+  只发布一次**（单一 publish effect）。释放错峰（250ms）避免 teardown 长任务与帧抖动。面板挂载期间另有
+  一个 1s 显示时钟（design 15 D5），只重算隐藏时长的格式化，不读任何数据面。**调试模式关闭 ⇒ 面板不挂载 ⇒ 零订阅、零 DOM 节点采集、零显示时钟**（挂载门而非 CSS 隐藏，design 15 D5）：面板因此是调试专用面，测量成本只在用户显式打开调试面时存在。
 - **不变量**：① local 恒留、永不被自动释放；② active/painted/pending/settings-target/booting 壳永不被
   自动释放；③ 最近输入（`packages/renderer/src/resident-policy.ts#INPUT_GRACE_MS` = 10min）内的壳不被硬上限/压力阀释放；④ 释放只走唯一拆除
   入口（dispose shell 撤 producer，随后清插件诊断与降级自愈事实）；⑤ 释放不改变来源注册表、不碰数据面键空间（会话事实
@@ -380,7 +380,8 @@ export const chamberBridge: {
 - **已知取舍**：① 设置面板后台挂载的源在面板关闭后成为普通常驻壳（面板 hold 只保证打开期间不被释放，
   之后不再自动释放）；② `critical` 压力下释放可能丢掉该壳内未提交的草稿/未保存表单（活动/屏上壳永不
   在候选内，但后台壳的编辑态无法在释放前保存）；③ 系统内存是 30s 采样，critical 释放可能滞后一个
-  窗口——宁滞后不误杀。
+  窗口——宁滞后不误杀；④「性能与内存」面板与其中的手动释放（「释放 UI」）只在调试模式开启时存在——诊断/手动控制面
+  不是常设设置面；关闭调试模式后无可视手动入口（自动退役仍按上表生效），需要手动释放时先开调试模式。
 - **Rejected alternatives**：① 保留旧「1 槽 + 60s 超限回收」——用户已可感知的温壳被拆，与 keep-all
   目标直接冲突；② 完整策略引擎/模式档（per-source pin / aggressive-conservative 档）——多一个需要实测
   校准的旋钮，而硬上限 + 压力阀已覆盖内存风险；③ 长空闲丢弃（如 30min 未活动即拆）——与「用户意图壳

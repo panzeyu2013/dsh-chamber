@@ -2,9 +2,9 @@
  * 「性能与内存」只读组的纯投影测试（resident-panel-model.ts）。
  *
  * 为什么测纯函数而不是 pin 组件源码：状态文案/格式化/禁用门/两击 arm 的真值表都在纯
- * 模块里，等价重构不误报、真实回归不漏；源码只留一条挂载锁（GeneralView 必须挂
- * ResidentPanel）与词典键存在性——挂载丢失或键缺失是「面板消失/文案空白」这两类
- * 静默回归，用文本锁钉住最直接。
+ * 模块里，等价重构不误报、真实回归不漏；源码只留一条挂载锁（GeneralView 只在调试模式
+ * 打开时把 ResidentPanel 挂在「更新」组之后）与词典键存在性——挂载丢失、失去调试门或
+ * 键缺失是「面板消失/面板常驻/文案空白」这类静默回归，用文本锁钉住最直接。
  */
 
 import { test } from 'node:test'
@@ -267,12 +267,18 @@ test('i18n: resident 组文案在 zh/en 双语字典里齐全且非空', () => {
   assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort(), 'en/zh 键集必须镜像')
 })
 
-test('挂载锁: GeneralView 在「运行」组之后挂载 ResidentPanel（面板不会被静默摘掉）', () => {
+test('挂载锁: GeneralView 只在调试模式打开时挂载 ResidentPanel，且位置在「更新」组（调试模式行）之后', () => {
   const source = readFileSync(new URL('../../src/client/GeneralView.tsx', import.meta.url), 'utf8')
   assert.match(source, /import \{ ResidentPanel \} from '\.\/ResidentPanel\.tsx'/)
-  assert.match(source, /<ResidentPanel t=\{t\} \/>/)
-  // 挂载点必须在「运行」组关闭之后：取 generalGroupRuntime 标题到挂载点的距离为正。
-  const runtime = source.indexOf(`generalGroupRuntime`)
+  // 唯一挂载点：无条件挂载 = 面板常驻，订阅/DOM 计数随页面一直在（旧形态回归）。
+  assert.equal(source.match(/<ResidentPanel\b/g)?.length, 1, 'ResidentPanel 必须只有一个挂载点')
+  const mountLine = source.split('\n').find(line => line.includes('<ResidentPanel')) ?? ''
+  assert.match(mountLine, /&&\s*<ResidentPanel t=\{t\} \/>/, '挂载必须是条件渲染（调试模式门），不能无条件挂载')
+  // 门在纯函数里，组件只接「已水合 + 调试模式开关」两个事实（真值表在 debug-mode-gate.test.ts）；
+  // 两个事实都必须来自真实状态——写死 `hydrated: true` 也会让「仅调试模式」通过，故连传入形参一起钉。
+  assert.match(source, /debugOnlySectionsVisible\(\{\s*hydrated,\s*enabled: settings\?\.debug\?\.enabled === true,?\s*\}\)/)
+  // 位置：「更新」组的最后一行是调试模式行，面板必须在该组之后（不在「运行」组后常驻）。
+  const update = source.indexOf('<UpdateSection t={t} />')
   const mount = source.indexOf('<ResidentPanel t={t} />')
-  assert.ok(runtime >= 0 && mount > runtime, 'ResidentPanel 必须挂在「运行」组之后')
+  assert.ok(update >= 0 && mount > update, 'ResidentPanel 必须挂在「更新」组（调试模式行）之后')
 })
