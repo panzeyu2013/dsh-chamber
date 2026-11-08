@@ -1,6 +1,6 @@
 # @dsh-chamber/dsh-runtime
 
-**宿主无关**的 dsh 运行时版本管理核心（设计 [18](../../docs/design/18-dsh-runtime-version.md)）：解析 → 下载 → 安装 → 验证 → 激活/回滚，全部策略都在这里，由 desktop 主进程与 gateway 各自适配注入（两者从不共享运行时状态）。
+**宿主无关**的 dsh 运行时版本管理核心（设计 [18](../../docs/design/runtime/18-dsh-runtime-version.md)）：解析 → 下载 → 安装 → 验证 → 激活/回滚，全部策略都在这里，由 desktop 主进程与 gateway 各自适配注入（两者从不共享运行时状态）。
 
 ## 契约与边界
 

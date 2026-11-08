@@ -6,7 +6,7 @@ dsh-chamber is the local desktop connection manager for dsh: the control plane h
 
 ## Development Environment
 
-Requirements, clone, vendor bootstrap, `pnpm install`, `bundle:dsh`, running, build/packaging, CI/releases and repo layout: development docs [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
+Requirements, clone, vendor bootstrap, `pnpm install`, `bundle:dsh`, running, build/packaging, CI/releases and repo layout: development docs [docs/DEVELOPMENT.en-US.md](./DEVELOPMENT.en-US.md).
 
 ```bash
 git clone <REPO-URL> --recurse-submodules
@@ -101,7 +101,7 @@ Pull requests are review handoffs, not just diffs: a reviewer must understand in
 
 Before opening a pull request:
 
-1. Read [`AGENTS.md`](../AGENTS.md) and the relevant design/progress docs (`docs/design/01-overview.md` is the entry point).
+1. Read [`AGENTS.md`](../AGENTS.md), [`docs/INDEX.md`](./INDEX.md) (the repository docs map), and the relevant design/progress docs ([`docs/design/INDEX.md`](./design/INDEX.md) is the design entry; overview `docs/design/01-overview.md`).
 2. Keep the change focused; separate unrelated cleanup or refactors.
 3. Run the validation required by the change, not only the broad commands above.
 4. Complete the pull request template with concrete, current evidence for the final PR HEAD.
@@ -130,4 +130,4 @@ You can still help:
 
 ## Questions?
 
-Open an [issue](https://github.com/panzeyu2013/dsh-chamber/issues) or read the design docs in [`docs/design/`](design/).
+Open an [issue](https://github.com/panzeyu2013/dsh-chamber/issues) or read the design docs in [`docs/design/`](./design).

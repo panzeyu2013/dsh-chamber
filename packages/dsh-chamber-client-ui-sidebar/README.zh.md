@@ -1,6 +1,6 @@
 # @dsh-chamber/dsh-chamber-client-ui-sidebar
 
-[English](README.md) | 中文
+[English](./README.md) | 中文
 
 chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外壳结构，把
 `sidebar.workspaces` 浏览区替换为 chamber 的**多来源 session/workspace 列表**。

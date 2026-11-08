@@ -1,6 +1,8 @@
 # dsh-chamber Gateway 部署指南
 
 > 一键安装脚本 `scripts/install-gateway.sh`（交互向导/非交互）；子命令install / update / restart / status / logs / uninstall。
+>
+> 文档地图：[docs/INDEX.md](../INDEX.md)；阶段矩阵与门禁入口：[docs/checklists/README.md](../checklists/README.md)。
 
 ## 1. 快速开始
 
@@ -43,7 +45,7 @@ GitHub Releases全部可用版本**（稳定/预发布标记、发布日期、ga
 
 ## 3. 从直连 dsh 迁移到 Gateway（无缝延续旧数据）
 
-> 适用场景：已按 [remote-dsh-instance.md](remote-dsh-instance.md) 以systemd直连部署dsh（数据在单元运行账号的 `~/.dsh`），现改由同一服务器的Gateway托管，旧会话 / 工作区 / 设置延续。
+> 适用场景：已按 [remote-dsh-instance.md](./remote-dsh-instance.md) 以systemd直连部署dsh（数据在单元运行账号的 `~/.dsh`），现改由同一服务器的Gateway托管，旧会话 / 工作区 / 设置延续。
 
 先明确两件事，避免误以为数据丢失：
 

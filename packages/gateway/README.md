@@ -1,6 +1,6 @@
 # @dsh-chamber/gateway
 
-**显式启动的 server 部署形态**（设计 [17](../../docs/design/17-server-side-gateway.md)）：同一个本地宿主管理器，放在**默认开启认证**的公网请求边界之后。
+**显式启动的 server 部署形态**（设计 [17](../../docs/design/gateway/17-server-side-gateway.md)）：同一个本地宿主管理器，放在**默认开启认证**的公网请求边界之后。
 
 ## 契约与边界
 

@@ -1,6 +1,6 @@
 # @dsh-chamber/dsh-chamber-client-ui-sidebar
 
-English | [中文](README.zh.md)
+English | [中文](./README.zh.md)
 
 Chamber's self-built sidebar plugin (design 05 §2): a copy of the official
 ui-sidebar shell whose `sidebar.workspaces` region is replaced by the chamber

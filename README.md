@@ -1,6 +1,6 @@
 # dsh-chamber（中文说明）
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-brightgreen)]()
 [![Release](https://img.shields.io/github/v/release/panzeyu2013/dsh-chamber?include_prereleases&label=release)](https://github.com/panzeyu2013/dsh-chamber/releases)
 [![Downloads](https://img.shields.io/github/downloads/panzeyu2013/dsh-chamber/total)](https://github.com/panzeyu2013/dsh-chamber/releases)
@@ -9,15 +9,15 @@ dsh（DeepSeek Harness）的桌面连接管理器：把本机与任意多台服�
 
 macOS版本采用 **Swift/AppKit原生壳**：窗口、菜单、托盘、通知、Dock角标、深链、文件对话框、隐藏/恢复与Sparkle应用内更新都在Swift侧实现；业务由随包分发的Node sidecar承载；页面100%复用dsh官方前端，不是浏览器套壳。
 
-> **版本范围（2026-11用户裁决）**：唯一出货版本 = **macOS Swift原生壳**（Apple Silicon）。Electron桌面版已**冻结归档**（不删除文件、可复活），Windows/Linux桌面版随之冻结、**不发布**；恢复需用户裁决，范围/共享契约/禁用面/复活清单见 [docs/progress/electron-frozen.md](docs/progress/electron-frozen.md)。
+> **版本范围（2026-11用户裁决）**：唯一出货版本 = **macOS Swift原生壳**（Apple Silicon）。Electron桌面版已**冻结归档**（不删除文件、可复活），Windows/Linux桌面版随之冻结、**不发布**；恢复需用户裁决，范围/共享契约/禁用面/复活清单见 [docs/progress/electron-frozen.md](./docs/progress/electron-frozen.md)。
 
 ## 用户界面
 
-![dsh-chamber用户主界面](assets/page.png)
+![dsh-chamber用户主界面](./assets/page.png)
 
 *用户主界面——单窗口，dsh原生侧边栏按来源列出（本地 + 远程）session/workspace，主区为活动实例的dsh shell。*
 
-> English: [README.en-US.md](docs/README.en-US.md) · 开发文档 [DEVELOPMENT.md](docs/DEVELOPMENT.md) · 设计入口 [01-overview.md](docs/design/01-overview.md) · 进度 [STATUS.md](docs/progress/STATUS.md)
+> English: [README.en-US.md](./docs/README.en-US.md) · 文档地图 [docs/INDEX.md](./docs/INDEX.md) · 开发文档 [DEVELOPMENT.md](./docs/DEVELOPMENT.md) · 设计索引 [design/INDEX.md](./docs/design/INDEX.md) · 进度 [STATUS.md](./docs/progress/STATUS.md)
 
 ## 为什么是 dsh-chamber
 
@@ -43,7 +43,7 @@ macOS安装包见 [GitHub Releases](https://github.com/panzeyu2013/dsh-chamber/r
 
 - macOS（Apple Silicon）：`dsh-chamber-<version>-macos-arm64.dmg`
 
-版本与通道策略以 [CHANGELOG.md](CHANGELOG.md) 与 GitHub Releases 为准：stable 与 beta 通道独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；打开后接收 beta 且偏好跨版本保留）。
+版本与通道策略以 [CHANGELOG.md](./CHANGELOG.md) 与 GitHub Releases 为准：stable 与 beta 通道独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；打开后接收 beta 且偏好跨版本保留）。
 
 ### 2 · 启动应用
 
@@ -75,14 +75,14 @@ bash install-gateway.sh
 安装完成后：
 
 - 日常管理：`install-gateway.sh status|logs|restart|update|uninstall`
-- 公网接入：用Nginx/Caddy将HTTPS反代到 `127.0.0.1:30801`，见 [docs/deploy/deploy-gateway.md](docs/deploy/deploy-gateway.md)
+- 公网接入：用Nginx/Caddy将HTTPS反代到 `127.0.0.1:30801`，见 [docs/deploy/deploy-gateway.md](./docs/deploy/deploy-gateway.md)
 - 桌面接入：「设置 → 连接」添加Gateway来源（HTTP transport + 反代地址），按需配置共享token / 登录密码
 
 #### 方式二：远程 dsh 实例 + systemd
 
-不装gateway时，可用systemd（系统或user单元，非root用户运行）持久化服务器上的dsh实例，桌面端经SSH隧道接入；完整配置与排障见 [docs/deploy/remote-dsh-instance.md](docs/deploy/remote-dsh-instance.md)。
+不装gateway时，可用systemd（系统或user单元，非root用户运行）持久化服务器上的dsh实例，桌面端经SSH隧道接入；完整配置与排障见 [docs/deploy/remote-dsh-instance.md](./docs/deploy/remote-dsh-instance.md)。
 
-已有直连实例、想改用Gateway？旧数据不会自动跟随；安装Gateway后按 [deploy-gateway.md §3「从直连dsh迁移到Gateway」](docs/deploy/deploy-gateway.md) 迁移一次即可。
+已有直连实例、想改用Gateway？旧数据不会自动跟随；安装Gateway后按 [deploy-gateway.md §3「从直连dsh迁移到Gateway」](./docs/deploy/deploy-gateway.md) 迁移一次即可。
 
 ### 4 · 添加远程主机
 
@@ -122,16 +122,20 @@ bash install-gateway.sh
 
 |文档|用途|
 |---|---|
-|[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)|开发文档：架构总览/环境搭建/构建打包/CI发布/仓库结构|
-|[docs/deploy/deploy-gateway.md](docs/deploy/deploy-gateway.md)|Gateway服务器端部署指南|
-|[docs/deploy/remote-dsh-instance.md](docs/deploy/remote-dsh-instance.md)|远程dsh实例的systemd持久化说明|
-|[CONTRIBUTING.md](CONTRIBUTING.md)|贡献指南（测试/Commit/PR契约）|
-|[AGENTS.md](AGENTS.md)|开发约束（常驻仓库规则）|
-|[docs/AGENTS.md](docs/AGENTS.md)|文档标准（分层 / 写作 / 篇幅 / 文档门）|
-|[CHANGELOG.md](CHANGELOG.md)|版本变更记录|
-|[docs/design/01-overview.md](docs/design/01-overview.md)|设计入口：收拢原则、范围、移除映射|
-|[docs/progress/STATUS.md](docs/progress/STATUS.md)|唯一进度记录：开放项 / 判据 / 指针|
-|[docs/README.en-US.md](docs/README.en-US.md)|English README|
+|[docs/INDEX.md](./docs/INDEX.md)|**全局文档地图**：入口 / 设计 / 清单 / 进度 / 运维的唯一导航|
+|[docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)|开发文档：架构总览/环境搭建/构建打包/CI发布/仓库结构|
+|[docs/design/INDEX.md](./docs/design/INDEX.md)|设计索引：27 篇设计按领域 × 状态 × owner（总览 [01-overview.md](./docs/design/01-overview.md)）|
+|[docs/design/decisions/README.md](./docs/design/decisions/README.md)|跨域决策记录（ADR：背景 / 决定 / 被否方案 / 后果）|
+|[docs/checklists/README.md](./docs/checklists/README.md)|检查清单阶段矩阵：commit / push / release / upgrade / acceptance / ops 的门与入口|
+|[docs/progress/STATUS.md](./docs/progress/STATUS.md)|唯一进度记录：开放项 / 判据 / 指针|
+|[docs/progress/electron-frozen.md](./docs/progress/electron-frozen.md)|Electron 冻结登记：范围 / 共享契约 / 禁用面 / 复活清单|
+|[docs/deploy/deploy-gateway.md](./docs/deploy/deploy-gateway.md)|Gateway服务器端部署指南|
+|[docs/deploy/remote-dsh-instance.md](./docs/deploy/remote-dsh-instance.md)|远程dsh实例的systemd持久化说明|
+|[CONTRIBUTING.md](./CONTRIBUTING.md)|贡献指南（测试/Commit/PR契约）|
+|[AGENTS.md](./AGENTS.md)|开发约束（常驻仓库规则）|
+|[docs/AGENTS.md](./docs/AGENTS.md)|文档标准（类型 / 放置 / 写作 / 篇幅 / 文档门）|
+|[CHANGELOG.md](./CHANGELOG.md)|版本变更记录|
+|[docs/README.en-US.md](./docs/README.en-US.md)|English README|
 
 ## 相关项目
 
@@ -144,8 +148,8 @@ bash install-gateway.sh
 
 ## 贡献
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)；开发约束见 [AGENTS.md](AGENTS.md)，环境与构建见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+见 [CONTRIBUTING.md](./CONTRIBUTING.md)；开发约束见 [AGENTS.md](./AGENTS.md)，环境与构建见 [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)。
 
 ## License
 
-MIT — 见 [LICENSE](LICENSE)。
+MIT — 见 [LICENSE](./LICENSE)。

@@ -12,7 +12,7 @@
 `build:sidecar` 把它拷到 `<sidecar>/primary-runtime`（与 `<sidecar>/office-skills`、`sidecar.js`
 平级），随 `build:swift-app` 进 `Contents/Resources/sidecar/primary-runtime`。Swift 用其中的
 `dependencies/node/bin/node` 启动 `sidecar.js`，托管 dsh 用同一 `process.execPath`（细节见
-`docs/design/25-macos-swift-native-shell.md` §3.2/§4.3）。
+`docs/design/desktop/25-macos-swift-native-shell.md` §3.2/§4.3）。
 
 ```
 primary-runtime/
@@ -49,8 +49,8 @@ node packages/desktop/scripts/prepare-python-payload.mjs --verify packages/deskt
 
 载荷的消费者是上游 `@deepseek-ai/dsh-tool-workspace-dependencies`，由本地启动行以
 `config {source: <本目录>, root: <DSH_HOME>/dsh-runtimes/dsh-primary-runtime}` 挂载（启动行契约
-见 `docs/design/09-client-plugin-runtime-loading.md` §3.5，载荷形状见
-`docs/design/18-dsh-runtime-version.md` §4.2）。首次 `load_workspace_dependencies` 调用把 app 内
+见 `docs/design/client/09-client-plugin-runtime-loading.md` §3.5，载荷形状见
+`docs/design/runtime/18-dsh-runtime-version.md` §4.2）。首次 `load_workspace_dependencies` 调用把 app 内
 这份**只读**载荷复制到 `<DSH_HOME>/dsh-runtimes/dsh-primary-runtime`，返回安装后的绝对路径；
 app 内文件不被修改。上游不经 PATH/env 暴露资源——路径由工具返回值显式交给模型。
 

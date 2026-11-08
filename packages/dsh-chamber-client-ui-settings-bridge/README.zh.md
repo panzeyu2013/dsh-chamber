@@ -1,6 +1,6 @@
 # @dsh-chamber/dsh-chamber-client-ui-settings-bridge
 
-[English](README.md) | 中文
+[English](./README.md) | 中文
 
 chamber 自研**设置壳**插件：以
 **保留的 shadow 优先级**（`-1000`，shared face `settings-shell.ts`）向

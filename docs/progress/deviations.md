@@ -1,8 +1,8 @@
 # Electron ↔ Swift 双 flavor 偏差登记（deviations）
 
-> **冻结横幅（2026-11 用户裁决）**：Electron flavor 已冻结归档（见 [electron-frozen.md](electron-frozen.md)）。
+> **冻结横幅（2026-11 用户裁决）**：Electron flavor 已冻结归档（见 [electron-frozen.md](./electron-frozen.md)）。
 > 本表为**历史参考**：Electron 冻结后**不再新增/维护行**，也不再要求「双端同步」；Swift-only 差异与开放事项
-> 走 [STATUS.md](STATUS.md)。正文中的 `open` 一律是**冻结前遗留结论**（其进度语义已随冻结失效；Swift 侧仍有
+> 走 [STATUS.md](./STATUS.md)。正文中的 `open` 一律是**冻结前遗留结论**（其进度语义已随冻结失效；Swift 侧仍有
 > 价值的条目在 STATUS 跟踪），`accepted` 同理只作历史参考——不要据本表排期或判「未完成」。
 
 > 文件定位：`docs/progress/STATUS.md`是唯一进度记录（未完成项、设计未决、范围决策）；本文件是
@@ -13,7 +13,7 @@
 > 本表逐行为当前结论：**状态**词即权威。只有 `open`（仍待处理）与 `accepted`（有意保留）留在正文；
 > 消解落地（`resolved`）的条目移出正文，只在末尾「id 退役索引」留一行——现象、取舍与证据原文见
 > git 历史与 design，不再复述。证据优先写符号锚（path#=literal:… / path#Symbol）；裸行号以当前工作树为准（D15）。
-> 本表的 `open` 是**差异结论**，不是进度状态；open 行的进度、验收门与关闭条件以 [STATUS.md](STATUS.md) 为准。
+> 本表的 `open` 是**差异结论**，不是进度状态；open 行的进度、验收门与关闭条件以 [STATUS.md](./STATUS.md) 为准。
 > 状态以各条的「状态」列为准；仍 open 的条目集中在 §1（S 系）与 §4（G/D 系）。
 
 ## 0. 更新纪律

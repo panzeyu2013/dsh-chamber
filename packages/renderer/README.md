@@ -1,6 +1,6 @@
 # @dsh-chamber/renderer
 
-**源码复用自建**的 dsh 官方前端（设计 [09](../../docs/design/09-client-plugin-runtime-loading.md)、[19](../../docs/design/19-notifications.md)）：把官方 web shell 编译进 chamber 自己的入口，在一个页面里以 N 个 cordis context 承载 N 个来源的 shell。
+**源码复用自建**的 dsh 官方前端（设计 [09](../../docs/design/client/09-client-plugin-runtime-loading.md)、[19](../../docs/design/client/19-notifications.md)）：把官方 web shell 编译进 chamber 自己的入口，在一个页面里以 N 个 cordis context 承载 N 个来源的 shell。
 
 ## 契约与边界
 
@@ -8,7 +8,7 @@
 - **每实例作用域**：`chamberInstanceId` / `chamberBasePath` / `chamberTransport` / `chamberSourceFingerprint` 逐入口注入，前端 runtime 的读写经 `/api/i/<id>/*` 落到该实例自己的 API。
 - **不做第二套 UI**：聊天/会话/设置/插件清单等界面全部来自官方前端；本包只做入口装配、来源编排与边沿投影（通知边沿：`notification-edges.ts`）。
 - **文档级全局是已知风险面**：单一 renderer 文档下 body portal 等全局共享（逐条登记在 `docs/progress/STATUS.md`）；document `drop` 曾属该族，现由两条构建期 vendor 补丁按 drop 落点所属视图做 intake containment（design 25 §5.7）。`<html lang>` 已由页级归属器持有（`src/page-language.ts` + `src/locale-ownership.ts`，design 06 §4.6「页面语言归属」），不再属于该清单。
-- **vendor 补丁是构建期精确文本重写**（`scripts/vendor-patches.mjs`，18 补丁 / 47 锚点），永不写 vendor 源码；`verify-vendor-patch-applied` 在构建链上验证命中；每条补丁声明 `retireCheck`（上游修复形态）或 `noRetireForm`（无可断言形态的理由），C9 据此区分 `retire-candidate` 与漂移。
+- **vendor 补丁是构建期精确文本重写**（`scripts/vendor-patches.mjs` 是补丁清单与锚点数的单一来源），永不写 vendor 源码；`verify-vendor-patch-applied` 在构建链上验证命中；每条补丁声明 `retireCheck`（上游修复形态）或 `noRetireForm`（无可断言形态的理由），C9 据此区分 `retire-candidate` 与漂移。
 
 ## 构建与检查
 

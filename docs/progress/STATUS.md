@@ -2,17 +2,17 @@
 
 > 只记仍开放项：未完成/部分完成（含实机与打包态门禁）、设计未决、仍成立的取舍；每条 = 开放事实 + 判据/指针。
 > 已实现基线以 git 历史、`CHANGELOG.md`、`docs/design/` 为权威；不记完成叙事、测试计数、哈希、批次与实现过程。
-> 本文件是**唯一进度记录**；未排期计划见 [TODO.md](TODO.md)，双 flavor 差异见 [deviations.md](deviations.md)；
+> 本文件是**唯一进度记录**；未排期计划见 [TODO.md](./TODO.md)，双 flavor 差异见 [deviations.md](./deviations.md)；
 > 条目的进度状态只在本文件，TODO/deviations 不重复记状态。条目落地或不再成立即删。
 >
-> **版本范围与冻结清单**：唯一出货 flavor = macOS Swift 原生壳；Electron flavor 已冻结归档、不发布（Windows/Linux 桌面腿随之冻结；下方 Electron 专属条目一律冻结、不排期）。范围、共享契约、禁用面与复活清单见 [electron-frozen.md](electron-frozen.md) §1 与根 [`AGENTS.md`](../../AGENTS.md)。
+> **版本范围与冻结清单**：唯一出货 flavor = macOS Swift 原生壳；Electron flavor 已冻结归档、不发布（Windows/Linux 桌面腿随之冻结；下方 Electron 专属条目一律冻结、不排期）。范围、共享契约、禁用面与复活清单见 [electron-frozen.md](./electron-frozen.md) §1 与根 [`AGENTS.md`](../../AGENTS.md)。
 
 ## 一、未完成 / 部分完成
 
 ### 1.1 会话链、运行位与页面通道
 
-- **I-15 上游漂移实机记录**：六组矩阵（P6、归档两段式+恢复、通知四缺口、运行位 60/190/310s、I-14 selection scope、I-12 谱系压制）待打包态/真机各跑一次；执行序见 `gui-acceptance-checklist.md` §4.1，判据见 [TODO.md](TODO.md) A§14.1。
-- **上游 UI 对齐遗留面**：待裁差异见 §2.1，外部约束见 §2.3，明细见 [TODO.md](TODO.md) A§15。
+- **I-15 上游漂移实机记录**：六组矩阵（P6、归档两段式+恢复、通知四缺口、运行位 60/190/310s、I-14 selection scope、I-12 谱系压制）待打包态/真机各跑一次；执行序见 `gui-acceptance-checklist.md` §4.1，判据见 [TODO.md](./TODO.md) A§14.1。
+- **上游 UI 对齐遗留面**：待裁差异见 §2.1，外部约束见 §2.3，明细见 [TODO.md](./TODO.md) A§15。
 - **会话链重构（design 14 §D4）**：60/190/310s、ssh 写回时延、macOS 腿、集中日志面待校准；Swift `RendererRecovery`/`RendererHangWatchdog` 超 ≤90/≤60 目标且未入棘轮；反补丁波次①–④；`tests` 模式 flaky。
 - **弱网韧性 v1（design 27）**：真实 WAN/ssh 中继下的 100/300ms、1/5% 丢包、10s 黑洞、20s flap、真机睡眠/切网（resume/online 复验）与 `verifyUpBudgetMs` 复合预算（gateway 口令 35s / dsh 5s）待人工确认；终态自愈（terminalRetryable）/就绪延展/慢探抖动的滚动升级与真机门禁同批待验；本机 `pnpm run acceptance:netem` 可复跑 veth+netem（真实 tc/真代理；`NETEM_BULK_UPLOAD=1` 追加 20MB@2Mbit），不替代真实 WAN 与真机睡眠。另：打包态入站 `client-body idle` 慢上传（loopback 已证 35s `requestTimeout` 不约束）、`$events` 宿主 boot id 后续、PinnedAgent 延期（pin 仍 `agent:false`）；其余已知限制见 design 27 §6。
 - **会话运行位卡死**：①lane 复现未接 CI；②WS 半盲时 transcript 不收敛（宿主 `asOfSeq` 对账未做）；③`session.list` 单飞悬挂；④子代理行不进运行时事实（有意）；⑤隐藏期 watchdog 不 tick；⑥阈值/N=2/写回链未实机校准；⑦vendor 语义由 `vendor-session-fact-contract.test.ts` 钉住；⑧日志取证价值未验；⑨全量性缺水位；⑩集中日志面未做；⑪两处更省形态未落；⑫对话流健康臂未实机验；⑬静默半死（keepalive/游标/`ended(false)` 兜底未做）；⑭修链未闭合（契约写回、90s 界限、ssh 时延、窄缝、行为测试）；修正 provenance 的 I3 臂无 host 证据不通知，实机矩阵未跑；⑮运行位解析未实机校准；⑯子代理环行集与官方不同源待裁。
@@ -27,7 +27,7 @@
 - **P2b 事实通道降级**：`$events` 有投递；一次定案为插件管理器长 RPC 撞 45s 保险丝（扩容 `LONG_RPC_PATHS` 待裁）；另一次十连败不可区分，出口 = 窗口期差分（Node 默认时序 + unary 探针）。
 - **完成身份/判读窗口**：无锚完成跨通道身份不同（最坏重复一条横幅）；`lastAnchoredSeq` 有单调记账；消除需上游 `turn/end` 判别符。facts-only 源无 `beforeBaseline` 首见窗口、P2b 行 `identityConfirmed` 门、facts 不可判时读清/武装冻结。
 - **性能遗留（P0–P2）**：五条实机复测 + 全视图 DOM ≤13,000（实测 15,805 含壳 chrome）；已知取舍（桥探测 30s 长尾、purged 孤儿键 K=2；design 06 §4.2 / 19 §3.2）；待真机 = 隐藏 ≥60s 唤醒、SVG scope 探针、风暴档发布速率、N-ctx 常驻定标（下条）。
-- **N-ctx 壳常驻（design 05 §4.1）**：①**实测定标**未做——N=3/5 的 DOM 节点数/帧时/流式开关壳 CPU/主进程内存曲线、稳态无 20s 回收 tick（>1 挂载时压力阀每 30s 采样是设计内唯一周期任务）与释放错峰（250ms）、面板关闭时快照不估读 DOM 节点；判据 = 外部采样 + 设置「性能与内存」面板读数。②**v1.1 压力阀平台矩阵**实机未跑——Linux `MemAvailable` / Windows `os.freemem` / macOS `vm_stat` 三臂与「失败 = unsupported」路径、8GB/16GB 二档、`constrained`/`critical` 按档位连续 2 次判定；判据 = 注入低内存下只释放可释放壳、活动/屏上壳不丢。③**侧边栏门控/单实例化评估**（触发 = 来源 ≥8 或实测 p95 劣化）：见 [TODO.md](TODO.md) D§4。④**进程隔离重评条件**：来源 >8 或「一个壳的长任务卡住整页」真机复现（design 05 §9）；重评前先取帧时/长任务证据。⑤**手动释放的草稿代价**见 §4.2；证据指针 = `packages/renderer/src/resident-policy.ts` / design 05 §4.1。
+- **N-ctx 壳常驻（design 05 §4.1）**：①**实测定标**未做——N=3/5 的 DOM 节点数/帧时/流式开关壳 CPU/主进程内存曲线、稳态无 20s 回收 tick（>1 挂载时压力阀每 30s 采样是设计内唯一周期任务）与释放错峰（250ms）、面板关闭时快照不估读 DOM 节点；判据 = 外部采样 + 设置「性能与内存」面板读数。②**v1.1 压力阀平台矩阵**实机未跑——Linux `MemAvailable` / Windows `os.freemem` / macOS `vm_stat` 三臂与「失败 = unsupported」路径、8GB/16GB 二档、`constrained`/`critical` 按档位连续 2 次判定；判据 = 注入低内存下只释放可释放壳、活动/屏上壳不丢。③**侧边栏门控/单实例化评估**（触发 = 来源 ≥8 或实测 p95 劣化）：见 [TODO.md](./TODO.md) D§4。④**进程隔离重评条件**：来源 >8 或「一个壳的长任务卡住整页」真机复现（design 05 §9）；重评前先取帧时/长任务证据。⑤**手动释放的草稿代价**见 §4.2；证据指针 = `packages/renderer/src/resident-policy.ts` / design 05 §4.1。
 - **Swift 壳性能 A/B**：启动/大载荷 p95/空闲 wakeups 待打包态；`[shell-fps]` 只在 `DSH_CHAMBER_SHELL_DEBUG` 调试面注入、打包态不产出（运行期门，非编译剔除）；判据 = 空闲安装率 <200/s、静默 CPU <10%。
 - **页面侧残余**：流级预算表外 2s/8 两份未锁；forensics request/snapshot 半通道、carrier `openingAnswered` 无生产消费者；五条结构性重复/死分支。
 - **载波重建节拍（design 27 §3.6/§6.26/§6.27）**：①真机 soak 待跑——原判据「`carrier-throttled[laneReconnect]` → `carrier-throttle-expired` → `carrier-rebuild` 三连」在改动后**结构上不可能出现**（expired 只由证据型 arm 发出），恒真不可伪，改为三条可伪信号：(a) `control-plane.log` 的 `closed (cause, Nms)` 间隔与 socket 寿命不再聚在 60s（旧形态实测恒 60000ms）；(b) `carrier-throttle-expired` 的 cause 只允许证据型（`socketNoFrame`/`openingStall`/`teardownNoFrame`），lane 拒绝后不再排期；(c) 注入证据故障（半开/零帧）时证据型重建仍发生（恢复面未退化）。对齐面 = `control-plane.log` + 页面 `dsh-chamber:stream-forensics`（须 inspector 实时监听：环 cap 256、flush 清空、无持久消费面；代理日志不含 close code，要 code 需另加日志）；②15s/15s 边界赛跑（teardown 判定的差值 = `15000 − 握手时延`，首轮取决于定时器迟到）见 §6.27，收紧要动表值，未裁；③聚合看门狗的 **stale 臂**按 transport 每 120s(http)/300s(ssh)（replay 不刷新 `snapshotAt` 时退化 60s），**fallback 臂**是 60s 退避而非 120/300——两臂都会产生一次**合法**换代际 ⇒ 三处 UI 仍按其节奏闪；「同批处理 vs 接受并写明」未裁；④三条渲染臂的 caller tag 只在 inspector 在场时可见（warn 级不进 console 环）；OS 唤醒/`online`/长隐藏返回的 liveness 换代在 vendor 车道内部直接 `controller.reconnect()`（`packages/dsh-client-connection/src/client/index.ts`），不经该 seam、成功零日志 ⇒ 该臂只能靠「无前置 `[renderer]` tag 的 `socket-reconnect`」反向推断，或接受不可归因；⑤`CarrierPhase 'silent'` 是死词汇（全仓无写入者，`streamFrame` 只做 silent→open）：保留注释还是删成员（公开 union，需独立改动）未裁。
@@ -55,14 +55,14 @@
 - **遮罩/揭幕 P0–P3**：W-1b 真机走查、揭幕时延、Swift 发布包 Safari 抽检。
 - **files seat（D-01=B）**：Files 页签出现「打开当前文件夹」、per-source 语义、官方占座 inert；判据 = 2 测试 + 目检。
 - **登录 shell 环境（design 02 §3.1）**：Dock/Finder 启动下两 flavor 读到 PATH/代理/API key；失败可定位、不阻塞；`DSH_*` 不被覆盖；判据 = 1 测试 + 实机。**（Electron 半边随冻结归档，只验 Swift 腿）**
-- **移动端真机抽检（design 17 §18.6）**：移动适配包已退役，布局/触控/键盘由上游前端负责；待跑 = iPhone Safari（键盘/图标/tap）、Android Chrome、iPad 834（确认接受上游 56px rail）真机抽检，判据 = design 17 §18.6 真机项与 [`gui-acceptance-checklist.md`](../checklists/gui-acceptance-checklist.md) §4。若复现硬缺口，按 design 17 §18.4 在上游或 host/renderer 层修复。
+- **移动端真机抽检（design 17 §18.6）**：移动适配包已退役，布局/触控/键盘由上游前端负责；待跑 = iPhone Safari（键盘/图标/tap）、Android Chrome、iPad 834（确认接受上游 56px rail）真机抽检，判据 = design 17 §18.6 真机项与 [`gui-acceptance-checklist.md`](../checklists/acceptance/gui-acceptance-checklist.md) §4。若复现硬缺口，按 design 17 §18.4 在上游或 host/renderer 层修复。
 - **N-ctx 主题/语言**：打包态目检；冷启动变化 ≤1、预热/收割 0，另验同帧性。
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载（常驻策略下关闭面板后该源成为普通常驻壳，design 05 §4.1）；打包态冒烟。
 - **「性能与内存」只读面板（design 15 §D5）**：新组 + 手动释放待打包态/真机目检（表项状态、隐藏时长、DOM 节点数、释放后转「已释放」且抑制生效）；`settings.get` 的 `system` 是**可选**字段——旧主进程（镜像早于本版）无该字段时面板必须读「不可得」而非猜数，三处类型镜像（desktop store / preload / renderer `global.d.ts`）与 `ipc-surface-mirror` lockstep 同批；页面 JS 堆仅 Electron 有（`performance.memory`），Swift 显示「不可得」。
 - **上游 More 行依赖延迟设置行**：`entry-customization` 的 `pluginNavigation` 只由延迟的 settings-plugin-manager 提供，宿主行停在 PENDING ⇒ 会话头/右栏 More 缺席。延迟簇的 `Promise.all`（`registerDeferred`，`packages/renderer/src/chamber-entry.ts`）无 deadline：chunk **reject** 时按行 id 上报、只该延迟行失败（延迟簇其余行照常挂载）；chunk **悬挂**时整簇不挂载且零报告。判据 = 延迟 chunk 失败 drill + 悬挂 drill + 目检；座席存在但读取在处置窗口抛错时 `openPending` 无自动 flush（再次点击恢复），同 drill 覆盖。
 - **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §6.2。
 - **未接入的上游服务面**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges`、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；接入点 = design 09 §3.5/§3.6 的复合入口与 seam，需要时按同一注册表接入。
-- **右栏浏览器 v2（design 28 §16/§16.11，2026-11 用户裁决）开放验收**：面板 = 上游 `ui-sidebar-browser` iframe 路径的忠实 fork（UI/DOM/CSS/地址解析/历史/多标签/快捷键/标题/8 语言/sandbox 开关逐字同源，唯一差异 = SSH 反代：iframe src 解析 + 代理页 external 出口的 alias 投影）；desktop CSP 放行 `blob:`/loopback/alias/`http:`/`https:`，任意 http(s) 子 frame 可嵌入。尚未完成 = 真机/打包态：真 sshd L5、打包（darwin `test:swift`/`test:macos`、macOS ATS/焦点键盘、kill -9 reaper、iframe 拖拽/分栏、站点数据清理登记）、packaging closure/真机表与 release 说明；**Electron/Windows 半边随冻结归档、不排期**。判据 = design 28 §16.9/§16.11；验收程序 = `docs/checklists/remote-browser-acceptance.md`。
+- **右栏浏览器 v2（design 28 §16/§16.11，2026-11 用户裁决）开放验收**：面板 = 上游 `ui-sidebar-browser` iframe 路径的忠实 fork（UI/DOM/CSS/地址解析/历史/多标签/快捷键/标题/8 语言/sandbox 开关逐字同源，唯一差异 = SSH 反代：iframe src 解析 + 代理页 external 出口的 alias 投影）；desktop CSP 放行 `blob:`/loopback/alias/`http:`/`https:`，任意 http(s) 子 frame 可嵌入。尚未完成 = 真机/打包态：真 sshd L5、打包（darwin `test:swift`/`test:macos`、macOS ATS/焦点键盘、kill -9 reaper、iframe 拖拽/分栏、站点数据清理登记）、packaging closure/真机表与 release 说明；**Electron/Windows 半边随冻结归档、不排期**。判据 = design 28 §16.9/§16.11；验收程序 = `docs/checklists/acceptance/remote-browser-acceptance.md`。
 
 ### 1.4 打包态与真机门禁（按来源）
 
@@ -80,7 +80,7 @@
 - **仅该来源**：①会话头视图折叠 + More（Trajectory 行在延迟簇注册视图，默认出现）；②右栏 guide More；③「浏览」落到设置→插件管理（plugin-navigation 座席）；①–③ + 含已打开会话的 More/浏览 走查（机械 live/走查未打开会话，不覆盖本行），判据 = 打包态真机；侧栏 More 不采纳见 §4.2。
 - **仅该来源（续）**：④New Session 全局按钮复用空白会话（复用保持创建时预设）；判据 = 已有空白会话（含非默认预设）时点全局「新会话」→ 会话行数不增、落回同一 `[data-session-id]`、预设不变，杀宿主重启后按当前定义重判。⑤右键上下文菜单（`ui-context-menu` 升 covered 首屏：`useContextMenu` root prop + `contextMenus` service）在 N-ctx 目检——判据 = 文件/图片右键、键盘 ContextMenu/Shift+F10、Escape 关闭、焦点归还。⑥窄窗 drawer（帧宽 <768px，vendor AppFrame 覆盖层）——判据 = mask/Escape 关闭、`data-shortcut-modal=sidebar` 与 Cmd/Ctrl+B 放行、窄窗进出 store 分支（`SIDEBAR_DRAWER_BREAKPOINT`）与上游一致。⑦`ui-file-actions` 仍由宿主图加载（文件菜单走 `remote.workspaceFiles.readBytes`，per-entry base），图片目标在缺 `path`/`sessionId` 时回退 `target.url`——判据 = 远端实例右键图片的复制/下载实测（失败则按 design 09 §3.6 给 `ui-attachment` 补 base）。⑧桌面 `dshDesktop.fileActions` 座位未采纳（`canSaveAs=false`，下载走 blob），与 fileDrag 载体缺口同型。
 - **仅该来源（续）**：⑨官方 8 语言界面（chamber 自撰文案仍 zh/en，layout 快捷键标签随上游镜像 8 语言）。⑩Web 搜索开关（默认关、三命名空间字段与凭据、`sendOriginalQuestion` 128 字符、下次搜索生效、回退前先关）。⑪Schedule（Automation tasks 面板/任务页/行 clock 标记/右侧任务标签/删除 toast/每会话 catalog 查询）+ Developer Tools（可选、默认关、Session/NodeJS Inspector、shell.bottom 声明）在 N-ctx 目检——判据 = C9/C11/C16 + `frame-slots`；风险 = inspector iframe document-relative 可能落 SPA fallback（C9 前缀或占位）。⑫启用市场 bundle 后设置→插件管理的 Discover 页签与安装链——判据 = `test:plugin-manager` 的 `plugins.tab` + C4 契约 27；风险 = inject 含 plugin-manager 行、extra row 模块表解析未测（必要时升 covered factory）。⑬账号通知栈（层叠/高度过渡/空标题/空 expiresAt/未校验 JsonValue）；⑭终端列表会话级缓存（去重/失效不重试/reset 刷新）；⑮右栏收起 PageUp 不横滚；⑯PTC code-first 与 persona 一致；
-- **仅该来源（续）**：⑰`web-deepseek-api` 凭据/available；⑱日志 `body.thinking` 可选 log-only。⑲整页插件/自动化（窄屏布局由上游前端负责）——待真机 = 安全区/横屏、iOS/Android 键盘、真实插件动作与保存，判据 = 真机抽检 + 目检（登记见 [gui-acceptance-checklist.md](../checklists/gui-acceptance-checklist.md) §4）。
+- **仅该来源（续）**：⑰`web-deepseek-api` 凭据/available；⑱日志 `body.thinking` 可选 log-only。⑲整页插件/自动化（窄屏布局由上游前端负责）——待真机 = 安全区/横屏、iOS/Android 键盘、真实插件动作与保存，判据 = 真机抽检 + 目检（登记见 [gui-acceptance-checklist.md](../checklists/acceptance/gui-acceptance-checklist.md) §4）。
 - **新客户端行**：官方新 client 行（action-cards / creation-recommendations / plugin-recommendations / message-quotes / cua）在 N-ctx 目检；判据 = 打包态真机（机械 live/走查不覆盖本行）；风险 = 新行若成为首屏根 inject 的强制依赖须升 covered factory（design 09 §3.5）。
 - **UI 对齐**：`fileDrag` 图片拖拽与文字选区浮条；模型标签三处（trigger/菜单/模型行）与模型徽标三处（菜单/模型行待目检）——判据 = 打包态真机/N-ctx 目检。drawer 内 `newSession` 的 darwin 填充未镜像上游 `:where(.root:not([role='dialog']))` 门控（Swift 锁步要求带 vibrancy 的裸选择器）＝纯视觉差异，判据 = 上述机器门（`test:layout`/`test:sidebar`/`build:renderer` 的 patch marker）。
 - **升级语义风险**：①include journal（loader/Include 把运行期编辑 journal 进父 patch 层，bundle 行运行时 `disabled:true` 不再跨重启）——判据 = 本机启停一轮后 `profiles/web/cordis.patch.yml` 只增 chamber 预期行、无重复 id、无非预期诊断，chamber 的行都带显式 id；②cordis 失败 fiber 语义（依赖恢复后失败 fiber 仍失败、`entry.update` reject）——chamber 的 `boot-tolerance` 只分类不驱动恢复，判据 = `test:client-web` 的 boot-tolerance 用例 + 一条「失败 fiber 不因依赖恢复自行 ACTIVE」的行为断言（未写则按设计接受更多 failure surfaced）；③终端 attach/重连（G43）：生成式流 uplink（输入/半关/取消帧）与断线重连待打包态真机走查，判据 = 行为用例 `client-uplink-support.test.ts`、`mux-self-heal.test.ts` + 真机；④portal 逃出实例子树（隐藏管不到、onShown 不校验 → 可能提前 ack/跨壳叠加）；⑤required-extra-rows 不覆盖 host-graph 行（inject 缺失静默 PENDING）。
@@ -97,7 +97,7 @@
 - **install/runtime**：`install` 不同步锚（待裁）；dl 运行时 macOS 全链/Linux/gateway 重连/`restartLocal` 交错/ZFS EAGAIN；上游装载面 `compose()` 10.65MiB、`SubagentHeaderLineage` 缺 class、首帧超时；会话可靠性六项；`protobufjs`/`@google/genai` 待 M2 证据。
 - **桌面更新（design 11）**：真实 Apple 凭据 CI、双平台清单、通道封签打包态实证；`checkNow()` 在 runCheck 门跳过仍回 ok、渲染门缺 `downloadStallPending` 腿（待裁回 `{ok:false}` 或补腿；判据 = 按钮可点必须有效果或明确禁用）。S-52 = Sparkle quit 与在飞关窗相撞（≤2s 窗、~0.6，未实机；修 = 区分在飞决策/重复退出）。**beta 订阅开关实机验收（design 25 §7）**：stable 构建开订阅 → 后台检查发现当前 beta、final 收口回 stable 且订阅保留、关闭后只收正式版；beta 构建默认关闭（只收正式版）、打开后继续接收 beta；构建未注入两条通道 feed URL 时开关禁用+原因；本机无 Swift 工具链，未跑（判据 = packaging-closure §3.1、gui-acceptance §4）。
 - **认证 Gateway**：生产 TLS/SPKI/`remote.mux` 恢复、三形态重登/撤销、`/chamber/runtime` TLS、Linux 升级回退、`--bind 0.0.0.0` 负例；凭据重置/改密 CLI。
-- **平台**：macOS 通知/徽标实机门（权限 / 点击 / 三态）；**Windows/Linux 桌面腿已随 Electron 冻结（ARCHIVED、不排期）**，冻结清单与复活基线见 [electron-frozen.md](electron-frozen.md) §6 与 TODO B§2 的冻结原表。
+- **平台**：macOS 通知/徽标实机门（权限 / 点击 / 三态）；**Windows/Linux 桌面腿已随 Electron 冻结（ARCHIVED、不排期）**，冻结清单与复活基线见 [electron-frozen.md](./electron-frozen.md) §6 与 TODO B§2 的冻结原表。
 - **发布/CI**：reusable workflow、submodule 验收、Gateway npm 分发、打包闭包；DMG 并发（`serial` 缺失 + `hdiutil` 弃用未迁移）；CI 无 SMOKE PASS 腿；A1（F6/S1）、A2（A2-4/7）、A3（A3-1…15、S1–S13；判据 = 读失败/未检须可与“通过”区分）、bundle `bundleLayers`、产物新鲜度（web/host-package/allowBuilds，G2/G3/G5/G7/G8；关闭 = 第五类比对或严格档 `build:renderer`）。
 - **其余**：SSH 一键免密/钥匙串未实现；模型额外参数待上游；`{detail}` 无 locale；变更文件覆盖率门未接。
 
@@ -107,8 +107,8 @@
 - **TODO B§1 收口后的判据指针**：WBS/W1–W7 判定、A1–A8 中止点、双端性能/产物体积 A/B 的明细已从 TODO 删除（原文存 git 历史）；现行指针 = design 25 §8.5、`gui-acceptance-checklist.md` §4.2 与 `scripts/perf/README.md`，若需完整判据须从历史恢复并重新登记。
 
 - **导出/门禁**：type-only 导出不判；无入口叶子模块不判（方向 = 孤儿模块门）；`TEST_ONLY_EXPORT_ALLOWLIST` 是规则化名单；`run-checks tests` 零覆盖可过；`verify:styles` 不覆盖 docs token；`verify:anchors` 无 Windows 覆盖；`install-gateway.sh` 走 npm 绕单源；`test:gateway` 仍有 2 处真装器 spawn。
-- **resident 收窄后的 test-only 导出**：retention 退役后 `packages/dsh-stream-state/src/container.ts` 的 hidden 投影（`projectHiddenSince` 等）只剩测试消费者，临时进 `TEST_ONLY_EXPORT_ALLOWLIST`；收窄源状态机（删无生产者的 `mounted/unmounted/painted/userSelected/reclaimed/retryRequested/harvestStarted/harvestSatisfied` 事件）与撤 allowlist 同批，触发 = 常驻改造收口（[TODO.md](TODO.md) D§4）。
-- **重构/测试**：renderer 外三处 state/ref 镜像、`ssh-<id>` 别名、跨包重复 0 组（[TODO.md](TODO.md) D§1）；god-file 预算条目与阈值见 `scripts/gates/file-budgets.json`（`node scripts/gates/verify-file-budgets.mjs --report` 的缺口只按可减目标合计，`kind:ceiling` 单列），但新模块仍需**人工**登记才受保护；CI 打包排练 CPU；Swift 串行 113s（并行会丢 XCTSkip 判据）；升级线残余 = fatal 恢复框键位走查、node-pty 补偿复核。
+- **resident 收窄后的 test-only 导出**：retention 退役后 `packages/dsh-stream-state/src/container.ts` 的 hidden 投影（`projectHiddenSince` 等）只剩测试消费者，临时进 `TEST_ONLY_EXPORT_ALLOWLIST`；收窄源状态机（删无生产者的 `mounted/unmounted/painted/userSelected/reclaimed/retryRequested/harvestStarted/harvestSatisfied` 事件）与撤 allowlist 同批，触发 = 常驻改造收口（[TODO.md](./TODO.md) D§4）。
+- **重构/测试**：renderer 外三处 state/ref 镜像、`ssh-<id>` 别名、跨包重复 0 组（[TODO.md](./TODO.md) D§1）；god-file 预算条目与阈值见 `scripts/gates/file-budgets.json`（`node scripts/gates/verify-file-budgets.mjs --report` 的缺口只按可减目标合计，`kind:ceiling` 单列），但新模块仍需**人工**登记才受保护；CI 打包排练 CPU；Swift 串行 113s（并行会丢 XCTSkip 判据）；升级线残余 = fatal 恢复框键位走查、node-pty 补偿复核。
 - **隐私/平台**：`DSH_TELEMETRY_DISABLED` 不覆盖 `session-log-deepseek`，桌面是否默认 opt-out 未裁；`isMainFrame` 归属缺陷；docs 锚点过期（D15）；私有文件纪律三实现；`client-web` 未用 `ui-theme`；layout `ThemePresenter` 残留；wire A–F、sanitize/win-probes、dashboard 第三份 UI、A-U3/A-F16、dual-host。
 - **低优 UX**：hover-only、徽标窄窗、en 单数、aria-label、ssh done 态、PluginDialog DOM 测试、对账空态、versionsEpoch、30s 文案、内联 effect。
 - **门单源残余**：① 5 个 typecheck（`typecheck:host-graph/host-git/host-archive-cleanup/host-open-in` 与 `typecheck:gateway`）只存在于 `ci.yml` 与 `release.yml` 的手写多行 run（gateway 的 `typecheck:gateway` 另见 `ci.yml` 手写步），registry 无条目 → 四个模式都不含它们，“modes 名字即 CI 所跑”对这 5 步不成立（`seed-client-graph` 的唯一检查完全在模式之外）；② `proof:true` 只覆盖 release 校验 job 的部分生成门步，`C8` rebuild、remote-state acceptance、third-party notices、`release-preflight --actions-only`、renderer SVG scoper 断言、gateway pack/install smoke 均非 proof-required（proof 集合与 id→command 身份面由 `scripts/gates/gate-registry.test.mjs` 的 golden 钉住，改动必须同批改断言）；③ 同一 job 里 typecheck 与 typecheck:runtime 各跑两次（手写块 + `run-checks typecheck`）；④ Windows 腿结构上进不了 registry（`gate-registry.mjs` 的 platform 校验只允许 darwin；Windows 腿已随 Electron 冻结删除），6 条 `macos.*` 门无生成块、靠手写步骤执行（命令等价但无 lockstep 测试）。修①需裁决：把手写步并入生成块，或补 registry 条目；⑤ 生成块之外的手写步骤仍无覆盖网——`gate-workflow-views --check` 只比对四个标记块，旧 `static-gate-parity` 扫整个 job 的能力没有等价替代（静态门的 CI 落位已由 registry 不变量「`workflow` 或 `coveredBy`」拦下，其余步骤仍需人工对照）
@@ -117,7 +117,7 @@
 
 ## 二、差异（功能面 / 外部约束）
 
-> 只汇总「app 做什么」与「本仓改不动什么」；明细与候选见 [TODO.md](TODO.md) A§15。
+> 只汇总「app 做什么」与「本仓改不动什么」；明细与候选见 [TODO.md](./TODO.md) A§15。
 
 ### 2.1 待裁（与 chamber 功能/契约相冲）
 
@@ -167,7 +167,7 @@
 
 ## 四、范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
-> 双 flavor 见 [deviations.md](deviations.md)。
+> 双 flavor 见 [deviations.md](./deviations.md)。
 
 ### 4.1 架构、门禁与平台边界
 
@@ -194,7 +194,7 @@
 - **会话投影**：标签跨代际保留（0.6–0.8s；`updatedAt` 前进即停）。
 - **P5b 工作树统一（开放取舍）**：①**Swift 保留**原生壳与 sidecar；Node 统一取 primary-runtime payload（单 Node 裁决，sidecar.js 与托管 dsh 同一 `process.execPath`，进程名 `node`；不再有独立 `dsh-chamber-helper`）；Electron 分支随冻结归档、不在本裁决内（`process.execPath` 不被改写），不做 sidecar 移除或回退形态；②forge bundle **opt-in**（默认关、启用/关闭需重启，GitHub provider disabled），不预置进 profile；③旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**；升级前逐树 `workspace.delete`（归档需保留的会话）+ `git worktree remove/prune` 是 **0.4.4 一次性历史迁移**的前提（design 08 §7.4），后续版本不再作为发布前提；④filters 与 forge 两步 parity，接受 LFS/clean-smudge 降级（checkout 为指针文件，需手动 `git lfs pull`）；⑤restore 仅 forge record（seed 树无 restore）；⑥`checkoutOrder` 只在本机 localStorage 持久化、不跨实例同步；⑦同一 checkout 允许 0..N 会话共享 HEAD/index（无默认提示、无硬锁）；⑧只发布池内 checkout，池外手工树不可见。判据 = design 08 §3/§5/§7。
 - **上游并存**：experimental worktree 默认关**仍真**（P5b 为 opt-in，需在实例插件页开启并重启）；P5b 下 forge 与 seed 共用 `<repo>/.agents/worktrees` 池，checkout 由 design 08 的派生行呈现，官方 `create_worktree` 工具与 composer 都复用同一池（“其产物由 design 08 接管、不复用 create”的旧裁决不再适用）；GitHub provider 由 overlay disabled；cua 不接入。
-- **设置/账户**：设置壳自绘 chrome/源壳必须挂载/离线占位/body portal；上游对齐轮偏差（首启门、`sectionsEmpty`、失败屏深引、`Switch` 属性、业务蓝、schedule 事实、状态标记/Dock/通知）；桌面账户登录不可闭环（`/oauth/callback` 未反代；待做与边界见 [TODO.md](TODO.md) C§1）；`__dshChamberAccountOverlay` 与安全网互搏（待裁）。
+- **设置/账户**：设置壳自绘 chrome/源壳必须挂载/离线占位/body portal；上游对齐轮偏差（首启门、`sectionsEmpty`、失败屏深引、`Switch` 属性、业务蓝、schedule 事实、状态标记/Dock/通知）；桌面账户登录不可闭环（`/oauth/callback` 未反代；待做与边界见 [TODO.md](./TODO.md) C§1）；`__dshChamberAccountOverlay` 与安全网互搏（待裁）。
 - **跨实例 rev 冲突 = 静默复用 + 连接页提示**（design 09 §3.5）：跨实例一律沿用页面已有 factory（`reuseForeignBuilds`），实例 boot 不因该冲突失败；代价 = 跨发布构建可能与宿主预期不一致（缺块/行为异常），由连接页诊断点名两侧发布版本与收口，且 local 无图降级时构建来源可能反转（design 09 §3.5 残余风险）；复验 = `packages/renderer/test/lifecycle/host-graph.test.ts` 冲突用例 + 连接页目检。
 - **右栏浏览器 v2（design 28 §16/§16.11）**：面板与上游 `ui-sidebar-browser` iframe 路径逐字同源（唯一差异 = SSH 反代：iframe src + 代理页 external alias 投影）；沿用 v1 = 无共享 `127.0.0.1` 回退（Host 被拒/421 = 可读错误，不降级；远端未配 `127.0.0.n` 的服务打不开）、OTP/2FA 主机不支持（每条 forward 独立 ssh）、`kill -9` 后 listener 存活到下次启动、被转发页面可无预检访问本机 loopback（PNA 残余）；新增/保留取舍 = 任意 http(s) 页面可 iframe（含 https；上游语义，证书不匹配直接表现为 iframe 失败条/工具栏 external 出口，不自动转系统浏览器）、XFO/frame-ancestors/TLS 不做可靠探测或 refusing UI（上游语义；W-15 旧 refusing 判据退役）、上游 sandbox 允许 popups，Electron `setWindowOpenHandler` 仍 deny 新窗口并把外链转系统浏览器（Swift 子 frame 的新窗不转系统、仅主文档外链转——有意更严，design 28 §16.11）、`list.embedding` 能力字段保留但 v2 fork 无 UI 消费者（生产恒 enabled；紧急回退 = 启动点收回 `frameSources`）、下载仍只允许 app-origin blob、`localhost`/公网/其它 host 按上游直连（只有 host 恰为 `127.0.0.1` 的 SSH 目标走 forward）、local iframe 与 app 同 host 共享 cookie jar、跨 site 第三方 cookie/SameSite 可能让认证型页面退化（E1）、隐藏 session 的 keepMounted tab 常驻占 8/source 配额、用户打开的源壳按 keep-all 常驻（design 05 §4.1；只有显式释放路径才拆壳，拆壳即释放该源 iframe/forward）、站点数据无手动清除（删源/retarget 清、tab 关闭不清）、上游 store persist key 在 N-ctx 同 sessionId 下跨来源共享 localStorage 条目（上游 known boundary）——均登记为已知取舍，不是待修缺陷。
 - **上游新面（More / New Session）的取舍**：桌面复合体**不采纳侧栏 More**（chamber 侧栏不声明 `sidebar.panellist.actions`，`entry-customization` 的该注册停在等待态；`panel-pins.ts` 登记 `dropped`，采纳触发见 TODO A§15/U6）；gateway 的官方侧栏照常显示。**New Session 复用空白会话**（全局按钮/快捷键）：宿主把复用的空白切到默认预设；仅当该空白的 Agent 仍加载时保持创建时组成，重启后按当前定义（官方 guide 14/16/20）；chamber 的来源「+」仍按来源复用（只打开复用行，不走上游 `connectWorkspace` 的 sessionId 语义）；接受，不包裹。（本节只记取舍；验收判据与未覆盖事实见 §1.4「上游 pin 新面」的 More/New Session 行，不在此重复。）

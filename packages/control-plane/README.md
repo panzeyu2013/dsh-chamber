@@ -1,6 +1,6 @@
 # @dsh-chamber/control-plane
 
-连接管理器核心（设计 [02](../../docs/design/02-host-management-deployment.md)、[03](../../docs/design/03-connections-proxy.md)、[04](../../docs/design/04-control-plane-api-data.md)）：本地 dsh 宿主的生命周期（spawn / 就绪探针 / reaper / 健康监控 / 日志）、管理 REST、**每实例同源反代**（HTTP/WS/SSE）与前端静态服务。
+连接管理器核心（设计 [02](../../docs/design/runtime/02-host-management-deployment.md)、[03](../../docs/design/control-plane/03-connections-proxy.md)、[04](../../docs/design/control-plane/04-control-plane-api-data.md)）：本地 dsh 宿主的生命周期（spawn / 就绪探针 / reaper / 健康监控 / 日志）、管理 REST、**每实例同源反代**（HTTP/WS/SSE）与前端静态服务。
 
 ## 契约与边界
 

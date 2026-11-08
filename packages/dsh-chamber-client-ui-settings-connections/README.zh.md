@@ -1,6 +1,6 @@
 # @dsh-chamber/dsh-chamber-client-ui-settings-connections
 
-[English](README.md) | 中文
+[English](./README.md) | 中文
 
 chamber 自研**连接设备页**设置分区（设计 05 §5）：设置壳经固定 nav id
 `__connections` 渲染本分区（`src/client/index.ts`），故本包只拥有词典命名

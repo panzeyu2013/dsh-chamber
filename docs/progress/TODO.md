@@ -1,12 +1,12 @@
 # TODO · 未排期计划与想法
 
-> 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；进度、验收门与取舍在 [STATUS.md](STATUS.md)，
-> [deviations.md](deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`。
+> 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；进度、验收门与取舍在 [STATUS.md](./STATUS.md)，
+> [deviations.md](./deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`。
 >
-> **版本范围与冻结清单**：唯一出货 flavor = macOS Swift 原生壳；Electron/Windows/Linux 桌面腿冻结、不发布（本文件相关计划一律标「冻结，不排期」，只在复活时执行）。范围、共享契约、禁用面与复活清单见 [electron-frozen.md](electron-frozen.md) §1/§6 与根 [`AGENTS.md`](../../AGENTS.md)。
+> **版本范围与冻结清单**：唯一出货 flavor = macOS Swift 原生壳；Electron/Windows/Linux 桌面腿冻结、不发布（本文件相关计划一律标「冻结，不排期」，只在复活时执行）。范围、共享契约、禁用面与复活清单见 [electron-frozen.md](./electron-frozen.md) §1/§6 与根 [`AGENTS.md`](../../AGENTS.md)。
 > 四部分：A 上游（A 类）、B 平台（B 类）、C 功能（C 类）、D 工程（D 类）。文中 `§N` 指本部分内编号；
 > 跨部分引用写 `A§N` / `B§N` / `C§N` / `D§N`。
-> 条目内的「剩余 / 未做 / 待…」是**计划范围**，不是进度状态；状态以 [STATUS.md](STATUS.md) 为准。
+> 条目内的「剩余 / 未做 / 待…」是**计划范围**，不是进度状态；状态以 [STATUS.md](./STATUS.md) 为准。
 > 新增：先判断阻塞来源；设计定稿移入 `docs/design/0X-*.md`，落地或明确不做则移出并在 STATUS 留结论。
 
 ## 索引
@@ -152,7 +152,7 @@
 
 #### 14.1 I-15 实机验收归并
 
-六组矩阵执行序见 `docs/checklists/gui-acceptance-checklist.md` §4.1（P6、归档两段式+恢复、通知四缺口、运行位 60/190/310s、I-14
+六组矩阵执行序见 `docs/checklists/acceptance/gui-acceptance-checklist.md` §4.1（P6、归档两段式+恢复、通知四缺口、运行位 60/190/310s、I-14
 selection scope、I-12 谱系压制）；剩余 = 打包态/真机各跑一次并留记录。判据/关闭见 STATUS §1.1。
 
 #### 14.2 待退役块（上游 wire 落地前不得删）
@@ -250,13 +250,13 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 
 > 阻塞来源 = 真机 / runner / 凭据 / 产物；每条的现行验证面 = macOS Swift 腿（Windows 仅在复活后适用）。契约见 design 25、design 23（ARCHIVED）。
 >
-> **范围**：只有 macOS Swift 腿继续排期；Windows v1 与 Electron 腿冻结归档（见 [electron-frozen.md](electron-frozen.md)），B§2 仅在复活时执行。
+> **范围**：只有 macOS Swift 腿继续排期；Windows v1 与 Electron 腿冻结归档（见 [electron-frozen.md](./electron-frozen.md)），B§2 仅在复活时执行。
 
 ### 1. macOS Swift 原生壳 v1
 
-> 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与未闭合外部门的指针；
+> 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/desktop/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与未闭合外部门的指针；
 > 决策 D1–D7、双线防漂移门禁的明细按收口删除（原文存 git 历史）；W1–W7 判定已迁入 design 25 §8.5；A1–A8 中止点、性能/产物体积 A/B 协议与 dev 约定的明细同样按收口删除（原文存 git 历史），
-> 现行判据 = design 25 §8–§10、`docs/checklists/gui-acceptance-checklist.md` §4.2 与 `scripts/perf/README.md`；开放状态归 STATUS。
+> 现行判据 = design 25 §8–§10、`docs/checklists/acceptance/gui-acceptance-checklist.md` §4.2 与 `scripts/perf/README.md`；开放状态归 STATUS。
 
 #### 1.1 决策结果索引（D1–D7）
 D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blocked-available→Sparkle、`macos/` SwiftPM、原生 UI 渐进不做、Node 版本与架构、静态凭据 0600 明文）见 design 25 §10（正式签核仍开放）。
@@ -264,7 +264,7 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 #### 1.2 外部门禁
 - M5 实机门禁 W-28…W-32（含 W1–W7 判定矩阵）：状态/范围见 STATUS §三「macOS Swift 壳 M5 实机矩阵未闭合」行，矩阵 design 25 §8.5。
 - 双端 harness 未实施（需 GUI 会话，design 25 §8.3/§8.6）；Apple 凭据（Developer ID/公证/stapler）缺失时 dry-run 全链绿可推进，不得声称「完成」（design 25 §7）；其余实机项（通知权限时序、SMAppService 登录项、LaunchServices 深链、唤醒恢复、SSE/WS 心跳、ATS、通知音效差异）在 STATUS 未完成项。
-- **（Electron 冻结归档，2026-11）**Electron 不再出包，「同 tag 双端发布回滚」语义只作复活参考；当前发布面 = Swift 腿（见 [electron-frozen.md](electron-frozen.md) §4/§6）。
+- **（Electron 冻结归档，2026-11）**Electron 不再出包，「同 tag 双端发布回滚」语义只作复活参考；当前发布面 = Swift 腿（见 [electron-frozen.md](./electron-frozen.md) §4/§6）。
 
 #### 1.3 WBS 任务号索引（W-01…W-32 → 契约落点）
 |任务|内容|契约落点|
@@ -283,10 +283,10 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 
 ### 2. Windows v1（**冻结，不排期**）
 
-> 契约与决策：`docs/design/23-windows-support.md`（ARCHIVED）。本文只留未实现/外部门禁、基线登记口径与取舍；
+> 契约与决策：`docs/design/archive/23-windows-support.md`（ARCHIVED）。本文只留未实现/外部门禁、基线登记口径与取舍；
 > 每条须真实 Windows/CI 验证才算完成。
 >
-> **冻结归档**：Windows 桌面腿随 Electron flavor 冻结、不发布、不排期（见 [electron-frozen.md](electron-frozen.md)）；本节只在按 §6 复活时执行，原文保留为复活基线。
+> **冻结归档**：Windows 桌面腿随 Electron flavor 冻结、不发布、不排期（见 [electron-frozen.md](./electron-frozen.md)）；本节只在按 §6 复活时执行，原文保留为复活基线。
 
 #### 2.1 外部门禁（需真实 Windows runner / 实机 / 产物；**冻结原表，复活后执行**）
 
@@ -349,7 +349,7 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 
 #### 2.3 仍生效的取舍
 
-取舍唯一权威是 `docs/design/23-windows-support.md` §5「妥协点（发布附注，唯一权威）」与
+取舍唯一权威是 `docs/design/archive/23-windows-support.md` §5「妥协点（发布附注，唯一权威）」与
 `docs/progress/STATUS.md`「范围决策与必要取舍」：F1 无进程组等价、能力先于开关（M2a 前只读/禁用）、
 Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记在彼，本文不复述（避免第三份副本漂移）。
 
@@ -371,7 +371,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 > 未设计、未排期。
 
-**动机**：侧边栏现只展示 session/workspace 行（`docs/design/06-sidebar-enhancements.md`）；会话运行时的 subagents（子代理）仅会话内可见，望侧边栏给出子层级/计数/状态。
+**动机**：侧边栏现只展示 session/workspace 行（`docs/design/client/06-sidebar-enhancements.md`）；会话运行时的 subagents（子代理）仅会话内可见，望侧边栏给出子层级/计数/状态。
 
 **现状对照**：侧边栏 = 每来源分组 + workspace/未分组桶 + session 行；行尾状态槽表达 running/completed/pending；每父会话 `runningSubagents` 计数徽标与 tooltip 由 design 06 §4.5 承担（经运行时事实通道上报、vendor `indexSubagentDescendants` 路由）。剩余开放 = 会话行下嵌套子层级（subagent 行缩进显示状态/会话）、层级折叠/截断、跨会话总览视图；逐子代理的可浏览行级列表 wire/store/UI 仍不存在，形态评估（chamber 插件 vs 不做）按 design 08 先例留待设计。
 
@@ -382,11 +382,11 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 - 层级深度（subagent 的 subagent）与大量 subagent 时的折叠/截断。
 - 跨来源投影（远程实例的 subagent 在本地侧边栏的呈现）与断连清理。
 
-**关联**：`docs/design/06-sidebar-enhancements.md`（侧边栏形态、运行时事实通道）；STATUS §4.2「连接/来源」的 v1 不做清单。
+**关联**：`docs/design/client/06-sidebar-enhancements.md`（侧边栏形态、运行时事实通道）；STATUS §4.2「连接/来源」的 v1 不做清单。
 
 ### 3. open-in：超集分批（S1/S2/S3）
 
-> fork & supersede 的契约见 `docs/design/20-open-in-registry.md`（§4 契约、§6 host 包与八处接线、§8 文件清单、§9 验证门）；实机验收与实施后开放项在 STATUS（design 20 §1 指向）。本节只留未排期超集分批与不做的边界。
+> fork & supersede 的契约见 `docs/design/desktop/20-open-in-registry.md`（§4 契约、§6 host 包与八处接线、§8 文件清单、§9 验证门）；实机验收与实施后开放项在 STATUS（design 20 §1 指向）。本节只留未排期超集分批与不做的边界。
 
 #### 3.1 超集分批（S1/S2 未排期；S3 残余；S4 不做）
 
@@ -509,7 +509,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 ### 3. 页面侧性能 P2 残项（推迟中）
 
 > 本节只承载页面侧性能修订中**未实现**的 P2 三项（侧栏 T2、factAt 量化、前置仪表）；
-> 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §8（隐藏期不采样）、19 §3.2.4（桥探测长尾）、
+> 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §7（观察者对账与页面恢复：隐藏期不采样）、19 §3.2.4（桥探测长尾）、
 > 24 F5（purged 孤儿键收敛）。三项都保留证据与设计以便下次决策，落地前不进入任何提交面。
 
 #### 3.1 侧栏 T2：更细的上下文拆分与按来源缓存
@@ -573,7 +573,7 @@ facts 供渲染，只在「是否需要重发布」的判据上用量化值。
 ### 4. 多实例常驻的后续研究（未排期）
 
 > 本条目的触发条件独立于 v1.1 落地；v1.1 只落 keep-all + 硬上限 + 压力阀（design 05 §4.1），
-> 下列工作不提前做。进度状态见 [STATUS.md](STATUS.md) §1.1/§1.3/§1.6。
+> 下列工作不提前做。进度状态见 [STATUS.md](./STATUS.md) §1.1/§1.3/§1.6。
 
 | # | 工作 | 触发条件 | 说明 / 验收方向 |
 |---|---|---|---|

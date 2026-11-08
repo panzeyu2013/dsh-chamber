@@ -3,7 +3,7 @@
 ## 当前版本范围（2026-11 用户裁决）
 
 - **唯一出货 flavor = macOS Swift 原生壳**（`macos/` + 打包 Node sidecar，design 25）：开发、门禁、发布与文档维护只以 **macOS Swift + 共享契约**为范围；Windows/Linux 桌面腿冻结、不发布，恢复需用户裁决。
-- **Electron flavor 已冻结归档**：不删除文件与历史文档，保留可复活形态。冻结面 = Electron 入口与边沿（`packages/desktop/electron/` 与 `updater.ts`）、Electron 打包与更新腿、Windows/Linux CI/发布腿、默认测试组中的 Electron-only 测试；完整清单、仍共享的契约、禁用面与复活清单见 [`docs/progress/electron-frozen.md`](docs/progress/electron-frozen.md)。
+- **Electron flavor 已冻结归档**：不删除文件与历史文档，保留可复活形态。冻结面 = Electron 入口与边沿（`packages/desktop/electron/` 与 `updater.ts`）、Electron 打包与更新腿、Windows/Linux CI/发布腿、默认测试组中的 Electron-only 测试；完整清单、仍共享的契约、禁用面与复活清单见 [`docs/progress/electron-frozen.md`](./docs/progress/electron-frozen.md)。
 - **agent 默认规则**：只在 Swift 腿与共享契约（control-plane / renderer / client 插件 / wire / dsh-runtime / seed 包等）内改；Electron 归档文件、Electron 打包/发布/CI 腿、Windows/Linux 桌面腿默认不改、不「顺手同步」——确需改冻结面或恢复发布腿 = 用户重开范围的裁决，先读 electron-frozen 并按其复活清单执行。新增只用于 Swift 腿的 A 桥通道 / 命名空间 / 方法进 `packages/desktop/bridge-swift-only-additions.json` 白名单（政策见 electron-frozen §5），不要求 Electron 侧同步注册。
 
 ## Purpose
@@ -12,7 +12,7 @@ dsh-chamber is the local desktop **connection manager** for dsh: it hosts one lo
 
 `packages/gateway` is a second, explicitly invoked **server deployment shape** (design 17): the same local-host manager behind an authenticated-by-default public request boundary. It is never auto-started or imported by the desktop control plane, and never becomes authoritative for dsh facts.
 
-This file is an action guide, not a record: purpose, hard facts, and the flows with a fixed procedure. Document structure and writing rules are `docs/AGENTS.md`; design lives in `docs/design/` (entry point `01-overview.md`), unimplemented ideas in `docs/progress/TODO.md` and open work in `docs/progress/STATUS.md` (recording rules: `docs/progress/README.md`). The frozen Electron scope, shared contracts, forbidden surfaces and revival checklist live in `docs/progress/electron-frozen.md`; the deviation register is `docs/progress/deviations.md` (historical reference while frozen).
+This file is an action guide, not a record: purpose, hard facts, and the flows with a fixed procedure. Document structure and writing rules are `docs/AGENTS.md`; the global docs map is [`docs/INDEX.md`](./docs/INDEX.md). Design navigation is [`docs/design/INDEX.md`](./docs/design/INDEX.md) (overview: `01-overview.md`), unimplemented ideas in `docs/progress/TODO.md` and open work in `docs/progress/STATUS.md` (recording rules: `docs/progress/README.md`). The frozen Electron scope, shared contracts, forbidden surfaces and revival checklist live in `docs/progress/electron-frozen.md`; the deviation register is `docs/progress/deviations.md` (historical reference while frozen).
 
 ## STATUS.md — what to record
 
@@ -22,24 +22,24 @@ This file is an action guide, not a record: purpose, hard facts, and the flows w
 
 ### Before release
 
-- Read and execute `docs/checklists/release-checklist.md` — any ❌ blocks the release (version, preflight, changelog/i18n, full suite on the exact release commit, build, tag, CI dry-run first). Changes to packaged modules, build scripts, `build.files` or `extraResources` additionally require `docs/checklists/packaging-closure-checklist.md`; the release workflow is policy-tested (`pnpm run test:release-workflow`).
+- Read and execute `docs/checklists/release/release-checklist.md` — any ❌ blocks the release (version, preflight, changelog/i18n, full suite on the exact release commit, build, tag, CI dry-run first). Changes to packaged modules, build scripts, `build.files` or `extraResources` additionally require `docs/checklists/release/packaging-closure-checklist.md`; the release workflow is policy-tested (`pnpm run test:release-workflow`).
 - **Release-blocking markers**: `FIXME` blocks a release unless reviewers explicitly agree; shipping one requires `release-preflight --allow-fixme` (a recorded decision). `TODO` means fix soon; `XXX` means someday.
 - `CHANGELOG.md` (with its `docs/CHANGELOG.en-US.md` mirror and the `verify:i18n` record) is written at RELEASE time only — never add `[Unreleased]` entries while implementing. It records **only the difference between adjacent formal releases**: what someone running the previous formal release sees changed. A formal release preceded by a beta series aggregates the series into one release-level delta; a beta section still exists because `release.yml` extracts it as the release body. Internal path — intermediate pins, beta-to-beta deltas, batch/round codenames, gate counts, lockfile notes, verification reports — never goes in: it belongs to git history and, while still open, STATUS.
 
 ### Before a dsh (upstream) upgrade
 
-- Execute `docs/checklists/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in `docs/checklists/upstream-touchpoints.md` §7.
-- The upstream-touchpoint registry has **one machine source**: `scripts/upstream/registry.json` (paths, per-file classification, criterion ids, deviation ids, reasons). `scripts/upstream/verify-upstream-touchpoints.mjs` reads it (C1/C3–C16; C2 is advisory under `--tags`), and `docs/checklists/upstream-touchpoints.md` §2/§9 are its **generated views** — the `<!-- GENERATED:registry:… -->` blocks are hand-edit forbidden (`node scripts/upstream/registry-views.mjs --write` regenerates them; `verify:registry` is the freshness gate). `verify:registry` and `verify:anchors` (symbol anchors + the legacy `file:line` budget, which may only go down) are ordinary gates in `check:static` and on both CI paths.
+- Execute `docs/checklists/upgrade/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in `docs/checklists/upgrade/upstream-touchpoints.md` §7.
+- The upstream-touchpoint registry has **one machine source**: `scripts/upstream/registry.json` (paths, per-file classification, criterion ids, deviation ids, reasons). `scripts/upstream/verify-upstream-touchpoints.mjs` reads it (C1/C3–C16; C2 is advisory under `--tags`), and `docs/checklists/upgrade/upstream-touchpoints.md` §2/§9 are its **generated views** — the `<!-- GENERATED:registry:… -->` blocks are hand-edit forbidden (`node scripts/upstream/registry-views.mjs --write` regenerates them; `verify:registry` is the freshness gate). `verify:registry` and `verify:anchors` (symbol anchors + the legacy `file:line` budget, which may only go down) are ordinary gates in `check:static` and on both CI paths.
 - `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, baseline snapshots or per-tag delta logs. The current anchor's single sources are `harness.commit` (source line), `packages/desktop/vendor/dsh/pnpm-lock.yaml` (runtime line) and each fork's `package.json`; a tag's upgrade narrative goes to the `CHANGELOG.md` release section, and still-open deviations to STATUS.
 
 ### Before changing the Swift native shell (`macos/`)
 
-- Assemble the sidecar payload and the app with `pnpm run build:sidecar` then `pnpm run build:swift-app` (flags, capability prerequisites and the full payload chain: `docs/DEVELOPMENT.md` §4 and `docs/checklists/packaging-closure-checklist.md`; push CI builds only the `--skip-node` assembly). Native artifacts are the release artifacts — the Electron leg is frozen, so no Electron artifacts ship. A signed build must pass `codesign --verify --deep --strict` and the bundle must stay free of symlinks that escape it.
+- Assemble the sidecar payload and the app with `pnpm run build:sidecar` then `pnpm run build:swift-app` (flags, capability prerequisites and the full payload chain: `docs/DEVELOPMENT.md` §4 and `docs/checklists/release/packaging-closure-checklist.md`; push CI builds only the `--skip-node` assembly). Native artifacts are the release artifacts — the Electron leg is frozen, so no Electron artifacts ship. A signed build must pass `codesign --verify --deep --strict` and the bundle must stay free of symlinks that escape it.
 - `pnpm run test:macos` is the macOS-only leg (darwin lock assertions plus the packaging-script suites); it runs in the ci.yml `test-macos-pack` job (the Swift build/test core is `test-macos`), never on the ubuntu leg.
 
 ### Before a pull request
 
-Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`; complete the template with concrete, current evidence for the final PR HEAD. A change that alters a design contract, a cross-package boundary, or shipped behavior adds a short **Rejected alternatives** section to the owning `docs/design/0X-*.md` — a **review duty, not a gate**; a green gate never means this one was satisfied.
+Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`; complete the template with concrete, current evidence for the final PR HEAD. A change that alters a design contract, a cross-package boundary, or shipped behavior adds a short **Rejected alternatives** section to the owning design doc under [`docs/design/`](./docs/design/INDEX.md) (domain subdirectories) — a **review duty, not a gate**; a green gate never means this one was satisfied.
 Pick evidence with `node scripts/gates/run-checks.mjs <static|tests|typecheck|full>` (`--list` shows the plan): a local pass is the same evidence for every gate the selected mode contains (darwin-only gates are absent from a linux run). Gates outside the modes are enumerated in `docs/progress/STATUS.md` §1.6.
 
 ## Runtime Boundaries

@@ -1,6 +1,6 @@
 # @dsh-chamber/dsh-chamber-client-ui-settings-connections
 
-English | [中文](README.zh.md)
+English | [中文](./README.zh.md)
 
 Chamber's self-built **Connections** settings section (design 05 §5): the
 settings shell renders it through its fixed nav id `__connections`

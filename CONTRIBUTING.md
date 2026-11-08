@@ -2,11 +2,11 @@
 
 感谢贡献！dsh-chamber是dsh的本地桌面连接管理器：控制面托管本地dsh实例（web profile），远程连接正交组合 `dsh|gateway` 目标与 `ssh|http` 传输；界面为dsh官方前端源码复用自建；显式启动的Gateway是认证默认开启的独立server形态。本指南涵盖流程、验证与合格PR标准。
 
-> English: [docs/CONTRIBUTING.en-US.md](docs/CONTRIBUTING.en-US.md)
+> English: [docs/CONTRIBUTING.en-US.md](./docs/CONTRIBUTING.en-US.md)
 
 ## 开发环境
 
-环境搭建（要求、clone、vendor引导、`pnpm install`、`bundle:dsh`）、运行、构建/打包、CI/发布与仓库结构见开发文档 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+环境搭建（要求、clone、vendor引导、`pnpm install`、`bundle:dsh`）、运行、构建/打包、CI/发布与仓库结构见开发文档 [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)。
 
 ```bash
 git clone <REPO-URL> --recurse-submodules
@@ -101,7 +101,7 @@ PR是评审交接件，不是单纯diff：评审者须能不重构你的工作�
 
 开PR之前：
 
-1. 阅读 [`AGENTS.md`](AGENTS.md) 与相关设计/进度文档（`docs/design/01-overview.md` 为入口）。
+1. 阅读 [`AGENTS.md`](./AGENTS.md)、[`docs/INDEX.md`](./docs/INDEX.md)（全仓文档地图）与相关设计/进度文档（设计入口 [`docs/design/INDEX.md`](./docs/design/INDEX.md)，总览 `docs/design/01-overview.md`）。
 2. 保持改动聚焦：清理或重构拆到独立PR。
 3. 运行改动所需的验证，而不只是上述宽泛命令。
 4. 按PR模板填写针对最终HEAD的具体证据。
@@ -130,4 +130,4 @@ PR是评审交接件，不是单纯diff：评审者须能不重构你的工作�
 
 ## 问题？
 
-打开一个 [issue](https://github.com/panzeyu2013/dsh-chamber/issues)，或阅读 [`docs/design/`](docs/design/) 下的设计文档。
+打开一个 [issue](https://github.com/panzeyu2013/dsh-chamber/issues)，或阅读 [`docs/design/`](./docs/design) 下的设计文档。

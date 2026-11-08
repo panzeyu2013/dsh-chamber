@@ -9,7 +9,7 @@ The desktop connection manager for [dsh](https://github.com/deepseek-ai/deepseek
 
 The macOS build uses a **Swift/AppKit native shell**: window, menus, status item, notifications, Dock badge, deep links, file dialogs, hide/restore and Sparkle in-app updates are implemented in Swift; the business runs in a packaged Node sidecar; the page 100% reuses the dsh official frontend — not a browser wrapper.
 
-> **Version scope (2026-11 user ruling)**: the only shipped build is the **macOS Swift native shell** (Apple Silicon). The Electron desktop build is **frozen and archived** (files kept, revivable); Windows/Linux desktop builds are frozen with it and **not published**. Reopening that scope is a user decision — scope, shared contracts, disabled surfaces and the revival checklist are in [progress/electron-frozen.md](progress/electron-frozen.md).
+> **Version scope (2026-11 user ruling)**: the only shipped build is the **macOS Swift native shell** (Apple Silicon). The Electron desktop build is **frozen and archived** (files kept, revivable); Windows/Linux desktop builds are frozen with it and **not published**. Reopening that scope is a user decision — scope, shared contracts, disabled surfaces and the revival checklist are in [progress/electron-frozen.md](./progress/electron-frozen.md).
 
 ## User interface
 
@@ -17,7 +17,7 @@ The macOS build uses a **Swift/AppKit native shell**: window, menus, status item
 
 *Main user interface — one window with the dsh-native sidebar listing each source's sessions/workspaces and the active instance's dsh shell.*
 
-> 中文版: [README.md](../README.md) · Development: [DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md) · Design: [01-overview.md](design/01-overview.md) · Progress: [STATUS.md](progress/STATUS.md)
+> 中文版: [README.md](../README.md) · Docs map: [docs/INDEX.md](./INDEX.md) · Development: [DEVELOPMENT.en-US.md](./DEVELOPMENT.en-US.md) · Design index: [design/INDEX.md](./design/INDEX.md) · Progress: [STATUS.md](./progress/STATUS.md)
 
 ## Why dsh-chamber
 
@@ -43,7 +43,7 @@ The macOS installer comes from [GitHub Releases](https://github.com/panzeyu2013/
 
 - macOS (Apple Silicon): `dsh-chamber-<version>-macos-arm64.dmg`
 
-Version and channel policy live in [CHANGELOG.en-US.md](CHANGELOG.en-US.md) and on GitHub Releases: stable and beta channels are independent; Settings → Update can subscribe to preview (beta) updates (a user preference, off by default; once enabled it persists across app updates).
+Version and channel policy live in [CHANGELOG.en-US.md](./CHANGELOG.en-US.md) and on GitHub Releases: stable and beta channels are independent; Settings → Update can subscribe to preview (beta) updates (a user preference, off by default; once enabled it persists across app updates).
 
 ### 2 · Open the app
 
@@ -75,14 +75,14 @@ The script completes automatically (defaults: loopback-only, `~/.dsh-chamber` in
 After installation:
 
 - Daily management: `install-gateway.sh status|logs|restart|update|uninstall`
-- Public access: reverse-proxy HTTPS to `127.0.0.1:30801` with Nginx/Caddy — see [deploy/deploy-gateway.md](deploy/deploy-gateway.md)
+- Public access: reverse-proxy HTTPS to `127.0.0.1:30801` with Nginx/Caddy — see [deploy/deploy-gateway.md](./deploy/deploy-gateway.md)
 - Desktop access: Settings → Connections, add a Gateway source (HTTP transport + proxy address); shared token / login password as needed
 
 #### Option B: remote dsh instance + systemd
 
-Without a gateway, persist the server's dsh instance with systemd (system or user unit, non-root) and connect over SSH; configuration and troubleshooting: [deploy/remote-dsh-instance.md](deploy/remote-dsh-instance.md).
+Without a gateway, persist the server's dsh instance with systemd (system or user unit, non-root) and connect over SSH; configuration and troubleshooting: [deploy/remote-dsh-instance.en-US.md](./deploy/remote-dsh-instance.en-US.md).
 
-Already on a direct instance and switching to the Gateway? Existing data does not follow; after installing the gateway, run the one-time migration in [deploy-gateway.md §3 "Migrating from a direct dsh instance to the Gateway"](deploy/deploy-gateway.md).
+Already on a direct instance and switching to the Gateway? Existing data does not follow; after installing the gateway, run the one-time migration in [deploy-gateway.md §3 "Migrating from a direct dsh instance to the Gateway"](./deploy/deploy-gateway.md).
 
 ### 4 · Add a remote host
 
@@ -122,15 +122,19 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 
 |Document|Purpose|
 |---|---|
-|[docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md)|Development: architecture/setup/build/package/CI/release/repo layout|
-|[deploy/deploy-gateway.md](deploy/deploy-gateway.md)|Server-side Gateway deployment guide|
-|[deploy/remote-dsh-instance.md](deploy/remote-dsh-instance.md)|Remote dsh instance persistence with systemd|
-|[CONTRIBUTING.en-US.md](CONTRIBUTING.en-US.md)|Contribution guide (testing/commits/PR contract)|
+|[docs/INDEX.md](./INDEX.md)|**Global docs map**: the single navigation entry for entries / design / checklists / progress / ops|
+|[docs/DEVELOPMENT.en-US.md](./DEVELOPMENT.en-US.md)|Development: architecture/setup/build/package/CI/release/repo layout|
+|[design/INDEX.md](./design/INDEX.md)|Design index: 27 designs by domain × status × owner (overview [01-overview.md](./design/01-overview.md))|
+|[design/decisions/README.md](./design/decisions/README.md)|Cross-domain decision records (ADR: context / decision / rejected alternatives / consequences)|
+|[checklists/README.md](./checklists/README.md)|Checklist stage matrix: commit / push / release / upgrade / acceptance / ops gates and entries|
+|[progress/STATUS.md](./progress/STATUS.md)|The single progress record: open items / criteria / pointers|
+|[progress/electron-frozen.md](./progress/electron-frozen.md)|Electron freeze registry: scope / shared contracts / forbidden surfaces / revival checklist|
+|[deploy/deploy-gateway.md](./deploy/deploy-gateway.md)|Server-side Gateway deployment guide|
+|[deploy/remote-dsh-instance.en-US.md](./deploy/remote-dsh-instance.en-US.md)|Remote dsh instance persistence with systemd|
+|[CONTRIBUTING.en-US.md](./CONTRIBUTING.en-US.md)|Contribution guide (testing/commits/PR contract)|
 |[AGENTS.md](../AGENTS.md)|Development constraints (always-on repo rules)|
-|[docs/AGENTS.md](AGENTS.md)|Documentation standard (layering / writing / budgets / doc gates)|
-|[CHANGELOG.en-US.md](CHANGELOG.en-US.md)|Version history|
-|[design/01-overview.md](design/01-overview.md)|Design entry: consolidation principles, scope, removals|
-|[progress/STATUS.md](progress/STATUS.md)|The single progress record: open items / criteria / pointers|
+|[docs/AGENTS.md](./AGENTS.md)|Documentation standard (types / placement / writing / budgets / doc gates)|
+|[CHANGELOG.en-US.md](./CHANGELOG.en-US.md)|Version history|
 |[README.md](../README.md)|中文README|
 
 ## Related projects
@@ -144,7 +148,7 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 
 ## Contributing
 
-See [CONTRIBUTING.en-US.md](CONTRIBUTING.en-US.md). Constraints: [AGENTS.md](../AGENTS.md); setup and builds: [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md).
+See [CONTRIBUTING.en-US.md](./CONTRIBUTING.en-US.md). Constraints: [AGENTS.md](../AGENTS.md); setup and builds: [docs/DEVELOPMENT.en-US.md](./DEVELOPMENT.en-US.md).
 
 ## License
 

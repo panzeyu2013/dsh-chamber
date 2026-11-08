@@ -1,6 +1,6 @@
 # @dsh-chamber/cli
 
-控制面（设计 [05 §7.2](../../docs/design/05-connection-manager.md)、端点形状见设计 [04](../../docs/design/04-control-plane-api-data.md)）的**瘦客户端**：不导入 `@dsh-chamber/control-plane`，只经 loopback REST 读取/操作运行中的控制面。
+控制面（设计 [05 §7.2](../../docs/design/control-plane/05-connection-manager.md)、端点形状见设计 [04](../../docs/design/control-plane/04-control-plane-api-data.md)）的**瘦客户端**：不导入 `@dsh-chamber/control-plane`，只经 loopback REST 读取/操作运行中的控制面。
 
 ## 命令与边界
 

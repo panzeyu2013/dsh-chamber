@@ -1,6 +1,6 @@
 # @deepseek-ai/dsh-client-web
 
-English | [中文](README.zh.md)
+English | [中文](./README.zh.md)
 
 Web shell kernel: `new AppWebEntry(container, options?).run()` mounts the whole client through the two-stage boot (rc.2 shape). Stage one (module face): adopt (or install) the shared client module system (`@deepseek-ai/dsh-client-modules`, built through the `window.__ModuleLoader__` bootstrap facade) over the host-pushed entry graph (`window.__DSH_BOOT__`) and prefetch the `immediately` tier in parallel — bundle execution registers factories only. Stage two (plugin face): mount the vendored cordis Loader with the module system injected through its `internal` contract, create one loader entry per graph row (tree.import materializes each module), await quiescence, audit activation, then mount the real UI through the `uiRenderer` service (the rc.2 renderer row — kernel-adopted here). The loading page is framework-free (`boot-page.ts`). Composition is entirely the host graph's: the roster and the immediately tier live in the composing app; the shell makes zero composition decisions.
 

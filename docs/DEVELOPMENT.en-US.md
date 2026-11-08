@@ -1,16 +1,16 @@
 # dsh-chamber Development
 
 > For developers: architecture, environment setup, running, building/packaging, CI/releases, repository layout.
-> User docs: [README.md](../README.md); contribution: [CONTRIBUTING.md](../CONTRIBUTING.md); repo rules: [AGENTS.md](../AGENTS.md); design authority: [docs/design/01-overview.md](design/01-overview.md).
+> User docs: [README.md](../README.md); contribution: [CONTRIBUTING.md](../CONTRIBUTING.md); repo rules: [AGENTS.md](../AGENTS.md); docs map: [docs/INDEX.md](./INDEX.md); design authority: [docs/design/INDEX.md](./design/INDEX.md) (overview [01-overview.md](./design/01-overview.md)).
 
-> 中文版: [docs/DEVELOPMENT.md](DEVELOPMENT.md)
+> 中文版: [docs/DEVELOPMENT.md](./DEVELOPMENT.md)
 
 > **Version scope (2026-11 user ruling)**: the only shipped flavor is the macOS Swift native shell; the Electron
 > flavor is frozen and archived (files kept, revivable; Windows/Linux desktop legs frozen and not published).
 > Default development, gates and releases cover macOS Swift plus shared contracts only; the diagram below reflects the
 > shipped shape (Swift window + packaged Node sidecar, Electron rows marked archival) — the shipped shell entry is `macos/`
 > plus the sidecar (`packages/desktop/sidecar-entry.ts`). Scope and revival checklist:
-> [progress/electron-frozen.md](progress/electron-frozen.md).
+> [progress/electron-frozen.md](./progress/electron-frozen.md).
 
 ## 1. Architecture overview
 
@@ -46,7 +46,7 @@ In one sentence: the control plane owns connection management, per-instance same
 
 Git worktree support pairs a chamber-bundled client plugin with an in-instance host plugin (P5b: a worktree is a checkout inside the source repository under `.agents/worktrees`, and the official forge bundle shares that same pool with this plugin). The control plane and desktop only distribute the host package and mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 
-Design authority: `docs/design/` (01 entry point, 05 v1 surface/architecture contract); package responsibilities and constraints: `AGENTS.md` "Runtime Boundaries"—this file navigates only.
+Design authority: `docs/design/` (entry [INDEX.md](./design/INDEX.md), overview 01-overview; 05 is the v1 surface/architecture contract); the global docs map is [docs/INDEX.md](./INDEX.md). Package responsibilities and constraints: `AGENTS.md` "Runtime Boundaries"—this file navigates only.
 
 Package responsibilities, boundaries and constraints have one home: root [`AGENTS.md`](../AGENTS.md) "Runtime Boundaries"; each package contract lives in `packages/*/README.md`. This file does not copy the package table; it keeps only the architecture diagram above.
 
@@ -80,7 +80,7 @@ pnpm install
 
 Upgrading the harness pin goes only through `node scripts/upstream/update-vendor.mjs <tag>` (atomic: fetch+verify tag→switch submodule→update `harness.commit`→rebuild links→regenerate lockfile→frozen verify); never bump the gitlink/`harness.commit` by hand. `pnpm-workspace.yaml` sets `verifyDepsBeforeRun: false`: `pnpm run` no longer auto-installs (guarding the lockfile from non-frozen rewrites); run `pnpm install` after dependency changes; CI also asserts `git diff --exit-code -- pnpm-lock.yaml` after every frozen install.
 
-`.npmrc` is a gitignored local config; formal builds commit no third-party mirror and always use the official source (a local mirror is debug-only for the archived Electron surface, see [progress/electron-frozen.md](progress/electron-frozen.md)).
+`.npmrc` is a gitignored local config; formal builds commit no third-party mirror and always use the official source (a local mirror is debug-only for the archived Electron surface, see [progress/electron-frozen.md](./progress/electron-frozen.md)).
 
 ### 2.3 Bundle the dsh runtime
 
@@ -124,11 +124,11 @@ Shipped Swift artifacts land in `macos/release/` (`.app` + dmg/zip + appcast; `.
 
 > Platform troubleshooting (install/permissions) lives in the README FAQ; the Windows desktop leg is frozen and no longer maintained.
 
-> The Windows/Linux desktop legs are frozen with Electron (not published, not scheduled); the pre-freeze support matrix and revival baseline live in [progress/electron-frozen.md](progress/electron-frozen.md) §6 and design 23 (ARCHIVED).
+> The Windows/Linux desktop legs are frozen with Electron (not published, not scheduled); the pre-freeze support matrix and revival baseline live in [progress/electron-frozen.md](./progress/electron-frozen.md) §6 and design 23 (ARCHIVED).
 
 ## 5. CI & releases
 
-> **(Electron frozen, 2026-11)** Current CI = `ci.yml` jobs `test` / `test-macos` / `test-macos-pack`; current release = `release.yml` `build-swift` + `build-gateway` (the three Electron release legs carry a job-level always-false condition and stay skipped). Gate placement and job rosters have their single sources in [release-checklist.md](checklists/release-checklist.md), [.github/workflows/](../.github/workflows/) and `scripts/gates/gate-surfaces.json`; this file does not copy them.
+> **(Electron frozen, 2026-11)** Current CI = `ci.yml` jobs `test` / `test-macos` / `test-macos-pack`; current release = `release.yml` `build-swift` + `build-gateway` (the three Electron release legs carry a job-level always-false condition and stay skipped). Gate placement and job rosters have their single sources in [release-checklist.md](./checklists/release/release-checklist.md), [.github/workflows/](../.github/workflows) and `scripts/gates/gate-surfaces.json`; this file does not copy them.
 
 - `.github/workflows/ci.yml`: branch pushes/PRs run the validation chain (a code change runs everything; prose-only runs the file-only gates, classifier `scripts/gates/classify-ci-changes.mjs`); the macOS legs `test-macos` (Swift build/test) and `test-macos-pack` (`test:macos` + compiled sidecar / native GUI assembly) run on macos-latest.
 - `.github/workflows/release.yml`: a `v*` tag or manual run produces distributable releases (stable `X.Y.Z` or beta `X.Y.Z-beta.N` only); the release body is the `## [<version>]` section of `CHANGELOG.md`; `validation` runs `scripts/release/verify-release-ci-proof.mjs` to prove a successful `ci.yml` run on `main` for that commit; `build-gateway` publishes the clean-prefix-smoked `.tgz` plus matching `.sha256`.
@@ -147,10 +147,14 @@ packages/
                             Each package contract (responsibilities, boundaries, modules, test entry, known limits) lives in its README;
                             the package roster is the packages/ directory and ownership is root AGENTS.md "Runtime Boundaries"
 docs/
-  design/                   Design documents (01 is the entry point; 05 is the surface/architecture contract (v1))
-  progress/                 STATUS.md — the only progress record; TODO.md — unscheduled plans (A upstream / B platform / C features / D engineering);
-                            deviations.md — pre-freeze dual-flavor deviations (historical reference); electron-frozen.md — Electron freeze registry
-  checklists/               Operational checklists (release / dsh upgrade / pin alignment / packaging integrity / GUI acceptance / remote browser / session-authority calibration / upstream touchpoints)
+  INDEX.md                  Global docs map (the single entry for all documents)
+  AGENTS.md                 Documentation standard (types / placement / writing / flow)
+  design/                   INDEX.md (domain × status × owner) + 01-overview.md overview
+                            + domain directories (runtime/ control-plane/ gateway/ client/ desktop/ plugins/ archive/)
+                            + decisions/ (ADR: context / decision / rejected alternatives / consequences)
+  checklists/               README.md stage matrix (the only stage list) + release/ upgrade/ acceptance/
+  progress/                 STATUS.md only progress record; TODO.md; deviations.md; electron-frozen.md; README.md rules
+  deploy/                   Gateway deployment / remote dsh instance persistence
   *.en-US.md                English mirrors of the root docs
 scripts/
   install-gateway.sh        One-shot Gateway installer (user/ops; entry docs/deploy/deploy-gateway.md)
@@ -171,7 +175,7 @@ vendor/
 
 ## 7. Scripts
 
-The script list has one home: root [`package.json`](../package.json) `scripts` (not copied here). For gate selection by change surface see [`CONTRIBUTING.md`](../CONTRIBUTING.md) and [`docs/AGENTS.md`](AGENTS.md) §5; build/release chains are in §4–§5.
+The script list has one home: root [`package.json`](../package.json) `scripts` (not copied here). For gate selection by change surface see [`CONTRIBUTING.md`](../CONTRIBUTING.md) and [`docs/AGENTS.md`](./AGENTS.md) §5; build/release chains are in §4–§5.
 
 ## 8. Documentation map
 
@@ -181,17 +185,13 @@ The script list has one home: root [`package.json`](../package.json) `scripts` (
 |This file `docs/DEVELOPMENT.md`|Development: architecture/build/package/CI/release|
 |[CONTRIBUTING.md](../CONTRIBUTING.md)|Contribution process (testing/commits/PR contract)|
 |[AGENTS.md](../AGENTS.md)|Always-on repository rules (purpose/hard facts/execution flows/package map)|
-|[docs/AGENTS.md](AGENTS.md)|Documentation standard (layering/writing/word budgets/doc gates/review checklist)|
-|[.agents/skills/](../.agents/skills/)|Reusable workflows: chamber-doc / chamber-pre-push / chamber-code-review|
+|[docs/AGENTS.md](./AGENTS.md)|Documentation standard (layering/writing/word budgets/doc gates/review checklist)|
+|[.agents/skills/](../.agents/skills)|Reusable workflows: chamber-doc / chamber-pre-push / chamber-code-review|
 |[CHANGELOG.md](../CHANGELOG.md)|Version history|
-|[docs/design/01-overview.md](design/01-overview.md)|Design entry point & consolidation principles|
-|[docs/progress/STATUS.md](progress/STATUS.md)|Progress overview (the only progress record)|
-|[docs/progress/electron-frozen.md](progress/electron-frozen.md)|Electron freeze registry (scope / archived inventory / shared contracts / forbidden surfaces / revival checklist)|
-|[docs/checklists/release-checklist.md](checklists/release-checklist.md)|Pre-release checklist (version/changelog/tests/build/tag/CI)|
-|[docs/checklists/dsh-upgrade-checklist.md](checklists/dsh-upgrade-checklist.md)|Pre-dsh-upgrade checklist (pin consistency/fork rebase/lockfile/regression)|
-|[docs/checklists/pin-alignment-checklist.md](checklists/pin-alignment-checklist.md)|Pre-release pin-alignment checklist (verifier / payload lockstep test / mirrors and generated projections / doc literals)|
-|[docs/checklists/packaging-closure-checklist.md](checklists/packaging-closure-checklist.md)|Packaging integrity checklist (module closure vs build.files, build-chain artifacts, packaged-app smoke)|
-|[docs/checklists/gui-acceptance-checklist.md](checklists/gui-acceptance-checklist.md)|GUI acceptance procedure (what to run / look for / record)|
-|[docs/checklists/remote-browser-acceptance.md](checklists/remote-browser-acceptance.md)|Right-sidebar browser v2 acceptance (local; CDP leg archived + Swift real machine)|
-|[docs/checklists/session-authority-calibration.md](checklists/session-authority-calibration.md)|Session-fact single-authority real-machine calibration (design 14 §D4)|
-|[docs/checklists/upstream-touchpoints.md](checklists/upstream-touchpoints.md)|Upstream touchpoint registry and per-tag maintenance loop (generated views; §2/§9 hand-edit forbidden)|
+|[docs/INDEX.md](./INDEX.md)|**Global docs map**: the single navigation entry for entries / design / checklists / progress / ops|
+|[docs/design/INDEX.md](./design/INDEX.md)|Design index (domain × status × owner; overview [01-overview.md](./design/01-overview.md))|
+|[docs/design/decisions/README.md](./design/decisions/README.md)|Cross-domain decision records (ADR)|
+|[docs/progress/README.md](./progress/README.md)|Progress-system rules (ownership and writing rules for STATUS / TODO / deviations / electron-frozen)|
+|[docs/progress/STATUS.md](./progress/STATUS.md)|Progress overview (the only progress record; open items / criteria / pointers)|
+|[docs/progress/electron-frozen.md](./progress/electron-frozen.md)|Electron freeze registry (scope / archived inventory / shared contracts / forbidden surfaces / revival checklist)|
+|[docs/checklists/README.md](./checklists/README.md)|Checklist stage matrix (the single source for stage → gate → checklist entries)|

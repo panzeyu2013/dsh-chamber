@@ -31,7 +31,7 @@
 | Electron 打包 / 装配 | `packages/desktop/package.json` 的 `build` 键、`electron-builder.base.cjs`、`electron-builder.beta.yml`、`scripts/{electron-dev,electron-shared,before-pack,after-pack-adhoc-sign}.mjs`、`dist:*` 脚本 | **冻结**（配置与依赖声明保留作复活基线，不删依赖） |
 | Electron 专属测试 | 只测 Electron 壳/工具链、不覆盖 Swift 腿的测试（FROZEN_GROUPS：`test/desktop-shell/{fatal-report,renderer-frame-watchdog,startup-recovery,updater-channel-seal,updater-main-wiring}.test.ts`、`shell-locale.test.ts`、`test/ipc/{desktop-shortcuts-bridge,renderer-trust}.test.ts`、`scripts/{after-pack-adhoc-sign,before-pack,electron-shared}.test.mjs`；清单以 `packages/desktop/scripts/test.mjs` 为准） | **默认测试组不跑**，`test:frozen` 是唯一入口；`verify-test-wiring` 仍须认为它们已登记。共享锁步（electron-free-gate / bridge-manifest / bridge-shim / bridge-shim-surface / ipc-surface-mirror / upstream-seats / node-edges / notifications / badge / **cross-package-contract** / **desktop-carrier-surface** / host-root-lease）**留在默认组**、不在 FROZEN（desktop-carrier-surface 含活 Swift shim + 共享 sidecar 断言，已回默认组） |
 | CI / 发布腿 | `ci.yml` 的 Windows job（`test-windows` / `test-windows-pack`，**已删除**，原文见 git 历史）与 `test-macos-pack` 的 Electron 打包排练 / artifact 校验步（**已移除**）；`release.yml` 的 `build-windows` / `build-linux` 与 **`build-macos` 整个 job**（Electron 发布腿 = 该 job 全部；job 级 `if: ${{ false }}` + ARCHIVED 头注） | **冻结**：Windows CI job 已删、三条 Electron 发布腿恒 skipped（`finalize-release` 容忍该状态）、不再产出 Electron 产物/更新 feed；ARCHIVED 头注指回本文件，**不得按旧 TEMPORARY 注释恢复** |
-| 打包闭包 / 发布检查单 | `docs/checklists/release-checklist.md`、`docs/checklists/packaging-closure-checklist.md` 的 Electron / Windows / Linux 项 | 已标 **ARCHIVED**（不删条目；只在按 §6 复活后执行） |
+| 打包闭包 / 发布检查单 | `docs/checklists/release/release-checklist.md`、`docs/checklists/release/packaging-closure-checklist.md` 的 Electron / Windows / Linux 项 | 已标 **ARCHIVED**（不删条目；只在按 §6 复活后执行） |
 | 设计文档 | design 11 的 Electron / electron-updater 半边 = 归档参考（Swift 更新链见 design 25 §7，现行）；design 22（Linux）/ design 23（Windows）= ARCHIVED；design 02 的 Electron/Chromium 专属段（spawn-dsh 的 Electron 分支、运行期指纹、safeStorage、electron-updater 等）随 flavor 归档，其 control-plane 宿主生命周期契约仍现行；design 25 §5 E 表 = Electron → Swift 的历史映射 | **归档参考**，原文保留 |
 | 发布产物 | Electron dmg / zip / NSIS / AppImage（以及 `verify-electron-artifacts` 相关步骤） | 不再产出；Swift 产物是唯一发布物 |
 
@@ -157,19 +157,19 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
    job 级 `if: ${{ false }}`、把 ARCHIVED 头注改回现行发布说明（`finalize-release` 的 needs/条件复原）；
    `scripts/release/verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS`、
    `scripts/gates/gate-surfaces.json` / `run-checks.mjs`、`scripts/release/release-workflow-policy.test.mjs`
-   的断言同批改（见 `docs/checklists/release-checklist.md` / `packaging-closure-checklist.md`）。
+   的断言同批改（见 `docs/checklists/release/release-checklist.md` / `packaging-closure-checklist.md`）。
 6. **恢复默认测试组**：FROZEN 组并回 `test`（`packages/desktop/scripts/test.mjs`），
    `verify-test-wiring` 仍绿；确认 Electron-only 测试文件在 `test-manifest.mjs` 中仍登记。
 7. **A/B 桥重建**：重生成 `bridge-manifest.json` / `BridgeManifest.swift` / `chamber-bridge.stub.js`，
    与 Swift 白名单锁步；评估 `bridge-swift-only-additions.json`：清空，或把「两侧都注册」的项迁为常规通道
    （白名单只留真正的 Swift-only 项）。
-8. **打包 / 签名 / 发布验证**：按 `docs/checklists/release-checklist.md` 与
-   `docs/checklists/packaging-closure-checklist.md` 全量走查（Electron mac 签名/公证、Windows 未签名让步、
+8. **打包 / 签名 / 发布验证**：按 `docs/checklists/release/release-checklist.md` 与
+   `docs/checklists/release/packaging-closure-checklist.md` 全量走查（Electron mac 签名/公证、Windows 未签名让步、
    Linux AppImage 形态门等既有条目恢复引用）。
 9. **文档回滚**：AGENTS.md 顶部范围段、STATUS/TODO 顶部横幅与冻结标注、design 11/22/23 的 ARCHIVED 横幅、
    design 02 的窄横幅、design 25 的「Electron 已冻结」句、**design 01 的文档状态表（11/19/22/23/25 行）**、
    README / docs README / DEVELOPMENT / **CONTRIBUTING（dev 命令与 build:preload）** 的范围说明、
-   **docs/checklists/upstream-touchpoints.md 的生成视图**（`registry-views.mjs --write` 重生成）、
+   **docs/checklists/upgrade/upstream-touchpoints.md 的生成视图**（`registry-views.mjs --write` 重生成）、
    根 `tsconfig.json` 的 include（把 `packages/desktop/electron/**/*.ts` 加回，见 §6.4 ⑦），
    以及本文件自身（改 active 或删除）。
 10. **验证**：`node scripts/gates/run-checks.mjs full`（Linux 上 Windows 腿不在模式内，见 STATUS §1.6）、
@@ -178,13 +178,13 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
 ## 7. 政策指针
 
 - 范围与 agent 规则：`AGENTS.md`「当前版本范围（2026-11 用户裁决）」。
-- 仓库级索引：`docs/design/01-overview.md` §3（文档地图）/ §4（移出项）。
+- 仓库级索引：`docs/INDEX.md`（全局文档地图）、`docs/design/INDEX.md`（设计索引）、`docs/design/01-overview.md` §3/§4（定位与移出项）。
 - 进度与计划：`docs/progress/STATUS.md` 顶部范围行、`docs/progress/TODO.md` 顶部范围行（B 平台条目已标冻结）。
-- Swift 腿设计：`docs/design/25-macos-swift-native-shell.md`（§4.1/§4.4.3 共享装配与 A 桥；§5 E 表为历史映射；
+- Swift 腿设计：`docs/design/desktop/25-macos-swift-native-shell.md`（§4.1/§4.4.3 共享装配与 A 桥；§5 E 表为历史映射；
   §7 Swift 更新链/Sparkle）。
-- 共享宿主生命周期：`docs/design/02-host-management-deployment.md`（仍现行；Electron/Chromium 专属段归档）。
+- 共享宿主生命周期：`docs/design/runtime/02-host-management-deployment.md`（仍现行；Electron/Chromium 专属段归档）。
 - 归档目录说明：`packages/desktop/electron/ARCHIVED.md`。
 - Swift-only A 桥白名单：`packages/desktop/bridge-swift-only-additions.json`（政策见 §5.2）。
-- 发布流程归档标注：`docs/checklists/release-checklist.md` / `packaging-closure-checklist.md`（ARCHIVED 条目）；
+- 发布流程归档标注：`docs/checklists/release/release-checklist.md` / `packaging-closure-checklist.md`（ARCHIVED 条目）；
   `.github/workflows/ci.yml` / `release.yml` 的 ARCHIVED 文案；发布证明脚本 =
   `scripts/release/verify-release-ci-proof.mjs`。

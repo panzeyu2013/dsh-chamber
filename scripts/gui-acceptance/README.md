@@ -1,6 +1,6 @@
 # scripts/gui-acceptance — GUI 验收工具箱
 
-面向维护者的**可执行证据产生器**：把 `docs/checklists/gui-acceptance-checklist.md` 里
+面向维护者的**可执行证据产生器**：把 `docs/checklists/acceptance/gui-acceptance-checklist.md` 里
 标 `[机械]` 的项目跑一遍，产出固定 schema 的报告 + 截图，供 PR / issue 附证据。
 
 **它不是新的阻断门**：判据的权威仍在 `docs/design/`（契约）与

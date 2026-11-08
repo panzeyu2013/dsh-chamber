@@ -20,7 +20,7 @@ description: Use before pushing, opening or updating a pull request, or claiming
 - 跨包边界 / 依赖：`verify:package-boundaries`、`verify:import-cycles`、`verify:file-budgets`（static）。
 - 上游触点（新增 `@deepseek-ai/*` 深导入、改 fork 副本、镜像 wire、新增再生物）：先登记 `scripts/upstream/registry.json`，再 `node scripts/upstream/registry-views.mjs --write`，并跑 `verify-upstream-touchpoints.mjs`；漏登 = CI C1/C3 硬失败。
 - 运行时 / 认证 / 协议 / 桌面壳：静态检查不能证明运行时正确；补聚焦测试，或说明未验证什么。
-- 发布相关（版本、workflow、打包）：先读 `docs/checklists/release-checklist.md` 与 `docs/checklists/packaging-closure-checklist.md`；发布证明链不在本地模式内。
+- 发布相关（版本、workflow、打包）：先读 `docs/checklists/release/release-checklist.md` 与 `docs/checklists/release/packaging-closure-checklist.md`；发布证明链不在本地模式内。
 
 ## 纪律
 

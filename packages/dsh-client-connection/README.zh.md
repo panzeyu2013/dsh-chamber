@@ -5,7 +5,7 @@ kind: "package-reference"
 
 # @deepseek-ai/dsh-client-connection
 
-[English](README.md) | 中文
+[English](./README.md) | 中文
 
 ## 概述
 

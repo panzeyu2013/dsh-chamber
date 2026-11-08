@@ -1,6 +1,6 @@
 # @dsh-chamber/dsh-chamber-client-ui-settings-bridge
 
-English | [中文](README.zh.md)
+English | [中文](./README.zh.md)
 
 Chamber's self-built **settings shell** plugin: it registers the 设置 / Settings
 shell into the `sidebar.settings` slot at the RESERVED shadow priority (`-1000`, shared face
