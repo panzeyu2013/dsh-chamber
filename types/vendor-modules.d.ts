@@ -305,14 +305,7 @@ declare module '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
   export class ThemePresenter { apply(snapshot: any): void; dispose(): void }
 }
 
-// ui-workspace / directory-picker deep faces.
-declare module '@deepseek-ai/dsh-client-ui-workspace/src/client/navigation.ts' {
-  /** Browse-capability business error (DirectoryBrowser renders rpcError.message). */
-  export class DirectoryBrowseError extends Error {
-    constructor(rpcError: { code: string; message: string; details?: unknown })
-    readonly rpcError: { code: string; message: string; details?: unknown }
-  }
-}
+// directory-picker deep faces.
 
 declare module '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx' {
   import type { DirectoryListingRow } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
@@ -545,7 +538,6 @@ declare module '@deepseek-ai/dsh-client-ui-settings-models/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 declare module '@deepseek-ai/dsh-client-ui-session/client'
-declare module '@deepseek-ai/dsh-client-ui-sidebar/client'
 declare module '@deepseek-ai/dsh-client-ui-skill/client'
 declare module '@deepseek-ai/dsh-client-ui-subagent/client'
 declare module '@deepseek-ai/dsh-client-ui-theme/client'
