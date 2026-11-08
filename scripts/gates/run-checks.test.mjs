@@ -357,18 +357,24 @@ test('stepInvocation resolves script names and explicit command entries without 
   const pnpm = { command: 'pnpm', prefix: [] }
   assert.deepEqual(stepInvocation('verify:i18n', pnpm),
     { command: 'pnpm', args: ['run', 'verify:i18n'], display: 'pnpm run verify:i18n' })
-  assert.deepEqual(stepInvocation('node scripts/gates/verify-electron-artifacts.mjs', pnpm),
-    { command: process.execPath, args: ['scripts/gates/verify-electron-artifacts.mjs'],
-      display: 'node scripts/gates/verify-electron-artifacts.mjs' })
+  assert.deepEqual(stepInvocation('node scripts/gates/compiled-sidecar-smoke.mjs', pnpm),
+    { command: process.execPath, args: ['scripts/gates/compiled-sidecar-smoke.mjs'],
+      display: 'node scripts/gates/compiled-sidecar-smoke.mjs' })
   const viaPnpm = stepInvocation('pnpm run build:sidecar --skip-node', { command: '/usr/bin/node', prefix: ['/pnpm.cjs'] })
   assert.equal(viaPnpm.command, '/usr/bin/node')
   assert.deepEqual(viaPnpm.args, ['/pnpm.cjs', 'run', 'build:sidecar', '--skip-node'])
 })
-test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml runs', () => {
+test('G32/G33: the darwin tests mode carries the native executed-assembly gates ci.yml runs', () => {
   const gates = [
     'test:sidecar:compiled',
-    'node scripts/gates/verify-electron-artifacts.mjs',
     'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web',
+  ]
+  // 2026-11 Electron freeze: these two gates are archived with the Electron flavor
+  // (docs/progress/electron-frozen.md) and must never re-enter the default modes
+  // silently; a revival is a deliberate edit of this test.
+  const archivedElectronGates = [
+    'node scripts/gates/verify-electron-artifacts.mjs',
+    'pnpm --filter @dsh-chamber/desktop run build:preload',
   ]
   if (process.platform === 'darwin') {
     for (const gate of gates) assert.ok(MODES.tests.includes(gate), `check:tests must run ${gate}`)
@@ -377,14 +383,7 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
     const assemblyBuild = 'pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages'
     // Order comparisons are vacuous when an operand is missing (indexOf -> -1), so prove
     // existence BEFORE comparing positions.
-    for (const step of [
-      assemblyBuild,
-      'pnpm run build:renderer',
-      'pnpm --filter @dsh-chamber/desktop run build:preload',
-      'test:sidecar:compiled',
-      'node scripts/gates/verify-electron-artifacts.mjs',
-      'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web',
-    ]) {
+    for (const step of [assemblyBuild, 'pnpm run build:renderer', ...gates]) {
       assert.ok(MODES.tests.includes(step), 'the order assertions below are vacuous unless this step exists: ' + step)
     }
     assert.ok(MODES.tests.indexOf(assemblyBuild) < MODES.tests.indexOf('test:sidecar:compiled'),
@@ -396,14 +395,15 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
     assert.ok(MODES.tests.indexOf('pnpm run build:renderer')
       < MODES.tests.indexOf('node scripts/gui-acceptance/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web'),
     'build:renderer must precede the native acceptance once N-6 is required to execute')
-    assert.ok(MODES.tests.indexOf('pnpm --filter @dsh-chamber/desktop run build:preload')
-      < MODES.tests.indexOf('node scripts/gates/verify-electron-artifacts.mjs'),
-    'build:preload must precede the Electron artifacts gate')
   } else {
     for (const gate of gates) {
-      assert.equal(MODES.tests.includes(gate), false, 'the native/Electron assembly gates stay off the ubuntu leg')
+      assert.equal(MODES.tests.includes(gate), false, 'the native assembly gates stay off the ubuntu leg')
       assert.equal(MODES.full.includes(gate), false)
     }
+  }
+  for (const gate of archivedElectronGates) {
+    assert.equal(MODES.tests.includes(gate), false, 'the archived Electron gate must stay out of the default tests mode: ' + gate)
+    assert.equal(MODES.full.includes(gate), false)
   }
 })
 // A5: the root tsc program is part of the typecheck mode, so
@@ -550,7 +550,7 @@ test('comparePayloadShapes catches an invoke payload-key drift', () => {
 })
 test('the shipped preload/shim surfaces agree on every payload shape and stay manifest-locked', () => {
   const verdict = comparePayloadShapes({
-    preloadText: readFileSync(join(REPO_ROOT, 'packages/desktop/preload.cts'), 'utf8'),
+    preloadText: readFileSync(join(REPO_ROOT, 'packages/desktop/electron/preload.cts'), 'utf8'),
     shimText: readFileSync(
       join(REPO_ROOT, 'macos/Sources/DSHChamber/Resources/bridge-shim.js'),
       'utf8',
@@ -606,7 +606,7 @@ test('G34: a silently removed member fails the surface-total pin, not only a mis
 })
 // Shim runtime arm (verify-shim-payload-shape.mjs; G22 residual)
 const SHIM_SOURCE = readFileSync(join(REPO_ROOT, 'macos/Sources/DSHChamber/Resources/bridge-shim.js'), 'utf8')
-const PRELOAD_SOURCE = readFileSync(join(REPO_ROOT, 'packages/desktop/preload.cts'), 'utf8')
+const PRELOAD_SOURCE = readFileSync(join(REPO_ROOT, 'packages/desktop/electron/preload.cts'), 'utf8')
 test('injectShimToken replaces the placeholder and rejects a malformed token', () => {
   const token = 'a1'.repeat(16)
   const injected = injectShimToken(SHIM_SOURCE, token)
@@ -814,9 +814,11 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   const controlPlaneEntry = join(DEFAULT_DESKTOP_DIST, 'control-plane', 'index.js')
   const preloadEntry = join(DEFAULT_DESKTOP_DIST, 'preload.cjs')
   if (!existsSync(controlPlaneEntry) || !existsSync(preloadEntry)) {
-    // Unit tests run before the CI desktop build; ci.yml's test-macos step runs the gate itself after build:control-plane/preload.
-    t.diagnostic('SKIP: compiled Electron artifacts absent under ' + DEFAULT_DESKTOP_DIST
-      + ' — the ci.yml test-macos step executes this gate after building them')
+    // ARCHIVED Electron artifact smoke: ci.yml does not run this gate any more (Electron
+    // frozen, docs/progress/electron-frozen.md); the case stays as a unit-only check of
+    // the archived tool and skips loudly when the compiled artifacts are absent.
+    t.diagnostic('SKIP: archived Electron artifact smoke — compiled artifacts absent under ' + DEFAULT_DESKTOP_DIST
+      + ' (not run by default; Electron frozen)')
     return
   }
   const verdict = await runElectronArtifactSmoke({ desktopDist: DEFAULT_DESKTOP_DIST })

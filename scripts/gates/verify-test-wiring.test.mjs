@@ -210,7 +210,7 @@ test('findSwiftTestScript + swiftWiringProblems: manifest ↔ run-checks lockste
   const script = findSwiftTestScript({ scripts: { 'test:swift': 'node scripts/gates/run-swift-tests.mjs' } })
   assert.deepEqual(script, { name: 'test:swift', command: 'node scripts/gates/run-swift-tests.mjs' })
   assert.equal(findSwiftTestScript({ scripts: { test: 'node x.test.mjs' } }), null)
-  assert.deepEqual(swiftWiringProblems({ script, runChecksText: "const MACOS_CHECKS = ['test:swift']" }), [])
+  assert.deepEqual(swiftWiringProblems({ script, runChecksText: '"command": "test:swift"' }), [])
   assert.match(
     swiftWiringProblems({ script: null, runChecksText: '' })[0],
     /root package.json has no script that runs the Swift suite/,

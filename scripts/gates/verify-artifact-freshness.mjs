@@ -1,5 +1,9 @@
 /**
  * verify-artifact-freshness.mjs —— 已提交/打包产物的「陈旧即红」守卫
+ *
+ * 非注册门（gate-surfaces 的 tests 模式在 clean checkout 跑；发布 checklist §4 在构建后用
+ * `--require-compare` 手动跑）。**ARCHIVED（2026-11 Electron 冻结）**：第 1 类
+ * `dist/preload.cjs` 属 Electron 归档流，默认构建不再产出，恒 SKIP；该分支保留作复活校验。
  * （design 21 §7 G2–G8）。
  *
  * 为什么需要：以下三类产物不是 C8（seed dist ×4 + dsh-runtime dist）的覆盖
@@ -82,7 +86,7 @@ function checkPreload() {
   const work = mkdtempSync(join(tmpdir(), 'dsh-preload-fresh-'))
   try {
     execFileSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.preload.build.json', '--outDir', work], { cwd: join(ROOT, 'packages', 'desktop'), stdio: 'pipe' })
-    const emitted = join(work, 'preload.cjs')
+    const emitted = join(work, 'electron', 'preload.cjs')
     if (!existsSync(emitted)) { note('desktop/preload.cjs', 'skip', 'tsc 未产出 preload.cjs（配置变了？）'); return }
     if (!sameBytes(emitted, dist)) note('desktop/preload.cjs', 'stale', '与 preload.cts 的编译结果不一致（重建：pnpm --filter @dsh-chamber/desktop run build:preload）')
     else note('desktop/preload.cjs', 'ok', '与 preload.cts 编译结果逐字节一致')

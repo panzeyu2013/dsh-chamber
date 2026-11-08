@@ -30,7 +30,7 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.join(here, '..', '..', '..', '..')
-const mainSource = readFileSync(path.join(here, '..', '..', 'main.ts'), 'utf8')
+const mainSource = readFileSync(path.join(here, '..', '..', 'electron', 'main.ts'), 'utf8')
 const COPY = { exit: '退出', restart: '重启', safeModeRestart: '安全模式重启' }
 
 test('三选恢复：默认项与 Esc 都落安全模式重启（绝不误退出/误普通重启）', () => {

@@ -1,3 +1,11 @@
+// ============================================================================
+// ARCHIVED / FROZEN — Electron flavor: electron-edges.ts (2026-11 user ruling).
+// Electron 已冻结归档：本文件不参与默认开发 / 门禁 / 发布，仅作为可复活参考保留。
+// 冻结范围与复活清单：docs/progress/electron-frozen.md；目录说明：./ARCHIVED.md
+// 位置变更：从 packages/desktop/ 根迁入本归档目录（old → new 见 ./ARCHIVED.md）。
+// 相对 import 已上移一层（../shell-core.ts 等）。
+// 默认不要修改本文件；需要解冻时先按 docs/progress/electron-frozen.md 执行。
+// ============================================================================
 /**
  * Electron HostEdges flavor (design 25 §4.1) — a face-B file: it imports
  * electron (Notification / powerMonitor / app) and sits on the
@@ -15,14 +23,14 @@
  */
 import { Notification, app, dialog, nativeTheme, powerMonitor, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
-import { rendererPushDelivered, type HostEdges, type HostMessageOptions } from './shell-core.ts';
-import { describeUnknownError } from './deep-link.ts';
+import { rendererPushDelivered, type HostEdges, type HostMessageOptions } from '../shell-core.ts';
+import { describeUnknownError } from '../deep-link.ts';
 import {
   BoundedActiveNotifications,
   MAX_ACTIVE_NATIVE_NOTIFICATIONS,
   describeNativeNotificationFailure,
   showNativeNotificationHonestly,
-} from './notifications.ts';
+} from '../notifications.ts';
 
 /** Host back-references: the single main-window identity, click activation and
  *  the 'show' subscription (both main-window state owned by the assembly side). */

@@ -2,17 +2,21 @@
 
 > 这不是新的阻断门，也不是判据的第二份副本。 判据权威在 `docs/design/`（契约）与 `docs/progress/STATUS.md`（开放实机门禁）；本清单只固定流程：跑什么、看什么、留什么证据；判据要改就改design/STATUS，本文件只跟指针。工具箱 `scripts/gui-acceptance/`（说明、已登记容忍与边界见 `scripts/gui-acceptance/README.md`；放宽容忍先改那里，不在工具箱里猜）。
 
+> **范围（2026-11 Electron 冻结）**：现行 = `--flavor native`（默认）与 `--live`、Swift 真机/目检；
+> Electron CDP 腿（`--dev`、`--dev` 的 `--flavor electron`、`--attach` 的 Electron 档、`acceptance:mobile` 的
+> CDP 驱动）**冻结归档、不进默认验收**；复活后按原表执行（见 `docs/progress/electron-frozen.md`）。
+
 ## 0. 选择腿
 
 |腿|何时用|命令|产物|
 |---|---|---|---|
 |机械A（只读探测）|每次改动控制面/反代/静态壳后；也可对安装态跑|`pnpm run acceptance:gui`|`.tmp/gui-acceptance/gui-live-report.md`|
-|机械B（界面走查）|每次改动renderer / 侧栏 / 设置面 / 布局后；**改动右栏浏览器/iframe/CSP 时**用 `--dev` 跑 W-13/W-14a/W-15/W-15b（local fixture；冷实例会先经既有 UI 建一次性工作区/会话），远端内嵌另用 `--attach --embed-port <port>`（真实 ssh 源）|`pnpm run acceptance:gui -- --attach`（已有dev实例）或 `-- --dev`（自起自关）；`--require-embed` 把内嵌腿的 INFO 改判 FAIL|`gui-walkthrough-report.md` + `shots/*.png`|
-|机械B-mobile（CDP 移动档走查）|每次改动移动相关验收判据或移动入口后；需一个带 `--remote-debugging-port` 的实例|`pnpm run acceptance:mobile`（`-- --cdp-port 9333`；认证 gateway 加 `--url` 与凭据环境变量；`-- --require-run` 把未执行的 INFO 改判 FAIL）|`gui-mobile-walkthrough-report.md` + `shots/*.png` + `mobile-ws-frames.json`|
+|机械B（界面走查；**ARCHIVED = Electron CDP 腿，复活参考**）|每次改动renderer / 侧栏 / 设置面 / 布局后（冻结期改为 Swift 真机/目检）；原流程：用 `--dev` 跑 W-13/W-14a/W-15/W-15b（local fixture），远端内嵌另用 `--attach --embed-port <port>`（真实 ssh 源）|`pnpm run acceptance:gui -- --attach`（已有dev实例）或 `-- --dev`（自起自关）；`--require-embed` 把内嵌腿的 INFO 改判 FAIL|`gui-walkthrough-report.md` + `shots/*.png`|
+|机械B-mobile（CDP 移动档走查；**ARCHIVED = Electron CDP 驱动**）|每次改动移动相关验收判据或移动入口后（冻结期改为真机抽检：STATUS 移动端条目）；原需一个带 `--remote-debugging-port` 的实例|`pnpm run acceptance:mobile`（`-- --cdp-port 9333`；认证 gateway 加 `--url` 与凭据环境变量；`-- --require-run` 把未执行的 INFO 改判 FAIL）|`gui-mobile-walkthrough-report.md` + `shots/*.png` + `mobile-ws-frames.json`|
 |目检|机械腿跑完后按 §3逐条看图|人|截图 + 一句结论|
 |打包态/真机|发布前，或涉及安装包、更新、深链、通知、运行时事务|见 §4 + STATUS|见 §4|
 
-前置：`--dev` 需先有构建产物；沙箱内需 `--electron-arg=--no-sandbox`；GUI 腿不整体进 CI：`ci.yml` 的 macOS job 与 `check:full` 的 macOS 腿只跑 native 机械档（`run.mjs --flavor native --require-assembly`），Electron 界面腿（`--attach`/`--dev`）与目检腿不进 CI；只读、不点变更控件（点击白名单与 v2 内嵌腿的例外见工具箱 README）。`--live` 的 `SH-7` 是纯 HTTP 腿，不需要 GUI。
+前置：`--dev` 需先有构建产物；沙箱内需 `--electron-arg=--no-sandbox`；GUI 腿不整体进 CI：`ci.yml` 的 macOS job 与 `check:full` 的 macOS 腿只跑 native 机械档（`run.mjs --flavor native --require-assembly`），Electron 界面腿（`--attach`/`--dev`，**ARCHIVED**）与目检腿不进 CI；只读、不点变更控件（点击白名单与 v2 内嵌腿的例外见工具箱 README）。`--live` 的 `SH-7` 是纯 HTTP 腿，不需要 GUI。
 
 ## 1. 机械 A：只读运行态（`--live`）
 
@@ -33,7 +37,7 @@
 - 实例未就绪（`dsh.status != ready`）时 `IP-*` / `IN-1` / `CP-5` 转INFO（design 18 §3.4隔离期503属预期）。
 - `--dev` 干净状态无远程来源（`MX-*` 记INFO）。
 
-## 2. 机械 B：界面走查（`--attach` / `--dev`）
+## 2. 机械 B：界面走查（`--attach` / `--dev`）（**ARCHIVED：Electron CDP 腿；现行界面走查 = Swift 真机/目检**）
 
 |项|检查id|判据来源|
 |---|---|---|

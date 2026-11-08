@@ -1,4 +1,7 @@
 /**
+ * ARCHIVED (2026-11, Electron frozen; docs/progress/electron-frozen.md): pure judgement
+ * layer of the archived CDP mobile walkthrough; kept for revival.
+ *
  * Pure judgement layer of the CDP mobile walkthrough.
  *
  * 与 `checks.mjs` 同一套纪律：这里没有 CDP、没有 DOM、没有 fs —— 只有

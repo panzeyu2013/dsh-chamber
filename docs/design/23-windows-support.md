@@ -1,11 +1,16 @@
 # 23. Windows 支持推进方案（Windows 11 x64）
 
+> **ARCHIVED（2026-11 用户裁决）**：Electron flavor 已冻结归档，**Windows 桌面腿冻结、不发布、不排期**
+> （见 [`../progress/electron-frozen.md`](../progress/electron-frozen.md)）。原文保留作为历史参考与复活基线；
+> 恢复需用户重开范围。
+
 > **范围与门禁：Windows 11 x64 支持契约（代码面可用；真实 Windows runner 与实机门禁尚未通过）**——本文是
 > dsh-chamber 桌面端（本地实例 + ssh/gateway 远程连接 + dsh 运行时版本管理）Windows 支持的权威契约（平台适配、运行时管理解锁纪律、妥协点与验收矩阵）；未完成门禁见 `docs/progress/STATUS.md`；台账与基线口径:`docs/progress/TODO.md` B§2。
 
 ## 1. 范围与总原则
 
 - 目标形态:Windows 11 x64(打包态 NSIS);macOS/Linux 契约不回退,每次合入保持 mac/linux 全量回归绿。
+  **（ARCHIVED：Windows 腿已随 Electron flavor 冻结归档，不发布、不排期；本节与下文均为复活基线）**
 - 纪律:
   1. **能力先于开关**:任何 mutation/功能解锁先经 env 门控或后台单测验证,UI 开关最后翻;
   2. **基线先行**:win32 测试 pass/skip 集合与平台门控拒绝码先固化(登记口径在 `docs/progress/TODO.md` B§2.2),每个里程碑的测试变化必须对照基线归因;
@@ -46,13 +51,13 @@
 
 - dsh-runtime 核心本就 Windows 友好:指针为普通文件(禁 symlink)、文件级 tmp+rename+fsync、pnpm 以 `node <pnpm.cjs>` 执行、候选经 `ELECTRON_RUN_AS_NODE` 拉起。
 - M2a 后台能力:desktop env 门控(纪律 5)、dsh-runtime `windows-process.ts`(supervisor 树终止 + 残余探测)、`rename-retry.ts`(snapshot-store 四处目录 rename,`WINDOWS_RENAME_RETRY_DELAYS_MS` 有界重试)、desktop `win-acl.ts`(icacls 收紧 + 验证 + 启动复合入口)、C16(gateway 凭据 win32 无 safeStorage = 拒绝明文,store 内存驻留);只读属性清理以 win32-only 决策门测试定实现。
-- **M2b 翻转前必须** M2a 在真实 win32 runner 全绿 + 实机故障注入矩阵记录;翻转点(接线全集):desktop `main.ts`(managementSupported 注入与决策点)、`dsh-runtime-controller.ts`(mutation 拦截)、`apply-now-gate.ts`、settings-bridge 段、版本 chip。
+- **M2b 翻转前必须** M2a 在真实 win32 runner 全绿 + 实机故障注入矩阵记录;翻转点(接线全集):desktop `electron/main.ts`(managementSupported 注入与决策点；**已冻结归档**)、`dsh-runtime-controller.ts`(mutation 拦截)、`apply-now-gate.ts`、settings-bridge 段、版本 chip。
 - Gateway 部署于 Windows:保持只读(服务器支持矩阵 = Linux/macOS,范围决策)。
 
 ## 4. 桌面打包态与系统集成解锁（M3/M4）
 
 - **打包态身份**:`app.setAppUserModelId('com.dshchamber.desktop')`(win32)——通知/Action Center 归属与任务栏分组的前提。
-- **托盘与 preload**:托盘图标候选收敛为只留真实打包资源(两条永不随包的候选路径为跨平台既有 P2，见 STATUS 与 design 22 §5);preload 缺失 loud 失败,不静默回退源码 `.cts`。
+- **托盘与 preload**（**ARCHIVED**：preload 已归档至 `packages/desktop/electron/preload.cts`）:托盘图标候选收敛为只留真实打包资源(两条永不随包的候选路径为跨平台既有 P2，见 STATUS 与 design 22 §5);preload 缺失 loud 失败,不静默回退源码 `.cts`。
 - **登录自启**:win32 走 `app.setLoginItemSettings({ openAtLogin, name: WINDOWS_APP_USER_MODEL_ID })`(Electron 43.4.0 在 win32 以该 name 写 HKCU `...\Run`,当前用户、无需管理员;`getLoginItemSettings` 的读回键同为该 name,故 P-20 读回校验一致——传其它 name 会让读回永久失败),`supported` 恒 true;NSIS 卸载段 include(`packages/desktop/scripts/nsis-uninstall-cleanup.nsh`)清 `dsh-chamber`、`@dsh-chamber/desktop` 与 AUMID `com.dshchamber.desktop` 三个 Run 值(前两个覆盖旧版本/双 flavor 残留)。
 - **深链**:打包态走无参数 `setAsDefaultProtocolClient` 注册(dev 不注册);`build.protocols` 键已声明(name `dsh-chamber` / scheme `dsh-chamber`),NSIS 是否写 `HKCU\Software\Classes` 待 runner 实证(§6)。
 - **open-in 本地路径**:本地实例(`instanceId='local'`)走 `validateLocalPath`(盘符/UNC),远程实例走 POSIX 口径 `validateRemotePath`。
@@ -111,7 +116,9 @@
 | Defender 计时不可接受 | 文档 + 排除建议 + MSIX 评估(M5) |
 | windows-2022 与 Win11 行为差异 | 契约腿在 runner,交互矩阵在真机(M3 双机对照) |
 
-## 7. 实机验收矩阵（Windows 11 x64 打包态）
+## 7. 实机验收矩阵（Windows 11 x64 打包态）（**ARCHIVED：冻结、不排期**）
+
+> 下表只在用户重开范围、按 `docs/progress/electron-frozen.md` §6 复活时执行；保留为复活基线。
 
 | 面 | 验收点 |
 |---|---|

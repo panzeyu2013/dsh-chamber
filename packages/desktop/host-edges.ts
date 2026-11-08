@@ -8,7 +8,7 @@ import type { NotificationOpenIntent, NotificationSourceToken } from './notifica
 // HostEdges — the host side-effect seam (design 25 §4.1).
 // Core business code reaches every Electron/host side effect ONLY through
 // this injected interface. The Electron main process implements it in
-// electron-edges.ts (createElectronEdges — the rendererPush
+// electron/electron-edges.ts (createElectronEdges — the rendererPush
 // leaf); the Swift-native
 // flavor will implement the same seam over the B bridge (node-edges.ts).
 // Electron-free by construction: member types are strings/numbers/booleans/
@@ -75,7 +75,7 @@ export type HostSetBadgeResult =
  *      的聚焦入口 → 删除成员。
  *  这些成员不在 preload/bridge-manifest 暴露面内（HostEdges 是主进程内部 seam），
  *  删除不动 A 桥；保留的唯一依据是 design 25 §4.1 的明确保留声明。
- *  electron-edges.ts 头注释列出已实现集合；每个成员标注其设计行来源，
+ *  electron/electron-edges.ts 头注释列出已实现集合；每个成员标注其设计行来源，
  *  未实现前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
 export interface HostEdges {
   /** 主窗口渲染器 push 叶：channel 为 opaque

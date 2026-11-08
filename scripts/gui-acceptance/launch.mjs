@@ -11,6 +11,10 @@
  * PIPE DISCIPLINE: the child's stdout/stderr go to a FILE, never to pipes. The
  * launcher exits immediately, and an inherited pipe closes under the child — the
  * Electron main process then aborts with SIGABRT before the window opens.
+ *
+ * ARCHIVED (2026-11): the Electron dev flow is frozen with the Electron flavor
+ * (docs/progress/electron-frozen.md). This launcher is kept as the revival path;
+ * GUI acceptance defaults to the native flavor.
  */
 import { execFileSync, spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
@@ -30,14 +34,15 @@ const DESKTOP_DIR = path.join(REPO, 'packages/desktop')
  */
 function preflight() {
   const required = [
-    [path.join(DESKTOP_DIR, ...RENDERER_DIST_RELATIVE), 'pnpm run build:desktop'],
-    [path.join(DESKTOP_DIR, 'dist/preload.cjs'), 'pnpm run build:desktop'],
-    [path.join(DESKTOP_DIR, 'dist/control-plane/index.js'), 'pnpm run build:desktop'],
+    [path.join(DESKTOP_DIR, ...RENDERER_DIST_RELATIVE), 'pnpm run build:renderer'],
+    [path.join(DESKTOP_DIR, 'dist/preload.cjs'), 'pnpm --filter @dsh-chamber/desktop run build:preload（Electron 归档流；复活后使用）'],
+    [path.join(DESKTOP_DIR, 'dist/control-plane/index.js'), 'pnpm --filter @dsh-chamber/desktop run build:control-plane'],
     [path.join(DESKTOP_DIR, 'vendor/dsh/node_modules'), 'pnpm --filter @dsh-chamber/desktop run bundle:dsh'],
   ]
   const missing = required.filter(([target]) => !existsSync(target))
   if (missing.length > 0) {
-    throw new Error(`dev 实例缺少构建产物（--dev 不隐式构建）：\n${missing.map(([target, fix]) => `  - ${path.relative(REPO, target)} → 先跑 ${fix}`).join('\n')}`)
+    throw new Error('dev 实例缺少构建产物（--dev 不隐式构建；Electron dev 已冻结归档）：\n'
+      + missing.map(([target, fix]) => '  - ' + path.relative(REPO, target) + ' → 先跑 ' + fix).join('\n'))
   }
 }
 

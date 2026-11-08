@@ -8,5 +8,5 @@
     "sourceMap": false,
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["preload.cts"]
+  "include": ["electron/preload.cts"]
 }

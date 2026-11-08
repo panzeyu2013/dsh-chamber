@@ -2,7 +2,10 @@
 /**
  * release-artifacts.mjs —— 双端同 tag 产物清单（design 25 §8.4/§六）
  *
- * 单 tag 下两个 macOS 产物族并存：
+ * ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）：Electron 产物族与
+ * `*.yml` feed 不再随发布产出；本模块保留其命名清单作为**复活基线**（`releaseManifest`
+ * 仍列出两族，且两族仍在断言里互不碰撞），而 `--check-dir` 只断言实际出货的 native 产物。
+ * 冻结前单 tag 下两个 macOS 产物族并存：
  *   Electron 腿（build-macos，既有）：dsh-chamber-electron-<v>-arm64.dmg /
  *     dsh-chamber-electron-<v>-arm64-mac.zip + 更新 feed（latest-mac.yml | beta-mac.yml）
  *   Swift 腿（build-swift）：dsh-chamber-<v>-macos-arm64.dmg /
@@ -16,7 +19,8 @@
  *
  * 本模块把"产物名不得碰撞 / feed 归属唯一"从散文变成可执行断言（演练清单 +
  * 策略测试共用）：Electron 的名字必含 `-electron`，Swift 原生腿用裸名 `dsh-chamber-`；
- * 只有 Electron 腿产出 `*.yml` feed，Swift 腿的更新源是 `*.xml` appcast。
+ * 冻结前只有 Electron 腿产出 `*.yml` feed（现随 Electron 冻结归档），Swift 腿的更新源是
+ * `*.xml` appcast。
  *
  * CLI：`node scripts/release/release-artifacts.mjs <version> [--check-dir <dir>]`。
  * `--check-dir` 进一步断言清单里的 native 产物确实存在于发布腿输出目录——

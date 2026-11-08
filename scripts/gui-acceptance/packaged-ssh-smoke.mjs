@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 /**
+ * ARCHIVED (2026-11, Electron frozen; docs/progress/electron-frozen.md): this is the
+ * Electron packaged/CDP counterpart; the shipped native shell has no CDP endpoint.
+ *
  * Packaged-app SSH smoke: run the W-13…W-15b walkthrough against an already
  * BUILT desktop payload (release/<platform>-unpacked) with the local SSH
  * fixture. This is the packaged counterpart of `run.mjs --dev --ssh-fixture`:

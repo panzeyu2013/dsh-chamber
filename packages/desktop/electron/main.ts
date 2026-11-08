@@ -1,3 +1,11 @@
+// ============================================================================
+// ARCHIVED / FROZEN — Electron flavor: main.ts (2026-11 user ruling).
+// Electron 已冻结归档：本文件不参与默认开发 / 门禁 / 发布，仅作为可复活参考保留。
+// 冻结范围与复活清单：docs/progress/electron-frozen.md；目录说明：./ARCHIVED.md
+// 位置变更：从 packages/desktop/ 根迁入本归档目录（old → new 见 ./ARCHIVED.md）。
+// 相对 import 已上移一层；pkgDir 显式解析回 packages/desktop（package.json/dist 锚不变）。
+// 默认不要修改本文件；需要解冻时先按 docs/progress/electron-frozen.md 执行。
+// ============================================================================
 /**
  * dsh-chamber desktop main process (connection-manager form).
  * The single window loads the control-plane origin directly — one frame, one origin;
@@ -19,8 +27,8 @@ import {
   isSafeModeEnabled,
   planStartupRecovery,
   resolveStartupRecoveryAction,
-} from './startup-error.ts';
-import type { StartupFailureKind, StartupRecoveryAction } from './startup-error.ts';
+} from '../startup-error.ts';
+import type { StartupFailureKind, StartupRecoveryAction } from '../startup-error.ts';
 /** 上游 windows-layout.ts 的镜像值（Windows caption 高度，dip）——preload.cts 内另有
  *  同值副本（preload 运行时自带，不跨 CJS 边界导入）；两处相等由 upstream-seats 用例钉住。 */
 const WINDOWS_TITLEBAR_HEIGHT = 40;
@@ -30,39 +38,39 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
-import { applyWindowsAclTightening } from './win-acl.ts';
-import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
-import { createTrustedIpc, forwardFrameErrorFromElectronError, isAllowedBrowserDownloadUrl, isAllowedBrowserFrameUrl, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
-import type { TrustedIpc } from './renderer-trust.ts';
-import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, forwardFrameSources, readPrivateFileNoFollow, startLoginShellEnvironment } from './control-plane-module.ts';
-import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from './deep-link.ts';
-import { createUpdateController, flashUpdateAttentionWindow, normalizeSealedChannel } from './updater.ts';
-import { shellStrings } from './shell-locale.ts';
-import { acquireChamberLock } from './chamber-lock.ts';
-import { acquireHostRootLease, describeHostRootLeaseFailure } from './host-root-lease.ts';
-import { DEFAULT_CHAMBER_SETTINGS, computeQuitRisk, decideMainWindowClose, launchAtLoginReconcileDecision, readSettingsFile, shouldUpdaterQuitTakeOver, verifyLaunchAtLoginReadBack } from './chamber-settings.ts';
-import type { ChamberSettings } from './chamber-settings.ts';
-import { shouldFocusApplicationBeforeShowing } from './notifications.ts';
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME } from './plugin-sync.ts';
+import { applyWindowsAclTightening } from '../win-acl.ts';
+import { verifyRuntimeClientClosure } from '../runtime-tree-check.ts';
+import { createTrustedIpc, forwardFrameErrorFromElectronError, isAllowedBrowserDownloadUrl, isAllowedBrowserFrameUrl, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from '../renderer-trust.ts';
+import type { TrustedIpc } from '../renderer-trust.ts';
+import { atomicWritePrivateFileNoFollow, createControlPlane, ensurePrivateDirectoryNoFollow, forwardFrameSources, readPrivateFileNoFollow, startLoginShellEnvironment } from '../control-plane-module.ts';
+import { attemptDeepLinkProtocolRegistration, canRestoreMainWindow, decideDeepLinkProtocolRegistration, describeUnknownError, ensureLinuxProtocolDesktopFile, linuxAutostartDesktopEntry, linuxAutostartDirectory, resolveLinuxLaunchExecutable } from '../deep-link.ts';
+import { createUpdateController, flashUpdateAttentionWindow, normalizeSealedChannel } from '../updater.ts';
+import { shellStrings } from '../shell-locale.ts';
+import { acquireChamberLock } from '../chamber-lock.ts';
+import { acquireHostRootLease, describeHostRootLeaseFailure } from '../host-root-lease.ts';
+import { DEFAULT_CHAMBER_SETTINGS, computeQuitRisk, decideMainWindowClose, launchAtLoginReconcileDecision, readSettingsFile, shouldUpdaterQuitTakeOver, verifyLaunchAtLoginReadBack } from '../chamber-settings.ts';
+import type { ChamberSettings } from '../chamber-settings.ts';
+import { shouldFocusApplicationBeforeShowing } from '../notifications.ts';
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME } from '../plugin-sync.ts';
 // 共享宿主装配（transport/gateway/seed/runtime 单一实现，与 Swift sidecar 同一份）。
-import { createHostAssembly } from './host-assembly.ts';
-import type { HostAssembly } from './host-assembly.ts';
-import { disposeForwardService, isLocalBrowserFrameUrl, noteForwardFrameError, noteLocalFrameError } from './shell-ipc-open-in.ts';
+import { createHostAssembly } from '../host-assembly.ts';
+import type { HostAssembly } from '../host-assembly.ts';
+import { disposeForwardService, isLocalBrowserFrameUrl, noteForwardFrameError, noteLocalFrameError } from '../shell-ipc-open-in.ts';
 // pnpm 入口候选集/选择算法的单一实现（runtime 安装器 + sidecar 装配共用）。
-import { bundledPnpmEntryCandidates, firstExistingPnpmEntry } from './pnpm-launcher.ts';
+import { bundledPnpmEntryCandidates, firstExistingPnpmEntry } from '../pnpm-launcher.ts';
 // 深链 scheme 的单一来源（协议注册字面量）。
-import { DEEP_LINK_SCHEME } from './deep-link-scheme.ts';
-import { IPC_CHANNELS } from './ipc-events.ts';
-import { DESKTOP_SHORTCUTS_CHANNELS, DesktopShortcutsBridge, desktopKeyEvent, loadDesktopShortcutProtocol } from './shortcuts-bridge.ts';
-import type { ShortcutStorage } from './shortcuts-bridge.ts';
-import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, shouldReloadAfterChildProcessGone, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveActiveRuntime, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from './shell-core.ts';
-import type { RendererReloadBudgetState } from './shell-core.ts';
+import { DEEP_LINK_SCHEME } from '../deep-link-scheme.ts';
+import { IPC_CHANNELS } from '../ipc-events.ts';
+import { DESKTOP_SHORTCUTS_CHANNELS, DesktopShortcutsBridge, desktopKeyEvent, loadDesktopShortcutProtocol } from '../shortcuts-bridge.ts';
+import type { ShortcutStorage } from '../shortcuts-bridge.ts';
+import { RENDERER_CRASH_RELOAD_DELAY_MS, RENDERER_HANG_RELOAD_DELAY_MS, RENDERER_RECOVERY_MAX_RELOADS, noteRendererReload, shouldReloadAfterChildProcessGone, auditLogFilePath, chamberSettingsFilePath, gatewaySecretsFilePath, QUIT_CLEANUP_TIMEOUT_MS, resolveActiveRuntime, resolveControlPlanePort, scanDeepLinkUrls, sshPasswordsFilePath, stateRootDir, installIpcHandlers, clearBadgeIntentForQuit, drainDeepLinkLaunches, enqueueDeepLink, onRendererLifecycle, openExternally, resolveDevBuiltinDshWorkspace, shouldReloadAfterCrash, shouldScheduleHangReload } from '../shell-core.ts';
+import type { RendererReloadBudgetState } from '../shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
-import { resolveDshPortBase } from './dsh-port-base.ts';
-import { describeFatalError } from './describe-error.ts';
-import { ConsoleRing, pushConsoleMessage, recordFatalReport } from './fatal-report.ts';
-import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_BLOCK_RTT_MS } from './renderer-frame-watchdog.ts';
-import type { SshCredentialCryptoAdapter } from './ssh-credentials.ts';
+import { resolveDshPortBase } from '../dsh-port-base.ts';
+import { describeFatalError } from '../describe-error.ts';
+import { ConsoleRing, pushConsoleMessage, recordFatalReport } from '../fatal-report.ts';
+import { RendererFrameWatchdog, RENDERER_FRAME_PROGRESS_SCRIPT, RENDERER_INPUT_BLOCK_RTT_MS } from '../renderer-frame-watchdog.ts';
+import type { SshCredentialCryptoAdapter } from '../ssh-credentials.ts';
 
 // Last-resort crash boundary: an unknown uncaught exception means the
 // privileged main process may be inconsistent and must fail closed rather than
@@ -276,7 +284,7 @@ app.on('child-process-gone', (_event, details) => {
   }
 });
 
-const pkgDir = path.dirname(fileURLToPath(import.meta.url));
+const pkgDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(pkgDir, '..', '..');
 const desktopManifest = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8')) as {
   version: string;

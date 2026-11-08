@@ -883,21 +883,38 @@ assert.doesNotMatch(
   ciWorkflow,
   /^\s+tags:\s*\[[^\]]*'v\*'[^\]]*\]\s*$/m,
   'ci.yml must not trigger on tag pushes: release.yml owns the tag path and rejects a commit main never validated')
-const ciWindowsJob = jobBlock(ciWorkflow, 'test-windows')
-// The proof names every required leg explicitly, so release validation cannot pass on a commit whose linux chain or windows leg never ran.
+// 2026-11 Electron freeze (docs/progress/electron-frozen.md): the Windows/Linux
+// desktop legs and the Electron packaging/update legs are ARCHIVED. Their ci.yml
+// jobs must not come back by accident, the proof must not require them, and
+// release.yml keeps the Electron publication legs as explicitly archived
+// `if: ${{ false }}` jobs — re-opening the scope is a user ruling plus a deliberate
+// edit of this test, never a "restore" from a stale comment.
+assert.doesNotMatch(ciWorkflow, /^  test-windows:/m,
+  'the Windows contract leg is archived: restore it only under a user scope ruling')
+assert.doesNotMatch(ciWorkflow, /^  test-windows-pack:/m,
+  'the Windows packaging leg is archived: restore it only under a user scope ruling')
+assert.doesNotMatch(ciWorkflow, /test:win32/,
+  'the Windows test manifests are archived with the Electron freeze')
+assert.doesNotMatch(ciWorkflow, /electron-builder|verify-electron-artifacts\.mjs/,
+  'the Electron packaging gates are archived: ci.yml must not run electron-builder or the Electron artifact smoke')
+assert.doesNotMatch(workflow, /TEMPORARY/,
+  'the frozen scope is marked ARCHIVED; a TEMPORARY marker would invite restoring the Electron legs by deleting a guard')
+for (const archivedJob of ['build-macos', 'build-windows', 'build-linux']) {
+  assert.match(jobBlock(workflow, archivedJob), /^\s+if: \$\{\{ false \}\}$/m,
+    archivedJob + ' must stay skipped by its job-level archived guard')
+}
+const ciMacosPackJob = jobBlock(ciWorkflow, 'test-macos-pack')
+assert.doesNotMatch(ciMacosPackJob, /electron-builder|verify-electron-artifacts\.mjs/,
+  'the Electron packaging rehearsal and artifact smoke are archived: test-macos-pack validates the native assembly only')
+// The proof names every required leg explicitly, so release validation cannot pass on a commit whose linux chain or macOS legs never ran.
 assert.match(
   validation,
   /- name: Release commit passed CI on main[\s\S]{0,400}?run: node scripts\/release\/verify-release-ci-proof\.mjs --sha/,
-  'release validation must prove the released commit passed ci.yml on main (linux + windows legs)')
+  'release validation must prove the released commit passed ci.yml on main (linux + macOS legs)')
 assert.match(
   validation,
   /permissions:\n\s+contents: read\n\s+actions: read\n/,
   'the proof lists workflow runs/jobs, so the validation job needs actions: read')
-for (const manifest of ['dsh-runtime', 'control-plane', 'desktop']) {
-  assert.ok(
-    ciWindowsJob.includes(`--filter @dsh-chamber/${manifest} run test:win32`),
-    `the windows leg must keep the ${manifest} test:win32 manifest`)
-}
 assert.match(
   ciWorkflow,
   /^concurrency:\n  group:\s*ci-\$\{\{\s*github\.ref\s*\}\}\n  cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}$/m,
@@ -1066,11 +1083,12 @@ const jobWithoutStep = (name, stepName) => {
   const entry = job(name, 'success')
   return { ...entry, steps: entry.steps.filter(step => step.name !== stepName) }
 }
-assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'success'), job('test-windows-pack', 'success'), job('test-macos', 'success'), job('test-macos-pack', 'success')]).state, 'ok')
-assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'skipped')]).state, 'failed',
-  'a skipped windows leg does not prove the win32 contracts')
+const GREEN_JOBS = [job('test', 'success'), job('test-macos', 'success'), job('test-macos-pack', 'success')]
+assert.equal(judgeRun(GREEN_RUN, GREEN_JOBS).state, 'ok')
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-macos', 'skipped')]).state, 'failed',
+  'a skipped macOS leg does not prove the native artifacts')
 assert.equal(judgeRun(GREEN_RUN, [job('test', 'success')]).state, 'failed',
-  'a run without the windows job is an incomplete chain, not a proof')
+  'a run without the macOS legs is an incomplete chain, not a proof')
 assert.equal(judgeRun({ ...GREEN_RUN, status: 'in_progress', conclusion: null }, []).state, 'pending',
   'a run still in flight keeps the release waiting instead of failing')
 assert.equal(judgeRun({ ...GREEN_RUN, conclusion: 'failure' }, []).state, 'failed')
@@ -1080,8 +1098,6 @@ assert.equal(judgeRun(null, []).state, 'failed', 'a missing run entry must fail 
 assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
-    job('test-windows', 'success'),
-    job('test-windows-pack', 'success'),
     jobWithoutStep('test-macos', 'Swift tests (release configuration, XCTSkip == 0)'),
     job('test-macos-pack', 'success'),
   ]).state,
@@ -1090,8 +1106,6 @@ assert.equal(
 assert.match(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
-    job('test-windows', 'success'),
-    job('test-windows-pack', 'success'),
     jobWithoutStep('test-macos', 'Swift tests (release configuration, XCTSkip == 0)'),
     job('test-macos-pack', 'success'),
   ]).reason,
@@ -1099,8 +1113,6 @@ assert.match(
 assert.equal(
   judgeRun(GREEN_RUN, [
     jobWithoutStep('test', 'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)'),
-    job('test-windows', 'success'),
-    job('test-windows-pack', 'success'),
     job('test-macos', 'success'),
     job('test-macos-pack', 'success'),
   ]).state,
@@ -1109,61 +1121,24 @@ assert.equal(
 assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success', 'skipped'),
-    job('test-windows', 'success'),
-    job('test-windows-pack', 'success'),
     job('test-macos', 'success'),
     job('test-macos-pack', 'success'),
   ]).state,
   'failed',
   'a step the classifier skipped does not prove that gate ran on the release commit')
-// The mac packaging rehearsal is in the required table, so a run whose rehearsal was
+// The native executed-assembly step is in the required table, so a run whose step was
 // deleted (or classifier-skipped on a prose-only push) fails the proof even with all jobs green.
 assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
-    job('test-windows', 'success'),
-    job('test-windows-pack', 'success'),
     job('test-macos', 'success'),
-    jobWithoutStep('test-macos-pack', 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'),
+    jobWithoutStep('test-macos-pack', 'Native assembly acceptance (spawned sidecar boots + serves)'),
   ]).state,
   'failed',
-  'deleting the mac packaging rehearsal step must fail the release proof')
-// The WINDOWS packaging rehearsal is the win32 mirror of the mac one. Release.yml
-// must never be the first place the NSIS pack runs (with release credentials loaded):
-// the proof requires the ci.yml rehearsal by name, so deleting or classifier-skipping
-// that step cannot leave a release able to ship a win32 pack no push-path gate produced.
-// Pin the same shape as the mac rehearsal: push-only, classifier-gated, --publish=never,
-// nothing uploaded — and require it by name in the proof.
-const WIN_REHEARSAL_STEP = 'Windows packaging rehearsal (no publish, no credentials)'
-assert.ok(
-  REQUIRED_JOB_STEPS['test-windows-pack'].includes(WIN_REHEARSAL_STEP),
-  'G25/P2: the proof must require the Windows packaging rehearsal step')
-const winRehearsal = jobBlock(ciWorkflow, 'test-windows-pack').slice(
-  jobBlock(ciWorkflow, 'test-windows-pack').indexOf(`- name: ${WIN_REHEARSAL_STEP}`))
-assert.notEqual(winRehearsal, '', 'ci.yml test-windows-pack must define the Windows packaging rehearsal step')
-assert.match(winRehearsal,
-  /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
-  'the win rehearsal is push-only and classifier-gated: never minutes of NSIS work per pull request')
-assert.ok(
-  winRehearsal.includes('pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never'),
-  'the win rehearsal must run the release packaging invocation with --publish=never')
-assert.doesNotMatch(winRehearsal, /--publish=always|gh release upload/,
-  'the win rehearsal must not publish or upload anything')
-assert.equal(
-  judgeRun(GREEN_RUN, [
-    job('test', 'success'),
-    job('test-windows', 'success'),
-    jobWithoutStep('test-windows-pack', WIN_REHEARSAL_STEP),
-    job('test-macos', 'success'),
-    job('test-macos-pack', 'success'),
-  ]).state,
-  'failed',
-  'deleting the windows packaging rehearsal step must fail the release proof')
+  'deleting the native assembly acceptance step must fail the release proof')
 assert.equal(
   judgeRun(GREEN_RUN, [
     { name: 'test', conclusion: 'success' },
-    job('test-windows', 'success'),
-    job('test-windows-pack', 'success'),
     job('test-macos', 'success'),
     job('test-macos-pack', 'success'),
   ]).state,
@@ -1180,8 +1155,8 @@ assert.deepEqual(
   'only a push run on the base branch proves a release')
 assert.equal(
   judgeCandidates([GREEN_RUN, { ...GREEN_RUN, id: 5, created_at: '2026-09-13T06:00:00Z' }], new Map([
-    [5, [job('test', 'success'), job('test-windows', 'failure'), job('test-windows-pack', 'success'), job('test-macos', 'success'), job('test-macos-pack', 'success')]],
-    [1, [job('test', 'success'), job('test-windows', 'success'), job('test-windows-pack', 'success'), job('test-macos', 'success'), job('test-macos-pack', 'success')]],
+    [5, [job('test', 'success'), job('test-macos', 'failure'), job('test-macos-pack', 'success')]],
+    [1, GREEN_JOBS],
   ])).state,
   'ok',
   'a flaky failure that was re-run green still proves the commit')
@@ -1192,8 +1167,8 @@ assert.equal(judgeCandidates([], new Map()).state, 'pending', 'no run yet is "no
 // a leg a deliberate edit, and the native artifacts ship from the same tag.
 assert.deepEqual(
   REQUIRED_JOBS,
-  ['test', 'test-windows', 'test-windows-pack', 'test-macos', 'test-macos-pack'],
-  'the proof must require the push chain plus both platform contract legs, each split into a contract job and a parallel push-only packaging job, including the macOS leg that validates the native artifacts')
+  ['test', 'test-macos', 'test-macos-pack'],
+  'the proof must require the push chain plus the two macOS legs (the shipped native artifacts), each split into a contract job and a parallel packaging job; the Windows/Linux desktop legs are archived with the Electron flavor')
 // G25: job names alone are not a proof. Every required job pins its load-bearing steps, and
 // those names must exist verbatim in the ci.yml job the proof watches (rename => two-file edit).
 assert.deepEqual(
@@ -1206,36 +1181,26 @@ assert.ok(
 assert.ok(
   REQUIRED_JOB_STEPS['test-macos-pack'].includes('Compiled sidecar smoke (shipped sidecar.js executes)'),
   'the proof must require the step that executes the shipped sidecar')
-// The Electron mac pack must not be first really executed inside release.yml (after
-// the draft exists, with Apple credentials loaded). ci.yml rehearses the exact chain on an
-// ordinary main push and the release proof must require that rehearsal by name, else a
-// deleted or classifier-skipped rehearsal silently shrinks coverage. Pin the rehearsal shape:
-// push-only, classifier-gated, ad-hoc, --publish=never, no notarization/upload command
-// anywhere in the step.
-const MAC_REHEARSAL_STEP = 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'
-assert.ok(
-  REQUIRED_JOB_STEPS['test-macos-pack'].includes(MAC_REHEARSAL_STEP),
-  'G25/A2: the proof must require the mac packaging rehearsal step')
-const macRehearsal = jobBlock(ciWorkflow, 'test-macos-pack').slice(
-  jobBlock(ciWorkflow, 'test-macos-pack').indexOf(`- name: ${MAC_REHEARSAL_STEP}`))
-assert.notEqual(macRehearsal, '', 'ci.yml test-macos-pack must define the mac packaging rehearsal step')
-assert.match(macRehearsal,
-  /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
-  'the rehearsal is push-only and classifier-gated: never minutes of packaging per pull request')
-assert.match(macRehearsal, /CSC_IDENTITY_AUTO_DISCOVERY: 'false'/,
-  'the rehearsal must never pick up a runner keychain identity (afterPack ad-hoc signs)')
-assert.ok(
-  macRehearsal.includes('pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=never'),
-  'the rehearsal must run the release packaging invocation with --publish=never')
-assert.doesNotMatch(macRehearsal, /--publish=always|notarytool|gh release upload/,
-  'the rehearsal must not publish, notarize or upload anything')
-// G32: the two EXECUTED-assembly gates are the only steps that prove the shipped artifacts
-// actually boot; a proof watching only their ci.yml presence would stay green after the step
-// (or its build prerequisite) was deleted. Both must be in the required table, and run-checks
-// must expose the same two gates so a developer's terminal runs what the proof demands — one
-// has no package.json alias by design, so its entry is a direct command; pin exact strings.
+// The Electron packaging rehearsal is ARCHIVED with the Electron flavor: neither the
+// push path nor release validation may rehearse the Electron app any more (the archived
+// publication legs stay skipped, asserted above). The native assembly steps keep their
+// own required pins; this guard is what stops the Electron rehearsal from quietly
+// returning as a "cheap extra check".
+assert.equal(ciWorkflow.includes('macOS packaging rehearsal'), false,
+  'the Electron mac packaging rehearsal is archived with the Electron freeze')
+assert.equal(ciWorkflow.includes('Windows packaging rehearsal'), false,
+  'the Windows packaging rehearsal is archived with the Electron freeze')
+assert.equal(ciTestJob.includes('build:preload'), false,
+  'the Electron preload build is archived: the push path runs the shared desktop sub-steps only')
+assert.equal(validation.includes('build:preload'), false,
+  'the Electron preload build is archived: release validation runs the shared sub-steps only')
+// G32: the native EXECUTED-assembly gate is the only step that proves the shipped artifacts
+// actually boot; a proof watching only its ci.yml presence would stay green after the step
+// (or its build prerequisite) was deleted. It must be in the required table, and run-checks
+// must expose the same gate so a developer's terminal runs what the proof demands — it has no
+// package.json alias by design, so its entry is a direct command; pin the exact string.
+// (The Electron compiled-artifacts smoke is ARCHIVED with the Electron freeze.)
 for (const step of [
-  'Electron compiled artifacts smoke (control-plane boot + preload surface)',
   'Native assembly acceptance (spawned sidecar boots + serves)',
 ]) {
   assert.ok(

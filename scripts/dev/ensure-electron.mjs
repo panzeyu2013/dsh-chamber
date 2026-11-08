@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）：本文件属冻结归档面，文件不删、默认不运行；需要复活时按其 §6 复活清单执行。
 /**
  * Ensure the shared Electron dist is present after install.
  *
@@ -12,7 +13,7 @@
  *
  * 惰性门：Electron 二进制
  * 只在桌面端需要——server 部署（gateway/control-plane/CLI）完全不需要它。
- * 默认 SKIP；仅当显式设置 DSH_CHAMBER_ELECTRON=1（桌面开发 dev:desktop 的
+ * 默认 SKIP；仅当显式设置 DSH_CHAMBER_ELECTRON=1（桌面开发 dev:desktop，现已随 Electron 冻结归档，
  * electron-dev.mjs 会在共享 dist 缺失时自动物化；打包 electron-builder 自行
  * 拉取自己的缓存）时才下载。全新环境先跑 gateway/单测无需白下 ~100MB 二进制。
  */

@@ -61,7 +61,7 @@ test('G21 permission posture: deny-by-default with the single clipboard-sanitize
   // main.ts wiring lock: the request handler and the permissions.query check
   // handler consume the same predicate, and no stray literal can re-introduce a
   // second posture. (The handlers cannot be imported here — main.ts loads electron.)
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   assert.match(main, /setPermissionRequestHandler\(\(_wc, permission, callback\) =>\s*callback\(isChamberPermissionGranted\(permission\)\)\)/)
   assert.match(main, /setPermissionCheckHandler\(\(_wc, permission\) => isChamberPermissionGranted\(permission\)\)/)
   assert.doesNotMatch(main, /permission === 'clipboard-sanitized-write'/)
@@ -150,7 +150,7 @@ test('trusted IPC passes only invoke arguments to an accepted handler', () => {
 })
 
 test('fatal main-process boundary claims ownership before every hostile host call', () => {
-  const source = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   const start = source.indexOf('function fatalMainError(reason: unknown): void {')
   const end = source.indexOf("process.on('uncaughtException'", start)
   assert.ok(start >= 0 && end > start, 'fatal boundary remains explicit and locally reviewable')
@@ -204,7 +204,7 @@ test('renderer ACK deliveries project and preload-validates the captured lifecyc
   // shell-core——fingerprint 投影断言的读取源指向 shell-core.ts（payload 只带
   // 非秘密投影字段）。
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
-  const preload = readFileSync(new URL('../../preload.cts', import.meta.url), 'utf8')
+  const preload = readFileSync(new URL('../../electron/preload.cts', import.meta.url), 'utf8')
   assert.match(core, /IPC_CHANNELS\.DEEP_LINK_INTENT[\s\S]*?sourceFingerprint: intent\.sourceFingerprint/)
   assert.match(core, /IPC_CHANNELS\.NOTIFICATION_OPEN[\s\S]*?sourceFingerprint: delivery\.payload\.sourceFingerprint/)
   assert.match(preload, /const REMOTE_SOURCE_FINGERPRINT_PATTERN = \/\^\[a-f0-9\]\{64\}\$\//)
@@ -213,7 +213,7 @@ test('renderer ACK deliveries project and preload-validates the captured lifecyc
 })
 
 test('window-open and navigation fences share the external-link allowlist', () => {
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   assert.match(main, /setWindowOpenHandler\(\(\{ url \}\) => \{[\s\S]*?isExternalLinkUrl\(url, rendererOrigin\)[\s\S]*?return \{ action: 'deny' \};/)
   assert.match(main, /will-navigate', \(event, url\) => \{[\s\S]*?handleUntrustedNavigation\(event, url, rendererOrigin\)/)
   // v2: will-redirect fires for subframes too. A framed page's redirect must use
@@ -260,7 +260,7 @@ test('did-fail-load classification for the v2 frameError projection', () => {
 })
 
 test('main.ts wires the v2 child-frame / download / did-fail-load gates', () => {
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   assert.match(main, /will-frame-navigate', \(details\) => \{\s*if \(!details\.isMainFrame && !isAllowedBrowserFrameUrl\(details\.url\)\) details\.preventDefault\(\);/)
   // W-15: a local-loopback child frame has no forward record, so the same
   // did-fail-load observation is routed to the bounded local store; alias frames
@@ -272,7 +272,7 @@ test('main.ts wires the v2 child-frame / download / did-fail-load gates', () => 
 })
 
 test('v2 CSP enable chain: only the two desktop entries pass frameSources', async () => {
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   const sidecar = readFileSync(new URL('../../sidecar-entry.ts', import.meta.url), 'utf8')
   assert.match(main, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/)
   assert.match(sidecar, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/)
@@ -302,7 +302,7 @@ test('v2 forward revoke runs only for a top-level document load, never an iframe
   // Electron emits did-start-loading for child-frame loads too; without the
   // main-frame guard a remote-loopback attach would revoke its own SSH forward
   // immediately (W-14b caught this: alias listener closed right after bind).
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   assert.match(
     main,
     /did-start-loading', \(\) => \{\s*if \(mainWindow !== win\) return;\s*\/\/[\s\S]*?if \(!win\.webContents\.isLoadingMainFrame\(\)\) return;\s*onRendererLifecycle\('did-start-loading'\);/,

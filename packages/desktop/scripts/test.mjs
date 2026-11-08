@@ -14,14 +14,27 @@
  * enter node:test and report a summary on every leg.
  *
  * Platform split (same precedent as packages/control-plane/scripts/test.mjs):
- * `test` runs GROUPS below; `test:win32` runs WIN32_FILES via --win32 and
- * `test:macos` runs MACOS_FILES via --macos (the two flags are mutually
- * exclusive). win-acl.test.ts exercises the icacls argument builders / output
- * verifiers on every leg (the win32 exec helper is platform-gated inside the
- * module), so it is both part of the full set and the package's Windows CI leg.
+ * `test` runs GROUPS below; `test:frozen` runs FROZEN_GROUPS via --frozen (the
+ * Electron-only tests, 2026-11 freeze); `test:macos` runs MACOS_FILES via --macos.
+ * WIN32_FILES / --win32 is retained for the ARCHIVED Windows leg (no package
+ * script while that leg is frozen; the flag still runs the set if the archived CI
+ * leg is restored). win-acl.test.ts exercises the icacls argument builders /
+ * output verifiers on every leg (the win32 exec helper is platform-gated inside
+ * the module), so it is both part of the full set and the archived Windows leg.
  * The macOS-only files need macOS tools (O_EXLOCK/plutil/codesign/ditto), so
  * --macos is their only entry point and they never ride the ubuntu leg.
  *
+ * Electron freeze (2026-11, docs/progress/electron-frozen.md): Electron-only tests
+ * moved to FROZEN_GROUPS. The default `test` run never schedules them (they are still
+ * registered here so verify-test-wiring keeps them wired); `test:frozen` (`--frozen`)
+ * is their only entry point. The shared lockstep suites (bridge manifest / shim
+ * surface / IPC mirror / dshDesktop carrier surface / electron-free gate / upstream
+ * seats / node edges …) stay in the default groups — they lock contracts the Swift
+ * leg still consumes. The dshDesktop carrier surface (desktop-carrier-surface) is
+ * NOT frozen: besides the frozen preload literals it pins the LIVE Swift shim carrier
+ * key set, the shared shell-ipc-settings.ts deviceInfo description format and the
+ * A-bridge ∥ dshDesktop channel-domain separation, so freezing it would silently
+ * drop those live/shared assertions (review 2026-11).
  * macOS leg skip discipline: the packaging suites
  * carry five environment-conditional `t.skip` sites (codesign/hdiutil, the
  * SwiftPM .build/release product, the resolved Sparkle artifact). A skipped case
@@ -144,7 +157,6 @@ export const GROUPS = {
   ipc: [
     // clear-only 凭据 IPC 的准入契约。
     'test/ipc/clear-only-credentials.test.ts',
-    'test/ipc/renderer-trust.test.ts',
     'test/ipc/cross-package-contract.test.ts',
     'test/ipc/local-plugin-list-redaction.test.ts',
     'test/ipc/ipc-surface-mirror.test.ts',
@@ -160,26 +172,21 @@ export const GROUPS = {
     'bridge-manifest.test.ts',
     'bridge-shim.test.ts',
     'bridge-shim-surface.test.ts',
-    // 原生 chrome 文案（tray / 对话框）的语言裁决与词典
-    'shell-locale.test.ts',
+    // Swift-only A 桥白名单解析/合并（.mjs 直测生成器纯函数；空表 = 三产物逐字节不变）
+    'test/ipc/bridge-swift-only-additions.test.mjs',
     // 上游席位锁：platform 标记 / dshDesktop 载体 / 失败分类 / Windows caption
     'upstream-seats.test.ts',
-    // C4 启动与修复：三选恢复决策 + chamber 自持状态备份 + main.ts 接线锁步
-    'test/desktop-shell/startup-recovery.test.ts',
-    // 致命诊断本地报告（§18 行 1 / §22.3.1）：describeFatalError + 报告落盘诚实性 +
-    // 渲染端 console 有界环
-    'test/desktop-shell/fatal-report.test.ts',
+    // dshDesktop 官方 desktop carrier 面：preload↔shim 键集相等（③）、
+    // 共享 shell-ipc-settings.ts 的 deviceInfo 描述格式（⑦，Swift sidecar 现行面）、
+    // dshDesktop 通道域 ∥ IPC_CHANNELS 零交集（⑥，A 桥白名单不得落入该域）。
+    // 2026-11 review 起留在默认组：冻结它会让三类活契约静默失去校验。
+    'test/ipc/desktop-carrier-surface.test.ts',
     'test/ipc/bridge-shim-document.test.ts',
     // 宿主路径面（上游 __DSH_HOST_PATHS__）：painted-source 门控 / 批次配对 / 消费一次。
     'test/ipc/bridge-shim-host-paths.test.ts',
-    // rc.2 dshDesktop 载体（官方 desktop preload 面）：字面量单源锁步 + 原生
-    // 键盘桥行为（真 protocol + 内存存储，无 Electron/GUI）。
-    'test/ipc/desktop-carrier-surface.test.ts',
-    'test/ipc/desktop-shortcuts-bridge.test.ts',
   ],
   // desktop-shell: OS-facing shell surfaces (deep links, open-in, notifications, badge) and the update lifecycle
   'desktop-shell': [
-    'test/desktop-shell/renderer-frame-watchdog.test.ts',
     'test/desktop-shell/notifications.test.ts',
     'test/desktop-shell/badge.test.ts',
     // W4：非交互腿有界队列的合流语义（在飞期间的新值不得被 shift 吞掉）。
@@ -194,14 +201,10 @@ export const GROUPS = {
     'test/desktop-shell/updater-watchdog.test.ts',
     // 就绪注意力语义（每目标一次 + 焦点即清 + 聚焦不打扰；§22.3.5）
     'test/desktop-shell/updater-attention.test.ts',
-    // main.ts 宿主的 resume nudge 与 win32 flashFrame seam（源码锁步 + seam 直测）
-    'test/desktop-shell/updater-main-wiring.test.ts',
     // 两个 GitHub 发现面的锁步（共享 update-discovery.ts）
     'test/desktop-shell/update-discovery.test.ts',
     // design 11 §4 采纳点②：确认回答的 revision 护栏（控制器语义 + IPC 源码锁）
     'test/desktop-shell/updater-revision.test.ts',
-    // design 11 §4 采纳点①：构建期通道封签（优先级表 + beta.yml 封签静态断言）
-    'test/desktop-shell/updater-channel-seal.test.ts',
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
     // 上游节奏单源 + 可选取证 JSONL（2026-09 对齐）
@@ -229,14 +232,49 @@ export const GROUPS = {
   scripts: [
     'scripts/bundle-swap.test.mjs',
     'scripts/bundle-pnpm-launcher.test.mjs',
-    'scripts/after-pack-adhoc-sign.test.mjs',
-    'scripts/before-pack.test.mjs',
-    'scripts/electron-shared.test.mjs',
     'scripts/control-plane-freshness.test.mjs',
     // python 载荷 machinery（C5：锁校验 / 解包器 / dry-run 离线保证 / 摘要纪律）
     'scripts/prepare-python-payload.test.mjs',
     // 上游 pnpm patch 通道（§17-C）：pin 集合 → 运行期 workspace → runtime lock 的锁步
     'scripts/upstream-patches.test.mjs',
+  ],
+}
+
+/**
+ * Electron-only FROZEN tests (2026-11 Electron freeze; docs/progress/electron-frozen.md).
+ *
+ * 冻结面 = 依赖归档入口/边沿/preload（`electron/main.ts` / `electron/electron-edges.ts` /
+ * `electron/preload.cts`）或 Electron 打包/更新工具链、且不覆盖 Swift 腿 / 共享契约的测试。
+ * 默认 `test` 不运行它们；`test:frozen`（`--frozen`）是唯一入口。它们仍登记在本清单里，
+ * 所以 verify-test-wiring 的「每个测试文件必须有脚本引用」保持成立。
+ *
+ * 不冻结（留在 GROUPS 默认组）的共享锁步：electron-free-gate / bridge-manifest /
+ * bridge-shim / bridge-shim-surface / ipc-surface-mirror / desktop-carrier-surface /
+ * upstream-seats / node-edges / notifications / badge / cross-package-contract /
+ * host-root-lease 等——它们锁的是 Swift 腿仍在用的共享契约，冻结文件只作为只读对照
+ * 参与，不需要 Electron 侧同步改动。desktop-carrier-surface 例外地留在默认组（2026-11
+ * review 修正）：它的 ③/⑥/⑦ 分别锁活 Swift shim 的 dshDesktop 键集、共享
+ * shell-ipc-settings.ts 的 deviceInfo 格式与 A 桥∥dshDesktop 通道域隔离，冻结即静默丢校验。
+ */
+export const FROZEN_GROUPS = {
+  'frozen-desktop-shell': [
+    'test/desktop-shell/fatal-report.test.ts',
+    'test/desktop-shell/renderer-frame-watchdog.test.ts',
+    'shell-locale.test.ts',
+    'test/desktop-shell/startup-recovery.test.ts',
+    'test/desktop-shell/updater-channel-seal.test.ts',
+    'test/desktop-shell/updater-main-wiring.test.ts',
+  ],
+  // 只测 Electron preload/main 信任面与键盘桥行为（无 Swift 侧/共享面结论）——
+  // desktop-carrier-surface 因含活 Swift shim + 共享 sidecar 断言，已回默认组。
+  'frozen-ipc': [
+    'test/ipc/desktop-shortcuts-bridge.test.ts',
+    'test/ipc/renderer-trust.test.ts',
+  ],
+  'frozen-scripts': [
+    'scripts/after-pack-adhoc-sign.test.mjs',
+    'scripts/before-pack.test.mjs',
+    'scripts/electron-shared.test.mjs',
   ],
 }
 
@@ -270,12 +308,32 @@ export const MACOS_FILES = [
  */
 export const ZERO_TEST_ALLOWLIST = []
 
+/** Flat file list of every group: the shared manifest lockstep must see every
+ *  on-disk test file while a run selects only one side of the Electron freeze. */
+const flatFiles = (groups) =>
+  Object.values(groups).flat().map((entry) => (typeof entry === 'string' ? entry : entry.file))
+
 function main() {
+  // Electron-only FROZEN group: default `test` never runs it (the other side's files
+  // ride platformFiles.frozen only so the lockstep sees them), and `test:frozen`
+  // (`--frozen`) runs ONLY the frozen group. Both sides stay registered here, so
+  // verify-test-wiring keeps seeing a script reference for every test file.
+  if (process.argv.includes('--frozen')) {
+    runTestManifest({
+      label: 'desktop (frozen)',
+      packageRoot: PACKAGE_ROOT,
+      groups: FROZEN_GROUPS,
+      platformFiles: { win32: WIN32_FILES, macos: MACOS_FILES, rest: flatFiles(GROUPS) },
+      zeroTestAllowlist: ZERO_TEST_ALLOWLIST,
+      allowPlatformFilesOutsideGroups: true,
+    })
+    return
+  }
   runTestManifest({
     label: 'desktop',
     packageRoot: PACKAGE_ROOT,
     groups: GROUPS,
-    platformFiles: { win32: WIN32_FILES, macos: MACOS_FILES },
+    platformFiles: { win32: WIN32_FILES, macos: MACOS_FILES, frozen: flatFiles(FROZEN_GROUPS) },
     zeroTestAllowlist: ZERO_TEST_ALLOWLIST,
     requireNoSkipsLegs: ['macos'],
     // The macos leg is a STANDALONE set: the darwin lock assertion and the two

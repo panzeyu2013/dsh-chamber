@@ -9,12 +9,13 @@
  * test derives the push path's gates from ci.yml and requires release
  * validation to run them).
  *
- * A step is normally a package script name (`pnpm run <step>`). Two executed-
- * assembly gates (the compiled-sidecar smoke and the compiled Electron
- * artifacts smoke) have no root package.json alias on purpose — one is
- * a script under scripts/gates/ — so a step may also be written as an explicit
- * command line: `node <script> [args]` or `pnpm <args>`. Both forms are
- * spawned directly by this runner; nothing is interpreted by a shell.
+ * A step is normally a package script name (`pnpm run <step>`). The executed-
+ * assembly gate (the compiled-sidecar smoke) has no root package.json alias on
+ * purpose — it is a script under scripts/gates/ — so a step may also be written
+ * as an explicit command line: `node <script> [args]` or `pnpm <args>`. Both
+ * forms are spawned directly by this runner; nothing is interpreted by a shell.
+ * The Electron compiled-artifact smoke left this set with the 2026-11 Electron
+ * freeze (it stays archived under scripts/gates/ for revival).
  *
  * The tests mode schedules differently from the other modes: every package step
  * is resolved once with DSH_TEST_MANIFEST_DUMP=1 (its manifest prints its exact

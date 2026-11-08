@@ -12,7 +12,7 @@
 //      §6.1 同根不变量，chamber-lock.test.ts 锁步）；
 //    - Electron 侧自身唯一的日志目录是控制面管理的
 //      <userData>/state/host-logs/<port>.log（packages/control-plane/src/
-//      host-logs.ts LOG_DIR = 'host-logs'；packages/desktop/main.ts 传
+//      host-logs.ts LOG_DIR = 'host-logs'；packages/desktop/electron/main.ts 传
 //      stateDir = stateRootDir(userData) = <userData>/state）。那是**被管理 dsh
 //      宿主**的 stdout/stderr 管道（按端口寻址、有 GET /api/host/logs 读侧），
 //      原生壳没有那条管道（它自己就是 sidecar 的父进程），不能把壳日志塞进

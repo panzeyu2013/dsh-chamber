@@ -22,12 +22,18 @@
 > 注册表）、21、24（归档清理）；§5.3 原生席位 = `macos/Sources/DSHChamber/NativeText.swift#NativeTextKey`
 > （文案键表）与 `macos/Sources/DSHChamber/NativeText.swift#NativeText`（取值链）+
 > `macos/Sources/DSHChamber/ShellPageFacts.swift#ShellPageFacts`（页面语言/主题事实载波）。
+>
+> **Electron flavor 冻结（2026-11 用户裁决）**：Electron 版已冻结归档、不删除文件
+> （[`../progress/electron-frozen.md`](../progress/electron-frozen.md)）；**本设计只维护 Swift 腿**。
+> §5 的 Electron → Swift 映射表（E 表）是**历史映射**，用于复活参考，不再是「两侧必须同步」的义务。
+> 正文中裸写的 `main.ts` / `electron-edges.ts` / `preload.cts` 均指归档后的
+> `packages/desktop/electron/` 同名文件（旧称是历史叙述，路径已随归档迁移变更）。
 
 ## 0. 摘要（给决策者的三分钟版）
 
 - **路线 A**：Swift/AppKit 只做"壳"（窗口、WKWebView、菜单/托盘/通知/角标/深链/对话框/外部打开），**壳内不承载业务**；业务 = control-plane + desktop 纯 Node 模块，打包为 sidecar 子进程（B 桥 stdio JSON-RPC）；Web UI 100% 复用，仅把 preload 的 `window.dshChamber` 换成 shim（A 桥）。
 - **可行性**：真实依赖 Electron 仅 main.ts、electron-edges.ts、preload.cts、updater.ts 4 文件；其余纯 Node 模块零 import、测试直接 `node *.test.ts` 可跑（`transport-manager.ts:56` 仅注释；`electron-free-gate.test.ts` 传递闭包断言）；控制面经 `createControlPlane(options)` 握手（`control-plane/src/index.ts:159-227`）；dsh 实例是 Node 进程（`spawn-dsh.ts` → `process.execPath`，基名表含捆绑名 `dsh-chamber-helper`，§4.3）；桥接面 58 个 `ipcMain.handle` + 9 push，键集单源 `ipc-events.ts` 的 `IPC_CHANNELS`（67 键），`ipc-surface-mirror.test.ts` / `bridge-manifest.json` / `bridge-shim-surface.test.ts` 锁步（§4.4.3）。
-- **工作量（人-日）**：M0 1–2 → M1 5–10 → M2 10–15 → M3 15–20 → M4 10–15 → M5 5–10，合计 **46–72 人-日（9–14 人周）**；Electron 版并行保留，Win/Linux 不受影响。
+- **工作量（人-日）**：M0 1–2 → M1 5–10 → M2 10–15 → M3 15–20 → M4 10–15 → M5 5–10，合计 **46–72 人-日（9–14 人周）**；Electron 版当时并行保留（代码保留现状；**2026-11 用户裁决后 Electron flavor 已冻结归档、不再并行发布，Win/Linux 桌面腿随之冻结、不发布**）。
 - **不做**：不重写 UI（luochenw/deepseek-harness-macos 全原生 = 3–6 人月 + parity 维护）；不在 Swift 重写宿主服务（summer-521/deepseek-harness-swift ≈900KB Swift + 自研 JS desktop-host = 路线 B，见 §2）；不碰 gateway。
 - **决策点**：双壳**共存**还是**替换**；bundle id 区分（通知授权身份）；更新「v1 blocked-available + v2 Sparkle」；双线防漂移（§4.4.3 / §9 R1）。
 
@@ -98,7 +104,7 @@ Node 侧。移植条件因此罕见：**把壳换掉，业务与测试资产原�
 
 - 不重写任何 Web UI/插件（renderer、dsh 官方前端、chamber 插件面）。
 - 不做 Swift 原生 UI 渐进替换（那是路线 B/C，§10 决策 5 单独评估）。
-- 不覆盖 Win/Linux（Electron 版继续承担）。
+- 不覆盖 Win/Linux（原设计 = Electron 版继续承担；**2026-11 用户裁决后 Electron flavor 已冻结归档，Win/Linux 桌面腿冻结、不发布**）。
 - 不做第二个 gateway、不进匿名控制面的执行域（AGENTS.md 硬纪律不变）。
 - v1 不做 Sparkle 全自动安装（见 §7；先诚实 blocked-available 形态）。
 
@@ -187,8 +193,8 @@ packages/desktop/scripts/build-sidecar.mjs  # sidecar 装配
 packages/desktop/scripts/emit-bridge-manifest.mjs # IPC 通道 manifest → Swift 枚举 + chamber-bridge.stub.js 锁步样本（§4.4.3）
 ```
 
-sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是双 flavor 宿主（Electron entry `main.ts` 保留；
-`sidecar-entry.ts` 及 host-edge 适配在 §4.1）。sidecar 打包布局 = **编译产物 `dist/control-plane/` + host 包
+sidecar 的 JS 面不动仓库布局：`packages/desktop` 仍是宿主核心包（Electron entry `main.ts` 保留为
+**冻结归档**（`packages/desktop/electron/main.ts`），不再随默认开发演进；`sidecar-entry.ts` 及 host-edge 适配在 §4.1）。sidecar 打包布局 = **编译产物 `dist/control-plane/` + host 包
 `dist/dsh-chamber-seed-*/` + 内嵌 `vendor/dsh/` 与 `pnpm/` + 捆绑 `node`**；renderer 产物 `dist/web` 属 .app 的
 `Contents/Resources/dist/web`（不在 sidecar 目录内）。复用 build-control-plane.mjs 的"双路径解析"（打包态 import
 编译产物、dev/测试走 pnpm 符号链接，control-plane-module.ts:5-30 注释）——sidecar 与 Electron 共享
@@ -423,6 +429,10 @@ interface HostEdges {
 - 深链：**macOS 现状 = open-url 事件 + argv 防御式扫描双路径**（main.ts:1479-1482 + 1687，归一化 intent key 去重，A7）——Swift 侧 = `application(_:open:)`（冷启动先于 ready → Swift 暂存，ready 后按序转交）+ 二次启动 argv 深链（`AppDelegate` 的 secondaryDeepLink 私有通知，与二次启动显窗请求同路）→ B 桥 deep-link(url) → core enqueueDeepLink 原逻辑（归一化去重、VS Code intent、proof 队列不动）；Win/Linux 的 second-instance argv 扫描仅 Electron flavor 保留。
 
 ## 5. 原生边沿逐项设计（Electron → Swift 映射）
+
+> **历史映射（2026-11）**：Electron flavor 已冻结归档，本表用于复活参考与 Swift 边的现状溯源，
+> 不再表示「Electron 侧需要同步维护」；Electron 现状列引用的 `main.ts` 现归档于
+> `packages/desktop/electron/main.ts`。
 
 | # | Electron 现状（main.ts/…） | Swift 对应 | 备注 |
 |---|---|---|---|
@@ -869,7 +879,7 @@ WKWebView 不认，故壳自建等价面（`macos/Sources/DSHChamber/ShellWindow
 
 ### 5.6 窗口 chrome 面（hiddenInset / 全屏标记 / 侧栏材质的等价面）
 
-§5.5 的窗口形态还需要三个上游等价面，否则页面按 `data-platform=darwin` 画的顶部带与真实窗口不成一条带。上游的量取自官方 desktop 主进程的 darwin 分支（`vendor/harness-checkout/apps/desktop/src/main.ts`：`titleBarStyle:'hiddenInset'`、`trafficLightPosition:{x:16,y:18}`、`vibrancy:'sidebar'`、`visualEffectState:'active'`、`backgroundColor:'#00000000'`）与 preload（`preload-platform.ts` 的 `dataset.fullscreen`）；本壳的量全部由本机同形窗探针实测；**Electron flavor 自 2026-09 起也按同一组 darwin 值收口**（`packages/desktop/main.ts` 的 darwin 分支：hiddenInset / trafficLightPosition(16,18) / vibrancy sidebar / visualEffectState active / backgroundColor #00000000，锁 = `packages/desktop/upstream-seats.test.ts` S-54），两 flavor 因此共用同一份页面几何（`--dsh-frame-top-clearance: 48px`、`.topStrip`、`[data-fullscreen]`）：
+§5.5 的窗口形态还需要三个上游等价面，否则页面按 `data-platform=darwin` 画的顶部带与真实窗口不成一条带。上游的量取自官方 desktop 主进程的 darwin 分支（`vendor/harness-checkout/apps/desktop/src/main.ts`：`titleBarStyle:'hiddenInset'`、`trafficLightPosition:{x:16,y:18}`、`vibrancy:'sidebar'`、`visualEffectState:'active'`、`backgroundColor:'#00000000'`）与 preload（`preload-platform.ts` 的 `dataset.fullscreen`）；本壳的量全部由本机同形窗探针实测；**Electron flavor 自 2026-09 起也按同一组 darwin 值收口**（`packages/desktop/electron/main.ts` 的 darwin 分支：hiddenInset / trafficLightPosition(16,18) / vibrancy sidebar / visualEffectState active / backgroundColor #00000000，锁 = `packages/desktop/upstream-seats.test.ts` S-54），两 flavor 因此共用同一份页面几何（`--dsh-frame-top-clearance: 48px`、`.topStrip`、`[data-fullscreen]`）：
 
 | 面 | 上游 | 本壳等价物 |
 |---|---|---|
@@ -902,7 +912,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 
 | 面 | Electron（镜像上游） | Swift（WKWebView 无该 API） |
 |---|---|---|
-| 取路径 | `packages/desktop/preload.cts` 的 `exposeHostPaths()`：`webUtils.getPathForFile(file)`（Electron 29+；无 `webUtils` 则不暴露全局 = 浏览器分支） | DOM `File` 不携带路径，只能「事件前快照 + 事件中同步配对」：`macos/Sources/DSHChamber/HostPathCatalog.swift` 的主线程 `.common` Timer 观察 `NSPasteboard(name:.drag)`（拖拽开始即有内容，`changeCount` 变化才读；读门=可见+按键+指针在窗内，清门只看几何/可见性——释放不清快照），`NSOpenPanel` 回执走 `adoptPicked`；`bridge-shim.js` 在捕获相位记录本次投递的 File 名单（`drop` 在 window、`change` 在 document） |
+| 取路径 | `packages/desktop/electron/preload.cts` 的 `exposeHostPaths()`：`webUtils.getPathForFile(file)`（Electron 29+；无 `webUtils` 则不暴露全局 = 浏览器分支） | DOM `File` 不携带路径，只能「事件前快照 + 事件中同步配对」：`macos/Sources/DSHChamber/HostPathCatalog.swift` 的主线程 `.common` Timer 观察 `NSPasteboard(name:.drag)`（拖拽开始即有内容，`changeCount` 变化才读；读门=可见+按键+指针在窗内，清门只看几何/可见性——释放不清快照），`NSOpenPanel` 回执走 `adoptPicked`；`bridge-shim.js` 在捕获相位记录本次投递的 File 名单（`drop` 在 window、`change` 在 document） |
 | 配对 | `webUtils` 按 File 身份精确 | `pathFor(file)` = 作用域门 → 批次 → 目录条目（**唯一匹配**：目录按名（size===0 或列表无同名文件条目时可作候选），**文件要求精确字节数**；候选 0 个或 ≥2 个一律回退上传——同名同 size、同名目录+空文件跨类都不猜路径），批次只由**可信事件**（`event.isTrusted`：drop / 文件面板回执的 change）装填，目录快照必须比**上一次投递**更新（否则旧手势残留条目被拒绝）、可信 `paste` 直接清批，批次与条目各消费一次、批次门 5s、**目录快照不设 TTL**（慢速悬停没有上限；新鲜度由批次门与整体换代保证）、上限 256；配不到即 `''` |
 | 入稿归属（intake） | 两 flavor 共用 vendor 补丁：`ui-attachment` 的 document 级 drop 监听按**本壳自己的 `[data-instance]` 子树**做 containment（`packages/renderer/scripts/vendor-patches.mjs` 两条精确改写，构建期生效、vendor 树零写入；产物 marker 由 `verify-vendor-patch-applied` 验证）——同一次 drop 只由落点所在的那个壳入稿，隐藏远端壳不再扇出（同时修掉既有的图片双附缺陷）；dragenter/dragover/dragleave 的副作用（dropEffect 否决、遮罩层、深度计数）与 drop 入稿同一归属判定。**已接受取舍**：落在所有实例壳之外的 drag/drop（chamber 侧栏、壳 chrome、跨实例 portal）不再由任何 composer 入稿（那些位置没有可达 composer）；布局里根本没有 `[data-instance]` 时按上游放行、有壳却解析不到自身则拒绝 |
 | 范围门控 | 两 flavor 共用：文档根 `data-chamber-painted-source`（`packages/renderer/src/host-path-scope.ts` 的 `publishHostPathScope`，由**屏上** `InstanceView` 按 `active` 发布 = App 的 paintedView，不是选择语义的 activeView；离开屏上 compare-and-clear）。只有屏上为本地实例才返回路径 | 同左（shim 读同一属性） |

@@ -3,8 +3,12 @@
  * GUI acceptance entry point (docs/checklists/gui-acceptance-checklist.md).
  *
  *   pnpm run acceptance:gui                     # --live: read-only probes against the RUNNING app
- *   pnpm run acceptance:gui -- --attach         # walk through an already-running dev instance (CDP 9333)
- *   pnpm run acceptance:gui -- --dev            # launch a throwaway dev instance, walk it, shut it down
+ *   pnpm run acceptance:gui -- --attach         # native default: probe a running native shell control plane
+ *   pnpm run acceptance:gui -- --dev --flavor electron # ARCHIVED Electron dev walkthrough (revival only)
+ *
+ * Electron flavor is **frozen/archived** (2026-11, docs/progress/electron-frozen.md): --dev/--attach
+ * default to the shipped native flavor; requesting Electron requires an explicit --flavor electron
+ * and a revived Electron dev environment.
  *
  * Exit code: 0 when nothing FAILED (INFO entries never fail a run); 1 otherwise.
  * Artifacts (report.md + report.json + screenshots) land in --out (default
@@ -28,9 +32,10 @@ const { values } = parseArgs({
     live: { type: 'boolean', default: false },
     dev: { type: 'boolean', default: false },
     attach: { type: 'boolean', default: false },
-    // electron (default) drives the Electron dev instance over CDP; native runs
-    // the minimal sidecar walkthrough of the macOS Swift payload (G20).
-    flavor: { type: 'string', default: 'electron' },
+    // native (default for --dev/--attach) probes the shipped macOS Swift sidecar/control
+    // plane (G20); electron (ARCHIVED, explicit only) drives the Electron dev instance
+    // over CDP. --live is HTTP-only and stays flavor-agnostic.
+    flavor: { type: 'string' },
     'sidecar-dir': { type: 'string' },
     // N-6 input: without it the native leg can only judge the shell index when
     // the assembly itself carries dist/web, and under --require-assembly a
@@ -75,9 +80,10 @@ if (values.help) {
   --live                     只读探测运行中的应用（默认；安装态亦可用）
   --attach                   对已带 --remote-debugging-port 的 dev 实例做界面走查
   --dev                      自起一次性 dev 实例（隔离 user-data）→ 走查 → 关闭
-  --flavor <electron|native> 目标 flavor（默认 electron）。native 走查原生壳 spawn 的
-                             sidecar 装配（ready/B 桥/控制面 HTTP）；—— 注意 native 不可
-                             驱动 WKWebView UI（无 CDP），那仍属实机验收
+  --flavor <electron|native> 目标 flavor（--dev/--attach 默认 native；--live 与 flavor 无关）。
+                             native 走查原生壳 spawn 的 sidecar 装配（ready/B 桥/控制面 HTTP）；
+                             注意 native 不可驱动 WKWebView UI（无 CDP），那仍属实机验收。
+                             electron 已冻结归档，仅显式传 --flavor electron 时用于复活后的 CDP 走查
   --sidecar-dir <dir>        native 模式的 sidecar 装配目录（默认 packages/desktop/release/sidecar）
   --web-dist <dir>           native 模式的 web dist 目录（renderer 产物，N-6 判"壳 index +
                              声明资源可服务"；相对路径按当前目录解析）；未给时探测
@@ -110,17 +116,47 @@ if (values.help) {
   process.exit(0)
 }
 
-const flavor = values.flavor
+const flavor = values.flavor ?? 'native' // concrete default; --live ignores flavor, --dev/--attach use native
 if (flavor !== 'electron' && flavor !== 'native') {
-  console.error(`--flavor 只接受 electron|native，收到：${flavor}`)
+  console.error('--flavor 只接受 electron|native，收到：' + String(values.flavor))
   process.exit(2)
 }
-if (flavor === 'native' && values.dev) {
-  console.error('--flavor native 不支持 --dev（原生壳没有 CDP dev 实例）：请用 --attach 指向运行中的原生壳控制面，或直接运行 native 走查（会自起 sidecar 装配）')
+if (values.dev && flavor !== 'electron') {
+  console.error('--dev 依赖 Electron dev（已冻结归档，2026-11）。原生壳请用 --attach --flavor native；'
+    + '确需复活 Electron dev 时按 docs/progress/electron-frozen.md §6 操作并显式传 --flavor electron。')
   process.exit(2)
 }
 if (values['ssh-fixture'] && (!values.dev || flavor !== 'electron')) {
-  console.error('--ssh-fixture 只支持 --dev --flavor electron（夹具预置一次性 dev userData 的注册表/known_hosts，并在该实例里走真实 SSH 隧道）')
+  console.error('--ssh-fixture 只支持 --dev --flavor electron（夹具预置一次性 dev userData 的注册表/known_hosts，并在该实例里走真实 SSH 隧道；Electron dev 已冻结归档）')
+  process.exit(2)
+}
+if (flavor === 'electron' && (values.dev || values.attach)) {
+  console.warn('ARCHIVED: Electron flavor 已冻结归档（2026-11，docs/progress/electron-frozen.md）；'
+    + '本模式需要复活后的 Electron dev/CDP 环境。')
+}
+if (values['require-hover'] && (!(values.dev || values.attach) || flavor !== 'electron')) {
+  console.error('--require-hover 只属于归档的 Electron CDP 走查：需 --attach/--dev --flavor electron（docs/progress/electron-frozen.md）')
+  process.exit(2)
+}
+if (values['require-embed'] && flavor !== 'electron' && (values.dev || values.attach)) {
+  console.error('--require-embed 在 native 走查没有可执行的界面腿：请改用 --live（HTTP 探针）或 --flavor electron（归档 CDP）')
+  process.exit(2)
+}
+if (values['embed-port'] && (!(values.dev || values.attach) || flavor !== 'electron')) {
+  console.error('--embed-port 只属于归档的 Electron CDP 走查（--attach/--dev --flavor electron）')
+  process.exit(2)
+}
+if (values['attach-create-session'] && flavor !== 'electron') {
+  console.error('--attach-create-session 只属于归档的 Electron CDP 走查：需 --flavor electron')
+  process.exit(2)
+}
+if ((values.dev || values.attach) && flavor === 'native'
+  && (values['cdp-port'] !== '9333' || (values['electron-arg'] ?? []).length > 0)) {
+  console.error('--cdp-port/--electron-arg 只属于归档的 Electron dev 走查：native 无 CDP；需 --flavor electron')
+  process.exit(2)
+}
+if (flavor === 'electron' && (values['web-dist'] || values['require-assembly'])) {
+  console.error('--web-dist/--require-assembly 只属于 native 装配走查：请用 --flavor native')
   process.exit(2)
 }
 
@@ -144,7 +180,19 @@ let info = 0
 let launched = null
 let sshFixture = null
 try {
-  if (flavor === 'native') {
+  if (mode === 'live') {
+    // --live is HTTP-only and works against either flavor (native shell or a revived
+    // Electron instance); it never needs CDP or the Electron dev flow.
+    const live = await runLiveAcceptance({
+      planeOrigin: values.plane,
+      instanceOrigin: values.instance,
+      sourceIds,
+      registryFile: values.registry,
+      outDir,
+      requireEmbed: values['require-embed'],
+    })
+    failed += live.failed
+  } else if (flavor === 'native') {
     // Native flavor: probe the sidecar the packaged Swift shell spawns (or, in
     // --attach mode, the control plane of an already-running native shell). The
     // WKWebView UI itself has no CDP endpoint and cannot be driven here — the
@@ -177,17 +225,6 @@ try {
           + '（来源 ' + sshFixture.sourceViewId + '）')
       }
       launched = await launchDevInstance({ outDir, cpPort, cdpPort, electronArgs: values['electron-arg'] })
-    }
-    if (mode === 'live') {
-      const live = await runLiveAcceptance({
-        planeOrigin: values.plane,
-        instanceOrigin: values.instance,
-        sourceIds,
-        registryFile: values.registry,
-        outDir,
-        requireEmbed: values['require-embed'],
-      })
-      failed += live.failed
     }
     if (mode === 'dev') {
       // Same read-only probe set, aimed at the throwaway instance (its dsh port is

@@ -5,6 +5,13 @@
 
 > 中文版: [docs/DEVELOPMENT.md](DEVELOPMENT.md)
 
+> **Version scope (2026-11 user ruling)**: the only shipped flavor is the macOS Swift native shell; the
+> Electron flavor is frozen and archived (files kept, revivable; Windows/Linux desktop legs frozen and
+> not published). Default development / gates / releases cover only the macOS Swift leg plus the shared
+> contracts; in the architecture diagram below, "Electron window / desktop process" is **archived
+> reference** — the live shell entry is `macos/` + the sidecar (`packages/desktop/sidecar-entry.ts`).
+> Scope and revival checklist: [progress/electron-frozen.md](progress/electron-frozen.md).
+
 ## 1. Architecture overview
 
 ```
@@ -45,7 +52,7 @@ Design authority: `docs/design/` (01 entry point, 05 v1 surface/architecture con
 |-|-|
 |`packages/control-plane`|Connection-manager core: web-profile host hosting, two-host-package seed/overlay, management REST, per-instance proxy, static frontend serving|
 |`packages/renderer`|Self-built dsh frontend (source reuse): entry build, pure-dsh first-screen bridge host, N-ctx orchestration, boot manifest|
-|`packages/desktop`|Electron shell: single frame, orthogonal target/transport providers, ready-time remote host-package seed, instance registry, IPC, runtime management and native edges|
+|`packages/desktop`|Shared host business core (host-assembly/shell-core/sidecar assembly) + frozen Electron entry (electron/, archived reference); updater pure functions shared with the sidecar|
 |`packages/cli`|CLI thin shell (serve/status/connections/host logs)|
 |`packages/gateway`|Standalone authenticated server shape (Design 17): mandatory-auth public boundary, one local dsh proxy, runtime management/credential panel/seed registry|
 |`packages/dsh-runtime`|Pure-Node dsh version-tree, install, activation, probe and two-phase rollback core shared by desktop and Gateway; state stays host-owned|
@@ -70,7 +77,7 @@ Design authority: `docs/design/` (01 entry point, 05 v1 surface/architecture con
 - Node.js 24+ (LTS recommended; TypeScript sources run natively via Node type stripping, see `.nvmrc`)
 - pnpm≥11 (package manager; lockfile `pnpm-lock.yaml`)
 - git
-- macOS (needed for `dist:desktop:mac` dmg/zip packaging)
+- macOS (needed for the Swift native-shell build/package and `test:macos`; the Electron `dist:desktop:mac` dmg/zip packaging is frozen with the flavor and no longer ships — revival commands in `progress/electron-frozen.md` §6)
 - A dsh host install is optional; the integration smoke test auto-SKIPs without it
 
 ### 2.2 Clone and install
@@ -102,23 +109,34 @@ The desktop bundles official `@deepseek-ai/dsh` into `packages/desktop/vendor/ds
 pnpm --filter @dsh-chamber/desktop run bundle:dsh   # exact pin by default; overrides must also be exact semver
 ```
 
-`bundle:dsh` also runs in `build:desktop`/`dist:desktop:mac`—jump straight to running or packaging.
+`bundle:dsh` also runs in `build:desktop` (the Electron `dist:desktop:mac` was removed with the freeze)—jump straight to running or packaging.
 
 ## 3. Running
 
+> **(Electron frozen, 2026-11)** `pnpm run dev:desktop` has been removed from the default script surface; the live
+> development surface is `pnpm run dev:control-plane` plus the macOS Swift-shell build chain (`build:sidecar` →
+> `build:swift-app`). The Electron dev commands below are kept as revival reference
+> (see [progress/electron-frozen.md](progress/electron-frozen.md) §6).
+
 ```bash
 pnpm run dev:control-plane   # control plane only — http://127.0.0.1:17500 (management REST + static frontend)
-pnpm run dev:desktop         # full window: control plane + dsh frontend + desktop shell
+# ARCHIVED (Electron frozen): pnpm run dev:desktop   # full window: control plane + dsh frontend + desktop shell (revival reference)
 ```
 
 ## 4. Build & package
 
+> **(Electron frozen, 2026-11)** The `dist:desktop:*` commands here (dmg/zip/NSIS) were removed from the default
+> script surface and no longer produce anything; `build:desktop` is still live (the Swift sidecar reuses its
+> control-plane / renderer / host-package artifacts, and it no longer includes the preload step). The Electron packaging
+> commands and electron-builder notes are kept as revival reference (see [progress/electron-frozen.md](progress/electron-frozen.md) §6).
+
 ```bash
 pnpm run build:host-packages # build the four host packages: host-graph, host-git-worktree, host-archive-cleanup, host-open-in
 pnpm run build:renderer      # build the dsh-frontend bundle (vite over the dsh workspace source)
-pnpm run build:desktop       # host packages → renderer → control-plane/copy → preload → bundle:dsh
-pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
-pnpm run dist:desktop:win    # package the Windows app (nsis only; must run on Windows — dsh runtime bundling is platform-specific)
+pnpm run build:desktop       # host packages → renderer → control-plane/copy → bundle:dsh (the Electron preload step was removed with the freeze)
+# ARCHIVED (Electron frozen):
+# pnpm run dist:desktop:mac  # package the macOS app (dmg + zip)
+# pnpm run dist:desktop:win  # package the Windows app (nsis only; must run on Windows)
 ```
 
 Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). A formal macOS release needs all five Apple/Developer ID credentials (a missing value fails closed before any GitHub Release mutation) and must pass Developer ID signing, notarization, stapler and spctl checks before its draft is public. Even with formal secrets, `workflow_dispatch dry_run` clears all signing/notarization variables and `GH_TOKEN`, uses `--publish=never`, writes no Release or asset, and produces an ad-hoc-signed validation package via the afterPack hook. The first Windows release remains unsigned (the SmartScreen warning is the explicit Design 11 §7 tradeoff).
@@ -127,7 +145,10 @@ Artifacts land in `packages/desktop/release/` (electron-builder `directories.out
 
 > Windows install slowness/hangs on "Installing" (Windows Defender per-file scanning) — see the README FAQ.
 
-### Windows support matrix (design 23, in progress)
+### Windows support matrix (design 23; **ARCHIVED: Windows leg frozen, not published, not scheduled**)
+
+> The table below records the pre-freeze state and is kept as the revival baseline; it is not scheduled and nothing ships.
+> See [progress/electron-frozen.md](progress/electron-frozen.md).
 
 |Area|Status|
 |-|-|
@@ -142,11 +163,17 @@ Artifacts land in `packages/desktop/release/` (electron-builder `directories.out
 
 ## 5. CI & releases
 
+> **(Electron frozen, 2026-11)** Current CI = `test` / `test-macos` / `test-macos-pack` in `ci.yml` (the Windows jobs were
+> deleted and the Electron packaging rehearsal was removed); current releases = `build-swift` + `build-gateway` in
+> `release.yml` (the three Electron publishing legs are kept skipped with a job-level `if: ${{ false }}` plus the ARCHIVED
+> header). The Electron/Windows release statements and the "all jobs green" proof wording below describe the **pre-freeze
+> shape**; revival is in [progress/electron-frozen.md](progress/electron-frozen.md) §6.
+
 - `.github/workflows/ci.yml`: every push/PR runs the validation chain only (frozen install→root/gateway/runtime/two-host-package/client-plugin type checks→control-plane/runtime/desktop/gateway/renderer/client/host tests, including `test:git` and `test:host-git`→workflow action-SHA gate (`release-preflight --actions-only`, since )→smoke [SKIPs without a bundled runtime]→renderer/host/desktop sub-builds→gateway pack-and-install smoke [`pack`→temporary prefix install→`gateway --help`]); it produces no release artifacts; desktop packaging and the real smoke run live in `release.yml` (tag/manual trigger).
-- `.github/workflows/release.yml`: produces distributable releases—push a `v*` tag (or run manually with a version without `v` and an optional dry-run). Publishable versions are canonical stable `X.Y.Z` or beta `X.Y.Z-beta.N` only; `alpha`, `rc` and other prereleases fail closed. Stable uses the default desktop build config and publishes only `latest.yml`/`latest-mac.yml`; beta uses `packages/desktop/electron-builder.beta.yml` and publishes only `beta.yml`/`beta-mac.yml`, with mutually exclusive channel assets. A formal run creates a draft, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, and goes public only after the fail-closed macOS checks above; dry-run writes no Release. `release-preflight --versions-only` checks the root, every non-fork chamber package, and all three fork baselines; the matching `## [<version>]` section of `CHANGELOG.md` is the mandatory release body. The `validation` job runs the release CI proof after the local chain and the builds, immediately before the third-party notices check (deliberately late: the proof polls the ci.yml run for this SHA, so local validation overlaps that wait; `scripts/release/verify-release-ci-proof.mjs`: the commit must carry a completed, successful `ci.yml` push run on `main` with the `test`, `test-windows` + `test-windows-pack` and `test-macos` + `test-macos-pack` jobs green (each contract leg plus the parallel packaging job its assembly/rehearsal steps were split into — the proof still pins those steps by name); an in-flight run is waited for with a bound; a failed run or a commit that never went through `main` fails closed); the local chain (gateway/runtime type checks and tests plus critical control-plane/desktop/renderer/plugin/CLI/policy gates) has already completed by then; `build-gateway` publishes only a clean-prefix-smoked `.tgz` plus matching `.tgz.sha256` to GitHub Releases; npm publish/dist-tags deferred.
+- `.github/workflows/release.yml`: produces distributable releases—push a `v*` tag (or run manually with a version without `v` and an optional dry-run). Publishable versions are canonical stable `X.Y.Z` or beta `X.Y.Z-beta.N` only; `alpha`, `rc` and other prereleases fail closed. Stable uses the default desktop build config and publishes only `latest.yml`/`latest-mac.yml`; beta uses `packages/desktop/electron-builder.beta.yml` and publishes only `beta.yml`/`beta-mac.yml`, with mutually exclusive channel assets. A formal run creates a draft, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, and goes public only after the fail-closed macOS checks above; dry-run writes no Release. `release-preflight --versions-only` checks the root, every non-fork chamber package, and all three fork baselines; the matching `## [<version>]` section of `CHANGELOG.md` is the mandatory release body. The `validation` job runs the release CI proof after the local chain and the builds, immediately before the third-party notices check (deliberately late: the proof polls the ci.yml run for this SHA, so local validation overlaps that wait; `scripts/release/verify-release-ci-proof.mjs`: the commit must carry a completed, successful `ci.yml` push run on `main` with the `test`, `test-macos` and `test-macos-pack` jobs green (**the Windows/Linux legs are ARCHIVED with the Electron freeze**; the `test-macos-pack` assembly/rehearsal steps are still pinned by name); an in-flight run is waited for with a bound; a failed run or a commit that never went through `main` fails closed); the local chain (gateway/runtime type checks and tests plus critical control-plane/desktop/renderer/plugin/CLI/policy gates) has already completed by then; `build-gateway` publishes only a clean-prefix-smoked `.tgz` plus matching `.tgz.sha256` to GitHub Releases; npm publish/dist-tags deferred.
 - Pre-release mechanical gate (since ): `pnpm run release:preflight <version>` (`scripts/release/release-preflight.mjs`)—version uniformity (incl. fork copies and the installer dsh constant), changelog zh/en parity, i18n, every workflow action SHA resolves upstream, conflict markers, clean git status, frozen install, test:release-workflow; the release checklist §1.5/§7 mandates it before commit and before push.
 - Release flow (optimization): local preflight + full battery on the exact release commit→commit+tag→workflow_dispatch dry-run first (new/modified workflows, script paths and action SHAs must pass one dry-run)→real tag push; full steps in the release checklist.
-- Push-path classification : the linux chain in `ci.yml` differs per event. On a branch push/PR, a prose-only change (`docs/**` plus the root prose allowlist, classified by `scripts/gates/classify-ci-changes.mjs`) runs only the file-only gates (workflow action SHAs, upstream-touchpoint registry/anchors, release-workflow policy, tooling unit tests; i18n and the design-token check are **local-only** gates that run in `check:static`, see `surfaces.ci=false` in `scripts/gates/gate-surfaces.json`) and skips install/type checks/unit suites/builds/the gateway pack smoke and the Windows leg; a code change runs everything. **Tag pushes do not trigger `ci.yml` at all** (CI-trigger revision)—a release PROVES instead of re-running: `release.yml`'s `validation` runs `verify-release-ci-proof.mjs`, which requires a successful full `ci.yml` run on `main` (the linux `test` chain plus the `test-windows`/`test-macos` legs and their `-pack` packaging jobs), waiting a bounded time for an in-flight run and failing closed otherwise. The old shape (linux chain stepping aside, Windows leg re-running on the tag) repeated one Windows run on the identical SHA and left a hole: tagging a commit that never went through `main` skipped the entire linux chain; the proof closes that hole. release.yml's gate alignment with ci.yml is still asserted by `release-workflow-policy.test.mjs` derived from ci.yml (adding a gate to ci.yml without mirroring it into release.yml turns CI red). The classifier fails safe: anything it cannot prove to be prose runs the full chain, and the prose allowlist is frozen by the policy test, so widening it takes a deliberate edit.
+- Push-path classification : the linux chain in `ci.yml` differs per event. On a branch push/PR, a prose-only change (`docs/**` plus the root prose allowlist, classified by `scripts/gates/classify-ci-changes.mjs`) runs only the file-only gates (workflow action SHAs, upstream-touchpoint registry/anchors, release-workflow policy, tooling unit tests; i18n and the design-token check are **local-only** gates that run in `check:static`, see `surfaces.ci=false` in `scripts/gates/gate-surfaces.json`) and skips install/type checks/unit suites/builds/the gateway pack smoke and the Windows leg (ARCHIVED); a code change runs everything. **Tag pushes do not trigger `ci.yml` at all** (CI-trigger revision)—a release PROVES instead of re-running: `release.yml`'s `validation` runs `verify-release-ci-proof.mjs`, which requires a successful full `ci.yml` run on `main` (the linux `test` chain plus the `test-macos` leg and the `test-macos-pack` packaging job; the Windows/Linux legs are ARCHIVED), waiting a bounded time for an in-flight run and failing closed otherwise. The old shape (linux chain stepping aside, Windows leg re-running on the tag) repeated one Windows run on the identical SHA and left a hole: tagging a commit that never went through `main` skipped the entire linux chain; the proof closes that hole. release.yml's gate alignment with ci.yml is still asserted by `release-workflow-policy.test.mjs` derived from ci.yml (adding a gate to ci.yml without mirroring it into release.yml turns CI red). The classifier fails safe: anything it cannot prove to be prose runs the full chain, and the prose allowlist is frozen by the policy test, so widening it takes a deliberate edit.
 - `ci.yml` serializes pushes per ref with `concurrency: ci-${{ github.ref }}` and cancels only superseded pull-request runs: branch pushes queue, because a prose-only push that cancelled the previous run would leave the code commit it followed with no validation at all (the classifier spares prose the heavy chain, but there is no "zero validation" tier). `release.yml` keeps `release-publish` + `cancel-in-progress: false` so a run that may already have created a draft is never cancelled.
 - Both workflows bootstrap the vendor source tree at the `harness.commit` pin before installing.
 
@@ -157,7 +184,7 @@ packages/
   control-plane/            Control plane: host hosting, management REST,
                             per-instance proxy, frontend serving
   renderer/                 Self-built dsh frontend (source reuse + bridge host + N-ctx)
-  desktop/                  Electron shell: single frame, orthogonal target/transport providers, instance registry, IPC
+  desktop/                  Desktop host business core (reused by the Swift sidecar) + the frozen Electron entry (electron/, archived reference)
   cli/                      CLI thin shell
   gateway/                  Standalone authenticated server shape + one local dsh + runtime management / credential panel / seed registry
   dsh-runtime/              Pure-Node dsh runtime-management core shared by desktop and Gateway
@@ -210,23 +237,23 @@ vendor/
 |Script|Description|
 |-|-|
 |`pnpm run dev:control-plane`|Start the control plane (management REST + static frontend), port 17500|
-|`pnpm run dev:desktop`|Electron shell: full window (control plane + dsh frontend + desktop shell)|
-|`pnpm run acceptance:gui`|GUI acceptance (`--live` read-only probes/`--attach`/`--dev` walkthrough); procedure in `docs/checklists/gui-acceptance-checklist.md`, boundaries in `scripts/gui-acceptance/README.md`|
+|`pnpm run dev:desktop` (**ARCHIVED**: removed from the default script surface; revival reference)|Electron shell: full window (control plane + dsh frontend + desktop shell)|
+|`pnpm run acceptance:gui`|GUI acceptance (`--live` read-only probes; `--attach`/`--dev` default to `--flavor native`; the Electron CDP leg `--flavor electron` is **ARCHIVED**); procedure in `docs/checklists/gui-acceptance-checklist.md`|
 |`pnpm run test:gui-acceptance`|Unit tests for the toolbox's pure judgement layer (= `test:scripts:gui-acceptance`; run in CI; the GUI-driving layer is not)|
 |`pnpm run test:scripts`|Single entry for all `scripts/` unit tests (groups: gates/upstream/release/gui-acceptance; manifest and naming rules in `scripts/README.md` §分类规则3)|
 |`pnpm run build:renderer`|Build the dsh-frontend bundle|
 |`pnpm run build:host-graph`|Build the host-graph package (esbuild)|
 |`pnpm run build:host-git`|Build the in-instance Git worktree host package (esbuild)|
 |`pnpm run build:host-packages`|Build the four host packages (graph / git-worktree / archive-cleanup / open-in), in order|
-|`pnpm run build:desktop`|Four host packages + renderer + control-plane compile/host-package copy + preload + dsh bundling|
+|`pnpm run build:desktop`|Four host packages + renderer + control-plane compile/host-package copy + dsh bundling (the Electron preload step was removed with the freeze)|
 |`pnpm run typecheck:git`|Type-check the Git worktree client plugin|
 |`pnpm run typecheck:browser`|Type-check the remote-browser client plugin (design 28)|
 |`pnpm run typecheck:host-git`|Type-check the in-instance Git worktree host package|
 |`pnpm run test:git`|Run the Git worktree client-plugin tests|
 |`pnpm run test:browser`|Run the remote-browser client-plugin tests (design 28)|
 |`pnpm run test:host-git`|Run the Git host core lifecycle and safety-guard tests|
-|`pnpm run dist:desktop:mac`|Package the macOS app (dmg + zip)|
-|`pnpm run dist:desktop:win`|Package the Windows app (nsis only; must run on Windows)|
+|`pnpm run dist:desktop:mac` (**ARCHIVED**)|Package the macOS app (dmg + zip; removed with the Electron freeze)|
+|`pnpm run dist:desktop:win` (**ARCHIVED**)|Package the Windows app (nsis only; must run on Windows; removed with the Electron freeze)|
 |`pnpm run cli -- <args>`|In-repo CLI thin shell (serve/status/connections/host logs)|
 |`pnpm run verify:i18n`|Fail when an EN↔ZH pair drifts (re-record with `-- --write`)|
 |`pnpm run verify:styles`|Upstream design-token conformance (S1 undeclared `--dsw-*` reference/S2 namespace overreach/S3 0.5px hairline/S4 literal fallback/S5 border-beside-shadow pairing/S6 dead declaration/S7 full-round radius pairing) across every chamber package and CSS-carrying file kind|

@@ -70,7 +70,7 @@ test('③ the beta build config seals extraMetadata; the dev/stable manifest car
   )
   // Wiring lock (the seal is useless if main never reads it): the packaged manifest key
   // must reach createUpdateController through normalizeSealedChannel.
-  const mainSource = readFileSync(join(pkgDir, 'main.ts'), 'utf8')
+  const mainSource = readFileSync(join(pkgDir, 'electron', 'main.ts'), 'utf8')
   assert.ok(
     mainSource.includes('sealedChannel: normalizeSealedChannel(desktopManifest.dshChamberUpdateChannel)'),
     'main.ts must pass the sealed manifest channel into the update controller',

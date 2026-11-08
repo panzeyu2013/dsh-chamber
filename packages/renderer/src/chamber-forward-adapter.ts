@@ -5,7 +5,7 @@
  * WHY IT EXISTS. The launcher (`@dsh-chamber/dsh-chamber-client-ui-browser`,
  * a deferred composite chunk) probes `ctx.chamberForward`, then a page-global
  * fallback that deliberately does not exist, and renders one row per record.
- * The trusted carrier is `window.dshChamber.forward` (packages/desktop/preload.cts
+ * The trusted carrier is `window.dshChamber.forward` (packages/desktop/electron/preload.cts
  * in Electron, the Swift shim on macOS), whose vocabulary is the wire contract
  * `@dsh-chamber/dsh-chamber-wire/forward`: `record` / `records`, seven states,
  * a closed table of snake_case error codes, and

@@ -1,4 +1,7 @@
 /**
+ * ARCHIVED (2026-11, Electron frozen; docs/progress/electron-frozen.md): CDP client for
+ * the archived Electron GUI walkthroughs; kept for revival.
+ *
  * Minimal Chrome DevTools Protocol client for the GUI acceptance toolbox.
  *
  * ZERO DEPENDENCIES: Node's built-in `fetch` (target discovery) and global

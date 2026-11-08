@@ -31,8 +31,10 @@ import { fileURLToPath } from 'node:url'
 
 export const GATE_REGISTRY_PATH = fileURLToPath(new URL('./gate-surfaces.json', import.meta.url))
 
-/** The ci.yml jobs release-proof pins; workflows may only place a gate on one of these. */
-export const CI_JOB_IDS = ['test', 'test-windows', 'test-windows-pack', 'test-macos', 'test-macos-pack']
+/** The ci.yml jobs release-proof pins; workflows may only place a gate on one of these.
+ *  The Windows/Linux desktop legs are ARCHIVED with the Electron flavor (2026-11,
+ *  docs/progress/electron-frozen.md) and no longer exist in ci.yml. */
+export const CI_JOB_IDS = ['test', 'test-macos', 'test-macos-pack']
 
 /** Modes the runner recognises; 'full' is derived, never stored. */
 const GATE_MODES = Object.freeze(['static', 'typecheck', 'tests'])
@@ -126,8 +128,8 @@ export function validateGateRegistry(registry, { scripts = rootScripts(), exists
         const filtered = /^pnpm --filter (\S+) run (\S+)/u.exec(command)
         const rootRun = /^pnpm run (\S+)/u.exec(command)
         if (filtered !== null) {
-          // A package script (build:preload) is resolved by the package manifest at run
-          // time; the filter must name a workspace package, never a path.
+          // A package script (build:control-plane) is resolved by the package manifest at
+          // run time; the filter must name a workspace package, never a path.
           if (!/^[@a-z0-9][@a-z0-9/._-]*$/u.test(filtered[1])) problems.push(at + ' pnpm --filter target invalid: ' + filtered[1])
         } else if (rootRun === null) {
           problems.push(at + ' pnpm command must be a run: ' + command)

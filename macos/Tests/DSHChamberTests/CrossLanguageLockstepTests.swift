@@ -72,7 +72,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
     /// shell-core 而不是 installRendererRecovery 体内，否则该文件假红且
     /// Electron 侧失去唯一文本钉。
     func testRendererRecoveryPolicyMatchesMainTs() throws {
-        let mainText = try source("packages/desktop/main.ts")
+        let mainText = try source("packages/desktop/electron/main.ts")
         guard let body = functionBody(mainText, named: "function installRendererRecovery") else {
             return XCTFail("main.ts 缺少 installRendererRecovery")
         }
@@ -300,7 +300,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
         XCTAssertLessThan(ready.lowerBound, spawn.lowerBound,
                           "pre-spawn 不得先于 ready 帧（会把 ready 推迟到 runtime 事务之后）")
 
-        let mainText = try source("packages/desktop/main.ts")
+        let mainText = try source("packages/desktop/electron/main.ts")
         guard let mStart = mainText.range(of: "await controlPlane.start();"),
               let mWindow = mainText.range(of: "const created = createMainWindow(rendererOrigin, true);"),
               let mTail = mainText.range(of: "void assembly.runStartupTail();") else {

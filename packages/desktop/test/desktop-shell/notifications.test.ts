@@ -866,7 +866,7 @@ test('S-44 describeNativeNotificationFailure: OS refusal/doubt is named honestly
 test('S-44 electron-edges routes every macOS delivery failure through the honest describer', () => {
   // electron-edges imports electron, so the wiring is pinned on comment-stripped
   // source: the raw outcome must be translated before core's claim release.
-  const source = stripComments(readFileSync(new URL('../../electron-edges.ts', import.meta.url), 'utf8'));
+  const source = stripComments(readFileSync(new URL('../../electron/electron-edges.ts', import.meta.url), 'utf8'));
   assert.match(source, /describeNativeNotificationFailure\(process\.platform, outcome\.reason, outcome\.error\)/,
     'the NOTIFY host leg must surface why the OS refused/never confirmed the banner');
   assert.match(source, /showNativeNotificationHonestly\(created\)/,

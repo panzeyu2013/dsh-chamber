@@ -449,7 +449,7 @@ function arrowFunctionBody(source: string, name: string): string {
 // guards in runtime-startup-host.ts). Read them like ipc-surface-mirror.test.ts's
 // MAIN_SIDE_FILES, or a relocated handler reports as "gone".
 const MAIN_SIDE_FILES = [
-  'main.ts', 'shell-core.ts', 'shell-ipc-runtime.ts', 'runtime-startup-host.ts',
+  'electron/main.ts', 'shell-core.ts', 'shell-ipc-runtime.ts', 'runtime-startup-host.ts',
 ]
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(import.meta.dirname, '..', '..', '..', '..', 'packages', 'desktop', file), 'utf8'))

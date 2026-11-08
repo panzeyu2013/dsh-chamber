@@ -1013,7 +1013,7 @@ for (const fork of FORKS) {
   // ② 宿主 manifest 接口仍做 producer ↔ preload ↔ renderer 字段集对照。
   const manifestSources = {
     producerSource: join(ROOT, 'packages', 'desktop', 'plugin-sync.ts'),
-    preloadSource: join(ROOT, 'packages', 'desktop', 'preload.cts'),
+    preloadSource: join(ROOT, 'packages', 'desktop', 'electron', 'preload.cts'),
     rendererSource: join(ROOT, 'packages', 'renderer', 'src', 'global.d.ts'),
   }
   const c14Host = manifestMirrorFindings(Object.fromEntries(

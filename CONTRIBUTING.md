@@ -13,7 +13,9 @@ git clone <REPO-URL> --recurse-submodules
 cd dsh-chamber
 node scripts/dev/ensure-harness-vendor.mjs   # 必须在 pnpm install 之前
 pnpm install
-pnpm run dev:desktop                     # 完整窗口（控制面 + dsh 前端 + 桌面壳）
+pnpm run dev:control-plane               # 仅控制面（现行默认开发面）
+pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift 壳构建链（现行出货；需要 macOS）
+# ARCHIVED（Electron 冻结；复活参考）：pnpm run dev:desktop   # 完整窗口（控制面 + dsh 前端 + 桌面壳）
 ```
 
 ## 测试
@@ -65,7 +67,7 @@ pnpm run test:release-workflow
 pnpm run smoke                                # PASS（或 SKIP，属正常）
 pnpm run build:renderer                       # 渲染层构建成功
 pnpm run build:gateway                        # gateway + dsh-runtime 构建成功
-pnpm --filter @dsh-chamber/desktop run build:preload
+# ARCHIVED（Electron 冻结；复活参考）：pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run verify:i18n
 pnpm run verify:styles
 ```

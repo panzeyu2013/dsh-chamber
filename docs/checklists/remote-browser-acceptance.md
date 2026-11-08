@@ -137,7 +137,8 @@ node scripts/gui-acceptance/run.mjs --attach --require-embed --embed-port <remot
    （`blob:` + `http://127.0.0.1:*` + `http://localhost:*` + 127.0.0.2–254 + 裸 `http:`/`https:`，共 258 源，
    头 ≤8KB），`frame-ancestors 'none'` 仍在；**不得**出现 `'self'`/`*`/`data:`。gateway/cli/standalone
    保持 v1 `frame-src blob:`（不得放宽；控制面缺省逐字节不变由单测锁）。
-7. **真机（双 flavor，同一批）**：Electron 打包态与 Swift .app 各一次——远端 dsh+ssh / gateway+ssh 的
+7. **真机（现行 = Swift .app；Electron 半边 ARCHIVED）**：Swift .app 一次（Electron 打包态随 flavor 冻结归档，
+   复活后再补跑）——远端 dsh+ssh / gateway+ssh 的
    loopback 页面内嵌/关闭释放；上游 system-browser 出口（上游不承诺 XFO/TLS 失败 UI）；任意 http(s)（含 https、
    公网）iframe 载入与证书错误形态；跨源 cookie/登录；`target=_blank`/下载的沙箱+壳安全门；iframe 内外键盘/焦点差异；
    远端页面不能改 chamber 状态（AC8 的 iframe 版）。Swift 的 ATS/子 frame 导航（任意 http(s)）/下载判据在
@@ -161,7 +162,7 @@ pnpm install --lockfile-only
 pnpm install --frozen-lockfile
 pnpm run typecheck:browser
 pnpm run build:renderer
-pnpm run build:preload
+# ARCHIVED（Electron 冻结）：pnpm run build:preload
 pnpm run build:sidecar
 pnpm run test:swift      # darwin
 pnpm run test:macos      # darwin

@@ -353,7 +353,7 @@ function typeAliasBody(source: string, typeName: string): string {
   return line.slice(eq + 1).replace(/\s+/g, ' ').trim()
 }
 
-const preload = readFileSync(join(ROOT, 'packages/desktop/preload.cts'), 'utf8')
+const preload = readFileSync(join(ROOT, 'packages/desktop/electron/preload.cts'), 'utf8')
 const renderer = readFileSync(join(ROOT, 'packages/renderer/src/global.d.ts'), 'utf8')
 const settings = readFileSync(join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src/global.d.ts'), 'utf8')
 const rendererApp = readFileSync(join(ROOT, 'packages/renderer/src/App.tsx'), 'utf8')
@@ -1055,6 +1055,26 @@ const mainHandleChannels = collectMainChannels(mainSideSource(), MAIN_HANDLE_CAL
 const mainSendChannels = collectMainSendChannels(mainSideSource())
 const preloadInvokeChannels = collectPreloadChannels(preload, 'invoke')
 const preloadOnChannels = collectPreloadChannels(preload, 'on')
+/** Swift-only A 桥白名单（docs/progress/electron-frozen.md §5.2）：这些 IPC_CHANNELS 键只有
+ *  Swift shim 实现、主进程（Electron 侧）按定义零注册——死键检查对它们豁免；
+ *  但 preload 不得暴露其通道（只有 shim 实现），且白名单键在 main 侧一旦出现引用
+ *  就判红（两侧都注册的通道属于常规通道，不得进白名单）。空表 = 全部 no-op。 */
+interface SwiftOnlyAddition {
+  channel: string
+  key: string
+  direction: 'invoke' | 'push'
+  namespace: string
+  method: string
+  reason: string
+}
+const swiftOnlyAdditions: SwiftOnlyAddition[] = (JSON.parse(
+  readFileSync(join(ROOT, 'packages/desktop/bridge-swift-only-additions.json'), 'utf8'),
+) as { entries: SwiftOnlyAddition[] }).entries
+const swiftOnlyKeys = new Set(swiftOnlyAdditions.map((entry) => entry.key))
+const swiftOnlyChannels = new Set(swiftOnlyAdditions.map((entry) => entry.channel))
+for (const channel of [...preloadInvokeChannels, ...preloadOnChannels]) {
+  assert.equal(swiftOnlyChannels.has(channel), false, `Swift-only 白名单通道不得出现在 preload：${channel}`)
+}
 
 test('every main-side ipcMain.handle / deps.ipc.handle channel is an IPC_CHANNELS constant (B8 — no raw main-side literals)', () => {
   const mainSource = mainSideSource()
@@ -1077,21 +1097,28 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
   }
 })
 
-test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 67/67 恰用一次由事实变断言)', () => {
+test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — Swift-only 白名单键豁免死键，仍不许双引用)', () => {
   // 每个 channel 常量必须在 MAIN_SIDE_FILES 的代码引用中各恰用一次：
   // 0 次 = 死 channel（注册/发送丢失），>1 次 = 意外双引用（镜像集合
-  // 相等看不见）。计数只认 `IPC_CHANNELS.<KEY>` 拼写，注释剥离用下方单趟状态机
-  // （正则助手只适用于短 interface 块，整文件 union 会吞掉真实代码）。
+  // 相等看不见）。Swift-only A 桥白名单键按定义只有 Swift shim 实现、主进程零注册，
+  // 因此豁免死键一侧；但白名单键在 main 侧一出现引用就红（两侧都注册 = 常规通道，
+  // 不得进白名单；生成器同样 loud）。计数只认 IPC_CHANNELS.<KEY> 拼写，注释剥离用
+  // 下方单趟状态机（正则助手只适用于短 interface 块，整文件 union 会吞掉真实代码）。
   const code = stripCommentsRobust(mainSideSource())
   const dead: string[] = []
   const duplicated: string[] = []
   for (const key of Object.keys(IPC_CHANNELS) as Array<keyof typeof IPC_CHANNELS>) {
     const occurrences = [...code.matchAll(new RegExp(`\\bIPC_CHANNELS\\.${key}\\b`, 'g'))].length
-    if (occurrences < 1) dead.push(key)
-    else if (occurrences > 1) duplicated.push(key)
+    if (swiftOnlyKeys.has(key)) {
+      if (occurrences > 0) duplicated.push(key)
+    } else if (occurrences < 1) {
+      dead.push(key)
+    } else if (occurrences > 1) {
+      duplicated.push(key)
+    }
   }
-  assert.deepEqual(dead, [], 'every IPC_CHANNELS constant must be referenced at least once by a main-side file')
-  assert.deepEqual(duplicated, [], 'every IPC_CHANNELS constant must be referenced exactly once on the main side')
+  assert.deepEqual(dead, [], 'every non-Swift-only IPC_CHANNELS constant must be referenced at least once by a main-side file')
+  assert.deepEqual(duplicated, [], 'every IPC_CHANNELS constant must be referenced exactly once on the main side (a Swift-only key must not be registered there at all)')
 })
 
 // ---------------------------------------------------------------------------

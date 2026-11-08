@@ -13,7 +13,9 @@ git clone <REPO-URL> --recurse-submodules
 cd dsh-chamber
 node scripts/dev/ensure-harness-vendor.mjs   # must run before pnpm install
 pnpm install
-pnpm run dev:desktop                     # full window (control plane + dsh frontend + desktop shell)
+pnpm run dev:control-plane               # control plane only (the current default dev surface)
+pnpm run build:sidecar && pnpm run build:swift-app   # macOS Swift shell build chain (the shipped artifact; needs macOS)
+# ARCHIVED (Electron frozen; revival reference): pnpm run dev:desktop   # full window (control plane + dsh frontend + desktop shell)
 ```
 
 ## Testing
@@ -65,7 +67,7 @@ pnpm run test:release-workflow
 pnpm run smoke                                # PASS (or SKIP, which is normal)
 pnpm run build:renderer                       # renderer build succeeds
 pnpm run build:gateway                        # gateway + dsh-runtime build succeeds
-pnpm --filter @dsh-chamber/desktop run build:preload
+# ARCHIVED (Electron frozen; revival reference): pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run verify:i18n
 pnpm run verify:styles
 ```

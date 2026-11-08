@@ -52,7 +52,9 @@ test('the shipped registry resolves to the documented per-mode counts', () => {
     return [modes.static.length, modes.typecheck.length, modes.tests.length, modes.full.length]
   }
   assert.deepEqual(counts('linux'), [21, 13, 23, 57], 'linux mode counts drifted: a gate was added/removed without updating this golden')
-  assert.deepEqual(counts('darwin'), [21, 13, 31, 65], 'darwin mode counts drifted')
+  // 2026-11 Electron freeze: the two darwin-only Electron packaging gates left the
+  // default tests set (they stay archived in the tree, not in the gate registry).
+  assert.deepEqual(counts('darwin'), [21, 13, 29, 63], 'darwin mode counts drifted')
   const linux = deriveModes(registry, { platform: 'linux' })
   assert.deepEqual(linux.full, [...linux.static, ...linux.typecheck, ...linux.tests], 'full must be exactly static+typecheck+tests')
 })
@@ -67,11 +69,20 @@ test('the gate identity surface is a golden (id -> command, and the proof set)',
   const registry = loadGateRegistry()
   const pairs = registry.gates.map(gate => gate.id + ' ' + gate.command)
   const hash = createHash('sha256').update(JSON.stringify(pairs)).digest('hex').slice(0, 16)
-  assert.equal(hash, '56b1974885820359', 'a gate was added, removed, renamed or re-commanded: update this golden in the same change')
+  assert.equal(hash, 'cf504c952be17801', 'a gate was added, removed, renamed or re-commanded: update this golden in the same change')
   assert.deepEqual(proofGateIds(registry), ['policy.workflow-pins', 'upstream.registry', 'upstream.anchors'],
     'the proof set is a release contract; changing it must be a deliberate edit of this assertion')
 })
 
+test('the archived Electron packaging gates are not part of the default gate set', () => {
+  // 2026-11 Electron freeze: the Electron compiled-artifact smoke and the preload
+  // build stay in the tree as archived tools, but the default tests mode must not
+  // run them any more (docs/progress/electron-frozen.md).
+  const registry = loadGateRegistry()
+  for (const id of ['macos.preload-build', 'macos.electron-artifacts']) {
+    assert.equal(registry.gates.some(gate => gate.id === id), false, id + ' must stay out of the gate registry while the Electron flavor is frozen')
+  }
+})
 test('a proof gate must be placed on release validation, on a legal ci job and on both surfaces', () => {
   const base = {
     id: 'arch.proof', title: 'Proof', command: 'verify:import-cycles', modes: ['static'], tier: 'policy',

@@ -222,7 +222,7 @@ test('G21 renderer recovery: crash and hang gates', () => {
 test('G21 renderer recovery: main.ts routes every decision through the shared policy', () => {
   // The main process cannot be imported here (it loads electron); this lock keeps
   // the wiring on the tested policy instead of letting the inline decision grow back.
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   assert.match(main, /noteRendererReload\(reloadBudget, Date\.now\(\)\)/)
   assert.match(main, /shouldReloadAfterCrash\(details\.reason, quitRequested\)/)
   assert.match(main, /shouldReloadAfterChildProcessGone\(details\.type, details\.reason, quitRequested\)/)
@@ -297,7 +297,7 @@ test('D7: the skip set stays exactly the three progress phases', () => {
 // to the pure decisions whose matrices live in chamber-settings.test.ts. The
 // source is comment-stripped so a commented-out line can never satisfy a contract.
 
-const desktopMainCode = stripComments(readFileSync(new URL('../../main.ts', import.meta.url), 'utf8'))
+const desktopMainCode = stripComments(readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8'))
 
 /** The body block of a function whose signature starts with `signature`. The
  *  body brace is the LAST `{` before the end of the signature line (a return

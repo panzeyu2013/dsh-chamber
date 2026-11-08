@@ -1,5 +1,9 @@
 name: Release
 
+# ARCHIVED SCOPE (2026-11 Electron freeze): the Electron/Windows/Linux publishing flow described
+# in the paragraphs below is frozen; only build-swift + build-gateway publish. Read the ARCHIVED
+# block further down (before the `on:` section) and docs/progress/electron-frozen.md first.
+
 # Tag-triggered (v*) or manual (workflow_dispatch) desktop release, modeled
 # on OpenChamber's release.yml: an ubuntu job creates a draft GitHub Release
 # first, per-platform jobs build and PUBLISH their artifacts into it
@@ -26,7 +30,8 @@ name: Release
 # APPLE_APP_SPECIFIC_PASSWORD/APPLE_TEAM_ID); the verify step then fails closed
 # unless the .app carries a Developer ID signature and a valid stapled
 # notarization ticket, so a missing/misconfigured secret can never publish an
-# ad-hoc build as a formal release (finalize waits on build-macos). Dry runs
+# ad-hoc build as a formal release (native finalize waits on build-swift; the
+# Electron mac leg is ARCHIVED and skipped — docs/progress/electron-frozen.md). Dry runs
 # stay ad-hoc tolerant (no secrets → ad-hoc via the afterPack hook, which is a
 # structurally valid signature so no "app is damaged" on Gatekeeper-relaxed
 # systems; a default Gatekeeper still requires right-click/open or "allow
@@ -34,19 +39,22 @@ name: Release
 # with a SmartScreen warning (documented tradeoff, design 11 §7); the macOS
 # INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
 #
-# ---------------------------------------------------------------- TEMPORARY SCOPE
-# Native + gateway publication (temporary): of the platform legs, ONLY
-# build-swift and build-gateway publish right now. The three other publishing
-# legs — build-macos, build-windows and build-linux — carry a job-level
-# `if: ${{ false }}` and are skipped; finalize-release tolerates that skipped
+# ---------------------------------------------------------------- ARCHIVED SCOPE
+# Electron flavor frozen (2026-11 user ruling; scope + revival checklist in
+# docs/progress/electron-frozen.md). The Electron publication paragraphs above
+# describe the ARCHIVED path, not the current release: of the platform legs, ONLY
+# build-swift and build-gateway publish. The three Electron publishing legs —
+# build-macos, build-windows and build-linux — carry a job-level
+# `if: ${{ false }}` and stay skipped; finalize-release tolerates that skipped
 # state while still refusing to publish after a failure, a cancellation or a red
 # validation. A v* tag (or a manual dispatch) therefore produces a release whose
 # assets are the native ones (zip / dmg / delta / signed appcast) plus the
 # gateway tarball with its SHA256: no Electron artifact and no Electron update
-# feed is built, uploaded or published. Restore the full platform release by
-# deleting the three job-level `if: ${{ false }}` lines and the `if:` on
-# finalize-release — every site carries the same TEMPORARY marker pointing back
-# here.
+# feed is built, uploaded or published.
+# Every site below carries the same ARCHIVED marker pointing back here. Do NOT
+# delete the `if: ${{ false }}` guards or otherwise "restore" the Electron legs
+# from these comments: re-opening the frozen scope is an explicit user ruling that
+# follows the revival checklist in docs/progress/electron-frozen.md.
 
 on:
   push:
@@ -396,23 +404,24 @@ jobs:
       # release validation path instead of deferring it to the macOS packaging lane.
       - name: Renderer page bundle carries the SVG scope code
         run: node scripts/gates/assert-scoper-artifact.mjs
-      # Desktop packaging sub-steps — ci.yml's "Desktop build sub-steps" gate:
-      # a release must not be the first place a broken
-      # control-plane/preload/host-package build surfaces.
+      # Desktop packaging sub-steps shared with the shipped Swift sidecar —
+      # ci.yml's "Desktop build sub-steps" gate: a release must not be the first
+      # place a broken control-plane/host-package build surfaces. The Electron
+      # preload build left this set with the 2026-11 Electron freeze.
       - name: Desktop build sub-steps
         run: |
           pnpm --filter @dsh-chamber/desktop run build:control-plane
-          pnpm --filter @dsh-chamber/desktop run build:preload
           pnpm --filter @dsh-chamber/desktop run build:host-graph-package
       # Release CI proof: the release must PROVE its commit already passed the full
-      # chain on main, including the windows and macOS legs release.yml has no
-      # equivalent of. It runs at the END of the heavy chain on purpose: the proof
+      # chain on main, including the macOS legs release.yml has no equivalent of
+      # (the Windows/Linux desktop legs are archived with the Electron flavor). It
+      # runs at the END of the heavy chain on purpose: the proof
       # polls the ci.yml run for this SHA (bounded), so doing the local validation
       # first overlaps that wait with real work instead of idling on the API — the
       # 2026-09 dry run spent 366s in this step while ci.yml was still running. A
       # commit main never validated still fails here, and one still in flight is
       # waited for; the step needs only this checked-out script (no node_modules).
-      - name: Release commit passed CI on main (linux + windows + macOS legs)
+      - name: Release commit passed CI on main (linux + macOS legs)
         env:
           RELEASE_SHA: ${{ github.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -461,8 +470,9 @@ jobs:
     # plus SHA256. Runs in PARALLEL with the desktop build legs:
     # it packs from the same tag-bound SHA and downloads no
     # desktop artifact, so nothing serializes on the platform legs. Public
-    # atomicity is enforced by finalize-release, which needs every build leg
-    # (gateway + macos + windows + linux) before flipping the draft public —
+    # atomicity is enforced by finalize-release, which needs every build leg —
+    # gateway + build-swift, plus the ARCHIVED Electron mac/windows/linux legs
+    # (skipped by their own `if: false`) — before flipping the draft public —
     # a failed leg keeps the release private, and the next run's create-release
     # stale-draft replacement clears any orphan assets. npm publication is
     # deliberately out of scope and has no dormant workflow step here.
@@ -549,9 +559,10 @@ jobs:
 
 
   build-macos:
-    # TEMPORARY native-only publication (see the header note): the Electron mac
-    # zip/dmg and its update feed do not publish right now. Delete this
-    # condition to re-enable.
+    # ARCHIVED Electron mac publication (see the header note): the Electron
+    # flavor is frozen (docs/progress/electron-frozen.md), so the mac zip/dmg and
+    # its update feed no longer ship. The job-level `if: ${{ false }}` keeps this
+    # job skipped — do not delete it outside an explicit user scope ruling.
     if: ${{ false }}
     needs: [create-release]
     permissions:
@@ -592,8 +603,9 @@ jobs:
         # 下载失败或 sha256 不符即 job 红（绝不静默退回空载荷——extraResources 会把
         # 缺件或旧载荷原样打进 .app）。
         run: node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64
-      # electron-builder 工具链与 Electron 发行包缓存（同 ci.yml 的两条排练腿）：发布腿
-      # 每平台都会冷下载 Electron 发行包与 dmg/nsis 工具链；键含 package.json 哈希。
+      # Electron 归档腿缓存：ci.yml 已无这些排练步（Electron 冻结，见
+      # docs/progress/electron-frozen.md），本 job 复活时才会冷下载 Electron 发行包与
+      # dmg/nsis 工具链；键含 package.json 哈希。
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -820,9 +832,10 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
 
   build-windows:
-    # TEMPORARY native-only publication (see the header note): the unsigned
-    # Windows exe and its update feed do not publish right now. Delete this
-    # condition to re-enable.
+    # ARCHIVED Electron Windows publication (see the header note): the Electron
+    # flavor is frozen (docs/progress/electron-frozen.md), so the unsigned exe
+    # and its update feed no longer ship. The job-level `if: ${{ false }}` keeps
+    # this job skipped — do not delete it outside an explicit user scope ruling.
     if: ${{ false }}
     needs: [create-release]
     permissions:
@@ -855,7 +868,9 @@ jobs:
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
 
-      # electron-builder 工具链与 Electron 发行包缓存（同 ci.yml 的 Windows 排练腿）。
+      # Electron 归档腿缓存：ci.yml 已无 Windows 排练步（Electron/Windows 冻结，见
+      # docs/progress/electron-frozen.md）；本 job 复活时才会冷下载 Electron 发行包与
+      # NSIS 工具链，键含 package.json 哈希。
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -909,9 +924,10 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
 
   build-linux:
-    # TEMPORARY native-only publication (see the header note): the AppImage and
-    # its update feed do not publish right now. Delete this condition to
-    # re-enable.
+    # ARCHIVED Electron Linux publication (see the header note): the Electron
+    # flavor is frozen (docs/progress/electron-frozen.md), so the AppImage and
+    # its update feed no longer ship. The job-level `if: ${{ false }}` keeps this
+    # job skipped — do not delete it outside an explicit user scope ruling.
     if: ${{ false }}
     needs: [create-release]
     permissions:
@@ -1968,24 +1984,26 @@ jobs:
 
   finalize-release:
     # needs keeps the full leg set (the publish contract): the three Electron
-    # legs are currently skipped by their own `if: ${{ false }}` while the
-    # gateway and Swift legs publish — temporary native + gateway scope, see the
-    # header note.
+    # legs are ARCHIVED and stay skipped by their own `if: ${{ false }}` while
+    # the gateway and Swift legs publish — see the header note and
+    # docs/progress/electron-frozen.md.
     needs: [validation, create-release, build-gateway, build-macos, build-windows, build-linux, build-swift]
-    # TEMPORARY: a skipped dependency would normally skip this job too, which
+    # ARCHIVED scope: a skipped dependency would normally skip this job too, which
     # would also drop the native publication. `always()` is what bypasses that
     # dependency gate (the documented way to run a job whose needs were skipped);
     # `!cancelled()` keeps a cancelled run from publishing, and the explicit
     # needs checks keep the gate fail-closed — the three load-bearing jobs must
     # have succeeded and no leg may have failed, so a red validation (or a leg
-    # that fails once it is re-enabled) cannot publish. Deleting this line
-    # restores the default skip semantics.
+    # that fails if the frozen scope is re-opened) cannot publish.
     if: ${{ always() && !cancelled() && needs.validation.result == 'success' && needs.create-release.result == 'success' && needs.build-swift.result == 'success' && needs.build-gateway.result != 'failure' && needs.build-macos.result != 'failure' && needs.build-windows.result != 'failure' && needs.build-linux.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Drop mac zip.blockmap assets from the draft release
+        # ARCHIVED with the Electron flavor: with build-macos skipped no
+        # .blockmap is uploaded, so this step is a no-op today; it is kept so
+        # re-opening the frozen scope needs no workflow edit.
         # electron-builder hardcodes the mac zip
         # target's isWriteUpdateInfo=true (MacPackager.createTargets), so the
         # mac leg always uploads a .zip.blockmap sidecar. The feeds never

@@ -5,6 +5,12 @@
 
 > English: [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md)
 
+> **版本范围（2026-11 用户裁决）**：唯一出货 flavor = macOS Swift 原生壳；Electron flavor 已冻结归档
+> （文件保留、可复活；Windows/Linux 桌面腿冻结、不发布）。默认开发 / 门禁 / 发布只以 macOS Swift 与共享
+> 契约为范围；下方架构图中的「Electron 窗口 / 桌面主进程」按**归档参考**阅读，现行壳入口是 `macos/` +
+> sidecar（`packages/desktop/sidecar-entry.ts`）。范围与复活清单见
+> [progress/electron-frozen.md](progress/electron-frozen.md)。
+
 ## 1. 架构总览
 
 ```
@@ -43,7 +49,7 @@ Git worktree由chamber-bundled client插件与每实例内host插件配对；控
 |-|-|
 |`packages/control-plane`|连接管理器核心：web profile宿主托管、host包seed/overlay、管理REST、每实例反代、静态前端服务|
 |`packages/renderer`|自建dsh前端（源码复用）：入口构建、纯dsh首屏桥接宿主、N-ctx编排、启动图清单|
-|`packages/desktop`|Electron壳：单frame、正交目标/传输provider、远端ready-time host包分发、实例注册表、IPC、运行时管理与原生边缘|
+|`packages/desktop`|共享宿主业务核心（host-assembly/shell-core/sidecar 装配）+ 冻结的 Electron 入口（electron/，归档参考）；updater 纯函数与 sidecar 共用|
 |`packages/cli`|CLI薄壳（serve/status/connections/host logs）|
 |`packages/gateway`|独立认证server形态（design 17）：强制认证公网边界+单本地dsh反代+运行时管理/凭据面板/种子注册表|
 |`packages/dsh-runtime`|desktop/gateway共用的纯Node dsh版本树、安装、激活、探针与两阶段回滚核心；状态仍归两宿主|
@@ -68,7 +74,7 @@ Git worktree由chamber-bundled client插件与每实例内host插件配对；控
 - Node.js 24+（推荐LTS；TypeScript源码经Node原生类型擦除直接运行，见 `.nvmrc`）
 - pnpm≥11（包管理器；锁文件 `pnpm-lock.yaml`）
 - git
-- macOS（`dist:desktop:mac` 打包dmg/zip需要）
+- macOS（Swift 原生壳构建/打包与 `test:macos` 需要；**Electron 的 `dist:desktop:mac` dmg/zip 打包随 flavor 冻结、不发布**，复活命令见 `progress/electron-frozen.md` §6）
 - dsh宿主可选——仅集成冒烟测试需要，未安装时自动SKIP
 
 ### 2.2 克隆与安装
@@ -100,23 +106,32 @@ pnpm install
 pnpm --filter @dsh-chamber/desktop run bundle:dsh   # 默认精确 pin；覆盖也必须是精确 semver
 ```
 
-`bundle:dsh` 也由 `build:desktop`/`dist:desktop:mac` 自动执行——可直接跳到运行或打包。
+`bundle:dsh` 也由 `build:desktop` 自动执行（Electron 的 `dist:desktop:mac` 已随冻结移除）——可直接跳到运行或打包。
 
 ## 3. 运行
 
+> **（Electron 冻结，2026-11）** `pnpm run dev:desktop` 已从默认脚本面移除；现行开发面 = `pnpm run dev:control-plane`
+> 与 macOS Swift 壳构建链（`build:sidecar` → `build:swift-app`）。下列 Electron dev 命令保留为复活参考
+> （见 [progress/electron-frozen.md](progress/electron-frozen.md) §6）。
+
 ```bash
 pnpm run dev:control-plane   # 仅控制面——http://127.0.0.1:17500（管理 REST + 静态前端）
-pnpm run dev:desktop         # 完整窗口：控制面 + dsh 前端 + 桌面壳
+# ARCHIVED（Electron 冻结）：pnpm run dev:desktop   # 完整窗口：控制面 + dsh 前端 + 桌面壳（复活参考）
 ```
 
 ## 4. 构建与打包
 
+> **（Electron 冻结，2026-11）** 本节的 `dist:desktop:*`（dmg/zip/NSIS）已从默认脚本面移除、不再产出；
+> `build:desktop` 仍现行（Swift sidecar 复用其 control-plane / renderer / host 包产物，且不再含 preload 步骤）。
+> Electron 打包命令与 electron-builder 说明保留为复活参考（见 [progress/electron-frozen.md](progress/electron-frozen.md) §6）。
+
 ```bash
 pnpm run build:host-packages # 构建 host-graph / host-git-worktree / host-archive-cleanup / host-open-in 四个宿主包
 pnpm run build:renderer      # 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码）
-pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复制 → preload → bundle:dsh
-pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
-pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows 上运行——dsh 运行时封装按平台区分）
+pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复制 → bundle:dsh（Electron preload 步骤已随冻结移除）
+# ARCHIVED（Electron 冻结）：
+# pnpm run dist:desktop:mac  # 打包 macOS 应用（dmg + zip）
+# pnpm run dist:desktop:win  # 打包 Windows 应用（仅 nsis；须在 Windows 上运行）
 ```
 
 打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。正式发布的macOS腿须具备五项Apple/Developer ID凭据，缺项即在任何GitHub Release变更前fail-closed；构建后还须过Developer ID签名、公证、stapler与spctl校验，任一失败阻断draft公开finalize。`workflow_dispatch dry_run` 即使配置正式secrets也无条件清空签名/公证环境与 `GH_TOKEN`，用 `--publish=never`，不创建/修改Release、不上传资产，并由afterPack钩子产生ad-hoc签名验证包。Windows首版仍未签名（SmartScreen警告，design 11 §7的明确权衡）。
@@ -125,7 +140,9 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows
 
 > Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
 
-### Windows 支持矩阵（design 23,推进中）
+### Windows 支持矩阵（design 23；**ARCHIVED：Windows 腿冻结、不发布、不排期**）
+
+> 下表为冻结前状态，保留为复活基线；当前不排期、不发布（见 [progress/electron-frozen.md](progress/electron-frozen.md)）。
 
 |面|状态|
 |-|-|
@@ -140,12 +157,17 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows
 
 ## 5. CI 与发布
 
+> **（Electron 冻结，2026-11）** 现行 CI = `ci.yml` 的 `test` / `test-macos` / `test-macos-pack`（Windows job 已删除、
+> Electron 打包排练已移除）；现行发布 = `release.yml` 的 `build-swift` + `build-gateway`（三条 Electron 发布腿以
+> job 级 `if: ${{ false }}` 恒 skipped + ARCHIVED 头注）。下文涉及 Electron/Windows 发布与「多 job 全覆盖」的表述为
+> **冻结前形态**；复活见 [progress/electron-frozen.md](progress/electron-frozen.md) §6。
+
 - `.github/workflows/ci.yml`：每次push/PR跑纯验证链（frozen install →根/gateway/runtime/host包/client插件typecheck→控制面/runtime/desktop/gateway/renderer/client/host单测〔含 `test:git`、`test:host-git`〕→ workflow action SHA门禁（`release-preflight --actions-only`起）→ smoke〔未捆绑运行时SKIP〕→ renderer/host/desktop子构建→ gateway打包安装冒烟〔`pack` →临时prefix安装→ `gateway --help`〕），不产出发布包；桌面打包与真实smoke在 `release.yml`（tag/手动触发）。
-- `.github/workflows/release.yml`：产出可分发版本——推送 `v*` tag（或手动运行，版本输入不带 `v`，可选dry-run）。发布版本仅限canonical stable `X.Y.Z` 与beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他prerelease fail closed；stable用默认desktop打包配置且只发布 `latest.yml`/`latest-mac.yml`，beta用独立 `packages/desktop/electron-builder.beta.yml` 且只发布 `beta.yml`/`beta-mac.yml`，两通道资产互斥。正式流程先建draft，构建macOS arm64（v1仅Apple Silicon）与Windows x64，完成上述macOS fail-closed校验后才翻转公开；dry-run全程零Release写入。版本断言经 `release-preflight --versions-only` 动态覆盖根、全部非fork chamber包及三个fork基线；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。`validation` job 在本地链与构建之后、第三方声明校验之前运行发布提交的 CI 证明（刻意放在重活之后：证明轮询该 SHA 的 ci.yml 运行，先做本地校验可与等待重叠；`scripts/release/verify-release-ci-proof.mjs`：该commit在 `main` 上须有一条已完成且成功的 `ci.yml` push运行，`test`、`test-windows`、`test-windows-pack`、`test-macos`、`test-macos-pack` 五个job都success（两条契约腿各自拆出一个并行的打包job：排练/装配步骤仍被证明按名字钉住，删掉或判类跳过一样红灯）；运行中有界等待，失败或未经main一律fail closed）；本地链（gateway/runtime typecheck+tests、关键control-plane/desktop/renderer/plugin/CLI/policy门禁）在它之前完成；`build-gateway` 只在GitHub Release发布经干净临时前缀安装冒烟的 `.tgz` 与同名 `.tgz.sha256`，npm publish/dist-tag延后。
+- `.github/workflows/release.yml`：产出可分发版本——推送 `v*` tag（或手动运行，版本输入不带 `v`，可选dry-run）。发布版本仅限canonical stable `X.Y.Z` 与beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他prerelease fail closed；stable用默认desktop打包配置且只发布 `latest.yml`/`latest-mac.yml`，beta用独立 `packages/desktop/electron-builder.beta.yml` 且只发布 `beta.yml`/`beta-mac.yml`，两通道资产互斥。正式流程先建draft，构建macOS arm64（v1仅Apple Silicon）与Windows x64，完成上述macOS fail-closed校验后才翻转公开；dry-run全程零Release写入。版本断言经 `release-preflight --versions-only` 动态覆盖根、全部非fork chamber包及三个fork基线；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。`validation` job 在本地链与构建之后、第三方声明校验之前运行发布提交的 CI 证明（刻意放在重活之后：证明轮询该 SHA 的 ci.yml 运行，先做本地校验可与等待重叠；`scripts/release/verify-release-ci-proof.mjs`：该commit在 `main` 上须有一条已完成且成功的 `ci.yml` push运行，`test`、`test-macos`、`test-macos-pack` 三个job都success（**Windows/Linux 腿随 Electron 冻结已 ARCHIVED**；`test-macos-pack` 的装配/排练步骤仍被证明按名字钉住，删掉或判类跳过一样红灯）；运行中有界等待，失败或未经main一律fail closed）；本地链（gateway/runtime typecheck+tests、关键control-plane/desktop/renderer/plugin/CLI/policy门禁）在它之前完成；`build-gateway` 只在GitHub Release发布经干净临时前缀安装冒烟的 `.tgz` 与同名 `.tgz.sha256`，npm publish/dist-tag延后。
 - 发布机械门禁（起）：`pnpm run release:preflight <版本>`（`scripts/release/release-preflight.mjs`）——版本统一性（含fork副本与安装器dsh常量）、changelog中英对等、i18n、workflow action SHA上游可解析、冲突标记、git干净、frozen install、test:release-workflow；发布checklist §1.5/§7要求commit前与push前各跑一次。
 - 发布流程（优化）：本地preflight +全量测试套件（精确发布提交）→
   commit+tag→workflow_dispatch dry_run先行（新增/修改的workflow/脚本路径/action SHA必须先dry-run验证过一次）→正式tag push。详细步骤见发布checklist。
-- 推送路径的判类：`ci.yml` 的linux链按事件分档——分支push/PR：纯文档变更（`docs/**`、根级prose白名单；判类器 `scripts/gates/classify-ci-changes.mjs`）只跑file-only门（action SHA门禁、上游触点登记表/anchors、release-workflow策略、工具单测（i18n 与设计 token 是 local-only 门，只在本地 check:static 跑，见 scripts/gates/gate-surfaces.json 的 surfaces.ci=false）），跳过install/typecheck /单测/构建/打包冒烟与windows腿；代码变更全跑。tag push：`ci.yml` 没有tag触发（CI触发策略修订）——发布改为证明而非重跑：`release.yml` 的 `validation` 跑 `verify-release-ci-proof.mjs`，要求该提交在 `main` 上已有成功的完整 `ci.yml` 运行（linux `test`、`test-windows`+`test-windows-pack`、`test-macos`+`test-macos-pack` 各腿连同其承载步都绿），运行中有限等待、失败即阻断。旧形态（linux链让位、windows腿在tag上照跑）既重复windows运行，又留下漏洞——给不在 `main` 上的提交打tag会跳过整条linux链；该漏洞现由证明堵住。release.yml与ci.yml的门禁对齐契约仍由 `release-workflow-policy.test.mjs` 从ci.yml派生断言（往ci.yml加门禁而忘了release.yml会直接红灯）。判类器fail-safe：无法证明是prose一律按代码跑；prose白名单被policy test冻结，放宽须显式改该测试。
+- 推送路径的判类：`ci.yml` 的linux链按事件分档——分支push/PR：纯文档变更（`docs/**`、根级prose白名单；判类器 `scripts/gates/classify-ci-changes.mjs`）只跑file-only门（action SHA门禁、上游触点登记表/anchors、release-workflow策略、工具单测（i18n 与设计 token 是 local-only 门，只在本地 check:static 跑，见 scripts/gates/gate-surfaces.json 的 surfaces.ci=false）），跳过install/typecheck /单测/构建/打包冒烟与 Windows 腿（ARCHIVED）；代码变更全跑。tag push：`ci.yml` 没有tag触发（CI触发策略修订）——发布改为证明而非重跑：`release.yml` 的 `validation` 跑 `verify-release-ci-proof.mjs`，要求该提交在 `main` 上已有成功的完整 `ci.yml` 运行（linux `test`、`test-macos`、`test-macos-pack` 各腿连同其承载步都绿；**Windows/Linux 腿 ARCHIVED**），运行中有限等待、失败即阻断。旧形态（linux链让位、windows腿在tag上照跑）既重复windows运行，又留下漏洞——给不在 `main` 上的提交打tag会跳过整条linux链；该漏洞现由证明堵住。release.yml与ci.yml的门禁对齐契约仍由 `release-workflow-policy.test.mjs` 从ci.yml派生断言（往ci.yml加门禁而忘了release.yml会直接红灯）。判类器fail-safe：无法证明是prose一律按代码跑；prose白名单被policy test冻结，放宽须显式改该测试。
 - `ci.yml` 用 `concurrency: ci-${{ github.ref }}` 串行化同ref的推送，且**只**取消PR的旧运行：分支推送排队——纯文档推送若取消前一轮，会让被跟随的代码提交失去验证（判类器已让文档推送不跑重活，但没有"零验证"档）。`release.yml` 保持 `release-publish`+`cancel-in-progress: false`，绝不取消可能已建draft的发布。
 -两个workflow都在install之前按 `harness.commit` 固定提交引导vendor源码树。
 
@@ -156,7 +178,7 @@ packages/
   control-plane/            控制面：宿主托管、管理 REST、
                             每实例反代、静态前端服务
   renderer/                 自建 dsh 前端（源码复用 + 桥接宿主 + N-ctx）
-  desktop/                  Electron 壳：单 frame、正交目标/传输 providers、实例注册表、IPC
+  desktop/                  桌面宿主业务核心（Swift sidecar 复用）+ 冻结的 Electron 入口（electron/，归档参考）
   cli/                      CLI 薄壳
   gateway/                  独立认证 server 形态 + 单本地 dsh + 运行时管理/凭据面板/种子注册表
   dsh-runtime/              desktop/gateway 共用的纯 Node dsh 运行时管理核心
@@ -208,23 +230,23 @@ vendor/
 |脚本|说明|
 |-|-|
 |`pnpm run dev:control-plane`|启动控制面（管理REST+静态前端），端口17500|
-|`pnpm run dev:desktop`|Electron壳：完整窗口（控制面+ dsh前端+桌面壳）|
-|`pnpm run acceptance:gui`|GUI验收（`--live` 只读探测／`--attach`／`--dev` 走查）；流程见 `docs/checklists/gui-acceptance-checklist.md`，边界见 `scripts/gui-acceptance/README.md`|
+|`pnpm run dev:desktop`（**ARCHIVED**：已从默认脚本面移除，复活参考）|Electron壳：完整窗口（控制面+ dsh前端+桌面壳）|
+|`pnpm run acceptance:gui`|GUI验收（`--live` 只读探测；`--attach`/`--dev` 默认 `--flavor native`；Electron CDP 档 `--flavor electron` 已 **ARCHIVED**）；流程见 `docs/checklists/gui-acceptance-checklist.md`|
 |`pnpm run test:gui-acceptance`|工具箱纯判据层单测（= `test:scripts:gui-acceptance`；CI跑；GUI驱动层不进CI）|
 |`pnpm run test:scripts`|`scripts/` 下全部单测单入口（组：gates/upstream/release/gui-acceptance；清单与命名规则见 `scripts/README.md` §分类规则3，兼容别名见同条）|
 |`pnpm run build:renderer`|构建dsh前端bundle|
 |`pnpm run build:host-graph`|构建host-graph包（esbuild）|
 |`pnpm run build:host-git`|构建实例内Git worktree host包（esbuild）|
 |`pnpm run build:host-packages`|依次构建host-graph / host-git-worktree / host-archive-cleanup / host-open-in四个宿主包|
-|`pnpm run build:desktop`|四个host包+ renderer +控制面编译/host包复制+ preload+dsh封装|
+|`pnpm run build:desktop`|四个host包+ renderer +控制面编译/host包复制+dsh封装（Electron preload 步骤已随冻结移除）|
 |`pnpm run typecheck:git`|类型检查Git worktree客户端插件|
 |`pnpm run typecheck:browser`|类型检查远端浏览器客户端插件（design 28）|
 |`pnpm run typecheck:host-git`|类型检查实例内Git worktree host包|
 |`pnpm run test:git`|运行Git worktree客户端插件测试|
 |`pnpm run test:browser`|运行远端浏览器客户端插件测试（design 28）|
 |`pnpm run test:host-git`|运行Git host core生命周期与安全守卫测试|
-|`pnpm run dist:desktop:mac`|打包macOS应用（dmg+zip）|
-|`pnpm run dist:desktop:win`|打包Windows应用（仅nsis；须在Windows上运行）|
+|`pnpm run dist:desktop:mac`（**ARCHIVED**）|打包macOS应用（dmg+zip；已随 Electron 冻结移除）|
+|`pnpm run dist:desktop:win`（**ARCHIVED**）|打包Windows应用（仅nsis；须在Windows上运行；已随 Electron 冻结移除）|
 |`pnpm run cli -- <args>`|仓库内CLI薄壳（serve/status/connections/host logs）|
 |`pnpm run verify:i18n`|EN ↔中文对漂移时报错（同步后用 `-- --write` 重新记录）|
 |`pnpm run verify:styles`|上游设计token合规门（S1未声明 `--dsw-*` 引用/ S2命名空间越界/ S3 0.5px发丝线/ S4字面量fallback/S5边框+阴影配对/ S6死声明/ S7全圆角配对），扫全部chamber包与可承载CSS的文件类型|

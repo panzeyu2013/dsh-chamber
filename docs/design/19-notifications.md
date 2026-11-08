@@ -1,10 +1,14 @@
 # 19 · 桌面通知与未读徽标（会话 complete / ask / request，设置可选项）
 
+> **范围横幅（2026-11 用户裁决）**：Electron 呈现腿（`Notification` 主进程实现）**已冻结归档**；
+> 决策/回执纪律仍在 core（`notifications.ts`），现行宿主腿 = Swift `UNUserNotificationCenter`（design 25）。
+> 本文中 Electron 专属描述保留为历史/复活参考，见 `../progress/electron-frozen.md`。
+
 > **桌面原生通知与未读徽标**——会话 complete / ask / request 时
 > 推送原生通知，Dock/任务栏图标显示未读红气泡（均为主进程裁决的设置可选项）；检测端
 > 复用 renderer 既有事实通道，控制面零改动、无新 host 插件；**未完成门禁**：macOS
 > 权限/拒绝行为的**打包态实机走查**（拒绝态设置页提示与「打开系统设置」恢复入口存在，
-> 见 §3.3/§4）、Windows 任务栏 overlay 门控（design 23 排期）——见
+> 见 §3.3/§4）、Windows 任务栏 overlay 门控（design 23 已冻结归档，不排期）——见
 > `docs/progress/STATUS.md`。
 > 需求来源：用户要求「一个 session 在 complete、ask、request 时推送通知」并做成设置
 > 可选项；未读徽标是同一投影的被动指示。
@@ -742,7 +746,7 @@ interface NotificationRequest {
   进程随 roster 投影的 64 位小写十六进制 opaque proof；App 只接受 proof 与当前权威来源代
   相等的 report，renderer 不从 registry 字段推导 proof。
 
-**主进程**（`packages/desktop/main.ts` + 新增 `packages/desktop/notifications.ts`
+**主进程**（`packages/desktop/electron/main.ts` + 新增 `packages/desktop/notifications.ts`
 纯逻辑模块，electron-free 便于单测）：
 
 - 新 IPC：`dsh-chamber:notify`（`trustedIpc` invoke，payload 白名单校验
@@ -1266,14 +1270,14 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
   不变——通知组不新增固定入口）。
 - `verify:i18n` 无 DRIFTED（settings-bridge 命名空间配对由
   `typecheck:settings-bridge` 编译期强制）；`typecheck`；`build:renderer`；
-  `dist:desktop:mac` 打包态通知冒烟。
+  **ARCHIVED（Electron 冻结）** `dist:desktop:mac` 打包态通知冒烟；现行 = Swift .app 打包态通知冒烟。
 - 最终 HEAD 的验证证据按 `CONTRIBUTING.md`/PR 模板给出；`docs/progress/STATUS.md`
   只记未完成与取舍，不记测试计数。
 
 **实机验收（未完成）**：macOS 通知权限的打包态走查（拒绝态 → 设置页原因 +
 「打开系统设置」→ 用户打开后重试成功这条闭环，代码面完成）；文案定稿、
 打包态三形态（关窗/托盘/后台）+ 点击打开会话 + 窗口重建；徽标 macOS Dock 打包态
-三态（武装/解除/退役 + 重载与退出清零）；Windows 任务栏 overlay 门控（design 23 排期）。
+三态（武装/解除/退役 + 重载与退出清零）；Windows 任务栏 overlay 门控（design 23 已冻结归档，不排期）。
 
 ### 4.1 拒绝态的可见性与恢复入口（含被否决方案）
 

@@ -10,7 +10,7 @@
 
 ## 1. 定位与范围
 
-> **v2 改判（2026-11 用户裁决）**：最新形态 = 右栏内嵌 iframe（local loopback 直连 + ssh 来源经 forward 到 alias；Electron 与 Swift 双 flavor 默认开启；localhost 可 iframe 也可系统浏览器）。§16 是当前契约；本节及以下 §1–§15 的 v1 文本保留为 v1 记录，冲突处以 §16 为准。
+> **v2 改判（2026-11 用户裁决）**：最新形态 = 右栏内嵌 iframe（local loopback 直连 + ssh 来源经 forward 到 alias；Electron 与 Swift 双 flavor 默认开启——**Electron 腿已冻结归档，仅 Swift 腿出货**；localhost 可 iframe 也可系统浏览器）。§16 是当前契约；本节及以下 §1–§15 的 v1 文本保留为 v1 记录，冲突处以 §16 为准。
 
 ### 1.1 是什么（v1 记录）
 
@@ -438,7 +438,7 @@ forward.openInBrowser({ sourceId, sourceFingerprint, id, path? })-> { ok: true }
 ### 8.1 公网 / 本机 URL：既有链接腿
 
 - launcher 渲染 `<a target="_blank" rel="noreferrer">`：点击触发 Electron 的
-  `setWindowOpenHandler`（`packages/desktop/main.ts#=literal:win.webContents.setWindowOpenHandler(({ url }) => {`），`isExternalLinkUrl(url, rendererOrigin)` 为真时
+  `setWindowOpenHandler`（`packages/desktop/electron/main.ts#=literal:win.webContents.setWindowOpenHandler(({ url }) => {`），`isExternalLinkUrl(url, rendererOrigin)` 为真时
   交给系统浏览器并拒绝新建窗口；Swift 对偶走 `TrustGuard` + `ExternalOpenBudget`。**不新增 IPC**。
 - 该腿共用既有全局预算（8 次/10s + 30s 冷却，`shell-core.ts` 的 `openExternally`）：超预算时**静默丢弃**，
   UI 只能显示“已在本机打开”`notice.publicOpened`；若被限流就是“点击后无反应”，v1 不伪造一个
@@ -612,7 +612,7 @@ S3 依赖 S1+S2 产物。
   `quality.dead-exports`（`RUNTIME_LOADED_PACKAGES` 登记新包）、`arch.import-cycles`、`typecheck`（新包程序）、
   `tests.desktop`/`tests.renderer-shell`（新测试进 manifest）。
 - **打包与真机（不在 `check:full`）**：`build:renderer`（chunk 预算）、`build:sidecar`、`build:swift-app`、
-  `test:swift`（darwin）、`test:macos`（darwin）、`test:win32`、`test:sidecar:compiled`、
+  `test:swift`（darwin）、`test:macos`（darwin）、`test:sidecar:compiled`、~~`test:win32`~~（Windows/Electron 冻结归档）,
   `acceptance:gui`（S2 新增 W 检查）、`verify:shim-payload`（macOS 组合步）。
 - **发布前**：`release-preflight` + packaging closure §1/§2/§4（根模块 95 复核）、CHANGELOG 分组（发布时写）。
 - 负例矩阵（S3）：https 远端、`[::1]`、RFC1918、app origin（根/子路径）、同端口、未确认、超预算、
@@ -723,7 +723,7 @@ S3 依赖 S1+S2 产物。
 
 ## 16. v2 修订（2026-11，用户裁决）：右栏内嵌 iframe + forward 生命周期
 
-> 本节是**当前契约**。v2 覆盖 §1–§15 的 v1 形态：面板不再是「零渲染 + 系统浏览器」，而是右栏内嵌 iframe；local 直连、ssh 经 forward 到 alias；Electron 与 Swift 均为核心 flavor、默认开启。
+> 本节是**当前契约**。v2 覆盖 §1–§15 的 v1 形态：面板不再是「零渲染 + 系统浏览器」，而是右栏内嵌 iframe；local 直连、ssh 经 forward 到 alias；Electron 与 Swift 均为核心 flavor、默认开启（**Electron 腿已冻结归档，见 `../progress/electron-frozen.md`**）。
 >
 > **2026-11 用户二次裁决（§16.11）**：面板的样式与行为改为上游官方 `ui-sidebar-browser` 的 iframe 路径忠实 fork，唯一差异 = SSH 反代（iframe src 解析 + 代理页 system-browser 出口的 alias 投影）；§16.1–§16.10 中与 §16.11 冲突的「自研 launcher/远端转发列表/https 系统浏览器/固定 sandbox」描述以 §16.11 为准。
 
@@ -748,7 +748,7 @@ S3 依赖 S1+S2 产物。
 ### 16.3 控制面 CSP（唯一服务端改动）
 
 - `ControlPlaneOptions` 增可选 `frameSources`；缺省 = v1 逐字节不变（gateway/cli/standalone 不变）。
-- 生产启用：`packages/desktop/main.ts`（createControlPlane 调用点）与 `packages/desktop/sidecar-entry.ts` 显式传入；`packages/gateway`、`packages/cli` 不传。
+- 生产启用：`packages/desktop/electron/main.ts`（createControlPlane 调用点）与 `packages/desktop/sidecar-entry.ts` 显式传入；`packages/gateway`、`packages/cli` 不传。
 - 源集合由单源生成：`blob:` + `http://127.0.0.1:*` + `http://localhost:*` + `http://127.0.0.2:*` … `http://127.0.0.254:*`（wire `FORWARD_ALIAS_OCTETS` 单源）。
 - **不得**加入 `'self'`、裸 `http:`/`https:`（任意站点内嵌）、app 反向代理同源面；`frame-ancestors 'none'`、`X-Frame-Options: DENY`、COOP/Corp 保持。
 - 锁步测试：desktop 精确集合（数量/首尾/无 'self'/无裸 scheme/长度上限）；control-plane 缺省逐字节不变 + 传入串内容 + gateway 镜像不放宽；GUI 走查新增 SH-7 CSP 合同。

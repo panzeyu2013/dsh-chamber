@@ -1,18 +1,23 @@
 # TODO · 未排期计划与想法
 
 > 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；进度、验收门与取舍在 [STATUS.md](STATUS.md)，
-> 双 flavor 差异结论在 [deviations.md](deviations.md)，契约在 `docs/design/`。
+> [deviations.md](deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`。
 > 四部分：A 上游（A 类）、B 平台（B 类）、C 功能（C 类）、D 工程（D 类）。文中 `§N` 指本部分内编号；
 > 跨部分引用写 `A§N` / `B§N` / `C§N` / `D§N`。
 > 条目内的「剩余 / 未做 / 待…」是**计划范围**，不是进度状态；状态以 [STATUS.md](STATUS.md) 为准。
 > 新增：先判断阻塞来源；设计定稿移入 `docs/design/0X-*.md`，落地或明确不做则移出并在 STATUS 留结论。
+>
+> **版本范围（2026-11 用户裁决）**：唯一出货 flavor = macOS Swift 原生壳；**Electron flavor 已冻结归档、
+> 不删除文件、可复活**（Windows/Linux 桌面腿随之冻结、不发布）。本文件中 Electron / Windows v1 计划
+> 一律标「冻结，不排期」，只在复活时执行（见 [electron-frozen.md](electron-frozen.md) §6）；A/C/D 的
+> Swift 与上游内容不受影响。
 
 ## 索引
 
 |部|内容|入口|
 |---|---|---|
 |A 上游|13 条上游提案、漂移收口、UI 对齐、pin 升级管线|A§1–A§16|
-|B 平台|macOS Swift 壳、Windows v1|B§1–B§2|
+|B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
 |D 工程|结构性重构、产物新鲜度、页面性能 P2、多实例常驻后续研究|D§1–D§4|
 
@@ -169,7 +174,7 @@ selection scope、I-12 谱系压制）；剩余 = 打包态/真机各跑一次�
 
 - 下一 pin 落地「真 `WorkspaceRegistry` + 真 binding」lockstep（当前 ad-hoc 8/8；CI 走 node_modules 解析）；复核
   vendor 补丁 retire 与 `RETIRED_PATCHES`（登记时 2 条退役：ReasoningRow sweep、util-values 比较）。
-- `node-addon-require-builtin` 指纹表未收录 Electron 43.4.0 ⇒ Electron flavor 托管宿主起不来（STATUS 设计未决）。
+- **（Electron 冻结归档，不排期）**`node-addon-require-builtin` 指纹表未收录 Electron 43.4.0 ⇒ Electron flavor 托管宿主起不来（STATUS 设计未决）；复活时按 `docs/progress/electron-frozen.md` §6 对齐 pin（基线 44.7.0）。
 
 #### 14.4 升级期检查两条闭口（待 vendor 物化）
 
@@ -217,7 +222,7 @@ search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 
 #### 15.2 维持的差异与裁决
 
 - **品牌**：mark 保持 chamber `BrandWordmark`（rail 用上游 FishLogo）；name 洞空回退（无构建版本事实）。
-- **Windows 标题栏**：随 design 23 落地时照抄 `[data-windows-titlebar]`；属性已由 win32 preload 写入。
+- **Windows 标题栏（ARCHIVED，Windows/Electron 冻结归档）**：随 design 23 复活时照抄 `[data-windows-titlebar]`；属性由 win32 preload 写入。
 - **会话卡状态行 0–1**：不兜底 `status.idle`。
 - **文案键**：搜索 aria 用 `search.sessions.aria`；workspace 复制用 `action.copy`；搜索占位/ tooltip 已逐字对齐。
 - **workspace 卡**：维持标题+路径+创建时间，不加 chamber 会话数行。
@@ -264,6 +269,8 @@ search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 
 ## B. 平台与外部门禁（B 类）
 
 > 阻塞来源 = 真机 / runner / 凭据 / 产物；每条须真实 macOS 或 Windows 验证。契约见 design 25、design 23。
+> **范围（2026-11）**：只有 macOS Swift 腿继续排期；Windows v1 与 Electron 腿已随 Electron flavor 冻结归档
+> （[electron-frozen.md](../progress/electron-frozen.md)），B§2 仅在复活时执行。
 
 ### 1. macOS Swift 原生壳 v1
 
@@ -320,33 +327,38 @@ search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 
 |门禁|落点|断言什么|
 |---|---|---|
 |IPC 面镜像锁步|`packages/desktop/test/ipc/ipc-surface-mirror.test.ts`|main handle/send 集合 == preload invoke/on 集合；无裸字面量；preload/renderer global.d.ts/settings-connections 结构镜像|
-|bridge-manifest 一致|`bridge-manifest.test.ts` + `packages/desktop/scripts/emit-bridge-manifest.mjs` + 提交物 JSON/Swift/stub|重生成 == 提交物；通道数守恒 70=61+9；manifest 只承载通道 + 方向|
+|bridge-manifest 一致|`bridge-manifest.test.ts` + `packages/desktop/scripts/emit-bridge-manifest.mjs` + 提交物 JSON/Swift/stub|重生成 == 提交物；通道数守恒 67=58+9；manifest 只承载通道 + 方向|
 |A 桥 shim 表面|`bridge-shim-surface.test.ts`|shim 每个命名空间方法集 == preload；method→channel 映射一致；无 W-04 别名残留|
 |A 桥 stub 锁步|`bridge-shim.test.ts`|重生成逐字节 == 提交物；invoke/push 计数；信封 `{id,method,payload}`|
 |core 禁 electron|`electron-free-gate.test.ts`|fail-closed 传递闭包：core 家族无 electron import；白名单四文件有|
-|sidecar 全通道冒烟|`sidecar-stdio.test.ts`|假 Swift 驱动 52 invoke 回包 + 9 push 面的代表采样（真处理器）|
+|sidecar 全通道冒烟|`sidecar-stdio.test.ts`|假 Swift 驱动 58 invoke 回包 + 9 push 面的代表采样（真处理器）|
 |release 腿策略/打包清单同源|`scripts/release/release-workflow-policy.test.mjs`、`packaging-manifest-lockstep.test.mjs`|staple 先于归档；`ARTIFACT_ARGS` 展开恰 2 次；产物名 `dsh-chamber-<ver>-macos-arm64`；host 包清单五处一致|
 |Swift 负例护栏|`macos/Tests`（XCTest，ci.yml `test-macos`）|伪造 frame/超大帧/非协议流/伪造事件名/越 origin 全拒|
 |双端 harness|`swift-harness-driver.test.ts`（未实施）|真实窗口/桥/通知/深链（需 mac + GUI，见 §1.2）|
 
-Swift 产品代码**禁止**手写通道字符串（测试 fixture 除外）。通道增删改 = 一次 PR 内三侧同改：
-`ipc-events`/preload（+ renderer 镜像）→ bridge-manifest 重生成 → Swift 引用点。
+Swift 产品代码**禁止**手写通道字符串（测试 fixture 除外）。通道增删改 = 一次 PR 内两侧同改：
+`ipc-events` → bridge-manifest 重生成 → Swift 引用点。**（Electron 冻结后的政策，2026-11）**只用于
+Swift 腿的新增通道/命名空间/方法走 `packages/desktop/bridge-swift-only-additions.json` 白名单，不再要求
+preload / Electron 侧注册；两侧共用通道仍按原三侧同改（preload 现位于归档目录
+`packages/desktop/electron/preload.cts`）。政策见 [electron-frozen.md](electron-frozen.md) §5。
 
 #### 1.5 同 tag 双端发布：回滚预案
 
 流程本体（凭据 fail-closed 门、两条 mac 腿、Swift 腿命名与独立 EdDSA appcast）见 design 25 §8.4 与 release.yml。
 回滚：Swift 产物出问题 ⇒ draft 不 publish、Electron 照发（共存主通道，Swift 可晚一 tag）；Electron 出问题 ⇒
 同 tag Swift 不单独发（防版本错位）；Win/Linux 不受影响。
+**（Electron 冻结归档，2026-11）**Electron 不再出包，「Electron 照发」「同 tag 双端」语义只作复活参考；
+当前发布面 = Swift 腿（见 [electron-frozen.md](electron-frozen.md) §4/§6）。
 
 #### 1.6 风险与中止条件
 
 **风险登记**（design 25 §9 R1–R13 的展开；措辞以 design 25 为准）：
 
-- R10 开发期双后端竞态：Electron dev（17520 起探测）与 Swift dev 共享控制面起始端口族 ⇒
+- R10 开发期双后端竞态：Electron dev（已冻结归档；17520 起探测仅复活参考）与 Swift dev 共享控制面起始端口族 ⇒
   `DSH_CHAMBER_CP_PORT`/`DSH_CHAMBER_SHELL_PORT` 分别钉死 + 双 userData（或先后启动）。
 - R11 人手单点：壳 + 桥 + 护栏 ≈25–35 个 Swift 文件长期维护；缓解 = 护栏集中单 target、XCTest 覆盖率门、
   Generated 产物。
-- R12 manifest 生成脚本解析脆弱性：新写法（模板串/别名）漏检 ⇒ 生成脚本复用 mirror 解析 + 「通道数守恒」断言（70=61+9）。
+- R12 manifest 生成脚本解析脆弱性：新写法（模板串/别名）漏检 ⇒ 生成脚本复用 mirror 解析 + 「通道数守恒」断言（67=58+9）。
 - R13 devtools：默认关；发布态由设置页运行期开关显式开启（design 25 §5.1.1）。debug 构建的默认开只在
   「无设置文件或文件级损坏（不动作）」时存活；合法文件（哪怕缺 debug 键，按 Electron 默认 false）会覆盖它。
   inspector 属信任边界。
@@ -357,7 +369,7 @@ Swift 产品代码**禁止**手写通道字符串（测试 fixture 除外）。�
 - A2：P0 G2 剪贴板/拖拽硬伤（W1/W3 不过；G3=侧栏插件不受影响）⇒ 试 1–2 天归因，仍不过重审。
 - A3：B 桥护栏负例被击穿（伪造 frame/超大帧/非协议流/伪造事件名任一）⇒ fail-closed 信任模型不成立：
   立即停止，P2 出口前必须闭合。
-- A4：P1 拆分后 `test:desktop` 连续 2 批不收敛绿 ⇒ 回退上一绿 commit 重排批次。
+- A4：P1 拆分后 `test:desktop` 连续 2 次不收敛绿 ⇒ 回退上一绿 commit 重新排序。
 - A5：M3 双端 harness 真实窗口不稳定（排除环境后 >1 周）⇒ 重审壳层策略（Electron 退守不受影响）。
 - A6：M4/M5 发布门因 Apple 凭据缺失挂起 ⇒ 不中止路线：dry-run 全链绿即可推进代码，发布登记外部阻断，
   不得声称「完成」。
@@ -380,8 +392,12 @@ Swift 产品代码**禁止**手写通道字符串（测试 fixture 除外）。�
 
 > 同环境 A/B 纪律见 `scripts/perf/README.md`：前后对照**只**在同环境 A/B 内可信，跨环境绝对值**不可比**；
 > 双端对比必须同机、同脚本顺序、同会话窗口，数据落 `scripts/perf/data/*.json` 同族。
+>
+> **冻结标注（2026-11）**：本节的 Electron/CDP 侧（CDP 驱动、双端 A/B、Electron 基线数据）随 Electron flavor
+> 冻结归档，仅作复活参考；**现行 Swift 测量 = `shell.log` / `[shell-fps]` 行 + Safari Web Inspector**（design 25），
+> 不再有 CDP 注入面。
 
-方法学平移（不换尺）：`scripts/perf/{boot,switch,eval,cdp-lib}-measure.mjs` 为 CDP 驱动（Electron 专属）；
+方法学平移（不换尺）：`scripts/perf/{boot,switch,eval,cdp-lib}-measure.mjs` 为 CDP 驱动（Electron 专属，**ARCHIVED**）；
 Swift 侧以 **WKUserScript 注入同一套 PerformanceObserver 探针 + `evaluateJavaScript` 驱动合成 MouseEvent**
 （同源、引擎无关），四场景平移：boot（wall/长任务/CLS）、跨来源切换、rapid×10 连点、eval 归因；
 驱动与 schema 双端共用，差异只在注入通道（CDP ↔ WKUserScript）。
@@ -404,10 +420,14 @@ Swift 侧以 **WKUserScript 注入同一套 PerformanceObserver 探针 + `evalua
   `.dev-user-data` 隔离，见 `deviations.md` §3 P-10）。
 - 工期估算（三档人-日）与里程碑排期不在本文；量级与关键路径见 design 25 §0。
 
-### 2. Windows v1
+### 2. Windows v1（**冻结，不排期**）
 
-> 契约与决策：`docs/design/23-windows-support.md`。本文只留未实现/外部门禁、基线登记口径与取舍；
+> 契约与决策：`docs/design/23-windows-support.md`（ARCHIVED）。本文只留未实现/外部门禁、基线登记口径与取舍；
 > 每条须真实 Windows/CI 验证才算完成。
+>
+> **冻结归档（2026-11 用户裁决）**：Windows 桌面腿随 Electron flavor 冻结、**不发布、不排期**；本节所有
+> 里程碑 / 基线登记 / 实机矩阵只在用户重开范围、按 [electron-frozen.md](electron-frozen.md) §6 复活时执行。
+> 原文保留作为复活基线，不删除。
 
 #### 2.1 外部门禁（需真实 Windows runner / 实机 / 产物）
 
@@ -421,7 +441,7 @@ Swift 侧以 **WKUserScript 注入同一套 PerformanceObserver 探针 + `evalua
   （Node rm 对只读树行为）+ icacls 实机输出核对。（私有状态读写的 win32 身份回退存在，事务首步不再因缺
   `O_NOFOLLOW` 抛错；矩阵本身仍需 runner。）
 - M2b（纪律门禁：M2a 全绿前不做）：`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS` 门控翻转
-  （main.ts/dsh-runtime-controller/apply-now-gate/UI/i18n/版本 chip）；win32 测试 diff 对照基线全归因；
+  （`electron/main.ts`/dsh-runtime-controller/apply-now-gate/UI/i18n/版本 chip）；win32 测试 diff 对照基线全归因；
   Windows 11 实机故障注入全链 + 只读投影文案移除。
 - M3：design 23 §7 实机矩阵全勾（托盘/关窗/唤醒/SSH 密钥隧道/updater stable+beta/深链特殊字符 URL/
   防火墙 loopback 无弹窗/ACL 查询）+ 打包产物核对（图标/preload）。
@@ -464,7 +484,7 @@ Swift 侧以 **WKUserScript 注入同一套 PerformanceObserver 探针 + `evalua
 |---|---|---|---|
 |dsh 运行时 mutation|`platform_read_only`|gateway runtime-manager；desktop `runtimeManagementSupported=false`（env `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 开启验证态）|desktop 解锁（仅 M2a 真实 win32 验证后，M2b）；gateway 保持|
 |SSH 密码|IPC 拒存（引导 keys/Pageant）|`ssh-provider.ts` sshPasswordSupported/main 门消息|保持；一键免密 UI = 后续特性|
-|登录自启|已解锁（代码）：supported=true、`setLoginItemSettings`（HKCU Run）|`chamber-settings.ts` computeSupported/`main.ts` applyLaunchAtLogin|runner/实机验证注册表与卸载清理|
+|登录自启|已解锁（代码）：supported=true、`setLoginItemSettings`（HKCU Run）|`chamber-settings.ts` computeSupported/`electron/main.ts` applyLaunchAtLogin|runner/实机验证注册表与卸载清理|
 |深链注册|已解锁（代码）：打包态 register(no-args)，dev skip|`deep-link.ts` decideDeepLinkProtocolRegistration|runner 实测注册表 + 冷热启动|
 |open-in 本地路径|已解锁（代码）：local 走 validateLocalPath（盘符/UNC）|`open-in.ts` runOpenInLaunch/finder|实机盘符路径打开验证|
 |0700/0600 语义|继承 ACL + no-follow/identity + icacls 启动收紧|store-permissions/private-file/win-acl.ts（main 已接线）|runner/实机 ACL 查询核对|
@@ -562,7 +582,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 - 远端宿主侧打开（需 ssh/http cookie 注入 + UI 明示，与「远程只用 vscode 部分」契约冲突）；
 - fork 官方 catalog 再扩本地应用集合之外的本地执行面（如「在终端里打开」的本地实现）；
-- 主进程自行枚举本机应用（重开 Batch 3 Phase 2 关闭的红线）。
+- 主进程自行枚举本机应用（重开已关闭的 Phase 2 红线）。
 
 
 ## D. 工程债（D 类）
@@ -634,7 +654,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
   `plugin-sync.ts` 与客户端行投影（settings-connections 的 `plugin-model.ts`/`save-host.ts`）仍两套。
   收口方向 = 一个 `PluginMutationPlan` + 三个薄执行器。
 - **未纳棘轮的 god 文件**：control-plane `index.ts`/`proxy-forward.ts`/`spawn-dsh.ts`、gateway
-  `dispatch.ts`/`plugins.ts`、dsh-runtime 多个 `runtime-*` 文件、desktop `updater.ts`/`main.ts`、Swift
+  `dispatch.ts`/`plugins.ts`、dsh-runtime 多个 `runtime-*` 文件、desktop `updater.ts`/`electron/main.ts`、Swift
   `MainWindowController`/`AppDelegate`/`BridgeClient`、`install-gateway.sh`——下一轮按包逐个纳入棘轮。
 - **死导出门覆盖洞**：client-ui 包整包在 `RUNTIME_LOADED_PACKAGES`（`verify-no-dead-exports.mjs`），
   `./client/**` 不受判；已知零消费者导出 `isFixedSectionId`、`transportTargetChangedSpec`
@@ -677,14 +697,14 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 > 比对门（`scripts/gates/verify-artifact-freshness.mjs` 的 tests/full，经 `ci.yml` 进 CI）；seed `dist/index.js` ×4 +
 > `dsh-runtime/dist/index.js` 的新鲜度归 C8（`scripts/upstream/verify-upstream-touchpoints.mjs`
 > 重建-比对，清单单一来源 `scripts/lib/build-artifacts.mjs`）；`scripts/gates/verify-electron-artifacts.mjs`
-> 的 macOS 腿/CI 另执行编译产物冒烟。G1=`verify:test-wiring`、G4/G6 同属该门。本节只留仍无守卫的产物与最小
+> （**ARCHIVED，2026-11 随 Electron 冻结移除**；现行产物新鲜度 = `verify-artifact-freshness` + C8，G1=`verify:test-wiring`）。本节只留仍无守卫的产物与最小
 > 守卫建议；开放状态见 STATUS「产物新鲜度」条，design 21 §7 登记。
 
 #### 2.1 仍无守卫的产物
 
 |产物|生成者|提交？|当前守卫|陈旧后果|
 |---|---|---|---|---|
-|`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`）|忽略|只有路径契约文本断言（`scripts/electron-shared.test.mjs`）与 CI 的 scoper 标记断言|打包发行旧前端壳（IPC 名/槽位可能漂移）|
+|`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`（**ARCHIVED**：Electron 冻结，保留为复活参考；其测试在 FROZEN 组））|忽略|只有路径契约文本断言（`scripts/electron-shared.test.mjs`，FROZEN 组）与 CI 的 scoper 标记断言|打包发行旧前端壳（IPC 名/槽位可能漂移；Electron 打包已冻结）|
 |`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`scripts/build-host-graph-package.mjs`（各 seed 包 `dist` cpSync）|忽略|只有行序/outDir 断言（`scripts/release/packaging-manifest-lockstep.test.mjs`）|打包 seed 旧宿主包|
 |vendor `allowBuilds` 锁步（根 `pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）|人工同步|提交|无|新增原生依赖漏登或漏 deny 会静默漂移|
 
@@ -790,5 +810,5 @@ facts 供渲染，只在「是否需要重发布」的判据上用量化值。
 | 1 | 侧边栏单实例化 / 隐藏壳监听门控 | 来源 ≥8，或实测 p95（切源/首帧/流式）劣化 | N 壳共享一个 renderer：隐藏壳的 React 更新与监听仍跑。先有帧时/输入延迟度量面，再评估「仅屏上壳订阅/暂停隐藏壳监听」；不得改变「会话保活」契约 |
 | 2 | `dsh-stream-state` 的 hidden/reclaimed 收窄 | `TEST_ONLY_EXPORT_ALLOWLIST` 清理时（同批） | retention 退役后 `projectHiddenSince` 等成 test-only；与删除无生产者的 `mounted/unmounted/painted/userSelected/reclaimed/retryRequested/harvestStarted/harvestSatisfied` 事件同批，保持 reducer 真值表与 `emission-coverage` 全绿 |
 | 3 | 进程 / 视图隔离（`WebContentsView` / 独立 WKWebView） | 来源 >8，或「一个壳的长任务卡住整页」真机复现 | design 05 §9 的重评触发；开做前先取整页卡顿证据（rAF/帧时/长任务），不以猜测开做 |
-| 4 | 每壳内存研究 | 面板/实测定标显示 N=5 稳态内存不可接受，或需要按壳归因的统计 | 单 renderer 下无每壳字节读数；方向 = Electron `app.getAppMetrics()`（仅 Electron）与 DOM/节点计数代理，**不伪造**每壳字节；Swift 腿只有整机内存 |
+| 4 | 每壳内存研究 | 面板/实测定标显示 N=5 稳态内存不可接受，或需要按壳归因的统计 | 单 renderer 下无每壳字节读数；方向 = DOM/节点计数代理，**不伪造**每壳字节；Swift 腿只有整机内存。**（Electron `app.getAppMetrics()` 方向随 flavor 冻结、不排期）** |
 | 5 | upstream freeze（vendor pin 升级冻结） | 常驻改造（D1–D4）未收口前冻结；出现上游安全修复/阻断则解冻单次并回归 | 避免 pin 升级把 vendor 隐藏壳行为/补丁面与本轮改动混进同一回归窗口；收口后按既有升级 checklist 恢复 |
