@@ -1,7 +1,12 @@
 # TODO · 未排期计划与想法
 
 > 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；进度、验收门与取舍在 [STATUS.md](STATUS.md)，
-> 双 flavor 差异结论在 [deviations.md](deviations.md)，契约在 `docs/design/`。
+> [deviations.md](deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`。
+>
+> **版本范围（2026-11 用户裁决）**：唯一出货 flavor = macOS Swift 原生壳；**Electron flavor 已冻结归档、
+> 不删除文件、可复活**（Windows/Linux 桌面腿随之冻结、不发布）。本文件中 Electron / Windows v1 计划
+> 一律标「冻结，不排期」，只在复活时执行（见 [electron-frozen.md](electron-frozen.md) §6）；A/C/D 的
+> Swift 与上游内容不受影响。
 > 四部分：A 上游（A 类）、B 平台（B 类）、C 功能（C 类）、D 工程（D 类）。文中 `§N` 指本部分内编号；
 > 跨部分引用写 `A§N` / `B§N` / `C§N` / `D§N`。
 > 条目内的「剩余 / 未做 / 待…」是**计划范围**，不是进度状态；状态以 [STATUS.md](STATUS.md) 为准。
@@ -12,7 +17,7 @@
 |部|内容|入口|
 |---|---|---|
 |A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐、§16 pin 升级管线|A§1–A§16|
-|B 平台|macOS Swift 壳、Windows v1|B§1–B§2|
+|B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
 |D 工程|结构性重构、产物新鲜度、页面性能 P2、多实例常驻后续研究|D§1–D§4|
 
@@ -212,7 +217,7 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 #### 15.2 维持的差异与裁决
 
 - **品牌/文案/workspace 卡**：mark 保持 chamber `BrandWordmark`（rail 用上游 FishLogo）、name 洞空回退；搜索 aria 用 `search.sessions.aria`、workspace 复制用 `action.copy`；workspace 卡维持标题+路径+创建时间，不加会话数行。
-- **Windows 标题栏**：随 design 23 落地时照抄 `[data-windows-titlebar]`；属性由 win32 preload 写入。
+- **Windows 标题栏（ARCHIVED，Windows/Electron 冻结归档）**：随 design 23 复活时照抄 `[data-windows-titlebar]`；属性由 win32 preload 写入。
 - **路径/命中盒/菜单密度**：绝对路径不缩写；clear 钮 18px；`compact`（24px/11px，比列表行矮 2px），抬到 26px 用 `Menu.listClassName`。
 - **布局/交互**：26px 行/13px 标题/20px 命中盒、动作簇 4px/20px、来源 accent、折叠动画删除、`RowHoverCard` 自持、vibrancy 门、`sidebar.workspaces` 只声明、`toggle.badge` 不做、品牌蓝点、默认 manual（B1）、flat/tree/归档过滤 per-source、`data-chamber-row`、归档两段式、面板轴入口按来源下挂。
 - **会话卡状态行 0–1**：不兜底 `status.idle`。
@@ -243,6 +248,9 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 ## B. 平台与外部门禁（B 类）
 
 > 阻塞来源 = 真机 / runner / 凭据 / 产物；每条须真实 macOS 或 Windows 验证。契约见 design 25、design 23。
+>
+> **范围（2026-11）**：只有 macOS Swift 腿继续排期；Windows v1 与 Electron 腿已随 Electron flavor 冻结归档
+> （[electron-frozen.md](electron-frozen.md)），B§2 仅在复活时执行。
 
 ### 1. macOS Swift 原生壳 v1
 
@@ -256,7 +264,7 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 #### 1.2 外部门禁
 - M5 实机门禁 W-28…W-32（含 W1–W7 判定矩阵）：状态/范围见 STATUS §三「macOS Swift 壳 M5 实机矩阵未闭合」行，矩阵 design 25 §8.5。
 - 双端 harness 未实施（需 GUI 会话，design 25 §8.3/§8.6）；Apple 凭据（Developer ID/公证/stapler）缺失时 dry-run 全链绿可推进，不得声称「完成」（design 25 §7）；其余实机项（通知权限时序、SMAppService 登录项、LaunchServices 深链、唤醒恢复、SSE/WS 心跳、ATS、通知音效差异）在 STATUS 未完成项。
-- 同 tag 双端发布回滚：Swift 产物出问题 ⇒ draft 不 publish、Electron 照发（Swift 可晚一 tag）；Electron 出问题 ⇒ Swift 不同 tag 单独发；Win/Linux 不受影响。
+- **（Electron 冻结归档，2026-11）**Electron 不再出包，「同 tag 双端发布回滚」语义只作复活参考；当前发布面 = Swift 腿（见 [electron-frozen.md](electron-frozen.md) §4/§6）。
 
 #### 1.3 WBS 任务号索引（W-01…W-32 → 契约落点）
 |任务|内容|契约落点|
@@ -273,10 +281,14 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 |W-26/W-27|CI（`test-macos`）与发布产物（`-native` 命名、appcast、回滚）|design 25 §8.4|
 |W-28…W-32|M5 实机门禁与验收|design 25 §8.5；开放状态见 STATUS|
 
-### 2. Windows v1
+### 2. Windows v1（**冻结，不排期**）
 
-> 契约与决策：`docs/design/23-windows-support.md`。本文只留未实现/外部门禁、基线登记口径与取舍；
+> 契约与决策：`docs/design/23-windows-support.md`（ARCHIVED）。本文只留未实现/外部门禁、基线登记口径与取舍；
 > 每条须真实 Windows/CI 验证才算完成。
+>
+> **冻结归档（2026-11 用户裁决）**：Windows 桌面腿随 Electron flavor 冻结、**不发布、不排期**；本节所有
+> 里程碑 / 基线登记 / 实机矩阵只在用户重开范围、按 [electron-frozen.md](electron-frozen.md) §6 复活时执行。
+> 原文保留作为复活基线，不删除。
 
 #### 2.1 外部门禁（需真实 Windows runner / 实机 / 产物）
 
@@ -466,7 +478,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 |产物|生成者|提交？|当前守卫|陈旧后果|
 |---|---|---|---|---|
-|`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`）|忽略|只有路径契约文本断言（`packages/desktop/scripts/electron-shared.test.mjs`）与 CI 的 scoper 标记断言|打包发行旧前端壳（IPC 名/槽位可能漂移）|
+|`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`（**ARCHIVED**：Electron 冻结，保留为复活参考；其测试在 FROZEN 组））|忽略|只有路径契约文本断言（`packages/desktop/scripts/electron-shared.test.mjs`，FROZEN 组）与 CI 的 scoper 标记断言|打包发行旧前端壳（IPC 名/槽位可能漂移；Electron 打包已冻结）|
 |`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`packages/desktop/scripts/build-host-graph-package.mjs`（各 seed 包 `dist` cpSync）|忽略|只有行序/outDir 断言（`scripts/release/packaging-manifest-lockstep.test.mjs`）|打包 seed 旧宿主包|
 |vendor `allowBuilds` 锁步（根 `pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）|人工同步|提交|无|新增原生依赖漏登或漏 deny 会静默漂移|
 

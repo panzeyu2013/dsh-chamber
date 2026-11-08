@@ -25,8 +25,8 @@ import { DESKTOP_SHORTCUTS_CHANNELS } from '../../shortcuts-bridge.ts'
 import { IPC_CHANNELS } from '../../ipc-events.ts'
 
 const ROOT = join(import.meta.dirname, '..', '..', '..', '..')
-const preload = readFileSync(join(ROOT, 'packages', 'desktop', 'preload.cts'), 'utf8')
-const main = readFileSync(join(ROOT, 'packages', 'desktop', 'main.ts'), 'utf8')
+const preload = readFileSync(join(ROOT, 'packages', 'desktop', 'electron', 'preload.cts'), 'utf8')
+const main = readFileSync(join(ROOT, 'packages', 'desktop', 'electron', 'main.ts'), 'utf8')
 const bridge = readFileSync(join(ROOT, 'packages', 'desktop', 'shortcuts-bridge.ts'), 'utf8')
 const shim = readFileSync(join(ROOT, 'macos', 'Sources', 'DSHChamber', 'Resources', 'bridge-shim.js'), 'utf8')
 

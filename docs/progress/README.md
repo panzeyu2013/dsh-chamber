@@ -1,16 +1,18 @@
 # 进度追踪（docs/progress）
 
-> 本目录四份文档，职责互斥：**STATUS** = 唯一进度记录；**TODO** = 未排期计划与想法；**deviations** = 双 flavor
-> 差异结论与证据；本 README = 规则与索引。事实源是 `docs/design/` 与源码；已实现基线以 git 历史、
-> `CHANGELOG.md` 与 `docs/design/` 为准。文档分层与写作规则见 `docs/AGENTS.md`。
+> 本目录**五份文档**，职责互斥：**STATUS** = 唯一进度记录；**TODO** = 未排期计划与想法；**deviations** =
+> 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护）；**electron-frozen** = Electron flavor 冻结登记
+> （范围/归档清单/共享契约/禁用面/复活清单）；本 README = 规则与索引。事实源是 `docs/design/` 与源码；
+> 已实现基线以 git 历史、`CHANGELOG.md` 与 `docs/design/` 为准。文档分层与写作规则见 `docs/AGENTS.md`。
 
 ## 文件与所有权
 
 | 文件 | 只记什么 | 不记什么 | 谁维护 |
 |---|---|---|---|
-| [STATUS.md](STATUS.md) | 所有开放项的状态：未完成 / 待验收 / 待裁 / 接受；每条 = 判据 + 指针 | 计划细节、证据原文、完成叙事、测试计数、批次台账 | 协调者单写 |
+| [STATUS.md](STATUS.md) | 所有开放项的状态：未完成 / 待验收 / 待裁 / 接受；每条 = 判据 + 指针 | 计划细节、证据原文、完成叙事、测试计数、过程台账 | 协调者单写 |
 | [TODO.md](TODO.md) | 未排期计划与想法：A 上游、B 平台、C 功能、D 工程；触发 / 范围 / 退出 | 进度状态、验收结果、完成记录 | 条目所有者 |
-| [deviations.md](deviations.md) | 双 flavor 差异结论与证据（S/T/P/G/D）；accepted 为主；open 行的进度以 STATUS 为准 | 待办计划、完成叙事 | 两侧维护者 |
+| [deviations.md](deviations.md) | 冻结前的双 flavor 差异结论与证据（S/T/P/G/D）——**历史参考**，Electron 冻结后不再新增/维护行；Swift-only 差异走 STATUS | 待办计划、完成叙事、进度状态 | 协调者（冻结后只读） |
+| [electron-frozen.md](electron-frozen.md) | Electron flavor 冻结登记：冻结范围、归档清单、仍共享契约、禁用面、agent 规则、复活清单（不记进度） | 进度状态、计划细节、完成叙事 | 协调者 |
 | README.md | 规则、索引、回写流程 | 业务内容 | 协调者 |
 
 ## 状态词（STATUS 条目用这些词描述；同一节可混合，不逐条打标签）
@@ -55,7 +57,9 @@
   另有差异、设计未决、范围决策。
 - [TODO.md](TODO.md) — **A 上游**（提案、漂移、UI 对齐、升级管线）、**B 平台**（macOS Swift、Windows v1）、
   **C 功能**（账户、subagents、open-in）、**D 工程**（重构、产物守卫、页面性能）。
-- [deviations.md](deviations.md) — Electron ↔ Swift 偏差登记 + 可达性纪律 + 退役索引。
+- [deviations.md](deviations.md) — Electron ↔ Swift 偏差登记（**冻结前的历史参考**）+ 可达性纪律 + 退役索引。
+- [electron-frozen.md](electron-frozen.md) — Electron flavor 冻结归档：范围、归档清单、仍共享契约、禁用面、
+  agent 规则与复活清单；Windows/Linux 桌面腿随之冻结、不发布。
 
 > 历史：已执行计划、已收敛台账与一次性审计按「不保留历史台账」纪律删除，原文存 git 历史；
 > 仍开放的内容在 STATUS、TODO 与 design 中，完成态不回写本目录。

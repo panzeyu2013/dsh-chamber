@@ -1,5 +1,10 @@
 # scripts/perf — 性能实测工具（T0 场景表 / 整改前后对照）
 
+> **Electron/CDP 冻结归档（2026-11）**：本目录的 CDP 驱动（`boot/switch/eval-measure.mjs`、`measure-ui.mjs`、
+> `switch-frame-probe.mjs`、`cdp-lib.mjs`）随 Electron flavor 冻结、仅作复活参考；**现行 Swift 测量 = `shell.log` /
+> `[shell-fps]` 行 + Safari Web Inspector**（design 25），不再有 CDP 注入面。`disk-walk-baseline.mjs`（合成
+> fixture）与 `scripts/perf/data/` 历史数据不受影响。
+
 本目录是 dsh-chamber 性能整改的实机测量工具箱。全部为**零新依赖**的纯 Node
 （`ws` 复用 control-plane 包依赖解析，`node:` 内置模块 + node 24 类型擦除直跑
 TS）。**「只读」措辞的精确含义**（2026-09 review nit6）：脚本不修改被测应用的

@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "policy": "只登记只存在于 Swift shim、无需 Electron preload/主进程注册的 A 桥通道；新增必须过评审（schema 与规则见 docs/progress/electron-frozen.md §5.2）",
+  "entries": []
+}

@@ -1,15 +1,22 @@
 # @dsh-chamber/desktop
 
-dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控制面 origin 上的 dsh 官方前端；主进程承担正交目标/传输管理（`dsh|gateway × ssh|http`）、实例注册表、write-only 凭据事务与 IPC。
+> **ARCHIVED（2026-11 用户裁决）**：Electron 入口与打包已**冻结归档**（不删除文件、可复活）：Electron
+> 主进程 / 边沿 / preload 位于 `electron/`（`main.ts` / `electron-edges.ts` / `preload.cts`），Electron
+> 打包与更新腿冻结。本包其余核心继续被 **Swift sidecar** 使用（`host-assembly.ts` / `shell-core.ts` /
+> `node-edges.ts` / transport providers / `updater.ts` 的纯函数等），**不是归档面**。范围、共享契约与复活
+> 清单见 [`../../docs/progress/electron-frozen.md`](../../docs/progress/electron-frozen.md)；归档目录说明见
+> `electron/ARCHIVED.md`。
+
+dsh-chamber 的 Electron 壳（v4 连接管理器形态，冻结归档）：单 frame 加载控制面 origin 上的 dsh 官方前端；主进程承担正交目标/传输管理（`dsh|gateway × ssh|http`）、实例注册表、write-only 凭据事务与 IPC。
 
 ## 目录
 
-- `main.ts` — Electron 主进程入口：单窗口单 frame、control-plane 生命周期、Electron edge 接线（edges/dialog/safeStorage/tray/窗口）、退出清理与 IPC 注册点；宿主装配本体在 `host-assembly.ts`。避免并存一套未导入的 handler 实现。
-- `host-assembly.ts` — **两 flavor 共享的宿主装配单一实现**（`createHostAssembly(deps)`：运行时启动前导 / 凭据存储 / gateway 会话 / transportManager / host 包 seed / `publishRegistryTransition` / runtime 启动事务宿主 / ctx / 启动尾部 / 回收腿）。`main.ts`（Electron）与 `sidecar-ctx.ts`（Swift sidecar）只保留各自的 edge 差异注入；差异全部在依赖参数层，装配体内无 flavor 分支。
+- `electron/main.ts`（**归档**）— Electron 主进程入口：单窗口单 frame、control-plane 生命周期、Electron edge 接线（edges/dialog/safeStorage/tray/窗口）、退出清理与 IPC 注册点；宿主装配本体在 `host-assembly.ts`。避免并存一套未导入的 handler 实现。
+- `host-assembly.ts` — **两 flavor 共享的宿主装配单一实现**（`createHostAssembly(deps)`：运行时启动前导 / 凭据存储 / gateway 会话 / transportManager / host 包 seed / `publishRegistryTransition` / runtime 启动事务宿主 / ctx / 启动尾部 / 回收腿）。`electron/main.ts`（Electron，归档）与 `sidecar-ctx.ts`（Swift sidecar）只保留各自的 edge 差异注入；差异全部在依赖参数层，装配体内无 flavor 分支。
 - `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 `test/ipc/ipc-surface-mirror.test.ts` 守卫）
 - `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/index.js` 自包含 esbuild 产物），导出 `createControlPlane`、共享协议工具（rpc-envelope / cordis-inserts）与 wire plugin-manifest 读算法（parsePluginManifest / readManifestVersion / isMaterializedValue）
 - `updater.ts` — 更新控制器（设计 11）：stable 走 GitHub provider；beta 按应用自身版本自动锁定，经有界 Releases API 选择最高 canonical published beta 后切 exact-tag Generic feed（发现失败绝不回退 `latest*`）；静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
-- `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
+- `electron/preload.cts`（**归档**）— 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）
 - `renderer-trust.ts` — IPC 围栏（`createTrustedIpc`：sender/frame/origin 校验，语义不变抛 `ipc_sender_forbidden`）+ 渲染进程 URL 信任判定
 - `transport-provider.ts` — TransportProvider 接口（来源无关契约：spec 校验 / 可选传输 argv / stderr 分类 / 可选 exec + verifyUp；缺省为无子进程的 direct-endpoint 模式，SSH provider 才拥有本地隧道）
 - `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 两段式重连（快速有界 jitter 退避突发 + 慢速周期重探）+ 环形日志 + 子进程监督 + 非秘密投影
@@ -24,32 +31,44 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 - `plugin-sync.ts` — 插件**读面 + chamber 宿主包 seed** 纯逻辑：manifest 解析/行投影/spec 分类/远端 probe/seed（cordis insert 渲染与 wire manifest 读算法/掩码判据均经 control-plane-module 共享实现——打包态不引裸包名）。用户插件写面（apply/materialize/undo）已随 2026-09 C 分层裁决退役
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` esbuild 打包为**自包含 ESM 单文件**（`dist/control-plane/index.js`，依赖全部内联，见下）
-- `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
-- `scripts/electron-dev.mjs` — dev 编排：共享 Electron dist（每机器一份，worktree 共用，见 `scripts/electron-shared.mjs`）缺失时自动物化 → 按需构建 renderer/preload → 以进程组方式启动 Electron → 信号/退出时清理子进程
+- `electron/electron-edges.ts`（**归档**）— Electron 的 `HostEdges` 实现（`createElectronEdges`）；Electron-only
+- `scripts/build-preload.mjs`（**ARCHIVED**：Electron 打包腿冻结，保留为复活参考）— 将 `electron/preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
+- `scripts/electron-dev.mjs`（**ARCHIVED**：Electron dev 冻结，保留为复活参考）— dev 编排：共享 Electron dist（每机器一份，worktree 共用，见 `scripts/electron-shared.mjs`）缺失时自动物化 → 按需构建 renderer/preload → 以进程组方式启动 Electron → 信号/退出时清理子进程
 - `dist/` — 渲染层构建产物（由 renderer 包构建输出到这里，不在此提交）
 
 ## 依赖安装
+
+> **ARCHIVED 提示（2026-11）**：Electron 二进制按需物化（`DSH_CHAMBER_ELECTRON=1` / `dev:desktop` 首启）
+> 随 Electron flavor 冻结；默认开发/门禁不需要 Electron 二进制。下列说明保留为复活参考。
 
 ```sh
 # 仓库根目录一次安装（pnpm workspaces 会把 @dsh-chamber/control-plane symlink 进来）
 pnpm install
 ```
 
-- pnpm install 默认不再下载 Electron 二进制（DSH_CHAMBER_ELECTRON=1 或 dev:desktop 首启时经 electron_mirror 物化）。二进制是**每机器共享 dist**（见 `scripts/electron-shared.mjs`）：位于平台缓存目录、按 `<版本>-<平台>-<架构>` 分键（macOS `~/Library/Caches/dsh-chamber/electron/v43.4.0-darwin-arm64/`；Linux `$XDG_CACHE_HOME|~/.cache/dsh-chamber/electron/...`；Windows `%LOCALAPPDATA%\dsh-chamber\Cache\electron\...`），所有 git worktree / 重复 dev 运行共用同一份——每台机器每个 (版本, 平台, 架构) 只需下载解压一次，不再每个 worktree 各 ~300MB。旧流程遗留的本地 dist（electron 包目录内、版本匹配）会被自动复用（status=legacy，离线可用），`DSH_CHAMBER_ELECTRON_DIST` 可显式指向任意现成 dist 目录并跳过缓存。
-- `@dsh-chamber/control-plane` 是工作区包，dev/测试态经 `control-plane-module.ts` 门面直接 `import` 工作区源码；打包态该门面改加载 esbuild 自包含产物（同一条 `main.ts` 代码路径）。
+- pnpm install 默认不再下载 Electron 二进制（DSH_CHAMBER_ELECTRON=1 或 dev:desktop 首启时经 electron_mirror 物化；**Electron dev 已冻结归档，默认开发不需要该二进制**）。二进制是**每机器共享 dist**（见 `scripts/electron-shared.mjs`）：位于平台缓存目录、按 `<版本>-<平台>-<架构>` 分键（macOS `~/Library/Caches/dsh-chamber/electron/v43.4.0-darwin-arm64/`；Linux `$XDG_CACHE_HOME|~/.cache/dsh-chamber/electron/...`；Windows `%LOCALAPPDATA%\dsh-chamber\Cache\electron\...`），所有 git worktree / 重复 dev 运行共用同一份——每台机器每个 (版本, 平台, 架构) 只需下载解压一次，不再每个 worktree 各 ~300MB。旧流程遗留的本地 dist（electron 包目录内、版本匹配）会被自动复用（status=legacy，离线可用），`DSH_CHAMBER_ELECTRON_DIST` 可显式指向任意现成 dist 目录并跳过缓存。
+- `@dsh-chamber/control-plane` 是工作区包，dev/测试态经 `control-plane-module.ts` 门面直接 `import` 工作区源码；打包态该门面改加载 esbuild 自包含产物（同一条 `electron/main.ts` 代码路径，归档面）。
 
 ## 运行
+
+> **ARCHIVED 提示（2026-11）**：`build:desktop` 仍现行（Swift sidecar 复用其 control-plane / renderer 产物），
+> 但 `pnpm run dev:desktop` 已从默认脚本面移除（Electron 冻结；复活命令见
+> [`../../docs/progress/electron-frozen.md`](../../docs/progress/electron-frozen.md) §6）；现行壳入口 = macOS
+> `build:sidecar` + `build:swift-app`。
 
 ```sh
 # 编译到可运行产物（renderer 构建 + 控制面编译 + dsh 封装），仓库根目录执行：
 pnpm run build:desktop
 
+# ARCHIVED（Electron 冻结；复活参考）：
 # dev 模式：renderer 产物缺失时自动构建，然后启动 Electron
 #（可传 --build 强制重建 renderer 产物；Ctrl+C 退出时级联清理 Electron 进程树）
-pnpm run dev:desktop
+# pnpm run dev:desktop
 ```
 
-### 打包为可分发的软件
+### 打包为可分发的软件（**ARCHIVED**）
+
+> `dist:desktop*` 已从默认脚本面移除，不再产出 Electron 安装包；下列命令保留为复活参考。
 
 ```sh
 # macOS（产出 dmg + zip 到 packages/desktop/release/）
@@ -73,18 +92,22 @@ pnpm run dist:desktop
 
 ### build:control-plane：打包态控制面打包（scripts/build-control-plane.mjs）
 
-- `build:desktop` 先执行 `build:control-plane`（① `tsc -p tsconfig.control-plane.build.json --noEmit` 编译闭包校验；② esbuild 打包 `packages/control-plane/src/index.ts` 为**自包含 ESM 单文件** `dist/control-plane/index.js`），再执行 `build:preload`（`preload.cts` → `dist/preload.cjs`）。
-- 打包态 `main.ts`（经 `control-plane-module.ts` 门面，打包分支走相对入口 `./dist/control-plane/index.js`；sidecar 装配同路径）条件导入该产物；开发态仍走 workspace 符号链接零构建直接运行源码（`pnpm run dev:desktop` 不需要编译步骤）。
-- 原因：Node 类型擦除不覆盖 node_modules，workspace 包的 raw TS 无法在 asar/装配目录内运行；而**逐文件 tsc 产物会残留裸说明符**（如 `@dsh-chamber/dsh-chamber-wire/plugin-manifest`，打包树里解析到 node_modules 下的 .ts → `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`；sidecar 装配目录没有 node_modules → `ERR_MODULE_NOT_FOUND`）。因此打包必须把 workspace/运行时依赖**全部内联**（与 gateway dist 同规；`ws` 的 CJS 内建 require 由 createRequire banner 承接）。构建脚本在产物上断言「只含 `node:` 说明符」，`scripts/control-plane-freshness.test.mjs` 对既有产物重复同一断言与保鲜标记检查。沙箱 preload 没有类型擦除，必须预编译为纯 CJS（`main.ts` 优先加载 `dist/preload.cjs`，`electron-dev.mjs` 缺失时自动编译）。
+- `build:desktop` 先执行 `build:control-plane`（① `tsc -p tsconfig.control-plane.build.json --noEmit` 编译闭包校验；② esbuild 打包 `packages/control-plane/src/index.ts` 为**自包含 ESM 单文件** `dist/control-plane/index.js`）。**（ARCHIVED）** 默认 `build:desktop` 不再调用 `build:preload`（`electron/preload.cts` → `dist/preload.cjs` 属冻结打包腿，保留为复活参考）。
+- 打包态 `electron/main.ts`（**归档**；经 `control-plane-module.ts` 门面，打包分支走相对入口 `./dist/control-plane/index.js`；sidecar 装配同路径）条件导入该产物；开发态仍走 workspace 符号链接零构建直接运行源码（`pnpm run dev:desktop` 不需要编译步骤；**该 dev 流程已随 Electron 冻结归档**）。
+- 原因：Node 类型擦除不覆盖 node_modules，workspace 包的 raw TS 无法在 asar/装配目录内运行；而**逐文件 tsc 产物会残留裸说明符**（如 `@dsh-chamber/dsh-chamber-wire/plugin-manifest`，打包树里解析到 node_modules 下的 .ts → `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`；sidecar 装配目录没有 node_modules → `ERR_MODULE_NOT_FOUND`）。因此打包必须把 workspace/运行时依赖**全部内联**（与 gateway dist 同规；`ws` 的 CJS 内建 require 由 createRequire banner 承接）。构建脚本在产物上断言「只含 `node:` 说明符」，`scripts/control-plane-freshness.test.mjs` 对既有产物重复同一断言与保鲜标记检查。沙箱 preload 没有类型擦除，必须预编译为纯 CJS（`electron/main.ts` 优先加载 `dist/preload.cjs`，`electron-dev.mjs` 缺失时自动编译）。
 
-### electron-builder 配置要点（packages/desktop/package.json 的 `build` 键）
+### electron-builder 配置要点（packages/desktop/package.json 的 `build` 键）（**ARCHIVED**）
+
+> Electron 打包冻结；本节保留为复活参考。`build.files` **已含** `electron/**/*.ts` / `electron/**/*.cts`
+> （与 `packages/desktop/package.json` 一致），复活时只需核对、不再补 glob；根 `tsconfig.json` 默认不含
+> `electron/**`（有意不让冻结类型检查反向绑定共享契约改动），复活按需加回（见 electron-frozen.md §6.4）。
 
 - `files` 只收主进程/预加载/transport/settings/plugin-sync 源文件、package.json 与 dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经两个精确的 `extraResources` FileSet 拷入产物：根 manifest/lock/workspace 文件一组，`vendor/dsh/node_modules` 作为独立复制根一组（electron-builder 会无条件忽略任一 FileSet 根下名为 `node_modules` 的直接子目录，不能只复制 `vendor/dsh`）。`afterPack` 在生成 DMG/ZIP/NSIS 前校验 dsh package manifest、版本与目标平台，缺失/漂移直接使打包失败；暂存树和交换备份不会进入产物。
 - `electronLanguages: ["en-US", "zh-CN"]` 裁剪 locales；mac 腿另有 `build.mac.electronLanguages: ["en","zh_CN"]`——`zh-CN` 匹配不到实际目录 `zh_CN.lproj`，app-builder-lib 会静默删除中文 `locale.pak`（S-47）。
 - **更新 feed（设计 11 §6）**：stable 使用 package 默认 GitHub publish 配置且只产 `latest.yml`/`latest-mac.yml`；SemVer beta 使用独立 `electron-builder.beta.yml`（经 `electron-builder.base.cjs` 继承同一 files/signing/runtime 配置）且只产 `beta.yml`/`beta-mac.yml`，发布策略测试同时做另一通道缺失断言。mac target 增加 `zip`（electron-updater mac 需要，dmg 保留首装）；`nsis.differentialPackage: false`（Windows 无 exe blockmap，更新全量下载）。`--publish=never` 不生成 update-info yml。
 - **公开 release fail-closed**：正式 macOS 缺少五项签名/公证凭据时在任何 Release mutation 前阻断；构建后必须通过 Developer ID、公证、stapler 与 spctl 才能公开 finalize。dry-run 即使正式 secrets 已配置也强制清空签名/Apple 环境与 `GH_TOKEN`，只产 ad-hoc 包，且不创建/修改 Release、不上传资产。Windows 首版未签名，SmartScreen 是明确让步（设计 11 §7）。
 
-## 主进程
+## 主进程（**ARCHIVED**：以下为 Electron 主进程的归档参考；共享契约见 AGENTS.md / electron-frozen.md）
 
 ### 单 frame
 
@@ -160,7 +183,7 @@ HostEdges 的 `trayAvailable`/`setKeepAwake`/`focusMainWindow`/`launchApp`/`setL
 - `trayAvailable`/`isPackaged`（E2/B1）：Electron 侧本就未实现；关闭行为与打包裁决不再需要经本 seam 暴露 → 删除成员与 node-edges 缓存。
 - `focusMainWindow`（D3）：Electron 通知 click 由 electron-edges 的 `host.showMainWindow` 承担、Swift 在 `SwiftEdgeHostLegs` 内自办；core 不需要可复用聚焦入口 → 删除成员。
 
-`dsh-chamber:info` 的 `flavor` 字段同为 E2 有意保留的零消费者字段（preload 不镜像）；`hostFacts.flavor`（`main.ts`/`sidecar-ctx.ts`）仍由 `chamber-settings` 的能力门消费，二者不是一回事。
+`dsh-chamber:info` 的 `flavor` 字段同为 E2 有意保留的零消费者字段（preload 不镜像）；`hostFacts.flavor`（`electron/main.ts`/`sidecar-ctx.ts`）仍由 `chamber-settings` 的能力门消费，二者不是一回事。
 
 ### 退出 / 单实例 / 错误处理
 
@@ -176,9 +199,9 @@ HostEdges 的 `trayAvailable`/`setKeepAwake`/`focusMainWindow`/`launchApp`/`setL
 - **凭据由主进程拥有（表单瞬时 write-only 输入例外）**：默认 ssh key/agent；可选 SSH 密码与 gateway token/password 只由表单瞬时采集并经 write-only IPC 进入主进程及上述 owner-only 镜像，永不返回/回填或由 renderer 持久化；askpass 永不上命令行，Gateway 仅向 exact connection-target scope 对应的注册 transport 注入白名单头；generation/proof/refresh epoch 阻止撤销后的迟到认证结果。HTTPS pin 匹配前登录/探针/HTTP/WS 反代发送零应用层字节；日志只含非秘密存在性/主机端口。
 - **插件写面退役（2026-09 C 分层裁决）**：安装/卸载/物化/撤销/npm 搜索/tarball 应用及对应的 ssh/gateway 写 IPC 已全部删除；仅保留只读清单投影（`plugin_list` / `local_plugin_list`，依赖值路径脱敏）、行投影与 capability 探针。chamber 宿主包 seed 与其 gateway seed-cache 同步是供给面，保留。
 
-## 桌面环境验收清单
+## 桌面环境验收清单（**ARCHIVED**：Electron dev 已冻结；现行 Swift 壳验收见 design 25 / GUI 验收清单）
 
-1. 运行 `pnpm run dev:desktop` 后出现 1280x800 主窗口，本地实例的 dsh Web UI 加载（v1 无登录面）。
+1. 运行 `pnpm run dev:desktop`（**ARCHIVED**，复活参考）后出现 1280x800 主窗口，本地实例的 dsh Web UI 加载（v1 无登录面）。
 2. DevTools 无报错：Menu > View > Toggle Developer Tools（或 Ctrl/Cmd+Shift+I）查看 console，无 error。
 3. chamber 侧栏可见（管理 | 本地 dsh | 远程实例列表），实例分区展开显示 workspace/session 聚合，点击会话行打开该实例 shell（N-ctx 切换正常）。
 4. chamber 管理视图中远程实例 CRUD/连接/断开/日志可用；配了 `serviceName` 时 systemd 起停生效。

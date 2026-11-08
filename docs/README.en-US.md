@@ -9,6 +9,8 @@ The desktop connection manager for [dsh](https://github.com/deepseek-ai/deepseek
 
 The macOS build uses a **Swift/AppKit native shell**: window, menus, status item, notifications, Dock badge, deep links, file dialogs, hide/restore and Sparkle in-app updates are implemented in Swift; the business runs in a packaged Node sidecar; the page 100% reuses the dsh official frontend — not a browser wrapper.
 
+> **Version scope (2026-11 user ruling)**: the only shipped build is the **macOS Swift native shell** (Apple Silicon). The Electron desktop build is **frozen and archived** (files kept, revivable); Windows/Linux desktop builds are frozen with it and **not published**. Reopening that scope is a user decision — scope, shared contracts, disabled surfaces and the revival checklist are in [progress/electron-frozen.md](progress/electron-frozen.md).
+
 ## User interface
 
 ![dsh-chamber user interface](../assets/page.png)

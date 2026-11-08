@@ -181,7 +181,7 @@ v1 规则：四次复验（fingerprint → source 匹配 → 归属 → 异步�
 
 ### 8.1 公网 / 本机 URL：既有链接腿
 
-`<a target="_blank" rel="noreferrer">` 触发 Electron 的 `setWindowOpenHandler`，`isExternalLinkUrl` 为真时交系统浏览器并拒绝新建窗口；
+`<a target="_blank" rel="noreferrer">` 触发 Electron 的 `setWindowOpenHandler`（Electron 腿冻结归档），`isExternalLinkUrl` 为真时交系统浏览器并拒绝新建窗口；
 Swift 对偶走 `TrustGuard` + `ExternalOpenBudget`；**不新增 IPC**。该腿共用既有全局预算（8 次/10s + 30s 冷却），超预算静默丢弃；
 **不要**用 `location.href`/`window.open` 绕路；渲染链接前必须用 §4 的解析器判定 scheme 与非 app-origin。
 
@@ -267,7 +267,7 @@ v1 测试面 = `packages/desktop/test/forward/` 的 namespace/argv/manager/lifec
 
 v1 门禁三组：本地 `check:static` + `check:tests`（file-budgets 零增长/已裁决 raise、test-wiring、包边界、死导出、import 循环、
 typecheck、desktop/renderer-shell 测试）；打包/真机（`build:renderer`、`build:sidecar`、`build:swift-app`、
-`test:swift`/`test:macos`/`test:win32`、`test:sidecar:compiled`、`acceptance:gui`、`verify:shim-payload`）；
+`test:swift`/`test:macos`、`test:sidecar:compiled`、`acceptance:gui`、`verify:shim-payload`；~~`test:win32`~~ 随 Windows/Electron 冻结归档）；
 发布前 `release-preflight` + packaging closure。门禁集合以 `scripts/gates/run-checks.mjs` 为机器单源，本节不重复枚举。
 
 ## 13. 文档集成与有界例外登记（v1 记录；v2 见 §16.9）
@@ -353,7 +353,7 @@ design 25 的计数锁步、packaging closure 与 STATUS 的取舍登记。现�
 
 ## 16. v2 修订（2026-11，用户裁决）：右栏内嵌 iframe + forward 生命周期
 
-> 本节是**当前契约**。v2 覆盖 §1–§15 的 v1 形态：面板不再是「零渲染 + 系统浏览器」，而是右栏内嵌 iframe；local 直连、ssh 经 forward 到 alias；Electron 与 Swift 均为核心 flavor、默认开启。
+> 本节是**当前契约**。v2 覆盖 §1–§15 的 v1 形态：面板不再是「零渲染 + 系统浏览器」，而是右栏内嵌 iframe；local 直连、ssh 经 forward 到 alias；Electron 与 Swift 均为核心 flavor、默认开启（**Electron 腿已冻结归档，见 `../progress/electron-frozen.md`**）。
 >
 > **2026-11 用户二次裁决（§16.11）**：面板的样式与行为改为上游官方 `ui-sidebar-browser` 的 iframe 路径忠实 fork，唯一差异 = SSH 反代（iframe src 解析 + 代理页 system-browser 出口的 alias 投影）；§16.1–§16.10 中与 §16.11 冲突的「自研 launcher/远端转发列表/https 系统浏览器/固定 sandbox」描述以 §16.11 为准。
 
@@ -378,7 +378,7 @@ design 25 的计数锁步、packaging closure 与 STATUS 的取舍登记。现�
 ### 16.3 控制面 CSP（唯一服务端改动）
 
 - `ControlPlaneOptions` 增可选 `frameSources`；缺省 = v1 逐字节不变（gateway/cli/standalone 不变）。
-- 生产启用：`packages/desktop/main.ts`（createControlPlane 调用点）与 `packages/desktop/sidecar-entry.ts` 显式传入；`packages/gateway`、`packages/cli` 不传。
+- 生产启用：`packages/desktop/electron/main.ts`（createControlPlane 调用点）与 `packages/desktop/sidecar-entry.ts` 显式传入；`packages/gateway`、`packages/cli` 不传。
 - 源集合由单源生成：`blob:` + `http://127.0.0.1:*` + `http://localhost:*` + `http://127.0.0.2:*` … `http://127.0.0.254:*`（wire `FORWARD_ALIAS_OCTETS` 单源）。
 - **不得**加入 `'self'`、裸 `http:`/`https:`（任意站点内嵌）、app 反向代理同源面；`frame-ancestors 'none'`、`X-Frame-Options: DENY`、COOP/Corp 保持。
 - 锁步测试：desktop 精确集合（数量/首尾/无 'self'/无裸 scheme/长度上限）；control-plane 缺省逐字节不变 + 传入串内容 + gateway 镜像不放宽；GUI 走查新增 SH-7 CSP 合同。

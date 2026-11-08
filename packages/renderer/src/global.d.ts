@@ -4,7 +4,7 @@
  * has no injection, so the property is optional and every consumer guards
  * with ?. / typeof checks.
  *
- * Mirrors the interface declared in packages/desktop/preload.cts; the two
+ * Mirrors the interface declared in packages/desktop/electron/preload.cts; the two
  * declarations must stay structurally identical (interface merging).
  */
 
@@ -301,7 +301,7 @@ export interface SshPasswordSubmission {
  * write-only input. The systemd/plugin
  * operations are SSH-only and fail explicitly for providers without exec.
  *
- * Mirrors packages/desktop/preload.cts structurally (interface merging).
+ * Mirrors packages/desktop/electron/preload.cts structurally (interface merging).
  */
 /** SSH instance-registry load health (degraded + roster-incomplete gates):
  *  while degraded, an instances_get empty array is NOT an authoritative
@@ -312,7 +312,7 @@ export interface SshPasswordSubmission {
  *  non-secret failure text (absent while healthy); droppedCount is the number
  *  of dropped rows and is present only with rosterIncomplete. Both flags are
  *  optional so an older producer's {degraded} answer still type-checks (an
- *  absent flag reads as false). Mirrors packages/desktop/preload.cts. */
+ *  absent flag reads as false). Mirrors packages/desktop/electron/preload.cts. */
 export interface SshInstancesHealth {
   degraded: boolean
   reason?: string
@@ -425,7 +425,7 @@ export type GatewayPluginSyncIpcResult =
 /**
  * The desktop update surface (design 11) — non-secret only: versions,
  * channel, a release-page URL, a short error text. Mirrors
- * packages/desktop/preload.cts structurally (interface merging).
+ * packages/desktop/electron/preload.cts structurally (interface merging).
  */
 export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error'
 
@@ -474,7 +474,7 @@ export interface UpdateSurface {
 /**
  * The dsh-chamber settings surface (design 14 D7) — chamber-GLOBAL runtime
  * settings owned by the main process (<userData>/chamber-settings.json),
- * non-secret only. Mirrors packages/desktop/preload.cts structurally
+ * non-secret only. Mirrors packages/desktop/electron/preload.cts structurally
  * (interface merging requires identical shapes).
  */
 
@@ -673,7 +673,7 @@ export interface OpenInSurface {
 /**
  * Remote-browser forward wire mirror (design 28 §7; the `forward` namespace).
  *
- * packages/desktop/preload.cts is the surface authority and declares the same
+ * packages/desktop/electron/preload.cts is the surface authority and declares the same
  * block; this file must stay structurally identical (namespace methods, payload
  * types and the record/limits shapes). The cross-process authority is
  * `packages/dsh-chamber-wire/src/forward.ts`; the chamber client adapter maps
@@ -925,7 +925,7 @@ export interface DshChamberBridge {
 /** rc.2 官方 desktop carrier（window.dshDesktop）：preload.cts 的
  *  exposeDesktopCarrier 与 Swift shim 的 dshDesktopApi 同形。官方 shortcuts /
  *  ui-settings-general / ui-sidebar-browser 客户端按结构读取；本仓的类型权威是
- *  packages/desktop/preload.cts（此处为渲染端消费镜像）。 */
+ *  packages/desktop/electron/preload.cts（此处为渲染端消费镜像）。 */
 export type DesktopShortcutInput = { readonly revision: string } & (
   | { readonly kind: 'menu'; readonly commandId: string }
   | {

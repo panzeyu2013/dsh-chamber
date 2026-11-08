@@ -1,13 +1,21 @@
+// ============================================================================
+// ARCHIVED / FROZEN — Electron flavor: preload.cts (2026-11 user ruling).
+// Electron 已冻结归档：本文件不参与默认开发 / 门禁 / 发布，仅作为可复活参考保留。
+// 冻结范围与复活清单：docs/progress/electron-frozen.md；目录说明：./ARCHIVED.md
+// 位置变更：从 packages/desktop/ 根迁入本归档目录（old → new 见 ./ARCHIVED.md）。
+// 沙箱 preload 仍编译为 dist/preload.cjs（tsconfig.preload.build.json / build-preload.mjs 同步）。
+// 默认不要修改本文件；需要解冻时先按 docs/progress/electron-frozen.md 执行。
+// ============================================================================
 import type { IpcRendererEvent } from 'electron';
 import type {
   TransportInstanceInput as SshInstanceInput,
   TransportInstanceSpec as RegistrySshInstanceSpec,
   TransportLogEntry as SshLogEntry,
   TransportStatusProjection as SshStatusProjection,
-} from './transport-provider.ts';
-import type { SshConfigDiscovery } from './ssh-config.ts';
-import type { UpdateState } from './updater.ts';
-import type { RuntimeState } from './dsh-runtime-controller.ts'
+} from '../transport-provider.ts';
+import type { SshConfigDiscovery } from '../ssh-config.ts';
+import type { UpdateState } from '../updater.ts';
+import type { RuntimeState } from '../dsh-runtime-controller.ts'
 import type { PluginRow as PluginRowProjection } from '@dsh-chamber/dsh-chamber-client-core/plugin-row';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 

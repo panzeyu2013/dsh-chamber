@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 将 packages/desktop/preload.cts 编译为纯 CJS（dist/preload.cjs）供打包与
+ * 将 packages/desktop/electron/preload.cts 编译为纯 CJS（dist/preload.cjs）供打包与
  * dev 使用。
  *
  * 背景：沙箱 preload 在 Electron 的 sandbox bundle 中以纯 CJS 执行——没有
@@ -8,7 +8,7 @@
  * （Cannot use import statement outside a module）。因此 dev 与打包态统一
  * 加载编译产物（main.ts 缺省回退 .cts 源码，仅为源码检出兜底）。
  *
- * 编译隔离：tsconfig 只 include preload.cts，但 tsc 会把其本地 import 的
+ * 编译隔离：tsconfig 只 include electron/preload.cts，但 tsc 会把其本地 import 的
  * 类型来源文件一并纳入程序并整体 emit（preload.cts 的 3 个 type-only
  * import 会额外产出 ssh-config.js/transport-provider.js/updater.js 死文件）。
  * 因此先 emit 到临时目录再只搬入 preload.cjs，
@@ -27,7 +27,7 @@ const repoRoot = path.resolve(desktopDir, '..', '..');
 const tscEntry = path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc');
 const project = path.join(desktopDir, 'tsconfig.preload.build.json');
 const tempOut = path.join(desktopDir, 'dist', '.preload-build');
-const entry = path.join(tempOut, 'preload.cjs');
+const entry = path.join(tempOut, 'electron', 'preload.cjs');
 const finalEntry = path.join(desktopDir, 'dist', 'preload.cjs');
 
 if (!existsSync(tscEntry)) {

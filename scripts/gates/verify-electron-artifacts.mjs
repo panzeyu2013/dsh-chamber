@@ -2,6 +2,12 @@
 /**
  * verify-electron-artifacts.mjs —— executed Electron-compiled-artifact gate.
  *
+ * **ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）**：默认门禁 / CI /
+ * 发布流程不再调用本 CLI（`gate-surfaces.json` 已移除 `macos.electron-artifacts`，ci.yml
+ * 的 Electron compiled-artifacts smoke 步已删）。文件保留为复活基线：其纯判定函数仍被
+ * `scripts/gates/run-checks.test.mjs` 与 `packages/desktop/scripts/after-pack-adhoc-sign.test.mjs`
+ * 引用；`--check-dir` 那类需要真实构建产物的执行面默认不运行。
+ *
  * The sidecar half is covered by compiled-sidecar-smoke.mjs (the shipped
  * `sidecar.js` boots and answers the B bridge); the Electron compiled
  * artifacts are otherwise only asserted to EXIST:
@@ -76,7 +82,7 @@ export const BRIDGE_NAMESPACE_KEYS = Object.values(FACTORY_TO_NAMESPACE).sort()
 
 /**
  * The dshDesktop.protocolVersion of the upstream rc.2 desktop carrier
- * (packages/desktop/preload.cts exposeDesktopCarrier(); the Swift shim pins
+ * (packages/desktop/electron/preload.cts exposeDesktopCarrier(); the Swift shim pins
  * the same value in bridge-shim-document.test.ts).
  */
 export const DESKTOP_CARRIER_PROTOCOL_VERSION = 1

@@ -281,7 +281,7 @@ F 在**名字集合**之外同时携带 **name→version 事实**（运行时线
 pin 多个版本；锁文件来源按 `name@version(peer 依赖后缀)` 取版本段，树枚举来源读该包自己的 `package.json`，读不到就不登记该名字的版本、绝不猜；键缺席或空集 = 没有版本事实）。它只服务 §6.11.3 的代口径与 §6.11.4 的复验，**不参与 P 的名字集合**——C11 的判据仍是名字集。
 
 **来源选择与可信性判据**：F 按候选顺序取（**内建锚锁文件 → 活动树自己的 `pnpm-lock.yaml` → 树枚举兜底**），
-候选必须过硬判据：核心锚齐全、不含禁名（与 C11 同源），**且名称解析出的闭包必须也解析出版本**——两解析器对同一批键矛盾（`the name and version parsers disagree about the same keys`）即拒绝该来源。**树枚举是刻意的例外**：不要求版本事实（目录名即其用途；"空目录树可作 F"的既有 pin 依赖它）——在树上也拒绝会让 `familyNames` 变 null ⇒ 写面进 `protected-set-unavailable`、挡死官方 opt-in 安装。内建锚（`pinnedLockfilePath`）只在**活动运行时与内建线同版**时才交给 `resolveRuntimeFamily`（`shouldPreferPinnedRuntimeLockfile`，`plugin-sync.ts`）；用户选装运行时（design 18 §3.6）用活动树自己锁文件。**唯一例外 = 显式 env 覆盖兜底**（`desktop/main.ts` 的 `localProtectionFacts`）：活动树与内建线**不同版**、自身事实源**解析失败**、且 `resolved.source === 'env'`（`DSH_CHAMBER_DSH_PATH` 开发者覆盖）时带内建锚**重试一次**（否则本地写面整体进 `protected-set-unavailable`）；`'user'`（用户自选已发布运行时）**永不**享受。gateway 没有内建锚，直接用自身 workspace 锁文件。
+候选必须过硬判据：核心锚齐全、不含禁名（与 C11 同源），**且名称解析出的闭包必须也解析出版本**——两解析器对同一批键矛盾（`the name and version parsers disagree about the same keys`）即拒绝该来源。**树枚举是刻意的例外**：不要求版本事实（目录名即其用途；"空目录树可作 F"的既有 pin 依赖它）——在树上也拒绝会让 `familyNames` 变 null ⇒ 写面进 `protected-set-unavailable`、挡死官方 opt-in 安装。内建锚（`pinnedLockfilePath`）只在**活动运行时与内建线同版**时才交给 `resolveRuntimeFamily`（`shouldPreferPinnedRuntimeLockfile`，`plugin-sync.ts`）；用户选装运行时（design 18 §3.6）用活动树自己锁文件。**唯一例外 = 显式 env 覆盖兜底**（`desktop/shell-core.ts` 的 `localProtectionFacts`（共享面；Electron main 冻结归档））：活动树与内建线**不同版**、自身事实源**解析失败**、且 `resolved.source === 'env'`（`DSH_CHAMBER_DSH_PATH` 开发者覆盖）时带内建锚**重试一次**（否则本地写面整体进 `protected-set-unavailable`）；`'user'`（用户自选已发布运行时）**永不**享受。gateway 没有内建锚，直接用自身 workspace 锁文件。
 
 #### 6.11.2 为什么 B 取 B₀ 而不取 live bundles
 

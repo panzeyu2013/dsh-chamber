@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）：本文件属冻结归档面，文件不删、默认不运行；需要复活时按其 §6 复活清单执行。
 /**
  * Shared Electron dist bootstrap (multi-worktree parallel dev).
  *
@@ -27,10 +28,10 @@
  * (~/Library/Caches/electron on macOS), so wiping the shared dist does not
  * re-download.
  *
- * Consumers:
+ * Consumers (ARCHIVED with the Electron flavor — 2026-11):
  *   - packages/desktop/scripts/electron-dev.mjs (dev launcher, auto-ensure);
- *   - scripts/dev/ensure-electron.mjs (root postinstall, gated by
- *     DSH_CHAMBER_ELECTRON=1).
+ *   - scripts/dev/ensure-electron.mjs (former root postinstall; the postinstall
+ *     hook was removed when Electron was frozen — revival only).
  * A per-worktree node_modules/electron/dist (status 'legacy') is still
  * reused automatically when present — offline machines that already
  * materialized a local dist keep working without any download.

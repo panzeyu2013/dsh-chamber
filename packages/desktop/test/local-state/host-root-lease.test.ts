@@ -131,7 +131,7 @@ test('state 根派生单源：sidecar 两文件不再裸 join <userData>/state�
 })
 
 test('desktop main：flock → host-root 租约 → plane，quit 先放 L2 再放 L1', () => {
-  const main = desktopSource('main.ts')
+  const main = desktopSource('electron/main.ts')
   const lockAt = main.indexOf('acquireChamberLock({')
   const leaseAt = main.indexOf('acquireHostRootLease(runtimeBaseDir,')
   const planeAt = main.indexOf('createControlPlane({')

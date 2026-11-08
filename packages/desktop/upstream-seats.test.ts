@@ -18,7 +18,7 @@ const DESKTOP = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(DESKTOP, '..', '..')
 /** Source locks must see code, not comments: a commented-out line must not satisfy them. */
 const read = (file: string): string => stripComments(readFileSync(file, 'utf8'))
-const preload = read(join(DESKTOP, 'preload.cts'))
+const preload = read(join(DESKTOP, 'electron', 'preload.cts'))
 const shim = read(join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'Resources', 'bridge-shim.js'))
 
 test('S-52: both flavors expose the upstream dshDesktop carrier', () => {
@@ -52,7 +52,7 @@ test('native theme seat: the Electron arm observes data-ds-theme-source like ups
   const shellSettings = read(join(DESKTOP, 'shell-ipc-settings.ts'))
   assert.match(shellSettings, /IPC_CHANNELS\.NATIVE_THEME_SET/, 'core handles the channel')
   assert.match(shellSettings, /deps\.edges\.nativeThemeSet\(source\)/, 'core routes it through the host edge')
-  const electronEdges = read(join(DESKTOP, 'electron-edges.ts'))
+  const electronEdges = read(join(DESKTOP, 'electron', 'electron-edges.ts'))
   assert.match(electronEdges, /nativeTheme\.themeSource = source/, 'Electron sets nativeTheme.themeSource')
   const nodeEdges = read(join(DESKTOP, 'node-edges.ts'))
   assert.match(nodeEdges, /nativeThemeSet\(_source: 'light' \| 'dark' \| 'system'\)/,
@@ -84,7 +84,7 @@ test('Windows caption seat: preload marker + hidden-titlebar window branch', () 
   assert.match(preload, /root\.dataset\.windowsTitlebar = ''/)
   assert.match(preload, /root\.style\.setProperty\('--dsh-windows-titlebar-height', WINDOWS_TITLEBAR_HEIGHT \+ 'px'\)/)
   // Mirrored constants must stay equal (preload cannot import across the CJS boundary).
-  const main = read(join(DESKTOP, 'main.ts'))
+  const main = read(join(DESKTOP, 'electron', 'main.ts'))
   const constant = /const WINDOWS_TITLEBAR_HEIGHT = (\d+);/
   const preloadHeight = preload.match(constant)?.[1]
   const mainHeight = main.match(constant)?.[1]
@@ -101,7 +101,7 @@ test('S-54: the macOS window chrome mirrors the upstream darwin branch', () => {
   // background to stay transparent, and 'active' keeps the material stable when
   // the window blurs. The page side is upstream ui-web/ui-layout CSS (transparent
   // frame, --dsh-frame-top-clearance 48px); the fullscreen mark is S-53.
-  const main = read(join(DESKTOP, 'main.ts'))
+  const main = read(join(DESKTOP, 'electron', 'main.ts'))
   assert.match(main, /process\.platform === 'darwin'/, 'the darwin branch must exist')
   assert.match(main, /titleBarStyle: 'hiddenInset' as const/)
   assert.match(main, /trafficLightPosition: \{ x: 16, y: 18 \}/)
@@ -148,7 +148,7 @@ test('S-53: the Electron flavor mirrors the fullscreen mark like the Swift shell
   // Electron flavor has no preload equivalent, so main pushes the same expression on
   // enter/leave and replays it after every load (the Swift shell does it natively in
   // ShellWindowFullscreenMark.swift — same spelling, same dataset form).
-  const main = read(join(DESKTOP, 'main.ts'))
+  const main = read(join(DESKTOP, 'electron', 'main.ts'))
   const swift = readFileSync(
     join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'ShellWindowFullscreenMark.swift'),
     'utf8',

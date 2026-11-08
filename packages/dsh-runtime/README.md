@@ -16,4 +16,4 @@
 
 ## 测试
 
-`pnpm run test:runtime`（含 Windows 语义 `test:win32`）。剩余实机门禁（打包 `.app`、Linux server、gateway 重启重连窗口等）以 [`docs/progress/STATUS.md`](../../docs/progress/STATUS.md) 为准。
+`pnpm run test:runtime`（Windows 语义 `test:win32` 仅本地平台分档；Windows 桌面腿冻结归档、CI 不跑）。剩余实机门禁（打包 `.app`、Linux server、gateway 重启重连窗口等）以 [`docs/progress/STATUS.md`](../../docs/progress/STATUS.md) 为准。

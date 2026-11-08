@@ -1,7 +1,8 @@
 # dsh-chamber 设计总览（v1：多来源会话统一导航）
 
 > **设计体系入口与索引（v1）**——dsh-chamber = dsh 的
-> **桌面连接管理器**：Electron 包装 dsh 官方前端，本地实例与远程服务器**同等接入**；
+> **桌面连接管理器**：原生壳包装 dsh 官方前端（当前出货 = macOS Swift 原生壳；Electron flavor 已冻结归档，
+> 见 [../progress/electron-frozen.md](../progress/electron-frozen.md)），本地实例与远程服务器**同等接入**；
 > 界面 = **dsh 官方前端源码复用自建**，首屏即 dsh 主界面，**多来源 session/workspace
 > 在 dsh 原生侧边栏平等呈现**（仅按来源分类、远程以颜色标注——
 > codex 式"导航统一、执行按来源路由"）；未完成门禁见 `docs/progress/STATUS.md`。
@@ -76,7 +77,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（opt-in） | git worktree 统一模型：实例内 seed host Remote（snapshot/create/enter/remove）+ 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 派生 `kind:'checkout'` 行；官方 `forge-bundle`（opt-in）与 seed 共用 `<repo>/.agents/worktrees` 池、GitHub provider 关闭；path-based 删除、无 workspace/session 生命周期 |
 | 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行 | dsh 客户端插件运行时加载：每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 活实例装/卸热同步（design 09 §3.7，无需窗口重载）+ 信任边界 |
 | 10 | —（契约并入 [05](05-connection-manager.md) §2.3/§3） | 并入 05 | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）；不改上游 dsh |
-| 11 | [11-auto-update.md](11-auto-update.md) | 现行 | 桌面端更新提示（无弹窗、低打扰）：settings chamber「更新」块 + 静默检查、确认后下载、退出时安装（win/mac/linux，mac 需 Developer ID）、beta → stable 通道 |
+| 11 | [11-auto-update.md](11-auto-update.md) | Electron/electron-updater 半边归档参考；Swift 更新链见 design 25 §7（现行） | 桌面端更新提示（无弹窗、低打扰）：settings chamber「更新」块 + 静默检查、确认后下载、退出时安装（win/mac/linux，mac 需 Developer ID）、beta → stable 通道 |
 | 12 | 并入 [24-archived-session-cleanup.md](24-archived-session-cleanup.md)（上游 wire 草案见 [../progress/TODO.md](../progress/TODO.md) A§3） | 并入 24 | 已归档会话管理：`workspace/unarchiveSession` 可恢复、浏览三态筛选；B 特权层冻结结论保留 |
 | 13 | [13-remote-plugin-management.md](13-remote-plugin-management.md) | 现行 | 远程实例插件管理：一键应用本地插件清单 + 可视化添加（provider exec 通道、spec 白名单、remoteDshHome 基准） |
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行 | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒重连、防休眠、退出保护 |
@@ -84,16 +85,16 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 现行 | VS Code OS 深链：`dsh-chamber://` 快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed；应用内打开面由 design 20 承接 |
 | 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 现行 | 独立启动的认证默认 server 形态（`--no-auth` 为显式可信网络例外）：单本地 dsh 公网接入、Desktop `gateway` target 与 gateway 认证/反代/运行时管理（编排写面已剥离）；普通 control-plane 仍 loopback-only |
 | 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md)；增补 [18-addendum-apply-now.md](18-addendum-apply-now.md)（「立即应用」） | 现行 | dsh 运行时版本管理：source-bound 安装、per-server 设置段、探针门控激活/回退、快照/失败现场与磁盘治理；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位） |
-| 19 | [19-notifications.md](19-notifications.md) | 现行 | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）+ 未读徽标。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + 并入客户端页「通知」控制组（无新设置入口）；OpenChamber 通知功能调研见文内 §2 |
+| 19 | [19-notifications.md](19-notifications.md) | 现行（macOS 权限/打包态实机验收未完成）；Electron 呈现腿冻结归档 | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）+ 未读徽标。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；**决策与回执纪律在 core（`notifications.ts`），Swift 宿主腿用 `UNUserNotificationCenter`（Electron Notification 腿冻结归档）** + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + 并入客户端页「通知」控制组（无新设置入口）；OpenChamber 通知功能调研见文内 §2 |
 | 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行 | open-in 打开面（design 16 演进；**fork & supersede**）：官方两份都不使用——宿主半 fork 进实例内 seed 包（`@dsh-chamber/dsh-chamber-seed-open-in`：本机全量目录 + 真实图标 + 拉起，localOnly），客户端半由 `@dsh-chamber/dsh-chamber-client-ui-open-in` 承接为官方超集。单一 header 入口按 per-source 视图模型选通道：本地走实例内 Remote、远程 ssh 走主进程 VS Code Remote、http/未知无入口；主进程注册表 vscode-only + 六步 loud 管线 + 能力协商 IPC。无 vendor 补丁、无 spawn/overlay 改动 |
 | 21 | [21-gateway-plugin-parity.md](21-gateway-plugin-parity.md) | 现行（A/B/C） | 统一插件管理模型与 gateway 连接对齐：单一模型、末段执行分叉（ssh exec；gateway 无插件写面） |
-| 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行 | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
-| 23 | [23-windows-support.md](23-windows-support.md) | 现行（Windows 11 x64 支持契约） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
+| 22 | [22-linux-desktop.md](22-linux-desktop.md) | **冻结归档**（Electron frozen，见 [../progress/electron-frozen.md](../progress/electron-frozen.md)） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
+| 23 | [23-windows-support.md](23-windows-support.md) | **冻结归档**（Electron frozen，见 [../progress/electron-frozen.md](../progress/electron-frozen.md)） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
 | 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行 | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{probe,purge}`（purge 带可选子集过滤 / `force` / 保护集 `protectSessionIds`；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover「查看已归档内容」打开——查看 / 恢复 / 逐条删除，整集删除只能显式全选后删选中、无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
-| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 现行（路线 A） | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、65 通道 manifest 锁步（56 invoke+9 push）、目录锁、原生边沿），与 Electron 三平台版共存保留；P5b 起 sidecar 继续作为 Swift flavor 的 node 来源 |
+| 25 | [25-macos-swift-native-shell.md](25-macos-swift-native-shell.md) | 现行（路线 A）；**唯一出货 flavor** | macOS Swift 原生壳：WKWebView 载控制面 origin 的壳文档 + 打包 Node sidecar（A/B 桥、通道 manifest 锁步（以 `bridge-manifest.json` 的 counts 为准，当前 58 invoke+9 push）、目录锁、原生边沿）；**Electron 版已冻结归档（2026-11），本设计只维护 Swift 腿**；P5b 起 sidecar 继续作为 Swift flavor 的 node 来源 |
 | 26 | [26-page-channel.md](26-page-channel.md) | 现行 | 页面级多路复用通道：一条同源 WS 承载全部长活流（health / pluginGraph / sessionFacts），实例在通道内以 instanceId 定址、容量归控制面（O(活跃订阅)）；每订阅信用窗口流控；通道独占重连与重订阅；不变量 I-1（页面长活 HTTP 流 = 0）配静态与运行期断言；健康 SSE 端点退役；§D7 页面级同源 HTTP 派发预算（有界队列、local 保留槽、`dispatched` 证据、fetch 唯一所有权 allowlist） |
 | 27 | [27-network-io-resilience.md](27-network-io-resilience.md) | 现行（v1） | WAN 网络 IO 韧性：transport link health 子态（healthy/suspect/down）、两次网络失败才 down、suspect 放行/down 复用 503、注册边沿、上传总预算、页面通道 link epoch、载波 closed 逃生、mutation unknown 分类；不新增包/phase/503 码 |
-| 28 | [28-remote-browser.md](28-remote-browser.md) | 现行（v2） | 右栏浏览器（v2）：**样式/行为 = 上游 `ui-sidebar-browser` iframe 路径的 chamber fork**（地址栏/工具栏/历史/多标签/快捷键/标题/8 语言/sandbox 开关逐字同源），唯一差异 = SSH 反代：local 直连 iframe，dsh/gateway+ssh 的 remote `127.0.0.1` 经 forward 到 per-source `127.0.0.n` alias 再 iframe（代理页 external 出口同用该 alias，解析中/失败禁用）；任意 http(s) 页面可内嵌（含 https，上游语义）；Electron 与 Swift 双核心默认开启；desktop CSP 放行 blob:+loopback+alias+http:/https:，main 仍强制子 frame/下载/权限门；不做 gateway 隧道/共享 127.0.0.1 回退/原生子视图。**§4 有界例外**，不是 web 预览回归 |
+| 28 | [28-remote-browser.md](28-remote-browser.md) | 现行（v2） | 右栏浏览器（v2）：**样式/行为 = 上游 `ui-sidebar-browser` iframe 路径的 chamber fork**（地址栏/工具栏/历史/多标签/快捷键/标题/8 语言/sandbox 开关逐字同源），唯一差异 = SSH 反代：local 直连 iframe，dsh/gateway+ssh 的 remote `127.0.0.1` 经 forward 到 per-source `127.0.0.n` alias 再 iframe（代理页 external 出口同用该 alias，解析中/失败禁用）；任意 http(s) 页面可内嵌（含 https，上游语义）；Electron 与 Swift 双核心默认开启（Electron 腿冻结归档，Swift 现行）；desktop CSP 放行 blob:+loopback+alias+http:/https:，main 仍强制子 frame/下载/权限门；不做 gateway 隧道/共享 127.0.0.1 回退/原生子视图。**§4 有界例外**，不是 web 预览回归 |
 
 ---
 

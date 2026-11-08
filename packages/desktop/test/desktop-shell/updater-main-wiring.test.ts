@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
-const main = stripComments(readFileSync(new URL('../../main.ts', import.meta.url), 'utf8'))
+const main = stripComments(readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8'))
 
 /** `from` 之后的第一个 `{ … }` 平衡块（源码已去注释）。 */
 function balancedBlock(source: string, from: number): string {

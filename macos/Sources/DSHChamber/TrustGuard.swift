@@ -84,7 +84,7 @@ enum TrustGuard {
     /// 期望 origin 必须 http(s)、origin 相等、`pathname == "/"`、无 query。
     /// 原因：控制面同一 origin 下还透传远端实例响应（`/api/i/<id>/*`），
     /// 仅 origin 相等会让被代理的远端 HTML 继承 shim 与全部 61 个 IPC 通道
-    /// （52 invoke + 9 push）。
+    /// （58 invoke + 9 push）。
     /// 消息护栏与导航护栏都改用本判定（isTrustedOrigin 保留为 origin 原语）。
     static func isTrustedDocument(_ urlString: String?, expectedOrigin: String) -> Bool {
         guard let urlString, !urlString.isEmpty,

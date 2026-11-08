@@ -1,5 +1,10 @@
 # 11 · 桌面端更新提示（settings 低调展示，无弹窗）与通道灰度
 
+> **范围横幅（2026-11 用户裁决）**：Electron flavor 已冻结归档（见
+> [`../progress/electron-frozen.md`](../progress/electron-frozen.md)）。本文的 **Electron / electron-updater 半边
+> = 归档参考**；**Swift 腿更新链现行**（Sparkle 2.10.0，契约见
+> [`25-macos-swift-native-shell.md`](25-macos-swift-native-shell.md) §7）。原文保留，不删除。
+
 > **dsh-chamber 应用本体更新；macOS/Windows/Linux 按运行形态门控**——本文是应用更新通道的权威行为契约：GitHub Releases feed、后台静默检查、settings 低调提示、用户明确确认后才下载、退出时安装 + 界面内「重启并安装」、beta → stable 通道模型与发布侧纪律；未完成门禁见 `docs/progress/STATUS.md`。
 
 ## 1. 需求与动机（当前形态）
@@ -98,7 +103,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 ## 4. 滚动/灰度：通道模型（beta → stable）
 
 - **stable（默认）**：读最新正式 release 的 `latest.yml` / `latest-mac.yml`。
-- **beta**：**优先读构建期封签的通道**——beta 构建经 `electron-builder.beta.yml` 的 `extraMetadata.dshChamberUpdateChannel` 写进打包 `package.json`（`packages/desktop/main.ts` 读回，`normalizeSealedChannel` + `resolveChannel` 解析），制品因此自证通道、与版本号后缀解耦；无封签（dev / stable / Swift 腿）时 canonical `X.Y.Z-beta.N` 应用按自身版本自动进入 beta；开发/显式 opt-in 仍可用 `DSH_CHAMBER_UPDATE_CHANNEL=beta`（**恒最强，只能加 beta 不能去 beta**，语义与封签前一致）。封签与版本后缀不一致 = 误配制品，**封签为准并 loud 记录**。消费侧只从最高规范 published beta 的精确 tag 读 `beta.yml` / `beta-mac.yml`；发现失败 fail closed，不尝试 `latest*`；settings 部分标注「beta 通道」。Swift 腿在原生腿在场时安装发现走 Sparkle appcast（T-04），当前封签只落 Electron 腿，Swift 腿维持版本后缀推导（同一版本串下事实等价，无用户可感差异）。
+- **beta**：**优先读构建期封签的通道**——beta 构建经 `electron-builder.beta.yml` 的 `extraMetadata.dshChamberUpdateChannel` 写进打包 `package.json`（`packages/desktop/electron/main.ts` 读回，`normalizeSealedChannel` + `resolveChannel` 解析），制品因此自证通道、与版本号后缀解耦；无封签（dev / stable / Swift 腿）时 canonical `X.Y.Z-beta.N` 应用按自身版本自动进入 beta；开发/显式 opt-in 仍可用 `DSH_CHAMBER_UPDATE_CHANNEL=beta`（**恒最强，只能加 beta 不能去 beta**，语义与封签前一致）。封签与版本后缀不一致 = 误配制品，**封签为准并 loud 记录**。消费侧只从最高规范 published beta 的精确 tag 读 `beta.yml` / `beta-mac.yml`；发现失败 fail closed，不尝试 `latest*`；settings 部分标注「beta 通道」。Swift 腿在原生腿在场时安装发现走 Sparkle appcast（T-04），封签只落 Electron 腿，Swift 腿维持版本后缀推导（同一版本串下事实等价，无用户可感差异）。
 - **发布侧**：beta = 版本精确匹配 canonical `X.Y.Z-beta.N`（如 `0.2.0-beta.1`）→ 独立
   `electron-builder.beta.yml` 显式产 `beta*.yml`；stable 用默认配置只产 `latest*.yml`；`alpha`、`rc` 与其他 prerelease 一律版本门禁拒绝。GitHub Release 的 prerelease 标志由已校验的 canonical beta 版本推导（非 workflow 输入——tag-push 时输入为空，按输入推导会把 beta feed 发到非 prerelease release，稳定客户端会把该 release 当最新并 404 在 latest.yml）；验证通过后发正式版本（`latest*.yml`）——「先内测、后提升」，契合既有 draft → finalize 手动节奏。
 - **明确不做（v1）**：百分比灰度（按客户端分桶）——需自托管 feed 侧实现；用户规模达到再评估。

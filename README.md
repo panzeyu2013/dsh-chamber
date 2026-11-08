@@ -9,6 +9,8 @@ dsh（DeepSeek Harness）的桌面连接管理器：把本机与任意多台服�
 
 macOS版本采用 **Swift/AppKit原生壳**：窗口、菜单、托盘、通知、Dock角标、深链、文件对话框、隐藏/恢复与Sparkle应用内更新都在Swift侧实现；业务由随包分发的Node sidecar承载；页面100%复用dsh官方前端，不是浏览器套壳。
 
+> **版本范围（2026-11用户裁决）**：唯一出货版本 = **macOS Swift原生壳**（Apple Silicon）。Electron桌面版已**冻结归档**（不删除文件、可复活），Windows/Linux桌面版随之冻结、**不发布**；恢复需用户裁决，范围/共享契约/禁用面/复活清单见 [docs/progress/electron-frozen.md](docs/progress/electron-frozen.md)。
+
 ## 用户界面
 
 ![dsh-chamber用户主界面](assets/page.png)

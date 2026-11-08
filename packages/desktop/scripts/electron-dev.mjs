@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）：本文件属冻结归档面，文件不删、默认不运行；需要复活时按其 §6 复活清单执行。
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

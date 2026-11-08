@@ -7,19 +7,25 @@
 `docs/progress/STATUS.md`（开放实机门禁），本目录只负责**跑**与**留痕**——所以正文不复制
 判据，避免出现第二份会漂移的台账。
 
+> **Electron/CDP 腿冻结归档（2026-11）**：`--dev`、`--flavor electron`、`walkthrough.mjs` / `launch.mjs` /
+> `packaged-ssh-smoke.mjs` 与 `mobile-walkthrough.mjs` 的 CDP 驱动属**归档面**（复活参考，见
+> `docs/progress/electron-frozen.md`）。现行腿 = `--flavor native`（`--dev` / `--attach` 默认）与 `--live`；
+> WKWebView UI 没有 CDP，界面走查只能真机/目检。显式传 `--flavor electron` 会打印 ARCHIVED 警告并走
+> 归档驱动（`launch.mjs` / `walkthrough.mjs` / `packaged-ssh-smoke.mjs` 文件头注释与本节一致）。
+
 | 文件 | 用途 |
 |---|---|
-| `run.mjs` | 单一入口：`--live` / `--attach` / `--dev`（`--flavor electron|native`） |
+| `run.mjs` | 单一入口：`--live` / `--attach` / `--dev`（默认 `--flavor native`；`--flavor electron` = **ARCHIVED** 复活参考） |
 | `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
 | `native.mjs` | `--flavor native`：驱动**原生壳 spawn 的 sidecar 装配**（ready/B 桥/控制面 HTTP），或 `--attach` 探测运行中的原生壳控制面；WKWebView UI 不可驱动（没有 CDP 端点）。`--require-assembly` 是机器门形态：装配缺失（以及 N-6 找不到 web dist）记 FAIL 而非 SKIP/INFO（ci.yml 的 native 装配启动门用它）。`--web-dist <dir>` 给出 N-6 要判的 renderer 产物目录（未给时探测 `sidecarDir/dist/web` → `sidecarDir/../dist/web`） |
-| `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡；v2 内嵌腿 `W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`（上游 ui-sidebar-browser iframe fork DOM/行为）：右栏 guide kind browser + BrowserBody 结构、local fixture 真跑 + postMessage、remote alias 端到端、系统浏览器出口（上游不承诺 XFO 探测）、关 tab 释放；`W-13` 前先经**既有 UI** 确保一个可见 Session：冷实例走 new-session 快捷控件，仍无工作区时走 hero 工作区入口 → 浏览式目录对话框，选中本次 `--out` 下的 `workspace` 目录（dsh 空态选工作区即生成空白会话）） |
+| `walkthrough.mjs` | **ARCHIVED（Electron CDP 腿）** CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡；v2 内嵌腿 `W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`（上游 ui-sidebar-browser iframe fork DOM/行为）：右栏 guide kind browser + BrowserBody 结构、local fixture 真跑 + postMessage、remote alias 端到端、系统浏览器出口（上游不承诺 XFO 探测）、关 tab 释放；`W-13` 前先经**既有 UI** 确保一个可见 Session：冷实例走 new-session 快捷控件，仍无工作区时走 hero 工作区入口 → 浏览式目录对话框，选中本次 `--out` 下的 `workspace` 目录（dsh 空态选工作区即生成空白会话）） |
 | `fixture.mjs` | v2 内嵌腿的 in-process HTTP fixture（127.0.0.1 随机端口）：`/` 标记页（`parent.postMessage` 证明跨源文档真的运行了）与 `/embed-xfo`（同页 + `X-Frame-Options: DENY`，`W-15` 的负例；上游不把该拒绝投影成失败 UI）；另含 `probeTcpReachable`（`W-15b` 的 alias 端口不可达判据，`node:net` 直连，ECONNREFUSED 才算已释放） |
-| `launch.mjs` | `--dev`：一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
-| `packaged-ssh-smoke.mjs` | 打包态（已构建 `release/<platform>-unpacked`）的 W-13…W-15b smoke：`startSshFixture` 预置一次性 userData/ssh-agent → 启动打包可执行 → 普通 CDP 走查（含 W-14b 真实 SSH alias iframe）；需要显示（Xvfb 即可），不碰真实 userData/~/.ssh |
-| `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
+| `launch.mjs` | **ARCHIVED（Electron `--dev`）** 一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
+| `packaged-ssh-smoke.mjs` | **ARCHIVED（Electron 打包态 CDP）** 打包态（已构建 `release/<platform>-unpacked`）的 W-13…W-15b smoke：`startSshFixture` 预置一次性 userData/ssh-agent → 启动打包可执行 → 普通 CDP 走查（含 W-14b 真实 SSH alias iframe）；需要显示（Xvfb 即可），不碰真实 userData/~/.ssh |
+| `cdp.mjs` | **ARCHIVED（CDP 仅 Electron 腿）** 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
 | `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
 | `checks.test.mjs` | `checks.mjs` 的单测（`pnpm run test:scripts:gui-acceptance`，CI 跑） |
-| `mobile-walkthrough.mjs` | 移动档 CDP 走查（独立 CLI；`pnpm run acceptance:mobile` 同义）：设备尺寸/触控模拟 + 几何断言 + M-8 WS 帧采集（`--ws-frames off\|summary\|full`；**先脱敏后截断**，截断帧在摘要/帧文件里标注原始长度）+ M-9 覆盖层只读探查 + M-10 未预期请求/渲染层 error **真判定**（容忍表在 `checks.mjs`）。`--require-run` 把「没目标/没会话/未激活」的 INFO 改判 FAIL；**M-8/M-9/M-10 不走这道门**（M-8 是观察项、M-9 的只读扫描完成即算执行、M-10 由容忍表直接判）。`connect`/`evaluate` 失败也走 fail-soft：照样写报告、关会话。**不接受 `--mobile`**（那是桌面走查的档位名） |
+| `mobile-walkthrough.mjs` | **ARCHIVED（Electron CDP 驱动；真机移动验收见 checklist）** 移动档 CDP 走查（独立 CLI；`pnpm run acceptance:mobile` 同义）：设备尺寸/触控模拟 + 几何断言 + M-8 WS 帧采集（`--ws-frames off\|summary\|full`；**先脱敏后截断**，截断帧在摘要/帧文件里标注原始长度）+ M-9 覆盖层只读探查 + M-10 未预期请求/渲染层 error **真判定**（容忍表在 `checks.mjs`）。`--require-run` 把「没目标/没会话/未激活」的 INFO 改判 FAIL；**M-8/M-9/M-10 不走这道门**（M-8 是观察项、M-9 的只读扫描完成即算执行、M-10 由容忍表直接判）。`connect`/`evaluate` 失败也走 fail-soft：照样写报告、关会话。**不接受 `--mobile`**（那是桌面走查的档位名） |
 | `mobile-walkthrough.test.mjs` | 走查**驱动层**的脱敏/降级单测（`pnpm run test:gui-acceptance` 一并跑）：凭据不出现在 stdout 与任何产物、fail-soft（无目标/connect 失败/采集中断）、M-8/M-9/M-10 的判定接线与报告行序、设备尺寸跟随 `--width/--height/--dpr` |
 | `mobile-checks.mjs` | 移动档的**纯判据层**（含脱敏）：判据全部是纯函数，无 IO |
 | `mobile-checks.test.mjs` | `mobile-checks.mjs` 的单测（`pnpm run test:gui-acceptance` 一并跑） |

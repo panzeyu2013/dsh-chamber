@@ -3,26 +3,32 @@
  * emit-bridge-manifest.mjs — 通道 manifest 生成管线（design 25 §4.4.3；
  * docs/progress/TODO.md 的对应行）。
  *
- * 输入（两份，缺一不可）：
+ * 输入（三份，缺一不可）：
  *   ① 名单源 packages/desktop/ipc-events.ts 的 `IPC_CHANNELS` 常量表：
- *      值 = 通道名、键 = 常量名（当前 65 键）。表即全量通道集合。
+ *      值 = 通道名、键 = 常量名（当前 67 键）。表即全量通道集合。
  *   ② 方向维度（实测集合法，不靠常量名启发）：main 侧注册事实 ——
- *      packages/desktop 的 MAIN_SIDE_FILES（main.ts / shell-core.ts /
- *      electron-edges.ts + shell-ipc-*.ts、runtime-startup-host.ts、
+ *      packages/desktop 的 MAIN_SIDE_FILES（electron/main.ts / shell-core.ts /
+ *      electron/electron-edges.ts + shell-ipc-*.ts、runtime-startup-host.ts、
  *      host-assembly.ts 与 host-registry-transition.ts；
  *      与 ipc-surface-mirror.test.ts 的扫描面一致）中 `IPC_CHANNELS.X`
  *      的注册调用：
- *        `(?:ipcMain|deps\.ipc).handle(IPC_CHANNELS.X`  →  invoke（56）
+ *        `(?:ipcMain|deps\.ipc).handle(IPC_CHANNELS.X`  →  invoke（58）
  *        `(?:webContents\.send|rendererPush)(IPC_CHANNELS.X` →  push（9）
+ *   ③ Swift-only 白名单 packages/desktop/bridge-swift-only-additions.json（schema =
+ *      docs/progress/electron-frozen.md §5.2）：只登记只存在于 Swift shim、无需
+ *      Electron preload / 主进程注册的 A 桥通道。条目方向由白名单给（invoke|push）；
+ *      死键检查对该白名单键豁免，但白名单键一旦在 main 侧也出现引用即 loud
+ *      （两侧都注册 = 常规通道，不得进白名单）。默认空表：三件生成物与加白名单前
+ *      逐字节一致；空表之外的任何条目都必须同批重生成三件并让锁步测试绿。
  *      注释先剥离再扫描（与镜像测试的逐字扫描器同语义——shell-core.ts 注释
  *      里就有 rendererPush(IPC_CHANNELS.DEEP_LINK_INTENT 的措辞，不剥离会
- *      误计）。不重扫 preload.cts：ipc-surface-mirror.test.ts 已机械断言
+ *      误计）。不重扫 electron/preload.cts：ipc-surface-mirror.test.ts 已机械断言
  *      main 侧 handle/send 集合 == preload invoke/on 集合，manifest 只需
  *      全量 + 方向两个维度。
  *
  * 产出（写入位置默认相对本脚本所在仓库）：
  *   A. packages/desktop/bridge-manifest.json（提交物）——
- *      { "invoke": [{channel,key}×56], "push": [{channel,key}×9],
+ *      { "invoke": [{channel,key}×58], "push": [{channel,key}×9],
  *        "counts": {invoke,push,total} }，两数组均按 IPC_CHANNELS 定义序。
  *   B. macos/Sources/DSHChamber/Generated/BridgeManifest.swift（生成物、
  *      提交）——`enum BridgeManifest` 两份 Set<String>（invokeChannels /
@@ -38,7 +44,7 @@
  *
  * 维度说明：design 25 §4.4.3 的文字写「通道名 + 方向 invoke|push + 归属命名
  * 空间」，但本管线当前只落**方向**一个维度——manifest 供 Swift 侧通道白名单
- * 与 shim 常量单源使用，命名空间归属的单源在 preload.cts 的 *Api 工厂/方法面
+ * 与 shim 常量单源使用，命名空间归属的单源在 electron/preload.cts 的 *Api 工厂/方法面
  * （bridge-shim-surface.test.ts 已逐命名空间锁 preload ↔ shim 一致），manifest
  * 不重复承载；该设计句须由 docs owner 修订（或把命名空间端到端落进
  * json/Swift/shim 三产物），本文件绝不产出伪造的 namespace 字段。
@@ -55,8 +61,11 @@
  * + vm 执行）守住。
  *
  * 导出（供 JS 侧复用；.mjs ↔ .mjs 直接 import，无类型声明问题）：
- *   MAIN_SIDE_FILES / parseIpcChannels(source) /
- *   computeManifest(sourceIpc?, sourceFiles?) /
+ *   MAIN_SIDE_FILES / COMMITTED_SWIFT_ONLY / COMMITTED_SHORTCUTS_BRIDGE /
+ *   loadSwiftOnlyAdditions(path?) / validateSwiftOnlyAdditions(additions, ipcEntries, dshDesktopDomains?) /
+ *   parseDshDesktopCarrierDomains(source) / loadDshDesktopCarrierDomains(path?) /
+ *   assertSwiftOnlyDshDesktopDisjoint(additions, reserved) / parseIpcChannels(source) /
+ *   computeManifest(sourceIpc?, sourceFiles?, additions?) /
  *   renderJsonManifest(manifest) / renderSwiftManifest(manifest) /
  *   renderShimStub(manifest)
  */
@@ -88,6 +97,17 @@ export const COMMITTED_SHIM_STUB = join(
   'Resources',
   'chamber-bridge.stub.js',
 )
+
+/** Swift-only A 桥 additions 白名单提交物（冻结政策单源；schema 见
+ *  docs/progress/electron-frozen.md §5.2）。空表 = 当前没有任何 Swift-only 通道：
+ *  生成器按空表合入时三件生成物与加白名单前逐字节一致。 */
+export const COMMITTED_SWIFT_ONLY = join(desktopDir, 'bridge-swift-only-additions.json')
+
+/** dshDesktop（官方 desktop carrier）通道域的单源 = shortcuts-bridge.ts 的
+ *  DESKTOP_SHORTCUTS_CHANNELS。A 桥 Swift-only 白名单只承载 dshChamber ↔ Swift
+ *  sidecar 的通道，落进 dshDesktop 域会让两套通道表在同一页面串域（preload 侧由
+ *  test/ipc/desktop-carrier-surface.test.ts ⑥ 在默认组锁住；白名单侧由本文件锁）。 */
+export const COMMITTED_SHORTCUTS_BRIDGE = join(desktopDir, 'shortcuts-bridge.ts')
 
 /** IPC_CHANNELS 常量表整块（保守正则，见头部注释）：块内不允许出现 `}`，
  *  注释行由逐行解析跳过。当前 ipc-events.ts 块内确无 `}`；
@@ -187,7 +207,133 @@ export function parseIpcChannels(source) {
   return entries
 }
 
-/** 计算 manifest（纯函数；两参皆可省略——省略即按仓库相对路径读真实文件）。
+/** Swift-only A 桥 additions 白名单条目的 schema（docs/progress/electron-frozen.md §5.2）。
+ *  只登记只存在于 Swift shim、无需 Electron preload / 主进程注册的通道：key 必须在
+ *  ipc-events.ts 的 IPC_CHANNELS 表里（通道名单一来源），但 main 侧注册文件对该 key
+ *  的引用必须为零（两侧都注册的通道属于常规通道，不得进白名单）。
+ *  @typedef {{ channel: string, key: string, direction: 'invoke' | 'push', namespace: string, method: string, reason: string, design?: string }} SwiftOnlyAddition
+ */
+
+/** 读取白名单文件（默认提交物位）。空表是常态：返回 []，不产出任何合成通道。
+ *  文件/JSON 形状错误一律 loud（生成器绝不带病产出部分 manifest）。 */
+export function loadSwiftOnlyAdditions(path = COMMITTED_SWIFT_ONLY) {
+  let parsed
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch (error) {
+    throw new Error(`Swift-only 白名单不可读或不是合法 JSON：${path}（${error instanceof Error ? error.message : String(error)}）`)
+  }
+  if (parsed === null || typeof parsed !== 'object' || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
+    throw new Error('Swift-only 白名单必须是 { version: 1, entries: [...] } 形状（docs/progress/electron-frozen.md §5.2）')
+  }
+  return parsed.entries
+}
+
+const DESKTOP_SHORTCUTS_CHANNELS_BLOCK = /export const DESKTOP_SHORTCUTS_CHANNELS = \{([\s\S]*?)\n\} as const/u
+
+/**
+ * 解析 dshDesktop carrier 通道域的单源（shortcuts-bridge.ts 的
+ * DESKTOP_SHORTCUTS_CHANNELS）。fail-closed：表缺失/解析出 0 条通道一律 throw——
+ * 白名单的 dshDesktop 域护栏绝不能被一次重构静默关掉。
+ * @param {string} source - shortcuts-bridge.ts 全文。
+ * @returns {{ keys: string[], channels: string[], namespaces: string[] }} 保留名。
+ */
+export function parseDshDesktopCarrierDomains(source) {
+  const block = String(source ?? '').match(DESKTOP_SHORTCUTS_CHANNELS_BLOCK)
+  if (block === null) {
+    throw new Error('shortcuts-bridge.ts 缺少 DESKTOP_SHORTCUTS_CHANNELS 表（Swift-only 白名单的 dshDesktop 域护栏无法判定，拒绝带病放行）')
+  }
+  const keys = []
+  const channels = []
+  const sourceLines = block[1].split('\n')
+  const candidateRows = sourceLines.filter(line => /^\s*[A-Z][A-Z0-9_]*\s*:/u.test(line)).length
+  for (const line of sourceLines) {
+    // 接受单/双引号两种上游写法；任何候选键行解析失败都计入计数缺口 -> loud。
+    const row = line.match(/^\s*([A-Z][A-Z0-9_]*):\s*['"]([^'"]+)['"],?\s*$/u)
+    if (row === null) continue
+    keys.push(row[1])
+    channels.push(row[2])
+  }
+  if (channels.length === 0) {
+    throw new Error('shortcuts-bridge.ts 的 DESKTOP_SHORTCUTS_CHANNELS 解析出 0 条通道（白名单域护栏不得静默失效）')
+  }
+  if (channels.length !== candidateRows) {
+    throw new Error('shortcuts-bridge.ts 的 DESKTOP_SHORTCUTS_CHANNELS 解析不完整（候选 ' + String(candidateRows) + ' 行，解析 ' + String(channels.length) + ' 条；白名单域护栏不得静默失效）')
+  }
+  return { keys, channels, namespaces: ['dshDesktop'] }
+}
+
+/** 读取提交物 shortcuts-bridge.ts 的 dshDesktop 域（默认路径）。 */
+export function loadDshDesktopCarrierDomains(path = COMMITTED_SHORTCUTS_BRIDGE) {
+  return parseDshDesktopCarrierDomains(readFileSync(path, 'utf8'))
+}
+
+/**
+ * 白名单条目不得与 dshDesktop（官方 desktop carrier）域冲突：channel 不得等于其
+ * 通道值、key 不得与其常量键同名、namespace 不得是 dshDesktop。空表恒 no-op；
+ * reserved 由调用方注入（生成器默认读 shortcuts-bridge.ts，单测注入负例），纯函数可测。
+ * @param {SwiftOnlyAddition[]} additions - 已过形状校验的白名单条目。
+ * @param {{ keys?: readonly string[], channels?: readonly string[], namespaces?: readonly string[] }} reserved - dshDesktop 域保留名。
+ * @returns {SwiftOnlyAddition[]} 原数组。
+ */
+export function assertSwiftOnlyDshDesktopDisjoint(additions, reserved) {
+  const channels = new Set(reserved.channels ?? [])
+  const keys = new Set(reserved.keys ?? [])
+  const namespaces = new Set(reserved.namespaces ?? [])
+  for (const [index, entry] of additions.entries()) {
+    const at = `entries[${index}]`
+    if (channels.has(entry.channel)) {
+      throw new Error(`Swift-only 白名单 ${at}.channel 落入 dshDesktop 通道域：${entry.channel}（A 桥与官方 desktop carrier 通道域必须不相交）`)
+    }
+    if (keys.has(entry.key)) throw new Error(`Swift-only 白名单 ${at}.key 与 dshDesktop 通道常量同名：${entry.key}`)
+    if (namespaces.has(entry.namespace)) throw new Error(`Swift-only 白名单 ${at}.namespace 与 dshDesktop 域同名：${entry.namespace}`)
+  }
+  return additions
+}
+
+/** 校验白名单条目对 IPC_CHANNELS 表、自身形状与 dshDesktop 域不相交的约束；返回原数组。
+ *  任何一条不合法即 throw（原因中文、逐条点名），空表直接通过（且不读
+ *  shortcuts-bridge.ts，行为与加护栏前逐字一致）。 */
+export function validateSwiftOnlyAdditions(additions, ipcEntries, dshDesktopDomains) {
+  const byKey = new Map(ipcEntries.map(entry => [entry.key, entry.channel]))
+  const seenKeys = new Set()
+  const seenChannels = new Set()
+  for (const [index, entry] of additions.entries()) {
+    const at = `entries[${index}]`
+    if (entry === null || typeof entry !== 'object') throw new Error(`Swift-only 白名单 ${at} 必须是对象`)
+    for (const field of ['channel', 'key', 'namespace', 'method', 'reason']) {
+      if (typeof entry[field] !== 'string' || entry[field].trim() === '') {
+        throw new Error(`Swift-only 白名单 ${at}.${field} 必须是非空字符串`)
+      }
+    }
+    if (entry.direction !== 'invoke' && entry.direction !== 'push') {
+      throw new Error(`Swift-only 白名单 ${at}.direction 必须是 invoke|push（manifest 的方向维度必需）`)
+    }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(entry.key)) throw new Error(`Swift-only 白名单 ${at}.key 形状非法：${entry.key}`)
+    const tableChannel = byKey.get(entry.key)
+    if (tableChannel === undefined) {
+      throw new Error(`Swift-only 白名单 ${at}.key 不在 ipc-events.ts 的 IPC_CHANNELS 表：${entry.key}（通道名单一来源）`)
+    }
+    if (entry.channel !== tableChannel) {
+      throw new Error(`Swift-only 白名单 ${at}.channel 与 IPC_CHANNELS.${entry.key} 不一致：${entry.channel} != ${tableChannel}`)
+    }
+    if (seenKeys.has(entry.key) || seenChannels.has(entry.channel)) {
+      throw new Error(`Swift-only 白名单重复登记：${entry.key} / ${entry.channel}`)
+    }
+    if (entry.design !== undefined && (typeof entry.design !== 'string' || entry.design.trim() === '')) {
+      throw new Error(`Swift-only 白名单 ${at}.design 必须是非空字符串（可省略）`)
+    }
+    seenKeys.add(entry.key)
+    seenChannels.add(entry.channel)
+  }
+  // 空表恒 no-op（不读 shortcuts-bridge.ts）；非空才加载 dshDesktop 域并断言不相交。
+  if (additions.length > 0) {
+    const reserved = dshDesktopDomains ?? loadDshDesktopCarrierDomains()
+    assertSwiftOnlyDshDesktopDisjoint(additions, reserved)
+  }
+  return additions
+}
+/** 计算 manifest（纯函数；三参皆可省略——省略即按仓库相对路径读真实文件）。
  *  sourceIpc：ipc-events.ts 全文；sourceFiles：[{file, text}]，file 必须等于
  *  MAIN_SIDE_FILES 之一且三文件齐全（防调用方漏文件造成方向误判）。
  *  校验（任一不过即 throw，绝不静默）：
@@ -199,11 +345,14 @@ export function parseIpcChannels(source) {
  *    - 同一键同时被 handle 与 send 引用（方向歧义）→ loud。
  *  返回 { invoke: [{channel,key}×N], push: […], counts:{invoke,push,total} }，
  *  两数组按 IPC_CHANNELS 定义序。 */
-export function computeManifest(sourceIpc, sourceFiles) {
+export function computeManifest(sourceIpc, sourceFiles, additions) {
   const ipcText = sourceIpc ?? readFileSync(join(desktopDir, 'ipc-events.ts'), 'utf8')
   const files = sourceFiles ?? MAIN_SIDE_FILES.map(file => ({ file, text: readFileSync(join(desktopDir, file), 'utf8') }))
   const entries = parseIpcChannels(ipcText)
   const knownKeys = new Set(entries.map(entry => entry.key))
+  // Swift-only 白名单：schema/key↔channel 对齐/重复登记 + dshDesktop 域不相交在这里一次校验完（空表 = []）。
+  const swiftOnly = validateSwiftOnlyAdditions(additions ?? loadSwiftOnlyAdditions(), entries)
+  const swiftOnlyKeys = new Set(swiftOnly.map(entry => entry.key))
 
   // 文件集校验：MAIN_SIDE_FILES 全覆盖、不许夹带未知文件。
   const seenFiles = new Set()
@@ -228,18 +377,26 @@ export function computeManifest(sourceIpc, sourceFiles) {
   }
 
   // ② 死键/双引用：每个键在代码中恰好出现一次（B12/E8 纪律，同镜像测试）。
+  // ② 死键/双引用：每个 key 在 code 中恰好一次；Swift-only 白名单键**豁免死键检查**
+  //    （它按定义就没有 Electron 侧注册），但一旦出现引用就说明两侧都注册了 -> loud
+  //    （白名单只承载 Swift-only 语义）。非白名单键仍是 0 次 = 死键、>1 次 = 双引用。
   const dead = []
   const duplicated = []
   for (const key of knownKeys) {
     const occurrences = [...code.matchAll(new RegExp(`\\bIPC_CHANNELS\\.${key}\\b`, 'g'))].length
-    if (occurrences === 0) dead.push(key)
-    else if (occurrences > 1) duplicated.push(key)
+    if (swiftOnlyKeys.has(key)) {
+      if (occurrences > 0) duplicated.push(key)
+    } else if (occurrences === 0) {
+      dead.push(key)
+    } else if (occurrences > 1) {
+      duplicated.push(key)
+    }
   }
   if (dead.length > 0) {
     throw new Error(`IPC_CHANNELS 死键（main 侧代码零引用，manifest 无法定方向）：${dead.join(', ')}`)
   }
   if (duplicated.length > 0) {
-    throw new Error(`IPC_CHANNELS 键在 main 侧被引用多次（一次注册/发送纪律被破坏）：${duplicated.join(', ')}`)
+    throw new Error(`IPC_CHANNELS 键在 main 侧被引用多次，或 Swift-only 白名单键同时被 main 侧注册（一次注册/发送纪律被破坏）：${duplicated.join(', ')}`)
   }
 
   // ③ 裸字面量注册/发送（绕开常量表）→ loud。
@@ -250,9 +407,14 @@ export function computeManifest(sourceIpc, sourceFiles) {
     throw new Error(`main 侧 send/推送用了裸字面量通道名（必须走 IPC_CHANNELS 常量）：${raw[2]}`)
   }
 
-  // ④ 方向分类：handle 注册 → invoke；webContents.send/rendererPush → push。
+  // ④ 方向分类：handle 注册 → invoke；webContents.send/rendererPush → push；
+  //    Swift-only 白名单条目按白名单声明的方向并入（方向维度必需）。
   const invokeKeys = new Set()
   const pushKeys = new Set()
+  for (const entry of swiftOnly) {
+    if (entry.direction === 'invoke') invokeKeys.add(entry.key)
+    else pushKeys.add(entry.key)
+  }
   const classify = /(?:ipcMain|deps\.ipc)\.handle\(\s*IPC_CHANNELS\.([A-Z][A-Z0-9_]*)|(?:webContents\.send|rendererPush)\(\s*IPC_CHANNELS\.([A-Z][A-Z0-9_]*)/g
   let hit = null
   while ((hit = classify.exec(code)) !== null) {

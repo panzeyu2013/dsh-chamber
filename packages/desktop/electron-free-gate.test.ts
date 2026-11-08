@@ -2,10 +2,11 @@
  * electron-free-gate.test.ts — core 对 electron 零 import 门禁
  *
  * design 25 §4.1 判定标准 + §8.2：Electron 依赖面收敛为白名单
- * 文件（main.ts / preload.cts / updater.ts / electron-edges.ts），其余
- * packages/desktop 顶层源码（业务模块与 shell-core 家族）一律不得
- * import/require electron——shell-core/node-edges/sidecar-entry 这类顶层源码
- * 自动被本门禁覆盖。
+ * 文件（归档面 electron/main.ts / electron/preload.cts / electron/electron-edges.ts，
+ * 共享面 updater.ts），其余 packages/desktop 顶层源码（业务模块与 shell-core 家族）
+ * 一律不得 import/require electron——shell-core/node-edges/sidecar-entry 这类顶层源码
+ * 自动被本门禁覆盖。归档目录不参与顶层面 A 扫描，但集合与「确实依赖 electron」的
+ * 正例面仍按 ARCHIVED_ENTRY_FILES 断言（缺文件、夹带未登记文件、丢依赖都红）。
  *
  * 面 A（禁止）：白名单外文件无 electron import（逐行去注释后检测）。
  * 面 B（正例防腐化）：白名单文件确实含 electron（防白名单滥用）。
@@ -19,7 +20,7 @@
  * 面 D（传递闭包）：core 家族的相对 import 传递闭包零**加载期** electron
  *   依赖（面 A 只看顶层直接 import）。
  *
- * 注：electron-edges.ts 是白名单文件（Electron HostEdges
+ * 注：electron/electron-edges.ts 是归档白名单文件（Electron HostEdges
  * 实现，含 from 'electron' import——面 B 正例）。
  *
  * fail-closed 门禁：
@@ -161,7 +162,13 @@ function referencesElectron(code: string): boolean {
 function hasStaticElectronImport(code: string): boolean {
   return hasStaticElectronSpecifier(code)
 }
-const WHITELIST = ['main.ts', 'preload.cts', 'updater.ts', 'electron-edges.ts']
+/** 顶层仍可 import electron 的文件（updater.ts 是 electron-free 共享面的
+ *  typed 例外，仍留在 packages/desktop 根）。 */
+const WHITELIST = ['updater.ts']
+/** 冻结归档在 electron/ 子目录的 Electron 入口/边沿/preload（2026-11 用户裁决）：
+ *  不参与顶层面 A，但仍是期望文件（缺失即红）、仍须确实依赖 electron（面 B 正例），
+ *  且归档目录不得夹带未登记的源码文件（防新文件逃出扫描面）。 */
+const ARCHIVED_ENTRY_FILES = ['electron/main.ts', 'electron/electron-edges.ts', 'electron/preload.cts']
 // 已知扫描边界（均为**构造性**且当前树不触发；面 A 覆盖顶层
 // 文件，下列边界仅影响未来新增的子目录闭包文件）：
 //   - 跨行断开的调用（`const e =` + 换行 + `require('electron')`）不累积；
@@ -269,8 +276,10 @@ function resolveSpecifier(root: string, importer: string, spec: string): string 
 interface GateResult {
   /** 顶层源码发现集（已排序）。 */
   topLevel: string[]
-  /** 期望文件（白名单 ∪ core 家族）中不存在的项——缺失即失败。 */
+  /** 期望文件（白名单 ∪ core 家族 ∪ 归档入口）中不存在的项——缺失即失败。 */
   missingExpected: string[]
+  /** 归档目录 electron/ 中不属于 ARCHIVED_ENTRY_FILES 的源码文件（逃出扫描面即失败）。 */
+  archivedUnexpected: string[]
   /** 面 A：白名单外顶层源码含 electron 依赖的文件。 */
   faceAOffenders: string[]
   /** 面 A 实际解析（读取并扫描）的文件数——防"扫描集被空集骗过"。 */
@@ -296,7 +305,19 @@ function evaluateGate(root: string): GateResult {
   const topLevel = readdirSync(root)
     .filter((name) => /\.(ts|cts)$/.test(name) && !/\.test\.(ts|mjs)$/.test(name))
     .sort()
-  const missingExpected = [...WHITELIST, ...CORE_FAMILY].filter((name) => !isFile(path.join(root, name)))
+  // 归档目录只允许三个登记文件；改名前后的文件都要显式登记，绝不静默逃出扫描面。
+  const archivedDir = path.join(root, 'electron')
+  const archivedPresent = existsSync(archivedDir) && statSync(archivedDir).isDirectory()
+  const archivedFiles = archivedPresent
+    ? readdirSync(archivedDir)
+      .filter((name) => /\.(ts|cts)$/.test(name) && !/\.test\.(ts|mjs)$/.test(name))
+      .sort()
+    : []
+  const archivedUnexpected = archivedFiles
+    .map((name) => 'electron/' + name)
+    .filter((name) => !ARCHIVED_ENTRY_FILES.includes(name))
+  const missingExpected = [...WHITELIST, ...CORE_FAMILY, ...ARCHIVED_ENTRY_FILES]
+    .filter((name) => !isFile(path.join(root, name)))
 
   // 面 A：白名单外顶层源码零 electron；逐文件解析并计数。
   const faceAOffenders: string[] = []
@@ -308,10 +329,10 @@ function evaluateGate(root: string): GateResult {
     if (referencesElectron(code)) faceAOffenders.push(name)
   }
 
-  // 面 B：白名单文件确实含 electron（缺失文件已由 missingExpected 捕获）。
+  // 面 B：白名单文件（含归档入口）确实含 electron（缺失文件已由 missingExpected 捕获）。
   const faceBMissing: string[] = []
-  for (const name of WHITELIST) {
-    if (!topLevel.includes(name)) continue
+  for (const name of [...WHITELIST, ...ARCHIVED_ENTRY_FILES]) {
+    if (!isFile(path.join(root, name))) continue
     const code = stripComments(readFileSync(path.join(root, name), 'utf8'))
     if (!referencesElectron(code)) faceBMissing.push(name)
   }
@@ -366,6 +387,7 @@ function evaluateGate(root: string): GateResult {
   return {
     topLevel,
     missingExpected,
+    archivedUnexpected,
     faceAOffenders,
     faceAParsed,
     faceBMissing,
@@ -391,7 +413,8 @@ const gate = evaluateGate(dir)
 /** 全部门禁面的失败断言集合：任何一面为红即抛。真实根由下面五个面测试
  *  逐面断言；自测用它证明 fixture 缺文件/含违规时确实会红、干净时确实会绿。 */
 function assertGateGreen(result: GateResult): void {
-  assert.deepEqual(result.missingExpected, [], '白名单/core 家族文件缺失必须先红（不得静默跳过）')
+  assert.deepEqual(result.missingExpected, [], '白名单/core 家族/归档入口文件缺失必须先红（不得静默跳过）')
+  assert.deepEqual(result.archivedUnexpected, [], '归档目录只允许 ARCHIVED_ENTRY_FILES（新文件不得逃出扫描面）')
   assert.deepEqual(result.unresolved, [], '闭包内相对 import 必须解析到存在的文件（不得静默丢弃子目录/未知形态）')
   assert.deepEqual(outsideViolations(result), [], '跳出包根的相对 import 必须显式登记在 OUTSIDE_ALLOWLIST')
   assert.deepEqual(result.faceAOffenders, [], '白名单外文件不得 import/require electron')
@@ -407,7 +430,8 @@ function assertGateGreen(result: GateResult): void {
 }
 
 test('面 0（前置）：期望文件齐全、闭包相对 import 全部可解析（缺失/断链即失败，不跳过）', () => {
-  assert.deepEqual(gate.missingExpected, [], '白名单/core 家族文件缺失必须先红（不得静默跳过）')
+  assert.deepEqual(gate.missingExpected, [], '白名单/core 家族/归档入口文件缺失必须先红（不得静默跳过）')
+  assert.deepEqual(gate.archivedUnexpected, [], '归档目录只允许 ARCHIVED_ENTRY_FILES（新文件不得逃出扫描面）')
   assert.deepEqual(gate.unresolved, [], '闭包内相对 import 必须解析到存在的文件（不得静默丢弃子目录/未知形态）')
   assert.deepEqual(outsideViolations(gate), [], '跳出包根的相对 import 必须显式登记在 OUTSIDE_ALLOWLIST')
 })
@@ -465,12 +489,13 @@ function without(files: FixtureSpec, omitted: string): FixtureSpec {
   return out
 }
 
-/** 干净 fixture：白名单正例、子目录传递链、side-effect import 链、require 链。 */
+/** 干净 fixture：顶层白名单正例（updater.ts）+ 归档面（electron/）、子目录传递链、
+ *  side-effect import 链、require 链。 */
 const GREEN_FIXTURE: FixtureSpec = {
-  'main.ts': "import { app } from 'electron'\n",
-  'preload.cts': "import { contextBridge } from 'electron'\n",
+  'electron/main.ts': "import { app } from 'electron'\n",
+  'electron/preload.cts': "import { contextBridge } from 'electron'\n",
   'updater.ts': "export function init(): void {\n  const electron = require('electron')\n}\n",
-  'electron-edges.ts': "import { Notification } from 'electron'\n",
+  'electron/electron-edges.ts': "import { Notification } from 'electron'\n",
   'shell-core.ts': "import './node-edges.ts'\nimport './sub/helper.ts'\n",
   'node-edges.ts': "import './leaf.ts'\n",
   'sidecar-entry.ts': "import './side-effect-layer.ts'\nconst required = require('./sub/require-leaf.ts')\nexport const entry = required\n",

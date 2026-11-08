@@ -118,7 +118,7 @@ ChamberSettings.sessionTodo: {
 
 - 持久化：主进程 `<userData>/chamber-settings.json`（`chamber-settings.ts`：类型/默认/白名单/嵌套归一与损坏
   校验/`validatePatch` 同 notifications 纪律；`main.ts` `applySettingsPatch` 嵌套 deep-merge，绝不全组替换）；
-- 类型镜像三处：`desktop/chamber-settings.ts`（store 权威）、`desktop/preload.cts`、`renderer/src/global.d.ts`
+- 类型镜像三处：`desktop/chamber-settings.ts`（store 权威）、`desktop/electron/preload.cts`（归档面）、`renderer/src/global.d.ts`
   （preload↔renderer 由 `test/ipc/ipc-surface-mirror.test.ts` 守护，含嵌套类型签名比对；desktop store 为手工镜像）；
 - 渲染端助手：`settings-bridge/src/client/session-todo-settings.ts`（`sessionTodoOf`/`sessionTodoPatch`/
   `SESSION_TODO_DEFAULTS`，partial 嵌套 patch 只带改动的键上 wire）；`settings-store.ts` 乐观 overlay 的

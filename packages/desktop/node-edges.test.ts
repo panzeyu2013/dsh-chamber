@@ -519,7 +519,7 @@ test('P-03: the dead notifyClicked/resolveResource members are gone from the con
   assert.doesNotMatch(core, /resolveResource\(kind/, 'HostEdges must not declare resolveResource')
   assert.doesNotMatch(core, /HostResourceKind/, 'the resource-kind contract type goes with the member')
 
-  const electron = readFileSync(new URL('./electron-edges.ts', import.meta.url), 'utf8')
+  const electron = readFileSync(new URL('./electron/electron-edges.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(electron, /notifyClicked\(openIntent/, 'Electron must not implement the removed member')
   assert.doesNotMatch(electron, /resolveResource\(kind/, 'Electron must not implement the removed member')
 
@@ -543,7 +543,7 @@ test('G14: the delivered gate is one shared predicate in both flavor implementat
 
   const node = readFileSync(new URL('./node-edges.ts', import.meta.url), 'utf8')
   assert.match(node, /const delivered = rendererPushDelivered\(facts\.mainWindowAlive, facts\.webViewContentAlive\)/)
-  const electron = readFileSync(new URL('./electron-edges.ts', import.meta.url), 'utf8')
+  const electron = readFileSync(new URL('./electron/electron-edges.ts', import.meta.url), 'utf8')
   assert.match(electron, /rendererPushDelivered\(windowAlive, webContentsAlive\(win\)\)/)
   assert.match(electron, /!win\.webContents\.isCrashed\(\)/)
 })

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）：本文件属冻结归档面，文件不删、默认不运行；需要复活时按其 §6 复活清单执行。
 /**
  * Design 18 macOS packaged-runtime acceptance smoke.
  *
@@ -31,7 +32,7 @@ const REPOSITORY_ROOT = path.resolve(SCRIPT_DIR, '../../..')
 const DEFAULT_RELEASE_DIR = path.join(REPOSITORY_ROOT, 'packages', 'desktop', 'release')
 
 function usage() {
-  return 'usage: pnpm run acceptance:runtime:mac-packaged -- [--app /path/to/dsh-chamber.app] [--runtime-tree /path/to/runtime-tree]'
+  return 'usage: node packages/desktop/scripts/runtime-mac-packaged-smoke.mjs -- [--app /path/to/dsh-chamber.app] [--runtime-tree /path/to/runtime-tree]（ARCHIVED：根脚本 acceptance:runtime:mac-packaged 已随 Electron 冻结移除）'
 }
 
 function parseArgs(argv) {

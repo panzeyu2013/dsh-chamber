@@ -830,7 +830,7 @@ chamber-settings.json，非秘密）：
   packument、`latest` 缺失回退、metadata/tarball 302、精确同源绑定、单次顶层 tarball、
   SRI、真实 pnpm `file:` 安装、prune/冒烟与发布；用开发树 Node/pnpm，**不等价于
   packaged Electron**（属实机边界）。
-- `pnpm run acceptance:runtime:mac-packaged` 是**可执行夹具，不是已有 PASS 记录**：
+- **ARCHIVED（Electron 冻结）** `pnpm run acceptance:runtime:mac-packaged`（现直接 `node packages/desktop/scripts/runtime-mac-packaged-smoke.mjs`）是**可执行夹具，不是已有 PASS 记录**：
   要求真实 `.app`，用 packaged Electron 执行内嵌 pnpm、require koffi、执行 dsh CLI
   并检查 `disable-library-validation`；没有真实 `.app` 结果时不得写成已通过。
 - afterPack 静态/fixture 测试只证明打包清单、entitlement 配置与断言逻辑，**不能替代**

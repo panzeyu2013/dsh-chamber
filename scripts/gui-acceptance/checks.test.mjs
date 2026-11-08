@@ -1438,7 +1438,7 @@ const BROWSER_RESOLVER_SOURCE = readProduct('src/client/browser/ForwardFrameReso
 const BROWSER_LOCALES = readProduct('src/client/locales.ts')
 const WIRE_FORWARD_SOURCE = readFileSync(new URL('../../packages/dsh-chamber-wire/src/forward.ts', import.meta.url), 'utf8')
 const CONTROL_PLANE_FRAME_SOURCES = readFileSync(new URL('../../packages/control-plane/src/browser-frame-sources.ts', import.meta.url), 'utf8')
-const DESKTOP_MAIN_SOURCE = readFileSync(new URL('../../packages/desktop/main.ts', import.meta.url), 'utf8')
+const DESKTOP_MAIN_SOURCE = readFileSync(new URL('../../packages/desktop/electron/main.ts', import.meta.url), 'utf8')
 const BROWSER_WALKTHROUGH = readFileSync(new URL('./walkthrough.mjs', import.meta.url), 'utf8')
 
 test('upstream fork contract mirror: sandbox/referrer/marker/guide kind agree with the product source', () => {

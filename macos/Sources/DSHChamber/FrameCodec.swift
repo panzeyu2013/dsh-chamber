@@ -22,7 +22,7 @@
 //   - id 单调纪律由 BridgeClient 保证（Swift 是客户端、sidecar 是服务端，
 //     design 25 §3.1：请求必带自增 id，sidecar 原样 echo。本文件只保证“响应
 //     必须可配对上 id”。
-//   - 帧内 method 字符串不校验：语义校验在 sidecar（52 invoke 处理器
+//   - 帧内 method 字符串不校验：语义校验在 sidecar（58 invoke 处理器
 //     原样），方法白名单在 A 桥（MessageHandler/TrustGuard，B12），B 桥只做
 //     结构解码与尺寸护栏（design 25 §4.4.2 护栏条）。
 //   - 容忍度：payload 键缺省与显式 null 一律折叠为 nil（协议两侧同语义）；

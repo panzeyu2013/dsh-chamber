@@ -174,7 +174,7 @@ test('the dev renderer artifact path is locked to vite outDir and main.ts webDis
   const launcherDist = path.resolve(repoRoot, 'packages/desktop', ...RENDERER_DIST_RELATIVE.slice(0, -1))
   assert.equal(launcherDist, builtDist, 'the launcher must look at the directory the renderer build writes')
   assert.equal(RENDERER_DIST_RELATIVE.at(-1), 'index.html', 'the launcher entry artifact is the built index.html')
-  const mainTs = readFileSync(path.join(repoRoot, 'packages/desktop/main.ts'), 'utf8')
+  const mainTs = readFileSync(path.join(repoRoot, 'packages/desktop/electron/main.ts'), 'utf8')
   assert.match(
     mainTs,
     /webDistDir:\s*path\.join\(pkgDir, 'dist', 'web'\)/,

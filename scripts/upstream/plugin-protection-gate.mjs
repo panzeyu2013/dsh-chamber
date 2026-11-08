@@ -499,7 +499,7 @@ export const PLUGIN_ROW_CONSUMERS = Object.freeze([
   },
   {
     side: 'preload',
-    source: 'packages/desktop/preload.cts',
+    source: 'packages/desktop/electron/preload.cts',
     specifier: '@dsh-chamber/dsh-chamber-client-core/plugin-row',
     names: ['PluginRowProjection'],
   },

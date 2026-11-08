@@ -431,7 +431,7 @@ test('C14 plugin-row 负控③单源字段缺失 / role 并集漂移：单源文
 test('真实仓库：C14 manifest 三方字段集 + plugin-row 单源（消费方只引用不重声明）', () => {
   const host = manifestMirrorFindings({
     producerSource: read('packages/desktop/plugin-sync.ts'),
-    preloadSource: read('packages/desktop/preload.cts'),
+    preloadSource: read('packages/desktop/electron/preload.cts'),
     rendererSource: read('packages/renderer/src/global.d.ts'),
   })
   const consumers = {}

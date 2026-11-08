@@ -82,7 +82,6 @@
     "packages/renderer/src/**/*.tsx",
     "packages/renderer/test/**/*.ts",
     "packages/desktop/*.ts",
-    "packages/desktop/*.cts",
     "packages/desktop/test/**/*.ts",
     "packages/gateway/src/**/*.ts",
     "packages/gateway/test/**/*.ts"

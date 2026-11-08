@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { SHELL_STRINGS, resolveShellLocale, shellStrings } from './shell-locale.ts'
 
 const DESKTOP = dirname(fileURLToPath(import.meta.url))
-const main = readFileSync(join(DESKTOP, 'main.ts'), 'utf8')
+const main = readFileSync(join(DESKTOP, 'electron', 'main.ts'), 'utf8')
 
 test('shell locale: upstream resolve rule (zh* → zh-CN, else en)', () => {
   assert.equal(resolveShellLocale('zh-Hans-CN'), 'zh-CN')

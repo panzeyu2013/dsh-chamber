@@ -123,7 +123,7 @@ test('badge input is the renderer merged projection — the desktop never re-der
 
 /** main.ts 是退出清 0 的调用方：will-quit 必须走 shell-core 的同一入口（注释已剥离）。 */
 function mainSource(): string {
-  return stripComments(readFileSync(new URL('../../main.ts', import.meta.url), 'utf8'));
+  return stripComments(readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8'));
 }
 
 test('quit clear: guarded by an existing intent, resets the holder, and is wired from will-quit', () => {

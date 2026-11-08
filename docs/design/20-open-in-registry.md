@@ -303,14 +303,14 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
    **C2** tag 重放自动纳入（按 registry 的 `upstream` 集合，advisory）；**C6 排除表不动**：本 fork
    **不 shadow vendor 包名**，上游 `packages/host/open-in-app` 必须留在 vendor 树作 diff 锚（加进
    `EXCLUDED_UPSTREAM_DIRS` 会让 C1 失去上游对照）；
-6. 桌面侧与**插件管理页的客户端投影**：`packages/desktop/main.ts:1301` 的 `chamberHostSourceDirs`
+6. 桌面侧与**插件管理页的客户端投影**：`packages/desktop/electron/main.ts:1301` 的 `chamberHostSourceDirs`（归档面）
    （不进远端 seed）与 `plugin-sync.ts:965` 的远端同步循环——**本包标 `localOnly`**：远端不 seed/不 probe。
    `localOnly?: true` 加到 `ChamberHostPackageDescriptor` 并**透出到 `ChamberHostPackageState`**
    （`plugin-sync.ts:427-441` 投影），页面据此把该行**只列在本地目标**（远端/gateway/http
    目标行集 = 该目标适用行，故 3 行；"两列都渲染『本地形态专用』"badge 退役——一张按目标的表不该列出该目标上任何动作都产生不出的行）。客户端包**不能 import**
    Node 注册表，故另有四处镜像锁步：`plugin-inventory-text.ts` 的 `OPEN_IN_PACKAGE` 与
    `InventoryEntryKind`/`chamberKindOf` 分类、`packages/renderer/src/global.d.ts` 与
-   `packages/desktop/preload.cts` 的 `ChamberHostPackageState`（加 `localOnly?: boolean`；四份声明由
+   `packages/desktop/electron/preload.cts` 的 `ChamberHostPackageState`（加 `localOnly?: boolean`；四份声明由
    §9 字段集门钉住）、`packages/dsh-chamber-client-ui-settings-connections/test/plugin-inventory/chamber-rows.test.ts`（读 `host-graph-seed.ts`：断言
    名字集合与注册表行一一对应，**新包不加入即红**）。远端探针在该行**零远端调用**（`installed:false`
    只表示"没问"；页面据注册表标志**不列**该行，绝不渲染"未注入"，也不参与 ssh 的 `sshChamberGates`）。

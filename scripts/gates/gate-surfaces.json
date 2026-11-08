@@ -977,38 +977,6 @@
       },
       "platform": "darwin",
       "reason": "macOS-only assembly leg; release validation has no macOS job"
-    },
-    {
-      "id": "macos.preload-build",
-      "title": "Preload build",
-      "command": "pnpm --filter @dsh-chamber/desktop run build:preload",
-      "modes": [
-        "tests"
-      ],
-      "tier": "assembly",
-      "surfaces": {
-        "local": true,
-        "ci": true,
-        "release": false
-      },
-      "platform": "darwin",
-      "reason": "macOS-only assembly leg; release validation has no macOS job"
-    },
-    {
-      "id": "macos.electron-artifacts",
-      "title": "Compiled Electron artifacts smoke",
-      "command": "node scripts/gates/verify-electron-artifacts.mjs",
-      "modes": [
-        "tests"
-      ],
-      "tier": "assembly",
-      "surfaces": {
-        "local": true,
-        "ci": true,
-        "release": false
-      },
-      "platform": "darwin",
-      "reason": "macOS-only assembly leg; release validation has no macOS job"
     }
   ]
 }

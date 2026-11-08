@@ -20,6 +20,10 @@
  *     ipcRenderer.on 字面量 == shim PUSH_EVENTS 值 == manifest push 集（9）；
  *  ⑤ 无 poc-unimplemented 兜底残留：shim 不含 pocUnimplemented/rejectMethods
  *     代码形态（头部注记文本仅描述 sidecar 桩，不属于兜底代码）。
+ *  ⑥ Swift-only A 桥白名单（bridge-swift-only-additions.json，政策见
+ *     docs/progress/electron-frozen.md §5.2）：白名单项只存在于 shim（preload 面外），
+ *     ①②③④ 的「两侧相等」对它们豁免；但 shim 必须真的实现它（缺方法/缺通道映射仍红），
+ *     preload 不得暴露同名成员、manifest 必须已收录该通道。空表 = 全部 no-op。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,7 +33,7 @@ import { fileURLToPath } from 'node:url'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(dir, '..', '..')
-const preloadSource = readFileSync(path.join(dir, 'preload.cts'), 'utf8')
+const preloadSource = readFileSync(path.join(dir, 'electron', 'preload.cts'), 'utf8')
 const shimSource = readFileSync(
   path.join(repoRoot, 'macos', 'Sources', 'DSHChamber', 'Resources', 'bridge-shim.js'),
   'utf8',
@@ -39,6 +43,32 @@ const manifest = JSON.parse(
 ) as { invoke: { channel: string }[]; push: { channel: string }[]; counts: { invoke: number; push: number } }
 const manifestInvoke = new Set(manifest.invoke.map((e) => e.channel))
 const manifestPush = new Set(manifest.push.map((e) => e.channel))
+/** Swift-only A 桥 additions 白名单（docs/progress/electron-frozen.md §5.2）：只存在于
+ *  Swift shim、无需 Electron preload / 主进程注册的通道。空表时下面所有豁免都是
+ *  no-op——本文件的断言行为与加白名单前逐字一致。 */
+interface SwiftOnlyAddition {
+  channel: string
+  key: string
+  direction: 'invoke' | 'push'
+  namespace: string
+  method: string
+  reason: string
+}
+const swiftOnlyAdditions: SwiftOnlyAddition[] =
+  (JSON.parse(readFileSync(path.join(dir, 'bridge-swift-only-additions.json'), 'utf8')) as {
+    entries: SwiftOnlyAddition[]
+  }).entries
+const swiftOnlyInvoke = new Set(
+  swiftOnlyAdditions.filter((entry) => entry.direction === 'invoke').map((entry) => entry.channel),
+)
+const swiftOnlyPush = new Set(
+  swiftOnlyAdditions.filter((entry) => entry.direction === 'push').map((entry) => entry.channel),
+)
+const swiftOnlyMethods = new Set(swiftOnlyAdditions.map((entry) => entry.namespace + '.' + entry.method))
+const swiftOnlyNamespaces = new Set(swiftOnlyAdditions.map((entry) => entry.namespace))
+for (const channel of swiftOnlyInvoke) {
+  assert.ok(!swiftOnlyPush.has(channel), `Swift-only 白名单通道不得同时声明两个方向：${channel}`)
+}
 
 /** preload *Api 工厂名 → 命名空间名（保守显式清单）。 */
 const API_FACTORY_TO_NAMESPACE: Record<string, string> = {
@@ -170,29 +200,49 @@ function extractShimTopKeys(): Set<string> {
 
 const EXPECTED_SCALARS = ['controlPlaneUrl', 'dshVersion', 'version', 'platform']
 
-test('① 命名空间方法名集合：preload == shim（无缺无多）', () => {
+test('① 命名空间方法名集合：preload == shim（无缺无多；Swift-only 白名单方法豁免"多"）', () => {
   for (const namespace of NAMESPACES) {
     const factory = Object.keys(API_FACTORY_TO_NAMESPACE).find((k) => API_FACTORY_TO_NAMESPACE[k] === namespace)
     assert.ok(factory !== undefined, `命名空间 ${namespace} 应有工厂名`)
     const preloadNames = extractMemberNames(preloadApiBlock(factory))
     const shimNames = extractMemberNames(shimNamespaceBlock(namespace))
     const missing = preloadNames.filter((n) => !shimNames.includes(n))
-    const extra = shimNames.filter((n) => !preloadNames.includes(n))
+    const extra = shimNames.filter(
+      (n) => !preloadNames.includes(n) && !swiftOnlyMethods.has(namespace + '.' + n),
+    )
     assert.deepEqual(
       { namespace, extra },
       { namespace, extra: [] },
-      `shim ${namespace} 暴露了 preload 面外的方法（W-04 时代别名如 onStateChanged 不允许残留）`,
+      `shim ${namespace} 暴露了 preload 面外的方法（W-04 时代别名如 onStateChanged 不允许残留；只有 Swift-only 白名单项可豁免）`,
     )
     assert.deepEqual(
       { namespace, missing },
       { namespace, missing: [] },
       `shim ${namespace} 缺少 preload 的方法`,
     )
-    assert.deepEqual([...shimNames].sort(), [...preloadNames].sort())
+    // 白名单只描述 Swift-only 方法：shim 必须真实现，preload 不得暴露。
+    for (const addition of swiftOnlyAdditions.filter((entry) => entry.namespace === namespace)) {
+      assert.ok(
+        !preloadNames.includes(addition.method),
+        `preload 不得暴露 Swift-only 白名单方法 ${namespace}.${addition.method}`,
+      )
+      assert.ok(
+        shimNames.includes(addition.method),
+        `shim 缺少 Swift-only 白名单方法 ${namespace}.${addition.method}`,
+      )
+    }
+    const comparableShimNames = shimNames.filter((n) => !swiftOnlyMethods.has(namespace + '.' + n))
+    assert.deepEqual([...comparableShimNames].sort(), [...preloadNames].sort())
+  }
+  // 全新 Swift-only 命名空间没有 preload 工厂可对拍：只要求 shim 侧存在该命名空间块与方法。
+  for (const namespace of [...swiftOnlyNamespaces].filter((name) => !NAMESPACES.includes(name))) {
+    const shimNames = extractMemberNames(shimNamespaceBlock(namespace))
+    for (const addition of swiftOnlyAdditions.filter((entry) => entry.namespace === namespace)) {
+      assert.ok(shimNames.includes(addition.method), `shim 缺少 Swift-only 白名单方法 ${namespace}.${addition.method}`)
+    }
   }
 })
-
-test('② 方法→通道映射逐条相等（preload 字面量 == shim 解析通道）', () => {
+test('② 方法→通道映射逐条相等（preload 字面量 == shim 解析通道；Swift-only 白名单项另测）', () => {
   const pushEvents = shimPushEvents()
   for (const namespace of NAMESPACES) {
     const factory = Object.keys(API_FACTORY_TO_NAMESPACE).find((k) => API_FACTORY_TO_NAMESPACE[k] === namespace)
@@ -200,7 +250,7 @@ test('② 方法→通道映射逐条相等（preload 字面量 == shim 解析�
     const preloadSpans = memberSpans(preloadApiBlock(factory))
     const shimSpans = memberSpans(shimNamespaceBlock(namespace))
     const preloadNames = [...preloadSpans.keys()]
-    const shimNames = [...shimSpans.keys()]
+    const shimNames = [...shimSpans.keys()].filter((name) => !swiftOnlyMethods.has(namespace + '.' + name))
     assert.deepEqual([...shimNames].sort(), [...preloadNames].sort())
     for (const name of preloadNames) {
       const preloadChannel = preloadMemberChannel(preloadSpans.get(name) ?? '')
@@ -209,18 +259,38 @@ test('② 方法→通道映射逐条相等（preload 字面量 == shim 解析�
       assert.ok(shimChannel !== '', `${namespace}.${name}（shim）应解析出通道`)
       assert.equal(shimChannel, preloadChannel, `${namespace}.${name} 通道映射不一致`)
     }
+    // Swift-only 方法只存在于 shim：它的解析通道必须等于白名单声明的通道。
+    for (const addition of swiftOnlyAdditions.filter((entry) => entry.namespace === namespace)) {
+      assert.equal(
+        shimMemberChannel(shimSpans.get(addition.method) ?? '', pushEvents),
+        addition.channel,
+        `Swift-only ${namespace}.${addition.method} 的 shim 通道与白名单不一致`,
+      )
+    }
+  }
+  for (const namespace of [...swiftOnlyNamespaces].filter((name) => !NAMESPACES.includes(name))) {
+    const shimSpans = memberSpans(shimNamespaceBlock(namespace))
+    for (const addition of swiftOnlyAdditions.filter((entry) => entry.namespace === namespace)) {
+      assert.equal(
+        shimMemberChannel(shimSpans.get(addition.method) ?? '', pushEvents),
+        addition.channel,
+        `Swift-only ${namespace}.${addition.method} 的 shim 通道与白名单不一致`,
+      )
+    }
   }
 })
-
-test('③ 顶层面：preload expose 键 == shim dshChamberApi 键（4 标量 + 11 命名空间）', () => {
-  const expected = new Set([...EXPECTED_SCALARS, ...NAMESPACES])
+test('③ 顶层面：preload expose 键 == 4 标量 + 11 命名空间；shim 另可带 Swift-only 命名空间', () => {
+  const base = new Set([...EXPECTED_SCALARS, ...NAMESPACES])
   const exposeKeys = extractExposeKeys(preloadSource)
-  assert.deepEqual(exposeKeys, expected, 'preload exposeInMainWorld 键应为 4 标量 + 11 命名空间')
+  assert.deepEqual(exposeKeys, base, 'preload exposeInMainWorld 键应为 4 标量 + 11 命名空间（Swift-only 不得进 preload）')
   const shimKeys = extractShimTopKeys()
-  assert.deepEqual(shimKeys, expected, 'shim dshChamberApi 键应为 4 标量 + 11 命名空间')
+  assert.deepEqual(
+    shimKeys,
+    new Set([...base, ...swiftOnlyNamespaces]),
+    'shim dshChamberApi 键应为 4 标量 + 11 命名空间 + Swift-only 白名单命名空间',
+  )
 })
-
-test('④ invoke/push 通道集：preload == shim == manifest（58 invoke / 9 push）', () => {
+test('④ invoke/push 通道集：preload == shim（Swift-only 白名单项除外）== manifest', () => {
   // 内部 bootstrap 通道（无命名空间方法暴露）：与 verify-shim-payload-shape 的
   // INTERNAL_INVOKE_CHANNELS 同集——info hydration + macOS 主题源 observer。
   const INTERNAL_INVOKE = ['dsh-chamber:info', 'dsh-chamber:native-theme-set']
@@ -248,25 +318,45 @@ test('④ invoke/push 通道集：preload == shim == manifest（58 invoke / 9 pu
       else shimInvoke.add(channel)
     }
   }
+  for (const namespace of [...swiftOnlyNamespaces].filter((name) => !NAMESPACES.includes(name))) {
+    for (const [name, memberText] of memberSpans(shimNamespaceBlock(namespace))) {
+      const channel = shimMemberChannel(memberText, pushEvents)
+      if (channel === '') continue
+      if (name.startsWith('on')) shimUsedPush.add(channel)
+      else shimInvoke.add(channel)
+    }
+  }
   for (const channel of INTERNAL_INVOKE) shimInvoke.add(channel)
-  // 集相等：shim 未遗漏/未发明任何 preload 用过的通道。
-  assert.deepEqual(shimInvoke, preloadInvoke, 'shim invoke 通道集应与 preload 一致')
+  // 集相等：去掉 Swift-only 白名单通道后，shim 未遗漏/未发明任何 preload 用过的通道。
+  const shimInvokeShared = new Set([...shimInvoke].filter((channel) => !swiftOnlyInvoke.has(channel)))
+  assert.deepEqual(shimInvokeShared, preloadInvoke, 'shim invoke 通道集（扣除 Swift-only 白名单）应与 preload 一致')
+  // 白名单项反向：shim 必须真实现，preload 不得暴露，manifest 必须已收录。
+  for (const channel of swiftOnlyInvoke) {
+    assert.ok(shimInvoke.has(channel), `Swift-only 白名单 invoke 通道未在 shim 实现：${channel}`)
+    assert.equal(preloadInvoke.has(channel), false, `Swift-only 白名单通道不得出现在 preload：${channel}`)
+    assert.ok(manifestInvoke.has(channel), `Swift-only 白名单通道未进 manifest：${channel}`)
+  }
   assert.equal(shimInvoke.size, manifest.counts.invoke, `invoke 通道应覆盖 manifest 的 ${manifest.counts.invoke} 条`)
   for (const channel of shimInvoke) {
     assert.ok(manifestInvoke.has(channel), `invoke 通道 ${channel} 应 ∈ manifest invoke 集`)
   }
   assert.equal(manifestInvoke.size, manifest.counts.invoke)
-  // push 面：preload on 字面量 == shim PUSH_EVENTS 值 == shim on* 实订阅 ==
+  // push 面：preload on 字面量 == shim PUSH_EVENTS 值（扣除 Swift-only）== shim on* 实订阅 ==
   // manifest push 集（无死订阅常量）。
   const shimPush = new Set(Object.values(pushEvents))
-  assert.deepEqual(shimPush, preloadPush, 'shim PUSH_EVENTS 应与 preload 订阅字面量一致')
+  const shimPushShared = new Set([...shimPush].filter((channel) => !swiftOnlyPush.has(channel)))
+  assert.deepEqual(shimPushShared, preloadPush, 'shim PUSH_EVENTS（扣除 Swift-only 白名单）应与 preload 订阅字面量一致')
+  for (const channel of swiftOnlyPush) {
+    assert.ok(shimPush.has(channel), `Swift-only 白名单 push 通道未在 shim PUSH_EVENTS 实现：${channel}`)
+    assert.equal(preloadPush.has(channel), false, `Swift-only 白名单通道不得出现在 preload：${channel}`)
+    assert.ok(manifestPush.has(channel), `Swift-only 白名单通道未进 manifest：${channel}`)
+  }
   assert.deepEqual(shimUsedPush, shimPush, 'shim 每个 PUSH_EVENTS 常量都应被某 on* 方法订阅')
   assert.equal(shimPush.size, manifest.counts.push, `push 通道应覆盖 manifest 的 ${manifest.counts.push} 条`)
   for (const channel of shimPush) {
     assert.ok(manifestPush.has(channel), `push 通道 ${channel} 应 ∈ manifest push 集`)
   }
 })
-
 test('⑥ update 面 payload 形状锁步：openReleasePage {url} / state|check 无载荷 / 确认动作带 {revision}（G22 的更新面切片）', () => {
   // 更新面的 payload 形状锁步：preload 与 shim 的「动作是否携带 payload、
   // 键叫什么」逐条锁死。更广的 payload 形状（notifications/deepLink/

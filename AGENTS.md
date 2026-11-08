@@ -1,10 +1,29 @@
 # dsh-chamber Agent Guide
 
+## 当前版本范围（2026-11 用户裁决）
+
+- **唯一出货 flavor = macOS Swift 原生壳**（`macos/` + 打包 Node sidecar，design 25）。默认开发、
+  门禁、发布与文档维护只以 **macOS Swift + 共享契约**为范围；Windows/Linux 桌面腿冻结、**不发布**，
+  恢复需用户裁决。
+- **Electron flavor 已冻结归档**（2026-11 用户裁决）：**不删除文件、不删除历史文档**，保留可复活形态。
+  冻结面 = Electron 入口与边沿（`packages/desktop/electron/` 的 `main.ts` / `electron-edges.ts` /
+  `preload.cts`；`updater.ts` 保留原位）、Electron 打包与更新腿、Windows/Linux CI/发布腿、默认测试组
+  中的 Electron-only 测试。完整清单、仍共享的契约、禁用面与复活清单见
+  `docs/progress/electron-frozen.md`。
+- **agent 默认规则**：只在 Swift 腿与共享契约（control-plane / renderer / client 插件 / wire /
+  dsh-runtime / seed 包等）内改；Electron 归档文件、Electron 打包/发布/CI 腿、Windows/Linux 桌面腿
+  **默认不改、不「顺手同步」**。确需改冻结面或恢复其发布腿 = 用户重开范围的裁决，先读
+  `docs/progress/electron-frozen.md` 并按复活清单执行，不在常规任务里自行解冻。
+- 共享契约按单一实现演进，但**不再要求 Electron 侧同步注册**：新增只用于 Swift 腿的 A 桥通道 /
+  命名空间 / 方法进 `packages/desktop/bridge-swift-only-additions.json` 白名单（政策见
+  `docs/progress/electron-frozen.md` §5），继续保证 Swift 腿 + 生成管线一致即可。
+
 ## Purpose
 
 dsh-chamber is the local desktop **connection manager** for dsh: it hosts one local dsh instance
-(web profile) and attaches remote dsh instances over SSH tunnels inside a single Electron window that
-runs the dsh official frontend — source-reused, self-built, one N-ctx shell per instance. The control
+(web profile) and attaches remote dsh instances over SSH tunnels inside a single native window
+(macOS Swift; the Electron flavor is frozen and archived — 2026-11, `docs/progress/electron-frozen.md`)
+that runs the dsh official frontend — source-reused, self-built, one N-ctx shell per instance. The control
 plane owns connection management, per-instance same-origin reverse proxying and static frontend
 serving (v1: anonymous, loopback-only). Host-native capabilities (goals, jobs, terminals, settings,
 plugin inventory, …) stay the dsh host's and its frontend's job: the control plane attaches and
@@ -20,8 +39,10 @@ procedure. Document structure and writing rules are `docs/AGENTS.md`; design liv
 `docs/design/` (entry point `01-overview.md`), unimplemented ideas in `docs/progress/TODO.md`
 and progress in `docs/progress/STATUS.md` (recording rules: `docs/progress/README.md`). The
 Electron↔Swift deviation register is `docs/progress/deviations.md` (S/T/P/G/D rows plus the
-reachability discipline); STATUS keeps a one-line pointer to it instead of duplicating dual-flavor
-rows.
+reachability discipline) — **historical reference while the Electron flavor is frozen**, no longer
+a default-sync duty; STATUS keeps a one-line pointer to it instead of duplicating dual-flavor rows.
+The freeze scope, shared-contract list and revival checklist live in
+`docs/progress/electron-frozen.md`.
 
 ## STATUS.md — what to record
 
@@ -84,9 +105,9 @@ The recording rules — what to add, remove or update, and the prohibited narrat
   `build:swift-app` now fails closed without `sidecar/primary-runtime/dependencies/node/bin/node` and the
   eight `office-skills` files. Push CI only builds the `--skip-node` assembly; the full payload chain runs
   in the release dry-run.
-  Native artifacts ship from the same tag as the Electron ones, so a signed build must pass the
-  assembly's own `codesign --verify --deep --strict` and the bundle must stay free of symlinks that
-  escape it.
+  Native artifacts are the release artifacts — the Electron leg is frozen, so no Electron artifacts
+  ship (see `docs/progress/electron-frozen.md`). A signed build must pass the assembly's own
+  `codesign --verify --deep --strict` and the bundle must stay free of symlinks that escape it.
 - `pnpm run test:macos` is the macOS-only leg (darwin lock assertions plus the packaging-script
   suites); it runs in the ci.yml `test-macos-pack` job (the Swift build/test core is `test-macos`),
   never on the ubuntu leg.
@@ -108,15 +129,14 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   contains** (a darwin-only gate is absent from a linux run). The gates that still live outside the
   modes are enumerated in
   `docs/progress/STATUS.md` §1.6 (hand-written host typechecks, the macOS-only jobs, the C8 rebuild,
-  remote-state acceptance, the notices diff, the gateway pack smoke, the renderer SVG scoper assertion
-  and the Windows manifests); a green local run never proves those.
+  remote-state acceptance, the notices diff, the gateway pack smoke, the renderer SVG scoper assertion); a green local run never proves those.
 
 ## Runtime Boundaries
 
 | Package | Responsibility |
 |---|---|
 | `packages/control-plane` | Connection-manager core: local host lifecycle (spawn/readiness/reaper/health/logs), management REST, per-instance generic reverse proxy (HTTP/WS/SSE), static frontend serving, the page-level multiplex WS server (`/api/page-channel`) and its three upstream adapters (design 26) |
-| `packages/dsh-runtime` | Shared host-agnostic dsh runtime version management core (design 18); adapted by the desktop main process and the gateway, which never share runtime state |
+| `packages/dsh-runtime` | Shared host-agnostic dsh runtime version management core (design 18); adapted by the desktop sidecar (the frozen Electron entry historically) and the gateway, which never share runtime state |
 | `packages/renderer` | Self-built dsh frontend: composite entry build, per-instance host-graph merge and extra-entry preloading, N-ctx multi-instance orchestration, notification edge projection, boot manifest (designs 09, 19) |
 | `packages/dsh-chamber-client-core` | Shared chamber client kernel every chamber client package consumes: multi-source session/workspace projection, the chamberBridge singleton, the page-level client-plugin load kernel, the per-instance unary client, the page-level multiplex channel client (one socket for every long-lived stream, design 26), the settings-seat contract plus the framework-free runtime-management / SVG-resource-scope leaf contracts, and the page-level same-origin HTTP dispatch budget (design 26 §D7). Source-only: consumers resolve the TypeScript sources through its named faces and the seed bundle inlines them (designs 05, 09, 26) |
 | `packages/dsh-chamber-wire` | Neutral host↔client wire contracts for the chamber host domains (design 24 `archiveCleanup` first; design 26 adds the page-channel stream protocol; P1-A moves the session-state contract here as `./session-state`, with `./json-guards` and `./mux-frame`): domain/method names, argument tables and frames shared by the in-host seed bundles and the client packages. Zero runtime dependencies; the source is inlined by the seed esbuild bundle and the client bundles |
@@ -131,8 +151,8 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-chamber-client-ui-settings-plugin-manager` | Reuses the upstream plugin manager as its own Settings section (`settings.section` id `plugin-manager`, after the official Built-in plugins inventory); owns no sidebar panel (design 05) |
 | `packages/dsh-chamber-client-ui-git` | Git worktree client plugin (design 08); facts and actions stay client-side and never become a control-plane execution surface |
 | `packages/dsh-chamber-client-ui-open-in` | Desktop open-in client plugin (designs 16, 20) + the conversation stream-health seat (design 14 §D4) |
-| `packages/dsh-chamber-client-ui-browser` | Client-only right-sidebar Browser (design 28 v2, 2026-11 user rulings): a faithful fork of upstream `ui-sidebar-browser`'s iframe path (same DOM/CSS/copy/8 locales/address parsing/history/multi-tab/shortcut/title/sandbox toggle/store; SHA-256-locked in the package tests), loaded as a deferred covered row by the composite; **not seeded** (a renderer workspace client package, not a host package). The **only behavior difference** is the SSH reverse proxy: local sources load `target.url` directly; a `dsh`/`gateway`+ssh source whose target host is exactly `127.0.0.1` attaches the forward lease first and uses main's composed `frameUrl` as the iframe src (address bar/history keep the logical URL; the forwarded page's external exit uses the alias, disabled while the lease resolves or fails; tab close releases the consumer). Any other http(s) target (https/any host) loads directly per upstream. Entry except http sources. Electron and Swift are both core/on by default. Desktop CSP allows `blob:`/loopback/alias/`http:`/`https:`; main-process gates still own child-frame navigation/download/permissions (XFO/TLS failures are not projected into upstream UI). No gateway tunnel, no shared `127.0.0.1` fallback, no native child view |
-| `packages/desktop` | Electron shell: single frame over the control-plane origin, trusted domain-scoped IPC, open-in/deep-link routing, edge notifications, crash-safe credential and runtime management, and the SSH forward service behind the upstream-faithful right-sidebar iframe browser (`remote-forward-args`, `remote-forward-namespace`, `remote-forward-manager`, `remote-forward-lifecycle`, `remote-forward-service`, `remote-forward-windows`, `shell-ipc-browser`; design 28 §16.11) — child frames are gated for navigation/download/permissions, and the shell never becomes a dsh execution surface |
+| `packages/dsh-chamber-client-ui-browser` | Client-only right-sidebar Browser (design 28 v2, 2026-11 user rulings): a faithful fork of upstream `ui-sidebar-browser`'s iframe path (same DOM/CSS/copy/8 locales/address parsing/history/multi-tab/shortcut/title/sandbox toggle/store; SHA-256-locked in the package tests), loaded as a deferred covered row by the composite; **not seeded** (a renderer workspace client package, not a host package). The **only behavior difference** is the SSH reverse proxy: local sources load `target.url` directly; a `dsh`/`gateway`+ssh source whose target host is exactly `127.0.0.1` attaches the forward lease first and uses main's composed `frameUrl` as the iframe src (address bar/history keep the logical URL; the forwarded page's external exit uses the alias, disabled while the lease resolves or fails; tab close releases the consumer). Any other http(s) target (https/any host) loads directly per upstream. Entry except http sources. The Electron flavor is frozen/archived; the Swift leg is the shipped one (`docs/progress/electron-frozen.md`). Desktop CSP allows `blob:`/loopback/alias/`http:`/`https:`; main-process gates still own child-frame navigation/download/permissions (XFO/TLS failures are not projected into upstream UI). No gateway tunnel, no shared `127.0.0.1` fallback, no native child view |
+| `packages/desktop` | **Node sidecar host business core + the frozen Electron entry (archived reference)**: the shared business assembly (`host-assembly`, `shell-core`, `host-edges`, `ipc-events`, transport providers / registry, credential + runtime management, SSH forward service behind the upstream-faithful right-sidebar iframe browser — `remote-forward-*`, `shell-ipc-browser`; design 28 §16.11) runs in the Swift sidecar. The Electron-only entry/edges/preload (`main.ts`, `electron-edges.ts`, `preload.cts`) live in `packages/desktop/electron/` and are **frozen** (2026-11, `docs/progress/electron-frozen.md`), together with Electron packaging/updating; `updater.ts` stays in place because the sidecar's headless update controller imports its pure functions. Neither flavor becomes a dsh execution surface |
 | `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup, in-instance open-in catalog/icons/launch (designs 09, 08, 24, 20) |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
 | `packages/gateway` | Separately invoked server shape (design 17): authenticated-by-default public boundary, single local-dsh proxy, host duties, seed registry |
@@ -151,17 +171,21 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   runs that set (registration: `docs/progress/STATUS.md`, 范围决策).
 - Credentials and connection secrets never enter the renderer, logs or any persistence layer — only the
   documented transient write-only form inputs (design 05 §8, design 17).
-- Both flavors resolve one userData root; on Darwin they share one directory lock
-  (`<userData>/.dsh-chamber.lock`: Swift `flock(LOCK_EX|LOCK_NB)`, Electron Darwin
-  `O_EXLOCK|O_NONBLOCK`; non-Darwin Electron returns `unsupported` and passes, and the Swift flavor
-  is macOS-only). The root derivation is pinned by the `chamber-lock.test.ts` lockstep assertion; the
-  lock file carries no secrets and is **never the arbitration authority** — the exclusive lock itself
-  is, and the recorded pid/start time are diagnostics only (design 25 §6.3).
+- The two flavor builds resolve one userData root from the same derivation; on Darwin they
+  historically shared one directory lock (`<userData>/.dsh-chamber.lock`: Swift `flock(LOCK_EX|LOCK_NB)`,
+  Electron Darwin `O_EXLOCK|O_NONBLOCK`; non-Darwin Electron returned `unsupported` and passed). With
+  the Electron flavor frozen only the Swift `flock` leg ships; the Electron leg remains in the frozen
+  archive for revival (`docs/progress/electron-frozen.md`), and the Swift flavor is macOS-only. The
+  root derivation is pinned by the `chamber-lock.test.ts` lockstep assertion; the lock file carries no
+  secrets and is **never the arbitration authority** — the exclusive lock itself is, and the recorded
+  pid/start time are diagnostics only (design 25 §6.3).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request (current
-  set: `ws`, `electron-updater`, `clsx` (client UI class composition), React/Vite, Electron, the
-  embedded pinned `pnpm`, the dsh client workspace packages; `Sparkle` 2.10.0 is the Swift native
-  shell's only SwiftPM dependency — the
-  in-app update chain, added on the user's explicit ruling "D-1 = B"). `typescript` /
+  set: `ws`, `electron-updater`, `clsx` (client UI class composition), React/Vite, the embedded
+  pinned `pnpm`, the dsh client workspace packages; `Sparkle` 2.10.0 is the Swift native shell's only
+  SwiftPM dependency — the in-app update chain, added on the user's explicit ruling "D-1 = B").
+  `Electron` (devDependency) is kept as the **revival baseline for the frozen Electron flavor**
+  (see `docs/progress/electron-frozen.md`), not as a dependency of the shipped Swift leg;
+  `electron-updater` stays because the shared update controller imports it. `typescript` /
   `@types/*` / `node-pty` are devDependencies — `node-pty` is the root resolution target for
   `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall (`pnpm-workspace.yaml` allowBuilds note
   + `scripts/dev/ensure-harness-vendor.mjs` shim), not a runtime dependency of the chamber tree; it

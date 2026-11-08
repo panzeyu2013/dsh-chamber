@@ -3,6 +3,10 @@
 > 按序执行，任何 ❌ 都阻断发布。依据 `.github/workflows/release.yml` 与 `docs/DEVELOPMENT.md` §5。命令前先
 > `nvm use`（或等价方式）让 `node --version` 的主版本与 `.nvmrc` 一致——本清单只写流程，不写版本字面值。
 > 只写可复用流程：某次发布的叙述写 `CHANGELOG.md` 发布节，仍open的门禁写 `STATUS.md`。
+>
+> **范围（2026-11 用户裁决）**：唯一出货 flavor = macOS Swift 原生壳。Electron flavor 已冻结归档
+> （`docs/progress/electron-frozen.md`），Windows/Linux 桌面腿不发布。下方标 **ARCHIVED** 的条目
+> 只在按复活清单重开 Electron 范围后才适用；默认发布**不执行**这些条目。
 
 ```
 本地: preflight → changelog/i18n → check:full（精确发布提交）→ 构建自检 → 工作区健康 → commit+tag
@@ -38,12 +42,14 @@ CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 
 - [ ] 架构门 `verify:import-cycles` / `verify:file-budgets` / `verify:package-boundaries` 在普通 CI、发布验证及本地全量套件中执行；文档门 `verify:i18n` 在 ci.yml `test` 与 release.yml `validation` 的 pre-install 生成块内执行（file-only）；其余质量辅助门 `verify:md-links` / `verify:test-wiring` / `verify:no-dead-exports` / `verify:styles` 仍按 local-only 决策由本地全量套件覆盖。所有门必须在下一条的本地绿色记录里出现，发布提交上不许漏跑。
 - [ ] 全量套件：`pnpm run check:full`（= `node scripts/gates/run-checks.mjs full`：static + typecheck + 全部包测试）；darwin 上 `tests` 模式按 `scripts/gates/gate-surfaces.json` 的 `macos.*` 门（platform=darwin）追加 Swift/打包腿类，CI 侧对应 ci.yml 手写的 `test-macos`（Swift 构建/测试）与 `test-macos-pack`（`test:macos`、compiled sidecar / native GUI 装配 / Electron 产物门）两个 job——它们不在生成块内，登记见 `docs/progress/STATUS.md` §1.6，且都被发布 proof 按 job 名钉住。冒烟是独立入口。上一提交的记录不算数；失败必须定位，不能用重跑代替结论。
-- [ ] full之外的发布项：`build:dsh-runtime`、`typecheck:host-graph` / `typecheck:host-git` / `typecheck:host-archive-cleanup` / `typecheck:host-open-in`；`test:win32` 只能由CI跑。
+- [ ] full之外的发布项（**现行**）：`build:dsh-runtime`、`typecheck:host-graph` / `typecheck:host-git` / `typecheck:host-archive-cleanup` / `typecheck:host-open-in`。
+- [ ] **ARCHIVED（Windows 腿已删）** `test:win32`：Windows 桌面腿冻结后不再有 CI 入口，默认发布不执行。
 - [ ] 旧版本号残留扫描：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs` 为空（硬编码旧shellVersion会误触发壳升级路径）。
 - [ ] `pnpm install --frozen-lockfile` 通过；`build:renderer`、`build:host-packages`、`build:desktop` 通过。
 - [ ] 产物建成后（`build:renderer` / `build:host-packages` / `build:desktop`）跑一次 `node scripts/gates/verify-artifact-freshness.mjs --require-compare`：严格档把「一类都没比过」判红，防止 clean checkout 的 SKIP 冒充通过（该门不在 `check:full`/`tests` 内，仅本清单在构建后手动跑）。
-- [ ] 打包完整性自检（`packaging-closure-checklist.md` §1–§2、§3.2）：main.ts传递import闭包 ⊆ `build.files`；产物齐全（dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。tag触发的构建腿另跑afterPack断言（vendor dsh平台 / pnpm模块 / asar内dsh-runtime）；改动打包链后先dry-run（§7）。
-- [ ] Linux腿（CI）：build-linux产AppImage(x64)；非dry_run断言 `latest-linux.yml`（beta为 `beta-linux.yml`）存在且互斥、无 `.blockmap`、runtime平台前缀 `linux-`。
+- [ ] **ARCHIVED（Electron 冻结）** Electron 打包完整性自检（`packaging-closure-checklist.md` §1–§2 的 Electron 部分）：`electron/main.ts` 传递 import 闭包 ⊆ `build.files`；Electron 产物齐全（`dist/preload.cjs` 等）。
+- [ ] **现行（Swift 侧）** Swift 载荷/装配自检（`packaging-closure-checklist.md` §3.2 的 Swift 部分、`build:sidecar` / `build:swift-app --dry-run`）：见下方“Swift 本地载荷与 Office 资产装配”条。
+- [ ] **ARCHIVED（Linux 冻结）** Linux腿（CI）：build-linux产AppImage(x64)（随 Electron 冻结，不再发布）。
 - [ ] **打包载荷与双形态**：forge bundle + 六个依赖包（七个 package.json；`worktree` / `tool-worktree` / `forge` / `forge-github` / `forge-session` / `client-ui-forge`）在 Electron 的 `resources/vendor/dsh/node_modules/@deepseek-ai/` 与 Swift sidecar 的 `vendor/dsh/node_modules/@deepseek-ai/` 内均有 `package.json`；实例前端 Plugins → More 可见 opt-in 开关，启用后 `forge-github` 行 disabled；Electron **打包态 + Finder 启动**下四项 UI、同池三条、node 实际创建成功；Swift 壳内同样四项 UI、同池三条、node 实际创建通过（design 08 §7.3）。任一 ❌ = 发布阻断。
 - [ ] **Swift 本地载荷与 Office 资产装配（Swift 腿专属）**：Swift 腿打包前准备全量 primary-runtime（python+node+pnpm；`prepare-python-payload` 带 `--with-node --with-pnpm`）与 office-skills（`prepare-office-assets`），并以 `build:sidecar --arch arm64 --require-python --require-node --require-pnpm --require-office-assets` 装配——缺件 fail-closed（`--require-*` 缺省只 warn，发布腿不允许）；装配后按 release.yml 对 `<sidecar>/primary-runtime` 与 `<sidecar>/office-skills` 各跑一次对应 `--verify`。`.app` 结构断言：`<Resources>/sidecar/primary-runtime/dependencies/node/bin/node` 可执行、`runtime.json` 与 `office-skills/office/SKILL.md` 在场、`sidecar.js` 在场、装配顶层没有任何独立 Node 条目（单 Node：唯一 Node 在 payload 内）、payload Node 的 lipo 架构含 arm64；payload/资产脚本单测随 `pnpm run test:desktop`（scripts 组），装配脚本单测随 darwin 上的 `pnpm run test:macos` 覆盖。Electron 腿保持现状（python-only payload + 既有 afterPack 断言），不做 Office 相关改动；CI 排练仍以 `build:sidecar --skip-node` 装配、用调用者 node 跑 `test:sidecar:compiled`。任一 ❌ = 发布阻断。
 - [ ] **Swift 单 Node 与本地 Office 实机验收**：在**没有系统 node/python** 的机器上安装 Swift 包并启动本地实例——sidecar 与托管 dsh 都运行在 app 内 payload 的 node 上（进程名即 `node`，按应用派生的子进程关系归因）、装配顶层没有独立 Node（旧布局）条目；实例内 7 个 Office 技能可见，`load_workspace_dependencies` 返回 python/node 路径，docx 创作与 render/export-pdf 可用（首次调用把只读载荷装到 `<DSH_HOME>/dsh-runtimes/dsh-primary-runtime`，app 内文件未被修改）。缺 payload/资产时宿主正常启动、启动行不挂、能力如实缺席。发布阻断项。

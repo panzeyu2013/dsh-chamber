@@ -300,7 +300,7 @@ detectVscodeAvailability(platform): { available: boolean }
 - `test:desktop` 脚本**逐项列出**测试文件（含 `test/desktop-shell/deep-link.test.ts`、
   `test/desktop-shell/open-in.test.ts`）——新增测试必须登记。
 - `preload.cts` 暴露 `deepLink.onIntent()/ready()/ack()` 与 open-in 面（`openIn.apps()/open()`，设计 20 §3.2；
-  `build:preload` 自动编译）；main.ts 接线（§4.2/§4.3）；electron-builder `protocols` 键（`schemes: ['dsh-chamber']`）。
+  `build:preload` 自动编译，Electron 冻结归档）；main.ts 接线（§4.2/§4.3）；electron-builder `protocols` 键（`schemes: ['dsh-chamber']`）（Electron 冻结归档；Swift 壳的深链在 Info.plist/AppDelegate，现行）。
 - release.yml 版本断言**自动纳入**：`release-preflight --versions-only` 数据驱动核对「根 + `packages/` 下全部非 fork 包 =
   目标版本」（`@deepseek-ai/*` fork 副本按 FORK_VERSION），新包必须与根同版本，不额外手工登记。
 

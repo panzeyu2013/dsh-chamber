@@ -13,7 +13,7 @@
 
 | 项 | 事实 | 证据 |
 |---|---|---|
-| 进程拓扑 | 控制面（`createControlPlane`）、transport-manager 与全部 dsh 子进程都由 Electron 主进程持有；窗口只是视图 | `packages/desktop/main.ts` |
+| 进程拓扑 | 控制面（`createControlPlane`）、transport-manager 与全部 dsh 子进程都由 Electron 主进程持有；窗口只是视图 | `packages/desktop/electron/main.ts` |
 | 断链恢复 | **已具备**：transport-manager jittered 指数退避重连 + 慢速重探（隧道断线自动恢复）；dsh-client-connection 原生 connect/pump/reconnect 循环（长活流断线自动重连） | `transport-manager.ts`（重连状态机）；`dsh-client-connection/src/client/connection.ts`（connect/pump/reconnect） |
 | 托盘 | 打包态防御式最小托盘：tooltip + 「显示窗口/退出」，无状态投影、无设置 | `main.ts`（`maybeCreateTray`） |
 | 退出清理所有权 | `will-quit` single-flight 完整 dispose 插件同步/本地插件子进程、传输层、控制面与 runtime 工作 | `main.ts`（`will-quit`） |
@@ -761,8 +761,8 @@ chamber 的边界是「自动升级 + 显式失败面」；页面级阶梯的自
 
 | 面 | 改动 |
 |---|---|
-| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；隐藏态节流 = Chromium 默认（修订，见 D1）；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
-| `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
+| `packages/desktop/electron/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；隐藏态节流 = Chromium 默认（修订，见 D1）；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
+| `packages/desktop/electron/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探；**D4 升级 ladder 的宿主与呈现**：30s tick 请求 producer 对账；`planLadder` + `sessionAuthorityEscalationLadder`（阈值读 `tables.json` 的 `ladders.authority`）决定 reconnect / notice；共享 per-source 重连账本；notice 横幅 + 忽略集合 |
 | `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行端**：`packages/dsh-chamber-client-core/src/session-fact-reconcile.ts`（唯一 I/O：官方 store 读、独立 unary 读、tier-3 写回、probe ladder 单飞、有界动作 ring）；producer 订阅 App 的 tick 通道并驱动它，快照经 `InstanceRuntimeReport.sessionAuthority` 回流（05 §3） |
 | `packages/dsh-chamber-client-ui-open-in` | **D4 对话流健康臂的座席宿主**：`src/client/session-stream-health.ts`（纯决策）+ `session-stream-health-probe.ts`（经 `binding(id)` 的具象 `Session.resync()`、`retainedBy.mainView` 呈现判定与面形状，全部 fail-closed）+ `SessionStreamHealthChip.tsx`、`session-stream-health-seat.ts`（注册进 `conversation.session.header.actions`，list/session 作用域）；error 臂自动执行具象 resync；chip 只报告提示，不含任何用户控件（手动出口退役） |

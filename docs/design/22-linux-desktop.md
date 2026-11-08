@@ -1,5 +1,9 @@
 # 22 · Linux 桌面支持（发行形态 / 自动更新形态门 / 系统集成）
 
+> **ARCHIVED（2026-11 用户裁决）**：Electron flavor 已冻结归档，**Linux 桌面腿冻结、不发布、不排期**
+> （见 [`../progress/electron-frozen.md`](../progress/electron-frozen.md)）。原文保留作为历史参考与复活基线；
+> 恢复需用户重开范围。
+
 > **范围**——本文是 dsh-chamber Linux 桌面支持的权威契约：AppImage(x64) 发行形态、按运行形态
 > 门控的自动更新、XDG/$APPIMAGE 桌面集成纪律、build-linux 发布腿与控制面/运行时平台适配；未完成门禁见
 > `docs/progress/STATUS.md`。运行时核心（macOS/Linux mutation 契约）见 18；深链契约见 16；自启/托盘/关窗

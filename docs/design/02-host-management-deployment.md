@@ -1,5 +1,11 @@
 # 02 · 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态
 
+> **范围横幅（2026-11 用户裁决；窄横幅，不整篇归档）**：Electron flavor 已冻结归档
+> （见 [`../progress/electron-frozen.md`](../progress/electron-frozen.md)）。本文中 **Electron/Chromium 专属段**
+> （spawn-dsh 的 Electron 分支、运行期指纹、safeStorage、electron-updater 等）随 flavor 归档；
+> **control-plane 宿主生命周期契约（spawn / 就绪 / 健康 / reaper / 日志 / host 包 seed）仍现行**，
+> Swift sidecar 继续按本文执行。
+>
 > **本地实例托管与部署形态**——控制面以 dsh 内置 web profile
 > 拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →
 > 孤儿回收）；未完成门禁见 `docs/progress/STATUS.md`。
@@ -206,6 +212,8 @@ rows，不改变官方 web profile 的其它组合层。
     可用性因此由 **Electron pin × addon 版本**共同决定，任一侧升级都要实机复核；纯 node 路径
     （含 Swift sidecar 的 `<Resources>/sidecar/primary-runtime/dependencies/node/bin/node`——单 Node，基名 `node`）
     不受该白名单约束。
+  - **（Electron 冻结归档，2026-11）**上面「Electron 主进程 / Electron 分支 / 运行期指纹白名单」属随
+    flavor 归档的专属段；Swift sidecar 只走纯 node 路径，不受 Electron pin/指纹表约束。
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
 - **随包 pnpm 供给**（`withPnpmShim`，pnpm-shim.ts）：上游插件管理器在**托管宿主进程**里
@@ -259,7 +267,7 @@ rows，不改变官方 web profile 的其它组合层。
 
 - **登录 shell 环境（rc.2 对齐；控制面 `login-shell-env.ts`）**：Dock/Finder/桌面启动只继承
   session manager 的环境，用户写在 `~/.zprofile`/`~/.zshrc` 的 PATH、代理与 API key 不会进入托管
-  宿主与它的 agent shell/终端（与随包 pnpm shim 同一病根）。两个桌面入口（Electron main、Swift
+  宿主与它的 agent shell/终端（与随包 pnpm shim 同一病根）。两个桌面入口（Electron main（**已冻结归档**）、Swift
   sidecar）**各发起一次** `startLoginShellEnvironment(log, { signal })`（`login-shell-env.ts` 的共享接线：
   内部走进程级一次读取 `readLoginShellEnvironmentOnce(process.env)`，逐条失败交给入口的 log、异常回退
   继承环境），
@@ -500,7 +508,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
   句柄 + O_NOFOLLOW**——与本节 host-logs 的 no-follow/0600 纪律同族）。动机：控制面是
   `proxy-forward` WS splice 取证行（`WebSocket stream <id> closed
   (<cause>, Nms)`、`heartbeat lost …`）的**权威**来源，而打包态由 Finder/Dock 启动时 console 不落盘
-  （design 14 §D4 实测）；控制面拥有 stateDir，故 Electron 与 Swift 壳**共用同一实现**。写失败/
+  （design 14 §D4 实测）；控制面拥有 stateDir，故 Electron 与 Swift 壳**共用同一实现**（Electron 壳已冻结归档，共享实现仍现行、Swift 腿继续使用）。写失败/
   轮转失败只降级为「不落盘 + 告警一次」，日志绝不能成为新失败面；`stop()` 关句柄、`start()` 重开
   （plane 支持 stop→start 重启）。**被否替代**：①写进 `host-logs/<port>.log`——那是**被管理宿主**的
   stdout/stderr 管道（按端口寻址、有读侧 API），混入会冒充宿主日志；②只依赖 stdout——打包态不落盘，
@@ -508,7 +516,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
   `control-plane.log`——两链生命周期不同步：`sidecar.log` 覆盖控制面 sink 建立**之前**的 stderr
   （含 fatal 启动输出），兜底价值大于重复成本（保留量差异登记 deviations T-25）。**与原生壳的关系**：
   原生壳另有 `<userData>/logs/sidecar.log`（design 25 §3.1）作**兜底**；同一批 console 行两处各存
-  一份、保留量不同（Electron `2 MiB × 3` = 6 MiB，原生壳另有 `256 KiB × 2` = 512 KiB，合计
+  一份、保留量不同（Electron 腿冻结归档，其 `2 MiB × 3` = 6 MiB 为历史值；原生壳另有 `256 KiB × 2` = 512 KiB，合计
   6 MiB + 512 KiB），该 flavor 偏差登记在 deviations。
   - **写入面纪律**：①日志行**同步**追加（每行一次 `writeSync`，无 fsync）
     ——与本节 host-logs 的"只入队、不阻塞"不同，取舍是"崩溃前最后几行必须在页缓存里"（取证价值）
@@ -641,8 +649,9 @@ exec 起停目标按 `serviceName` 在该单元与 `dsh.service` 间选择（03 
 `packages/control-plane/src/win-probes.ts`(design 23):身份 = PowerShell CIM(命令行/PPID)、端口归属
 = netstat、树终止 = `taskkill /T /F` + CIM 残余后代清扫;reaper/spawn-dsh 平台自适应接线,全部
 fail-closed(不可证即保留/拒绝)。残余让步(妥协 F1/C6-C8):无 SIGTERM 握手 → 硬终止 + 事务恢复;身份
-证明依赖 PowerShell 与同行权限可读 CommandLine。Windows 契约腿 = ci.yml `test-windows`;win32-only
-集成测试见 `win32-lifecycle.integration.test.ts`。
+证明依赖 PowerShell 与同行权限可读 CommandLine。**（Windows 腿已随 Electron 冻结归档、不发布）**Windows 契约腿
+原为 ci.yml `test-windows`（该 job 已删除，原文见 git 历史）；win32-only 集成测试见
+`win32-lifecycle.integration.test.ts`（冻结保留，不在默认测试组）。
 
 ### 5.2 起始端口选择
 

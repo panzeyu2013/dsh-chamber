@@ -6,11 +6,13 @@
  * ship an untested commit" must rest on an assertion, not on procedure: without
  * this gate, tagging a commit that never went through `main` would skip the
  * linux chain entirely (release.yml's validation is its mechanical superset;
- * the Windows leg has no release.yml equivalent).
+ * the macOS test legs have no release.yml equivalent). The Windows/Linux desktop
+ * legs are ARCHIVED with the Electron flavor (2026-11): they are no longer part
+ * of the required set.
  *
  * This gate asserts the proof directly: the release
  * commit must carry a COMPLETED, SUCCESSFUL `ci.yml` push run on `main` whose
- * `test`, `test-macos` and `test-windows` jobs all succeeded AND whose
+ * `test`, `test-macos` and `test-macos-pack` jobs all succeeded AND whose
  * load-bearing steps actually ran (REQUIRED_JOB_STEPS — job names alone can
  * stay green after `swift test` or a leg step is deleted, and a classifier-
  * skipped step can never prove a release). A run still in
@@ -36,16 +38,16 @@ import { argv, env, exit } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 /** Jobs that must have concluded `success` on the proven run: the linux chain
- *  (release.yml's mechanical superset is validated against it), the Windows
- *  contract leg release.yml has no equivalent of, the macOS leg — the native
- *  `.app`/dmg/zip ship from the SAME tag (release.yml's build-swift), and
- *  `test-macos` is the only job that exercises the darwin lock and the two
- *  packaging-script suites those artifacts are produced by, so a release that
- *  skipped it would ship native artifacts no push-path gate ever validated —
- *  plus the two push-only packaging jobs those legs were split into (the
- *  minutes of NSIS/electron-builder work no longer extend the contract legs'
- *  wall clock, but the rehearsals themselves stay required: the split moved
- *  the STEPS to a parallel job, it did not drop any coverage). */
+ *  (release.yml's mechanical superset is validated against it) and the two macOS
+ *  legs — the native `.app`/dmg/zip ship from the SAME tag (release.yml's
+ *  build-swift), and `test-macos` is the only job that exercises the darwin lock
+ *  and the two packaging-script suites those artifacts are produced by, so a
+ *  release that skipped it would ship native artifacts no push-path gate ever
+ *  validated; `test-macos-pack` carries the executed-assembly gates and the native
+ *  dry runs split out of it (the split moved the STEPS to a parallel job, it did
+ *  not drop any coverage). The Windows/Linux desktop legs are ARCHIVED with the
+ *  Electron flavor (2026-11, docs/progress/electron-frozen.md), so they are not
+ *  part of the proof set. */
 export const REQUIRED_JOBS = [...CI_JOB_IDS]
 
 /**
@@ -64,47 +66,24 @@ const NON_GATE_STEPS = {
     'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)',
     'Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in)',
   ],
-  'test-windows': [
-    'Assert lockfile not rewritten',
-    'dsh-runtime test:win32 manifest',
-    'control-plane test:win32 manifest (real CIM/netstat/taskkill integration)',
-    'desktop test:win32 manifest (real icacls)',
-    // The renderer/sidebar manifests carry the boot-gap + extra-row
-    // decisions (the surface the real-machine sidebarRight gap appears on); the
-    // proof must require them for the same reason it requires the three older
-    // manifests — a deleted step cannot stay green.
-    'renderer test:win32 manifest (boot-gap + extra-row decisions)',
-    'sidebar test:win32 manifest (source boot-gap copy)',
-  ],
-  // The Windows packaging rehearsal is the win32 mirror of the mac one, and
-  // release.yml must never be the first place the NSIS pack runs (with release
-  // credentials loaded). It lives in its own push-only job so the minutes of
-  // toolchain work do not extend the contract leg; the proof still requires the
-  // step by name, so deleting or classifier-skipping it cannot leave a release
-  // able to ship a win32 pack no push-path gate produced.
-  'test-windows-pack': ['Windows packaging rehearsal (no publish, no credentials)'],
   'test-macos': [
     'Assert lockfile not rewritten',
     'Swift build (release)',
     'Swift tests (release configuration, XCTSkip == 0)',
     'Bridge manifest + shim surface + payload shape lockstep',
   ],
-  // The executed-artifact gates and the credential-free packaging rehearsal run
-  // in their own job (a second macOS runner, in parallel with the Swift
-  // core above) — but they stay REQUIRED steps: a green job whose executed-
-  // assembly gate or packaging rehearsal was deleted (or classifier-skipped on a
-  // prose-only push) must still fail the proof. The WKWebView UI itself stays a
-  // real-machine item (no CDP), and the Electron mac pack is rehearsed nowhere
-  // else on the push path: without the rehearsal step release.yml would build it
-  // for the first time after the draft exists and with the Apple credentials
-  // loaded.
+  // The executed-assembly gates and the native dry runs run in their own job (a
+  // second macOS runner, in parallel with the Swift core above) — but they stay
+  // REQUIRED steps: a green job whose executed-assembly gate was deleted (or
+  // classifier-skipped on a prose-only push) must still fail the proof. The
+  // WKWebView UI itself stays a real-machine item (no CDP). The Electron compiled-
+  // artifact smoke and the Electron packaging rehearsal left this table with the
+  // 2026-11 Electron freeze.
   'test-macos-pack': [
     'Packaging + darwin lock suites (test:macos)',
     'Compiled sidecar smoke (shipped sidecar.js executes)',
-    'Electron compiled artifacts smoke (control-plane boot + preload surface)',
     'Native assembly acceptance (spawned sidecar boots + serves)',
     'Packaging dry runs (sidecar + .app)',
-    'macOS packaging rehearsal (ad-hoc, no publish, no credentials)',
   ],
 }
 

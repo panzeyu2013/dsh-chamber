@@ -1,7 +1,7 @@
 /**
  * Desktop IPC channel names — the single source for MAIN-process senders and
- * handlers (main.ts + the ipc-*.ts wiring modules). `SYSTEM_RESUME_EVENT` is
- * also referenced (as the same literal) by preload.cts: the preload build
+ * handlers (electron/main.ts + the ipc-*.ts wiring modules). `SYSTEM_RESUME_EVENT` is
+ * also referenced (as the same literal) by electron/preload.cts: the preload build
  * contract is a self-contained single file (build-preload.mjs), so it cannot
  * import this module — the duplication is deliberate and pinned by
  * test/ipc/ipc-surface-mirror.test.ts (which asserts the main-side handle/send literal

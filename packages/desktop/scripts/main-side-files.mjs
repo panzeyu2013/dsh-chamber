@@ -12,9 +12,9 @@
  * SSH_STATUS_CHANGED / SSH_INSTANCES_CHANGED 就是这种迁移）。
  */
 export const MAIN_SIDE_FILES = [
-  'main.ts',
+  'electron/main.ts',
   'shell-core.ts',
-  'electron-edges.ts',
+  'electron/electron-edges.ts',
   // shell-core 的 installIpcHandlers 注册体按域分布在 shell-ipc-*.ts；
   // runtime state push 在 runtime-startup-host.ts；两 flavor 共用的宿主装配
   // （ready 注册/committed push）在 host-assembly.ts。

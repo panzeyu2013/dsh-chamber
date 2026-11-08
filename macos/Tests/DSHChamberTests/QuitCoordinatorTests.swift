@@ -360,7 +360,7 @@ final class QuitCoordinatorTests: XCTestCase {
             .deletingLastPathComponent()   // macos
             .deletingLastPathComponent()   // repo root
         let mainTs = try String(contentsOf: root
-            .appendingPathComponent("packages/desktop/main.ts"), encoding: .utf8)
+            .appendingPathComponent("packages/desktop/electron/main.ts"), encoding: .utf8)
         XCTAssertTrue(mainTs.contains("退出清理超时，强制退出"),
                       "Electron 侧同一超时分支必须保留")
         XCTAssertTrue(mainTs.contains("app.exit(1)"),

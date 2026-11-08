@@ -27,6 +27,14 @@
  * surface (apply / undo / materialize / npm search / local add-remove) was
  * retired with the 2026-09 C layering ruling.
  *
+ * Swift-only A-bridge additions (packages/desktop/bridge-swift-only-additions.json,
+ * docs/progress/electron-frozen.md §5.2) are the ONE bounded exemption: the Electron
+ * side is frozen, so a channel may exist only on the Swift shim. For those entries
+ * the gate waives the two-side equality but still proves that the shim really
+ * implements the declared member/channel/direction, that preload NEVER exposes it,
+ * and that the committed manifest lists the channel. The committed table is empty,
+ * so the current pass is unchanged (65 members; every printed total identical).
+ *
  * It is static text parsing on purpose: no runtime dependency, no surface
  * execution, the same discipline as bridge-shim-surface.test.ts. Changing a
  * payload shape on one side without the other fails here, and the failure names
@@ -52,6 +60,58 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..
  *     preload-theme.ts; Electron arm only, the Swift shell follows page facts).
  */
 export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info', 'dsh-chamber:native-theme-set'])
+
+/**
+ * Committed Swift-only A-bridge additions whitelist (docs/progress/electron-frozen.md
+ * §5.2). Entries are channels/namespaces/methods that exist ONLY on the Swift shim
+ * and are intentionally absent from preload.cts / the frozen Electron main. They are
+ * exempt from the two-side equality below, but the gate still proves the shim really
+ * implements them and that preload never exposes them. Empty table = no-op: every
+ * comparison and every printed total is byte-identical to the pre-whitelist gate.
+ */
+export const SWIFT_ONLY_ADDITIONS_FILE = 'packages/desktop/bridge-swift-only-additions.json'
+
+/**
+ * Load the committed whitelist. The AUTHORITATIVE schema validation lives in the
+ * generator (packages/desktop/scripts/emit-bridge-manifest.mjs); this loader only
+ * fails closed on the fields this gate needs to exempt (a malformed table must not
+ * silently weaken a security lockstep).
+ * @param {string} [file] - repo-relative path.
+ * @param {string} [root] - repo root.
+ * @returns {{channel: string, key: string, direction: 'invoke'|'push', namespace: string, method: string, reason: string}[]} entries.
+ */
+export function loadSwiftOnlyAdditions(file = SWIFT_ONLY_ADDITIONS_FILE, root = REPO_ROOT) {
+  const parsed = JSON.parse(readFileSync(join(root, file), 'utf8'))
+  if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.entries)) {
+    throw new Error('Swift-only whitelist must be { version: 1, entries: [...] } (docs/progress/electron-frozen.md §5.2)')
+  }
+  for (const entry of parsed.entries) {
+    if (entry === null || typeof entry !== 'object'
+      || typeof entry.channel !== 'string' || typeof entry.namespace !== 'string'
+      || typeof entry.method !== 'string' || (entry.direction !== 'invoke' && entry.direction !== 'push')) {
+      throw new Error('Swift-only whitelist entry is missing channel/direction/namespace/method: ' + JSON.stringify(entry))
+    }
+  }
+  return parsed.entries
+}
+
+/**
+ * Fast lookup sets for one whitelist snapshot. An empty table yields empty sets, so
+ * every filter/collect below degenerates to the pre-whitelist behavior.
+ * @param {{channel: string, direction: 'invoke'|'push', namespace: string, method: string}[]} [swiftOnly] - whitelist entries.
+ * @returns {{ methods: Set<string>, invokeChannels: Set<string>, pushChannels: Set<string> }} lookup sets.
+ */
+export function swiftOnlySurfaceSets(swiftOnly = []) {
+  const methods = new Set()
+  const invokeChannels = new Set()
+  const pushChannels = new Set()
+  for (const entry of swiftOnly) {
+    methods.add(entry.namespace + '.' + entry.method)
+    if (entry.direction === 'invoke') invokeChannels.add(entry.channel)
+    else pushChannels.add(entry.channel)
+  }
+  return { methods, invokeChannels, pushChannels }
+}
 
 /**
  * The frozen surface totals. The per-member comparison only proves that
@@ -117,7 +177,7 @@ export function assertSurfaceCounts(observed, expected = EXPECTED_SURFACE) {
 /**
  * rc.2 desktop-carrier functions in preload.cts. They are NOT dshChamber
  * namespaces (no shim namespace counterpart): the dshDesktop carrier is the
- * official desktop preload surface, owned by packages/desktop/preload.cts with
+ * official desktop preload surface, owned by packages/desktop/electron/preload.cts with
  * channel constants in shortcuts-bridge.ts. Listed here so the fail-closed
  * factory check below still fails when a namespace function appears without a
  * mapping entry while these intentional exclusions stay visible and asserted.
@@ -446,11 +506,70 @@ export function describeShape(shape) {
 }
 
 /**
+ * Check one Swift-only whitelist entry's SHIM implementation against its declaration
+ * and the manifest. The whitelist exists because the Electron side is frozen: the
+ * channel may be absent from preload, but the shim must really implement it and
+ * preload must never expose it. Shared by existing and Swift-only namespaces.
+ * @param {object} input - entry, shim member span, push table, manifest sets, exposed sets, mismatch sink.
+ * @returns {boolean} true when the entry is implemented and manifest-covered.
+ */
+function checkSwiftOnlyImplementation({
+  entry, shimSpan, pushEvents, manifestInvoke, manifestPush,
+  preloadInvokeChannels, preloadPushChannels, shimInvokeChannels, mismatches,
+}) {
+  const where = entry.namespace + '.' + entry.method
+  if (shimSpan === undefined) {
+    mismatches.push('Swift-only whitelist member missing from the shim: ' + where)
+    return false
+  }
+  const call = parseMemberCall(shimSpan, 'shim', pushEvents)
+  if (call === null) {
+    mismatches.push(where + ': shim implementation has no parseable channel call')
+    return false
+  }
+  if (call.channel !== entry.channel) {
+    mismatches.push(where + ': shim channel ' + call.channel + ' != whitelist ' + entry.channel)
+    return false
+  }
+  if (call.kind !== entry.direction) {
+    mismatches.push(where + ': shim call kind ' + call.kind + ' != whitelist direction ' + entry.direction)
+    return false
+  }
+  if (call.kind === 'push') {
+    if (preloadPushChannels.has(call.channel)) {
+      mismatches.push(where + ': preload must not expose Swift-only push channel ' + call.channel)
+      return false
+    }
+    if (!manifestPush.has(call.channel)) {
+      mismatches.push(where + ': Swift-only push channel ' + call.channel + ' is not in bridge-manifest.json')
+      return false
+    }
+    return true
+  }
+  if (preloadInvokeChannels.has(call.channel)) {
+    mismatches.push(where + ': preload must not expose Swift-only invoke channel ' + call.channel)
+    return false
+  }
+  shimInvokeChannels.add(call.channel)
+  if (!manifestInvoke.has(call.channel)) {
+    mismatches.push(where + ': Swift-only invoke channel ' + call.channel + ' is not in bridge-manifest.json')
+    return false
+  }
+  return true
+}
+
+/**
  * Compare every namespace member's payload shape across the two surfaces.
- * @param {{ preloadText: string, shimText: string, manifest: object }} input - surface sources + manifest.
+ *
+ * Swift-only whitelist entries (docs/progress/electron-frozen.md §5.2) are exempt
+ * from the two-side method-set equality (the Electron side is frozen and cannot be
+ * extended), but the gate still proves: shim implements the declared member/channel/
+ * direction, preload never exposes it, and the committed manifest lists the channel.
+ * Empty table (the committed state) = zero behavior change.
+ * @param {{ preloadText: string, shimText: string, manifest: object, swiftOnly?: object[] }} input - surface sources + manifest + whitelist.
  * @returns {{ checked: number, mismatches: string[], missingFromManifest: string[], unexposedManifestChannels: string[], namespaces: number, perNamespace: Record<string, number> }} verdict.
  */
-export function comparePayloadShapes({ preloadText, shimText, manifest }) {
+export function comparePayloadShapes({ preloadText, shimText, manifest, swiftOnly = [] }) {
   const declared = extractFactoryNames(preloadText)
   const missingCarrier = [...DESKTOP_CARRIER_FUNCTIONS].filter(name => !declared.includes(name))
   if (missingCarrier.length > 0) {
@@ -466,8 +585,10 @@ export function comparePayloadShapes({ preloadText, shimText, manifest }) {
   const manifestInvoke = new Set((manifest.invoke ?? []).map(entry => entry.channel))
   const manifestPush = new Set((manifest.push ?? []).map(entry => entry.channel))
   const pushEvents = shimPushEvents(shimText)
+  const swift = swiftOnlySurfaceSets(swiftOnly)
   const mismatches = []
   const preloadInvokeChannels = new Set()
+  const preloadPushChannels = new Set()
   const shimInvokeChannels = new Set()
   const perNamespace = {}
   let checked = 0
@@ -484,7 +605,15 @@ export function comparePayloadShapes({ preloadText, shimText, manifest }) {
     // sides lost it together, which the per-member comparison cannot see.
     namespaces += 1
     perNamespace[namespace] = preloadMembers.size
-    if (JSON.stringify([...shimNames].sort()) !== JSON.stringify([...preloadNames].sort())) {
+    const preloadSwiftOnly = preloadNames.filter(name => swift.methods.has(namespace + '.' + name))
+    if (preloadSwiftOnly.length > 0) {
+      mismatches.push(namespace + ': preload must not expose Swift-only whitelist member(s): ' + preloadSwiftOnly.join(', '))
+      continue
+    }
+    // Whitelist methods are shim-only by definition: exempt them from the set
+    // equality, then prove each declared one below.
+    const sharedShimNames = shimNames.filter(name => !swift.methods.has(namespace + '.' + name))
+    if (JSON.stringify([...sharedShimNames].sort()) !== JSON.stringify([...preloadNames].sort())) {
       mismatches.push(namespace + ': method set differs (preload=[' + preloadNames.join(', ') + '] shim=[' + shimNames.join(', ') + '])')
       continue
     }
@@ -504,8 +633,11 @@ export function comparePayloadShapes({ preloadText, shimText, manifest }) {
       if (isPush) {
         if (preloadCall.kind !== 'push' || shimCall.kind !== 'push') {
           mismatches.push(namespace + '.' + name + ': push member must subscribe on both surfaces')
-        } else if (!manifestPush.has(preloadCall.channel)) {
-          mismatches.push(namespace + '.' + name + ': push channel ' + preloadCall.channel + ' is not in bridge-manifest.json')
+        } else {
+          preloadPushChannels.add(preloadCall.channel)
+          if (!manifestPush.has(preloadCall.channel)) {
+            mismatches.push(namespace + '.' + name + ': push channel ' + preloadCall.channel + ' is not in bridge-manifest.json')
+          }
         }
         continue
       }
@@ -523,12 +655,52 @@ export function comparePayloadShapes({ preloadText, shimText, manifest }) {
         )
       }
     }
+    // Whitelist entries that extend an EXISTING namespace: the member set was
+    // filtered above, so prove the shim implementation + manifest coverage here.
+    for (const entry of swiftOnly.filter(item => item.namespace === namespace)) {
+      checkSwiftOnlyImplementation({
+        entry,
+        shimSpan: shimMembers.get(entry.method),
+        pushEvents,
+        manifestInvoke,
+        manifestPush,
+        preloadInvokeChannels,
+        preloadPushChannels,
+        shimInvokeChannels,
+        mismatches,
+      })
+    }
+  }
+
+  // Whitelist entries that open a NEW shim-only namespace: no preload factory
+  // exists to pair against, so only the shim implementation + manifest are proven.
+  const preloadNamespaces = new Set(Object.values(FACTORY_TO_NAMESPACE))
+  for (const entry of swiftOnly.filter(item => !preloadNamespaces.has(item.namespace))) {
+    let shimMembers
+    try {
+      shimMembers = extractMemberSpans(shimNamespaceBlock(shimText, entry.namespace))
+    } catch (error) {
+      mismatches.push(entry.namespace + ': Swift-only whitelist namespace is missing from the shim')
+      continue
+    }
+    checkSwiftOnlyImplementation({
+      entry,
+      shimSpan: shimMembers.get(entry.method),
+      pushEvents,
+      manifestInvoke,
+      manifestPush,
+      preloadInvokeChannels,
+      preloadPushChannels,
+      shimInvokeChannels,
+      mismatches,
+    })
   }
 
   const methodInvokeChannels = new Set([...preloadInvokeChannels, ...shimInvokeChannels])
   const missingFromManifest = [...methodInvokeChannels].filter(channel => !manifestInvoke.has(channel))
   const unexposedManifestChannels = [...manifestInvoke].filter(
-    channel => !methodInvokeChannels.has(channel) && !INTERNAL_INVOKE_CHANNELS.has(channel),
+    channel => !methodInvokeChannels.has(channel) && !INTERNAL_INVOKE_CHANNELS.has(channel)
+      && !swift.invokeChannels.has(channel),
   )
   return { checked, mismatches, missingFromManifest, unexposedManifestChannels, namespaces, perNamespace }
 }
@@ -612,11 +784,17 @@ function argsForMember(fn, shape) {
 /**
  * Execute the injected shim, drive EVERY namespace member, and compare the
  * emitted postMessage envelopes key-by-key against the preload.cts call sites.
- * @param {{ preloadText: string, shimText: string, token?: string }} input - sources + optional token.
+ *
+ * Swift-only whitelist members have no preload call site by definition (the
+ * Electron side is frozen): they are skipped by the drive (their manifest/channel
+ * wiring is proven by the static arm) but still required to be real functions, and
+ * they are excluded from the per-namespace count pin. Empty table = no change.
+ * @param {{ preloadText: string, shimText: string, token?: string, swiftOnly?: object[] }} input - sources + optional token + whitelist.
  * @returns {Promise<{ checked: number, invoked: number, subscribed: number, mismatches: string[], namespaces: number, perNamespace: Record<string, number> }>} verdict.
  */
-export async function compareRuntimePayloads({ preloadText, shimText, token = makeNativeToken() } = {}) {
+export async function compareRuntimePayloads({ preloadText, shimText, token = makeNativeToken(), swiftOnly = [] } = {}) {
   const expected = preloadMemberCalls(preloadText, shimText)
+  const swift = swiftOnlySurfaceSets(swiftOnly)
   const harness = await runShimRuntime({ shimText, token })
   const surface = harness.surface()
   const mismatches = []
@@ -632,11 +810,19 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
       continue
     }
     // The runtime surface's own per-namespace row count, so a member the
-    // shim stopped exposing cannot hide behind the per-member comparison.
+    // shim stopped exposing cannot hide behind the per-member comparison. The
+    // Swift-only whitelist members are shim-only by definition and excluded here.
     namespaces += 1
-    perNamespace[namespace] = Object.keys(members).length
+    perNamespace[namespace] = Object.keys(members)
+      .filter(name => !swift.methods.has(namespace + '.' + name)).length
     for (const [name, member] of Object.entries(members)) {
       const key = namespace + '.' + name
+      if (swift.methods.has(key)) {
+        // No preload counterpart by design; the static arm proves its channel,
+        // direction and manifest coverage. Only require it to stay callable.
+        if (typeof member !== 'function') mismatches.push(key + ': Swift-only runtime member is not a function')
+        continue
+      }
       const call = expected.get(key)
       if (call === undefined) {
         mismatches.push(key + ': runtime member has no preload.cts call site')
@@ -688,6 +874,18 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
           + ' != preload ' + describeShape(call.shape),
         )
       }
+    }
+  }
+  // Swift-only namespaces that do not exist on the preload side are not in the
+  // factory loop above: require their members to be callable on the live surface.
+  const preloadNamespaces = new Set(Object.values(FACTORY_TO_NAMESPACE))
+  for (const entry of swiftOnly.filter(item => !preloadNamespaces.has(item.namespace))) {
+    const members = surface[entry.namespace]
+    const key = entry.namespace + '.' + entry.method
+    if (members === null || typeof members !== 'object') {
+      mismatches.push(entry.namespace + ': Swift-only runtime namespace is missing from the shim surface')
+    } else if (typeof members[entry.method] !== 'function') {
+      mismatches.push(key + ': Swift-only runtime member is not a function')
     }
   }
   for (const key of expected.keys()) {
@@ -787,14 +985,22 @@ function read(file) {
 }
 
 async function main() {
-  const preloadText = read('packages/desktop/preload.cts')
+  const preloadText = read('packages/desktop/electron/preload.cts')
   const shimText = read('macos/Sources/DSHChamber/Resources/bridge-shim.js')
+  let swiftOnly
+  try {
+    swiftOnly = loadSwiftOnlyAdditions()
+  } catch (error) {
+    console.error('shim payload shape: FAILED — Swift-only whitelist: ' + (error instanceof Error ? error.message : String(error)))
+    return 1
+  }
   let verdict
   try {
     verdict = comparePayloadShapes({
       preloadText,
       shimText,
       manifest: JSON.parse(read('packages/desktop/bridge-manifest.json')),
+      swiftOnly,
     })
   } catch (error) {
     console.error('shim payload shape: FAILED — ' + (error instanceof Error ? error.message : String(error)))
@@ -836,7 +1042,7 @@ async function main() {
   let failure
   let reinjection
   try {
-    runtime = await compareRuntimePayloads({ preloadText, shimText })
+    runtime = await compareRuntimePayloads({ preloadText, shimText, swiftOnly })
     failure = await runShimFailureBranch({ shimText })
     reinjection = await assertShimReinjectionNoop({ shimText })
   } catch (error) {

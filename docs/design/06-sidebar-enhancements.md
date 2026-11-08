@@ -1487,8 +1487,8 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
   在 `ChamberListBoundary` **之内**——region 渲染错误纪律覆盖待办区）。打开经
   SidebarRoot 守卫回调（拖拽尾随 click 抑制 + 同会话内联重命名保护），来源色点复用
   `packages/dsh-chamber-client-core/src/derive.ts sourceAccentColor`（列表/rail/待办共用）；
-- 设置面：`desktop/chamber-settings.ts`（类型/默认/校验）、`desktop/main.ts`
-  （deep-merge）、`desktop/preload.cts` + `renderer/src/global.d.ts`（镜像）、
+- 设置面：`desktop/chamber-settings.ts`（类型/默认/校验）、`desktop/electron/main.ts`
+  （归档面 deep-merge）、`desktop/electron/preload.cts`（归档面）+ `renderer/src/global.d.ts`（镜像）、
   `settings-bridge`（`session-todo-settings.ts` 助手 + `GeneralView` 新组 +
   `settings-store.ts` 乐观 overlay 嵌套合并扩展 + zh/en 各 6 键）、sidebar
   zh/en 各 5 键（`todo.*`）。

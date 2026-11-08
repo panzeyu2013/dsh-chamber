@@ -101,7 +101,7 @@ test('①b a new non-localOnly row with no sidecar resolver throws, naming the d
 })
 
 test('①c the Electron main.ts sourceDir map names every non-localOnly registry domain', () => {
-  const mainSource = readFileSync(join(REPO_ROOT, 'packages', 'desktop', 'main.ts'), 'utf8')
+  const mainSource = readFileSync(join(REPO_ROOT, 'packages', 'desktop', 'electron', 'main.ts'), 'utf8')
   const block = /const chamberHostSourceDirs: Record<string, string> = \{([\s\S]*?)\n\s*\};/u.exec(mainSource)
   assert.ok(block !== null, 'main.ts must keep the chamberHostSourceDirs map literal')
   const exported = pluginSyncModule as unknown as Record<string, unknown>
