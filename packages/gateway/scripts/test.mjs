@@ -81,7 +81,6 @@ const GROUPS = {
     { file: 'test/session-state/session-state-observer.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-routes.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-surface.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
-    { file: 'test/session-state/session-state-old-desktop-matrix.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-diagnostics.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
   ],
   // chamber-surface: the /chamber/* route surface - installed read projection, seed cache, dashboard assets.

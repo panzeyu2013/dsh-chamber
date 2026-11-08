@@ -1262,7 +1262,7 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
 - `test:control-plane`：wire 叶子 `packages/dsh-chamber-wire/src/session-state.ts`
   的可选 capability（`session-state.goal` 绝不进 BASE/缺失不降级）与 `session-mux` 的 goal 白名单投影/
   activation 路由用例。`test:gateway`：`session-state` 的 goal 合并/持久化（activation
-  剥除）、ready 边沿清空、旧端矩阵 fixture 的 additive 步与 features 宣告。
+  剥除）、ready 边沿清空、goal 加法字段的 wire 往返与 capability 宣告。
 - `test:settings-bridge`：通知设置纯函数（模块 `notifications-settings.ts`；用例在
   `test/settings/settings-groups.test.ts`：缺省回落/partial patch/未知键过滤/默认值
   镜像）+ 通知失败原因映射（`test/settings/notify-test-result.test.ts`：成功不带原因、

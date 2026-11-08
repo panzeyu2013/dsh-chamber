@@ -980,7 +980,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   （全被过滤时空 payload 早退、游标不前进），`snapshotFor` 同过滤；子代理行只作统计输入，父行
   `subagentCount` 仍由它们统计；行身份「顶层 → subagent」翻转时补发 `removedSessionIds`（行离场，
   而非静默改写）。替代方案「wire 加 `origin`、由桌面过滤」被否：桌面没有子代理行的消费者，却要动
-  冻结协议、fixture 与旧端矩阵（§20）。P2b 观察者同样在本地跳过子代理行（design 19 §3.5）。
+  冻结协议（§20）。P2b 观察者同样在本地跳过子代理行（design 19 §3.5）。
 - **身份只能由列表事实确认（S1）**：`StoredRow.originKnown` 只在
   `applyBaseline`/`applyAdded` 置真（`createStoredRow` 置假，随行持久化；旧文档缺该字段
   按未确认读）。投递判定（`commitDelta` 与 `snapshotFor` 共用同一条 `isDeliverable`）是
@@ -1023,7 +1023,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   **Rejected alternatives**：①**保留两阶段剪枝**，用第二次缺席容忍偶发的**不完整**列表——
   「成功且完整」已是该分支的前置事实，再留一拍容忍窗只会让删除滞后，客户端多出的窗口没有
   任何事实依据（上游 ready 即删）；②给 wire 行加 absent 语义位（`present` 出口或等价位）——
-  动冻结协议、fixture 与旧端矩阵，收益不足（同本节子代理 `origin` 的裁决）；③在桌面判定侧
+  动冻结协议，收益不足（同本节子代理 `origin` 的裁决）；③在桌面判定侧
   识别缺席——wire 没有该位，判定侧只看到 `running:false`，边沿照样被武装（假蓝点）。
 
 **接口摘要**：`GET /chamber/session-state`（快照 + `protocol` / `features` / `cursor`）、
@@ -1031,11 +1031,11 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
 **已退役（跨端读回执）**：`POST /chamber/session-state/read` 与 `/read-all`（每客户端读标记与
 源级读水位地板）连同 `session-state.read`/`session-state.read-all` 能力位与快照 `read` 字段整体
 删除——完成未读对齐上游后它们没有消费者；`PROTOCOL_VERSION` 保持 1。旧 desktop（v0.4.0-beta.1）
-再发这两个 POST 得到 fail-closed 的 404（`not_found`）并静默忽略，无非崩溃/无重试风暴；这是
-**有记录**的冻结表破坏，纪律 = 不删冻结条目、以 tombstone + `postFreezeRetirements` 追加登记：
-`support/compat/route-table-0.4.0.fixture.json`（`retired: true` + 期望 404），旧端矩阵
-`packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts` 逐条 replay 断言
-404，并断言退役能力不再出现在 `features` 词汇表里。
+再发这两个 POST 得到 fail-closed 的 404（`not_found`）并静默忽略，无非崩溃/无重试风暴；退役能力
+不进 `SESSION_STATE_FEATURES` 词汇表（`session-state-routes.test.ts` 断言退役路由不被 claim 与
+现行能力集——7 条 feature、含可选 `session-state.goal`）。**Rejected alternatives**：保留冻结
+route-table 夹具与旧端矩阵——旧端无法从本仓重建，夹具的活路由/键集断言与现有单源测试
+重复，退役回执路由已无消费者（2026-11 维护裁决，移除该支撑件）。
 
 **P2a 增量面：goal 事实（design 19 §3.2.1）**
 
@@ -1082,10 +1082,8 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   `packages/dsh-chamber-wire/src/session-state.ts` 的 `SessionStateDiagnostics.dropped`；
   `status().dropped` 与持久文档 `dropped` 同形，旧客户端不进 diagnostics）：flush 把当时
   的进程内累计值写进持久文档，但加载校验把 `goalActivations` **一律归一为
-  0**（缺键/坏值与携带非零值同路，重启不继承）；保留边本身**不落盘**。旧端矩阵 fixture
-  （`support/compat/route-table-0.4.0.fixture.json`）把
-  `diagnostics.dropped.goalActivations` 以 dotted path 记进
-  `anchor.postFreezeAdditions` + `nested.diagnosticsDropped` 键表（负控制删/改名该键必红）。
+  0**（缺键/坏值与携带非零值同路，重启不继承）；保留边本身**不落盘**。
+  该计数经 wire 诊断暴露（`session-state-diagnostics.test.ts` 断言其出现与缺键负控制）。
   路由级 `/chamber/session-state/stream` 的 delta 与
   快照共用 wire row 投影，`sessions[]` 携带完整 goal（含进程内 activation）；旧客户端只读
   冻结键、忽略该加法字段。
@@ -1100,12 +1098,9 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
 - **能力协商**：`session-state.goal` 是**可选** feature（`SESSION_STATE_FEATURES` 新增，
   **绝不进** `SESSION_STATE_BASE_FEATURES`/required）：旧桌面或旧 gateway 缺它不降级，只是
   该来源没有 goal 事实（现状）。它在 `sse` 与 `poll` 两种 mode 都宣告（只读
-  `session/list` 在两种 mode 都存在，不是 event-only）。旧桌面矩阵 fixture
-  （`support/compat/route-table-0.4.0.fixture.json`）按 additive 形状登记：
-  `features.addedAfterFreeze` + `sessionRowAdditive`（goal）+ 嵌套 `goal` 白名单键 +
-  `anchor.postFreezeAdditions`。`nested.goal` 键表已含 `activation`（进程内加法字段），
-  矩阵 seed 行带 bound activation 并断言其经 wire row 往返；negative control 删掉
-  `activation` 键必红（冻结键集 tripwire 的可失败性自证）。桌面侧
+  `session/list` 在两种 mode 都存在，不是 event-only）。会话行携带的 `goal`（含进程内
+  `activation`）是加法字段，其经 wire row 的往返由 `session-state-routes.test.ts` 与
+  `session-state-observer.test.ts` 的 goal 用例覆盖。桌面侧
   `session-facts-source.ts` 防御性解析该加法字段
   （字段缺席 = unknown），**不按 capability 门控**（capability 只宣告能力，不改变解析）。
 - **只读边界不变**：仍是只读事实镜像，不写、不发命令；activation 的唯一来源是转发事件，
@@ -1116,7 +1111,7 @@ additive `details.state`；WS reject 帧不带），上游错误 502 `upstream_f
   与 gateway 的 `/chamber/session-state` 无关；两条事实源只在 renderer 侧汇成同一份
   `SessionFactsSnapshot` 形状（design 19 §3.5）。其 `goalActivations` 保留边同本节纪律：
   绑定 id 与基线不符保留待匹配、no-goal 只清已知对象 goal（design 19 §3.2.2/§3.5）。
-- **验证与开放**：goal 白名单投影/activation 身份绑定路由/能力可选/旧端矩阵/持久化剥
+- **验证与开放**：goal 白名单投影/activation 身份绑定路由/能力可选/持久化剥
   activation 的定向用例由 `test:control-plane` / `test:gateway` 覆盖；实机/CI 权威验收
   仍见 `docs/progress/STATUS.md` 的「只读会话状态镜像」条（本地环境伪象与轮次叙事不属设计契约）。
 
