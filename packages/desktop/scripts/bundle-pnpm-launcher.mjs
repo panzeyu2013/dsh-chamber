@@ -11,3 +11,17 @@
 export function bundlePnpmLaunch(platform = process.platform) {
   return { command: 'pnpm', shell: platform === 'win32' }
 }
+
+/** 安装命令的有界尝试次数：瞬时失败只重试一次，绝不无限重试。 */
+export const BUNDLE_PNPM_INSTALL_ATTEMPTS = 2
+
+/**
+ * pnpm 安装的瞬时失败分类：ZFS 上建 hardlink 偶发 `ERR_PNPM_EAGAIN`
+ * （首次失败、二次成功；staging 可弃、安装幂等），只需一次有界重试。
+ * 其它失败（ENOSPC、冻结锁冲突、真实解析错误）不得重试——重试会掩盖它们。
+ * `output` 是被捕获的 stderr（可是空串）。
+ */
+export function isTransientPnpmEagain(output) {
+  if (typeof output !== 'string' || output === '') return false
+  return /ERR_PNPM_EAGAIN/.test(output) || /\bEAGAIN\b/.test(output)
+}

@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
-import { bundlePnpmLaunch } from './bundle-pnpm-launcher.mjs';
+import { BUNDLE_PNPM_INSTALL_ATTEMPTS, bundlePnpmLaunch, isTransientPnpmEagain } from './bundle-pnpm-launcher.mjs';
 import { PRUNE_RULES_REVISION, collectDeclaredDetailFiles, renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
@@ -196,6 +196,34 @@ function run(args, what) {
 }
 
 /**
+ * 安装命令执行：捕获 stderr（转发的同时供分类），瞬时 `ERR_PNPM_EAGAIN`
+ * （ZFS 建链，首次失败二次成功）有界重试一次；其它失败立即退出，绝不重试。
+ */
+function runPnpmInstall(args, what) {
+  for (let attempt = 1; attempt <= BUNDLE_PNPM_INSTALL_ATTEMPTS; attempt += 1) {
+    console.log(`[bundle-dsh] ${what}${attempt === 1 ? '' : `（第 ${attempt} 次尝试）`}`);
+    const result = spawnSync(args[0], args.slice(1), {
+      cwd: work,
+      stdio: ['inherit', 'inherit', 'pipe'],
+      shell: bundlePnpmLaunch().shell,
+      encoding: 'utf8',
+    });
+    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.error) {
+      console.error(`[bundle-dsh] 无法执行 ${args[0]}：${result.error.message}`);
+      process.exit(1);
+    }
+    if (result.status === 0) return;
+    if (attempt < BUNDLE_PNPM_INSTALL_ATTEMPTS && isTransientPnpmEagain(result.stderr)) {
+      console.warn('[bundle-dsh] pnpm 安装瞬时失败（ERR_PNPM_EAGAIN，ZFS 建链），有界重试一次…');
+      continue;
+    }
+    console.error(`[bundle-dsh] ${what} 失败（exit code ${result.status}），封装未完成`);
+    process.exit(1);
+  }
+}
+
+/**
  * 封装运行期（含布局选择）：
  * - `--config.node-linker=hoisted`：以 pnpm 扁平布局安装（npm 式，无
  *   .pnpm store、无符号链接）。这是 Windows 安装体验的关键：isolated 布局
@@ -215,7 +243,7 @@ if (!existsSync(sourceLockfile) && !refreshLockfile) {
 if (existsSync(sourceLockfile)) copyFileSync(sourceLockfile, path.join(work, 'pnpm-lock.yaml'));
 const pnpmCommand = resolvePnpmCommand();
 if (refreshLockfile) {
-  run(
+  runPnpmInstall(
     [...pnpmCommand, 'install', '--lockfile-only', '--no-frozen-lockfile'],
     `显式刷新 @deepseek-ai/dsh@${VERSION} runtime lockfile…`,
   );
@@ -228,7 +256,7 @@ if (refreshLockfile) {
     assertPatchesApplied(readFileSync(workLockfile, 'utf8'), upstreamPatchedDependencies(), 'runtime lock');
   }
 }
-run(
+runPnpmInstall(
   [...pnpmCommand, 'install', '--frozen-lockfile', '--config.node-linker=hoisted'],
   `按冻结 lockfile 安装 @deepseek-ai/dsh@${VERSION}（hoisted 布局）…`,
 );
