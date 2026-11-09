@@ -11,7 +11,6 @@ import {
   credentialReentryFor,
   gatewayPasswordValidationError,
   saveHostWithConnectionCredentials,
-  transportTargetChangedSpec,
 } from '../../src/client/save-host.ts'
 
 function specGatewaySsh(overrides: Partial<SshInstanceSpec> = {}): SshInstanceSpec {
@@ -150,28 +149,6 @@ test('gateway password validation mirrors the 12-1024 Unicode-capable server gat
   assert.equal(gatewayPasswordValidationError('正确的网关登录密码🔐很安全'), null)
   assert.equal(gatewayPasswordValidationError('line\nbreak-more'), null)
   assert.equal(gatewayPasswordValidationError('tab\there-more'), null)
-})
-
-test('registry target mirror excludes transport/protocol/SPKI/label but includes host/port/kind', () => {
-  const previous = specGatewaySsh()
-  assert.equal(transportTargetChangedSpec(previous, { ...previous, label: 'Renamed' }), false)
-  assert.equal(transportTargetChangedSpec(previous, { ...previous, transport: 'http' }), false)
-  assert.equal(transportTargetChangedSpec(previous, { ...previous, insecureHttp: true }), false)
-  assert.equal(transportTargetChangedSpec(previous, { ...previous, spkiPin: 'ab'.repeat(32) }), false)
-  assert.equal(transportTargetChangedSpec(previous, { ...previous, host: 'other.example.com' }), true)
-  assert.equal(transportTargetChangedSpec(previous, { ...previous, remotePort: 443 }), true)
-  assert.equal(transportTargetChangedSpec(previous, { ...previous, kind: 'dsh' }), true)
-})
-
-test('registry target mirror normalizes omitted input fields like the main process', () => {
-  const previous: SshInstanceSpec = {
-    id: 'minimal', label: 'Minimal', kind: 'dsh', transport: 'ssh', host: 'host.example.com',
-    user: null, sshPort: null, remotePort: 30800, serviceName: null, remoteDshHome: null, insecureHttp: false,
-    sourceFingerprint: 'test-proof:minimal',
-  }
-  assert.equal(transportTargetChangedSpec(previous, {
-    id: previous.id, label: previous.label, host: previous.host, remotePort: previous.remotePort,
-  }), false)
 })
 
 test('gateway URL parser accepts credential-free http/https origins and formatter round-trips defaults', () => {

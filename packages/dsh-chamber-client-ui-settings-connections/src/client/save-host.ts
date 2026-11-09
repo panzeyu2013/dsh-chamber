@@ -25,29 +25,6 @@ export function gatewayPasswordValidationError(password: string): 'length' | nul
   if (password.length < MIN_GATEWAY_PASSWORD_CHARS || password.length > MAX_GATEWAY_PASSWORD_CHARS) return 'length'
   return null
 }
-/**
- * Plugin-side mirror of the desktop transport-identity predicate (packages/desktop/
- * credential-identity.ts, locked by a cross-package test): true when an EDIT changes the transport
- * TARGET — kind or any host/user/port field — while the id stays the same. Label-only edits are not
- * target changes; `insecureHttp` is deliberately excluded (an http↔https switch on the same target
- * keeps the credential). The renderer cannot import the desktop module, so the check is duplicated
- * here with input normalization mirroring the main process (an omitted kind defaults to dsh, an
- * omitted transport derives from kind). The settings form's save_connection path deliberately does
- * NOT reuse it for credential ownership: gateway auth compares host+remotePort, SSH password
- * host+user+sshPort.
- */
-export function transportTargetChangedSpec(a: SshInstanceSpec, b: SshInstanceInput): boolean {
-  const aKind = a.kind === 'gateway' ? 'gateway' : 'dsh'
-  const kind = (b.kind ?? 'dsh') === 'gateway' ? 'gateway' : 'dsh'
-  return aKind !== kind
-    || a.host !== b.host
-    || a.user !== (b.user ?? null)
-    || a.sshPort !== (b.sshPort ?? null)
-    || a.remotePort !== b.remotePort
-    || a.serviceName !== (b.serviceName ?? null)
-    || a.remoteDshHome !== (b.remoteDshHome ?? null)
-}
-
 export interface CredentialReentry {
   sshPassword: boolean
   gatewayToken: boolean
