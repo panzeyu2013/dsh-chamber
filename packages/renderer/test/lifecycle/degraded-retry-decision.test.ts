@@ -15,7 +15,7 @@ import type { ShellRetryDispatch } from '../../src/source-readiness.ts'
 const V: SourceIncarnation = { sourceId: 'ssh-a', fingerprint: 'fp' }
 // Retryability is the App's table (isRetryableBootGap); here only 'graph-unavailable'
 // is retryable, which is what makes the 'kind a re-mount cannot fix' case testable.
-const ENV: SourceEnv = { reclaimGraceMs: 60_000, retryableGap: (kind) => kind === 'graph-unavailable' }
+const ENV: SourceEnv = { retryableGap: (kind) => kind === 'graph-unavailable' }
 
 function apply(registry: SourceRegistry, phase: string | undefined, degraded: string | null): SourceRegistry {
   const epoch = epochOf(registry, V.sourceId)

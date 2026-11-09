@@ -2,7 +2,7 @@
  * The prewarm-ledger events (Set-shaped ledgers).
  *
  * The App keeps two Set ledgers - autoPrewarmedRef (origin: this source was
- * prewarmed, not chosen) and prewarmSuppressedRef (retention must not prewarm it
+ * prewarmed, not chosen) and prewarmSuppressedRef (a release forbids prewarming it
  * again). A Set is mutated through METHODS (add/delete), which no property setter
  * can intercept; these events are the mechanism those call sites dispatch.
  */
@@ -22,7 +22,7 @@ import {
 } from '../../src/index.ts'
 import type { SourceEnv, SourceLifecycleState, SourceRegistry, SourceRegistryEntry } from '../../src/index.ts'
 
-const ENV: SourceEnv = { reclaimGraceMs: 60_000, retryableGap: () => true }
+const ENV: SourceEnv = { retryableGap: () => true }
 
 function base(): SourceLifecycleState {
   return initialSourceLifecycle({ sourceId: 'remote-1', fingerprint: 'fp' })
@@ -36,55 +36,35 @@ function registryOf(...states: SourceLifecycleState[]): SourceRegistry {
 }
 
 test('prewarmStarted records the origin flag only', () => {
-  const before = reduceSource(base(), { kind: 'mounted', at: 0 }, ENV).state
+  const before = base()
   const after = reduceSource(before, { kind: 'prewarmStarted' }, ENV).state
   assert.equal(after.autoPrewarmed, true)
   assert.equal(after.prewarmSuppressed, before.prewarmSuppressed, 'suppression is a different question')
-  assert.equal(after.mounted, true)
   assert.deepEqual([...projectAutoPrewarmed(registryOf(after))], ['remote-1'])
 })
 
-test('prewarmStarted does not add a hidden-window entry', () => {
-  const after = reduceSource(base(), { kind: 'prewarmStarted' }, ENV).state
-  assert.equal(after.hiddenSince, null)
-})
-
-test('prewarmUnsuppressed lifts suppression without asking for a boot', () => {
+test('prewarmSuppressionForgotten lifts suppression without asking for a boot', () => {
   // The retirement path clears suppression for a source it is dropping: it must NOT
   // produce a mount effect (that would boot a source the registry just removed).
-  // A suppressed state as retention leaves it: settled, unmounted, hidden past the
-  // grace. Built directly so the test is about the EVENT, not about reclaim timing.
-  const settled: SourceLifecycleState = {
-    ...base(),
-    mounted: false,
-    boot: { outcome: 'booted' },
-    hiddenSince: 0,
-    prewarmSuppressed: true,
-  }
-  const reduction = reduceSource(settled, { kind: 'prewarmUnsuppressed' }, ENV)
+  const suppressed: SourceLifecycleState = { ...base(), prewarmSuppressed: true, boot: { outcome: 'booted' } }
+  const reduction = reduceSource(suppressed, { kind: 'prewarmSuppressionForgotten' }, ENV)
   assert.equal(reduction.state.prewarmSuppressed, false)
-  assert.deepEqual(reduction.effects, [], 'no mount effect: this is not a user selection')
+  assert.deepEqual(reduction.effects, [], 'no mount effect: this is not a user boot request')
   assert.deepEqual([...projectPrewarmSuppressed(registryOf(reduction.state))], [])
 })
 
 test('prewarmForgotten drops the origin flag and nothing else', () => {
-  // The prune paths (registry sweep, reclaim) drop the origin claim of one source
-  // while every other question about it stays open.
-  const started = reduceSource(
-    reduceSource(base(), { kind: 'mounted', at: 0 }, ENV).state,
-    { kind: 'prewarmStarted' },
-    ENV,
-  ).state
+  // The prune paths (registry sweep, shell consumption) drop the origin claim of one
+  // source while every other question about it stays open.
+  const started = reduceSource(base(), { kind: 'prewarmStarted' }, ENV).state
   const forgotten = reduceSource(started, { kind: 'prewarmForgotten' }, ENV)
   assert.equal(forgotten.state.autoPrewarmed, false)
   assert.deepEqual(forgotten.effects, [], 'forgetting is not an action')
-  assert.equal(forgotten.state.mounted, true)
-  assert.equal(forgotten.state.hiddenSince, started.hiddenSince)
   assert.equal(forgotten.state.prewarmSuppressed, started.prewarmSuppressed)
 })
 
 test('the Set view reads from the projection and dispatches on mutation', () => {
-  // The adapter is the bridge for the three sweep loops that mutate a Set through
+  // The adapter is the bridge for the sweep loops that mutate a Set through
   // METHODS: add/delete must become events, and reads must never be a local copy.
   const state = registryOf({ ...base(), autoPrewarmed: true })
   const events: string[] = []
@@ -104,8 +84,6 @@ test('the Set view survives delete-during-iteration (the sweep loops)', () => {
   // App/scheduler sweeps do: for (const id of set) if (!live.has(id)) set.delete(id).
   // On a REAL Set that is a generator hazard; on this view the iterator walks a
   // snapshot, so the loop completes and the next read sees the new state.
-  // Two sources, neither alive: the sweep must remove BOTH. The hazard is that
-  // deleting during iteration invalidates the iterator and one entry is skipped.
   let state = registryOf(
     { ...base(), autoPrewarmed: true },
     { ...initialSourceLifecycle({ sourceId: 'remote-2', fingerprint: 'fp' }), autoPrewarmed: true },
@@ -157,7 +135,7 @@ test('the Map view reads the projection and dispatches on mutation', () => {
   assert.deepEqual(events, ['set:remote-2->remote-9', 'delete:remote-1'])
 })
 
-test('an abandoned view is excluded from the reclaim projection after clearing', () => {
+test('an abandoned view is excluded from the projection after clearing', () => {
   // The sweeps read `size` first and bail early when zero: the cleared state must
   // project an EMPTY map, or the sweep would run forever on stale entries.
   const marked = reduceSource(base(), { kind: 'abandoned', target: 'x' }, ENV).state
@@ -206,6 +184,6 @@ test('the two flags are independent (origin vs suppression)', () => {
   state = reduceSource(state, { kind: 'prewarmStarted' }, ENV).state
   assert.equal(state.prewarmSuppressed, false, 'a prewarmed source is not suppressed')
   state = { ...state, prewarmSuppressed: true }
-  const lifted = reduceSource(state, { kind: 'prewarmUnsuppressed' }, ENV).state
+  const lifted = reduceSource(state, { kind: 'prewarmSuppressionForgotten' }, ENV).state
   assert.equal(lifted.autoPrewarmed, true, 'lifting suppression must not forget the origin')
 })

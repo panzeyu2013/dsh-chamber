@@ -152,7 +152,9 @@ test('the declared surfaces are real and the corpus is non-empty', () => {
   const declared = surfaces()
   assert.ok(declared.length >= 4, 'every lifecycle union must be declared')
   for (const surface of declared) {
-    assert.ok(surface.literals.length >= 2, surface.name + ' parsed no literals - the extractor lost the union')
+    // SourceEffect is deliberately single-member after the producer-less faces retired;
+    // the guard's job is only to prove the extractor still sees each union.
+    assert.ok(surface.literals.length >= 1, surface.name + ' parsed no literals - the extractor lost the union')
   }
   const corpus = productionCorpus()
   assert.ok(corpus.includes('reduceCarrier') && corpus.includes('reduceSource'), 'the corpus must be the production sources')

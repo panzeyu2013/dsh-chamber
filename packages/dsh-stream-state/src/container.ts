@@ -101,15 +101,6 @@ export function retainSourceIds(
 // Projections: each mirrors exactly one of the App's refs, reading the CURRENT
 // generation only - the registry cannot express another.
 
-/** Legacy hidden-window projection (retention retired; test-covered lifecycle contract, pending follow-up narrowing). */
-export function projectHiddenSince(registry: SourceRegistry): Record<string, number> {
-  const out: Record<string, number> = {}
-  for (const [sourceId, entry] of Object.entries(registry)) {
-    if (entry.state.hiddenSince !== null) out[sourceId] = entry.state.hiddenSince
-  }
-  return out
-}
-
 /** App's degradedRetriedRef. */
 export function projectDegradedRetried(registry: SourceRegistry): Record<string, boolean> {
   const out: Record<string, boolean> = {}

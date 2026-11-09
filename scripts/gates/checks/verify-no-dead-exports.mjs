@@ -133,11 +133,6 @@ export const TEST_ONLY_EXPORT_ALLOWLIST = [
   // only the contract suite names it (production composes it through
   // mutationCallBudgetMs).
   { package: 'dsh-chamber-wire', name: 'proxyTotalWorstCaseMs', reason: 'inbound+flush total asserted by the budget-contract test (the client must outlive it)' },
-  // The hidden-window ledger's renderer live view was its only production reader; the
-  // N-ctx resident refactor (D1) retired that whole reclaim path. The projection still
-  // documents the container's hidden state and stays exercised by the stream-state
-  // suite — narrowing the container face is a separate, deliberate follow-up.
-  { package: 'dsh-stream-state', name: 'projectHiddenSince', reason: 'retention retired; hidden projection remains test-covered lifecycle contract pending follow-up narrowing' },
 ]
 
 /**

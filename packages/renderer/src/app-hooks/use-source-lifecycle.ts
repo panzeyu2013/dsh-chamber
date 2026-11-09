@@ -41,15 +41,11 @@ export function useSourceLifecycle(sourceLifecyclesRef: OwnershipRef) {  // View
     }
     if (epoch === undefined) return undefined
     // `retryableGap` is passed as data from `isRetryableBootGap`: the registry owns the decision, the App the table.
-    // `reclaimGraceMs: 0` is deliberate: the hidden-window idle-reclaim policy retired with the N-ctx
-    // resident refactor (D1) and no caller dispatches 'reclaimed' any more, so the container's reclaim
-    // arm is unreachable by construction. `SourceEnv` still requires the field — keep it 0 (a positive
-    // grace would only be dead semantics) and never let the 60s hidden window come back from here.
     const reduction = dispatchSource(
       registry,
       viewId,
       { ...event, epoch },
-      { reclaimGraceMs: 0, retryableGap: (kind) => isRetryableBootGap(kind as ShellDegradedKind) },
+      { retryableGap: (kind) => isRetryableBootGap(kind as ShellDegradedKind) },
     )
     // A dropped event (superseded epoch / unregistered source) returns the SAME registry reference, so this write cannot resurrect a retired life.
     sourceLedgerStoreRef.current = reduction.registry
