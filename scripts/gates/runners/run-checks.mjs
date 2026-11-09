@@ -53,6 +53,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { delimiter, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -161,6 +162,18 @@ export function requestedJobs(argv) {
 
 /** Repository root, derived from this file's location (never the caller cwd). */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+const LOCKFILE_PATH = resolve(REPO_ROOT, 'pnpm-lock.yaml')
+
+/** Digest of the committed root lockfile: tests/full must never rewrite it. */
+function defaultLockfileSnapshot() {
+  return createHash('sha256').update(readFileSync(LOCKFILE_PATH)).digest('hex')
+}
+
+/** The failure name when a mode rewrote the lockfile (null = unchanged/not watched). */
+export function lockfileGateFailure(before, after) {
+  if (before === null || before === undefined || before === after) return null
+  return 'pnpm-lock.yaml'
+}
 
 /** The two package test scripts that ARE the shared manifest invocation. */
 const MANIFEST_TEST_SCRIPTS = new Set([
@@ -476,6 +489,11 @@ export async function runMode(mode, options = {}) {
       return { failed: [`ensure-artifacts (${verdict.missing.length} missing)`], ran: 0 }
     }
   }
+  // CI asserts after install that the run never rewrote the lockfile; the local
+  // tests/full modes carry the same invariant (tests must not install or mutate
+  // dependency resolution). The digest is taken before any step can spawn.
+  const snapshotLockfile = options.lockfileSnapshot ?? defaultLockfileSnapshot
+  const lockfileBefore = mode === 'tests' || mode === 'full' ? snapshotLockfile() : null
   const keepGoing = options.keepGoing === true
   const failed = []
   let ran = 0
@@ -600,6 +618,11 @@ export async function runMode(mode, options = {}) {
       log(`run-checks: ${step} FAILED (exit ${String(result.status ?? 'signal')})`)
       if (!keepGoing) break
     }
+  }
+  if (lockfileGateFailure(lockfileBefore, snapshotLockfile()) !== null) {
+    failed.push('pnpm-lock.yaml')
+    log('run-checks: pnpm-lock.yaml 在 ' + mode + ' 期间被改写——安装/测试步骤不得改锁文件'
+      + '（CI 侧对应断言由 verify-release-ci-proof 的 NON_GATE_STEPS 按步骤名保护）')
   }
   return { failed, ran }
 }

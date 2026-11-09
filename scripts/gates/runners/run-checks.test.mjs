@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  MODES, directManifestInvocation, directNodeInvocation, directTscInvocation, packageManifestDirs,
+  MODES, directManifestInvocation, directNodeInvocation, directTscInvocation, lockfileGateFailure, packageManifestDirs,
   pnpmInvocation, requestedJobs, requestedMode, resolvePackageTestPlan, rootScripts, roundRobinSchedule,
   runMode, stepInvocation, totalJobs,
 } from './run-checks.mjs'
@@ -255,6 +255,42 @@ test('tests mode drives one global pool over every resolved package manifest', a
   assert.equal(run.ran, packageSteps.length, 'the serial freshness step must not run after a failure')
   assert.ok(logged.some(line => line.includes(`${packageSteps.length} package step(s) resolved`)))
 })
+test('lockfile invariant: tests/full fail when the run rewrites pnpm-lock.yaml', () => {
+  assert.equal(lockfileGateFailure(null, 'x'), null, 'an unwatched mode never fails')
+  assert.equal(lockfileGateFailure('a', 'a'), null, 'an unchanged digest passes')
+  assert.equal(lockfileGateFailure('a', 'b'), 'pnpm-lock.yaml', 'a rewritten lockfile is a failure')
+})
+
+test('tests mode reports a rewritten lockfile alongside the step failures', async () => {
+  const snapshots = ['before', 'after']
+  let index = 0
+  const scripts = rootScripts()
+  const packageSteps = MODES.tests.filter(step =>
+    typeof scripts[step] === 'string' && /^pnpm --filter \S+ run test$/u.test(scripts[step]))
+  const run = await runMode('tests', {
+    log: () => {},
+    jobs: 2,
+    ensureArtifacts: () => ({ ok: true, missing: [], built: false }),
+    lockfileSnapshot: () => snapshots[Math.min(index++, 1)],
+    // Serial build/test steps would spawn for real otherwise; stub them as successes
+    // so this test observes only the lockfile invariant.
+    spawn: () => ({ status: 0, signal: null }),
+    launchStep: async step => ({
+      status: 0, signal: null, stderr: '',
+      stdout: '__DSH_TEST_MANIFEST_DUMP__' + JSON.stringify({
+        label: step, packageRoot: '/pkg', guard: 'executed', timeoutMs: null,
+        requireNoSkips: false, zeroTestAllowlist: [],
+        entries: [{ group: 'g', file: step + '.test.ts', nodeArgs: [] }],
+      }),
+    }),
+    runner: () => ({ promise: Promise.resolve({ status: 0, signal: null, stdout: 'ℹ tests 1\nℹ pass 1\n', stderr: '' }), kill() {} }),
+    writeStdout: () => {},
+    writeStderr: () => {},
+  })
+  assert.deepEqual(run.failed, ['pnpm-lock.yaml'])
+  assert.equal(run.ran, MODES.tests.length, 'no step failed early, so the whole mode ran before the lockfile verdict')
+})
+
 test('totalJobs: --jobs wins, then DSH_TEST_JOBS, then the bounded default', () => {
   assert.equal(totalJobs(9), 9)
   assert.equal(totalJobs(undefined, { DSH_TEST_JOBS: '6' }), 6)
