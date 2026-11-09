@@ -97,6 +97,14 @@ export const LOCAL_HTTP_RESERVED_SLOTS = 1
  * same instance. They therefore count against this SEPARATE owner-wide pool.
  */
 export const MAX_CONCURRENT_LONG_RPC_REQUESTS = 8
+/**
+ * Fair share of the long-RPC pool for ONE remote connectionId. The pool stays
+ * owner-wide, but one instance must not take the whole window: a single remote
+ * instance running its long commands would otherwise make every OTHER instance's
+ * long command 503 while ordinary HTTP stays untouched. The LOCAL instance is
+ * exempt (full pool): it is the interactive seat the reserve exists for.
+ */
+export const MAX_CONCURRENT_LONG_RPC_REQUESTS_PER_CONNECTION = 4
 
 /** Shared by every proxy owner in this process (instance proxy + gateway
  * direct proxy). Per-owner counters remain diagnostic projections only. */

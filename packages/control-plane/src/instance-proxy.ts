@@ -31,6 +31,7 @@ import {
   MAX_CONCURRENT_HTTP_REQUESTS,
   MAX_CONCURRENT_HTTP_REQUESTS_PER_CONNECTION,
   MAX_CONCURRENT_LONG_RPC_REQUESTS,
+  MAX_CONCURRENT_LONG_RPC_REQUESTS_PER_CONNECTION,
   MAX_CONCURRENT_WS_STREAMS,
   MAX_CONCURRENT_WS_STREAMS_PER_CONNECTION,
   MAX_PENDING_WS_HANDSHAKES,
@@ -137,6 +138,9 @@ export interface InstanceProxyDeps {
   localReservedHttpSlots?: number
   /** Owner-wide long-RPC pool (default MAX_CONCURRENT_LONG_RPC_REQUESTS). */
   maxConcurrentLongRpcRequests?: number
+  /** Fair share of the long-RPC pool for ONE remote connectionId (default
+   *  MAX_CONCURRENT_LONG_RPC_REQUESTS_PER_CONNECTION; local keeps the full pool). */
+  maxConcurrentLongRpcRequestsPerConnection?: number
   maxBufferedRequestBytes?: number
   /** Stream request bodies whose DECLARED Content-Length exceeds
    *  streamThresholdBytes (plan P1-1). Production default: ON, opt-out through
@@ -324,6 +328,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const maxPendingWsHandshakesPerConnection = deps.maxPendingWsHandshakesPerConnection ?? MAX_PENDING_WS_HANDSHAKES_PER_CONNECTION
   const localReservedHttpSlots = deps.localReservedHttpSlots ?? LOCAL_HTTP_RESERVED_SLOTS
   const maxConcurrentLongRpcRequests = deps.maxConcurrentLongRpcRequests ?? MAX_CONCURRENT_LONG_RPC_REQUESTS
+  const maxConcurrentLongRpcRequestsPerConnection = deps.maxConcurrentLongRpcRequestsPerConnection ?? MAX_CONCURRENT_LONG_RPC_REQUESTS_PER_CONNECTION
   /** The owner-wide long-RPC window selected once so admission and forwarding agree. */
   const longRpcPaths = deps.longRpcPaths ?? LONG_RPC_PATHS
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
@@ -350,6 +355,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   /** The long-RPC pool is deliberately NOT part of activeHttpRequests: a 30min
    *  /api/commands/execute must never occupy an ordinary unary slot. */
   let activeLongRpcRequests = 0
+  /** Long-RPC occupancy keyed by quota owner; the per-connection share is checked before the
+   *  owner-wide pool so a saturated instance is blamed precisely (same shape as ordinary HTTP). */
+  const activeLongRpcByQuotaKey = new Map<string, number>()
   /** Ordinary HTTP occupancy keyed by quota owner: the connectionId, or
    *  LOCAL_QUOTA_KEY for the unregistered local instance (connectionId === null). */
   const activeHttpByQuotaKey = new Map<string, number>()
@@ -380,6 +388,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     longRpc: boolean,
   ): { kind: 'http' | 'long-rpc'; scope: 'connection' | 'global' } | null {
     if (longRpc) {
+      // Fair share FIRST: one remote instance must not occupy the whole pool. Local is
+      // exempt (it is the interactive seat, and the owner-wide reserve already protects it).
+      if (!isLocal && (activeLongRpcByQuotaKey.get(quotaKey) ?? 0) >= maxConcurrentLongRpcRequestsPerConnection) {
+        return { kind: 'long-rpc', scope: 'connection' }
+      }
       // One slot is reserved for the local instance: a remote target must not
       // starve local long commands (ordinary HTTP already has that reserve).
       const cap = isLocal ? maxConcurrentLongRpcRequests : Math.max(0, maxConcurrentLongRpcRequests - 1)
@@ -750,6 +763,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       // invocations must never both observe the last free slot.
       if (longRpc) {
         activeLongRpcRequests += 1
+        activeLongRpcByQuotaKey.set(quotaKey, (activeLongRpcByQuotaKey.get(quotaKey) ?? 0) + 1)
       } else {
         activeHttpRequests += 1
         activeHttpByQuotaKey.set(quotaKey, (activeHttpByQuotaKey.get(quotaKey) ?? 0) + 1)
@@ -764,6 +778,9 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         released = true
         if (longRpc) {
           activeLongRpcRequests = Math.max(0, activeLongRpcRequests - 1)
+          const nextLongRpc = Math.max(0, (activeLongRpcByQuotaKey.get(quotaKey) ?? 0) - 1)
+          if (nextLongRpc === 0) activeLongRpcByQuotaKey.delete(quotaKey)
+          else activeLongRpcByQuotaKey.set(quotaKey, nextLongRpc)
           return
         }
         activeHttpRequests = Math.max(0, activeHttpRequests - 1)

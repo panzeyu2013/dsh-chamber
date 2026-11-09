@@ -16,6 +16,7 @@ import {
   MAX_CONCURRENT_HTTP_REQUESTS,
   MAX_CONCURRENT_HTTP_REQUESTS_PER_CONNECTION,
   MAX_CONCURRENT_LONG_RPC_REQUESTS,
+  MAX_CONCURRENT_LONG_RPC_REQUESTS_PER_CONNECTION,
   MAX_CONCURRENT_WS_STREAMS,
   MAX_CONCURRENT_WS_STREAMS_PER_CONNECTION,
   MAX_PENDING_WS_HANDSHAKES,
@@ -176,6 +177,36 @@ test('HTTP: long-RPC requests occupy a SEPARATE pool and never starve ordinary u
   const diagnostics = proxy.getDiagnostics()
   assert.equal(diagnostics.activeLongRpcRequests, 0)
   assert.equal(diagnostics.activeHttpRequests, 0)
+})
+
+test('long-RPC: a per-connection fair share stops one remote instance owning the pool', async () => {
+  const { proxy } = hangingHttpProxy()
+  proxy.registerTransport('dsh:a', 'http://127.0.0.1:22040')
+  proxy.registerTransport('dsh:b', 'http://127.0.0.1:22041')
+  const held: Array<ReturnType<typeof fakeResponse>> = []
+  try {
+    for (let index = 0; index < MAX_CONCURRENT_LONG_RPC_REQUESTS_PER_CONNECTION; index += 1) {
+      const response = fakeResponse()
+      await proxy.handleHttp(fakeRequest('/api/i/dsh-a/api/commands/execute', 'POST'), response)
+      assert.equal(response.status, null)
+      held.push(response)
+    }
+    // Same instance asks again: the per-connection share is the more specific verdict.
+    const sameConnection = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/i/dsh-a/api/commands/execute', 'POST'), sameConnection)
+    assert.equal(sameConnection.status, 503)
+    assert.deepEqual(refusalOf(sameConnection.body).details, { kind: 'long-rpc', scope: 'connection' })
+
+    // Another instance still has room under the owner-wide remote cap (8 - 1 local reserve).
+    const other = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/i/dsh-b/api/commands/execute', 'POST'), other)
+    assert.equal(other.status, null)
+    held.push(other)
+    assert.equal(proxy.getDiagnostics().activeLongRpcRequests, MAX_CONCURRENT_LONG_RPC_REQUESTS_PER_CONNECTION + 1)
+  } finally {
+    for (const response of held) response.destroy()
+  }
+  assert.equal(proxy.getDiagnostics().activeLongRpcRequests, 0)
 })
 
 test('WS: pending handshakes are bounded per connection (4) and do not touch another instance', async () => {
