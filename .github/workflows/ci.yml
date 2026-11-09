@@ -136,16 +136,14 @@ jobs:
       - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
         run: pnpm run test:scripts
       # GENERATED:gates:ci.test.post:end
-      - name: Type check (tsc + chamber host packages + gateway)
+      - name: Type check (chamber host packages + gateway; root/runtime come from run-checks typecheck)
         if: steps.classify.outputs.code == 'true'
         run: |
-          pnpm run typecheck
           pnpm run typecheck:host-graph
           pnpm run typecheck:host-git
           pnpm run typecheck:host-archive-cleanup
           pnpm run typecheck:host-open-in
           pnpm run typecheck:gateway
-          pnpm run typecheck:runtime
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
         run: node scripts/release/preflight/release-preflight.mjs --actions-only
         env:
