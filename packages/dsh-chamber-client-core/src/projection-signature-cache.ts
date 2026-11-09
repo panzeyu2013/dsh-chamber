@@ -10,6 +10,11 @@
 
 import type { ChamberServerAggregate } from './aggregate-store.ts'
 import { serversProjectionSignature } from './derive.ts'
+import {
+  recordSignatureFragmentHit,
+  recordSignatureFragmentMiss,
+  recordSignatureRememberedHit,
+} from './render-counters.ts'
 
 const rememberedProjectionSignatures = new WeakMap<object, string>()
 
@@ -34,8 +39,11 @@ export function rememberServersProjectionSignature(
 function sourceFragment(server: ChamberServerAggregate, cache: ChamberProjectionSignatureCache): string {
   let fragment = cache.fragments.get(server)
   if (fragment === undefined) {
+    recordSignatureFragmentMiss()
     fragment = serversProjectionSignature([server]).slice(1, -1)
     cache.fragments.set(server, fragment)
+  } else {
+    recordSignatureFragmentHit()
   }
   return fragment
 }
@@ -49,7 +57,10 @@ export function cachedServersProjectionSignature(
   cache?: ChamberProjectionSignatureCache,
 ): string {
   const remembered = rememberedProjectionSignatures.get(servers)
-  if (remembered !== undefined) return remembered
+  if (remembered !== undefined) {
+    recordSignatureRememberedHit()
+    return remembered
+  }
   if (cache === undefined) return serversProjectionSignature(servers)
   if (servers.length === 0) return '[]'
   const parts: string[] = []

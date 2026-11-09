@@ -11,6 +11,7 @@ import {
   managedRuntimeDown,
   mergeRuntimeFacts,
   projectableCurrent,
+  recordSidebarRowDerivations,
   SOURCE_PHASE_UNKNOWN,
   withPendingArchives,
   withSessionEcho,
@@ -338,6 +339,10 @@ export function deriveServers(
         repoLayouts,
         gitFlagsVersion,
       )
+      // 诊断仪表（design 05 §3）：一次投影真正派生出的侧栏会话行数（未变化来源命中投影缓存、不计数）。
+      let derivedRowCount = 0
+      for (const workspace of workspaces) derivedRowCount += workspace.sessions.length
+      recordSidebarRowDerivations(derivedRowCount)
       // Archive-manager metadata (design 24 revision): archived rows
       // of this source's snapshot ride the same aggregate; the manager UI
       // never issues its own session read. archiveSetKnown is the provenance

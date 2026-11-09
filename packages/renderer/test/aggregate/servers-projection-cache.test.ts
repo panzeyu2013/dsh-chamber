@@ -8,7 +8,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   cachedServersProjectionSignature,
+  countChangedProjectionSources,
   createChamberProjectionSignatureCache,
+  recordProjectionPublish,
+  recordSidebarRowDerivations,
   rememberServersProjectionSignature,
   serversProjectionSignature,
   type ChamberServerAggregate,
@@ -89,7 +92,7 @@ test('facts authority: a producer-owned source is not degraded by the no-shell o
   const facts = degradedFacts()
   const withProducer = deriveWithFacts(
     f,
-    { local: { stale: false } as InstanceRuntimeReport },
+    { local: { stale: false, reportedAt: Date.now() } as InstanceRuntimeReport },
     { local: facts, [REMOTE_SOURCE_ID]: facts },
   )
   assert.equal(
@@ -119,7 +122,7 @@ test('facts authority: a producer-owned source is not degraded by the no-shell o
 
   // Version facts stay visible even when the producer owns the rows (review m9).
   const versionFact = { ...degradedFacts(), degradation: 'forward-skew' } as SessionFactsSnapshot
-  const withVersionFact = deriveWithFacts(f, { local: { stale: false } as InstanceRuntimeReport }, { local: versionFact })
+  const withVersionFact = deriveWithFacts(f, { local: { stale: false, reportedAt: Date.now() } as InstanceRuntimeReport }, { local: versionFact })
   assert.equal(
     withVersionFact.find(server => server.id === 'local')?.sessionFacts,
     'degraded',
@@ -132,7 +135,7 @@ test('facts authority: a producer-owned source is not degraded by the no-shell o
   disconnected.remoteStatus = { r1: { ...readyStatus, phase: 'error' } }
   const producerButOffline = deriveWithFacts(
     disconnected,
-    { [REMOTE_SOURCE_ID]: { stale: false } as InstanceRuntimeReport },
+    { [REMOTE_SOURCE_ID]: { stale: false, reportedAt: Date.now() } as InstanceRuntimeReport },
     { [REMOTE_SOURCE_ID]: facts },
   )
   assert.equal(
@@ -142,7 +145,7 @@ test('facts authority: a producer-owned source is not degraded by the no-shell o
   )
 
   const cache = createServerProjectionCache()
-  const cachedFirst = deriveWithFacts(f, { local: { stale: false } as InstanceRuntimeReport }, { local: facts }, cache)
+  const cachedFirst = deriveWithFacts(f, { local: { stale: false, reportedAt: Date.now() } as InstanceRuntimeReport }, { local: facts }, cache)
   const cachedSecond = deriveWithFacts(f, {}, { local: facts }, cache)
   assert.notEqual(
     cachedSecond.find(server => server.id === 'local'),
@@ -387,3 +390,65 @@ test('projection signature cache: fragments are keyed by source identity (immuta
   assert.notEqual(cachedServersProjectionSignature([servers[0], { ...servers[1] }]), before,
     'a new object recomputes its fragment')
 })
+
+/**
+ * 仅开发档的页面渲染计数器（design 05 §3）：读面是页面全局
+ * `globalThis.__dshChamberRenderCounters()`（devtools/inspector 现场可读；无 UI、无持久化）。
+ * 这里锁三件事：变化来源计数按对象身份、签名缓存命中/未命中与派生行数的读数会动、
+ * 以及投影网关一次真实派生记为「实际派生的会话行数」。
+ */
+interface RenderCountersReading {
+  publishes: number
+  lastChangedSources: number
+  maxChangedSources: number
+  signatureRememberedHits: number
+  signatureFragmentHits: number
+  signatureFragmentMisses: number
+  sidebarRowDerivations: number
+}
+
+function readRenderCounters(): RenderCountersReading {
+  const read = (globalThis as { __dshChamberRenderCounters?: () => RenderCountersReading }).__dshChamberRenderCounters
+  assert.equal(typeof read, 'function', 'the devtools-only read view is installed with the counter module')
+  return (read as () => RenderCountersReading)()
+}
+
+test('render counters: changed-source counting is identity-based', () => {
+  const a = { id: 'a' }
+  const b = { id: 'b' }
+  assert.equal(countChangedProjectionSources(null, [a, b]), 2, 'the first publish counts every source')
+  assert.equal(countChangedProjectionSources([a, b], [a, b]), 0, 'identical identities do not change')
+  assert.equal(countChangedProjectionSources([a, b], [b, a]), 0, 'a reorder is not a source change')
+  assert.equal(countChangedProjectionSources([a, b], [{ id: 'a' }, b]), 1, 'a replaced source counts once')
+  assert.equal(countChangedProjectionSources([a, b], [a]), 1, 'a removed source counts')
+  assert.equal(countChangedProjectionSources([a], [a, b]), 1, 'a new source counts')
+})
+
+test('render counters: publish, signature-cache and row-derivation readings move', () => {
+  // 先跑一次派生，把「派生本身」的读数排除在 before/after 窗口外。
+  const servers = derive(fixture())
+  const before = readRenderCounters()
+  recordProjectionPublish(7)
+  const cache = createChamberProjectionSignatureCache()
+  cachedServersProjectionSignature(servers, cache) // 2 fragment misses
+  cachedServersProjectionSignature([...servers], cache) // 2 fragment hits (same source objects)
+  rememberServersProjectionSignature(servers, 'remembered')
+  cachedServersProjectionSignature(servers, cache) // 1 remembered hit (O(1))
+  recordSidebarRowDerivations(3)
+  const after = readRenderCounters()
+  assert.equal(after.publishes - before.publishes, 1)
+  assert.equal(after.lastChangedSources, 7)
+  assert.ok(after.maxChangedSources >= 7)
+  assert.equal(after.signatureFragmentMisses - before.signatureFragmentMisses, 2)
+  assert.equal(after.signatureFragmentHits - before.signatureFragmentHits, 2)
+  assert.equal(after.signatureRememberedHits - before.signatureRememberedHits, 1)
+  assert.equal(after.sidebarRowDerivations - before.sidebarRowDerivations, 3)
+})
+
+test('render counters: one projection pass records the rows it actually derived', () => {
+  const before = readRenderCounters().sidebarRowDerivations
+  // 两个已连接来源 × 各 1 个 workspace × 各 1 行会话 ⇒ 2 行派生。
+  derive(fixture(), createServerProjectionCache())
+  assert.equal(readRenderCounters().sidebarRowDerivations - before, 2)
+})
+

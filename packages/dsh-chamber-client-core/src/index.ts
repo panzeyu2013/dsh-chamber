@@ -33,6 +33,10 @@ export type * from './checkout-placement.ts'
 export { checkoutOrderKey, checkoutPathKey, checkoutWorkspaceOf, parseCheckoutOrderKey, pathIsWithin, planCheckoutPlacements } from './checkout-placement.ts'
 export { cachedServersProjectionSignature, createChamberProjectionSignatureCache, rememberServersProjectionSignature, type ChamberProjectionSignatureCache } from './projection-signature-cache.ts'
 export type * from './projection-signature-cache.ts'
+// 仅开发档（devtools 页面全局）的页面渲染计数器（design 05 §3）：发布栅与投影派生各记
+// 一处；读面是 `globalThis.__dshChamberRenderCounters`，不是用户可见 UI、不持久化。
+export type * from './render-counters.ts'
+export { countChangedProjectionSources, recordProjectionPublish, recordSidebarRowDerivations } from './render-counters.ts'
 export type * from './completion-arm.ts'
 export { stepCompletionArm, sameTrueTable } from './completion-arm.ts'
 export type * from './workspace-echo.ts'

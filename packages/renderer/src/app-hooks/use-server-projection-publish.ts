@@ -8,7 +8,9 @@ import { useEffect, useRef } from 'react'
 import {
   cachedServersProjectionSignature,
   chamberBridge,
+  countChangedProjectionSources,
   createChamberProjectionSignatureCache,
+  recordProjectionPublish,
   rememberServersProjectionSignature,
   type ChamberProjectionSignatureCache,
   type ChamberServerAggregate,
@@ -40,6 +42,9 @@ export function usePublishServerProjection(
   gitFlagsVersion = 0,
 ): void {
   const lastGateRef = useRef('')
+  // 诊断仪表（design 05 §3）：上次真正发布的数组，用于数「本次发布的 servers 变化来源数」。
+  // 来源对象由投影缓存按身份保持（未变来源是同一个对象），因此身份比较即变化判定。
+  const lastPublishedRef = useRef<readonly ChamberServerAggregate[] | null>(null)
   useEffect(() => {
     const signature = cachedServersProjectionSignature(servers, caches.signature)
     const gate = `${gitFlagsVersion}\u0000${signature}`
@@ -48,6 +53,8 @@ export function usePublishServerProjection(
     // 记住的是**内容签名**：订阅闸（sidebar-root-projection）拿同一个数组再比签名要拿到
     // 同一个值，带上版本前缀会让两侧永远不相等。
     rememberServersProjectionSignature(servers, signature)
+    recordProjectionPublish(countChangedProjectionSources(lastPublishedRef.current, servers))
+    lastPublishedRef.current = servers
     chamberBridge.publish(servers)
   }, [servers, caches, gitFlagsVersion])
 }
