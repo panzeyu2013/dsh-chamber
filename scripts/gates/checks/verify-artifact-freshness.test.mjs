@@ -8,10 +8,16 @@
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { canonRungs, summarizeResults } from './verify-artifact-freshness.mjs'
+import {
+  ARTIFACT_FRESHNESS_REGISTRY,
+  freshnessGuardIds,
+  validateArtifactFreshnessRegistry,
+} from './artifact-freshness-registry.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -53,5 +59,51 @@ test('main：--help 打印用法（exit 0），未知参数 exit 2 且不跑任�
   assert.match(typo.stderr, /未知参数 --mobil-rebuild/)
   assert.match(typo.stderr, /用法: node/)
   assert.equal(typo.stdout.trim(), '', '未知参数不得静默退化成普通检查（一个产物状态字符都不许打）')
+})
+
+test('G2/G8: the shipped artifact registry is valid — every artifact has a guard or a signed exemption', () => {
+  assert.deepEqual(validateArtifactFreshnessRegistry(), [])
+  assert.ok(ARTIFACT_FRESHNESS_REGISTRY.length > 0)
+  for (const entry of ARTIFACT_FRESHNESS_REGISTRY) {
+    if (entry.guard.kind === 'exemption') assert.ok(entry.guard.reason.trim().length > 0, entry.id + ' exemption must carry a reason')
+    else assert.ok(entry.guard.detail.trim().length > 0, entry.id + ' guard must name where it lives')
+  }
+})
+
+test('G8: an exemption without a reason is rejected (the table cannot be hollowed out silently)', () => {
+  const problems = validateArtifactFreshnessRegistry([
+    { id: 'x', artifact: 'a', generator: 'g', guard: { kind: 'exemption' } },
+  ])
+  assert.ok(problems.some(problem => /G8/.test(problem)), problems.join('; '))
+})
+
+test('G2: unknown guard kinds, duplicate ids and missing fields are rejected', () => {
+  const unknown = validateArtifactFreshnessRegistry([
+    { id: 'x', artifact: 'a', generator: 'g', guard: { kind: 'wishful', detail: 'd' } },
+  ])
+  assert.ok(unknown.some(problem => /unknown guard kind/.test(problem)))
+  const duplicate = validateArtifactFreshnessRegistry([
+    { id: 'x', artifact: 'a', generator: 'g', guard: { kind: 'freshness', detail: 'd' } },
+    { id: 'x', artifact: 'b', generator: 'g', guard: { kind: 'freshness', detail: 'd' } },
+  ])
+  assert.ok(duplicate.some(problem => /duplicate id/.test(problem)))
+  const missing = validateArtifactFreshnessRegistry([
+    { id: 'y', artifact: '', generator: 'g', guard: { kind: 'freshness', detail: 'd' } },
+  ])
+  assert.ok(missing.some(problem => /missing artifact/.test(problem)))
+})
+
+test('G2 two-way lockstep: the freshness ids are exactly the ids the verifier emits', () => {
+  assert.deepEqual(freshnessGuardIds(), [
+    'desktop/preload.cjs',
+    'renderer/src/generated/typert',
+    'gateway/dist/index.js',
+  ])
+  const source = readFileSync(new URL('./verify-artifact-freshness.mjs', import.meta.url), 'utf8')
+  for (const id of freshnessGuardIds()) {
+    assert.ok(source.includes("note('" + id + "'"), 'the verifier must emit the registered id ' + id)
+  }
+  assert.match(source, /artifactFreshnessSummary\(\)/, 'the gate must print the registry summary')
+  assert.match(source, /freshnessGuardIds\(\)/, 'the gate must enforce the two-way lockstep itself')
 })
 

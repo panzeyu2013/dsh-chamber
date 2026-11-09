@@ -43,6 +43,11 @@ import { fileURLToPath } from 'node:url'
 // (shared with the upgrade touchpoint gate); the freshness gate imports it and
 // never re-types the roster names.
 import { EXPECTED_GENERATED_REMOTES } from '../../../packages/renderer/scripts/typert-remote-contract.mjs'
+import {
+  artifactFreshnessSummary,
+  freshnessGuardIds,
+  validateArtifactFreshnessRegistry,
+} from './artifact-freshness-registry.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const results = []
@@ -278,6 +283,14 @@ function main(argv) {
     return
   }
   const requireCompare = argv.includes('--require-compare')
+  // G2/G8: the registry is validated before anything is compared — an artifact
+  // without a guard or a signed exemption fails the gate even on a clean tree.
+  const registryProblems = validateArtifactFreshnessRegistry()
+  if (registryProblems.length > 0) {
+    for (const problem of registryProblems) console.error('artifact-freshness registry: ' + problem)
+    console.error('artifact freshness: G2/G8 登记表不合法（见上）')
+    process.exit(1)
+  }
   if (argv.includes('--self-test')) {
     const a = join(tmpdir(), 'dsh-fresh-a-' + process.pid)
     const b = join(tmpdir(), 'dsh-fresh-b-' + process.pid)
@@ -310,9 +323,27 @@ function main(argv) {
       : 'FAIL'))
     process.exit(selfTestOk ? 0 : 1)
   }
+  console.log('  ' + artifactFreshnessSummary())
   checkPreload()
   checkGenerated()
   checkGatewayDist()
+  // G2 two-way lockstep: every freshness id the registry claims must have been
+  // observed by a note() here, and every observed id must be registered — adding a
+  // comparison without registering it (or vice versa) fails the gate.
+  const observedIds = new Set(results.map(result => result.id))
+  const registeredIds = new Set(freshnessGuardIds())
+  for (const id of registeredIds) {
+    if (!observedIds.has(id)) {
+      console.error('artifact freshness: G2 登记的 freshness id ' + id + ' 没有被本门观测（登记表与实现失步）')
+      process.exit(1)
+    }
+  }
+  for (const id of observedIds) {
+    if (!registeredIds.has(id)) {
+      console.error('artifact freshness: 本门观测到 ' + id + '，但 G2/G8 登记表未登记（新增比较必须同批登记）')
+      process.exit(1)
+    }
+  }
   for (const result of results) {
     const tag = result.status === 'ok' ? 'OK   ' : result.status === 'skip' ? 'SKIP ' : 'STALE'
     console.log('  ' + tag + ' ' + result.id + (result.detail ? ' — ' + result.detail : ''))
