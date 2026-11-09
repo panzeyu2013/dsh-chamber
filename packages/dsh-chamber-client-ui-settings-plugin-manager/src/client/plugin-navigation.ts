@@ -38,14 +38,72 @@ export interface PluginNavigation {
    * @param navigate - applies one target to the page store.
    */
   attach(navigate: (target: PluginNavigationTarget) => void): () => void
-  /** Retry a queued open once the settings-navigation seat appears. */
-  retryOpen(): void
+  /** Retry a queued open once the settings-navigation seat appears; true = flushed. */
+  retryOpen(): boolean
 }
 
 /** Dependencies owned by the plugin body (ctx lookups stay there, not in this module). */
 export interface PluginNavigationDeps {
   /** Ask the shell to open the plugin-manager section; false when the seat is absent. */
   readonly openSection: () => boolean
+}
+
+/** Bounded retry for an open refused during a TRANSIENT window (ctx.get / seat.open
+ * throw while a service is disposing): unlike a missing seat, a throw has no
+ * service-appearance event to wake the queued open, so the caller retries a few
+ * ticks and stops on success. Pure: the timer is injected. */
+export interface OpenRetrySchedulerOptions {
+  readonly retryOpen: () => boolean
+  /** Schedule one run; returns the cancel function. */
+  readonly schedule: (run: () => void, delayMs: number) => () => void
+  readonly maxAttempts?: number
+  readonly delayMs?: number
+}
+
+export interface OpenRetryScheduler {
+  /** Arm a bounded retry series (no duplicate timers while one is in flight). */
+  request(): void
+  /** Stop the series and refuse further arming (plugin teardown). */
+  cancel(): void
+}
+
+export function createOpenRetryScheduler(options: OpenRetrySchedulerOptions): OpenRetryScheduler {
+  const maxAttempts = options.maxAttempts ?? 5
+  const delayMs = options.delayMs ?? 0
+  let attempts = 0
+  let cancelTimer: (() => void) | undefined
+  let cancelled = false
+  const run = (): void => {
+    cancelTimer = undefined
+    if (cancelled) return
+    if (options.retryOpen()) {
+      attempts = 0
+      return
+    }
+    if (attempts >= maxAttempts) {
+      attempts = 0
+      return
+    }
+    arm()
+  }
+  const arm = (): void => {
+    if (cancelled || cancelTimer !== undefined || attempts >= maxAttempts) return
+    attempts += 1
+    cancelTimer = options.schedule(run, delayMs)
+  }
+  return {
+    request: () => {
+      if (cancelled || cancelTimer !== undefined) return
+      // A new request (a fresh click) starts a fresh bounded series.
+      if (attempts >= maxAttempts) attempts = 0
+      arm()
+    },
+    cancel: () => {
+      cancelled = true
+      cancelTimer?.()
+      cancelTimer = undefined
+    },
+  }
 }
 
 /**
@@ -82,7 +140,10 @@ export function createPluginNavigation(deps: PluginNavigationDeps): PluginNaviga
       return () => { if (navigate === next) navigate = undefined }
     },
     retryOpen: () => {
-      if (openPending && deps.openSection()) openPending = false
+      if (!openPending) return false
+      if (!deps.openSection()) return false
+      openPending = false
+      return true
     },
   }
 }

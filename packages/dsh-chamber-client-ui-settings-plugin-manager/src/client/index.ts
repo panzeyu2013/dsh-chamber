@@ -19,7 +19,7 @@ import type { PluginManagerLocaleKey } from '@deepseek-ai/dsh-client-ui-plugin-m
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/src/client/slot-contract.ts'
 import { EmbeddedPluginManagerPage } from './EmbeddedPluginManagerPage.tsx'
 import { createPluginActionTracker } from './plugin-action-tracker.ts'
-import { createPluginNavigation, type PluginNavigationTarget } from './plugin-navigation.ts'
+import { createOpenRetryScheduler, createPluginNavigation, type PluginNavigationTarget } from './plugin-navigation.ts'
 import { sectionLocales, type PluginManagerSectionLocaleKey } from './section-locales.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -154,22 +154,41 @@ export function apply(ctx: ClientContext): void {
   // `chamberSettingsNavigation` seat the settings shell provides. Both peers are
   // deferred chunks and either may arrive first, so a request queues and the dynamic
   // inject flushes a queued open when the seat appears (a refused seat stays queued).
-  const navigation = createPluginNavigation({
-    openSection: () => {
-      // ctx.get can throw while a service is being disposed (the cordis proxy's
-      // documented edge; same guard as the sidebar's goal-activation read). A click
-      // in that window must queue, not surface a TypeError.
-      let seat: { open(sectionId: string): void } | undefined
-      try {
-        seat = ctx.get('chamberSettingsNavigation')
-      } catch {
-        seat = undefined
-      }
+  let armOpenRetry: (() => void) | undefined
+  const openSection = (): boolean => {
+    // ctx.get / the seat's open() can throw while a service is being disposed (the
+    // cordis proxy's documented edge; same guard as the sidebar's goal-activation
+    // read). A click in that window must queue, not surface a TypeError — and unlike
+    // an absent seat, a throw consumes the service-appearance event, so the queued
+    // open gets a bounded next-tick retry instead of waiting for the next click.
+    try {
+      const seat = ctx.get('chamberSettingsNavigation')
       if (seat === undefined) return false
       seat.open(PLUGIN_SECTION_ID)
       return true
-    },
-  })
+    } catch {
+      armOpenRetry?.()
+      return false
+    }
+  }
+  const navigation = createPluginNavigation({ openSection })
+  // The dynamic inject flushes a queued open when the seat appears; a transient throw
+  // has no such event, so the bounded scheduler retries on the next ticks. No timer
+  // outlives the plugin ctx.
+  ctx.effect(() => {
+    const retry = createOpenRetryScheduler({
+      retryOpen: () => navigation.retryOpen(),
+      schedule: (run, delayMs) => {
+        const timer = setTimeout(run, delayMs)
+        return () => clearTimeout(timer)
+      },
+    })
+    armOpenRetry = () => { retry.request() }
+    return () => {
+      armOpenRetry = undefined
+      retry.cancel()
+    }
+  }, 'settings-plugin-manager: navigation open retry')
   // Dynamic dependency: the callback runs now when the seat is already provided and
   // when it appears later (cordis keeps the child Fiber until this plugin ctx dies).
   ctx.inject(['chamberSettingsNavigation'], () => { navigation.retryOpen() })

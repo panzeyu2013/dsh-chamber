@@ -37,6 +37,14 @@ test('the plugin body provides the service, reads the seat, and flushes a queued
   assert.match(pmIndex, /createPluginNavigation\(\{/)
   assert.match(pmIndex, /ctx\.get\('chamberSettingsNavigation'\)/)
   assert.match(pmIndex, /ctx\.inject\(\['chamberSettingsNavigation'\], \(\) => \{ navigation\.retryOpen\(\) \}\)/)
+  // A transient ctx.get/seat.open throw has no service-appearance event to wake the
+  // queued open: the plugin body retries it on bounded next ticks, cancelled on teardown.
+  assert.match(pmIndex, /createOpenRetryScheduler\(\{/)
+  assert.match(pmIndex, /retryOpen: \(\) => navigation\.retryOpen\(\)/)
+  assert.match(pmIndex, /armOpenRetry\?\.\(\)/)
+  assert.match(pmIndex, /'settings-plugin-manager: navigation open retry'/)
+  assert.match(pmIndex, /return \(\) => \{[\s\S]{0,120}?armOpenRetry = undefined[\s\S]{0,120}?retry\.cancel\(\)/,
+    'teardown must drop the arming hook and cancel the pending retry timer')
   assert.match(pmIndex, /seat\.open\(PLUGIN_SECTION_ID\)/)
   assert.match(pmIndex, /ctx\.reflect\.provide\('pluginNavigation', navigation\.provider\)/)
   assert.match(pmIndex, /yield navigation\.attach\(applyNavigation\)/)
