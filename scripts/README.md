@@ -11,7 +11,7 @@
 | `dev/` | 开发者 | 安装链引导（`bootstrap/`：ensure-harness-vendor = preinstall、ensure-artifacts、ensure-electron **ARCHIVED**）；客户端 typecheck 垫片（`typecheck/`，共享引擎 + 4 个入口）；测试 loader/register 桩（`test-loaders/`）；共享测试夹具（`test-support/`）；真机 SVG 探针 `svg-resource-probe.mjs`。 | 面向仓库开发的本地工具链，不在用户部署环境执行 |
 | `gates/` | 每次 push 的门（本地 = CI 同源） | 机器源与基础设施（`registry/`：门清单 `gate-surfaces.json` + 校验/派生 `gate-registry.mjs` + workflow 生成块 `gate-workflow-views.mjs` + CI 变更判类 + god-file 预算表）；单一入口（`runners/`：`run-checks.mjs` 见下、`run-script-tests.mjs`、`run-swift-tests.mjs`）；单门实现（`checks/`：`verify-*.mjs`、装配冒烟、远程状态验收/注入矩阵、`assert-scoper-artifact.mjs`、ARCHIVED 的 `verify-electron-artifacts.mjs`）。 | `pnpm run check:static` / `check:tests`；新增门须同时进 `gate-surfaces.json`（机器源：id/title/命令/模式/表面/理由）与根 `package.json`；`run-checks.mjs` 只从 registry 派生模式，不再自带门名单 |
 | `release/` | 发布链 | `preflight/`（发布预检 `release-preflight.mjs` + `release-semver.mjs`、产物清单/校验 `release-artifacts.mjs`、发布 CI 证明、pin 对齐、release workflow 策略与打包清单锁步测试）；`notices/`（第三方声明生成与随包载荷声明）；`feed/`（本版本 appcast 门禁 `verify-native-appcast.mjs`、滚动 beta feed 合并 `merge-native-feed.mjs`）。 | `pnpm run release:preflight` / `test:release-workflow`；流程见 `docs/checklists/release/release-checklist.md` |
-| `upstream/` | 上游 pin 与触点 | `registry/`（**触点单一来源** `registry.json` + 序列化/生成视图/保鲜门 + 判据 id 表 + seat 审计）；`pin/`（pin 升级 `update-vendor.mjs`、升级前预检、锁文件 vendor 记录恢复及其锁步测试）；`verify/`（C1–C16 上游触点门、能力面门、插件受保护集合门、产物门）；`anchors/`（符号锚探针与遗留行号锚预算棘轮）。 | **单一来源 `scripts/upstream/registry/registry.json`**（机械事实；生成视图与判据散文见 `docs/checklists/upgrade/upstream-touchpoints.md`）；升级流程 `docs/checklists/upgrade/dsh-upgrade-checklist.md` |
+| `upstream/` | 上游 pin 与触点 | `registry/`（**触点单一来源** `registry.json` + 序列化/生成视图/保鲜门 + 判据 id 表 + seat 审计）；`pin/`（pin 升级 `update-vendor.mjs`、升级前预检、机械面单批管线 `pin-upgrade-pipeline.mjs`（由 tag 推导六锚/3 fork 字面量并打印 diff，再跑生成视图与触点门收尾）、锁文件 vendor 记录恢复及其锁步测试）；`verify/`（C1–C16 上游触点门、能力面门、插件受保护集合门、产物门）；`anchors/`（符号锚探针与遗留行号锚预算棘轮）。 | **单一来源 `scripts/upstream/registry/registry.json`**（机械事实；生成视图与判据散文见 `docs/checklists/upgrade/upstream-touchpoints.md`）；升级流程 `docs/checklists/upgrade/dsh-upgrade-checklist.md` |
 | `perf/` | 性能实测 | `boot/switch/eval-measure.mjs`、`measure-ui.mjs`、`disk-walk-baseline.mjs` + `data/`（结果入库）；CDP 采集腿（`boot-measure.mjs` / `cdp-lib.mjs` / `switch-frame-probe.mjs` / `switch-measure.mjs`）随 Electron 冻结为 **ARCHIVED**，仍被归档回归锁与 `remote-state-acceptance` 的 self-test 以 CLI 相对路径调用。 | 方法与环境纪律见同目录 `README.md`（只做同环境 A/B） |
 | `acceptance/` | 需要特权/环境的验收 | `netem-link-health.mjs`——真实 tc netem + veth/netns + 真 transport manager/真代理的弱网链路验收（root + CAP_NET_ADMIN；`NETEM_BULK_UPLOAD=1` 追加 20MB@2Mbit 上传）。不入 CI，退出码 0/1，跑完自清理 veth/namespace。 | `pnpm run acceptance:netem`；判据见 design 27 §7 |
 | `gui-acceptance/` | GUI 验收 | 单一入口与驱动（`drivers/`：`run.mjs` 入口、native 原生壳装配驱动、ARCHIVED 的 Electron CDP 驱动/走查）；纯判据层（`checks/`：`checks.mjs` / `mobile-checks.mjs` / probe 及其单测）；in-process fixture（`fixtures/`）。 | `pnpm run acceptance:gui`；流程见 `docs/checklists/acceptance/gui-acceptance-checklist.md`；v2 内嵌腿见同目录 `README.md` |
@@ -32,7 +32,7 @@
 | `preflight/` | 发布前机械门禁、版本与产物校验、发布策略锁步测试。 |
 | `notices/` | 第三方 / 随包载荷声明生成。 |
 | `feed/` | 更新 feed 与 appcast 门禁。 |
-| `pin/` | 上游 pin 生命周期：升级、预检、锁文件修复。 |
+| `pin/` | 上游 pin 生命周期：升级、预检、机械面单批管线（六锚/3 fork diff + 生成视图/触点门收尾）、锁文件修复。 |
 | `verify/` | 上游触点/能力/受保护集合等校验门（`capabilities.json` 是能力面数据，与消费者同目录）。 |
 | `anchors/` | 符号锚与锚预算。 |
 | `drivers/` | 验收驱动层（启动、连接、走查、CDP——无纯判定逻辑）。 |

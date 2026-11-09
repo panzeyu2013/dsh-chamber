@@ -174,6 +174,7 @@ function main() {
     console.log('运行时线同步见 checklist §2（bundle-dsh / release.yml env / install-gateway.sh 常量）。')
     console.log('回归：按 docs/checklists/upgrade/dsh-upgrade-checklist.md §6 全量测试套件 + typecheck + 构建 + smoke')
     console.log('触点：按 docs/checklists/upgrade/upstream-touchpoints.md §7 循环重放/登记——先跑 node scripts/upstream/verify/verify-upstream-touchpoints.mjs --tags <旧tag> <新tag>')
+    console.log('机械面：node scripts/upstream/pin/pin-upgrade-pipeline.mjs <tag>（由 tag 推导六锚/3 fork 字面量并打印 diff，再跑生成视图 + 触点门收尾）')
   } catch (err) {
     console.error(`✗ update-vendor: ${err.message}`)
     if (oldPin !== null) {
