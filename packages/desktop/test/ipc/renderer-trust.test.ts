@@ -172,18 +172,23 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   // shell-core.installIpcHandlers (their send leaves go through HostEdges rendererPush with the
   // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts. The
   // remaining push anchors (instances / status) live in the SINGLE shared assembly consumed by
-  // both flavors: host-assembly.ts keeps the status push, the committed-registry push moved to
-  // host-registry-transition.ts (B4-2a), so the assertion reads their union — still requiring
-  // the window-liveness gate, the race re-check inside the closure and the non-throwing boundary.
+  // both flavors: the committed-registry push moved to host-registry-transition.ts (B4-2a);
+  // the status push moved WITH the subscription pair into its own factory module
+  // host-transport-subscriptions.ts (B4-2b), so its assertion reads that module directly —
+  // still requiring the window-liveness gate, the race re-check inside the closure and the
+  // non-throwing boundary.
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../../shell-ipc-update.ts', import.meta.url), 'utf8')
   const assembly = readFileSync(new URL('../../host-assembly.ts', import.meta.url), 'utf8')
     + readFileSync(new URL('../../host-registry-transition.ts', import.meta.url), 'utf8')
+  // B4-2b: the pair lives in ONE factory module; the push contract is asserted on its own source
+  // (the union is not used here: the wildcard must not be satisfied by a sibling file).
+  const subscriptions = readFileSync(new URL('../../host-transport-subscriptions.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(assembly, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
-  assert.match(assembly, /if \(deps\.edges\.mainWindowAlive\(\)\) \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
-  assert.match(assembly, /if \(!deps\.edges\.mainWindowAlive\(\)\) \{\s*throw new Error\('status renderer changed before push'\)/,
+  assert.match(subscriptions, /if \(edges\.mainWindowAlive\(\)\) \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(subscriptions, /if \(!edges\.mainWindowAlive\(\)\) \{\s*throw new Error\('status renderer changed before push'\)/,
     'the status push must re-check window liveness inside the closure (replaced-window race)')
   // alpha.3 review follow-up: the push is extracted into pushState so a refused (stale)
   // confirmation can re-push. The lock slices pushState's OWN body — a lazy wildcard could find

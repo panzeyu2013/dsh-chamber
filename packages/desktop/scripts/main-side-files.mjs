@@ -16,8 +16,8 @@ export const MAIN_SIDE_FILES = [
   'shell-core.ts',
   'electron/electron-edges.ts',
   // shell-core 的 installIpcHandlers 注册体按域分布在 shell-ipc-*.ts；
-  // runtime state push 在 runtime-startup-host.ts；两 flavor 共用的宿主装配
-  // （ready 注册/committed push）在 host-assembly.ts。
+  // runtime state push 在 runtime-startup-host.ts；两 flavor 共用的宿主装配本体在
+  // host-assembly.ts（status 订阅体已随 B4-2b 抽到 host-transport-subscriptions.ts）。
   'shell-ipc-settings.ts',
   'shell-ipc-connections.ts',
   'shell-ipc-plugins-ssh.ts',
@@ -36,4 +36,7 @@ export const MAIN_SIDE_FILES = [
   // committed registry push（SSH_INSTANCES_CHANGED）随 B4-2a 抽到独立模块：
   // 名单是唯一来源，注册点迁移只改这里，manifest 方向判定与 IPC 面锁步同拍。
   'host-registry-transition.ts',
+  // transport status push（SSH_STATUS_CHANGED）随 B4-2b 的成对订阅抽到独立工厂模块：
+  // 同一名单是方向判定与 IPC 面锁步的唯一来源，漏登记会把真实存在的 push 报成死键。
+  'host-transport-subscriptions.ts',
 ]
