@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { createInstanceProxy } from '../../src/instance-proxy.ts'
 import type { ProxyRequest } from '../../src/instance-proxy.ts'
-import { getProcessBufferedRequestBytes, matchesLongRpcPath } from '../../src/proxy-forward.ts'
+import { MAX_BUFFERED_REQUEST_BYTES, getProcessBufferedRequestBytes, matchesLongRpcPath } from '../../src/proxy-forward.ts'
 import { startWsHeartbeat } from '../../src/ws-heartbeat.ts'
 import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import { pongFrame } from '../support/utils.ts'
@@ -706,4 +706,79 @@ test('heartbeat: a throwing write self-cleans (onDead once, interval stopped)', 
   assert.equal(dead, 1, 'onDead must fire exactly once (the interval is stopped)')
   heartbeat.stop()
 })
+
+
+// ---------------------------------------------------------------------------
+// Process-wide inbound buffered budget, end to end through createInstanceProxy.
+// The byte budget is a PROCESS-wide reservation shared by every proxy owner: the
+// request that would push the total over the cap must be refused even while each
+// instance's OWN counter is still well under its share.
+// ---------------------------------------------------------------------------
+
+test('http: the buffered request-body budget is process-wide across instance proxies', async () => {
+  // Undeclared (chunked) bodies reserve the unknown-length per-request cap, and a
+  // never-settling iterator keeps that reservation held without buffering a byte.
+  const pendingChunked = (url: string): ProxyRequest => {
+    const emitter = new EventEmitter()
+    return Object.assign(emitter, {
+      url,
+      method: 'POST',
+      headers: { 'transfer-encoding': 'chunked' },
+      async *[Symbol.asyncIterator]() { await new Promise(() => {}) },
+    }) as unknown as ProxyRequest
+  }
+  // Two DISTINCT owners (two instance proxies) over the same process budget.
+  const upstreamA = fakeHttpRequest(() => undefined)
+  const upstreamB = fakeHttpRequest(() => undefined)
+  const proxyA = proxyFor(upstreamA.fn, { clientBodyIdleTimeoutMs: 60 })
+  const proxyB = proxyFor(upstreamB.fn, { clientBodyIdleTimeoutMs: 60 })
+
+  const accepted: ReturnType<typeof fakeResponse>[] = []
+  const pending: Promise<void>[] = []
+  let rejected: ReturnType<typeof fakeResponse> | undefined
+  let heldBeforeReject = 0
+  let reservation = 0
+  for (let i = 0; i < 12; i += 1) {
+    const owner = i % 2 === 0 ? proxyA : proxyB
+    const res = fakeResponse()
+    const before = getProcessBufferedRequestBytes()
+    // The reservation is taken synchronously (before the body read awaits), so the
+    // shared counter already reflects the request when handleHttp returns.
+    pending.push(owner.handleHttp(pendingChunked('/api/i/local/api/session/list'), res))
+    const after = getProcessBufferedRequestBytes()
+    if (after === before) {
+      rejected = res
+      heldBeforeReject = before
+      break
+    }
+    assert.ok(after <= MAX_BUFFERED_REQUEST_BYTES, 'the process-wide reservation must never exceed the cap')
+    accepted.push(res)
+    reservation = after - before
+  }
+
+  assert.ok(rejected !== undefined, 'the process-wide budget must eventually refuse a reservation')
+  assert.equal(rejected.status, 503)
+  assert.match(rejected.body, /resource_exhausted/)
+  assert.match(rejected.body, /proxy request-body budget is exhausted/)
+  // The refusal is the SHARED cap: the held total plus this reservation crosses it…
+  assert.ok(heldBeforeReject + reservation > MAX_BUFFERED_REQUEST_BYTES,
+    'the refused reservation must be the one that crosses the process-wide cap')
+  // …while neither owner is over its OWN share, so only the shared pool can explain it.
+  const ownA = proxyA.getDiagnostics().bufferedRequestBytes
+  const ownB = proxyB.getDiagnostics().bufferedRequestBytes
+  assert.equal(ownA + ownB, heldBeforeReject, 'diagnostics expose the split of the shared total')
+  assert.ok(ownA < MAX_BUFFERED_REQUEST_BYTES && ownB < MAX_BUFFERED_REQUEST_BYTES,
+    'neither owner may be at its own ceiling when the shared cap refuses')
+  assert.ok(ownA > 0 && ownB > 0, 'both instance proxies actually hold reservations in the shared pool')
+
+  // Idle bodies time out and release their reservation; the refused request already
+  // answered. Nothing may remain reserved against the process-wide budget.
+  await Promise.all(pending)
+  assert.equal(getProcessBufferedRequestBytes(), 0, 'every reservation must be released')
+  for (const res of accepted) {
+    assert.equal(res.status, 408)
+    assert.match(res.body, /request_timeout/)
+  }
+})
+
 
