@@ -105,3 +105,117 @@ test('restore: a broken symlink counts as removed (upstream deleted the target)'
   assert.doesNotMatch(readFileSync(current, 'utf8'), /ghost-package/)
   assert.match(result.stdout, /跳过 1 条/)
 })
+
+// TODO A§16.4: the HEAD record predates edges the upgrade just added. Restoring the
+// raw record is not enough — the CURRENT member package.json edges must be unioned
+// in, otherwise frozen fails with no repair path.
+
+function writeManifest(linkDir, member, manifest) {
+  mkdirSync(join(linkDir, member), { recursive: true })
+  writeFileSync(join(linkDir, member, 'package.json'), JSON.stringify(manifest))
+}
+
+test('restore: a restored record is unioned with the CURRENT package.json edges', () => {
+  const { linkDir, current, head } = fixture()
+  writeFileSync(current, lockfile([importerBlock('dsh-client-store', '    dependencies: {}')]))
+  writeFileSync(head, lockfile([
+    importerBlock('dsh-client-store', '    dependencies: {}'),
+    importerBlock('dsh-client-ui-slots', '    dependencies: {}'),
+  ]))
+  writeManifest(linkDir, 'dsh-client-ui-slots', {
+    name: '@deepseek-ai/dsh-client-ui-slots',
+    dependencies: { '@deepseek-ai/dsh-brand': 'workspace:*', zod: '4.4.3' },
+  })
+  const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+  assert.equal(result.code, 0, result.stdout)
+  const merged = readFileSync(current, 'utf8')
+  // Workspace edge becomes a link version; a registry edge keeps its specifier (frozen verifies).
+  assert.match(merged, /dsh-client-ui-slots:[\s\S]*'@deepseek-ai\/dsh-brand':[\s\S]*specifier: workspace:\*[\s\S]*version: link:\.\.\/dsh-brand/)
+  assert.match(merged, /dsh-client-ui-slots:[\s\S]*zod:[\s\S]*specifier: 4\.4\.3[\s\S]*version: 4\.4\.3/)
+  assert.match(result.stdout, /specifier 边 2 条/)
+})
+
+test('restore: a kept record missing a new registry edge gains it (fail-closed at frozen)', () => {
+  const { linkDir, current, head } = fixture()
+  const block = "    dependencies:\n      zod:\n        specifier: 4.4.3\n        version: 4.4.3"
+  writeFileSync(current, lockfile([importerBlock('dsh-client-store', block)]))
+  writeFileSync(head, lockfile([importerBlock('dsh-client-store', block)]))
+  writeManifest(linkDir, 'dsh-client-store', {
+    dependencies: { zod: '4.4.3', lodash: '^4.17.0' },
+  })
+  const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+  assert.equal(result.code, 0, result.stdout)
+  const merged = readFileSync(current, 'utf8')
+  assert.match(merged, /      lodash:\n        specifier: \^4\.17\.0\n        version: \^4\.17\.0/)
+  // The existing edge is untouched (no reordering, no rewrite).
+  assert.match(merged, /      zod:\n        specifier: 4\.4\.3\n        version: 4\.4\.3/)
+  assert.match(result.stdout, /specifier 边 1 条/)
+})
+
+test('restore: a member without a manifest is left byte-identical (no invented edges)', () => {
+  const { linkDir, current, head } = fixture()
+  writeFileSync(current, lockfile([importerBlock('dsh-client-store', '    dependencies: {}')]))
+  writeFileSync(head, lockfile([importerBlock('dsh-client-store', '    dependencies: {}')]))
+  const before = readFileSync(current, 'utf8')
+  const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+  assert.equal(result.code, 0, result.stdout)
+  assert.equal(readFileSync(current, 'utf8'), before)
+  assert.match(result.stdout, /无需修复/)
+})
+
+test('restore: a member key that escapes the link tree reads no manifest', () => {
+  const { linkDir, current, head } = fixture()
+  const block = '    dependencies: {}'
+  writeFileSync(current, lockfile([importerBlock('../escape', block)]))
+  writeFileSync(head, lockfile([importerBlock('../escape', block)]))
+  // A manifest OUTSIDE the member path exists only to prove the guard refuses to read it.
+  mkdirSync(join(linkDir, 'escape'), { recursive: true })
+  writeFileSync(join(linkDir, 'escape', 'package.json'), JSON.stringify({ dependencies: { zod: '4.4.3' } }))
+  const before = readFileSync(current, 'utf8')
+  const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+  assert.equal(result.code, 0, result.stdout)
+  assert.equal(readFileSync(current, 'utf8'), before, 'an escaping member key must stay byte-identical')
+})
+
+test('restore: an inline-empty group is expanded, never duplicated', () => {
+  const { linkDir, current, head } = fixture()
+  const block = '    dependencies: {}'
+  writeFileSync(current, lockfile([importerBlock('dsh-client-store', block)]))
+  writeFileSync(head, lockfile([importerBlock('dsh-client-store', block)]))
+  writeManifest(linkDir, 'dsh-client-store', { dependencies: { zod: '4.4.3' } })
+  const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+  assert.equal(result.code, 0, result.stdout)
+  const merged = readFileSync(current, 'utf8')
+  assert.equal((merged.match(/^    dependencies:/gm) ?? []).length, 1, 'exactly one dependencies group')
+  assert.doesNotMatch(merged, /dependencies: \{\}/)
+  assert.match(merged, /    dependencies:\n      zod:\n        specifier: 4\.4\.3\n        version: 4\.4\.3/)
+  assert.match(result.stdout, /specifier 边 1 条/)
+})
+
+test('restore: multiple added entries keep the pnpm sort order', () => {
+  const { linkDir, current, head } = fixture()
+  const block = "    dependencies:\n      zod:\n        specifier: 4.4.3\n        version: 4.4.3"
+  writeFileSync(current, lockfile([importerBlock('dsh-client-store', block)]))
+  writeFileSync(head, lockfile([importerBlock('dsh-client-store', block)]))
+  writeManifest(linkDir, 'dsh-client-store', { dependencies: { zzz: '1.0.0', aaa: '2.0.0' } })
+  const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+  assert.equal(result.code, 0, result.stdout)
+  const merged = readFileSync(current, 'utf8')
+  const aaa = merged.indexOf('      aaa:')
+  const zod = merged.indexOf('      zod:')
+  const zzz = merged.indexOf('      zzz:')
+  assert.ok(aaa > -1 && zod > aaa && zzz > zod, 'entries must be name-sorted')
+})
+
+test('restore: a missing dependency GROUP is created in alphabetical position and counted once', () => {
+  const { linkDir, current, head } = fixture()
+  const block = "    dependencies:\n      zod:\n        specifier: 4.4.3\n        version: 4.4.3"
+  writeFileSync(current, lockfile([importerBlock('dsh-client-store', block)]))
+  writeFileSync(head, lockfile([importerBlock('dsh-client-store', block)]))
+  writeManifest(linkDir, 'dsh-client-store', { devDependencies: { '@example/tool': '2.0.0' } })
+  const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+  assert.equal(result.code, 0, result.stdout)
+  const merged = readFileSync(current, 'utf8')
+  assert.match(merged, /    dependencies:[\s\S]*    devDependencies:\n      '@example\/tool':\n        specifier: 2\.0\.0/)
+  assert.match(result.stdout, /specifier 边 1 条/, 'a new group must count once, not twice')
+})
