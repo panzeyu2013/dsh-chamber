@@ -222,7 +222,6 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
   覆盖「先发布空轴、后注册」与「壳拆除窗口收下再 re-arm」两个窗口。
 - 六个小图标命中盒无几何锁；`RowHoverCard.onClickCapture` 无源码锁；marquee 两条分支未覆盖；`row-render-cost`
   的 13 faces 等号与 key==deps 对账是有意收紧。
-- design 06 两条上游锚待符号化。
 - `ServerSection.tsx` 两处 IIFE/12 空格缩进可无损改写但动行号与源码锁；投影查询四份可收敛 `findProjected`；
   `createdAt` 门只判 undefined（不可达，第二写入点需加 finite）。
 
@@ -429,7 +428,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 - **未纳棘轮的 god 文件**：control-plane `index.ts`/`proxy-forward.ts`/`spawn-dsh.ts`、gateway
   `dispatch.ts`/`plugins.ts`、dsh-runtime 多个 `runtime-*` 文件、desktop `updater.ts`/`main.ts`、Swift
   `MainWindowController`/`AppDelegate`/`BridgeClient`、`install-gateway.sh`——后续按包逐个纳入棘轮。
-- **死导出门覆盖洞**：client-ui 包整包在 `RUNTIME_LOADED_PACKAGES`（`verify-no-dead-exports.mjs`），`./client/**` 不受判；已知零消费者导出 `isFixedSectionId`、`transportTargetChangedSpec`。
+- **死导出门覆盖洞**：client-ui 包整包在 `RUNTIME_LOADED_PACKAGES`（`verify-no-dead-exports.mjs`），`./client/**` 不受判；已知零消费者导出 `transportTargetChangedSpec`（`isFixedSectionId` 已被 `nav-active.ts` 消费）。
 - **第二实现复核**：`openPromise` 三态证据在 `packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts`；`safeStorage` 访问器 5 份（gateway-provider / host-assembly / main / registry-projection / sidecar-ctx）；spec 分类的客户端对照文件需先重新取证再收口。
 - **client/seed god 文件与形态**：`PluginDialog.tsx`（约 32 个 useState）、`ConnectionsSection.tsx`、
   `ServerSection.tsx`（JSX 内派生状态残留）等已在棘轮内；`packages/dsh-chamber-seed-git-worktree/src/core.ts`、
