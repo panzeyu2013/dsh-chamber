@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-browser",
   "description": "Chamber remote-browser fork (design 28 §16): a faithful source fork of the official @deepseek-ai/dsh-client-ui-sidebar-browser iframe path (pinned vendor edition). The right-sidebar Browser tab (address bar, sandbox switch, multi-tab, shortcut, guide, persisted navigation, failure/restore states) is the upstream implementation verbatim; the ONLY behavior difference is the SSH reverse proxy — a local target loads directly, while an SSH source's remote 127.0.0.1 target attaches the existing per-tab SSH forward lease and uses main's composed frameUrl (the forwarded page's external exit uses that alias; disabled while the lease resolves or fails), releasing the consumer when the target is left or the tab closes",
-  "version": "0.4.5-beta.2",
+  "version": "0.4.5-beta.3",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
