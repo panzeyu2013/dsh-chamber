@@ -180,7 +180,9 @@ export interface PageChannelDeps {
 }
 
 /** 通道的只读计数（会计可见性；绝不是一个容量旋钮）。消费面是本模块自己的
- *  周期性日志行 + closeAll 的拆除行：spec 明确不新增第二个读面（HTTP 端点）。 */
+ *  周期性日志行 + closeAll 的拆除行，以及实例反代的 owner-wide HTTP 准入：通道自己开的
+ *  长活 SSE 上游不在反代转发表里，控制面把它计入同一并发池（InstanceProxyDeps.
+ *  getExternalUpstreams 读 {@link PageChannelStats.upstreams}；不新增 HTTP 读面）。 */
 export interface PageChannelStats {
   /** 活动页面 socket 数。 */
   sockets: number

@@ -89,6 +89,9 @@ export interface InstanceProxyDiagnostics {
   /** WS close codes by leg, keyed `down:<code>` / `up:<code>` (1006 = no close
    *  frame observed before the socket ended). */
   wsCloseCodes: Record<string, number>
+  /** Page-channel SSE upstreams live right now (counted outside this proxy's own
+   *  forward paths; see {@link InstanceProxyDeps.getExternalUpstreams}). */
+  pageChannelUpstreams: number
 }
 
 /** createInstanceProxy deps. */
@@ -156,6 +159,13 @@ export interface InstanceProxyDeps {
   /** Downlink activity window that keeps the link "busy" (default 2s; tests that
    *  must not sleep 2s override it). */
   busyActivityWindowMs?: number
+  /** Live upstream connections opened OUTSIDE this proxy's forward paths — the page
+   *  channel's per-subscription SSE requests (design 26 §D5: one upstream per active
+   *  non-health subscription). They dial the same instance and consume the same
+   *  owner-wide upstream capacity, so admission counts them against the ordinary HTTP
+   *  pool and diagnostics exposes the reading (the page channel's `stats().upstreams`
+   *  was a producer with no consumer before this seam). Absent = 0. */
+  getExternalUpstreams?: () => number
 }
 
 /** The instance-proxy surface. */
@@ -332,6 +342,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   /** The owner-wide long-RPC window selected once so admission and forwarding agree. */
   const longRpcPaths = deps.longRpcPaths ?? LONG_RPC_PATHS
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
+  /** Page-channel upstreams are real upstream connections: admission must subtract
+   *  them from the owner-wide ordinary HTTP pool. Per-connection fairness is NOT
+   *  applied (the page channel exposes one total; upstreams are few by construction:
+   *  at most one per active non-health subscription). */
+  const readExternalUpstreams = deps.getExternalUpstreams ?? (() => 0)
   /** ONE resolution per owner, so every forward call agrees (and a test that sets
    *  the env var cannot be bypassed by a later re-read). */
   const streamRequestBody = deps.streamRequestBody ?? streamRequestBodyEnabled()
@@ -406,7 +421,10 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     const globalCap = isLocal
       ? maxConcurrentHttpRequests
       : Math.max(0, maxConcurrentHttpRequests - Math.max(0, localReservedHttpSlots))
-    if (activeHttpRequests >= globalCap) return { kind: 'http', scope: 'global' }
+    // The page channel's long-lived SSE upstreams occupy upstream capacity this
+    // proxy does not track; counting them here keeps the owner-wide pool honest
+    // (design 26 §D5/D7 — `stats()` now has this admission as its consumer).
+    if (activeHttpRequests + readExternalUpstreams() >= globalCap) return { kind: 'http', scope: 'global' }
     return null
   }
 
@@ -1126,6 +1144,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         longRpcTimeouts: counters.longRpcTimeouts,
         transports: transports.size,
         wsCloseCodes: { ...wsCloseCodes },
+        pageChannelUpstreams: readExternalUpstreams(),
       }
     },
 

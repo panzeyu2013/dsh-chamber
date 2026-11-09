@@ -107,8 +107,7 @@ const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'package
 /**
  * Default source for the chamber in-host open-in domain package (fork of
  * upstream's open-in host half; packaged runtimes pass the bundled location).
- * LOCAL shape only: the row is `localOnly`, so no remote target or gateway
- * receives it.
+ * LOCAL shape only: the row is `localOnly`, so no remote target or gateway receives it.
  */
 const DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-open-in')
 
@@ -663,11 +662,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
   // Per-instance reverse proxy: /api/i/<id>/* HTTP/WS/SSE passthrough, reachable
   // without any session; ssh transports are registered by the desktop main process.
+  // The page channel is created below: its live SSE upstreams count against this
+  // owner's ordinary HTTP pool (design 26 §D5/D7 — stats() gains that consumer).
   const instanceProxy = createInstanceProxy({
     logger,
     getLocalState: () => local.getState(),
     getLocalDshPort: () => local.getDshPort(),
     canExposeLocal: localExposureAllowed,
+    getExternalUpstreams: () => pageChannel.stats().upstreams,
   })
 
   /** The connection-row projection on the wire: status/dshPort/error are LIVE
@@ -742,8 +744,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const pageChannel = createPageChannel({
     logger,
     subscribeHealthEvents,
-    // 懒闭包：订阅发生在任意时刻，快照必须在那一刻读，不能在外面先算好（否则
-    // 每个订阅都拿到创建通道时的旧状态）。
+    // 懒闭包：订阅发生在任意时刻，快照必须在那一刻读，不能在外面先算好（否则每个订阅都拿到创建通道时的旧状态）。
     currentHealthSnapshot: () => currentPublicLocalSnapshot(),
     resolveTargetFor: instanceId => instanceProxy.resolveTargetFor(instanceId),
     // The channel's own SSE requests are outside the instance proxy's traffic table:
@@ -751,9 +752,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // probe timeout was still counted as link death (design 27 §3.2 busy).
     onDownlink: (connectionId, bytes) => { instanceProxy.noteDownlink(connectionId, bytes) },
   })
-  // 通道自己开的每条上游 http.request 不在实例代理的 traffic 表里：隧道被替换或
-  // 注销时，代理显式通知，通道失败对应订阅（客户端重连阶梯会重新 subscribe，届时
-  // 解析到新传输），否则旧化身的 SSE 会继续把事实推给页面。
+  // 通道自己开的每条上游 http.request 不在实例代理的 traffic 表里：隧道被替换或注销时，代理显式通知，
+  // 通道失败对应订阅（客户端重连阶梯会重新 subscribe，届时解析到新传输），否则旧化身的 SSE 会继续把事实推给页面。
   instanceProxy.onTransportRevoked(connectionId => { pageChannel.revokeConnection(connectionId) })
 
   const api = createApi({

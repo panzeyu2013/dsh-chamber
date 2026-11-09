@@ -325,3 +325,43 @@ test('WS: live streams are bounded per connection (16); another instance keeps i
   }
   assert.equal(proxy.getDiagnostics().activeStreams, 0)
 })
+
+test('HTTP: page-channel upstreams count against the owner-wide pool and surface in diagnostics', async () => {
+  // 小夹具：3 槽、1 槽 local 保留 ⇒ 远端可用 2。页面通道（design 26 §D5）自己开的长活
+  // SSE 上游不在实例代理的转发表里，必须计入同一 owner-wide 池：它们占 2 条时远端额度
+  // 已满，而 local 的保留槽仍在（与「远端突发不得抢走 local」同一纪律）。
+  let externalUpstreams = 2
+  const { proxy } = hangingHttpProxy({
+    maxConcurrentHttpRequests: 3,
+    maxConcurrentHttpRequestsPerConnection: 4,
+    getExternalUpstreams: () => externalUpstreams,
+  })
+  proxy.registerTransport('dsh:a', 'http://127.0.0.1:22033')
+  const held: Array<ReturnType<typeof fakeResponse>> = []
+  try {
+    const remote = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/i/dsh-a/api/session/list'), remote)
+    assert.equal(remote.status, 503, 'page-channel upstreams consume the remote admission budget')
+    assert.deepEqual(refusalOf(remote.body).details, { kind: 'http', scope: 'global' })
+    // stats() 的 upstreams 现在有消费方：同一读数的诊断投影。
+    assert.equal(proxy.getDiagnostics().pageChannelUpstreams, 2)
+
+    const local = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list'), local)
+    assert.equal(local.status, null, 'the local reserve survives page-channel upstreams')
+    held.push(local)
+    assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
+
+    // 读数是现场的：外部上游消失后远端槽位立刻恢复。
+    externalUpstreams = 0
+    assert.equal(proxy.getDiagnostics().pageChannelUpstreams, 0)
+    const admitted = fakeResponse()
+    await proxy.handleHttp(fakeRequest('/api/i/dsh-a/api/session/list'), admitted)
+    assert.equal(admitted.status, null)
+    held.push(admitted)
+  } finally {
+    for (const response of held) response.destroy()
+  }
+  assert.equal(proxy.getDiagnostics().activeHttpRequests, 0)
+})
+
