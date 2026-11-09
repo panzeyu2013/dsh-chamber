@@ -712,6 +712,11 @@ export default function App() {
     snapshotAtRef.current = aggregateInvalidation.snapshotAtBySource
     mountedSources.retire(aggregateInvalidation.removedSourceIds)
     readyAggregateSourcesRef.current = aggregateInvalidation.readySources
+    // Event-side, immediate ledger prune: passive effects may be SKIPPED on a same-id
+    // replacement, so the retired generation's refresh bookkeeping (sessionListRefresh*)
+    // and authoritative archive set must not leak into the replacement. The field list is
+    // whatever host/source-ledger.ts owns, so a new per-source table cannot drift here.
+    pruneSourceLedger(sourceLedger, liveSourceIds)
     // Event authority is immediate: delayed view/deep-link callbacks must see the source absent before the replacement resolves.
     liveServerIdsRef.current = nextLive
 

@@ -44,6 +44,9 @@ test('a dispatch reads the stored epoch instead of recomputing the fingerprint',
 
 test('retirement prunes the registry with the live-id set', () => {
   assert.ok(APP.includes('retainSourceIds(sourceLedgerStoreRef.current, liveSourceIds)'), 'retireSources must drop retired generations')
+  // The WHOLE per-source ledger (field list single source) is pruned event-side too: a
+  // same-id replacement must not inherit sessionListRefresh*/authoritativeArchiveSet.
+  assert.ok(APP.includes('pruneSourceLedger(sourceLedger, liveSourceIds)'), 'retireSources must prune the ledger immediately')
   assert.equal(APP.includes('incarnationKey('), false, 'the keyed-record API must have no call site')
   assert.equal(APP.includes('retainSources('), false, 'the old sweep must have no call site')
   assert.equal(APP.includes('SourceLifecycleState'), false, 'the old per-record type must not appear in the App')
