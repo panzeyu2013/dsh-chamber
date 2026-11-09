@@ -45,6 +45,22 @@ test('the marker mirrors the dot priority exactly (pending > subagents > complet
   assert.deepEqual(sessionRowState({ runningSubagents: 0, completed: true }).state, 'completed')
 })
 
+test('archived rows never present a live state (design 06 §3.4)', () => {
+  // 归档行状态槽留空；点/文案/仪表与呈现四面必须同时沉默（19 §3.7 归档行排除）。
+  const archivedOf = (facts: Parameters<typeof sessionRowState>[0]): ReturnType<typeof sessionRowState> => sessionRowState({ ...facts, archived: true })
+  assert.equal(archivedOf({ completed: true }).state, 'none')
+  assert.equal(archivedOf({ running: true }).state, 'none')
+  assert.equal(archivedOf({ pending: 'approval' }).state, 'none')
+  assert.equal(archivedOf({ runningSubagents: 2 }).state, 'none')
+  assert.equal(archivedOf({ completed: true, running: true, pending: 'question', runningSubagents: 3 }).state, 'none')
+  assert.equal(archivedOf({ completed: true }).completedVisible, false)
+  assert.equal(archivedOf({ completed: true }).goalActive, false)
+  // 非归档行优先级不变（回归锁）。
+  assert.equal(sessionRowState({ completed: true }).state, 'completed')
+  assert.equal(sessionRowState({ running: true }).state, 'running')
+  assert.equal(sessionRowState({ pending: 'approval' }).state, 'pending:approval')
+})
+
 test('the source names where the displayed reading came from', () => {
   assert.equal(sessionRowState({ running: true }).source, 'wire')
   assert.equal(sessionRowState({ pending: 'question' }).source, 'channel')
@@ -179,6 +195,8 @@ test('six faces derive from the single sessionRowState source (goal gate include
   assert.match(HOOK, /subagentActivity: facts\?\.subagentActivity/)
   assert.match(HOOK, /stale: server\.runtime\?\.stale/)
   assert.match(HOOK, /goal: facts\?\.goal/)
+  // 归档行经同一派生沉默：leaf 吃 archived，行面不再自行裁决（design 06 §3.4）。
+  assert.match(HOOK, /archived: session\.archived === true/)
   // 四个 reader 的原文经同一 sessionRowStateOf 这一事实由 row-render-cost.test.ts:53-55
   // 的循环锁（并含 slot/负面断言）更强守护，此处不再重复。
   // 旧的各写一遍优先级的 raw 分支必须消失——点与仪表不得再各自裁决。

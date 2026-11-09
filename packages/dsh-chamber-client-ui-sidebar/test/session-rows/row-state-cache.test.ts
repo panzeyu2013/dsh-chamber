@@ -1,7 +1,7 @@
 /**
  * session-row-state-cache 的纯行为测。一行渲染会调用 sessionRowStateOf 9-12 次
  * （marker / label / pending / dot + 悬停卡），缓存必须让同一
- * (facts 对象身份, session.running, stale) 只派生一次。无 DOM：这里锁叶子契约，
+ * (facts 对象身份, session.running, stale, archived) 只派生一次。无 DOM：这里锁叶子契约，
  * React 侧接线由 row-render-cost.test.ts 的源码锁覆盖。
  *
  * Run directly: node test/session-rows/row-state-cache.test.ts
@@ -27,6 +27,14 @@ test('running and stale are keyed in all three raw values', () => {
   // true / false / undefined 是三个不同输入（runningRingVisible 读得出来）；
   // stale 的 false 与 undefined 同样不得折叠。
   assert.equal(slots.size, 9)
+})
+
+test('archived is keyed too: an archived row never shares a live slot', () => {
+  const cache = createSessionRowStateCache<{ state: string }>()
+  const facts = {}
+  assert.notEqual(cache.slot(facts, undefined, undefined, true), cache.slot(facts, undefined, undefined))
+  assert.equal(cache.slot(facts, undefined, undefined, true), cache.slot(facts, undefined, undefined, true))
+  assert.notEqual(cache.slot(facts, true, false, true), cache.slot(facts, false, false, true))
 })
 
 test('a new facts object is a new key, absent facts share one sentinel', () => {

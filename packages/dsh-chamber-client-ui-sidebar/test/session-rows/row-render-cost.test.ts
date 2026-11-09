@@ -55,10 +55,10 @@ test('the row derives nothing itself: 13 state faces share the one memoized deri
   // 每个 reader 原文不动地经同一个 sessionRowStateOf……
   for (const reader of ['sessionStateLabel', 'sessionStatePending', 'sessionStateMarker', 'sessionStateDot'])
     assert.match(HOOK, new RegExp('const ' + reader + ' = [\\s\\S]{0,240}?sessionRowStateOf\\(server, session\\)'))
-  // ……而 sessionRowStateOf 对 (facts 身份, running, stale) 只有一个槽：
+  // ……而 sessionRowStateOf 对 (facts 身份, running, stale, archived) 只有一个槽：
   // 首次调用派生并填槽，其余 12 次读数命中 slot.result（行为见 row-state-cache.test.ts）。
   assert.match(HOOK, /const rowStateCache = useMemo\(\(\) => createSessionRowStateCache<SessionRowStateResult>\(\), \[\]\)/)
-  assert.match(HOOK, /const slot = rowStateCache\.slot\(facts, session\.running, server\.runtime\?\.stale\)/)
+  assert.match(HOOK, /const slot = rowStateCache\.slot\(facts, session\.running, server\.runtime\?\.stale, session\.archived === true\)/)
   assert.match(HOOK, /if \(slot\.result !== undefined\) return slot\.result/)
   assert.match(HOOK, /slot\.result = result/)
 })

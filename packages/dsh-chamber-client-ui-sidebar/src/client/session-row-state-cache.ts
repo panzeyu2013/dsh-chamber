@@ -4,10 +4,10 @@
  * Every row face (marker / label / pending / dot, plus the hover card's status
  * line) routes through `sessionRowStateOf(server, session)`, so ONE row render
  * asks for the same result 9-12 times. The leaf `sessionRowState` is pure and its
- * whole input is the triple (facts row object identity, `session.running`, the
- * source `stale` bit): `mergeRuntimeFacts` re-publishes a CHANGED row as a new
+ * whole input is the quadruple (facts row object identity, `session.running`, the
+ * source `stale` bit, `session.archived`): `mergeRuntimeFacts` re-publishes a CHANGED row as a new
  * object and keeps every untouched row by reference, so the row identity is the
- * change signal. The cache hands back one mutable slot per triple; the caller
+ * change signal. The cache hands back one mutable slot per quadruple; the caller
  * fills `slot.result` once and every later reader call gets the same result
  * object instead of re-deriving it.
  *
@@ -22,8 +22,8 @@ export interface SessionRowStateSlot<T> {
 }
 
 export interface SessionRowStateCache<T> {
-  /** The slot for (facts, running, stale): the same triple always maps to the same slot object. */
-  slot(facts: object | undefined, running: boolean | undefined, stale: boolean | undefined): SessionRowStateSlot<T>
+  /** The slot for (facts, running, stale, archived): the same quadruple always maps to the same slot object. */
+  slot(facts: object | undefined, running: boolean | undefined, stale: boolean | undefined, archived?: boolean): SessionRowStateSlot<T>
 }
 
 /** Create one cache per consumer (the readers of one hook instance). */
@@ -33,7 +33,7 @@ export function createSessionRowStateCache<T>(): SessionRowStateCache<T> {
   const noFacts: object = {}
   const byFacts = new WeakMap<object, Map<string, SessionRowStateSlot<T>>>()
   return {
-    slot(facts, running, stale) {
+    slot(facts, running, stale, archived) {
       const key = facts ?? noFacts
       let variants = byFacts.get(key)
       if (variants === undefined) {
@@ -42,7 +42,8 @@ export function createSessionRowStateCache<T>(): SessionRowStateCache<T> {
       }
       // The variant key names the raw values: true / false / undefined are three
       // different inputs (runningRingVisible reads the difference).
-      const variant = `${running === true ? 'r' : running === false ? 'R' : '-'}:${stale === true ? 's' : stale === false ? 'S' : '-'}`
+      // archived 也进变体键：归档行与同一会话的非归档读数不得共享槽（归档行落 none）。
+      const variant = `${running === true ? 'r' : running === false ? 'R' : '-'}:${stale === true ? 's' : stale === false ? 'S' : '-'}:${archived === true ? 'a' : '-'}`
       let slot = variants.get(variant)
       if (slot === undefined) {
         slot = {}

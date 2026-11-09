@@ -104,6 +104,12 @@ export interface SessionRowStateFacts {
   /** 该来源的运行时事实是否 stale（断连/主机不可达时仍可附加）。 */
   stale?: boolean
   /**
+   * 归档行（design 06 §3.4）：状态槽留空、不可打开，任何活状态读数都不得呈现。
+   * 归档行的点/文案/仪表与呈现四面必须同时沉默，否则「完成未读」会留下无法
+   * 通过阅读清除的幻影提醒（19 §3.7「归档行排除」）。
+   */
+  archived?: boolean
+  /**
    * v5 §2.1 行事实：缺席 = unknown，`null` = 明确无 goal，对象 = 有 goal。
    * {@link goalSuppressesPresentation} 是唯一的呈现裁决入口。
    */
@@ -203,6 +209,11 @@ export function sessionRowState(facts: SessionRowStateFacts | undefined): Sessio
       : subagents > 0
         ? 'derived'
         : 'wire'
+  if (facts?.archived === true) {
+    // 归档行不呈现任何活状态：仪表读 none、文案缺席、点不点亮（design 06 §3.4）。
+    // 早于 pending/subagents/completed/running 四个分支，任何读数都不得漏出。
+    return { state: 'none', source, completedVisible: false, goalActive: false }
+  }
   if (pending !== undefined) {
     return { state: `pending:${pending}`, source, pending, completedVisible: false, goalActive }
   }
