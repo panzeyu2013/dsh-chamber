@@ -1,6 +1,6 @@
 # 18 · dsh 运行时版本管理（运行期从 npm 拉取安装）
 
-> **dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；未完成门禁见 `docs/progress/STATUS.md`（design 18 条目）。
+> **dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；开放状态见 `docs/progress/STATUS.md`（design 18 条目）。
 
 ## 1. 需求与动机
 
@@ -13,7 +13,7 @@
 - npm 上的 `@deepseek-ai/dsh` 是**包**（依赖声明 + lib 产物），**不是** chamber 需要的「裁剪后完整运行时树」（hoisted `node_modules` + 平台原生二进制 + prune）。`bundle-dsh.mjs` 干的活（精确版本 → pnpm install hoisted →allowBuilds 白名单 → prune → 冒烟 → 原子发布）在运行期必须重演。
 - 因此「从 npm 拉最新装进壳」= **运行期安装**：下载 tarball → 校验 integrity →pnpm install（hoisted + allowBuilds）→ prune → `bin.js --version` 冒烟 → 发布为版本树，即 **bundle-dsh 语义从构建期搬到运行期**。
 - 运行期安装的**额外收益**：安装在目标机执行 → 原生模块自动是本机平台 →**省掉 per-platform 资产矩阵**；**代价/风险**（平台差异面）：
-  - 原生模块 prebuilt 与否（node-pty prebuilt ✓；koffi 3.x 的 optionalDeps prebuilt结构已由 lockfile 证实，install 脚本 `cnoke --prebuild` 先 require 探测；开发树Electron-as-node 链已有记录，**真实打包 `.app` 内的 koffi load 以 STATUS 实机门禁为准**）；浮动依赖解析（无 frozen lockfile）；安装耗时/体积（预估 2–10 分钟、数百MB 解压）；
+  - 原生模块 prebuilt 与否（node-pty prebuilt ✓；koffi 3.x 的 optionalDeps prebuilt结构已由 lockfile 证实，install 脚本 `cnoke --prebuild` 先 require 探测；开发树Electron-as-node 链已有记录，**真实打包 `.app` 内的 koffi load 以发布验收为准**）；浮动依赖解析（无 frozen lockfile）；安装耗时/体积（预估 2–10 分钟、数百MB 解压）；
   - **Electron-as-node 跑 pnpm 全链路（ESM shim/worker_threads）**：开发树路径已实测，打包态 extraResources 由 acceptance harness 覆盖，无真实 `.app` 结果不得视为通过。
 
 ## 3. 架构
@@ -142,7 +142,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 5. **状态/进度行**（上下文驱动，无块标题——无「当前状态」h4 与 `dshRuntimeGroupStatus`键，事实行直接呈现，段内以发丝线分隔）：claim 类文案（「已是最新版本 / 尚未检查更新 /有可用更新 vY」）不出现；机器状态由版本行后**彩色徽标**表达（正常/检查中/下载中/安装中/待应用/应用中/回退中/重启中/切换失败/快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，绿/蓝/黄/红四色）；详情行仅承载真实状态/操作/终态结果/失败（checking「检查更新中…」；installing「安装 dsh vY…」；pending「将于下次启动切换到 vY」；applying「应用 dsh vY…」；applied「已更新到 vY」；rollback/failed 错误文案（脱敏））。
 6. **失败记录行**（仅失败时）：「vY 安装失败：<原因> — 建议升级 dsh-chamber / 重试」。失败现场清除**仅本地**：desktop 经 `dsh-chamber:runtime-clear-failure` trustedIpc调 `clearRuntimeFailure`（保护集校验通过后显式删除对应 `failures/*.json`）；gateway无清除按钮（无 `/chamber/runtime` 清除路由），按仅 local 降级并登记偏差（见 STATUS）。
 7. **快照 + 运行时占用事实块**（`.runtimeDiskFacts`，紧凑 gap 4px，与版本源错误行同区域、发丝线分隔；位置见组件树；local/gateway 同构）：快照行 = 标签 + 值（说明句 `dshRuntimeSnapshotHint` 不渲染），失败态「快照失败：<原因> [重试应用] [恢复内建]」；磁盘行无独立标签，文案自身带头「运行时占用 {total}」——**真实字节**：整棵 runtime 根 + `dsh-home.old*` 备份一次 walk、按 `(dev, ino)` 去重累计（消除硬链接双计）；`unclassifiedBytes` 收未落入已知分类的条目，`totalBytes = Σ分类（含 unclassified）`，与真实可见字节一致，`unclassifiedBytes>0`时追加「，未分类残留 {n}」；数值 `.runtimeFactValue` 12px/600 加粗、标签 12px tertiary、行距收紧。**诚实边界**：APFS reflink/clone 共享物理块经 stat 不可识别（不同 inode），统计对 reflink 副本重复计数——与 macOS `du` 一致的已知近似。
-8. **重启 dsh**（刷新插件挂载）——`[重启 dsh]` 二次确认后执行**受控进程重启**（非版本切换）：优雅停止（SIGTERM 进程组→ 1s → SIGKILL，02 §3.7）→ 重新 spawn（同端口 / P+1 退让）→ 就绪探测。**刷新语义**（重启生效的一切，02 §2.6/设计 13）：chamber host 包 seed thunk 每次spawn 前重新求值（client-graph/git-worktree 挂载行按当前构建产物重建）；dsh boot重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端页面不随宿主重启重 boot（已 boot 的实例壳不重 boot）。页面侧 client 行的刷新走 design 09 §3.7 的`/plugins/events`：重连撞上本段下文的 503/502 窗口时，控制面为该 `pluginGraph` 订阅发 error 帧、页面级通道（design 26）按 3s→30s 阶梯重发 `subscribe`（重连阶梯只有通道这一条），成帧即重新下发整图并热同步增删；通道或上游持续不可用则退回 boot 现状（机会性契约：boot 始终是回退权威），须手动重载页面/重启应用（存活仍为 STATUS 开放实机项）。boot 时**没有图**的非本地壳（`not-injected`，host 尚无 chamber 宿主包）走 §3.7 的另一路：宿主后来才有图时（design 13 的 seed流程即此）按有界探测（每来源每 60s 至多一次）发现并重挂该实例一次，同样不需要整页重载；**本地**实例的 404是 `local-graph-not-injected` 降级 boot，归降级自愈（§3.2 W3），不属该路。
+8. **重启 dsh**（刷新插件挂载）——`[重启 dsh]` 二次确认后执行**受控进程重启**（非版本切换）：优雅停止（SIGTERM 进程组→ 1s → SIGKILL，02 §3.7）→ 重新 spawn（同端口 / P+1 退让）→ 就绪探测。**刷新语义**（重启生效的一切，02 §2.6/设计 13）：chamber host 包 seed thunk 每次spawn 前重新求值（client-graph/git-worktree 挂载行按当前构建产物重建）；dsh boot重读 DSH_HOME profiles + `--patch` overlay（`dsh plugin` 装/删的插件生效）；前端页面不随宿主重启重 boot（已 boot 的实例壳不重 boot）。页面侧 client 行的刷新走 design 09 §3.7 的`/plugins/events`：重连撞上本段下文的 503/502 窗口时，控制面为该 `pluginGraph` 订阅发 error 帧、页面级通道（design 26）按 3s→30s 阶梯重发 `subscribe`（重连阶梯只有通道这一条），成帧即重新下发整图并热同步增删；通道或上游持续不可用则退回 boot 现状（机会性契约：boot 始终是回退权威），须手动重载页面/重启应用（存活仍为开放项）。boot 时**没有图**的非本地壳（`not-injected`，host 尚无 chamber 宿主包）走 §3.7 的另一路：宿主后来才有图时（design 13 的 seed流程即此）按有界探测（每来源每 60s 至多一次）发现并重挂该实例一次，同样不需要整页重载；**本地**实例的 404是 `local-graph-not-injected` 降级 boot，归降级自愈（§3.2 W3），不属该路。
 
 **互斥与门控**：与健康状态机 `restarting` 单飞互斥；applying 期间禁用；状态行「重启 dsh…」→「已重启」与诚实失败文案（附 host-logs 入口）。失败不回滚、不改指针——重启前后是同一棵激活树，仅进程级刷新。per-server：local = `restartLocal()` 事务（§9.3，与健康重启单飞行串行化）；gateway = `POST /chamber/runtime/restart`（202 + status 轮询，§9.3）。远端重启窗口内隧道 phase 保持 `ready`（隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，03 §3），会话/侧边栏短时错误属预期。**完成确认（不重载窗口）**：重启动作不再附带窗口重载。local 腿经桌面 IPC 的ready/degraded 白名单后即报结果：`restartLocal()` 的 resolve ≠ success——窗口耗尽落`restart-exhausted` 也照样 resolve（契约所有者 = control-plane `local-connection.ts` 的`restartLocal`，§9.3 只定义事务），非白名单终态由 `shell-ipc-runtime.ts` 的"did not reach ready" 响亮拒绝；gateway 腿保留`pollGatewayReady`（1s/120s）的 202 + status 轮询，超时/失败按分类器如实投影。**窗口重载（负面契约）**：重启入口不附带任何窗口重载——`restart-window-reload.ts` 的 page-owned completion 不存在。
 
@@ -163,7 +163,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - settings 壳：`SettingsShell` 服务器下拉选中任一服务器后，其设置段列表在**agent-presets（agent 预设）之后**追加「dsh 运行时」段（`settings.section`，id `RUNTIME_SECTION_ID = 'dsh-runtime'`、order 31；connections 为壳的固定 nav入口、在分隔线之下，不占 ledger order——视觉顺序即 agent-presets → dsh-runtime）。**不出现在`__general`（通用）视图**——`GeneralView` 只保留设计 15 的控制组（启动与关闭 /运行 / 更新）。桥接面（design 05 §5）：该段由本包在**该来源自己的 boot ctx** 上注册（`settings-bridge` 的 `apply`，随 `chamberBridge` roster 投影reconcile），与官方 `settings.section`、该来源第三方分节同处一份台账——视觉位置不变，邻居可能含第三方分节（同形、无来源标记；见 design 05 §5）。投影不可识别时**只报告不抛错**（`console.error`，该 ctx 是那台实例自己的前端）。
 - 每服务器行为按来源分支（同一段、同一视觉，事实与动作随实例路由）：
   - **local**：完整管理面（规格 1–8 全量）；事实读主进程权威投影，动作走既有 IPC（§3.6 状态机同口径）；重启 = `restartLocal()` 事务（§9.3，与健康重启单飞行串行化）；
-  - **gateway**：同一段内容，事实与动作经该实例反代触达 gateway 的`/chamber/runtime`（`/api/i/gateway-<id>/chamber/runtime/*`，§9.3），不接触token（design 17 §7.2/§12 纪律）；状态机文案矩阵同口径；重启 =`POST /chamber/runtime/restart`。gateway 分支即完整 per-server 管理面——版本选择器、状态/失败、快照、更新/回滚/恢复内建、registry、restart、cleanup-version /restore-pre-rollback / recover-metadata 与 metadata 健康投影均经认证反代代理，与desktop 对齐；清理/恢复/救援入口、彩色状态徽标与快照 + 占用段尾事实块两分支同构（失败现场清除仅本地，见规格 6）。组件级与实机验收门禁见 STATUS（§9.5 同口径），不以缩减视图作为产品契约。
+  - **gateway**：同一段内容，事实与动作经该实例反代触达 gateway 的`/chamber/runtime`（`/api/i/gateway-<id>/chamber/runtime/*`，§9.3），不接触token（design 17 §7.2/§12 纪律）；状态机文案矩阵同口径；重启 =`POST /chamber/runtime/restart`。gateway 分支即完整 per-server 管理面——版本选择器、状态/失败、快照、更新/回滚/恢复内建、registry、restart、cleanup-version /restore-pre-rollback / recover-metadata 与 metadata 健康投影均经认证反代代理，与desktop 对齐；清理/恢复/救援入口、彩色状态徽标与快照 + 占用段尾事实块两分支同构（失败现场清除仅本地，见规格 6）。组件级与实机验收门禁见 `docs/checklists/acceptance/gui-acceptance-checklist.md`，不以缩减视图作为产品契约。
   - **dsh（ssh/http 直连）**：**不挂载**——远端运行时由 systemd 部署、无 chamber运行时管理面、无 `/chamber` 通道（design 17 §3 能力差异表），不渲染 dsh-runtime分节、无任何版本/重启动作；远端重启经 connections 卡的服务操作（`restart_service`，03 §2.2）触达。
 - `DshRuntimeSection` 内部行序（自上而下，与上列显示规格一一对应）：
   ```
@@ -209,7 +209,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 
 ## 4. 运行期安装细节
 
-- **内嵌 pnpm（新增运行时依赖，显式声明）**：desktop dependencies 增加 `pnpm` **钉精确版本（单源 = 根 `package.json` 的 `packageManager`；`BUNDLE_PNPM_VERSION` 与之一致）**——AGENTS.md「不新增运行时依赖」纪律的刻意偏差（同 design 11 引入 electron-updater）；**放置定案 =extraResources（实体盘，非 asar 内）**——规避 asar 内 .cjs 仅 Electron-node 可读、allowBuilds 生命周期子进程需继承 ELECTRON_RUN_AS_NODE 的整类问题；体积实测 npm 包 37MB → 删 artifacts 后 ~19MB（开发树记录）。spawn 用`resolveNodeExecutable`（Electron 分支）直接 `node pnpm.cjs`，跨平台无需 shell；**install 子进程纳入 will-quit 回收**（同 transport 的 TERMINATE_GRACE，work 目录记pid 供启动清理判活）。
+- **内嵌 pnpm（新增运行时依赖，显式声明）**：desktop dependencies 增加 `pnpm` **钉精确版本（单源 = 根 `package.json` 的 `packageManager`；`BUNDLE_PNPM_VERSION` 与之一致）**——AGENTS.md「不新增运行时依赖」纪律的刻意偏差（同 design 11 引入 electron-updater）；**放置定案 =extraResources（实体盘，非 asar 内）**——规避 asar 内 .cjs 仅 Electron-node 可读、allowBuilds 生命周期子进程需继承 ELECTRON_RUN_AS_NODE 的整类问题；体积实测 npm 包 37MB → 删 artifacts 后 ~19MB（开发树记录）。spawn 用`resolveNodeExecutable`（Electron 分支）直接 `node pnpm.cjs`，跨平台无需 shell；**install 子进程纳入 will-quit 回收**（同 transport 的 TERMINATE_GRACE，work 目录记 pid（可用时含 bootId/startTicks 身份）供启动清理判活）。
 - **安装命令**：work manifest 先写`dependencies["@deepseek-ai/dsh"] = "file:./dsh-runtime-package.tgz"`，再执行`node <pnpm>/bin/pnpm.cjs install --config.node-linker=hoisted --store-dir <userData>/dsh-runtime/.pnpm-store --cache-dir <userData>/dsh-runtime/.pnpm-cache--registry <所选源> --fetch-retries=0`（+ 壳级总超时）。`--no-update-notifier` 在 pnpm 11 已移除，命令不含该旗标。
 - **源钉死**：用户 `~/.npmrc` 会被 pnpm 读取并覆盖 registry，使安装源漂移、供应链锚点与白名单矛盾——安装子进程 env **scrubbing**（只保留 PATH 与 HTTP(S)/NO_PROXY 基础项，剥离用户 npm config/凭据）+ HOME / XDG_CACHE_HOME 钉到 `<dsh-runtime>/.install-home`/ `.xdg-cache` + **`NPM_CONFIG_USERCONFIG` 指向壳自管空文件** + **显式`--registry`**。**registry 源用户自设**：检查/安装均由主进程 spawn，源在 settings「版本源」下拉显式设置（npmjs 默认 / 白名单镜像 / 自定义 HTTPS registry，走 §6 URL白名单校验，存 chamber-settings.json，非秘密）；**不做按 locale 的静默默认切换**——语言≠地理位置，静默换 registry 等于换信任锚；切换后 metadata 与 integrity 一并来自所选源，信任边界显式可见。
 - **allowBuilds（单一来源常量）**：`allow-builds.mjs` 是构建期 `bundle-dsh.mjs` 与运行期安装器共用的唯一来源——放行 6 项（node-pty / koffi / fs-ext / protobufjs /@google/genai / @deepseek-ai/dsh-subprocess-local；fs-ext 为 0.1.3 线session-persistence-jsonl 写租约 flock 引入），另以显式否认列表登记 pnpm 11 `strictDepBuilds` 下必须显式写 `false` 的 build-script 依赖（`msgpackr-extract`，语义 = 已拒绝其安装期执行脚本）——它由上游**私有桌面应用**构建面引入（`apps/desktop` 用 `msgpackr`，`msgpackr-extract` 为其可选原生加速器；上游`packages/**` 无依赖），运行时闭包不含（`packages/desktop/vendor/dsh/pnpm-lock.yaml`对 `msgpackr*` 零命中）⇒ 运行时树内是**惰性的防御性 false**而非已发生的拒绝；两个生成点共用渲染器，漂移由测试钉死。**work 目录必须先写pnpm-workspace.yaml 再跑 pnpm**（缺失 allowBuilds 配置实测硬失败），且不得位于含pnpm-workspace.yaml 的祖先下（向上探测实测报错）；**白名单 miss 是硬失败**（实测ERR_PNPM_IGNORED_BUILDS）→ 新 dsh 引入新 build-script 依赖时安装失败，UI 给「请升级 dsh-chamber」指引（「不等 chamber 发版」对这类版本不成立）。简略 packument与捆绑基线 lockfile 均无 `hasInstallScript`——**无法从 lockfile 推导build-script 覆盖**，故以「单一来源常量 + 漂移钉死测试 + 白名单 miss 硬失败」三层兜底（真实安装的 ERR_PNPM_IGNORED_BUILDS 显式暴露，UI 引导升级、不静默跳过）。
@@ -305,7 +305,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 
 **平台证据口径**：Windows 只读（§6）；未跑 Windows mutation 测试不构成偏差（该能力不在契约内）。
 
-**实机验收项与判据见 `docs/progress/STATUS.md`，本文不冒充结果**：真实 `.app` 中运行packaged smoke，以及更强的 packaged fake-registry 安装 + web host + 全激活探针端到端；真实 packaged Electron 壳内「安装候选 → 全探针 → 故障 → 回退/恢复」端到端；快照体积实测与可再生物排除优化；安装耗时/磁盘体积的更多机器样本；兼容基线下限随壳重基代维护。
+**实机验收项与判据见 `docs/checklists/acceptance/gui-acceptance-checklist.md` 与 `docs/checklists/release/release-checklist.md`，本文不冒充结果**：真实 `.app` 中运行packaged smoke，以及更强的 packaged fake-registry 安装 + web host + 全激活探针端到端；真实 packaged Electron 壳内「安装候选 → 全探针 → 故障 → 回退/恢复」端到端；快照体积实测与可再生物排除优化；安装耗时/磁盘体积的更多机器样本；兼容基线下限随壳重基代维护。
 
 ## 9. 服务端化与共享核心（gateway 宿主）
 
@@ -412,7 +412,7 @@ Gateway 在 `DSH_GATEWAY_DSH_PATH` env 来源下，startup core 的 `env-overrid
 
 自动化门禁：共享包/gateway typecheck+test；desktop 全量回归；`build:gateway` + pack/install smoke 含 pnpm 依赖；frozen lockfile；i18n；路由权限测试（含 restart 202/poll、applying 409、dsh 停机窗口 status 可轮询）；lifecycle 测试（启动顺序/失败回滚/stop 回收/restart 与健康重启单飞行交错）；CLI 契约测试；settings-bridge 回归。
 
-实机门禁：服务端安装候选 → 重启 gateway → 探针 → 故障注入回退 → DSH_HOME 数据恢复（Linux server 记录）；生产 TLS 反代下 `/chamber/runtime` status 轮询与认证行为；fake-registry acceptance 的 gateway 形态移植与 ssh `restart_service` 回归（见 STATUS 登记）。
+实机门禁：服务端安装候选 → 重启 gateway → 探针 → 故障注入回退 → DSH_HOME 数据恢复（Linux server 记录）；生产 TLS 反代下 `/chamber/runtime` status 轮询与认证行为；fake-registry acceptance 的 gateway 形态移植与 ssh `restart_service` 回归（验收程序见 `docs/checklists/acceptance/`）。
 
 Windows 只读口径与验证门例外同 §6（正式解锁待真实 Windows 验证记录）。
 

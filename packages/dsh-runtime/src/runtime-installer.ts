@@ -35,6 +35,7 @@ import {
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { renameWithWindowsRetry } from './rename-retry.ts'
+import { serializePidEvidence } from './process-identity.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { makeOwnedTreeWritable } from './tree-writable.ts'
 import { assertSafeVersion } from './version-safety.ts'
@@ -1067,7 +1068,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       atomicWriteRuntimeFileNoFollow(opts.baseDir, statePath, `${value}\n`)
     }
     const noteChildPid = (pid: number): void => {
-      atomicWriteRuntimeFileNoFollow(opts.baseDir, pidPath, String(pid))
+      atomicWriteRuntimeFileNoFollow(opts.baseDir, pidPath, serializePidEvidence(pid))
       // PID evidence is written BEFORE the marker flips to 'spawned': the marker alone never
       // authorizes cleanup.
       writeState('spawned')

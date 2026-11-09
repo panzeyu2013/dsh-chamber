@@ -17,6 +17,7 @@ import {
 import type { InstallerDeps, RunOptions, RunResult } from '../../src/runtime-installer.ts'
 import type { RuntimeInstallResolution } from '../../src/dsh-runtime-updater.ts'
 import { markStorePruneNeeded } from '../../src/dsh-runtime-store.ts'
+import { parsePidEvidence } from '../../src/process-identity.ts'
 import { criticalFilesFor } from '../support/store-fixtures.ts'
 
 const VERSION = '0.1.1-rc.2'
@@ -201,7 +202,7 @@ test('installRuntimeVersion: writes allowBuilds before pnpm and publishes no tar
     return { status: 0, stdout: '', stderr: '' }
   }
   const result = await install(baseDir, depsWithRun(run))
-  assert.equal(pidDuringRun, '424242', 'work marker records the actual child pid reported by run')
+  assert.equal(parsePidEvidence(pidDuringRun ?? '')?.pid, 424242, 'work marker records the actual child pid reported by run')
   assert.equal(existsSync(path.join(result.versionTreeDir, 'pid')), false)
   assert.equal(existsSync(path.join(result.versionTreeDir, 'dsh-runtime-package.tgz')), false)
 })
@@ -964,7 +965,7 @@ test('installRuntimeVersion preserves work/PID evidence when a child process gro
   const runtimeDir = path.join(baseDir, 'dsh-runtime')
   const work = readdirSync(runtimeDir).find(name => name.startsWith('.work-'))
   assert.ok(work !== undefined)
-  assert.equal(readFileSync(path.join(runtimeDir, work!, 'pid'), 'utf8'), String(process.pid))
+  assert.equal(parsePidEvidence(readFileSync(path.join(runtimeDir, work!, 'pid'), 'utf8'))?.pid, process.pid)
 })
 
 test('disposeRuntimeInstaller: aborts and awaits an active download before cleanup returns', async () => {

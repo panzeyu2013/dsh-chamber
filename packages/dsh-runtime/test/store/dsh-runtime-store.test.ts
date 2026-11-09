@@ -405,6 +405,73 @@ test('stale-install cleanup preserves live PID/PGID evidence and fails closed', 
   assert.equal(existsSync(work), true);
 });
 
+test('stale-install cleanup reclaims a recycled pid whose identity does not match', () => {
+  const base = freshBase();
+  const work = path.join(base, 'dsh-runtime', '.work-recycled');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(path.join(work, 'pid'), JSON.stringify({ v: 1, pid: 424242, bootId: 'boot-a', startTicks: 777 }));
+  const removed = cleanupStaleInstalls(base, {
+    bootId: () => 'boot-a',
+    startTicks: () => 888,
+    // The pid is alive because an UNRELATED process reuses the number; the group is not ours.
+    alive: (pid, group) => group !== true && pid === 424242,
+  });
+  assert.deepEqual(removed, ['.work-recycled'], 'the pid was reused by another process, so the install is stale');
+  assert.equal(existsSync(work), false);
+});
+
+test('stale-install cleanup reclaims evidence recorded on another boot', () => {
+  const base = freshBase();
+  const work = path.join(base, 'dsh-runtime', '.work-prev-boot');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(path.join(work, 'pid'), JSON.stringify({ v: 1, pid: 424243, bootId: 'boot-old', startTicks: 777 }));
+  const removed = cleanupStaleInstalls(base, {
+    bootId: () => 'boot-new',
+    startTicks: () => 777,
+    alive: () => true,
+  });
+  assert.deepEqual(removed, ['.work-prev-boot']);
+});
+
+test('stale-install cleanup keeps a live writer whose identity still matches', () => {
+  const base = freshBase();
+  const work = path.join(base, 'dsh-runtime', '.work-identity-match');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(path.join(work, 'pid'), JSON.stringify({ v: 1, pid: 424244, bootId: 'boot-a', startTicks: 777 }));
+  const deps = {
+    bootId: () => 'boot-a',
+    startTicks: () => 777,
+    alive: () => true,
+  };
+  assert.throws(() => cleanupStaleInstalls(base, deps), /活动写进程/);
+  assert.equal(existsSync(work), true);
+});
+
+test('stale-install cleanup keeps evidence when a recycled pid still has a live process group', () => {
+  const base = freshBase();
+  const work = path.join(base, 'dsh-runtime', '.work-live-group');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(path.join(work, 'pid'), JSON.stringify({ v: 1, pid: 424245, bootId: 'boot-a', startTicks: 777 }));
+  const deps = {
+    bootId: () => 'boot-a',
+    startTicks: () => 888,
+    alive: (_pid: number, group?: boolean) => group === true,
+  };
+  // The recorded process is gone (start ticks differ) but a leftover descendant owns
+  // the group: never delete evidence under a live group.
+  assert.throws(() => cleanupStaleInstalls(base, deps), /活动写进程/);
+  assert.equal(existsSync(work), true);
+});
+
+test('stale-install cleanup treats unknown evidence versions as corrupt', () => {
+  const base = freshBase();
+  const work = path.join(base, 'dsh-runtime', '.work-bad-version');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(path.join(work, 'pid'), JSON.stringify({ v: 2, pid: 424246 }));
+  assert.throws(() => cleanupStaleInstalls(base), /PID\/PGID.*损坏/);
+  assert.equal(existsSync(work), true);
+});
+
 test('stale-install cleanup only removes a proven empty pre-spawn work dir', () => {
   const emptyBase = freshBase();
   const emptyWork = path.join(emptyBase, 'dsh-runtime', '.work-empty');

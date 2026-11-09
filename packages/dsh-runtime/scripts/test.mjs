@@ -60,6 +60,7 @@ const GROUPS = {
     'test/store/version-safety.test.ts',
     'test/store/sanitize-error.test.ts',
     'test/store/private-fs-nofollow.test.ts',
+    'test/store/process-identity.test.ts',
   ],
   // activation: 激活裁决、应用事务（apply-phase / apply-now）、状态迁移与宿主探针
   activation: [

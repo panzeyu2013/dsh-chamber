@@ -22,6 +22,13 @@ import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { EXACT_SEMVER, assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
+import {
+  isPidEvidenceStale,
+  parsePidEvidence,
+  readBootId,
+  readProcessStartTicks,
+  type PidEvidence,
+} from './process-identity.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import {
   CRITICAL_FILE_DIGEST_PATTERN,
@@ -1443,7 +1450,14 @@ function readWorkStateMarker(workDir: string): 'preparing' | 'spawning' | 'spawn
   }
 }
 
-export function cleanupStaleInstalls(baseDir: string): string[] {
+/** Injectable kernel probes for tests; production uses the process-identity defaults. */
+export interface StaleInstallCleanupDeps {
+  readonly bootId?: () => string | null
+  readonly startTicks?: (pid: number) => number | null
+  readonly alive?: (pid: number, group?: boolean) => boolean
+}
+
+export function cleanupStaleInstalls(baseDir: string, deps: StaleInstallCleanupDeps = {}): string[] {
   ensureRuntimeRootNoFollow(baseDir)
   let entries
   try {
@@ -1459,17 +1473,19 @@ export function cleanupStaleInstalls(baseDir: string): string[] {
     const pidPath = join(workDir, 'pid')
     let pid: number | null = null
     let pidEvidence: 'missing' | 'corrupt' | 'valid' = 'missing'
+    let evidence: PidEvidence | null = null
     try {
       const info = lstatSync(pidPath)
-      if (info.isSymbolicLink() || !info.isFile() || info.size > 64) {
+      // Identity evidence (JSON) is larger than a bare pid; the cap still rejects junk loudly.
+      if (info.isSymbolicLink() || !info.isFile() || info.size > 256) {
         pidEvidence = 'corrupt'
       } else {
-        const parsed = Number(readFileSync(pidPath, 'utf8').trim())
-        if (Number.isSafeInteger(parsed) && parsed > 0) {
-          pid = parsed
-          pidEvidence = 'valid'
-        } else {
+        evidence = parsePidEvidence(readFileSync(pidPath, 'utf8'))
+        if (evidence === null) {
           pidEvidence = 'corrupt'
+        } else {
+          pid = evidence.pid
+          pidEvidence = 'valid'
         }
       }
     } catch (error) {
@@ -1496,10 +1512,16 @@ export function cleanupStaleInstalls(baseDir: string): string[] {
       }
       throw new Error(`运行时安装现场的 PID/PGID 证据${pidEvidence === 'missing' ? '缺失' : '损坏'}（${entry.name}）；拒绝清理并阻止启动`)
     }
-    if (pid !== null && (isPidAlive(pid, true) || isPidAlive(pid))) {
+    const probe = {
+      bootId: deps.bootId ?? readBootId,
+      startTicks: deps.startTicks ?? readProcessStartTicks,
+      alive: deps.alive ?? isPidAlive,
+    }
+    if (evidence !== null && !isPidEvidenceStale(evidence, probe)) {
       // A hard-crashed installer may leave a lifecycle descendant after the group leader exits:
-      // never delete evidence while the PID or PGID is live.
-      throw new Error(`运行时安装现场仍有活动写进程（pid/pgid ${pid}）；拒绝清理并阻止启动`)
+      // never delete evidence while the PID or PGID is live. A RECYCLED pid (identity mismatch)
+      // is stale evidence, not a live writer — without that distinction startup blocks forever.
+      throw new Error(`运行时安装现场仍有活动写进程（pid/pgid ${evidence.pid}）；拒绝清理并阻止启动`)
     }
     rmSync(workDir, { recursive: true, force: true })
     removed.push(entry.name)
