@@ -15,7 +15,7 @@
 
 - [ ] 范围裁决已落文档：冻结面（Electron / Windows / Linux）本版不发布；Swift 腿 + 共享契约是唯一出货面（[AGENTS.md](../../../AGENTS.md)「当前版本范围」、[electron-frozen.md](../../progress/electron-frozen.md)）。
 - [ ] 发布提交 = `main` 上已通过 CI 的精确提交（`verification` 侧的 release CI proof 由 workflow 在本提交上自动校验，本地不重复实现）；工作区干净、无未提交迁移残留（`git status` 人工核对；`release-preflight` 的 git 干净项是机械检查）。
-- [ ] 本版阻断项已清零：[STATUS.md](../../progress/STATUS.md) 的开放发布阻断项逐条关闭或经裁决降级并登记；功能/契约开放项不随发布打包（只按 STATUS 记录的判据放行）。
+- [ ] 本版阻断项已清零：本清单与 [packaging-closure-checklist.md](./packaging-closure-checklist.md) 的 ❌ 项逐条关闭或经裁决降级并登记（发布阻断只在本清单登记）；功能/契约开放项不随发布打包。
 - [ ] 凭据齐备：macOS 发布需 Apple Developer ID 签名 + 公证凭据（`release.yml` 在**任何** Release 变更前 fail-closed 校验）；Sparkle appcast 签名私钥 / 公钥按 design 25 §7 准备。
 - [ ] 发布类型确定：stable（`X.Y.Z`）或 beta（`X.Y.Z-beta.N`）；beta 是 GitHub prerelease、更新走滚动 beta 通道（design 25 §7 / [merge-native-feed.mjs](../../../scripts/release/feed/merge-native-feed.mjs)）。
 - [ ] ARCHIVED（本版不执行）：Electron dmg/zip 打包与更新 feed、Windows（NSIS）与 Linux（AppImage）发布腿——对应 workflow job 恒 skipped，见 §7 与 [electron-frozen.md](../../progress/electron-frozen.md)。
@@ -58,7 +58,7 @@
 - [ ] 产物名义校验：`node scripts/release/preflight/release-artifacts.mjs <版本> --check-dir macos/release`（native 产物命名/清单；Electron 名族为 ARCHIVED 复活基线）。
 - [ ] 编译 sidecar 冒烟：`pnpm run test:sidecar:compiled`（`compiled-sidecar-smoke.mjs`，需已构建 sidecar）。
 - [ ] 原生装配门：`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`；真机/打包态 GUI 走查按 [gui-acceptance-checklist.md](../acceptance/gui-acceptance-checklist.md) §4.2 执行并留证据。
-- [ ] 打包态真机验收（发布阻断项，按 [STATUS.md](../../progress/STATUS.md) 登记）：无系统 node/python 的机器上 Office 能力（`load_workspace_dependencies` + docx 编辑/渲染/PDF 导出）与 primary-runtime 首装；不得以 dev 状态代替打包态。
+- [ ] 打包态真机验收（发布阻断项，本清单登记）：无系统 node/python 的机器上 Office 能力（`load_workspace_dependencies` + docx 编辑/渲染/PDF 导出）与 primary-runtime 首装；不得以 dev 状态代替打包态。
 - [ ] 更新链（ARCHIVED 部分不执行）：Sparkle stable/beta 通道、appcast 双 feed、beta 滚动 feed 的形状与签名按 [design 25](../../design/desktop/25-macos-swift-native-shell.md) §7 与 §6 验证；Electron electron-updater feed 为 ARCHIVED（[electron-frozen.md](../../progress/electron-frozen.md)）。
 
 ## 5. 签名、公证与 appcast（正式发布 fail-closed）
@@ -73,7 +73,7 @@
 - [ ] 先 `workflow_dispatch` **dry-run** 跑通 `release.yml`：dry-run 不创建/修改 Release、不上传资产、清空签名/公证环境与 `GH_TOKEN`（`--publish=never`）；重点验证本版新增/修改的 workflow、脚本路径与 action SHA 已在真实 CI 上生效。
 - [ ] 正式 tag push 后：`create-release`（draft）→ 各构建腿上传 → `finalize-release` 转公开；beta 版本 `prerelease=true, make_latest=false`，stable 反之。
 - [ ] 产物清单可审计：`node scripts/release/preflight/release-artifacts.mjs <版本> --check-dir <发布腿输出目录>` 与 draft 资产逐条对照；appcast 引用的每个 zip 可下载（enclosure 可解析）。
-- [ ] 更新链实机：stable 客户端收 stable final；beta 客户端收 beta.N+1 与 final（滚动 feed 行为见 `merge-native-feed.mjs` 与 design 25 §7）；[STATUS.md](../../progress/STATUS.md) 的更新链开放项判据逐条对照。
+- [ ] 更新链实机：stable 客户端收 stable final；beta 客户端收 beta.N+1 与 final（滚动 feed 行为见 `merge-native-feed.mjs` 与 design 25 §7）。
 - [ ] 下载/安装/启动/深链/通知/退出等安装态行为按 [gui-acceptance-checklist.md](../acceptance/gui-acceptance-checklist.md) §4.2 复验（安装态而非 dev）。
 
 ## 7. 提交、tag 与推送（顺序固定）
@@ -87,5 +87,5 @@
 
 - [ ] draft → public 后核对 Release 资产与 `CHANGELOG.md` 段落一致、正文非空（`release.yml` 缺段即红）。
 - [ ] 失败处置：任何红都 fail-closed（不发半成品）；已转公开的 Release 不可变，修正需新版本；stale draft 只能整体重建（`release.yml` 的「Refuse published release and replace stale drafts」语义）。
-- [ ] 回滚 = 发布一个修复版本（tag 不可移动）；紧急下架只改 Release 状态/资产，不删 tag，并在 STATUS 记录。
-- [ ] 记录纪律：发布叙述只进 `CHANGELOG.md` 发布节；仍 open 的发布阻断项进 [STATUS.md](../../progress/STATUS.md)；本清单只留流程，不写版本值、不写门禁计数。
+- [ ] 回滚 = 发布一个修复版本（tag 不可移动）；紧急下架只改 Release 状态/资产，不删 tag，并在 `CHANGELOG.md` 发布节记录。
+- [ ] 记录纪律：发布叙述只进 `CHANGELOG.md` 发布节；仍 open 的发布阻断项留在本清单（❌），已落地判据归 design；本清单只留流程，不写版本值、不写门禁计数。

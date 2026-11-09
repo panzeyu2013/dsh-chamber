@@ -1,6 +1,6 @@
 # 02 · 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态
 
-> **范围横幅（2026-11 用户裁决；窄横幅，不整篇归档）**：Electron flavor 已冻结归档（见 [`../progress/electron-frozen.md`](../../progress/electron-frozen.md)）。本文中 **Electron/Chromium 专属段**（spawn-dsh 的 Electron 分支、运行期指纹、safeStorage、electron-updater 等）随 flavor 归档；**control-plane 宿主生命周期契约（spawn / 就绪 / 健康 / reaper / 日志 / host 包 seed）仍现行**，Swift sidecar 继续按本文执行。**本地实例托管与部署形态**——控制面以 dsh 内置 web profile拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →孤儿回收）；未完成门禁见 `docs/progress/STATUS.md`。
+> **范围横幅（2026-11 用户裁决；窄横幅，不整篇归档）**：Electron flavor 已冻结归档（见 [`../progress/electron-frozen.md`](../../progress/electron-frozen.md)）。本文中 **Electron/Chromium 专属段**（spawn-dsh 的 Electron 分支、运行期指纹、safeStorage、electron-updater 等）随 flavor 归档；**control-plane 宿主生命周期契约（spawn / 就绪 / 健康 / reaper / 日志 / host 包 seed）仍现行**，Swift sidecar 继续按本文执行。**本地实例托管与部署形态**——控制面以 dsh 内置 web profile拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →孤儿回收）；开放状态见 `docs/progress/STATUS.md`。
 > - **profile 形态**：`dsh --profile web --host 127.0.0.1
 >   --port <port> --trusted-host 127.0.0.1:<port>`——不生成/维护自建 profile 目录、业务 patch  stack 或 glue 插件；端口固定（非随机），占用时按 port+1 有界退让。唯一例外是设计 08/09/20/24  的**宿主包 loader overlay**（见 §2.6），不接管宿主组装权威。
 > - **契约范围**：spawn 生命周期、端口占用重试、pid 记录、instance-id 仲裁、readiness、健康七态状态机、

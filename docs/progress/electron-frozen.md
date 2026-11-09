@@ -136,7 +136,7 @@ manifest 已收录；空表输出逐字不变）。**首个白名单条目**会�
    `packages/desktop/electron/` 路径）；git 操作需用户明确要求。**不删除历史文档**。
    冻结落地后应打一个 tag（如 `electron-frozen-<日期>`）指向冻结前的最后一个提交；若尚未打，
    取本批变更的父提交。
-3. **对齐 Electron pin**：当前 pin 见 `packages/desktop/package.json` 的 `electron` devDependency；若该 pin 不在 node-addon-require-builtin 的指纹表内（表以该包源码为准；design 02 §3.1、STATUS §三），宿主会
+3. **对齐 Electron pin**：当前 pin 见 `packages/desktop/package.json` 的 `electron` devDependency；若该 pin 不在 node-addon-require-builtin 的指纹表内（表以该包源码为准；design 02 §3.1），宿主会
    `exit 1`。复活时 pin 对齐表内最新稳定版本，同批同步：
    `packages/desktop/package.json` 的 `electron` devDependency、`scripts/build-sidecar.mjs` 的
    `ELECTRON_NODE_PINS` + `DEFAULT_NODE_VERSION` + `PINNED_NODE_SHA256`、`pnpm-lock.yaml`

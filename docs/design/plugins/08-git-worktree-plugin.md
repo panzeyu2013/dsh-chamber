@@ -1,6 +1,6 @@
 # 08 · Git Worktree 独立插件（seed rail + 官方 forge 同池）
 
-> **目标模型**：工作树是**仓库内的 Git checkout**，不是 dsh workspace。每个 checkout 落在 `<repo>/.agents/worktrees/<name>`（主 checkout 之内、自忽略），会话仍以源主 checkout 为根，创建后经 `gitWorktree/enter` 把 `workingDirectory` 切进 checkout。chamber seed 提供仓库级管理 rail（snapshot/create/enter/remove）；官方 `@deepseek-ai/dsh-experimental-forge-bundle`（opt-in）提供 agent 的 `create_worktree` 工具与 composer/restore UI，两套创建引擎共用同一个池与同一套行/放置。旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**（§7.4）。开放门禁见 [STATUS](../../progress/STATUS.md)。
+> **目标模型**：工作树是**仓库内的 Git checkout**，不是 dsh workspace。每个 checkout 落在 `<repo>/.agents/worktrees/<name>`（主 checkout 之内、自忽略），会话仍以源主 checkout 为根，创建后经 `gitWorktree/enter` 把 `workingDirectory` 切进 checkout。chamber seed 提供仓库级管理 rail（snapshot/create/enter/remove）；官方 `@deepseek-ai/dsh-experimental-forge-bundle`（opt-in）提供 agent 的 `create_worktree` 工具与 composer/restore UI，两套创建引擎共用同一个池与同一套行/放置。旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**（§7.4）。开放状态见 [STATUS](../../progress/STATUS.md)。
 
 ## 1. 边界与部署形态
 **原则：Git 只是会话工作区的实例内扩展，不是控制面或 Desktop 的新执行面。**
@@ -265,7 +265,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - **回滚**：P5b 关闭 bundle + 重启；删除不删用户数据；Swift 保留，无 sidecar 回退项。
 
 ### 7.5 验收矩阵（V1–V21）
-合并/PR 门 = V1/V2/V3/V4/V5/V6/V16 的 dev Swift 子集 + PR CI + build:renderer；其余是发布门（尤其 V8–V15、V17–V21）。未跑项按 STATUS 开账，不能用“代码已合”代替。
+合并/PR 门 = V1/V2/V3/V4/V5/V6/V16 的 dev Swift 子集 + PR CI + build:renderer；其余是发布门（尤其 V8–V15、V17–V21）。未跑项按 release 清单开账，不能用“代码已合”代替。
 
 | ID | 场景 | 判据 | 门 |
 |---|---|---|---|

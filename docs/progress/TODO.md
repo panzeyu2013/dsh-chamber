@@ -1,7 +1,7 @@
 # TODO · 未排期计划与想法
 
 > 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；进度、验收门与取舍在 [STATUS.md](./STATUS.md)，
-> [deviations.md](./deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`。
+> [deviations.md](./deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`；验收 / 发布 / 实机 / 门禁程序归 `docs/checklists/`，本文件不登记。
 >
 > **版本范围与冻结清单**：唯一出货 flavor = macOS Swift 原生壳；Electron/Windows/Linux 桌面腿冻结、不发布（本文件相关计划一律标「冻结，不排期」，只在复活时执行）。范围、共享契约、禁用面与复活清单见 [electron-frozen.md](./electron-frozen.md) §1/§6 与根 [`AGENTS.md`](../../AGENTS.md)。
 > 四部分：A 上游（A 类）、B 平台（B 类）、C 功能（C 类）、D 工程（D 类）。文中 `§N` 指本部分内编号；
@@ -39,7 +39,7 @@
 |§11|座席声明可转移|上游声明可委托/页面级座席|
 |§12|workspace 删除 order/remove 原子化|上游原子化 order/remove|
 |§13|插件管理页可嵌入|上游提供 surface=embedded|
-|§14|漂移剩余、待退役块、工程债|打包态/下一 pin|
+|§14|漂移剩余、待退役块、工程债|下一 pin|
 |§15|UI 对齐候选与维持差异|UI 裁决触发时|
 |§16|pin 升级管线自动化|下次 pin 升级|
 
@@ -150,11 +150,6 @@
 
 ### 14. 漂移收口：剩余项、待退役块与工程环境债
 
-#### 14.1 I-15 实机验收归并
-
-六组矩阵执行序见 `docs/checklists/acceptance/gui-acceptance-checklist.md` §4.1（P6、归档两段式+恢复、通知四缺口、运行位 60/190/310s、I-14
-selection scope、I-12 谱系压制）；剩余 = 打包态/真机各跑一次并留记录。判据/关闭见 STATUS §1.1。
-
 #### 14.2 待退役块（上游 wire 落地前不得删）
 
 |块|规模|退役触发|
@@ -168,7 +163,7 @@ selection scope、I-12 谱系压制）；剩余 = 打包态/真机各跑一次�
 #### 14.3 工程环境债
 
 - 下一 pin 落地「真 `WorkspaceRegistry` + 真 binding」lockstep（当前 ad-hoc 形态；CI 走 node_modules 解析）；复核 vendor 补丁 retire 与 `RETIRED_PATCHES`（2 条退役：ReasoningRow sweep、util-values 比较）。
-- `node-addon-require-builtin` 指纹表未收录当前 Electron pin ⇒ Electron flavor 托管宿主起不来（Electron 已冻结归档，复活按 `electron-frozen.md` §6.3）；开放事实见 STATUS §三「Electron 运行时指纹」。
+- `node-addon-require-builtin` 指纹表未收录当前 Electron pin ⇒ Electron flavor 托管宿主起不来（Electron 已冻结归档，复活按 `electron-frozen.md` §6.3）。
 
 #### 14.4 升级期检查两条闭口（待 vendor 物化）
 
@@ -227,7 +222,7 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
   覆盖「先发布空轴、后注册」与「壳拆除窗口收下再 re-arm」两个窗口。
 - 六个小图标命中盒无几何锁；`RowHoverCard.onClickCapture` 无源码锁；marquee 两条分支未覆盖；`row-render-cost`
   的 13 faces 等号与 key==deps 对账是有意收紧。
-- C15 `TIMING_PAIRS` 只锁原子默认，两处 `openDelayMs={800}` 是生效值却无锁；design 06 两条上游锚待符号化。
+- design 06 两条上游锚待符号化。
 - `ServerSection.tsx` 两处 IIFE/12 空格缩进可无损改写但动行号与源码锁；投影查询四份可收敛 `findProjected`；
   `createdAt` 门只判 undefined（不可达，第二写入点需加 finite）。
 
@@ -241,30 +236,22 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 
 > 不阻断合并，不弱化现有门禁；自动写锚只打印 diff。
 
-- **16.1 update-vendor 首跑失败**：只切 submodule/`harness.commit`、不写 index gitlink，差量建链对拍失败；catch 指引与 checklist 相反。修 = step 5 专用豁免 `DSH_CHAMBER_VENDOR_SKIP_GITLINK=1` + 文案改 `git add` 重跑。
-- **16.2 bundle:dsh ZFS EAGAIN**：`ERR_PNPM_EAGAIN` 失败、二次成功；修 = `bundle-dsh.mjs` 一次有界重试（staging 可弃、安装幂等）；hardlink 未实测，不推荐。
-- **16.3 机械面单批管线**：16.1/16.2 + 由 tag 推导六锚/3 fork 字面量（打印 diff）+ `registry-views --write` / `verify:i18n --write` + 收尾 `verify-upstream-touchpoints`；不自动提交/改判据。
-- **16.4 restore-lockfile 只增不减**：HEAD 版 vendor importer 与 `packages`/`snapshots` 条目会被并集补回；但当前 `package.json` 新增 specifier 边丢失时仍无修复（frozen 失败、无自动补边）。修 =「旧记录 ∪ 当前 package.json 新边」并集（多复活边会被 frozen 判红，fail-closed）。
+- **16.3 机械面单批管线**：由 tag 推导六锚/3 fork 字面量（打印 diff）+ `registry-views --write` / `verify:i18n --write` + 收尾 `verify-upstream-touchpoints`；不自动提交/改判据。
 
-## B. 平台与外部门禁（B 类）
+## B. 平台、契约索引与冻结基线（B 类）
 
-> 阻塞来源 = 真机 / runner / 凭据 / 产物；每条的现行验证面 = macOS Swift 腿（Windows 仅在复活后适用）。契约见 design 25、design 23（ARCHIVED）。
+> 阻塞来源 = 平台 / 发布面；本部分只留 macOS Swift 腿的决策索引、WBS 契约落点与冻结基线，**验收 / 实机 / 发布门禁不在此登记**（程序见 `docs/checklists/release/` 与 `docs/checklists/acceptance/`）。契约见 design 25、design 23（ARCHIVED）。
 >
 > **范围**：只有 macOS Swift 腿继续排期；Windows v1 与 Electron 腿冻结归档（见 [electron-frozen.md](./electron-frozen.md)），B§2 仅在复活时执行。
 
 ### 1. macOS Swift 原生壳 v1
 
-> 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/desktop/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与未闭合外部门的指针；
+> 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/desktop/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与契约落点；
 > 决策 D1–D7、双线防漂移门禁的明细按收口删除（原文存 git 历史）；W1–W7 判定已迁入 design 25 §8.5；A1–A8 中止点、性能/产物体积 A/B 协议与 dev 约定的明细同样按收口删除（原文存 git 历史），
-> 现行判据 = design 25 §8–§10、`docs/checklists/acceptance/gui-acceptance-checklist.md` §4.2 与 `scripts/perf/README.md`；开放状态归 STATUS。
+> 契约落点 = design 25 §3–§10；开放状态归 STATUS。
 
 #### 1.1 决策结果索引（D1–D7）
 D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blocked-available→Sparkle、`macos/` SwiftPM、原生 UI 渐进不做、Node 版本与架构、静态凭据 0600 明文）见 design 25 §10（正式签核仍开放）。
-
-#### 1.2 外部门禁
-- M5 实机门禁 W-28…W-32（含 W1–W7 判定矩阵）：状态/范围见 STATUS §三「macOS Swift 壳 M5 实机矩阵未闭合」行，矩阵 design 25 §8.5。
-- 双端 harness 未实施（需 GUI 会话，design 25 §8.3/§8.6）；Apple 凭据（Developer ID/公证/stapler）缺失时 dry-run 全链绿可推进，不得声称「完成」（design 25 §7）；其余实机项（通知权限时序、SMAppService 登录项、LaunchServices 深链、唤醒恢复、SSE/WS 心跳、ATS、通知音效差异）在 STATUS 未完成项。
-- **（Electron 冻结归档，2026-11）**Electron 不再出包，「同 tag 双端发布回滚」语义只作复活参考；当前发布面 = Swift 腿（见 [electron-frozen.md](./electron-frozen.md) §4/§6）。
 
 #### 1.3 WBS 任务号索引（W-01…W-32 → 契约落点）
 |任务|内容|契约落点|
@@ -394,7 +381,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 - **S1 远程 provider 家族**：主进程 open-in 注册表（`packages/desktop/open-in.ts`）当前只有 vscode；待加 Insiders/Cursor/Windsurf/JetBrains Gateway/`ssh://` 终端——只构造 URL 交 OS、不启动进程；每项需实机 scheme 语义验证。实例侧本地目录（`packages/dsh-chamber-seed-open-in` 的 catalog）已覆盖这些应用，但与主进程远程注册表不是同一面。
 - **S2 远程文件级打开**：远程来源允许文件路径（纯 URL 构造，不经 host 包）；本地仍目录限定。
-- **S3 复制路径（残余）**：工作区悬停卡复制 `workspace.path`（`ServerSection.tsx` 的 `copyText`）；会话行仍只复制标题（`ServerSectionRows.tsx`），待补 `cwd` 复制或裁决只保留工作区。零新 IPC/依赖；「复制 `ssh user@host`/复制 VS Code 深链」不做（结论见 STATUS §1.4「open-in/Git/深链/只读镜像」）。
+- **S3 复制路径（残余）**：工作区悬停卡复制 `workspace.path`（`ServerSection.tsx` 的 `copyText`）；会话行仍只复制标题（`ServerSectionRows.tsx`），待补 `cwd` 复制或裁决只保留工作区。零新 IPC/依赖；「复制 `ssh user@host`/复制 VS Code 深链」不做（结论见 design 20 §7.3）。
 - **S4 多入口**：不做（理由登记 STATUS）：header 按钮与目标会话同排相邻，侧栏入口边际价值有限；会话行动作在行菜单（置顶/重命名/分叉/归档）+ 行内悬停归档钮与置顶钮（`packages/dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx`），新增入口要么重复要么推翻它——不要把「会话行刻意没有 kebab」当理由（会话行有 kebab；刻意无 kebab 的是 worktree 派生的 workspace 行）。快捷键缺基建（vendor 无 keybinding 注册表，只有聊天输入框 keymap），自建 document 级监听还要处理「哪个 entry 是活跃视图」与 chord 冲突。边界（不做，design 20 §7.3 唯一权威）：远端宿主侧打开、扩本地执行面、主进程自行枚举本机应用。
 
 ## D. 工程债（D 类）
@@ -435,8 +422,6 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 #### 1.5 审计开放项（未排期）
 
-- **renderer reconnect 记账**：`App.tsx` 的 `retireSources` 仍缺 `sessionListRefreshAt/Pending`、
-  `authoritativeArchiveSet`（同 id 换代泄漏）。收口 = 单一 `reconnectSource(id)` + 生命周期参与者注册表。
 - **session-state 语义单源（A-1/A-2/A-3）**：协议常量、wire 类型、descriptor 解析、capability 分类与 turn-end 分类单源在 `packages/dsh-chamber-wire/src/session-state.ts`；mux 路径、`$events` 端点、follow 载荷、goal 投影白名单与 `goal/activation-changed` 归一化单源在 `packages/dsh-chamber-wire/src/mux-frame.ts`；`isPlainRecord`/`isRecord`/`isWatermark` 单源在 `packages/dsh-chamber-wire/src/json-guards.ts`（浏览器经 client-core 的 `./session-state`、`./mux-frame`、`./json-guards` 具名面）。**刻意的残余差异（不得「顺手统一」）**：①外层 frame 容器解析仍分两处（`parseMuxServerFrame` ⇄ `parseMuxFrame`，容器与返回形状不同，只共享内层语义）；②status args 的对象形仍只有 renderer 接受；③`packages/desktop/store-file-hygiene.ts` 的同名守卫是**宽松**变体（任意非数组对象），已在文件内注明；④fork `dsh-api-gateway/src/stream-protocol.ts` 按 pin 重放纪律保留；源码文本锁步测试只保留 fork 侧与瀑布字面量两类。
 - **插件三链路流水线**：local/ssh/gateway 各自 validate→confirm→remove/add→restart→verify；desktop
   `plugin-sync.ts` 与客户端行投影（settings-connections 的 `plugin-model.ts`/`save-host.ts`）仍两套。
@@ -468,9 +453,9 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 - **B7 收口**：删除 `scripts/refactor/stream-state-metrics.mjs`、`stream-state-baseline.json` 与其 `metrics-tool.test.ts`，并移除 design 14 §D4 ⑤ 的 `--check` 引用。
 - 两条均为未排期；触发 = 对应收口裁决落地。
 
-### 2. 产物新鲜度守卫（G2/G3/G5/G7/G8；未排期）
+### 2. 产物新鲜度守卫（G3/G5/G7；未排期）
 
-> 现有守卫：`desktop/dist/control-plane/**`、`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。本节只留仍无守卫的产物与最小守卫建议；开放状态见 STATUS §1.5「发布/CI」的产物新鲜度项，design 21 §7 登记。
+> 现有守卫：`desktop/dist/control-plane/**`、`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。G2/G8 的唯一登记 = `scripts/gates/checks/artifact-freshness-registry.mjs`（`verify-artifact-freshness` 默认档校验，并与门自身观测的 freshness id 双向锁步；新增比较或新产物不同批登记即红）。本节只留仍无守卫的产物（§2.1，均已登记为带理由的 `exemption`）与剩余最小守卫建议（G3/G5/G7）；开放状态见 design 21 §7 与 STATUS §1.6。
 
 #### 2.1 仍无守卫的产物
 
@@ -483,14 +468,11 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 `dist/` 整族在 `.gitignore`：干净 checkout 的「缺失」是正常态——首批 host/dsh-runtime 产物须先由
 `pnpm run build:artifacts` 自举，其余按需构建；要防的是本地/打包态的「存在但陈旧」——CI 每次全新构建，
 看不到这一类。上表 `scripts/*` 指 `packages/desktop/scripts/*`（Electron 构建脚本；gateway 侧
-`packages/gateway/scripts/*`），非仓库根 `scripts/`。
+`packages/gateway/scripts/*`），非仓库根 `scripts/`。上表三类均已在 G2/G8 登记表登记为 `exemption` 并附理由；
+`verify-artifact-freshness` 对「门观测到但未登记」「登记了但门没观测」两个方向都判红。
 
 #### 2.2 最小守卫建议
 
-- **P0 G2 产物新鲜度登记表**：产物 ↔ 生成者 ↔ 守卫或豁免一张表，门禁断言每个产物都有守卫或显式豁免（§2.1 全部）。
-  成本低–中（表 + 纯函数）；收益：杜绝静默。
-- **P0 G8 豁免表**：不需要守卫的产物显式记理由（§2.1 全部）。成本低；收益：防止 G2 表被「全部豁免」掏空——
-  豁免也要有人签。
 - **P1 G3 `.build-manifest.json` 输入摘要**：构建时写 `{inputsHash, toolVersion, outputs[]}`，测试比对；
   比标记串强——无文案产物（web/host-package）也能判。适用全部忽略态产物。成本中（每构建脚本一处 + 比对函数）。
 - **P1 G5 `before-pack` 打包前兜底**：当前 `packages/desktop/scripts/before-pack.mjs` 只 materialize dsh-runtime

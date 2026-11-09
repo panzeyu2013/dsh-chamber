@@ -1,6 +1,6 @@
 # 18 增补 · dsh 运行时版本「立即应用」（Apply Now）
 
-> **apply-now 立即应用；desktop 本地实例与 gateway 托管 dsh**——本文是 `docs/design/runtime/18-dsh-runtime-version.md` §3.3（应用时机 = 下次启动的异步相位）的受控扩展契约：在保留「仅下次启动」路径的同时，新增用户可随时触发的「立即应用」动作，在当前会话内执行既有激活事务（停机 → 快照 → 切指针 → spawn 新树 → 探针门控 → 裁决/回退），不等待下次启动；未完成门禁见 `docs/progress/STATUS.md`。
+> **apply-now 立即应用；desktop 本地实例与 gateway 托管 dsh**——本文是 `docs/design/runtime/18-dsh-runtime-version.md` §3.3（应用时机 = 下次启动的异步相位）的受控扩展契约：在保留「仅下次启动」路径的同时，新增用户可随时触发的「立即应用」动作，在当前会话内执行既有激活事务（停机 → 快照 → 切指针 → spawn 新树 → 探针门控 → 裁决/回退），不等待下次启动；开放状态见 `docs/progress/STATUS.md`。
 
 ## 0. 决策与约束（现行契约）
 

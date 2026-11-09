@@ -1,6 +1,6 @@
 # 24 · 已归档会话内容清理（server 行 hover 动作 · chamber 宿主域）
 
-> **范围**：本文是 dsh-chamber「删除已归档会话内容」chamber 宿主域（wire `archiveCleanup/{probe,purge}`）、归档管理器交互与 purge 后会话列表收敛的权威契约；开放门禁见 [STATUS](../../progress/STATUS.md)，上游 delete wire 草案见 [TODO](../../progress/TODO.md) A§3。控制面/主进程特权层直删方案继续冻结（§2 边界 5）。
+> **范围**：本文是 dsh-chamber「删除已归档会话内容」chamber 宿主域（wire `archiveCleanup/{probe,purge}`）、归档管理器交互与 purge 后会话列表收敛的权威契约；开放状态见 [STATUS](../../progress/STATUS.md)，上游 delete wire 草案见 [TODO](../../progress/TODO.md) A§3。控制面/主进程特权层直删方案继续冻结（§2 边界 5）。
 >
 > **交互与执行面**：锚点 = chamber 侧边栏**服务器分组头行（server 行）hover 操作簇**；执行层 = **chamber 宿主域插件**（实例进程内、按宿主权威状态执行删除）；对 local / gateway-managed / 远程 dsh 全部来源形态统一生效。移动端（gateway 移动入口，无 hover 表面）与侧边栏 rail/窄栏形态**不在 v1 范围**（§6）；触屏入口另行设计。
 
