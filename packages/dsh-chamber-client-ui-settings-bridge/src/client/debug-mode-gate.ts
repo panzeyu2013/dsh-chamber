@@ -1,7 +1,8 @@
 /**
- * 「调试模式」行的呈现决策（纯函数，零 React）：可见性、禁用门与状态行分类都从这里出，
- * 组件只做「分类 → 文案 + className」的映射。抽出来的理由与 update-gate.ts /
- * blocked-reason.ts 同款——真值表可以真测，源码断言只留结构锚（不 pin 变量名）。
+ * 调试模式的呈现决策（纯函数，零 React）：「调试模式」行的可见性/禁用门/状态行分类，
+ * 以及调试专用区块（设置页末尾的「性能与内存」只读组）的挂载门都从这里出，组件只做
+ * 「分类 → 文案 + className」的映射。抽出来的理由与 update-gate.ts / blocked-reason.ts
+ * 同款——真值表可以真测，源码断言只留结构锚（不 pin 变量名）。
  */
 
 /** 宿主实测回读的形状子集（settings 投影的 `debugRuntime`）。 */
@@ -81,4 +82,16 @@ export function debugToggleDisabled(input: {
  *  可能无效的开关。与 `badgeSupported` 的「缺失 = 支持」是非对称的，且这是有意的。 */
 export function debugSupported(supported: { debugInspectable?: boolean } | undefined): boolean {
   return supported?.debugInspectable === true
+}
+
+/** 「调试专用」区块（设置 → 通用「性能与内存」只读组）的挂载门：**只有设置已水合且
+ *  调试模式开关打开**才渲染。返回的是「挂不挂组件」而不是「怎么隐藏」——面板的
+ *  residentBridge 订阅、DOM 节点数采集与 1s 显示时钟都随挂载存在，关闭调试模式即卸载，
+ *  这组测量成本才真正归零。
+ *
+ *  未水合（开关状态未知）不先渲染一帧再撤；宿主回读 `inspectable` 也**不作开启依据**：
+ *  「设置说关但宿主还开着」这类撤销未确认的事实归调试模式事实卡呈现，不把诊断面板
+ *  留在页面上。壳不支持调试模式时开关恒不可用（enabled 恒 false），面板自然缺席。 */
+export function debugOnlySectionsVisible(input: { hydrated: boolean; enabled: boolean }): boolean {
+  return input.hydrated && input.enabled
 }

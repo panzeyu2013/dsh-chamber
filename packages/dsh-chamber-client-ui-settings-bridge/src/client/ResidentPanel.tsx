@@ -6,6 +6,10 @@
  * 近似）。固定声明「每壳字节内存不可得（单 renderer 架构）」——N 个壳共用一个
  * document，平台只给整页/整进程读数，任何「每壳字节」都是编的。
  *
+ * 挂载 = 「面板打开」：GeneralView 只在调试模式打开时挂载本组件（D5 的调试专用门，
+ * debug-mode-gate.ts#debugOnlySectionsVisible），卸载即撤销订阅、DOM 节点数采集与显示
+ * 时钟——关闭调试模式就是关掉这组测量成本，不是把面板用 CSS 藏起来。
+ *
  * 数据面：client-core 的 residentBridge（D2 页面级单例）——面板打开时 subscribe 并
  * requestRefresh 一次（DOM 节点数只在有订阅者时采集）、卸载撤销，**不轮询数据面**；settings.get()
  * 打开时读一次（system 只在该响应里）；面板打开期间有一个 1s 显示时钟，只重算隐藏时长格式化。

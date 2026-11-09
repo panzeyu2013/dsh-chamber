@@ -1,8 +1,9 @@
 /**
  * Chamber-global「客户端」section: the settings shell's `__general` content.
  * Groups are all chamber-GLOBAL (main-process chamber-settings.json, never an
- * instance's dsh home): 启动与关闭 / 运行 / 性能与内存 / 会话待办区 / 通知 / 更新
- * (UpdateSection). Notification sub-settings stay COLLAPSED while the master
+ * instance's dsh home): 启动与关闭 / 运行 / 会话待办区 / 通知 / 更新（含调试模式）
+ * → 最后是调试专用的只读组「性能与内存」（仅调试模式打开时挂载）。
+ * Notification sub-settings stay COLLAPSED while the master
  * switch is off (config unchanged, just hidden) in one bordered card, that switch
  * itself a borderless disclosure row. Mutations go through the settings IPC
  * (settings-store), which overlays OPTIMISTICALLY (no disabled/dimmed flash) and
@@ -21,6 +22,7 @@ import { sessionTodoOf, sessionTodoPatch } from './session-todo-settings.ts'
 import { SegmentedControl } from './SegmentedControl.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
 import { ResidentPanel } from './ResidentPanel.tsx'
+import { debugOnlySectionsVisible } from './debug-mode-gate.ts'
 import { applyDisclosureAttributes } from './disclosure-attrs.ts'
 import css from './SettingsShell.module.css'
 
@@ -213,6 +215,13 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   const sessionTodo = sessionTodoOf(settings)
   // 平台事实来自桥（design 25）：仅 macOS 需要「系统设置 → 通知」恢复入口。
   const isDarwin = isMacPlatform()
+  // 「性能与内存」只读组是调试专用面：只在调试模式打开时挂载（D5）。卸载 = 撤销订阅、
+  // DOM 节点数采集与显示时钟——所以这里是挂载门，不是 CSS 隐藏；宿主回读 inspectable
+  // 不作开启依据（撤销未确认的事实由调试模式事实卡呈现）。
+  const debugOnlySections = debugOnlySectionsVisible({
+    hydrated,
+    enabled: settings?.debug?.enabled === true,
+  })
 
   // The dsh runtime block is the per-server「dsh 运行时」settings.section; the full
   // group set rendered below is enumerated in this file's top doc block.
@@ -298,11 +307,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           />
         </div>
       </div>
-
-      {/* 性能与内存（D3）：只读常驻来源表 + 手动释放 + 系统/页面内存读数。独立组件
-          文件承载全部订阅/确认逻辑，GeneralView 只留一行挂载（真值表在
-          resident-panel-model 的单测里）。 */}
-      <ResidentPanel t={t} />
 
       {/* 会话待办区：主开关（默认开）是无边框披露行，开启后展开子设置（三类事件
           开关收入唯一一张卡片，与通知组同节奏）；默认全开，待办区仅在有条目时出现。 */}
@@ -483,8 +487,13 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         )}
       </div>
 
-      {/* Chamber-global update status: merged into the General section (no dedicated nav entry). */}
+      {/* Chamber-global update status: merged into the General section (no dedicated nav
+          entry); its last row is the「调试模式」switch. The「性能与内存」read-only group
+          (D5) sits directly below it and only mounts while debug mode is on — the mount
+          gate is what switches off the DOM-node measurement and the display clock, not a
+          CSS hide. */}
       <UpdateSection t={t} />
+      {debugOnlySections && <ResidentPanel t={t} />}
 
       {saveError !== null && (
         <p className={css.generalError} aria-live="polite">{t('generalSaveFailed', { error: saveError })}</p>
