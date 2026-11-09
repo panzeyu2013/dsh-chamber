@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var quitFactsCache = QuitFactsCache()
     /// 退出清理是否已启动（幂等；清理完成/超时后 reply 一次）。
     private var quitCleanupStarted = false
+    /// 关窗决策在飞期间收到退出请求（Sparkle quit / 二次 terminate）：结算时并入退出。
+    private var terminateRequestedWhileDeciding = false
     /// 是否在等待 `reply(toApplicationShouldTerminate:)`（每次 .terminateLater 一轮）。
     private var awaitingTerminateReply = false
     /// SIGTERM/SIGINT 的 DispatchSource（必须常驻持有，否则信号监听失效）。
@@ -744,6 +746,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return later ? .terminateLater : .terminateNow
         }
         guard quitGate.beginDecision() else {
+            // S-52：在飞的关窗决策不会自己返回 .terminateLater（它没有 reply 轮次）。
+            // Sparkle quit 无超时等待，被吞掉会让更新永远装不上；把这次 terminate
+            // 并入在飞决策（记标志 + 维持 awaiting），由 close 决策结算时转退出。
+            if quitGate.isDecisionInFlight && !awaitingTerminateReply {
+                terminateRequestedWhileDeciding = true
+                awaitingTerminateReply = true
+                shellLog("[shell] 退出请求并入在飞的关窗决策（等待结算，Sparkle quit 不吞）")
+                return .terminateLater
+            }
             shellLog("[shell] 退出决策在途，忽略重复退出请求")
             return .terminateCancel
         }
@@ -809,6 +820,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         requestQuitFacts(quitRequested: false) { [weak self] facts in
             guard let self else { return }
             self.quitGate.endDecision()
+            // S-52：在飞关窗决策期间收到的退出请求优先结算为退出。
+            if self.consumePendingTerminate() { return }
             guard let facts else {
                 shellLog("[shell] 关窗决策获取失败：保守隐藏窗口（不关闭、不退出）")
                 self.mainWindowController?.noteWindowHiddenExplicitly()
@@ -953,6 +966,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // （QUIT_CLEANUP_TIMEOUT_MS − 500ms = 4.5s）早已到期。
             shellLog("[shell] 退出清理超时，强制退出（与 Electron app.exit(1) 同向；可能有子进程残留）")
             exit(1)
+        }
+        return true
+    }
+
+    /// 关窗决策结算：若期间收到退出请求（Sparkle quit / 二次 terminate），
+    /// 并入一次退出（置确认位走清理链并 reply 那轮 .terminateLater）。
+    @discardableResult
+    private func consumePendingTerminate() -> Bool {
+        guard terminateRequestedWhileDeciding else { return false }
+        terminateRequestedWhileDeciding = false
+        quitGate.markConfirmed()
+        shellLog("[shell] 在飞关窗决策结算：并入了退出请求，转入退出清理")
+        if !beginTerminationCleanup() {
+            replyTerminate(true)
         }
         return true
     }

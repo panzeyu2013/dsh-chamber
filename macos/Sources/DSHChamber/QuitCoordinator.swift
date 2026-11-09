@@ -172,6 +172,14 @@ public final class QuitGate {
         return confirmed
     }
 
+    /// 决策请求是否在飞（不含确认框/已确认）：caller 用它区分「把 terminate 并入
+    /// 在飞关窗决策」与「重复退出（忽略）」。
+    public var isDecisionInFlight: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return decisionInFlight
+    }
+
     /// 进入决策请求（单飞）；已在决策/确认中 → false（调用方保守处理）。
     public func beginDecision() -> Bool {
         lock.lock()

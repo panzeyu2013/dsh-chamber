@@ -142,6 +142,20 @@ final class QuitCoordinatorTests: XCTestCase {
         gate.endConfirm()
     }
 
+    /// S-52：terminate（Sparkle quit）与在飞关窗决策相撞时要求「决策在飞」，
+    /// 而确认框在飞不算 —— 前者并入退出，后者只忽略重复请求。
+    func testGateExposesDecisionInFlightOnlyForDecisions() {
+        let gate = QuitGate()
+        XCTAssertFalse(gate.isDecisionInFlight)
+        XCTAssertTrue(gate.beginDecision())
+        XCTAssertTrue(gate.isDecisionInFlight)
+        gate.endDecision()
+        XCTAssertFalse(gate.isDecisionInFlight)
+        XCTAssertTrue(gate.beginConfirm())
+        XCTAssertFalse(gate.isDecisionInFlight, "确认框在飞不是决策在飞（terminate 不并入它）")
+        gate.endConfirm()
+    }
+
     func testGateDecisionBlocksWhileConfirming() {
         let gate = QuitGate()
         XCTAssertTrue(gate.beginConfirm())
