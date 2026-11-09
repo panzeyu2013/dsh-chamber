@@ -7,6 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { acceptConfirm, armConfirm, cancelConfirm, IDLE_CONFIRM, type ConfirmRunner, type ConfirmState } from '../../src/client/confirm-machine.ts';
 import { applyNowStillValid, cleanupVersionStillValid, gatewayConfirmGates, preRollbackOfferable, recoverMetadataStillValid, restoreBuiltinStillValid, restorePreRollbackStillValid, retryApplyStillValid, retryRestoreStillValid, type GatewayConfirmFacts } from '../../src/client/runtime-confirm-guards.ts';
 import { remoteStatus as status } from '../support/runtime-fixtures.ts';
@@ -304,4 +305,70 @@ test('F2: the re-validation projection is literally the render’s gate function
   assert.equal(retryApplyStillValid(factsNow), !gates.retryApplyDisabled);
   assert.equal(retryRestoreStillValid(factsNow), !gates.retryRestoreDisabled);
   assert.equal(recoverMetadataStillValid(factsNow), !gates.recoverMetadataDisabled);
+})
+
+// ── Branch-merge parity locks ────────────────────────────────────────────────
+// The section still renders two shapes (local store vs polled gateway status), so
+// before any branch merge these locks pin the halves ALREADY shared by both: one
+// armed-confirmation controller, one dialog, one version-selection machine. They
+// are the safety net the merge is measured against, not a claim that the two
+// render bodies are one component yet.
+
+/** The section source, comments included: the locks read wiring, never runtime. */
+function sectionSource(): string {
+  return readFileSync(new URL('../../src/client/DshRuntimeSection.tsx', import.meta.url), 'utf8');
+}
+
+test('merge parity: both runtime shapes share ONE armed-confirmation controller', () => {
+  const section = sectionSource();
+  // ONE store instance: the render reads it through useSyncExternalStore and every
+  // event path (arm / cancel / accept) reads the same getSnapshot().
+  assert.equal([...section.matchAll(/const \[confirmStore\] = useState\(createConfirmStore\)/gu)].length, 1);
+  assert.equal([...section.matchAll(/useSyncExternalStore\(confirmStore\.subscribe, confirmStore\.getSnapshot/gu)].length, 1);
+  // The gateway child receives the parent's askConfirm; the local restart arms
+  // through the same one — one dialog, one cancel path, one pending discipline.
+  assert.match(section, /askConfirm=\{askConfirm\}/);
+  assert.match(section, /const onRestartDsh = useCallback\(\(\): void => \{\n    if \(restartingRef\.current\) return\n    askConfirm\(\{/);
+  // ARM is refused synchronously while the accepted action is pending: the
+  // single-flight fence is the store snapshot, never React state.
+  assert.match(section, /const askConfirm = useCallback\(\(request: RuntimeConfirmRequest\) => \{\n    if \(confirmStore\.getSnapshot\(\)\.pending\) return\n    confirmStore\.arm\(request\)/);
+  // The accept re-validates the LIVE-armed request, marks pending BEFORE the
+  // runner's first synchronous step, and returns the machine to idle on settle.
+  assert.match(section, /const result = acceptConfirmStep\(confirmStore\.getSnapshot\(\), \(run\) => \{/);
+  assert.match(section, /confirmStore\.beginLaunch\(\)/);
+  assert.match(section, /\.finally\(\(\) => \{ confirmStore\.settle\(\) \}\)/);
+  // No native dialog: the in-app Modal is the only confirmation surface.
+  assert.doesNotMatch(section, /window\.confirm\(|globalThis\.confirm\(/);
 });
+
+test('merge parity: both runtime shapes share ONE version-selection machine', () => {
+  const section = sectionSource();
+  // The hook definition + the two shape call sites: one implementation, no
+  // second preferredRuntimeVersion projection left in either component body.
+  assert.equal([...section.matchAll(/useRuntimeSelection\(/gu)].length, 3);
+  assert.match(section, /const \{ chosen: chosenRemote, choose: chooseRemote \} = useRuntimeSelection\(/);
+  assert.match(section, /const \{ chosen, choose \} = useRuntimeSelection\(/);
+  assert.doesNotMatch(section, /const chosen = preferredRuntimeVersion\(/);
+  assert.doesNotMatch(section, /const chosenRemote = preferredRuntimeVersion\(/);
+});
+
+test('merge parity: action-runner policies stay per-shape by design (NOT unified yet)', () => {
+  const section = sectionSource();
+  // GATEWAY: one whole-action wall clock (proxied hops + settle poll), a
+  // synchronous single-flight fence, our deadline reported in localized copy and a
+  // superseded abort kept silent.
+  assert.match(section, /const REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS \+ 60_000/);
+  assert.match(section, /if \(actionInFlight\.current \|\| checkIntent\.current\) return/);
+  assert.match(section, /timedOut = true\n      controller\.abort\(\)\n    \}, REMOTE_ACTION_TIMEOUT_MS\)/);
+  assert.match(section, /if \(timedOut\) \{\n        if \(componentActive\.current\) setActionError\(tRef\.current\('dshRuntimeActionTimeout'\)\)/);
+  assert.match(section, /else if \(!controller\.signal\.aborted && componentActive\.current\)/);
+  // LOCAL: the main-process transaction owns the budget; the client only mirrors
+  // the busy window (no controller, no client clock). This difference is the
+  // remaining merge blocker — it is pinned, not silently dropped.
+  const start = section.indexOf('const runRuntimeAction = useCallback');
+  assert.notEqual(start, -1, 'the local action runner exists');
+  const localRunner = section.slice(start, section.indexOf('}, [])', start));
+  assert.match(localRunner, /setBusy\(true\)/);
+  assert.doesNotMatch(localRunner, /AbortController|setTimeout/);
+});
+;

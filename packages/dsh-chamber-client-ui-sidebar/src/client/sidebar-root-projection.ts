@@ -5,7 +5,8 @@
  * presentational.
  */
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { createListenerSet } from '@dsh-chamber/dsh-chamber-client-core'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { nextUpdatedOrder, orderServersForDisplay, type ArchivedFilter, type SessionGroupBy, type SessionOrderBy } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { flatAccountKey } from '@dsh-chamber/dsh-chamber-client-core/flat-account'
@@ -17,25 +18,53 @@ import {
 import { getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import { isCheckoutRow, sessionFullOrder } from './checkout-row.ts'
 
+/**
+ * One small snapshot store for the multi-source projection.
+ *
+ * WHY a store instead of `useState` + a render-time ref mirror: the bridge
+ * subscriber must dedupe a publish against the value that is about to render,
+ * and the render must read that exact same value. One cached snapshot — read by
+ * `getSnapshot()` in the subscriber and by React through useSyncExternalStore —
+ * is that single source; no ref is assigned during render.
+ */
+interface SidebarServersStore {
+  subscribe(listener: () => void): () => void
+  getSnapshot(): ChamberServerAggregate[]
+  set(next: ChamberServerAggregate[]): void
+}
+
+function createServersStore(initial: ChamberServerAggregate[]): SidebarServersStore {
+  let snapshot = initial
+  const listeners = createListenerSet()
+  return {
+    subscribe: listeners.subscribe,
+    getSnapshot: () => snapshot,
+    set(next) {
+      snapshot = next
+      listeners.notify()
+    },
+  }
+}
+
 export function useSidebarProjection() {
   // chamber: the multi-source projection, published by the App layer on its
   // poll cycle; this shell subscribes and re-renders. Defense in depth: the
-  // subscription re-checks the render-relevant signature before setState, so
-  // an ungated publisher cannot re-render on unchanged content.
-  // The dedupe baseline is the CURRENTLY RENDERED state (a ref), not
-  // getServers(): a publish landing between useState's initializer and the
-  // subscribe would otherwise count as "already seen" and the list would stay
-  // stale forever — the publish gate never re-emits unchanged content.
-  const [servers, setServers] = useState<ChamberServerAggregate[]>(() => chamberBridge.getServers())
-  const serversRef = useRef(servers)
-  serversRef.current = servers
+  // subscription re-checks the render-relevant signature against the store's
+  // snapshot before publishing, so an ungated publisher cannot re-render on
+  // unchanged content. The dedupe baseline is that snapshot — never
+  // `chamberBridge.getServers()`: a publish landing between the store's
+  // initializer and the subscription would otherwise count as "already seen"
+  // and the list would stay stale forever (the publish gate never re-emits
+  // unchanged content).
+  const [serversStore] = useState(() => createServersStore(chamberBridge.getServers()))
+  const servers = useSyncExternalStore(serversStore.subscribe, serversStore.getSnapshot, serversStore.getSnapshot)
   useEffect(() => {
     return chamberBridge.subscribe(() => {
       const next = chamberBridge.getServers()
-      if (cachedServersProjectionSignature(next) === cachedServersProjectionSignature(serversRef.current)) return
-      setServers(next)
+      if (cachedServersProjectionSignature(next) === cachedServersProjectionSignature(serversStore.getSnapshot())) return
+      serversStore.set(next)
     })
-  }, [])
+  }, [serversStore])
 
   // Re-render when the git plugin publishes per-workspace flags (worktree
   // fold-button swap / create-from-main gating). The flags store's MONOTONIC

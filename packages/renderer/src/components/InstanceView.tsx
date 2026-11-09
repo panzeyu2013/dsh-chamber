@@ -12,10 +12,10 @@
  * (failure belongs to the App overlay); retry in flight → announce the same-id
  * tail wait cap.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { clearHostPathScope, publishHostPathScope } from '../host-path-scope.ts'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
-import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
+import { createListenerSet, dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
 import {
   bootInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, shellStateIdle,
   readInstanceSessionStreamHealth, rebuildInstanceSessionStream,
@@ -43,6 +43,43 @@ import { createSessionDeliveryOwner } from '../session-delivery-state.ts'
 import { activeSymptomSinceMs, advanceContentStallStreak, openStallSymptomActive, upperTierStallEvidence, type ContentStallStreak } from '../session-content-stall.ts'
 import { documentReloadBudgetStorage, shouldReloadDocument } from '../document-reload-budget.ts'
 import { readRendererStallStrikes } from '../renderer-stall-evidence.ts'
+
+/**
+ * One small store for the facts this view's async callbacks must read.
+ *
+ * `shell` is the boot state: the render's single source (read through
+ * useSyncExternalStore), so the retry path reads the settled fact synchronously
+ * from getSnapshot() instead of a render-time ref mirror. `getActive()` is the
+ * latest COMMITTED painted flag — the `active` prop stays the authority and a
+ * layout effect publishes each committed value, so the boot settle callback
+ * (a microtask) can neither read a stale render-scope closure nor a ref assigned
+ * during a render that never committed. The snapshot deliberately carries only
+ * the boot state: React must not re-render for a prop edge it already received.
+ */
+interface InstanceViewStore {
+  subscribe(listener: () => void): () => void
+  getSnapshot(): ShellState
+  setShell(next: ShellState): void
+  getActive(): boolean
+  setActive(next: boolean): void
+}
+
+function createInstanceViewStore(active: boolean, shell: ShellState): InstanceViewStore {
+  let shellSnapshot = shell
+  let activeSnapshot = active
+  const listeners = createListenerSet()
+  return {
+    subscribe: listeners.subscribe,
+    getSnapshot: () => shellSnapshot,
+    setShell(next) {
+      if (next === shellSnapshot) return
+      shellSnapshot = next
+      listeners.notify()
+    },
+    getActive: () => activeSnapshot,
+    setActive(next) { activeSnapshot = next },
+  }
+}
 
 interface InstanceViewProps {
   instanceId: string
@@ -124,17 +161,15 @@ export default function InstanceView({
     aliveRef.current = true
     return () => { aliveRef.current = false }
   }, [])
-  // settle 到达时读最新可见性（active = App 的 paintedView，不能吃闭包旧值）。
-  const activeRef = useRef(active)
-  activeRef.current = active
-  const [shell, setShell] = useState<ShellState>(() => shellStateIdle(instanceId, basePath))
+  const [viewStore] = useState(() => createInstanceViewStore(active, shellStateIdle(instanceId, basePath)))
+  const shell = useSyncExternalStore(viewStore.subscribe, viewStore.getSnapshot, viewStore.getSnapshot)
+  // settle 到达时读最新可见性（active = App 的 paintedView，不能吃闭包旧值）：prop 是唯一
+  // 权威，layout effect 发布每个**已提交**的值——异步回调读 getSnapshot()，不做渲染期 ref 镜像。
+  useLayoutEffect(() => { viewStore.setActive(active) }, [active, viewStore])
   /** 本次尝试开始时刻；null 仅在尚未发起这次尝试（含 bootDeferred）时。 */
   const bootStartedAtRef = useRef<number | null>(null)
   /** 已等待毫秒（仅未 settle 时按秒推进）。 */
   const [waitedMs, setWaitedMs] = useState(0)
-  /** 渲染期镜像的 settle 事实（重试 effect 在复位**之前**读它，避免闭包依赖）。 */
-  const settledRef = useRef(false)
-  settledRef.current = isSettledShellState(shell)
   /** 本次尝试是否排在上一次未 settle 的 boot 后面（诚实播报）；失败后重试不排队。 */
   const queuedBehindPredecessorRef = useRef(false)
   /** **本次持有**开始时刻（遮罩兜底窗基准）：必须是持有起点而非 shell settle 时刻，
@@ -377,7 +412,7 @@ export default function InstanceView({
     // 本次尝试令牌：被重试取代的旧 boot 迟到 settle 不得覆盖新状态。
     const bootToken = bootTokenRef.current + 1
     bootTokenRef.current = bootToken
-    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport, {
+    void bootInstanceShell(instanceId, basePath, el, viewStore.setShell, sourceFingerprint, transport, {
       waitForServing,
       // 结算后补发的事实（5s 探针判词、延迟簇失败）必须到达 **App**：shell 的
       // onState 是本视图的 React setter，只发它 App 的 shellStates 镜像收不到，
@@ -388,8 +423,8 @@ export default function InstanceView({
       if (!aliveRef.current || bootToken !== bootTokenRef.current) return
       // 屏上视图用 View Transition 落位，后台 boot 即时落位；键 'settle' 与切换流隔离
       // （被同键吞并会导致骨架 veil 永驻），同视图连续 settle 单槽合并。
-      if (activeRef.current) runViewTransition(() => setShell(next), 'settle')
-      else setShell(next)
+      if (viewStore.getActive()) runViewTransition(() => viewStore.setShell(next), 'settle')
+      else viewStore.setShell(next)
       onSettled?.(instanceId)
       // 失败呈现由 App 统一负责（覆盖层）：每次 settle 上报最终状态。
       onStateChange?.(instanceId, next)
@@ -402,14 +437,14 @@ export default function InstanceView({
     if (retryToken === lastRetryTokenRef.current) return
     lastRetryTokenRef.current = retryToken
     // 复位前取样：仅上一次尝试未 settle 时，这次重试才会等在 boot 尾上。
-    queuedBehindPredecessorRef.current = !settledRef.current
+    queuedBehindPredecessorRef.current = !isSettledShellState(viewStore.getSnapshot())
     startedRef.current = false
     // 立刻清掉上一代的可见秒数，避免重置帧仍画旧值。
     setWaitedMs(0)
     const next = shellStateIdle(instanceId, basePath)
-    setShell(next)
+    viewStore.setShell(next)
     onStateChange?.(instanceId, next)
-  }, [retryToken, instanceId, basePath, onStateChange])
+  }, [retryToken, instanceId, basePath, onStateChange, viewStore])
 
   // 已等待时长：只在未 settle 且 boot 已发起时走秒（用户才能判断慢还是死）。
   useEffect(() => {

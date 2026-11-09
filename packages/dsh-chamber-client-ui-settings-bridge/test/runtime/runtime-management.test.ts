@@ -27,6 +27,8 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core/runtime-management'
 // Test-only internal: a package-internal deep import keeps it off the public subpath face.
 import { RuntimeStateStore } from '../../../dsh-chamber-client-core/src/runtime-management.ts'
+import { remoteRuntimeActionGates, type RemoteRuntimeStatus } from '@dsh-chamber/dsh-chamber-client-core'
+import { remoteStatus as gatewayStatus } from '../support/runtime-fixtures.ts'
 
 function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}): RuntimeState {
   return {
@@ -544,4 +546,114 @@ test('runtime store tears down and retries after a transient hydration failure',
   assert.deepEqual(harness.counts(), { subscriptions: 2, unsubscriptions: 1 })
   off()
   assert.equal(harness.counts().unsubscriptions, 2)
+})
+
+
+// ── Gateway/local action-gate parity (design 18 §3.6/§9.3) ───────────────────
+// The two runtime shapes gate the SAME action vocabulary from different authorities
+// (local: the main-process RuntimeState store; gateway: the polled
+// /chamber/runtime status). A branch merge is only defensible against one gate
+// truth table, so these cases pin the states where the shapes must agree — and
+// the recovery-phase differences a merge has to decide first (second case below;
+// they are NOT claimed to be equivalent).
+
+/** The seven action families both shapes expose (local action ids ↔ gateway gates). */
+interface ActionParity {
+  versionMutation: boolean
+  restoreBuiltin: boolean
+  applyNow: boolean
+  retryApply: boolean
+  retryRestore: boolean
+  recoverMetadata: boolean
+  restart: boolean
+}
+
+function localParity(state: RuntimeState): ActionParity {
+  const actions = new Set(runtimeAllowedActions(state))
+  return {
+    versionMutation: actions.has('select-version'),
+    restoreBuiltin: actions.has('reset-builtin'),
+    applyNow: actions.has('apply-now'),
+    retryApply: actions.has('retry-apply'),
+    retryRestore: actions.has('retry-restore'),
+    recoverMetadata: actions.has('recover-metadata'),
+    restart: actions.has('restart-dsh'),
+  }
+}
+
+function gatewayParity(status: RemoteRuntimeStatus): ActionParity {
+  const gates = remoteRuntimeActionGates(status, false)
+  return {
+    versionMutation: !gates.mutationDisabled,
+    restoreBuiltin: !gates.restoreBuiltinDisabled,
+    applyNow: !gates.applyNowDisabled,
+    retryApply: !gates.retryApplyDisabled,
+    retryRestore: !gates.retryRestoreDisabled,
+    recoverMetadata: !gates.recoverMetadataDisabled,
+    restart: !gates.restartDisabled,
+  }
+}
+
+test('action parity: equivalent gateway/local states offer the same action families', () => {
+  const cases: Array<[string, RuntimeState, RemoteRuntimeStatus]> = [
+    ['idle', runtimeState('idle', { hasOverride: true }), gatewayStatus()],
+    ['available', runtimeState('available', { hasOverride: true }), gatewayStatus()],
+    ['applied (the gateway folds it into idle)', runtimeState('applied', { hasOverride: true }), gatewayStatus()],
+    [
+      'pending',
+      runtimeState('pending', { source: 'user', hasOverride: true, pending: '1.1.0' }),
+      gatewayStatus({ phase: 'pending', pending: '1.1.0' }),
+    ],
+    ['installing (busy)', runtimeState('installing'), gatewayStatus({ phase: 'installing' })],
+    ['env-selected tree', runtimeState('idle', { source: 'env' }), gatewayStatus({ source: 'env' })],
+    ['read-only platform', runtimeState('idle', { managementSupported: false }), gatewayStatus({ mutationsAllowed: false })],
+    ['restart in flight', runtimeState('checking'), gatewayStatus({ restart: 'running' })],
+    [
+      'failed operation',
+      runtimeState('failed', { error: 'boom', hasOverride: true }),
+      gatewayStatus({ operationError: 'boom' }),
+    ],
+  ]
+  for (const [name, localState, remote] of cases) {
+    assert.deepEqual(gatewayParity(remote), localParity(localState), 'action families must agree in ' + name)
+  }
+})
+
+test('action parity: recovery-phase differences stay explicit for the merge decision', () => {
+  // applying: the local escape hatch may abort the activation, while the gateway
+  // keeps restore-builtin disabled throughout recovery (the server re-blocks an
+  // armed reset against durable markers). Only this family differs.
+  assert.deepEqual(localParity(runtimeState('applying', { source: 'user', hasOverride: true })), {
+    versionMutation: false, restoreBuiltin: true, applyNow: false,
+    retryApply: false, retryRestore: false, recoverMetadata: false, restart: false,
+  })
+  assert.deepEqual(gatewayParity(gatewayStatus({ phase: 'applying' })), {
+    versionMutation: false, restoreBuiltin: false, applyNow: false,
+    retryApply: false, retryRestore: false, recoverMetadata: false, restart: false,
+  })
+  // snapshot-failed: both expose the matching retry-apply; only the local shape
+  // keeps the reset escape hatch.
+  assert.deepEqual(localParity(runtimeState('snapshot-failed', { canRetryApply: true })), {
+    versionMutation: false, restoreBuiltin: true, applyNow: false,
+    retryApply: true, retryRestore: false, recoverMetadata: false, restart: false,
+  })
+  assert.deepEqual(gatewayParity(gatewayStatus({ phase: 'snapshot-failed' })), {
+    versionMutation: false, restoreBuiltin: false, applyNow: false,
+    retryApply: true, retryRestore: false, recoverMetadata: false, restart: false,
+  })
+  // restore-blocked: the local projection surfaces the mandatory data restore on
+  // its 'failed' phase (ordinary failed actions stay alongside it), while the
+  // gateway projects recovery as the ONLY mutation — the merge must decide the one
+  // policy both authorities can enforce.
+  assert.deepEqual(
+    localParity(runtimeState('failed', { canRetryRestore: true, restoreOutcome: 'incomplete', hasOverride: true })),
+    {
+      versionMutation: true, restoreBuiltin: true, applyNow: false,
+      retryApply: false, retryRestore: true, recoverMetadata: false, restart: true,
+    },
+  )
+  assert.deepEqual(gatewayParity(gatewayStatus({ phase: 'restore-blocked' })), {
+    versionMutation: false, restoreBuiltin: false, applyNow: false,
+    retryApply: false, retryRestore: true, recoverMetadata: false, restart: false,
+  })
 })

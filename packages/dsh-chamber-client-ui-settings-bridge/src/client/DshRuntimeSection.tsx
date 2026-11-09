@@ -66,7 +66,7 @@ import {
   retryRestoreStillValid,
   type GatewayConfirmFacts,
 } from './runtime-confirm-guards.ts'
-import { errorMessage } from '@dsh-chamber/dsh-chamber-client-core'
+import { createListenerSet, errorMessage } from '@dsh-chamber/dsh-chamber-client-core'
 import { bridgeRestartRefusalText } from './restart-refusal.ts'
 import { RUNTIME_BADGE_KEYS, RUNTIME_BADGE_TONE_CLASS, formatTimestamp, localizeRegistryError, metadataComponentText, type RuntimeTranslate } from './runtime-display.ts'
 import css from './SettingsShell.module.css'
@@ -86,6 +86,39 @@ const CUSTOM_REGISTRY = '__custom__'
  * (11 min); the ceiling adds the same one-minute margin for the hops around it.
  */
 const REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS + 60_000
+
+/**
+ * ONE version-selection state machine for both runtime shapes: an explicit choice
+ * survives pushes/re-pulls until it leaves the listed versions; before the user
+ * chooses, the active version wins, then the builtin anchor, then the recommendation
+ * (the shape-specific projection only feeds the facts).
+ */
+function useRuntimeSelection(
+  hydrated: boolean,
+  versions: readonly RuntimeVersionEntry[],
+  latest: string | null,
+  active: string | null,
+  builtin: string | null,
+): { chosen: string | null; choose: (version: string) => void } {
+  const [selected, setSelected] = useState<string | null>(null)
+  const selectionExplicit = useRef(false)
+  useEffect(() => {
+    if (!hydrated) return
+    setSelected((current) => {
+      const stillExplicit = selectionExplicit.current
+        && current !== null
+        && versions.some((entry) => entry.version === current)
+      if (!stillExplicit) selectionExplicit.current = false
+      return preferredRuntimeVersion(stillExplicit ? current : null, versions, latest, active, builtin)
+    })
+  }, [active, builtin, hydrated, latest, versions])
+  return {
+    chosen: preferredRuntimeVersion(
+      selectionExplicit.current ? selected : null, versions, latest, active, builtin,
+    ),
+    choose: (version) => { selectionExplicit.current = true; setSelected(version) },
+  }
+}
 
 /* One coloured status badge vocabulary shared by both branches — label keys +
    dsw tone classes; it names the machine state, never a registry verdict. */
@@ -133,6 +166,33 @@ interface RuntimeConfirmRequest {
   stillValid: () => boolean
   /** The confirmed action; it owns its own failure reporting and never runs before the user confirms. */
   run: () => Promise<void>
+}
+
+/**
+ * One small store for the section's armed confirmation: the render reads the state
+ * through useSyncExternalStore and every event path (arm / cancel / accept) reads the
+ * SAME getSnapshot() synchronously — `pending` is the single-flight fence while the
+ * accepted action runs (React state is not a synchronous mutex), never a ref mirror.
+ */
+const createConfirmStore = () => {
+  let snapshot: ConfirmState<RuntimeConfirmRequest> = IDLE_CONFIRM
+  const listeners = createListenerSet()
+  const commit = (next: ConfirmState<RuntimeConfirmRequest>): void => {
+    if (next.request === snapshot.request && next.pending === snapshot.pending) return
+    snapshot = next
+    listeners.notify()
+  }
+  return {
+    subscribe: listeners.subscribe,
+    getSnapshot: () => snapshot,
+    arm: (request: RuntimeConfirmRequest) => commit(armConfirm(request)),
+    cancel: () => commit(cancelConfirmStep(snapshot)),
+    /** In flight BEFORE the runner's first synchronous step (same-frame arm/accept). */
+    beginLaunch: () => commit({ request: snapshot.request, pending: true }),
+    settle: () => commit(IDLE_CONFIRM),
+    /** Apply the pure machine's next state. */
+    replace: commit,
+  }
 }
 
 /**
@@ -218,8 +278,6 @@ function GatewayRuntimeSection({
   const [remoteVersions, setRemoteVersions] = useState<RemoteVersions | null>(null)
   const [versionsError, setVersionsError] = useState<string | null>(null)
   const [versionsEpoch, setVersionsEpoch] = useState(0)
-  const [selectedRemote, setSelectedRemote] = useState<string | null>(null)
-  const selectionExplicit = useRef(false)
   const [actionBusy, setActionBusy] = useState(false)
   const actionInFlight = useRef(false)
   const actionController = useRef<AbortController | null>(null)
@@ -390,33 +448,8 @@ function GatewayRuntimeSection({
     [sortedVersions],
   )
 
-  // Preserve an explicit choice across pushes / re-pulls; before the user
-  // chooses: the active version wins (default no-override: the active version IS
-  // the builtin anchor), then the builtin anchor, then the recommendation
-  // (same policy as the local branch's preferredRuntimeVersion).
-  useEffect(() => {
-    if (remoteStatus === null) return
-    setSelectedRemote((current) => {
-      const stillExplicit = selectionExplicit.current
-        && current !== null
-        && sortedVersions.some(entry => entry.version === current)
-      if (!stillExplicit) selectionExplicit.current = false
-      return preferredRuntimeVersion(
-        stillExplicit ? current : null,
-        sortedVersions,
-        latestTag,
-        remoteActive,
-        remoteStatus.builtinVersion,
-      )
-    })
-  }, [remoteStatus, sortedVersions, latestTag, remoteActive])
-
-  const chosenRemote = preferredRuntimeVersion(
-    selectionExplicit.current ? selectedRemote : null,
-    sortedVersions,
-    latestTag,
-    remoteActive,
-    remoteStatus?.builtinVersion ?? null,
+  const { chosen: chosenRemote, choose: chooseRemote } = useRuntimeSelection(
+    remoteStatus !== null, sortedVersions, latestTag, remoteActive, remoteStatus?.builtinVersion ?? null,
   )
   const isActiveRemote = chosenRemote !== null && chosenRemote === remoteActive
   // Direction-aware merged primary action: one button covers both directions —
@@ -961,10 +994,7 @@ function GatewayRuntimeSection({
               aria-label={t('dshRuntimeSelectVersion')}
               value={chosenRemote ?? ''}
               disabled={mutationDisabled}
-              onChange={(event) => {
-                selectionExplicit.current = true
-                setSelectedRemote(event.target.value)
-              }}
+              onChange={(event) => { chooseRemote(event.target.value) }}
             >
               {sortedVersions.length === 0
                 ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
@@ -1283,8 +1313,6 @@ export function DshRuntimeSection({
   // click in the same frame.
   const restartingRef = useRef(false)
   useEffect(() => () => { restartPollAbort.current?.abort() }, [])
-  const [selected, setSelected] = useState<string | null>(null)
-  const selectionExplicit = useRef(false)
   const [customOrigin, setCustomOrigin] = useState('')
   const [registrySelection, setRegistrySelection] = useState(NPMJS)
   const [registryEditing, setRegistryEditing] = useState(false)
@@ -1301,39 +1329,34 @@ export function DshRuntimeSection({
   // pending discipline. Transitions are the pure machine in ./confirm-machine.ts:
   // arming runs nothing, cancel drops the request before its runner is called, accept
   // launches exactly one runner after re-validating it.
-  const [confirmState, setConfirmState] = useState<ConfirmState<RuntimeConfirmRequest>>(IDLE_CONFIRM)
-  // The synchronous mirror of "the accepted action is running". The accept path,
-  // its re-entry fence and the ARM path all read this ref, never the state: an arm
-  // landing while an action is pending must NOT replace the pending request with a
-  // non-pending one (that would silently downgrade the dialog: the following
+  const [confirmStore] = useState(createConfirmStore)
+  const confirmState = useSyncExternalStore(confirmStore.subscribe, confirmStore.getSnapshot, confirmStore.getSnapshot)
+  // The synchronous "the accepted action is running" fact IS the store snapshot: an
+  // arm landing while an action is pending must NOT replace the pending request with
+  // a non-pending one (that would silently downgrade the dialog: the following
   // Confirm becomes a no-op and `Modal` has no focus trap to hint it).
-  const confirmLaunchRef = useRef(false)
   const askConfirm = useCallback((request: RuntimeConfirmRequest) => {
-    if (confirmLaunchRef.current) return
-    setConfirmState(armConfirm(request))
-  }, [])
+    if (confirmStore.getSnapshot().pending) return
+    confirmStore.arm(request)
+  }, [confirmStore])
   const cancelConfirm = useCallback(() => {
-    setConfirmState(cancelConfirmStep)
-  }, [])
+    confirmStore.cancel()
+  }, [confirmStore])
   const acceptConfirm = useCallback(() => {
-    if (confirmLaunchRef.current) return
-    const result = acceptConfirmStep(confirmState, (run) => {
-      confirmLaunchRef.current = true
+    const result = acceptConfirmStep(confirmStore.getSnapshot(), (run) => {
+      confirmStore.beginLaunch()
       // The runners own their failure reporting; the defensive catch keeps a
       // runner that breaks that contract from vanishing as an unhandled
       // rejection while the dialog is armed.
       void run()
         .catch((error: unknown) => { setActionError(errorMessage(error)) })
-        .finally(() => {
-          confirmLaunchRef.current = false
-          setConfirmState(IDLE_CONFIRM)
-        })
+        .finally(() => { confirmStore.settle() })
     })
     // The armed request re-validated itself before the runner launched and
     // failed — the confirm ends in an honest refusal, never in silence.
     if (result.outcome === 'dropped') setActionError(t('dshRuntimeConfirmStale'))
-    if (result.outcome !== 'ignored') setConfirmState(result.state)
-  }, [confirmState, t])
+    if (result.outcome !== 'ignored') confirmStore.replace(result.state)
+  }, [confirmStore, t])
 
   const runtime = currentRuntimeSurface()
   const hydrated = state !== null
@@ -1357,32 +1380,8 @@ export function DshRuntimeSection({
     if (registryMode === CUSTOM_REGISTRY) setCustomOrigin(registryOrigin)
   }, [registryMode, registryOrigin])
 
-  // Preserve an explicit choice across pushes. Before the user chooses, the picker
-  // preselects the active version (default no-override: the active version IS the
-  // bundled one); the bundled version is the safe default only when none exists.
-  useEffect(() => {
-    if (!hydrated) return
-    setSelected((current) => {
-      const currentStillExplicit = selectionExplicit.current
-        && current !== null
-        && versions.some((entry) => entry.version === current)
-      if (!currentStillExplicit) selectionExplicit.current = false
-      return preferredRuntimeVersion(
-        currentStillExplicit ? current : null,
-        versions,
-        state?.latest ?? null,
-        active,
-        bundled,
-      )
-    })
-  }, [active, bundled, hydrated, state?.latest, versions])
-
-  const chosen = preferredRuntimeVersion(
-    selectionExplicit.current ? selected : null,
-    versions,
-    state?.latest ?? null,
-    active,
-    bundled,
+  const { chosen, choose } = useRuntimeSelection(
+    hydrated, versions, state?.latest ?? null, active, bundled,
   )
   const isActive = chosen !== null && chosen === active
   const selectionDirection = runtimeSelectionDirection(chosen, active)
@@ -1889,10 +1888,7 @@ export function DshRuntimeSection({
               aria-label={t('dshRuntimeSelectVersion')}
               value={chosen ?? ''}
               disabled={mutationDisabled || !canSelect}
-              onChange={(event) => {
-                selectionExplicit.current = true
-                setSelected(event.target.value)
-              }}
+              onChange={(event) => { choose(event.target.value) }}
             >
               {versions.length === 0
                 ? <option value="" disabled>{t('dshRuntimeNoVersions')}</option>
