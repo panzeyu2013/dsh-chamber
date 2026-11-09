@@ -703,6 +703,10 @@ export async function collectExtraRows(
   const restartDrops = new Map<string, ExtraModuleRow>()
   /** Rows whose fresh load failed ordinary (not a DOM-script timeout): recovery candidates. */
   const failedRows: { row: ExtraModuleRow; error: unknown }[] = []
+  /** Rows whose PAGE-BUDGET wait expired before dispatch (design 26 §D7 ③): never a
+   *  source fact — these are deferred to a later graph-return pass, with no
+   *  bundle-load-failed diagnostic (the wait cap is not a queueDeadline). */
+  const budgetDeferredRows: { row: ExtraModuleRow; error: unknown }[] = []
 
   /** Record one conflict verdict: cross-instance drift is reported and reused, a same-instance rebuild drops. */
   const recordConflict = (
@@ -802,7 +806,12 @@ export async function collectExtraRows(
       return
     }
     // 'shared' needs no action: the row stays and materializes under the owner factory.
-    if (outcome.state === 'failed') failedRows.push({ row: outcome.row, error: outcome.error })
+    // A page-budget refusal is "never dispatched": defer it instead of treating it as a
+    // load failure (a saturated page must not become a source diagnostic).
+    if (outcome.state === 'failed') {
+      if (outcome.error instanceof HttpBudgetUnscheduledError) budgetDeferredRows.push({ row: outcome.row, error: outcome.error })
+      else failedRows.push({ row: outcome.row, error: outcome.error })
+    }
   }
   // The page's first-load-wins table keeps ONE factory per id, so a row at another
   // revision can only materialize under the owner's factory. This scan decides what
@@ -971,7 +980,13 @@ export async function collectExtraRows(
         console.error(`[shell] instance ${instanceId} row ${alsoConflicted.id} also carries a rev conflict; `
           + 'the boot stops on the load failure first (the drift fact is logged)')
       }
+      // A page-budget refusal is "never dispatched", not a load verdict: it is deferred
+      // (below) WITHOUT a source diagnostic; only real load failures report.
+      const realKeptFailures = keptFailures.filter(failure => !(failure.error instanceof HttpBudgetUnscheduledError))
       for (const failure of keptFailures) {
+        if (failure.error instanceof HttpBudgetUnscheduledError) budgetDeferredRows.push(failure)
+      }
+      for (const failure of realKeptFailures) {
         reportDiagnostic(instanceId, 'bundle-load-failed', {
           pluginId: failure.row.id,
           message: failure.error instanceof Error ? failure.error.message : String(failure.error),
@@ -989,9 +1004,21 @@ export async function collectExtraRows(
         for (let index = rows.length - 1; index >= 0; index -= 1) {
           if (failedIds.has(rows[index]!.id)) rows.splice(index, 1)
         }
-      } else {
-        throw keptFailures[0]!.error
+      } else if (realKeptFailures.length > 0) {
+        throw realKeptFailures[0]!.error
       }
+    }
+  }
+  if (budgetDeferredRows.length > 0) {
+    // The page HTTP budget never dispatched these rows (their queue wait expired):
+    // defer them to a later graph-return pass and keep only a neutral log line — a
+    // saturated page is not a source verdict (design 26 §D7 ③).
+    const deferredIds = new Set(budgetDeferredRows.map(failure => failure.row.id))
+    deferredLoadFailure = budgetDeferredRows[0]
+    console.error(`[shell] instance ${instanceId} rows deferred by the page HTTP budget (no source verdict): `
+      + [...deferredIds].join(', '))
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      if (deferredIds.has(rows[index]!.id)) rows.splice(index, 1)
     }
   }
   // A claim can appear while the load/recovery passes await their scripts — the sync

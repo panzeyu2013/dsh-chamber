@@ -139,7 +139,25 @@ export interface ClientRowLoadOptions {
    *  returning `rev-conflict`. The caller owns the user-facing explanation: the
    *  kernel reports no conflict for a row it was told to reuse. */
   reuseForeignBuilds?: boolean
+  /** Test/tuning seam: how long one boot-wave bundle may WAIT for a slot before the
+   *  wait is abandoned as `unscheduled` (see BUNDLE_QUEUE_WAIT_MS; default in the
+   *  implementation). */
+  queueWaitMs?: number
 }
+
+/**
+ * Bundle-slot QUEUE-WAIT cap (design 26 §D7 ③) — NOT a queueDeadline. It bounds how
+ * long one boot-wave bundle may WAIT for a slot; it deliberately does NOT opt the
+ * request into queue-depth refusal or the per-source queue accounting, because a
+ * bundle row must never be refused just because its own source's boot wave filled
+ * the queue. The wait is bounded with an abort signal, so an expired wait settles as
+ * `unscheduled` (never dispatched — the page-budget classifier's "not attempted"
+ * shape) and the caller defers/re-tries instead of reporting a source diagnostic.
+ * Rationale for the value: half of one bundle's own 30s load window; a slot not free
+ * by then belongs to a saturated page, and holding first paint behind it only trades
+ * a bounded gap for an unbounded wait.
+ */
+const BUNDLE_QUEUE_WAIT_MS = 15_000
 
 /**
  * Whether an id's bundle is published WITH the host release: the whole
@@ -281,6 +299,9 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
             kind: 'bundle',
             lane: 'background',
             leaseMs: httpBudgetLeaseFor(60_000),
+            // Wait cap, not a queue deadline (see BUNDLE_QUEUE_WAIT_MS): the signal
+            // only settles the queue wait; it never aborts a dispatched script load.
+            signal: AbortSignal.timeout(options.queueWaitMs ?? BUNDLE_QUEUE_WAIT_MS),
             label: 'bundle:' + row.url,
           })
           if (acquired.kind === 'unscheduled') {

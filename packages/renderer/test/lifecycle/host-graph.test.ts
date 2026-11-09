@@ -18,7 +18,7 @@ import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
 // (a text regex over boot-rows.ts would pin spelling, not the coupling).
 import { MODULES_ID, UI_RENDERER_ID } from '../../../dsh-client-web/src/boot-rows.ts'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
-import { acquireHttpBudget, configureHttpBudgetForTests, resetHttpBudgetForTests } from '../../../dsh-chamber-client-core/src/http-budget.ts'
+import { HttpBudgetUnscheduledError, acquireHttpBudget, configureHttpBudgetForTests, resetHttpBudgetForTests } from '../../../dsh-chamber-client-core/src/http-budget.ts'
 
 // Extra-bundle URLs are `/plugins/??<id>&rev=…` combos, so the fixture and the
 // main-path assertions must pin the combo form.
@@ -101,6 +101,50 @@ test('collectExtraRows: a deferred recovery keeps the failure diagnostic and nev
     'a boot that DROPPED a row must never overwrite its named failure with ok (design 26 §D7)')
   assert.ok(diagnostics.some(entry => entry.state === 'bundle-load-failed' && entry.pluginId === '@scope/broken'),
     'the named failure stays on the single diagnostic slot')
+})
+
+test('loadClientPluginRows: a bundle queued past its WAIT CAP settles as an undispatched budget refusal', async () => {
+  // design 26 §D7 ③：bundle 槽的排队等待用 AbortSignal 作上限（wait cap，不是 queueDeadline；
+  // 不上报 queue-full、不改变每源排队计数语义）。到期时 acquire 结算 unscheduled(&#39;aborted&#39;)，
+  // 加载器把它作为普通失败交回调用方（boot 走 defer/重试），绝不挂到最长在飞 lease 那么久。
+  resetHttpBudgetForTests()
+  const restore = configureHttpBudgetForTests({ bundleMax: 0 })
+  const started = performance.now()
+  try {
+    const [outcome] = await loadClientPluginRows('queue-cap-source', [{
+      id: '@scope/queue-cap', url: '/plugins/??@scope/queue-cap&rev=queuecap1', rev: 'queuecap1',
+    }], { loadBundle: async () => { throw new Error('must not load') } },
+    { ordinary: 'defer', timeout: 'throw', queueWaitMs: 25 })
+    assert.equal(outcome?.state, 'failed')
+    assert.ok(outcome?.state === 'failed' && outcome.error instanceof HttpBudgetUnscheduledError,
+      'an expired queue wait is a never-dispatched budget refusal, not a load verdict')
+    assert.ok(performance.now() - started < 1_000,
+      'the wait cap bounds the queue wait instead of holding first paint behind a lease-length wait')
+  } finally {
+    restore()
+    resetHttpBudgetForTests()
+  }
+})
+
+test('collectExtraRows: a page-budget bundle wait expiry defers the row without a source diagnostic', async (t) => {
+  // design 26 §D7 ③：bundle 槽的「排队等待上限」（wait cap，不是 queueDeadline）到期会把请求
+  // 结算成 unscheduled（从未派发）——这不是来源裁决：本 boot 丢掉该行、由 graph-return 重试，
+  // 绝不写 bundle-load-failed 来源诊断，也绝不能以干净的 ok 收尾。
+  stubFetch(t, 200, envelope([row('@scope/queued-bundle')]))
+  const consoleCapture = captureConsoleError(t)
+  const diagnostics: { state?: string; pluginId?: string }[] = []
+  const rows = await collectExtraRows('budget-wait', '/api/i/budget-wait', {
+    loadModuleBundle: async () => {
+      throw new HttpBudgetUnscheduledError('aborted', 15_000)
+    },
+    reportDiagnostic: (_sourceId, next) => { diagnostics.push(next) },
+  })
+  assert.deepEqual(rows, [], 'the deferred row is dropped for this boot')
+  assert.ok(!diagnostics.some(entry => entry.state === 'bundle-load-failed'),
+    'a page-budget wait expiry must never become a source diagnostic')
+  assert.ok(!diagnostics.some(entry => entry.state === 'ok'),
+    'a boot that dropped rows is never a clean ok')
+  assert.match(consoleCapture.messages.join('\n'), /deferred by the page HTTP budget \(no source verdict\)/)
 })
 
 test('collectExtraRows: a recovery the host answered (503) is a source fact and still throws', async (t) => {
