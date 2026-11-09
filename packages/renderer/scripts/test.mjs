@@ -61,6 +61,8 @@ export const GROUPS = {
     // 页面根接管安全网：外部 shell.overlay 置 0 #root 的检测 / 上报 / 释放。
     'test/lifecycle/root-takeover-watch.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',
+    // 延迟簇每行的装载期限：悬挂 chunk 是逐行失败报告，不是整簇静默不挂。
+    'test/lifecycle/deferred-rows.test.ts',
     // 页面级 chamberForward adapter（design 28）：wire（record/records、snake_case、
     // 7 态）→ launcher（3 态 / 10 码）的唯一翻译层；无桥时不留服务、不写页面全局。
     'test/lifecycle/chamber-forward-adapter.test.ts',

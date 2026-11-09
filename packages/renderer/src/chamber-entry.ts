@@ -16,6 +16,7 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import { bootGapSignature, type ShellDegradedFact, type ShellDegradedReport } from './boot-gap.ts'
+import { DEFERRED_ROW_DEADLINE_MS, withDeferredRowDeadline } from './deferred-rows.ts'
 import {
   deferredRegistrationFailureMessage,
   DEFERRED_EXTRA_ROW_IDS,
@@ -208,6 +209,8 @@ const decorateMount = (id: string, plugin: object): object => MOUNT_DECORATORS[i
  * own verdict, surviving families still register, and the failed id set travels through
  * deferredRegistrationFailureMessage to the shell's post-settle degrade seam (the same
  * seam the required-service probe uses), which is what the App renders and self-heals.
+ * Every row is also BOUNDED by DEFERRED_ROW_DEADLINE_MS: a chunk that never settles is
+ * a failed id like a rejection, not a silent whole-cluster hang with zero diagnostics.
  */
 async function registerDeferred(
   ctx: Context,
@@ -216,9 +219,11 @@ async function registerDeferred(
   probeRearm: ProbeRearmSlot,
 ): Promise<void> {
   // Chunks fetch in parallel (one round of requests), but each row keeps its own verdict.
+  // Every row is BOUNDED: a chunk that never settles is reported as a failed id at the
+  // shared deadline instead of hanging the cluster with zero diagnostics.
   const settled = await Promise.all(DEFERRED_ROWS.map(async ([id, load]) => {
     try {
-      return { id, ok: true as const, plugin: await load(), error: undefined }
+      return { id, ok: true as const, plugin: await withDeferredRowDeadline(id, load(), DEFERRED_ROW_DEADLINE_MS), error: undefined }
     } catch (error) {
       return { id, ok: false as const, plugin: undefined, error }
     }

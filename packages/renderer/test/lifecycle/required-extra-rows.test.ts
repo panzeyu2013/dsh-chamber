@@ -474,6 +474,9 @@ test('chamber-entry wires the deferred roster, the per-row isolation and the nam
   // Reporting: the shared builder + the shell seam (never console-only), and
   // still no boot gate (the registration is fire-and-forget).
   assert.match(entry, /deferredRegistrationFailureMessage\(/, 'the failed id set must be reported by name')
+  // A chunk that never settles must be a per-row failure, not a silent whole-cluster hang.
+  assert.match(entry, /withDeferredRowDeadline\(id, load\(\), DEFERRED_ROW_DEADLINE_MS\)/,
+    'each deferred row must be bounded by the shared deadline')
   // The deferred cluster reports its OWN kind with the
   // failed ids attached. Sharing the probe's kind would make the two facts
   // indistinguishable to the frame's copy table (and drop the second one as a
