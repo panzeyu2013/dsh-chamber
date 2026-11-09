@@ -187,7 +187,7 @@
 - 缺：①块内拖拽/跨块守卫（上游 `sessionDragOrder` 同分区门）；②写进本地账号（上游 `pinSessionOrder` 领先槽；本仓
   unpin 回自然位 = B2）；③半开 follow 的陈旧标记（归档成功时本地清 id）与未挂载源「发送即忘」。
 - 候选：A 完整对齐（引入第三条持久账号，碰 manual=wire）；B 现分区（不写账号/不动拖拽）；C 不做（已否）。证据：
-  `pin-partition.test.ts`、`session-row-actions.test.ts`、`vendor-session-fact-contract.test.ts`、`binding.test.ts`。
+  `pin-partition.test.ts`、`session-row-actions.test.ts`、`vendor-session-fact-contract.test.ts`。
 
 **U2 会话行时间列**：上游行尾静息 `trailingLabel ?? timeLabel(updatedAt)`，hover 换出；本仓行尾是状态槽（10px/14px），
 时间只在卡片。候选 A 状态槽静息分支/B 双尾随/C 不落。
@@ -408,13 +408,6 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 #### 1.5 审计开放项（未排期）
 
 - **session-state 语义单源（A-1/A-2/A-3）**：协议常量、wire 类型、descriptor 解析、capability 分类与 turn-end 分类单源在 `packages/dsh-chamber-wire/src/session-state.ts`；mux 路径、`$events` 端点、follow 载荷、goal 投影白名单与 `goal/activation-changed` 归一化单源在 `packages/dsh-chamber-wire/src/mux-frame.ts`；`isPlainRecord`/`isRecord`/`isWatermark` 单源在 `packages/dsh-chamber-wire/src/json-guards.ts`（浏览器经 client-core 的 `./session-state`、`./mux-frame`、`./json-guards` 具名面）。**刻意的残余差异（不得「顺手统一」）**：①外层 frame 容器解析仍分两处（`parseMuxServerFrame` ⇄ `parseMuxFrame`，容器与返回形状不同，只共享内层语义）；②status args 的对象形仍只有 renderer 接受；③`packages/desktop/store-file-hygiene.ts` 的同名守卫是**宽松**变体（任意非数组对象），已在文件内注明；④fork `dsh-api-gateway/src/stream-protocol.ts` 按 pin 重放纪律保留；源码文本锁步测试只保留 fork 侧与瀑布字面量两类。
-- **插件三链路流水线**：local/ssh/gateway 各自 validate→confirm→remove/add→restart→verify；desktop
-  `plugin-sync.ts` 与客户端行投影（settings-connections 的 `plugin-model.ts`/`save-host.ts`）仍两套。
-  收口方向 = 一个 `PluginMutationPlan` + 三个薄执行器。
-- **未纳棘轮的 god 文件**：control-plane `index.ts`/`proxy-forward.ts`/`spawn-dsh.ts`、gateway
-  `dispatch.ts`/`plugins.ts`、dsh-runtime 多个 `runtime-*` 文件、desktop `updater.ts`/`main.ts`、Swift
-  `MainWindowController`/`AppDelegate`/`BridgeClient`、`install-gateway.sh`——后续按包逐个纳入棘轮。
-- **死导出门覆盖洞**：client-ui 包整包在 `RUNTIME_LOADED_PACKAGES`（`verify-no-dead-exports.mjs`），`./client/**` 不受判；已知零消费者导出 `transportTargetChangedSpec`（`isFixedSectionId` 已被 `nav-active.ts` 消费）。
 - **第二实现复核**：`openPromise` 三态证据在 `packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts`；`safeStorage` 访问器 5 份（gateway-provider / host-assembly / main / registry-projection / sidecar-ctx）；spec 分类的客户端对照文件需先重新取证再收口。
 - **client/seed god 文件与形态**：`PluginDialog.tsx`（约 32 个 useState）、`ConnectionsSection.tsx`、
   `ServerSection.tsx`（JSX 内派生状态残留）等已在棘轮内；`packages/dsh-chamber-seed-git-worktree/src/core.ts`、
@@ -429,7 +422,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 #### 1.7 未删项与判面/锁步依据（非漏做）
 
-- 需先补跨端锁步测试再收口的 seam：`sessionStateNoteKey` / `SESSION_STATE_ROUTES`（读水位与路由字面量锁，待 §1.5 单源）、`pendingStats`（control-plane `dsh-client.ts`，settle-once 诊断缝）、`transportTargetChangedSpec`（settings-connections `save-host.ts`，跨端镜像缝）；删前依据见各文件注释与对应测试。
+- 需先补跨端锁步测试再收口的 seam：`sessionStateNoteKey` / `SESSION_STATE_ROUTES`（读水位与路由字面量锁，待 §1.5 单源）、`pendingStats`（control-plane `dsh-client.ts`，settle-once 诊断缝）；删前依据见各文件注释与对应测试。
 - `dsh-stream-state/swift` 的 Swift 镜像只剩 `CarrierDecision.swift`（`LoadState` 镜像归 design 14 §D4）；client-ui `./client/**` 整包在 `RUNTIME_LOADED_PACKAGES`，扩死导出门需逐包注册客户端 seam，独立一轮；`safeStorage` 访问器 5 份 / spec 分类两套 / session-row 三转换 / reconnect 第四臂归 §1.5 单源条目。
 
 #### 1.8 重构脚手架退役（B1/B7 收口后）
@@ -438,46 +431,40 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 - **B7 收口**：删除 `scripts/refactor/stream-state-metrics.mjs`、`stream-state-baseline.json` 与其 `metrics-tool.test.ts`，并移除 design 14 §D4 ⑤ 的 `--check` 引用。
 - 两条均为未排期；触发 = 对应收口裁决落地。
 
-### 2. 产物新鲜度守卫（G3/G5/G7；未排期）
+### 2. 产物新鲜度守卫（G7；未排期）
 
-> 现有守卫：`desktop/dist/control-plane/**`、`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。G2/G8 的唯一登记 = `scripts/gates/checks/artifact-freshness-registry.mjs`（`verify-artifact-freshness` 默认档校验，并与门自身观测的 freshness id 双向锁步；新增比较或新产物不同批登记即红）。本节只留仍无守卫的产物（§2.1，均已登记为带理由的 `exemption`）与剩余最小守卫建议（G3/G5/G7）；开放状态见 design 21 §7 与 STATUS §1.6。
+> 现有守卫：`desktop/dist/web/**` 与 `desktop/dist/host-*-package/**` 的 G3 输入摘要（`.build-manifest.json`，构建末尾写、`verify-artifact-freshness` 比对）、`desktop/dist/control-plane/**`/`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）、G5 打包前兜底（`packages/desktop/scripts/build-sidecar.mjs` CLI 装配成功后跑 `assertPackArtifactsFresh({mode:'sidecar'})`；失败带重建命令）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。G2/G8 的唯一登记 = `scripts/gates/checks/artifact-freshness-registry.mjs`（`verify-artifact-freshness` 默认档校验，并与门自身观测的 freshness id 双向锁步；新增比较或新产物不同批登记即红）。本节只留仍无守卫的产物（§2.1）与剩余最小守卫建议（G7）；开放状态见 design 21 §7 与 STATUS §1.6。
 
 #### 2.1 仍无守卫的产物
 
 |产物|生成者|提交？|当前守卫|陈旧后果|
 |---|---|---|---|---|
-|`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`（**ARCHIVED**：Electron 冻结，保留为复活参考；其测试在 FROZEN 组））|忽略|只有路径契约文本断言（`packages/desktop/scripts/electron-shared.test.mjs`，FROZEN 组）与 CI 的 scoper 标记断言|打包发行旧前端壳（IPC 名/槽位可能漂移；Electron 打包已冻结）|
-|`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`packages/desktop/scripts/build-host-graph-package.mjs`（各 seed 包 `dist` cpSync）|忽略|只有行序/outDir 断言（`scripts/release/preflight/packaging-manifest-lockstep.test.mjs`）|打包 seed 旧宿主包|
 |vendor `allowBuilds` 锁步（根 `pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）|人工同步|提交|无|新增原生依赖漏登或漏 deny 会静默漂移|
 
 `dist/` 整族在 `.gitignore`：干净 checkout 的「缺失」是正常态——首批 host/dsh-runtime 产物须先由
 `pnpm run build:artifacts` 自举，其余按需构建；要防的是本地/打包态的「存在但陈旧」——CI 每次全新构建，
 看不到这一类。上表 `scripts/*` 指 `packages/desktop/scripts/*`（Electron 构建脚本；gateway 侧
-`packages/gateway/scripts/*`），非仓库根 `scripts/`。上表三类均已在 G2/G8 登记表登记为 `exemption` 并附理由；
+`packages/gateway/scripts/*`），非仓库根 `scripts/`。上表剩余的 vendor allowBuilds 已在 G2/G8 登记表登记为带理由的 `exemption`；
 `verify-artifact-freshness` 对「门观测到但未登记」「登记了但门没观测」两个方向都判红。
 
 #### 2.2 最小守卫建议
 
-- **P1 G3 `.build-manifest.json` 输入摘要**：构建时写 `{inputsHash, toolVersion, outputs[]}`，测试比对；
-  比标记串强——无文案产物（web/host-package）也能判。适用全部忽略态产物。成本中（每构建脚本一处 + 比对函数）。
-- **P1 G5 `before-pack` 打包前兜底**：当前 `packages/desktop/scripts/before-pack.mjs` 只 materialize dsh-runtime
-  core，**不**断言 `dist/web`/`preload.cjs`/`host-*-package`/`control-plane` 的存在与新鲜度；建议补存在 + mtime/
-  输入摘要断言（fresh checkout 缺失另判）。
 - **P2 G7 vendor allowBuilds 锁步**：断言根 `pnpm-workspace.yaml` 的 `allowBuilds` 与
   `packages/dsh-runtime/src/allow-builds.mjs` 的 `ALLOW_BUILDS`/`DENY_BUILDS` 镜像关系。成本低；收益：把 AGENTS
   的硬事实从人工同步变成门。
 
 #### 2.3 开放问题
 
-- 标记串（现状）vs 输入摘要（G3）是否并存值得。
-- 失败信息**必须**给重建命令，否则操作者只看到红、不知下一步。
-- CI 腿的边界：CI 每次全新构建，「陈旧」只在本地/打包态出现——要真覆盖得在打包作业跑 G5。
+- 标记串与输入摘要（G3）当前并存：标记只证明「构建发生过」，摘要才判「输入没变」，两者语义不同，保留。
+- 失败信息带重建命令已是实现约束（G3/G5 共用）；新增守卫必须沿用。
+- Swift `.app` 装配腿（`macos/scripts/build-swift-app.mjs`）在 `--skip-sidecar` 复用旧装配时没有等价 G5 兜底——是否接线到该脚本需 macos owner 决定（同一 `assertPackArtifactsFresh` 一行调用）。
+- G3 输入集的 vendor 只按 `harness.commit` 计入（不逐文件哈希 2 万文件/190MB），同 semver 范围内第三方小版本漂移不改变 `inputsHash`；发布/打包链靠「全新构建 + 构建顺序」兜底。
 
 ### 3. 页面侧性能 P2 残项（推迟中）
 
-> 本节只承载页面侧性能修订中**未实现**的 P2 三项（侧栏 T2、factAt 量化、前置仪表）；
+> 本节只承载页面侧性能修订中**未实现**的两项 P2 残项（侧栏 T2、factAt 量化）；
 > 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §7（观察者对账与页面恢复：隐藏期不采样）、19 §3.2.4（桥探测长尾）、
-> 24 F5（purged 孤儿键收敛）。三项都保留证据与设计以便下次决策，落地前不进入任何提交面。
+> 24 F5（purged 孤儿键收敛）。两项都保留证据与设计以便下次决策，落地前不进入任何提交面。
 
 #### 3.1 侧栏 T2：更细的上下文拆分与按来源缓存
 
@@ -522,20 +509,6 @@ facts 供渲染，只在「是否需要重发布」的判据上用量化值。
 
 **验证**：derive 单测（量化桶边界、桶内等值不发布、桶外仍发布）；实机风暴复测（发布计数与徽标翻转数）；
 真机确认行的新鲜度读数仍可接受。
-
-#### 3.3 搜索通知与 ctx 拆分的前置仪表
-
-**证据**：发布速率、每次发布的订阅者数量、React 提交耗时都没有仪表；风暴 27 次/秒与静息趋零只是两端锚点，
-中间的分布（一次交互触发几次发布）不可测。上面两项的收益因此只能给结构性上界。
-
-**设计**：加一个仅开发档可读的计数器（发布次数、每次发布的 servers 变化来源数、签名缓存命中数、侧栏行派生次数），
-走既有诊断通道暴露，不新增持久化、不进渲染热路径。
-
-**预期收益**：把 P2 的收益判定从「结构性倍数」升级为实测数字；也是壳常驻后内存/发布速率的复核依据（释放壳的蓝点/通知已由 facts-only 判定侧读回退覆盖，见 STATUS §1.1）。
-
-**风险**：仪表本身不能成为新的热路径成本（计数要无分配、无字符串拼接）；诊断面不得进入打包产物的用户可见 UI。
-
-**验证**：开发档读一次计数；打包档确认计数器被编译掉或不暴露。
 
 ### 4. 多实例常驻的后续研究（未排期）
 

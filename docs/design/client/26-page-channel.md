@@ -66,6 +66,8 @@
 
 I-1 之后页面池内长连接 = 0，但**有界、可数的 unary 请求仍然共享同一条 6 槽池**。`packages/dsh-chamber-client-core/src/http-budget.ts` 是这些请求派发的唯一所有者：全局在飞 ≤ `totalMax`（4，留头寸给官方客户端与 script/import 等不可调度消费者）、`local` 车道严格保留 1 槽且**永不被队列上界拒绝**（lane 级保留，不承诺多个 local 请求下的基线优先）、bundle 子帽 2、lease watchdog 只回收不重派、fail-open 与 kill switch。队列上界（`queueMax`/`perSourceQueueMax`）只对显式带 `queueDeadlineAt` 的调用方生效（**per-source 计数也只统计这些条目**：bundle 行与无 deadline 的用户动作不计入，否则一个来源自己的 boot 波会把同源的 bounded 读取即时拒掉；无 deadline 条目本身永不被拒，但其深度计入全局 `queueMax`（饱和时有界调用方吃的最后一道拒绝面））：无 deadline 的调用方（bundle 行装载、gateway-runtime request）由各自生产者的单飞/波控收敛，不因队列深度被拒；
 
+bundle 行装载的**排队等待**另有上限而不改 admission：`client-plugin-loader` 以 `AbortSignal.timeout(BUNDLE_QUEUE_WAIT_MS = 15s)` 作 wait cap（不是 `queueDeadlineAt`，不参与 queue-full/每源计数），到期以 `HttpBudgetUnscheduledError`（从未派发）结算，host-graph 按页面预算 defer——本 boot 丢该行、不写 `bundle-load-failed` 来源诊断、交 graph-return 重试。
+
 bounded 调用方另含用户动作（plugin-capability/plugin-inventory/restart，各 10s 队列截止，拥塞时快速失败并本地化）与 gateway facts probe（5s 队列截止，拒绝后重臂探针阶梯）、设置页 status 探针（5s 队列 + 10s 上限）与 restart/start 控制 POST（30s）；bounded 调用方（mux、per-instance unary、gateway runtime poll、boot 图每段**派发起点** 5s 且每尝试 1.5s（serving 门后重新计时；已派发的一次尝试可越界 ≤1.5s+30s）、控制面 REST 10s）的拒绝发生在派发前，按预算错误上抛、绝不落来源事实（见 §5 第 8、9 条）。它同时提供 design 14 §D4 需要的 `dispatched` 证据：到期时仍在自有队列中的请求按 `unscheduled` 结算，绝不写成来源事实；gateway 事实 probe 的 `unscheduled` 结果按类型排除在分类器之外并重臂有界阶梯。来源退役驱逐是权威退役调用的显式选项（`retire(ids, { evict: true })`，仅 lifecycle 实例；该类还被请求世代复用），壳回收**不**驱逐仍存活来源的读取；
 
 页面拆除 `disposeAllShells` 同时驱逐 booting 代的排队请求。
