@@ -40,7 +40,6 @@
 ### 1.3 客户端插件与设置
 
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载（常驻策略下关闭面板后该源成为普通常驻壳，design 05 §4.1）。
-- **「性能与内存」只读面板（design 15 §D5）**：`settings.get` 的 `system` 是**可选**字段——旧主进程（镜像早于本版）无该字段时面板必须读「不可得」而非猜数，三处类型镜像（desktop store / preload / renderer `global.d.ts`）与 `ipc-surface-mirror` lockstep 同批；页面 JS 堆仅 Electron 有（`performance.memory`），Swift 显示「不可得」。
 - **上游 More 行依赖延迟设置行**：`entry-customization` 的 `pluginNavigation` 只由延迟的 settings-plugin-manager 提供，宿主行停在 PENDING ⇒ 会话头/右栏 More 缺席。残余 = 延迟簇座席存在但读取在处置窗口抛错时 `openPending` 无自动 flush（再次点击恢复）。
 - **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §6.2。
 - **未接入的上游服务面**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges`、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；接入点 = design 09 §3.5/§3.6 的复合入口与 seam，需要时按同一注册表接入。
@@ -61,11 +60,10 @@
 
 - **门禁局部面**：`i18n` 的 CI/release 落位见 `gate-surfaces.json` 的 `workflow` 生成块；`md-links` / `test-wiring` / `no-dead-exports` / `styles` 按 local-only 决策只在本地跑（`check:static`/`check:full`），不生成 CI 步骤。
 - **导出/门禁**：type-only 导出不判；无入口叶子模块不判（方向 = 孤儿模块门）；`TEST_ONLY_EXPORT_ALLOWLIST` 是规则化名单；`run-checks tests` 零覆盖可过；`verify:styles` 不覆盖 docs token；`verify:anchors` 无 Windows 覆盖；`install-gateway.sh` 走 npm 绕单源；`test:gateway` 仍有 2 处真装器 spawn。
-- **resident 收窄后的 test-only 导出**：retention 退役后 `packages/dsh-stream-state/src/container.ts` 的 hidden 投影（`projectHiddenSince` 等）只剩测试消费者，临时进 `TEST_ONLY_EXPORT_ALLOWLIST`；收窄源状态机（删无生产者的 `mounted/unmounted/painted/userSelected/reclaimed/retryRequested/harvestStarted/harvestSatisfied` 事件）与撤 allowlist 同批，触发 = 常驻改造收口（[TODO.md](./TODO.md) D§4）。
 - **重构/测试**：renderer 外三处 state/ref 镜像、`ssh-<id>` 别名、跨包重复 0 组（[TODO.md](./TODO.md) D§1）；god-file 预算条目与阈值见 `scripts/gates/registry/file-budgets.json`（`node scripts/gates/checks/verify-file-budgets.mjs --report` 的缺口只按可减目标合计，`kind:ceiling` 单列），但新模块仍需**人工**登记才受保护；CI 打包排练 CPU；Swift 串行 113s（并行会丢 XCTSkip 判据）；升级线残余 = fatal 恢复框键位走查、node-pty 补偿复核。
 - **隐私/平台**：`DSH_TELEMETRY_DISABLED` 不覆盖 `session-log-deepseek`，桌面是否默认 opt-out 未裁；`isMainFrame` 归属缺陷；docs 锚点过期（D15）；私有文件纪律三实现；`client-web` 未用 `ui-theme`；layout `ThemePresenter` 残留；wire A–F、sanitize/win-probes、dashboard 第三份 UI、A-U3/A-F16、dual-host。
 - **低优 UX**：hover-only、徽标窄窗、en 单数、aria-label、ssh done 态、PluginDialog DOM 测试、对账空态、versionsEpoch、30s 文案、内联 effect。
-- **门单源残余**：① 5 个 typecheck（`typecheck:host-graph/host-git/host-archive-cleanup/host-open-in` 与 `typecheck:gateway`）只存在于 `ci.yml` 与 `release.yml` 的手写多行 run（gateway 的 `typecheck:gateway` 另见 `ci.yml` 手写步），registry 无条目 → 四个模式都不含它们，“modes 名字即 CI 所跑”对这 5 步不成立（`seed-client-graph` 的唯一检查完全在模式之外）；② `proof:true` 只覆盖 release 校验 job 的部分生成门步，`C8` rebuild、remote-state acceptance、third-party notices、`release-preflight --actions-only`、renderer SVG scoper 断言、gateway pack/install smoke 均非 proof-required（proof 集合与 id→command 身份面由 `scripts/gates/registry/gate-registry.test.mjs` 的 golden 钉住，改动必须同批改断言）；④ Windows 腿结构上进不了 registry（`gate-registry.mjs` 的 platform 校验只允许 darwin；Windows 腿已随 Electron 冻结删除），6 条 `macos.*` 门无生成块、靠手写步骤执行（命令等价但无 lockstep 测试）。修①需裁决：把手写步并入生成块，或补 registry 条目；⑤ 生成块之外的手写步骤仍无覆盖网——`gate-workflow-views --check` 只比对四个标记块，旧 `static-gate-parity` 扫整个 job 的能力没有等价替代（静态门的 CI 落位已由 registry 不变量「`workflow` 或 `coveredBy`」拦下，其余步骤仍需人工对照）
+- **门单源残余**：① 5 个 typecheck（`typecheck:host-graph/host-git/host-archive-cleanup/host-open-in` 与 `typecheck:gateway`）只存在于 `ci.yml` 与 `release.yml` 的手写多行 run（gateway 的 `typecheck:gateway` 另见 `ci.yml` 手写步），registry 无条目 → 四个模式都不含它们，“modes 名字即 CI 所跑”对这 5 步不成立（`seed-client-graph` 的唯一检查完全在模式之外）；② `proof:true` 只覆盖 release 校验 job 的部分生成门步，`C8` rebuild、remote-state acceptance、third-party notices、`release-preflight --actions-only`、renderer SVG scoper 断言、gateway pack/install smoke 均非 proof-required（proof 集合与 id→command 身份面由 `scripts/gates/registry/gate-registry.test.mjs` 的 golden 钉住，改动必须同批改断言）；③ Windows 腿结构上进不了 registry（`gate-registry.mjs` 的 platform 校验只允许 darwin；Windows 腿已随 Electron 冻结删除），6 条 `macos.*` 门无生成块、靠手写步骤执行（命令等价但无 lockstep 测试）。修①需裁决：把手写步并入生成块，或补 registry 条目；④ 生成块之外的手写步骤仍无覆盖网——`gate-workflow-views --check` 只比对四个标记块，旧 `static-gate-parity` 扫整个 job 的能力没有等价替代（静态门的 CI 落位已由 registry 不变量「`workflow` 或 `coveredBy`」拦下，其余步骤仍需人工对照）
 - **其他**：`verify:i18n` 的 40-hex 例外；lockfile 断言（`git diff --exit-code -- pnpm-lock.yaml`，`ci.yml` 与 `release.yml` 的多个 job）不在任何模式里，只由 `verify-release-ci-proof.mjs` 的 `NON_GATE_STEPS` 按步骤名保护；gateway 失败分支夹具；归档保护闭包测试；通知收敛器遗留；旧边沿孤岛；页面账本预热接线锁；page-channel 重复实例只报错；`notServingYet` 无生产者；Git 分支候选；B 桥写端行为夹具。`verify-artifact-freshness`（release-checklist 手跑）与 `pnpm run smoke`（ci 步骤）也不在四个模式内，按各自单源执行。
 - **首屏体积**：`build:renderer` 两条 warn 越线（chamber entry 与 head CSS）；增量含 `lexical`（ui-conversation 编辑器）与既有的 `simple-icons` 整桶。只 warn 不 fail，阈值不上调（上调会把增长藏起来）；拆分/懒载未排期。
 
@@ -109,12 +107,11 @@
 - C15 hover 触发降级（提案）：改触发面 + 同批改 `AGENTS.md`/触点表/发布策略/静态门。
 - 上游 host release 门（#6228）在 chamber 不生效：未决采纳（透传 release + 复刻刷新提示）或登记有意差异。
 - S-49 原生窗口高度（786 vs 800）；宽度偏好 per-flavor（T-18）。
-- 起始端口偏移已定（dsh 17510+1..17514、CP 17500，仅 env 覆盖）。
 - trusted-host 自定义 Host 需同步扩集；多 plane `$DSH_HOME` 隔离未决；catalog metadata 无跨进程 CAS。
 - 响应头白名单双处同步；`__DSH_BOOT__` 以 vendor `parseBootManifest` 为准。
 - 未挂载源 `workspace/follow` 只读流未决；facts forward-skew 带载荷是否算权威行集未裁。
-- P1 结构性收口的两处“编排核心”按**风险/收益**保留，而非“需要依赖容器”：`retireSources`（App 678-827，外部绑定约 75 个、线性扇出）与 `refreshRemotes`（838-936，99 行、约 23 个自由变量）可继续拆成 3 段 + 按域输入对象，但收益主要是可测的注销不变量（per-source closers 登记表），行数有限；host-assembly 的订阅体按上一条成对抽即可。seam 级拆分的边界：wire 契约与 gate 单源在 registry/生成块内受约束；renderer 的 6 个大 hook（28 个 app-hook 的其余部分 <200 行）与 desktop/gateway 12 个新模块登记在 file-budgets.json（清单与阈值以表为准）；未拆的两处编排核心即上一条。
-- host-assembly 的 `sm.onStatusChanged` 订阅体**可以抽**，但必须与 `onVerified` **成对**抽成同一工厂（二者共享 `registeredTargetKeys`/`registeredAuthFingerprints`）：工厂在组合根原位调用一次、仍同步订阅，注册时机不变。“必须内联”的判断不成立；真约束只剩两处：fail-closed 分支的 `return` 语义逐字保留（现 698-710）与 6 个同工厂闭包状态的归属。抽完预计 -158 行（1163 → ~1005）。
+- P1 结构性收口的两处“编排核心”按**风险/收益**保留，而非“需要依赖容器”：`retireSources`（外部绑定约 75 个、线性扇出）与 `refreshRemotes`（99 行、约 23 个自由变量）可继续拆成 3 段 + 按域输入对象，但收益主要是可测的注销不变量（per-source closers 登记表），行数有限；host-assembly 的订阅体按上一条成对抽即可。seam 级拆分的边界：wire 契约与 gate 单源在 registry/生成块内受约束；renderer 的 6 个大 hook（28 个 app-hook 的其余部分 <200 行）与 desktop/gateway 12 个新模块登记在 file-budgets.json（清单与阈值以表为准）；未拆的两处编排核心即上一条。
+- host-assembly 的 `sm.onStatusChanged` 订阅体**可以抽**，但必须与 `onVerified` **成对**抽成同一工厂（二者共享 `registeredTargetKeys`/`registeredAuthFingerprints`）：工厂在组合根原位调用一次、仍同步订阅，注册时机不变。“必须内联”的判断不成立；真约束只剩两处：fail-closed 分支的 `return` 语义逐字保留（`sm.onStatusChanged` 订阅体内）与 6 个同工厂闭包状态的归属。抽完预计 −158 行（以抽取时的基线复测为准）。
 
 ## 四、范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
@@ -129,7 +126,7 @@
 - **移出项（P3）**：匿名 control-plane 认证/审计、薄壳会话面、统一索引、broker、通知中心、MCP 不得回流；design 17/18/19/08/20/24 例外不作他域先例。
 - **构建/注册**：构建产物移出 git（`build:artifacts` 自举）；注册表降级不剪不落盘（fail-closed）；上游纯镜像 README 死链跳过（C1）；sidebar/layout `lib` 目标与镜像 exports 有意保留。
 - **安全/发布**：`--no-auth` 有界例外；Gateway state 0700 + 属主；safeStorage 诚实回退；Windows 无 Authenticode、macOS 不出 x64；发布面 = macOS Swift + gateway；Electron 三腿 `if: false` 恒 skipped（冻结归档，恢复按 `electron-frozen.md` §6，不得按旧注释删守卫）；state 根租约对越界拓扑（容器重建挂 volume、NFS 共享根）响亮拒绝，恢复 = 移走 `owner.json`（design 17 §12）。
-- **N-ctx**：单文档信任域；原生键盘单槽（全部 boot 实例 accept）；壳常驻——local 恒留 + 用户意图壳常驻（keep-all，无常规空闲退役）；系统投机壳（空闲预热/收割）≤1 后台槽；唯一自动退役 = 硬上限（12）+ 平台化内存压力阀（v1.1）；手动释放 = 设置→通用「性能与内存」（仅调试模式开启时挂载、可用）；释放写 `prewarmSuppressed`（选中/删源/设置目标清除）；契约见 design 05 §4.1，决策叶 `packages/renderer/src/resident-policy.ts`、页面级快照 `packages/dsh-chamber-client-core/src/resident-store.ts`；文档主题/页面语言归 §1.3。
+- **N-ctx**：单文档信任域；原生键盘单槽（全部 boot 实例 accept）；壳常驻——local 恒留 + 用户意图壳常驻（keep-all，无常规空闲退役）；系统投机壳（空闲预热/收割）≤1 后台槽；唯一自动退役 = 硬上限（12）+ 平台化内存压力阀（v1.1）；手动释放 = 设置→通用「性能与内存」；释放写 `prewarmSuppressed`（选中/删源/设置目标清除）；契约见 design 05 §4.1，决策叶 `packages/renderer/src/resident-policy.ts`、页面级快照 `packages/dsh-chamber-client-core/src/resident-store.ts`；文档主题/页面语言归 §1.3。
 - **registry/元工程**：触点 registry 单一来源、无 Windows 覆盖；R10 文本锁未全量改 import 断言；settings-plugin-manager 无 typecheck 程序（其 vendor client 面未铺成独立 program），`ctx.get` 显式类型实参一类编译错误只有该包 wiring 测试的反向源锁兜底；R11 布局助手受 Swift 锚点；pnpm shim 待打包实机；state 根租约 legacy 一个 minor 后删；Windows 覆盖缺口 R2/R14；R15 ui-layout 分类表；host 域逐域手写有 lockstep；第三类 vendor 补丁（`use-chat-reading`）；ServerSection 预算 raise（1243→1273）；alpha.3 workspace 成员判定待复核；cua 不接入。
 
 ### 4.2 产品、界面与运行时取舍

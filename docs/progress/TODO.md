@@ -560,7 +560,6 @@ facts 供渲染，只在「是否需要重发布」的判据上用量化值。
 | # | 工作 | 触发条件 | 说明 / 验收方向 |
 |---|---|---|---|
 | 1 | 侧边栏单实例化 / 隐藏壳监听门控 | 来源 ≥8，或实测 p95（切源/首帧/流式）劣化 | N 壳共享一个 renderer：隐藏壳的 React 更新与监听仍跑。先有帧时/输入延迟度量面，再评估「仅屏上壳订阅/暂停隐藏壳监听」；不得改变「会话保活」契约 |
-| 2 | `dsh-stream-state` 的 hidden/reclaimed 收窄 | `TEST_ONLY_EXPORT_ALLOWLIST` 清理时（同批） | retention 退役后 `projectHiddenSince` 等成 test-only；与删除无生产者的 `mounted/unmounted/painted/userSelected/reclaimed/retryRequested/harvestStarted/harvestSatisfied` 事件同批，保持 reducer 真值表与 `emission-coverage` 全绿 |
-| 3 | 进程 / 视图隔离（`WebContentsView` / 独立 WKWebView） | 来源 >8，或「一个壳的长任务卡住整页」真机复现 | design 05 §9 的重评触发；开做前先取整页卡顿证据（rAF/帧时/长任务），不以猜测开做 |
-| 4 | 每壳内存研究 | 面板/实测定标显示 N=5 稳态内存不可接受，或需要按壳归因的统计 | 单 renderer 下无每壳字节读数；方向 = Electron `app.getAppMetrics()`（仅 Electron）与 DOM/节点计数代理，**不伪造**每壳字节；Swift 腿只有整机内存 |
-| 5 | upstream freeze（vendor pin 升级冻结） | 常驻改造（D1–D4）未收口前冻结；出现上游安全修复/阻断则解冻单次并回归 | 避免 pin 升级把 vendor 隐藏壳行为/补丁面与常驻改造改动混进同一回归窗口；收口后按既有升级 checklist 恢复 |
+| 2 | 进程 / 视图隔离（`WebContentsView` / 独立 WKWebView） | 来源 >8，或「一个壳的长任务卡住整页」真机复现 | design 05 §9 的重评触发；开做前先取整页卡顿证据（rAF/帧时/长任务），不以猜测开做 |
+| 3 | 每壳内存研究 | 面板/实测定标显示 N=5 稳态内存不可接受，或需要按壳归因的统计 | 单 renderer 下无每壳字节读数；方向 = Electron `app.getAppMetrics()`（仅 Electron）与 DOM/节点计数代理，**不伪造**每壳字节；Swift 腿只有整机内存 |
+| 4 | upstream freeze（vendor pin 升级冻结） | 常驻改造（D1–D4）未收口前冻结；出现上游安全修复/阻断则解冻单次并回归 | 避免 pin 升级把 vendor 隐藏壳行为/补丁面与常驻改造改动混进同一回归窗口；收口后按既有升级 checklist 恢复 |
