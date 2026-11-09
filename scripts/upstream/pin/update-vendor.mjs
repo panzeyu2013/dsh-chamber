@@ -136,7 +136,7 @@ function main() {
     // 5. 差量建链。--allow-lockfile-stale 下锁文件断言已禁用，故任何非零
     // 退出都是硬错误（没有"预期失败"分支）。
     console.log('[update-vendor] 差量重建 vendor 链接（--allow-lockfile-stale）')
-    const ensure = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', 'dev', 'bootstrap', 'ensure-harness-vendor.mjs'), '--allow-lockfile-stale'], { encoding: 'utf8' })
+    const ensure = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', 'dev', 'bootstrap', 'ensure-harness-vendor.mjs'), '--allow-lockfile-stale'], { encoding: 'utf8', env: { ...process.env, DSH_CHAMBER_VENDOR_SKIP_GITLINK: '1' } })
     console.log(ensure.stdout.trim())
     if (ensure.status !== 0) {
       fail(`ensure-harness-vendor 失败: ${ensure.stderr?.trim() || `exit ${ensure.status}`}`)
@@ -177,8 +177,9 @@ function main() {
   } catch (err) {
     console.error(`✗ update-vendor: ${err.message}`)
     if (oldPin !== null) {
-      console.error(`恢复指引：submodule 可能已切到新 commit 而 harness.commit/gitlink 仍为旧 pin；` +
-        `可执行 git -C vendor/harness-checkout checkout --detach ${oldPin} 切回后重试`)
+      console.error(`恢复指引：submodule 可能已切到新 commit 而 index gitlink 仍为旧 pin（升级中断态）。` +
+        `继续升级：确认 harness.commit 已是新 pin 后执行 git add vendor/harness-checkout harness.commit pnpm-lock.yaml 再重跑；` +
+        `完全回退：git -C vendor/harness-checkout checkout --detach ${oldPin} && git add vendor/harness-checkout harness.commit`)
     }
     process.exitCode = 1
   } finally {

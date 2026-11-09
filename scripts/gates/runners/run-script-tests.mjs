@@ -105,6 +105,8 @@ export const GROUPS = {
     'scripts/upstream/pin/lockfile-store-path-mappings.test.mjs',
     'scripts/upstream/pin/roster-parity.test.mjs',
     'scripts/upstream/pin/workspace-range-ratchet.test.mjs',
+    // 升级管线的两脚本握手：step 5 的 gitlink 豁免与中断态恢复指引。
+    'scripts/upstream/pin/update-vendor.test.mjs',
   ],
   // Release chain: workflow safety policy, dual-flavor artifact清单, packaging
   // manifest lockstep, bundled-payload notices (primary runtime).

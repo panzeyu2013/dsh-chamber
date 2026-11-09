@@ -87,7 +87,7 @@ function submoduleHead() {
  * 校验 submodule 单一事实来源：目录存在、HEAD 可解析、且 == 声明性 pin。
  * 任何模式共用；不匹配即硬失败（不存在"警告后继续"的静默回退）。
  */
-function verifyPin() {
+function verifyPin(options = {}) {
   const pin = readPin()
   if (!existsSync(MANAGED_DIR)) {
     throw new Error(`submodule ${MANAGED_DIR} 不存在 — 请先物化：git submodule update --init(本地) 或 checkout submodules: true(CI)`)
@@ -102,9 +102,17 @@ function verifyPin() {
   }
   // gitlink（index 里的 160000 条目）与声明 pin 一致：把"手改 harness.commit
   // 而 gitlink 未动"的洞从 CI（checkout 物化后硬失败）提前到本地。
+  // `update-vendor` 的 step 5 在 submodule 已切到新 commit、harness.commit 已写、
+  // 但 index gitlink 尚未 `git add` 的**升级中间态**跑本脚本：那是流程中态，
+  // 不是漂移。仅该流程设 DSH_CHAMBER_VENDOR_SKIP_GITLINK=1 跳过本次对拍；
+  // 日常开发 / preinstall / CI 不设，守卫照常生效。
   const gitlink = gitLinkCommit()
   if (gitlink !== null && gitlink !== pin) {
-    throw new Error(`submodule gitlink=${gitlink.slice(0, 12)} != harness.commit pin=${pin.slice(0, 12)} — 请用 node scripts/upstream/pin/update-vendor.mjs <tag> 升级（gitlink 与 pin 同批提交）`)
+    if (options.skipGitlinkGuard !== true) {
+      throw new Error(`submodule gitlink=${gitlink.slice(0, 12)} != harness.commit pin=${pin.slice(0, 12)} — 请用 node scripts/upstream/pin/update-vendor.mjs <tag> 升级（gitlink 与 pin 同批提交）`)
+    }
+    // Loud on purpose: the bypass is printed, never silent.
+    console.warn('[ensure-harness-vendor] 跳过 gitlink 对拍：升级中间态（DSH_CHAMBER_VENDOR_SKIP_GITLINK=1 且 --allow-lockfile-stale）；完成后必须 git add vendor/harness-checkout')
   }
   return pin
 }
@@ -457,7 +465,13 @@ function main() {
   const args = process.argv.slice(2)
   const checkMode = args.includes('--check')
   const allowStaleLockfile = args.includes('--allow-lockfile-stale') || process.env.DSH_CHAMBER_VENDOR_ALLOW_STALE_LOCKFILE === '1'
-  const pin = verifyPin()
+  // The gitlink bypass is NARROW: it needs the stale-lockfile upgrade mode too, so a stray
+  // environment variable alone can never disable the drift guard in dev/CI/preinstall.
+  if (process.env.DSH_CHAMBER_VENDOR_SKIP_GITLINK === '1' && !allowStaleLockfile) {
+    throw new Error('DSH_CHAMBER_VENDOR_SKIP_GITLINK=1 只允许与 --allow-lockfile-stale 同用（update-vendor 升级中间态）；日常开发/CI 不得关闭 gitlink 对拍')
+  }
+  const skipGitlinkGuard = allowStaleLockfile && process.env.DSH_CHAMBER_VENDOR_SKIP_GITLINK === '1'
+  const pin = verifyPin({ skipGitlinkGuard })
   const packages = collectPackages(MANAGED_DIR)
   if (packages.length < MIN_LINKS) {
     throw new Error(`发现的 @deepseek-ai 包过少(${packages.length} < ${MIN_LINKS}),疑似 submodule 不完整: ${MANAGED_DIR}`)
