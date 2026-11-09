@@ -15,8 +15,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
+  CLIENT_SEAM_SKIPS,
+  RUNTIME_LOADED_CLIENT_SEAMS,
+  clientSeamCoverage,
+  clientSeamVerdict,
   collectImports,
   deadExports,
+  discoverClientPlugins,
   extractRuntimeExports,
   parseIndexModules,
   staleExemptions,
@@ -93,6 +98,69 @@ test('the real index and its modules parse into a non-trivial surface', () => {
       : entry.names.length)
   }, 0)
   assert.ok(names >= 30, 'the parsed runtime surface must be non-trivial: ' + String(names))
+})
+
+test('parse: type-only re-export faces are erased, value re-exports and modules stay judged', () => {
+  const parsed = parseIndexModules(
+    "export * from './star.ts'\n" +
+    "export { used, type Face } from './value.ts'\n" +
+    "export type { OnlyType } from './type.ts'\n",
+  )
+  assert.equal(parsed.length, 3)
+  assert.deepEqual(parsed[1], { module: './value.ts', names: ['used'] })
+  // The type-only group keeps its module so a missing target is still red, but
+  // declares no runtime name the gate could judge.
+  assert.deepEqual(parsed[2], { module: './type.ts', names: [] })
+})
+
+test('client seams: an unimported public export is reported, the registered ABI names are exempt, a stale ABI entry is flagged', () => {
+  const entry = [{ package: 'pkg', file: 'packages/pkg/src/client/index.ts', names: ['apply', 'inject', 'used', 'orphan'] }]
+  const subpaths = [{ package: 'pkg', file: 'packages/pkg/src/client/extra.ts', names: ['subUsed', 'subOrphan'] }]
+  const verdict = clientSeamVerdict(entry, subpaths, new Set(['used', 'subUsed']), ['apply', 'inject'])
+  assert.deepEqual(verdict.dead.map((item) => item.name).sort(), ['orphan', 'subOrphan'])
+  assert.equal(verdict.checked, 6)
+  assert.deepEqual(verdict.staleAbi, [])
+  // The loader ABI names have no static importer by design; an ABI name that gains
+  // one (or leaves the client entry) means the exemption no longer holds.
+  assert.deepEqual(clientSeamVerdict(entry, subpaths, new Set(['used', 'subUsed', 'apply']), ['apply', 'inject']).staleAbi, ['apply'])
+  assert.deepEqual(clientSeamVerdict(entry, subpaths, new Set(['used', 'subUsed', 'apply', 'inject']), ['missing']).staleAbi, ['missing'])
+})
+
+test('client seams: coverage reports an unregistered plugin, a zombie row and a judged+skipped conflict', () => {
+  const discovered = [{ name: 'judged' }, { name: 'skipped' }, { name: 'newcomer' }]
+  const coverage = clientSeamCoverage(
+    discovered,
+    [{ package: 'judged', reason: 'registered', abi: ['apply'] }, { package: 'gone', reason: 'stale', abi: ['apply'] }],
+    { skipped: 'recorded skip reason' },
+  )
+  assert.deepEqual(coverage.unregistered, ['newcomer'])
+  assert.deepEqual(coverage.zombies, ['gone'])
+  assert.deepEqual(coverage.conflicts, [])
+  assert.deepEqual(clientSeamCoverage(discovered, [{ package: 'skipped', reason: 'x', abi: [] }], { skipped: 'both' }).conflicts, ['skipped'])
+  // A manifest that declares dsh.client without a resolvable ./client export is a
+  // broken convention, not a coverable seam: it must not be forced into the table.
+  const broken = [{ name: 'broken', clientEntry: null }, { name: 'judged', clientEntry: '/x/src/client/index.ts' }]
+  const brokenCoverage = clientSeamCoverage(broken, [{ package: 'judged', reason: 'x', abi: [] }, { package: 'broken', reason: 'x', abi: [] }], {})
+  assert.deepEqual(brokenCoverage.unregistered, [])
+  assert.deepEqual(brokenCoverage.zombies, ['broken'])
+})
+
+test('the real client-plugin discovery is covered by the seam table', () => {
+  const discovered = discoverClientPlugins()
+  assert.ok(discovered.length >= 8, 'the discovery must find every client-plugin package: ' + String(discovered.length))
+  for (const plugin of discovered) {
+    assert.ok(plugin.clientEntry.startsWith(plugin.dir + '/'), plugin.name + ': the ./client export must resolve inside the package')
+    assert.ok(plugin.subpaths.every((entry) => entry.subpath.startsWith('./') && entry.file.startsWith(plugin.dir + '/')), plugin.name + ': subpaths are package-relative source entries')
+  }
+  const judged = new Set(RUNTIME_LOADED_CLIENT_SEAMS.map((entry) => entry.package))
+  for (const plugin of discovered.filter((entry) => judged.has(entry.name))) {
+    assert.ok(plugin.clientEntry.endsWith('/client/index.ts'), plugin.name + ': a judged seam is a source entry (src/client/index.ts)')
+    assert.ok(!(plugin.name in CLIENT_SEAM_SKIPS), plugin.name + ': one row must own the package')
+  }
+  const coverage = clientSeamCoverage(discovered)
+  assert.deepEqual(coverage.unregistered, [], 'a client-plugin package without a seam row would be silently unjudged')
+  assert.deepEqual(coverage.zombies, [], 'a seam row that no longer matches a package is a stale exemption')
+  assert.deepEqual(coverage.conflicts, [])
 })
 
 test('import parsing understands type-only and aliased named imports', () => {

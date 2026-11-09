@@ -36,16 +36,29 @@
  *
  * NOT JUDGED, but named with a reason so the skip is auditable:
  * - RUNTIME_LOADED_PACKAGES: entries the dsh plugin loader / host-graph insert
- *   loads at runtime by package name - no static importer exists by design.
+ *   loads at runtime by package name - no static importer exists by design. The
+ *   package's NON-root public entries are still judged through the client-seam
+ *   table below (a client-plugin package is not a blanket skip).
+ * - RUNTIME_LOADED_CLIENT_SEAMS: the browser half of a client-plugin package is a
+ *   package.json export subpath the composite entry loads by package name; the
+ *   client-plugin loader reads the namespace and calls apply() / reads inject, so
+ *   each seam lists those ABI names instead of relying on an importer. Every other
+ *   runtime export reachable from a non-root public entry (`./client` and extra
+ *   subpaths such as `./section`) is judged like a package root.
+ * - CLIENT_SEAM_SKIPS: a client-plugin package whose client half is replayed from
+ *   the upstream pin (dsh-api-gateway, dsh-client-connection) is not
+ *   chamber-authored surface; an in-repo importer rule would flag upstream API
+ *   and force edits that break the fork-replay discipline. The reason is recorded.
  * - PENDING_PACKAGES: barrel narrowing assigned to another owner. The dead faces
  *   are still counted and printed, but do not fail this run. A pending package
  *   with no dead export is a zombie entry and FAILS - the list can only shrink
  *   as owners land their narrowing.
- * - TYPE-ONLY exports (interfaces, type aliases, `export type` faces): erased at
- *   runtime and often the contract's documentation face; judging them by "an
- *   importer names the type" would flag the many types read only in type
- *   positions. Ruling (upstream-drift V2): they stay out of this gate - narrowing
- *   a type that lost its last consumer is a review duty, not a script verdict.
+ * - TYPE-ONLY exports (interfaces, type aliases, `export type` faces and inline
+ *   `type` modifiers in a named re-export group): erased at runtime and often the
+ *   contract's documentation face; judging them by "an importer names the type"
+ *   would flag the many types read only in type positions. Ruling
+ *   (upstream-drift V2): they stay out of this gate - narrowing a type that lost
+ *   its last consumer is a review duty, not a script verdict.
  *
  * EXEMPTIONS. DEAD_EXPORT_EXEMPTIONS names a real dead export per package, with
  * the reason a reviewer accepted and where the consumer lands. A stale exemption
@@ -59,11 +72,13 @@
  * surface the read-face lockstep suite does not walk. Tests, generated output,
  * vendor trees and docs are not scanned: the names legitimately live there.
  *
- * NEGATIVE CONTROL: --self-test drives the pure resolver with a fabricated
- * module list whose one export has no importer and asserts it is reported, an
- * exemption silences it, a stale exemption is flagged, the index parser does
- * not mistake comment text for an export name, and the retired write-face
- * scanner detects a reappearance in a fabricated shim source.
+ * NEGATIVE CONTROL: --self-test drives the pure resolvers with fabricated module
+ * lists: an orphan export is reported, an exemption silences it, a stale exemption
+ * is flagged, the index parser does not mistake comment text for an export name
+ * and drops type-only re-exports, the client-seam verdict reports an unimported
+ * export but respects the registered ABI names and flags a stale ABI entry, the
+ * coverage verdict reports an unregistered client plugin and a zombie row, and the
+ * retired write-face scanner detects a reappearance in a fabricated shim source.
  *
  * Usage:
  *   node scripts/gates/checks/verify-no-dead-exports.mjs            # gate
@@ -138,7 +153,8 @@ export const TEST_ONLY_EXPORT_ALLOWLIST = [
 /**
  * Package entries loaded at runtime by name, so their root index has no static
  * importer by design. Each entry carries the reason; none of these packages'
- * exports is judged as a dead face.
+ * root exports is judged as a dead face. A client-plugin package's browser half
+ * is still judged through RUNTIME_LOADED_CLIENT_SEAMS below.
  * @type {Readonly<Record<string, string>>}
  */
 export const RUNTIME_LOADED_PACKAGES = {
@@ -153,6 +169,49 @@ export const RUNTIME_LOADED_PACKAGES = {
   'dsh-chamber-client-ui-settings-bridge': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-settings-connections': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
   'dsh-chamber-client-ui-sidebar': 'client-plugin loader: the composite entry imports the ./client half at build time; the root index apply() is the host plugin ABI the dsh loader calls',
+}
+
+/**
+ * Client-plugin seams: the browser half of these packages is a package.json export
+ * subpath that the composite entry (renderer/src/chamber-entry.ts) loads by package
+ * name. The client-plugin loader reads the module namespace and calls apply() /
+ * reads inject, so those ABI names have no static importer by design - the seam
+ * lists them per package instead of exempting the whole package. Every OTHER
+ * runtime export reachable from a non-root public entry (`./client` and extra
+ * subpaths such as `./section`, `./machine-catalog`, `./stream-health-probe`) is
+ * judged like a package root, with the seam entry's own re-export lines excluded
+ * from its consumer set. The table MUST cover every discovered client-plugin
+ * package (a manifest declaring `dsh.client`; a package without a resolvable
+ * `./client` export fails loud instead of being registered): a new package is red
+ * until its seam is registered with a reason, and a row whose package stopped
+ * matching is a zombie (red). `abi` stays honest: a listed name that gained a
+ * production importer or disappeared from the client entry is a stale exemption.
+ * @type {readonly { package: string, reason: string, abi: readonly string[] }[]}
+ */
+export const RUNTIME_LOADED_CLIENT_SEAMS = [
+  { package: 'dsh-chamber-client-ui-browser', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client as a deferred chunk (design 28 Browser fork); the root . is the host-plugin ABI' },
+  { package: 'dsh-chamber-client-ui-git', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client at build time (design 08 Git worktree); the root . is the host-plugin ABI' },
+  { package: 'dsh-chamber-client-ui-layout', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client at build time (design 06 layout fork, the only root-slot declarer); the root . is the host-plugin ABI' },
+  { package: 'dsh-chamber-client-ui-open-in', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client at build time (designs 16/20 open-in + the stream-health seat); the root . is the host-plugin ABI' },
+  { package: 'dsh-chamber-client-ui-settings-bridge', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client at build time (design 05 settings shell); the root . is the host-plugin ABI' },
+  { package: 'dsh-chamber-client-ui-settings-connections', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client at build time (design 05 connections page); the root . is the host-plugin ABI' },
+  { package: 'dsh-chamber-client-ui-settings-plugin-manager', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client at build time (design 05 plugin-manager section); the package has no root src/index.ts, so ./client is its only public face' },
+  { package: 'dsh-chamber-client-ui-sidebar', abi: ['apply', 'inject'], reason: 'the composite entry loads ./client at build time (design 05 sidebar shell); the root . is the host-plugin ABI' },
+]
+
+/**
+ * Client-plugin packages deliberately outside the seam judgment, each with the
+ * reason. Both are client halves replayed from the upstream pin, not
+ * chamber-authored surface: judging them by in-repo importers would flag upstream
+ * client API (installConnection/SYSTEM_RESUME_EVENT/isRemoteFailure) that the
+ * official runtime consumes at load time, and "fixing" that would break the C1
+ * byte-parity / fork-replay discipline. Recorded so a new client plugin cannot
+ * join this skip without a reviewed reason.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const CLIENT_SEAM_SKIPS = {
+  'dsh-api-gateway': 'fork of the official api-gateway client half (registry fork.dsh-api-gateway): the client entry replays the upstream surface, so in-repo importer status is not the owning contract',
+  'dsh-client-connection': '[pure] mirror of the official connection client + per-entry base-path patch (C1 byte parity): the client entry is upstream API the official runtime loads by name, not chamber-authored surface',
 }
 
 /**
@@ -298,16 +357,28 @@ export function stripComments(sourceText) {
   return out
 }
 
-/** Parse export-* from './x.ts' (and named re-exports) out of the index. */
+/**
+ * Parse export-* from './x.ts' (and named re-exports) out of the index. A named
+ * group keeps its module (so a missing target is still red) but carries only its
+ * RUNTIME names: `export type {…} from` and an inline `type` modifier are erased
+ * at runtime and are not a judged face (header: TYPE-ONLY rule).
+ */
 export function parseIndexModules(indexText) {
   const text = stripComments(indexText)
   const modules = []
   const star = /(?:^|\n)\s*export\s+\*\s+from\s+['"](\.[^'"]+)['"]/gu
   for (const match of text.matchAll(star)) modules.push(match[1])
-  const named = /(?:^|\n)\s*export\s*(?:type\s+)?\{([^}]*)\}\s*from\s*['"](\.[^'"]+)['"]/gu
+  const named = /(?:^|\n)\s*export\s+(type\s+)?\{([^}]*)\}\s*from\s*['"](\.[^'"]+)['"]/gu
   for (const match of text.matchAll(named)) {
-    const names = match[1].split(',').map((name) => name.trim().replace(/^type\s+/u, '').split(/\s+as\s+/u)[0].trim()).filter(Boolean)
-    modules.push({ module: match[2], names })
+    const typeOnlyGroup = match[1] !== undefined
+    const names = typeOnlyGroup
+      ? []
+      : match[2].split(',')
+        .map((item) => item.trim())
+        .filter((item) => item !== '' && !/^type\s+/u.test(item))
+        .map((item) => item.split(/\s+as\s+/u)[0].trim())
+        .filter(Boolean)
+    modules.push({ module: match[3], names })
   }
   return modules
 }
@@ -389,11 +460,68 @@ export function discoverPackages(repoRoot = REPO_ROOT) {
 }
 
 /**
+ * Client-plugin packages: every direct child of packages/ whose manifest declares
+ * `dsh.client` (the client-plugin loader's contract). `clientEntry` is the
+ * manifest's `./client` export resolved to a path, or null when the manifest
+ * declares the client plugin without that export (a broken convention: the loader
+ * imports `<pkg>/client` - the caller fails it loud instead of skipping it).
+ * `subpaths` lists the package's OTHER public export subpaths (each is
+ * source-judged like an entry). Derived from the workspace tree - no package is
+ * named here.
+ * @returns {{ name: string, dir: string, spec: string, clientEntry: string | null,
+ *   subpaths: { subpath: string, file: string }[] }[]}
+ */
+export function discoverClientPlugins(repoRoot = REPO_ROOT) {
+  const base = join(repoRoot, 'packages')
+  if (!existsSync(base)) return []
+  const plugins = []
+  for (const entry of readdirSync(base, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const dir = join(base, entry.name)
+    const manifestPath = join(dir, 'package.json')
+    if (!existsSync(manifestPath)) continue
+    let manifest
+    try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) } catch { continue }
+    if (typeof manifest.name !== 'string' || manifest.name === '') continue
+    if (manifest.dsh === null || typeof manifest.dsh !== 'object') continue
+    if (manifest.dsh.client === null || typeof manifest.dsh.client !== 'object') continue
+    const exportsMap = manifest.exports === null || typeof manifest.exports !== 'object' ? {} : manifest.exports
+    const targetOf = (target) => {
+      if (typeof target === 'string') return target
+      if (target === null || typeof target !== 'object') return undefined
+      const candidate = target.default ?? target.types
+      return typeof candidate === 'string' ? candidate : undefined
+    }
+    const clientTarget = targetOf(exportsMap['./client'])
+    const subpaths = []
+    for (const [subpath, target] of Object.entries(exportsMap)) {
+      if (subpath === '.' || subpath === './client' || subpath === './package.json') continue
+      const rel = targetOf(target)
+      if (rel === undefined || !/\.(?:ts|tsx|mts|cts)$/u.test(rel)) continue
+      subpaths.push({ subpath, file: join(dir, rel) })
+    }
+    plugins.push({
+      name: entry.name,
+      dir,
+      spec: manifest.name,
+      clientEntry: clientTarget === undefined ? null : join(dir, clientTarget),
+      subpaths,
+    })
+  }
+  return plugins.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
  * Importer names of one package's entry (see the header for the consumer rule).
  * Every file under packages/ and scripts/ is scanned, including the package's
  * own sources; build output is always excluded.
- * @param {{ scope?: 'production' | 'test' }} [options] - `production` (default)
- *   excludes test files; `test` reads ONLY them (the V1 test-only rule).
+ * @param {{ scope?: 'production' | 'test', ownEntryFiles?: string[],
+ *   skipOwnReExports?: boolean }} [options] - `production` (default) excludes
+ *   test files; `test` reads ONLY them (the V1 test-only rule); `ownEntryFiles`
+ *   adds more judged entries whose own re-export lines must not self-satisfy
+ *   (client seams); `skipOwnReExports` extends the own-entry skip to the
+ *   `export {…} from` loop for those files (the barrel-only hole stays for the
+ *   package root: closing it is a separate barrel-policy decision).
  * @returns {Set<string>}
  */
 export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT, options = {}) {
@@ -410,6 +538,7 @@ export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT, options = {})
   const ownEntryFiles = new Set([
     join(pkg.dir, 'src', 'index.ts'),
     join(pkg.dir, 'src', 'index.tsx'),
+    ...(options.ownEntryFiles ?? []),
   ])
   for (const absolute of files) {
     if (!/\.(?:ts|tsx|mts|mjs)$/u.test(absolute)) continue
@@ -448,6 +577,7 @@ export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT, options = {})
     }
     for (const match of text.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}\s+from\s+['"]([^'"]+)['"]/gsu)) {
       if (!inPackage(match[2])) continue
+      if (options.skipOwnReExports === true && declaresOwnSurface) continue
       for (const name of match[1].split(',').map((item) => item.trim().replace(/^type\s+/u, '').split(/\s+as\s+/u)[0].trim()).filter(Boolean)) imported.add(name)
     }
     const dynamicBindings = []
@@ -467,25 +597,28 @@ export function collectPackageConsumers(pkg, repoRoot = REPO_ROOT, options = {})
 }
 
 /**
- * Read one package's index surface from disk.
+ * Read one package entry surface from disk. `entry` defaults to the package root
+ * (`src/index.ts`); a client seam passes its `./client` (or extra subpath) entry,
+ * and local re-exports resolve from that entry's own directory.
  * @returns {{ indexText: string, modules: { package: string, file: string, names: string[], missing?: true }[] }}
  */
-export function readModules(pkg, repoRoot = REPO_ROOT) {
-  const indexText = readFileSync(pkg.index, 'utf8')
+export function readModules(pkg, repoRoot = REPO_ROOT, entry = pkg.index) {
+  const indexText = readFileSync(entry, 'utf8')
   const modules = []
-  const indexRel = relative(repoRoot, pkg.index).split(sep).join('/')
+  const indexRel = relative(repoRoot, entry).split(sep).join('/')
+  const baseDir = dirname(entry)
   for (const name of extractRuntimeExports(indexText)) modules.push({ package: pkg.name, file: indexRel, names: [name] })
-  for (const entry of parseIndexModules(indexText)) {
-    const module = typeof entry === 'string' ? entry : entry.module
-    const file = join(pkg.dir, 'src', module.replace(/^\.\//u, ''))
+  for (const entryModule of parseIndexModules(indexText)) {
+    const module = typeof entryModule === 'string' ? entryModule : entryModule.module
+    const file = join(baseDir, module.replace(/^\.\//u, ''))
     const relFile = relative(repoRoot, file).split(sep).join('/')
     if (!existsSync(file)) {
       modules.push({ package: pkg.name, file: relFile, names: [], missing: true })
       continue
     }
-    const names = typeof entry === 'string'
+    const names = typeof entryModule === 'string'
       ? extractRuntimeExports(readFileSync(file, 'utf8'))
-      : entry.names
+      : entryModule.names
     modules.push({ package: pkg.name, file: relFile, names })
   }
   return { indexText, modules }
@@ -575,6 +708,53 @@ export function staleEntrylessSeams(modules, imported, seams = ENTRYLESS_SEAMS) 
   return seams.filter((entry) => !dead.has(entry.name))
 }
 
+/**
+ * Pure verdict for one registered client seam: runtime exports reachable from the
+ * seam's non-root public entries that no production importer names, plus ABI names
+ * whose exemption no longer holds. `abi` covers only names declared by the client
+ * ENTRY modules (the loader reads that namespace); an extra public subpath gets no
+ * ABI allowance because a static importer is supposed to name its exports.
+ * @returns {{ dead: { name: string, file: string }[], staleAbi: string[], checked: number }}
+ */
+export function clientSeamVerdict(entryModules, subpathModules, imported, abi) {
+  const entryNames = new Set()
+  for (const module of entryModules) for (const name of module.names) entryNames.add(name)
+  const abiNames = new Set(abi)
+  const dead = []
+  let checked = 0
+  for (const module of [...entryModules, ...subpathModules]) {
+    for (const name of module.names) {
+      checked += 1
+      if (imported.has(name)) continue
+      if (entryNames.has(name) && abiNames.has(name)) continue
+      dead.push({ name, file: module.file })
+    }
+  }
+  const staleAbi = abi.filter((name) => imported.has(name) || !entryNames.has(name))
+  return { dead, staleAbi, checked }
+}
+
+/**
+ * Coverage verdict for the client-seam tables: every discovered client-plugin
+ * package must be registered (judged or skipped with a reason) and every row must
+ * still match a discovered package.
+ * @returns {{ unregistered: string[], zombies: string[], conflicts: string[] }}
+ */
+export function clientSeamCoverage(discovered, seams = RUNTIME_LOADED_CLIENT_SEAMS, skips = CLIENT_SEAM_SKIPS) {
+  const registered = new Set(seams.map((entry) => entry.package))
+  const skipped = new Set(Object.keys(skips))
+  // A package that declares dsh.client without a resolvable ./client export is not
+  // a coverable seam (the caller fails it loud); it must not count as registered.
+  const present = new Set(discovered.filter((plugin) => plugin.clientEntry !== null).map((plugin) => plugin.name))
+  return {
+    unregistered: discovered
+      .filter((plugin) => plugin.clientEntry !== null && !registered.has(plugin.name) && !skipped.has(plugin.name))
+      .map((plugin) => plugin.name),
+    zombies: [...registered, ...skipped].filter((name) => !present.has(name)),
+    conflicts: [...registered].filter((name) => skipped.has(name)),
+  }
+}
+
 function selfTest() {
   const modules = [
     { file: 'src/a.ts', names: ['used', 'orphan'] },
@@ -603,12 +783,38 @@ function selfTest() {
     '  // another { comment\n' +
     '  used,\n' +
     '  type Face,\n' +
-    "} from './b.ts'\n",
+    "} from './b.ts'\n" +
+    "export type { TypeOnly } from './c.ts'\n",
   )
-  const commentsIgnored = parsed.length === 2
-    && parsed[1].names.length === 2
+  // Comments are not code, an inline `type` modifier is erased, and a type-only
+  // group keeps its module (missing-target check) but declares no runtime name.
+  const commentsIgnored = parsed.length === 3
+    && parsed[1].names.length === 1
     && parsed[1].names[0] === 'used'
-    && parsed[1].names[1] === 'Face'
+    && parsed[2].names.length === 0
+  // Client seam negative controls: an unimported export of a non-root public
+  // entry is reported, the registered ABI names are exempt while the client entry
+  // declares them, and an ABI name that gained a production importer is stale.
+  const seamEntryModules = [{ package: 'pkg', file: 'packages/pkg/src/client/index.ts', names: ['apply', 'inject', 'used', 'orphan'] }]
+  const seamSubpathModules = [{ package: 'pkg', file: 'packages/pkg/src/client/extra.ts', names: ['subUsed', 'subOrphan'] }]
+  const seamVerdict = clientSeamVerdict(seamEntryModules, seamSubpathModules, new Set(['used', 'subUsed']), ['apply', 'inject'])
+  const seamDetected = seamVerdict.checked === 6
+    && seamVerdict.dead.length === 2
+    && seamVerdict.dead.some((item) => item.name === 'orphan')
+    && seamVerdict.dead.some((item) => item.name === 'subOrphan')
+    && seamVerdict.staleAbi.length === 0
+  const seamStale = clientSeamVerdict(seamEntryModules, seamSubpathModules, new Set(['used', 'subUsed', 'apply']), ['apply', 'inject']).staleAbi
+  const seamStaleDetected = seamStale.length === 1 && seamStale[0] === 'apply'
+  const coverageVerdict = clientSeamCoverage(
+    [{ name: 'judged' }, { name: 'skipped' }, { name: 'newcomer' }],
+    [{ package: 'judged', reason: 'registered', abi: ['apply'] }, { package: 'gone', reason: 'stale', abi: ['apply'] }],
+    { skipped: 'recorded skip reason' },
+  )
+  const coverageDetected = coverageVerdict.unregistered.length === 1
+    && coverageVerdict.unregistered[0] === 'newcomer'
+    && coverageVerdict.zombies.length === 1
+    && coverageVerdict.zombies[0] === 'gone'
+    && coverageVerdict.conflicts.length === 0
   const entrylessModules = [{ file: 'src/x.ts', names: ['used', 'seamOnly', 'orphan'] }]
   const entrylessVerdict = entrylessDeadExports(entrylessModules, new Set(['used']), [{ name: 'seamOnly', reason: 'suite seam' }])
   const entrylessDetected = entrylessVerdict.checked === 3 && entrylessVerdict.dead.length === 1 && entrylessVerdict.dead[0].name === 'orphan'
@@ -620,8 +826,8 @@ function selfTest() {
   ])
   const retiredDetected = retiredVerdict.length === 1 && retiredVerdict[0].name === 'local_plugin_add'
   if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected && retiredDetected
-    && testOnlyDetected && testOnlyAllowed && testOnlyStale) {
-    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, a test-only export needs a reason, comments are not code, a retired write-face name reappearing is caught)')
+    && testOnlyDetected && testOnlyAllowed && testOnlyStale && seamDetected && seamStaleDetected && coverageDetected) {
+    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, a test-only export needs a reason, comments are not code, type-only re-exports are erased, a client-seam orphan is reported while its registered ABI names and coverage rows stay honest, a retired write-face name reappearing is caught)')
     return
   }
   console.error(
@@ -629,7 +835,8 @@ function selfTest() {
     ', exemptionWorks=' + String(exemptionWorks) + ', staleDetected=' + String(staleDetected) +
     ', commentsIgnored=' + String(commentsIgnored) + ', entryless=' + String(entrylessDetected) + '/' + String(entrylessStaleDetected) +
     ', retiredWriteFace=' + String(retiredDetected) +
-    ', testOnly=' + String(testOnlyDetected) + '/' + String(testOnlyAllowed) + '/' + String(testOnlyStale) + ')',
+    ', testOnly=' + String(testOnlyDetected) + '/' + String(testOnlyAllowed) + '/' + String(testOnlyStale) +
+    ', clientSeam=' + String(seamDetected) + '/' + String(seamStaleDetected) + '/' + String(coverageDetected) + ')',
   )
   process.exit(1)
 }
@@ -727,6 +934,64 @@ function main() {
     failures.push('retired plugin write-face names reappeared in shipped surfaces: '
       + retiredViolations.map((entry) => entry.name + ' (' + entry.file + ')').join(', '))
   }
+  // Client-plugin seams (design 05 / 09): the browser half is loaded by package
+  // name, so the root entry keeps the RUNTIME_LOADED skip while every NON-root
+  // public entry is judged here. The seam table must cover the discovered set.
+  const clientPlugins = discoverClientPlugins()
+  const seamCoverage = clientSeamCoverage(clientPlugins)
+  for (const name of seamCoverage.unregistered) {
+    failures.push('client-plugin package ' + name + ': manifest declares dsh.client but no RUNTIME_LOADED_CLIENT_SEAMS row - register the seam (or a CLIENT_SEAM_SKIPS reason) so the browser half is never silently unjudged')
+  }
+  for (const name of seamCoverage.zombies) {
+    failures.push('client seam ' + name + ': registered/skipped but no package manifest declares dsh.client with a ./client export - delete the stale row')
+  }
+  for (const name of seamCoverage.conflicts) {
+    failures.push('client seam ' + name + ': registered as both judged and skipped - one row must own it')
+  }
+  let clientSeamChecked = 0
+  let clientSeamDead = 0
+  const clientSeamByName = new Map(RUNTIME_LOADED_CLIENT_SEAMS.map((entry) => [entry.package, entry]))
+  for (const plugin of clientPlugins) {
+    if (plugin.clientEntry === null) {
+      failures.push('client-plugin package ' + plugin.name + ': manifest declares dsh.client but no resolvable ./client export target - the client-plugin loader imports <pkg>/client, so fix the manifest (it cannot be registered as a seam)')
+      continue
+    }
+    const seam = clientSeamByName.get(plugin.name)
+    if (seam === undefined) continue
+    if (!/\.(?:ts|tsx|mts|cts)$/u.test(plugin.clientEntry)) {
+      failures.push('client seam ' + plugin.name + ': the registered ./client entry resolves to a non-source file (' + plugin.clientEntry + ') - a judged seam must point at a source entry')
+      continue
+    }
+    const judgedEntries = [plugin.clientEntry, ...plugin.subpaths.map((entry) => entry.file)]
+    const imported = collectPackageConsumers(plugin, REPO_ROOT, { ownEntryFiles: judgedEntries, skipOwnReExports: true })
+    const clientRead = readModules(plugin, REPO_ROOT, plugin.clientEntry)
+    const subpathReads = plugin.subpaths.map((entry) => readModules(plugin, REPO_ROOT, entry.file))
+    const missing = [...clientRead.modules, ...subpathReads.flatMap((read) => read.modules)]
+      .filter((module) => module.missing === true)
+    if (missing.length > 0) {
+      failures.push('client seam ' + plugin.name + ': a public entry re-exports a missing module: ' + missing.map((module) => module.file).join(', '))
+      continue
+    }
+    const subpathModules = subpathReads.flatMap((read) => read.modules)
+    const verdict = clientSeamVerdict(clientRead.modules, subpathModules, imported, seam.abi)
+    clientSeamChecked += verdict.checked
+    clientSeamDead += verdict.dead.length
+    if (verdict.dead.length > 0) {
+      failures.push('client seam ' + plugin.name + ': ' + String(verdict.dead.length)
+        + ' runtime export(s) of a non-root public entry have no production importer: '
+        + verdict.dead.map((item) => item.name + ' (' + item.file + ')').join(', ')
+        + ' - delete the export, narrow the entry, or list the name in the seam ABI only when the loader really reads it')
+    }
+    if (verdict.staleAbi.length > 0) {
+      failures.push('client seam ' + plugin.name + ': stale ABI exemption(s) - the name gained a production importer or the client entry no longer declares it: ' + verdict.staleAbi.join(', '))
+    }
+  }
+  if (clientPlugins.length < 8) {
+    failures.push('the client-plugin scan found only ' + String(clientPlugins.length) + ' package(s) - below the sanity floor (8); refusing to read a discovery failure as a clean surface')
+  }
+  if (clientSeamChecked < 20) {
+    failures.push('the client-seam scan parsed only ' + String(clientSeamChecked) + ' runtime export(s) - below the sanity floor (20); refusing to read a parse failure as a clean surface')
+  }
   let testOnlyAllowedCount = 0
   for (const entry of perPackage) {
     testOnlyAllowedCount += entry.testOnly.checked
@@ -781,7 +1046,10 @@ function main() {
       process.exit(1)
     }
   }
+  const clientSeamJudged = clientPlugins.filter((plugin) => clientSeamByName.has(plugin.name)).length
   const suffix = [
+    clientSeamJudged > 0 ? String(clientSeamJudged) + ' client-plugin package(s) judged at non-root public entries (' + String(clientSeamChecked) + ' runtime export(s)' + (clientSeamDead > 0 ? ', ' + String(clientSeamDead) + ' dead' : '') + ')' : '',
+    clientPlugins.length > clientSeamJudged ? String(clientPlugins.length - clientSeamJudged) + ' pinned-fork client half(ies) skipped with a reason' : '',
     runtimeLoaded > 0 ? String(runtimeLoaded) + ' runtime-loaded package(s) not judged' : '',
     pendingSuppressed > 0 ? String(pendingSuppressed) + ' pending dead export(s) suppressed' : '',
     testOnlyAllowedCount > 0 ? String(testOnlyAllowedCount) + ' test-only export(s) allowlisted' : '',

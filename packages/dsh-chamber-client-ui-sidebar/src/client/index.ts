@@ -106,7 +106,7 @@ let producerGenerationCounter = 0
  * most one entry per floor, later changes fold into the next entry's suppression
  * count. Same discipline (and shape) as the renderer's SOURCE_REFRESH_HINT_FLOOR_MS.
  */
-export const RUNNING_DIVERGENCE_FLOOR_MS = 30_000
+const RUNNING_DIVERGENCE_FLOOR_MS = 30_000
 
 /** Services required by the sidebar plugin. */
 export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale', 'shortcuts']
