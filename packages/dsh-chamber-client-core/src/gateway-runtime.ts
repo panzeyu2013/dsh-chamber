@@ -19,7 +19,7 @@ import { pollUntil, sleepMs } from './poll.ts'
 import { isRecord } from './wire-common.ts'
 import {
   HttpBudgetUnscheduledError, acquireHttpBudget, httpBudgetLaneFor, httpBudgetLeaseFor,
-  httpBudgetSourceIdFromProxyPath, remainingDispatchBudgetMs, runWithHttpBudget,
+  httpBudgetSourceIdFromProxyPath, MAX_LONG_UNARY_LEASE_MS, remainingDispatchBudgetMs, runWithHttpBudget,
 } from './http-budget.ts'
 
 const REMOTE_STATUS_POLL_INTERVAL_MS = 2_000
@@ -490,13 +490,15 @@ async function request(
   try {
     // Same-origin dispatch budget (design 26 §D7); the body is consumed inside
     // the slot because a slow body is a real in-flight connection. A queue abort
-    // honours the caller's signal; the lease bounds the action surface.
+    // honours the caller's signal; the lease bounds the action surface and is
+    // same-sourced with the action's own 12-minute budget (a 5-minute cap would let
+    // the watchdog reap a slot while the install/apply request is still in flight).
     const budgetSource = httpBudgetSourceIdFromProxyPath(url)
     result = await runWithHttpBudget({
       sourceId: budgetSource,
       kind: 'unary',
       lane: httpBudgetLaneFor(budgetSource),
-      leaseMs: httpBudgetLeaseFor(init.timeoutMs ?? 12 * 60_000),
+      leaseMs: httpBudgetLeaseFor(init.timeoutMs ?? 12 * 60_000, MAX_LONG_UNARY_LEASE_MS),
       label: 'gateway-runtime',
       ...(init.queueDeadlineAt === undefined ? {} : { queueDeadlineAt: init.queueDeadlineAt }),
       ...(init.signal !== undefined ? { signal: init.signal } : {}),

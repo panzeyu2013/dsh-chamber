@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { MutationOutcomeUnknownError, ResponseLostError, createHostDirectory, fetchInstanceSnapshot, searchSessions } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { HttpBudgetUnscheduledError, acquireHttpBudget, configureHttpBudgetForTests, resetHttpBudgetForTests } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 
@@ -1264,4 +1265,18 @@ test('not-ready carrier: an old body, an unknown phase and a malformed phase sta
   // No details at all (null) is the same as absent.
   const nullDetails = throwFor({ code: 'instance_unavailable', error: 'x', details: null })
   assert.equal((nullDetails as InstanceUnavailableError).state, undefined)
+})
+
+test('mutation leases are same-sourced with the size-derived budget (design 26 §D7)', () => {
+  // The mutation timeout is body-derived (up to ~60 min): a 5-min lease would let the
+  // page-budget watchdog reap a live slot. Wiring lock: the mutation branch must pass
+  // the long ceiling; the ordinary-read branch must keep the default cap.
+  const source = readFileSync(new URL('../../../dsh-chamber-client-core/src/instance-api.ts', import.meta.url), 'utf8')
+  assert.match(source, /httpBudgetLeaseFor\(timeoutMs, MAX_LONG_UNARY_LEASE_MS\)/, 'mutation branch must use the long ceiling')
+  assert.match(source, /MAX_LONG_UNARY_LEASE_MS,\n\} from '\.\/http-budget\.ts'/, 'the long ceiling must come from the budget module')
+})
+
+test('gateway-runtime actions are same-sourced with their 12-minute budget', () => {
+  const source = readFileSync(new URL('../../../dsh-chamber-client-core/src/gateway-runtime.ts', import.meta.url), 'utf8')
+  assert.match(source, /httpBudgetLeaseFor\(init\.timeoutMs \?\? 12 \* 60_000, MAX_LONG_UNARY_LEASE_MS\)/, 'runtime actions must take the long ceiling')
 })

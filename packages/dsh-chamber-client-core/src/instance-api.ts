@@ -22,7 +22,13 @@ import { InstanceRpcError } from './instance-rpc-error.ts'
 import { pollUntil, sleepMs } from './poll.ts'
 import { mintRpcId } from './wire-common.ts'
 import { InstanceUnavailableError } from './wire-error.ts'
-import { acquireHttpBudget, HttpBudgetUnscheduledError, httpBudgetLaneFor, httpBudgetLeaseFor } from './http-budget.ts'
+import {
+  acquireHttpBudget,
+  HttpBudgetUnscheduledError,
+  httpBudgetLaneFor,
+  httpBudgetLeaseFor,
+  MAX_LONG_UNARY_LEASE_MS,
+} from './http-budget.ts'
 import { readNotFoundBody } from './instance-not-found-body.ts'
 // The archiveCleanup host domain's wire contract is SINGLE-SOURCED in the
 // neutral @dsh-chamber/dsh-chamber-wire package, which the in-host seed gateway
@@ -268,7 +274,12 @@ class InstanceApiClient {
       sourceId: this.sourceId,
       kind: 'unary',
       lane: httpBudgetLaneFor(this.sourceId),
-      leaseMs: httpBudgetLeaseFor(timeoutMs), queueDeadlineAt: Date.now() + Math.min(timeoutMs, 10_000),
+      // Mutation timeouts are size-derived (up to ~60 min at the body cap): the lease must
+      // not be shorter than the caller's own deadline or the watchdog reaps a live slot.
+      leaseMs: mutation
+        ? httpBudgetLeaseFor(timeoutMs, MAX_LONG_UNARY_LEASE_MS)
+        : httpBudgetLeaseFor(timeoutMs),
+      queueDeadlineAt: Date.now() + Math.min(timeoutMs, 10_000),
       label: 'instance:' + endpoint,
       signal,
     })

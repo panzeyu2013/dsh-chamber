@@ -653,18 +653,29 @@ export function httpBudgetLaneFor(sourceId: string): HttpBudgetLane {
   return sourceId === 'local' ? 'local' : 'foreground'
 }
 
-/** Hard cap for one page-level slot lease. Long uploads/calls may legitimately
- *  outlive it; the watchdog then releases the slot and the request continues
- *  (the existing "release only, never re-dispatch" semantics). Without the cap a
- *  30-60min mutation budget would pin a 4-slot page budget for its whole life. */
+/** Hard cap for one page-level slot lease on ORDINARY reads. Long uploads/calls may
+ *  legitimately outlive it; the watchdog then releases the slot and the request
+ *  continues ("release only, never re-dispatch"). The mutation path deliberately
+ *  passes a long ceiling instead ({@link MAX_LONG_UNARY_LEASE_MS}): its budget is
+ *  size-derived (up to ~60 min), so the 5-min cap would reap a live slot. */
 export const MAX_UNARY_LEASE_MS = 5 * 60_000
+/**
+ * Long-budget ceiling: some caller budgets are documented in minutes — a mutation's own
+ * wire budget is body-derived (`mutationCallBudgetMs`: ~370 s at 20 MiB, ~60 min at the
+ * 300 MiB cap) and gateway-runtime install/apply actions get 12 min. A 5-minute lease
+ * reaps a slot while such a request is still legitimately in flight, under-counting
+ * in-flight load. The lease is therefore same-sourced with the caller's own deadline
+ * for those paths (design 26 §D7).
+ */
+export const MAX_LONG_UNARY_LEASE_MS = 65 * 60_000
 
 /** Lease with headroom over the caller's own deadline, never below the default
- *  and never above MAX_UNARY_LEASE_MS. */
-export function httpBudgetLeaseFor(timeoutMs: number): number {
+ *  and never above the caller's ceiling (default {@link MAX_UNARY_LEASE_MS}). */
+export function httpBudgetLeaseFor(timeoutMs: number, maxLeaseMs: number = MAX_UNARY_LEASE_MS): number {
   // Reads the LIVE limits so a test seam (or a future tuning table) changes both
   // the dispatcher and the lease derived from it (review Minor: two sources).
-  return Math.min(MAX_UNARY_LEASE_MS, Math.max(limits.defaultLeaseMs, timeoutMs + 5_000))
+  const ceiling = Math.max(limits.defaultLeaseMs, maxLeaseMs)
+  return Math.min(ceiling, Math.max(limits.defaultLeaseMs, timeoutMs + 5_000))
 }
 
 // 现场可读出口（真机 inspector）：挂函数而不是快照，读数始终是最新值。

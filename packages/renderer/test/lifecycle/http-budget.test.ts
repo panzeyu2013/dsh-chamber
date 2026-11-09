@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   HTTP_BUDGET_LIMITS,
+  MAX_LONG_UNARY_LEASE_MS,
   MAX_UNARY_LEASE_MS,
   HttpBudgetUnscheduledError,
   httpBudgetLeaseFor,
@@ -575,8 +576,13 @@ test('a leaked slot is reclaimed by the watchdog lease', async () => {
   }
 })
 
-test('a page-level lease is capped at MAX_UNARY_LEASE_MS even for a 30min mutation', () => {
+test('a page-level lease is capped: default 5min, mutation path same-sourced with a long ceiling', () => {
   assert.equal(httpBudgetLeaseFor(0), HTTP_BUDGET_LIMITS.defaultLeaseMs)
   assert.equal(httpBudgetLeaseFor(10 * 60_000), MAX_UNARY_LEASE_MS)
   assert.equal(httpBudgetLeaseFor(MAX_UNARY_LEASE_MS), MAX_UNARY_LEASE_MS)
+  // The mutation path passes the long ceiling: a 10-min deadline keeps a 10-min lease
+  // (a 5-min cap would let the watchdog reap a live slot -> under-counted in-flight load).
+  assert.equal(httpBudgetLeaseFor(10 * 60_000, MAX_LONG_UNARY_LEASE_MS), 10 * 60_000 + 5_000)
+  assert.equal(httpBudgetLeaseFor(MAX_LONG_UNARY_LEASE_MS, MAX_LONG_UNARY_LEASE_MS), MAX_LONG_UNARY_LEASE_MS)
+  assert.equal(httpBudgetLeaseFor(1_000, 1), HTTP_BUDGET_LIMITS.defaultLeaseMs)
 })
