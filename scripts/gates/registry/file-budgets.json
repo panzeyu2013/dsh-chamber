@@ -23,9 +23,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx",
-      "lines": 2185,
+      "lines": 2181,
       "target": 600,
-      "note": "gateway + local runtime branches in one file"
+      "note": "gateway + local runtime branches in one file; selection + armed-confirm controller shared"
     },
     {
       "path": "packages/dsh-chamber-client-ui-settings-connections/src/client/PluginDialog.tsx",
@@ -91,9 +91,15 @@
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1217,
-      "target": 1163,
-      "note": "Composition root: exit leg and committed registry transition extracted (B4). Frozen at its current size: the remaining onStatusChanged/onVerified pair moves four mutable maps into a third module, so it is a recorded boundary decision, not a line-count task. Target raised from the aspirational 400 to the accepted boundary (= lines while FROZEN); the raise is this note, per design 27 §6.17. +12（P0-3）= 单一 hostKey guard 装配（<userData>/ssh/known_hosts + 首用导入 ~/.ssh/known_hosts）同时注入 transport manager 与 IPC ctx。+37（P2-1）= 启动先 orphan sweep + sshOrphanStateDir 注入 + 注册/session refresh/seed 探针/插件 sync 的 socketPath 透传；+2（R2-A MAJOR-4）= configureSshSocketNamespace(runtimeBaseDir) 在 spawn 前固定 UDS 命名空间（target 仍按 FROZEN 边界记账）。+4（2026-11，beta 更新通道）= HostAssemblyDeps.nativeBetaChannelSwitch（可选；Swift sidecar 注入壳的 --native-updater-beta）+ ShellAssemblyCtx 的同名字段（Electron 冻结装配不传 → false；能力门的第二输入）——raise 由本次 review 记录"
+      "lines": 991,
+      "target": 991,
+      "note": "Composition root: exit leg and committed registry transition extracted (B4); the sm.onStatusChanged + sm.onVerified pair extracted as ONE factory to host-transport-subscriptions.ts (B4-2b) — registered synchronously at the composition root's original position, sharing registeredTargetKeys/registeredAuthFingerprints; the six shared closure states stay owned here and are injected. Per STATUS §三 the \"must stay inline\" reading did not hold, so the FROZEN boundary is retired: lines lowered with the extraction and target lowered to the new accepted boundary (= the composition root that remains; no further extraction planned). Historical increments (git history): +12（P0-3）= 单一 hostKey guard 装配同时注入 transport manager 与 IPC ctx；+37（P2-1）= 启动 orphan sweep + sshOrphanStateDir/socketPath 的注册/session refresh/seed 探针/插件 sync 透传；+2（R2-A）= configureSshSocketNamespace；+4（2026-11）= HostAssemblyDeps.nativeBetaChannelSwitch（beta 更新通道能力门）。"
+    },
+    {
+      "path": "packages/desktop/host-transport-subscriptions.ts",
+      "lines": 336,
+      "target": 336,
+      "note": "Transport status/verify subscriptions split out of host-assembly (B4-2b): ONE factory registers sm.onStatusChanged + sm.onVerified synchronously at the composition root's original position. Owns no lifecycle: the six shared closure states and every effect arrive as dependencies; currentGatewayAuth moves with its only consumers; the fail-closed branch keeps its return semantics verbatim. Frozen at its extracted size."
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
