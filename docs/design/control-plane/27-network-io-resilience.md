@@ -104,7 +104,8 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 | `packages/desktop/transport-manager` | health 子态、two-failure down、success clear、resume/online、`reverifyAll`、bind-race 重分配、5xx transient |
 | `packages/desktop/transport-provider` | `link` 投影与 `failureKind` |
 | `packages/desktop/ssh-provider/gateway-provider` | failureKind 分类；SSH `ConnectTimeout`/`ExitOnForwardFailure` |
-| `packages/desktop/host-assembly` | registration key；health-only `setInstanceTransportHealth`；不 re-register |
+| `packages/desktop/host-assembly` | 装配本体（transport 订阅体已抽成下一行的成对模块）；不 re-register |
+| `packages/desktop/host-transport-subscriptions` | registration key（`onStatusChanged`/`onVerified` 成对）；health-only `setInstanceTransportHealth`；不 re-register |
 | `packages/desktop/transport-registration` | 纯 registration key/fingerprint/decision 单测，锁住 health-only 边沿 |
 | `packages/control-plane/instance-proxy` | health 记录/快速失败；`setInstanceTransportHealth`；每连接 keep-alive 池与生命周期销毁；`isLinkBusy`（≥256KiB 上传窗口 + 2s 下游字节窗口）；上游失败缝（connectionId） |
 | `packages/control-plane/http-limits` | Node 31min 死手/5s 检查周期、应用层 10s 头窗、192 软上限 raw 503/256 硬帽 |

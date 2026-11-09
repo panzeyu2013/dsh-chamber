@@ -92,7 +92,7 @@
 - **`HoverCard` pointerleave 竞态**：leave 不 arm ⇒ 卡片机器自持 `hover-intent`。
 - **`sidebar.workspaces` 保留声明但不渲染**：撤销会让官方/第三方注册静默消失；上游归档/恢复/过滤为死件；两行座席由 vendor 补丁 13 删除、本仓自声明（design 09 §3.6）。
 - **A1 座席 id**：注册台账每实例 ctx 一份；同 registry 同 id 抛错，两个 registry 互不干扰 ⇒「同页两实例必抛」不可复现；待复核 `schedule-mark`（owning occupant）与 `schedules` 面板入口（owning 真身 + 外来源回落）。
-- **面板轴**：`ui-schedule` 页面级 localStorage 键、30s 无 visibility 门、点击埋点未复制；宽态入口盒形/aria 分组/重挂载偏差见 design 06 §4.7。**跨壳回落**：已挂载来源读页面级 `panel-axis` 发布、未挂载且 connected 来源按 pin 默认组合回落；回落档无 selected 态、未知面板 id 不渲染（pin 升级新增 panellist 注册者须补 `remote-panel-axis.tsx` 字形表并上报待裁）、选中意图 TTL 自点击起算（consume 返回原点击时刻，跨代不重置；激活失败后 TTL 内同来源重激活仍可能消费旧意图并开面板——每来源一条上限，已接受取舍；壳释放/换代不擦在飞意图）、不可激活来源（托管停机/瞬态）不渲染外来源入口（与 header/rail 激活门一致）；A/B 来源 hover 的时钟入口与点击待走查（切来源 + 打开该来源面板）。
+- **面板轴**：`ui-schedule` 页面级 localStorage 键、30s 无 visibility 门、点击埋点未复制；宽态入口盒形/aria 分组/重挂载偏差见 design 06 §4.7。**跨壳回落**：已挂载来源读页面级 `panel-axis` 发布、未挂载且 connected 来源按 pin 默认组合回落；回落档无 selected 态、未知面板 id 不渲染（pin 升级新增 panellist 注册者须补 `remote-panel-axis.tsx` 字形表并上报待裁）、选中意图 TTL 自点击起算（consume 返回原点击时刻，跨代不重置；激活失败后 TTL 内同来源重激活仍可能消费旧意图并开面板——每来源一条上限，已接受取舍；壳释放/换代不擦在飞意图）、不可激活来源（托管停机/瞬态）不渲染外来源入口（与 header/rail 激活门一致）。
 - **外来源行无活动定时任务标记**：上游 occupant 只读本实例 Host 任务目录（`schedule/catalog`），chamber 不按来源拉 catalog；旧 `hasActiveSchedule` 会话投影回落链随 pin 移除 `schedule` projection 已删除（design 06 §4.3）。版本歪斜的旧远端宿主（仅缺 identity 方法的极旧宿主会被要求升级，design 27 §3.2）若仍在会话投影里带 `schedule`，chamber 也**有意不读**——恢复需按来源拉 catalog（未做）。判据 = 外来源行与搜索结果行零足迹、owning 行首标记仍由上游 occupant 渲染。
 - **删除 workspace 两帧**：宿主 order/remove 非原子 + client `installOrder` 沉底 ⇒ 行先滑尾；本仓删除意图补偿；外部删除仍复现；上游原子化后退役。
 - **平台腿**：Windows `[data-windows-titlebar]` 未抄 ⇒ 侧栏形态不同（随 Windows 腿冻结，复活时执行）。
@@ -108,7 +108,7 @@
 - trusted-host 自定义 Host 需同步扩集；多 plane `$DSH_HOME` 隔离未决；catalog metadata 无跨进程 CAS。
 - 响应头白名单双处同步；`__DSH_BOOT__` 以 vendor `parseBootManifest` 为准。
 - 未挂载源 `workspace/follow` 只读流未决；facts forward-skew 带载荷是否算权威行集未裁。
-- P1 结构性收口的两处“编排核心”按**风险/收益**保留，而非“需要依赖容器”：`retireSources`（外部绑定约 75 个、线性扇出）与 `refreshRemotes`（99 行、约 23 个自由变量）可继续拆成 3 段 + 按域输入对象，但收益主要是可测的注销不变量（per-source closers 登记表），行数有限。seam 级拆分的边界：wire 契约与 gate 单源在 registry/生成块内受约束；renderer 的 6 个大 hook（28 个 app-hook 的其余部分 <200 行）与 desktop/gateway 12 个新模块登记在 file-budgets.json（清单与阈值以表为准）；未拆的两处编排核心即上一条。
+- P1 结构性收口的两处“编排核心”按**风险/收益**保留，而非“需要依赖容器”：`retireSources`（外部绑定约 75 个、线性扇出）与 `refreshRemotes`（99 行、约 23 个自由变量）可继续拆成 3 段 + 按域输入对象，但收益主要是可测的注销不变量（per-source closers 登记表），行数有限。seam 级拆分的边界：wire 契约与 gate 单源在 registry/生成块内受约束；renderer 的 6 个大 hook（28 个 app-hook 的其余部分 <200 行）与 desktop/gateway 的新模块登记在 file-budgets.json（清单与阈值以表为准）；未拆的两处编排核心即上一条。
 
 ## 四、范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
@@ -124,7 +124,7 @@
 - **构建/注册**：构建产物移出 git（`build:artifacts` 自举）；注册表降级不剪不落盘（fail-closed）；上游纯镜像 README 死链跳过（C1）；sidebar/layout `lib` 目标与镜像 exports 有意保留。
 - **安全/发布**：`--no-auth` 有界例外；Gateway state 0700 + 属主；safeStorage 诚实回退；Windows 无 Authenticode、macOS 不出 x64；发布面 = macOS Swift + gateway；Electron 三腿 `if: false` 恒 skipped（冻结归档，恢复按 `electron-frozen.md` §6，不得按旧注释删守卫）；state 根租约对越界拓扑（容器重建挂 volume、NFS 共享根）响亮拒绝，恢复 = 移走 `owner.json`（design 17 §12）。
 - **N-ctx**：单文档信任域；原生键盘单槽（全部 boot 实例 accept）；壳常驻——local 恒留 + 用户意图壳常驻（keep-all，无常规空闲退役）；系统投机壳（空闲预热/收割）≤1 后台槽；唯一自动退役 = 硬上限（12）+ 平台化内存压力阀（v1.1）；手动释放 = 设置→通用「性能与内存」；释放写 `prewarmSuppressed`（选中/删源/设置目标清除）；契约见 design 05 §4.1，决策叶 `packages/renderer/src/resident-policy.ts`、页面级快照 `packages/dsh-chamber-client-core/src/resident-store.ts`；文档主题/页面语言归 §1.3。
-- **registry/元工程**：触点 registry 单一来源、无 Windows 覆盖；R10 文本锁未全量改 import 断言；settings-plugin-manager 无 typecheck 程序（其 vendor client 面未铺成独立 program），`ctx.get` 显式类型实参一类编译错误只有该包 wiring 测试的反向源锁兜底；R11 布局助手受 Swift 锚点；pnpm shim 待打包实机；state 根租约 legacy 一个 minor 后删；Windows 覆盖缺口 R2/R14；R15 ui-layout 分类表；host 域逐域手写有 lockstep；第三类 vendor 补丁（`use-chat-reading`）；ServerSection 预算 raise（1243→1273）；alpha.3 workspace 成员判定待复核；cua 不接入。
+- **registry/元工程**：触点 registry 单一来源、无 Windows 覆盖；R10 文本锁未全量改 import 断言；settings-plugin-manager 无 typecheck 程序（其 vendor client 面未铺成独立 program），`ctx.get` 显式类型实参一类编译错误只有该包 wiring 测试的反向源锁兜底；R11 布局助手受 Swift 锚点；pnpm shim 待打包实机；state 根租约 legacy 一个 minor 后删；Windows 覆盖缺口 R2/R14；R15 ui-layout 分类表；host 域逐域手写有 lockstep；第三类 vendor 补丁（`use-chat-reading`）；ServerSection 预算 raise（行数与阈值以 `file-budgets.json` 为准）；alpha.3 workspace 成员判定待复核；cua 不接入。
 
 ### 4.2 产品、界面与运行时取舍
 

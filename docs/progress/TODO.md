@@ -382,7 +382,7 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 |#|工作|现状|验收判据|
 |---|---|---|---|
-|1|settings 两分支剩余合流：`DshRuntimeSection` 的 gateway/local 数据权威与渲染体|selection/confirm controller 已单源（parity 测试已落：`test/runtime/runtime-management.test.ts`、`confirm-machine-guards.test.ts`）；剩余 = 数据权威（local 主进程订阅 vs gateway 3s 轮询投影）与两段渲染体合并——需新文件与 client-core action-runner 边界|runtime-management / 设置桥套件绿；渲染体合并前先按已知差异（recovery 相位）裁决|
+|1|settings 两分支剩余合流：`DshRuntimeSection` 的 gateway/local 数据权威与渲染体|selection/confirm controller 已单源（parity 测试已落：`packages/dsh-chamber-client-ui-settings-bridge/test/runtime/runtime-management.test.ts`、`confirm-machine-guards.test.ts`）；剩余 = 数据权威（local 主进程订阅 vs gateway 3s 轮询投影）与两段渲染体合并——需新文件与 client-core action-runner 边界|runtime-management / 设置桥套件绿；渲染体合并前先按已知差异（recovery 相位）裁决|
 |2|逐包棘轮收尾：file-budgets.json 只降不升（含新叶、`kind:ceiling` 单列与 FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|目标与缺口一律看 node scripts/gates/checks/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**未决**：新模块仍需人工登记|
 |3|§1.5 的审计开放项|未动|各自条目内|
 |4|App 残余编排的依赖容器化（`retireSources`+`refreshRemotes`+`JSX` 共 ≈75 个自由标识符）|未决：逐字搬会得到 ≈75 字段的入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|

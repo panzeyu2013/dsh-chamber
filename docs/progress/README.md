@@ -53,10 +53,10 @@
 
 ## 索引
 
-- [STATUS.md](./STATUS.md) — 唯一进度记录；按「会话链 / 通知归档 / 插件设置 / 实机门禁 / 平台发布 / 工程债」分组，
+- [STATUS.md](./STATUS.md) — 唯一进度记录；按「会话链 / 通知归档 / 客户端设置 / 平台运行时 / 一致性债务」分组，
   另有差异、设计未决、范围决策。
-- [TODO.md](./TODO.md) — **A 上游**（提案、漂移、UI 对齐、升级管线）、**B 平台**（macOS Swift、Windows v1）、
-  **C 功能**（账户、subagents、open-in）、**D 工程**（重构、产物守卫、页面性能）。
+- [TODO.md](./TODO.md) — **A 上游**（提案、漂移、UI 对齐）、**B 平台**（macOS Swift、Windows v1）、
+  **C 功能**（账户、subagents、open-in）、**D 工程**（重构、产物守卫、页面性能、多实例常驻）。
 - [deviations.md](./deviations.md) — Electron ↔ Swift 偏差登记（**冻结前的历史参考**）+ 可达性纪律 + 退役索引。
 - [electron-frozen.md](./electron-frozen.md) — Electron flavor 冻结归档：范围、归档清单、仍共享契约、禁用面、
   agent 规则与复活清单；Windows/Linux 桌面腿随之冻结、不发布。
