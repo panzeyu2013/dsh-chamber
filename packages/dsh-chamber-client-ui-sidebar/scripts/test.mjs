@@ -58,6 +58,8 @@ export const GROUPS = {
     'test/session-rows/round3-regressions.test.ts',
     // 孤儿 workspace 行的注册清理入口：常驻清理钮 + 徽标共用 opener（源码文本 + 字典值锁）。
     'test/session-rows/workspace-orphan-cleanup.test.ts',
+    // 搜索行的三处投影查询收敛：findProjectedRow 的「首行命中」顺序契约。
+    'test/session-rows/projected-row-lookup.test.ts',
     // PR2 派生 checkout 行（design 08 §3.2-§3.3）：derive 行形状/放置/家族锚点/折叠/树/
     // 子序排序 + 行渲染/座席/拖动/扁平的源码与行为锁。
     'test/session-rows/checkout-row.test.ts',
@@ -168,6 +170,8 @@ export const GROUPS = {
     'test/plugin-kernel/panel-entry-placement.test.ts',
     // 非活动来源的面板轴回落（N-ctx 两档真相 + 页面级发布/选中意图接线 + 字形/默认组合/文案锁）。
     'test/plugin-kernel/foreign-panel-axis.test.ts',
+    // 面板选中意图的两个竞态窗口（boot 竞态 / 拆除窗口回灌保 TTL）的纯行为测。
+    'test/plugin-kernel/panel-select-pending.test.ts',
     'test/plugin-kernel/settings-shell.test.ts',
   ],
   // archive-purge: the archive/purge flow, its tombstones and the producer/retention wiring
@@ -203,6 +207,8 @@ export const GROUPS = {
     // reveal class, because a CSS `:has(:focus-visible)` display flip is visible but
     // not Tab-reachable. Cross-file wiring lock.
     'test/visual-lock/keyboard-reveal-reachability.test.ts',
+    // 六个 <24px 图标钮的命中盒 = 视觉盒几何（design 06 §7 命中区纪律）。
+    'test/visual-lock/icon-hit-box-geometry.test.ts',
     // Row motion (the ported AnimatedRows + its key wiring, design 06 §7): the
     // byte-fidelity lock compares against the pinned vendor source.
     'test/session-rows/animated-rows.test.ts',

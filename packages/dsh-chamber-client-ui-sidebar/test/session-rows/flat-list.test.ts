@@ -32,7 +32,7 @@ test('the section renders flat as one header-less list over the flat account (so
   assert.ok(SECTION.includes('(flatGroupBy ? [flatWorkspace] : visibleOrderedWorkspaces).map(workspace => {'),
     'the flat pseudo account replaces the workspace list')
   assert.ok(SECTION.includes('const flatAccount = flatGroupBy && workspace.id === FLAT_ACCOUNT_KEY'))
-  assert.ok(SECTION.includes('{flatAccount ? null : workspace.createdAt === undefined ? ('),
+  assert.ok(SECTION.includes('{flatAccount ? null : !hasCreationFact(workspace.createdAt) ? ('),
     'the pseudo account renders no workspace header (nor hover card)')
   const gateCount = (SECTION.match(/flatAccount \|\| workspace\.ungrouped === true/gu) ?? []).length
   assert.equal(gateCount, 2, 'both workspace drag gates stand down for the flat pseudo account')

@@ -46,6 +46,7 @@ import {
   type SessionRunningStatus,
 } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 import { createGoalActivationTracker } from './goal-activation.ts'
+import { createPanelSelectPending } from './panel-select-pending.ts'
 import { createPanelSource, type SlotsReader } from './panel-source.ts'
 import { createPurgeTracker } from '@dsh-chamber/dsh-chamber-client-core/purged-tracker'
 import {
@@ -232,9 +233,10 @@ export function apply(ctx: ClientContext): void {
   // **boot 竞态（first-screen vs extra row）**：本侧栏是 first-screen 同步注册，而
   // ui-schedule 等 panellist 注册者是宿主图的 extra row，在 collectExtraRows 之后才 apply。
   // 因此目标壳 boot 时本 effect 先跑、`panels.source` 仍为空——此时绝不能把刚消费到的意图
-  // 当成「未注册」丢弃（那正是「点击未挂载来源的时钟」主路径：切来源后打开面板）。意图先
-  // 落到本地挂起，并订阅面板轴：注册到达时由那次变化唤醒重试；只有超过 core 的 TTL 才丢弃
-  // （不挂计时器，轴变化时判定——面板轴没有变化就没有可执行的对象）。
+  // 当成「未注册」丢弃。挂起/解析/TTL 的窗口状态机在纯叶子 panel-select-pending.ts
+  // （行为测见 test/plugin-kernel/panel-select-pending.test.ts）；本 effect 只接线：
+  // 意图先落到本地挂起，并订阅面板轴——注册到达时由那次变化唤醒重试；只有超过 core 的 TTL
+  // 才丢弃（不挂计时器，轴变化时判定——面板轴没有变化就没有可执行的对象）。
   ctx.effect(() => {
     const instanceId = (ctx as any).chamberInstanceId as string | undefined
     if (instanceId === undefined) return () => {}
@@ -245,41 +247,27 @@ export function apply(ctx: ClientContext): void {
         console.error('[dsh-chamber] panel select failed:', error)
       }
     }
-    // 未注册面板的挂起意图（至多一条）：armedAt 是最近一次武装的单调钟毫秒。
-    let pendingPanelId: string | undefined
-    let armedAt = 0
-    const tryResolve = (): void => {
-      const panelId = pendingPanelId
-      if (panelId === undefined) return
-      if (performance.now() - armedAt > PANEL_SELECT_INTENT_TTL_MS) {
-        pendingPanelId = undefined
-        return
-      }
-      // 面板尚未注册（extra row 还没 apply）：保持挂起，等面板轴的下一次变化。
-      if (!panels.source.getSnapshot().some(panel => panel.id === panelId)) return
-      pendingPanelId = undefined
-      selectIfRegistered(panelId)
-    }
+    const intent = createPanelSelectPending({
+      ttlMs: PANEL_SELECT_INTENT_TTL_MS,
+      now: () => performance.now(),
+      isRegistered: (panelId) => panels.source.getSnapshot().some(panel => panel.id === panelId),
+      selectPanel: selectIfRegistered,
+    })
     /**
      * 武装一条意图并立即尝试一次（面板已注册的常规路径当场命中）。`at` 是**原始点击时刻**：
      * 挂载时从 core pending 继承（consume 把原 at 一并交出），监听器收到的新点击才用当前时刻——
      * 这样跨壳换代不会把 TTL 上限续期（早先的挂起若已超时，tryResolve 直接丢弃）。
      */
-    const arm = (panelId: string, at = performance.now()): void => {
-      pendingPanelId = panelId
-      armedAt = at
-      tryResolve()
-    }
     const pending = consumePanelSelect(instanceId)
-    if (pending !== undefined) arm(pending.panelId, pending.at)
+    if (pending !== undefined) intent.arm(pending.panelId, pending.at)
     // 面板注册/改 label 是 boot 竞态的唯一解药：先订阅，挂起意图等这次变化。
-    const offPanels = panels.source.subscribe(tryResolve)
+    const offPanels = panels.source.subscribe(intent.tryResolve)
     const offSelect = onPanelSelectRequest((request) => {
       if (request.sourceId !== instanceId) return
       // 本监听器已接收该意图：清掉 core 的 pending（改由本地挂起，boot 竞态下等待注册），
       // 避免目标壳下次挂载时重复执行。监听器路径是**本次新点击**：用当前时刻重新计时。
       consumePanelSelect(instanceId)
-      arm(request.panelId)
+      intent.arm(request.panelId)
     })
     return () => {
       // 先摘监听：re-arm 若还活着本壳监听器，会被自己同步消费并再次落入本地挂起。
@@ -289,10 +277,11 @@ export function apply(ctx: ClientContext): void {
       // 目标来源下一次 apply 的 consumePanelSelect 会取走（每来源一条）。回灌**保留原 TTL**
       // （以 armedAt 作为 requestPanelSelect 的注入时钟，不重置为新的 15s）；已超时的意图直接
       // 丢弃——TTL 外绝不落到之后的手工激活上。
-      if (pendingPanelId !== undefined) {
-        const remaining = PANEL_SELECT_INTENT_TTL_MS - (performance.now() - armedAt)
-        if (remaining > 0) requestPanelSelect({ sourceId: instanceId, panelId: pendingPanelId }, armedAt)
-        pendingPanelId = undefined
+      const held = intent.pending()
+      if (held !== undefined) {
+        const remaining = PANEL_SELECT_INTENT_TTL_MS - (performance.now() - held.at)
+        if (remaining > 0) requestPanelSelect({ sourceId: instanceId, panelId: held.panelId }, held.at)
+        intent.clear()
       }
     }
   }, 'dsh-chamber: page panel-select intent')

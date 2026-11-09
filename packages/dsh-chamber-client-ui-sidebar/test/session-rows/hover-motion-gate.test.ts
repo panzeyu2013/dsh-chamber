@@ -114,3 +114,18 @@ test('every row-level hover reveal carries the gate clause', () => {
   }
   assert.deepEqual(offenders, [], '行级 :hover 揭示必须带 :not([data-hover-gate])')
 })
+
+test('the hover card keeps both dismiss paths (pointerdown and click-without-pointerdown)', () => {
+  // vendor dismissFromAnchor 同时挂 pointerdown 与 click：不经过 pointerdown 的 click
+  //（键盘激活、程序化 click）过去只靠 leave/宽限收卡。两条路径都必须是「按锚点收卡、
+  // 卡片内部按压/点击不收卡」，否则 pointerleave-only 的失效面无法覆盖。
+  const pointerDown = CARD.indexOf('onPointerDownCapture={(e) => {')
+  const click = CARD.indexOf('onClickCapture={(e) => {')
+  assert.ok(pointerDown !== -1, 'the pointerdown dismiss path exists')
+  assert.ok(click !== -1, 'the click-without-pointerdown dismiss path exists')
+  for (const at of [pointerDown, click]) {
+    const guard = CARD.indexOf('cardRef.current?.contains(e.target as Node)', at)
+    const press = CARD.indexOf('intent.press()', at)
+    assert.ok(guard !== -1 && guard < press, 'a press inside the card (text selection) must stay mounted')
+  }
+})

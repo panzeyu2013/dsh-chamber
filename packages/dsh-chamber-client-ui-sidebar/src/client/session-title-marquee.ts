@@ -52,6 +52,36 @@ export function restTitle(title: HTMLElement): void {
   delete title.dataset.clipped
 }
 
+/** Which marquee behavior a clipped title earns: rest on a barely-clipped title,
+ * jump to the far edge under reduced motion, otherwise crawl. */
+export type MarqueePlan = 'rest' | 'jump' | 'crawl'
+
+export function marqueePlan(range: number, reducedMotion: boolean): MarqueePlan {
+  if (range <= MIN_TITLE_REVEAL_PX) return 'rest'
+  return reducedMotion ? 'jump' : 'crawl'
+}
+
+/** One animation-frame cursor: the previous frame timestamp and the crawl position. */
+export interface MarqueeCursor {
+  readonly previous: number | undefined
+  readonly position: number
+}
+
+/** Advance the crawl by one frame: the first frame only records the timestamp
+ * (position 0), later frames add elapsed * TITLE_MARQUEE_PX_PER_MS, clamped to
+ * `range`; `done` means the far edge has been reached. */
+export function advanceMarquee(
+  cursor: MarqueeCursor,
+  now: number,
+  range: number,
+): { readonly cursor: MarqueeCursor; readonly left: number; readonly done: boolean } {
+  const position = cursor.previous === undefined
+    ? 0
+    : cursor.position + (now - cursor.previous) * TITLE_MARQUEE_PX_PER_MS
+  const left = Math.min(position, range)
+  return { cursor: { previous: now, position: left }, left, done: left >= range }
+}
+
 /**
  * Marquee a title wider than its one-line cell while its row is hovered.
  * @param title - ref to the row's clipping title element.
@@ -68,19 +98,19 @@ export function useTitleMarquee(title: RefObject<HTMLElement | null>): { enter: 
       if (title.current === null) return
       const element = title.current
       const range = element.scrollWidth - element.clientWidth
-      if (range <= MIN_TITLE_REVEAL_PX) return
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const plan = marqueePlan(range, window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      if (plan === 'rest') return
+      if (plan === 'jump') {
         placeTitle(element, range, range)
         return
       }
       cancelAnimationFrame(frame.current)
-      let previous: number | undefined
-      let position = 0
+      let cursor: MarqueeCursor = { previous: undefined, position: 0 }
       const step = (now: number): void => {
-        position += previous === undefined ? 0 : (now - previous) * TITLE_MARQUEE_PX_PER_MS
-        previous = now
-        placeTitle(element, Math.min(position, range), range)
-        if (position < range) frame.current = requestAnimationFrame(step)
+        const next = advanceMarquee(cursor, now, range)
+        cursor = next.cursor
+        placeTitle(element, next.left, range)
+        if (!next.done) frame.current = requestAnimationFrame(step)
       }
       frame.current = requestAnimationFrame(step)
     },

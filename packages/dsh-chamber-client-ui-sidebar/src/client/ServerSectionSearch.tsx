@@ -13,6 +13,7 @@ import type { SearchRow } from '@dsh-chamber/dsh-chamber-client-core/instance-ap
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
 import { clearSearch, setSearchQuery, type SourceSearchState } from '@dsh-chamber/dsh-chamber-client-core/search-state'
 import { SEARCH_QUERY_MAX_CODE_UNITS } from '@dsh-chamber/dsh-chamber-client-core/derive'
+import { findProjectedRow } from './server-section-model.ts'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
@@ -78,37 +79,22 @@ export function ServerSectionSearchResults({ server, merged, currentRemote, curr
               // 标签来自来源 aggregate（可能比最新快照滞后一轮 poll）；用官方
               // display label——host 读不到标题时渲染目录名。
               const searchRowLabel = (sessionId: string): { title: string; workspaceLabel: string | undefined } => {
-                for (const workspace of server.workspaces) {
-                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
-                  if (session === undefined) continue
-                  return {
-                    title: session.displayTitle,
-                    workspaceLabel: workspace.ungrouped === true ? t('list.ungrouped') : workspace.title,
-                  }
-                }
+                const row = findProjectedRow(server, sessionId)
                 // 防御：不在任何投影行内的命中仍给诚实标签——官方阶梯最后一级（id）。
-                return { title: sessionId, workspaceLabel: undefined }
+                if (row === undefined) return { title: sessionId, workspaceLabel: undefined }
+                return {
+                  title: row.session.displayTitle,
+                  workspaceLabel: row.workspace.ungrouped === true ? t('list.ungrouped') : row.workspace.title,
+                }
               }
               // 结果行的 running 位来自投影（visibleIds 过滤保证命中行在投影内，
               // 查不到——防御——回落 false）；运行环 wire 权威，通道 running 不
               // 参与渲染，sessionStateDot/Label 直接用此投影位。
-              const projectedRunning = (sessionId: string): boolean => {
-                for (const workspace of server.workspaces) {
-                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
-                  if (session === undefined) continue
-                  return session.running === true
-                }
-                return false
-              }
+              const projectedRunning = (sessionId: string): boolean =>
+                findProjectedRow(server, sessionId)?.session.running === true
               // 归档位来自投影（show/only 下归档行在投影内）；查不到 ⇒ false。
-              const projectedArchived = (sessionId: string): boolean => {
-                for (const workspace of server.workspaces) {
-                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
-                  if (session === undefined) continue
-                  return session.archived === true
-                }
-                return false
-              }
+              const projectedArchived = (sessionId: string): boolean =>
+                findProjectedRow(server, sessionId)?.session.archived === true
   return (
     <>
                         <div className={cc.searchResults} role="tree" aria-label={t('search.results.aria')}>

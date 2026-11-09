@@ -127,64 +127,41 @@ test('every mounted shell publishes its own axis and retires it on teardown', ()
     'the publication effect is labelled')
 })
 
-test('the select intent consumer resolves only for its own source and holds a boot-late panel instead of dropping the intent', () => {
+test('the select intent consumer wires the pure pending machine for its own source', () => {
   assert.ok(index.includes("'dsh-chamber: page panel-select intent'"), 'the consumer effect is labelled')
+  assert.match(index, /import \{ createPanelSelectPending \} from '\.\/panel-select-pending\.ts'/)
   const labelAt = index.indexOf("'dsh-chamber: page panel-select intent'")
   const effectAt = index.lastIndexOf('ctx.effect(() => {', labelAt)
   assert.ok(effectAt !== -1 && labelAt > effectAt, 'the labelled consumer effect block is locatable')
   const effect = index.slice(effectAt, labelAt)
-  // Boot race: the sidebar is first-screen sync while panellist registrants are host-graph
-  // extra rows. The consumer must observe the panel axis instead of judging registration
-  // once at mount -- an intent that arrives before the registration must NOT be dropped.
-  assert.match(effect, /const offPanels = panels\.source\.subscribe\(tryResolve\)/,
+  assert.match(effect, /createPanelSelectPending\(\{/)
+  assert.match(normalize(effect), /ttlMs: PANEL_SELECT_INTENT_TTL_MS/)
+  assert.match(normalize(effect), /now: \(\) => performance\.now\(\)/)
+  assert.match(normalize(effect), /isRegistered: \(panelId\) => panels\.source\.getSnapshot\(\)\.some\(panel => panel\.id === panelId\)/)
+  assert.match(effect, /selectPanel: selectIfRegistered/)
+  assert.match(effect, /const offPanels = panels\.source\.subscribe\(intent\.tryResolve\)/,
     'the consumer subscribes to the panel axis so an extra-row registration wakes the held intent')
   assert.match(effect, /const offSelect = onPanelSelectRequest\(\(request\) => \{/,
     'later intents arrive through the page-level listener')
   assert.match(effect, /if \(request\.sourceId !== instanceId\) return/,
     'only the addressed source executes the intent')
-  // Teardown: release the two listeners FIRST, then hand an unresolved locally held intent
-  // back to the core pending — a shell released in the async-teardown window must not take
-  // the click with it; the next generation's apply consumes it. The re-arm PRESERVES the
-  // original TTL (armedAt as the injected clock) and drops an already-expired intent.
-  assert.match(normalize(effect),
-    /return \(\) => \{ offPanels\(\) offSelect\(\) if \(pendingPanelId !== undefined\) \{ const remaining = PANEL_SELECT_INTENT_TTL_MS - \(performance\.now\(\) - armedAt\) if \(remaining > 0\) requestPanelSelect\(\{ sourceId: instanceId, panelId: pendingPanelId \}, armedAt\) pendingPanelId = undefined \} \}/,
-    'teardown releases both listeners before re-arming the unresolved held intent, preserving its original TTL and dropping an expired one')
-  assert.ok(!/setTimeout|setInterval/.test(effect),
-    'the local TTL is checked on axis changes only -- no timer may outlive the shell')
-
-  // The held intent: local variable, resolved when the panel appears, discarded only by the
-  // core TTL (never by a single too-early registration check).
-  const tryAt = effect.indexOf('const tryResolve = (): void => {')
-  assert.notEqual(tryAt, -1, 'the retry resolver exists')
-  const resolver = normalize(braceBody(effect, effect.indexOf('{', tryAt)))
-  assert.match(resolver, /const panelId = pendingPanelId if \(panelId === undefined\) return/,
-    'nothing held -> nothing to resolve')
-  assert.match(resolver,
-    /if \(performance\.now\(\) - armedAt > PANEL_SELECT_INTENT_TTL_MS\) \{ pendingPanelId = undefined return \}/,
-    'ONLY the core TTL discards a held intent (checked when the axis changes)')
-  assert.match(resolver, /if \(!panels\.source\.getSnapshot\(\)\.some\(panel => panel\.id === panelId\)\) return/,
-    'a not-yet-registered panel returns with the intent still held')
-  const ttlDropAt = resolver.indexOf('pendingPanelId = undefined')
-  const unregisteredAt = resolver.indexOf('!panels.source.getSnapshot().some')
-  const successClearAt = resolver.indexOf('pendingPanelId = undefined', unregisteredAt)
-  const selectAt = resolver.indexOf('selectIfRegistered(panelId)')
-  assert.ok(ttlDropAt !== -1 && unregisteredAt > ttlDropAt,
-    'the TTL discard branch precedes the registration check')
-  assert.ok(successClearAt > unregisteredAt, 'the held id is cleared only after registration is observed')
-  assert.ok(selectAt > successClearAt, 'selection runs only after the panel is confirmed registered')
-  assert.match(normalize(effect),
-    /const arm = \(panelId: string, at = performance\.now\(\)\): void => \{ pendingPanelId = panelId armedAt = at tryResolve\(\) \}/,
-    'arming carries the ORIGINAL click instant (mount consumption passes pending.at; a listener click defaults to now)')
-  assert.match(normalize(effect),
-    /const pending = consumePanelSelect\(instanceId\) if \(pending !== undefined\) arm\(pending\.panelId, pending\.at\)/,
+  assert.match(normalize(effect), /const pending = consumePanelSelect\(instanceId\) if \(pending !== undefined\) intent\.arm\(pending\.panelId, pending\.at\)/,
     'the mount-time consumption keeps the original click instant, so a shell handoff cannot renew the TTL')
-  assert.match(normalize(effect), /consumePanelSelect\(instanceId\) arm\(request\.panelId\)/,
+  assert.match(normalize(effect), /consumePanelSelect\(instanceId\) intent\.arm\(request\.panelId\)/,
     'an intent received by the listener clears the core pending and is held locally')
   assert.equal((index.match(/consumePanelSelect\(instanceId\)/g) ?? []).length, 2,
     'one core pending slot per source: mount consumption + listener clearing')
+  assert.match(normalize(effect),
+    /offPanels\(\) offSelect\(\) const held = intent\.pending\(\) if \(held !== undefined\) \{ const remaining = PANEL_SELECT_INTENT_TTL_MS - \(performance\.now\(\) - held\.at\) if \(remaining > 0\) requestPanelSelect\(\{ sourceId: instanceId, panelId: held\.panelId \}, held\.at\) intent\.clear\(\) \}/,
+    'teardown releases both listeners BEFORE handing the unresolved held intent back with its original TTL')
+  assert.ok(!/setTimeout|setInterval/.test(effect), 'the local TTL is checked on axis changes only -- no timer may outlive the shell')
   assert.match(normalize(index),
     /try \{ ctx\.layout\.selectPanel\(panelId as Parameters<typeof ctx\.layout\.selectPanel>\[0\]\) \} catch \(error\) \{ console\.error\('\[dsh-chamber\] panel select failed:', error\) \}/,
     'a selectPanel throw is contained (the intent must not break the shell)')
+  // The window state machine itself lives in the pure leaf (behavior truth table in
+  // panel-select-pending.test.ts); the effect must not grow a second held-intent face.
+  assert.ok(!effect.includes('pendingPanelId') && !effect.includes('armedAt'),
+    'the held-intent state moved into the pure leaf, not the effect')
 })
 
 test('each source header subscribes to the page-level axis per source (no shared-context churn)', () => {

@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { createdLabel } from '../../src/client/server-section-model.ts'
+import { createdLabel, hasCreationFact } from '../../src/client/server-section-model.ts'
 import { en, zh } from '../../src/client/locales.ts'
 
 const translate = (table: Record<string, string>) =>
@@ -26,10 +26,20 @@ test('createdLabel composes the localized absolute time the official card render
   assert.equal(createdLabel(at.getTime(), translate(tables.en) as never), 'Created 2026-1-2 09:05')
 })
 
-test('the card only mounts on a real creation fact (sparse wire contract)', () => {
+test('the card only mounts on a FINITE creation fact (sparse wire + second-writer guard)', () => {
   // 上游同门（WS `if (row.createdAt === void 0) return ownRow;`）：没有创建事实就不挂卡，
   // 因为 createdLabel 对任意 number 逐字格式化 ⇒ NaN 会渲染成「NaN年NaN月NaN日」。
-  const model = readFileSync(new URL('../../src/client/ServerSection.tsx', import.meta.url), 'utf8')
-  assert.match(model, /workspace\.createdAt === undefined/u,
-    'the workspace card mounts only when the projection carries a creation time')
+  // derive 的稀疏契约只保证现有写入点；第二个写入点可能带 NaN/Infinity，故门判有限数。
+  const component = readFileSync(new URL('../../src/client/ServerSection.tsx', import.meta.url), 'utf8')
+  assert.match(component, /!hasCreationFact\(workspace\.createdAt\)/u,
+    'the workspace card mounts only when the projection carries a finite creation time')
+})
+
+test('hasCreationFact admits only finite numbers', () => {
+  assert.equal(hasCreationFact(0), true)
+  assert.equal(hasCreationFact(1_700_000_000_000), true)
+  assert.equal(hasCreationFact(undefined), false)
+  assert.equal(hasCreationFact(Number.NaN), false, 'NaN would render as NaN年NaN月NaN日')
+  assert.equal(hasCreationFact(Number.POSITIVE_INFINITY), false)
+  assert.equal(hasCreationFact(Number.NEGATIVE_INFINITY), false)
 })

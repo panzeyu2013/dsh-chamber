@@ -8,7 +8,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
-  MIN_TITLE_REVEAL_PX, TITLE_MARQUEE_PX_PER_MS, placeTitle, restTitle,
+  MIN_TITLE_REVEAL_PX, TITLE_MARQUEE_PX_PER_MS, advanceMarquee, marqueePlan, placeTitle, restTitle,
+  type MarqueeCursor,
 } from '../../src/client/session-title-marquee.ts'
 
 interface FakeTitle {
@@ -81,4 +82,26 @@ test('a title without scrollTo falls back to the scrollLeft assignment', () => {
   assert.equal(element.scrollLeft, 9)
   restTitle(element as unknown as HTMLElement)
   assert.equal(element.scrollLeft, 0)
+})
+
+test('marqueePlan: rest on a barely-clipped title, jump under reduced motion, crawl otherwise', () => {
+  assert.equal(marqueePlan(0, false), 'rest')
+  assert.equal(marqueePlan(MIN_TITLE_REVEAL_PX, false), 'rest', 'the floor is inclusive')
+  assert.equal(marqueePlan(MIN_TITLE_REVEAL_PX + 1, true), 'jump')
+  assert.equal(marqueePlan(MIN_TITLE_REVEAL_PX + 1, false), 'crawl')
+})
+
+test('advanceMarquee: first frame samples the clock, later frames crawl and clamp at the far edge', () => {
+  const start: MarqueeCursor = { previous: undefined, position: 0 }
+  const first = advanceMarquee(start, 1_000, 40)
+  assert.equal(first.left, 0, 'the first frame has no elapsed time to spend')
+  assert.equal(first.done, false)
+  assert.deepEqual(first.cursor, { previous: 1_000, position: 0 })
+  const second = advanceMarquee(first.cursor, 1_200, 40)
+  assert.equal(second.left, 6, '200ms at 0.03 px/ms')
+  assert.equal(second.done, false)
+  const far = advanceMarquee(second.cursor, 3_200, 40)
+  assert.equal(far.left, 40)
+  assert.equal(far.done, true, 'the crawl stops at the far edge')
+  assert.equal(advanceMarquee({ previous: undefined, position: 0 }, 0, 0).done, true)
 })

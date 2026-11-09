@@ -55,7 +55,7 @@ import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 import { AnimatedRows } from './rows/animated-rows.tsx'
 import { useHoverMotionGate } from './use-hover-motion-gate.ts'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
-import { ROW_CARD_OPEN_DELAY_MS, createdLabel, dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
+import { ROW_CARD_OPEN_DELAY_MS, createdLabel, dragOverState, hasCreationFact, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
 
 export const ServerSection = memo(function ServerSection({ server }: { server: ChamberServerAggregate }) {
@@ -1277,13 +1277,13 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   commitWorkspaceDrag(server, workspaceDrag, { id: workspace.id, half: rowHalf(event) })
                                 }}
                             >
-                              {flatAccount ? null : workspace.createdAt === undefined ? (
+                              {flatAccount ? null : !hasCreationFact(workspace.createdAt) ? (
                                 // Upstream's own gate (`row.createdAt === void 0`): no
-                                // creation fact, no card. derive leaves createdAt sparse
-                                // for an unparseable wire value ('' on the cwd-derived
-                                // synthetic groups) and the ungrouped bucket is built
-                                // without one, so NaN never reaches the verbatim
-                                // createdLabel.
+                                // creation fact, no card. The sparse wire contract keeps
+                                // today's writers at undefined, but a second writer must
+                                // not turn an unparseable value into NaN: createdLabel
+                                // formats any number verbatim, so the gate admits only a
+                                // FINITE creation instant.
                                 workspaceHeader
                               ) : (
                                 <RowHoverCard

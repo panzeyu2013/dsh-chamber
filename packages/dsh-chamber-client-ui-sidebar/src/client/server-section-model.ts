@@ -43,6 +43,14 @@ export function createdLabel(
   })
 }
 
+/** A creation fact is a FINITE number. The sparse wire contract leaves `createdAt`
+ * absent for unparseable values, but a second write point must not turn one into
+ * NaN: createdLabel formats any number verbatim, so the card gate checks finite.
+ */
+export function hasCreationFact(createdAt: number | undefined): createdAt is number {
+  return typeof createdAt === 'number' && Number.isFinite(createdAt)
+}
+
 /** Rebuild an InstanceSnapshot-shaped view of ONE source aggregate for the LOCAL search
  * matcher from already-post-filter VISIBLE rows. `archivedSessionIds` is rebuilt from the
  * rows carrying the sparse `archived` bit (the raw set is not on the aggregate): the
@@ -86,6 +94,23 @@ export function projectionHasSession(server: ChamberServerAggregate, sessionId: 
     }
   }
   return false
+}
+
+/** One session row resolved across the projected workspaces, with its owning workspace.
+ * The FIRST projected row wins (the order every search-row lookup walked before this
+ * helper existed); a hit outside the projection resolves to undefined. */
+export interface ProjectedRowHit {
+  readonly workspace: ChamberServerAggregate['workspaces'][number]
+  readonly session: ChamberServerAggregate['workspaces'][number]['sessions'][number]
+}
+
+export function findProjectedRow(server: ChamberServerAggregate, sessionId: string): ProjectedRowHit | undefined {
+  for (const workspace of server.workspaces) {
+    for (const session of workspace.sessions) {
+      if (session.id === sessionId) return { workspace, session }
+    }
+  }
+  return undefined
 }
 
 /** Map the projected phase to a visual kind. The reconnect cycle folds into ONE stable
