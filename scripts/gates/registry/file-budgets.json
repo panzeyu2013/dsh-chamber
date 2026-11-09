@@ -274,6 +274,120 @@
       "lines": 282,
       "target": 240,
       "note": "P0-1 server construction limits + app header deadline + connection soft cap (new in v0.2); +6 = checkContinue 共用头窗记账（合并前 review A-M1）；+6 = soft-cap upgrade 查询导出（R6 C-m2）。"
+    },
+    {
+      "path": "packages/control-plane/src/index.ts",
+      "lines": 1537,
+      "target": 1537,
+      "note": "FROZEN, no adjudicated target (TODO D§1.5 未纳棘轮 god 文件): composition root — createControlPlane assembles catalog + managed local host + management REST + instance proxy + page-channel + state-root lease in one call graph, and the tail is the package-wide type re-export facade. A target needs a module-boundary decision (which seam leaves the root: static frontend service / page-channel wiring / management-API wiring); until then the row locks growth only."
+    },
+    {
+      "path": "packages/control-plane/src/proxy-forward.ts",
+      "lines": 1963,
+      "target": 1963,
+      "note": "FROZEN, no adjudicated target (design 27 §6.17 recorded it as not yet ratcheted): shared reverse-proxy core for the instance and gateway legs — one request/body/upgrade/stream state machine with the header whitelists, counters and pending-upgrade leases. Design 26 §8 rejected merging it with the page-channel adapter; no extraction seam is adjudicated, so the row locks growth only."
+    },
+    {
+      "path": "packages/control-plane/src/spawn-dsh.ts",
+      "lines": 1286,
+      "target": 1286,
+      "note": "FROZEN, no adjudicated target: managed dsh spawn + process lifecycle (port ladder, readiness window, writer-quiescence classification, node executable discovery, group signalling). The node-discovery block is the only self-contained leaf and it carries the platform fallback order pinned by design 22/23; no split is adjudicated yet, so the row locks growth only."
+    },
+    {
+      "path": "packages/gateway/src/dispatch.ts",
+      "lines": 935,
+      "target": 935,
+      "note": "FROZEN, no adjudicated target: gateway middleware — auth gate + public/pre-gate/behind-gate routing, boundary rejection pages and the collapsed auth_rejected audit. Routing claims interleave with the control-plane shell hooks; the row locks growth only."
+    },
+    {
+      "path": "packages/gateway/src/plugins.ts",
+      "lines": 226,
+      "target": 226,
+      "note": "FROZEN: desktop-synced seed cache (PUT /chamber/plugins) — registry-derived whitelist + size caps + atomic 0600/0700 writes + probe-name derivation. Cohesive module registered with the gateway family so a new gateway duty cannot grow unguarded."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-installer.ts",
+      "lines": 1255,
+      "target": 1255,
+      "note": "FROZEN, no adjudicated target: top-level runtime install transaction (registry resolution → SRI verify → local tarball handoff to pnpm → store prune request). One restartable sequence; the row locks growth only."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-metadata-recovery.ts",
+      "lines": 1813,
+      "target": 1813,
+      "note": "FROZEN, no adjudicated target: corrupt runtime-selection metadata recovery — one durable, restartable transaction (stop writers → finish older restore → stash → archival renames → probe → marker). The phases share the journal; the row locks growth only."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-startup.ts",
+      "lines": 870,
+      "target": 870,
+      "note": "FROZEN, no adjudicated target: startup transaction (restore/journal recovery/activation intent) with the optional abort signal. The row locks growth only."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-probes.ts",
+      "lines": 538,
+      "target": 538,
+      "note": "FROZEN, no adjudicated target: activation probe list + pinned wire (read-only, injectable). Probe semantics are pinned to the upstream tree shape; the row locks growth only."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-state-machine.ts",
+      "lines": 224,
+      "target": 224,
+      "note": "FROZEN: pure runtime version-management state machine (transition + allowedActions, zero deps); registered with the runtime family so the leaf cannot grow unguarded (no target adjudicated)."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-critical-files.ts",
+      "lines": 43,
+      "target": 43,
+      "note": "FROZEN: install-format critical-file list + digest helpers shared by the store (read side) and the installer (publish side); cohesive leaf registered with the runtime family."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-host-adapter.ts",
+      "lines": 48,
+      "target": 48,
+      "note": "FROZEN: sketch host-adapter interface with no production implementor (hosts adapt through StartupDeps/ApplyDeps/InstallerDeps); registered with the runtime family so the sketch cannot grow silently."
+    },
+    {
+      "path": "packages/dsh-runtime/src/runtime-operation-fence.ts",
+      "lines": 82,
+      "target": 82,
+      "note": "FROZEN: process-local operation fence shared by every DSH_HOME/selection-metadata mutation; cohesive leaf registered with the runtime family."
+    },
+    {
+      "path": "packages/desktop/updater.ts",
+      "lines": 1449,
+      "target": 1449,
+      "note": "FROZEN, no adjudicated target: shared update controller (schedule + check/download + beta feed + cache cleanup + Linux/AppImage gates + the native/Swift headless leg). Electron packaging is frozen but this controller still ships for the Swift sidecar; the row locks growth only."
+    },
+    {
+      "path": "packages/desktop/electron/main.ts",
+      "lines": 1685,
+      "target": 1685,
+      "note": "FROZEN: archived Electron entry (2026-11 user ruling, docs/progress/electron-frozen.md) — not built or shipped and not to be edited; the row makes accidental growth fail. A revival change goes through the frozen-scope checklist and may raise this row with a note."
+    },
+    {
+      "path": "macos/Sources/DSHChamber/MainWindowController.swift",
+      "lines": 2986,
+      "target": 2986,
+      "note": "FROZEN, no adjudicated target: WKWebView host + A/B-bridge site + navigation guard + hostFacts source + notify routing in one window controller. The row locks growth only; an extraction needs a navigation/edge seam decision first."
+    },
+    {
+      "path": "macos/Sources/DSHChamber/AppDelegate.swift",
+      "lines": 2087,
+      "target": 2087,
+      "note": "FROZEN, no adjudicated target: app lifecycle assembly (env/packaged-path resolution, BridgeClient creation, sidecar start, main window, tray, quit confirmation). The row locks growth only."
+    },
+    {
+      "path": "macos/Sources/DSHChamber/BridgeClient.swift",
+      "lines": 1920,
+      "target": 1920,
+      "note": "FROZEN, no adjudicated target: B-bridge process client (spawn, NDJSON framing, invoke, edge reply budget); the frame contract is pinned by design 25 §4.4.2. The row locks growth only."
+    },
+    {
+      "path": "scripts/install-gateway.sh",
+      "lines": 3839,
+      "target": 3839,
+      "note": "FROZEN, no adjudicated target: one installer runbook (guided wizard + install/update/restart/status/uninstall + systemd/user unit emission + dsh anchor handling). A target needs an ops-surface decision (sourced phase modules vs one script); the row locks growth only so every new flag/phase is reviewed."
     }
   ]
 }
