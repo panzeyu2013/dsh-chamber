@@ -79,8 +79,7 @@ import type { RemotesStore } from '../host/remotes-store.ts'
 const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 
 /**
- * 桌面桥面探测判定（App 的 500ms 探测 effect 维护，见 App.tsx 的
- * `bridgeVerdict`）：
+ * 桌面桥面探测判定（App 的 500ms 探测 effect 维护，见 App.tsx 的 `bridgeVerdict`）：
  * - `'pending'`：探测中——`window.dshChamber` 由桌面 preload 经异步 IPC 后
  *   expose，首帧必然缺席，迟到窗口内无法区分「无桥」与「桥未就绪」；
  * - `'present'`：`desktopSsh` 已 expose，存在远程来源，权威 roster 是异步事实；
@@ -100,8 +99,7 @@ export type DesktopBridgeVerdict = 'pending' | 'present' | 'absent'
  * live={local} 剪枝，四类 durable 表里属于远端来源的键会被当成退役来源写盘删除
  * ——pending/outcomes/notified 全部不可恢复（这正是 F6 回归的写盘
  * 丢失）。因此四类 durable 剪枝统一由本谓词放行：
- * - 有桥（`'present'`）：只有权威 roster 结算
- *   （`remoteRosterSettledRef`：refreshRemotes 成功结算后置位，见 App.tsx）
+ * - 有桥（`'present'`）：只有权威 roster 结算（`remoteRosterSettledRef`：refreshRemotes 成功结算后置位，见 App.tsx）
  *   后 live 才完整；结算那一拍的 `remoteRosterSettled` state 变化使剪枝 effect
  *   重跑，届时再按权威 live 收敛。
  * - 无桥（`'absent'`）：没有远程来源，live={local} 安全，**视同已结算**放行；
@@ -921,9 +919,11 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         // identity-preserving：同内容上报不换 state 对象，避免每次上报重派生 servers。
         const current = prev[sourceId]
         if (current !== undefined && runtimeReportSignature(current) === runtimeReportSignature(report)) {
+          // 事实权威门的年龄输入（design 19 §3.5）：同内容上报只刷新 liveness 戳，不换对象。
+          current.reportedAt = Date.now()
           return prev
         }
-        return { ...prev, [sourceId]: report }
+        return { ...prev, [sourceId]: { ...report, reportedAt: Date.now() } }
       })
       if (report === undefined) {
         // 壳上报撤回（shell 重连/重 boot 窗口）：provenance = 壳轨——facts 载体未换代，

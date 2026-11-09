@@ -110,16 +110,14 @@ export interface ChamberServerAggregate {
    * dsh version fact. The LOCAL instance's version flows straight from the
    * desktop bridge
    * (`window.dshChamber.dshVersion` → App hostFacts); remote instances stay
-   * unknown until the control-plane `dsh --version` facts are projected
-   * through the chamber bridge.
+   * unknown until the control-plane `dsh --version` facts are projected through the chamber bridge.
    */
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
   /**
    * Settled-boot GAP of this source's mounted shell (design 05 §4
-   * 「降级呈现」/ design 09 §3.2): the shell settled successfully while a whole
-   * surface is missing.
+   * 「降级呈现」/ design 09 §3.2): the shell settled successfully while a whole surface is missing.
    *
    * A SEPARATE fact from {@link pluginDiagnostic} on purpose. The diagnostic
    * channel describes the host boot-GRAPH channel (`ok` legitimately means "the
@@ -505,6 +503,8 @@ export interface InstanceRuntimeReport {
    * flag keeps today's semantics exactly (unknown ≠ attention).
    */
   stale?: boolean
+  /** Producer report time (page wall clock, ms); the facts authority gate bounds producer authority by age (design 19 §3.5); absent = age unknown. */
+  reportedAt?: number
 }
 
 type Listener = () => void

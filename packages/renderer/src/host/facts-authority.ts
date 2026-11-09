@@ -3,8 +3,9 @@
  * session-facts capability" (design 19 §3.5).
  *
  * While a mounted shell's runtime producer owns a source's runtime facts
- * (factsStore.runtime[id] present, the source's own transport connected, and the
- * report not stale), the no-shell observer's
+ * (factsStore.runtime[id] present, the source's own transport connected, the
+ * report not stale, and the report FRESH — its receipt age bounds producer
+ * authority; design 19 §3.5 "producer 在位无年龄上界"), the no-shell observer's
  * transient `degraded` capability mode must not be projected as the source's
  * capability. The observer's failure can be a page-local artefact — its 5s
  * baseline can expire while queued in chamber's dispatch budget or behind
@@ -19,16 +20,33 @@
 import type { InstanceRuntimeReport } from '@dsh-chamber/dsh-chamber-client-core'
 import type { SourceSessionFactsMode } from '../session-facts-mode.ts'
 
+/**
+ * Producer authority upper bound (wall clock ms). The mounted producer re-reports on
+ * every sessions/workspaces store change and on each authority-tick settle; a report
+ * older than this bound means the producer stopped reporting WITHOUT a teardown (a
+ * hung shell whose runtime row was never cleared), so its row is last-known state and
+ * must not suppress the observer forever. Calibration item: the real restoration
+ * delay is measured long-run (STATUS §1.1); the bound is deliberately loose (5 × the
+ * 60s boot budget order) so a quiet-but-alive producer keeps authority.
+ */
+const PRODUCER_AUTHORITY_MAX_AGE_MS = 5 * 60_000
+
 /** True when the mounted shell's runtime producer currently owns this source's
- *  live facts. Two decay conditions hand authority back to the no-shell observer:
- *  the report's own `stale` bit (a residual row is read-only history), and a
+ *  live facts. Three decay conditions hand authority back to the no-shell observer:
+ *  the report's own `stale` bit (a residual row is read-only history), a
  *  disconnected source (the producer cannot be delivering facts through a dead
- *  transport — its row is last-known state, not live evidence). */
+ *  transport — its row is last-known state, not live evidence), and an aged report
+ *  (the producer stopped reporting without a teardown; absent/non-finite receipt time
+ *  = age unknown, which never counts as fresh authority). */
 export function producerOwnsSessionFacts(
   runtime: InstanceRuntimeReport | undefined,
   sourceConnected: boolean,
+  now: number = Date.now(),
 ): boolean {
-  return runtime !== undefined && sourceConnected && runtime.stale !== true
+  if (runtime === undefined || !sourceConnected || runtime.stale === true) return false
+  const reportedAt = runtime.reportedAt
+  if (typeof reportedAt !== 'number' || !Number.isFinite(reportedAt) || reportedAt <= 0) return false
+  return now - reportedAt <= PRODUCER_AUTHORITY_MAX_AGE_MS
 }
 
 /** Apply the authority gate to a projected capability mode. Only the STALE carrier
