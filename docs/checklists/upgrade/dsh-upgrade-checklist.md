@@ -5,7 +5,7 @@
 - Owner：pin 升级负责人
 - Timebox：半天/一次 tag（动 pin 前审阅 + 升级 + 回归；不连续跨 tag 混做）
 - 退出标准：§0 的四条门与 §6 回归在**同一提交**上全绿；触点 / 锚点 / registry 一致；偏差已进 STATUS
-- 自动化入口：`preflight-vendor-pin.mjs`、`update-vendor.mjs`、`verify-upstream-touchpoints.mjs`、`verify-registry.mjs`、`check-anchors.mjs`、`verify-capabilities.mjs`、`run-checks.mjs full`
+- 自动化入口：`preflight-vendor-pin.mjs`、`update-vendor.mjs`、`pin-upgrade-pipeline.mjs`（机械面单批：六锚/3 fork diff + 生成视图收尾）、`verify-upstream-touchpoints.mjs`、`verify-registry.mjs`、`check-anchors.mjs`、`verify-capabilities.mjs`、`run-checks.mjs full`
 - 证据：PR Validation 表（命令 + 结果）；升级叙述在发版时写 `CHANGELOG.md` 发布节；open 偏差进 [`../../progress/STATUS.md`](../../progress/STATUS.md)
 
 > 范围：**只**改 chamber 侧，不动 dsh 内容（vendor / submodule 源码零修改）。命令前先 `nvm use`（或等价方式）让 `node --version` 与 `.nvmrc` 一致。

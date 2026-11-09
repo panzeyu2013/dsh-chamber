@@ -13,7 +13,7 @@
 
 |部|内容|入口|
 |---|---|---|
-|A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐、§16 pin 升级管线|A§1–A§16|
+|A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐|A§1–A§15|
 |B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
 |D 工程|结构性重构、产物新鲜度、页面性能 P2、多实例常驻后续研究|D§1–D§4|
@@ -41,7 +41,6 @@
 |§13|插件管理页可嵌入|上游提供 surface=embedded|
 |§14|漂移剩余、待退役块、工程债|下一 pin|
 |§15|UI 对齐候选与维持差异|UI 裁决触发时|
-|§16|pin 升级管线自动化|下次 pin 升级|
 
 ### 1. N-壳宿主下持久化 selection 需要按 shell/入口作用域
 
@@ -217,25 +216,14 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 
 #### 15.3 清洁项（非裁决）
 
-- 面板轴 boot 竞态 + teardown re-arm（`sidebar/src/client/index.ts` 的 pendingPanelId / arm / tryResolve
-  与 cleanup 回灌状态机）目前只有源码文本锁、无行为单测；候选 = 仿 panel-source 抽成纯叶子 + 假 observable
-  覆盖「先发布空轴、后注册」与「壳拆除窗口收下再 re-arm」两个窗口。
-- 六个小图标命中盒无几何锁；`RowHoverCard.onClickCapture` 无源码锁；marquee 两条分支未覆盖；`row-render-cost`
-  的 13 faces 等号与 key==deps 对账是有意收紧。
-- `ServerSection.tsx` 两处 IIFE/12 空格缩进可无损改写但动行号与源码锁；投影查询四份可收敛 `findProjected`；
-  `createdAt` 门只判 undefined（不可达，第二写入点需加 finite）。
+- `row-render-cost` 的 13 faces 等号与 key==deps 对账是有意收紧（非缺陷）。
+- `ServerSection.tsx` 两处 IIFE/12 空格缩进可无损改写但动行号与源码锁（收益低，最后处理）。
 
 #### 15.4 复用准则
 
 1. 上游有源码路径导出 → 经 `types/vendor-modules.d.ts` + registry `vendorSourceConsumers` 消费；
 2. 非导出纯函数 → 逐字拷入 + 出处注 + 语义锁（先例 `session-title-marquee.ts`）；
 3. 结构不同可见面 → 只复用片段（CSS/JSX/字典键），逐值对照。
-
-### 16. 上游 pin 升级管线自动化
-
-> 不阻断合并，不弱化现有门禁；自动写锚只打印 diff。
-
-- **16.3 机械面单批管线**：由 tag 推导六锚/3 fork 字面量（打印 diff）+ `registry-views --write` / `verify:i18n --write` + 收尾 `verify-upstream-touchpoints`；不自动提交/改判据。
 
 ## B. 平台、契约索引与冻结基线（B 类）
 
@@ -394,12 +382,10 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 |#|工作|现状|验收判据|
 |---|---|---|---|
-|1|三处 state/ref 镜像：`packages/dsh-chamber-client-ui-sidebar/src/client/sidebar-root-projection.ts`（serversRef）、`packages/renderer/src/components/InstanceView.tsx`（activeRef/settledRef）、`packages/dsh-chamber-client-ui-settings-bridge/src/client/DshRuntimeSection.tsx`（confirmLaunchRef）|未收口；其余镜像的基线在 git 历史与各 host store 注释|渲染值走 useSyncExternalStore 小 store（单源）、事件回调读 store 的 getSnapshot()，删 ref 镜像；不引入状态库/新包|
-|2|settings 两分支合流：`DshRuntimeSection` 的 gateway/local 共享 controller|未动|runtime-management / 设置桥套件绿；先补 parity 测试再合并|
-|3|逐包棘轮收尾：file-budgets.json 只降不升（含新叶、`kind:ceiling` 单列与 FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|目标与缺口一律看 node scripts/gates/checks/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**未决**：新模块仍需人工登记；host-assembly 成对抽取与 transport exec 的取舍见 STATUS §三|
-|4|§1.5 的审计开放项|未动|各自条目内|
-|5|`packages/desktop/host-assembly.ts` 的 `sm.onStatusChanged` 订阅回调（~204 行，28 个自由变量）→ 与 `onVerified` 成对抽成同一工厂|未动|判据见 STATUS §三（预计 −158 行）；file-budgets 记为 FROZEN|
-|6|App 残余编排的依赖容器化（`retireSources`+`refreshRemotes`+`JSX` 共 ≈75 个自由标识符）|未决：逐字搬会得到 ≈75 字段的入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
+|1|settings 两分支剩余合流：`DshRuntimeSection` 的 gateway/local 数据权威与渲染体|selection/confirm controller 已单源（parity 测试已落：`test/runtime/runtime-management.test.ts`、`confirm-machine-guards.test.ts`）；剩余 = 数据权威（local 主进程订阅 vs gateway 3s 轮询投影）与两段渲染体合并——需新文件与 client-core action-runner 边界|runtime-management / 设置桥套件绿；渲染体合并前先按已知差异（recovery 相位）裁决|
+|2|逐包棘轮收尾：file-budgets.json 只降不升（含新叶、`kind:ceiling` 单列与 FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|目标与缺口一律看 node scripts/gates/checks/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**未决**：新模块仍需人工登记|
+|3|§1.5 的审计开放项|未动|各自条目内|
+|4|App 残余编排的依赖容器化（`retireSources`+`refreshRemotes`+`JSX` 共 ≈75 个自由标识符）|未决：逐字搬会得到 ≈75 字段的入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
 
 #### 1.2 不做与保留（结论）
 

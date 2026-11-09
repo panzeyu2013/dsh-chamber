@@ -524,7 +524,7 @@ command-manager-entry / duration-env / device-info.ts。
 4. fork重放 + 版本标记同步（三副本 → 新版本）；
 5. roster pass：covered/factory存在性、typert契约、新增官方行裁决；**侧栏新增内容面必须提请用户裁决，不得默认拒绝**——上游若在侧栏（`sidebar.*` 任一键：会话行/工作区行/页脚/设置/面板入口等）新增声明、新增占用者，或把内容注册进「已声明但本壳未渲染」的键，逐条列出并交用户裁决采纳/跳过/替换；默认处置只有一条：**上报待裁**，不得以「本壳不渲染」为由拒绝或静默丢弃（键仍被声明 ⇒ 第三方 `inject` 不会失败，面却不会出现，静默即漏裁决）。差集取法：`grep -rhoE "'sidebar\.[a-z.]+" vendor/harness-checkout/packages/client/ui-*/src/client/index.ts | sort -u` 对 chamber 侧栏 `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 的声明表 + 各渲染点，逐键判定「已渲染 / 未渲染待裁」；裁决结果按 §2.7 登记行或 `STATUS.md` 偏差条落账；
 6. 契约复验：contract-mirror 表逐行（§4）+ 相关测试；插件管理页容纳层的 DOM 缝先跑 §3 末条的锁步门（`pnpm --filter @dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager test`；跑在 `test:plugin-manager` 腿里，红了即形状已变，按本步重锚），再按 §3 末条 grep 复核（`data-plugin-panel`、页头/More/详情三条 `data-window-drag`、页根直接子 `[data-slot]`、`settings.section` 的 `plugin-manager` 注册）：零命中或形状变化 ⇒ 按 STATUS 偏差条裁决。
-7. 运行时线与源码线必须**同一提交**（C5「fork 版本 == 上游源码版本」与 C10「fork 活字面量 == 运行时锚」的联合不变量：拆批的任一中间态必红，历史 pin 升级均为单提交）；bundle-dsh 刷新 + 六锚 + bin.js 冒烟是其中的步骤；
+7. 运行时线与源码线必须**同一提交**（C5「fork 版本 == 上游源码版本」与 C10「fork 活字面量 == 运行时锚」的联合不变量：拆批的任一中间态必红，历史 pin 升级均为单提交）；bundle-dsh 刷新 + 六锚 + bin.js 冒烟是其中的步骤；机械面单批跑 `node scripts/upstream/pin/pin-upgrade-pipeline.mjs <tag>`（打印六锚/3 fork 的 unified diff、派生锁文件只报重生成命令，随后 `registry-views --write` / `verify-i18n --write` / `verify-upstream-touchpoints` 收尾；不自动提交、不改判据，锚值仍人工按 diff 落笔）；
 8. 文档回写：CHANGELOG/STATUS + registry刷新后重生成本表 §2/§9（`registry-views.mjs --write`，
    `verify-registry.mjs` 绿；版本值不进checklist）+ i18n重录；另做两项**无门禁**的目检——
    ① 全仓 docs/README 的「当前基线」版本/tag 字面量复扫（旧值只许留在历史叙述，如「…起」），
