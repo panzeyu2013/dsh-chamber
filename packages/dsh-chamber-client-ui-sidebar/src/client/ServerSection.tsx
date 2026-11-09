@@ -55,7 +55,7 @@ import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 import { AnimatedRows } from './rows/animated-rows.tsx'
 import { useHoverMotionGate } from './use-hover-motion-gate.ts'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
-import { createdLabel, dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
+import { ROW_CARD_OPEN_DELAY_MS, createdLabel, dragOverState, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
 
 export const ServerSection = memo(function ServerSection({ server }: { server: ChamberServerAggregate }) {
@@ -1297,7 +1297,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                       <div className={cc.hoverTime}>{createdLabel(workspace.createdAt, t)}</div>
                                     </div>
                                   )}
-                                  openDelayMs={800}
+                                  openDelayMs={ROW_CARD_OPEN_DELAY_MS}
                                   disabled={menuOpen[workspaceKey] === true || renamingThisWorkspace
                                     || workspaceDrag !== null || sessionDrag !== null || serverDrag !== null}
                                   copyText={workspace.path}

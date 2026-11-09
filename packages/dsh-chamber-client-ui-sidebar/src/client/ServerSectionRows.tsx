@@ -26,7 +26,7 @@ import { clearPendingClick, noteSessionRowClick } from '@dsh-chamber/dsh-chamber
 import { HOVER_GATE_ATTR } from './hover-motion-gate.ts'
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
-import { dragOverState, rowHalf } from './server-section-model.ts'
+import { ROW_CARD_OPEN_DELAY_MS, dragOverState, rowHalf } from './server-section-model.ts'
 import { useTitleMarquee } from './session-title-marquee.ts'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
 import { useSidebarSection } from './sidebar-context.ts'
@@ -500,7 +500,7 @@ const SessionRow = memo(function SessionRow({
               )}
             </div>
           )}
-          openDelayMs={800}
+          openDelayMs={ROW_CARD_OPEN_DELAY_MS}
           disabled={menuOpenRow || sessionDrag !== null || workspaceDrag !== null || serverDrag !== null}
           copyText={session.blank === true ? undefined : sessionTitleText}
           copyLabel={t('action.copy')}

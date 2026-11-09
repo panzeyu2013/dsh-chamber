@@ -9,6 +9,19 @@ import type { InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core/inst
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import type { SidebarKey } from './locales.ts'
 
+/**
+ * Row / workspace-header hover-card dwell.
+ *
+ * The upstream atomic `HoverCard` default is 500 ms and the C15 gate locks that
+ * pair (`HOVER_OPEN_DELAY_MS`). The chamber sidebar deliberately gives ROW cards a
+ * longer dwell — the pointer crosses rows while moving toward the card, so the
+ * atomic default opens too eagerly. That EFFECTIVE value used to be a bare `800`
+ * at two call sites: the C15 pair stayed 500, so both overrides could drift with
+ * no gate seeing it. One named constant keeps the two sites in lockstep and makes
+ * the effective value reviewable (design 06 §7).
+ */
+export const ROW_CARD_OPEN_DELAY_MS = 800
+
 /** Connection-status visual kind: dot colors plus the connecting spinner. */
 export type SourceStatusKind = 'ok' | 'busy' | 'err' | 'idle'
 

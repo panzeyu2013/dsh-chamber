@@ -179,6 +179,18 @@ test('perf gates stay: one sessionsOf per workspace per render, dropEnv only whi
   assert.ok(SECTION.includes('const flatMemberSessions = flatGroupBy'))
 })
 
+test('the row-card hover dwell has one named effective value, not bare literals', () => {
+  const TIMING = read('../../src/client/server-section-model.ts')
+  // The atomic default (500) is C15-locked against upstream; the ROW cards deliberately
+  // dwell longer, and that effective value must be a single reviewable constant so the
+  // two call sites cannot drift apart unnoticed (design 06 §7).
+  assert.match(TIMING, /export const ROW_CARD_OPEN_DELAY_MS = 800/)
+  for (const [name, source] of [['ServerSection', SECTION], ['ServerSectionRows', ROWS]] as const) {
+    assert.ok(source.includes('openDelayMs={ROW_CARD_OPEN_DELAY_MS}'), name + ' must consume the named constant')
+    assert.equal(source.includes('openDelayMs={800}'), false, name + ' must not keep a bare effective value')
+  }
+})
+
 test('the todo area excludes archived rows (their open dead-ends, so the entry could never clear)', async () => {
   const { deriveTodoAttention } = await import('@dsh-chamber/dsh-chamber-client-core/todo-attention')
   const filters = { completed: true, ask: true, request: true }
