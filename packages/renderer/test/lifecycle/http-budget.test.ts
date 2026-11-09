@@ -5,6 +5,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   HTTP_BUDGET_LIMITS,
   MAX_LONG_UNARY_LEASE_MS,
@@ -585,4 +586,26 @@ test('a page-level lease is capped: default 5min, mutation path same-sourced wit
   assert.equal(httpBudgetLeaseFor(10 * 60_000, MAX_LONG_UNARY_LEASE_MS), 10 * 60_000 + 5_000)
   assert.equal(httpBudgetLeaseFor(MAX_LONG_UNARY_LEASE_MS, MAX_LONG_UNARY_LEASE_MS), MAX_LONG_UNARY_LEASE_MS)
   assert.equal(httpBudgetLeaseFor(1_000, 1), HTTP_BUDGET_LIMITS.defaultLeaseMs)
+})
+
+test('the shipped budget table is pinned (the per-source queue share included)', () => {
+  assert.deepEqual({ ...HTTP_BUDGET_LIMITS }, {
+    totalMax: 4,
+    localReserve: 1,
+    bundleMax: 2,
+    queueMax: 64,
+    perSourceQueueMax: 8,
+    watchdogMs: 1_000,
+    defaultLeaseMs: 65_000,
+  })
+})
+
+test('the follow deadline is ONE 2s budget across renderer and control-plane', () => {
+  // renderer/source-mux-facts 的完成边沿读尾 deadline 声称对齐 control-plane/session-mux；
+  // 两个载体各自持有一份 2s 字面量，单边改动不得悄悄漂移。
+  const rendererSrc = readFileSync(new URL('../../src/source-mux-facts.ts', import.meta.url), 'utf8')
+  const proxySrc = readFileSync(new URL('../../../../packages/control-plane/src/session-mux.ts', import.meta.url), 'utf8')
+  const pattern = /export const DEFAULT_FOLLOW_TIMEOUT_MS = 2_000/u
+  assert.match(rendererSrc, pattern, 'renderer follow deadline stays 2s')
+  assert.match(proxySrc, pattern, 'proxy follow deadline stays 2s')
 })
