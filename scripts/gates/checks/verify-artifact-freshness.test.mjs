@@ -94,10 +94,14 @@ test('G2: unknown guard kinds, duplicate ids and missing fields are rejected', (
 })
 
 test('G2 two-way lockstep: the freshness ids are exactly the ids the verifier emits', () => {
+  // G3 加入后，dist/web 与 host-*-package 从 exemption 升为 freshness 类：
+  // 清单比对由 verify-artifact-freshness 观测（缺一组即失步即红）。
   assert.deepEqual(freshnessGuardIds(), [
     'desktop/preload.cjs',
     'renderer/src/generated/typert',
     'gateway/dist/index.js',
+    'desktop/dist/web',
+    'desktop/dist/host-*-package',
   ])
   const source = readFileSync(new URL('./verify-artifact-freshness.mjs', import.meta.url), 'utf8')
   for (const id of freshnessGuardIds()) {

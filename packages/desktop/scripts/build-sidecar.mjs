@@ -70,6 +70,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { verifyPayload } from './prepare-python-payload.mjs'
 import { verifyOfficeAssets } from './prepare-office-assets.mjs'
+import { assertPackArtifactsFresh } from './pack-input-guards.mjs'
 import { isCliEntry, runCliTool } from '../../../scripts/lib/cli.mjs'
 import { payloadNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
 
@@ -911,6 +912,15 @@ if (isCliEntry(import.meta.url)) {
       '       [--require-python] [--require-node] [--require-pnpm] [--require-office-assets] [--help]',
     ],
     parse: parseBuildSidecarArgs,
-    run: runBuildSidecar,
+    // G5（design 21 §7；TODO D§2.2）：装配成功后对现行出货腿消费的输入产物做
+    // 存在 + 新鲜度兜底（dist/web 的 .build-manifest.json 摘要与
+    // dist/control-plane 的输入 mtime）。dry-run 不查：它不写盘，也不代表产物
+    // 会进入打包。Electron 复活时按 electron-frozen §6 在 before-pack 里改用
+    // requirePresence: true + mode: 'electron-pack' 即可（同一份 guard）。
+    run: async (options) => {
+      const result = await runBuildSidecar(options)
+      if (result.dryRun !== true) assertPackArtifactsFresh({ mode: 'sidecar' })
+      return result
+    },
   })
 }

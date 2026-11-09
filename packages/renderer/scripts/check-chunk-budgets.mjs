@@ -39,6 +39,11 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
+// G3（design 21 §7；TODO D§2.2）：本次构建的成功末尾写 .build-manifest.json
+// （输入摘要 + 工具链 + 输出指纹）。writer/verifier 的规则单源在
+// packages/desktop/scripts/build-manifest.mjs —— dist/web 是 renderer 包的
+// vite outDir，而一致性比对在 verify-artifact-freshness（非注册门）。
+import { BUILD_MANIFEST_FILE, writeWebDistBuildManifest } from '../../desktop/scripts/build-manifest.mjs'
 
 const WEB_DIST = fileURLToPath(new URL('../../desktop/dist/web/', import.meta.url))
 const VITE_MANIFEST = fileURLToPath(new URL('../../desktop/dist/web/.vite/manifest.json', import.meta.url))
@@ -191,3 +196,11 @@ crosses('chamberEntryRaw', chamberBytes.raw, 'chamberEntryRaw')
 crosses('headCssRaw', headCss.raw, 'headCssRaw')
 console.log(`check-chunk-budgets: wrote ${SIZES_OUT}`)
 if (failed) process.exit(1)
+
+// G3：只有成功构建才写清单（失败的半成品不配得到「新鲜」的摘要，旧清单保持
+// 原样 ⇒ 后续比对永远判红，直到重建成功）。必须在本脚本最后一个写盘点之后：
+// 输出集在这里从磁盘枚举，perf-sizes.json 已在上方落盘；manifest 自身除外。
+const buildManifest = writeWebDistBuildManifest({ webDistDir: WEB_DIST })
+console.log(
+  `check-chunk-budgets: wrote ${BUILD_MANIFEST_FILE}（${buildManifest.inputsCount} 输入 / ${buildManifest.outputs.length} 输出）`,
+)

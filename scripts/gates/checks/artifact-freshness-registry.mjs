@@ -79,17 +79,17 @@ export const ARTIFACT_FRESHNESS_REGISTRY = Object.freeze([
     artifact: 'packages/desktop/dist/web/**',
     generator: 'pnpm run build:renderer',
     guard: {
-      kind: 'exemption',
-      reason: '产物在 .gitignore，干净 checkout 缺失是正常态；CI 每次全新构建看不到「存在但陈旧」。发布链以 build:renderer 全量重建，打包态由 packaging-closure 清单核对，故不做内容比对（G3 输入摘要仍未落地）',
+      kind: 'freshness',
+      detail: 'G3 构建清单：check-chunk-budgets.mjs 成功末尾写 .build-manifest.json（inputsHash/toolVersion/outputs）；verify-artifact-freshness 读回比对（缺失=SKIP，漂移=陈旧）',
     },
   },
   {
     id: 'desktop/dist/host-*-package',
     artifact: 'packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**',
-    generator: 'build-host-graph-package / build-sidecar',
+    generator: 'pnpm --filter @dsh-chamber/desktop run build:host-graph-package',
     guard: {
-      kind: 'exemption',
-      reason: '同 desktop/dist/web：忽略态产物只在本地/打包态可能陈旧，打包链每次全新 cpSync 生成，且 packaging-closure 清单锁定 outDir 与行序断言',
+      kind: 'freshness',
+      detail: 'G3 构建清单：build-host-graph-package.mjs 在 .tmp 内写 .build-manifest.json 后原子 rename；verify-artifact-freshness 逐行比对（含行集不得缩水：缺目录或旧摘要=陈旧）',
     },
   },
   {

@@ -20,7 +20,13 @@
  *   3. packages/gateway/dist/index.js —— build:gateway 的 esbuild 产物（包 exports
  *      的落点）；用包自己的 build.mjs 在临时副本里重建后逐字节比对（模块路径按
  *      packages/gateway cwd 归一），dist 不在场时 loud SKIP。
- *
+ *   4/5. G3 构建清单类（design 21 §7；TODO D§2.2）：packages/desktop/dist/web/**
+ *      与 dist/host-*-package/** 是忽略态、无稳定文案的产物，构建时由
+ *      packages/desktop/scripts/build-manifest.mjs 写 .build-manifest.json
+ *      （inputsHash + toolVersion + outputs 指纹）；本门用同一份输入集规则重算并
+ *      比对——输入源漂移（改了 src 没重建）与产物漂移（多文件/缺文件/被改）都判
+ *      陈旧。目录缺失 = 未构建 ⇒ loud SKIP（clean checkout 正常态）。
+
  * 语义（与 control-plane-freshness / build-smoke 同款豁免）：
  *   - 输入缺失（clean checkout、未 build 的环境）⇒ **loud SKIP**，不判红；
  *   - 产物在但与「从当前 src 重建/重算」的结果不一致 ⇒ **FAIL（陈旧）**，
@@ -35,14 +41,30 @@
  *                     静默退化成普通检查）。
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // The C4 mount-order table is the single source for the generated artifact set
 // (shared with the upgrade touchpoint gate); the freshness gate imports it and
 // never re-types the roster names.
 import { EXPECTED_GENERATED_REMOTES } from '../../../packages/renderer/scripts/typert-remote-contract.mjs'
+import { HOST_PACKAGE_BUILD_ROWS } from '../../../packages/desktop/scripts/build-host-graph-package.mjs'
+import {
+  HOST_PACKAGE_REBUILD_COMMAND,
+  WEB_DIST_ARTIFACT_ID,
+  WEB_DIST_REBUILD_COMMAND,
+  WEB_DIST_RELATIVE,
+  formatManifestVerdict,
+  hostPackageArtifactId,
+  hostPackageInputFiles,
+  hostPackageToolVersion,
+  sha256File,
+  verifyBuildManifest,
+  webDistInputFiles,
+  webDistToolVersion,
+  writeBuildManifest,
+} from '../../../packages/desktop/scripts/build-manifest.mjs'
 import {
   artifactFreshnessSummary,
   freshnessGuardIds,
@@ -242,11 +264,75 @@ function checkGatewayDist() {
   }
 }
 
+/**
+ * 4. G3：packages/desktop/dist/web/** —— 读构建清单（.build-manifest.json）并与
+ * 当前输入集/输出指纹比对。目录缺失 = 未构建 ⇒ loud SKIP（clean checkout 正常态）；
+ * 清单缺失/输入漂移/产物漂移 ⇒ 陈旧（绝不自动重建）。
+ */
+function checkWebDistBuildManifest() {
+  const dir = join(ROOT, WEB_DIST_RELATIVE)
+  const rebuild = WEB_DIST_REBUILD_COMMAND
+  if (!existsSync(dir)) {
+    note('desktop/dist/web', 'skip', '未构建（无 packages/desktop/dist/web）（重建：' + rebuild + '）')
+    return
+  }
+  try {
+    const verdict = verifyBuildManifest(dir, {
+      artifactId: WEB_DIST_ARTIFACT_ID,
+      inputs: webDistInputFiles({ root: ROOT }),
+      toolVersion: webDistToolVersion({ root: ROOT }),
+      rebuildCommand: rebuild,
+    })
+    if (verdict.status === 'stale') {
+      note('desktop/dist/web', 'stale', formatManifestVerdict(verdict, rebuild))
+      return
+    }
+    note('desktop/dist/web', 'ok', '构建清单一致（' + String(verdict.manifest.inputsCount) + ' 输入 / ' + String(verdict.manifest.outputs.length) + ' 输出）')
+  } catch (error) {
+    note('desktop/dist/web', 'stale', '无法重算输入集：' + String(error.message ?? error).split('\n')[0] + '（重建：' + rebuild + '）')
+  }
+}
+
+/**
+ * 5. G3：packages/desktop/dist/host-*-package/** —— 逐行读构建清单比对（行集不得
+ * 缩水：只要有一个目录在场，缺目录/旧摘要都判陈旧）。全部缺失 = 未构建 ⇒ SKIP。
+ */
+function checkHostPackageBuildManifests() {
+  const rebuild = HOST_PACKAGE_REBUILD_COMMAND
+  const desktopDir = join(ROOT, 'packages', 'desktop')
+  const rows = HOST_PACKAGE_BUILD_ROWS.map((row) => ({ row, dir: join(desktopDir, 'dist', basename(row.outDir)) }))
+  const present = rows.filter((entry) => existsSync(entry.dir))
+  if (present.length === 0) {
+    note('desktop/dist/host-*-package', 'skip', '未构建（无 dist/host-*-package）（重建：' + rebuild + '）')
+    return
+  }
+  const problems = []
+  for (const entry of rows) {
+    if (!existsSync(entry.dir)) {
+      problems.push('缺目录 ' + basename(entry.dir))
+      continue
+    }
+    try {
+      const verdict = verifyBuildManifest(entry.dir, {
+        artifactId: hostPackageArtifactId(entry.dir),
+        inputs: hostPackageInputFiles(entry.row.sourceDir, { root: ROOT }),
+        toolVersion: hostPackageToolVersion(),
+        rebuildCommand: rebuild,
+      })
+      if (verdict.status === 'stale') problems.push(entry.row.label + '：' + verdict.problems.join('；'))
+    } catch (error) {
+      problems.push(entry.row.label + '：无法重算输入集：' + String(error.message ?? error).split('\n')[0])
+    }
+  }
+  if (problems.length > 0) note('desktop/dist/host-*-package', 'stale', formatManifestVerdict({ problems }, rebuild))
+  else note('desktop/dist/host-*-package', 'ok', rows.length + ' 个 host 包产物的构建清单一致')
+}
+
 /** 用法（--help 与未知参数都打印它）。 */
 const USAGE = [
   '用法: node scripts/gates/checks/verify-artifact-freshness.mjs [--require-compare] [--self-test]',
   '',
-  '  无参数           比对已构建的 preload / typert / gateway dist。',
+  '  无参数           比对已构建的 preload / typert / gateway dist / dist-web 与 host 包构建清单。',
   '  --require-compare 严格档：一类产物都比不了（全 SKIP，例如 clean checkout）即红；',
   '                    用于必须证明「比过」的场合；默认档下 SKIP 只 loud 打印、不判红。',
   '  --self-test       负控：证明比对能抓到人为差异，exit 0/1。',
@@ -317,9 +403,32 @@ function main(argv) {
     // read as a failure, one compared class must not.
     const strictArm = summarizeResults([{ status: 'skip' }, { status: 'skip' }], { requireCompare: true }).strictFailure
       && !summarizeResults([{ status: 'ok' }], { requireCompare: true }).strictFailure
-    const selfTestOk = identical && detected && setArm && strictArm
+    // G3 arm (the build-manifest instrument): a manifest written for a fixture
+    // artifact must read ok; a mutated output OR a mutated input must read
+    // stale. Same negative-control discipline as the arms above: the new
+    // comparison must be shown able to fail.
+    const manifestWork = mkdtempSync(join(tmpdir(), 'dsh-fresh-manifest-'))
+    let manifestArm = false
+    try {
+      const artifact = join(manifestWork, 'artifact')
+      mkdirSync(artifact, { recursive: true })
+      writeFileSync(join(artifact, 'index.html'), 'html\n')
+      writeFileSync(join(manifestWork, 'src.txt'), 'source\n')
+      const currentInputs = () => [{ path: 'src.txt', bytes: 7, sha256: sha256File(join(manifestWork, 'src.txt')), mtimeMs: Date.now() }]
+      const expected = { artifactId: 'fixture/artifact', inputs: currentInputs(), toolVersion: 'fixture/1', rebuildCommand: 'pnpm run build:renderer' }
+      writeBuildManifest(artifact, { artifactId: expected.artifactId, inputs: expected.inputs, toolVersion: expected.toolVersion })
+      const ok = verifyBuildManifest(artifact, expected).status === 'ok'
+      writeFileSync(join(artifact, 'index.html'), 'mutated\n')
+      const outputDrift = verifyBuildManifest(artifact, expected).status === 'stale'
+      writeFileSync(join(manifestWork, 'src.txt'), 'source-2\n')
+      const inputDrift = verifyBuildManifest(artifact, { ...expected, inputs: currentInputs() }).status === 'stale'
+      manifestArm = ok && outputDrift && inputDrift
+    } finally {
+      rmSync(manifestWork, { recursive: true, force: true })
+    }
+    const selfTestOk = identical && detected && setArm && strictArm && manifestArm
     console.log('artifact-freshness self-test: ' + (selfTestOk
-      ? 'ok（同内容=一致，追加一字节=陈旧，多余/缺失/错名产物=陈旧，全 SKIP 严格档=红）'
+      ? 'ok（同内容=一致，追加一字节=陈旧，多余/缺失/错名产物=陈旧，全 SKIP 严格档=红，构建清单输出/输入漂移=陈旧）'
       : 'FAIL'))
     process.exit(selfTestOk ? 0 : 1)
   }
@@ -327,6 +436,8 @@ function main(argv) {
   checkPreload()
   checkGenerated()
   checkGatewayDist()
+  checkWebDistBuildManifest()
+  checkHostPackageBuildManifests()
   // G2 two-way lockstep: every freshness id the registry claims must have been
   // observed by a note() here, and every observed id must be registered — adding a
   // comparison without registering it (or vice versa) fails the gate.

@@ -18,6 +18,12 @@
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import {
+  hostPackageArtifactId,
+  hostPackageInputFiles,
+  hostPackageToolVersion,
+  writeBuildManifest,
+} from './build-manifest.mjs'
 
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = join(desktopDir, '..', '..')
@@ -77,15 +83,22 @@ function buildHostGraphPackages() {
 
   for (const entry of HOST_PACKAGE_BUILD_ROWS) {
     // 原子替换：先把完整产物写进 .tmp，再 rename 入位；读取者只会看到旧
-    // 产物或完整新产物，不会看到半拷目录。
+    // 产物或完整新产物，不会看到半拷目录。G3 的 .build-manifest.json 也写进
+    // .tmp（manifest 的 artifactId 用最终 outDir 派生，输出集从 .tmp 枚举），
+    // 因此 manifest 与产物一起原子发布，不存在「新产物 + 旧摘要」的窗口。
     const tmpDir = `${entry.outDir}.tmp`
     rmSync(tmpDir, { recursive: true, force: true })
     mkdirSync(tmpDir, { recursive: true })
     cpSync(join(entry.sourceDir, 'package.json'), join(tmpDir, 'package.json'))
     cpSync(join(entry.sourceDir, 'dist'), join(tmpDir, 'dist'), { recursive: true })
+    const manifest = writeBuildManifest(tmpDir, {
+      artifactId: hostPackageArtifactId(entry.outDir),
+      inputs: hostPackageInputFiles(entry.sourceDir),
+      toolVersion: hostPackageToolVersion(),
+    })
     rmSync(entry.outDir, { recursive: true, force: true })
     renameSync(tmpDir, entry.outDir)
-    console.log(`[build-host-graph-package] ${entry.label} package -> ${entry.outDir}/`)
+    console.log(`[build-host-graph-package] ${entry.label} package -> ${entry.outDir}/（.build-manifest.json：${manifest.inputsCount} 输入 / ${manifest.outputs.length} 输出）`)
   }
 }
 

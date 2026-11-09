@@ -229,6 +229,10 @@ export const GROUPS = {
     'scripts/bundle-swap.test.mjs',
     'scripts/bundle-pnpm-launcher.test.mjs',
     'scripts/control-plane-freshness.test.mjs',
+    // G3 构建清单（输入摘要/输出指纹）的写入-比对语义 + 负控（design 21 §7）
+    'scripts/build-manifest.test.mjs',
+    // G5 打包前输入兜底（存在/新鲜度判定、sidecar 腿的 mode 边界）
+    'scripts/pack-input-guards.test.mjs',
     // python 载荷 machinery（C5：锁校验 / 解包器 / dry-run 离线保证 / 摘要纪律 /
     // full 载荷的 pnpm 半边：版本单源、拷贝/prune、manifest/digest、--verify）
     'scripts/prepare-python-payload.test.mjs',
