@@ -462,12 +462,21 @@ test('service: request binds through the alias, records the child, opens and rel
 
   // Native confirmation happened once (the permission is now remembered).
   assert.equal(h.dialogs.length, 1)
-  const dialog = h.dialogs[0] as { message: string; detail: string; defaultId: number; cancelId: number }
+  const dialog = h.dialogs[0] as {
+    title: string; message: string; detail: string; buttons: string[]
+    defaultId: number; cancelId: number
+  }
   assert.match(dialog.message, /dsh-web-1/)
   assert.match(dialog.message, /5173/)
+  // v3 confirmation copy (design 28 §2.6/§4): the target opens in the panel's
+  // native guest, site data stays in this process's memory, buttons = 打开/取消.
+  assert.match(dialog.message, /面板/)
   assert.match(dialog.detail, /root@dev.example.com/)
-  assert.match(dialog.detail, /系统浏览器/)
+  assert.match(dialog.detail, /guest/)
+  assert.match(dialog.detail, /不会拉起系统浏览器/)
+  assert.match(dialog.detail, /内存/)
   assert.match(dialog.detail, /本机任何进程/)
+  assert.deepEqual(dialog.buttons, ['打开', '取消'], 'the v3 copy offers open/cancel only')
   assert.equal(dialog.defaultId, 1, 'cancel is the default button')
   assert.equal(dialog.cancelId, 1)
 

@@ -41,6 +41,8 @@ test('the path is normalized to a same-origin relative path (fragment dropped, q
     ['/app?x=1&y=2', '/app?x=1&y=2'],
     ['/app#frag', '/app'],
     ['/a/../b', '/b'],
+    // design 28 §3 ceiling: a 4096-character same-origin path is accepted.
+    ['/' + 'a'.repeat(4095), '/' + 'a'.repeat(4095)],
   ]
   for (const [input, expected] of cases) {
     const harness = new ForwardIpcHarness()
@@ -58,7 +60,7 @@ const INVALID_PATHS: Array<[name: string, path: unknown]> = [
   ['userinfo URL', 'http://u:p@127.0.0.1/'],
   ['encoded control bytes', '/%0d%0a'],
   ['raw CR/LF', '/x\r\ny'],
-  ['oversized path', '/' + 'a'.repeat(2048)],
+  ['oversized path', '/' + 'a'.repeat(4096)],
   ['non-string path', 42],
   ['object path', {}],
 ]

@@ -129,8 +129,8 @@ test('② 重生成 Swift 与提交物 BridgeManifest.swift 逐字节一致', ()
 
 test('③ 通道数守恒：counts {invoke:64, push:13, total:77} 与两列表长度自洽', () => {
   const { manifest } = regenerated()
-  // 当前仓库事实（67 = 58 + 9，与 ipc-surface-mirror.test.ts 的集合断言
-  // 同一批事实；58 = 56 个命名空间 invoke 成员 + info + native-theme-set）；
+  // 当前仓库事实（77 = 64 + 13，与 ipc-surface-mirror.test.ts 的集合断言
+  // 同一批事实；64 = 62 个命名空间 invoke 成员 + info + native-theme-set）；
   // 通道增删时须与两提交物同步更新。
   assert.deepEqual(manifest.counts, { invoke: 64, push: 13, total: 77 })
   assert.equal(manifest.invoke.length, manifest.counts.invoke)
@@ -164,7 +164,7 @@ test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表�
   }
 })
 
-test('⑤ 方向抽查：invoke/push 归属与 main 侧注册事实一致（含 9 push 精确集）', () => {
+test('⑤ 方向抽查：invoke/push 归属与 main 侧注册事实一致（含 Swift-only browser 4 push 的精确集）', () => {
   const { manifest } = regenerated()
   const directionOf = (channel: string): 'invoke' | 'push' | 'unknown' => {
     if (manifest.invoke.some(entry => entry.channel === channel)) return 'invoke'

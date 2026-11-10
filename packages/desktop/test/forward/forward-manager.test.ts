@@ -31,6 +31,7 @@ import {
   FORWARD_MAX_GLOBAL,
   FORWARD_MAX_PER_SOURCE,
   FORWARD_OPEN_MAX_PER_WINDOW,
+  FORWARD_PATH_MAX_CHARS as MANAGER_PATH_MAX,
   FORWARD_STATES,
 } from '../../remote-forward-manager.ts'
 import type {
@@ -212,7 +213,6 @@ function harness(overrides: {
   spawnWindowMs?: number
   onAuthorize?: () => void
   releaseTimeoutMs?: number
-  embedding?: { readonly enabled: boolean; readonly reason?: string }
 } = {}): Harness {
   const storage = new MemoryStorage()
   const clock = overrides.clock ?? { now: 1_000 }
@@ -268,7 +268,6 @@ function harness(overrides: {
     reconnect: overrides.reconnect ?? { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
     spawnWindowMs: overrides.spawnWindowMs ?? 0,
     ...(overrides.releaseTimeoutMs === undefined ? {} : { releaseTimeoutMs: overrides.releaseTimeoutMs }),
-    ...(overrides.embedding === undefined ? {} : { embedding: overrides.embedding }),
   })
   return { manager, storage, namespaces, ports, launcher, openExternal, sources, clock, timers, authorize, grant }
 }
@@ -765,7 +764,7 @@ test('openInBrowser refusal matrix: state, path and browser failures', async () 
   assert.equal(bound.ok, true)
   if (!bound.ok) return
 
-  for (const path of ['//evil.com/x', 'mailto:dev@example.com', '/a%0d%0ab', 42, 'http://127.0.0.1:9/x', 'x'.repeat(2049)]) {
+  for (const path of ['//evil.com/x', 'mailto:dev@example.com', '/a%0d%0ab', 42, 'http://127.0.0.1:9/x', '/' + 'x'.repeat(4096)]) {
     const result = await failing.manager.openInBrowser({
       sourceId: SOURCE_ID,
       sourceFingerprint: FINGERPRINT,
@@ -955,9 +954,15 @@ test('normalizeForwardPath is a same-origin normalizer, not a string prefix chec
   for (const [raw, expected] of accepted) {
     assert.deepEqual(normalizeForwardPath(raw), { ok: true, path: expected }, String(raw))
   }
-  for (const raw of ['//evil.com/x', 'http://evil.com/x', 'https://127.0.0.1:5173/x', 'mailto:a@b', 'javascript:alert(1)', '/a%0d%0ab', '/a\u0000b', 42, {}, 'x'.repeat(2049)]) {
+  for (const raw of ['//evil.com/x', 'http://evil.com/x', 'https://127.0.0.1:5173/x', 'mailto:a@b', 'javascript:alert(1)', '/a%0d%0ab', '/a\u0000b', 42, {}, '/' + 'x'.repeat(4096)]) {
     assert.deepEqual(normalizeForwardPath(raw), { ok: false }, String(raw))
   }
+  // design 28 §3 ceiling: 4096 characters pass, 4097 are refused (D17 fix).
+  assert.equal(MANAGER_PATH_MAX, 4096)
+  const atLimit = '/' + 'a'.repeat(MANAGER_PATH_MAX - 1)
+  const overLimit = '/' + 'a'.repeat(MANAGER_PATH_MAX)
+  assert.deepEqual(normalizeForwardPath(atLimit), { ok: true, path: atLimit })
+  assert.deepEqual(normalizeForwardPath(overLimit), { ok: false })
 })
 
 test('allocation failures are typed refusals and leave no record/ownership behind', async () => {
@@ -1259,21 +1264,18 @@ test('v2: frameError projection patches by alias origin and clears on rebind', a
   assert.equal(cleared.records[0].frameError, null)
 })
 
-test('v3: list no longer carries the retired embedding capability', async () => {
+test('v3: list result carries only records + limits (retired paper fields are gone)', async () => {
   const h = harness()
   install(h)
   await h.manager.request(requestArgs(5173))
-  const enabled = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
-  assert.equal(enabled.ok, true)
-  if (!enabled.ok) return
-  assert.equal('embedding' in enabled, false, 'the paper capability is retired from the wire result')
-
-  // The (still accepted) option can no longer leak onto the list result.
-  const rolled = harness({ embedding: { enabled: false, reason: 'emergency_rollback' } })
-  install(rolled)
-  await rolled.manager.request(requestArgs(5173))
-  const disabled = await rolled.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
-  assert.equal(disabled.ok, true)
-  if (!disabled.ok) return
-  assert.equal('embedding' in disabled, false)
+  const list = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(list.ok, true)
+  if (!list.ok) return
+  assert.deepEqual(Object.keys(list).sort(), ['limits', 'ok', 'records'], 'wire v3 removed the iframe-era embedding/frameErrors list fields')
+  // The per-record diagnostic projection survives the retirement.
+  h.manager.noteFrameErrorForUrl('http://127.0.0.2:5173/app', 'blocked_by_response')
+  const withError = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
+  assert.equal(withError.ok, true)
+  if (!withError.ok) return
+  assert.equal(withError.records[0].frameError, 'blocked_by_response')
 })

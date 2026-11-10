@@ -74,7 +74,6 @@ import type {
   ForwardChild,
   ForwardChildExit,
   ForwardChildLauncher,
-  ForwardEmbeddingSnapshot,
   ForwardFrameError,
   ForwardLaunchInput,
   ForwardListenerProbe,
@@ -201,8 +200,6 @@ export interface RemoteForwardServiceOptions {
   readonly browserEnabled?: ForwardBrowserEnablementStore
   /** v2 host-key policy: app-owned known_hosts paths (default: ctx.deps.ctx.hostKey). */
   readonly knownHosts?: () => ForwardSshKnownHosts | null
-  /** v2 embedding capability (default enabled; emergency rollback may disable it). */
-  readonly embedding?: ForwardEmbeddingSnapshot
   readonly platform?: NodeJS.Platform
   readonly now?: () => number
   readonly mintId?: () => string
@@ -224,7 +221,7 @@ export interface RemoteForwardService extends ForwardIpcService {
   retireSource(sourceId: string): Promise<ForwardRetireResult>
   /** v2 renderer-lifecycle revoke: close every record a renderer consumer holds. */
   revokeAttached(): Promise<number>
-  /** v2 iframe failure projection: patch records by alias origin (never page text). */
+  /** Diagnostic projection (per-record frameError; frozen Electron renderer only — never page text). */
   noteFrameErrorForUrl(url: string, frameError: ForwardFrameError | null): Promise<number>
   /** App exit / sidecar shutdown: close every child (best effort, never throws). */
   dispose(): Promise<void>
@@ -577,19 +574,26 @@ function createSourceResolver(
   }
 }
 
-/** The confirm dialog's non-secret copy (the launcher never sees these facts). */
+/**
+ * The confirm dialog's non-secret copy (the launcher never sees these facts).
+ *
+ * v3 semantics: the target opens in the panel's native guest (design 28 §2.6/§4) —
+ * never the system browser — and the guest's site data lives only in this
+ * process's memory (the partition is non-persistent).
+ */
 function authorizeOptions(source: ForwardSource, targetPort: number, sshPort: number | null): HostMessageOptions {
   const destination = source.ssh.user === null ? source.ssh.host : source.ssh.user + '@' + source.ssh.host
   const subject = source.label === undefined ? source.sourceId : source.label + '（' + source.sourceId + '）'
   return {
     type: 'question',
     title: '远程浏览器访问确认',
-    message: '允许 ' + subject + ' 在本机浏览器打开远端端口 ' + String(targetPort) + ' 吗？',
+    message: '允许 ' + subject + ' 在面板内的浏览器中打开远端端口 ' + String(targetPort) + ' 吗？',
     detail: '将通过 SSH（' + destination + '，端口 ' + String(sshPort ?? 22) + '）把远端 127.0.0.1:' + String(targetPort)
-      + ' 转发到本机的专用回环地址，并用“系统浏览器”打开。注意：在关闭该转发前，本机任何进程都可以访问这个地址。'
-      + '证书/站点数据由系统浏览器管理；本应用无法清除其 cookie。'
+      + ' 转发到本机的专用回环地址，并在面板内的浏览器 guest 中打开（不会拉起系统浏览器）。'
+      + '注意：在关闭该转发前，本机任何进程都可以访问这个地址。'
+      + '页面数据仅保存在本进程内存中（不落盘），关闭面板或退出后不保留。'
       + '此确认只记住该端口的浏览器访问许可；连接目标或端口变更后会重新询问。',
-    buttons: ['打开系统浏览器', '取消'],
+    buttons: ['打开', '取消'],
     // Cancel is the default AND the escape action: Enter/Esc never grant access.
     defaultId: 1,
     cancelId: 1,
@@ -1241,7 +1245,6 @@ export function createRemoteForwardService(
       ...(options.releaseTimeoutMs === undefined ? {} : { releaseTimeoutMs: options.releaseTimeoutMs }),
       ...(options.reconnect === undefined ? {} : { reconnect: options.reconnect }),
       ...(options.spawnWindowMs === undefined ? {} : { spawnWindowMs: options.spawnWindowMs }),
-      ...(options.embedding === undefined ? {} : { embedding: options.embedding }),
     })
   })().catch((error: unknown) => {
     manager = null

@@ -98,7 +98,7 @@ export const FORWARD_ERROR_CODES = [
 export type ForwardErrorCode = (typeof FORWARD_ERROR_CODES)[number]
 
 /** Wire version of this contract (mirror of the wire FORWARD_WIRE_VERSION). */
-export const FORWARD_WIRE_VERSION = 2
+export const FORWARD_WIRE_VERSION = 3
 
 /** One forward scheme (https is passed through, never downgraded). */
 export type ForwardScheme = 'http' | 'https'
@@ -121,9 +121,10 @@ export function isForwardConsumer(value: unknown): value is ForwardConsumer {
 }
 
 /**
- * Best-effort iframe failure projection (v2, wire mirror): main observes a
- * child-frame load failure for the record's alias origin and exposes the
- * classification here. `null` = unknown; never page content or stderr text.
+ * Best-effort per-record frame failure projection (wire mirror; diagnostic face
+ * kept in wire v3): the frozen Electron main observes a child-frame load failure
+ * for the record's alias origin and exposes the classification here. `null` =
+ * unknown; never page content or stderr text.
  */
 export const FORWARD_FRAME_ERRORS = [
   'blocked_by_response',
@@ -138,17 +139,6 @@ export type ForwardFrameError = (typeof FORWARD_FRAME_ERRORS)[number]
 /** Narrow an untrusted value to a frame-failure classification. */
 export function isForwardFrameError(value: unknown): value is ForwardFrameError {
   return typeof value === 'string' && (FORWARD_FRAME_ERRORS as readonly string[]).includes(value)
-}
-
-/**
- * v2 embedding capability carried by `list`: default enabled; a main-side
- * emergency rollback (or an unsupported flavor) may disable it with a bounded
- * machine reason. Absent = enabled (v1 bridge compatibility).
- */
-export interface ForwardEmbeddingSnapshot {
-  readonly enabled: boolean
-  /** Bounded machine reason; never localized, never carries page/secret content. */
-  readonly reason?: string
 }
 
 /** The fixed remote loopback target of v1. */
@@ -308,8 +298,6 @@ export type ForwardListResult =
     readonly ok: true
     readonly records: readonly ForwardRecord[]
     readonly limits: ForwardLimitsSnapshot
-    /** v2 embedding capability (default enabled; emergency rollback may disable). */
-    readonly embedding?: ForwardEmbeddingSnapshot
   }
   | { readonly ok: false; readonly error: ForwardError }
 
@@ -454,8 +442,6 @@ export interface RemoteForwardManagerOptions {
   readonly reconnect?: { readonly maxAttempts: number; readonly baseDelayMs: number; readonly maxDelayMs: number }
   /** Test seam; production uses FORWARD_SPAWN_WINDOW_MS. */
   readonly spawnWindowMs?: number
-  /** v2 embedding capability (default enabled; emergency rollback may disable). */
-  readonly embedding?: ForwardEmbeddingSnapshot
 }
 
 /** One internal continuation token set per record (never serialized). */
@@ -532,6 +518,13 @@ export function evaluateForwardGate(source: ForwardSource, targetPort: number): 
 /** Same-origin path normalization result. */
 export type ForwardPathResult = { readonly ok: true; readonly path: string } | { readonly ok: false }
 
+/**
+ * Design 28 §3 payload bound: the launcher's forward path argument is at most 4096
+ * characters (wire guard = FORWARD_PATH_MAX_CHARS; the Swift normalizePath enforces
+ * the same ceiling on the main-composed path, counted in UTF-8 bytes).
+ */
+export const FORWARD_PATH_MAX_CHARS = 4096
+
 /** Encoded control characters are rejected (header/path smuggling hygiene). */
 const ENCODED_CONTROL = /%(?:0[0-9a-f]|1[0-9a-f]|7f)/iu
 const RAW_CONTROL = /[\u0000-\u001f\u007f]/u
@@ -549,7 +542,7 @@ const PATH_BASE = 'http://forward.invalid'
 export function normalizeForwardPath(raw: unknown): ForwardPathResult {
   if (raw === undefined || raw === null) return { ok: true, path: '/' }
   if (typeof raw !== 'string') return { ok: false }
-  if (raw.length > 2048) return { ok: false }
+  if (raw.length > FORWARD_PATH_MAX_CHARS) return { ok: false }
   if (RAW_CONTROL.test(raw) || ENCODED_CONTROL.test(raw)) return { ok: false }
   let parsed: URL
   try {
@@ -585,7 +578,6 @@ export class RemoteForwardManager {
   readonly #releaseTimeoutMs: number
   readonly #reconnect: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number }
   readonly #spawnWindowMs: number
-  readonly #embedding: ForwardEmbeddingSnapshot
 
   readonly #records = new Map<string, ForwardRecord>()
   readonly #internals = new Map<string, InternalForward>()
@@ -622,7 +614,6 @@ export class RemoteForwardManager {
       maxDelayMs: reconnect.maxDelayMs,
     }
     this.#spawnWindowMs = options.spawnWindowMs ?? FORWARD_SPAWN_WINDOW_MS
-    this.#embedding = options.embedding ?? { enabled: true }
   }
 
   /**

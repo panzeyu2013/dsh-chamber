@@ -19,7 +19,7 @@
 import type { ShellIpcCtx } from '../../shell-ipc-ctx.ts'
 import type { NotificationSourceToken } from '../../notifications.ts'
 import { registerForwardHandlers } from '../../shell-ipc-browser.ts'
-import type { ForwardIpcService, ForwardLocalFrameState } from '../../shell-ipc-browser.ts'
+import type { ForwardIpcService } from '../../shell-ipc-browser.ts'
 import type {
   ForwardListArgs,
   ForwardListResult,
@@ -94,8 +94,8 @@ export class ForwardIpcHarness {
   }
 
   /** Register the four channels (service null = the not-assembled state). */
-  install(service: ForwardIpcService | null, local: ForwardLocalFrameState | null = null): void {
-    registerForwardHandlers(this.ctx(), service, local)
+  install(service: ForwardIpcService | null): void {
+    registerForwardHandlers(this.ctx(), service)
   }
 
   /** Drive one registered handler exactly as the IPC fence would. */

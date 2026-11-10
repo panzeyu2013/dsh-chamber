@@ -8,7 +8,7 @@ import { listOpenInApps, runOpenInLaunch } from './open-in.ts'
 import { registerForwardHandlers } from './shell-ipc-browser.ts'
 import { createRemoteForwardService } from './remote-forward-service.ts'
 import type { RemoteForwardService, RemoteForwardServiceOptions } from './remote-forward-service.ts'
-import type { ForwardEmbeddingSnapshot, ForwardFrameError } from './remote-forward-manager.ts'
+import type { ForwardFrameError } from './remote-forward-manager.ts'
 
 /**
  * The per-process remote-browser forward plane.
@@ -30,13 +30,17 @@ import type { ForwardEmbeddingSnapshot, ForwardFrameError } from './remote-forwa
  */
 let forwardService: RemoteForwardService | null = null
 let forwardServiceCreated = false
-/** Embedding capability chosen when the forward plane was assembled (absent = enabled). */
-let localEmbedding: ForwardEmbeddingSnapshot | undefined
 /**
- * Bounded main-side local-frame failure store (v2 W-15 fix): a local direct
- * iframe has no forward record, so main projects its did-fail-load observation
- * here and the renderer reads it back through the additive `forward.list.frameErrors`
- * field. Keyed by canonical origin; insertion order is the eviction order.
+ * Bounded main-side local-frame failure store — FROZEN ELECTRON ONLY.
+ *
+ * The iframe carrier is retired (design 28 v3 / ADR-0004) and wire v3 dropped the
+ * `forward.list.frameErrors` field, so no shipped reader remains. The store stays
+ * because the frozen Electron main (electron/main.ts) still imports
+ * `noteLocalFrameError`/`noteForwardFrameError`/`isLocalBrowserFrameUrl` and
+ * calls them from its did-fail-load observers; the shipped Swift shell has no
+ * child-frame error face. The snapshot accessor remains as the forward-service
+ * suite's read seam (ENTRYLESS_SEAMS); it has no production reader since wire v3.
+ * Keyed by canonical origin; insertion order is the eviction order.
  */
 const LOCAL_FRAME_ERROR_LIMIT = 8
 const localFrameErrorsByOrigin = new Map<string, ForwardFrameError>()
@@ -44,7 +48,8 @@ const localFrameErrorsByOrigin = new Map<string, ForwardFrameError>()
 /**
  * True for a direct local browser frame URL: http(s) on 127.0.0.1 / localhost.
  * The alias range 127.0.0.2..254 is a forwarded page (record frameError path),
- * so it is deliberately NOT local here.
+ * so it is deliberately NOT local here. FROZEN ELECTRON ONLY (see the store
+ * comment above); the Swift v3 shell never calls it.
  */
 export function isLocalBrowserFrameUrl(url: string): boolean {
   if (typeof url !== 'string' || url.length === 0 || url.length > 4096) return false
@@ -62,6 +67,7 @@ export function isLocalBrowserFrameUrl(url: string): boolean {
  * Project one observed local child-frame failure (or clear one origin with null).
  * Non-local / unparsable URLs are ignored: an alias failure belongs to its record,
  * and a foreign scheme has no local iframe to paint. Bounded, never throws.
+ * FROZEN ELECTRON ONLY: the only caller is the frozen electron/main.ts observer.
  */
 export function noteLocalFrameError(url: string, frameError: ForwardFrameError | null): void {
   if (!isLocalBrowserFrameUrl(url)) return
@@ -83,7 +89,7 @@ export function noteLocalFrameError(url: string, frameError: ForwardFrameError |
   }
 }
 
-/** Snapshot of the bounded local-frame failure store (newest last). */
+/** Snapshot of the bounded local-frame failure store (newest last); the forward-service suite's read seam (no production reader since wire v3). */
 export function localFrameErrors(): readonly { readonly origin: string; readonly code: ForwardFrameError }[] {
   return [...localFrameErrorsByOrigin].map(([origin, code]) => ({ origin, code }))
 }
@@ -100,7 +106,6 @@ export function getOrCreateForwardService(
 ): RemoteForwardService | null {
   if (forwardServiceCreated) return forwardService
   forwardServiceCreated = true
-  localEmbedding = options?.embedding
   try {
     forwardService = createRemoteForwardService(ctx, options ?? {})
   } catch (error) {
@@ -120,9 +125,9 @@ export function getOrCreateForwardService(
 }
 
 /**
- * v2 renderer-lifecycle funnel (design 28 §16.5): a document reload/crash/close
- * kills every iframe, so every tab-bound forward must be revoked with it. The
- * new document re-attaches lazily from its persisted tabs. Pinned records (the
+ * Renderer-lifecycle funnel (design 28 §4.2): a document reload/crash/close kills
+ * every tab-bound guest, so every consumer-bound forward must be revoked with it.
+ * The new document re-attaches lazily from its persisted tabs. Pinned records (the
  * system-browser leg) hold no consumer and are deliberately left alive.
  */
 export type ForwardRendererLifecycleEvent = 'did-start-loading' | 'did-finish-load' | 'crashed' | 'closed'
@@ -130,8 +135,8 @@ export type ForwardRendererLifecycleEvent = 'did-start-loading' | 'did-finish-lo
 /** Revoke every forward a renderer consumer holds (idempotent, never throws). */
 export function revokeForwardRenderer(event: ForwardRendererLifecycleEvent): void {
   if (event !== 'did-start-loading' && event !== 'crashed' && event !== 'closed') return
-  // A new document paints fresh local frames: the previous document's origin
-  // observations must not refuse them (W-15 store lifecycle).
+  // The frozen Electron observer's previous-document origin observations must not
+  // leak into the next document (the shipped Swift v3 shell has no such face).
   clearLocalFrameErrors()
   const service = forwardService
   if (service === null) return
@@ -158,9 +163,11 @@ export async function disposeForwardService(): Promise<void> {
 }
 
 /**
- * v2 frame-failure projection (design 28 §16.7): main forwards an observed
- * child-frame load failure for a browser record's alias origin. Safe before the
- * service exists (no-op) and async by contract (returns before the patch lands).
+ * Per-record frame-failure projection: main forwards an observed child-frame load
+ * failure for a browser record's alias origin. Safe before the service exists
+ * (no-op) and async by contract (returns before the patch lands).
+ * FROZEN ELECTRON ONLY (electron/main.ts did-fail-load observer); the per-record
+ * frameError stays in the wire as a diagnostic projection.
  */
 export function noteForwardFrameError(url: string, frameError: ForwardFrameError | null): void {
   const service = forwardService
@@ -219,15 +226,11 @@ export function registerOpenInHandlers(ctx: ShellIpcCtx): void {
     }
     return result;
   })
-  // Remote-browser forward (design 28 §7): mounted from this registrar to keep
+  // Remote-browser forward (design 28 §2.1): mounted from this registrar to keep
   // installIpcHandlers the single registration point without a shell-core
   // budget raise (w0-ipc-gate-map §3.2 option C). The service is the module-level
   // singleton above (null only when it could not be constructed at all), so the
-  // four channels are wired to real forwards on both flavors. The local frame
-  // state rides ALONGSIDE the service (not inside it): the local leg has no
-  // forward record, but its failures answer on the same list channel.
-  registerForwardHandlers(ctx, getOrCreateForwardService(ctx), {
-    frameErrors: localFrameErrors,
-    embedding: () => localEmbedding,
-  })
+  // four channels are wired to real forwards on both flavors. Wire v3 retired the
+  // iframe-era local projections: list answers the manager snapshot only.
+  registerForwardHandlers(ctx, getOrCreateForwardService(ctx))
 }

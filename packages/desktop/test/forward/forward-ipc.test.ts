@@ -352,36 +352,22 @@ test('v2: release relays the consumer (detach) and refuses a malformed one', asy
   assert.deepEqual(badService.calls, [])
 })
 
-test('v2 W-15: the local identity answers list with the bounded frameErrors projection', async () => {
+test('v3: the local identity answers list with the empty diagnostic snapshot', async () => {
   const harness = new ForwardIpcHarness()
   const service = new FakeForwardService()
   // Local list must not enter the manager: the local leg owns no forward record.
-  harness.install(service, {
-    frameErrors: () => [
-      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
-      { origin: 'https://localhost:8443', code: 'certificate_error' },
-    ],
-    embedding: () => ({ enabled: true }),
-  })
+  harness.install(service)
   const result = await harness.invoke(CHANNEL.list, { sourceId: 'local', sourceFingerprint: 'local' })
-  // v3: the retired local projections (embedding/frameErrors) are gone from the
-  // list answer even when the injected local state still supplies them.
+  // Wire v3 retired the iframe-era local projections (embedding/frameErrors):
+  // the local answer is exactly the empty records + cap snapshot.
   assert.deepEqual(result, {
     ok: true,
     records: [],
     limits: { perSource: 8, global: 32, perSourceUsed: 0, globalUsed: 0 },
   })
+  assert.deepEqual(Object.keys(result as object).sort(), ['limits', 'ok', 'records'], 'no retired local paper fields')
   assert.equal(isForwardListResult(result), true, 'the local list answer satisfies the wire guard')
   assert.deepEqual(service.calls, [], 'the local list never calls the forward manager')
-
-  // An empty/bounded store omits the additive array (absent = none).
-  const quiet = new ForwardIpcHarness()
-  quiet.install(new FakeForwardService(), { frameErrors: () => [] })
-  assert.deepEqual(await quiet.invoke(CHANNEL.list, { sourceId: 'local', sourceFingerprint: 'local' }), {
-    ok: true,
-    records: [],
-    limits: { perSource: 8, global: 32, perSourceUsed: 0, globalUsed: 0 },
-  })
 
   // The local identity is exact: any other fingerprint is refused as unknown.
   for (const fingerprint of ['a'.repeat(64), '', 'LOCAL', 42]) {

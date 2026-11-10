@@ -43,11 +43,12 @@ import { isRecord, isWatermark } from './json-guards.ts'
 /**
  * Wire version of this contract (a semantic change bumps it; additive only in 0.4.x).
  * v2 = design 28 §16: consumer attach/detach, frameUrl and release_timeout.
- * The v2 paper list fields (`embedding`/`frameErrors`) are retired per design
- * 28 v3 §3; the per-record `frameError` stays as a diagnostic projection.
+ * v3 = design 28 v3 §3: the iframe-era paper list fields (`embedding`/`frameErrors`)
+ * are REMOVED (a semantic change, hence the bump); the per-record `frameError`
+ * stays as a diagnostic projection for the frozen Electron renderer only.
  * All remaining additions are optional fields.
  */
-export const FORWARD_WIRE_VERSION = 2
+export const FORWARD_WIRE_VERSION = 3
 
 /** IPC/bridge namespace name reserved for this domain (not mounted by v1 S1). */
 export const FORWARD_DOMAIN = 'forward'
@@ -190,36 +191,15 @@ export function isForwardFrameError(value: unknown): value is ForwardFrameError 
 }
 
 /**
- * The LOCAL instance's source identity on the `list` poll face (design 28 §16.2):
- * the local leg has no forward record, so its child-frame failures are carried by
- * the additive `frameErrors` field instead of a record. Every other method still
- * rejects `local` — a local address never forwards.
+ * The LOCAL instance's source identity on the `list` poll face (design 28 §3):
+ * the local leg owns no forward record, so `list` answers an empty diagnostic
+ * snapshot for it (the iframe-era `frameErrors` paper field is retired in wire
+ * v3; a local page is a top-level guest, not a forwarded record). Every other
+ * method still rejects `local` — a local address never forwards.
  */
 export const FORWARD_LOCAL_SOURCE_ID = 'local'
 /** The local instance's boot fingerprint is the literal word (shell.ts provides it). */
 export const FORWARD_LOCAL_SOURCE_FINGERPRINT = 'local'
-
-/**
- * v2 embedding capability carried by `forward.list`: default enabled; a main-side
- * emergency rollback (or an unsupported flavor) may disable it with a bounded
- * machine reason. Absent = enabled (v1 bridge compatibility).
- */
-export interface ForwardEmbeddingSnapshot {
-  readonly enabled: boolean
-  /** Bounded machine reason; never localized, never carries page/secret content. */
-  readonly reason?: string
-}
-
-/** Narrow an untrusted value to an embedding capability snapshot. */
-export function isForwardEmbeddingSnapshot(value: unknown): value is ForwardEmbeddingSnapshot {
-  if (!isRecord(value)) return false
-  const keys = Object.keys(value)
-  if (keys.some(key => key !== 'enabled' && key !== 'reason')) return false
-  if (typeof value.enabled !== 'boolean') return false
-  if (value.reason !== undefined
-    && (typeof value.reason !== 'string' || value.reason.length === 0 || value.reason.length > 128)) return false
-  return true
-}
 
 /** The fixed remote target of one forward. */
 export interface ForwardTarget {
@@ -310,9 +290,11 @@ export function isForwardAliasHost(value: unknown): value is string {
 export const FORWARD_LOCAL_LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', 'localhost'] as const)
 
 /**
- * Allowed `frame-src` host sources for the v2 embedded browser: `blob:` (document
- * preview), the local loopback hosts, and every per-source alias host. The list
- * is the ONE generator both flavors pass to the control plane; it deliberately
+ * Allowed `frame-src` host sources for the RETIRED v2 embedded browser (iframe
+ * carrier): `blob:` (document preview), the local loopback hosts, and every
+ * per-source alias host. Kept for the frozen Electron entry, which is the only
+ * startup point that still passes it; the shipped Swift v3 sidecar keeps the
+ * control-plane default short claim (`frame-src blob:`). It deliberately
  * contains no `'self'` and no bare `http:`/`https:` scheme source.
  */
 export function forwardFrameSources(): readonly string[] {
@@ -353,7 +335,7 @@ export interface ForwardRequestArgs {
    * v1 pinned request (system-browser leg). Never exposed in `list`.
    */
   readonly consumer?: ForwardConsumer
-  /** Same-origin relative path used to compose `frameUrl` (fragment dropped). */
+  /** Same-origin relative path used to compose `frameUrl` (fragment dropped; ≤4096 characters, design 28 §3). */
   readonly path?: string
 }
 
@@ -418,7 +400,7 @@ export interface ForwardOpenArgs {
   readonly sourceId: string
   readonly sourceFingerprint: string
   readonly id: string
-  /** Same-origin relative path (`/`, `/app?x=1`); fragment is dropped. */
+  /** Same-origin relative path (`/`, `/app?x=1`); fragment is dropped; ≤4096 characters (design 28 §3). */
   readonly path?: string
 }
 
@@ -504,9 +486,16 @@ function hasOnlyKeys(value: Record<string, unknown>, required: readonly string[]
     && Object.keys(value).every(key => allowed.has(key))
 }
 
+/**
+ * Design 28 §3 payload bound: the forwarded same-origin relative path is at most
+ * 4096 characters (main's normalizeForwardPath and the Swift normalizePath enforce
+ * the same ceiling; Swift counts UTF-8 bytes on the path it composes).
+ */
+export const FORWARD_PATH_MAX_CHARS = 4096
+
 /** Bounded same-origin relative path argument (main normalizes the final URL). */
 function isForwardPathArgument(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 2048
+  return typeof value === 'string' && value.length > 0 && value.length <= FORWARD_PATH_MAX_CHARS
     && value.startsWith('/') && !value.startsWith('//')
     && !/[\u0000-\u0020\u007f\\#]/u.test(value)
 }
@@ -596,9 +585,10 @@ export function isForwardReleaseArgs(value: unknown): value is ForwardReleaseArg
  * Narrow an untrusted value to `forward.list` arguments.
  *
  * The poll face is the ONE method that also accepts the local instance
- * (`{sourceId:'local', sourceFingerprint:'local'}`): the local leg has no
- * forward records, but its iframe failures are carried here so the panel can
- * refuse honestly. request/release/openInBrowser keep rejecting `local`.
+ * (`{sourceId:'local', sourceFingerprint:'local'}`): the local leg owns no
+ * forward record, so list stays its empty read-only diagnostic snapshot
+ * (wire v3 retired the iframe-era frameErrors projection).
+ * request/release/openInBrowser keep rejecting `local`.
  */
 export function isForwardListArgs(value: unknown): value is ForwardListArgs {
   if (!isRecord(value)) return false

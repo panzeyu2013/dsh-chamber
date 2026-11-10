@@ -20,6 +20,7 @@ import {
   FORWARD_ERROR_CODES as WIRE_ERROR_CODES,
   FORWARD_FRAME_ERRORS as WIRE_FRAME_ERRORS,
   FORWARD_LIMITS,
+  FORWARD_PATH_MAX_CHARS as WIRE_PATH_MAX,
   FORWARD_SCHEMES as WIRE_SCHEMES,
   FORWARD_STATES as WIRE_STATES,
   FORWARD_WIRE_VERSION as WIRE_VERSION,
@@ -28,7 +29,6 @@ import {
   isForwardAliasHost as isWireAliasHost,
   isForwardChangedEvent,
   isForwardConsumer,
-  isForwardEmbeddingSnapshot,
   isForwardError,
   isForwardFrameError,
   isForwardFrameUrl,
@@ -52,6 +52,7 @@ import {
   FORWARD_MAX_TARGET_PORT,
   FORWARD_MIN_LOCAL_PORT,
   FORWARD_MIN_TARGET_PORT,
+  FORWARD_PATH_MAX_CHARS as MANAGER_PATH_MAX,
   FORWARD_SCHEMES as MANAGER_SCHEMES,
   FORWARD_STATES as MANAGER_STATES,
   FORWARD_WIRE_VERSION as MANAGER_WIRE_VERSION,
@@ -90,8 +91,8 @@ test('the error-code and state tables are exactly the manager mirror', () => {
   assert.equal(new Set(WIRE_ERROR_CODES).size, WIRE_ERROR_CODES.length)
 })
 
-test('v2 mirror: wire version, schemes, frame errors and consumer grammar agree', () => {
-  assert.equal(WIRE_VERSION, 2)
+test('v3 mirror: wire version, schemes, frame errors and consumer grammar agree', () => {
+  assert.equal(WIRE_VERSION, 3, 'wire v3 removed the iframe-era paper list fields (semantic change)')
   assert.equal(MANAGER_WIRE_VERSION, WIRE_VERSION)
   assert.deepEqual([...WIRE_SCHEMES], [...MANAGER_SCHEMES])
   assert.deepEqual([...WIRE_FRAME_ERRORS], [...MANAGER_FRAME_ERRORS])
@@ -105,7 +106,7 @@ test('v2 mirror: wire version, schemes, frame errors and consumer grammar agree'
   }
 })
 
-test('v2 guards: consumer/path arguments, frameUrl, frameError', () => {
+test('v3 guards: consumer/path arguments, frameUrl, frameError', () => {
   const args = { sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', port: 5173 }
   assert.equal(isForwardRequestArgs({ ...args, consumer: 'abcdefgh' }), true)
   assert.equal(isForwardRequestArgs({ ...args, consumer: 'nope' }), false)
@@ -132,17 +133,15 @@ test('v2 guards: consumer/path arguments, frameUrl, frameError', () => {
   assert.equal(isForwardRequestResult({ ok: true, record: validRecord(), frameUrl: 'http://127.0.0.2:5173/' }), true)
   assert.equal(isForwardRequestResult({ ok: true, record: validRecord(), frameUrl: 'javascript:alert(1)' }), false)
 
-  // embedding/frameErrors are RETIRED list fields (design 28 v3 §3): the guard
-  // must ignore unknown extra keys on the result and keep accepting records.
-  // (The former v2 assertions for both were removed in the same change.)
+  // The iframe-era paper list fields are GONE in wire v3 (design 28 v3 §3): the
+  // result guard judges the documented members and ignores unknown extra keys
+  // (a stale peer's retired field can never make the answer invalid).
   const limits = { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 }
   assert.equal(isForwardListResult({ ok: true, records: [], limits }), true)
-  // Retired paper fields are ignored (no longer part of the shape): extra keys pass.
-  assert.equal(isForwardListResult({ ok: true, records: [], limits, embedding: { enabled: true } }), true)
-  assert.equal(isForwardListResult({ ok: true, records: [], limits, frameErrors: 'nope' }), true)
+  assert.equal(isForwardListResult({ ok: true, records: [], limits, retiredField: 'ignored' }), true)
 })
 
-test('v2 local list identity: only list accepts {local,local}; request/release still refuse it', () => {
+test('v3 local list identity: only list accepts {local,local}; request/release still refuse it', () => {
   assert.equal(isForwardListArgs({ sourceId: 'local', sourceFingerprint: 'local' }), true)
   assert.equal(isForwardListArgs({ sourceId: 'local', sourceFingerprint: 'a'.repeat(64) }), false)
   assert.equal(isForwardListArgs({ sourceId: 'dsh-web-1', sourceFingerprint: 'local' }), false)
@@ -249,7 +248,24 @@ test('argument guards enforce source/id/port/path shapes', () => {
   assert.equal(isForwardReleaseArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'x' }), false)
   assert.equal(isForwardOpenArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'fwd-0123456789abcdef', path: '/app?x=1' }), true)
   assert.equal(isForwardOpenArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'fwd-0123456789abcdef', path: 42 }), false)
-  assert.equal(isForwardOpenArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'fwd-0123456789abcdef', path: 'x'.repeat(2049) }), false)
+  assert.equal(isForwardOpenArgs({ sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'fwd-0123456789abcdef', path: '/' + 'x'.repeat(4096) }), false)
+})
+
+test('forward path bound is 4096 characters and the wire/manager constants agree', () => {
+  // design 28 §3: the launcher's same-origin relative path is capped at 4096
+  // characters (Swift normalizePath enforces the same ceiling on UTF-8 bytes).
+  assert.equal(WIRE_PATH_MAX, 4096)
+  assert.equal(MANAGER_PATH_MAX, WIRE_PATH_MAX, 'the desktop mirror must use the wire ceiling')
+  const atLimit = '/' + 'a'.repeat(WIRE_PATH_MAX - 1)
+  const overLimit = '/' + 'a'.repeat(WIRE_PATH_MAX)
+  assert.equal(atLimit.length, 4096)
+  assert.equal(overLimit.length, 4097)
+  const request = { sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', port: 5173 }
+  assert.equal(isForwardRequestArgs({ ...request, path: atLimit }), true)
+  assert.equal(isForwardRequestArgs({ ...request, path: overLimit }), false)
+  const open = { sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', id: 'fwd-0123456789abcdef' }
+  assert.equal(isForwardOpenArgs({ ...open, path: atLimit }), true)
+  assert.equal(isForwardOpenArgs({ ...open, path: overLimit }), false)
 })
 
 test('result guards are exact unions (never "ok with garbage")', () => {
@@ -268,9 +284,8 @@ test('list result guard enforces the cap snapshot causality', () => {
   const limits = { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 }
   assert.equal(isForwardListResult({ ok: true, records: [validRecord()], limits }), true)
   assert.equal(isForwardListResult({ ok: true, records: [], limits }), true)
-  // v2 paper list fields (embedding/frameErrors) are RETIRED (design 28 v3 §3):
-  // the guard no longer validates them — unknown extra keys are simply ignored.
-  assert.equal(isForwardListResult({ ok: true, records: [], limits, frameErrors: [{ bad: true }] }), true)
+  // Wire v3 retired the paper list fields: unknown extra keys are ignored.
+  assert.equal(isForwardListResult({ ok: true, records: [], limits, retiredField: [{ bad: true }] }), true)
   assert.equal(isForwardListResult({ ok: true, records: [], limits: { ...limits, perSourceUsed: 9 } }), false)
   assert.equal(isForwardListResult({ ok: true, records: [validRecord()], limits: { ...limits, globalUsed: 33 } }), false)
   assert.equal(isForwardListResult({ ok: false, error: { code: 'source_unknown', detail: null } }), true)

@@ -16,8 +16,8 @@
  *  ③ 顶层面：preload exposeInMainWorld('dshChamber', {…}) 的 15 个键
  *     （4 标量 + 11 命名空间）== shim dshChamberApi 键；
  *  ④ invoke 通道集：preload 全部 invoke 字面量 == shim 全部 invoke 字面量
- *     == manifest invoke 集（58）；push 通道集：preload 全部
- *     ipcRenderer.on 字面量 == shim PUSH_EVENTS 值 == manifest push 集（9）；
+ *     == manifest invoke 集（64）；push 通道集：preload 全部
+ *     ipcRenderer.on 字面量 == shim PUSH_EVENTS 值 == manifest push 集（13）；
  *  ⑤ 无 poc-unimplemented 兜底残留：shim 不含 pocUnimplemented/rejectMethods
  *     代码形态（头部注记文本仅描述 sidecar 桩，不属于兜底代码）。
  *  ⑥ Swift-only A 桥白名单（bridge-swift-only-additions.json，政策见
@@ -320,6 +320,11 @@ test('④ invoke/push 通道集：preload == shim（Swift-only 白名单项除�
   }
   for (const namespace of [...swiftOnlyNamespaces].filter((name) => !NAMESPACES.includes(name))) {
     for (const [name, memberText] of memberSpans(shimNamespaceBlock(namespace))) {
+      // The renderer-carrier wrapper (`events`) carries the four push faces; its
+      // nested subscribe lines are locked by test ⑦ and must not be re-counted as
+      // top-level invoke members here (the flat onX aliases remain the push face
+      // this test collects).
+      if (name === 'events') continue
       const channel = shimMemberChannel(memberText, pushEvents)
       if (channel === '') continue
       if (name.startsWith('on')) shimUsedPush.add(channel)
@@ -409,4 +414,59 @@ test('⑤ 无 poc-unimplemented 兜底残留（代码形态）', () => {
   // 兜底代码形态（pocUnimplemented 标识符 / rejectMethods 填充器）必须为零。
   assert.equal(shimSource.includes('pocUnimplemented'), false, 'shim 不得含 pocUnimplemented 兜底')
   assert.equal(shimSource.includes('rejectMethods'), false, 'shim 不得含 rejectMethods 填充器')
+})
+
+test('⑦ Swift-only browser carrier: shim events object == BrowserBridge.BROWSER_PUSHES source', () => {
+  // Cross-side lock (D1): the renderer consumes `dshChamber.browser.events` while
+  // the iframe-era shim exposed only flat onX members, so unit suites on each side
+  // could both stay green with a dead carrier. This test binds the two SHIPPED
+  // sources: the shim's events keys must equal the launcher's BROWSER_PUSHES list.
+  const bridgeSource = readFileSync(
+    path.join(repoRoot, 'packages', 'dsh-chamber-client-ui-browser', 'src', 'client', 'browser', 'BrowserBridge.ts'),
+    'utf8',
+  )
+  const pushesMatch = /export const BROWSER_PUSHES = \[([^\]]*)\] as const/u.exec(bridgeSource)
+  assert.notEqual(pushesMatch, null, 'BrowserBridge.ts must keep the BROWSER_PUSHES single source')
+  const expected = [...pushesMatch![1].matchAll(/'([^']+)'/gu)].map((match) => match[1])
+  assert.deepEqual([...expected].sort(), ['forwardNeeded', 'input', 'openRequested', 'state'])
+
+  const browserSpans = memberSpans(shimNamespaceBlock('browser'))
+  const eventsSpan = browserSpans.get('events') ?? ''
+  assert.notEqual(eventsSpan, '', 'bridge-shim.js browser namespace must expose the renderer `events` wrapper (design 28 v3 §3)')
+  const shimEventNames = [...eventsSpan.matchAll(/^ {6}([A-Za-z_$][A-Za-z0-9_$]*):/gmu)].map((match) => match[1])
+  assert.deepEqual(
+    [...shimEventNames].sort(),
+    [...expected].sort(),
+    'shim browser.events keys must equal the launcher BROWSER_PUSHES source list',
+  )
+  // Name equality alone cannot catch a mapping swap (events.state wired to the
+  // input channel would still pass). Bind each events member to its push
+  // constant AND to the matching flat onX alias the whitelist registers.
+  const EVENTS_TO_CONSTANT: Readonly<Record<string, string>> = {
+    state: 'BROWSER_STATE',
+    openRequested: 'BROWSER_OPEN_REQUESTED',
+    input: 'BROWSER_INPUT',
+    forwardNeeded: 'BROWSER_FORWARD_NEEDED',
+  }
+  const ALIAS_TO_EVENT: Readonly<Record<string, string>> = { onState: 'state', onOpenRequested: 'openRequested', onInput: 'input', onForwardNeeded: 'forwardNeeded' }
+  for (const [event, constant] of Object.entries(EVENTS_TO_CONSTANT)) {
+    assert.match(
+      eventsSpan,
+      new RegExp('^ {6}' + event + ":\\s*function \\(callback\\) \\{ return subscribe\\(PUSH_EVENTS\\." + constant + ', callback\\) \\},?$', 'mu'),
+      'browser.events.' + event + ' must subscribe PUSH_EVENTS.' + constant,
+    )
+  }
+  for (const [alias, event] of Object.entries(ALIAS_TO_EVENT)) {
+    const aliasSpan = browserSpans.get(alias) ?? ''
+    assert.match(
+      aliasSpan,
+      new RegExp('PUSH_EVENTS\\.' + EVENTS_TO_CONSTANT[event] + ', callback', 'u'),
+      'flat ' + alias + ' alias must subscribe the same PUSH_EVENTS constant as events.' + event,
+    )
+  }
+  // D1 keeps the flat onX aliases the whitelist registers; they remain the push
+  // face test ④ collects, so their disappearance is red too.
+  for (const addition of swiftOnlyAdditions.filter((entry) => entry.namespace === 'browser' && entry.direction === 'push')) {
+    assert.ok(browserSpans.has(addition.method), 'shim keeps the whitelisted flat alias ' + addition.method)
+  }
 })

@@ -15,14 +15,14 @@
  *     across the await boundary (source_changed on any drift);
  *   - the main-side `path` normalization for `openInBrowser`
  *     (`normalizeForwardPath`: absolute URLs, protocol-relative `//host`,
- *     userinfo, CR/LF, encoded control bytes and >2048-byte strings are refused
+ *     userinfo, CR/LF, encoded control bytes and >4096-character strings are refused
  *     before the manager composes any URL; the fragment is dropped);
  *   - forward-record ownership re-check on the two calls that return records —
  *     an answer naming another source is refused instead of relayed;
- *   - the v2 local-list exception (design 28 §16.7, W-15): `list` is the ONE call
- *     that also accepts `{sourceId:'local', sourceFingerprint:'local'}`; it has no
- *     records, but answers the bounded local-frame `frameErrors` projection plus
- *     the embedding capability so a rejected local iframe cannot paint live.
+ *   - the local-list exception (design 28 §3): `list` is the ONE call that also
+ *     accepts `{sourceId:'local', sourceFingerprint:'local'}`; the local leg owns
+ *     no forward record, so it answers an empty read-only snapshot (the
+ *     iframe-era frameErrors/embedding paper fields are retired in wire v3).
  *
  * WHAT IT DELIBERATELY DOES NOT OWN (the manager stays authoritative):
  * limits (8/32), idempotency/single-flight, the state machine, the per-source
@@ -64,10 +64,8 @@ import {
   FORWARD_MAX_PER_SOURCE,
 } from './remote-forward-manager.ts'
 import type {
-  ForwardEmbeddingSnapshot,
   ForwardError,
   ForwardErrorCode,
-  ForwardFrameError,
   ForwardLimitsSnapshot,
   ForwardListArgs,
   ForwardListResult,
@@ -95,30 +93,7 @@ export interface ForwardIpcService {
 /** The refusal half shared by all four results. */
 type ForwardFailure = { readonly ok: false; readonly error: ForwardError }
 
-/**
- * v2 local-frame failure entry (wire additive `forward.list.frameErrors`; the
- * desktop mirror here keeps this module independent of the wire package while
- * `test/forward/forward-wire.test.ts` pins the shapes side by side).
- */
-export interface ForwardFrameErrorInfo {
-  /** Canonical http(s) loopback/alias origin (scheme://host:port). */
-  readonly origin: string
-  readonly code: ForwardFrameError
-}
-
-/**
- * The bounded local-frame state the forward registrar reads on `list`: the
- * direct local leg owns no forward record, so its did-fail-load projection and
- * the embedding capability ride beside the service (supplied by
- * `shell-ipc-open-in.ts`, never by the manager).
- */
-export interface ForwardLocalFrameState {
-  frameErrors(): readonly ForwardFrameErrorInfo[]
-  /** Absent = enabled (v1 bridge compatibility). */
-  embedding?(): ForwardEmbeddingSnapshot | undefined
-}
-
-/** The list reply: the remote manager snapshot plus the additive local fields. */
+/** The list reply: the remote manager snapshot (wire v3; no retired local paper fields). */
 export type ForwardListIpcResult =
   | {
     readonly ok: true
@@ -283,16 +258,15 @@ async function releaseForward(
 
 /**
  * `list`: the poll face. Remote sources use the manager snapshot; the LOCAL
- * instance is the one accepted non-forward source — it has no records, but its
- * direct iframe failures (XFO/frame-ancestors/TLS/network) are projected here as
- * a DIAGNOSTIC contract (the v2 upstream fork UI does not consume it; §16.11).
+ * instance is the one accepted non-forward source — it owns no record, so it
+ * answers an empty read-only diagnostic snapshot (wire v3 retired the iframe-era
+ * frameErrors projection: a local page is a top-level guest, not a frame).
  * Every returned REMOTE record must belong to the proven source.
  */
 async function listForwards(
   ctx: ShellIpcCtx,
   service: ForwardIpcService | null,
   payload: unknown,
-  local: ForwardLocalFrameState | null,
 ): Promise<ForwardListIpcResult> {
   const input = isRecord(payload) ? payload : {}
   if (input.sourceId === LOCAL_SOURCE_ID) {
@@ -361,10 +335,9 @@ async function openForward(
 export function registerForwardHandlers(
   ctx: ShellIpcCtx,
   service: ForwardIpcService | null = null,
-  local: ForwardLocalFrameState | null = null,
 ): void {
   ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_REQUEST, (payload: unknown) => requestForward(ctx, service, payload))
   ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_RELEASE, (payload: unknown) => releaseForward(ctx, service, payload))
-  ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_LIST, (payload: unknown) => listForwards(ctx, service, payload, local))
+  ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_LIST, (payload: unknown) => listForwards(ctx, service, payload))
   ctx.deps.ipc.handle(IPC_CHANNELS.FORWARD_OPEN_IN_BROWSER, (payload: unknown) => openForward(ctx, service, payload))
 }
