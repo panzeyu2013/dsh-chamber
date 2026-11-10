@@ -11,6 +11,11 @@
  * diagnostic. The v2 list paper fields are retired with the iframe carrier and
  * the wire (design 28 v3 §3): the suite asserts they never reappear.
  *
+ * The browser adapter half (design 28 v3 §3/§4.5) is locked here too: guest key
+ * replay is occurrence-targeted (D12: lease placeholder first, tab key fallback)
+ * and subscribed ONCE per page (N-ctx entries must not double-dispatch), and a
+ * two-key chord binding is not forwarded to the shell keymap (D13).
+ *
  * Evidence shape:
  *  - behavioural: every wire state and error code is DRIVEN from the wire source
  *    through a fake page host, and the translated envelope is re-parsed by the
@@ -30,7 +35,6 @@ import type { ChamberForwardBridge } from '../../src/chamber-forward-adapter.ts'
 import {
   asBrowserForwardBridge,
   parseForwardAck,
-  parseForwardListResult,
   parseForwardRecord,
   parseForwardRequestResult,
 } from '../../../dsh-chamber-client-ui-browser/src/shared/forward-bridge.ts'
@@ -51,7 +55,7 @@ const WIRE_STATES = quotedBlock(WIRE_SOURCE, 'export const FORWARD_STATES = \\['
 const WIRE_CODES = quotedBlock(WIRE_SOURCE, 'export const FORWARD_ERROR_CODES = \\[', '\\] as const')
 /** The wire frame-failure classifications, read from the wire source. */
 const WIRE_FRAME_ERRORS = quotedBlock(WIRE_SOURCE, 'export const FORWARD_FRAME_ERRORS = \\[', '\\] as const')
-/** The wire contract version, read from the wire source (v2 = design 28 §16). */
+/** The wire contract version, read from the wire source (v3 = design 28 v3 §3). */
 const WIRE_VERSION = (() => {
   const match = /export const FORWARD_WIRE_VERSION = (\d+)/u.exec(WIRE_SOURCE)
   assert.ok(match !== null, 'the wire version literal moved; re-read the wire source')
@@ -287,7 +291,7 @@ test('all seven wire states fold into the three launcher states and stay launche
   for (const record of result.records) {
     assert.deepEqual(parseForwardRecord(record), record, 'each translated row must survive the launcher own guard')
   }
-  assert.equal(parseForwardListResult(result).ok, true)
+  assert.equal(result.records.length, WIRE_STATES.length, 'one row per wire state')
 })
 
 test('the three launcher states are exactly the ones translated (both directions)', () => {
@@ -454,10 +458,10 @@ test('the projection reads exactly the wire record fields (rename lockstep)', ()
   assert.ok(wireFields.includes('frameError'), 'the v2 additive record field must stay in the wire guard')
 })
 
-// ── Wire v2 additive projection ────────────────────────────────────────────────
+// ── Wire v2/v3 additive projection ────────────────────────────────────────────
 
-test('the wire contract version is 2 (design 28 §16 additive batch)', () => {
-  assert.equal(WIRE_VERSION, 2, 'the wire bumped its version; re-review every additive field below')
+test('the wire contract version is 3 (design 28 v3 §3: iframe-era paper fields retired)', () => {
+  assert.equal(WIRE_VERSION, 3, 'the wire bumped its version; re-review every field projection below')
 })
 
 test('every wire frame-failure classification projects unchanged into the launcher row', async () => {
@@ -558,9 +562,10 @@ test('the composite installs the forward and browser adapters BEFORE the deferre
 })
 
 test('⑧ the adapter browser invoke probe is locked to the launcher invoke single source', () => {
-  // The adapter cannot import the launcher at runtime (deferred chunk + the
-  // module's documented runtime-import-free property), so the local literal is
-  // pinned to the launcher's exported constant instead of drifting silently.
+  // The adapter must not import the launcher at runtime (deferred chunk + the
+  // module's documented eager-composite constraint; its only runtime import is the
+  // dependency-free wire frame-error table), so the local literal is pinned to the
+  // launcher's exported constant instead of drifting silently.
   // The launcher's full six-name face is REQUIRED_BROWSER_INVOKES + the
   // documented optional sixth 'keymap' (BrowserBridge.ts:187); the adapter
   // requires it because the shipped v3 Swift shim always exposes it.
@@ -572,6 +577,36 @@ test('⑧ the adapter browser invoke probe is locked to the launcher invoke sing
     .filter(Boolean)
   assert.deepEqual(adapterList, [...REQUIRED_BROWSER_INVOKES, 'keymap'],
     'the adapter probe must equal the launcher single source (five required + keymap)')
+})
+
+test('the browser push face and the optional input lease stay locked to the client BrowserBridge (D12)', async () => {
+  const { BROWSER_PUSHES } = await import('../../../dsh-chamber-client-ui-browser/src/client/browser/BrowserBridge.ts')
+  const BRIDGE_SOURCE = readFileSync(
+    new URL('../../../dsh-chamber-client-ui-browser/src/client/browser/BrowserBridge.ts', import.meta.url), 'utf8')
+  const GLOBAL_SOURCE = readFileSync(new URL('../../src/global.d.ts', import.meta.url), 'utf8')
+
+  // The adapter's push probe is the launcher's push single source (name-for-name).
+  const adapterPushes = /const BROWSER_EVENTS = \[([^\]]*)\] as const/u.exec(ADAPTER_SOURCE)
+  assert.ok(adapterPushes !== null, 'the adapter browser push list moved; re-read the adapter')
+  const adapterNames = adapterPushes[1]
+    .split(',')
+    .map(item => item.trim().replace(/^['"]|['"]$/gu, ''))
+    .filter(Boolean)
+  assert.deepEqual(adapterNames, [...BROWSER_PUSHES])
+
+  // global.d.ts mirrors the same four push members on `browser.events`.
+  const globalPushNames = [...GLOBAL_SOURCE.matchAll(
+    /\n {4}(\w+)\(listener: \(value: BrowserGuest\w+\) => void\): \(\) => void/gu,
+  )].map(match => match[1])
+  assert.deepEqual(globalPushNames, [...BROWSER_PUSHES])
+
+  // D12: the optional input lease is declared on BOTH mirrors of the push type.
+  for (const [label, source] of [['BrowserBridge.ts', BRIDGE_SOURCE], ['global.d.ts', GLOBAL_SOURCE]] as const) {
+    const input = /export interface BrowserGuestInput \{([\s\S]*?)\n\}/u.exec(source)
+    assert.ok(input !== null, label + ' must declare BrowserGuestInput')
+    assert.match(input[1], /readonly lease\?: string/u,
+      label + ' must keep the optional input lease (the replay target selector)')
+  }
 })
 
 test('the browser package is a deferred covered row (the launcher half, never the root apply)', () => {
@@ -619,31 +654,81 @@ test('shortcut combos map the catalog + fixed catalog with platform primary', as
   assert.deepEqual(shortcutCombosFromSnapshots({}), [])
 })
 
+type BrowserPushListener = (value: unknown) => void
+
+/** The minimal element the replay needs (a real `Element` in production). */
+type ReplayTarget = { dispatchEvent(event: KeyboardEvent): boolean }
+
 function fakeBrowserSurface() {
-  const listeners: Record<string, ((value: unknown) => void) | undefined> = {}
+  // Every subscription is kept in order: the shim dispatches a push to ALL its
+  // registered listeners, so the registration count is the replay count.
+  const listeners: Record<string, BrowserPushListener | undefined> = {}
+  const pushes: Record<string, BrowserPushListener[]> = { state: [], openRequested: [], input: [], forwardNeeded: [] }
+  const subscribe = (name: string) => (fn: BrowserPushListener): (() => void) => {
+    pushes[name].push(fn)
+    listeners[name] = fn
+    return () => {}
+  }
   const noop = async () => ({ ok: true })
   return {
     listeners,
+    pushes,
     surface: {
       acquire: noop, release: noop, navigate: noop, command: noop, frame: noop, keymap: noop,
       events: {
-        state: (fn: (value: unknown) => void) => { listeners.state = fn; return () => {} },
-        openRequested: (fn: (value: unknown) => void) => { listeners.openRequested = fn; return () => {} },
-        input: (fn: (value: unknown) => void) => { listeners.input = fn; return () => {} },
-        forwardNeeded: (fn: (value: unknown) => void) => { listeners.forwardNeeded = fn; return () => {} },
+        state: subscribe('state'),
+        openRequested: subscribe('openRequested'),
+        input: subscribe('input'),
+        forwardNeeded: subscribe('forwardNeeded'),
       },
     },
   }
 }
 
-function installBrowserOverFakePage() {
+interface BrowserPageHarness {
+  readonly page: unknown
+  readonly fake: ReturnType<typeof fakeBrowserSurface>
+  readonly dispatched: KeyboardEvent[]
+  /** Every selector the replay asked the document for, in order. */
+  readonly selectors: string[]
+}
+
+/**
+ * One fake page: a six-invoke + four-push shim plus a document whose
+ * querySelector records the selector and answers `elementFor` (default: the one
+ * placeholder element the synthetic keydown lands on).
+ */
+function browserPageHarness(
+  options: { elementFor?: (selector: string, fallback: ReplayTarget) => unknown } = {},
+): BrowserPageHarness {
   const fake = fakeBrowserSurface()
   const dispatched: KeyboardEvent[] = []
-  const element = { dispatchEvent: (event: KeyboardEvent) => { dispatched.push(event); return true } }
-  const page = { dshChamber: { browser: fake.surface }, document: { querySelector: () => element } }
+  const selectors: string[] = []
+  const element: ReplayTarget = { dispatchEvent: (event: KeyboardEvent) => { dispatched.push(event); return true } }
+  const querySelector = (selector: string): unknown => {
+    selectors.push(selector)
+    return options.elementFor === undefined ? element : options.elementFor(selector, element)
+  }
+  return { page: { dshChamber: { browser: fake.surface }, document: { querySelector } }, fake, dispatched, selectors }
+}
+
+/** Install the browser adapter over one harness page (a fresh ctx per install). */
+function installOver(page: unknown): boolean {
   const provided: unknown[] = []
-  const installed = installChamberBrowser({ provide: (_name: string, value: unknown) => { provided.push(value) }, get: () => undefined }, page)
-  return { installed, listeners: fake.listeners, dispatched }
+  return installChamberBrowser({ provide: (_name: string, value: unknown) => { provided.push(value) }, get: () => undefined }, page)
+}
+
+function installBrowserOverFakePage(
+  options: { elementFor?: (selector: string, fallback: ReplayTarget) => unknown } = {},
+) {
+  const harness = browserPageHarness(options)
+  const installed = installOver(harness.page)
+  return { installed, listeners: harness.fake.listeners, pushes: harness.fake.pushes, dispatched: harness.dispatched, selectors: harness.selectors }
+}
+
+/** Simulate one shim push: the shim calls every registered listener, in order. */
+function pushTo(listeners: readonly BrowserPushListener[], payload: unknown): void {
+  for (const listener of listeners) listener(payload)
 }
 
 class FakeKeyboardEvent {
@@ -701,4 +786,67 @@ test('guest key replay ignores unknown or mis-cased modifier tokens', () => {
   const init = (dispatched[0] as unknown as { init: Record<string, unknown> }).init
   assert.equal(init.ctrlKey, false, 'mis-cased control is not the canonical token')
   assert.equal(init.metaKey, true)
+})
+
+// ── D12: occurrence-targeted replay + one subscription per page ───────────────
+
+test('guest key replay targets the lease placeholder first and falls back to the tab key', () => {
+  const { pushes, dispatched, selectors } = installBrowserOverFakePage()
+  withFakeKeyboardEvent(() => {
+    // A lease-carrying push (v3 shim) resolves the occurrence's placeholder.
+    pushTo(pushes.input, { tabId: 'tab-1', code: 'KeyT', modifiers: ['meta'], lease: 'lease-7' })
+    // No lease (older shim) falls back to the tab key.
+    pushTo(pushes.input, { tabId: 'tab-1', code: 'KeyT', modifiers: ['meta'] })
+    // A malformed/unusable lease is treated like an absent one, never a throw.
+    pushTo(pushes.input, { tabId: 'tab-1', code: 'KeyT', modifiers: ['meta'], lease: 'not a lease' })
+  })
+  assert.deepEqual(selectors, [
+    '[data-chamber-browser-lease="lease-7"]',
+    '[data-chamber-browser-tab="tab-1"]',
+    '[data-chamber-browser-tab="tab-1"]',
+  ])
+  assert.equal(dispatched.length, 3, 'every input push replays exactly once')
+})
+
+test('a lease with no matching placeholder falls back to the tab element (acquire race)', () => {
+  const { pushes, dispatched, selectors } = installBrowserOverFakePage({
+    elementFor: (selector, fallback) => (selector.includes('data-chamber-browser-lease') ? null : fallback),
+  })
+  withFakeKeyboardEvent(() => {
+    pushTo(pushes.input, { tabId: 'tab-1', code: 'KeyT', modifiers: ['meta'], lease: 'lease-7' })
+  })
+  assert.deepEqual(selectors, ['[data-chamber-browser-lease="lease-7"]', '[data-chamber-browser-tab="tab-1"]'])
+  assert.equal(dispatched.length, 1, 'the tab fallback still replays the key')
+})
+
+test('the guest key replay subscribes once per page (N-ctx entries never double-dispatch)', () => {
+  const harness = browserPageHarness()
+  // Every N-ctx entry installs the adapter on the SAME page (one composite boot).
+  assert.equal(installOver(harness.page), true)
+  assert.equal(installOver(harness.page), true)
+  assert.equal(harness.fake.pushes.input.length, 1,
+    'the page-level input channel must be subscribed once, not once per entry')
+  withFakeKeyboardEvent(() => {
+    pushTo(harness.fake.pushes.input, { tabId: 'tab-1', code: 'KeyT', modifiers: ['meta'] })
+  })
+  assert.equal(harness.dispatched.length, 1, 'one guest key = one synthetic keydown')
+})
+
+// ── D13: two-key chords are not forwarded to the shell keymap ────────────────
+
+test('two-key chord bindings are not forwarded to the shell keymap (D13)', async () => {
+  const { shortcutCombo, shortcutCombosFromSnapshots } = await import('../../src/chamber-forward-adapter.ts')
+  assert.equal(shortcutCombo({ code: 'KeyK', modifiers: ['meta'], secondCode: 'KeyC' }, 'macos'), null,
+    'a chord stays inside the guest: the per-key shell keymap would consume only its first key')
+  assert.deepEqual(shortcutCombo({ code: 'KeyK', modifiers: ['meta'], secondCode: '' }, 'macos'),
+    { code: 'KeyK', primary: true, alt: false, shift: false, control: false },
+    'an empty secondCode is not a chord')
+  // The enumeration inherits the exclusion: only the single-key binding is pushed.
+  assert.deepEqual(shortcutCombosFromSnapshots({
+    platform: 'macos',
+    catalog: { getSnapshot: () => [
+      { id: 'chord', binding: { code: 'KeyK', modifiers: ['meta'], secondCode: 'KeyC' } },
+      { id: 'plain', binding: { code: 'KeyT', modifiers: ['meta'] } },
+    ] },
+  }), [{ code: 'KeyT', primary: true, alt: false, shift: false, control: false }])
 })

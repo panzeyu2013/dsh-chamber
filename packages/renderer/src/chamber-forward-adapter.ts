@@ -25,14 +25,17 @@
  * boot facts — no page global is added (`globalThis.chamberForward` stays
  * forbidden: the single page-level namespace is `window.dshChamber`).
  *
- * WHAT IS PURE. Everything here is a pure function of its arguments; the one
- * page read (`readPageForwardHost`) takes its scope as an argument and
- * defaults to `globalThis`. No DOM, no timers, no Node APIs, and NO RUNTIME
- * IMPORT: the wire faces are type-only (erased under Node type stripping), which
- * is what lets the translation tables be unit-tested without a workspace install.
- * The wire tables are keyed BY the wire unions, so a new wire state or error
- * code fails the real type check here; the suite re-reads the wire source and
- * the launcher source to pin the same sets at review time
+ * WHAT IS PURE. Everything here is a pure function of its arguments; the two
+ * page reads (`readPageForwardHost` / `readPageBrowserSurface`) take their scope
+ * as an argument and default to `globalThis`. No DOM of its own (the guest-key
+ * replay seam takes `document` from that page scope), no timers, no Node APIs.
+ * The ONLY runtime import is the dependency-free wire frame-error TABLE
+ * (`FORWARD_FRAME_ERRORS`, the single source for the launcher's frame-failure
+ * tokens); every other wire face is type-only and erased under Node type
+ * stripping, and nothing imports the launcher (a deferred chunk) or the desktop
+ * host. The wire tables are keyed BY the wire unions, so a new wire state or
+ * error code fails the real type check here; the suite re-reads the wire source
+ * and the launcher source to pin the same sets at review time
  * (test/lifecycle/chamber-forward-adapter.test.ts).
  *
  * RECORD SEMANTICS. `bound` means the local listener accepted a probe, not
@@ -86,15 +89,6 @@ export type LauncherForwardFrameError = ForwardFrameError
 function isLauncherFrameError(value: unknown): value is LauncherForwardFrameError {
   return typeof value === 'string' && (FORWARD_FRAME_ERRORS as readonly string[]).includes(value)
 }
-
-/** The launcher's frame-failure vocabulary (same closed tokens as the wire table). */
-
-/**
- * v2 local-frame failure projection (list-only, additive): an origin-scoped
- * classification for a browser child frame that main observed failing without a
- * forward record (the direct local loopback leg). The launcher maps it onto the
- * CURRENT iframe origin so an engine error page can never settle as live.
- */
 
 /** One row as the launcher renders it (display facts only; never a URL to open). */
 export interface LauncherForwardRecord {
@@ -229,14 +223,11 @@ const WIRE_CODE_TO_LAUNCHER: Readonly<Record<WireForwardErrorCode, LauncherForwa
   release_timeout: 'release-timeout',
 }
 
-/** The alias range 127.0.0.2-254 (never .1/.0/.255); display host only. */
-
-/** The wire frame-failure table, re-declared locally (no runtime wire import). */
-
 /**
- * Main-composed iframe URL guard (the adapter has no runtime wire import; the
- * same bounds are mirrored from the wire's isForwardFrameUrl). A malformed URL
- * is dropped, never trusted into a row.
+ * Main-composed alias `frameUrl` guard (the v3 guest loads this alias URL in
+ * place of the logical address; the iframe carrier is retired). The bounds mirror
+ * the wire's `isForwardFrameUrl` — that guard is not imported at runtime (only
+ * `FORWARD_FRAME_ERRORS` is). A malformed URL is dropped, never trusted into a row.
  */
 function isLauncherFrameUrl(value: unknown): value is string {
   if (typeof value !== 'string' || value.length < 9 || value.length > 4096) return false
@@ -583,10 +574,11 @@ type PageBrowserSurface = {
  * SOURCE = the launcher's BrowserBridge.ts (`REQUIRED_BROWSER_INVOKES` plus the
  * documented optional sixth `keymap`; the v3 Swift shim always exposes it, and
  * treating it as required keeps a half-built carrier fail-closed here). Kept as
- * a local literal on purpose: the adapter is runtime-import-free (the launcher
- * half is a deferred chunk; importing it here would pull it into the eager
- * composite). The list is locked name-for-name to the launcher's documented
- * six-name face by chamber-forward-adapter.test.ts ⑧.
+ * a local literal on purpose: the adapter must not runtime-import the launcher
+ * half (it is a deferred chunk; importing it here would pull it into the eager
+ * composite). Its only runtime import is the dependency-free wire frame-error
+ * table. The list is locked name-for-name to the launcher's documented six-name
+ * face by chamber-forward-adapter.test.ts ⑧.
  */
 const BROWSER_INVOKES = ['acquire', 'release', 'navigate', 'command', 'frame', 'keymap'] as const // = REQUIRED_BROWSER_INVOKES + optional 'keymap'
 const BROWSER_EVENTS = ['state', 'openRequested', 'input', 'forwardNeeded'] as const
@@ -693,23 +685,31 @@ function projectGuestOpenRequest(value: unknown): GuestOpenRequest | null {
 
 /**
  * Replay a guest-focused primary-modifier key into the shell's shortcut pipeline
- * (design 28 v3 §4.5).
+ * (design 28 v3 §4.5, D12).
  *
  * The Shortcuts service exposes no programmatic dispatch: `dispatch` lives on its
  * package-private registry and is fed by the window keydown listener, which has NO
  * `isTrusted` gate (vendor `packages/client/shortcuts/src/client/dom.ts:66-99`). So
- * the seam is a synthetic `KeyboardEvent` targeted at the browser tab element
- * (`data-chamber-browser-tab`), which gives the shortcut context a real Element target.
+ * the seam is a synthetic `KeyboardEvent` targeted at the browser tab element,
+ * which gives the shortcut context a real Element target.
+ *
+ * TARGET SELECTION (D12). One tab OCCURRENCE owns one guest lease, so the
+ * presentation writes `data-chamber-browser-lease="<lease>"` on the placeholder
+ * once the lease settles: a lease-carrying push is replayed to THAT element. When
+ * the push carries no usable lease (older shim, or the acquire race before the
+ * placeholder advertises it) the replay falls back to `data-chamber-browser-tab`,
+ * the carrier's tab key. The payload is untrusted: a malformed lease/tab id is a
+ * miss, never a throw (this listener runs inside the shim's push dispatch).
  */
 function replayGuestKey(input: unknown, scope: unknown): void {
   if (typeof input !== 'object' || input === null) return
   const record = input as Record<string, unknown>
   const tabId = record.tabId
   const code = record.code
-  if (typeof tabId !== 'string' || typeof code !== 'string' || code === '') return
+  if (typeof tabId !== 'string' || tabId === '' || typeof code !== 'string' || code === '') return
   const document = (typeof scope === 'object' && scope !== null ? (scope as { document?: Document }).document : undefined)
   if (document === undefined || typeof document.querySelector !== 'function') return
-  const element = document.querySelector('[data-chamber-browser-tab=' + JSON.stringify(tabId) + ']')
+  const element = guestKeyTarget(document, tabId, record.lease)
   if (element === null) return
   const modifiers = readGuestKeyModifiers(record)
   const event = new KeyboardEvent('keydown', {
@@ -723,6 +723,45 @@ function replayGuestKey(input: unknown, scope: unknown): void {
   })
   element.dispatchEvent(event)
 }
+
+/** Selector-safe lease grammar (the shell mints `[A-Za-z0-9_-]{1,128}` lease ids). */
+const GUEST_KEY_LEASE = /^[A-Za-z0-9_-]{1,128}$/u
+
+/** Query one dataset-targeted Element; a hostile token is a miss, never a throw. */
+function queryGuestTarget(document: Document, attribute: string, value: string): Element | null {
+  try {
+    return document.querySelector('[' + attribute + '=' + JSON.stringify(value) + ']')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve the Element a guest key replay targets.
+ *
+ * The lease wins (one occurrence = one placeholder = one shortcut context);
+ * without a usable lease the tab key is the fallback so an older shim or a
+ * pre-acquire push still reaches the right tab element.
+ */
+function guestKeyTarget(document: Document, tabId: string, lease: unknown): Element | null {
+  if (typeof lease === 'string' && GUEST_KEY_LEASE.test(lease)) {
+    const byLease = queryGuestTarget(document, 'data-chamber-browser-lease', lease)
+    if (byLease !== null) return byLease
+  }
+  return queryGuestTarget(document, 'data-chamber-browser-tab', tabId)
+}
+
+/**
+ * Page scopes whose guest-key replay subscription is already installed.
+ *
+ * `installChamberBrowser` runs once per N-ctx ENTRY on the SAME page (the
+ * composite entry is per instance), while the shim's `browser.input` channel is
+ * page-level: subscribing per entry would replay one guest key once per instance
+ * (N synthetic keydowns through the one shortcut pipeline). The page scope is the
+ * natural identity key — the module is loaded once per page. A WeakSet carries
+ * this bookkeeping WITHOUT writing a marker onto the page (no new page global).
+ */
+const GUEST_KEY_REPLAY_PAGES = new WeakSet<object>()
 
 /**
  * Install the page-level `chamberBrowser` service (design 28 v3 §3).
@@ -770,8 +809,14 @@ export function installChamberBrowser(
       forwardNeeded: (listener: (value: unknown) => void) => surface.events.forwardNeeded(listener),
     },
   })
-  // Guest-focused keys ride the shortcut pipeline through the synthetic event seam.
-  surface.events.input(value => { replayGuestKey(value, page) })
+  // Guest-focused keys ride the shortcut pipeline through the synthetic event
+  // seam, subscribed ONCE per page (see GUEST_KEY_REPLAY_PAGES): the shim's push
+  // channel is page-level, so a per-entry subscription would dispatch N times.
+  const pageObject = typeof page === 'object' && page !== null ? page as object : undefined
+  if (pageObject === undefined || !GUEST_KEY_REPLAY_PAGES.has(pageObject)) {
+    if (pageObject !== undefined) GUEST_KEY_REPLAY_PAGES.add(pageObject)
+    surface.events.input(value => { replayGuestKey(value, page) })
+  }
   return true
 }
 
@@ -785,7 +830,12 @@ export interface ShortcutCombo {
 }
 
 /** One normalized physical binding (vendor NormalizedBinding shape). */
-type NormalizedBindingLike = { readonly code?: unknown; readonly modifiers?: unknown }
+type NormalizedBindingLike = {
+  readonly code?: unknown
+  readonly modifiers?: unknown
+  /** Second key of a two-key chord (vendor NormalizedBinding.secondCode). */
+  readonly secondCode?: unknown
+}
 
 /**
  * Map one effective normalized binding to the shell combination.
@@ -793,13 +843,24 @@ type NormalizedBindingLike = { readonly code?: unknown; readonly modifiers?: unk
  * primary is the platform's primary modifier: Command (meta) on macOS, Control
  * elsewhere. On macOS the literal Control key is still forwarded as control.
  *
+ * TWO-KEY CHORDS ARE NOT FORWARDED (D13). The shell's keymap face is a per-key
+ * table (one code + modifiers); the shell matches ONE keydown at a time, so
+ * forwarding a chord's first key would consume it with no way to observe the
+ * second key — the action could never fire AND the guest would lose the key
+ * ("consumed without action"). A binding with a non-empty `secondCode` therefore
+ * yields null: the whole chord stays inside the guest and is handled there
+ * unchanged.
+ *
  * @param binding - the binding from the Shortcuts catalog/fixed catalog.
  * @param platform - the Shortcuts platform word.
- * @returns the combo, or null when the binding has no usable code.
+ * @returns the combo, or null when the binding has no usable code or is a chord.
  */
 export function shortcutCombo(binding: NormalizedBindingLike, platform: unknown): ShortcutCombo | null {
   const code = binding.code
   if (typeof code !== 'string' || code === '') return null
+  // Any present, non-empty second key is a chord (a malformed value is treated
+  // the same way: forwarding a possibly-chord key is the failure mode to avoid).
+  if (binding.secondCode !== undefined && binding.secondCode !== null && binding.secondCode !== '') return null
   const modifiers = Array.isArray(binding.modifiers)
     ? binding.modifiers.filter((item): item is string => typeof item === 'string')
     : []
