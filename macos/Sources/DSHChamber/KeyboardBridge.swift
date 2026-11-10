@@ -94,7 +94,8 @@ final class KeyboardBridge {
     /// guest 上时，即使键位表命中也不消费（原样交系统）。其余判据：有活动 tab、
     /// 键位表存在且精确匹配。
     /// - Returns: 命中时的 (tabId, combo)；nil = pass-through。
-    static func consumeDecision(activeTabId: String?,
+    /// nonisolated：纯值判定，测试可从任意上下文直调（不依赖 MainActor）。
+    nonisolated static func consumeDecision(activeTabId: String?,
                                 guestFocused: Bool,
                                 stroke: BrowserKeyStroke,
                                 combos: Set<BrowserKeyboardCombo>?) -> (tabId: String, combo: BrowserKeyboardCombo)? {
@@ -118,8 +119,8 @@ final class KeyboardBridge {
                                 isRepeat: event.isARepeat)
     }
 
-    /// 命中表项（精确匹配 code + 四个修饰位）。
-    static func matches(stroke: BrowserKeyStroke, combos: Set<BrowserKeyboardCombo>) -> BrowserKeyboardCombo? {
+    /// 命中表项（精确匹配 code + 四个修饰位）。nonisolated：纯值判定，单测直调。
+    nonisolated static func matches(stroke: BrowserKeyStroke, combos: Set<BrowserKeyboardCombo>) -> BrowserKeyboardCombo? {
         combos.first { combo in
             combo.code == stroke.code && combo.primary == stroke.primary && combo.alt == stroke.alt
                 && combo.shift == stroke.shift && combo.control == stroke.control
@@ -128,15 +129,19 @@ final class KeyboardBridge {
 
     /// macOS 虚拟键码 → DOM KeyboardEvent.code（ANSI 布局；未知键返回 nil）。
     /// 与上游 keyboard.ts 的 input.code 语义对齐（只覆盖可绑定的常用键）。
-    static func domCode(keyCode: UInt16, charactersIgnoringModifiers: String?) -> String? {
+    /// 表外键码的字符兜底同样返回 **DOM code**（D18：字母 → KeyX、数字 → DigitN），
+    /// 不再返回裸字符——否则 keymap 表项（renderer 上报 KeyX/DigitN）永远命不中。
+    /// nonisolated：纯值映射，单测直调。
+    nonisolated static func domCode(keyCode: UInt16, charactersIgnoringModifiers: String?) -> String? {
         if let mapped = ansiKeyCodes[keyCode] { return mapped }
         guard let characters = charactersIgnoringModifiers?.uppercased(), characters.count == 1,
               let scalar = characters.unicodeScalars.first, scalar.isASCII else { return nil }
-        if (65...90).contains(scalar.value) || (48...57).contains(scalar.value) { return characters }
+        if (65...90).contains(scalar.value) { return "Key" + characters }
+        if (48...57).contains(scalar.value) { return "Digit" + characters }
         return nil
     }
 
-    private static let ansiKeyCodes: [UInt16: String] = [
+    nonisolated private static let ansiKeyCodes: [UInt16: String] = [
         0: "KeyA", 1: "KeyS", 2: "KeyD", 3: "KeyF", 4: "KeyH", 5: "KeyG", 6: "KeyZ", 7: "KeyX",
         8: "KeyC", 9: "KeyV", 11: "KeyB", 12: "KeyQ", 13: "KeyW", 14: "KeyE", 15: "KeyR",
         16: "KeyY", 17: "KeyT", 18: "Digit1", 19: "Digit2", 20: "Digit3", 21: "Digit4", 22: "Digit6",

@@ -10,8 +10,9 @@
 //
 // 调用契约（共享契约，MainWindowController 以
 // `BridgeShimInjector.install(config:source:)` 调用，勿改名）：
-//   - source：bridge-shim.js 源码（全表面：4 标量 + 9 命名空间 +
-//     50 个 invoke 方法（+9 push；manifest 通道 52 含两个内部通道）；文件内零 poc-unimplemented 兜底，错误如实上抛）；
+//   - source：bridge-shim.js 源码（全表面：4 标量 + 12 命名空间 +
+//     62 个命名空间 invoke 方法（另 2 个内部通道）；manifest 77 通道 =
+//     64 invoke + 13 push；文件内零 poc-unimplemented 兜底，错误如实上抛）；
 //   - install 必须在用该 configuration 构造 WKWebView 之前调用（user
 //     script 随 configuration 生效于首次导航）。
 

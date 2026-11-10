@@ -24,7 +24,7 @@
 //                7. payload → AnyCodable（失败 = 信封不合法）
 //             全过 → onInvoke(id, method, payload)
 //         └→ onInvoke → controller → BridgeClient.invoke(method:payload:)
-//              → sidecar（58 invoke 处理器语义校验原样，design 25 §3.1）
+//              → sidecar（64 invoke 通道的处理器语义校验原样，design 25 §3.1）
 //             任一不过 → evaluateJavaScript
 //             "__dshChamberResolve(id, null, <错误码>)"（错误码与
 //             renderer-trust / design 25 §4.4.1 同族：Electron 侧投
@@ -34,7 +34,7 @@
 //     sidecar 的 notify 帧（node-edges sendNotify/rendererPush）→ B 桥
 //     BridgeClient.onNotify → MainWindowController.notify 路由解包 →
 //     evaluateJS 直写 __dshChamberEmit(event, payload) → web shim 订阅表派发
-//     （通道名以 IPC_CHANNELS / 05 §7.4 为权威，manifest 9 push 通道）。
+//     （通道名以 IPC_CHANNELS / 05 §7.4 为权威，manifest 13 push 通道）。
 //     本 handler 不参与事件下行（双写纪律「乙」：事件唯一入口是
 //     controller 的 notify 路由）。
 //     event 帧族已整体退役（BridgeClient 只余 request/response/notify/edge 四族）。
@@ -64,8 +64,8 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     // MARK: - 构造参数（共享契约，MainWindowController 按此构造，勿改名）
 
     /// 方法白名单：MainWindowController 实传 BridgeManifest.invokeChannels
-    /// （生成物，58 invoke 通道；design 25 §4.4.3），其余通道一律
-    /// method_not_allowed。事件订阅面（9 push 通道）属 shim 侧 PUSH_EVENTS，
+    /// （生成物，64 invoke 通道；design 25 §4.4.3），其余通道一律
+    /// method_not_allowed。事件订阅面（13 push 通道）属 shim 侧 PUSH_EVENTS，
     /// 不经本白名单。
     private let whitelist: Set<String>
 

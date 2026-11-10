@@ -201,10 +201,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 右栏浏览器 v3：原生 guest 宿主层 / 注册表 / 快捷键桥 / Swift-only browser 桥面
     /// （design 28 v3 §4/§5/§7；生成物通道名由 E1 与本文件常量锁步）。
     private var browserLayer: BrowserGuestLayerView?
-    /// 上次提交的壳文档 URL（E4b/R6：guest 释放的 generation 判据）。
-    private var lastCommittedShellURL: String?
-    /// A 桥当前壳文档 generation（acquire await 后复验；shell reload 后旧请求作废）。
-    private var lastBridgeDocumentId: String?
+    /// A 桥壳文档世代（D4：shim 每文档一个 documentId；commit/reload 退役旧 generation，
+    /// acquire 的 await 后复验与壳 crash 清理都走这里）。
+    private var browserDocuments = BrowserGuestDocumentGeneration()
     private var browserGuests: BrowserGuestRegistry?
     private var browserIPC: BrowserIPCRouter?
     private var keyboardBridge: KeyboardBridge?
@@ -327,14 +326,26 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let layer = BrowserGuestLayerView(frame: container.bounds)
         container.addSubview(layer, positioned: .above, relativeTo: webView)
         browserLayer = layer
+        // M-A：活动 guest 被切走/隐藏/卸载时把 firstResponder 交回壳 webView，避免键盘
+        // 继续落进看不见的 guest（layer 在 setActive(nil)/setGuestVisible(false)/卸载时触发）。
+        layer.returnFocusToShell = { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.makeFirstResponder(self.webView)
+        }
         let keyboard = KeyboardBridge()
         keyboard.onInput = { [weak self] tabId, stroke in
-            self?.emitToPage(BrowserIPCChannel.input,
-                             BrowserIPCPayload.inputPayload(tabId: tabId, stroke: stroke))
+            guard let self else { return }
+            // D12：input 载荷带活动 lease（renderer 用 lease 精确定位该 tab 的占位元素；
+            // 无租约/旧 shim 路径时省略键）。
+            let lease = self.browserGuests?.activeLease(forTab: tabId)
+            self.emitToPage(event: BrowserIPCChannel.input,
+                            payload: BrowserIPCPayload.inputPayload(tabId: tabId, lease: lease,
+                                                                    stroke: stroke))
         }
         keyboard.isGuestFocused = { [weak self] in
             guard let self else { return false }
-            return self.browserLayer?.isGuestResponder(self.window?.firstResponder) ?? false
+            // M-A：只有「活动且可见」guest 能消费键盘（隐藏/非活动 guest 一律 pass-through）。
+            return self.browserLayer?.isActiveGuestResponder(self.window?.firstResponder) ?? false
         }
         keyboard.install()
         keyboardBridge = keyboard
@@ -352,12 +363,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 let payload = AnyCodable.object(["sourceId": .string(sourceId),
                                                  "sourceFingerprint": .string(fingerprint)])
                 do {
-                    _ = try await self.bridge.invoke(method: "dsh-chamber:forward-list",
-                                                     payload: payload, timeout: 1.0)
+                    let result = try await self.bridge.invoke(method: "dsh-chamber:forward-list",
+                                                              payload: payload, timeout: 1.0)
+                    // D7：只有 {ok:true,...} 才证明来源；{ok:false}/异形回执一律 nil
+                    // （fail-closed），拒绝时打一行审计（sourceId + 原因）。
+                    guard Self.isForwardListProof(result) else {
+                        shellLog("[shell][browser-guest] source 证明被拒绝 source=\(sourceId) "
+                            + "原因=forward-list 回执非 ok:true")
+                        return nil
+                    }
                     return BrowserGuestSourceFacts(sourceId: sourceId, fingerprint: fingerprint,
                                                    mayForward: sourceId.hasPrefix("dsh-")
                                                        || sourceId.hasPrefix("gateway-"))
                 } catch {
+                    shellLog("[shell][browser-guest] source 证明被拒绝 source=\(sourceId) "
+                        + "原因=\(error.localizedDescription)")
                     return nil
                 }
             },
@@ -376,23 +396,26 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 }
             },
             documentAlive: { [weak self] documentId in
-                self?.lastBridgeDocumentId == documentId
+                self?.browserDocuments.isAlive(documentId) ?? false
             },
             pageZoom: { [weak self] in self?.webView.pageZoom ?? 1 },      // R-05
             keymapInvalidated: { [weak keyboard] tabId in keyboard?.removeKeymap(tabId: tabId) },  // RT-05
             allowsInspection: { [weak self] in self?.currentInspectable() ?? false })
         registry.onState = { [weak self] payload in
-            self?.emitToPage(BrowserIPCChannel.state, BrowserIPCPayload.statePayload(payload))
+            self?.emitToPage(event: BrowserIPCChannel.state,
+                             payload: BrowserIPCPayload.statePayload(payload))
         }
         registry.onOpenRequested = { [weak self] tabId, url in
             // RT-11：contract 增量——openRequested 载荷带 lease（renderer 侧按 lease 对回 tab）。
             guard let self, let lease = self.browserGuests?.activeLease(forTab: tabId) else { return }
-            self.emitToPage(BrowserIPCChannel.openRequested,
-                            BrowserIPCPayload.openRequestedPayload(tabId: tabId, lease: lease, url: url))
+            self.emitToPage(event: BrowserIPCChannel.openRequested,
+                            payload: BrowserIPCPayload.openRequestedPayload(tabId: tabId,
+                                                                            lease: lease, url: url))
         }
         registry.onForwardNeeded = { [weak self] tabId, lease, url in
-            self?.emitToPage(BrowserIPCChannel.forwardNeeded,
-                             BrowserIPCPayload.forwardNeededPayload(tabId: tabId, lease: lease, url: url))
+            self?.emitToPage(event: BrowserIPCChannel.forwardNeeded,
+                             payload: BrowserIPCPayload.forwardNeededPayload(tabId: tabId,
+                                                                             lease: lease, url: url))
         }
         registry.onActiveGuestChanged = { [weak keyboard] tabId in keyboard?.activeTabId = tabId }
         registry.prepareContentRules()
@@ -403,7 +426,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// forward-list 回执里按 recordId 找 record（P0：URL 合成只用 main 事实）。
-    /// 回执形状：{ok:true, records:[{id, sourceId, aliasHost, localPort, scheme, ...}], limits}。
+    /// 回执形状：{ok:true, records:[{id, sourceId, aliasHost, localPort, scheme, state,
+    /// stale, ...}], limits}。D16 收敛：只接受 state == "bound" 且 stale == false 的记录，
+    /// localPort 必须是合法整数（绝不把 51234.9 截断成 51234 加载），alias 必须落在
+    /// forward 段 127.0.0.2–254。
     static func parseForwardRecord(id: String, from result: AnyCodable,
                                    lease: BrowserGuestLease) -> BrowserGuestForwardRecord? {
         guard case .object(let root) = result,
@@ -413,8 +439,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             guard case .object(let record) = item,
                   BrowserIPCPayload.string(record["id"]) == id,
                   BrowserIPCPayload.string(record["sourceId"]) == lease.sourceId,
+                  BrowserIPCPayload.string(record["state"]) == "bound",
+                  BrowserIPCPayload.bool(record["stale"]) == false,
                   let aliasHost = BrowserIPCPayload.string(record["aliasHost"]),
-                  let localPort = BrowserIPCPayload.double(record["localPort"]).map({ Int($0) }),
+                  BrowserGuestPolicy.isForwardAliasHost(aliasHost),
+                  let localPort = BrowserIPCPayload.int(record["localPort"]),
+                  (1024...65535).contains(localPort),
                   let scheme = BrowserIPCPayload.string(record["scheme"]) else { continue }
             // fingerprint 字段若存在则参与归属比对（wire 无则记 nil，由 registry 处置）。
             let fingerprint = BrowserIPCPayload.string(record["fingerprint"])
@@ -423,6 +453,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                                              aliasHost: aliasHost, localPort: localPort)
         }
         return nil
+    }
+
+    /// D7：forward-list 回执是否构成「来源已证明」——必须是对象且 ok == true。
+    /// {ok:false} / 异形回执 / nil 一律 false（fail-closed）。
+    static func isForwardListProof(_ result: AnyCodable) -> Bool {
+        guard case .object(let root) = result else { return false }
+        return BrowserIPCPayload.bool(root["ok"]) == true
     }
 
     private static let isDebugBuild: Bool = {
@@ -1426,7 +1463,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     private func handleInvoke(documentId: String, id: Int, method: String, payload: AnyCodable?) {
-        lastBridgeDocumentId = documentId
+        browserDocuments.noteInvoke(documentId: documentId)
         // Swift-only browser 命名空间：不进 sidecar，由 BrowserIPCRouter 本地分派
         // （design 28 v3 §3；通道名常量见 BrowserIPC.swift，E1 生成 manifest 同批锁步）。
         if let router = browserIPC, router.handles(method) {
@@ -1436,10 +1473,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     self.evaluateJS("__dshChamberResolve(\(self.nativeTokenLiteral), "
                         + "\(Self.jsonLiteral(of: .string(documentId))), \(id), "
                         + "\(Self.jsonLiteral(of: result)), null)")
-                case .failure(let code):
+                case .failure(let error):
                     self.evaluateJS("__dshChamberResolve(\(self.nativeTokenLiteral), "
                         + "\(Self.jsonLiteral(of: .string(documentId))), \(id), null, "
-                        + "\(Self.jsonLiteral(of: .string(code))))")
+                        + "\(Self.jsonLiteral(of: .string(error.code))))")
                 }
             }
             return
@@ -1774,7 +1811,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// expectedOrigin 完全相同；**不**要求 pathname == "/"、**不**要求无 query。
     ///
     /// 取舍：A 桥保留 TrustGuard.isTrustedDocument
-    /// 的严格壳文档判定——它承载 61 个 IPC 方法，同源非壳文档（/api/i/* 代理回传的
+    /// 的严格壳文档判定——它承载 77 个 IPC 通道，同源非壳文档（/api/i/* 代理回传的
     /// 远端 HTML）继承 shim 是真实风险。本通道只携带 lang/dark 两个非敏感事实，且与
     /// A 桥白名单/就绪门完全解耦（事实必须在 sidecar ready 前可用）；页面一旦采用
     /// history.pushState/replaceState（例如把地址改成 /api/i/1 或带 query 的 SPA
@@ -2183,19 +2220,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // handler 的 origin 判定以 message.webView?.url 实时值为优先，
         // 本记录（lastCommittedURL）作兜底（进程终止/测试桩场景）
         bridgeHandler.noteCommitted(url: webView.url?.absoluteString)
-        // 壳文档新 generation：旧 document 的全部 guest lease 失效（design 28:110）；
-        // 分区保留（站点数据随 source 存活，不随壳 reload 清空）。
-        // E4b/R6：只在「提交的是可信壳文档 + URL 与上次提交不同」时释放，避免 SPA/重复
-        // commit 误伤仍在使用的 guest（didCommit 只在跨文档提交时触发，这里再收一道）。
+        // 壳文档新 generation（D4）：可信壳文档的**每次** commit 都无条件回收旧 generation
+        // 的 guest（design 28:110）。旧实现按「URL 与上次不同」守卫，导致同 URL reload 的
+        // guest 泄漏；这里回归为无条件回收。分区保留（站点数据随 source 存活，不随壳
+        // reload 清空）。回收覆盖面由 BrowserGuestDocumentReclaim 纯函数单测钉住。
         let committed = webView.url?.absoluteString
-        if let committed,
-           TrustGuard.isTrustedDocument(committed, expectedOrigin: cpOrigin),
-           lastCommittedShellURL != committed {
-            lastCommittedShellURL = committed
-            // FW1 ⑦：只释放旧 generation 的 document（未知 documentId 时走全量兜底并清 book）。
-            if let documentId = lastBridgeDocumentId {
+        if BrowserGuestDocumentReclaim.shouldReclaim(committedURL: committed,
+                                                     controlPlaneOrigin: cpOrigin) {
+            switch browserDocuments.noteCommitted() {
+            case .document(let documentId):
                 browserGuests?.releaseAll(documentId: documentId)
-            } else {
+            case .all:
+                // 导航开始时没有已知旧 generation（首次启动/未知）：全量兜底并清 book，
+                // 防 lease 泄漏后 duplicateTab；**不退役** commit 时刻的 currentDocumentId。
                 browserGuests?.releaseAllDocuments()
             }
             browserLayer?.removeAll()
@@ -2213,6 +2250,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // D4：跨文档导航开始即捕获「旧 generation」——didCommit 只退役这里捕获的
+        // documentId（新文档 shim 的 documentStart invoke 可能在 commit 前到达并把
+        // currentDocumentId 改成新 id，commit 时不能再按 current 退役）。
+        browserDocuments.noteNavigationStarted()
         hangWatchdog.reset()
         // provisional 导航开始（首载 / 退避重试 / 重载统一入口）→
         // webViewLoading:true（electron-edges webViewLoading = isLoading 的
@@ -2334,14 +2375,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    /// 退出清理已开始：A 桥 app_quitting 门置位（AppDelegate
-    /// beginTerminationCleanup 调用）。置位后 late invoke 一律回 app_quitting。
     /// 窗口几何变化（resize/全屏）：guest 层按容器重裁剪（native 兜底，不依赖 renderer 再推）。
     func windowDidResize(_ notification: Notification) {
         guard let layer = browserLayer else { return }
         layer.refreshClip(containerSize: layer.superview?.bounds.size ?? layer.bounds.size)
     }
 
+    /// 退出清理已开始：A 桥 app_quitting 门置位（AppDelegate
+    /// beginTerminationCleanup 调用）。置位后 late invoke 一律回 app_quitting。
     func noteQuitting() {
         quitting = true
         browserGuests?.closeAll()
@@ -2389,11 +2430,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         _ = webView.reloadFromOrigin()
     }
 
-    /// FW1 ⑩：焦点在 guest 时 Cmd+±/Cmd+0 作用于 guest 的 pageZoom（不双投、不动壳）。
+    /// FW1 ⑩ / M-A：焦点在**活动且可见**的 guest 时 Cmd+±/Cmd+0 才作用于该 guest 的
+    /// pageZoom（不双投、不动壳；隐藏/非活动 guest 不得命中）。
     private func focusedGuestWebView() -> WKWebView? {
-        let responder = window?.firstResponder
-        guard browserLayer?.isGuestResponder(responder) == true else { return nil }
-        return browserGuests?.activeGuestWebView()
+        guard let layer = browserLayer,
+              layer.isActiveGuestResponder(window?.firstResponder) else { return nil }
+        return layer.activeGuestWebView()
     }
 
     func zoomIn() {
@@ -2670,6 +2712,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 崩溃到重载之间没有导航事件（did-start-loading 不触发）——必须显式
         // 上报 crashed，否则 core 会继续向死 frame 推送丢事件。
         sendRendererLifecycle("crashed")
+
+        // D4/M-B：壳 web content 进程崩溃 = 文档面整体失效——guest 全关、宿主层清空、
+        // 文档世代作废（迟到的 acquire/keymap 一律 fail-closed）。**分区必须保留**：
+        // WKWebsiteDataStore.nonPersistent 是进程生命周期，只有 source 退役/删除才丢
+        // （design §4.4）；closeAll() 会清 partitions，只留给退出用。
+        browserGuests?.releaseAllDocuments()
+        browserLayer?.removeAll()
+        browserDocuments.resetAfterShellCrash()
 
         // 重载走共享的有界恢复策略（不置永久放弃位：滚动窗口自身限制 60s 内 ≤3 次）。
         // 卡死腿同用这一份预算。

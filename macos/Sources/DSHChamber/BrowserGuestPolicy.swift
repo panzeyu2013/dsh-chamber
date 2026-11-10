@@ -38,8 +38,6 @@ enum BrowserGuestNavigationOutcome: Equatable {
     case cancel(reason: String)
     /// 放行前需先走 forward 面协商（loopback 目标 + 可转发来源）。
     case forwardNeeded
-    /// 子帧发起的不可拦截请求：main 只记录（S0 探针 P-04/A5 定性）。
-    case unobservable
 }
 
 /// 新窗请求决策（createWebViewWith）。
@@ -72,9 +70,11 @@ enum BrowserGuestPolicy {
     /// loopback 主机集合（URL.host 对 IPv6 已去括号）。
     static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "::1"]
 
-    /// RT-01：host 归一化（WHATWG URL 会规范 IPv4 数字型；但仍需防御非规范输入，
+    /// RT-01/D6：host 归一化（WHATWG URL 会规范 IPv4 数字型；但仍需防御非规范输入，
     /// 因为 payload/字符串可能绕过 URL 解析）：小写、去尾点、IPv4 短写/十进制/十六进制、
-    /// IPv4-mapped IPv6（::ffff:a.b.c.d）→ 点分四段。解析失败返回 nil（调用方 fail-closed）。
+    /// IPv4-mapped IPv6（::ffff:a.b.c.d）→ 点分四段；IPv6 loopback 的任意展开写法
+    /// （[::1]、[0:0:0:0:0:0:0:1]、裸写）→ "::1"。其余 IPv6 保守原样返回；
+    /// 解析失败返回 nil（调用方 fail-closed）。
     static func canonicalHost(_ host: String?) -> String? {
         guard var value = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !value.isEmpty else { return nil }
@@ -83,14 +83,53 @@ enum BrowserGuestPolicy {
         }
         while value.hasSuffix(".") { value = String(value.dropLast()) }
         if value.isEmpty { return nil }
-        // IPv4-mapped IPv6：::ffff:127.0.0.1 → 127.0.0.1（其余 IPv6 原样返回供 host 集比对）。
+        // D6：IPv4-mapped IPv6 的两个已列出文本形态 → 点分四段；其余映射展开形式
+        // （如 [0:0:0:0:0:ffff:7f00:1]）保守不归一，交给 host 集比对自然拒绝。
+        if value == "::ffff:7f00:1" { return "127.0.0.1" }
         if let range = value.range(of: "::ffff:") {
             let tail = String(value[range.upperBound...])
             if let mapped = canonicalIPv4(tail) { return mapped }
         }
-        if value.contains(":") { return value }   // 普通 IPv6（::1）
+        if value.contains(":") { return canonicalIPv6(value) }
         if let ipv4 = canonicalIPv4(value) { return ipv4 }
         return value
+    }
+
+    /// D6：IPv6 文本归一——只收敛 loopback（8 组任意展开/压缩写法都归为 "::1"），
+    /// 其余 IPv6 保守原样返回（不做通用压缩，避免改变 host 集比对语义）。
+    static func canonicalIPv6(_ value: String) -> String {
+        guard let groups = expandedIPv6Groups(value) else { return value }
+        if groups == [0, 0, 0, 0, 0, 0, 0, 1] { return "::1" }
+        if groups == [0, 0, 0, 0, 0, 0, 0, 0] { return "::" }
+        return value
+    }
+
+    /// IPv6 字面量展开为 8 组（支持 "::" 压缩；非法写法 → nil）。
+    static func expandedIPv6Groups(_ text: String) -> [UInt16]? {
+        func parse(_ parts: [Substring]) -> [UInt16]? {
+            var groups: [UInt16] = []
+            for part in parts {
+                guard (1...4).contains(part.count),
+                      part.allSatisfy({ $0.isHexDigit }),
+                      let group = UInt16(part, radix: 16) else { return nil }
+                groups.append(group)
+            }
+            return groups
+        }
+        let halves = text.components(separatedBy: "::")
+        guard halves.count <= 2 else { return nil }
+        if halves.count == 1 {
+            let parts = text.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 8, let groups = parse(parts) else { return nil }
+            return groups
+        }
+        let head = halves[0]
+        let tail = halves[1]
+        let leftParts = head.isEmpty ? [] : head.split(separator: ":", omittingEmptySubsequences: false)
+        let rightParts = tail.isEmpty ? [] : tail.split(separator: ":", omittingEmptySubsequences: false)
+        guard let left = parse(leftParts), let right = parse(rightParts),
+              left.count + right.count <= 7 else { return nil }
+        return left + Array(repeating: 0, count: 8 - left.count - right.count) + right
     }
 
     /// IPv4 变体归一（inet_aton 语义：a.b.c.d / a.b.c / a.b / a；十进制整数；0x 十六进制）。
@@ -211,7 +250,7 @@ enum BrowserGuestPolicy {
         switch navigationOutcome(url: url, isMainFrame: true, shouldPerformDownload: false,
                                  controlPlaneOrigin: controlPlaneOrigin, mayForward: false) {
         case .allow, .forwardNeeded: return .openRequested
-        case .cancel, .unobservable: return .drop
+        case .cancel: return .drop
         }
     }
 
@@ -234,14 +273,15 @@ enum BrowserGuestPolicy {
         return BrowserGuestFailureProjection(code: code, description: description)
     }
 
-    /// CSS px → AppKit points（design 28:101：points = cssPx / webView.pageZoom），
+    /// CSS px → AppKit points（D5：points = cssPx × webView.pageZoom——WKWebView.pageZoom
+    /// 是页面内容放大倍率，占位元素在 guest 坐标系里同倍放大；原 `/ zoom` 是方向错误），
     /// 并按容器尺寸裁剪（防远端插件用几何覆盖壳 UI）。
     static func rectInPoints(frame: BrowserGuestFrame,
                              pageZoom: CGFloat,
                              containerSize: CGSize) -> CGRect {
         let zoom = pageZoom > 0 ? pageZoom : 1
-        let raw = CGRect(x: frame.x / zoom, y: frame.y / zoom,
-                         width: frame.width / zoom, height: frame.height / zoom)
+        let raw = CGRect(x: frame.x * zoom, y: frame.y * zoom,
+                         width: frame.width * zoom, height: frame.height * zoom)
         if raw.isEmpty { return .zero }
         // 只允许落在容器内；负原点/超界均裁剪（不是权限门，是 UI 防破坏）。
         let clipped = raw.intersection(CGRect(origin: .zero, size: containerSize))
@@ -374,15 +414,27 @@ struct BrowserGuestContentRuleGate {
 }
 
 /// guest 内容规则（app-host / ssh 来源直接 loopback 的请求级兜底；design 28:145）。
+///
+/// D2 契约（review 实测的 WKContentRuleList 子集）：
+/// - 输出必须是**顶层 JSON 数组**（[{trigger,action}, ...]），不是 {rules,version} 包装；
+/// - url-filter 不允许 |（编译报 "Disjunctions are not supported yet"）与 {m,n}
+///   （"Arbitrary atom repetitions are not supported"），也不使用分组括号：每个 scheme /
+///   每个端口边界形态各自成一条规则；
+/// - 两变体语义不变：base 只挡控制面 host:cpPort 的 http(s)/ws(s)；ssh 变体追加直接
+///   loopback（任意端口），但**不误伤** forward alias 段 127.0.0.2–254。
 enum BrowserGuestContentRules {
+    /// 规则覆盖的 scheme（不允许 alternation，故逐 scheme 各生成一份规则）。
+    static let schemes: [String] = ["http", "https", "ws", "wss"]
+
     /// 控制面/直接 loopback 的**主机形态**（url-filter 片段；点号已转义）。
     /// 与 BrowserGuestPolicy.canonicalIPv4 的接受集对齐：127.0.0.1 的短写
     /// （127.1 / 127.0.1）、尾点、十进制整数、0x 十六进制、前导零八进制、
-    /// IPv4-mapped IPv6 文本形态。大小写由 url-filter-is-case-sensitive=false 覆盖。
+    /// IPv4-mapped IPv6 文本形态、IPv6 loopback 全展开写法（D6）。大小写由
+    /// url-filter-is-case-sensitive=false 覆盖。
     ///
     /// 剩余绕过面（WKContentRuleList 只能做 URL 文本正则、无算术/归一）：
     /// ① 未列尽的混合进制/任意前导零逐段写法（如 0x7f.0x0.0x0.0x1、127.00.1.1）；
-    /// ② 映射到 127.0.0.1 的其它 IPv6 展开写法（[0:0:0:0:0:0:0:1]）；
+    /// ② 其余映射到 127.0.0.1 的 IPv6 展开写法（如 [0:0:0:0:0:ffff:7f00:1]）；
     /// ③ URL 带 userinfo 的形态（导航级门会拒，请求级规则不匹配）。
     /// 以上登记 design §5/S-59（docs 批），不在此处假装已覆盖。
     static let loopbackHostPatterns: [String] = [
@@ -399,37 +451,77 @@ enum BrowserGuestContentRules {
         "0x7f000001",
         "017700000001",
         "\\[::1\\]",
+        "\\[0:0:0:0:0:0:0:1\\]",
         "\\[::ffff:127\\.0\\.0\\.1\\]",
         "\\[::ffff:7f00:1\\]"
     ]
 
     /// 127/8 中**除 127.0.0.2–254（forward alias 必须放行）与 127.0.0.1（上一数组）**
-    /// 之外的 loopback 文本形态。只用于 ssh 变体的任意端口阻断：堵住 127.0.1.1 /
-    /// 127.1.2.3 这类非 alias 回环地址的直连，不误伤 alias 段。
+    /// 之外的 loopback 文本形态，只用于 ssh 变体的任意端口阻断：堵住 127.0.1.1 /
+    /// 127.1.2.3 这类非 alias 回环地址的直连，不误伤 alias 段。**无 alternation /
+    /// 无花括号重复**：每个十进制区段一条 pattern（1–255 由 [1-9][0-9]? /
+    /// 1[0-9][0-9] / 2[0-4][0-9] / 25[0-5] 四段枚举覆盖）；以转义点结尾的
+    /// pattern 表示「第四段（1–3 位十进制）随后」。
     static let loopbackRangePatterns: [String] = [
         "127\\.0\\.0\\.0",
         "127\\.0\\.0\\.255",
-        "127\\.0\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[1-9])\\.[0-9]+",
-        "127\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[1-9])\\.[0-9]+\\.[0-9]+"
+        "127\\.0\\.[1-9][0-9]?\\.",
+        "127\\.0\\.1[0-9][0-9]\\.",
+        "127\\.0\\.2[0-4][0-9]\\.",
+        "127\\.0\\.25[0-5]\\."
     ]
 
-    /// 由控制面端口生成 WKContentRuleList JSON：base 只 block 控制面 host:port 的
-    /// http(s)/ws(s) 请求；ssh 变体额外 block 直接 loopback 子资源（任意端口）。
-    /// 端口非法 → 空规则（不误 block；调用方 fail-closed）。
+    /// 127/8 中第二段非 0 的 loopback 文本形态（D2 显式枚举 127.[1-255].*.*）：
+    /// 这些 pattern 以转义点结尾，后面既可能是 3 段写法（127.1.2，第三段）也可能是
+    /// 4 段写法（127.1.2.3，第三段 + 第四段），生成器会各补一套后缀；
+    /// 第二段恒非 0 ⇒ 永不匹配 forward alias 127.0.0.2–254。
+    static let loopbackSecondOctetPatterns: [String] = [
+        "127\\.[1-9][0-9]?\\.",
+        "127\\.1[0-9][0-9]\\.",
+        "127\\.2[0-4][0-9]\\.",
+        "127\\.25[0-5]\\."
+    ]
+
+    /// 由控制面端口生成规则对象：base 只 block 控制面 host:port 的 http(s)/ws(s)
+    /// 请求；ssh 变体额外 block 直接 loopback 子资源（任意端口，alias 段除外）。
+    /// 规则内不使用竖线 alternation / 花括号重复 / 分组括号（WebKit url-filter 子集）。
     static func ruleObjects(controlPlanePort: Int, blocksDirectLoopback: Bool = false) -> [[String: Any]] {
-        guard controlPlanePort >= 1, controlPlanePort <= 65535 else { return [] }
+        guard (1...65535).contains(controlPlanePort) else { return [] }
         let port = String(controlPlanePort)
         var filters: [String] = []
-        // cp origin：legacy 写法同样可能命中控制面（127.1:cpPort 等）。
-        for host in loopbackHostPatterns {
-            filters.append("^(https?)://" + host + ":" + port + "([/:?#]|$)")
-            filters.append("^(wss?)://" + host + ":" + port + "([/:?#]|$)")
+        // cp origin：legacy 写法同样可能命中控制面（127.1:cpPort 等）；端口后必须
+        // 紧跟 /?# 或字符串结尾（避免误 block 175201 这类同前缀端口）。
+        for scheme in schemes {
+            for host in loopbackHostPatterns {
+                filters.append("^" + scheme + "://" + host + ":" + port + "[/?#]")
+                filters.append("^" + scheme + "://" + host + ":" + port + "$")
+            }
         }
         if blocksDirectLoopback {
-            // ssh 变体：直接 loopback 子资源任意端口；127/8 仅排除 forward alias 段。
-            for host in loopbackHostPatterns + loopbackRangePatterns {
-                filters.append("^(https?)://" + host + "(:[0-9]+)?([/:?#]|$)")
-                filters.append("^(wss?)://" + host + "(:[0-9]+)?([/:?#]|$)")
+            // ssh 变体：直接 loopback 子资源任意端口（含默认端口）；127/8 仅排除 alias 段。
+            for scheme in schemes {
+                for host in loopbackHostPatterns {
+                    filters.append("^" + scheme + "://" + host + "[:/?#]")
+                    filters.append("^" + scheme + "://" + host + "$")
+                }
+                for host in loopbackRangePatterns {
+                    if host.hasSuffix("\\.") {
+                        // 127.0.X.<4th>：pattern 已到第四段前。
+                        filters.append("^" + scheme + "://" + host + "[0-9]+[:/?#]")
+                        filters.append("^" + scheme + "://" + host + "[0-9]+$")
+                    } else {
+                        filters.append("^" + scheme + "://" + host + "[:/?#]")
+                        filters.append("^" + scheme + "://" + host + "$")
+                    }
+                }
+                for host in loopbackSecondOctetPatterns {
+                    // 127.X.<3rd> 与 127.X.<3rd>.<4th> 两种段数都要命中的是 127/8
+                    // 非 alias 回环（例如 127.1.2 / 127.1.2.3）。
+                    filters.append("^" + scheme + "://" + host + "[0-9]+[:/?#]")
+                    filters.append("^" + scheme + "://" + host + "[0-9]+$")
+                    filters.append("^" + scheme + "://" + host + "[0-9]+\\.[0-9]+[:/?#]")
+                    filters.append("^" + scheme + "://" + host + "[0-9]+\\.[0-9]+$")
+                }
             }
         }
         return filters.map { filter in
@@ -458,23 +550,16 @@ enum BrowserGuestContentRules {
     }
 
     /// WKContentRuleList 的 JSON 文本（走 JSONSerialization 生成，避免手写转义出错；
-    /// R4 静态收敛项）。端口非法 → 空规则（不误 block）。
+    /// R4 静态收敛项）。**D2：顶层数组**（WebKit 接受形态）；端口非法 → "[]"。
     static func json(controlPlanePort: Int, blocksDirectLoopback: Bool = false) -> String {
         let rules = ruleObjects(controlPlanePort: controlPlanePort,
                                 blocksDirectLoopback: blocksDirectLoopback)
-        let payload: [String: Any] = ["rules": rules, "version": 1]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+        guard let data = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8) else {
-            return #"{"rules":[],"version":1}"#
+            return "[]"
         }
         return text
     }
-}
-
-/// guest 资源上限（对齐 design 28:52 的 8/source，global 32；本文件是纯值）。
-struct BrowserGuestLimits: Equatable {
-    var perSource = 8
-    var global = 32
 }
 
 /// main 侧 forward record 投影（P0：URL 只由 main 用 record 合成，renderer 只发 recordId+path）。
@@ -489,38 +574,109 @@ struct BrowserGuestForwardRecord: Equatable {
 
 /// forward 目标的合成与 path 校验（纯逻辑，单测直测）。
 enum BrowserGuestForwardTarget {
-    /// origin-relative path 归一：nil/空 → "/"；必须以 "/" 开头；拒绝 "//"（protocol-relative）、
-    /// 含 "://"（绝对 URL）、反斜杠、空白/控制字符；query/fragment 原样保留。
+    /// origin-relative path 归一（D3，design §3）：nil/空 → "/"；必须以 "/" 开头且非 "//"
+    /// （protocol-relative）；长度 ≤4096 字节；拒绝 "://"（绝对 URL）；path 与 query
+    /// （第一个 "?" 之后）分别按 RFC 3986 字符集 + 严格 %HH 校验（"%zz"/"100%"/非 ASCII
+    /// 一律拒绝），阻止 URLComponents.percentEncoded* 对非法字符直接 fatalError。
+    /// query 保留在返回串里（"/a?b" 通过；"/a?b#c"、"/a?q=%zz" 拒绝）。
     static func normalizePath(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return "/" }
-        guard raw.utf8.count <= 8 * 1024 else { return nil }   // RT-07：path ≤8KB
+        guard raw.utf8.count <= 4096 else { return nil }
         guard raw.hasPrefix("/"), !raw.hasPrefix("//") else { return nil }
-        guard !raw.contains("://"), !raw.contains("\\") else { return nil }
-        for scalar in raw.unicodeScalars where scalar.value < 0x20 || scalar.value == 0x7f || scalar == " " {
+        guard !raw.contains("://") else { return nil }
+        let pathText: String
+        let queryText: String?
+        if let queryIndex = raw.firstIndex(of: "?") {
+            pathText = String(raw[raw.startIndex..<queryIndex])
+            queryText = String(raw[raw.index(after: queryIndex)...])
+        } else {
+            pathText = raw
+            queryText = nil
+        }
+        guard isValidPercentEncodedComponent(pathText, allowsQuestionMark: false) else { return nil }
+        if let queryText, !isValidPercentEncodedComponent(queryText, allowsQuestionMark: true) {
             return nil
         }
         return raw
     }
 
+    /// 单个 path/query 分量的字符校验（D3）：允许集 = RFC 3986 unreserved /
+    /// sub-delims / ":" / "@" / "/"（query 另允许 "?"），以及严格 %HH。
+    /// 该集合是 Foundation URLComponents.percentEncoded* setter 的实测接受集：
+    /// 其它可打印 ASCII（" < > [ ] 反斜杠 ^ 反引号 { | }）会让 setter fatalError（崩溃面 D3）。
+    static func isValidPercentEncodedComponent(_ raw: String, allowsQuestionMark: Bool) -> Bool {
+        let scalars = Array(raw.unicodeScalars)
+        var index = 0
+        while index < scalars.count {
+            let scalar = scalars[index]
+            if scalar == "%" {
+                guard index + 2 < scalars.count,
+                      isASCIIHexDigit(scalars[index + 1]),
+                      isASCIIHexDigit(scalars[index + 2]) else { return false }
+                index += 3
+                continue
+            }
+            guard isAllowedPercentEncodedScalar(scalar, allowsQuestionMark: allowsQuestionMark) else {
+                return false
+            }
+            index += 1
+        }
+        return true
+    }
+
+    private static func isAllowedPercentEncodedScalar(_ scalar: Unicode.Scalar,
+                                                      allowsQuestionMark: Bool) -> Bool {
+        let value = scalar.value
+        if (0x30...0x39).contains(value) { return true }   // 0-9
+        if (0x41...0x5a).contains(value) { return true }   // A-Z
+        if (0x61...0x7a).contains(value) { return true }   // a-z
+        switch scalar {
+        case "!", "$", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", ":", ";", "=", "@", "_", "~":
+            return true
+        case "?":
+            return allowsQuestionMark
+        default:
+            return false
+        }
+    }
+
+    private static func isASCIIHexDigit(_ scalar: Unicode.Scalar) -> Bool {
+        (0x30...0x39).contains(scalar.value) || (0x41...0x46).contains(scalar.value)
+            || (0x61...0x66).contains(scalar.value)
+    }
+
     /// 用 main 侧 record 合成 scheme://aliasHost:localPort + path（design 28 §2.10）。
     /// record 的 scheme/alias/port 任一不合法 → nil（绝不回退 renderer URL）。
+    /// D3：只有 normalizePath 校验通过后才使用 URLComponents.percentEncoded*。
     static func composedURL(record: BrowserGuestForwardRecord, path rawPath: String?) -> URL? {
         let scheme = record.scheme.lowercased()
         guard scheme == "http" || scheme == "https" else { return nil }
         guard BrowserGuestPolicy.isForwardAliasHost(record.aliasHost) else { return nil }
         guard (1...65535).contains(record.localPort) else { return nil }
         guard let normalized = normalizePath(rawPath) else { return nil }
+        let pathText: String
+        let queryText: String?
+        if let queryIndex = normalized.firstIndex(of: "?") {
+            pathText = String(normalized[normalized.startIndex..<queryIndex])
+            queryText = String(normalized[normalized.index(after: queryIndex)...])
+        } else {
+            pathText = normalized
+            queryText = nil
+        }
+        // 二次防御：拆分后的 path/query 仍必须过同一字符/转义规则（normalizePath 已校验，
+        // 这里防未来调用方绕过它直接拼装）。percentEncodedPath/percentEncodedQuery 的
+        // setter 对非法字符是 fatalError（不是 nil），所以校验必须是硬前置。
+        guard isValidPercentEncodedComponent(pathText, allowsQuestionMark: false) else { return nil }
+        if let queryText, !isValidPercentEncodedComponent(queryText, allowsQuestionMark: true) {
+            return nil
+        }
         var components = URLComponents()
         components.scheme = scheme
         components.host = record.aliasHost
         components.port = record.localPort
         // query 与 path 分开：path 段不做 printf 式转义、query 原样保留（fragment 不送远端）。
-        if let queryIndex = normalized.firstIndex(of: "?") {
-            components.percentEncodedPath = String(normalized[normalized.startIndex..<queryIndex])
-            components.percentEncodedQuery = String(normalized[normalized.index(after: queryIndex)...])
-        } else {
-            components.percentEncodedPath = normalized
-        }
+        components.percentEncodedPath = pathText
+        if let queryText { components.percentEncodedQuery = queryText }
         components.user = nil
         components.password = nil
         components.fragment = nil
@@ -532,7 +688,6 @@ enum BrowserGuestForwardTarget {
 enum BrowserGuestFailure: String, Error, Equatable {
     case sourceUnverified = "guest_source_unverified"
     case invalidPayload = "guest_invalid_payload"
-    case limitReached = "guest_limit"
     case duplicateTab = "guest_duplicate_tab"
     case unknownLease = "guest_unknown_lease"
     case ownerMismatch = "guest_owner_mismatch"
@@ -555,22 +710,23 @@ struct BrowserGuestLease: Equatable {
     var mayForward: Bool
 }
 
-/// 租约账本（纯逻辑，无 WebKit）：mint/remove/按 document 与 source 清理、限额。
+/// 租约账本（纯逻辑，无 WebKit）：mint/remove/按 document 与 source 清理。
+/// D9：**不设 per-tab/总量配额**（design 28:52/§8-8——总量交给 N-ctx 12 与 WebKit
+/// 内存压力；Swift 侧只保留「同 tab 单租约」这一结构性约束）。
 struct BrowserGuestLeaseBook {
     private(set) var entries: [String: BrowserGuestLease] = [:]
-    var limits = BrowserGuestLimits()
 
     /// 该 tab 是否已有 lease（一个 tab occurrence 只允许一个 guest）。
     func lease(forTab tabId: String) -> String? {
         entries.first { $0.value.tabId == tabId }?.key
     }
 
-    /// 该 source 的 lease 数。
+    /// 该 source 的 lease 数（诊断/测试用，不是配额判据）。
     func count(forSource sourceId: String) -> Int {
         entries.values.filter { $0.sourceId == sourceId }.count
     }
 
-    /// 生成租约；限额/重复 tab 一律拒绝（fail-closed）。
+    /// 生成租约；同 tab 重复租约一律拒绝（fail-closed）。
     /// - Parameters:
     ///   - lease: 由调用方（registry）传入 UUID，便于单测注入
     mutating func mint(lease: String,
@@ -583,8 +739,6 @@ struct BrowserGuestLeaseBook {
                        mayForward: Bool) -> Result<BrowserGuestLease, BrowserGuestFailure> {
         if entries[lease] != nil { return .failure(.duplicateTab) }
         if self.lease(forTab: tabId) != nil { return .failure(.duplicateTab) }
-        if entries.count >= limits.global { return .failure(.limitReached) }
-        if count(forSource: sourceId) >= limits.perSource { return .failure(.limitReached) }
         let value = BrowserGuestLease(lease: lease, tabId: tabId, sessionId: sessionId,
                                       sourceId: sourceId, sourceFingerprint: sourceFingerprint,
                                       partitionKey: partitionKey, documentId: documentId,
@@ -718,6 +872,81 @@ struct BrowserGuestRectAudit: Equatable {
                                                                            pageZoom: pageZoom,
                                                                            containerSize: containerSize),
                               guest: guest, pageZoom: pageZoom, visible: visible, occluded: occluded)
+    }
+}
+
+// MARK: - 壳文档世代（D4：reload/crash 的 guest 回收）
+
+/// 壳文档提交时的 guest 回收判定（D4）。旧实现用「上次提交 URL 相同就不释放」守卫，
+/// 导致**同 URL reload 的旧 generation guest 泄漏**；现在可信壳文档的每次 commit 都
+/// 无条件回收（同 URL commit 必须释放——这是 D4 的回归点）。
+enum BrowserGuestDocumentReclaim {
+    /// 回收范围：旧 documentId 已知 → 精确释放该 generation；未知 → 全量兜底。
+    enum Plan: Equatable {
+        case document(String)
+        case all
+    }
+
+    /// 提交目标是否为可信壳文档（是 ⇒ 必须回收旧 generation 的 guest 并清宿主层）。
+    /// nil/空/非控制面 origin 文档 → false（失败说明页等非壳文档不触发回收）。
+    static func shouldReclaim(committedURL: String?, controlPlaneOrigin: String) -> Bool {
+        guard let committedURL, !committedURL.isEmpty else { return false }
+        return TrustGuard.isTrustedDocument(committedURL, expectedOrigin: controlPlaneOrigin)
+    }
+
+}
+
+/// A 桥壳文档世代（D4）：shim 每个文档生成一个新 documentId；壳 commit/reload 后旧
+/// generation 立即失效，迟到 invoke（尤其 acquire 的 await 后复验）不得再建 guest。
+/// 纯值、无 AppKit/WebKit，可由单测直接驱动。
+///
+/// 退役对象 = **跨文档导航开始时**捕获的旧 documentId（pendingRetireDocumentId），
+/// 不是 didCommit 时刻的 currentDocumentId：新文档 shim 的 documentStart invoke 可能
+/// 在 commit 之前到达，把 currentDocumentId 改成新 id；若在 commit 时退役 current，
+/// 新文档会被误退役（D4 排序修复）。
+struct BrowserGuestDocumentGeneration: Equatable {
+    /// 最近一次 invoke 的 documentId（B 桥信封里的 generation 事实）。
+    private(set) var currentDocumentId: String?
+    /// 已退役（壳文档已被新 generation 取代）的 documentId；滞后 acquire 一律拒绝。
+    private(set) var retiredDocumentIds: Set<String> = []
+    /// 跨文档导航开始时捕获的「旧 generation」；didCommit 只退役它。
+    private(set) var pendingRetireDocumentId: String?
+
+    /// 记录一次 invoke 的 documentId。已退役 generation 的迟到 invoke **不得**把
+    /// currentDocumentId 抢回旧 id（否则新文档在其下一次 invoke 前会被 documentAlive
+    /// 误判为死、acquire 被拒）；UUID 每文档唯一，退役集只增不减。
+    mutating func noteInvoke(documentId: String) {
+        guard !retiredDocumentIds.contains(documentId) else { return }
+        currentDocumentId = documentId
+    }
+
+    /// 跨文档导航开始（didStartProvisionalNavigation）：捕获当时的 currentDocumentId
+    /// 作为待退役 generation。之后的 does-not-commit / 失败重试会被下一次导航开始覆盖。
+    mutating func noteNavigationStarted() {
+        pendingRetireDocumentId = currentDocumentId
+    }
+
+    /// didCommit（可信壳文档）：把 pending 旧 generation 退役并返回回收计划。
+    /// 无 pending（首次启动 / 导航开始时还没有任何 documentId）→ 返回 .all 全量兜底，
+    /// 且**不退役任何 id**——commit 时刻的 currentDocumentId 可能是新文档的 pre-commit
+    /// invoke，绝不能退役。调用后清空 pending。
+    mutating func noteCommitted() -> BrowserGuestDocumentReclaim.Plan {
+        defer { pendingRetireDocumentId = nil }
+        guard let pending = pendingRetireDocumentId else { return .all }
+        retiredDocumentIds.insert(pending)
+        return .document(pending)
+    }
+
+    /// 壳 web 内容进程崩溃：guest 全部关闭 + 文档跟踪清零（含未完成导航的 pending）。
+    mutating func resetAfterShellCrash() {
+        if let currentDocumentId { retiredDocumentIds.insert(currentDocumentId) }
+        currentDocumentId = nil
+        pendingRetireDocumentId = nil
+    }
+
+    /// 该 documentId 是否仍是当前且未退役的 generation（acquire 的 await 后复验面）。
+    func isAlive(_ documentId: String) -> Bool {
+        documentId == currentDocumentId && !retiredDocumentIds.contains(documentId)
     }
 }
 

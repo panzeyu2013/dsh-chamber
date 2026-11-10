@@ -11,7 +11,7 @@
  * 实现）：每个方法的通道、payload 形状与返回映射逐字对齐 preload.cts
  * （manifest invoke 通道共 64 个，含 info/native-theme-set 两个内部通道
  * + 13 个 on* 订阅 → 13 manifest push 通道，合计 77；其中 6 invoke + 4 push
- * 属 Swift-only `browser` 命名空间），
+ * 属 Swift-only `browser` 命名空间；其 events 四键是 on* 订阅的别名映射，不新增通道），
  * 文件内零 poc-unimplemented 兜底。用户插件写面（apply/undo/
  * materialize/npm search/local add-remove）已随 2026-09 C 分层裁决退役。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
@@ -678,7 +678,16 @@
     onState: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_STATE, callback) },
     onOpenRequested: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_OPEN_REQUESTED, callback) },
     onInput: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_INPUT, callback) },
-    onForwardNeeded: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_FORWARD_NEEDED, callback) }
+    onForwardNeeded: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_FORWARD_NEEDED, callback) },
+    // D1：renderer 的 BrowserBridge 以 browser.events.<name> 读四个订阅入口
+    // （state/openRequested/input/forwardNeeded）；on* 保留为别名，不删除。
+    // 不新增通道：四项都映射到上面同一批 PUSH_EVENTS。
+    events: {
+      state: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_STATE, callback) },
+      openRequested: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_OPEN_REQUESTED, callback) },
+      input: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_INPUT, callback) },
+      forwardNeeded: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_FORWARD_NEEDED, callback) }
+    }
   }
 
   // ---- dshDesktop carrier (rc.2 official desktop surface) -----------------

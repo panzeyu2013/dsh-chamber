@@ -6,7 +6,7 @@
 //  两边名字必须逐字一致（本文件即 E4 对 E1 的契约输入）：
 //    invoke（6）：acquire/release/navigate/command/frame/keymap
 //    push  （4）：state/openRequested/input/forward-needed
-//  故 A 桥计数 58→64 invoke、9→13 push、67→77（design 28 §3 单源，不在正文抄数字）。
+//  故 A 桥计数 64 invoke、13 push、合计 77 通道（design 28 §3 单源）。
 //
 //  router 只做「解码 → registry 调用 → 编码回执」；护栏（主帧/壳文档/尺寸/白名单/quoting）
 //  由既有 ChamberMessageHandler.fence 完成。
@@ -50,9 +50,33 @@ enum BrowserIPCPayload {
         return flag
     }
 
+    /// 推送字段截断（m2：按 **UTF-16 code unit** 计数，与 renderer 侧 JS String.length
+    /// 的上限判定一致；按 Character 计数时 astral/组合字符会让 JS length 超限、整条
+    /// state push 被 renderer 丢弃）。截断点不劈开代理对 ⇒ 结果 utf16.count ≤ limit。
+    static func truncated(_ text: String, limit: Int) -> String {
+        guard limit > 0, text.utf16.count > limit else { return text }
+        var result = ""
+        var used = 0
+        for character in text {
+            let units = character.utf16.count
+            if used + units > limit { break }
+            result.append(character)
+            used += units
+        }
+        return result
+    }
+
     static func double(_ value: AnyCodable?) -> Double? {
         guard case .number(let number) = value else { return nil }
         return number
+    }
+
+    /// 严格整数（D16 收敛：forward record 的 localPort 必须是整数，绝不能把
+    /// 51234.9 截断成 51234 后当作合法端口）。
+    static func int(_ value: AnyCodable?) -> Int? {
+        guard let number = double(value), number.isFinite,
+              number == number.rounded(), abs(number) <= 9_007_199_254_740_992 else { return nil }
+        return Int(number)
     }
 
     /// frame 对象：{x,y,width,height}，全部有限且非负宽高。
@@ -147,8 +171,9 @@ enum BrowserIPCPayload {
         ]
         // INC-02/R-08：nil 不发 .null（renderer 侧 url/title 是可缺省字段，.null 会破坏
         // 「地址恒 observed」的字符串契约）——省略键。
-        if let url = state.url { fields["url"] = .string(url) }
-        if let title = state.title { fields["title"] = .string(title) }
+        // 状态 push 的长度上限（远端页面可让 url/title 任意长）：url ≤4096、title ≤512。
+        if let url = state.url { fields["url"] = .string(truncated(url, limit: 4096)) }
+        if let title = state.title { fields["title"] = .string(truncated(title, limit: 512)) }
         if let error = state.error {
             fields["error"] = .object(["code": .number(Double(error.code)),
                                        "description": .string(error.description)])
@@ -158,22 +183,24 @@ enum BrowserIPCPayload {
         return .object(fields)
     }
 
-    /// browser-input 推送载荷。
     /// browser-input 推送载荷（V3-C P0/P1：design 28:89 的 modifiers 是**字符串数组**，
     /// 不是 5 个布尔——renderer BrowserBridge.ts 消费 modifiers: string[]）。
-    /// 映射：primary → "meta"（⌘）；alt → "alt"；shift → "shift"；control → "ctrl"。
-    /// repeat 作为可选额外键保留（renderer 可忽略）。
-    static func inputPayload(tabId: String, stroke: BrowserKeyStroke) -> AnyCodable {
+    /// 映射：primary → "meta"（⌘）；alt → "alt"；shift → "shift"；control → "control"
+    /// （INC-01/RT-02：canonical 修饰名不是 "ctrl"）。repeat 作为可选额外键保留。
+    /// D12：lease 可选（Swift 发放的活动租约）；renderer 用 lease 精确定位该 tab 的
+    /// 占位元素（旧 shim/无租约时省略键，renderer 回退按 tabId 查找）。
+    static func inputPayload(tabId: String, lease: String?, stroke: BrowserKeyStroke) -> AnyCodable {
         var modifiers: [AnyCodable] = []
         if stroke.primary { modifiers.append(.string("meta")) }
         if stroke.alt { modifiers.append(.string("alt")) }
         if stroke.shift { modifiers.append(.string("shift")) }
-        // INC-01/RT-02：canonical 修饰名是 "control"（"ctrl" 不是 KeyboardEvent 修饰名）。
         if stroke.control { modifiers.append(.string("control")) }
-        return .object(["tabId": .string(tabId),
-                        "code": .string(stroke.code),
-                        "modifiers": .array(modifiers),
-                        "repeat": .bool(stroke.isRepeat)])
+        var fields: [String: AnyCodable] = ["tabId": .string(tabId),
+                                            "code": .string(stroke.code),
+                                            "modifiers": .array(modifiers),
+                                            "repeat": .bool(stroke.isRepeat)]
+        if let lease, !lease.isEmpty { fields["lease"] = .string(lease) }
+        return .object(fields)
     }
 
     /// browser-forward-needed 推送载荷（main 在 guest 内主 frame 命中 loopback 时请求 renderer 走 forward 面）。
@@ -189,6 +216,22 @@ enum BrowserIPCPayload {
 }
 
 // MARK: - router（A 桥 invoke 的 Swift 侧分派）
+
+/// browser invoke 的失败类型（A 桥错误串的唯一来源）。协议内失败沿用
+/// BrowserGuestFailure 的既有错误码；白名单外/未知 method 保留 method_not_allowed
+/// 语义（与 MessageHandler 的拒绝码逐字一致、shim 侧 ERROR_TEXT_BY_CODE 已知码）。
+enum BrowserIPCDispatchError: Error, Equatable {
+    case protocolFailure(BrowserGuestFailure)
+    case methodNotAllowed
+
+    /// renderer 收到的错误串（shim errorFromRejection 按已知码投影文案）。
+    var code: String {
+        switch self {
+        case .protocolFailure(let failure): return failure.rawValue
+        case .methodNotAllowed: return "method_not_allowed"
+        }
+    }
+}
 
 /// `browser` 命名空间的 registrar：只做「解码 → registry → 编码回执」。
 /// 护栏（主帧/壳文档/尺寸/白名单/quitting）由 ChamberMessageHandler.fence 已完成，
@@ -210,38 +253,38 @@ final class BrowserIPCRouter {
         BrowserIPCChannel.invokeChannels.contains(method)
     }
 
-    /// 分派一次 invoke；失败返回 A 桥错误串（renderer reject Promise）。
-    func dispatch(method: String, payload: AnyCodable?, documentId: String) async -> Result<AnyCodable, String> {
+    /// 分派一次 invoke；失败返回类型化错误（renderer reject Promise；code 转 A 桥错误串）。
+    func dispatch(method: String, payload: AnyCodable?, documentId: String) async -> Result<AnyCodable, BrowserIPCDispatchError> {
         switch method {
         case BrowserIPCChannel.acquire:
             guard let request = BrowserIPCPayload.acquireRequest(payload) else {
-                return .failure(BrowserGuestFailure.invalidPayload.rawValue)
+                return .failure(.protocolFailure(.invalidPayload))
             }
             switch await registry.acquire(request, documentId: documentId) {
             case .success(let lease): return .success(BrowserIPCPayload.ok(["lease": .string(lease)]))
-            case .failure(let failure): return .failure(failure.rawValue)
+            case .failure(let failure): return .failure(.protocolFailure(failure))
             }
         case BrowserIPCChannel.release:
             guard let fields = BrowserIPCPayload.object(payload),
                   let tabId = BrowserIPCPayload.string(fields["tabId"]),
                   let lease = BrowserIPCPayload.string(fields["lease"]) else {
-                return .failure(BrowserGuestFailure.invalidPayload.rawValue)
+                return .failure(.protocolFailure(.invalidPayload))
             }
             switch registry.release(tabId: tabId, lease: lease, documentId: documentId) {
             case .success: return .success(BrowserIPCPayload.ok())
-            case .failure(let failure): return .failure(failure.rawValue)
+            case .failure(let failure): return .failure(.protocolFailure(failure))
             }
         case BrowserIPCChannel.navigate:
             guard let fields = BrowserIPCPayload.object(payload),
                   let tabId = BrowserIPCPayload.string(fields["tabId"]),
                   let lease = BrowserIPCPayload.string(fields["lease"]),
                   let target = BrowserIPCPayload.navigateTarget(fields["target"]) else {
-                return .failure(BrowserGuestFailure.invalidPayload.rawValue)
+                return .failure(.protocolFailure(.invalidPayload))
             }
             switch await registry.navigate(tabId: tabId, lease: lease, documentId: documentId,
                                            target: target) {
             case .success: return .success(BrowserIPCPayload.ok())
-            case .failure(let failure): return .failure(failure.rawValue)
+            case .failure(let failure): return .failure(.protocolFailure(failure))
             }
         case BrowserIPCChannel.command:
             guard let fields = BrowserIPCPayload.object(payload),
@@ -249,42 +292,68 @@ final class BrowserIPCRouter {
                   let lease = BrowserIPCPayload.string(fields["lease"]),
                   let raw = BrowserIPCPayload.string(fields["command"]),
                   let command = BrowserGuestCommand(rawValue: raw) else {
-                return .failure(BrowserGuestFailure.invalidPayload.rawValue)
+                return .failure(.protocolFailure(.invalidPayload))
             }
             switch registry.command(tabId: tabId, lease: lease, documentId: documentId, command: command) {
             case .success: return .success(BrowserIPCPayload.ok())
-            case .failure(let failure): return .failure(failure.rawValue)
+            case .failure(let failure): return .failure(.protocolFailure(failure))
             }
         case BrowserIPCChannel.frame:
             guard let fields = BrowserIPCPayload.object(payload),
                   let tabId = BrowserIPCPayload.string(fields["tabId"]),
                   let lease = BrowserIPCPayload.string(fields["lease"]) else {
-                return .failure(BrowserGuestFailure.invalidPayload.rawValue)
+                return .failure(.protocolFailure(.invalidPayload))
             }
-            let frame = fields["frame"].flatMap { BrowserIPCPayload.frame($0) }
-            let visible = fields["visible"].flatMap { BrowserIPCPayload.bool($0) }
-            let occluded = fields["occluded"].flatMap { BrowserIPCPayload.bool($0) }
+            // 键存在但值非法 → invalidPayload（不得静默当作缺省轴——那会把坏载荷
+            // 当成「未更新」，掩盖 renderer 契约漂移；缺键才是可选轴）。
+            let frame: BrowserGuestFrame?
+            if let rawFrame = fields["frame"] {
+                guard let decoded = BrowserIPCPayload.frame(rawFrame) else {
+                    return .failure(.protocolFailure(.invalidPayload))
+                }
+                frame = decoded
+            } else {
+                frame = nil
+            }
+            let visible: Bool?
+            if let rawVisible = fields["visible"] {
+                guard let decoded = BrowserIPCPayload.bool(rawVisible) else {
+                    return .failure(.protocolFailure(.invalidPayload))
+                }
+                visible = decoded
+            } else {
+                visible = nil
+            }
+            let occluded: Bool?
+            if let rawOccluded = fields["occluded"] {
+                guard let decoded = BrowserIPCPayload.bool(rawOccluded) else {
+                    return .failure(.protocolFailure(.invalidPayload))
+                }
+                occluded = decoded
+            } else {
+                occluded = nil
+            }
             switch registry.frame(tabId: tabId, lease: lease, documentId: documentId, frame: frame,
                                   pageZoom: pageZoom(), visible: visible, occluded: occluded) {
             case .success: return .success(BrowserIPCPayload.ok())
-            case .failure(let failure): return .failure(failure.rawValue)
+            case .failure(let failure): return .failure(.protocolFailure(failure))
             }
         case BrowserIPCChannel.keymap:
             guard let decoded = BrowserIPCPayload.keymap(payload) else {
-                return .failure(BrowserGuestFailure.invalidPayload.rawValue)
+                return .failure(.protocolFailure(.invalidPayload))
             }
             // FW1 ②：keymap 越租必须拒绝（lease 对回本 document + tab）。
             switch registry.authorizeKeymap(tabId: decoded.tabId, lease: decoded.lease,
                                             documentId: documentId) {
             case .failure(let failure):
                 shellLog("[shell][browser-guest] keymap 拒绝（越租）tab=\(decoded.tabId) lease=\(decoded.lease)")
-                return .failure(failure.rawValue)
+                return .failure(.protocolFailure(failure))
             case .success:
                 keyboard.setKeymap(tabId: decoded.tabId, combos: decoded.combos)
                 return .success(BrowserIPCPayload.ok())
             }
         default:
-            return .failure("method_not_allowed")
+            return .failure(.methodNotAllowed)
         }
     }
 }

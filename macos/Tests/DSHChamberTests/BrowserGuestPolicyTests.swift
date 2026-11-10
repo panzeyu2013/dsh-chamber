@@ -101,10 +101,16 @@ final class BrowserGuestPolicyTests: XCTestCase {
 
     func testRectConversionAndClamp() {
         let frame = BrowserGuestFrame(x: 100, y: 50, width: 400, height: 300)
-        // pageZoom 2：CSS px 折半 → points。
+        // D5：points = cssPx * pageZoom（不是折半）。pageZoom 2 + CSS 100 → 200 points。
         XCTAssertEqual(BrowserGuestPolicy.rectInPoints(frame: frame, pageZoom: 2,
                                                        containerSize: CGSize(width: 1280, height: 772)),
-                       CGRect(x: 50, y: 25, width: 200, height: 150))
+                       CGRect(x: 200, y: 100, width: 800, height: 600))
+        // pageZoom 2 下 100 CSS px 必须投影成 200 points（D5 的最小回归断言）。
+        XCTAssertEqual(BrowserGuestPolicy.rectInPoints(frame: BrowserGuestFrame(x: 100, y: 0,
+                                                                                width: 100, height: 100),
+                                                       pageZoom: 2,
+                                                       containerSize: CGSize(width: 1280, height: 772)).minX,
+                       200)
         // 越界裁剪到容器；负原点被裁。
         XCTAssertEqual(BrowserGuestPolicy.rectInPoints(frame: BrowserGuestFrame(x: -10, y: -10, width: 100, height: 100),
                                                        pageZoom: 1,
@@ -118,12 +124,26 @@ final class BrowserGuestPolicyTests: XCTestCase {
 
     func testContentRuleListOnlyBlocksControlPlaneOrigin() {
         let json = BrowserGuestContentRules.json(controlPlanePort: 17520)
+        // D2：WKContentRuleListStore 只接受顶层 JSON 数组（无 {rules,version} 包装）。
+        guard let data = json.data(using: .utf8),
+              let rules = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return XCTFail("content rule JSON 顶层必须是数组（D2），实际：\(json.prefix(120))")
+        }
+        XCTAssertFalse(rules.isEmpty)
         XCTAssertTrue(json.contains(#""type":"block""#))
         XCTAssertTrue(json.contains("17520"))
         XCTAssertFalse(json.contains("17521"))
-        // 只出现 loopback 主机与 cp 端口，不出现通配 host。
-        XCTAssertFalse(json.contains("*"))
-        XCTAssertEqual(BrowserGuestContentRules.json(controlPlanePort: 0), #"{"rules":[],"version":1}"#)
+        // 只出现 loopback 主机与 cp 端口，不出现通配 host（D2 允许 url-filter 用 * 量词，
+        // 这里锁的是「host 段不得写成通配」）。
+        XCTAssertFalse(json.contains("*://"))
+        XCTAssertFalse(json.contains("://*"))
+        // 端口非法 → 空数组（不误 block；调用方 fail-closed）。
+        let empty = BrowserGuestContentRules.json(controlPlanePort: 0)
+        guard let emptyData = empty.data(using: .utf8),
+              let emptyRules = try? JSONSerialization.jsonObject(with: emptyData) as? [Any] else {
+            return XCTFail("端口非法的 JSON 必须是可解析的顶层数组，实际：\(empty)")
+        }
+        XCTAssertTrue(emptyRules.isEmpty, "端口非法必须输出空 JSON 数组，实际：\(empty)")
     }
 }
 
@@ -145,11 +165,12 @@ extension BrowserGuestPolicyTests {
         let base = BrowserGuestContentRules.ruleObjects(controlPlanePort: 17520)
         let ssh = BrowserGuestContentRules.ruleObjects(controlPlanePort: 17520,
                                                        blocksDirectLoopback: true)
-        // 每条主机形态 × http(s)/ws(s) 两 scheme；ssh 变体 = base + 任意端口两份。
-        let hostCount = BrowserGuestContentRules.loopbackHostPatterns.count
-        XCTAssertEqual(base.count, hostCount * 2)
-        XCTAssertEqual(ssh.count,
-                       base.count + (hostCount + BrowserGuestContentRules.loopbackRangePatterns.count) * 2)
+        // D2 重写了 scheme/端口边界/loopbackRange 的 pattern 拆法 → 不按条数硬编码，
+        // 只断言语义：base 全含 cp 端口；ssh 额外含任意端口规则（数量必须更多）。
+        XCTAssertFalse(base.isEmpty)
+        XCTAssertGreaterThan(ssh.count, base.count)
+        XCTAssertFalse(BrowserGuestContentRules.loopbackRangePatterns.isEmpty)
+        XCTAssertFalse(BrowserGuestContentRules.loopbackSecondOctetPatterns.isEmpty)
         for rule in base {
             guard let trigger = rule["trigger"] as? [String: Any],
                   let action = rule["action"] as? [String: Any] else {
@@ -161,15 +182,29 @@ extension BrowserGuestPolicyTests {
             XCTAssertFalse(filter.contains("17521"))
         }
         XCTAssertTrue(BrowserGuestContentRules.ruleObjects(controlPlanePort: 0).isEmpty)
+        // D2：WKContentRuleList 的 url-filter 只允许 WebKit 接受的子集——出现 | 或 {m,n}
+        // 会让整份规则编译失败（App 启动即 fail-closed 不可用）。
+        for filter in filters(base) + filters(ssh) {
+            XCTAssertFalse(filter.contains("|"), "url-filter 不得含 |（D2）：\(filter)")
+            XCTAssertFalse(filter.contains("{"), "url-filter 不得含 {m,n}（D2）：\(filter)")
+            XCTAssertFalse(filter.contains("}"), "url-filter 不得含 {m,n}（D2）：\(filter)")
+        }
+        // host 片段本身（拼接进 url-filter）同样禁止 alternation/量词花括号。
+        for pattern in BrowserGuestContentRules.loopbackHostPatterns
+            + BrowserGuestContentRules.loopbackRangePatterns
+            + BrowserGuestContentRules.loopbackSecondOctetPatterns {
+            XCTAssertFalse(pattern.contains("|"), "host pattern 不得含 |（D2）：\(pattern)")
+            XCTAssertFalse(pattern.contains("{"), "host pattern 不得含 {（D2）：\(pattern)")
+        }
         // JSONSerialization 生成的文本必须可解析回同一结构（R4：不手写转义）。
         let text = BrowserGuestContentRules.json(controlPlanePort: 17520,
                                                  blocksDirectLoopback: true)
         guard let data = text.data(using: .utf8),
-              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return XCTFail("content rule JSON must be valid JSON")
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return XCTFail("content rule JSON 顶层必须是数组（D2）")
         }
-        XCTAssertEqual((parsed["rules"] as? [[String: Any]])?.count, ssh.count)
-        XCTAssertEqual(parsed["version"] as? Int, 1)
+        XCTAssertEqual(parsed.count, ssh.count)
+        XCTAssertFalse(text.contains(#""version""#), "D2：不得再有 {rules,version} 包装")
     }
 
     func testRectAuditAlignedAndMismatch() {
@@ -198,13 +233,16 @@ extension BrowserGuestPolicyTests {
     }
 
     func testRectAuditUsesPageZoomNotRendererClaim() {
-        // 占位 CSS 200,100,600,400 + pageZoom 2 → 期望 points 100,50,300,200。
-        let audit = BrowserGuestRectAudit.make(placeholderCss: BrowserGuestFrame(x: 200, y: 100,
-                                                                                  width: 600, height: 400),
+        // D5：points = CSS px * pageZoom。占位 CSS (100,50,300,200) + pageZoom 2
+        // → 期望 points (200,100,600,400)（旧实现折半会得到 (50,25,150,100)）。
+        let audit = BrowserGuestRectAudit.make(placeholderCss: BrowserGuestFrame(x: 100, y: 50,
+                                                                                  width: 300, height: 200),
                                                pageZoom: 2,
-                                               guest: CGRect(x: 100, y: 50, width: 300, height: 200),
+                                               guest: CGRect(x: 200, y: 100, width: 600, height: 400),
                                                containerSize: CGSize(width: 1280, height: 772),
                                                visible: false, occluded: true)
+        XCTAssertEqual(audit.placeholder, CGRect(x: 200, y: 100, width: 600, height: 400),
+                       "rect-audit 的占位换算必须与 rectInPoints 同源（pageZoom 乘法）")
         XCTAssertTrue(audit.isAligned)
         XCTAssertTrue(audit.debugLine.contains("pageZoom=2.00"))
         XCTAssertTrue(audit.debugLine.contains("visible=false"))
@@ -232,20 +270,56 @@ extension BrowserGuestPolicyTests {
         XCTAssertTrue(BrowserGuestPolicy.isForwardTargetHost("127.0.0.1"))
         XCTAssertTrue(BrowserGuestPolicy.isForwardTargetHost("localhost"))
         XCTAssertTrue(BrowserGuestPolicy.isForwardTargetHost("::1"))
+        // D6：IPv6 / IPv4-mapped 归一后才判定 forward 目标。
+        XCTAssertTrue(BrowserGuestPolicy.isForwardTargetHost("[::1]"))
+        XCTAssertTrue(BrowserGuestPolicy.isForwardTargetHost("[0:0:0:0:0:0:0:1]"))
+        XCTAssertTrue(BrowserGuestPolicy.isForwardTargetHost("[::ffff:7f00:1]"))
         XCTAssertFalse(BrowserGuestPolicy.isForwardTargetHost("127.0.0.2"))
         XCTAssertFalse(BrowserGuestPolicy.isForwardTargetHost("127.0.0.99"))
         XCTAssertFalse(BrowserGuestPolicy.isForwardTargetHost("example.com"))
+    }
+
+    func testIPv6LoopbackNavigationGoesForwardAndAppHost() {
+        // D6：主 frame 命中 loopback 非 alias 且可转发 → forwardNeeded；覆盖 ::1 与
+        // 全展开 IPv6 写法。不可转发来源仍 allow（design §2.4）。
+        XCTAssertEqual(outcome("http://[::1]:3000/", mayForward: true), .forwardNeeded)
+        XCTAssertEqual(outcome("http://[0:0:0:0:0:0:0:1]:3000/", mayForward: true), .forwardNeeded)
+        XCTAssertEqual(outcome("http://[::1]:3000/", mayForward: false), .allow)
+        XCTAssertTrue(BrowserGuestPolicy.needsForwardNegotiation(
+            url: URL(string: "http://[::1]:3000/"), mayForward: true))
+        XCTAssertFalse(BrowserGuestPolicy.needsForwardNegotiation(
+            url: URL(string: "http://[::1]:3000/"), mayForward: false))
+        // app-host 门同样覆盖 IPv6 loopback（cp 端口拒绝）。
+        XCTAssertEqual(outcome("http://[::1]:17520/"), .cancel(reason: "app-host"))
+        XCTAssertTrue(BrowserGuestPolicy.isApplicationHost(
+            URL(string: "http://[::1]:17520/")!, controlPlaneOrigin: origin))
     }
 
     func testForwardPathNormalization() {
         XCTAssertEqual(BrowserGuestForwardTarget.normalizePath(nil), "/")
         XCTAssertEqual(BrowserGuestForwardTarget.normalizePath(""), "/")
         XCTAssertEqual(BrowserGuestForwardTarget.normalizePath("/api/x?q=1"), "/api/x?q=1")
+        // 合法百分号转义与编码后的 UTF-8 path 通过。
+        XCTAssertEqual(BrowserGuestForwardTarget.normalizePath("/a%20b"), "/a%20b")
+        XCTAssertEqual(BrowserGuestForwardTarget.normalizePath("/%E4%BD%A0"), "/%E4%BD%A0")
         XCTAssertNil(BrowserGuestForwardTarget.normalizePath("//evil.example/x"))
         XCTAssertNil(BrowserGuestForwardTarget.normalizePath("https://evil.example/x"))
         XCTAssertNil(BrowserGuestForwardTarget.normalizePath("api/x"))
         XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a b"))
         XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a\\b"))
+        // D3：fragment 不送远端 → # 一律拒绝（含 query 段里的 #）。
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a#b"))
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a?b#c"))
+        // D3：非 ASCII 裸字符拒绝（必须 percent-encoded）。
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/你好"))
+        // D3：所有 % 必须是 %HH（两位 hex）——畸形转义不得进 composedURL。
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/%zz"))
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/100%"))
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a?q=%zz"))
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a%2"))
+        // D3：控制字符拒绝。
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a\nb"))
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/a\u{7f}b"))
     }
 
     func testForwardURLCompositionOnlyFromRecord() {
@@ -283,17 +357,31 @@ extension BrowserGuestPolicyTests {
         XCTAssertEqual(BrowserGuestPolicy.canonicalHost("[::ffff:127.0.0.1]"), "127.0.0.1")
         XCTAssertEqual(BrowserGuestPolicy.canonicalHost("LOCALHOST"), "localhost")
         XCTAssertEqual(BrowserGuestPolicy.canonicalHost("::1"), "::1")
+        // D6：IPv6 loopback / IPv4-mapped 归一。URL.host 已去方括号，但 payload 可带。
+        XCTAssertEqual(BrowserGuestPolicy.canonicalHost("[::1]"), "::1")
+        XCTAssertEqual(BrowserGuestPolicy.canonicalHost("[0:0:0:0:0:0:0:1]"), "::1")
+        XCTAssertEqual(BrowserGuestPolicy.canonicalHost("[::ffff:7f00:1]"), "127.0.0.1")
+        XCTAssertEqual(BrowserGuestPolicy.canonicalHost("::ffff:7f00:1"), "127.0.0.1")
         XCTAssertNil(BrowserGuestPolicy.canonicalHost(""))
         // W-17 负例：非规范写法不得绕过 app-host/loopback 判定。
         XCTAssertTrue(BrowserGuestPolicy.isLoopbackHost("127.1"))
         XCTAssertTrue(BrowserGuestPolicy.isLoopbackHost("2130706433"))
         XCTAssertTrue(BrowserGuestPolicy.isLoopbackHost("0x7f000001"))
         XCTAssertTrue(BrowserGuestPolicy.isLoopbackHost("[::ffff:127.0.0.1]"))
+        XCTAssertTrue(BrowserGuestPolicy.isLoopbackHost("[::ffff:7f00:1]"))
+        XCTAssertTrue(BrowserGuestPolicy.isLoopbackHost("[0:0:0:0:0:0:0:1]"))
     }
 
-    func testForwardTargetCapLengths() {
-        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/" + String(repeating: "a", count: 8 * 1024 + 1)))
-        XCTAssertEqual(BrowserGuestForwardTarget.normalizePath("/" + String(repeating: "a", count: 8 * 1024))?.count, 8 * 1024 + 1)
+    func testForwardTargetPathCapIs4096Bytes() {
+        // D3/design §3：path 上限 4096 **字节**（含 query；不再用旧的 8KB）。
+        let maxPath = "/" + String(repeating: "a", count: 4095)   // 4096 bytes
+        XCTAssertEqual(BrowserGuestForwardTarget.normalizePath(maxPath)?.utf8.count, 4096)
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath("/" + String(repeating: "a", count: 4096)),
+                     "4097 字节必须拒绝")
+        // query 计入同一上限（normalizePath 的输入 = path + "?" + query）。
+        let maxWithQuery = "/a?q=" + String(repeating: "b", count: 4096 - 5)
+        XCTAssertEqual(BrowserGuestForwardTarget.normalizePath(maxWithQuery)?.utf8.count, 4096)
+        XCTAssertNil(BrowserGuestForwardTarget.normalizePath(maxWithQuery + "b"), "含 query 超 4096 字节必须拒绝")
     }
 }
 
@@ -391,7 +479,9 @@ extension BrowserGuestPolicyTests {
                     "http://0x7f.1:17520/", "http://0x7f.0.0.1:17520/",
                     "http://017700000001:17520/",
                     "https://localhost:17520/x", "wss://localhost.:17520/",
-                    "http://[::1]:17520/", "http://[::ffff:127.0.0.1]:17520/"] {
+                    "http://[::1]:17520/", "http://[::ffff:127.0.0.1]:17520/",
+                    // D2/D6：IPv6 loopback 展开写法也必须拦截。
+                    "http://[0:0:0:0:0:0:0:1]:17520/", "http://[::ffff:7f00:1]:17520/"] {
             XCTAssertTrue(matches(base, url), "base 必须拦截 \(url)")
         }
         XCTAssertFalse(matches(base, "http://127.0.0.1:17521/"))
@@ -404,7 +494,12 @@ extension BrowserGuestPolicyTests {
                     "http://127.0.1.1:3000/", "http://127.1.2.3:3000/",
                     "http://2130706433:3000/", "http://0x7f000001:3000/",
                     "http://0x7f.1:3000/", "http://[::1]:3000/",
-                    "wss://[::ffff:7f00:1]:3000/", "https://localhost:8443/"] {
+                    "wss://[::ffff:7f00:1]:3000/", "https://localhost:8443/",
+                    // D2：127/8 非 alias 的两端也必须在 ssh 变体命中。
+                    "http://127.0.0.0:3000/", "http://127.0.0.255:3000/",
+                    // D6：IPv6 loopback 展开写法（任意端口）。
+                    "http://[0:0:0:0:0:0:0:1]:3000/",
+                    "http://[::ffff:7f00:1]:3000/"] {
             XCTAssertTrue(matches(ssh, url), "ssh 变体必须拦截 \(url)")
         }
         // alias 段 127.0.0.2–254 必须保持放行（forward 依赖）。

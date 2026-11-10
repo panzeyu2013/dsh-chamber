@@ -21,15 +21,23 @@ final class BrowserGuestLeaseTests: XCTestCase {
         XCTAssertEqual(book.lease(forTab: "tab-1"), "L1")
     }
 
-    func testMintRejectsDuplicateTabAndLimits() {
+    func testMintRejectsDuplicateTabButHasNoPerTabQuota() {
         var book = BrowserGuestLeaseBook()
-        book.limits = BrowserGuestLimits(perSource: 2, global: 3)
         _ = mint(&book, lease: "L1", tabId: "tab-1")
+        // 同一 tab occurrence 只允许一个 guest（重复/伪造 lease 一律拒绝）。
         XCTAssertEqual(mint(&book, lease: "L2", tabId: "tab-1").failureValue, .duplicateTab)
-        _ = mint(&book, lease: "L2", tabId: "tab-2")
-        XCTAssertEqual(mint(&book, lease: "L3", tabId: "tab-3").failureValue, .limitReached)
-        // 另一来源仍受全局上限约束。
-        XCTAssertEqual(mint(&book, lease: "L4", tabId: "tab-4", sourceId: "dsh-b").failureValue, .limitReached)
+        // D9：不设 per-tab / per-source 上限（总量由 N-ctx 12 与 WebKit 内存压力约束），
+        // 超过旧常量（perSource 8 / global 32）后仍必须能 mint。
+        for index in 0..<40 {
+            let lease = "bulk-\(index)"
+            let tabId = "bulk-tab-\(index)"
+            let sourceId = "dsh-\(index % 6)"
+            guard case .success = mint(&book, lease: lease, tabId: tabId, sourceId: sourceId) else {
+                return XCTFail("无 per-tab/per-source 上限：第 \(index) 个 lease 必须成功")
+            }
+        }
+        XCTAssertEqual(book.count(forSource: "dsh-0"), 7)
+        XCTAssertEqual(mint(&book, lease: "L1", tabId: "tab-2").failureValue, .duplicateTab)
     }
 
     func testRemoveAndAuthorizeEnforceOwnership() {
@@ -150,21 +158,25 @@ final class BrowserGuestLeaseTests: XCTestCase {
     func testInputPayloadUsesModifiersArray() {
         // V3-C P0/P1：design 28:89 / renderer 消费 modifiers: string[]。
         let payload = BrowserIPCPayload.inputPayload(
-            tabId: "t1",
+            tabId: "t1", lease: "L1",
             stroke: BrowserKeyStroke(code: "KeyT", primary: true, alt: false, shift: true,
                                      control: false, isRepeat: false))
         guard case .object(let fields) = payload, case .array(let modifiers)? = fields["modifiers"] else {
             return XCTFail("input payload must carry modifiers array")
         }
         XCTAssertEqual(modifiers, [.string("meta"), .string("shift")])
+        // D12：input push 携带 lease（renderer 按 lease 定位 placeholder，旧 shim 缺省时回退 tabId）。
+        XCTAssertEqual(fields["lease"], .string("L1"))
         // INC-01：control 的 canonical 名是 "control"（不是 "ctrl"）。
         let ctrl = BrowserIPCPayload.inputPayload(
-            tabId: "t", stroke: BrowserKeyStroke(code: "KeyA", primary: false, alt: false,
-                                                 shift: false, control: true, isRepeat: false))
+            tabId: "t", lease: nil,
+            stroke: BrowserKeyStroke(code: "KeyA", primary: false, alt: false,
+                                     shift: false, control: true, isRepeat: false))
         guard case .object(let ctrlFields) = ctrl, case .array(let ctrlMods)? = ctrlFields["modifiers"] else {
             return XCTFail("ctrl input payload must carry modifiers array")
         }
         XCTAssertEqual(ctrlMods, [.string("control")])
+        XCTAssertNil(ctrlFields["lease"], "无 lease 时省略键（不得发 null）")
         XCTAssertEqual(fields["code"], .string("KeyT"))
         XCTAssertNil(fields["primary"])   // 旧布尔形状必须消失
         XCTAssertEqual(fields["repeat"], .bool(false))
@@ -210,17 +222,33 @@ final class BrowserGuestLeaseTests: XCTestCase {
         XCTAssertNil(failedFields["url"])
         XCTAssertNil(failedFields["title"])
         guard case .object(let input) = BrowserIPCPayload.inputPayload(
-            tabId: "t1", stroke: BrowserKeyStroke(code: "KeyT", primary: true, alt: false,
-                                                 shift: false, control: false, isRepeat: false)) else {
+            tabId: "t1", lease: "L1",
+            stroke: BrowserKeyStroke(code: "KeyT", primary: true, alt: false,
+                                     shift: false, control: false, isRepeat: false)) else {
             return XCTFail("input payload must be an object")
         }
         XCTAssertEqual(input["code"], .string("KeyT"))
+        XCTAssertEqual(input["lease"], .string("L1"))
         // N-01：与 testInputPayloadUsesModifiersArray 一致——旧布尔形状必须消失。
         XCTAssertNil(input["primary"])
         guard case .array(let mods)? = input["modifiers"] else {
             return XCTFail("input payload must carry modifiers array")
         }
         XCTAssertEqual(mods, [.string("meta")])
+    }
+
+    func testStatePayloadTruncatesLongURLAndTitle() {
+        // 跨进程 push 的载荷硬化：url ≤4096 字符、title ≤512 字符（prefix 截断，不丢键）。
+        let longURL = "https://example.com/" + String(repeating: "a", count: 5000)
+        let longTitle = String(repeating: "t", count: 600)
+        let state = BrowserGuestStatePayload(tabId: "t1", lease: "L1", url: longURL,
+                                             title: longTitle, canGoBack: false,
+                                             canGoForward: false, loading: true, error: nil)
+        guard case .object(let fields) = BrowserIPCPayload.statePayload(state) else {
+            return XCTFail("state payload must be an object")
+        }
+        XCTAssertEqual(fields["url"], .string(String(longURL.prefix(4096))))
+        XCTAssertEqual(fields["title"], .string(String(longTitle.prefix(512))))
     }
 }
 

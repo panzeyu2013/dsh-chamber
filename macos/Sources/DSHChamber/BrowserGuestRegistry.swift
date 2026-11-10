@@ -8,8 +8,8 @@
 //    退役事实 = 既有 desktop_ssh_instances_changed push（不新增 A 桥通道）；
 //  - 每 tab 一个 guest WKWebView（独立 dispatcher，不是单例）：全新 configuration、零注入脚本、
 //    content rule app-host 兜底；keepMounted 由 layer 保证（隐藏不销毁）；
-//  - 导航状态投影 / 崩溃投影 / 新窗 openRequested / forward-needed 协商出口。
-//  本机无 swiftc：本文件未经编译验证（见 .audit/browser-parity/exec-e4-swift.md 的 NOT RUN 证据）。
+//  - 导航状态投影（含 SPA 同文档导航的 KVO url 观察，D11）/ 崩溃投影 / 新窗 openRequested /
+//    forward-needed 协商出口。
 //
 
 import AppKit
@@ -209,13 +209,9 @@ final class BrowserGuestRegistry {
         case .stale:
             return
         case .ready:
-            if let list {
-                ruleLists[variant] = list
-                // P2-D：ssh 规则只补给 mayForward guest，绝不装到 local guest 上。
-                for controller in controllers.values where controller.mayForward == variant.blocksDirectLoopback {
-                    controller.installContentRuleList(list)
-                }
-            }
+            if let list { ruleLists[variant] = list }
+            // 迟到的「补装」路径已删除（不可达）：acquire 必须等该变体 ready 才建 controller，
+            // 因此不存在「controller 先建、其变体后 ready」的窗口；规则只经 acquire 传入。
             if variant == .base { startRuleCompile(.ssh) }
             resumeRuleWaiters(for: variant)
         case .retry:
@@ -265,6 +261,11 @@ final class BrowserGuestRegistry {
         guard documentAlive(documentId) else { return .failure(.ownerMismatch) }
         // content rule 就绪闸（FW1 ⑨）：只等该来源需要的变体；未就绪/失败 → fail-closed。
         await ensureContentRules(mayForward: facts.mayForward)
+        // D8：await 之后、mint/建 store/attach 之前复验「文档世代 + 归属」——等待规则编译
+        // 期间壳可能 reload/崩溃（旧 document 的迟到 acquire 不得建 guest），同 tab 也不得
+        // 因并发请求出现双租（mint 的 duplicateTab 之外，先 fail-closed 一次）。
+        guard documentAlive(documentId) else { return .failure(.ownerMismatch) }
+        guard book.lease(forTab: request.tabId) == nil else { return .failure(.duplicateTab) }
         // R-03/P2-D：local 源只用 base，mayForward 源只用 ssh；缺失即显式拒绝，
         // 绝不回退到另一变体（静默降级会让 ssh 来源失去直接-loopback 阻断）。
         let ruleVariant = BrowserGuestContentRuleVariant.selected(mayForward: facts.mayForward)
@@ -325,11 +326,17 @@ final class BrowserGuestRegistry {
                                                          pageZoom: geometry.pageZoom,
                                                          containerSize: layer.bounds.size)
             layer.attach(lease: lease, guest: controller.webView, points: points)
-            layer.setActive(lease: lease)
-            // R-09：acquire 不写全局 layer.setVisible/occluded，只设 per-guest 可见性。
-            layer.setGuestVisible((geometry.visible && !geometry.occluded && !points.isEmpty), for: lease)
-            if geometry.visible, !geometry.occluded, !points.isEmpty { activeTabId = request.tabId }
-            onActiveGuestChanged?(activeTabId)
+            // 只有可见 guest 才成为活动 guest（后台/隐藏 tab 的 acquire 不得抢焦点与
+            // 键盘路由）；不可见 lease 保持既有活动态不动。
+            let isActive = geometry.visible && !geometry.occluded && !points.isEmpty
+            layer.setGuestVisible(isActive, for: lease)
+            if isActive {
+                layer.setActive(lease: lease)
+                activeTabId = request.tabId
+                onActiveGuestChanged?(activeTabId)
+            }
+            // W-20：首次挂载也打一行 rect-debug（此前只有 frame/重建路径打）。
+            emitRectAudit(lease: lease)
             return .success(lease)
         }
     }
@@ -341,7 +348,7 @@ final class BrowserGuestRegistry {
             return .failure(failure)
         case .success(let entry):
             if activeTabId == entry.tabId { activeTabId = nil }
-            keymapInvalidated(entry.tabId)   // RT-05：release 清该 tab keymap
+            // RT-05 的 keymap 清理只在 teardown 做一次（m5：此前 release 与 teardown 重复调用）。
             teardown(lease: lease)
             return .success(())
         }
@@ -359,11 +366,18 @@ final class BrowserGuestRegistry {
         guard let controller = controllers[lease] else { return .failure(.unknownLease) }
         switch target {
         case .direct(let url):
-            if case .cancel = BrowserGuestPolicy.navigationOutcome(
+            // D6：direct 目标永不走本机 loopback——命中 forwardNeeded（远端 loopback 且
+            // 来源可转发）等于 renderer 该走 forward 面，这里拒绝而不是静默加载本机地址；
+            // cancel（app-host/凭据/非法 scheme）同样 fail-closed。
+            switch BrowserGuestPolicy.navigationOutcome(
                 url: url, isMainFrame: true, shouldPerformDownload: false,
                 controlPlaneOrigin: controlPlaneOrigin, mayForward: entry.mayForward) {
-                return .failure(.invalidPayload)
+            case .allow: break
+            case .forwardNeeded, .cancel: return .failure(.invalidPayload)
             }
+            // D10：崩溃后的 guest 先重建（rebuild 会 reattach）再加载；m4：skipReload 避免
+            // 先重载旧 lastTarget 再被本次目标取消的双请求。
+            if controller.isTerminated { controller.rebuild(skipReload: true) }
             controller.load(url)
             return .success(())
         case .forward(let recordId, let path):
@@ -385,6 +399,9 @@ final class BrowserGuestRegistry {
                   !BrowserGuestPolicy.isApplicationHost(url, controlPlaneOrigin: controlPlaneOrigin) else {
                 return .failure(.forwardUnresolved)
             }
+            // D10：崩溃后的 guest 先重建（reattach）再加载合成后的 alias URL；m4：skipReload
+            // 避免先重载旧 lastTarget 再被本次目标取消的双请求。
+            if controller.isTerminated { controller.rebuild(skipReload: true) }
             controller.load(url)
             return .success(())
         }
@@ -417,13 +434,23 @@ final class BrowserGuestRegistry {
             viewStates[lease] = state
             let points = BrowserGuestPolicy.rectInPoints(frame: state.frame, pageZoom: state.pageZoom,
                                                          containerSize: layer.bounds.size)
+            let isVisible = state.visible && !state.occluded && !points.isEmpty
             layer.setFrame(points, for: lease)
             // per-guest 可见性：非活动 tab 报 hidden 不得隐藏活动 guest。
-            layer.setGuestVisible(state.visible && !state.occluded && !points.isEmpty, for: lease)
-            if state.visible, !state.occluded, !points.isEmpty {
+            layer.setGuestVisible(isVisible, for: lease)
+            if isVisible {
                 layer.setActive(lease: lease)
-                activeTabId = tabId
-                onActiveGuestChanged?(tabId)
+                if activeTabId != tabId {
+                    activeTabId = tabId
+                    onActiveGuestChanged?(tabId)
+                }
+            } else if activeTabId == tabId {
+                // M-A：活动 guest 变不可见（visible=false / occluded=true / 空 rect）时清活动态，
+                // 否则键盘路由与焦点门仍指向看不见的 guest；layer.setActive(nil) 同时把
+                // firstResponder 交回壳 webView。
+                activeTabId = nil
+                layer.setActive(lease: nil)
+                onActiveGuestChanged?(nil)
             }
             emitRectAudit(lease: lease)
             return .success(())
@@ -460,12 +487,6 @@ final class BrowserGuestRegistry {
         book.lease(forTab: tabId)
     }
 
-    /// 活动 guest 的 WKWebView（zoom 路由用；无活动 guest → nil）。
-    func activeGuestWebView() -> WKWebView? {
-        guard let activeTabId else { return nil }
-        return controllers.values.first { $0.tabId == activeTabId }?.webView
-    }
-
     /// 来源退役/retarget：关闭该来源全部 guest 并丢掉分区（design 28:113/132）。
     /// 接线 = 既有 desktop_ssh_instances_changed push（MainWindowController.routeNotify），
     /// 不新增 A 桥通道；返回销毁的 guest 数（0 = 该来源无活跃 guest）。
@@ -497,6 +518,7 @@ final class BrowserGuestRegistry {
         activeTabId = nil
         partitions.removeAll()
         partitionSources.removeAll()
+        onActiveGuestChanged?(nil)   // m1：退出全清后键盘/zoom 路由不得再指向旧 guest
     }
 
     // MARK: - 内部
@@ -571,8 +593,6 @@ final class BrowserGuestRegistry {
 final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate {
     let lease: String
     let tabId: String
-    /// 该 guest 的租约是否可转发（content rule 变体安装匹配用；P2-D）。
-    var mayForward: Bool { entry.mayForward }
     private let entry: BrowserGuestLease
     private let dataStore: WKWebsiteDataStore
     private let controlPlaneOrigin: String
@@ -594,7 +614,8 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
     private var lastTarget: URL?
     private var error: BrowserGuestFailureProjection?
     private var disposed = false
-    private var titleObservation: NSKeyValueObservation?
+    /// D11：每文档的 state 投影观察（url/title KVO；SPA 同文档导航只改 url/title）。
+    private var stateObservations: [NSKeyValueObservation] = []
 
     init(entry: BrowserGuestLease,
          dataStore: WKWebsiteDataStore,
@@ -624,15 +645,21 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
         super.init()
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        titleObservation = webView.observe(\.title, options: [.new]) { [weak self] _, _ in
-            Task { @MainActor in self?.publish() }
-        }
+        observeWebViewState()
     }
 
-    /// 编译后的 content rule 迟到：补进已建 guest（只影响后续请求）。
-    func installContentRuleList(_ list: WKContentRuleList) {
-        ruleList = list
-        webView.configuration.userContentController.add(list)
+    /// D11：SPA 的 pushState/replaceState/hash 导航没有 WKNavigationDelegate 回调，
+    /// 但会更新 webView.url（title 也可能变）。观察 url + title 重新投影 state
+    /// （canGoBack/canGoForward 随 publish 一起读当前值）。
+    private func observeWebViewState() {
+        stateObservations = [
+            webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor in self?.publish() }
+            },
+            webView.observe(\.title, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor in self?.publish() }
+            }
+        ]
     }
 
     // MARK: - 命令
@@ -642,7 +669,9 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
         guard !disposed else { return }
         lastTarget = url
         error = nil
-        publish(loading: true)
+        // D14：此刻 webView.url 仍是旧页 ⇒ 省略 url/title（地址/标题未定），本次导航的
+        // 地址只由 didCommit/didFinish 的投影给出。
+        publish(loading: true, includeURL: false)
         webView.load(URLRequest(url: url))
     }
 
@@ -668,11 +697,14 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
     }
 
     /// 崩溃后重建：销毁旧 WKWebView、用同 store 重建并重载 checkpoint URL（design 28:136）。
-    func rebuild() {
+    /// - Parameter skipReload: true = 只重建并 reattach（经 onWebViewReplaced），由调用方随后
+    ///   load 目标 URL。D10 navigate 路径用它避免「先重载旧 lastTarget、再被目标 URL 取消」
+    ///   的双请求（m4）；命令 reload 保持 false（恢复 checkpoint）。
+    func rebuild(skipReload: Bool = false) {
         guard !disposed else { return }
         let url = lastTarget ?? webView.url
         error = nil
-        titleObservation = nil
+        stateObservations = []
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         webView.removeFromSuperview()
@@ -681,19 +713,17 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
                                                      inspectable: !isPackaged && allowsInspection())
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        titleObservation = webView.observe(\.title, options: [.new]) { [weak self] _, _ in
-            Task { @MainActor in self?.publish() }
-        }
+        observeWebViewState()
         isTerminated = false
         onWebViewReplaced?(webView)
-        if let url { load(url) }
+        if !skipReload, let url { load(url) }
     }
 
     /// 释放：断 delegate 链、停加载（分区保留在 registry）。
     func dispose() {
         disposed = true
         isDisposed = true
-        titleObservation = nil
+        stateObservations = []
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
@@ -713,21 +743,28 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.allowsAirPlayForMediaPlayback = false
-        configuration.allowsLinkPreview = false
         if let ruleList { configuration.userContentController.add(ruleList) }
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        // allowsLinkPreview 是 WKWebView 实例属性（不是 WKWebViewConfiguration 的）。
+        webView.allowsLinkPreview = false
         if #available(macOS 13.3, *) { webView.isInspectable = inspectable }
         return webView
     }
 
     // MARK: - 状态投影
 
-    private func publish(loading: Bool? = nil) {
+    /// 状态投影。
+    /// - Parameters:
+    ///   - loading: nil = 由 webView.isLoading/error 推断。
+    ///   - includeURL: false = 省略 url/title 键（design 28 §3：缺省 = 地址未定/标题未定）。
+    ///     用于「导航刚开始、webView.url 还是旧页」的投影（D14 stale push）：把旧页地址当
+    ///     本次导航事实推给 renderer 会被 adopt 成新地址（地址栏/历史项错位）。
+    private func publish(loading: Bool? = nil, includeURL: Bool = true) {
         guard !disposed else { return }
         onState(BrowserGuestStatePayload(tabId: tabId,
                                          lease: lease,
-                                         url: webView.url?.absoluteString,
-                                         title: webView.title,
+                                         url: includeURL ? webView.url?.absoluteString : nil,
+                                         title: includeURL ? webView.title : nil,
                                          canGoBack: webView.canGoBack,
                                          canGoForward: webView.canGoForward,
                                          loading: loading ?? (error == nil && webView.isLoading),
@@ -741,8 +778,10 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
 
     // MARK: - WKNavigationDelegate
 
+    /// 导航开始（design 28 §3 事件表：did-start-navigation → loading=true，**不带 url**）。
+    /// D14：此时 webView.url 还是旧页地址，带上它会让 renderer 把旧页 adopt 成本次导航事实。
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        publish(loading: true)
+        publish(loading: true, includeURL: false)
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -752,11 +791,6 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         error = nil
         publish(loading: false)
-    }
-
-    /// SPA 内导航（pushState/replaceState/hash）：主 frame 同文档 → 推 state（FW1 ④）。
-    func webView(_ webView: WKWebView, didSameDocumentNavigation navigation: WKSameDocumentNavigationType) {
-        publish()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -796,7 +830,7 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
             if let url = navigationAction.request.url {
                 onForwardNeeded(tabId, lease, url.absoluteString)
             }
-        case .cancel, .unobservable:
+        case .cancel:
             decisionHandler(.cancel)
         }
     }
@@ -820,7 +854,11 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
         }
     }
 
-    func webView(_ webView: WKWebView, shouldAllowDeprecatedTLS decisionHandler: @escaping (Bool) -> Void) {
+    /// SDK 正确签名（D 修正）：WKWebView 的 authenticationChallenge 回调形态；
+    /// guest 恒拒绝已废弃 TLS（不做降级）。
+    func webView(_ webView: WKWebView,
+                 authenticationChallenge challenge: URLAuthenticationChallenge,
+                 shouldAllowDeprecatedTLS decisionHandler: @escaping (Bool) -> Void) {
         decisionHandler(false)
     }
 

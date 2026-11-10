@@ -19,9 +19,13 @@ final class BrowserGuestKeyboardTests: XCTestCase {
         XCTAssertEqual(KeyboardBridge.domCode(keyCode: 0, charactersIgnoringModifiers: "a"), "KeyA")
         XCTAssertEqual(KeyboardBridge.domCode(keyCode: 123, charactersIgnoringModifiers: nil), "ArrowLeft")
         XCTAssertEqual(KeyboardBridge.domCode(keyCode: 51, charactersIgnoringModifiers: nil), "Backspace")
-        // 字母/数字兜底（表外键码）。
+        // 字母/数字兜底（表外键码）：必须返回 DOM KeyboardEvent.code 形态
+        // （KeyX/DigitN），而不是裸字符 "Q"/"1"——renderer 键位表按 DOM code 匹配。
         XCTAssertEqual(KeyboardBridge.domCode(keyCode: 999, charactersIgnoringModifiers: "Q"), "KeyQ")
-        // 不可映射键（无字符、无表项）→ nil = pass-through。
+        XCTAssertEqual(KeyboardBridge.domCode(keyCode: 999, charactersIgnoringModifiers: "1"), "Digit1")
+        // 表内数字键不受兜底影响（DigitN 形态）。
+        XCTAssertEqual(KeyboardBridge.domCode(keyCode: 18, charactersIgnoringModifiers: "1"), "Digit1")
+        // 不可映射键（无字符、无表项、非字母数字）→ nil = pass-through。
         XCTAssertNil(KeyboardBridge.domCode(keyCode: 999, charactersIgnoringModifiers: nil))
         XCTAssertNil(KeyboardBridge.domCode(keyCode: 999, charactersIgnoringModifiers: "?"))
     }

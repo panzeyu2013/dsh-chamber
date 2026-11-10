@@ -6,7 +6,10 @@
 //  - isFlipped：与 CSS 同 y 向下；rect 直接是 webView 坐标（points，已按 pageZoom 归一）；
 //  - hitTest：只有「活动 guest + 可见 + 点在 guest rect 内」才命中，其余穿透给壳页面
 //    （否则空 overlay 会吃掉壳文档的滚动/拖拽/菜单事件）；
-//  - visible=false 或 occluded=true（遮挡协议）→ 整层不参与命中。
+//  - per-guest 可见性（visible/occluded 轴）只影响该 lease；全局遮挡协议已退役
+//    （renderer 不再推窗口级 occluded，活动态由 registry 的 setActive 维护）；
+//  - 焦点门只认**活动且可见**的 guest（M-A）：活动 guest 被切走/隐藏/卸载时把
+//    firstResponder 交回壳 webView（controller 注入 returnFocusToShell）。
 //
 
 import AppKit
@@ -19,16 +22,16 @@ final class BrowserGuestLayerView: NSView {
     private(set) var guests: [String: WKWebView] = [:]
     /// 活动 guest 的 lease（tab 切换由 registry 通过 setActive 更新）。
     private(set) var activeLease: String?
-    /// 遮挡协议（design 28:102）：renderer 的 overlayDepth > 0 时整层隐藏。
-    private(set) var isOccluded = false
-    private(set) var isLayerVisible = true
     /// per-guest 可见性（V3-C F-06/F-07）：非活动 tab 报 visible=false **不得**隐藏活动 guest。
     private var guestVisible: [String: Bool] = [:]
+    /// 活动 guest 被切换/隐藏/卸载时把 firstResponder 交回壳 webView（controller 注入）：
+    /// 否则活动 guest 隐藏后键盘仍可能派发进隐藏 guest（M-A 焦点门）。
+    var returnFocusToShell: (() -> Void)?
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
 
-    init(frame: CGRect = .zero) {
+    override init(frame: CGRect = .zero) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -40,7 +43,7 @@ final class BrowserGuestLayerView: NSView {
 
     /// 命中面：活动 guest 且可见且点在 rect 内 → 返回 guest；否则 nil（穿透给壳页面）。
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard isLayerVisible, !isOccluded, let lease = activeLease, let guest = guests[lease],
+        guard let lease = activeLease, let guest = guests[lease],
               guest.isHidden == false, guestVisible[lease] ?? true else { return nil }
         let local = superview.map { convert(point, from: $0) } ?? point
         guard guest.frame.contains(local) else { return nil }
@@ -56,12 +59,15 @@ final class BrowserGuestLayerView: NSView {
         guest.isHidden = shouldHide(lease)
     }
 
-    /// 卸载一个 guest（release/崩溃销毁）。
+    /// 卸载一个 guest（release/崩溃销毁）。活动 guest 被卸载时焦点交回壳。
     func detach(lease: String) {
         guard let guest = guests.removeValue(forKey: lease) else { return }
         guestVisible.removeValue(forKey: lease)
         guest.removeFromSuperview()
-        if activeLease == lease { activeLease = nil }
+        if activeLease == lease {
+            activeLease = nil
+            handBackFocusIfGuestHoldsIt()
+        }
     }
 
     /// 更新几何（points 已换算并裁剪；0 面积 = 隐藏）。
@@ -71,36 +77,36 @@ final class BrowserGuestLayerView: NSView {
         guest.isHidden = points.isEmpty || shouldHide(lease)
     }
 
-    /// tab 切换：只切可见性，不销毁（keepMounted）。
+    /// tab 切换/清空活动 guest：只切可见性，不销毁（keepMounted）。
+    /// 旧活动 guest 被切走或清空时，若 firstResponder 还在某个 guest 上，交回壳 webView
+    /// （M-A：隐藏后的 guest 不得继续持有键盘）。
     func setActive(lease: String?) {
+        let previous = activeLease
         activeLease = lease
         for (key, guest) in guests {
-            guest.isHidden = (key != lease) || !isLayerVisible || isOccluded || !(guestVisible[key] ?? true)
+            guest.isHidden = (key != lease) || !(guestVisible[key] ?? true)
         }
+        if let previous, previous != lease { handBackFocusIfGuestHoldsIt() }
     }
 
-    /// per-guest 可见性（browser-frame 的顶层 visible/occluded）。
-    /// 只影响该 lease；层可见性与遮挡仍是全局态（窗口隐藏时整层不命中）。
+    /// per-guest 可见性（browser-frame/acquire 的顶层 visible/occluded）。
+    /// 只影响该 lease；活动态仍是全局态（非活动 guest 恒隐藏）。
+    /// M-A：把**活动** guest 置为不可见时同时清活动态并把焦点交回壳。
     func setGuestVisible(_ visible: Bool, for lease: String) {
         guestVisible[lease] = visible
-        guard let guest = guests[lease] else { return }
-        guest.isHidden = !visible || isOccluded || !isLayerVisible || lease != activeLease
-    }
-
-    /// 全局遮挡/层可见性（窗口隐藏、occ 协议的自有全局面）。
-    func setVisible(_ visible: Bool, occluded: Bool) {
-        isLayerVisible = visible
-        isOccluded = occluded
-        isHidden = !visible || occluded
-        for (key, guest) in guests {
-            guest.isHidden = isHidden || (key != activeLease) || !(guestVisible[key] ?? true)
+        if !visible, lease == activeLease {
+            activeLease = nil
+            handBackFocusIfGuestHoldsIt()
         }
+        guard let guest = guests[lease] else { return }
+        guest.isHidden = !visible || lease != activeLease
     }
 
-    /// 当前活动 guest 的 WKWebView（键盘/zoom 路由用）。
+    /// 当前活动且可见 guest 的 WKWebView（焦点门通过后的 zoom 路由用）。
     func activeGuestWebView() -> WKWebView? {
-        guard let lease = activeLease, guestVisible[lease] ?? true else { return nil }
-        return guests[lease]
+        guard let lease = activeLease, let guest = guests[lease],
+              !guest.isHidden, guestVisible[lease] ?? true else { return nil }
+        return guest
     }
 
     /// 窗口 resize / 全屏 / 缩放变化：把现有 rect 重新裁剪（native 兜底，不依赖 renderer 再推）。
@@ -111,15 +117,31 @@ final class BrowserGuestLayerView: NSView {
         }
     }
 
-    /// 焦点门：responder 是否属于某个 guest（WKWebView 自身或其子视图——WebKit 常把
-    /// 内部 content view 设为 firstResponder，故用 isDescendant(of:) 兼容）。
-    func isGuestResponder(_ responder: NSResponder?) -> Bool {
+    /// 焦点门（M-A）：responder 是否属于**活动且可见**的 guest（WKWebView 自身或其子视图——
+    /// WebKit 常把内部 content view 设为 firstResponder，故用 isDescendant(of:) 兼容）。
+    /// 活动 guest 隐藏/切走后键盘不得继续派发给它。
+    func isActiveGuestResponder(_ responder: NSResponder?) -> Bool {
+        guard let view = responder as? NSView,
+              let lease = activeLease, let guest = guests[lease],
+              !guest.isHidden, guestVisible[lease] ?? true else { return false }
+        return view === guest || view.isDescendant(of: guest)
+    }
+
+    /// responder 是否属于任一 guest（卸载/清层前判断是否需要把焦点交回壳）。
+    private func isAnyGuestResponder(_ responder: NSResponder?) -> Bool {
         guard let view = responder as? NSView else { return false }
         return guests.values.contains { view === $0 || view.isDescendant(of: $0) }
     }
 
-    /// 全清（壳文档 reload/退出）。
+    /// 当前 firstResponder 若还在某个 guest 上，交回壳 webView（调用方注入出口）。
+    private func handBackFocusIfGuestHoldsIt() {
+        guard isAnyGuestResponder(window?.firstResponder) else { return }
+        returnFocusToShell?()
+    }
+
+    /// 全清（壳文档 reload/crash/退出）。先交回焦点再拆视图（拆完就判断不出 responder）。
     func removeAll() {
+        if activeLease != nil { handBackFocusIfGuestHoldsIt() }
         for guest in guests.values { guest.removeFromSuperview() }
         guests.removeAll()
         guestVisible.removeAll()
@@ -127,6 +149,6 @@ final class BrowserGuestLayerView: NSView {
     }
 
     private func shouldHide(_ lease: String) -> Bool {
-        isHidden || isOccluded || lease != activeLease
+        lease != activeLease
     }
 }
