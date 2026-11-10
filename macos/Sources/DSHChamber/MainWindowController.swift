@@ -198,6 +198,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var externalBudget = ExternalOpenBudget()
 
     private var webView: WKWebView!
+    /// 右栏浏览器 v3：原生 guest 宿主层 / 注册表 / 快捷键桥 / Swift-only browser 桥面
+    /// （design 28 v3 §4/§5/§7；生成物通道名由 E1 与本文件常量锁步）。
+    private var browserLayer: BrowserGuestLayerView?
+    /// 上次提交的壳文档 URL（E4b/R6：guest 释放的 generation 判据）。
+    private var lastCommittedShellURL: String?
+    /// A 桥当前壳文档 generation（acquire await 后复验；shell reload 后旧请求作废）。
+    private var lastBridgeDocumentId: String?
+    private var browserGuests: BrowserGuestRegistry?
+    private var browserIPC: BrowserIPCRouter?
+    private var keyboardBridge: KeyboardBridge?
     /// 侧栏材质视图（建窗时唯一一次 install；最小化/隐藏兜底要切它的 isHidden）。
     private var windowMaterial: NSVisualEffectView?
     /// WKWebView 是否真的关掉了自己的底（私有键 `drawsBackground` 生效 ⇒ 页面透明区能露出
@@ -310,6 +320,119 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// 构建 WKWebView（含 A 桥注入与消息通道）与主窗口
+    /// 右栏浏览器 v3 装配：guest 层挂在壳 webView 之上（contentView 已是多子视图容器，
+    /// 见 ShellWindowMaterial.swift:35-49，不重排）；registry 独占 lease/store/guest 生命周期。
+    private func installBrowserGuests(window: NSWindow) {
+        guard let container = window.contentView else { return }
+        let layer = BrowserGuestLayerView(frame: container.bounds)
+        container.addSubview(layer, positioned: .above, relativeTo: webView)
+        browserLayer = layer
+        let keyboard = KeyboardBridge()
+        keyboard.onInput = { [weak self] tabId, stroke in
+            self?.emitToPage(BrowserIPCChannel.input,
+                             BrowserIPCPayload.inputPayload(tabId: tabId, stroke: stroke))
+        }
+        keyboard.isGuestFocused = { [weak self] in
+            guard let self else { return false }
+            return self.browserLayer?.isGuestResponder(self.window?.firstResponder) ?? false
+        }
+        keyboard.install()
+        keyboardBridge = keyboard
+        let registry = BrowserGuestRegistry(
+            layer: layer,
+            controlPlaneOrigin: cpOrigin,
+            isPackaged: !Self.isDebugBuild,
+            verifySource: { [weak self] sourceId, fingerprint in
+                // local 直连不转发；其余来源用既有 forward-list 做证明（失败/超时 = 未证明，
+                // 对齐 shell-ipc-browser.ts:192 的四步复验语义；local 面永不转发）。
+                if sourceId == "local", fingerprint == "local" {
+                    return BrowserGuestSourceFacts(sourceId: sourceId, fingerprint: fingerprint, mayForward: false)
+                }
+                guard let self else { return nil }
+                let payload = AnyCodable.object(["sourceId": .string(sourceId),
+                                                 "sourceFingerprint": .string(fingerprint)])
+                do {
+                    _ = try await self.bridge.invoke(method: "dsh-chamber:forward-list",
+                                                     payload: payload, timeout: 1.0)
+                    return BrowserGuestSourceFacts(sourceId: sourceId, fingerprint: fingerprint,
+                                                   mayForward: sourceId.hasPrefix("dsh-")
+                                                       || sourceId.hasPrefix("gateway-"))
+                } catch {
+                    return nil
+                }
+            },
+            resolveForwardRecord: { [weak self] recordId, lease in
+                // P0：URL 的唯一来源 = sidecar forward record（经既有诊断通道 list 读取；
+                // 不新增 IPC）。record 归属由每次调用的 sourceId/fingerprint 证明。
+                guard let self else { return nil }
+                let payload = AnyCodable.object(["sourceId": .string(lease.sourceId),
+                                                 "sourceFingerprint": .string(lease.sourceFingerprint)])
+                do {
+                    let result = try await self.bridge.invoke(method: "dsh-chamber:forward-list",
+                                                             payload: payload, timeout: 1.5)
+                    return Self.parseForwardRecord(id: recordId, from: result, lease: lease)
+                } catch {
+                    return nil
+                }
+            },
+            documentAlive: { [weak self] documentId in
+                self?.lastBridgeDocumentId == documentId
+            },
+            pageZoom: { [weak self] in self?.webView.pageZoom ?? 1 },      // R-05
+            keymapInvalidated: { [weak keyboard] tabId in keyboard?.removeKeymap(tabId: tabId) },  // RT-05
+            allowsInspection: { [weak self] in self?.currentInspectable() ?? false })
+        registry.onState = { [weak self] payload in
+            self?.emitToPage(BrowserIPCChannel.state, BrowserIPCPayload.statePayload(payload))
+        }
+        registry.onOpenRequested = { [weak self] tabId, url in
+            // RT-11：contract 增量——openRequested 载荷带 lease（renderer 侧按 lease 对回 tab）。
+            guard let self, let lease = self.browserGuests?.activeLease(forTab: tabId) else { return }
+            self.emitToPage(BrowserIPCChannel.openRequested,
+                            BrowserIPCPayload.openRequestedPayload(tabId: tabId, lease: lease, url: url))
+        }
+        registry.onForwardNeeded = { [weak self] tabId, lease, url in
+            self?.emitToPage(BrowserIPCChannel.forwardNeeded,
+                             BrowserIPCPayload.forwardNeededPayload(tabId: tabId, lease: lease, url: url))
+        }
+        registry.onActiveGuestChanged = { [weak keyboard] tabId in keyboard?.activeTabId = tabId }
+        registry.prepareContentRules()
+        browserGuests = registry
+        browserIPC = BrowserIPCRouter(registry: registry, keyboard: keyboard,
+                                      pageZoom: { [weak self] in self?.webView.pageZoom ?? 1 })
+        shellLog("[shell] 右栏浏览器 guest 装载完成（layer + registry + keyboard）")
+    }
+
+    /// forward-list 回执里按 recordId 找 record（P0：URL 合成只用 main 事实）。
+    /// 回执形状：{ok:true, records:[{id, sourceId, aliasHost, localPort, scheme, ...}], limits}。
+    static func parseForwardRecord(id: String, from result: AnyCodable,
+                                   lease: BrowserGuestLease) -> BrowserGuestForwardRecord? {
+        guard case .object(let root) = result,
+              BrowserIPCPayload.bool(root["ok"]) == true,
+              case .array(let records)? = root["records"] else { return nil }
+        for item in records {
+            guard case .object(let record) = item,
+                  BrowserIPCPayload.string(record["id"]) == id,
+                  BrowserIPCPayload.string(record["sourceId"]) == lease.sourceId,
+                  let aliasHost = BrowserIPCPayload.string(record["aliasHost"]),
+                  let localPort = BrowserIPCPayload.double(record["localPort"]).map({ Int($0) }),
+                  let scheme = BrowserIPCPayload.string(record["scheme"]) else { continue }
+            // fingerprint 字段若存在则参与归属比对（wire 无则记 nil，由 registry 处置）。
+            let fingerprint = BrowserIPCPayload.string(record["fingerprint"])
+            return BrowserGuestForwardRecord(id: id, sourceId: lease.sourceId,
+                                             fingerprint: fingerprint, scheme: scheme,
+                                             aliasHost: aliasHost, localPort: localPort)
+        }
+        return nil
+    }
+
+    private static let isDebugBuild: Bool = {
+        var debug = false
+        #if DEBUG
+        debug = true
+        #endif
+        return debug
+    }()
+
     private func setupWindow() {
         let configuration = WKWebViewConfiguration()
 
@@ -586,6 +709,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 透明区露出材质；首帧/重载仍有 underPageBackgroundColor 的骨架色兜住"不白闪"
         // （构造时先置 #0f1115，页面事实到达后由 reconcileThemedBackground 接管）。
         windowMaterial = ShellWindowMaterial.install(in: window, webView: webView)
+        installBrowserGuests(window: window)
         // WebKit 真能透明时露底色即刻转 clear，不必等第一份页面事实到达：窗口在首个
         // didCommit 前不呈现（StartupPresentationGate），页面骨架 .dsh-boot 不透明，故这里
         // 转 clear 不会白闪；事实到达后 reconcileThemedBackground 走同一判定（幂等）。
@@ -1302,6 +1426,24 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     private func handleInvoke(documentId: String, id: Int, method: String, payload: AnyCodable?) {
+        lastBridgeDocumentId = documentId
+        // Swift-only browser 命名空间：不进 sidecar，由 BrowserIPCRouter 本地分派
+        // （design 28 v3 §3；通道名常量见 BrowserIPC.swift，E1 生成 manifest 同批锁步）。
+        if let router = browserIPC, router.handles(method) {
+            Task { @MainActor in
+                switch await router.dispatch(method: method, payload: payload, documentId: documentId) {
+                case .success(let result):
+                    self.evaluateJS("__dshChamberResolve(\(self.nativeTokenLiteral), "
+                        + "\(Self.jsonLiteral(of: .string(documentId))), \(id), "
+                        + "\(Self.jsonLiteral(of: result)), null)")
+                case .failure(let code):
+                    self.evaluateJS("__dshChamberResolve(\(self.nativeTokenLiteral), "
+                        + "\(Self.jsonLiteral(of: .string(documentId))), \(id), null, "
+                        + "\(Self.jsonLiteral(of: .string(code))))")
+                }
+            }
+            return
+        }
         // 计时戳仅在调试态取（生产零成本，注释与实现一致）。
         let started = ShellDebug.isEnabledCached ? Date() : nil
         if ShellDebug.isEnabledCached {
@@ -1451,7 +1593,20 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 // 设置变了 → 关窗决策缓存作废（缓存必须随设置失效）。
                 onSettingsChanged?()
             }
+            // 来源删除/retarget：既有 desktop_ssh_instances_changed push 是宿主侧
+            // 唯一的来源退役事实（host-registry-transition.ts 的 {removedIds, retiredIds}）。
+            // 复用它释放 guest/分区，不新增 A 桥通道；解析是纯函数，消费在主线程。
+            let retiredSourceIds = channel == BrowserGuestSourceRetirement.instancesChangedChannel
+                ? BrowserGuestSourceRetirement.sourceIds(from: payload) : []
             Task { @MainActor in
+                if !retiredSourceIds.isEmpty {
+                    var retired = 0
+                    for sourceId in retiredSourceIds {
+                        retired += self.browserGuests?.retireSource(sourceId: sourceId) ?? 0
+                    }
+                    shellLog("[shell] browser-guest 来源退役：\(retiredSourceIds.count) 个 sourceId、"
+                             + "\(retired) 个 guest")
+                }
                 emitToPage(event: channel, payload: payload)
             }
         case .hostLeg(let method, let payload):
@@ -2028,6 +2183,23 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // handler 的 origin 判定以 message.webView?.url 实时值为优先，
         // 本记录（lastCommittedURL）作兜底（进程终止/测试桩场景）
         bridgeHandler.noteCommitted(url: webView.url?.absoluteString)
+        // 壳文档新 generation：旧 document 的全部 guest lease 失效（design 28:110）；
+        // 分区保留（站点数据随 source 存活，不随壳 reload 清空）。
+        // E4b/R6：只在「提交的是可信壳文档 + URL 与上次提交不同」时释放，避免 SPA/重复
+        // commit 误伤仍在使用的 guest（didCommit 只在跨文档提交时触发，这里再收一道）。
+        let committed = webView.url?.absoluteString
+        if let committed,
+           TrustGuard.isTrustedDocument(committed, expectedOrigin: cpOrigin),
+           lastCommittedShellURL != committed {
+            lastCommittedShellURL = committed
+            // FW1 ⑦：只释放旧 generation 的 document（未知 documentId 时走全量兜底并清 book）。
+            if let documentId = lastBridgeDocumentId {
+                browserGuests?.releaseAll(documentId: documentId)
+            } else {
+                browserGuests?.releaseAllDocuments()
+            }
+            browserLayer?.removeAll()
+        }
         // 首个「有内容」的提交才呈现启动主窗——窗口在此之前保持隐藏，绝不先亮
         // 无内容空窗（Electron 在 controlPlane.start() 完成后才 createMainWindow
         // 的对偶；失败说明页同为已提交内容，因此失败终态仍可见）。失败页豁免在
@@ -2164,8 +2336,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 退出清理已开始：A 桥 app_quitting 门置位（AppDelegate
     /// beginTerminationCleanup 调用）。置位后 late invoke 一律回 app_quitting。
+    /// 窗口几何变化（resize/全屏）：guest 层按容器重裁剪（native 兜底，不依赖 renderer 再推）。
+    func windowDidResize(_ notification: Notification) {
+        guard let layer = browserLayer else { return }
+        layer.refreshClip(containerSize: layer.superview?.bounds.size ?? layer.bounds.size)
+    }
+
     func noteQuitting() {
         quitting = true
+        browserGuests?.closeAll()
     }
 
     /// 退出清理开始 → 抑制渲染恢复并取消已排定重载（AppDelegate 调用）。
@@ -2210,7 +2389,20 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         _ = webView.reloadFromOrigin()
     }
 
+    /// FW1 ⑩：焦点在 guest 时 Cmd+±/Cmd+0 作用于 guest 的 pageZoom（不双投、不动壳）。
+    private func focusedGuestWebView() -> WKWebView? {
+        let responder = window?.firstResponder
+        guard browserLayer?.isGuestResponder(responder) == true else { return nil }
+        return browserGuests?.activeGuestWebView()
+    }
+
     func zoomIn() {
+        if let guest = focusedGuestWebView() {
+            let zoom = Self.steppedZoom(current: guest.pageZoom, direction: 1)
+            guest.pageZoom = zoom
+            shellLog("[shell] guest 放大 → pageZoom=\(zoom)")
+            return
+        }
         let zoom = Self.steppedZoom(current: webView.pageZoom, direction: 1)
         webView.pageZoom = zoom
         persistPageZoom(zoom)
@@ -2218,6 +2410,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func zoomOut() {
+        if let guest = focusedGuestWebView() {
+            let zoom = Self.steppedZoom(current: guest.pageZoom, direction: -1)
+            guest.pageZoom = zoom
+            shellLog("[shell] guest 缩小 → pageZoom=\(zoom)")
+            return
+        }
         let zoom = Self.steppedZoom(current: webView.pageZoom, direction: -1)
         webView.pageZoom = zoom
         persistPageZoom(zoom)
@@ -2225,6 +2423,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func resetPageZoom() {
+        if let guest = focusedGuestWebView() {
+            guest.pageZoom = 1.0
+            shellLog("[shell] guest 实际大小 → pageZoom=1.0")
+            return
+        }
         webView.pageZoom = 1.0
         persistPageZoom(1.0)
         shellLog("[shell] 菜单实际大小 → pageZoom=1.0")

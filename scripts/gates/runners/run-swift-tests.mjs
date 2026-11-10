@@ -92,6 +92,11 @@ export const SWIFT_TEST_MANIFEST = [
   'macos/Tests/DSHChamberTests/BridgeClientStopGraceTests.swift',
   'macos/Tests/DSHChamberTests/BridgeManifestConsistencyTests.swift',
   'macos/Tests/DSHChamberTests/BridgeShimInjectorTests.swift',
+  // Remote Browser v3 native-guest carrier (design 28 v3 / ADR-0004): policy
+  // canonicalization, lease/release bookkeeping and the keymap push gate.
+  'macos/Tests/DSHChamberTests/BrowserGuestKeyboardTests.swift',
+  'macos/Tests/DSHChamberTests/BrowserGuestLeaseTests.swift',
+  'macos/Tests/DSHChamberTests/BrowserGuestPolicyTests.swift',
   'macos/Tests/DSHChamberTests/CrashDiagnosticsTests.swift',
   'macos/Tests/DSHChamberTests/CrossLanguageLockstepTests.swift',
   'macos/Tests/DSHChamberTests/DownloadDestinationTests.swift',
