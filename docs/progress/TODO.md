@@ -13,7 +13,7 @@
 
 |部|内容|入口|
 |---|---|---|
-|A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐|A§1–A§15|
+|A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐、§17 客户端插件页面 base path 上游化|A§1–A§15、A§17|
 |B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
 |D 工程|结构性重构、产物新鲜度、页面性能 P2、多实例常驻后续研究、右栏浏览器 v3 落地债|D§1–D§5|
@@ -41,6 +41,7 @@
 |§13|插件管理页可嵌入|上游提供 surface=embedded|
 |§14|漂移剩余、待退役块、工程债|下一 pin|
 |§15|UI 对齐候选与维持差异|UI 裁决触发时|
+|§17|客户端插件页面 base path 上游化|上游引入通用页面挂载前缀 seam|
 
 ### 1. N-壳宿主下持久化 selection 需要按 shell/入口作用域
 
@@ -224,6 +225,12 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 1. 上游有源码路径导出 → 经 `types/vendor-modules.d.ts` + registry `vendorSourceConsumers` 消费；
 2. 非导出纯函数 → 逐字拷入 + 出处注 + 语义锁（先例 `session-title-marquee.ts`）；
 3. 结构不同可见面 → 只复用片段（CSS/JSX/字典键），逐值对照。
+
+### 17. 客户端插件页面 base path 上游化
+
+> 阻塞来源 = 上游；chamber 侧公开契约 v1 见 design 09 §4，本条只记上游化路径。
+
+- **17.1**：上游 `ConnectionInstallOptions` 无 `basePath`（仅 chamber fork 有），且官方 web shell 的插件契约仍假定页面由宿主在 origin root 提供；上游若引入「页面挂载前缀 / 宿主路由基址」通用 seam（client ctx 服务或 boot 配置），chamber 改为消费该键并在至少一个正式发布版本内双读 `chamberBasePath` 后删私有键（CHANGELOG 为发布单源）。触发 = 上游接受 RFC 或 dsh 发布该 seam；退出 = 私有键删除、design 09 §4 改指上游键。
 
 ## B. 平台、契约索引与冻结基线（B 类）
 

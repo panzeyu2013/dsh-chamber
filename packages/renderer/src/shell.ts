@@ -312,7 +312,12 @@ function createPluginRefreshControl(
   })
 }
 
-/** Build the per-entry Context initializer: the closure owns immutable values. */
+/** Build the per-entry Context initializer: the closure owns immutable values.
+ *  Public client-plugin context contract v1 (design 09 §4): every entry provides
+ *  `chamberBasePath` before any plugin applies; third-party plugins read it with
+ *  `ctx.get('chamberBasePath')` (never the property: Cordis rejects an uninjected
+ *  property read), prefix their own host routes with it, and treat `undefined` as
+ *  the native dsh origin-root host. */
 export function createChamberContextSetup(
   instanceId: string,
   basePath: string,

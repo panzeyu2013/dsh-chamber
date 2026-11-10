@@ -40,6 +40,7 @@
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载（常驻策略下关闭面板后该源成为普通常驻壳，design 05 §4.1）。
 - **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §6.2。
 - **未接入的上游服务面**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges`、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；接入点 = design 09 §3.5/§3.6 的复合入口与 seam，需要时按同一注册表接入。
+- **N-ctx 第三方插件 base-path 契约 v1（design 09 §4）与静态层非 GET/HEAD 405（design 04 §5）待验收**：待验收 = Super 等第三方插件在 ready 实例经 `/api/i/<id>/super` 端到端、旧版硬编码插件在非 GET/HEAD 宿主路由上得到 405 JSON、非文档导航未知 GET/HEAD 得到 404 JSON、打包态回归；Super 现实现 sanitize 失败回落 origin root 属插件迁移缺口；运行期 fetch 失败不在 chamber 插件诊断面（连接页 ok 只表示图/行装载健康）。判据 = design 09 §4 + control-plane static-serving 测试 + renderer 契约测试（含真实 Cordis）+ 实机。
 
 ### 1.5 平台、运行时与外部凭据
 
