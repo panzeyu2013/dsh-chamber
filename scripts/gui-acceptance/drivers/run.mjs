@@ -78,8 +78,8 @@ const { values } = parseArgs({
 if (values.help) {
   console.log(`用法：
   --live                     只读探测运行中的应用（默认；安装态亦可用）
-  --attach                   对已带 --remote-debugging-port 的 dev 实例做界面走查
-  --dev                      自起一次性 dev 实例（隔离 user-data）→ 走查 → 关闭
+  --attach                   对运行中的实例做界面走查（native 默认：只读探针；--flavor electron 才驱动归档 CDP）
+  --dev                      自起一次性 dev 实例（隔离 user-data）→ 走查 → 关闭（仅 --flavor electron；native 拒绝）
   --flavor <electron|native> 目标 flavor（--dev/--attach 默认 native；--live 与 flavor 无关）。
                              native 走查原生壳 spawn 的 sidecar 装配（ready/B 桥/控制面 HTTP）；
                              注意 native 不可驱动 WKWebView UI（无 CDP），那仍属实机验收。
@@ -101,14 +101,18 @@ if (values.help) {
   --cp-port <port>           --dev 的控制面端口（默认 17530）
   --electron-arg <arg>       追加 Electron 开关（可重复；沙箱内需 --electron-arg=--no-sandbox）
   --keep                     --dev 结束后保留实例（默认关闭）
-  --require-hover            走查的 hover 腿必须真实执行：未执行（INFO）计为 FAIL（默认关闭）
+  --require-hover            走查的 hover 腿必须真实执行：未执行（INFO）计为 FAIL（默认关闭；仅归档 Electron CDP 走查）
   --require-embed            内嵌腿（W-13/W-14a/W-14b/W-15/W-15b）必须真实执行：
-                             未执行（INFO）计为 FAIL（默认关闭；--attach 无真实 SSH 源时尤其需要它）。SH-7 恒判定，不在本旗标范围
+                             未执行（INFO）计为 FAIL（默认关闭；仅归档 Electron CDP 走查）。
+                             native 走查没有可执行的界面腿：传了本旗标会被拒绝（exit 2）；v3 请用 --live（SH-7 恒判定）
+                             + 真机/目检（docs/checklists/acceptance/remote-browser-acceptance.md §E2）
   --embed-port <port>        W-14b 的远端 loopback 端口：把窗口切到 dsh/gateway+ssh 来源并给出该主机
                              127.0.0.1 上真实可服务的端口，才跑真实 SSH → alias iframe 端到端腿
+                             （仅归档 Electron CDP 走查；native 不接受，传了 exit 2）
   --attach-create-session    显式允许 --attach 在浏览器腿前经既有 UI 建一次性工作区/会话
-                              （仅用于打包/一次性实例的自起自关 smoke；默认禁止写真实实例状态）
-  --ssh-fixture              W-14b 本机端到端夹具（仅 --dev）：一次性 sshd（独立端口/临时 host key）+
+                              （仅用于打包/一次性实例的自起自关 smoke；默认禁止写真实实例状态）。
+                             仅 --flavor electron（归档 CDP 走查）；native --attach 传了会被拒绝（exit 2）
+  --ssh-fixture              W-14b 本机端到端夹具（仅 --dev --flavor electron）：一次性 sshd（独立端口/临时 host key）+
                              ssh-agent + 临时 remote dsh（vendor dsh CLI，temp DSH_HOME）+ 回环
                              cookie 注入代理 + fixture 页面；预置 dev userData 的 ssh-instances.json 与
                              app 自有 known_hosts，走真实 SSH 隧道验证 alias iframe/上游 sandbox/referrer/

@@ -93,7 +93,12 @@ export const SWIFT_TEST_MANIFEST = [
   'macos/Tests/DSHChamberTests/BridgeManifestConsistencyTests.swift',
   'macos/Tests/DSHChamberTests/BridgeShimInjectorTests.swift',
   // Remote Browser v3 native-guest carrier (design 28 v3 / ADR-0004): policy
-  // canonicalization, lease/release bookkeeping and the keymap push gate.
+  // canonicalization, lease/release bookkeeping, the keymap push gate, the
+  // document-generation reclaim rule, the real WKContentRuleList compile probe
+  // and the forward-list proof / dispatch-error contract.
+  'macos/Tests/DSHChamberTests/BrowserGuestBridgeContractTests.swift',
+  'macos/Tests/DSHChamberTests/BrowserGuestContentRuleCompileTests.swift',
+  'macos/Tests/DSHChamberTests/BrowserGuestDocumentReclaimTests.swift',
   'macos/Tests/DSHChamberTests/BrowserGuestKeyboardTests.swift',
   'macos/Tests/DSHChamberTests/BrowserGuestLeaseTests.swift',
   'macos/Tests/DSHChamberTests/BrowserGuestPolicyTests.swift',
@@ -104,6 +109,7 @@ export const SWIFT_TEST_MANIFEST = [
   'macos/Tests/DSHChamberTests/FileOpenPanelTests.swift',
   'macos/Tests/DSHChamberTests/FrameCodecTests.swift',
   'macos/Tests/DSHChamberTests/HostFactsDiffTests.swift',
+  'macos/Tests/DSHChamberTests/HostPathCatalogTests.swift',
   'macos/Tests/DSHChamberTests/IngestReconcileSeamTests.swift',
   'macos/Tests/DSHChamberTests/JSLiteralEscapingTests.swift',
   'macos/Tests/DSHChamberTests/MainWindowShownGateTests.swift',
