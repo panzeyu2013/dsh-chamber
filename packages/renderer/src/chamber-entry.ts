@@ -28,7 +28,7 @@ import {
 } from './required-extra-rows.ts'
 import { withLocaleOwnership } from './locale-ownership.ts'
 import { isChamberSourceId } from './transport-source.ts'
-import { installChamberForward } from './chamber-forward-adapter.ts'
+import { installChamberBrowser, installChamberForward } from './chamber-forward-adapter.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -499,6 +499,11 @@ export function apply(ctx: Context): void {
   // service: the launcher then renders its honest no-bridge state instead of a
   // fake empty list. This adds no page global.
   installChamberForward(ctx)
+  // Page-level browser guest bridge (design 28 v3 §3): the Swift shim owns
+  // `window.dshChamber.browser`; the launcher's ctx probe must resolve before the
+  // deferred chunk mounts. Missing namespace (gateway/plain web) provides nothing
+  // and the Browser row stays absent (fail-closed).
+  installChamberBrowser(ctx)
   // Deferred families: fetched in the background and registered once loaded, never
   // awaited. The seam is shared with the required-service probe below, so both
   // post-settle verdicts land on the one channel the App self-heals from.

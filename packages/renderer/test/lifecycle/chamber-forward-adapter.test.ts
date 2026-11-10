@@ -7,8 +7,9 @@
  * `records`, seven states, a closed snake_case error table, `{ok:false,
  * error:{code,detail}}`) and the remote-browser launcher (three states, eleven
  * kebab-case codes, `{ok:false, code}`). v2 additive fields are driven too:
- * consumer/path passthrough, frameUrl projection, the embedding capability and
- * the record frameError projection.
+ * consumer/path passthrough, frameUrl projection and the per-record frameError
+ * diagnostic. The v2 list paper fields are retired with the iframe carrier and
+ * the wire (design 28 v3 §3): the suite asserts they never reappear.
  *
  * Evidence shape:
  *  - behavioural: every wire state and error code is DRIVEN from the wire source
@@ -24,7 +25,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { installChamberForward } from '../../src/chamber-forward-adapter.ts'
+import { installChamberBrowser, installChamberForward } from '../../src/chamber-forward-adapter.ts'
 import type { ChamberForwardBridge } from '../../src/chamber-forward-adapter.ts'
 import {
   asBrowserForwardBridge,
@@ -33,6 +34,7 @@ import {
   parseForwardRecord,
   parseForwardRequestResult,
 } from '../../../dsh-chamber-client-ui-browser/src/shared/forward-bridge.ts'
+import { REQUIRED_BROWSER_INVOKES } from '../../../dsh-chamber-client-ui-browser/src/client/browser/BrowserBridge.ts'
 
 const WIRE_SOURCE = readFileSync(
   new URL('../../../dsh-chamber-wire/src/forward.ts', import.meta.url), 'utf8')
@@ -493,61 +495,6 @@ test('request projects the main-composed frameUrl and drops a malformed one', as
   assert.deepEqual(parseForwardRequestResult(malformed), malformed)
 })
 
-test('list carries the embedding capability; absent or malformed = absent (= enabled)', async () => {
-  const state = mutableHost()
-  const { bridge } = installedBridge(state.host)
-  state.next = { ok: true, records: [wireRecord()], limits: limits(), embedding: { enabled: false, reason: 'rollback' } }
-  const off = await bridge.list(listArgs())
-  if (!off.ok) assert.fail('the list must be ok')
-  assert.deepEqual(off.embedding, { enabled: false, reason: 'rollback' })
-  assert.deepEqual(parseForwardListResult(off), off)
-
-  state.next = { ok: true, records: [], limits: limits() }
-  const absent = await bridge.list(listArgs())
-  if (!absent.ok) assert.fail('the list must be ok')
-  assert.equal(absent.embedding, undefined)
-
-  state.next = { ok: true, records: [], limits: limits(), embedding: { enabled: 'yes' } }
-  const malformed = await bridge.list(listArgs())
-  if (!malformed.ok) assert.fail('a malformed embedding must not fail the list')
-  assert.equal(malformed.embedding, undefined)
-})
-
-test('v2 W-15: the local list answer projects frameErrors by origin and keeps the launcher guard', async () => {
-  const state = mutableHost()
-  const { bridge } = installedBridge(state.host)
-  state.next = {
-    ok: true,
-    records: [],
-    limits: limits(),
-    embedding: { enabled: true },
-    frameErrors: [
-      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
-      { origin: 'https://localhost:8443', code: 'certificate_error' },
-      // Malformed entries are dropped, never a list-wide failure.
-      { origin: 'http://127.0.0.1:44215/embed-xfo', code: 'load_failed' },
-      { origin: 'http://127.0.0.1:44215', code: 'future_code' },
-      { origin: 42, code: 'timeout' },
-      null,
-    ],
-  }
-  const result = await bridge.list({ sourceId: 'local', sourceFingerprint: 'local' })
-  if (!result.ok) assert.fail('the local list must translate')
-  assert.deepEqual(result.records, [])
-  assert.deepEqual(result.frameErrors, [
-    { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
-    { origin: 'https://localhost:8443', code: 'certificate_error' },
-  ])
-  assert.deepEqual(parseForwardListResult(result), result, 'the launcher own guard accepts the projection')
-
-  // Absent or empty frameErrors stay absent (no key churn across polls).
-  state.next = { ok: true, records: [], limits: limits(), frameErrors: [] }
-  const empty = await bridge.list({ sourceId: 'local', sourceFingerprint: 'local' })
-  assert.equal(empty.ok, true)
-  if (!empty.ok) return
-  assert.equal('frameErrors' in empty, false)
-})
-
 test('v2 W-15: the local identity crosses the bridge verbatim (payload keys unchanged)', async () => {
   const calls: Array<{ method: string; input: unknown }> = []
   const host = {
@@ -562,11 +509,12 @@ test('v2 W-15: the local identity crosses the bridge verbatim (payload keys unch
   const { bridge } = installedBridge(host)
   await bridge.list({ sourceId: 'local', sourceFingerprint: 'local' })
   assert.deepEqual(calls, [{ method: 'list', input: { sourceId: 'local', sourceFingerprint: 'local' } }])
-  // The wire declares the local list arm and the additive field; the adapter
-  // mirrors both shapes (the desktop registrar + browser face are driven above).
+  // The wire keeps the local list arm; the v2 list paper fields are retired with
+  // the iframe carrier and the wire (design 28 v3 §3), so neither source may
+  // reintroduce them.
   assert.ok(WIRE_SOURCE.includes('FORWARD_LOCAL_SOURCE_ID'))
-  assert.ok(WIRE_SOURCE.includes('readonly frameErrors?: readonly ForwardFrameErrorEntry[]'))
-  assert.ok(ADAPTER_SOURCE.includes('LauncherForwardFrameErrorEntry'))
+  assert.equal(WIRE_SOURCE.includes('readonly frameErrors?:'), false)
+  assert.equal(ADAPTER_SOURCE.includes('LauncherForwardFrameErrorEntry'), false)
 })
 
 test('the renderer-minted consumer and relative path cross the bridge verbatim', async () => {
@@ -599,12 +547,31 @@ test('the renderer-minted consumer and relative path cross the bridge verbatim',
 
 // ── Composite wiring ─────────────────────────────────────────────────────────
 
-test('the composite installs the adapter BEFORE the deferred roster mounts', () => {
-  assert.match(ENTRY_SOURCE, /import \{ installChamberForward \} from '\.\/chamber-forward-adapter\.ts'/u)
+test('the composite installs the forward and browser adapters BEFORE the deferred roster mounts', () => {
+  assert.match(ENTRY_SOURCE, /import \{[^}]*\binstallChamberForward\b[^}]*\} from '\.\/chamber-forward-adapter\.ts'/u)
   const installAt = ENTRY_SOURCE.indexOf('installChamberForward(ctx)')
+  const browserAt = ENTRY_SOURCE.indexOf('installChamberBrowser(ctx)')
   const deferredAt = ENTRY_SOURCE.indexOf('void registerDeferred(')
-  assert.ok(installAt > 0, 'chamber-entry must install the adapter')
-  assert.ok(deferredAt > installAt, 'the service must exist before any deferred chunk mounts')
+  assert.ok(installAt > 0, 'chamber-entry must install the forward adapter')
+  assert.ok(browserAt > 0, 'chamber-entry must install the browser guest adapter')
+  assert.ok(deferredAt > installAt && deferredAt > browserAt, 'both services must exist before any deferred chunk mounts')
+})
+
+test('⑧ the adapter browser invoke probe is locked to the launcher invoke single source', () => {
+  // The adapter cannot import the launcher at runtime (deferred chunk + the
+  // module's documented runtime-import-free property), so the local literal is
+  // pinned to the launcher's exported constant instead of drifting silently.
+  // The launcher's full six-name face is REQUIRED_BROWSER_INVOKES + the
+  // documented optional sixth 'keymap' (BrowserBridge.ts:187); the adapter
+  // requires it because the shipped v3 Swift shim always exposes it.
+  const match = /const BROWSER_INVOKES = \[([^\]]*)\] as const/u.exec(ADAPTER_SOURCE)
+  assert.ok(match !== null, 'the adapter browser invoke list moved; re-read the adapter')
+  const adapterList = match[1]
+    .split(',')
+    .map(item => item.trim().replace(/^['"]|['"]$/gu, ''))
+    .filter(Boolean)
+  assert.deepEqual(adapterList, [...REQUIRED_BROWSER_INVOKES, 'keymap'],
+    'the adapter probe must equal the launcher single source (five required + keymap)')
 })
 
 test('the browser package is a deferred covered row (the launcher half, never the root apply)', () => {
@@ -614,4 +581,124 @@ test('the browser package is a deferred covered row (the launcher half, never th
   )
   assert.doesNotMatch(ENTRY_SOURCE, /import \* as .*dsh-chamber-client-ui-browser/u,
     'the package must stay a deferred chunk (no static namespace import)')
+})
+// ── E2d: effective keymap enumeration for the shell KeyboardBridge ────────────
+
+test('shortcut combos map the catalog + fixed catalog with platform primary', async () => {
+  const { shortcutCombo, shortcutCombosFromSnapshots } = await import('../../src/chamber-forward-adapter.ts')
+  // macOS: Command is primary, literal Control stays separate.
+  assert.deepEqual(shortcutCombo({ code: 'KeyT', modifiers: ['meta'] }, 'macos'),
+    { code: 'KeyT', primary: true, alt: false, shift: false, control: false })
+  assert.deepEqual(shortcutCombo({ code: 'KeyK', modifiers: ['meta', 'shift', 'control'] }, 'macos'),
+    { code: 'KeyK', primary: true, alt: false, shift: true, control: true })
+  // Other platforms: Control is primary.
+  assert.deepEqual(shortcutCombo({ code: 'KeyT', modifiers: ['control'] }, 'windows'),
+    { code: 'KeyT', primary: true, alt: false, shift: false, control: false })
+  assert.equal(shortcutCombo({ modifiers: ['meta'] }, 'macos'), null)
+
+  const shortcuts = {
+    platform: 'macos',
+    catalog: { getSnapshot: () => [
+      { id: 'browser.new', binding: { code: 'KeyT', modifiers: ['meta'] } },
+      // config override is already folded into the catalog by the registry.
+      { id: 'sidebar.toggle', binding: { code: 'KeyB', modifiers: ['meta', 'alt'] } },
+      { id: 'unbound', binding: null },
+    ] },
+    config: { getSnapshot: () => ({ status: 'ready' }), subscribe: () => () => {} },
+    fixedCatalog: { getSnapshot: () => [
+      { id: 'shortcuts.stop', bindings: [{ code: 'Escape', modifiers: [] }] },
+    ] },
+  }
+  assert.deepEqual(shortcutCombosFromSnapshots(shortcuts), [
+    { code: 'KeyT', primary: true, alt: false, shift: false, control: false },
+    { code: 'KeyB', primary: true, alt: true, shift: false, control: false },
+    { code: 'Escape', primary: false, alt: false, shift: false, control: false },
+  ])
+  // Unreadable snapshots are fail-safe (empty, never a thrown install).
+  assert.deepEqual(shortcutCombosFromSnapshots({ platform: 'macos', catalog: { getSnapshot: () => { throw new Error('x') } } }), [])
+  assert.deepEqual(shortcutCombosFromSnapshots({}), [])
+})
+
+function fakeBrowserSurface() {
+  const listeners: Record<string, ((value: unknown) => void) | undefined> = {}
+  const noop = async () => ({ ok: true })
+  return {
+    listeners,
+    surface: {
+      acquire: noop, release: noop, navigate: noop, command: noop, frame: noop, keymap: noop,
+      events: {
+        state: (fn: (value: unknown) => void) => { listeners.state = fn; return () => {} },
+        openRequested: (fn: (value: unknown) => void) => { listeners.openRequested = fn; return () => {} },
+        input: (fn: (value: unknown) => void) => { listeners.input = fn; return () => {} },
+        forwardNeeded: (fn: (value: unknown) => void) => { listeners.forwardNeeded = fn; return () => {} },
+      },
+    },
+  }
+}
+
+function installBrowserOverFakePage() {
+  const fake = fakeBrowserSurface()
+  const dispatched: KeyboardEvent[] = []
+  const element = { dispatchEvent: (event: KeyboardEvent) => { dispatched.push(event); return true } }
+  const page = { dshChamber: { browser: fake.surface }, document: { querySelector: () => element } }
+  const provided: unknown[] = []
+  const installed = installChamberBrowser({ provide: (_name: string, value: unknown) => { provided.push(value) }, get: () => undefined }, page)
+  return { installed, listeners: fake.listeners, dispatched }
+}
+
+class FakeKeyboardEvent {
+  readonly type: string
+  readonly init: Record<string, unknown>
+  constructor(type: string, init: Record<string, unknown>) { this.type = type; this.init = init }
+}
+
+function withFakeKeyboardEvent(run: () => void): void {
+  const original = (globalThis as { KeyboardEvent?: unknown }).KeyboardEvent
+  ;(globalThis as { KeyboardEvent?: unknown }).KeyboardEvent = FakeKeyboardEvent
+  try { run() } finally { ;(globalThis as { KeyboardEvent?: unknown }).KeyboardEvent = original }
+}
+
+test('guest key replay uses the canonical modifier array (input contract)', () => {
+  const { installed, listeners, dispatched } = installBrowserOverFakePage()
+  assert.equal(installed, true, 'a six-invoke + four-push surface must install')
+  withFakeKeyboardEvent(() => {
+    listeners.input?.({ tabId: 'tab-1', code: 'KeyT', modifiers: ['meta', 'shift'] })
+  })
+  assert.equal(dispatched.length, 1)
+  const init = (dispatched[0] as unknown as { init: Record<string, unknown> }).init
+  assert.equal(init.metaKey, true)
+  assert.equal(init.shiftKey, true)
+  assert.equal(init.ctrlKey, false)
+})
+
+test('guest key replay accepts the legacy boolean shape (primary maps to the primary modifier)', () => {
+  const { listeners, dispatched } = installBrowserOverFakePage()
+  withFakeKeyboardEvent(() => {
+    listeners.input?.({ tabId: 'tab-1', code: 'KeyW', primary: true, alt: true, repeat: true })
+  })
+  const init = (dispatched[0] as unknown as { init: Record<string, unknown> }).init
+  assert.equal(init.metaKey, true)
+  assert.equal(init.altKey, true)
+  assert.equal(init.repeat, true, 'repeat survives both shapes')
+})
+
+test('guest key replay prefers the canonical array over legacy booleans', () => {
+  const { listeners, dispatched } = installBrowserOverFakePage()
+  withFakeKeyboardEvent(() => {
+    listeners.input?.({ tabId: 'tab-1', code: 'KeyB', modifiers: ['alt'], primary: true, shift: true })
+  })
+  const init = (dispatched[0] as unknown as { init: Record<string, unknown> }).init
+  assert.equal(init.altKey, true)
+  assert.equal(init.metaKey, false, 'canonical array wins; legacy primary is ignored')
+  assert.equal(init.shiftKey, false, 'legacy shift is ignored too')
+})
+
+test('guest key replay ignores unknown or mis-cased modifier tokens', () => {
+  const { listeners, dispatched } = installBrowserOverFakePage()
+  withFakeKeyboardEvent(() => {
+    listeners.input?.({ tabId: 'tab-1', code: 'KeyX', modifiers: ['Control', 'meta', 'bogus'] })
+  })
+  const init = (dispatched[0] as unknown as { init: Record<string, unknown> }).init
+  assert.equal(init.ctrlKey, false, 'mis-cased control is not the canonical token')
+  assert.equal(init.metaKey, true)
 })

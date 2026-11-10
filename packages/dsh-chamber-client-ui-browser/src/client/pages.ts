@@ -1,29 +1,31 @@
-/** Assemble iframe navigation and presentation without platform branches in consumers. */
+/** Assemble native guest navigation and presentation without platform branches in consumers. */
 import type { BrowserPage, BrowserPageOptions } from './browser/BrowserPage.ts'
-import type { BrowserFrameSrcResolver } from './browser/IframeImpl.ts'
-import { IframeImpl } from './browser/IframeImpl.ts'
-import { IframePresentation } from './view/IframePresentation.ts'
+import type { BrowserTargetRefResolver } from './browser/ForwardFrameResolver.ts'
+import type { NativeGuestCarrier } from './browser/BrowserBridge.ts'
+import { NativeGuestImpl } from './browser/NativeGuestImpl.ts'
+import { NativeGuestPresentation } from './view/NativeGuestPresentation.ts'
 
 /**
- * Assemble an idle iframe provider and its DOM presentation.
+ * Assemble one native guest page (design 28 §4, ADR-0004).
  *
- * FORK DIFF: `resolver` is the chamber seam that maps one logical target onto
- * the exact iframe URL (local direct; remote 127.0.0.1 through the SSH forward
- * lease). Everything else is upstream's assembly verbatim.
+ * The iframe carrier is retired: the presentation only measures the placeholder
+ * and the provider drives main's child WKWebView through the `browser` bridge.
  *
  * @param options - saved navigation and callbacks.
- * @param resolver - logical target → iframe src (owns the forward lease).
- * @returns the Web page's navigation and presentation objects.
+ * @param carrier - the bridge plus the boot-bound lease identity.
+ * @param resolver - logical target → guest target (owns the forward lease).
+ * @returns the tab's navigation and placeholder presentation.
  */
-export function createIframePage(
+export function createNativeGuestPage(
   options: BrowserPageOptions,
-  resolver: BrowserFrameSrcResolver,
+  carrier: NativeGuestCarrier,
+  resolver: BrowserTargetRefResolver,
 ): BrowserPage {
-  const presentation = new IframePresentation({
-    loaded: (revision) => { frame.handleLoaded(revision) },
-    failed: (revision) => { frame.handleLoadFailed(revision) },
-    remounted: () => { frame.reload() },
-  })
-  const frame = new IframeImpl(options, presentation, resolver)
-  return { frame, presentation }
+  let frame: NativeGuestImpl | undefined
+  const presentation = new NativeGuestPresentation({
+    report: (next) => { frame?.reportFrame(next) },
+    hidden: () => { frame?.reportFrame({ frame: { x: 0, y: 0, width: 0, height: 0 }, visible: false, occluded: true }) },
+  }, options.tabId)
+  frame = new NativeGuestImpl(options, carrier, presentation, resolver)
+  return { frame, presentation: presentation }
 }

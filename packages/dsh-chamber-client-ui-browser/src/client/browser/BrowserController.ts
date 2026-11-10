@@ -3,9 +3,11 @@ import { createSnapshotStore, type BoundActions, type SnapshotStore } from '@dee
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { BrowserFrameState } from './BrowserFrame.ts'
 import type { BrowserPage, BrowserPageFactory } from './BrowserPage.ts'
+import type { NativeGuestCarrier } from './BrowserBridge.ts'
 import { currentBrowserTarget, type BrowserTabState } from './BrowserPersistence.ts'
 import type { BrowserStore } from './store.ts'
 import { parseBrowserAddress, type BrowserAddressFailure, type BrowserTarget } from './url.ts'
+import { allowOpenRequest, monotonicNow } from './popup-limit.ts'
 
 /**
  * FORK ADAPTATION (type-only): the repo-level vendor ambient face declares the
@@ -32,15 +34,23 @@ export interface BrowserControllerOptions {
   readonly initial: BrowserTabState | undefined
   readonly actions: BoundActions<BrowserStore>
   readonly createPage: BrowserPageFactory
+  /** Native guest carrier identity (bridge + boot-bound lease identity). */
+  readonly carrier: NativeGuestCarrier
+  /** Clock seam for the popup rate limit (defaults to Date.now). */
+  readonly now?: () => number
   readonly openTab: (url: string) => void
 }
 
 /** Owns input validation and page lifetime without inspecting the carrier type. */
 export class BrowserController implements HostObservable<BrowserControllerState> {
   private readonly page: BrowserPage
+  // Vendor store kernel: UI-facing controller state consumed by slot subscriptions;
+  // NativeGuestImpl keeps its own carrier-local snapshot-store for bridge pushes.
   private readonly store: SnapshotStore<BrowserControllerState>
   private readonly unsubscribe: () => void
   private actions: BoundActions<BrowserStore>
+  /** Accepted popup times for this occurrence (rolling window). */
+  private readonly openRequestTimes: number[] = []
   private checkpoint: BrowserTabState | undefined
   private started = false
   private disposed = false
@@ -52,6 +62,7 @@ export class BrowserController implements HostObservable<BrowserControllerState>
     this.actions = options.actions
     this.checkpoint = options.initial
     this.page = options.createPage({
+      tabId: options.tabId, carrier: options.carrier,
       initial: options.initial,
       persist: (state) => {
         if (this.disposed) return
@@ -62,6 +73,10 @@ export class BrowserController implements HostObservable<BrowserControllerState>
         if (this.disposed) return
         const result = parseBrowserAddress(value, options.applicationOrigin)
         if (!result.ok) { this.addressFailed(result.reason); return }
+        // §5③/§8-16: a hostile page cannot open tabs in a loop; the cap is per tab
+        // occurrence and a refused popup is silently dropped (no error surface).
+        const now = (options.now ?? monotonicNow)()
+        if (!allowOpenRequest(this.openRequestTimes, now)) return
         options.openTab(result.target.url)
       },
     })
@@ -132,15 +147,6 @@ export class BrowserController implements HostObservable<BrowserControllerState>
   }
 
   /**
-   * Apply the optional embedding-sandbox control; unsupported providers remain unchanged.
-   * @param enabled - whether to enforce the provider's embedding sandbox.
-   */
-  setSandbox(enabled: boolean): void {
-    const sandbox = this.page.frame.sandbox
-    if (sandbox !== undefined) this.command(() => { sandbox.setEnabled(enabled) })
-  }
-
-  /**
    * Redirect future checkpoint writes to a replacement Session binding.
    * @param actions - replacement persistence writer.
    */
@@ -153,6 +159,8 @@ export class BrowserController implements HostObservable<BrowserControllerState>
   dispose(): Promise<void> {
     if (this.disposal !== undefined) return this.disposal
     this.disposed = true
+    // The occurrence ends: its popup ledger must not survive into a rebind (RT-05).
+    this.openRequestTimes.length = 0
     this.options.signal.removeEventListener('abort', this.abort)
     this.unsubscribe()
     this.disposal = this.page.frame.dispose()
@@ -207,8 +215,6 @@ export interface BrowserInjected {
   goForward(tabId: TabId): void
   /** Restore a saved address or reload its page. @param tabId - owning tab. */
   reload(tabId: TabId): void
-  /** @param tabId - owning tab. @param enabled - provider's optional sandbox control. */
-  setSandbox(tabId: TabId, enabled: boolean): void
 }
 
 /**
@@ -219,7 +225,7 @@ export interface BrowserInjected {
  * @returns tab callbacks.
  */
 export function createBrowserControllers(actions: BoundActions<BrowserStore>, createPage: BrowserPageFactory,
-  isTabOpen: (tabId: TabId) => boolean): BrowserInjected {
+  isTabOpen: (tabId: TabId) => boolean, carrier: NativeGuestCarrier): BrowserInjected {
   let currentActions = actions
   const controllers = new Map<TabId, {
     readonly signal: AbortSignal
@@ -238,7 +244,7 @@ export function createBrowserControllers(actions: BoundActions<BrowserStore>, cr
           held.signal.removeEventListener('abort', held.forget)
           void held.controller.dispose()
         }
-        const created = new BrowserController({ ...request, actions: currentActions, createPage })
+        const created = new BrowserController({ ...request, actions: currentActions, createPage, carrier, now: () => Date.now() })
         const forget = (): void => {
           controllers.delete(tabId)
           // Plugin unload also aborts occurrences; only layout removal deletes saved navigation.
@@ -269,6 +275,5 @@ export function createBrowserControllers(actions: BoundActions<BrowserStore>, cr
     goBack: (id) => { controller(id)?.goBack() },
     goForward: (id) => { controller(id)?.goForward() },
     reload: (id) => { controller(id)?.reload() },
-    setSandbox: (id, enabled) => { controller(id)?.setSandbox(enabled) },
   }
 }

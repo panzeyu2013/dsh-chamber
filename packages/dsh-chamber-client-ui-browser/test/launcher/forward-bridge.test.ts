@@ -4,7 +4,8 @@
  * (the renderer never receives a URL it can pass back to openInBrowser).
  *
  * v2 additions: the consumer grammar, the main-composed frameUrl guard, the
- * embedding capability projection and the release-timeout failure code.
+ * envelope shapes and the release-timeout failure code. The v2 list paper fields
+ * (embedding/frameErrors) are retired (design 28 v3 §3).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,12 +15,8 @@ import {
   isBrowserAliasHost,
   isForwardConsumer,
   isForwardFrameError,
-  isForwardFrameErrorOrigin,
   isForwardFrameUrl,
   parseForwardAck,
-  parseForwardEmbedding,
-  parseForwardFrameErrors,
-  parseForwardListResult,
   parseForwardRecord,
   parseForwardRecords,
   parseForwardRequestResult,
@@ -107,82 +104,7 @@ test('non-array record lists project to an empty list', () => {
   assert.deepEqual(parseForwardRecords({ length: 1 }), [])
 })
 
-test('list envelopes are validated and carry the optional embedding capability', () => {
-  assert.deepEqual(parseForwardListResult({ ok: true, records: [RECORD] }), { ok: true, records: [RECORD] })
-  assert.deepEqual(
-    parseForwardListResult({ ok: true, records: [RECORD], embedding: { enabled: false, reason: 'rollback' } }),
-    { ok: true, records: [RECORD], embedding: { enabled: false, reason: 'rollback' } },
-  )
-  assert.deepEqual(parseForwardListResult({ ok: true, records: 'nope' }), { ok: false, code: 'unknown' })
-  assert.deepEqual(parseForwardListResult({ ok: false, code: 'limit' }), { ok: false, code: 'limit' })
-  assert.deepEqual(parseForwardListResult({ ok: false, code: 'not-a-code' }), { ok: false, code: 'unknown' })
-  assert.deepEqual(parseForwardListResult({ ok: false, code: 'release_timeout' }), { ok: false, code: 'unknown' },
-    'the adapter translates wire codes; the local face only accepts its own table')
-  assert.deepEqual(parseForwardListResult(null), { ok: false, code: 'unknown' })
-})
 
-test('v2 W-15: frameErrors project only canonical loopback origins with closed codes', () => {
-  for (const origin of [
-    'http://127.0.0.1:44215',
-    'https://localhost:8443',
-    'http://127.0.0.2:41000',
-  ]) {
-    assert.equal(isForwardFrameErrorOrigin(origin), true, origin)
-  }
-  for (const origin of [
-    'http://127.0.0.1:44215/embed-xfo',
-    'http://127.0.0.1:44215?x=1',
-    'http://user:pw@127.0.0.1:44215',
-    'http://127.0.0.1:80',
-    'http://127.0.0.0:1',
-    'http://127.0.0.255:1',
-    'http://example.com:1',
-    'blob:http://127.0.0.1:1/uuid',
-    'not a url',
-    '',
-    42,
-  ]) {
-    assert.equal(isForwardFrameErrorOrigin(origin), false, String(origin))
-  }
-  assert.deepEqual(
-    parseForwardFrameErrors([
-      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
-      { origin: 'http://127.0.0.1:44215', code: 'timeout' },
-      { origin: 'https://localhost:8443', code: 'certificate_error' },
-      { origin: 'http://127.0.0.1:44215/', code: 'load_failed' },
-      { origin: 'http://127.0.0.2:41000', code: 'future_code' },
-      { origin: 42, code: 'timeout' },
-      null,
-      'nope',
-    ]),
-    [
-      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
-      { origin: 'https://localhost:8443', code: 'certificate_error' },
-    ],
-    'first entry per origin wins; malformed entries are dropped, never a list failure',
-  )
-  assert.deepEqual(parseForwardFrameErrors(undefined), [])
-  assert.deepEqual(parseForwardFrameErrors('nope'), [])
-  assert.deepEqual(parseForwardListResult({
-    ok: true,
-    records: [RECORD],
-    frameErrors: [{ origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' }],
-  }), {
-    ok: true,
-    records: [RECORD],
-    frameErrors: [{ origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' }],
-  })
-  assert.deepEqual(parseForwardListResult({ ok: true, records: [], frameErrors: 'nope' }), { ok: true, records: [] })
-})
-
-test('the embedding projection is strict (absent = enabled, malformed = absent)', () => {
-  assert.equal(parseForwardEmbedding(undefined), undefined)
-  assert.deepEqual(parseForwardEmbedding({ enabled: true }), { enabled: true })
-  assert.deepEqual(parseForwardEmbedding({ enabled: false, reason: 'rollback' }), { enabled: false, reason: 'rollback' })
-  for (const value of [{}, { enabled: 'yes' }, { enabled: true, reason: '' }, { enabled: true, reason: 7 }, null, 'x']) {
-    assert.equal(parseForwardEmbedding(value), undefined, JSON.stringify(value))
-  }
-})
 
 test('the consumer grammar matches the wire pattern', () => {
   for (const value of ['a'.repeat(8), 'a'.repeat(64), '9f8e7d6c-5b4a-3210-9876-543210fedcba']) {

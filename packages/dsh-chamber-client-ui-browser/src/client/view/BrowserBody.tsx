@@ -8,8 +8,6 @@ import {
   IconLinkOutlineRegular,
   IconRefreshOutlineRegular, Tooltip,
   IconRightUpOutlineRegular,
-  SHIELD_OUTLINE_PATH,
-  ICON_REGULAR_STROKE,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import type { BrowserInjected } from '../browser/BrowserController.ts'
@@ -19,17 +17,6 @@ import type { BrowserStore } from '../browser/store.ts'
 import css from './Browser.module.css'
 
 const EMPTY_FRAME = emptyBrowserFrame()
-
-function SandboxPolicyIcon({ sandboxed }: { readonly sandboxed: boolean }): ReactNode {
-  return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path d={SHIELD_OUTLINE_PATH} stroke="currentColor" strokeWidth={ICON_REGULAR_STROKE} strokeLinejoin="round" />
-      {sandboxed
-        ? <path d="M12.1654 5.7552L8.9447 9.41475C8.73044 9.65816 8.53628 9.8804 8.35774 10.0423C8.1713 10.2114 7.94235 10.3717 7.64016 10.4254C7.48207 10.4535 7.32 10.4552 7.16151 10.4294C6.85843 10.3801 6.62728 10.2223 6.43836 10.0559C6.25752 9.89653 6.06037 9.67732 5.84264 9.43705L4.72925 8.20897L5.63557 7.38707L6.74897 8.61594C6.98603 8.87755 7.12974 9.03533 7.24673 9.13839C7.31033 9.19443 7.34485 9.21476 7.35823 9.22122C7.38068 9.22484 7.40352 9.22515 7.42593 9.22122C7.40522 9.22502 7.42893 9.23294 7.53583 9.136C7.65132 9.03126 7.79316 8.87139 8.02643 8.60638L11.2479 4.94763L12.1654 5.7552Z" fill="currentColor" />
-        : <path d="M10.6074 4.40278L8.00975 6.99973L10.6074 9.59739L9.59736 10.6074L6.9997 8.00978L4.40274 10.6074L3.3927 9.59739L5.98966 6.99973L3.3927 4.40278L4.40274 3.39273L6.9997 5.98969L9.59736 3.39273L10.6074 4.40278Z" fill="currentColor" transform="translate(1.2 0.8)" />}
-    </svg>
-  )
-}
 
 /** Browser body props assembled by the tab seat. */
 export type BrowserBodyProps = PropsRuntime<'sidebar.right.pane.tab'>
@@ -45,7 +32,7 @@ function useBrowserDraft(url: string | undefined, revision: number): readonly [s
 
 /** Render provider-neutral navigation state and optional controls. */
 export function BrowserBody(props: BrowserBodyProps): ReactNode {
-  const { mount, loadUrl, restore, goBack, goForward, reload, setSandbox, useBrowserState, useStore, useTabInfo, t } = props
+  const { mount, loadUrl, restore, goBack, goForward, reload, useBrowserState, useStore, useTabInfo, t } = props
   const { tab } = useTabInfo()
   useEffect(() => tab.actions.bindCommands({ refresh: () => { reload(tab.id) } }), [tab.actions, tab.id, reload])
   const saved = useStore(state => state.byTab[tab.id])
@@ -69,13 +56,11 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
     return hide
   }, [mount, tab.id, tab.signal, tab.actions, viewportId, props.actions])
 
-  const unknown = frame.address === 'unknown'
   // FORK DIFF (SSH reverse proxy only): a forwarded page's logical URL is the
-  // remote 127.0.0.1 address, unreachable on this machine; the provider supplies
-  // the per-source alias URL for the upstream external action.
-  const externalUrl = unknown ? undefined
-    : frame.externalUrl === null ? undefined : frame.externalUrl ?? target?.url
-  const sandboxed = frame.sandboxEnabled
+  // remote loopback, unreachable on this machine; the provider supplies the
+  // alias URL main composed for the upstream external action.
+  const externalUrl = frame.externalUrl === null ? undefined
+    : frame.externalUrl ?? target?.url
   const failure = state?.addressFailure
   const error = frame.error
   const submit = (event: FormEvent): void => { event.preventDefault(); loadUrl(tab.id, draft) }
@@ -90,29 +75,19 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
         </Tooltip>
         <div className={css.addressBox}>
           <input
-            className={[css.address, unknown ? css.addressUnknown : ''].join(' ')}
+            className={css.address}
             value={draft}
             aria-label={t('address.placeholder')}
             placeholder={t('address.placeholder')}
             spellCheck={false}
             onChange={(event) => { setDraft(event.currentTarget.value) }}
           />
-          {unknown && <span className={css.addressChanged}>{t('address.changed')}</span>}
           <button type="submit" className={[css.tool, css.addressGo].join(' ')} aria-label={t('go')} title={t('go')}><IconLinkOutlineRegular /></button>
         </div>
         <button type="button" className={css.tool} aria-label={t('external')} title={t('external')} disabled={externalUrl === undefined}
           onClick={externalUrl === undefined ? undefined : () => { window.open(externalUrl, '_blank', 'noopener,noreferrer') }}
         ><IconRightUpOutlineRegular size={14} /></button>
-        {sandboxed !== undefined && <button
-          type="button"
-          className={[css.tool, sandboxed ? '' : css.sandboxOff].join(' ')}
-          aria-label={t(sandboxed ? 'sandbox.disable' : 'sandbox.enable')}
-          title={t(sandboxed ? 'sandbox.disable' : 'sandbox.enable')}
-          aria-pressed={!sandboxed}
-          onClick={() => { setSandbox(tab.id, !sandboxed) }}
-        ><SandboxPolicyIcon sandboxed={sandboxed} /></button>}
       </form>
-      {sandboxed === false && <div className={css.sandboxWarning} role="status">{t('sandbox.warning')}</div>}
       {error !== undefined && <div className={css.failure} role="status">{error.code !== undefined && error.description !== undefined
         ? t('load.failed.detail', { code: String(error.code), description: error.description })
         : t('load.failed')}</div>}
@@ -131,7 +106,6 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
           <div className={css.start}>{t(target === undefined ? 'start' : 'loading')}</div>
         </div>}
       </div>
-      {unknown && <p className={css.limit}>{t('address.unknown')}</p>}
     </div>
   )
 }

@@ -735,13 +735,7 @@ export type ForwardConsumer = string
  * Main's best-effort child-frame failure projection (v2): XFO/frame-ancestors,
  * TLS, network, or the main-side load deadline. `null`/absent = unknown.
  */
-export type ForwardFrameError = 'blocked_by_response' | 'certificate_error' | 'load_failed' | 'timeout'
 
-/** v2 runtime embedding capability from `list` (absent = enabled). */
-export interface ForwardEmbeddingSnapshot {
-  readonly enabled: boolean
-  readonly reason?: string
-}
 
 /** One forwarded port as shown by the launcher (no child handle, no ssh argv). */
 export interface ForwardRecord {
@@ -760,7 +754,6 @@ export interface ForwardRecord {
   readonly updatedAt: number
   readonly boundAt: number | null
   /** Main's best-effort iframe failure projection (v2); absent/null = unknown. */
-  readonly frameError?: ForwardFrameError | null
 }
 
 /** Cap usage for one source snapshot (the launcher names what holds a slot). */
@@ -820,22 +813,14 @@ export type ForwardReleaseResult =
   | { readonly ok: false; readonly error: ForwardError }
 
 /** v2 local-frame failure entry (additive list field; a local iframe has no record). */
-export interface ForwardFrameErrorEntry {
-  /** Canonical http(s) loopback origin (scheme://host:port). */
-  readonly origin: string
-  readonly code: ForwardFrameError
-}
 
 export type ForwardListResult =
   | {
     readonly ok: true
     readonly records: readonly ForwardRecord[]
     readonly limits: ForwardLimitsSnapshot
-    /** v2 embedding capability (default enabled; emergency rollback may disable). */
-    readonly embedding?: ForwardEmbeddingSnapshot
     /** v2 local-frame failures main observed (local list only; mapped by origin). */
-    readonly frameErrors?: readonly ForwardFrameErrorEntry[]
-  }
+    }
   | { readonly ok: false; readonly error: ForwardError }
 
 export type ForwardOpenResult =
@@ -845,7 +830,7 @@ export type ForwardOpenResult =
 /** window.dshChamber.forward — the four-invoke remote-browser forward surface
  *  (design 28 §16.6). No subscribe member: the launcher still polls list()
  *  every 1-2 s, and the wire's reserved 'forward:changed' push is deliberately
- *  absent. v2 additive fields: consumer/path/frameUrl/embedding/frameError and
+ *  absent. v2 additive fields: consumer/path/frameUrl and
  *  the release_timeout error code; the channel count stays 58 invoke + 9 push. */
 export interface ForwardSurface {
   request(input: ForwardRequestArgs): Promise<ForwardRequestResult>
@@ -927,6 +912,8 @@ export interface DshChamberBridge {
   badge: BadgeSurface
   /** Remote-browser forward surface (design 28 §7): four invokes, no subscribe. */
   forward: ForwardSurface
+  /** Swift 原生 guest 载体（design 28 v3）：缺失即不注册 Browser 行。 */
+  browser?: BrowserSurface
 }
 
 /** rc.2 官方 desktop carrier（window.dshDesktop）：preload.cts 的
@@ -936,7 +923,9 @@ export interface DshChamberBridge {
 export type DesktopShortcutInput = { readonly revision: string } & (
   | { readonly kind: 'menu'; readonly commandId: string }
   | {
-    readonly kind: 'keyboard' | 'iframe' | 'webview'
+    /** The shipping Swift shim only emits main-document input (kind 'keyboard',
+     *  frameName ''); the frozen Electron preload still declares 'iframe'/'webview'. */
+    readonly kind: 'keyboard'
     readonly frameName: string
     readonly code: string
     readonly secondCode?: string
@@ -1001,6 +990,67 @@ export interface DshDesktopCarrier {
    *  app_arch=…; cpu=…; memory_gib=…`, unavailable fields omitted). Optional:
    *  an older bridge without the reader makes the client report the UA. */
   deviceInfo?(): Promise<string>
+}
+
+
+/** window.dshChamber.browser —— Swift 原生 guest 载体（design 28 v3 §3）。
+ *  6 个 invoke（acquire/release/navigate/command/frame/keymap）+ 4 条推送；
+ *  只有 Swift shim 提供（Electron 冻结不注册）。keymap 为可选面：旧 shim 缺它
+ *  时 guest 快捷键不转发、绝不吞键（与 BrowserBridge.keymap? 契约一致）。
+ *  形状单源 = packages/dsh-chamber-client-ui-browser/src/client/browser/BrowserBridge.ts
+ *  （FW1/FW2 精确化：几何与可见性分层、input modifiers 数组、forward recordId/path）。 */
+/** Placeholder geometry only; visibility/occlusion are TOP-LEVEL fields (design 28 §3:85). */
+export interface BrowserGuestFrame { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
+/** Geometry report: the `frame` field is REQUIRED on acquire/frame (design 28 §3:85). */
+/** One geometry report: geometry plus its top-level visibility flags. */
+export interface BrowserFrameReport { readonly frame: BrowserGuestFrame; readonly visible: boolean; readonly occluded: boolean }
+/** One forwarded shortcut combination (`browser.keymap`; design 28 v3 §3/§4.5). */
+export interface BrowserKeyCombo { readonly code: string; readonly primary: boolean; readonly alt: boolean; readonly shift: boolean; readonly control: boolean }
+export type BrowserGuestTarget =
+  | { readonly kind: 'direct'; readonly url: string }
+  | { readonly kind: 'forward'; readonly recordId: string; readonly path: string }
+export interface BrowserGuestLease { readonly tabId: string; readonly lease: string }
+export interface BrowserGuestStatePayload {
+  readonly tabId: string; readonly lease: string
+  /** The wire omits an unsettled page identity (never JSON null); the client
+   *  guard normalizes a missing/null projection to ''. */
+  readonly url: string; readonly title: string
+  readonly canGoBack: boolean; readonly canGoForward: boolean; readonly loading: boolean
+  readonly error?: { readonly code?: number; readonly description?: string }
+  /** Optional top-level visibility projection (main-side occlusion/z-order). */
+  readonly visible?: boolean
+  readonly occluded?: boolean
+}
+/** Pushed new-window request: the panel opens a browser tab. `lease` is the
+ *  opener tab occurrence (RT-11; absent on an older shim); the launcher checks it
+ *  against the receiving occurrence before the new-tab intent. */
+export interface BrowserGuestOpenRequest { readonly tabId: string; readonly url: string; readonly lease?: string }
+/** Pushed primary-modifier key; `modifiers` is canonical (legacy booleans normalized main-side). */
+export interface BrowserGuestInput {
+  readonly tabId: string
+  readonly code: string
+  readonly modifiers: readonly string[]
+  readonly repeat?: boolean
+  /** Legacy alias for the primary modifier (maps to meta). */
+  readonly primary?: boolean
+}
+/** Pushed forward negotiation request (main suspends the loopback navigation). */
+export interface BrowserGuestForwardNeeded { readonly tabId: string; readonly url: string; /** Lease the negotiation belongs to (absent = older shim). */ readonly lease?: string }
+export type BrowserGuestAck = { readonly ok: true } | { readonly ok: false; readonly code: string }
+export interface BrowserSurface {
+  acquire(input: { tabId: string; sessionId: string; sourceId: string; sourceFingerprint: string; workspaceKey: string } & BrowserFrameReport): Promise<{ readonly ok: true; readonly lease: string } | { readonly ok: false; readonly code: string }>
+  release(input: BrowserGuestLease): Promise<BrowserGuestAck>
+  navigate(input: BrowserGuestLease & { readonly target: BrowserGuestTarget }): Promise<BrowserGuestAck>
+  command(input: BrowserGuestLease & { readonly command: 'goBack' | 'goForward' | 'reload' | 'stop' }): Promise<BrowserGuestAck>
+  frame(input: BrowserGuestLease & BrowserFrameReport): Promise<BrowserGuestAck>
+  /** Optional on a shim that predates the keyboard bridge (fail-safe: keys inert). */
+  keymap?(input: BrowserGuestLease & { readonly combos: readonly BrowserKeyCombo[] }): Promise<BrowserGuestAck>
+  events: {
+    state(listener: (value: BrowserGuestStatePayload) => void): () => void
+    openRequested(listener: (value: BrowserGuestOpenRequest) => void): () => void
+    input(listener: (value: BrowserGuestInput) => void): () => void
+    forwardNeeded(listener: (value: BrowserGuestForwardNeeded) => void): () => void
+  }
 }
 
 declare global {

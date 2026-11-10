@@ -1,31 +1,24 @@
 /**
- * FORK DIFF — the SSH reverse proxy (the ONLY behavior difference from the
- * upstream iframe browser): the exact URL one iframe loads, and the external
- * exit of a forwarded page (which must use the alias, never the remote loopback).
+ * FORK DIFF — the SSH reverse proxy (the carrier's ONLY behavior difference).
  *
- * Upstream resolves a navigation target to `target.url` and hands it straight
- * to the iframe. In the chamber N-ctx shell an SSH source's remote loopback
- * (`127.0.0.1` target) is not reachable from the page, so it must ride the
- * existing SSH forward lease:
+ * Upstream resolved a navigation target to the URL an iframe loaded. In v3 the
+ * guest is a top-level document owned by main, and main composes every URL, so
+ * the renderer only decides the TARGET SHAPE (design 28 §2.10/§3):
  *
- *   - local source            → `target.url` (this machine, no forward);
- *   - ssh + host 127.0.0.1    → `BrowserForwardController.attach` (consumer
- *                               lease) and main's composed `frameUrl`;
- *   - ssh + any other host    → `target.url` (upstream direct URL).
+ *   - local source / non-loopback host → direct URL (passed through verbatim);
+ *   - ssh source + host `127.0.0.1`/`localhost` → attach the per-source SSH
+ *     forward lease and answer `{ kind: 'forward', recordId, path }`; main loads
+ *     the alias itself and the address bar/history keep the LOGICAL URL;
+ *   - a refused attach → `undefined`, rendered as the upstream failure bar.
  *
- * The DISPLAYED target never changes: `BrowserBody`'s address bar and the
- * persisted history keep the logical target; only `IframePresentation.src`
- * uses the resolved URL. Leaving a forwarded target (or closing the tab)
- * releases the consumer through the same controller; an attach failure yields
- * `undefined`, which surfaces as the upstream `BrowserFrameState.error` bar.
+ * `externalUrl` is display-only: the forwarded page's system-browser exit goes
+ * to main's composed alias URL (never the remote loopback on this machine).
  *
- * Everything else (address parsing, history, persistence, sandbox, shortcut,
- * multi-tab behavior, DOM/className/copy) stays upstream verbatim.
+ * Everything else (address parsing, persistence, multi-tab, copy) is upstream.
  */
 import { BrowserForwardController } from '../../shared/browser-controller.ts'
 import type { BrowserForwardBridge } from '../../shared/forward-bridge.ts'
 import type { BrowserSource } from '../../shared/source.ts'
-import type { BrowserFrameSrcResolver } from './IframeImpl.ts'
 import type { BrowserTarget } from './url.ts'
 
 /** Construction inputs: the per-entry source proof and the trusted forward bridge. */
@@ -38,14 +31,30 @@ export interface ForwardFrameResolverOptions {
   readonly bridge: BrowserForwardBridge | null
 }
 
-/** The one address-bar host that means "the REMOTE machine's loopback". */
-const FORWARD_TARGET_HOST = '127.0.0.1'
+/** The exact guest target one logical navigation resolves to (design 28 §3). */
+export type BrowserTargetRef =
+  | { readonly kind: 'direct'; readonly url: string }
+  | {
+    readonly kind: 'forward'
+    readonly recordId: string
+    readonly path: string
+    /** Main-composed alias URL for the system-browser exit (display only). */
+    readonly externalUrl: string
+  }
 
-/**
- * Resolve logical Browser targets to iframe URLs through the existing
- * per-tab forward lease (one resolver per tab occurrence).
- */
-export class ForwardFrameResolver implements BrowserFrameSrcResolver {
+/** The seam `NativeGuestImpl` consumes: logical target → guest target. */
+export interface BrowserTargetRefResolver {
+  /** @returns the guest target, or undefined when the forward attach failed. */
+  resolve(target: BrowserTarget): Promise<BrowserTargetRef | undefined>
+  /** Release every forward consumer this tab held; repeated calls are safe. */
+  dispose(): Promise<void>
+}
+
+/** The two host spellings that mean "the REMOTE machine's loopback". */
+const FORWARD_TARGET_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost'])
+
+/** One resolver per tab occurrence. */
+export class ForwardFrameResolver implements BrowserTargetRefResolver {
   private readonly options: ForwardFrameResolverOptions
   private readonly controller: BrowserForwardController
   private disposed = false
@@ -57,18 +66,12 @@ export class ForwardFrameResolver implements BrowserFrameSrcResolver {
     this.controller = new BrowserForwardController({
       source: options.source,
       sourceFingerprint: options.sourceFingerprint,
-      // The controller parses every answer; a missing carrier disables the leg.
       transport: options.bridge,
     })
   }
 
-  /** @param target - logical navigation target. @returns whether this load attaches a forward lease. */
-  forwards(target: BrowserTarget): boolean {
-    return this.mustForward(target)
-  }
-
-  /** @param target - logical navigation target. @returns exact iframe src, or undefined on failure. */
-  resolve(target: BrowserTarget): Promise<string | undefined> {
+  /** @param target - logical navigation target. @returns the exact guest target. */
+  resolve(target: BrowserTarget): Promise<BrowserTargetRef | undefined> {
     const next = this.chain.then(async () => this.resolveSerial(target))
     this.chain = next.then(() => undefined, () => undefined)
     return next
@@ -81,26 +84,33 @@ export class ForwardFrameResolver implements BrowserFrameSrcResolver {
     await this.controller.dispose()
   }
 
-  private async resolveSerial(target: BrowserTarget): Promise<string | undefined> {
+  private async resolveSerial(target: BrowserTarget): Promise<BrowserTargetRef | undefined> {
     if (this.disposed) return undefined
     if (!this.mustForward(target)) {
       // A direct target ends any forwarded page in this pane: release its
-      // consumer BEFORE the iframe leaves the forwarded URL.
+      // consumer BEFORE the guest leaves the forwarded URL.
       if (this.controller.currentRecordId !== null) await this.controller.detachCurrent()
-      return target.url
+      return { kind: 'direct', url: target.url }
     }
     if (this.options.bridge === null) return undefined
     const request = this.forwardRequest(target)
     if (request === undefined) return undefined
     const outcome = await this.controller.attach(request)
-    return outcome.ok ? outcome.frameUrl : undefined
+    if (!outcome.ok) return undefined
+    const record = outcome.record
+    return {
+      kind: 'forward',
+      recordId: record.id,
+      path: request.path,
+      externalUrl: record.scheme + '://' + record.aliasHost + ':' + String(record.localPort) + request.path,
+    }
   }
 
-  /** Whether this target must ride the source's SSH forward. */
+  /** Whether this target must ride the source's SSH reverse proxy. */
   private mustForward(target: BrowserTarget): boolean {
     if (!this.options.source.mayForward) return false
     try {
-      return new URL(target.url).hostname === FORWARD_TARGET_HOST
+      return FORWARD_TARGET_HOSTS.has(new URL(target.url).hostname)
     } catch {
       return false
     }
@@ -109,23 +119,15 @@ export class ForwardFrameResolver implements BrowserFrameSrcResolver {
   /** Extract the validated remote port/scheme/path from a logical target. */
   private forwardRequest(target: BrowserTarget): { port: number; scheme: 'http' | 'https'; path: string } | undefined {
     let url: URL
-    try {
-      url = new URL(target.url)
-    } catch {
-      return undefined
-    }
+    try { url = new URL(target.url) } catch { return undefined }
     const scheme = target.kind === 'https' ? 'https' : 'http'
     const port = url.port === '' ? (scheme === 'https' ? 443 : 80) : Number(url.port)
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return undefined
-    return {
-      port,
-      scheme,
-      path: (url.pathname === '' ? '/' : url.pathname) + url.search,
-    }
+    return { port, scheme, path: (url.pathname === '' ? '/' : url.pathname) + url.search }
   }
 }
 
-/** Build the per-tab forward resolver (one consumer lease per tab occurrence). */
+/** Build the per-tab resolver (one consumer lease per tab occurrence). */
 export function createForwardFrameResolver(options: ForwardFrameResolverOptions): ForwardFrameResolver {
   return new ForwardFrameResolver(options)
 }

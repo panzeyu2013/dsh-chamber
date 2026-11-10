@@ -7,13 +7,13 @@
  * fails (a zero-case manifest is never a pass).
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  *
- * This package is a faithful source fork of upstream
- * `@deepseek-ai/dsh-client-ui-sidebar-browser` (0.2.2-rc.1) iframe path; the
- * only behavior difference is the SSH reverse proxy (forward frame-src resolver
- * + the forwarded page's alias external exit). The URL and
- * navigation suites are node:test dialects of the upstream specs, the forward
- * resolver suite covers the one diff, and the locks suite pins the fork surface
- * (verbatim digests + the deleted self-built UI).
+ * The Browser plugin keeps upstream `@deepseek-ai/dsh-client-ui-sidebar-browser`
+ * (0.2.2-rc.1) chrome/address/history and drives the Swift shell's native guest
+ * (one child WKWebView per tab, design 28 v3 / ADR-0004). The only behavior
+ * difference is the SSH reverse proxy (forward recordRef + alias external exit).
+ * The URL and navigation suites are node:test dialects of the upstream specs, the
+ * forward resolver suite covers the one diff, the carrier suite pins the bridge
+ * guard/geometry model, and the locks suite pins the fork surface.
  */
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -30,10 +30,16 @@ const GROUPS = {
   navigation: [
     'test/navigation/navigation.test.ts',
   ],
-  // forward: the fork's ONLY behavior diff — logical target → exact iframe src.
+  // forward: the carrier's ONLY behavior diff — logical target → guest target recordRef.
   forward: [
     'test/forward/resolver.test.ts',
     'test/launcher/forward-bridge.test.ts',
+  ],
+  // carrier: the native guest bridge guard, push projections and placeholder geometry.
+  carrier: [
+    'test/carrier/native-guest.test.ts',
+    'test/carrier/guest-state.test.ts',
+    'test/carrier/popup-limit.test.ts',
   ],
   // lifecycle: the tab-occurrence forward lease the resolver drives.
   lifecycle: [

@@ -11,11 +11,12 @@
  * a closed table of snake_case error codes, and
  * `{ ok: false, error: { code, detail } }`. The launcher speaks a smaller UI
  * vocabulary: three states, eleven kebab-case codes, `{ ok: false, code }`.
- * v2 also adds the renderer-minted `consumer` (attach/detach lifetime),
- * main-composed `frameUrl`, the `embedding` capability, the
- * `record.frameError` iframe-failure projection and the local-only
- * `list.frameErrors` origin projection (a direct local iframe has no record,
- * design 28 §16.7 / W-15).
+ * v2 also adds the renderer-minted `consumer` (attach/detach lifetime) and the
+ * forward recordRef routing used by the native guest carrier (design 28 v3
+ * §2.10). The iframe-era paper list fields are retired with the iframe carrier
+ * and the wire (design 28 v3 §3). The
+ * per-record `frameError` stays as a diagnostic classification only: the native
+ * guest reports its own load failures through `browser.state`, so no UI reads it.
  *
  * This module is the ONE translation between those two vocabularies: preload
  * and main stay wire-shaped (design 28 §7: no main-side rewrite, or Electron
@@ -43,10 +44,12 @@
  * happen. Error `detail` is main-composed diagnostics and never reaches the
  * row: only the mapped launcher code does (the panel renders it as a token).
  */
-import type {
-  ForwardErrorCode as WireForwardErrorCode,
-  ForwardRecord as WireForwardRecord,
-  ForwardState as WireForwardState,
+import {
+  FORWARD_FRAME_ERRORS,
+  type ForwardErrorCode as WireForwardErrorCode,
+  type ForwardFrameError,
+  type ForwardRecord as WireForwardRecord,
+  type ForwardState as WireForwardState,
 } from '@dsh-chamber/dsh-chamber-wire/forward'
 
 /** Service name the deferred browser launcher probes on its ctx. */
@@ -73,18 +76,18 @@ export type LauncherForwardFailureCode =
   | 'unavailable'
   | 'unknown'
 
-/** The launcher's frame-failure vocabulary (same closed tokens as the wire table). */
-export type LauncherForwardFrameError =
-  | 'blocked_by_response'
-  | 'certificate_error'
-  | 'load_failed'
-  | 'timeout'
+/**
+ * The launcher's frame-failure vocabulary — SINGLE SOURCE = wire
+ * `FORWARD_FRAME_ERRORS` (no hand-copied token list; a wire addition flows here).
+ */
+export type LauncherForwardFrameError = ForwardFrameError
 
-/** v2 embedding capability (list-only, default enabled, emergency rollback only). */
-export interface LauncherForwardEmbedding {
-  enabled: boolean
-  reason?: string
+/** Narrow an untrusted value to a frame-failure classification. */
+function isLauncherFrameError(value: unknown): value is LauncherForwardFrameError {
+  return typeof value === 'string' && (FORWARD_FRAME_ERRORS as readonly string[]).includes(value)
 }
+
+/** The launcher's frame-failure vocabulary (same closed tokens as the wire table). */
 
 /**
  * v2 local-frame failure projection (list-only, additive): an origin-scoped
@@ -92,11 +95,6 @@ export interface LauncherForwardEmbedding {
  * forward record (the direct local loopback leg). The launcher maps it onto the
  * CURRENT iframe origin so an engine error page can never settle as live.
  */
-export interface LauncherForwardFrameErrorEntry {
-  /** Canonical http(s) loopback/alias origin (scheme://host:port). */
-  origin: string
-  code: LauncherForwardFrameError
-}
 
 /** One row as the launcher renders it (display facts only; never a URL to open). */
 export interface LauncherForwardRecord {
@@ -111,7 +109,11 @@ export interface LauncherForwardRecord {
   stale: boolean
   /** Mapped launcher code; present iff `state === 'error'`. */
   error?: string
-  /** main's best-effort iframe failure projection; absent = unknown. */
+  /**
+   * Main's diagnostic frame-failure classification (wire keeps the per-record
+   * field in v3). No launcher UI consumes it: the native guest reports its own
+   * load failures through `browser.state` (design 28 v3 §4.3).
+   */
   frameError?: LauncherForwardFrameError
 }
 
@@ -120,9 +122,6 @@ export type LauncherForwardListResult =
   | {
     ok: true
     records: LauncherForwardRecord[]
-    embedding?: LauncherForwardEmbedding
-    /** v2 local-frame failures (origin-scoped; local list only). */
-    frameErrors?: LauncherForwardFrameErrorEntry[]
   }
   | LauncherForwardFailure
 export type LauncherForwardRequestResult =
@@ -231,20 +230,8 @@ const WIRE_CODE_TO_LAUNCHER: Readonly<Record<WireForwardErrorCode, LauncherForwa
 }
 
 /** The alias range 127.0.0.2-254 (never .1/.0/.255); display host only. */
-const ALIAS_HOST = /^127\.0\.0\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/u
 
 /** The wire frame-failure table, re-declared locally (no runtime wire import). */
-const LAUNCHER_FRAME_ERRORS: ReadonlySet<string> = new Set<LauncherForwardFrameError>([
-  'blocked_by_response',
-  'certificate_error',
-  'load_failed',
-  'timeout',
-])
-
-/** Narrow an untrusted projection to the launcher's frame-failure vocabulary. */
-function isLauncherFrameError(value: unknown): value is LauncherForwardFrameError {
-  return typeof value === 'string' && LAUNCHER_FRAME_ERRORS.has(value)
-}
 
 /**
  * Main-composed iframe URL guard (the adapter has no runtime wire import; the
@@ -263,65 +250,8 @@ function isLauncherFrameUrl(value: unknown): value is string {
   }
 }
 
-/**
- * Frame-origin guard (no runtime wire import): canonical http(s) origin of a
- * loopback browser frame — 127.0.0.1 / localhost or a 127.0.0.2..254 alias. The
- * value must be the CANONICAL origin spelling (URL.origin), never a URL with a
- * path, credentials or a non-canonical port.
- */
-function isLauncherFrameOrigin(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch {
-    return false
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
-  if (url.username !== '' || url.password !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '') return false
-  if (url.origin !== value) return false
-  if (url.hostname === 'localhost') return true
-  if (url.hostname === '127.0.0.1') return true
-  return ALIAS_HOST.test(url.hostname)
-}
-
-/** Project the optional additive frameErrors array; malformed entries are dropped. */
-function readFrameErrors(value: unknown): LauncherForwardFrameErrorEntry[] {
-  if (!Array.isArray(value)) return []
-  const out: LauncherForwardFrameErrorEntry[] = []
-  const seen = new Set<string>()
-  for (const entry of value) {
-    if (typeof entry !== 'object' || entry === null) continue
-    let origin: unknown
-    let code: unknown
-    try {
-      ;({ origin, code } = entry as Record<string, unknown>)
-    } catch {
-      continue
-    }
-    if (!isLauncherFrameOrigin(origin) || !isLauncherFrameError(code) || seen.has(origin)) continue
-    seen.add(origin)
-    out.push({ origin, code })
-  }
-  return out
-}
-
-/** Read the optional embedding capability; absent/malformed = absent (= enabled). */
-function readEmbedding(value: unknown): LauncherForwardEmbedding | undefined {
-  if (typeof value !== 'object' || value === null) return undefined
-  let enabled: unknown
-  let reason: unknown
-  try {
-    ;({ enabled, reason } = value as Record<string, unknown>)
-  } catch {
-    return undefined
-  }
-  if (typeof enabled !== 'boolean') return undefined
-  if (reason !== undefined && (typeof reason !== 'string' || reason === '' || reason.length > 128)) {
-    return undefined
-  }
-  return reason === undefined ? { enabled } : { enabled, reason }
-}
+/** The alias range 127.0.0.2-254 (never .1/.0/.255); display host only. */
+const ALIAS_HOST = /^127\.0\.0\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/u
 
 /** The four wire calls this adapter forwards, in wire order. */
 const FORWARD_METHODS = ['request', 'release', 'list', 'openInBrowser'] as const
@@ -435,11 +365,11 @@ function readWireRecord(value: unknown): WireRecordFacts | null {
   const wireState = state as WireForwardState
   const wireError = readWireError(error)
   if (!wireError.ok) return null
+  // frameError is an optional/null diagnostic (absent = unknown); an unknown
+  // future token is dropped (the row still renders), never a dropped row.
+  const projectedFrameError = isLauncherFrameError(frameError) ? frameError : null
   // Wire invariant (`isForwardRecord`): an error is present iff state is 'error'.
   if ((wireError.code === null) !== (wireState !== 'error')) return null
-  // frameError is optional/null (absent = unknown); an unknown future token is
-  // dropped (the row still renders) instead of failing the whole record.
-  const projectedFrameError = isLauncherFrameError(frameError) ? frameError : null
   return {
     id,
     targetPort,
@@ -518,13 +448,9 @@ function projectListResult(value: unknown): LauncherForwardListResult {
   if (!envelope.ok) return projectFailure(envelope.value)
   const records = envelope.value.records
   if (!Array.isArray(records)) return { ok: false, code: 'unknown' }
-  const embedding = readEmbedding(envelope.value.embedding)
-  const frameErrors = readFrameErrors(envelope.value.frameErrors)
   return {
     ok: true,
     records: projectRecords(records),
-    ...(embedding === undefined ? {} : { embedding }),
-    ...(frameErrors.length === 0 ? {} : { frameErrors }),
   }
 }
 
@@ -631,4 +557,346 @@ export function installChamberForward(
   if (host === null) return false
   ctx.provide(CHAMBER_FORWARD_SERVICE, createBridge(host))
   return true
+}
+
+/** Service name the deferred browser launcher probes on its ctx (design 28 v3 §3). */
+const CHAMBER_BROWSER_SERVICE = 'chamberBrowser'
+
+/** The browser guest surface the page (Swift shim) may own. */
+type PageBrowserSurface = {
+  acquire(input: unknown): Promise<unknown>
+  release(input: unknown): Promise<unknown>
+  navigate(input: unknown): Promise<unknown>
+  command(input: unknown): Promise<unknown>
+  frame(input: unknown): Promise<unknown>
+  keymap?(input: unknown): Promise<unknown>
+  events: {
+    state(listener: (value: unknown) => void): () => void
+    openRequested(listener: (value: unknown) => void): () => void
+    input(listener: (value: unknown) => void): () => void
+    forwardNeeded(listener: (value: unknown) => void): () => void
+  }
+}
+
+/**
+ * The six invokes the page carrier MUST expose (design 28 v3 §3): SINGLE
+ * SOURCE = the launcher's BrowserBridge.ts (`REQUIRED_BROWSER_INVOKES` plus the
+ * documented optional sixth `keymap`; the v3 Swift shim always exposes it, and
+ * treating it as required keeps a half-built carrier fail-closed here). Kept as
+ * a local literal on purpose: the adapter is runtime-import-free (the launcher
+ * half is a deferred chunk; importing it here would pull it into the eager
+ * composite). The list is locked name-for-name to the launcher's documented
+ * six-name face by chamber-forward-adapter.test.ts ⑧.
+ */
+const BROWSER_INVOKES = ['acquire', 'release', 'navigate', 'command', 'frame', 'keymap'] as const // = REQUIRED_BROWSER_INVOKES + optional 'keymap'
+const BROWSER_EVENTS = ['state', 'openRequested', 'input', 'forwardNeeded'] as const
+
+/** Structural probe for `<page>.dshChamber.browser` (Swift-only carrier). */
+function readPageBrowserSurface(page: unknown): PageBrowserSurface | null {
+  const chamber = readPageNamespace(page, 'dshChamber')
+  if (typeof chamber !== 'object' || chamber === null) return null
+  let browser: unknown
+  try { browser = (chamber as Record<string, unknown>).browser } catch { return null }
+  if (typeof browser !== 'object' || browser === null) return null
+  for (const method of BROWSER_INVOKES) {
+    let member: unknown
+    try { member = (browser as Record<string, unknown>)[method] } catch { return null }
+    if (typeof member !== 'function') return null
+  }
+  let events: unknown
+  try { events = (browser as Record<string, unknown>).events } catch { return null }
+  if (typeof events !== 'object' || events === null) return null
+  for (const name of BROWSER_EVENTS) {
+    let member: unknown
+    try { member = (events as Record<string, unknown>)[name] } catch { return null }
+    if (typeof member !== 'function') return null
+  }
+  return browser as PageBrowserSurface
+}
+
+function readPageNamespace(scope: unknown, key: string): unknown {
+  if (typeof scope !== 'object' || scope === null) return undefined
+  try { return (scope as Record<string, unknown>)[key] } catch { return undefined }
+}
+
+/** Project one invoke answer; a rejected invoke is an infrastructure failure. */
+async function projectBrowserAck(run: () => Promise<unknown>): Promise<{ ok: boolean; code?: string; lease?: string }> {
+  try {
+    const value = await run()
+    if (typeof value !== 'object' || value === null) return { ok: false, code: 'unknown' }
+    const record = value as Record<string, unknown>
+    if (record.ok !== true) {
+      return { ok: false, code: typeof record.code === 'string' && record.code !== '' ? record.code : 'unknown' }
+    }
+    return typeof record.lease === 'string' ? { ok: true, lease: record.lease } : { ok: true }
+  } catch {
+    return { ok: false, code: 'unavailable' }
+  }
+}
+
+/** Canonical guest input modifier vocabulary (design 28 §3 push input; lowercase DOM names). */
+const GUEST_KEY_MODIFIERS = ['meta', 'alt', 'shift', 'control'] as const
+
+/**
+ * Normalize one guest key payload's modifier set.
+ *
+ * Canonical `modifiers: string[]` wins; the legacy boolean shape
+ * (`primary` → meta, `alt`/`shift`/`control`) is the fallback only when no array
+ * is present (design 28 §3 input contract: the legacy shape exists so a shim
+ * rollout order cannot break the replay). Unknown/mixed-case tokens are ignored
+ * (the canonical vocabulary is lowercase).
+ *
+ * @param record - the untrusted input push.
+ * @returns the canonical modifier names in wire spelling.
+ */
+function readGuestKeyModifiers(record: Record<string, unknown>): readonly string[] {
+  if (Array.isArray(record.modifiers)) {
+    return record.modifiers.filter((item): item is string =>
+      typeof item === 'string' && (GUEST_KEY_MODIFIERS as readonly string[]).includes(item))
+  }
+  const legacy: string[] = []
+  if (record.primary === true) legacy.push('meta')
+  for (const modifier of ['alt', 'shift', 'control'] as const) {
+    if (record[modifier] === true) legacy.push(modifier)
+  }
+  return legacy
+}
+
+/** One normalized new-tab intent (RT-11: `lease` = the opener tab occurrence). */
+type GuestOpenRequest = { readonly tabId: string; readonly url: string; readonly lease?: string }
+
+/**
+ * Narrow an untrusted open-request push.
+ *
+ * `lease` identifies the opener tab occurrence (design 28 §3:89); the launcher
+ * checks it against the occurrence that received the push (attribution) before
+ * opening the new tab. A malformed lease rejects the whole push (fail closed,
+ * like `state`); an absent lease is the older-shim compatibility arm.
+ *
+ * @param value - the untrusted push payload.
+ * @returns the normalized intent, or null when a required bound is broken.
+ */
+function projectGuestOpenRequest(value: unknown): GuestOpenRequest | null {
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as Record<string, unknown>
+  const tabId = record.tabId
+  const url = record.url
+  if (typeof tabId !== 'string' || tabId === '' || tabId.length > 128) return null
+  if (typeof url !== 'string' || url.length > 4096) return null
+  let lease: string | undefined
+  if (record.lease !== undefined) {
+    if (typeof record.lease !== 'string' || record.lease === '' || record.lease.length > 128) return null
+    lease = record.lease
+  }
+  return { tabId, url, ...(lease === undefined ? {} : { lease }) }
+}
+
+/**
+ * Replay a guest-focused primary-modifier key into the shell's shortcut pipeline
+ * (design 28 v3 §4.5).
+ *
+ * The Shortcuts service exposes no programmatic dispatch: `dispatch` lives on its
+ * package-private registry and is fed by the window keydown listener, which has NO
+ * `isTrusted` gate (vendor `packages/client/shortcuts/src/client/dom.ts:66-99`). So
+ * the seam is a synthetic `KeyboardEvent` targeted at the browser tab element
+ * (`data-chamber-browser-tab`), which gives the shortcut context a real Element target.
+ */
+function replayGuestKey(input: unknown, scope: unknown): void {
+  if (typeof input !== 'object' || input === null) return
+  const record = input as Record<string, unknown>
+  const tabId = record.tabId
+  const code = record.code
+  if (typeof tabId !== 'string' || typeof code !== 'string' || code === '') return
+  const document = (typeof scope === 'object' && scope !== null ? (scope as { document?: Document }).document : undefined)
+  if (document === undefined || typeof document.querySelector !== 'function') return
+  const element = document.querySelector('[data-chamber-browser-tab=' + JSON.stringify(tabId) + ']')
+  if (element === null) return
+  const modifiers = readGuestKeyModifiers(record)
+  const event = new KeyboardEvent('keydown', {
+    code, key: code,
+    ctrlKey: modifiers.includes('control'), altKey: modifiers.includes('alt'),
+    shiftKey: modifiers.includes('shift'), metaKey: modifiers.includes('meta'),
+    // The legacy shape carries repeat as a sibling boolean; the canonical shape
+    // does too (design 28 §3:89), so both are passed through as a boolean.
+    repeat: record.repeat === true,
+    bubbles: true, cancelable: true, composed: true,
+  })
+  element.dispatchEvent(event)
+}
+
+/**
+ * Install the page-level `chamberBrowser` service (design 28 v3 §3).
+ *
+ * Mirrors `installChamberForward`: the launcher's ctx probe resolves before the
+ * deferred chunk mounts, a page without the Swift shim's browser namespace gets NO
+ * service (the Browser row then stays absent, fail-closed), and the page-global
+ * fallback in the launcher stays for early boots.
+ *
+ * @param ctx - the per-entry context (structural: only `provide` is used).
+ * @param page - the page scope to read; defaults to `globalThis` (tests pass a literal scope).
+ * @returns true when the service was provided.
+ */
+export function installChamberBrowser(
+  ctx: { provide(name: string, value: unknown): void; get?(name: string): unknown },
+  page: unknown = globalThis,
+): boolean {
+  const surface = readPageBrowserSurface(page)
+  if (surface === null) return false
+  // Effective keymap source over the per-entry Shortcuts service (design 28 v3
+  // §4.5). Absent service => absent source => the launcher sends no keymap.
+  const combos = typeof ctx.get === 'function'
+    ? createComboSource({ get: name => ctx.get!(name) })
+    : undefined
+  ctx.provide(CHAMBER_BROWSER_SERVICE, {
+    acquire: (input: unknown) => projectBrowserAck(() => surface.acquire(input)),
+    release: (input: unknown) => projectBrowserAck(() => surface.release(input)),
+    navigate: (input: unknown) => projectBrowserAck(() => surface.navigate(input)),
+    command: (input: unknown) => projectBrowserAck(() => surface.command(input)),
+    frame: (input: unknown) => projectBrowserAck(() => surface.frame(input)),
+    ...(typeof surface.keymap === 'function'
+      ? { keymap: (input: unknown) => projectBrowserAck(() => surface.keymap!(input)) }
+      : {}),
+    ...(combos === undefined ? {} : { combos }),
+    events: {
+      state: (listener: (value: unknown) => void) => surface.events.state(listener),
+      // RT-11: normalize the push and retain the opener occurrence's lease on the
+      // request. The launcher attributes it to the receiving tab occurrence before
+      // the new-tab intent; no other behavior reads it (a new tab is a new occurrence).
+      openRequested: (listener: (value: unknown) => void) => surface.events.openRequested(value => {
+        const request = projectGuestOpenRequest(value)
+        if (request !== null) listener(request)
+      }),
+      input: (listener: (value: unknown) => void) => surface.events.input(listener),
+      forwardNeeded: (listener: (value: unknown) => void) => surface.events.forwardNeeded(listener),
+    },
+  })
+  // Guest-focused keys ride the shortcut pipeline through the synthetic event seam.
+  surface.events.input(value => { replayGuestKey(value, page) })
+  return true
+}
+
+/** The shell-facing combination (design 28 v3 §4.5): Swift KeyboardBridge keymap row. */
+export interface ShortcutCombo {
+  readonly code: string
+  readonly primary: boolean
+  readonly alt: boolean
+  readonly shift: boolean
+  readonly control: boolean
+}
+
+/** One normalized physical binding (vendor NormalizedBinding shape). */
+type NormalizedBindingLike = { readonly code?: unknown; readonly modifiers?: unknown }
+
+/**
+ * Map one effective normalized binding to the shell combination.
+ *
+ * primary is the platform's primary modifier: Command (meta) on macOS, Control
+ * elsewhere. On macOS the literal Control key is still forwarded as control.
+ *
+ * @param binding - the binding from the Shortcuts catalog/fixed catalog.
+ * @param platform - the Shortcuts platform word.
+ * @returns the combo, or null when the binding has no usable code.
+ */
+export function shortcutCombo(binding: NormalizedBindingLike, platform: unknown): ShortcutCombo | null {
+  const code = binding.code
+  if (typeof code !== 'string' || code === '') return null
+  const modifiers = Array.isArray(binding.modifiers)
+    ? binding.modifiers.filter((item): item is string => typeof item === 'string')
+    : []
+  const mac = platform === 'macos'
+  return {
+    code,
+    primary: mac ? modifiers.includes('meta') : modifiers.includes('control'),
+    alt: modifiers.includes('alt'),
+    shift: modifiers.includes('shift'),
+    control: mac && modifiers.includes('control'),
+  }
+}
+
+/** The Shortcuts snapshots the keymap source reads (vendor ObservableSnapshot). */
+interface ShortcutSnapshots {
+  readonly platform?: unknown
+  readonly catalog?: { getSnapshot?(): unknown; subscribe?(listener: () => void): () => void }
+  readonly config?: { getSnapshot?(): unknown; subscribe?(listener: () => void): () => void }
+  readonly fixedCatalog?: { getSnapshot?(): unknown; subscribe?(listener: () => void): () => void }
+}
+
+/**
+ * Enumerate the effective combinations the shell must forward.
+ *
+ * The catalog already folds config overrides in (the registry recomputes the
+ * effective bindings on every config/locale change), so this reads the catalog
+ * plus the fixed catalog (feature-owned reserved combinations).
+ *
+ * @param shortcuts - the Shortcuts service face.
+ * @returns deduped combinations; an unreadable table yields an empty array.
+ */
+export function shortcutCombosFromSnapshots(shortcuts: ShortcutSnapshots): ShortcutCombo[] {
+  const platform = shortcuts.platform
+  const combos: ShortcutCombo[] = []
+  const seen = new Set<string>()
+  const add = (binding: NormalizedBindingLike): void => {
+    const combo = shortcutCombo(binding, platform)
+    if (combo === null) return
+    const key = [combo.code, combo.primary, combo.alt, combo.shift, combo.control].join(':')
+    if (seen.has(key)) return
+    seen.add(key)
+    combos.push(combo)
+  }
+  const readRows = (snapshot: { getSnapshot?(): unknown } | undefined): readonly unknown[] => {
+    if (snapshot?.getSnapshot === undefined) return []
+    let rows: unknown
+    try { rows = snapshot.getSnapshot.call(snapshot) } catch { return [] }
+    return Array.isArray(rows) ? rows : []
+  }
+  for (const row of readRows(shortcuts.catalog)) {
+    if (typeof row !== 'object' || row === null) continue
+    const binding = (row as { binding?: unknown }).binding
+    if (typeof binding === 'object' && binding !== null) add(binding as NormalizedBindingLike)
+  }
+  for (const row of readRows(shortcuts.fixedCatalog)) {
+    if (typeof row !== 'object' || row === null) continue
+    const bindings = (row as { bindings?: unknown }).bindings
+    if (!Array.isArray(bindings)) continue
+    for (const binding of bindings) {
+      if (typeof binding === 'object' && binding !== null) add(binding as NormalizedBindingLike)
+    }
+  }
+  return combos
+}
+
+/**
+ * Build the launcher-facing combination source over the per-entry Shortcuts service.
+ *
+ * Lazy by design: the Shortcuts service is materialized by a first-screen plugin
+ * that may apply after this adapter. A service that never appears leaves the
+ * source absent (no keymap push; guest keys stay inert, never swallowed). Reads
+ * and subscriptions are fail-safe.
+ *
+ * @param ctx - entry context to read the shortcuts service from.
+ * @returns the source, or undefined when no Shortcuts service is present.
+ */
+function createComboSource(ctx: { get(name: string): unknown }): { read(): ShortcutCombo[]; subscribe(listener: () => void): () => void } | undefined {
+  const service = (): ShortcutSnapshots | undefined => {
+    let value: unknown
+    try { value = ctx.get('shortcuts') } catch { return undefined }
+    return typeof value === 'object' && value !== null ? (value as ShortcutSnapshots) : undefined
+  }
+  if (service() === undefined) return undefined
+  return {
+    read: () => {
+      const snapshots = service()
+      return snapshots === undefined ? [] : shortcutCombosFromSnapshots(snapshots)
+    },
+    subscribe: (listener: () => void) => {
+      const snapshots = service()
+      if (snapshots === undefined) return () => undefined
+      const stops: (() => void)[] = []
+      for (const snapshot of [snapshots.catalog, snapshots.config, snapshots.fixedCatalog]) {
+        if (snapshot === undefined || snapshot.subscribe === undefined) continue
+        try { stops.push(snapshot.subscribe(listener)) } catch { /* fail-safe */ }
+      }
+      return () => { for (const stop of stops) { try { stop() } catch { /* fail-safe */ } } }
+    },
+  }
 }
