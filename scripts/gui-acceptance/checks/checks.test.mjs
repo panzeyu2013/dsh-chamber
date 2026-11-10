@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import {
   BROWSER_ADDRESS_LABELS, BROWSER_FRAME_CONTRACT, BROWSER_FRAME_CSP_MAX_BYTES, BROWSER_FRAME_CSP_SOURCES,
-  BROWSER_FRAME_CSP_V1, BROWSER_SANDBOX_LABELS, BROWSER_TOOLBAR_LABELS,
+  BROWSER_FRAME_CSP_V1, BROWSER_TOOLBAR_LABELS,
   EXPECTED_FIXTURE_CONSOLE_NOISE, EXPECTED_FIXTURE_REQUEST_FAILURES,
   HOVER_RACE_FALLBACK_OFFSETS, HOVER_RACE_WINDOW_CAP_MS, KNOWN_UPSTREAM_BOOT_NOISE,
   RAIL_TOGGLE_BAND_MAX_TOP_PX, RAIL_TOGGLE_BOX_MAX_PX, RAIL_TOGGLE_LEFT_FRACTION, TOLERATED_REQUEST_FAILURES,
@@ -1422,14 +1422,18 @@ test('I15: the switch legs own --require-switch and the walkthrough declares non
 })
 
 // ============================================================================
-// Browser (design 28 §16.9): the upstream ui-sidebar-browser iframe fork.
-// Part 1 = product source-lock mirrors; part 2 = pure verdicts; part 3 = the
-// REAL page expressions against a fake upstream DOM; part 4 = fixture + SH-7
-// over real HTTP.
+// Browser (design 28 v3 §4/§9): the Swift native-guest carrier (iframe retired).
+// Part 1 = product source-lock mirrors; part 2 = pure verdicts (the five
+// W-13…W-15b iframe verdicts are ARCHIVED v2 — green there is NOT v3 acceptance
+// evidence; v3 criteria = acceptance §E2); part 3 = REAL page expressions
+// against a fake DOM (the iframe scene is ARCHIVED v2, same caveat); part 4 =
+// fixture + SH-7 over real HTTP (SH-7 stays live for v3).
 // ============================================================================
 
 const readProduct = relative => readFileSync(new URL('../../../packages/dsh-chamber-client-ui-browser/' + relative, import.meta.url), 'utf8')
-const BROWSER_IFRAME_PRESENTATION = readProduct('src/client/view/IframePresentation.ts')
+const BROWSER_NATIVE_CARRIER = readProduct('src/client/browser/NativeGuestImpl.ts')
+const BROWSER_NATIVE_PRESENTATION = readProduct('src/client/view/NativeGuestPresentation.ts')
+const BROWSER_BRIDGE_SOURCE = readProduct('src/client/browser/BrowserBridge.ts')
 const BROWSER_BODY_SOURCE = readProduct('src/client/view/BrowserBody.tsx')
 const BROWSER_DEFINITION_SOURCE = readProduct('src/client/definition.tsx')
 const BROWSER_INDEX_SOURCE = readProduct('src/client/index.ts')
@@ -1439,23 +1443,37 @@ const BROWSER_LOCALES = readProduct('src/client/locales.ts')
 const WIRE_FORWARD_SOURCE = readFileSync(new URL('../../../packages/dsh-chamber-wire/src/forward.ts', import.meta.url), 'utf8')
 const CONTROL_PLANE_FRAME_SOURCES = readFileSync(new URL('../../../packages/control-plane/src/browser-frame-sources.ts', import.meta.url), 'utf8')
 const DESKTOP_MAIN_SOURCE = readFileSync(new URL('../../../packages/desktop/electron/main.ts', import.meta.url), 'utf8')
+const DESKTOP_SIDECAR_SOURCE = readFileSync(new URL('../../../packages/desktop/sidecar-entry.ts', import.meta.url), 'utf8')
 const BROWSER_WALKTHROUGH = readFileSync(new URL('../drivers/walkthrough.mjs', import.meta.url), 'utf8')
 
-test('upstream fork contract mirror: sandbox/referrer/marker/guide kind agree with the product source', () => {
-  const sandboxMatch = /export const WEB_BROWSER_SANDBOX = '([^']+)'/u.exec(BROWSER_IFRAME_PRESENTATION)
-  assert.notEqual(sandboxMatch, null, 'the upstream sandbox constant must stay readable')
-  assert.equal(sandboxMatch[1], BROWSER_FRAME_CONTRACT.sandbox, 'the sandbox mirror drifted from IframePresentation.ts')
-  assert.deepEqual(sandboxMatch[1].split(' '), [...BROWSER_FRAME_CONTRACT.sandboxTokens])
+test('upstream fork contract mirror: native guest carrier shape + guide kind agree with the product source', () => {
+  // v3 native carrier (design 28 §3/§4, ADR-0004): the guest is a child WKWebView
+  // owned by the Swift shell; the renderer keeps the upstream chrome and only
+  // sends intents over the trusted `chamberBrowser` bridge. The iframe carrier is
+  // retired — no WEB_BROWSER_SANDBOX / iframe element may come back.
   for (const marker of [
-    "element.referrerPolicy = 'no-referrer'",
-    "element.dataset.sidebarBrowserFrame = 'iframe'",
-    "element.setAttribute('sandbox', WEB_BROWSER_SANDBOX)",
-    'element.src = current.url',
+    'export interface BrowserGuestFrame',
+    'export interface NativeGuestCarrier',
   ]) {
-    assert.equal(BROWSER_IFRAME_PRESENTATION.includes(marker), true, marker)
+    assert.equal(BROWSER_BRIDGE_SOURCE.includes(marker), true, 'native carrier contract marker: ' + marker)
   }
-  assert.equal(BROWSER_FRAME_CONTRACT.referrerPolicy, 'no-referrer')
-  assert.equal(BROWSER_FRAME_CONTRACT.frameMarkerValue, 'iframe', 'the dataset VALUE is the upstream contract, not mere presence')
+  for (const marker of [
+    'carrier.bridge.acquire(',
+    'carrier.bridge.navigate(',
+    'carrier.bridge.release(',
+  ]) {
+    assert.equal(BROWSER_NATIVE_CARRIER.includes(marker), true, 'NativeGuestImpl marker: ' + marker)
+  }
+  for (const marker of [
+    'new ResizeObserver(',
+    'visualViewport',
+    'shouldReportGuestFrame',
+  ]) {
+    assert.equal(BROWSER_NATIVE_PRESENTATION.includes(marker), true, 'NativeGuestPresentation marker: ' + marker)
+  }
+  for (const retired of ['WEB_BROWSER_SANDBOX', 'createElement(\'iframe\')', 'data-sidebar-browser-frame']) {
+    assert.equal(BROWSER_NATIVE_CARRIER.includes(retired) || BROWSER_NATIVE_PRESENTATION.includes(retired), false, 'the iframe carrier must not come back: ' + retired)
+  }
   const kindMatch = /export const BROWSER_KIND = '([^']+)'/u.exec(BROWSER_DEFINITION_SOURCE)
   assert.equal(kindMatch[1], 'browser', 'the fork keeps upstream tab kind browser')
   assert.equal(BROWSER_FRAME_CONTRACT.guideEntryKind, kindMatch[1])
@@ -1476,25 +1494,34 @@ test('upstream fork contract mirror: sandbox/referrer/marker/guide kind agree wi
   ]) {
     assert.equal(BROWSER_BODY_SOURCE.includes(marker), true, marker)
   }
-  assert.match(BROWSER_RESOLVER_SOURCE, /FORWARD_TARGET_HOST = '127\.0\.0\.1'/u)
+  // v3 resolver (design 28 §2.10/§3): logical target → guest target ref; main
+  // composes every URL. Only the ssh loopback leg attaches a forward lease.
+  assert.match(BROWSER_RESOLVER_SOURCE, /FORWARD_TARGET_HOSTS: ReadonlySet<string> = new Set\(\['127\.0\.0\.1', 'localhost'\]\)/u)
   assert.match(BROWSER_RESOLVER_SOURCE, /controller\.attach\(/u)
   assert.match(BROWSER_RESOLVER_SOURCE, /detachCurrent\(\)/u)
-  assert.match(BROWSER_RESOLVER_SOURCE, /return target\.url/u, 'local/direct targets keep the upstream URL')
+  assert.match(BROWSER_RESOLVER_SOURCE, /kind: 'forward'/u, 'the ssh loopback target becomes a forward target ref')
+  assert.match(BROWSER_RESOLVER_SOURCE, /recordId/u)
   assert.match(BROWSER_INDEX_SOURCE, /resolveBrowserEntry\(/u, 'the chamber source gate must stay')
+  assert.match(BROWSER_INDEX_SOURCE, /probeBrowserBridge\(/u, 'the native carrier gate must stay fail-closed')
+  assert.match(BROWSER_INDEX_SOURCE, /chamberBrowser/u, 'the page carrier is the trusted chamberBrowser bridge')
   assert.match(BROWSER_SOURCE_GATE, /transport !== 'local' && transport !== 'ssh'/u, 'plain-http sources are excluded')
   assert.match(BROWSER_SOURCE_GATE, /prefix: 'dsh-'/u)
   assert.match(BROWSER_SOURCE_GATE, /prefix: 'gateway-'/u)
   for (const gone of [
     'src/shared/frame-policy.ts', 'src/client/BrowserPanel.tsx', 'src/client/BrowserPanel.module.css',
     'src/shared/launcher-model.ts', 'src/shared/address.ts', 'src/locales.ts',
+    'src/client/view/IframePresentation.ts', 'src/client/browser/IframeImpl.ts',
   ]) {
     assert.equal(existsSync(new URL('../../../packages/dsh-chamber-client-ui-browser/' + gone, import.meta.url)), false, gone)
   }
   for (const forbidden of ['data-chamber-browser-panel', 'data-frame-phase', 'chamber-remote-browser', 'attachedRows']) {
     assert.equal(BROWSER_WALKTHROUGH.includes(forbidden), false, 'the acceptance layer must not lock the deleted self-built UI: ' + forbidden)
   }
+  // ARCHIVED v2 legs only: this pins the frozen Electron CDP walkthrough's
+  // selectors (revival reference), NOT v3 acceptance evidence. The retired v2
+  // iframe marker is deliberately absent — asserting it keeps a green suite
+  // reading as "the iframe carrier still works", which v3 cannot satisfy.
   for (const marker of [
-    'iframe[data-sidebar-browser-frame]',
     "'[data-sidebar-right-guide-entry]'",
     "'[data-sidebar-right-tab]'",
     "'[data-dockkit-tab-close]'",
@@ -1519,11 +1546,12 @@ test('copy mirrors: the acceptance label allowlists cover the upstream zh dictio
   for (const [role, labels] of Object.entries(BROWSER_TOOLBAR_LABELS)) {
     assert.notEqual(labels.indexOf(zhValue(role)), -1, 'toolbar mirror missing ' + role)
   }
-  assert.equal(BROWSER_SANDBOX_LABELS.disable.indexOf(zhValue('sandbox.disable')) !== -1, true)
-  assert.equal(BROWSER_SANDBOX_LABELS.enable.indexOf(zhValue('sandbox.enable')) !== -1, true)
+  // v3 (design 28 §1/§4, ADR-0004): the sandbox toggle is retired with the
+  // iframe carrier (the native guest cannot be sandboxed), so the zh dictionary
+  // no longer carries sandbox.* and there is no label mirror to drift.
 })
 
-test('CSP frame-src mirror: wire sources + the desktop bare http:/https: widening; v1 default stays blob:', () => {
+test('CSP frame-src mirrors: the retired v2 extended set stays readable as the SH-7 negative fixture; no shipped startup passes frameSources', () => {
   const range = /FORWARD_ALIAS_OCTETS = Object\.freeze\(\{ min: (\d+), max: (\d+), capacity: \d+ \}\)/u.exec(WIRE_FORWARD_SOURCE)
   assert.notEqual(range, null, 'the wire alias range must stay readable')
   const hosts = [.../FORWARD_LOCAL_LOOPBACK_HOSTS = Object\.freeze\(\[([^\]]*)\]/u.exec(WIRE_FORWARD_SOURCE)[1]
@@ -1536,26 +1564,37 @@ test('CSP frame-src mirror: wire sources + the desktop bare http:/https: widenin
     'http:',
     'https:',
   ]
-  assert.deepEqual([...BROWSER_FRAME_CSP_SOURCES], expected, 'the SH-7 mirror drifted from wire + desktop widening')
+  assert.deepEqual([...BROWSER_FRAME_CSP_SOURCES], expected, 'the retired-v2 negative fixture drifted from wire + v2 widening')
   assert.match(CONTROL_PLANE_FRAME_SOURCES, /ANY_HTTP_SCHEME_FRAME_SOURCES: ReadonlySet<string> = new Set\(\['http:', 'https:'\]\)/u)
   assert.match(CONTROL_PLANE_FRAME_SOURCES, /DEFAULT_BROWSER_FRAME_SOURCES: readonly string\[\] = Object\.freeze\(\['blob:'\]\)/u)
   assert.match(CONTROL_PLANE_FRAME_SOURCES, /isAllowedBrowserFrameSource/u)
+  // v3 (design 28 §5「CSP」, ADR-0004): the embedded browser is the Swift native
+  // guest carrier (a top-level document), so the SHIPPED sidecar startup no longer
+  // passes ControlPlaneOptions.frameSources — the shell keeps the default short claim.
+  assert.doesNotMatch(DESKTOP_SIDECAR_SOURCE, /frameSources\s*:/u, 'sidecar-entry.ts must not pass frameSources (v3 CSP narrowing)')
+  // The FROZEN Electron archive keeps the retired v2 widening in its own file; it
+  // never ships and must not be "synced" back into the shipped sidecar.
   assert.match(DESKTOP_MAIN_SOURCE, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/u)
   assert.deepEqual([...BROWSER_FRAME_CSP_V1], ['blob:'])
 })
 
-test('SH-7: the v2 frame-src set passes, v1 stays INFO, forbidden sources and drift FAIL', () => {
-  const v2 = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ') + "; frame-ancestors 'none'; script-src 'self'"
-  const pass = browserFrameCspVerdict(v2)
+test('SH-7: the v3 short frame-src passes, the retired v2 extended set and any drift FAIL', () => {
+  const short = "default-src 'self'; frame-src blob:; frame-ancestors 'none'; script-src 'self'"
+  const pass = browserFrameCspVerdict(short)
   assert.equal(pass.ok, true)
-  assert.equal(pass.shape, 'v2')
-  assert.match(pass.evidence, /258 源/u)
-  const v1 = "default-src 'self'; frame-src blob:; frame-ancestors 'none'; script-src 'self'"
-  assert.equal(browserFrameCspVerdict(v1).ok, null)
-  assert.equal(browserFrameCspVerdict(v1).shape, 'v1')
-  assert.equal(applyRequireEmbed(browserFrameCspVerdict(v1), true).ok, false)
-  assert.match(applyRequireEmbed(browserFrameCspVerdict(v1), true).evidence, /--require-embed/)
-  assert.equal(applyRequireEmbed(browserFrameCspVerdict(v2), true).ok, true)
+  assert.equal(pass.shape, 'v3')
+  assert.match(pass.evidence, /短头/u)
+  assert.match(pass.evidence, /native guest/u)
+  const v2 = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ') + "; frame-ancestors 'none'; script-src 'self'"
+  const extended = browserFrameCspVerdict(v2)
+  assert.equal(extended.ok, false, 'the retired v2 extended set must FAIL in v3 (regression)')
+  assert.equal(extended.shape, 'drift')
+  assert.match(extended.evidence, /回归/u)
+  assert.match(extended.evidence, /v2/u)
+  assert.match(extended.evidence, /扩展/u)
+  // SH-7 now always decides PASS/FAIL: no INFO leg left for --require-embed to relabel.
+  assert.equal(applyRequireEmbed(pass, true).ok, true)
+  assert.equal(applyRequireEmbed(extended, true).ok, false)
   for (const widened of ["'self'", '*', 'data:']) {
     const verdict = browserFrameCspVerdict("default-src 'self'; frame-src blob: " + widened + "; frame-ancestors 'none'")
     assert.equal(verdict.ok, false, widened + ' must FAIL')
@@ -1573,12 +1612,12 @@ test('SH-7: the v2 frame-src set passes, v1 stays INFO, forbidden sources and dr
   const partialVerdict = browserFrameCspVerdict(partial)
   assert.equal(partialVerdict.ok, false)
   assert.equal(partialVerdict.shape, 'drift')
-  assert.match(partialVerdict.evidence, /127\.0\.0\.2/iu)
+  assert.match(partialVerdict.evidence, /127\.0\.0\.1:\*/u)
 })
 
-test('CSP size ceiling: the exact v2 set over the 8KB header ceiling FAILs', () => {
-  const overLong = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ')
-    + "; frame-ancestors 'none'; report-uri " + 'x'.repeat(BROWSER_FRAME_CSP_MAX_BYTES)
+test('CSP size ceiling: a short frame-src behind an >8KB header FAILs', () => {
+  const overLong = "default-src 'self'; frame-src blob:; frame-ancestors 'none'; report-uri "
+    + 'x'.repeat(BROWSER_FRAME_CSP_MAX_BYTES)
   const verdict = browserFrameCspVerdict(overLong)
   assert.equal(verdict.ok, false)
   assert.match(verdict.evidence, /8192/u)
@@ -1594,7 +1633,7 @@ test('browser guide entry picker: kind marker + visibility only, ambiguity fails
   assert.equal(pickBrowserGuideEntry([visible, { ...visible, index: 3 }]).reason, 'ambiguous')
 })
 
-/** One upstream BrowserBody fact set for verdict tests. */
+/** ARCHIVED v2: one upstream BrowserBody fact set for the iframe verdict tests (sandbox slots are v2-only). */
 function bodyFacts(overrides = {}) {
   return {
     visible: true,
@@ -1614,7 +1653,7 @@ function bodyFacts(overrides = {}) {
   }
 }
 
-/** One upstream iframe fact set for verdict tests. */
+/** ARCHIVED v2: one upstream iframe fact set for the iframe verdict tests. */
 function frameFacts(overrides = {}) {
   return {
     src: 'http://127.0.0.1:41234/',
@@ -1628,7 +1667,7 @@ function frameFacts(overrides = {}) {
 
 const FIXTURE_MESSAGE = Object.freeze({ type: FIXTURE_MESSAGE_TYPE, marker: FIXTURE_MARKER })
 
-test('W-13 verdict: upstream BrowserBody structure, toolbar roles and sandbox default', () => {
+test('ARCHIVED v2 W-13 verdict: upstream BrowserBody structure, toolbar roles and sandbox default', () => {
   const pass = browserPanelVerdict({
     hasActiveView: true, activeSource: 'local', sessionPresent: true, sessionOpen: true,
     openedVia: 'clicked-entry', bodyCount: 1, bodies: [bodyFacts()],
@@ -1656,7 +1695,7 @@ test('W-13 verdict: upstream BrowserBody structure, toolbar roles and sandbox de
   assert.equal(browserPanelVerdict({ hasActiveView: false }).ok, false)
 })
 
-test('W-14a verdict: upstream iframe contract + fixture postMessage + logical address', () => {
+test('ARCHIVED v2 W-14a verdict: upstream iframe contract + fixture postMessage + logical address', () => {
   const origin = 'http://127.0.0.1:41234'
   const messages = [{ origin, data: FIXTURE_MESSAGE }]
   const pass = embedFrameVerdict({
@@ -1676,7 +1715,7 @@ test('W-14a verdict: upstream iframe contract + fixture postMessage + logical ad
   assert.equal(embedFrameVerdict({ bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts(), frameFacts()], fixtureOrigin: origin, messages }).ok, false)
 })
 
-test('W-14b verdict: alias iframe + logical address + fixture postMessage (no attached-row UI)', () => {
+test('ARCHIVED v2 W-14b verdict: alias iframe + logical address + fixture postMessage (no attached-row UI)', () => {
   const alias = 'http://127.0.0.2:51234/'
   const messages = [{ origin: alias, data: FIXTURE_MESSAGE }]
   const pass = remoteEmbedVerdict({
@@ -1702,7 +1741,7 @@ test('W-14b verdict: alias iframe + logical address + fixture postMessage (no at
   }).ok, false)
 })
 
-test('W-15 verdict: upstream explicit system-browser exit, never automatic, XFO failure UI not promised', () => {
+test('ARCHIVED v2 W-15 verdict: upstream explicit system-browser exit, never automatic, XFO failure UI not promised', () => {
   const xfo = 'http://127.0.0.1:41234/embed-xfo'
   const pass = externalExitVerdict({
     executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: xfo })],
@@ -1727,7 +1766,7 @@ test('W-15 verdict: upstream explicit system-browser exit, never automatic, XFO 
   assert.equal(externalExitVerdict({ executed: true, bodyCount: 1, bodies: [bodyFacts()], frames: [frameFacts({ src: 'http://127.0.0.1:41234/' })], expectedFrameUrl: xfo, openedAfterClick: [xfo] }).ok, false)
 })
 
-test('W-15b verdict: closing the tab removes BrowserBody/iframe and releases the alias', () => {
+test('ARCHIVED v2 W-15b verdict: closing the tab removes BrowserBody/iframe and releases the alias', () => {
   const pass = closeReleaseVerdict({
     executed: true, bodyCount: 0, frameCount: 0, busy: false, settled: true,
     aliasProbe: { url: 'http://127.0.0.2:51234/', reachable: 'closed' },
@@ -1806,7 +1845,7 @@ function fakeWindow({ witness = undefined } = {}) {
   return win
 }
 
-/** One composed upstream-browser scene: active view + hidden N-ctx view. */
+/** ARCHIVED v2: one composed iframe-browser scene (active view + hidden N-ctx view) for the retired W-13…W-15b page expressions. */
 function browserScene({ origin = 'http://127.0.0.1:41234', sessionOpen = true, frameSrc = origin + '/', extraChips = [] } = {}) {
   const input = fakeNode({ tag: 'INPUT', attrs: { 'aria-label': BROWSER_ADDRESS_LABELS[0] } })
   input.value = origin + '/'
@@ -1817,7 +1856,11 @@ function browserScene({ origin = 'http://127.0.0.1:41234', sessionOpen = true, f
     button(BROWSER_TOOLBAR_LABELS.reload[0]),
     button(BROWSER_TOOLBAR_LABELS.go[0]),
     button(BROWSER_TOOLBAR_LABELS.external[0]),
-    fakeNode({ attrs: { 'aria-label': BROWSER_SANDBOX_LABELS.disable[0], 'aria-pressed': 'false' } }),
+    // v3: the sandbox toggle is retired with the iframe carrier (the product
+    // locales dropped the sandbox.* keys, so there is no label allowlist any
+    // more). The W-13 verdict layer still inspects this fixture slot until its
+    // own v3 rewrite lands (E2/E5) — keep a literal zh label, not a mirror.
+    fakeNode({ attrs: { 'aria-label': '关闭沙箱限制', 'aria-pressed': 'false' } }),
   ]
   const frame = fakeNode({
     attrs: {
@@ -1891,7 +1934,7 @@ function browserScene({ origin = 'http://127.0.0.1:41234', sessionOpen = true, f
   }
 }
 
-test('BROWSER_LANDSCAPE fake DOM: active-view scoping, BrowserBody/toolbar/frame/tab facts', () => {
+test('ARCHIVED v2 BROWSER_LANDSCAPE fake DOM: active-view scoping, BrowserBody/toolbar/frame/tab facts', () => {
   const scene = browserScene()
   const witness = { messages: [{ origin: 'http://127.0.0.1:41234', data: FIXTURE_MESSAGE }], external: [], opened: [] }
   scene.window.__dshGuiEmbedWitness = witness
@@ -1927,7 +1970,7 @@ test('BROWSER_LANDSCAPE fake DOM: active-view scoping, BrowserBody/toolbar/frame
   }).ok, false)
 })
 
-test('BROWSER_LANDSCAPE fake DOM: collapsed panel and no-active-view fail closed', () => {
+test('ARCHIVED v2 BROWSER_LANDSCAPE fake DOM: collapsed panel and no-active-view fail closed', () => {
   const scene = browserScene({ sessionOpen: false })
   const facts = new Function('document', 'window', 'return (' + BROWSER_LANDSCAPE + ')')(scene.document, scene.window)
   assert.equal(facts.sessionOpen, false)
@@ -2069,9 +2112,9 @@ test('embed fixture: / serves the marker page, /embed-xfo adds XFO DENY, close f
   assert.equal(await probeTcpReachable(fixture.origin), 'closed', 'closing the fixture releases the port')
 })
 
-test('live probe SH-7: the v2 CSP header passes, the v1 default is INFO and --require-embed FAILs it', async () => {
+test('live probe SH-7: the v3 short CSP header passes, the retired v2 extended set FAILs, --require-embed does not relabel it', async () => {
   const shellHtml = '<!doctype html><html><head><title>dsh-chamber</title></head><body><div id="root"></div></body></html>'
-  let csp = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ') + "; frame-ancestors 'none'; script-src 'self'"
+  let csp = "default-src 'self'; frame-src blob:; frame-ancestors 'none'; script-src 'self'"
   const server = createServer((request, response) => {
     const target = request.url ?? '/'
     if (target === '/') {
@@ -2101,14 +2144,16 @@ test('live probe SH-7: the v2 CSP header passes, the v1 default is INFO and --re
       const { results } = await runLiveAcceptance({ planeOrigin: origin, instanceOrigin: '', sourceIds: [], outDir, requireEmbed })
       return results.find(entry => entry.id === 'SH-7')
     }
-    const v2 = await run(false)
-    assert.equal(v2.ok, true)
-    assert.match(v2.evidence, /v2 源集/u)
+    const v3 = await run(false)
+    assert.equal(v3.ok, true)
+    assert.match(v3.evidence, /v3 短头/u)
+    csp = "default-src 'self'; frame-src " + BROWSER_FRAME_CSP_SOURCES.join(' ') + "; frame-ancestors 'none'; script-src 'self'"
+    const extended = await run(false)
+    assert.equal(extended.ok, false, 'the retired v2 extended set must FAIL SH-7 in v3')
+    assert.match(extended.evidence, /回归/u)
     csp = "default-src 'self'; frame-src blob:; frame-ancestors 'none'; script-src 'self'"
-    const v1 = await run(false)
-    assert.equal(v1.ok, null, 'the gateway/default v1 header must not fail SH-7')
     const strict = await run(true)
-    assert.equal(strict.ok, false, '--require-embed demands the v2 frame-src set')
+    assert.equal(strict.ok, true, 'SH-7 decides PASS/FAIL itself: --require-embed must not relabel it')
   } finally {
     server.closeAllConnections()
     await new Promise(resolve => server.close(resolve))

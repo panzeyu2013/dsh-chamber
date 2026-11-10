@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import {
-  applyRequireEmbed, browserFrameCspVerdict, createRecorder, deriveSourceIds, hasSecurityHeaders,
+  browserFrameCspVerdict, createRecorder, deriveSourceIds, hasSecurityHeaders,
   isHonestError, isInstanceIndex, isShellIndex, isWriterQuiescent, leakedFileContent, parseBaseHref,
   parseInstanceAssets, parsePluginLoaderUrls, parseShellAssets, renderMarkdown, resolveDeclaredUrl,
   safeJson, summarizeNetFailures, writerEvidence,
@@ -113,9 +113,10 @@ async function get(origin, target, init) {
  * @param opts.registryFile registry file to read when sourceIds is absent (default: the Electron
  *   userData convention — pass the probed instance's own file when --plane is not that instance)
  * @param opts.outDir artifact directory (default .tmp/gui-acceptance)
- * @param opts.requireEmbed (`--require-embed`) demand the v2 frame-src contract: a v1 short
- *   `frame-src blob:` header is recorded as INFO by default (the gateway must never widen) and
- *   becomes a FAIL under this flag.
+ * @param opts.requireEmbed (`--require-embed`) is accepted for CLI compatibility only. The
+ *   `--live` probe's single embed-related leg is SH-7, and v3 SH-7 always decides PASS/FAIL
+ *   (short `frame-src blob:` PASS, any extended source set FAIL) — there is no INFO verdict
+ *   left for the flag to relabel (design 28 §5「CSP」v3).
  */
 export async function runLiveAcceptance({
   planeOrigin = 'http://127.0.0.1:17500',
@@ -208,14 +209,13 @@ export async function runLiveAcceptance({
     !leakedFileContent(traversalEncoded.body) && !leakedFileContent(traversalRaw.body),
     `encoded=${traversalEncoded.status} raw=${traversalRaw.status}`)
 
-  // v2 embedded browser (design 28 §16.3): the shell CSP's frame-src contract.
-  // SH-2 only checks default-src 'self', so a widened (or accidentally
-  // narrowed) frame-src would not turn it red — this leg is why SH-7 exists.
-  const frameContract = applyRequireEmbed(
-    browserFrameCspVerdict(shell.headers['content-security-policy']),
-    requireEmbed,
-  )
-  rec.add('SH-7', '壳 CSP frame-src 合同（v2 内嵌源集；gateway 不得放宽）', frameContract.ok, frameContract.evidence)
+  // v3 CSP narrowing (design 28 §5「CSP」, ADR-0004): the shell frontend document's
+  // frame-src must be the default short claim (`blob:` only — document previews).
+  // SH-2 only checks default-src 'self', so a regression widening or a narrowed
+  // frame-src would not turn it red — this leg is why SH-7 exists. SH-7 is decided
+  // (PASS/FAIL), so --require-embed (a no-op for --live in v3) is not applied here.
+  const frameContract = browserFrameCspVerdict(shell.headers['content-security-policy'])
+  rec.add('SH-7', '壳 CSP frame-src 合同（v3 短头 blob:；扩展源集=FAIL）', frameContract.ok, frameContract.evidence)
 
   // ---------------------------------------------------------------- instance proxy
   // Every /api/i/* and /api/host/logs probe needs a READY managed instance: while

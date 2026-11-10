@@ -862,28 +862,38 @@ export function veilLayeringVerdict({ veilFrames = 0, samples = [], error = null
 
 
 // ============================================================================
-// v2 embedded browser (design 28 §16): pure judgement for W-13 / W-14a / W-14b
-// / W-15 / W-15b + the SH-7 CSP contract. No DOM, no HTTP, no CDP — the
+// ARCHIVED v2 embedded browser (design 28 §16, iframe era): pure judgement for
+// W-13 / W-14a / W-14b / W-15 / W-15b. The iframe carrier is retired (ADR-0004)
+// and these five verdicts judge facts the v3 native guest can NEVER produce
+// (iframe count / data-sidebar-browser-frame / sandbox / referrerpolicy) — a
+// green run here proves the v2 carrier, not v3 acceptance. They remain only as
+// the frozen Electron CDP leg's judgement (walkthrough.mjs is ARCHIVED too) for
+// revival reference; v3 criteria = docs/checklists/acceptance/
+// remote-browser-acceptance.md §E2 (guest, real machine). SH-7 (below) and the
+// pure locator/URL predicates stay LIVE for v3. No DOM, no HTTP, no CDP — the
 // walkthrough gathers facts, these functions decide, and checks.test.mjs runs
 // them in CI (including the REAL page expressions against a fake DOM).
 // ============================================================================
 
 /**
- * The upstream-fork iframe contract (design 28 §16; the browser package is a
- * faithful fork of upstream `ui-sidebar-browser` 0.2.2-rc.1's iframe path —
- * the ONLY behavior diff is the SSH-forward frame URL resolver).
+ * ARCHIVED (v2 iframe carrier; ADR-0004 retired it): the upstream-fork iframe
+ * marker/sandbox/referrer values the archived Electron CDP walkthrough asserted
+ * (design 28 §16). v3 carries the page in a child WKWebView guest, where none of
+ * these DOM attributes exist, so this mirror is v2 revival reference only; the
+ * live v3 values are the bridge/wire contracts, not iframe attributes.
  *
  * Kept here instead of importing the browser package: checks.mjs is the
  * dependency-free judgement layer and the package is a source-only renderer
- * package. Drift is caught in CI by checks.test.mjs, which reads the fork's
- * own source text (`view/IframePresentation.ts`, `view/BrowserBody.tsx`,
- * `definition.tsx`, `shared/source.ts`, `browser/ForwardFrameResolver.ts`)
- * and asserts these mirrors, plus the vendored upstream guide/chip markers.
+ * package. The mirrored iframe constants are frozen with the archived leg
+ * (`view/IframePresentation.ts` no longer exists); checks.test.mjs still mirrors
+ * the LIVE pieces from `view/BrowserBody.tsx`, `definition.tsx`,
+ * `shared/source.ts` and `browser/ForwardFrameResolver.ts`, plus the vendored
+ * upstream guide/chip markers.
  *
  * The self-built v2 launcher UI (panel marker / data-frame-phase / remote
- * sections / attached rows / XFO projection) is GONE: the upstream surface has
- * no such DOM, so W-13/W-14a/W-14b/W-15/W-15b judge the upstream DOM/behavior
- * instead of fake self-built anchors.
+ * sections / attached rows / XFO projection) is GONE; these verdicts judged the
+ * upstream iframe fork's DOM/behavior instead of fake self-built anchors. v3
+ * judges guest/wire facts, not DOM (acceptance §E2).
  */
 /** Alias octet range of the per-source forward hosts (wire FORWARD_ALIAS_OCTETS). */
 const BROWSER_ALIAS_MIN_OCTET = 2
@@ -893,13 +903,16 @@ const BROWSER_ALIAS_MAX_OCTET = 254
 const BROWSER_ALIAS_HOST = /^127\.0\.0\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/u
 
 /**
- * The exact desktop v2 `frame-src` list (design 28 §16.3): the wire's
- * `forwardFrameSources()` (blob: + 127.0.0.1 + localhost + the 253 aliases)
- * followed by the two bare scheme sources desktop main/sidecar append because
- * the upstream iframe browser may frame ANY http(s) page. This is a MIRROR;
- * checks.test.mjs reads the wire generator, the control-plane validator and the
- * desktop caller and asserts the mirror has not drifted (SH-7 must judge the
- * real contract).
+ * The RETIRED v2 desktop `frame-src` set (design 28 §16.3, iframe era): the
+ * wire's `forwardFrameSources()` (blob: + 127.0.0.1 + localhost + the 253
+ * aliases) followed by the two bare scheme sources v2 desktop main/sidecar
+ * appended because the upstream iframe browser could frame ANY http(s) page.
+ *
+ * KEPT ONLY AS THE SH-7 NEGATIVE FIXTURE. v3 (design 28 §5「CSP」, ADR-0004)
+ * retired the iframe carrier for the Swift native guest — a top-level document
+ * that `frame-src` does not constrain — so no startup point passes
+ * `ControlPlaneOptions.frameSources` any more and this set appearing in a shell
+ * header is a FAIL (re-enabled widening = regression).
  */
 export const BROWSER_FRAME_CSP_SOURCES = Object.freeze([
   'blob:',
@@ -913,10 +926,14 @@ export const BROWSER_FRAME_CSP_SOURCES = Object.freeze([
   'https:',
 ])
 
-/** Size ceiling of the desktop CSP header (plan E2: ~5.7KB measured; keep < 8KB). */
+/** Size ceiling of the shell CSP header (defensive: the short claim is tiny; keep < 8KB). */
 export const BROWSER_FRAME_CSP_MAX_BYTES = 8_192
 
-/** The v1 default `frame-src` claim (control-plane default; gateway/cli carry it). */
+/**
+ * The v3 desktop short `frame-src` claim (design 28 §5「CSP」): the
+ * control-plane default, document previews only. Every deployment (desktop,
+ * gateway, cli, standalone) carries exactly this now — SH-7 demands it verbatim.
+ */
 export const BROWSER_FRAME_CSP_V1 = Object.freeze(['blob:'])
 
 /**
@@ -996,12 +1013,6 @@ export const BROWSER_TOOLBAR_LABELS = Object.freeze({
   external: Object.freeze(['在系统浏览器中打开', 'Open in system browser']),
 })
 
-/** Upstream iframe sandbox toggle labels (aria-pressed carries the state). */
-export const BROWSER_SANDBOX_LABELS = Object.freeze({
-  disable: Object.freeze(['关闭沙箱限制', 'Disable sandbox restrictions']),
-  enable: Object.freeze(['恢复沙箱限制', 'Restore sandbox restrictions']),
-})
-
 /** Whether one label belongs to a role's upstream allowlist. */
 export function isBrowserLabel(labels, value) {
   return typeof value === 'string' && Array.isArray(labels) && labels.includes(value)
@@ -1033,7 +1044,8 @@ function firstBody(bodies) {
 }
 
 /**
- * W-13's verdict: the upstream Browser surface STRUCTURE (design 28 §16.9).
+ * ARCHIVED（v2 iframe 判据）W-13's verdict: the upstream Browser surface STRUCTURE (design 28 §16.9).
+ * v3 的 W-13 = 面板结构 + 占位几何，见 acceptance §E2 步 1；本判据的 sandbox 开关在 v3 不存在。
  *
  * Judged facts (reported by the page dump, decided here):
  *  - a visible Session's right sidebar is open (upstream renders the surface
@@ -1119,8 +1131,8 @@ export function browserPanelVerdict({
 }
 
 /**
- * W-14a's verdict: a LOCAL fixture page really rendered inside the upstream
- * BrowserBody iframe.
+ * ARCHIVED（v2 iframe 判据）W-14a's verdict: a LOCAL fixture page really rendered inside the upstream
+ * BrowserBody iframe. v3 的 W-14a = guest 真跑 + page JS 证据，见 acceptance §E2 步 2。
  *
  * Required: exactly one upstream BrowserBody/frame, the frame marker VALUE is
  * 'iframe', the src is THIS run's local fixture root, the sandbox token set and
@@ -1189,8 +1201,9 @@ export function embedFrameVerdict({
 }
 
 /**
- * W-14b's verdict: a REMOTE source's loopback page embedded end-to-end through
+ * ARCHIVED（v2 iframe 判据）W-14b's verdict: a REMOTE source's loopback page embedded end-to-end through
  * main's forward lease (upstream BrowserBody iframe src = per-source alias).
+ * v3 的 W-14b = guest 实际加载 alias + 页面执行证据，见 acceptance §E2 步 3。
  *
  * Required: one visible BrowserBody, exactly one marker frame whose src host is
  * a per-source ALIAS (127.0.0.2..254 — never 127.0.0.1, never the remote
@@ -1273,7 +1286,9 @@ export function remoteEmbedVerdict({
 }
 
 /**
- * W-15's verdict: the SYSTEM-BROWSER EXIT under upstream iframe semantics.
+ * ARCHIVED（v2 iframe 判据，v3 判据反转）W-15's verdict: the SYSTEM-BROWSER EXIT under upstream iframe semantics.
+ * v2 允许「XFO 站点白屏、不承诺失败 UI」；v3 guest 是顶层文档，XFO 站点必须可见
+ * （acceptance §E2 步 4），所以本判据的 XFO 半段在 v3 失效，切勿当 v3 证据。
  *
  * Upstream `ui-sidebar-browser` does NOT promise XFO/TLS failure detection: a
  * framed document that sets `X-Frame-Options: DENY` simply stays an empty
@@ -1348,7 +1363,7 @@ export function externalExitVerdict({
 }
 
 /**
- * W-15b's verdict: closing the Browser tab releases the tab occurrence — the
+ * ARCHIVED（v2 iframe 判据）W-15b's verdict: closing the Browser tab releases the tab occurrence — the
  * upstream BrowserBody and its iframe are gone, no pending rebuild shows up in
  * the settle window, and (when the run had a forward) its alias port is
  * unreachable. The upstream fork has no forward-list UI; the release is proven
@@ -1425,23 +1440,23 @@ function cspDirectives(header) {
 }
 
 /**
- * SH-7's verdict: the shell's CSP `frame-src` contract (design 28 §16.3).
+ * SH-7's verdict: the shell's CSP `frame-src` contract (design 28 §5「CSP」v3).
  *
- * TWO LEGITIMATE SHAPES, one per deployment:
- *  - v2 (desktop main/sidecar pass `[...forwardFrameSources(), 'http:', 'https:']`):
- *    `frame-src` equals the frozen source list exactly — blob: + the two local
- *    loopback hosts + the 253 aliases, then the two bare scheme sources the
- *    upstream iframe browser needs (it may frame ANY http(s) page). The bare
- *    schemes are the ONE supported widening; `'self'`, `*`, `data:` and any
- *    other host stay forbidden. PASS.
- *  - v1 (gateway/cli/standalone and old installs keep the control-plane
- *    default): `frame-src blob:` byte-for-byte. NOT a failure — the gateway
- *    must never widen — but it did not exercise the v2 contract, so INFO, and
- *    `--require-embed` turns it into FAIL.
- * Anything else (partial list, forbidden source, weakened `frame-ancestors`,
- * missing directive, oversized header) is FAIL.
+ * ONE LEGITIMATE SHAPE (v3): the shell carries the control-plane default short
+ * claim `frame-src blob:` byte-for-byte (document previews only). The embedded
+ * browser is the Swift native guest carrier — a TOP-LEVEL WKWebView document,
+ * not an iframe — so no startup point passes `ControlPlaneOptions.frameSources`
+ * any more and `frame-src` must not be widened (design 28 §5, ADR-0004;
+ * acceptance `remote-browser-acceptance.md` §E2 step 15).
+ *
+ * The RETIRED v2 extended set (blob: + loopback/alias hosts + bare http:/https:,
+ * {@link BROWSER_FRAME_CSP_SOURCES}) MUST FAIL: its reappearance means a startup
+ * point re-enabled the iframe-era widening — a regression, never INFO.
+ * `'self'`/`*`/`data:`/any other host, partial lists, a weakened
+ * `frame-ancestors`, a missing directive and an oversized header are FAIL too.
  * @param contentSecurityPolicy - the shell response header (or undefined).
- * @returns `{ ok, shape, evidence }` (`ok === null` is INFO).
+ * @returns `{ ok, shape, evidence }` (`ok === null` stays reserved for INFO
+ *   legs; SH-7 itself now always decides PASS/FAIL).
  */
 export function browserFrameCspVerdict(contentSecurityPolicy) {
   const header = typeof contentSecurityPolicy === 'string' ? contentSecurityPolicy : ''
@@ -1465,13 +1480,13 @@ export function browserFrameCspVerdict(contentSecurityPolicy) {
       evidence: '应用自身的 frame-ancestors 合同被改弱（期望恰为 ' + JSON.stringify("'none'") + '，实际 ' + JSON.stringify(ancestors ?? null) + '）',
     }
   }
-  const expected = BROWSER_FRAME_CSP_SOURCES
+  const expected = BROWSER_FRAME_CSP_V1
   const forbidden = frame.filter(token => ["'self'", '*', 'data:'].includes(token))
   if (forbidden.length > 0) {
     return {
       ok: false,
       shape: 'invalid',
-      evidence: 'frame-src 含禁止源 ' + forbidden.join(' ') + "——不得放 'self'/通配/data:（design 28 §16.3）",
+      evidence: 'frame-src 含禁止源 ' + forbidden.join(' ') + "——不得放 'self'/通配/data:（design 28 §5 v3）",
     }
   }
   const exact = frame.length === expected.length && expected.every((token, index) => frame[index] === token)
@@ -1480,21 +1495,13 @@ export function browserFrameCspVerdict(contentSecurityPolicy) {
       return {
         ok: false,
         shape: 'invalid',
-        evidence: 'CSP 头 ' + String(header.length) + 'B 超过 ' + String(BROWSER_FRAME_CSP_MAX_BYTES) + 'B 上限（长头需按平台分表，plan E2）',
+        evidence: 'CSP 头 ' + String(header.length) + 'B 超过 ' + String(BROWSER_FRAME_CSP_MAX_BYTES) + 'B 上限（壳头只应有短 frame-src，plan E2 的 8KB 天花板保留）',
       }
     }
     return {
       ok: true,
-      shape: 'v2',
-      evidence: 'frame-src 精确等于 v2 源集（' + String(expected.length) + ' 源 = blob: + 2 local loopback + 253 alias + 裸 http:/https:），头长 ' + String(header.length) + 'B ≤ ' + String(BROWSER_FRAME_CSP_MAX_BYTES) + "B，frame-ancestors 'none'；gateway/cli 不传 frameSources，由 control-plane 缺省逐字节锁 + gateway 包测试保证不放宽",
-    }
-  }
-  const v1 = frame.length === BROWSER_FRAME_CSP_V1.length && BROWSER_FRAME_CSP_V1.every((token, index) => frame[index] === token)
-  if (v1) {
-    return {
-      ok: null,
-      shape: 'v1',
-      evidence: 'frame-src 为 v1 短头（仅 blob:，' + String(header.length) + 'B）——gateway/cli/standalone 的既有缺省不放宽；desktop 启用链未生效或该平面本就不该放宽（--require-embed 会改判 FAIL）',
+      shape: 'v3',
+      evidence: 'frame-src 精确等于 v3 短头（仅 blob:，头长 ' + String(header.length) + 'B ≤ ' + String(BROWSER_FRAME_CSP_MAX_BYTES) + "B），frame-ancestors 'none'；内嵌浏览器 = native guest 载体（顶层文档，不受 frame-src 约束），启动点不再传 frameSources（design 28 §5 CSP）",
     }
   }
   const missing = expected.filter(token => !frame.includes(token))
@@ -1502,16 +1509,17 @@ export function browserFrameCspVerdict(contentSecurityPolicy) {
   return {
     ok: false,
     shape: 'drift',
-    evidence: 'frame-src 与 v2 源集不符（' + String(frame.length) + ' 源 vs ' + String(expected.length) + '）：缺 ' + (missing.slice(0, 4).join(' ') || '（无）') + (missing.length > 4 ? ' …' : '') + '；多 ' + (extra.slice(0, 4).join(' ') || '（无）') + (extra.length > 4 ? ' …' : ''),
+    evidence: 'frame-src 与 v3 短头（仅 blob:）不符（' + String(frame.length) + ' 源）：缺 ' + (missing.slice(0, 2).join(' ') || '（无）') + '；多 ' + (extra.slice(0, 4).join(' ') || '（无）') + (extra.length > 4 ? ' …' : '') + ' —— v2 扩展源集（loopback/alias/裸 http:/https:）在 v3 属回归 FAIL：iframe 已退役，启动点不得再传 frameSources（design 28 §5 CSP）',
   }
 }
 
 /**
- * Request/console noise produced by the acceptance fixture itself (W-15's XFO
- * negative control). Scoped by the fixture-only path segment `/embed-xfo`:
- * Chromium's refusal of that framed document is the criterion W-15 judges, so
- * the global W-11/W-12 gates must not call it an unexpected failure. A normal
- * request is never tolerated.
+ * ARCHIVED（v2 W-15 腿）: request/console noise produced by the acceptance
+ * fixture itself (W-15's XFO negative control). Scoped by the fixture-only path
+ * segment `/embed-xfo`: Chromium's refusal of that framed document is the
+ * criterion W-15 judges, so the global W-11/W-12 gates must not call it an
+ * unexpected failure. A normal request is never tolerated. v3 guest loads XFO
+ * pages top-level (acceptance §E2 step 4), so this noise rule has no v3 leg.
  */
 export const EXPECTED_FIXTURE_REQUEST_FAILURES = Object.freeze([
   Object.freeze({
@@ -1520,7 +1528,7 @@ export const EXPECTED_FIXTURE_REQUEST_FAILURES = Object.freeze([
   }),
 ])
 
-/** Console noise of the same fixture (Chromium's "Refused to display" log). */
+/** ARCHIVED（v2 W-15 腿）: console noise of the same fixture (Chromium's "Refused to display" log). */
 export const EXPECTED_FIXTURE_CONSOLE_NOISE = Object.freeze([
   Object.freeze({
     pattern: /Refused to display [^]*\/embed-xfo[^]*X-Frame-Options/i,

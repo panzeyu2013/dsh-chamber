@@ -153,14 +153,17 @@ export interface ControlPlaneOptions {
   dshPortBase?: number
   webDistDir?: string
   /**
-   * v2 embedded-browser frame sources (design 28 §16.3/§16.11). Absent/null = the
-   * v1 `frame-src blob:` claim byte-for-byte (gateway/cli/standalone/tests). The
-   * desktop main and Swift sidecar pass `forwardFrameSources()` from
-   * `@dsh-chamber/dsh-chamber-wire/forward` (blob: + local loopback + every
-   * 127.0.0.2..254 alias host) plus the upstream-iframe scheme sources
-   * `http:`/`https:` (any http(s) child frame, the ui-sidebar-browser behavior).
-   * Invalid entries throw at construction (no silent widening to 'self', `*`, or an
-   * arbitrary host-source; only the two explicit bare web schemes are allowed).
+   * v2 embedded-browser frame sources (design 28 §16.3), RETIRED startup opt-in
+   * under v3 (design 28 §5「CSP」, ADR-0004). Absent/null = the default
+   * `frame-src blob:` claim byte-for-byte (the shell keeps it; the embedded
+   * browser is the Swift native guest carrier — a top-level WKWebView document
+   * that frame-src does not constrain — so NO startup point passes this any
+   * more). Only the frozen Electron entry (archived, never shipped) still passes
+   * `forwardFrameSources()` from `@dsh-chamber/dsh-chamber-wire/forward` plus the
+   * two bare web schemes in its own file (`electron-frozen.md`). The validator
+   * surface is retained for that archive: invalid entries throw at construction
+   * (no silent widening to 'self', `*`, or an arbitrary host-source; only the two
+   * explicit bare web schemes are allowed).
    */
   frameSources?: readonly string[]
   /**

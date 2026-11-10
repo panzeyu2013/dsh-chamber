@@ -102,8 +102,8 @@ if (values.help) {
   --electron-arg <arg>       追加 Electron 开关（可重复；沙箱内需 --electron-arg=--no-sandbox）
   --keep                     --dev 结束后保留实例（默认关闭）
   --require-hover            走查的 hover 腿必须真实执行：未执行（INFO）计为 FAIL（默认关闭）
-  --require-embed            内嵌腿（W-13/W-14a/W-14b/W-15/W-15b 与 SH-7 的 v1 短头）必须真实执行：
-                             未执行（INFO）计为 FAIL（默认关闭；--attach 无真实 SSH 源时尤其需要它）
+  --require-embed            内嵌腿（W-13/W-14a/W-14b/W-15/W-15b）必须真实执行：
+                             未执行（INFO）计为 FAIL（默认关闭；--attach 无真实 SSH 源时尤其需要它）。SH-7 恒判定，不在本旗标范围
   --embed-port <port>        W-14b 的远端 loopback 端口：把窗口切到 dsh/gateway+ssh 来源并给出该主机
                              127.0.0.1 上真实可服务的端口，才跑真实 SSH → alias iframe 端到端腿
   --attach-create-session    显式允许 --attach 在浏览器腿前经既有 UI 建一次性工作区/会话

@@ -276,11 +276,16 @@ test('main.ts wires the v2 child-frame / download / did-fail-load gates', () => 
   assert.match(main, /will-download', \(event, item\) => \{\s*if \(!isAllowedBrowserDownloadUrl\(item\.getURL\(\), rendererOrigin\)\) event\.preventDefault\(\);/)
 })
 
-test('v2 CSP enable chain: only the two desktop entries pass frameSources', async () => {
+test('v3 CSP narrowing: only the FROZEN Electron entry keeps frameSources; the shipped sidecar stays on the default short claim', async () => {
   const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   const sidecar = readFileSync(new URL('../../sidecar-entry.ts', import.meta.url), 'utf8')
+  // The frozen Electron archive retains the retired v2 widening in its own file
+  // (electron-frozen.md); it never ships. Do not "sync" the shipped entry to it.
   assert.match(main, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/)
-  assert.match(sidecar, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/)
+  // design 28 §5 CSP v3 / ADR-0004: the native guest carrier is a top-level
+  // WKWebView document, so the shell must keep the control-plane default
+  // `frame-src blob:` (document previews only) — no startup injection.
+  assert.doesNotMatch(sidecar, /frameSources\s*:/u, 'sidecar-entry.ts must not pass frameSources (v3 CSP narrowing)')
   // gateway / cli / standalone must keep the v1 short claim (no opt-in).
   const roots = ['../../../gateway/src', '../../../cli/src']
   for (const root of roots) {

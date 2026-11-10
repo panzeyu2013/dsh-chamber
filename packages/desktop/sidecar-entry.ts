@@ -23,7 +23,6 @@ import { computeQuitRisk, shouldHideToTray } from './chamber-settings.ts'
 // facade 在打包态加载 <sidecar>/dist/control-plane/index.js，裸说明符会 ERR_MODULE_NOT_FOUND。
 import {
   createControlPlane,
-  forwardFrameSources,
   isPackagedSidecarRuntime,
   startLoginShellEnvironment,
   type StateRootLease,
@@ -554,10 +553,13 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
     // 租约记录的诊断 flavor：冲突方读到 sidecar 而不是笼统的 control-plane。
     stateWriter: 'sidecar',
     webDistDir,
-    // v2 embedded browser (design 28 §16.3): same frame-source contract as the
-    // Electron entry — loopback/alias hosts plus the bare http:/https: widening
-    // the upstream iframe behavior needs; gateway/cli never pass it.
-    frameSources: [...forwardFrameSources(), 'http:', 'https:'],
+    // v3 CSP narrowing (design 28 §5「CSP」, ADR-0004): the embedded browser is the
+    // Swift native guest carrier (a top-level WKWebView document), so the shell keeps
+    // the control-plane default short claim (`frame-src blob:`, document previews
+    // only) — do NOT pass frameSources here again. The frozen Electron entry keeps
+    // the retired v2 widening in its own archived file (electron-frozen.md);
+    // gateway/cli/standalone never pass it either.
+
     ...(args.hostGraphDir !== null ? { hostGraphPackageSourceDir: args.hostGraphDir } : {}),
     ...(args.hostGitDir !== null ? { hostGitWorktreePackageSourceDir: args.hostGitDir } : {}),
     ...(args.hostArchiveDir !== null ? { hostArchiveCleanupPackageSourceDir: args.hostArchiveDir } : {}),

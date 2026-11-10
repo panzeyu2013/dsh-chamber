@@ -172,20 +172,23 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
 
 `CP-4` 的判据是 `quiescent === true`（**不是** `writers` 为空）：扫描到的 `reclaimed` 孤儿会如实列出，只有 `kept`（无法回收）才代表有无法解释的活写者。
 
-## v2 内嵌腿（W-13…W-15b、SH-7）
+## 内嵌腿（W-13…W-30、SH-7；下表 W-13…W-15b = ARCHIVED v2）
 
-design 28 §16.9 / plan §5 L4。判据全在 `checks.mjs`（CI 单测 + 假 DOM 跑真实页面表达式），本目录只负责驱动与留痕：
+> **W-13…W-15b = ARCHIVED（v2 iframe 判据）**：它们描述的是已退役的 iframe 载体与 Electron CDP 走查（`walkthrough.mjs` 同为 ARCHIVED），不再对 v3 native guest 执行、不再计入绿口径。**下表五行的「判据」列是 v2 iframe 语义（iframe 恰一、`data-sidebar-browser-frame`、sandbox/referrer、alias iframe postMessage、iframe 移除），在 v3 不可能成立**；v3 的 W-13…W-15b 判据见 [`remote-browser-acceptance.md` §E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)（guest 判据：真机/目检）与 `gui-acceptance-checklist.md` §4.2。下五行保留为 Electron 复活参考。
+
+design 28 §9 / plan §5 L4。判据全在 `checks.mjs`（CI 单测 + 假 DOM 跑真实页面表达式），本目录只负责驱动与留痕：
 
 | 腿 | 判据 | 在哪跑 |
 |---|---|---|
-| `W-13` 入口/面板结构 | 右栏 guide 入口按**上游标记**（`[data-sidebar-right-guide-entry="browser"]`，fork 保留上游 kind 'browser'）定位；上游 BrowserBody（地址栏 `input[aria-label=上游 placeholder]`、toolbar `back/forward/reload/go/external`、"sandbox 开关 aria-pressed"）恰一个可见且 `aria-busy` 可读；不再有自研 panel/phase/远端分区概念 | `--dev` 自开右栏+页签；`--attach` 仅在右栏/页签已预开时判定，否则 INFO |
-| `W-14a` local 内嵌真跑 | 走查自起 in-process fixture（127.0.0.1 随机端口，`/` 标记页 `parent.postMessage`）→ 地址栏输入**显式** `http://127.0.0.1:<port>/`（上游裸地址默认 https）→ iframe 恰一、src 指向本次 fixture、`data-sidebar-browser-frame="iframe"`、sandbox 精确上游 token（含 allow-popups）、referrerpolicy=no-referrer、**收到 postMessage**；不断言 name/title | `--dev`（local 直连；无需 SSH） |
-| `W-14b` remote 端到端 | `--ssh-fixture` 驱动，或 `--attach` + 真实 SSH 源 + `--embed-port`：活动视图切到 dsh/gateway+ssh 源 → 上游 BrowserBody 地址栏输入 `http://127.0.0.1:<port>/` → iframe src 为 **per-source alias**（127.0.0.2–254）、地址栏仍显示逻辑地址、上游 sandbox/referrer 契约、fixture postMessage；上游 fork 已删除 attached 行 UI，租约由 alias iframe + postMessage + 关 tab 后 alias 不可达证明 | `--dev --ssh-fixture`（本机真实 sshd/remote dsh/回环 fixture）或 `--attach` + 真实 ssh 源；缺前置 = **loud SKIP**（INFO，终端打 `SKIP W-14b`） |
-| `W-15` 系统浏览器出口（上游语义） | fixture `/embed-xfo`（XFO DENY）：上游**不承诺** XFO/TLS 失败探测，不要求 refusing/失败条；断言 iframe 尝试了该显式 http 地址、external 按钮存在且**可点**、装载时不自动打开、点击后 `window.open(逻辑地址,'_blank','noopener,noreferrer')` 恰一次（witness stub 掉真实打开）；观察到的上游失败条仅作证据 | 同 `W-14a`（`--dev` local） |
-| `W-15b` 关 tab 即释放 | 点页签关闭控件 → 面板/iframe 移除、无 pending（`aria-busy`/重建观察窗）；local 直连**没有** forward 记录，不做 list 探针（local 记录恒空，不能当释放证据）；有 forward 时 alias 端口必须 ECONNREFUSED（`node:net` 直连；未知不算已释放） | `--dev` local 版断言无 pending；远端 release 腿归真机/L5 |
-| `SH-7` CSP frame-src 合同 | `--live` 读壳 CSP：v2 精确源集（`blob:` + `127.0.0.1`/`localhost` + 253 alias + 裸 `http:`/`https:`，共 258 源，头 ≤8KB）PASS；v1 默认 `frame-src blob:`（gateway/cli/standalone 不放宽）INFO；`'self'`/通配/部分 alias/削弱的 `frame-ancestors`/超长头 FAIL | `--live`（纯 HTTP，无 GUI） |
+| `W-13`（**ARCHIVED** v2 iframe；v3 判据见 [§E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)）入口/面板结构 | 右栏 guide 入口按**上游标记**（`[data-sidebar-right-guide-entry="browser"]`，fork 保留上游 kind 'browser'）定位；上游 BrowserBody（地址栏 `input[aria-label=上游 placeholder]`、toolbar `back/forward/reload/go/external`、"sandbox 开关 aria-pressed"）恰一个可见且 `aria-busy` 可读；不再有自研 panel/phase/远端分区概念 | `--dev` 自开右栏+页签；`--attach` 仅在右栏/页签已预开时判定，否则 INFO |
+| `W-14a`（**ARCHIVED** v2 iframe；v3 判据见 [§E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)）local 内嵌真跑 | 走查自起 in-process fixture（127.0.0.1 随机端口，`/` 标记页 `parent.postMessage`）→ 地址栏输入**显式** `http://127.0.0.1:<port>/`（上游裸地址默认 https）→ iframe 恰一、src 指向本次 fixture、`data-sidebar-browser-frame="iframe"`、sandbox 精确上游 token（含 allow-popups）、referrerpolicy=no-referrer、**收到 postMessage**；不断言 name/title | `--dev`（local 直连；无需 SSH） |
+| `W-14b`（**ARCHIVED** v2 iframe；v3 判据见 [§E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)）remote 端到端 | `--ssh-fixture` 驱动，或 `--attach` + 真实 SSH 源 + `--embed-port`：活动视图切到 dsh/gateway+ssh 源 → 上游 BrowserBody 地址栏输入 `http://127.0.0.1:<port>/` → iframe src 为 **per-source alias**（127.0.0.2–254）、地址栏仍显示逻辑地址、上游 sandbox/referrer 契约、fixture postMessage；上游 fork 已删除 attached 行 UI，租约由 alias iframe + postMessage + 关 tab 后 alias 不可达证明 | `--dev --ssh-fixture`（本机真实 sshd/remote dsh/回环 fixture）或 `--attach` + 真实 ssh 源；缺前置 = **loud SKIP**（INFO，终端打 `SKIP W-14b`） |
+| `W-15`（**ARCHIVED** v2 iframe；v3 判据见 [§E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)）系统浏览器出口（上游语义） | fixture `/embed-xfo`（XFO DENY）：上游**不承诺** XFO/TLS 失败探测，不要求 refusing/失败条；断言 iframe 尝试了该显式 http 地址、external 按钮存在且**可点**、装载时不自动打开、点击后 `window.open(逻辑地址,'_blank','noopener,noreferrer')` 恰一次（witness stub 掉真实打开）；观察到的上游失败条仅作证据 | 同 `W-14a`（`--dev` local） |
+| `W-15b`（**ARCHIVED** v2 iframe；v3 判据见 [§E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)）关 tab 即释放 | 点页签关闭控件 → 面板/iframe 移除、无 pending（`aria-busy`/重建观察窗）；local 直连**没有** forward 记录，不做 list 探针（local 记录恒空，不能当释放证据）；有 forward 时 alias 端口必须 ECONNREFUSED（`node:net` 直连；未知不算已释放） | `--dev` local 版断言无 pending；远端 release 腿归真机/L5 |
+| `SH-7` CSP frame-src 合同 | `--live` 读壳 CSP：`frame-src` 精确等于 `blob:`（v3 收窄，iframe 载体已退役；桌面/网关/cli 同一短头）PASS；出现 v2 扩展源集（loopback/alias host、裸 `http:`/`https:`）或任何多源 = **回归 FAIL**；`'self'`/通配/`data:`/削弱的 `frame-ancestors`/`frame-src` 缺失/超长头 FAIL；**无 INFO 档** | `--live`（纯 HTTP，无 GUI） |
 
-严格档 `--require-embed`：以上腿与 SH-7 的 v1 短头只要判成 INFO 就改判 **FAIL**（与 `--require-hover` 同形态）。它只重标“未执行”，已经是 PASS/FAIL 的判据原样通过；exit code 语义不变，所以这是**逐次显式选择**，不是新的默认门。
+严格档 `--require-embed`：以上内嵌腿（`W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`）只要判成 INFO 就改判 **FAIL**（与 `--require-hover` 同形态）。它只重标“未执行”，已经是 PASS/FAIL 的判据原样通过；exit code 语义不变，所以这是**逐次显式选择**，不是新的默认门。`SH-7` 恒判定（短头 PASS / 扩展源集 FAIL），不在重标范围。
+
 
 写入边界：`--dev` 允许展开右栏/开页签/关闭页签（布局状态）；`--attach` **不**代开右栏与页签，只要 INFO 并写明前置（要真跑远端腿，先人工把窗口切到该 ssh 来源并打开浏览器页签，再给 `--embed-port`——给出端口即表示授权该腿驱动该面板，页签的逻辑目标会随 `browserTargetStorage` 持久化）。`W-14b` 结束后**不会**替操作者关页签（`--attach` 不碰他人页签），该 forward 随页签存活：验收后请手动关闭页签以释放 alias 端口。
 
