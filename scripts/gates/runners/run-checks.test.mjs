@@ -872,9 +872,17 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   const verdict = await runElectronArtifactSmoke({ desktopDist: DEFAULT_DESKTOP_DIST })
   assert.equal(verdict.action, 'run')
   assert.ok(verdict.port > 0)
-  // G34 产物臂：`>= 60` 下限会让陈旧的 dist 在本机一路绿，故与源面同一组精确钉子比对；红时先跑 `pnpm --filter @dsh-chamber/desktop run build:preload` 刷新编译产物。
-  assert.equal(verdict.members, EXPECTED_SURFACE.members,
-    'the COMPILED preload must equal the pinned member total（陈旧 dist 先跑 '
+  // G34 产物臂：`>= 60` 下限会让陈旧的 dist 在本机一路绿，故仍按精确钉子比对；红时先跑 `pnpm --filter @dsh-chamber/desktop run build:preload` 刷新编译产物。
+  // 预载可见面 = 钉子全集减去「只存在于 Swift shim 的命名空间」：`browser` 登记在
+  // packages/desktop/bridge-swift-only-additions.json（政策 electron-frozen §5.2、design 28 v3 §3），
+  // 冻结的 Electron preload 没有它的 factory，故编译产物合法地只暴露子集。数量按同一份白名单派生，
+  // 不另写死魔数——真实成员增删仍会让本断言变红。
+  const preloadNamespaces = new Set(BRIDGE_NAMESPACE_KEYS)
+  const swiftOnlyOnlyMembers = loadSwiftOnlyAdditions()
+    .filter(entry => !preloadNamespaces.has(entry.namespace))
+    .length
+  assert.equal(verdict.members, EXPECTED_SURFACE.members - swiftOnlyOnlyMembers,
+    'the COMPILED preload must equal the preload-visible member total（陈旧 dist 先跑 '
     + 'pnpm --filter @dsh-chamber/desktop run build:preload）')
   // F7 产物臂：dshDesktop 载体也必须真的在编译产物里（protocolVersion 1 +
   // updates 3 / keyboard 2 / shortcuts 4 个函数，由 preload.cts 单源声明）。
