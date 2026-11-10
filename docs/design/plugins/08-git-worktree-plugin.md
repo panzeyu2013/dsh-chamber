@@ -22,7 +22,7 @@
                 │ per-instance unary（/api/i/<id>/api/gitWorktree/*）
                 ▼
 ┌─ @dsh-chamber/dsh-chamber-seed-git-worktree（实例进程内）──┐
-│ snapshot / previewCreate / create / enter / remove          │
+│snapshot / branches / previewCreate / create / enter / remove│
 │ workspaceRegistry + live agents 权威守卫；spawn("git", argv)│
 └───────────────┬───────────────────────────────────────────┘
                 │ 同一池（<repo>/.agents/worktrees）
@@ -43,11 +43,12 @@ namespace 固定为 `gitWorktree`：
 | 方法 | 语义 |
 |---|---|
 | `snapshot()` | 从 `workspaceRegistry.list()` 出发找 repo，按 absolute `git-common-dir` 去重，返回 pool 内 worktree/branch/HEAD/dirty/locked 与主 checkout 的 workspace 关联；单 repo/path 错误与完整 repo 并存 |
+| `branches(input)` | 只读查询 `{sourceWorkspaceId}`：按 workspaceId 定位已注册 workspace，与 `previewCreate` 同源门禁（workspace 存在 → `assertSourceShape`（非仓库/子目录/submodule 拒绝）→ topology → 主 checkout 断言 `source-not-main-checkout`），现场直读 `git show-ref --heads`，返回回显 `sourceWorkspaceId`、宿主铸造 `repoId`、本地分支名、`checkedOutBranches`（advisory）与 `truncated`；分支名有界（§2.1），失败显式报错而非空数组 |
 | `previewCreate(input)` | 验证 repo id、来源必须是主 checkout、本地分支、目标 parent/basename 和当前 HEAD，返回短期 capability token；preview 不是最终授权 |
 | `create(input)` | 在 common-dir mutex 中重新验证；`operationId` 合并重复请求；只产生 checkout（无 workspace/session/rollback） |
 | `enter(input)` | 薄契约 `{sessionId,path}`：校验会话根、checkout 为权威 topology 中的精确 worktree 根且在会话根之内，然后经宿主 `workingDirectory` 服务切换会话目录；不建会话、不改注册表 |
 | `remove(input)` | path-based，只删权威 worktree list 中的 linked worktree；main、locked、registered、嵌套 workspace、身份变化都拒绝；running 读 effective cwd；dirty 默认拒绝，显式 `discardChanges` 才 `--force`；不触碰任何会话/归档 |
-RPC 只接受领域 operation，不接受任意 Git argv。所有 mutation 的锁键是 canonical common-dir，不是 renderer 提供的 repo path。**没有 `rollbackCreate`**：创建失败不自动删树（原因见 §2.3 与 §6.2），也没有 registered remove / workspace.delete 分支。
+RPC 只接受领域 operation，不接受任意 Git argv。`branches` 是只读查询：不产生 mutation、不取 common-dir mutex。所有 mutation 的锁键是 canonical common-dir，不是 renderer 提供的 repo path。**没有 `rollbackCreate`**：创建失败不自动删树（原因见 §2.3 与 §6.2），也没有 registered remove / workspace.delete 分支。
 
 Typert carrier 把普通业务异常归并为 `internal`，故所有方法都在 carrier success 内返回第二层领域 envelope：`{ok:true,value}` 或 `{ok:false,error:{code,message,retryable?,details?}}`。客户端必须同时验证两层 envelope，并对每个 success value 做运行时 shape 与请求相关性校验；路径、operation/worktree/repo id、branch 或 HEAD 任一错配都不得推进 delete 副作用。
 
@@ -57,7 +58,10 @@ Typert carrier 把普通业务异常归并为 `internal`，故所有方法都在
 - **孤儿/关联诊断**：注册 workspace 路径不可解析时，host 在快照 `errors` 里加一条逐行诊断（路径消失 = `path-unavailable`，兜底码 `workspace-path-failed`，带 `workspaceId`）；客户端据此把该 workspace 的 flags 合并为 `orphaned: true`（保留既有 worktree 身份）。新模型下这是**旧 registered worktree 遗留形态**；新 checkout 不注册，因此不产生该诊断。
 - **容量与预算**：Snapshot 共用一个 in-flight：20 秒是 probe launch/Git budget，25 秒是对客户端的 wall response deadline；上限 128 workspace、64 repo、每 repo 128 且全源合计 256 worktree、16K session memberships；running agent cwd 每轮至多 canonicalize 一次。超限/超时返回显式 source error 与已有局部事实，不伪装成健康空结果。Node 的 FS await 无法安全取消，25 秒后旧 scan 可继续，但退出前 single-flight 不释放，后续 poll 复用 deadline 结果，绝不启动重叠扫描。
 - **幂等记录 TTL**：preview 最长保留 5 分钟；create/remove operation 最长保留 24 小时。容量压力下只可淘汰从未进入 mutation、无外部 effect/provenance 的最老 `ready` 记录； `created/uncertain/removed` tombstone 在 TTL 内不得提前淘汰，否则宁可 fail-closed `operation-capacity`。进程重启丢内存幂等缓存，恢复仍以 fresh registry + Git topology 为权威，绝不依赖缓存作安全凭据。
-- **发现缓存**：create/remove 提交后必须使该仓库发现缓存失效（否则新 worktree 在 TTL 内不可见）；快照每 repo 每轮只跑一次 `show-ref`，branches 消费该次结果。仓库级快照失败 keep 上一快照，flag 不闪失。
+- **发现缓存**：create/remove 提交后必须使该仓库发现缓存失效（否则新 worktree 在 TTL 内不可见）；快照每 repo 每轮只跑一次 `show-ref`，快照的 `branches` 字段消费该次结果。仓库级快照失败 keep 上一快照，flag 不闪失。
+- **`branches` 按需读取**：`snapshot.branches` 降级为 picker 的旧宿主/读取失败回退，不再是首选数据源；按需读不读也不写发现缓存，也不 join 快照的 single-flight，每次调用现场直读 `git show-ref --heads`。响应有界：本地分支名与 `checkedOutBranches` 各至多 `MAX_BRANCH_CANDIDATES=1024`，任一截断即 `truncated:true`；`checkedOutBranches` 来自同一次 topology 读取，是 advisory 提示，不参与任何校验。该读不取 common-dir mutex——它可能观察到 mutation 的中间态，权威校验仍在锁内的 `previewCreate`/`create`。
+- **空与失败必须可区分**：`show-ref` 非零退出且带输出、或输出协议漂移 = 显式错误（复用域内既有错误码，如 `git-command-failed`/`git-protocol-error`），绝不静默返回空数组；空输出（exit 1，或个别 Git 版本的 exit 0，防御性声明）= 真空仓库/无本地 refs 的事实，不是失败。
+- **成本与去重**：每次调用 7 个 git 子进程（`assertSourceShape` 3×`rev-parse` + `discover` 2×`rev-parse` + `worktree list` + `show-ref`；旧 Git 的 `-z` 回退会多一次），与 `previewCreate` 的前置同源；registry 读不是 git 子进程。该读**不做跨调用缓存/单飞**——它是对话框的动作型查询，用跨打开的 TTL 缓存换陈旧不可取（每次打开一次读取），加载态因此沿用既有 git RPC 的 60s 预算（慢实例下选择器最长禁用 60s）。
 
 ### 2.2 工作树池、来源与分支解析
 - **统一池**：`<主 checkout>/.agents/worktrees/<name>`（相对路径，位于源 workspace 之内）。 seed 与 forge 都遵守：root 已存在不覆盖；首次创建幂等写 `<pool>/.gitignore`（内容 `*\n`， create-only；已存在不重写，绝不动仓库自己的 `.gitignore`）；不可写 = `ignore-unavailable` fail-closed，且发生在 mutation 之前。池自忽略使创建后源仓库 `git status --porcelain` 为空。
@@ -106,6 +110,7 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookC
 
 - 订阅 neutral `chamberBridge` 获得 `local | dsh-<id> | gateway-<id>`（`ssh-<id>` 为 v2 迁移前 legacy）和 connected 事实；
 - 每来源一个 in-flight promise，30s tick **轮转波**（每拍最多刷新 2 个 connected 来源， `pollCursor` 轮转）：单来源仍按 30s 节拍，N>2 时单源有效周期 **≤30s·ceil(N/2)**——页面 6 槽同源池的波控（design 26 §D7），不是每源独立并发；新连接/动作后的即时刷新不受波控；可见性恢复边一拍最多取 4 个来源（当前 active 优先）；
+- **分支候选是动作触发的有界只读 unary**：打开创建对话框（含重开）、点重试、`previewCreate` 返回 `branch-not-found`/`branch-checked-out` 时自动重读；Existing 页签激活时，若该仓已 settled 的列表距上次读超过 15s 再读一次（判定只在 effect 依赖变化时发生——打开/切换页签/查询 settle/来源变化——不设 timer，普通重渲染不判定；旧宿主 `unsupported` 后同一对话框不再重探 404）。来源 workspace 在对话框打开时由预填决定（对话框没有独立 repo 选择器）。该读不进 30s 轮询波、不进 busy/recovery 账本，也不进 coordinator 的 facts store（对话框局部状态；多壳各自打开对话框各自读一次，无跨壳去重）。
 - 断连立即清该来源事实；迟到响应用 sequence 拒绝；
 - `repos` 与 path/repo 级 `errors` 并存，一个失败不抹掉其它完整实体；
 - N-ctx 所有 occupant 读同一 facts/action/recovery store，不重复轮询，切换 shell 不丢 busy 或部分失败状态；
@@ -144,11 +149,14 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookC
 
 ## 4. 创建与进入会话
 ### 4.1 创建对话框与来源分支候选
-- **New Branch / Existing Branch 双 tab**（active-pill）；分支名打开时自动双词 slug （10×10 组合，查重避开已有分支与工作树目录名，8 次重 roll）；目录随分支名同步直至编辑（“重置为分支名”）；来源分支下拉（本地分支，localStorage 按仓库记忆上次选择）；已有分支为可选框（host 快照 `branches`，`show-ref --heads` 白名单）。
+- **New Branch / Existing Branch 双 tab**（active-pill）；分支名打开时自动双词 slug （10×10 组合，查重避开已有分支与工作树目录名，8 次重 roll）；目录随分支名同步直至编辑（“重置为分支名”）；来源分支下拉（本地分支，localStorage 按仓库记忆上次选择）；已有分支为可选框（host `gitWorktree/branches` 按需读，`show-ref --heads` 白名单；§2）。
 - **单击直接创建**：无预览屏——客户端内部串行 previewCreate→createFromPreview（host 校验链完整保留），错误直接显示。创建**永不提交会话**；成功后 refresh，行由 layout 派生出现。
-- **来源分支候选**：`sourceBranchChoices()`（`shared/git-facts.ts`）——host 分支表原样放行，主 checkout 当前分支可选；detached 时默认 base 是 detached commit；unborn 行从回退集跳过；不得把主 checkout 分支过滤掉（单分支仓库会候选必空）。
+- **候选来源**：首选是本次对话框内最近一次 `gitWorktree/branches` 的 fresh 列表（`shared/branch-query.ts` 的 `branchChoices()` 直接采用，取代 `snapshot.branches`）；快照回退路径仍用 `sourceBranchChoices()`（`shared/git-facts.ts`）消费 `snapshot.branches` 与已检出分支。主 checkout 当前分支可选；detached 时默认 base 是 detached commit；unborn 行从回退集跳过；不得把主 checkout 分支过滤掉（单分支仓库会候选必空）。`snapshot.branches` 保留为旧宿主与读取失败的回退（§6.3）。
+- **读取触发**：创建对话框打开（含重开）时、点重试、`previewCreate` 返回 `branch-not-found`/`branch-checked-out` 时自动重读；Existing 页签激活且已 settled 的列表距上次读超过 15s 再读一次（无 timer，只在 effect 依赖变化时判定；旧宿主 404 后同一对话框不再重探，重开时再读一次）。关闭/卸载 abort 在飞读取。来源 workspace 由打开时的预填决定（无 repo 选择器）。读是一次动作型 unary，不进 30s 轮询波（§3.1）。
+- **三态与禁用**：loading/ready/error 三态；loading 时分支选择器禁用，不退化为手输。fresh 列表取代 `snapshot.branches`；Existing 页签把 `checkedOutBranches` 中的分支禁用并标注；New Branch 的来源分支下拉不受此限制——主 checkout 分支必须保持可选。快照回退列表（旧宿主/读取失败）没有 checked-out 事实，不 disable——这是旧宿主的能力上限，host 的 `previewCreate` 仍以 `branch-checked-out` 拒绝。
+- **失败与旧宿主**：读取失败显示本地化错误条 + 重试；确定性拒绝（缺失域、source-shape/workspace 拒绝）不给重试。有快照回退时 Existing 页签选择器保持可用（回退列表 + 错误条），无回退候选时退化为禁用选择器（阻断的是该页签的 fresh 分支选择；New 页签仍可创建，创建仍由 host 的 `previewCreate`/`create` 校验）。旧宿主（已挂载域上的未知方法 → 客户端 `git-host-not-loaded`，且本来源已有成功 snapshot）回退到 `snapshot.branches`，不弹重启指引、不显示错误条；无 snapshot 的 404 仍是真域缺失文案（§6.3）。
 - **目录重名自动加数字后缀**（`resolveCandidateDirectory`：name-2/name-3…）；host `target-exists` 仍是最终守卫——已存在目录不得静默覆盖。
-- **已知边界**：unborn 仓库 `branches` 必空；detached/unborn 主 checkout 记过分支后 MenuSelect 无“回到默认”；host `show-ref` 失败静默返回 `[]` 时 new-branch 选择器只剩已 checkout 分支（existing 页签有 Input 回退）；非 git 工作区不渲染入口是设计行为。
+- **已知边界**：unborn 仓库分支候选必空（`show-ref` 空输出是真空仓库事实，不是读取失败）；读取成功但候选为空（unborn 仓 / 旧宿主空快照）时 Existing 页签保留既有的手输回退（host 仍以 `branch-not-found` 拒绝，与改动前一致）；detached/unborn 主 checkout 记过分支后 MenuSelect 无“回到默认”；快照回退路径的既有边界是 host `show-ref` 失败静默返回 `[]`，选择器可能只剩已 checkout 分支——按需读的失败走显式错误 + 重试，不经过该静默路径；非 git 工作区不渲染入口是设计行为。
 
 ### 4.2 在 checkout 新建会话（source + enter）
 `createSessionHere`（行内“+”）：fresh facts → `canTargetSession` 健康门 → 主 checkout 的 workspace id → `session.create(sourceWorkspaceId, {sessionId, origin:'user', workingDirectory:path})` → `requestOpenSession` → `gitWorktree/enter`。
@@ -163,7 +171,7 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookC
 - forge 的 composer “New worktree”/创建卡/hold/取消/重试/不带工作树继续、右栏 tab、toast、行 hover 都保留；它创建的是同一个池里的 checkout，会话放置/行表现由本设计统一。
 - 官方 agent 工具 `create_worktree` 由 forge bundle 的 `worktree` + `tool-worktree` 行提供，产物自动成行/放置；linked 源不可用；工具树可被侧栏删除（running 守卫读 effective cwd）。
 - **restore 仅 forge record**：forge 的 missing 树可 restore/continue；seed 自建的树没有 restore（不对称，接受并写入发布说明）。seed 删除 forge 树后 forge 显示 missing/restore，我们的派生行不显示幽灵；反向删除后行消失。
-- 同一池的三条断言：forge 创建 → 侧栏 ≤1 波成行且会话 placed；seed 创建 → forge tab 可见； seed 删除 forge 树 → forge missing/restore 且反向行消失。
+- 同一池的三条断言：forge 创建 → 侧栏在单源有效周期（≤30s·ceil(N/2)，§3.1）内成行且会话 placed；seed 创建 → forge tab 可见； seed 删除 forge 树 → forge missing/restore 且反向行消失。
 
 ## 5. 删除事务（path-based，不隐式归档）
 ```text
@@ -225,6 +233,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 
 ### 6.3 host 包缺失与一键重启
 - 404 = 确定性 `git-host-not-loaded`（git RPC 404，host 包缺失或未生效）：客户端判定为确定性失败——不建恢复、不重试，按来源指引重启：本地实例在“dsh 运行时”点“重启 dsh”；远程 ssh 在连接设置重新下发 chamber host 包并点“重启生效”；gateway 经 `/chamber/runtime/restart` 后重试。该错误归属 connections 插件的插件管理面，不进侧栏。
+- **分支候选的兼容窗口**：`branches` 是新增方法，新客户端 + 旧宿主调用得到 404（已挂载域上的未知方法）；若本来源已有成功 snapshot，按旧宿主回退到 `snapshot.branches`，不显示重启指引，无 snapshot 的 404 仍按上一条判为真域缺失。旧客户端 + 新宿主不受影响；两半可任意顺序上线/回滚，重启 dsh/seed 同步后按需读自然生效。
 - **重启入口**：连接卡“重启实例”按来源区分（ssh `restart_service`、gateway `/chamber/runtime/restart`、本地 control-plane `restartLocal()`）；seed 写/补 patch 后的“重启生效”态由 `PluginDialog` 承载。`remoteNeedsSeed` = 宿主图包未 (installed && patched)，或 gitWorktree 行未安装。
 
 ### 6.4 已接受的残余
@@ -240,7 +249,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - host 包与 client-graph 包一起进入本地 profile seed、远程 ready-time seed、desktop 打包资源和 loader patch；seed 继续只经既有的受限 `run/write-file` 通道。host 包的 esbuild `dist/index.js`（`@deepseek-ai/*` external）为构建期生成、不提交；clean checkout 由 `pnpm run build:artifacts` 自举。
 - loader id 与 package name 在 profile 中是全局身份：单个 exact 既有 row 复用，同 id/异包、同包/异 id 或重复 exact row 都在写包/启动前 fail-loud。
 - client 包是首屏静态覆盖行：Vite aliases、`chamber-entry` apply + module factory、 `CHAMBER_COVERED_IDS` 必须锁步。
-- 专属验证门：`typecheck:git`、`typecheck:host-git`、`test:git`、`test:host-git`、 `build:renderer`；同时运行 sidebar/renderer-shell/desktop/control-plane 回归。新增 `enter` 的行号/契约由 host-client lockstep 锁步（旧覆盖不含 enter，属新增）。
+- 专属验证门：`typecheck:git`、`typecheck:host-git`、`test:git`、`test:host-git`、 `build:renderer`；同时运行 sidebar/renderer-shell/desktop/control-plane 回归。新增 `branches`/`enter` 的 wire 契约由 host-client lockstep 锁步（方法名单/命名空间/真宿主结果↔真客户端解码；旧覆盖不含两者，属新增）。
 - 打包前必须重建 host 产物（`build:artifacts` / `build:host-packages`），再拷贝到 desktop `dist/`。
 
 ### 7.2 P5b：forge bundle、GitHub 关闭与 node
@@ -264,8 +273,8 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - **view-prefs 清理**：回滚/升级脚本清 `__checkout__` 前缀键与 `checkoutOrder`；正常升级无需迁移（旧键若存在，渲染侧跳过未知 path，体积可忽略）。
 - **回滚**：P5b 关闭 bundle + 重启；删除不删用户数据；Swift 保留，无 sidecar 回退项。
 
-### 7.5 验收矩阵（V1–V21）
-合并/PR 门 = V1/V2/V3/V4/V5/V6/V16 的 dev Swift 子集 + PR CI + build:renderer；其余是发布门（尤其 V8–V15、V17–V21）。未跑项按 release 清单开账，不能用“代码已合”代替。
+### 7.5 验收矩阵（V1–V22）
+合并/PR 门 = V1/V2/V3/V4/V5/V6/V16 的 dev Swift 子集 + PR CI + build:renderer；其余是发布门（尤其 V8–V15、V17–V22）。未跑项按 release 清单开账，不能用“代码已合”代替。
 
 | ID | 场景 | 判据 | 门 |
 |---|---|---|---|
@@ -290,6 +299,7 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 | V19 | LFS/clean-smudge/required | 指针降级可解释，手动 git lfs pull 后可用 | Release |
 | V20 | 主 checkout 未注册/池注册 | 无行/无入口；池注册以 workspace 行存在 | Release |
 | V21 | Swift 腿完整验收 | 四项 UI、同池三条、node 创建（Electron 归档参考，不验收） | Release |
+| V22 | 分支候选按需读取 | 外部新建本地分支后打开对话框即可见；Existing 页签已检出分支禁用（旧宿主回退列表不具备该事实，豁免）；读取失败显式错误 + 重试；旧宿主回退快照列表；local/ssh/gateway 三形态一致（404 分类/线格式/状态机由单测前置覆盖；旧宿主回退行为在实机 V22 复核） | Release |
 ## 8. Rejected alternatives（统一模型与 P5b）
 - **worktree 作为 workspace（旧模型：`workspace.create` + `session.create` + 补偿 saga + 删除时 `workspace.delete`）**：否决。会话/工作区是两个持久化域，创建要补偿、删除要归档前置与 registered 删除；未挂载来源还要回声/位置意图才能看见空工作区；而 workspace-write 沙盒仍要求 checkout 在源 checkout 内。统一模型把 checkout 降为 Git 事实、会话留在源根，用一条 thin `enter` 完成放置，删掉了 workspace/session 生命周期、rollback、echo 与 registered remove。代价 = 旧池必须清空（§7.4）且池外树不可见；接受。
 - **自研 forge / 自建 restore**：否决。forge 已有 composer 开关、创建卡/hold、restore/ continue、右栏 tab 与 agent `create_worktree`；自研等于复制一套执行面与会话耦合，还要自己维护 restore 记录。保留 seed 只做仓库级 inventory/删除/enter，UI 交给 forge；代价 = restore 仅 forge record，seed 树无 restore（接受的不对称）。
@@ -305,3 +315,11 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - **删除进行中允许 X/Escape 关闭以“取消”**：否决。异步删除没有取消语义，关闭只会造成“看起来取消、实际继续”；改为删除中忽略关闭，停止确认仍可单独取消归档。
 - **子模块 refusal 只显示错误、不重新武装勾选**：否决。host 的强制移除需要显式 `discardChanges`；不重新武装会让用户永远无法越过该拒绝。
 - **归档对话框复用单一 `RiskConfirmation`**：否决。分支/归档/确认三个选择无法塞进单框；改为自定义 `Modal` + 停止对话框，仍只用原语组件。
+- **打开创建对话框时刷全量 snapshot 以取新分支**：否决。快照会重扫描全部 repo/worktree，并受 30s 发现缓存与 20–25 秒 single-flight 约束，为一仓库的本地分支名触发全量扫描，成本不匹配；改为独立的按需只读 unary（§2、§4.1）。**打开时强制失效发现缓存**的变体同样否决：仍要全量重扫，且 snapshot 的 single-flight 在飞时会复用旧 deadline 结果，失败面只有整源 `sourceError`，没有窄范围的缓存失效面。
+- **给 snapshot 加 `fresh`/`bypass` 参数**：否决。那等于把发现缓存变成人人可绕过的开关，缓存的存在意义被契约否定，且“picker 要新鲜分支”这一便利会扩散成 snapshot 的通用刷新语义；按需读用独立方法承担，不污染快照契约。
+- **Existing 页签在读取失败时允许手输分支名**：否决。手输把“存在且未被检出”的校验推到 `previewCreate` 才失败，用户单击创建后才发现错误；loading 禁用选择器、error 给本地化错误 + 重试，才把校验留在同一个位置（§4.1）。（读取成功但候选为空时保留既有手输回退，不属于本条。）
+- **缩短 30s tick 或加大轮询波以刷新分支列表**：否决。轮询波受页面同源槽池预算约束（design 26 §D7），缩短 tick/加波是全局事实刷新成本，不是“打开 picker 时读一次分支”的解法；按需读不进波（§3.1）。
+- **snapshot 增加 capability 字段告知客户端是否支持 `branches`**：否决。只为省一次 404 探测就扩快照契约，还要求新旧两半对 capability 字段 lockstep；方法缺失的 404 + 本来源已有成功 snapshot 已足以判定旧宿主并回退（§6.3）。
+- **用 refs 指纹让 `snapshot.branches` 每轮新鲜**：否决。指纹只让宿主在 TTL 内提前失效发现缓存，治不了客户端 30s 波与多来源轮转带来的新鲜度问题；按需读同时绕开宿主 TTL 与客户端波。
+- **fs.watch / 事件推送分支变化**：否决。实例域没有 server→client 通道，为此新建推送面与监听器的成本远超 picker 的一次动作读取；外部 forge/agent 创建的 checkout 行仍按既有轮询波出现，不为此加事件面。
+- **现在退役 `snapshot.branches`**：否决。它是旧宿主与按需读失败时 picker 的唯一回退源，退役会断掉兼容窗口与降级路径（§6.3）；保留为回退，首选数据源改为按需读。退役条件（连接面不再有旧 host）单独裁决，不在本设计内自证。
