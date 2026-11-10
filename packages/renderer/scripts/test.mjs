@@ -32,6 +32,15 @@ export const GROUPS = {
   scripts: [
     'scripts/typert-remote-contract.test.mjs',
     'scripts/vendor-patches.test.mjs',
+    // Real-Cordis provide/get join for the public client-plugin base-path contract (design 09 §4).
+    {
+      file: 'scripts/chamber-base-path-real-context.test.mjs',
+      nodeArgs: [
+        '--experimental-transform-types',
+        '--import', '../../scripts/dev/test-loaders/test-shell-register.mjs',
+        '--import', '../../scripts/dev/test-loaders/test-cordis-src-register.mjs',
+      ],
+    },
   ],
   // lifecycle: 实例启动生命周期 —— shell 引导与降级自愈、宿主图/必需行探测、首屏基线预热、page 读路
   lifecycle: [
@@ -80,6 +89,8 @@ export const GROUPS = {
     // dsh-client-web fixture loader (see scripts/dev/test-loaders/test-shell-loader.mjs); the --import
     // specifier resolves from the package root (spawn cwd).
     { file: 'test/lifecycle/shell.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
+    // Public client-plugin context contract v1 (design 09 §4): value shape + rejection cases.
+    { file: 'test/lifecycle/chamber-base-path-contract.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
     { file: 'test/lifecycle/shell-tail-wait-teardown.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
