@@ -60,6 +60,15 @@
  *   (upstream-drift V2): they stay out of this gate - narrowing a type that lost
  *   its last consumer is a review duty, not a script verdict.
  *
+ *
+ * IMPLEMENTATION-SURFACE PACKAGES. A package whose public entry is a thin
+ * loader can carry a shipped implementation tree that no index re-export
+ * reaches (the client-plugin ./client half is the motivating case).
+ * INTERNAL_SURFACE_PACKAGES names such packages with their implementation
+ * roots and the entry files that stay entry-level; every runtime export under
+ * those roots is live when a production importer names it OR its own module
+ * reads it, and anything else needs an INTERNAL_SURFACE_ALLOWLIST entry with
+ * the reason a reviewer accepted. Stale allowlist entries are red.
  * EXEMPTIONS. DEAD_EXPORT_EXEMPTIONS names a real dead export per package, with
  * the reason a reviewer accepted and where the consumer lands. A stale exemption
  * (the export is imported or gone) is red: the list may not lie.
@@ -430,6 +439,42 @@ export function workspacePackageGlobs(repoRoot = REPO_ROOT) {
  * pnpm-workspace.yaml globs, filtered to direct children of packages/.
  * @returns {{ name: string, dir: string, spec: string, index: string }[]}
  */
+/**
+ * Packages whose implementation tree is judged IN ADDITION to the package entry
+ * (R4 review): the client-plugin ./client half ships a whole carrier that no
+ * index re-export reaches, so an entry-only scan would leave it unjudged.
+ * `roots` are package-relative implementation roots; `entryFiles` are
+ * package-relative ENTRY files excluded from this tree scan. Their runtime
+ * exports are the client-plugin loader ABI (`apply`/`inject` and the ./client
+ * entry face) owned by the loader contract, not by this scan — the package ROOT
+ * entry (`src/index.ts`) keeps the ordinary entry-level rules above. Self-use
+ * counts as live inside the judged tree.
+ * @type {Readonly<Record<string, { roots: readonly string[], entryFiles: readonly string[], reason: string }>>}
+ */
+export const INTERNAL_SURFACE_PACKAGES = {
+  'dsh-chamber-client-ui-browser': {
+    roots: ['src/client', 'src/shared'],
+    entryFiles: ['src/client/index.ts'],
+    reason: 'the v3 native-guest carrier (BrowserBridge / guest-state / geometry / keymap / popup-limit / forward bridge) lives in the ./client half; the root index only exports apply(), so the entry-only scan would leave the shipped carrier unjudged',
+  },
+}
+
+/**
+ * Accepted implementation exports with no production importer and no self-use
+ * (R4 review 2026-11-10; narrowed by the browser v3 fix batch). Each entry must
+ * STAY dead: a production importer, a self-use, or a vanished export makes the
+ * entry stale (red), exactly like the other exemption tables. The remaining entry
+ * is upstream-verbatim text kept under a SHA lock; the test-only carrier guards
+ * that used to be listed here were DELETED with their tests (design 28 v3 §3,
+ * D16) instead of being allowlisted, so do not re-add them.
+ * @type {readonly { package: string, name: string, reason: string }[]}
+ */
+export const INTERNAL_SURFACE_ALLOWLIST = [
+  // Upstream-verbatim file under a SHA-256 freeze (locks/registration.test.ts): the
+  // helper has no v3 reader but deleting it would break the upstream-text lock.
+  { package: 'dsh-chamber-client-ui-browser', name: 'browserAddressCheckpoint', reason: 'upstream ui-sidebar-browser text kept verbatim under the package SHA lock; the v3 state push carries the address, so it has no reader and must stay for byte-identity' },
+]
+
 export function discoverPackages(repoRoot = REPO_ROOT) {
   const dirs = new Set()
   for (const glob of workspacePackageGlobs(repoRoot)) {
@@ -755,6 +800,151 @@ export function clientSeamCoverage(discovered, seams = RUNTIME_LOADED_CLIENT_SEA
   }
 }
 
+/**
+ * Strip comments AND string/template literal CONTENTS. Self-use must mean a
+ * name really appears in code: a dead export whose name only occurs inside a
+ * literal (a comment or a quoted string) is not a consumer; template literals are
+ * kept because their ${...} interpolations are real code. A space replaces each
+ * literal so adjacent tokens cannot fuse into a false symbol.
+ * @param {string} sourceText - module source.
+ * @returns {string} source with comments and literal contents removed.
+ */
+export function stripCommentsAndStrings(sourceText) {
+  let out = ''
+  let index = 0
+  const length = sourceText.length
+  while (index < length) {
+    const char = sourceText[index]
+    const next = sourceText[index + 1]
+    if (char === '/' && next === '/') {
+      while (index < length && sourceText[index] !== '\n') index += 1
+      continue
+    }
+    if (char === '/' && next === '*') {
+      index += 2
+      while (index < length && !(sourceText[index] === '*' && sourceText[index + 1] === '/')) index += 1
+      index += 2
+      continue
+    }
+    if (char === '"' || char === "'") {
+      out += ' '
+      index += 1
+      while (index < length) {
+        if (sourceText[index] === '\\') {
+          index += 2
+          continue
+        }
+        if (sourceText[index] === char) {
+          index += 1
+          break
+        }
+        index += 1
+      }
+      continue
+    }
+    out += char
+    index += 1
+  }
+  return out
+}
+
+
+/**
+ * Names a module reads itself (the export declaration plus at least one more
+ * word-boundary occurrence in code, comments stripped). Such an export is an
+ * unnecessary `export`, not dead code: the implementation surface rule exempts
+ * it. Pure.
+ * @param {string} sourceText - module source.
+ * @param {readonly string[]} names - its runtime exports.
+ * @returns {string[]} self-read names.
+ */
+export function selfUsedRuntimeExports(sourceText, names, { stripStrings = true, stripComments: stripCommentText = true } = {}) {
+  const text = stripStrings
+    ? stripCommentsAndStrings(sourceText)
+    : stripCommentText ? stripComments(sourceText) : sourceText
+  const isWordChar = (char) => /[A-Za-z0-9_$]/.test(char)
+  const used = []
+  for (const name of names) {
+    let count = 0
+    let at = text.indexOf(name)
+    while (at !== -1) {
+      const before = at === 0 ? '' : text[at - 1]
+      const after = text[at + name.length] ?? ''
+      if (!isWordChar(before) && !isWordChar(after)) count += 1
+      at = text.indexOf(name, at + name.length)
+    }
+    if (count > 1) used.push(name)
+  }
+  return used
+}
+
+/**
+ * Read the implementation surface of one INTERNAL_SURFACE_PACKAGES entry:
+ * every runtime export under its declared roots, excluding its entry files,
+ * with self-use recorded. Returns [] for packages not in the table.
+ * @param {{ name: string, dir: string }} pkg - discovered package.
+ * @param {string} [repoRoot] - repository root.
+ * @returns {{ package: string, file: string, names: string[], selfUsed: string[] }[]}
+ */
+export function internalSurfaceModules(pkg, repoRoot = REPO_ROOT) {
+  const config = INTERNAL_SURFACE_PACKAGES[pkg.name]
+  if (config === undefined) return []
+  const entryFiles = new Set((config.entryFiles ?? []).map((file) => join(pkg.dir, file)))
+  const modules = []
+  for (const root of config.roots) {
+    const absolute = join(pkg.dir, root)
+    if (!existsSync(absolute)) continue
+    const files = walkFiles(
+      absolute,
+      (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file) && !/\.d\.(?:ts|mts|cts)$/u.test(file),
+      { extraIgnored: ['test', 'tests', 'test-fixtures', 'scripts', 'vendor', 'generated', 'lib'] },
+    )
+    for (const file of files) {
+      if (entryFiles.has(file)) continue
+      const text = readFileSync(file, 'utf8')
+      const names = extractRuntimeExports(text)
+      if (names.length === 0) continue
+      modules.push({
+        package: pkg.name,
+        file: relative(repoRoot, file).split(sep).join('/'),
+        names,
+        selfUsed: selfUsedRuntimeExports(text, names),
+      })
+    }
+  }
+  return modules
+}
+
+/**
+ * Pure verdict for one implementation surface: an export is live when a
+ * production importer names it or its own module reads it (selfUsed); anything
+ * else is red unless INTERNAL_SURFACE_ALLOWLIST names it. Test importers do NOT
+ * count, so a test-only internal export needs an allowlist reason too.
+ * @returns {{ dead: { package: string, name: string, file: string }[], checked: number }}
+ */
+export function internalSurfaceDeadExports(modules, imported, allowlist = INTERNAL_SURFACE_ALLOWLIST) {
+  const allowed = new Set(allowlist.map((entry) => (entry.package ?? '') + '\u0000' + entry.name))
+  const dead = []
+  let checked = 0
+  for (const module of modules) {
+    const selfUsed = new Set(module.selfUsed ?? [])
+    for (const name of module.names) {
+      checked += 1
+      if (imported.has(name) || selfUsed.has(name)) continue
+      if (allowed.has((module.package ?? '') + '\u0000' + name)) continue
+      dead.push({ package: module.package ?? '', name, file: module.file })
+    }
+  }
+  return { dead, checked }
+}
+
+/** Implementation-surface allowlist entries that no longer name a dead face (stale = red). */
+export function staleInternalSurfaceAllowlist(modules, imported, allowlist = INTERNAL_SURFACE_ALLOWLIST) {
+  const dead = new Set(internalSurfaceDeadExports(modules, imported, []).dead.map((entry) => entry.package + '\u0000' + entry.name))
+  return allowlist.filter((entry) => !dead.has((entry.package ?? '') + '\u0000' + entry.name))
+}
+
+
 function selfTest() {
   const modules = [
     { file: 'src/a.ts', names: ['used', 'orphan'] },
@@ -820,19 +1010,41 @@ function selfTest() {
   const entrylessDetected = entrylessVerdict.checked === 3 && entrylessVerdict.dead.length === 1 && entrylessVerdict.dead[0].name === 'orphan'
   const entrylessStale = staleEntrylessSeams(entrylessModules, new Set(['used', 'seamOnly', 'orphan']), [{ name: 'seamOnly', reason: 'suite seam' }])
   const entrylessStaleDetected = entrylessStale.length === 1
+  // Implementation-surface rule negative controls: self-use is live, a real
+  // orphan is reported, an allowlist silences it, and a stale entry is flagged.
+  const internalModules = [
+    { package: 'pkg', file: 'packages/x/src/client/a.ts', names: ['prodUsed', 'selfUsedName', 'orphan'], selfUsed: ['selfUsedName'] },
+  ]
+  const internalVerdict = internalSurfaceDeadExports(internalModules, new Set(['prodUsed']), [])
+  const internalDetected = internalVerdict.checked === 3 && internalVerdict.dead.length === 1
+    && internalVerdict.dead[0].name === 'orphan'
+  const internalSelfUsed = internalVerdict.dead.every((entry) => entry.name !== 'selfUsedName')
+  const internalAllowed = internalSurfaceDeadExports(internalModules, new Set(['prodUsed']),
+    [{ package: 'pkg', name: 'orphan', reason: 'suite seam' }]).dead.length === 0
+  const internalStale = staleInternalSurfaceAllowlist(internalModules, new Set(['prodUsed', 'orphan']),
+    [{ package: 'pkg', name: 'orphan', reason: 'suite seam' }]).length === 1
+  // Self-use scanner controls (strict arm): a comment or a quoted literal is NOT
+  // a consumer; a real call is; a ${...} interpolation is real code (template
+  // literals stay verbatim). Historical mode still counts a quoted mention.
+  const selfUseSource = ['// ghost prose', "const label = 'ghost'", '${ghost()}', 'ghost()'].join('\n')
+  const strictSelfUse = selfUsedRuntimeExports(selfUseSource, ['ghost'])
+  const historicalSelfUse = selfUsedRuntimeExports(selfUseSource, ['ghost'], { stripStrings: false, stripComments: false })
+  const selfUseStrictOk = strictSelfUse.length === 1 && strictSelfUse[0] === 'ghost'
+  const selfUseHistoricalOk = historicalSelfUse.length === 1 && historicalSelfUse[0] === 'ghost'
   const retiredVerdict = retiredWriteFaceViolations([
     { file: 'packages/x/src/clean.ts', text: 'const listPlugins = () => []' },
     { file: 'macos/Sources/X/Resources/bridge-shim.js', text: "invoke('desktop_local_plugin_add', {})" },
   ])
   const retiredDetected = retiredVerdict.length === 1 && retiredVerdict[0].name === 'local_plugin_add'
-  if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected && retiredDetected
+  if (detected && exemptionWorks && staleDetected && commentsIgnored && entrylessDetected && entrylessStaleDetected && retiredDetected && internalDetected && internalSelfUsed && internalAllowed && internalStale && selfUseStrictOk && selfUseHistoricalOk
     && testOnlyDetected && testOnlyAllowed && testOnlyStale && seamDetected && seamStaleDetected && coverageDetected) {
-    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, a test-only export needs a reason, comments are not code, type-only re-exports are erased, a client-seam orphan is reported while its registered ABI names and coverage rows stay honest, a retired write-face name reappearing is caught)')
+    console.log('no-dead-exports self-test: ok (an orphan is reported, an exemption silences it, a stale exemption is flagged, a test-only export needs a reason, comments and quoted literals are not code but template interpolations are, type-only re-exports are erased, a client-seam orphan is reported while its registered ABI names and coverage rows stay honest, a retired write-face name reappearing is caught)')
     return
   }
   console.error(
     'no-dead-exports self-test: FAIL (detected=' + String(detected) +
     ', exemptionWorks=' + String(exemptionWorks) + ', staleDetected=' + String(staleDetected) +
+    ', internal=' + String(internalDetected) + '/' + String(internalSelfUsed) + '/' + String(internalAllowed) + '/' + String(internalStale) +
     ', commentsIgnored=' + String(commentsIgnored) + ', entryless=' + String(entrylessDetected) + '/' + String(entrylessStaleDetected) +
     ', retiredWriteFace=' + String(retiredDetected) +
     ', testOnly=' + String(testOnlyDetected) + '/' + String(testOnlyAllowed) + '/' + String(testOnlyStale) +
@@ -855,6 +1067,7 @@ function main() {
   const perPackage = []
   let totalChecked = 0
   let totalDead = 0
+  let internalChecked = 0
   for (const pkg of packages) {
     const { modules } = readModules(pkg)
     const declared = modules.reduce((sum, module) => sum + module.names.length, 0)
@@ -879,7 +1092,38 @@ function main() {
     const testOnly = testOnlyExports(modules, imported, testImported, testOnlyAllowlist)
     totalChecked += checked
     totalDead += dead.length
-    perPackage.push({ pkg, declared, dead, stale, testOnly })
+    // Implementation surface (INTERNAL_SURFACE_PACKAGES): the shipped tree the
+    // thin entry does not re-export. Self-use is live; a test-only or
+    // zero-consumer name needs an allowlist entry that must stay honest.
+    let internal = { dead: [], checked: 0 }
+    if (INTERNAL_SURFACE_PACKAGES[pkg.name] !== undefined) {
+      const internalModules = internalSurfaceModules(pkg)
+      const internalAllowlist = INTERNAL_SURFACE_ALLOWLIST.filter((entry) => entry.package === pkg.name)
+      if (internalModules.length === 0) {
+        failures.push(pkg.name + ': implementation surface is configured in INTERNAL_SURFACE_PACKAGES but the scan read no module - refusing to read a walk failure as a clean surface')
+      }
+      internal = internalSurfaceDeadExports(internalModules, imported, internalAllowlist)
+      const staleInternal = staleInternalSurfaceAllowlist(internalModules, imported, internalAllowlist)
+      if (staleInternal.length > 0) {
+        failures.push(pkg.name + ': ' + String(staleInternal.length)
+          + ' stale INTERNAL_SURFACE_ALLOWLIST entry(ies) - the export gained a production/self consumer or is gone: '
+          + staleInternal.map((entry) => entry.name).join(', '))
+      }
+      if (internal.dead.length > 0) {
+        failures.push(pkg.name + ': ' + String(internal.dead.length)
+          + ' implementation export(s) with no production importer and no self-use: '
+          + internal.dead.map((entry) => entry.name + ' (' + entry.file + ')').join(', '))
+      }
+      internalChecked += internal.checked
+    }
+    perPackage.push({ pkg, declared, dead, stale, testOnly, internal })
+  }
+  // A configured implementation surface whose package is not discovered would
+  // silently go unjudged (rename/private-package drift): fail the discovery gap.
+  for (const name of Object.keys(INTERNAL_SURFACE_PACKAGES)) {
+    if (!packages.some((pkg) => pkg.name === name)) {
+      failures.push('INTERNAL_SURFACE_PACKAGES names ' + name + ' but package discovery found no such package with src/index.ts - the implementation surface would silently go unjudged')
+    }
   }
   let entrylessChecked = 0
   let entrylessDead = 0
@@ -1048,13 +1292,14 @@ function main() {
   }
   const clientSeamJudged = clientPlugins.filter((plugin) => clientSeamByName.has(plugin.name)).length
   const suffix = [
+    internalChecked > 0 ? String(internalChecked) + ' implementation export(s) judged in ' + String(Object.keys(INTERNAL_SURFACE_PACKAGES).length) + ' package(s), ' + String(INTERNAL_SURFACE_ALLOWLIST.length) + ' allowlisted' : '',
     clientSeamJudged > 0 ? String(clientSeamJudged) + ' client-plugin package(s) judged at non-root public entries (' + String(clientSeamChecked) + ' runtime export(s)' + (clientSeamDead > 0 ? ', ' + String(clientSeamDead) + ' dead' : '') + ')' : '',
     clientPlugins.length > clientSeamJudged ? String(clientPlugins.length - clientSeamJudged) + ' pinned-fork client half(ies) skipped with a reason' : '',
     runtimeLoaded > 0 ? String(runtimeLoaded) + ' runtime-loaded package(s) not judged' : '',
     pendingSuppressed > 0 ? String(pendingSuppressed) + ' pending dead export(s) suppressed' : '',
     testOnlyAllowedCount > 0 ? String(testOnlyAllowedCount) + ' test-only export(s) allowlisted' : '',
   ].filter(Boolean).join('; ')
-  console.log('ok no-dead-exports: all ' + String(totalChecked - pendingSuppressed) + ' judged runtime export(s) have a production importer across ' + String(packages.length) + ' package(s), plus ' + String(entrylessChecked) + ' entryless export(s) across ' + String(ENTRYLESS_PACKAGES.length) + ' package(s)'
+  console.log('ok no-dead-exports: all ' + String(totalChecked - pendingSuppressed) + ' judged runtime export(s) have a production importer across ' + String(packages.length) + ' package(s), plus ' + String(entrylessChecked) + ' entryless export(s) across ' + String(ENTRYLESS_PACKAGES.length) + ' package(s), plus ' + String(internalChecked) + ' implementation export(s) across ' + String(Object.keys(INTERNAL_SURFACE_PACKAGES).length) + ' package(s)'
     + (suffix === '' ? '' : '（' + suffix + '）'))
 }
 
