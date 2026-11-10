@@ -1259,20 +1259,21 @@ test('v2: frameError projection patches by alias origin and clears on rebind', a
   assert.equal(cleared.records[0].frameError, null)
 })
 
-test('v2: list carries the embedding capability (default enabled, rollback visible)', async () => {
+test('v3: list no longer carries the retired embedding capability', async () => {
   const h = harness()
   install(h)
   await h.manager.request(requestArgs(5173))
   const enabled = await h.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
   assert.equal(enabled.ok, true)
   if (!enabled.ok) return
-  assert.deepEqual(enabled.embedding, { enabled: true })
+  assert.equal('embedding' in enabled, false, 'the paper capability is retired from the wire result')
 
+  // The (still accepted) option can no longer leak onto the list result.
   const rolled = harness({ embedding: { enabled: false, reason: 'emergency_rollback' } })
   install(rolled)
   await rolled.manager.request(requestArgs(5173))
   const disabled = await rolled.manager.list({ sourceId: SOURCE_ID, sourceFingerprint: FINGERPRINT })
   assert.equal(disabled.ok, true)
   if (!disabled.ok) return
-  assert.deepEqual(disabled.embedding, { enabled: false, reason: 'emergency_rollback' })
+  assert.equal('embedding' in disabled, false)
 })

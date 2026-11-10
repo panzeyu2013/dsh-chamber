@@ -31,8 +31,6 @@ import {
   isForwardEmbeddingSnapshot,
   isForwardError,
   isForwardFrameError,
-  isForwardFrameErrorEntry,
-  isForwardFrameErrorOrigin,
   isForwardFrameUrl,
   isForwardListArgs,
   isForwardListResult,
@@ -107,7 +105,7 @@ test('v2 mirror: wire version, schemes, frame errors and consumer grammar agree'
   }
 })
 
-test('v2 guards: consumer/path arguments, frameUrl, embedding, frameError', () => {
+test('v2 guards: consumer/path arguments, frameUrl, frameError', () => {
   const args = { sourceId: 'dsh-a', sourceFingerprint: 'abcdefgh', port: 5173 }
   assert.equal(isForwardRequestArgs({ ...args, consumer: 'abcdefgh' }), true)
   assert.equal(isForwardRequestArgs({ ...args, consumer: 'nope' }), false)
@@ -134,15 +132,14 @@ test('v2 guards: consumer/path arguments, frameUrl, embedding, frameError', () =
   assert.equal(isForwardRequestResult({ ok: true, record: validRecord(), frameUrl: 'http://127.0.0.2:5173/' }), true)
   assert.equal(isForwardRequestResult({ ok: true, record: validRecord(), frameUrl: 'javascript:alert(1)' }), false)
 
-  // embedding: default enabled, optional bounded machine reason.
-  assert.equal(isForwardEmbeddingSnapshot({ enabled: true }), true)
-  assert.equal(isForwardEmbeddingSnapshot({ enabled: false, reason: 'emergency_rollback' }), true)
-  assert.equal(isForwardEmbeddingSnapshot({ enabled: false, reason: 'x'.repeat(129) }), false)
-  assert.equal(isForwardEmbeddingSnapshot({ enabled: 'yes' }), false)
-  assert.equal(isForwardEmbeddingSnapshot({ enabled: true, extra: 1 }), false)
+  // embedding/frameErrors are RETIRED list fields (design 28 v3 §3): the guard
+  // must ignore unknown extra keys on the result and keep accepting records.
+  // (The former v2 assertions for both were removed in the same change.)
   const limits = { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 }
+  assert.equal(isForwardListResult({ ok: true, records: [], limits }), true)
+  // Retired paper fields are ignored (no longer part of the shape): extra keys pass.
   assert.equal(isForwardListResult({ ok: true, records: [], limits, embedding: { enabled: true } }), true)
-  assert.equal(isForwardListResult({ ok: true, records: [], limits, embedding: { enabled: 1 } }), false)
+  assert.equal(isForwardListResult({ ok: true, records: [], limits, frameErrors: 'nope' }), true)
 })
 
 test('v2 local list identity: only list accepts {local,local}; request/release still refuse it', () => {
@@ -156,40 +153,6 @@ test('v2 local list identity: only list accepts {local,local}; request/release s
   assert.equal(isForwardRequestArgs({ sourceId: 'local', sourceFingerprint: 'local', port: 5173 }), false)
   assert.equal(isForwardReleaseArgs({ sourceId: 'local', sourceFingerprint: 'local', id: 'fwd-0123456789abcdef' }), false)
   assert.equal(isForwardOpenArgs({ sourceId: 'local', sourceFingerprint: 'local', id: 'fwd-0123456789abcdef' }), false)
-})
-
-test('v2 frame-error entries carry a canonical loopback origin and a closed code', () => {
-  for (const origin of [
-    'http://127.0.0.1:44215',
-    'https://localhost:8443',
-    'http://127.0.0.2:41000',
-    'http://127.0.0.254:65535',
-    'http://127.0.0.1',
-  ]) {
-    assert.equal(isForwardFrameErrorOrigin(origin), true, origin)
-    assert.equal(isForwardFrameErrorEntry({ origin, code: 'blocked_by_response' }), true, origin)
-  }
-  for (const origin of [
-    'http://127.0.0.1:44215/embed',
-    'http://127.0.0.1:44215?x=1',
-    'http://user:pw@127.0.0.1:44215',
-    'http://127.0.0.1:80', // non-canonical default port spelling
-    'http://127.0.0.0:1',
-    'http://127.0.0.255:1',
-    'http://10.0.0.1:1',
-    'http://example.com:1',
-    'blob:http://127.0.0.1:1/uuid',
-    'http://127.0.0.1:44215#frag',
-    'not a url',
-    '',
-    42,
-  ]) {
-    assert.equal(isForwardFrameErrorOrigin(origin), false, String(origin))
-  }
-  assert.equal(isForwardFrameErrorEntry({ origin: 'http://127.0.0.1:1', code: 'future' }), false)
-  assert.equal(isForwardFrameErrorEntry({ origin: 'http://127.0.0.1:1' }), false)
-  assert.equal(isForwardFrameErrorEntry({ origin: 'http://127.0.0.1:1', code: 'timeout', extra: 1 }), false)
-  assert.equal(isForwardFrameErrorEntry(null), false)
 })
 
 test('limits/alias tables agree with the manager and namespace leaf constants', () => {
@@ -305,26 +268,9 @@ test('list result guard enforces the cap snapshot causality', () => {
   const limits = { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 }
   assert.equal(isForwardListResult({ ok: true, records: [validRecord()], limits }), true)
   assert.equal(isForwardListResult({ ok: true, records: [], limits }), true)
-  // v2 local projection: an optional frameErrors array of canonical origin entries.
-  assert.equal(isForwardListResult({
-    ok: true,
-    records: [],
-    limits,
-    frameErrors: [{ origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' }],
-  }), true)
-  assert.equal(isForwardListResult({
-    ok: true,
-    records: [],
-    limits,
-    frameErrors: [{ origin: 'http://127.0.0.1:44215/embed', code: 'blocked_by_response' }],
-  }), false)
-  assert.equal(isForwardListResult({
-    ok: true,
-    records: [],
-    limits,
-    frameErrors: [{ origin: 'http://127.0.0.1:44215', code: 'future_code' }],
-  }), false)
-  assert.equal(isForwardListResult({ ok: true, records: [], limits, frameErrors: 'nope' }), false)
+  // v2 paper list fields (embedding/frameErrors) are RETIRED (design 28 v3 §3):
+  // the guard no longer validates them — unknown extra keys are simply ignored.
+  assert.equal(isForwardListResult({ ok: true, records: [], limits, frameErrors: [{ bad: true }] }), true)
   assert.equal(isForwardListResult({ ok: true, records: [], limits: { ...limits, perSourceUsed: 9 } }), false)
   assert.equal(isForwardListResult({ ok: true, records: [validRecord()], limits: { ...limits, globalUsed: 33 } }), false)
   assert.equal(isForwardListResult({ ok: false, error: { code: 'source_unknown', detail: null } }), true)

@@ -124,8 +124,6 @@ export type ForwardListIpcResult =
     readonly ok: true
     readonly records: readonly ForwardRecord[]
     readonly limits: ForwardLimitsSnapshot
-    readonly embedding?: ForwardEmbeddingSnapshot
-    readonly frameErrors?: readonly ForwardFrameErrorInfo[]
   }
   | ForwardFailure
 
@@ -299,8 +297,6 @@ async function listForwards(
   const input = isRecord(payload) ? payload : {}
   if (input.sourceId === LOCAL_SOURCE_ID) {
     if (input.sourceFingerprint !== LOCAL_SOURCE_FINGERPRINT) return failure('source_unknown')
-    const frameErrors = local?.frameErrors() ?? []
-    const embedding = local?.embedding?.()
     return {
       ok: true,
       records: [],
@@ -310,8 +306,6 @@ async function listForwards(
         perSourceUsed: 0,
         globalUsed: 0,
       },
-      ...(embedding === undefined ? {} : { embedding }),
-      ...(frameErrors.length === 0 ? {} : { frameErrors }),
     }
   }
   if (service === null) return notAssembled()

@@ -364,15 +364,12 @@ test('v2 W-15: the local identity answers list with the bounded frameErrors proj
     embedding: () => ({ enabled: true }),
   })
   const result = await harness.invoke(CHANNEL.list, { sourceId: 'local', sourceFingerprint: 'local' })
+  // v3: the retired local projections (embedding/frameErrors) are gone from the
+  // list answer even when the injected local state still supplies them.
   assert.deepEqual(result, {
     ok: true,
     records: [],
     limits: { perSource: 8, global: 32, perSourceUsed: 0, globalUsed: 0 },
-    embedding: { enabled: true },
-    frameErrors: [
-      { origin: 'http://127.0.0.1:44215', code: 'blocked_by_response' },
-      { origin: 'https://localhost:8443', code: 'certificate_error' },
-    ],
   })
   assert.equal(isForwardListResult(result), true, 'the local list answer satisfies the wire guard')
   assert.deepEqual(service.calls, [], 'the local list never calls the forward manager')
@@ -396,14 +393,13 @@ test('v2 W-15: the local identity answers list with the bounded frameErrors proj
   }
 })
 
-test('v2: list relays the embedding capability verbatim', async () => {
+test('v3: list relays the manager snapshot verbatim (retired paper fields absent)', async () => {
   const harness = new ForwardIpcHarness()
   const service = new FakeForwardService()
   service.listResult = {
     ok: true,
     records: [makeRecord({ frameError: 'timeout' })],
     limits: { perSource: 8, global: 32, perSourceUsed: 1, globalUsed: 1 },
-    embedding: { enabled: false, reason: 'emergency_rollback' },
   }
   harness.install(service)
   assert.deepEqual(await harness.invoke(CHANNEL.list, listPayload()), service.listResult)

@@ -763,7 +763,6 @@ export class RemoteForwardManager {
         perSourceUsed: this.#countActive(source.sourceId),
         globalUsed: this.#countActive(),
       },
-      embedding: this.#embedding,
     })
   }
 

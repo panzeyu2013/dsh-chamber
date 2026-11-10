@@ -42,8 +42,10 @@ import { isRecord, isWatermark } from './json-guards.ts'
 
 /**
  * Wire version of this contract (a semantic change bumps it; additive only in 0.4.x).
- * v2 = design 28 §16: consumer attach/detach, frameUrl, embedding capability,
- * frameError projection and release_timeout. All additions are optional fields.
+ * v2 = design 28 §16: consumer attach/detach, frameUrl and release_timeout.
+ * The v2 paper list fields (`embedding`/`frameErrors`) are retired per design
+ * 28 v3 §3; the per-record `frameError` stays as a diagnostic projection.
+ * All remaining additions are optional fields.
  */
 export const FORWARD_WIRE_VERSION = 2
 
@@ -196,53 +198,6 @@ export function isForwardFrameError(value: unknown): value is ForwardFrameError 
 export const FORWARD_LOCAL_SOURCE_ID = 'local'
 /** The local instance's boot fingerprint is the literal word (shell.ts provides it). */
 export const FORWARD_LOCAL_SOURCE_FINGERPRINT = 'local'
-
-/**
- * One v2 local-frame failure projection entry (additive `forward.list` field):
- * a browser child frame that main observed failing (XFO/frame-ancestors, TLS,
- * network or the load deadline) at one http(s) loopback origin. The renderer maps
- * it onto the CURRENT iframe origin, so a rejected local page can no longer reach
- * `live` through its engine error page onload. It never carries page content,
- * stderr text, or a path.
- */
-export interface ForwardFrameErrorEntry {
-  /** Canonical origin (`scheme://host:port`; default ports omitted). */
-  readonly origin: string
-  readonly code: ForwardFrameError
-}
-
-/**
- * Frame-origin predicate: canonical http(s) origin of a loopback browser frame —
- * 127.0.0.1 / localhost (the local leg) or a 127.0.0.2..254 alias (defensive: the
- * field is scoped to local frames today, but the same closed host table keeps a
- * future alias projection from widening the IPC surface).
- */
-export function isForwardFrameErrorOrigin(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch {
-    return false
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
-  // Only the canonical origin spelling crosses IPC: no credentials/path/query and
-  // no non-canonical port spelling (URL.origin drops default ports).
-  if (url.username !== '' || url.password !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '') return false
-  if (url.origin !== value) return false
-  if (url.hostname === 'localhost') return true
-  const match = /^127\.0\.0\.(\d{1,3})$/u.exec(url.hostname)
-  if (match === null) return false
-  const octet = Number(match[1])
-  return octet === 1 || (octet >= FORWARD_ALIAS_OCTETS.min && octet <= FORWARD_ALIAS_OCTETS.max)
-}
-
-/** Narrow an untrusted value to one local-frame failure entry. */
-export function isForwardFrameErrorEntry(value: unknown): value is ForwardFrameErrorEntry {
-  if (!isRecord(value)) return false
-  if (!hasExactKeys(value, ['origin', 'code'])) return false
-  return isForwardFrameErrorOrigin(value.origin) && isForwardFrameError(value.code)
-}
 
 /**
  * v2 embedding capability carried by `forward.list`: default enabled; a main-side
@@ -434,14 +389,6 @@ export type ForwardListResult =
     readonly ok: true
     readonly records: readonly ForwardRecord[]
     readonly limits: ForwardLimitsSnapshot
-    /** v2 embedding capability (default enabled; emergency rollback may disable). */
-    readonly embedding?: ForwardEmbeddingSnapshot
-    /**
-     * v2 local-frame failure projection (additive, local list only): bounded
-     * origin→classification entries for browser child frames that failed without
-     * a forward record (the direct local loopback leg).
-     */
-    readonly frameErrors?: readonly ForwardFrameErrorEntry[]
   }
   | { readonly ok: false; readonly error: ForwardError }
 
@@ -688,9 +635,6 @@ export function isForwardListResult(value: unknown): value is ForwardListResult 
   if (value.ok === true) {
     return Array.isArray(value.records) && value.records.every(isForwardRecord)
       && isForwardLimitsSnapshot(value.limits)
-      && (value.embedding === undefined || isForwardEmbeddingSnapshot(value.embedding))
-      && (value.frameErrors === undefined
-        || (Array.isArray(value.frameErrors) && value.frameErrors.every(isForwardFrameErrorEntry)))
   }
   if (value.ok === false) return isForwardError(value.error)
   return false
