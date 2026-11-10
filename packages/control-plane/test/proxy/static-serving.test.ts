@@ -4,8 +4,10 @@
  * vary: accept-encoding on gzip and identity variants, explicit
  * content-length (incl. HEAD), the immutable cache policy for /assets/*,
  * no-cache + __DSH_BOOT__ injection on index.html, SPA fallback to the
- * shell, missing-asset 404, q-value-aware Accept-Encoding, and /health
- * untouched — against a real HTTP server on an ephemeral port with a
+ * shell for document navigations only (Sec-Fetch-Dest / Accept), non-GET/HEAD
+ * 405 JSON (allow: GET, HEAD) before path resolution, non-navigation unknown
+ * GET/HEAD 404 JSON, missing-asset 404, q-value-aware Accept-Encoding, and
+ * /health untouched — against a real HTTP server on an ephemeral port with a
  * fixture dist in a temp dir (never the real dist). The dsh host is never
  * spawned (fake spawn seam, same as manager-api.ts). The module under test
  * is src/static-serving.ts (createStaticServing), exercised both directly
@@ -347,7 +349,7 @@ test('static: boot manifest strings cannot terminate the inline script block', a
 test('static: SPA fallback serves the injected shell; missing assets answer 404', async () => {
   const holder = await makeStaticPlane()
   try {
-    const fallback = await rawRequest(holder.plane.port!, 'GET', '/some/unknown/route')
+    const fallback = await rawRequest(holder.plane.port!, 'GET', '/some/unknown/route', { accept: 'text/html' })
     assert.equal(fallback.status, 200)
     assert.match(fallback.headers['content-type'] ?? '', /text\/html/)
     assert.equal(fallback.headers['cache-control'], 'no-cache')
@@ -360,6 +362,132 @@ test('static: SPA fallback serves the injected shell; missing assets answer 404'
       assert.equal(response.headers['content-length'], String(response.body.length), `${missing} carries an explicit length`)
       assert.ok(response.body.toString('utf8').includes('not_found'), `${missing} body carries not_found`)
     }
+  } finally {
+    await cleanup(holder)
+  }
+})
+
+test('static: non-GET/HEAD answers 405 JSON with Allow and never the shell (module)', async () => {
+  const fixture = fixtureDist()
+  try {
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      for (const path of ['/super', '/index.html', fixture.assetUrl, '/../outside.txt']) {
+        const response = await serveOnce(serving, fakeReq({}, method), path)
+        assert.equal(response.status, 405, method + ' ' + path + ' must be 405')
+        assert.equal(response.headers['allow'], 'GET, HEAD')
+        assert.match(response.headers['content-type'] ?? '', /application\/json/)
+        assert.equal(response.headers['cache-control'], 'no-store')
+        assert.equal(response.body.toString('utf8'), '{"error":"method_not_allowed","code":"method_not_allowed"}')
+        assert.ok(!response.body.toString('utf8').includes('__DSH_BOOT__'), 'a 405 never carries the shell')
+      }
+    }
+    // The fallback stays a GET/HEAD surface: the same path still answers the shell for GET.
+    const fallback = await serveOnce(serving, fakeReq({ accept: 'text/html' }), '/super')
+    assert.equal(fallback.status, 200)
+    assert.match(fallback.headers['content-type'] ?? '', /text\/html/)
+    assert.ok(fallback.body.toString('utf8').includes('window.__DSH_BOOT__='))
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+test('static module: the method gate runs before the boot-manifest nonce requirement', async () => {
+  const fixture = fixtureDist()
+  try {
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+    const res = new FakeRes() as unknown as ApiResponse
+    // No _cspNonce: the 405 path must not reach index.html injection.
+    await serving.serve(fakeReq({}, 'POST'), res, '/')
+    const fake = res as unknown as FakeRes
+    assert.equal(fake.status, 405)
+    assert.equal(fake.headers['allow'], 'GET, HEAD')
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+test('static: assembled plane answers non-GET/HEAD with 405 JSON; GET/HEAD fallback stays', async () => {
+  const holder = await makeStaticPlane()
+  try {
+    for (const [method, path] of [
+      ['POST', '/super'],
+      ['PUT', '/some/unknown'],
+      ['DELETE', '/manifest.json'],
+      ['OPTIONS', '/super'],
+    ] as const) {
+      const response = await rawRequest(holder.plane.port!, method, path)
+      assert.equal(response.status, 405, method + ' ' + path + ' must be 405')
+      assert.equal(response.headers['allow'], 'GET, HEAD')
+      assert.match(response.headers['content-type'] ?? '', /application\/json/)
+      assert.equal(response.headers['cache-control'], 'no-store')
+      // The control-plane security headers are set before dispatch, so even a 405 stays in the boundary.
+      assert.match(response.headers['content-security-policy'] ?? '', /nonce-[A-Za-z0-9+/=]+/)
+      const body = JSON.parse(response.body.toString('utf8')) as { error: string; code: string }
+      assert.deepEqual(body, { error: 'method_not_allowed', code: 'method_not_allowed' })
+    }
+    // Existing files are not a method exception.
+    const postIndex = await rawRequest(holder.plane.port!, 'POST', '/index.html')
+    assert.equal(postIndex.status, 405)
+    const postAsset = await rawRequest(holder.plane.port!, 'POST', holder.fixture.assetUrl)
+    assert.equal(postAsset.status, 405)
+    assert.ok(!postAsset.body.toString('utf8').includes('chamber asset'), 'a 405 never leaks the asset bytes')
+
+    // The gate is the STATIC surface only: /api/i/* still reaches the instance proxy.
+    const proxied = await rawRequest(holder.plane.port!, 'POST', '/api/i/local/super')
+    assert.equal(proxied.status, 503, 'a proxied instance route must not be swallowed by the static method gate')
+    assert.match(proxied.headers['content-type'] ?? '', /application\/json/)
+
+    // GET keeps the SPA shell fallback; HEAD keeps its headers without a body.
+    const get = await rawRequest(holder.plane.port!, 'GET', '/super', { accept: 'text/html' })
+    assert.equal(get.status, 200)
+    assert.match(get.headers['content-type'] ?? '', /text\/html/)
+    assert.ok(get.body.toString('utf8').includes('window.__DSH_BOOT__='))
+    const head = await rawRequest(holder.plane.port!, 'HEAD', '/super', { 'sec-fetch-dest': 'document' })
+    assert.equal(head.status, 200)
+    assert.equal(head.body.length, 0)
+    assert.ok(Number(head.headers['content-length']) > 0)
+    assert.match(head.headers['content-type'] ?? '', /text\/html/)
+  } finally {
+    await cleanup(holder)
+  }
+})
+
+test('static: only document navigations receive the SPA shell; other unknown GET/HEAD answer 404 JSON', async () => {
+  const holder = await makeStaticPlane()
+  try {
+    const nonNavigationHeaders: Record<string, string>[] = [
+      {},
+      { 'sec-fetch-dest': 'empty' },
+      { 'sec-fetch-dest': 'script' },
+      { 'sec-fetch-dest': 'empty', accept: 'text/html' },
+      { accept: '*/*' },
+    ]
+    for (const headers of nonNavigationHeaders) {
+      const response = await rawRequest(holder.plane.port!, 'GET', '/super', headers)
+      assert.equal(response.status, 404, JSON.stringify(headers) + ' must not receive the shell')
+      assert.match(response.headers['content-type'] ?? '', /application\/json/)
+      const body = JSON.parse(response.body.toString('utf8')) as { error: string; code: string }
+      assert.deepEqual(body, { error: 'not_found', code: 'not_found' })
+      assert.ok(!response.body.toString('utf8').includes('__DSH_BOOT__'))
+    }
+
+    const documentNavigation = await rawRequest(holder.plane.port!, 'GET', '/super', { 'sec-fetch-dest': 'document' })
+    assert.equal(documentNavigation.status, 200)
+    assert.match(documentNavigation.headers['content-type'] ?? '', /text\/html/)
+    assert.ok(documentNavigation.body.toString('utf8').includes('window.__DSH_BOOT__='))
+    const iframeNavigation = await rawRequest(holder.plane.port!, 'GET', '/super', { 'sec-fetch-dest': 'iframe' })
+    assert.equal(iframeNavigation.status, 200, 'embedded document navigations keep the shell fallback')
+    const legacyHtmlAccept = await rawRequest(holder.plane.port!, 'GET', '/super', { accept: 'text/html' })
+    assert.equal(legacyHtmlAccept.status, 200, 'an HTML Accept without Fetch Metadata keeps the shell fallback')
+
+    const headFetch = await rawRequest(holder.plane.port!, 'HEAD', '/super', { 'sec-fetch-dest': 'empty' })
+    assert.equal(headFetch.status, 404)
+    assert.equal(headFetch.body.length, 0)
+    const headNavigation = await rawRequest(holder.plane.port!, 'HEAD', '/super', { 'sec-fetch-dest': 'document' })
+    assert.equal(headNavigation.status, 200)
+    assert.equal(headNavigation.body.length, 0)
+    assert.ok(Number(headNavigation.headers['content-length']) > 0)
   } finally {
     await cleanup(holder)
   }
@@ -430,9 +558,9 @@ class FakeRes {
   destroy() { return undefined }
 }
 
-/** Minimal ApiRequest double; serve() only reads headers. */
-function fakeReq(headers: Record<string, string> = {}): ApiRequest {
-  return { headers } as unknown as ApiRequest
+/** Minimal ApiRequest double; serve() reads the method and headers. */
+function fakeReq(headers: Record<string, string> = {}, method = 'GET'): ApiRequest {
+  return { method, headers } as unknown as ApiRequest
 }
 
 /** Serve one path through the module directly (await the async serve). */
@@ -482,11 +610,17 @@ test('static module: MIME resolution, SPA fallback, missing-asset 404 and path-e
     const asset = await serveOnce(serving, fakeReq(), fixture.assetUrl)
     assert.equal(asset.headers['content-type'], 'text/javascript; charset=utf-8')
 
-    // SPA fallback serves the injected shell for an unknown HTML-ish path.
-    const fallback = await serveOnce(serving, fakeReq(), '/some/unknown/route')
+    // SPA fallback serves the injected shell for an unknown document navigation.
+    const fallback = await serveOnce(serving, fakeReq({ accept: 'text/html' }), '/some/unknown/route')
     assert.equal(fallback.status, 200)
     assert.match(fallback.headers['content-type'] ?? '', /text\/html/)
     assert.ok(fallback.body.toString('utf8').includes('window.__DSH_BOOT__='))
+    const navigationByMetadata = await serveOnce(serving, fakeReq({ 'sec-fetch-dest': 'document' }), '/some/unknown/route')
+    assert.equal(navigationByMetadata.status, 200, 'Sec-Fetch-Dest: document keeps the shell fallback')
+    const fetchMiss = await serveOnce(serving, fakeReq({ 'sec-fetch-dest': 'empty' }), '/some/unknown/route')
+    assert.equal(fetchMiss.status, 404, 'a non-navigation fetch must not receive the shell')
+    assert.match(fetchMiss.headers['content-type'] ?? '', /application\/json/)
+    assert.ok(fetchMiss.body.toString('utf8').includes('not_found'))
 
     // Missing assets answer JSON 404, never the shell.
     const missing = await serveOnce(serving, fakeReq(), '/assets/missing-xyz.js')

@@ -31,7 +31,7 @@
 
 ### D4 · 前端服务 = 静态 dist + `__DSH_BOOT__` 清单
 
-- 控制面在 `/` 服务 dsh 官方前端构建产物（dist/）并注入启动图清单（§5）；静态壳匿名加载。
+- 控制面在 `/` 服务 dsh 官方前端构建产物（dist/）并注入启动图清单（§5）；静态壳匿名加载，静态面仅 GET/HEAD 可服务。
 - renderer 的管理 REST/SSE 基址以当前 shell 的 `window.location.origin` 为权威；preload 异步注入的 `controlPlaneUrl` 只作非页面 harness 回退——dev 端口或 `DSH_CHAMBER_CP_PORT` 覆盖首个 effect 即生效、不会先连固定 17500，也无需桥水合后重建长连接。
 - 静态 gzip 先协商再读文件：缓存命中直接返回压缩 Buffer，miss 只读一次后压缩并入有界 cache；identity 仍只读一次，避免命中时无用分配原文件、miss 时重复读取。
 
@@ -175,7 +175,7 @@ upgrade：/api/page-channel      精确路径匹配，不属于 /api/i/* 面
 
 ## 5. 前端服务契约
 
-- **静态服务**：控制面在 `/` 匿名服务 dsh 官方前端构建产物（`dist/`）——index.html、assets（`/assets/chamber-*.js` 等）、`/manifest.json`；SPA 回退（未知路径 → index.html，缺资产仍 404）。
+- **静态服务**：控制面在 `/` 匿名服务 dsh 官方前端构建产物（`dist/`）——index.html、assets（`/assets/chamber-*.js` 等）、`/manifest.json`；仅 GET/HEAD 可服务：SPA 回退（未知路径 → index.html）只对文档导航生效（`Sec-Fetch-Dest` 为 document/iframe/frame/embed/object，或缺该头时 `Accept` 含 `text/html`），非 GET/HEAD 在路径解析前统一 405 JSON（`allow: GET, HEAD`），非文档导航的未知 GET/HEAD 答 404 JSON，缺资产仍 404。**Rejected alternatives（静态层方法语义）**：非 GET/HEAD 回 404 JSON（语义不如 405 准确、偏离上游）；未知 GET/HEAD 一律回 SPA 回退（插件 GET/EventSource 宿主路由会被 200 HTML 掩盖）；静态层加 route-miss 计数/连接页投影（无消费者，成本大于收益）。
 - **`__DSH_BOOT__` 启动图清单**：构建链产出 `dist/manifest.json`（renderer 的 gen-boot-manifest.mjs），控制面在响应 index.html 时注入 `window.__DSH_BOOT__`（与 dsh-client-modules 的 parseBootManifest 契约一致，vendor `dsh-client-modules/src/client/manifest.ts` 为权威）：
 
 ```ts

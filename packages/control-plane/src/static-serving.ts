@@ -4,6 +4,14 @@
  * createStaticServing assembles the pure static-serve surface over a
  * webDistDir: MIME resolution, on-the-fly gzip (with a tiny per-file cache),
  * the SPA fallback to the injected shell, and __DSH_BOOT__ manifest injection.
+ * Only GET/HEAD reach the surface: every other method is answered 405 JSON
+ * (allow: GET, HEAD) before path resolution — the method gate and Allow match
+ * the dsh webserver resource semantics; the JSON body is chamber's static-error
+ * shape (upstream answers an empty 405). The SPA shell fallback is only for
+ * document navigations (Sec-Fetch-Dest document/iframe/frame/embed/object, or
+ * Accept: text/html when Sec-Fetch-Dest is absent); other unknown GET/HEAD
+ * paths answer 404 JSON so a same-origin plugin fetch fails loudly instead of
+ * receiving the shell.
  * Anonymous like every other surface. It owns no HTTP server and no
  * security-header policy — index.ts mints the per-response CSP nonce
  * (`res._cspNonce`) and sets the browser boundary headers before dispatch; this
@@ -44,6 +52,9 @@ const COMPRESSIBLE_TYPES = new Set(['.html', '.js', '.mjs', '.css', '.json', '.s
 
 /** FIFO cap of the per-file gzip cache (memory bound: one compressed asset). */
 const GZIP_CACHE_MAX = 64
+
+/** Methods the static surface answers; every other method receives 405. */
+const STATIC_METHODS = 'GET, HEAD'
 
 /** zlib.gzip's callback API as a promise: no sync compression on the serve path. */
 function gzipAsync(source: Buffer): Promise<Buffer> {
@@ -153,6 +164,25 @@ export function createStaticServing({ webDistDir, logger, safeMode = false }: St
     return resolved
   }
 
+  /** Whether a GET/HEAD request is a document navigation (SPA fallback applies only then). */
+  function isDocumentNavigation(req: ApiRequest): boolean {
+    const header = (name: string): string | undefined => {
+      const value = req.headers[name]
+      return Array.isArray(value) ? value.join(',') : value
+    }
+    const destination = header('sec-fetch-dest')?.toLowerCase()
+    if (destination !== undefined) {
+      return destination === 'document'
+        || destination === 'iframe'
+        || destination === 'frame'
+        || destination === 'embed'
+        || destination === 'object'
+    }
+    // Older/embedded engines may omit Fetch Metadata: a document navigation
+    // still asks for HTML, while a plugin fetch defaults to */*.
+    return (header('accept') ?? '').toLowerCase().includes('text/html')
+  }
+
   /** Read the __DSH_BOOT__ manifest (<dist>/manifest.json); null when absent. */
   async function readBootManifest(): Promise<unknown | null> {
     try {
@@ -164,6 +194,13 @@ export function createStaticServing({ webDistDir, logger, safeMode = false }: St
 
   /** Serve a static file (or index.html fallback) on the response. */
   async function serveStatic(req: ApiRequest, res: ApiResponse, pathname: string): Promise<void> {
+    // Method gate BEFORE path resolution (dsh reference frontend-static answers
+    // non-GET/HEAD with 405 + allow before matching). Without it a POST to an
+    // unknown route fell into the SPA fallback and looked like a 200 HTML success.
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      jsonStaticError(res, 405, 'method_not_allowed', { allow: STATIC_METHODS })
+      return
+    }
     let candidate = pathname === '/' ? '/index.html' : pathname
     // SPA fallback: unknown paths render index.html, except asset-looking paths
     // (a missing asset answers 404 — a build error must not masquerade as the shell).
@@ -193,6 +230,13 @@ export function createStaticServing({ webDistDir, logger, safeMode = false }: St
     } catch {
       const ext = extname(candidate)
       if (ext !== '' && ext !== '.html') {
+        jsonStaticError(res, 404, 'not_found')
+        return
+      }
+      // Non-navigation GET/HEAD (plugin fetches default to */*, EventSource to
+      // text/event-stream) must not receive the SPA shell: a missing host route
+      // has to fail loudly as 404 JSON instead of a 200 HTML success.
+      if (!isDocumentNavigation(req)) {
         jsonStaticError(res, 404, 'not_found')
         return
       }
@@ -277,9 +321,15 @@ export function createStaticServing({ webDistDir, logger, safeMode = false }: St
     res.end(data)
   }
 
-  function jsonStaticError(res: ApiResponse, status: number, code: string) {
+  function jsonStaticError(
+    res: ApiResponse,
+    status: number,
+    code: string,
+    extraHeaders: Record<string, string> = {},
+  ) {
     const body = JSON.stringify({ error: code, code })
     res.writeHead(status, {
+      ...extraHeaders,
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
       'cache-control': 'no-store',
