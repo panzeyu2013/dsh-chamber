@@ -53,8 +53,9 @@
 | `packages/desktop/bridge-manifest.test.ts`、`bridge-shim.test.ts` 生成物锁步；`electron-free-gate.test.ts` 的 core 零 electron import；`bridge-shim-surface.test.ts` / `ipc-surface-mirror.test.ts` 等镜像测试 | 契约锁步 | 冻结不等于放弃锁步：**生成物 == 提交物、Swift 白名单 == manifest、core 家族零 electron import** 必须继续绿；白名单项按 §5 豁免「两侧相等 / 每通道恰用一次」。镜像类测试以 `test.mjs` 的 FROZEN 清单为准：被冻结的镜像测试其契约结论由生成物 + Swift 侧测试承接，不得静默失去校验 |
 | `packages/control-plane` / `packages/renderer` / `packages/dsh-chamber-*` / `packages/dsh-runtime` / `packages/gateway` / `packages/cli` / `macos/` | 现行包 | 与 Electron 无关的出货面 |
 
-**A 桥通道计数**：以生成物 `packages/desktop/bridge-manifest.json` 的 `counts` 为准（本文件写作时为
-58 invoke + 9 push = 67；旧文档里的 65/70 等数字已过期，改动通道时同批重生成三件）。
+**冻结面例外（CSP）**：归档 `packages/desktop/electron/main.ts` 仍向控制面传 v2 `frameSources` 扩展源集（`blob:` + loopback/alias host + 裸 `http:`/`https:`），保留 Electron 界面的 iframe 期行为；`ControlPlaneOptions.frameSources` 的校验面为它保留。Swift sidecar、gateway、cli 均不传（`frame-src blob:`，SH-7 判据见 design 28 §5）。该扩展只存在于归档文件，不随出货、不构成 Swift 腿的回退面。
+
+**A 桥通道计数**：以生成物 `packages/desktop/bridge-manifest.json` 的 `counts` 为单源（改动通道时同批重生成三件：manifest / `BridgeManifest.swift` / `chamber-bridge.stub.js`）；本文不复述数字。
 
 **Electron-free 门禁（归档后形态）**：`packages/desktop/electron-free-gate.test.ts` 的 `WHITELIST`
 现在只有 `updater.ts`（共享面唯一允许 electron import 的顶层文件）；三个归档入口
@@ -93,9 +94,9 @@
 
 只存在于 Swift shim、不需要 Electron preload / 主进程注册的通道（含命名空间 / 方法）必须登记在
 **`packages/desktop/bridge-swift-only-additions.json`**，由 `packages/desktop/scripts/emit-bridge-manifest.mjs` 合入
-manifest（方向必需），并豁免「两侧必须相等 / 每通道恰用一次」类锁步检查。默认空表时生成物逐字节不变。
+manifest（方向必需），并豁免「两侧必须相等 / 每通道恰用一次」类锁步检查。空表时生成物逐字节不变（现行表非空，见下）。
 
-**schema（当前初始 `entries: []`）**：
+**schema**（现行形状 = `browser` 命名空间的 Swift-only 登记：invoke 与 push 两类条目；清单与条数以 [`packages/desktop/bridge-swift-only-additions.json`](../../packages/desktop/bridge-swift-only-additions.json) 为单源，本文不复述计数）：
 
 ```jsonc
 {
@@ -103,13 +104,13 @@ manifest（方向必需），并豁免「两侧必须相等 / 每通道恰用一
   "policy": "只登记只存在于 Swift shim、无需 Electron preload/主进程注册的 A 桥通道；新增必须过评审",
   "entries": [
     {
-      "channel": "dsh-chamber:some-swift-only", // 必填：完整通道串（与 IPC_CHANNELS 值一致）
-      "key": "SOME_SWIFT_ONLY",                  // 必填：ipc-events.ts 的 IPC_CHANNELS 常量名
+      "channel": "dsh-chamber:browser-acquire",  // 必填：完整通道串（与 IPC_CHANNELS 值一致）
+      "key": "BROWSER_ACQUIRE",                  // 必填：ipc-events.ts 的 IPC_CHANNELS 常量名
       "direction": "invoke",                     // 必填：invoke | push（manifest 方向维度）
-      "namespace": "desktopSsh",                 // 必填：preload / shim 命名空间面
-      "method": "someMethod",                    // 必填：shim 方法名
+      "namespace": "browser",                    // 必填：preload / shim 命名空间面
+      "method": "acquire",                       // 必填：shim 方法名
       "reason": "为什么 Electron 侧不需要注册（必填，评审依据）",
-      "design": "design 25 §4.4.3"               // 可选：设计指针
+      "design": "design 28 v3 §3"                // 可选：设计指针
     }
   ]
 }
@@ -124,9 +125,9 @@ violation 一律 loud 拒绝）：`channel` / `key` 必须与 `ipc-events.ts` �
 逐字节不变）；白名单项**不得**成为 Electron 运行时路径（冻结面不为它补实现）；增加白名单项必须同批重新生成
 三件 manifest 产物并让锁步测试绿。已豁免白名单的锁步门：`emit-bridge-manifest.mjs`、`bridge-shim-surface.test.ts`、
 `ipc-surface-mirror.test.ts`、`scripts/gates/checks/verify-shim-payload-shape.mjs`（后者要求 shim 真实现、preload 不暴露、
-manifest 已收录；空表输出逐字不变）。**首个白名单条目**会改变 manifest counts，同批还必须更新硬编码计数钉：
+manifest 已收录；空表输出逐字不变）。白名单条目增删会改变 manifest counts，同批还必须更新硬编码计数钉：
 `packages/desktop/bridge-manifest.test.ts`、`packages/desktop/bridge-shim.test.ts`、
-`macos/Tests/DSHChamberTests/BridgeManifestConsistencyTests.swift`（以及 A 桥 65/56/9/11 相关 payload 钉子）。
+`macos/Tests/DSHChamberTests/BridgeManifestConsistencyTests.swift`（以及 A 桥 surface 75/62/13 相关 payload 钉子：75 = 62 invoke + 13 push，manifest counts 64/13=77 含 2 个内部通道）。
 
 ## 6. 复活清单（按序）
 

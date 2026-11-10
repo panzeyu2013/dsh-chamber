@@ -90,7 +90,7 @@ docs: document the commit message convention
   - 设计19的桌面原生通知投影（Swift `UNUserNotificationCenter`；Electron 呈现腿归档）
   - 设计20的可信open-in边缘能力（含仅本地形态的实例内host域 `openInApp`，边界见design 20 §6.3）
   - 设计24的实例内归档清理宿主域 `archiveCleanup/{probe,purge}`（只删不读、运行中整棵跳过、幂等；最窄边界见design 24 §2）
-  - 设计28的右栏浏览器客户端插件（remote-browser：忠实 fork 上游 `ui-sidebar-browser` 的 iframe 路径，唯一差异是 SSH 反代的 `frameUrl` 与租约生命周期；最窄边界见 design 28 §16.9/§16.11）。
+  - 设计28的右栏浏览器客户端插件（remote-browser：Swift 原生 guest 载体，每 tab 子 `WKWebView`，唯一差异是 SSH 反代的 alias 与租约生命周期；最窄边界见 design 28 §1/§4/§5）。
 
   它们不得把执行面、session消费者、通知历史或事实权威带进 `packages/control-plane` 或renderer。
 - 任何新领域功能提案先回答：dsh原生、插件生态或宿主web前端是否已覆盖？有 → 不开发。

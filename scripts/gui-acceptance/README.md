@@ -67,17 +67,13 @@ M-8（帧采集）与 M-10（未预期 ≥400/渲染层 error）同样不进这�
 ## 命令
 
 ```sh
-pnpm run acceptance:gui                      # --live：探测运行中的应用（只读，最安全）
-pnpm run acceptance:gui -- --attach          # 对已带 CDP 的 dev 实例做界面走查
-pnpm run acceptance:gui -- --dev             # 自起 dev 实例 → 走查 → 自动关闭
-# --dev 同时把 managed dsh 起始端口设为 cpPort+10（DSH_CHAMBER_DSH_PORT_BASE 可覆盖），
-# 因此在跑安装占用 17510..17514 时也能启动。
-pnpm run acceptance:gui -- --dev --require-hover   # 悬停腿必须真实执行：未执行（INFO）计为 FAIL
-pnpm run acceptance:gui -- --dev --electron-arg=--no-sandbox   # 一次性实例：W-13/W-14a/W-15/W-15b 真跑（local fixture）
-pnpm run acceptance:gui -- --attach --require-embed --embed-port 8080   # 远端真实 SSH 源：W-14b 端到端，且内嵌腿必须真实执行
-pnpm run acceptance:gui -- --attach --attach-create-session           # 一次性/打包态 smoke：显式允许经既有 UI 建工作区/会话后再跑 W-13…W-15b（默认 --attach 不写真实实例状态）
-xvfb-run -a node scripts/gui-acceptance/drivers/packaged-ssh-smoke.mjs \
-  --binary packages/desktop/release/linux-unpacked/dsh-chamber-electron   # 打包态 W-13…W-15b（含 W-14b 真实 SSH fixture）
+pnpm run acceptance:gui                      # --live：探测运行中的应用（只读，最安全；SH-7 CSP 短头恒判定）
+pnpm run acceptance:gui -- --flavor native --attach   # 原生壳控制面只读探针（native 无 CDP，界面走查靠真机/目检）
+# 归档 Electron CDP 走查（--dev / --require-hover / --require-embed / --embed-port /
+# --attach-create-session / --ssh-fixture / --electron-arg / --cdp-port）在 native 默认下
+# 一律被驱动拒绝（exit 2）：需要 --flavor electron 且复活 Electron dev 环境
+# （docs/progress/electron-frozen.md §6）。v3 的载体语义验收 = 真机/目检（acceptance §E2）。
+# ARCHIVED: packaged-ssh-smoke.mjs 与上面的 Electron CDP 走查同批冻结（复活后才可用）
 pnpm run acceptance:gui -- --live --sources gateway-a,gateway-b   # 显式指定要扫的远程来源
 pnpm run acceptance:gui -- --live --plane http://127.0.0.1:17540 --registry <isolated-userData>/ssh-instances.json  # MX 来源与该平面同源
 pnpm run acceptance:gui -- --flavor native   # 原生 flavor：自起 sidecar 装配 → 走查 → SIGTERM 关闭
@@ -172,11 +168,11 @@ sidecar 生命周期可终止（attach 不启动、也不终止运行中的壳�
 
 `CP-4` 的判据是 `quiescent === true`（**不是** `writers` 为空）：扫描到的 `reclaimed` 孤儿会如实列出，只有 `kept`（无法回收）才代表有无法解释的活写者。
 
-## 内嵌腿（W-13…W-30、SH-7；下表 W-13…W-15b = ARCHIVED v2）
+## 内嵌腿（ARCHIVED v2）与 SH-7（live）
 
-> **W-13…W-15b = ARCHIVED（v2 iframe 判据）**：它们描述的是已退役的 iframe 载体与 Electron CDP 走查（`walkthrough.mjs` 同为 ARCHIVED），不再对 v3 native guest 执行、不再计入绿口径。**下表五行的「判据」列是 v2 iframe 语义（iframe 恰一、`data-sidebar-browser-frame`、sandbox/referrer、alias iframe postMessage、iframe 移除），在 v3 不可能成立**；v3 的 W-13…W-15b 判据见 [`remote-browser-acceptance.md` §E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)（guest 判据：真机/目检）与 `gui-acceptance-checklist.md` §4.2。下五行保留为 Electron 复活参考。
+> **W-13…W-15b = ARCHIVED（v2 iframe 判据）**：它们描述的是已退役的 iframe 载体与 Electron CDP 走查（`walkthrough.mjs` 同为 ARCHIVED），不再对 v3 native guest 执行、不再计入绿口径。本目录不实现 v3 的 W-16…W-30；v3 判据只有真机/打包态（[acceptance §E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2) 与 [gui-acceptance-checklist §4.2](../../docs/checklists/acceptance/gui-acceptance-checklist.md)）。
 
-design 28 §9 / plan §5 L4。判据全在 `checks.mjs`（CI 单测 + 假 DOM 跑真实页面表达式），本目录只负责驱动与留痕：
+本目录只含 ARCHIVED v2 iframe 走查的判据镜像与 SH-7 的 live 判据；v3 的 W-13…W-30 = 真机/目检（[acceptance §E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2) 与 gui-acceptance-checklist §4.2），本工具箱没有对应机器腿。
 
 | 腿 | 判据 | 在哪跑 |
 |---|---|---|
@@ -187,7 +183,7 @@ design 28 §9 / plan §5 L4。判据全在 `checks.mjs`（CI 单测 + 假 DOM �
 | `W-15b`（**ARCHIVED** v2 iframe；v3 判据见 [§E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)）关 tab 即释放 | 点页签关闭控件 → 面板/iframe 移除、无 pending（`aria-busy`/重建观察窗）；local 直连**没有** forward 记录，不做 list 探针（local 记录恒空，不能当释放证据）；有 forward 时 alias 端口必须 ECONNREFUSED（`node:net` 直连；未知不算已释放） | `--dev` local 版断言无 pending；远端 release 腿归真机/L5 |
 | `SH-7` CSP frame-src 合同 | `--live` 读壳 CSP：`frame-src` 精确等于 `blob:`（v3 收窄，iframe 载体已退役；桌面/网关/cli 同一短头）PASS；出现 v2 扩展源集（loopback/alias host、裸 `http:`/`https:`）或任何多源 = **回归 FAIL**；`'self'`/通配/`data:`/削弱的 `frame-ancestors`/`frame-src` 缺失/超长头 FAIL；**无 INFO 档** | `--live`（纯 HTTP，无 GUI） |
 
-严格档 `--require-embed`：以上内嵌腿（`W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`）只要判成 INFO 就改判 **FAIL**（与 `--require-hover` 同形态）。它只重标“未执行”，已经是 PASS/FAIL 的判据原样通过；exit code 语义不变，所以这是**逐次显式选择**，不是新的默认门。`SH-7` 恒判定（短头 PASS / 扩展源集 FAIL），不在重标范围。
+严格档 `--require-embed`（ARCHIVED Electron CDP 腿）：以上内嵌腿（`W-13`/`W-14a`/`W-14b`/`W-15`/`W-15b`）只要判成 INFO 就改判 **FAIL**（与 `--require-hover` 同形态）。它只重标“未执行”，已经是 PASS/FAIL 的判据原样通过；exit code 语义不变，所以这是**逐次显式选择**，不是新的默认门。`SH-7` 恒判定（短头 PASS / 扩展源集 FAIL），不在重标范围。v3 native driver 不接受 `--require-embed`。
 
 
 写入边界：`--dev` 允许展开右栏/开页签/关闭页签（布局状态）；`--attach` **不**代开右栏与页签，只要 INFO 并写明前置（要真跑远端腿，先人工把窗口切到该 ssh 来源并打开浏览器页签，再给 `--embed-port`——给出端口即表示授权该腿驱动该面板，页签的逻辑目标会随 `browserTargetStorage` 持久化）。`W-14b` 结束后**不会**替操作者关页签（`--attach` 不碰他人页签），该 forward 随页签存活：验收后请手动关闭页签以释放 alias 端口。

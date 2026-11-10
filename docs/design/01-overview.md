@@ -80,13 +80,13 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 控制面会话运行时/统一索引/交互管线 | **移除** | 各实例前端 runtime 自有（N-ctx） |
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
-| walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **仍移出**；「web 预览」裁决见下：design 28 v2 是**右栏内嵌 iframe 的有界例外**（2026-11 用户裁决），不是 web 预览域回流 | 宿主原生覆盖，控制面只接入/服务 |
+| walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **仍移出**；「web 预览」裁决见下：design 28 v3 是**右栏浏览器的有界例外**：Swift 原生 guest 载体（每 tab 一个子 WKWebView、独立 web content process，[ADR-0004](./decisions/0004-swift-guest-per-tab.md)），不是 web 预览域回流 | 宿主原生覆盖，控制面只接入/服务 |
 | 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步；移动适配包已退役，design 17 §10/§18）+ **只读插件投影**（`GET …/installed`；install/remove/materialize/tasks 写面已退役，读契约见 design 21 §6.2/§6.3） |
 | git/GitHub | **插件化** | design 08 的 seed Git Remote 是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；P5b 的官方 `forge-bundle` 是实例内**官方工作树 UI 面**（opt-in；GitHub provider 由 overlay 关闭；仅 worktree UI/本地 diff，不新增 chamber 执行面）；gateway 服务器侧 worktree 记录已随编排面剥离 |
 
 > **有界例外（与 AGENTS.md 同列：designs 08 / 17 / 19 / 20 / 24 / 28）**：design 08 实例内 Git 插件、
 > design 17 独立 gateway、design 19 桌面原生边沿通知投影、design 20 可信 open-in 边缘能力、
-> design 24 实例内归档清理宿主域、design 28 右栏浏览器（v2 内嵌 iframe）——各自窄边界见对应 design；
+> design 24 实例内归档清理宿主域、design 28 右栏浏览器（v3 原生 guest，每 tab 子 WKWebView）——各自窄边界见对应 design；
 > design 18 §9 是 17/18 的有界扩展（gateway 获得与桌面同源的 dsh 运行时版本管理，不新增执行面）。
 > 这些范围的**当期取舍、偏差与证据**按 owning design 与 [`docs/progress/STATUS.md`](../progress/STATUS.md)/[`deviations.md`](../progress/deviations.md) 记录，本节不重复台账。
 

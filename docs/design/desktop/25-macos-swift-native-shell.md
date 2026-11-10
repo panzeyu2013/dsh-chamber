@@ -301,7 +301,7 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动 chrom
 
 - **只落文档根**：不改任何滚动容器的滚动范围，也不改文档内链式滚动（`none` 管的是视口越界效果与向视口外链接）；页面结构、上游代码零改动。
 - **`!important` + 样式元素标记**（`data-dsh-shell-overscroll`）：`!important` 压过页面普通声明；**层叠边界**——页面若在根上再声明同属性 `!important`（同特异性、文档序靠后）或根元素内联 `!important` 仍可翻转。当前上游无根级声明（`packages/dsh-client-web` 全目录 `overscroll` 命中 0；其余命中是滚动容器的 `contain`，无一定在文档根），故为理论边界；author 源内也挡不住页面 JS。将来上游若在根声明，升级手段 = documentEnd 再追加一次（文档序靠后）或对 documentElement 设内联 `important`；打包态可用 `getComputedStyle(document.documentElement).overscrollBehavior` 自检。
-- **时机与作用域**：documentStart、仅主 frame（iframe 子文档保持自身行为）；崩溃/卡死恢复只 reload，注入随每次导航生效。本机实测 documentStart 时序 = readyState=loading、documentElement 已存在、head 尚不存在；落点始终优先 documentElement（保住「页面重写 head 也删不掉」的免疫），两者都取不到时才走一次 DOMContentLoaded。
+- **时机与作用域**：documentStart、仅主 frame（子 frame 保持自身行为）；崩溃/卡死恢复只 reload，注入随每次导航生效。本机实测 documentStart 时序 = readyState=loading、documentElement 已存在、head 尚不存在；落点始终优先 documentElement（保住「页面重写 head 也删不掉」的免疫），两者都取不到时才走一次 DOMContentLoaded。
 - **证据**：契约有单测（`macos/Tests/DSHChamberTests/ShellOverscrollPolicyTests.swift` 锁 CSS 串、documentStart/仅主 frame 注入与「不得逐容器 contain」反例）；行为效果实机目检：滚到端点或指针停在不可滚动 chrome 上滚动，整页不得平移。
 - **范围**：只关视口越界与链式越界；内层滚动器局部回弹不在范围内。
 - **CSP 依赖（指令级守卫）**：注入的 `<style>` 依赖控制面 CSP 的 `style-src 'self' 'unsafe-inline'`（`packages/control-plane/src/index.ts#createControlPlane` 的响应头组装处：注释 + 指令同段）。页面当前没有 meta CSP；即便将来加入 meta `style-src 'self'`，documentStart 注入也早于其解析（本地 fixture 实测），唯一真实耦合是响应头 CSP。对抗验证（本地 HTTP fixture + 真实 WKWebView）实测三种同样静默失效的改法：① 删掉 `'unsafe-inline'`；② 同一 `style-src` 再加 `'nonce-…'`/`'sha256-…'`（CSP3：出现 nonce/hash 即忽略 unsafe-inline）；③ 新增 `style-src-elem`（覆盖 style-src 对 `<style>` 的管辖）——都让 computed 回 `auto`、回弹复现。守卫：`packages/control-plane/test/proxy/static-serving.test.ts` 按指令解析响应头（同一 policy 内重复指令首次生效；逗号分隔的每个 policy 都生效），要求每一条生效的 `style-src` 保留 `'unsafe-inline'`、不带 nonce/hash、不出现 `style-src-elem`/`style-src-attr`；校验边界：子串正则会绕过 `style-src 'self' 'unsafe-inline', style-src 'none'` 这类多 policy 写法。改 CSP 必须同时复核本策略与 S-50。
@@ -364,7 +364,7 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动 chrom
 - **起拖**：消息回调（主线程）里用当前鼠标位置（`NSEvent.mouseLocation` → `convertPoint(fromScreen:)` 窗口坐标）合成 `leftMouseDown` 事件调 `NSWindow.performDrag`，AppKit 的窗口拖拽循环接管到抬键。位置取窗口坐标系 ⇒ 起拖瞬间抓取偏移为零、窗口不跳；「按下与消息到达之间已抬键」不会挂住壳（实测：未按键时 `performDrag` 立即返回、不挪窗）。不可移动/最小化窗口直接弃。
 - **安全边界**：mousedown 是页面事件，本通道不接受页面指定「拖哪个窗、挪到哪」——窗口与位置都取自壳自己的事实；准入 = 通道名 + 主 frame + 同源文档（`MainWindowController.isSameOriginDocument`，与页面事实通道同款门）。本通道不并入 A 桥白名单/就绪门（sidecar ready 前窗口就该能拖）。
 - **行为锁**：`ShellWindowDragTests.swift` 直测围栏真值表与事件合成字段，并在 JavaScriptCore + 最小假 DOM 下跑注入脚本本身（13 个场景：标记行/控件/未标记/修饰键/非左键/页面已 preventDefault/recall 标记/portal 层/非元素目标 + 幂等）；TS 侧锁步在 `CrossLanguageLockstepTests.swift#testWindowDragMarkAndInteractiveSelectorLockstep`（标记属性与选择器逐项同序）。
-- **范围**：iframe 子文档不注入（只有主 frame）；非左键、双击与页面自己的 `preventDefault` 一律原样放行；Electron 腿的窗口同样走 darwin 分支（`hiddenInset` + 灯组 (16,18) + vibrancy），标记在那条腿同样是拖拽面（deviations T-30）——拖拽面本身两腿同源（同一批标记）。
+- **范围**：子 frame 不注入（只有主 frame）；非左键、双击与页面自己的 `preventDefault` 一律原样放行；Electron 腿的窗口同样走 darwin 分支（`hiddenInset` + 灯组 (16,18) + vibrancy），标记在那条腿同样是拖拽面（deviations T-30）——拖拽面本身两腿同源（同一批标记）。
 
 **Rejected alternatives**：让 `isMovableByWindowBackground` 生效（子类化 WKWebView 覆写 `mouseDownCanMoveWindow`，或让命中视图不再是 WebView）——命中视图是 WebKit 自己的内层视图，覆写不到；把整窗设成拖拽面又会吃掉文本选择、滚动条与画布拖拽，拒；原生覆盖层（把 `data-window-drag` 盒镜像成一组 `mouseDownCanMoveWindow = true` 的透明 NSView）——要几何镜像 + 布局变化时重采集，陈旧矩形会把控件「盖死」，失败模式更重，拒；自己跑拖拽循环（mousemove 报偏移 → `setFrameOrigin`）——逐帧 IPC，跟手感与多屏/缩放边界处理都差，拒；在 ui-web 副本里加 Swift 专用分支——本方案零页面改动（标记是上游本来就有的属性），拒；把 `-webkit-app-region: drag` 留在页面上等 WKWebView 支持——无此计划，且窗口整场不能移动，拒。
 
@@ -408,6 +408,10 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 - **行为锁**：`packages/desktop/upstream-seats.test.ts`（S-56：双 flavor 载体 + painted 门控属性与 'local' 值锁步）、`packages/desktop/test/ipc/bridge-shim-host-paths.test.ts`（门控/可信事件/精确 size/目录按名/消费一次/TTL/代际/封顶/载荷失败闭合）、`macos/Tests/DSHChamberTests/HostPathCatalogTests.swift`（顺序/去重/封顶/指针门/载荷形状）、`packages/renderer/test/frame-chrome/host-path-scope.test.ts`（标记写入/清理与接线）、`packages/renderer/scripts/vendor-patches.test.mjs`（containment 执行测试 + 未打补丁负控制 + marker 锁步；产物门 = `verify-vendor-patch-applied`）。
 
 **Rejected alternatives**：WKWebView 子类实现拖放目的地（`draggingEntered`/`performDragOperation` 读 `draggingPasteboard`）——能否收到回调取决于 WebKit 内部拖放目标的解析（内容视图 vs WKWebView 本体），未证；且若真成为目的地，WebKit 不再合成 DOM drop，必须自己消费并重放事件；拖拽板轮询与该解析无关，先采用可验证的一条。原生消费 drop 后合成 DOM 事件——需要伪造 `DataTransferItem.webkitGetAsEntry`（客户端据它判目录），且与 WebKit 自身合成的 drop 二选一，事件可信度/维护面都差，拒。同步 `prompt()` 桥（WKUIDelegate 的 runJavaScriptTextInputPanel）取精确路径——阻塞 JS、非常规用法，且拖拽结束后拖拽板可能已换代；作为轮询失效时的后手保留，不进 v1。私有 SPI `_dragDestinationAction`——本仓只容忍已有那一个 WebKit SPI（刷新率，有独立 C target 与探针），不为本面再引入，拒。不做（维持浏览器分支）——用户可感的桌面识别缺口（本地拖入文件夹被当作浏览器），且与上游桌面行为分叉，拒。把粘贴（general pasteboard）一并纳入 v1——读取 `NSPasteboard.general` 会把用户为别的 App 复制的文件路径读进页面（隐私面），且轮询时序与 ⌘C→⌘V 间隔耦合；v1 先覆盖拖入与回形针，粘贴列为后续项（残余登记见 STATUS）。把 painted 门控当安全边界，或按调用者身份门控——同一 JS realm 内没有页面可写的标记可被信任；上游签名（只有 File）也给不出调用者身份；要真边界只能把远端 client bundle 移进独立 realm/iframe，或对远端实例整体不暴露该全局——架构级改动，不在本次范围；只封低成本滥用面并如实登记残余。
+
+### 5.8 右栏浏览器 guest 载体（child WKWebView）
+
+右栏 Browser 的面板内容 = 每 tab 一个子 `WKWebView` guest；载体契约（lease/分区/几何与遮挡协议/键盘输入转发/崩溃重建/安全门）以 [28-remote-browser.md](../client/28-remote-browser.md) §4/§5 为单源，本文只记录壳侧装配面：`BrowserGuestLayerView`（contentView 子视图、isFlipped、命中穿透）/ `KeyboardBridge` / zoom 按 `focusedGuestWebView()` 分流。载体决策 = [ADR-0004](../decisions/0004-swift-guest-per-tab.md)。
 
 ## 6. 数据、状态兼容与共存
 

@@ -38,7 +38,7 @@
 | 15 | [15-chamber-settings-page.md](./client/15-chamber-settings-page.md) | current | Chamber 设置呈现：settings 壳固定入口、全局/实例配置分离 | client |
 | 19 | [19-notifications.md](./client/19-notifications.md) | current | 桌面通知与未读徽标；Swift 原生边沿投影，Electron 呈现腿归档 | renderer / desktop |
 | 26 | [26-page-channel.md](./client/26-page-channel.md) | current | 页面级多路复用通道：长活流、instanceId、信用窗口、I-1、HTTP 预算 | control-plane |
-| 28 | [28-remote-browser.md](./client/28-remote-browser.md) | current | 右栏浏览器 v2：上游 iframe path fork + SSH 反代 alias；§4 有界例外 | client-ui-browser |
+| 28 | [28-remote-browser.md](./client/28-remote-browser.md) | current | 右栏浏览器 v3：Swift 原生 guest 载体（每 tab 子 WKWebView）+ SSH 反代 alias | client-ui-browser |
 
 ## desktop — 桌面壳与系统集成
 

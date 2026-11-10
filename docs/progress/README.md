@@ -11,7 +11,7 @@
 |---|---|---|---|
 | [STATUS.md](./STATUS.md) | 代码/功能类开放项：待做 / 待裁 / 接受；每条 = 判据 + 指针。**验收 / 发布 / 实机 / 目检 / CI 复核不在此登记**（程序归 `docs/checklists/`） | 计划细节、证据原文、完成叙事、测试计数、过程台账、验收报告 | 协调者单写 |
 | [TODO.md](./TODO.md) | 未排期计划与想法：A 上游、B 平台、C 功能、D 工程；触发 / 范围 / 退出 | 进度状态、验收结果、完成记录 | 条目所有者 |
-| [deviations.md](./deviations.md) | 冻结前的双 flavor 差异结论与证据（S/T/P/G/D）——**历史参考**，Electron 冻结后不再新增/维护行；Swift-only 差异走 STATUS | 待办计划、完成叙事、进度状态 | 协调者（冻结后只读） |
+| [deviations.md](./deviations.md) | 冻结前的双 flavor 差异结论与证据（S/T/P/G/D）——**历史参考**，Electron 冻结后不再新增/维护行；Swift-only 差异走 STATUS（例外：design 28 v3 载体的 Swift-only 残余 S-59…S-64 与 T-31 按 2026-11-10 裁决登记） | 待办计划、完成叙事、进度状态 | 协调者（冻结后只读） |
 | [electron-frozen.md](./electron-frozen.md) | Electron flavor 冻结登记：冻结范围、归档清单、仍共享契约、禁用面、agent 规则、复活清单（不记进度） | 进度状态、计划细节、完成叙事 | 协调者 |
 | README.md | 规则、索引、回写流程 | 业务内容 | 协调者 |
 
@@ -37,7 +37,7 @@
 2. **进入实施**：在 [STATUS.md](./STATUS.md) 建条目（状态 + 判据 + 指针）；TODO 中已排期的计划细节可删除，
    只留触发条件。
 3. **状态变化**：只改 STATUS。TODO 与 deviations 不改进度状态。
-4. **双 flavor 差异（冻结前历史）**：deviations 冻结后只读，不再新增/维护行；Swift-only 差异与开放项写 [STATUS.md](./STATUS.md)；历史引用仍走退役索引。accepted 不重复登记。
+4. **双 flavor 差异（冻结前历史）**：deviations 冻结后只读，不再新增/维护行；Swift-only 差异与开放项写 [STATUS.md](./STATUS.md)；历史引用仍走退役索引。accepted 不重复登记。**唯一例外**：design 28 v3 载体的 Swift-only 残余（S-59…S-64）与 T-31 重写按 2026-11-10 载体裁决登记在 deviations，供 design/ADR 以 S 号引用；其余仍走 STATUS。
 5. **落地或明确不做**：STATUS 删除条目（基线留 git/CHANGELOG/design）；TODO 删除计划；deviations 冻结后不再新增/维护（历史引用留退役索引）。
 6. **引用稳定**：跨文件引用用 `TODO.md A§N`、`B§N`、`C§N`、`D§N`，`deviations.md` 的 S/T/P/G/D 编号，
    或 STATUS 的条目名；编号只增不重排。
@@ -57,7 +57,7 @@
   另有差异、设计未决、范围决策。
 - [TODO.md](./TODO.md) — **A 上游**（提案、漂移、UI 对齐）、**B 平台**（macOS Swift、Windows v1）、
   **C 功能**（账户、subagents、open-in）、**D 工程**（重构、产物守卫、页面性能、多实例常驻）。
-- [deviations.md](./deviations.md) — Electron ↔ Swift 偏差登记（**冻结前的历史参考**）+ 可达性纪律 + 退役索引。
+- [deviations.md](./deviations.md) — Electron ↔ Swift 偏差登记（**冻结前的历史参考**，含 design 28 v3 载体 Swift-only 残余例外）+ 可达性纪律 + 退役索引。
 - [electron-frozen.md](./electron-frozen.md) — Electron flavor 冻结归档：范围、归档清单、仍共享契约、禁用面、
   agent 规则与复活清单；Windows/Linux 桌面腿随之冻结、不发布。
 

@@ -16,7 +16,7 @@
 |A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐|A§1–A§15|
 |B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
-|D 工程|结构性重构、产物新鲜度、页面性能 P2、多实例常驻后续研究|D§1–D§4|
+|D 工程|结构性重构、产物新鲜度、页面性能 P2、多实例常驻后续研究、右栏浏览器 v3 落地债|D§1–D§5|
 
 ## A. 上游依赖（A 类）
 
@@ -521,3 +521,17 @@ facts 供渲染，只在「是否需要重发布」的判据上用量化值。
 | 2 | 进程 / 视图隔离（`WebContentsView` / 独立 WKWebView） | 来源 >8，或「一个壳的长任务卡住整页」真机复现 | design 05 §9 的重评触发；开做前先取整页卡顿证据（rAF/帧时/长任务），不以猜测开做 |
 | 3 | 每壳内存研究 | 面板/实测定标显示 N=5 稳态内存不可接受，或需要按壳归因的统计 | 单 renderer 下无每壳字节读数；方向 = Electron `app.getAppMetrics()`（仅 Electron）与 DOM/节点计数代理，**不伪造**每壳字节；Swift 腿只有整机内存 |
 | 4 | upstream freeze（vendor pin 升级冻结） | 常驻改造（D1–D4）未收口前冻结；出现上游安全修复/阻断则解冻单次并回归 | 避免 pin 升级把 vendor 隐藏壳行为/补丁面与常驻改造改动混进同一回归窗口；收口后按既有升级 checklist 恢复 |
+### 5. 右栏浏览器 v3 落地债（未排期）
+
+> 契约 = [design 28](../design/client/28-remote-browser.md) / [ADR-0004](../design/decisions/0004-swift-guest-per-tab.md)；验收 = [remote-browser-acceptance.md](../checklists/acceptance/remote-browser-acceptance.md) §E2。此处只记未排期的计划与触发条件，不记状态。表内 `#` 是条目 id（删除后不复用；引用写 `#N`，不按行序）。
+
+|#|工作|触发 / 范围|退出|
+|---|---|---|---|
+|0|通用 alias→逻辑 URL 反查（**降级已裁决**）：只保持同一 forward alias origin 内的逻辑地址；不做 record 表通用反查、无未知 alias 显式提示（地址栏/历史会原样显示离开 origin 的 alias URL）|W-26 真机；产品要求地址栏永不暴露 alias 时|反查纯函数 + 状态表达式落地，W-26 该半段有可执行判据并 PASS|
+|1|统一 overlay 遮挡信号：当前 = 9 点 DOM 命中 + overlay 候选 selector（`OVERLAY_SELECTOR`，候选列表 250ms 缓存）+ 显式 `setOccluded` seam，浮层来源未统一接线|design 28 §4.1 / W-19 真机遮挡负例|一条统一信号驱动 guest 隐藏（9 点启发式仅兜底），W-19 以截图 region diff 转 PASS|
+|2|verifySource 专用通道：当前借 `dsh-chamber:forward-list`（诊断面）返回 `ok:true` 做 source 指纹证明（失败/异常 = 拒绝并写审计日志）；替代 = Swift↔sidecar 专用 prove 通道（**不动 E1 manifest 的通道表**前提下评估复用/内部通道）|E1 通道表冻结期；`forward.list` 语义变化前|浏览器信任面不再耦合 forward 诊断面；`forward.list` 语义变化不静默破 browser|
+|3|forward 类型两处镜像去重：`packages/dsh-chamber-wire/src/forward.ts` 与 client 侧 `shared/forward-bridge.ts` 的 ForwardRecord/错误码表重复；合并需 `package.json` workspace 依赖（当前 client 包零依赖契约）|下次 workspace 依赖调整同批|单一类型源，镜像测试删除|
+|4|`browser.state` 的 `visible/occluded` 死可选字段清理：Swift 的 state push 不发这两个字段（遮挡走几何检测 + `setOccluded` seam），renderer 类型与服务侧保留可选仅为向前兼容|下次 state 载荷变更同批|字段从类型/解析删除或由 Swift 真实生产；删除前确认向前兼容臂不依赖|
+|5|`runOpenPanel` 的安全开启：当前 = guest delegate 显式 `completionHandler(nil)` 拒绝（design 28 §8-13）；开启前置 = 用户手势证据 + **只回本 guest 的临时授权**（不回执本机路径、不落日志）|产品要求 guest 内可上传文件时；与 W-27 真机判据同批|安全开启路径落地 + W-27 判据从「显式拒绝」改写为「手势授权后仅本 guest 可用」并真机 PASS；未开启前保持拒绝|
+|6|content rule 残面扩展：正则子集无法做地址归一，未枚举的混合进制/任意前导零逐段写法、其它 IPv6 展开写法与带 userinfo 的子资源 URL 仍可能绕过（S-59）|真机 W-17/W-25 出现绕过，或产品要求更强的资源级门|残面收敛为有证据的已知限制或资源级 seam 扩展；S-59 退役条件成立|
+|7|browser 面 invoke 的 renderer 侧 deadline：`browser` 命名空间由 Swift 本地 `BrowserIPCRouter` 分派、不经 A 桥 45s deadline；renderer 未设独立超时（等待期只由 push 投影失败条兜底）|真机出现永久 loading，或内容规则编译/来源证明等待明显时|renderer 侧截止与失败投影有可执行判据|

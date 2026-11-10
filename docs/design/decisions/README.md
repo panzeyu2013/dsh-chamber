@@ -18,7 +18,8 @@
 |---|---|---|
 | [ADR-0001](./0001-docs-layered-by-type-and-stage.md) | 文档按类型与生命周期分层 | accepted |
 | [ADR-0002](./0002-swift-only-flavor.md) | 唯一出货 flavor = macOS Swift 原生壳 | accepted |
-| [ADR-0003](./0003-remote-browser-v2-iframe.md) | 右栏浏览器 v2：上游 iframe path fork + SSH alias | accepted |
+| [ADR-0003](./0003-remote-browser-v2-iframe.md) | 右栏浏览器 v2：上游 iframe path fork + SSH alias | superseded（[ADR-0004](./0004-swift-guest-per-tab.md)） |
+| [ADR-0004](./0004-swift-guest-per-tab.md) | 右栏浏览器 v3：Swift 原生 guest 载体（每 tab 子 WKWebView）+ SSH 反代 | accepted |
 
 ## 何时写 / 不写
 

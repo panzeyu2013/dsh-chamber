@@ -100,7 +100,7 @@ bash install-gateway.sh
 - Git Worktree生命周期 — 工作树是源仓库内的Git checkout：每个仓库用自己的 `<repo>/.agents/worktrees` 池（首次创建写一份忽略自身的 `.gitignore`，源仓库 `git status` 保持干净）；创建不再注册workspace，侧栏在主检出下派生一枚 `kind:'checkout'` 行（分支名标题，该checkout内新建的会话按 `workingDirectory` 归到这一行）；删除只走path-based `git worktree remove`：主检出/locked/运行中/状态未知硬阻断，dirty须显式确认「丢弃未提交更改」后才force（分支与已提交内容保留），对话框可选同时删除本地分支、或归档该checkout内的会话（默认关闭）
 - 多实例并行（N-ctx） — 一个窗口内多个dsh shell共存，随时切换活动实例
 - open-in打开注册表 — 会话头部统一打开面：本地来源在Finder/文件管理器显示目录；本地或SSH远程来源可拉起VS Code（本地 `vscode://file/`、远程Remote-SSH）；支持 `dsh-chamber://` 深链
-- 远端浏览器 — 右栏「浏览器」页签是上游 `ui-sidebar-browser` iframe 路径的忠实 fork（DOM/CSS/文案/8语言/地址解析/历史/多标签/快捷键/标题/sandbox开关/store逐字同源）：任意 http(s) URL 直接内嵌 iframe（含 https 与任意 host）；唯一分支 = SSH 来源且目标主机恰为 `127.0.0.1`，先摘该来源的 forward 租约、以主进程合成的 alias `frameUrl` 作 iframe src（地址栏/历史保留逻辑 URL，代理页的 external 出口用 alias 并在租约解析中/失败时禁用），关页签即释放。桌面 CSP 放行 `blob:`/loopback/alias/`http:`/`https:`；不做 gateway 隧道、不做共享 `127.0.0.1` 回退、不做原生子视图
+- 远端浏览器 — 右栏「浏览器」页签由 **Swift 原生 guest 载体**承载（design 28 v3 / ADR-0004）：每个页签一个独立子 `WKWebView`（独立 web content process、非持久分区 store、main 独占 lease/分区/安全门），renderer 保留上游 `ui-sidebar-browser` 的 UI/地址解析/历史/多标签/标题/store/占位几何（iframe 载体已退役）；唯一有意功能差异 = SSH 反代（forward alias 由 main 合成并加载、地址栏/历史保留逻辑 URL、external 出口投影 alias 并在租约解析中/失败时禁用，关页签即释放）。桌面 CSP 收窄为 `frame-src blob:`（仅文档预览）；不做 gateway 隧道、不做共享 `127.0.0.1` 回退
 - 桌面通知 — 会话完成 / 提问 / 审批时推送桌面通知，点击直达会话；设置「通知」分组可开关
 - 桌面端更新 — stable与beta配置和feed独立；设置页「更新」组可订阅预览版（beta）更新（纯用户偏好、默认关闭；beta 构建默认也走稳定通道，打开开关后继续接收 beta）；静默检查，确认后下载、退出时安装（低打扰、无弹窗）
 - 睡眠/后台常驻 — 关窗可隐藏到托盘继续运行（或退出并确认）；登录自启（macOS）；OS唤醒即时重连；保持唤醒开关

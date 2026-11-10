@@ -113,7 +113,7 @@ pnpm run dist:desktop
 
 ### 单 frame
 
-- `BrowserWindow` 1280x800，`loadURL` 控制面 origin（`http://127.0.0.1:<port>`，默认 17500）；webPreferences 无 `webviewTag`——N-ctx 是同窗口内 ctx 切换，不是 webview 嵌套。
+- `BrowserWindow` 1280x800，`loadURL` 控制面 origin（`http://127.0.0.1:<port>`，默认 17500）；webPreferences 无 `webviewTag`——N-ctx 是同窗口内 ctx 切换，不是 webview 嵌套。右栏 Browser 的面板内容由 Swift 壳的每 tab 子 `WKWebView` guest 承载（design 28 v3 / [ADR-0004](../../docs/design/decisions/0004-swift-guest-per-tab.md)），不是 Electron `webviewTag`/iframe 载体。
 - `contextIsolation: true`、`nodeIntegration: false`，默认 sandbox。
 
 ### 控制面

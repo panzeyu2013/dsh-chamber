@@ -177,7 +177,7 @@ N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*
 ## 4. 信任模型与边界
 
 - **远程实例的 client bundle 会运行在本地 renderer 里**——与官方模型一致（官方 web profile 同样加载宿主下发的一切：宿主是权威、loopback-only、v1 无认证面）；这是安全相关事实，已在 `host-graph.ts` 与模块 A `src/index.ts` 的模块头注释显式声明，不静默。
-- **远端 web 内容也会进入同一 shell document（design 28 v2 右栏 iframe）**：跨源 iframe 子 frame 不获得 preload/桥（主进程只向主 frame 注入、IPC 围栏校验 main frame），但远端页面由同一浏览器引擎在壳 document 的嵌套 browsing context 中渲染；renderer 侧 sandbox/属性**不是**安全边界（同 document 的远端插件仍可创建任意 iframe），强制边界在 main 进程（CSP `frame-src`、`will-frame-navigate`、`will-download`、权限 deny-all）；desktop v2 为对齐上游 iframe 行为，CSP 允许任意 http(s) 子 frame（design 28 §16.11），但非 web scheme/credentials/下载/新窗口仍由 main 拦。该事实随 v2 一并成为契约，不静默。
+- **远端 web 内容不再进入 shell document（design 28 v3 native guest）**：右栏 Browser 的页面内容由 Swift 壳的每 tab 子 `WKWebView` guest 承载——独立 web content process、独立非持久 `WKWebsiteDataStore`、无 `dshChamber` 桥/注入脚本；壳 document 里只剩 renderer 的占位几何与状态投影，渲染端不再有跨源 iframe 面。强制边界因此收敛到 main（guest lease/分区 + 导航/新窗/权限/下载/证书门，design 28 §5）；renderer 的 source gate 与几何上报不构成安全边界（同 document 的远端插件仍可请求开 tab，URL 类别门不变，见 design 28 §8 的 remote-source 残余）。
 - 插件作者须提供**构建好的 `./client` bundle**（官方工具链产物；缺 bundle 时宿主 `ClientModuleRegistry` 激活即 fail-loud，chamber 侧同样报错不静默）。
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，不降级。
 - **设置面不装载插件（完整桥接形态）**：桌面设置壳不再为选中来源二次装载任何插件行——它渲染该来源自己 boot ctx 的 `settings.section` 台账与标准座（[05](../control-plane/05-connection-manager.md) §5），故：①执行面回到「已打开/被面板要求挂载的来源自己的 ctx」，面板只保证该 ctx 挂在屏外也保持挂载（`chamberBridge.setSettingsTarget`），关闭即撤除；②没有第二次实例化 ⇒ 没有重复注册、跨来源模块共享报告与「未激活」报告，插件作者契约回到普通插件契约（模块级无状态仍是好习惯，但不再是设置面约束）；③面板不再读 `clientGraph/graph`、不再经页面级 kernel 装载 bundle，`client-plugin-loader.ts` 的每实例图缓存只服务 boot 路径；④来源自己的 `remote` 就是真 remote（WS 流在），无手工面与能力降级；⑤未挂载完成的来源显示「正在启动该实例的前端」中间态，绝不伪造内容。

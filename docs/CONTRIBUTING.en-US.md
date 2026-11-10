@@ -90,7 +90,7 @@ One logical change per commit; split commits that bundle unrelated changes.
   - Design 19's desktop native notification projection (Swift `UNUserNotificationCenter`; the Electron presentation leg is archived)
   - Design 20's trusted open-in edge capability (including its local-shape in-instance host domain `openInApp`, boundaries in design 20 §6.3)
   - Design 24's in-instance archive-cleanup host domain `archiveCleanup/{probe,purge}` (delete-only, whole-subtree skip while running, idempotent; narrowest boundaries in design 24 §2)
-  - Design 28's right-sidebar browser client plugin (remote-browser: a faithful fork of upstream `ui-sidebar-browser`'s iframe path whose only difference is the SSH reverse-proxied `frameUrl` and its lease lifecycle; narrowest boundaries in design 28 §16.9/§16.11).
+  - Design 28's right-sidebar browser client plugin (remote-browser: a Swift native guest carrier, one child `WKWebView` per tab, whose only difference is the SSH reverse-proxied alias and its lease lifecycle; narrowest boundaries in design 28 §1/§4/§5).
 
   None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
 - For any new domain feature, ask first whether dsh native, the plugin ecosystem, or the host web frontend already covers it; if so, don't build.

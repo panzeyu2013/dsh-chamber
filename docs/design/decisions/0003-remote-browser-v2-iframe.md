@@ -1,6 +1,6 @@
 # ADR-0003：右栏浏览器 v2 = 上游 iframe path fork + SSH alias
 
-- 状态：accepted
+- 状态：superseded（由 [ADR-0004](./0004-swift-guest-per-tab.md) 取代）
 - 日期：2026-11-08
 
 ## 背景
