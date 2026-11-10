@@ -367,9 +367,9 @@
     },
     {
       "path": "macos/Sources/DSHChamber/MainWindowController.swift",
-      "lines": 2986,
-      "target": 2986,
-      "note": "FROZEN, no adjudicated target: WKWebView host + A/B-bridge site + navigation guard + hostFacts source + notify routing in one window controller. The row locks growth only; an extraction needs a navigation/edge seam decision first."
+      "lines": 3239,
+      "target": 3239,
+      "note": "FROZEN, no adjudicated target: WKWebView host + A/B-bridge site + navigation guard + hostFacts source + notify routing in one window controller; raised by the design 28 v3 native-guest carrier (guest layer install, browser IPC dispatch, document-generation reclaim, focus/zoom routing). The row locks further growth only; an extraction needs a navigation/edge seam decision first."
     },
     {
       "path": "macos/Sources/DSHChamber/AppDelegate.swift",

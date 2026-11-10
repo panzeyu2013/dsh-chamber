@@ -270,6 +270,7 @@ export const ENTRYLESS_SEAMS = [
   { package: 'desktop', name: 'canForwardTransition', reason: 'design 28 transition table reader for review/suite; the manager drives states through its own patches, so no production reader exists' },
   { package: 'desktop', name: 'FORWARD_REAP_SEMANTICS', reason: 'design 28 crash-window documentation constant; the lifecycle suite asserts it (documentation, not a code path)' },
   { package: 'desktop', name: 'forwardSpawnSupervision', reason: 'design 28 POSIX detached/win32 policy; asserted by the lifecycle suite, the launcher states the same policy inline with its spawn call' },
+  { package: 'desktop', name: 'localFrameErrors', reason: 'frozen-Electron-only local-frame store snapshot (design 28 v3 §3 retired forward.list.frameErrors); the forward-service suite asserts the writer/bounding behavior' },
 ]
 
 /**
@@ -435,11 +436,6 @@ export function workspacePackageGlobs(repoRoot = REPO_ROOT) {
 }
 
 /**
- * First-party packages with a src/index.ts: the package list comes from
- * pnpm-workspace.yaml globs, filtered to direct children of packages/.
- * @returns {{ name: string, dir: string, spec: string, index: string }[]}
- */
-/**
  * Packages whose implementation tree is judged IN ADDITION to the package entry
  * (R4 review): the client-plugin ./client half ships a whole carrier that no
  * index re-export reaches, so an entry-only scan would leave it unjudged.
@@ -474,7 +470,11 @@ export const INTERNAL_SURFACE_ALLOWLIST = [
   // helper has no v3 reader but deleting it would break the upstream-text lock.
   { package: 'dsh-chamber-client-ui-browser', name: 'browserAddressCheckpoint', reason: 'upstream ui-sidebar-browser text kept verbatim under the package SHA lock; the v3 state push carries the address, so it has no reader and must stay for byte-identity' },
 ]
-
+/**
+ * First-party packages with a src/index.ts: the package list comes from
+ * pnpm-workspace.yaml globs, filtered to direct children of packages/.
+ * @returns {{ name: string, dir: string, spec: string, index: string }[]}
+ */
 export function discoverPackages(repoRoot = REPO_ROOT) {
   const dirs = new Set()
   for (const glob of workspacePackageGlobs(repoRoot)) {
