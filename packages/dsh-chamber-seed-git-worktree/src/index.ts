@@ -7,7 +7,7 @@
  * capabilities: every mutation starts from `workspaceId`, re-reads host state and Git
  * topology, then compares opaque repo/worktree identities plus expected branch and HEAD.
  *
- * Wire namespace is fixed at `gitWorktree/{snapshot,previewCreate,create,enter,remove}`.
+ * Wire namespace is fixed at `gitWorktree/{snapshot,branches,previewCreate,create,enter,remove}`.
  * This plugin owns no persistence: create produces only a checkout (no workspace/session
  * coupling); enter changes only the session's working directory through the host service;
  * remove is Git-first and returns the still-registered workspace identity. All methods
@@ -22,6 +22,8 @@ import {
   GitWorktreeError,
   agentNotReady,
   domainResult,
+  type BranchesInput,
+  type BranchesResult,
   type CreateInput,
   type CreateResult,
   type EnterInput,
@@ -143,6 +145,16 @@ export class GitWorktreeGateway extends TypertRemoteService {
   @Remote('previewCreate')
   previewCreate(input: PreviewCreateInput): Promise<GitWorktreeDomainResult<PreviewCreateResult>> {
     return domainResult(() => this.core.previewCreate(input))
+  }
+
+  /**
+   * On-demand branch candidates for the create dialog (design 08 §2.1/§4.1): the picker's
+   * value at open time, never the polled snapshot's possibly one-wave-old list. Read-only;
+   * the authoritative branch validation stays in `previewCreate`/`create`.
+   */
+  @Remote('branches')
+  branches(input: BranchesInput): Promise<GitWorktreeDomainResult<BranchesResult>> {
+    return domainResult(() => this.core.branches(input))
   }
 
   @Remote('create')

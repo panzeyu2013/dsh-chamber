@@ -38,6 +38,7 @@ import {
   DETERMINISTIC_GIT_REJECTION_CODES,
   DETERMINISTIC_HOST_RETRYABLE_OVERRIDES,
   GitWorktreeRpcError,
+  decodeBranchesValue,
   isAmbiguousGitRpcFailure,
   isDeterministicGitRejection,
 } from '../../src/shared/git-api.ts'
@@ -427,3 +428,46 @@ const HOST_PROVEN_PRE_MUTATION_CODES = (() => {
     .exec(HOST_CORE_SOURCE)?.[0] ?? ''
   return [...block.matchAll(/'([a-z][a-z0-9]*(?:-[a-z0-9]+)*)'/gu)].map(match => match[1]!)
 })()
+
+test('wire lockstep: the client calls exactly the host @Remote methods under one namespace', () => {
+  const clientSource = readFileSync(new URL('../../src/shared/git-api.ts', import.meta.url), 'utf8')
+  const hostIndex = readFileSync(
+    new URL('../../../dsh-chamber-seed-git-worktree/src/index.ts', import.meta.url),
+    'utf8',
+  )
+  const hostMethods = [...hostIndex.matchAll(/@Remote\('([^']+)'\)/gu)].map(match => match[1]!).sort()
+  const clientMethods = [...new Set(
+    [...clientSource.matchAll(/callGitRemote\(\s*sourceId,\s*'([^']+)'/gu)].map(match => match[1]!),
+  )].sort()
+  assert.deepEqual(clientMethods, hostMethods,
+    'a host @Remote rename must fail here, never as a runtime 404')
+  // ONE namespace literal on both sides of the wire.
+  assert.match(hostIndex, /super\(ctx, 'gitWorktree'\)/u)
+  assert.match(clientSource, /gitWorktree\/\$\{method\}/u)
+})
+
+test('wire lockstep: the REAL host branches result decodes with zero client errors', async () => {
+  const host = new FakeHost()
+  host.branches.set('fresh', '7'.repeat(40))
+  const core = new GitWorktreeCore({
+    source: {
+      listWorkspaces: () => host.workspaces.map(workspace => ({ ...workspace, sessionIds: [...workspace.sessionIds] })),
+      listAgents: () => host.agents.map(agent => ({ ...agent })),
+      listArchivedSessionIds: () => [...host.archived],
+    },
+    git: host.runner,
+    fs: host.fs,
+  })
+  const hostResult = await core.branches({ sourceWorkspaceId: 'ws-main' })
+  // A field rename on either side fails HERE, not as a silently dropped candidate.
+  const decoded = decodeBranchesValue(hostResult, { sourceWorkspaceId: 'ws-main' }, hostResult.repoId)
+  assert.deepEqual(decoded, {
+    sourceWorkspaceId: 'ws-main',
+    repoId: hostResult.repoId,
+    branches: hostResult.branches,
+    checkedOutBranches: hostResult.checkedOutBranches,
+    truncated: false,
+  })
+  assert.deepEqual(decoded.checkedOutBranches, ['feature', 'main', 'unreg'])
+  assert.ok(decoded.branches.includes('fresh'), 'the out-of-band branch is part of the wire result')
+})

@@ -25,6 +25,10 @@ test('removeFailureCopyKey: host and local refusals map to localized copy', () =
   assert.equal(removeFailureCopyKey('worktree-invalid'), 'unhealthyInvalidBlocked')
   assert.equal(removeFailureCopyKey('fresh-facts-unavailable'), 'freshFactsUnavailable')
   assert.equal(removeFailureCopyKey('source-workspace-missing'), 'sourceWorkspaceMissing')
+  // Create-dialog refusals (previewCreate): localized, actionable copy for the picker/self-heal.
+  assert.equal(removeFailureCopyKey('branch-not-found'), 'branchNotFound')
+  assert.equal(removeFailureCopyKey('branch-checked-out'), 'branchCheckedOutBlocked')
+  assert.equal(removeFailureCopyKey('branch-exists'), 'branchExists')
   // The retired registered-removal vocabulary has no copy key any more.
   assert.equal(removeFailureCopyKey('worktree-unregistered'), undefined)
   assert.equal(removeFailureCopyKey('worktree-current'), undefined)

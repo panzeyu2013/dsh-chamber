@@ -65,7 +65,8 @@ export interface GitRepoTopology {
   commonDir: string
   mainPath: string
   worktrees: GitWorktreeInfo[]
-  /** Local branch names for the existing-branch picker; empty when the host is older or the read failed. */
+  /** Snapshot-time local branch names, kept ONLY as the create dialog's fallback when the
+   *  on-demand `gitWorktree/branches` read is unavailable (older host) or failed. */
   branches: string[]
 }
 
@@ -92,6 +93,20 @@ export interface PreviewCreateResult {
   targetPath: string
   branch: string
   baseHead: string
+}
+
+/** On-demand branch candidates for the create dialog (design 08 §2.1/§4.1). */
+export interface BranchCandidatesResult {
+  /** Echo of the requested capability anchor (request correlation). */
+  sourceWorkspaceId: string
+  /** Host-minted opaque repository identity the candidates belong to. */
+  repoId: string
+  /** Local branch names, capped by the host's MAX_BRANCH_CANDIDATES. */
+  branches: string[]
+  /** Branches currently checked out by some worktree of the repository (advisory). */
+  checkedOutBranches: string[]
+  /** True when the host capped `branches` or `checkedOutBranches`. */
+  truncated: boolean
 }
 
 export interface CreateWorktreeResult {

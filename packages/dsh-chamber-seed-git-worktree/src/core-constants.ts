@@ -28,6 +28,10 @@ export const MAX_WORKSPACES = 128
 export const MAX_REPOSITORIES = 64
 export const MAX_WORKTREES_PER_REPOSITORY = 128
 export const MAX_TOTAL_WORKTREES = 256
+/** Branch-candidate bound for the on-demand `branches` query (design 08 §2.1): a usable
+ *  picker list, far below READ_OUTPUT_CAP; a repository above it reports `truncated` and the
+ *  host keeps git's refname order for the retained prefix. */
+export const MAX_BRANCH_CANDIDATES = 1024
 export const MAX_AGENTS = 4_096
 export const MAX_SESSIONS_PER_WORKSPACE = 4_096
 export const MAX_TOTAL_SESSION_MEMBERSHIPS = 16_384

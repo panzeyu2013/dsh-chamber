@@ -3,7 +3,7 @@
  */
 import { GitWorktreeError } from './core-errors.ts'
 import { GIT_DIR_POINTER_MAX_BYTES } from './core-constants.ts'
-import type { CreateInput, PreviewCreateInput, RemoveInput, WorktreeFileSystem } from './core-types.ts'
+import type { BranchesInput, CreateInput, PreviewCreateInput, RemoveInput, WorktreeFileSystem } from './core-types.ts'
 import { createHash } from 'node:crypto'
 import { access, lstat, mkdir, open, realpath, writeFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
@@ -157,6 +157,13 @@ export function parsePreviewInput(value: PreviewCreateInput): PreviewCreateInput
     // Same validation as the branch name: a control character or leading dash must never reach argv.
     ...(value.startRef === undefined ? {} : { startRef: safeBranchName(value.startRef, 'input.startRef') }),
   }
+}
+
+/** The on-demand branch query carries one capability anchor and nothing else. */
+export function parseBranchesInput(value: BranchesInput): BranchesInput {
+  assertRecord(value, 'input')
+  assertExactKeys(value, ['sourceWorkspaceId'], 'input')
+  return { sourceWorkspaceId: requiredString(value.sourceWorkspaceId, 'sourceWorkspaceId', 256) }
 }
 
 export function parseCreateInput(value: CreateInput): CreateInput {

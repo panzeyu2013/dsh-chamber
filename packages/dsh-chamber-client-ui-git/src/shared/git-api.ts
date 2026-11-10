@@ -3,8 +3,8 @@ import {
   getInstanceClient, InstanceDomainMissingError, type UnaryResult,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
-  CreateWorktreeResult, EnterWorktreeInput, EnterWorktreeResult, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult,
-  RemoveWorktreeResult,
+  BranchCandidatesResult, CreateWorktreeResult, EnterWorktreeInput, EnterWorktreeResult, GitWorktreeSnapshot, PreviewCreateInput,
+  PreviewCreateResult, RemoveWorktreeResult,
 } from './types.ts'
 import { errorMessage, isRecord } from '@dsh-chamber/dsh-chamber-client-core'
 import { HttpBudgetUnscheduledError } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
@@ -115,6 +115,27 @@ export function isAgentNotReady(error: unknown): boolean {
   return error instanceof GitWorktreeRpcError && error.code === 'agent-not-ready'
 }
 
+/**
+ * The host does not serve the `gitWorktree` domain at all (404). For the on-demand branch
+ * query this is ALSO the old-host signal: the create dialog only exists once this source has
+ * a snapshot, so the domain is demonstrably mounted and a 404 on `branches` means the METHOD
+ * is absent (an older seed package). The dialog then falls back to `snapshot.branches`
+ * instead of claiming the plugin is missing (design 08 §6.3).
+ */
+export function isGitHostNotLoaded(error: unknown): boolean {
+  return error instanceof GitWorktreeRpcError && error.code === 'git-host-not-loaded'
+}
+
+/**
+ * The old-host inference the create dialog applies (design 08 §6.3): a missing METHOD on an
+ * otherwise mounted domain answers the same 404 as a missing domain, so the degradation is
+ * valid only when the source's own snapshot proves the domain is mounted. Everywhere else a
+ * 404 stays the honest domain-missing failure (restart guidance, no retry).
+ */
+export function isOldHostFallback(error: unknown, snapshotPresent: boolean): boolean {
+  return snapshotPresent && isGitHostNotLoaded(error)
+}
+
 export interface CreateWorktreeInput {
   previewToken: string
   operationId: string
@@ -195,6 +216,33 @@ export function decodeSnapshotValue(value: unknown): GitWorktreeSnapshot {
   } catch (error) {
     invalidValue('snapshot', errorMessage(error))
   }
+}
+
+/** Decode the on-demand branch candidates: shape, request echo and the optional
+ *  snapshot-repository identity the dialog asked about (a repo swap under the workspace
+ *  must fail closed instead of serving candidates for another repository). */
+export function decodeBranchesValue(
+  value: unknown,
+  input: { sourceWorkspaceId: string },
+  expectedRepoId?: string,
+): BranchCandidatesResult {
+  const method = 'branches'
+  if (!isRecord(value)) invalidValue(method, 'result must be an object')
+  const result: BranchCandidatesResult = {
+    sourceWorkspaceId: stringField(value, 'sourceWorkspaceId', method),
+    repoId: repoIdField(value, method),
+    branches: stringArrayField(value, 'branches', method),
+    checkedOutBranches: stringArrayField(value, 'checkedOutBranches', method),
+    truncated: booleanField(value, 'truncated', method),
+  }
+  assertEqual(method, 'sourceWorkspaceId', result.sourceWorkspaceId, input.sourceWorkspaceId)
+  if (expectedRepoId !== undefined) assertEqual(method, 'repoId', result.repoId, expectedRepoId)
+  // A ref name can never carry control characters (git itself refuses them): reject instead of
+  // rendering an impossible candidate.
+  for (const name of [...result.branches, ...result.checkedOutBranches]) {
+    if (/[\u0000-\u001f\u007f]/u.test(name)) invalidValue(method, 'a branch name carries control characters')
+  }
+  return result
 }
 
 export function decodePreviewCreateValue(
@@ -323,7 +371,7 @@ export function decodeRemoveValue(
  *  creation without applying it, so it stays a read. */
 const GIT_MUTATION_METHODS: ReadonlySet<string> = new Set(['create', 'remove', 'enter'])
 
-async function callGitRemote(sourceId: string, method: string, input?: unknown): Promise<unknown> {
+async function callGitRemote(sourceId: string, method: string, input?: unknown, signal?: AbortSignal): Promise<unknown> {
   const endpoint = `gitWorktree/${method}`
   let transport: UnaryResult<unknown>
   try {
@@ -331,7 +379,7 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
       endpoint,
       // Typert validates the named argument object exactly: snapshot() has none, mutating methods take `input`.
       input === undefined ? {} : { input },
-      undefined,
+      signal,
       // The 60s budget must stay ABOVE the proxy's 45s upstream idle window and
       // the host's 30s mutation budget; the opt-in keeps the 404 discrimination.
       { timeoutMs: RPC_TIMEOUT_MS, notFoundAsDomainMissing: true, mutation: GIT_MUTATION_METHODS.has(method) },
@@ -404,6 +452,21 @@ function carrierFailureMessage(error: unknown): string {
 export const gitWorktreeApi = {
   async snapshot(sourceId: string): Promise<GitWorktreeSnapshot> {
     return decodeSnapshotValue(await callGitRemote(sourceId, 'snapshot'))
+  },
+  /** On-demand picker candidates (design 08 §2.1/§4.1): the value at open time, never the
+   *  polled snapshot's possibly one-wave-old list. Read-only; abortable by the dialog. */
+  async listBranches(
+    sourceId: string,
+    input: { sourceWorkspaceId: string; expectedRepoId?: string },
+    signal?: AbortSignal,
+  ): Promise<BranchCandidatesResult> {
+    const value = await callGitRemote(
+      sourceId,
+      'branches',
+      { sourceWorkspaceId: input.sourceWorkspaceId },
+      signal,
+    )
+    return decodeBranchesValue(value, input, input.expectedRepoId)
   },
   async previewCreate(sourceId: string, input: PreviewCreateInput): Promise<PreviewCreateResult> {
     return decodePreviewCreateValue(await callGitRemote(sourceId, 'previewCreate', input), input)

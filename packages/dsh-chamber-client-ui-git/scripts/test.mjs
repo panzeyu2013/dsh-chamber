@@ -28,6 +28,7 @@ const GROUPS = {
   // shared: the pure shared modules behind the dialog gates and the polling seam.
   shared: [
     'test/shared/action-error.test.ts',
+    'test/shared/branch-query.test.ts',
     'test/shared/checkout.test.ts',
     'test/shared/checkout-archive.test.ts',
     'test/shared/freshness.test.ts',
@@ -41,6 +42,7 @@ const GROUPS = {
   ],
   // locks: source-text locks over the client sources and the cross-package contracts.
   locks: [
+    'test/locks/branch-candidates.test.ts',
     'test/locks/checkout-occupant.test.ts',
     'test/locks/slot-contract.test.ts',
   ],

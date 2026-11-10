@@ -10,8 +10,16 @@ import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } fro
 import { Button, IconChevronRightOutlineRegular, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { basenameOf } from '@dsh-chamber/dsh-chamber-client-core'
 import { createFromPreview, gitCoordinator, previewCreate } from '../shared/coordinator.ts'
-import { gitActionErrorText } from '../shared/action-error.ts'
-import { createSourceOptions, sourceBranchChoices } from '../shared/git-facts.ts'
+import { gitActionErrorCode, gitActionErrorText } from '../shared/action-error.ts'
+import {
+  beginBranchQuery, branchChoices, branchOptionCheckedOut, branchQueryKey, planBranchQuery, settleBranchQuery,
+  type BranchQueryOutcome, type BranchQueryState,
+} from '../shared/branch-query.ts'
+import { NOT_DISPATCHED_CODE } from '../shared/not-dispatched.ts'
+import { gitWorktreeApi, isDeterministicGitRejection, isGitHostNotLoaded, isOldHostFallback } from '../shared/git-api.ts'
+import { removeFailureCopyKey } from '../shared/remove-notes.ts'
+import { createSourceOptions } from '../shared/git-facts.ts'
+import type { GitSidebarKey } from '../locales.ts'
 import type { GitWorktreeSnapshot } from '../shared/types.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
 import css from './SidebarGit.module.css'
@@ -92,10 +100,10 @@ function slugifyBranchName(branch: string): string {
 }
 
 /** Custom dropdown built on the repo's own Menu primitive. */
-function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel }: {
+function MenuSelect({ value, placeholder, items, disabled, onChange, ariaLabel }: {
   value: string
   placeholder: string
-  options: string[]
+  items: readonly { id: string; label: string; disabled?: boolean }[]
   disabled?: boolean
   onChange: (value: string) => void
   ariaLabel: string
@@ -111,7 +119,11 @@ function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel
       open={open}
       onClose={() => setOpen(false)}
       onSelect={(id: string) => { setOpen(false); onChange(id) }}
-      items={options.map(option => ({ id: option, label: option }))}
+      items={items.map(item => ({
+        id: item.id,
+        label: item.label,
+        ...(item.disabled === true ? { disabled: true } : {}),
+      }))}
       anchor={(
         <button
           type="button"
@@ -148,6 +160,11 @@ export function CreateWorktreeDialog({
   const tabsId = useId()
   const panelId = `${tabsId}-panel`
   const [formError, setFormError] = useState<string | null>(null)
+  // On-demand branch candidates (design 08 §2.1/§4.1): a point-in-time query, never the
+  // polled snapshot's list. The flight ref fences late answers per (key, requestId).
+  const [branchQuery, setBranchQuery] = useState<BranchQueryState | undefined>(undefined)
+  const branchQueryFlight = useRef<AbortController | undefined>(undefined)
+  const branchQueryCounter = useRef(0)
 
   const options = useMemo(
     () => source?.snapshot === undefined ? [] : createSourceOptions(source.snapshot),
@@ -155,6 +172,12 @@ export function CreateWorktreeDialog({
   )
   const busy = source?.busy !== undefined
   const actionLocked = busy || source?.recovery !== undefined
+  // One query identity for the CURRENT repository: an answer for a previously chosen
+  // repository is never rendered (the planner re-reads for the new key instead).
+  const branchQueryKeyForRepo = sourceWorkspaceId === '' ? '' : branchQueryKey(sourceId, sourceWorkspaceId)
+  const currentBranchQuery = branchQuery !== undefined && branchQuery.key === branchQueryKeyForRepo
+    ? branchQuery
+    : undefined
 
   // (Re)initialize on open: fresh branch suggestion + synced directory, and the OpenChamber default of creating WITHOUT a session.
   const prevOpen = useRef(false)
@@ -209,22 +232,108 @@ export function CreateWorktreeDialog({
   // localStorage parity), restored when the dialog opens.
   const sourceBranchStorageKey = sourceRepo === undefined ? null : `dsh-chamber.git.source-branch.${sourceRepo.repoId}`
 
-  // Existing-branch choices: the host's branch list (show-ref --heads) preferred,
-  // then the snapshot's known worktree branches. An unborn row is skipped — its
-  // name resolves to no commit, so offering it only makes the picker fail.
+  const startBranchQuery = (workspaceId: string, expectedRepoId: string | undefined): void => {
+    branchQueryCounter.current += 1
+    const requestId = branchQueryCounter.current
+    const key = branchQueryKey(sourceId, workspaceId)
+    branchQueryFlight.current?.abort()
+    const controller = new AbortController()
+    branchQueryFlight.current = controller
+    setBranchQuery(beginBranchQuery(key, requestId, Date.now()))
+    void gitWorktreeApi.listBranches(sourceId, {
+      sourceWorkspaceId: workspaceId,
+      ...(expectedRepoId === undefined ? {} : { expectedRepoId }),
+    }, controller.signal).then(result => {
+      setBranchQuery(previous => previous === undefined
+        ? previous
+        : settleBranchQuery(previous, key, requestId, { kind: 'ready', result }, Date.now()))
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return
+      // An old host package does not serve the method. The snapshot this dialog is driven by
+      // proves the domain is mounted, so degrade to the snapshot candidates instead of
+      // claiming the plugin is missing (design 08 §6.3; the inference is a tested pure helper).
+      const outcome: BranchQueryOutcome = isOldHostFallback(error, gitCoordinator.getSource(sourceId).snapshot !== undefined)
+        ? { kind: 'unsupported' }
+        : {
+            kind: 'failed',
+            code: gitActionErrorCode(error),
+            message: error instanceof Error ? error.message : String(error),
+            // A deterministic host refusal (or a missing domain) cannot be fixed by re-reading;
+            // a transport/git failure can, so only the latter offers the retry affordance. The
+            // page-budget refusal is deterministic by classification but transient in fact.
+            retryable: !isGitHostNotLoaded(error)
+              && (gitActionErrorCode(error) === NOT_DISPATCHED_CODE || !isDeterministicGitRejection(error)),
+          }
+      setBranchQuery(previous => previous === undefined
+        ? previous
+        : settleBranchQuery(previous, key, requestId, outcome, Date.now()))
+    })
+  }
+
+  // ONE read plan (open / workspace resolution / Existing-tab staleness). A second effect used
+  // to race this one on reopen and on a repository switch: both started the read in the same
+  // commit, aborting the first dispatch. `reset` owns the close-abort.
+  useEffect(() => {
+    const plan = planBranchQuery({
+      open,
+      workspaceReady: sourceWorkspaceId !== '',
+      mode,
+      key: branchQueryKeyForRepo,
+      query: currentBranchQuery,
+      now: Date.now(),
+    })
+    if (plan === 'reset') {
+      branchQueryFlight.current?.abort()
+      branchQueryFlight.current = undefined
+      setBranchQuery(undefined)
+      return
+    }
+    if (plan === 'start') startBranchQuery(sourceWorkspaceId, sourceRepo?.repoId)
+    // sourceRepo is read at dispatch time; the plan identity is the effect's dependency set.
+  }, [open, mode, branchQueryKeyForRepo, currentBranchQuery])
+
+  // Closing or unmounting cancels an in-flight read.
+  useEffect(() => () => {
+    branchQueryFlight.current?.abort()
+  }, [])
+
+  // Candidate choices: the on-demand read when it settled, else the snapshot fallback (old
+  // host / failed read). The static snapshot list is no longer the primary source.
   const existingBranchChoices = useMemo(
-    () => sourceBranchChoices(
+    () => branchChoices(
+      currentBranchQuery,
       sourceRepo?.branches ?? [],
       sourceRepo?.worktrees
         .filter(worktree => worktree.headState !== 'unborn')
         .map(worktree => worktree.branch) ?? [],
     ),
-    [sourceRepo],
+    [currentBranchQuery, sourceRepo],
   )
+  // No settled answer for the CURRENT repository yet = still reading (an old repo's list is
+  // never rendered while the new read is in flight).
+  const branchLoading = open && sourceWorkspaceId !== ''
+    && (currentBranchQuery === undefined || currentBranchQuery.status === 'loading')
+  const branchErrorKey: GitSidebarKey | undefined = currentBranchQuery?.status === 'error'
+    ? removeFailureCopyKey(currentBranchQuery.error?.code) ?? 'branchesReadFailed'
+    : undefined
+  // Deterministic refusals (missing domain, source-shape/workspace refusals) cannot be fixed
+  // by re-reading; every transport/git failure can. The classifier is computed once when the
+  // query fails (branch-query state), not re-derived from the code here.
+  const branchRetryable = branchErrorKey !== undefined && currentBranchQuery?.error?.retryable === true
+  // Only the Existing tab consumes the checked-out advisory; the NEW-branch startRef keeps
+  // the main checkout's own branch selectable (design 08 §4.1).
+  const branchMenuItems = existingBranchChoices.map(name => {
+    const checkedOut = branchOptionCheckedOut(name, currentBranchQuery, mode)
+    return {
+      id: name,
+      label: checkedOut ? `${name}${t('branchCheckedOut')}` : name,
+      ...(checkedOut ? { disabled: true } : {}),
+    }
+  })
 
-  // Restore the remembered source branch when the key and choices are ready.
+  // Restore the remembered source branch once the candidates settled and contain it.
   useEffect(() => {
-    if (!open || startRef !== '') return
+    if (!open || startRef !== '' || branchLoading) return
     if (sourceBranchStorageKey === null) return
     let saved = ''
     try {
@@ -233,7 +342,13 @@ export function CreateWorktreeDialog({
       return
     }
     if (saved !== '' && existingBranchChoices.includes(saved)) setStartRef(saved)
-  }, [open, sourceBranchStorageKey, startRef, existingBranchChoices])
+  }, [open, sourceBranchStorageKey, startRef, branchLoading, existingBranchChoices])
+
+  // A remembered/stale startRef that no longer exists must not shadow the default.
+  useEffect(() => {
+    if (!open || startRef === '' || branchLoading) return
+    if (!existingBranchChoices.includes(startRef)) setStartRef('')
+  }, [open, startRef, branchLoading, existingBranchChoices])
 
   const close = (): void => {
     if (busy) return
@@ -292,6 +407,12 @@ export function CreateWorktreeDialog({
       // The code→copy resolver: user-reachable refusals render localized copy;
       // an unmapped failure keeps its raw (English) message.
       setFormError(gitActionErrorText(error, t))
+      // The list the user picked from can be one interaction old (the branch was created or
+      // checked out elsewhere meanwhile): heal it once for the next attempt.
+      const code = gitActionErrorCode(error)
+      if ((code === 'branch-not-found' || code === 'branch-checked-out') && sourceWorkspaceId !== '') {
+        startBranchQuery(sourceWorkspaceId, sourceRepo?.repoId)
+      }
     }
   }
 
@@ -412,12 +533,12 @@ export function CreateWorktreeDialog({
               <span>{t('sourceBranch')}</span>
               <MenuSelect
                 value={startRef}
-                placeholder={sourceBranch ?? t('sourceBranchDefault')}
+                placeholder={branchLoading ? t('branchesLoading') : (sourceBranch ?? t('sourceBranchDefault'))}
                 // The main checkout's branch stays SELECTABLE: the host resolves it
                 // to that branch's HEAD, and filtering it out would leave a remembered
                 // pick shadowing main and single-branch repositories.
-                options={existingBranchChoices}
-                disabled={actionLocked}
+                items={branchMenuItems}
+                disabled={actionLocked || branchLoading}
                 ariaLabel={t('sourceBranch')}
                 onChange={value => {
                   setStartRef(value)
@@ -439,14 +560,33 @@ export function CreateWorktreeDialog({
           <>
             <label>
               <span>{t('existingBranch')}</span>
-              {existingBranchChoices.length > 0 ? (
+              {branchLoading ? (
+                <MenuSelect
+                  value=""
+                  placeholder={t('branchesLoading')}
+                  items={[]}
+                  disabled
+                  ariaLabel={t('existingBranch')}
+                  onChange={() => {}}
+                />
+              ) : existingBranchChoices.length > 0 ? (
                 <MenuSelect
                   value={branchName}
                   placeholder={t('existingBranchPlaceholder')}
-                  options={existingBranchChoices}
+                  items={branchMenuItems}
                   disabled={actionLocked}
                   ariaLabel={t('existingBranch')}
                   onChange={value => { setBranchName(value) }}
+                />
+              ) : branchErrorKey !== undefined ? (
+                // A failed read with no snapshot fallback must not degrade into blind typing.
+                <MenuSelect
+                  value=""
+                  placeholder={t(branchErrorKey)}
+                  items={[]}
+                  disabled
+                  ariaLabel={t('existingBranch')}
+                  onChange={() => {}}
                 />
               ) : (
                 <Input
@@ -471,6 +611,29 @@ export function CreateWorktreeDialog({
           </>
         )}
         </div>
+        {currentBranchQuery?.status === 'ready' && currentBranchQuery.result?.truncated === true && (
+          <p className={css.sourceFrom}>{t('branchesTruncated')}</p>
+        )}
+        {branchErrorKey !== undefined && (
+          <p className={css.formError} role="alert">
+            {t(branchErrorKey)}
+            {branchRetryable && (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  className={css.resetDirectory}
+                  disabled={branchLoading}
+                  onClick={() => {
+                    if (sourceWorkspaceId !== '') startBranchQuery(sourceWorkspaceId, sourceRepo?.repoId)
+                  }}
+                >
+                  {t('retry')}
+                </button>
+              </>
+            )}
+          </p>
+        )}
         {formError !== null && <p className={css.formError} role="alert">{formError}</p>}
       </div>
     </Modal>

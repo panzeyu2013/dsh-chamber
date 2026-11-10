@@ -22,6 +22,7 @@ const GROUPS = {
   // and mutation safety.
   core: [
     'test/core.test.ts',
+    'test/branches.test.ts',
     'test/create.test.ts',
     'test/removal.test.ts',
     'test/mutation-safety.test.ts',

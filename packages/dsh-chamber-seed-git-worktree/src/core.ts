@@ -19,6 +19,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   DISCOVERY_TTL_MS,
   MAX_AGENTS,
+  MAX_BRANCH_CANDIDATES,
   MAX_OPERATIONS,
   MAX_PATH_LENGTH,
   MAX_REPOSITORIES,
@@ -46,6 +47,7 @@ import {
   nodeFileSystem,
   objectFingerprint,
   opaqueId,
+  parseBranchesInput,
   parseRemoveInput,
   requiredString,
   safeErrorMessage,
@@ -75,6 +77,8 @@ import {
 } from './core-parse.ts'
 import type {
   AgentFact,
+  BranchesInput,
+  BranchesResult,
   CreateInput,
   CreateResult,
   GitAttentionReason,
@@ -97,6 +101,7 @@ import type {
 
 // Public surface re-exported verbatim.
 export {
+  MAX_BRANCH_CANDIDATES,
   MAX_OPERATIONS,
   MAX_REPOSITORIES,
   MAX_TOTAL_SESSION_MEMBERSHIPS,
@@ -114,6 +119,8 @@ export { createLocalGitRunner } from './core-git-runner.ts'
 export { parseBranchLine } from './core-parse.ts'
 export type {
   AgentFact,
+  BranchesInput,
+  BranchesResult,
   CreateBranch,
   CreateInput,
   CreateResult,
@@ -696,6 +703,48 @@ export class GitWorktreeCore {
   /** Create-path facade: the body lives in core-ops-create.ts. */
   async create(untrusted: CreateInput): Promise<CreateResult> {
     return await this.createOps.create(untrusted)
+  }
+
+  /**
+   * On-demand local-branch candidates for the create-worktree dialog (design 08 §2.1/§4.1).
+   *
+   * Deliberately NOT a snapshot consumer: `snapshot().branches` rides the 30s discovery
+   * cache and the page's poll wave, so a branch created out of band (forge composer, agent
+   * `create_worktree`, a terminal) can stay invisible for one wave. The picker needs the
+   * value at the moment it opens, so this read reruns the source gates and Git directly:
+   * registered workspace -> repository shape -> authoritative main checkout (the exact
+   * `previewCreate` preflight) and then `git show-ref --heads`.
+   *
+   * It reads/writes NEITHER discovery cache and takes NO common-dir mutex: the answer is
+   * advisory (a concurrent mutation may be observed mid-flight), and `previewCreate`/
+   * `create` stay the authoritative validation inside the lock. Every read failure is
+   * LOUD (`git-command-failed`/`git-protocol-error`) - a silent empty list would be
+   * indistinguishable from "only main".
+   */
+  async branches(untrusted: BranchesInput): Promise<BranchesResult> {
+    const input = parseBranchesInput(untrusted)
+    const state = await this.readSource()
+    const workspace = this.workspace(state, input.sourceWorkspaceId)
+    const canonicalSource = await this.assertSourceShape(workspace.path)
+    const topology = await this.topology(workspace.path)
+    await this.assertCreatableSource(canonicalSource, topology)
+    const branches = await this.readBranchNames(topology.mainPath)
+    const checkedOut = new Set<string>()
+    for (const worktree of topology.worktrees) {
+      if (worktree.branch !== null) checkedOut.add(worktree.branch)
+    }
+    const boundedBranches = branches.slice(0, MAX_BRANCH_CANDIDATES)
+    const checkedOutBranches = [...checkedOut].sort()
+    const boundedCheckedOut = checkedOutBranches.slice(0, MAX_BRANCH_CANDIDATES)
+    return {
+      sourceWorkspaceId: input.sourceWorkspaceId,
+      repoId: opaqueId('repo', topology.commonDir),
+      branches: boundedBranches,
+      checkedOutBranches: boundedCheckedOut,
+      // BOTH arrays are part of the bounded wire payload (the advisory set is bounded by the
+      // repository's worktree count in practice, and shares the same hard cap).
+      truncated: branches.length > boundedBranches.length || checkedOutBranches.length > boundedCheckedOut.length,
+    }
   }
 
   /**
@@ -2201,6 +2250,30 @@ export class GitWorktreeCore {
     }
     if (withZ.exitCode !== 0) this.gitExitError(withZ, 'worktree')
     return parseWorktreePorcelain(withZ.stdout, '\0')
+  }
+
+  /**
+   * Strict local-branch read for the on-demand picker query (design 08 §2.1): unlike
+   * `listBranches` (the snapshot's best-effort read, which degrades to `[]`), every failure
+   * here is explicit. `show-ref --heads` answers an unborn repository with exit 1 and empty
+   * output (some Git versions exit 0 with no refs): an empty list is then the FACT, not a
+   * failure; any other non-zero exit or a malformed line is surfaced loudly.
+   */
+  private async readBranchNames(cwd: string): Promise<string[]> {
+    const result = await this.gitCommand(cwd, ['show-ref', '--heads'], false, READ_TIMEOUT_MS)
+    if (result.exitCode === 0 && result.stdout === '') return []
+    if (result.exitCode === 1 && result.stdout === '') return []
+    if (result.exitCode !== 0) this.gitExitError(result, 'show-ref')
+    const branches: string[] = []
+    for (const line of result.stdout.split('\n')) {
+      if (line === '') continue
+      const match = /^[0-9a-fA-F]{40,64}\s+refs\/heads\/(.+)$/u.exec(line)
+      if (match === null || match[1] === '') {
+        fail('git-protocol-error', 'git show-ref returned an unexpected local-branch line')
+      }
+      branches.push(match[1]!)
+    }
+    return branches
   }
 
   /** Local branch names for the existing-branch picker; any failure yields an empty list and

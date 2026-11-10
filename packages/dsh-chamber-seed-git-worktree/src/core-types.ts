@@ -129,6 +129,25 @@ export interface PreviewCreateResult {
   readonly baseHead: string
 }
 
+/** On-demand local-branch candidates for the create dialog (design 08 §2.1/§4.1). */
+export interface BranchesInput {
+  readonly sourceWorkspaceId: string
+}
+
+export interface BranchesResult {
+  /** Echo of the request capability anchor; the client asserts it (request correlation). */
+  readonly sourceWorkspaceId: string
+  /** Host-minted opaque repository identity the candidates belong to. */
+  readonly repoId: string
+  /** Local branch names (`git show-ref --heads`), capped at MAX_BRANCH_CANDIDATES. */
+  readonly branches: readonly string[]
+  /** Branches currently checked out by SOME worktree of this repository. Advisory: the
+   *  authoritative refusal stays `previewCreate`'s `branch-checked-out`. */
+  readonly checkedOutBranches: readonly string[]
+  /** True when `branches` or `checkedOutBranches` was capped at MAX_BRANCH_CANDIDATES. */
+  readonly truncated: boolean
+}
+
 export interface CreateInput {
   readonly previewToken: string
   readonly operationId: string

@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  decodeCreateValue, decodeEnterValue, decodeRemoveValue, GitWorktreeRpcError, gitWorktreeApi,
-  isAgentNotReady, isAmbiguousGitRpcFailure, isDeterministicGitRejection,
+  decodeBranchesValue, decodeCreateValue, decodeEnterValue, decodeRemoveValue, GitWorktreeRpcError, gitWorktreeApi,
+  isAgentNotReady, isAmbiguousGitRpcFailure, isDeterministicGitRejection, isGitHostNotLoaded, isOldHostFallback,
 } from '../../src/shared/git-api.ts'
 import type { PreviewCreateResult } from '../../src/shared/types.ts'
 import { NOT_DISPATCHED_CODE } from '../../src/shared/not-dispatched.ts'
@@ -292,4 +292,79 @@ test('the git transport is the shared carrier: no self-made fetch envelope remai
   assert.match(code, /getInstanceClient\(sourceId\)\.callUnary\(/, 'the shared carrier is the only transport')
   assert.match(code, /timeoutMs: RPC_TIMEOUT_MS/, 'the 60s budget must be handed to the carrier')
   assert.match(code, /notFoundAsDomainMissing: true/, 'the 404 domain discrimination must be requested')
+})
+
+test('branch candidates ride the one named capability anchor and decode with correlation', async () => {
+  const bodies: any[] = []
+  await withFetch((async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body))
+    bodies.push(body)
+    return carrierEnvelope(String(init?.body), {
+      ok: true,
+      value: {
+        ok: true,
+        value: {
+          sourceWorkspaceId: 'ws-1', repoId: REPO_ID,
+          branches: ['main', 'feature'], checkedOutBranches: ['main'], truncated: false,
+        },
+      },
+    })
+  }) as typeof fetch, async () => {
+    const result = await gitWorktreeApi.listBranches('local', { sourceWorkspaceId: 'ws-1', expectedRepoId: REPO_ID })
+    assert.deepEqual(result.branches, ['main', 'feature'])
+    assert.deepEqual(result.checkedOutBranches, ['main'])
+    assert.equal(result.truncated, false)
+  })
+  assert.equal(bodies[0].method, 'gitWorktree/branches')
+  assert.deepEqual(bodies[0].payload, { args: { input: { sourceWorkspaceId: 'ws-1' } } })
+})
+
+test('branch-candidate decoding fails closed on a wrong echo, repository or shape', () => {
+  const raw = {
+    sourceWorkspaceId: 'ws-1', repoId: REPO_ID,
+    branches: ['main'], checkedOutBranches: [], truncated: false,
+  }
+  assert.deepEqual(decodeBranchesValue(raw, { sourceWorkspaceId: 'ws-1' }).branches, ['main'])
+  const invalid = (error: unknown): boolean => error instanceof GitWorktreeRpcError
+    && error.code === 'invalid-domain-value'
+  assert.throws(() => decodeBranchesValue({ ...raw, sourceWorkspaceId: 'ws-2' }, { sourceWorkspaceId: 'ws-1' }), invalid)
+  assert.throws(() => decodeBranchesValue(raw, { sourceWorkspaceId: 'ws-1' }, 'repo_' + 'b'.repeat(64)), invalid)
+  assert.throws(() => decodeBranchesValue({ ...raw, truncated: 'no' }, { sourceWorkspaceId: 'ws-1' }), invalid)
+  assert.throws(() => decodeBranchesValue({ ...raw, branches: ['main', 'main'] }, { sourceWorkspaceId: 'ws-1' }), invalid)
+})
+
+test('git-host-not-loaded is the old-host signal the dialog degrades on', () => {
+  assert.equal(isGitHostNotLoaded(new GitWorktreeRpcError('git-host-not-loaded', 'not served')), true)
+  assert.equal(isGitHostNotLoaded(new GitWorktreeRpcError('rpc-failed', 'x')), false)
+  assert.equal(isGitHostNotLoaded(new Error('plain')), false)
+})
+
+test('the old-host inference requires a mounted domain (four quadrants)', () => {
+  const missing = new GitWorktreeRpcError('git-host-not-loaded', 'not served')
+  assert.equal(isOldHostFallback(missing, true), true, 'method-missing on a snapshot-proven domain = old host')
+  assert.equal(isOldHostFallback(missing, false), false, 'a 404 without a snapshot stays a real domain-missing failure')
+  assert.equal(isOldHostFallback(new GitWorktreeRpcError('git-command-failed', 'x'), true), false)
+  assert.equal(isOldHostFallback(new Error('plain'), true), false)
+})
+
+test('an old host answers the on-demand read with the 404 the dialog degrades on', async () => {
+  // Upstream rpc-host answers an unknown method on a mounted domain with a PLAIN 404; the
+  // carrier's domain-missing class is exactly what the dialog's old-host inference consumes.
+  await withFetch((async () => new Response('not found', { status: 404 })) as typeof fetch, async () => {
+    await assert.rejects(
+      gitWorktreeApi.listBranches('local', { sourceWorkspaceId: 'ws-1' }),
+      (error: unknown) => isGitHostNotLoaded(error),
+    )
+  })
+})
+
+test('branch-candidate decoding rejects control characters in a ref name', () => {
+  const raw = {
+    sourceWorkspaceId: 'ws-1', repoId: REPO_ID,
+    branches: ['bad\nname'], checkedOutBranches: [], truncated: false,
+  }
+  assert.throws(
+    () => decodeBranchesValue(raw, { sourceWorkspaceId: 'ws-1' }),
+    (error: unknown) => error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-value',
+  )
 })

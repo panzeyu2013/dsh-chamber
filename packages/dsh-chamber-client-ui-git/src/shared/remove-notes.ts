@@ -44,6 +44,10 @@ export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | 
     case 'outside-writable-root': return 'outsideWritableRoot'
     case 'ignore-unavailable': return 'ignoreUnavailable'
     case 'agent-not-ready': return 'agentNotReady'
+    // Picker/self-heal refusals (previewCreate): a localized, actionable answer.
+    case 'branch-not-found': return 'branchNotFound'
+    case 'branch-checked-out': return 'branchCheckedOutBlocked'
+    case 'branch-exists': return 'branchExists'
     // A fresh host re-check that found the tree dirty: the host's own refusal.
     case 'worktree-dirty': return 'dirtyDiscardWarning'
     // Submodule checkouts make Git refuse a plain remove; the retry needs the

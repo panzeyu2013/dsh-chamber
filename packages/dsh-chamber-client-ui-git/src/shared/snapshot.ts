@@ -188,8 +188,9 @@ export function normalizeGitSnapshot(value: unknown): GitWorktreeSnapshot {
         worktrees.push(worktree)
       }
     }
-    // branches is OPTIONAL: an older host omits it and the picker degrades to empty
-    // rather than rejecting the snapshot (fail-closed applies to shapes, not version skew).
+    // branches is OPTIONAL: an older host may omit it; the client keeps it only as the create
+    // dialog's picker FALLBACK (the on-demand `gitWorktree/branches` read is the primary
+    // source). A missing/empty value is a fallback fact, never a read failure.
     const branches = Array.isArray(rawRepo.branches) && rawRepo.branches.every(isNonEmptyString)
       ? rawRepo.branches
       : []

@@ -46,6 +46,12 @@ test('snapshot keeps valid siblings beside malformed rows and preserves opaque i
   assert.deepEqual(snapshot.errors.map(error => error.code), ['status-failed', 'invalid-worktree', 'duplicate-worktree-id', 'invalid-repo'])
 })
 
+test('a malformed snapshot branches value degrades to the empty fallback without rejecting the repo', () => {
+  const snapshot = normalize([repo([worktree()], { branches: 'not-an-array' })])
+  assert.equal(snapshot.repos.length, 1, 'the repo row survives: the fallback list is optional')
+  assert.deepEqual(snapshot.repos[0].branches, [], 'the picker fallback degrades to empty, never a hard failure')
+})
+
 test('snapshot projects the optional blockingRunningSessionIds (absent on an old host, malformed fails the row)', () => {
   const withField = normalize([repo([worktree({ runningSessionIds: ['s1', 's2'], blockingRunningSessionIds: ['s2'] })])])
   assert.deepEqual(withField.repos[0]!.worktrees[0]!.runningSessionIds, ['s1', 's2'])
@@ -107,11 +113,14 @@ test('source-branch choices keep the main checkout branch selectable and never e
 
 test('the create dialog never filters the main checkout branch out of the source picker', () => {
   // Source-level pin: a pure-helper test alone cannot catch filtering being
-  // re-added at the call site. Positive pin: the picker must consume the
-  // unfiltered helper result directly.
+  // re-added at the call site. Positive pin: the picker consumes the helper
+  // result; the ONLY per-candidate change is the mode-scoped checked-out
+  // advisory (by construction 'false' in the NEW-branch startRef path).
   const dialog = readFileSync(new URL('../../src/client/CreateWorktreeDialog.tsx', import.meta.url), 'utf8')
-  assert.match(dialog, /options=\{existingBranchChoices\}/,
-    'the source-branch picker must offer the helper result unfiltered (main checkout branch included)')
+  assert.match(dialog, /items=\{branchMenuItems\}/,
+    'the source-branch picker must offer the helper result (main checkout branch included)')
+  assert.match(dialog, /branchOptionCheckedOut\(name, \w+, mode\)/,
+    'the checked-out advisory must stay mode-scoped so the startRef picker keeps the main branch')
   assert.doesNotMatch(dialog, /existingBranchChoices\.filter/,
     'the source-branch picker must never filter the main checkout branch out')
 })
