@@ -1,7 +1,7 @@
 // BridgeManifest.swift — GENERATED, do not edit.
 //
 // 通道 manifest（design 25 §4.4.3）：Swift 侧 IPC 白名单单源
-// （67 通道 = 58 invoke + 9 push）。
+// （77 通道 = 64 invoke + 13 push）。
 // 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs
 // 落位：macos/Sources/DSHChamber/Generated/ —— target 内随编译接线
 // （bridge-manifest.test.ts 守重生成 == 提交物）。
@@ -11,7 +11,7 @@
 
 /// IPC 通道 manifest —— 生成物，勿手改；增删通道请先改 IPC_CHANNELS 并重新生成。
 enum BridgeManifest {
-    /// invoke 通道：renderer invoke → main 的 handle 注册面（ipcMain|deps.ipc），共 58 条。
+    /// invoke 通道：renderer invoke → main 的 handle 注册面（ipcMain|deps.ipc），共 64 条。
     static let invokeChannels: Set<String> = [
         "dsh-chamber:info",
         "dsh-chamber:settings-get",
@@ -35,6 +35,12 @@ enum BridgeManifest {
         "dsh-chamber:forward-release",
         "dsh-chamber:forward-list",
         "dsh-chamber:forward-open-in-browser",
+        "dsh-chamber:browser-acquire",
+        "dsh-chamber:browser-release",
+        "dsh-chamber:browser-navigate",
+        "dsh-chamber:browser-command",
+        "dsh-chamber:browser-frame",
+        "dsh-chamber:browser-keymap",
         "desktop_ssh_instances_get",
         "desktop_ssh_instances_health",
         "desktop_ssh_save_connection",
@@ -73,12 +79,16 @@ enum BridgeManifest {
         "dsh-chamber:runtime-restore-pre-rollback",
     ]
 
-    /// push 通道：main → renderer（webContents.send|rendererPush 推送面），共 9 条。
+    /// push 通道：main → renderer（webContents.send|rendererPush 推送面），共 13 条。
     static let pushChannels: Set<String> = [
         "dsh-chamber:settings-changed",
         "dsh-chamber:notification-open",
         "dsh-chamber:update-state-changed",
         "dsh-chamber:deep-link-intent",
+        "dsh-chamber:browser-state",
+        "dsh-chamber:browser-open-requested",
+        "dsh-chamber:browser-input",
+        "dsh-chamber:browser-forward-needed",
         "dsh-chamber:system-resume",
         "dsh-chamber:renderer-stall-evidence",
         "desktop_ssh_status_changed",

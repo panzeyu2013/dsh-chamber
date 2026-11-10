@@ -106,13 +106,24 @@ function manifestWithProbe() {
   return copy
 }
 
-test('the committed whitelist is the canonical empty table (version 1, entries [])', () => {
+test('the committed whitelist carries the Swift-only browser bridge surface (10 entries)', () => {
   const entries = loadSwiftOnlyAdditions()
-  assert.deepEqual(entries, [])
   const raw = JSON.parse(readFileSync(COMMITTED_SWIFT_ONLY, 'utf8'))
   assert.equal(raw.version, 1)
   assert.equal(typeof raw.policy, 'string')
   assert.ok(raw.policy.length > 0)
+  assert.equal(entries.length, 10, 'design 28 v3 §3: 6 invoke + 4 push')
+  assert.equal(entries.filter((entry) => entry.direction === 'invoke').length, 6)
+  assert.equal(entries.filter((entry) => entry.direction === 'push').length, 4)
+  for (const entry of entries) assert.equal(entry.namespace, 'browser', entry.key)
+  const channels = new Set(entries.map((entry) => entry.channel))
+  for (const channel of [
+    'dsh-chamber:browser-acquire', 'dsh-chamber:browser-release',
+    'dsh-chamber:browser-navigate', 'dsh-chamber:browser-command',
+    'dsh-chamber:browser-frame', 'dsh-chamber:browser-keymap',
+    'dsh-chamber:browser-state', 'dsh-chamber:browser-open-requested',
+    'dsh-chamber:browser-input', 'dsh-chamber:browser-forward-needed',
+  ]) assert.ok(channels.has(channel), channel)
 })
 
 test('loadSwiftOnlyAdditions fails loudly on a missing file, bad JSON or a wrong shape', () => {
@@ -263,33 +274,38 @@ test('parseDshDesktopCarrierDomains accepts double-quoted rows but rejects a par
 // ③ verify-shim-payload-shape：白名单豁免（空表逐字不变 / 正例放行 / 负例仍红）
 // ---------------------------------------------------------------------------
 
-test('the shape gate keeps the empty table byte-identical (65 pairs, same counts)', () => {
-  const verdict = comparePayloadShapes({ preloadText: REAL_PRELOAD, shimText: REAL_SHIM, manifest: REAL_MANIFEST })
+test('the shape gate agrees on the committed browser bridge surface (75 members, 12 namespaces)', () => {
+  const swiftOnly = loadSwiftOnlyAdditions()
+  assert.equal(swiftOnly.length, 10)
+  const verdict = comparePayloadShapes({
+    preloadText: REAL_PRELOAD, shimText: REAL_SHIM, manifest: REAL_MANIFEST, swiftOnly,
+  })
   assert.deepEqual(verdict.mismatches, [])
   assert.deepEqual(verdict.missingFromManifest, [])
   assert.deepEqual(verdict.unexposedManifestChannels, [])
-  assert.equal(verdict.checked, 65, '空表：与加豁免前相同的 65 个双侧成员')
-  assert.equal(verdict.namespaces, 11)
+  assert.equal(verdict.checked, 75, '65 个 preload 双侧成员 + 10 个 Swift-only browser 成员')
+  assert.equal(verdict.namespaces, 12)
 })
 
 test('the shape gate exempts a whitelisted shim-only member but still fails without it', () => {
   const manifest = manifestWithProbe()
   const shim = shimWithProbe()
   const exempted = comparePayloadShapes({
-    preloadText: REAL_PRELOAD, shimText: shim, manifest, swiftOnly: [SWIFT_ONLY_PROBE],
+    preloadText: REAL_PRELOAD, shimText: shim, manifest,
+    swiftOnly: [...loadSwiftOnlyAdditions(), SWIFT_ONLY_PROBE],
   })
   assert.deepEqual(exempted.mismatches, [])
   assert.deepEqual(exempted.unexposedManifestChannels, [], '白名单通道计入已暴露集')
-  assert.equal(exempted.checked, 65, '白名单成员不进双侧计数')
+  assert.equal(exempted.checked, 75, '白名单成员不计入 preload 双侧计数（65 + 10 browser）')
   // 同一源不给白名单 = 旧的严格行为，必须红（豁免不是普遍放宽）。
   const strict = comparePayloadShapes({ preloadText: REAL_PRELOAD, shimText: shim, manifest })
-  assert.ok(strict.mismatches.some((m) => m.includes('method set differs')), JSON.stringify(strict.mismatches))
+  assert.ok(strict.unexposedManifestChannels.length >= 6, 'stricter arm sees the unexempted browser channels')
   // 全新 Swift-only 命名空间同样可放行（shim 真实现 + manifest 已收录）。
   const newNamespace = comparePayloadShapes({
     preloadText: REAL_PRELOAD,
     shimText: shimWithNewNamespace(),
     manifest,
-    swiftOnly: [{ ...SWIFT_ONLY_PROBE, namespace: 'swiftOnlyNs', method: 'probe' }],
+    swiftOnly: [...loadSwiftOnlyAdditions(), { ...SWIFT_ONLY_PROBE, namespace: 'swiftOnlyNs', method: 'probe' }],
   })
   assert.deepEqual(newNamespace.mismatches, [])
   assert.deepEqual(newNamespace.unexposedManifestChannels, [])
@@ -311,13 +327,14 @@ test('the shape gate fails closed when the whitelist claim is not true on the sh
 
 test('the runtime arm skips whitelisted shim-only members without shifting the pins', async () => {
   const runtime = await compareRuntimePayloads({
-    preloadText: REAL_PRELOAD, shimText: shimWithProbe(), swiftOnly: [SWIFT_ONLY_PROBE],
+    preloadText: REAL_PRELOAD, shimText: shimWithProbe(),
+    swiftOnly: [...loadSwiftOnlyAdditions(), SWIFT_ONLY_PROBE],
   })
   assert.deepEqual(runtime.mismatches, [])
-  assert.equal(runtime.checked, 65)
-  assert.equal(runtime.invoked, 56)
-  assert.equal(runtime.subscribed, 9)
-  assert.equal(runtime.namespaces, 11)
+  assert.equal(runtime.checked, 75)
+  assert.equal(runtime.invoked, 62)
+  assert.equal(runtime.subscribed, 13)
+  assert.equal(runtime.namespaces, 12)
   assert.equal(runtime.perNamespace.badge, 1, '白名单成员不计入命名空间行数钉子')
   // 不给白名单 = 旧的严格行为，必须红。
   const strict = await compareRuntimePayloads({ preloadText: REAL_PRELOAD, shimText: shimWithProbe() })

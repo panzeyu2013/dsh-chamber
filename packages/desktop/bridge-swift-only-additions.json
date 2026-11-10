@@ -1,5 +1,96 @@
 {
   "version": 1,
   "policy": "只登记只存在于 Swift shim、无需 Electron preload/主进程注册的 A 桥通道；新增必须过评审（schema 与规则见 docs/progress/electron-frozen.md §5.2）",
-  "entries": []
+  "entries": [
+    {
+      "channel": "dsh-chamber:browser-acquire",
+      "key": "BROWSER_ACQUIRE",
+      "direction": "invoke",
+      "namespace": "browser",
+      "method": "acquire",
+      "reason": "Swift guest carrier lease/acquisition — Electron flavor is frozen and never mounts a child webview.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-release",
+      "key": "BROWSER_RELEASE",
+      "direction": "invoke",
+      "namespace": "browser",
+      "method": "release",
+      "reason": "Swift-only guest release; Electron has no guest registry to release.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-navigate",
+      "key": "BROWSER_NAVIGATE",
+      "direction": "invoke",
+      "namespace": "browser",
+      "method": "navigate",
+      "reason": "main-constructed guest URL (direct/forward) — Electron frozen, no child webview navigation surface.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-command",
+      "key": "BROWSER_COMMAND",
+      "direction": "invoke",
+      "namespace": "browser",
+      "method": "command",
+      "reason": "guest history/reload commands are Swift WKWebView-only.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-frame",
+      "key": "BROWSER_FRAME",
+      "direction": "invoke",
+      "namespace": "browser",
+      "method": "frame",
+      "reason": "native layer geometry/visibility protocol has no Electron counterpart (frozen).",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-keymap",
+      "key": "BROWSER_KEYMAP",
+      "direction": "invoke",
+      "namespace": "browser",
+      "method": "keymap",
+      "reason": "renderer shortcut table for native guest key forwarding; Swift-only.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-state",
+      "key": "BROWSER_STATE",
+      "direction": "push",
+      "namespace": "browser",
+      "method": "onState",
+      "reason": "guest navigation/state projection pushed from Swift main; Electron frozen.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-open-requested",
+      "key": "BROWSER_OPEN_REQUESTED",
+      "direction": "push",
+      "namespace": "browser",
+      "method": "onOpenRequested",
+      "reason": "guest target=_blank request routed to a panel tab; Swift-only carrier.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-input",
+      "key": "BROWSER_INPUT",
+      "direction": "push",
+      "namespace": "browser",
+      "method": "onInput",
+      "reason": "native key events forwarded into the renderer shortcut pipeline; Swift-only.",
+      "design": "design 28 v3 §3"
+    },
+    {
+      "channel": "dsh-chamber:browser-forward-needed",
+      "key": "BROWSER_FORWARD_NEEDED",
+      "direction": "push",
+      "namespace": "browser",
+      "method": "onForwardNeeded",
+      "reason": "guest main-frame loopback navigation asks the renderer for a forward lease; Swift-only.",
+      "design": "design 28 v3 §3"
+    }
+  ]
 }

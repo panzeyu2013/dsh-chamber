@@ -89,6 +89,30 @@
       "key": "FORWARD_OPEN_IN_BROWSER"
     },
     {
+      "channel": "dsh-chamber:browser-acquire",
+      "key": "BROWSER_ACQUIRE"
+    },
+    {
+      "channel": "dsh-chamber:browser-release",
+      "key": "BROWSER_RELEASE"
+    },
+    {
+      "channel": "dsh-chamber:browser-navigate",
+      "key": "BROWSER_NAVIGATE"
+    },
+    {
+      "channel": "dsh-chamber:browser-command",
+      "key": "BROWSER_COMMAND"
+    },
+    {
+      "channel": "dsh-chamber:browser-frame",
+      "key": "BROWSER_FRAME"
+    },
+    {
+      "channel": "dsh-chamber:browser-keymap",
+      "key": "BROWSER_KEYMAP"
+    },
+    {
       "channel": "desktop_ssh_instances_get",
       "key": "SSH_INSTANCES_GET"
     },
@@ -251,6 +275,22 @@
       "key": "DEEP_LINK_INTENT"
     },
     {
+      "channel": "dsh-chamber:browser-state",
+      "key": "BROWSER_STATE"
+    },
+    {
+      "channel": "dsh-chamber:browser-open-requested",
+      "key": "BROWSER_OPEN_REQUESTED"
+    },
+    {
+      "channel": "dsh-chamber:browser-input",
+      "key": "BROWSER_INPUT"
+    },
+    {
+      "channel": "dsh-chamber:browser-forward-needed",
+      "key": "BROWSER_FORWARD_NEEDED"
+    },
+    {
       "channel": "dsh-chamber:system-resume",
       "key": "SYSTEM_RESUME"
     },
@@ -272,8 +312,8 @@
     }
   ],
   "counts": {
-    "invoke": 58,
-    "push": 9,
-    "total": 67
+    "invoke": 64,
+    "push": 13,
+    "total": 77
   }
 }

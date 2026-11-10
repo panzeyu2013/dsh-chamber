@@ -108,6 +108,22 @@
       "coveredBy": "ci.yml test-macos: Bridge manifest + shim surface + payload shape lockstep"
     },
     {
+      "id": "payload.bridge-manifest",
+      "title": "Bridge manifest / Swift manifest / shim stub freshness (--check)",
+      "command": "node packages/desktop/scripts/emit-bridge-manifest.mjs --check",
+      "modes": [
+        "static"
+      ],
+      "tier": "policy",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": false
+      },
+      "reason": "read-only generated-artifact freshness check (no platform, no install, never writes); it runs before the suites so drift fails check:static/check:full. CI does not invoke the command directly: the hand-written test-macos composite runs the equivalent byte lockstep suites (bridge-manifest.test.ts re-generates JSON/Swift; bridge-shim.test.ts re-generates the stub), and release validation has no macOS job.",
+      "coveredBy": "ci.yml test-macos: Bridge manifest + shim surface + payload shape lockstep"
+    },
+    {
       "id": "docs.md-links",
       "title": "Relative markdown links resolve",
       "command": "verify:md-links",

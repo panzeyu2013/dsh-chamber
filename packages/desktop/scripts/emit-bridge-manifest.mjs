@@ -51,14 +51,17 @@
  *
  * 用法（工作目录 packages/desktop）：
  *   node scripts/emit-bridge-manifest.mjs                       # 写三个提交物默认位
+ *   node scripts/emit-bridge-manifest.mjs --check               # 只读校验三件提交物（一致 exit 0；漂移打印 diff 摘要并 exit 1）
  *   node scripts/emit-bridge-manifest.mjs <json> <swift>        # 写指定路径（不入 stub）
  *   node scripts/emit-bridge-manifest.mjs <json> <swift> <stub> # 三产物到指定路径（测试用）
+ *   node scripts/emit-bridge-manifest.mjs --check <json> <swift> <stub>  # 只读校验指定路径（测试/诊断）
  *
  * 稳定性承诺：产物不含时间戳/绝对路径等易漂移内容；同输入两次运行字节一致。
  * 错误纪律：解析/校验失败一律 loud（stderr 中文原因 + 非 0 退出），绝不带病
- * 产出部分 manifest。生成物 == 提交物由 bridge-manifest.test.ts（JSON/Swift，
- * 重生成逐字节比对 + 无死键）与 bridge-shim.test.ts（stub，重生成 + 通道映射
- * + vm 执行）守住。
+ * 产出部分 manifest；未知 flag 同样 loud（exit 2），绝不因拼错参数退化成写模式。
+ * 生成物 == 提交物由 bridge-manifest.test.ts（JSON/Swift，重生成逐字节比对 +
+ * --check 双臂 + 无死键）与 bridge-shim.test.ts（stub，重生成 + 通道映射 +
+ * vm 执行）守住；--check 另由静态门 payload.bridge-manifest 调用。
  *
  * 导出（供 JS 侧复用；.mjs ↔ .mjs 直接 import，无类型声明问题）：
  *   MAIN_SIDE_FILES / COMMITTED_SWIFT_ONLY / COMMITTED_SHORTCUTS_BRIDGE /
@@ -67,7 +70,7 @@
  *   assertSwiftOnlyDshDesktopDisjoint(additions, reserved) / parseIpcChannels(source) /
  *   computeManifest(sourceIpc?, sourceFiles?, additions?) /
  *   renderJsonManifest(manifest) / renderSwiftManifest(manifest) /
- *   renderShimStub(manifest)
+ *   renderShimStub(manifest) / checkCommittedOutputs(options?) / summarizeTextDiff(generated, disk)
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -575,30 +578,172 @@ export function renderShimStub(manifest) {
   return lines.join('\n')
 }
 
+/** --check 摘要每件的差异行展示上限（只影响日志，不影响判定）。 */
+const CHECK_DIFF_LIMIT = 3
+
+/** 日志里单行内容的最大展示宽度。 */
+const CHECK_LINE_WIDTH = 160
+
+function clipLine(value) {
+  if (value === undefined) return '<文件已结束>'
+  return value.length <= CHECK_LINE_WIDTH ? value : value.slice(0, CHECK_LINE_WIDTH) + '…'
+}
+
+/**
+ * 两段文本的逐行 diff 摘要（不引依赖、只读）：定位首个差异行，最多列出
+ * limit 处「生成 vs 磁盘」行。行内容按 1-based 计；缺失一侧显示 <文件已结束>。
+ * @param {string} generated - 本次生成文本。
+ * @param {string} disk - 磁盘当前文本。
+ * @param {number} [limit] - 最多列出的差异行数。
+ * @returns {{ identical: boolean, firstLine: number, generatedLines: number, diskLines: number, rows: {line: number, generated: string | undefined, disk: string | undefined}[] }}
+ */
+export function summarizeTextDiff(generated, disk, limit = CHECK_DIFF_LIMIT) {
+  const generatedLines = generated.split('\n')
+  const diskLines = disk.split('\n')
+  const total = Math.max(generatedLines.length, diskLines.length)
+  const rows = []
+  let firstLine = 0
+  for (let index = 0; index < total; index += 1) {
+    const left = generatedLines[index]
+    const right = diskLines[index]
+    if (left === right) continue
+    if (firstLine === 0) firstLine = index + 1
+    rows.push({ line: index + 1, generated: left, disk: right })
+    if (rows.length >= limit) break
+  }
+  return {
+    identical: rows.length === 0,
+    firstLine,
+    generatedLines: generatedLines.length,
+    diskLines: diskLines.length,
+    rows,
+  }
+}
+
+/**
+ * 只读校验：把本次生成的三件文本与磁盘文件逐字节比较；不写任何文件。
+ * 默认比提交物三件；options 可覆盖路径（bridge-manifest.test.ts 用临时副本
+ * 覆盖双臂，绝不改造仓库内生成物）。文件缺失按不一致处理（missing）。
+ * @param {{ jsonOut?: string, swiftOut?: string, stubOut?: string, manifest?: object }} [options]
+ * @returns {{ ok: boolean, manifest: object, results: { label: string, path: string, ok: boolean, missing?: true, diff?: ReturnType<typeof summarizeTextDiff> }[] }}
+ */
+export function checkCommittedOutputs(options = {}) {
+  const manifest = options.manifest ?? computeManifest()
+  const outputs = [
+    { label: 'json', path: options.jsonOut ?? COMMITTED_MANIFEST, generated: renderJsonManifest(manifest) },
+    { label: 'swift', path: options.swiftOut ?? COMMITTED_SWIFT, generated: renderSwiftManifest(manifest) },
+    { label: 'stub', path: options.stubOut ?? COMMITTED_SHIM_STUB, generated: renderShimStub(manifest) },
+  ]
+  const results = outputs.map(({ label, path, generated }) => {
+    let disk
+    try {
+      disk = readFileSync(path, 'utf8')
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && error.code === 'ENOENT') {
+        return { label, path, ok: false, missing: true }
+      }
+      throw new Error(`读取生成物失败：${path}（${error instanceof Error ? error.message : String(error)}）`)
+    }
+    if (disk === generated) return { label, path, ok: true }
+    return { label, path, ok: false, diff: summarizeTextDiff(generated, disk) }
+  })
+  return { ok: results.every(result => result.ok), manifest, results }
+}
+
+const USAGE = '[emit-bridge-manifest] 用法：node scripts/emit-bridge-manifest.mjs'
+  + ' [--check [jsonPath swiftPath stubPath]]'
+  + ' | [jsonOut swiftOut] | [jsonOut swiftOut stubOut]'
+  + '（不带参数写提交物默认位；--check 只读校验）'
+
+/**
+ * CLI argv 解析（先于任何生成/写入）：未知 flag 一律 loud —— 历史故障是
+ * `--check` 被 filter 静默丢掉后退化成写模式，直接重写三件生成物。
+ * @param {string[]} argv
+ * @returns {{ check: boolean, positional: string[] } | { error: string }}
+ */
+function parseCli(argv) {
+  let check = false
+  const positional = []
+  for (const arg of argv) {
+    if (arg === '--check') { check = true; continue }
+    if (arg.startsWith('-')) return { error: `未知参数：${arg}（只支持 --check；不带 flag 为写模式）` }
+    positional.push(arg)
+  }
+  if (check) {
+    if (positional.length !== 0 && positional.length !== 3) {
+      return { error: '--check 需要 0 个或 3 个路径参数（json swift stub）' }
+    }
+    return { check: true, positional }
+  }
+  if (positional.length !== 0 && positional.length !== 2 && positional.length !== 3) {
+    return { error: '写模式需要 0、2 或 3 个路径参数（json [swift [stub]]）' }
+  }
+  return { check: false, positional }
+}
+
+/** --check 输出：逐件 ok/漂移 + 首个差异行摘要；返回进程退出码。 */
+function runCheck(positional) {
+  const options = positional.length === 3
+    ? {
+        jsonOut: resolve(positional[0]),
+        swiftOut: resolve(positional[1]),
+        stubOut: resolve(positional[2]),
+      }
+    : {}
+  const verdict = checkCommittedOutputs(options)
+  for (const result of verdict.results) {
+    if (result.ok) {
+      console.log(`  ✓ ${result.label}  ${result.path}`)
+      continue
+    }
+    if (result.missing === true) {
+      console.error(`  ✗ ${result.label}  ${result.path}（文件缺失）`)
+      continue
+    }
+    const diff = result.diff
+    console.error(`  ✗ ${result.label}  ${result.path}`)
+    console.error(`      首个差异行 ${diff.firstLine}（生成 ${diff.generatedLines} 行 / 磁盘 ${diff.diskLines} 行；最多列 ${CHECK_DIFF_LIMIT} 处）`)
+    for (const row of diff.rows) {
+      console.error(`      第 ${row.line} 行`)
+      console.error(`        - 生成: ${clipLine(row.generated)}`)
+      console.error(`        + 磁盘: ${clipLine(row.disk)}`)
+    }
+  }
+  if (verdict.ok) {
+    const { counts } = verdict.manifest
+    console.log(`[emit-bridge-manifest] --check ok：三件生成物与单源一致（${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push）`)
+    return 0
+  }
+  console.error('[emit-bridge-manifest] --check FAILED：生成物与单源漂移；运行 node scripts/emit-bridge-manifest.mjs 重新生成并提交三件')
+  return 1
+}
+
 /** CLI：默认写三个提交物；位置参数覆盖输出路径（2 个 = json+swift 旧式，
- *  3 个 = json+swift+stub——测试重生成到临时目录）。 */
+ *  3 个 = json+swift+stub——测试重生成到临时目录）；--check 只读校验。 */
 function main(argv) {
-  const positional = argv.filter(arg => !arg.startsWith('-'))
-  let jsonOut = COMMITTED_MANIFEST
-  let swiftOut = COMMITTED_SWIFT
-  let stubOut = COMMITTED_SHIM_STUB
-  if (positional.length === 3) {
-    jsonOut = resolve(positional[0])
-    swiftOut = resolve(positional[1])
-    stubOut = resolve(positional[2])
-  } else if (positional.length === 2) {
-    jsonOut = resolve(positional[0])
-    swiftOut = resolve(positional[1])
-    stubOut = null
-  } else if (positional.length !== 0) {
-    console.error(
-      '[emit-bridge-manifest] 用法：node scripts/emit-bridge-manifest.mjs'
-      + ' [jsonOut swiftOut] | [jsonOut swiftOut stubOut]'
-      + '（不带参数写提交物默认位）'
-    )
+  const parsed = parseCli(argv)
+  if ('error' in parsed) {
+    console.error(USAGE)
+    console.error(`[emit-bridge-manifest] ${parsed.error}`)
     process.exit(2)
   }
   try {
+    if (parsed.check) {
+      process.exit(runCheck(parsed.positional))
+    }
+    const positional = parsed.positional
+    let jsonOut = COMMITTED_MANIFEST
+    let swiftOut = COMMITTED_SWIFT
+    let stubOut = COMMITTED_SHIM_STUB
+    if (positional.length === 3) {
+      jsonOut = resolve(positional[0])
+      swiftOut = resolve(positional[1])
+      stubOut = resolve(positional[2])
+    } else if (positional.length === 2) {
+      jsonOut = resolve(positional[0])
+      swiftOut = resolve(positional[1])
+      stubOut = null
+    }
     const manifest = computeManifest()
     const jsonText = renderJsonManifest(manifest)
     const swiftText = renderSwiftManifest(manifest)

@@ -65,6 +65,22 @@ export const IPC_CHANNELS = {
   FORWARD_LIST: 'dsh-chamber:forward-list',
   FORWARD_OPEN_IN_BROWSER: 'dsh-chamber:forward-open-in-browser',
 
+  /** Remote-browser native guest carrier (design 28 v3 §3): Swift-only A-bridge
+   *  `browser` namespace (6 invoke + 4 push). No Electron preload/main
+   *  registration — the frozen flavor never grows it; whitelist policy =
+   *  docs/progress/electron-frozen.md §5.2, single source =
+   *  packages/desktop/bridge-manifest.json. */
+  BROWSER_ACQUIRE: 'dsh-chamber:browser-acquire',
+  BROWSER_RELEASE: 'dsh-chamber:browser-release',
+  BROWSER_NAVIGATE: 'dsh-chamber:browser-navigate',
+  BROWSER_COMMAND: 'dsh-chamber:browser-command',
+  BROWSER_FRAME: 'dsh-chamber:browser-frame',
+  BROWSER_KEYMAP: 'dsh-chamber:browser-keymap',
+  BROWSER_STATE: 'dsh-chamber:browser-state',
+  BROWSER_OPEN_REQUESTED: 'dsh-chamber:browser-open-requested',
+  BROWSER_INPUT: 'dsh-chamber:browser-input',
+  BROWSER_FORWARD_NEEDED: 'dsh-chamber:browser-forward-needed',
+
   SYSTEM_RESUME: 'dsh-chamber:system-resume',
 
   /** Renderer-stall evidence (frame-probe strikes / input-block RTT): main →

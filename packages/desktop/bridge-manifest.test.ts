@@ -19,8 +19,8 @@
  * 断言面（生成物 == 提交物绿 + 通道数守恒）：
  *   ① 重生成 JSON == 提交物 packages/desktop/bridge-manifest.json（文本级）；
  *   ② 重生成 Swift == 提交物 macos/Sources/DSHChamber/Generated/BridgeManifest.swift；
- *   ③ 通道数守恒：counts {invoke:58, push:9, total:67} 与两列表长度自洽；
- *   ④ 无死键：manifest 键集 == ipc-events.ts IPC_CHANNELS 表键集（67 全覆盖、
+ *   ③ 通道数守恒：counts {invoke:64, push:13, total:77} 与两列表长度自洽；
+ *   ④ 无死键：manifest 键集 == ipc-events.ts IPC_CHANNELS 表键集（77 全覆盖、
  *      键/通道无重复、invoke/push 无交集 —— 生成器内部同样校验并 loud
  *      失败，此处以测试侧复刻解析把该事实变成可见断言）；
  *   ⑤ 方向抽查：dsh-chamber:info / desktop_ssh_instances_get 属 invoke，
@@ -41,7 +41,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -51,6 +51,7 @@ const REPO_ROOT = join(DESKTOP, '..', '..')
 const GENERATOR = join(DESKTOP, 'scripts', 'emit-bridge-manifest.mjs')
 const COMMITTED_JSON_PATH = join(DESKTOP, 'bridge-manifest.json')
 const COMMITTED_SWIFT_PATH = join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'Generated', 'BridgeManifest.swift')
+const COMMITTED_STUB_PATH = join(REPO_ROOT, 'macos', 'Sources', 'DSHChamber', 'Resources', 'chamber-bridge.stub.js')
 
 /** manifest JSON 的结构形状（与生成器产出 schema 一致）。 */
 interface ManifestEntry {
@@ -126,20 +127,20 @@ test('② 重生成 Swift 与提交物 BridgeManifest.swift 逐字节一致', ()
   )
 })
 
-test('③ 通道数守恒：counts {invoke:58, push:9, total:67} 与两列表长度自洽', () => {
+test('③ 通道数守恒：counts {invoke:64, push:13, total:77} 与两列表长度自洽', () => {
   const { manifest } = regenerated()
   // 当前仓库事实（67 = 58 + 9，与 ipc-surface-mirror.test.ts 的集合断言
   // 同一批事实；58 = 56 个命名空间 invoke 成员 + info + native-theme-set）；
   // 通道增删时须与两提交物同步更新。
-  assert.deepEqual(manifest.counts, { invoke: 58, push: 9, total: 67 })
+  assert.deepEqual(manifest.counts, { invoke: 64, push: 13, total: 77 })
   assert.equal(manifest.invoke.length, manifest.counts.invoke)
   assert.equal(manifest.push.length, manifest.counts.push)
   assert.equal(manifest.invoke.length + manifest.push.length, manifest.counts.total)
 })
 
-test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（67 全覆盖、无重复、无交集）', () => {
+test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（77 全覆盖、无重复、无交集）', () => {
   const table = ipcChannelTable()
-  assert.equal(table.length, 67, 'IPC_CHANNELS 应恰为 67 键（当前事实）')
+  assert.equal(table.length, 77, 'IPC_CHANNELS 应恰为 77 键（当前事实）')
   const { manifest } = regenerated()
   const covered = [...manifest.invoke, ...manifest.push]
   assert.equal(covered.length, table.length, '两向条目总数必须 == 常量表键数（无死键/无幻影键）')
@@ -191,18 +192,78 @@ test('⑤ 方向抽查：invoke/push 归属与 main 侧注册事实一致（含 
     'desktop_ssh_instances_changed',
     'dsh-chamber:runtime-state-changed',
     'dsh-chamber:renderer-stall-evidence',
+    // Swift-only browser namespace pushes (design 28 v3 §3, whitelist §5.2).
+    'dsh-chamber:browser-state',
+    'dsh-chamber:browser-open-requested',
+    'dsh-chamber:browser-input',
+    'dsh-chamber:browser-forward-needed',
   ].sort()
   assert.deepEqual(
     manifest.push.map(entry => entry.channel).sort(),
     goldenPushChannels,
-    'push 通道集必须 == main 侧 9 个推送注册点的精确集',
+    'push 通道集必须 == main 侧 9 个推送注册点 + Swift-only browser 4 个推送的精确集',
   )
   for (const channel of goldenPushChannels) {
     assert.equal(directionOf(channel), 'push')
   }
 })
 
-test('⑥ 提交物双件语义一致：Swift 字面量集合与 JSON 通道集逐条对应', () => {
+test('⑥ --check 只读双臂：一致 exit 0；不一致 exit 1 且绝不改写文件', () => {
+  // 只读契约：两臂都只调用 --check，快照三件提交物的字节，最后证明全程零写入。
+  const before = [
+    readFileSync(COMMITTED_JSON_PATH),
+    readFileSync(COMMITTED_SWIFT_PATH),
+    readFileSync(COMMITTED_STUB_PATH),
+  ]
+  const runCheck = (args: string[]) => spawnSync(process.execPath, [GENERATOR, '--check', ...args], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  })
+
+  // 一致臂（仓库默认三件）：必须 exit 0，且输出点名三件与单源一致。
+  const consistent = runCheck([])
+  assert.equal(consistent.status, 0, `--check 一致臂应 exit 0（stderr：${consistent.stderr?.trim() ?? ''}）`)
+  assert.match(consistent.stdout ?? '', /--check ok/u)
+
+  // 未知 flag：历史故障是 --check 被静默忽略后退化成写模式；现在必须 loud（exit 2）。
+  const unknownFlag = runCheck(['--bogus'])
+  assert.equal(unknownFlag.status, 2, '未知 flag 必须 exit 2，绝不退化成写模式')
+  assert.match(unknownFlag.stderr ?? '', /未知参数/u)
+
+  // 不一致臂用临时副本构造（desktop runner 会并行跑文件：绝不改仓库内三件提交物）。
+  const outDir = mkdtempSync(join(tmpdir(), 'bridge-manifest-check-'))
+  try {
+    const jsonPath = join(outDir, 'bridge-manifest.json')
+    const swiftPath = join(outDir, 'BridgeManifest.swift')
+    const stubPath = join(outDir, 'chamber-bridge.stub.js')
+    copyFileSync(COMMITTED_JSON_PATH, jsonPath)
+    copyFileSync(COMMITTED_SWIFT_PATH, swiftPath)
+    copyFileSync(COMMITTED_STUB_PATH, stubPath)
+
+    const copiedConsistent = runCheck([jsonPath, swiftPath, stubPath])
+    assert.equal(copiedConsistent.status, 0, '未改动的临时副本必须判一致')
+
+    // 追加一个空行 = 逐字节漂移；--check 必须 exit 1 并打印差异摘要。
+    writeFileSync(jsonPath, readFileSync(jsonPath, 'utf8') + '\n')
+    const drifted = runCheck([jsonPath, swiftPath, stubPath])
+    assert.equal(drifted.status, 1, '生成物漂移必须 exit 1')
+    assert.match(drifted.stderr ?? '', /--check FAILED/u)
+    assert.match(drifted.stderr ?? '', /首个差异行/u)
+    // --check 只读：被改的副本保持改动后的内容，未改的两件保持逐字节一致。
+    assert.equal(readFileSync(jsonPath, 'utf8').endsWith('\n\n'), true, '--check 不得写回副本')
+    assert.deepEqual(readFileSync(swiftPath), readFileSync(COMMITTED_SWIFT_PATH))
+    assert.deepEqual(readFileSync(stubPath), readFileSync(COMMITTED_STUB_PATH))
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
+
+  // 两臂结束后三件提交物逐字节未变（--check 全程只读）。
+  assert.deepEqual(readFileSync(COMMITTED_JSON_PATH), before[0], '--check 不得改写 bridge-manifest.json')
+  assert.deepEqual(readFileSync(COMMITTED_SWIFT_PATH), before[1], '--check 不得改写 BridgeManifest.swift')
+  assert.deepEqual(readFileSync(COMMITTED_STUB_PATH), before[2], '--check 不得改写 chamber-bridge.stub.js')
+})
+
+test('⑦ 提交物双件语义一致：Swift 字面量集合与 JSON 通道集逐条对应', () => {
   // ① ② 已保证「重生成 == 提交物」，两者同源出自一次生成；本测试在文本
   // 相等之外做交叉检查——即便双件被手工改坏成「互相一致但偏离生成器」，
   // ① ② 仍会红，此处再钉死 Swift 两个 Set 与 JSON 集合的字面量对应。

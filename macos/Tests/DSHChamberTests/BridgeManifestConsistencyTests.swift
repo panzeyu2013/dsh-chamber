@@ -6,7 +6,8 @@
 //  由 packages/desktop/bridge-manifest.test.ts 保证；本测试钉 Swift 生成物
 //  （编译接线后的白名单真值）——防提交的 BridgeManifest.swift 被手工改坏/
 //  漂移后 swift test 仍静默全绿：
-//    1. 通道数守恒：invoke 58 / push 9（D1 插件写面退役 + design 28 forward 4 + host-key 2）；
+//    1. 通道数守恒：invoke 64 / push 13（D1 插件写面退役 + design 28 forward 4 + host-key 2
+//       + design 28 v3 browser 6 invoke/4 push；合计 77）；
 //    2. 方向无交集：invoke ∩ push = ∅；
 //    3. invoke 方向抽样：dsh-chamber:info / desktop_ssh_instances_get /
 //       desktop_ssh_connect 属 invoke 面（main 侧 handle 注册事实）；
@@ -24,8 +25,8 @@ final class BridgeManifestConsistencyTests: XCTestCase {
     func testCountsInvokeAndPush() {
         // 当前仓库事实（与 bridge-manifest.json 的 counts 及
         // bridge-manifest.test.ts ③ 同一批数字）；通道增删须同步更新。
-        XCTAssertEqual(BridgeManifest.invokeChannels.count, 58, "invoke 通道数应 == 提交物 counts.invoke（58）")
-        XCTAssertEqual(BridgeManifest.pushChannels.count, 9, "push 通道数应 == 提交物 counts.push（9）")
+        XCTAssertEqual(BridgeManifest.invokeChannels.count, 64, "invoke 通道数应 == 提交物 counts.invoke（64）")
+        XCTAssertEqual(BridgeManifest.pushChannels.count, 13, "push 通道数应 == 提交物 counts.push（13）")
     }
 
     func testInvokeAndPushDisjoint() {

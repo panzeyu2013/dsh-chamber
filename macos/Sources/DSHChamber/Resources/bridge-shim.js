@@ -6,11 +6,12 @@
  *
  * It mirrors the window.dshChamber surface of packages/desktop/electron/preload.cts
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
- * platform) + 11 namespaces (desktopSsh/update/settings/systemResume/
- * rendererStall/openIn/deepLink/runtime/notifications/badge/forward)（全表面
+ * platform) + 12 namespaces (desktopSsh/update/settings/systemResume/
+ * rendererStall/openIn/deepLink/runtime/notifications/badge/forward/browser)（全表面
  * 实现）：每个方法的通道、payload 形状与返回映射逐字对齐 preload.cts
- * （manifest invoke 通道共 58 个，含 info/native-theme-set 两个内部通道
- * + 9 个 on* 订阅 → 9 manifest push 通道，合计 67），
+ * （manifest invoke 通道共 64 个，含 info/native-theme-set 两个内部通道
+ * + 13 个 on* 订阅 → 13 manifest push 通道，合计 77；其中 6 invoke + 4 push
+ * 属 Swift-only `browser` 命名空间），
  * 文件内零 poc-unimplemented 兜底。用户插件写面（apply/undo/
  * materialize/npm search/local add-remove）已随 2026-09 C 分层裁决退役。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
@@ -166,7 +167,7 @@
     return error
   }
 
-  /** The 9 push events the bridge can subscribe to — one constant per event
+  /** The 13 push events the bridge can subscribe to — one constant per event
    *  name so every method ↔ event mapping stays literal and reviewable. */
   var PUSH_EVENTS = {
     RENDERER_STALL_EVIDENCE: 'dsh-chamber:renderer-stall-evidence',
@@ -177,7 +178,11 @@
     DEEP_LINK_INTENT: 'dsh-chamber:deep-link-intent',
     RUNTIME_STATE_CHANGED: 'dsh-chamber:runtime-state-changed',
     SYSTEM_RESUME: 'dsh-chamber:system-resume',
-    UPDATE_STATE_CHANGED: 'dsh-chamber:update-state-changed'
+    UPDATE_STATE_CHANGED: 'dsh-chamber:update-state-changed',
+    BROWSER_STATE: 'dsh-chamber:browser-state',
+    BROWSER_OPEN_REQUESTED: 'dsh-chamber:browser-open-requested',
+    BROWSER_INPUT: 'dsh-chamber:browser-input',
+    BROWSER_FORWARD_NEEDED: 'dsh-chamber:browser-forward-needed'
   }
 
   /** The four info scalars, mirroring the preload bridge's top-level fields. */
@@ -646,6 +651,36 @@
     }
   }
 
+  /** browser — Swift-only native guest carrier（design 28 v3 §3；白名单政策见
+   *  docs/progress/electron-frozen.md §5.2）：6 invoke + 4 push。main 独占 guest
+   *  生命周期（lease 是 capability），renderer 只发意图与几何；shim 只做传输，
+   *  URL 构造/renderer 归属/四重复验在 sidecar 的 BrowserIPC。载荷键逐字
+   *  design 28 §3（可选字段恒写键——Swift JSON 桥会丢 undefined 键）。 */
+  var browser = {
+    acquire: function (input) {
+      return invoke('dsh-chamber:browser-acquire', { tabId: input.tabId, sessionId: input.sessionId, sourceId: input.sourceId, sourceFingerprint: input.sourceFingerprint, workspaceKey: input.workspaceKey, frame: input.frame, visible: input.visible, occluded: input.occluded })
+    },
+    release: function (input) {
+      return invoke('dsh-chamber:browser-release', { tabId: input.tabId, lease: input.lease })
+    },
+    navigate: function (input) {
+      return invoke('dsh-chamber:browser-navigate', { tabId: input.tabId, lease: input.lease, target: input.target })
+    },
+    command: function (input) {
+      return invoke('dsh-chamber:browser-command', { tabId: input.tabId, lease: input.lease, command: input.command })
+    },
+    frame: function (input) {
+      return invoke('dsh-chamber:browser-frame', { tabId: input.tabId, lease: input.lease, frame: input.frame, visible: input.visible, occluded: input.occluded })
+    },
+    keymap: function (input) {
+      return invoke('dsh-chamber:browser-keymap', { tabId: input.tabId, lease: input.lease, combos: input.combos })
+    },
+    onState: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_STATE, callback) },
+    onOpenRequested: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_OPEN_REQUESTED, callback) },
+    onInput: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_INPUT, callback) },
+    onForwardNeeded: function (callback) { return subscribe(PUSH_EVENTS.BROWSER_FORWARD_NEEDED, callback) }
+  }
+
   // ---- dshDesktop carrier (rc.2 official desktop surface) -----------------
   // The official shortcuts service constructs during boot and THROWS when the
   // document is platform-marked but dshDesktop.keyboard is absent; the same
@@ -956,7 +991,8 @@
     runtime: runtime,
     notifications: notifications,
     badge: badge,
-    forward: forward
+    forward: forward,
+    browser: browser
   }
 
   // ---- info hydration ----------------------------------------------------

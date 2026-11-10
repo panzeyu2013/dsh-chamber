@@ -667,13 +667,33 @@ test('the five remaining surfaces keep identical normalized signatures across pr
       `${surface} renderer mirror drifted from the preload contract (parameter types / return type / inline payload shape)`)
   }
   // The bridge itself is part of the same contract: a surface exposed on one
-  // side and forgotten on the other must fail loudly.
+  // side and forgotten on the other must fail loudly. Swift-only A-bridge
+  // namespaces (bridge-swift-only-additions.json) exist ONLY on the Swift shim
+  // and the renderer type mirror — preload must never expose them — so the
+  // renderer field set is compared as preload ∪ whitelist namespaces.
   const bridgeFields = interfaceFieldSignatures(preload, 'DshChamberBridge')
+  const swiftOnlyNamespaces = new Set(swiftOnlyAdditions.map((entry) => entry.namespace))
+  const rendererBridgeFields = interfaceFieldSignatures(renderer, 'DshChamberBridge')
+  const rendererNonSwiftOnly = rendererBridgeFields.filter((field) => {
+    const name = field.split(':')[0].replace('?', '')
+    return !swiftOnlyNamespaces.has(name)
+  })
   assert.deepEqual(
-    interfaceFieldSignatures(renderer, 'DshChamberBridge'),
+    rendererNonSwiftOnly,
     bridgeFields,
-    'DshChamberBridge field set drifted across the preload/renderer mirrors',
+    'DshChamberBridge field set drifted across the preload/renderer mirrors (Swift-only whitelist namespaces exempt)',
   )
+  for (const namespace of swiftOnlyNamespaces) {
+    assert.equal(
+      bridgeFields.some((field) => field.split(':')[0].replace('?', '') === namespace),
+      false,
+      `preload must not expose the Swift-only A-bridge namespace ${namespace}`,
+    )
+    assert.ok(
+      rendererBridgeFields.some((field) => field.split(':')[0].replace('?', '') === namespace),
+      `renderer DshChamberBridge must expose the Swift-only A-bridge namespace ${namespace}`,
+    )
+  }
   for (const surface of P2_SURFACES) {
     assert.ok(bridgeFields.some(field => field.endsWith(`:${surface}`)),
       `DshChamberBridge must expose ${surface}`)

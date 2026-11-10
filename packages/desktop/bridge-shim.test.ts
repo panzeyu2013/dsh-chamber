@@ -90,9 +90,9 @@ test('④ vm 执行 stub：manifest 形状 + assert 正/负例', () => {
     push: string[]
     counts: { invoke: number; push: number; total: number }
   }
-  assert.ok(Array.isArray(manifest.invoke) && manifest.invoke.length === 58)
-  assert.ok(Array.isArray(manifest.push) && manifest.push.length === 9)
-  assert.equal(manifest.counts.total, 67)
+  assert.ok(Array.isArray(manifest.invoke) && manifest.invoke.length === 64)
+  assert.ok(Array.isArray(manifest.push) && manifest.push.length === 13)
+  assert.equal(manifest.counts.total, 77)
   // 正例
   vm.runInContext('__dshChamberAssertMethod("dsh-chamber:info")', context)
   vm.runInContext('__dshChamberAssertEvent("dsh-chamber:settings-changed")', context)

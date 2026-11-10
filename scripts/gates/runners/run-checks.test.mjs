@@ -41,6 +41,7 @@ import {
   compareRuntimePayloads,
   describeRuntimePayload,
   injectShimToken,
+  loadSwiftOnlyAdditions,
   parseMemberCall,
   parsePayloadShape,
   payloadShapeMatches,
@@ -595,6 +596,10 @@ test('the shipped preload/shim surfaces agree on every payload shape and stay ma
       'utf8',
     ),
     manifest: JSON.parse(readFileSync(join(REPO_ROOT, 'packages/desktop/bridge-manifest.json'), 'utf8')),
+    // The browser namespace is Swift-only: the gate main passes the committed
+    // whitelist, so the shipped comparison must too (otherwise every browser
+    // member reads as "in the shim, not in preload").
+    swiftOnly: loadSwiftOnlyAdditions(),
   })
   assert.deepEqual(verdict.mismatches, [])
   assert.deepEqual(verdict.missingFromManifest, [])
@@ -668,7 +673,7 @@ test('runtime payload shape predicates are key-exact, not truthy', () => {
   assert.equal(describeRuntimePayload(['x']), 'direct:array(1)')
 })
 test('the real shim executes in node:vm and every member posts the preload payload keys (G22)', async () => {
-  const verdict = await compareRuntimePayloads({ preloadText: PRELOAD_SOURCE, shimText: SHIM_SOURCE })
+  const verdict = await compareRuntimePayloads({ preloadText: PRELOAD_SOURCE, shimText: SHIM_SOURCE, swiftOnly: loadSwiftOnlyAdditions() })
   assert.deepEqual(verdict.mismatches, [])
   // G34: the executed surface is pinned to the same totals as the static arm,
   // including the invoke/push split and the per-namespace rows.
@@ -706,10 +711,14 @@ test('the runtime arm catches a payload-key drift and a channel drift the static
     'a channel drift must fail the runtime arm')
 })
 test('the total-failure branch still exposes the surface with null scalars after 11 rejections (G22/T-12)', async () => {
-  const failure = await runShimFailureBranch({ shimText: SHIM_SOURCE })
+  // The browser namespace is Swift-only: the gate main passes the committed
+  // whitelist, so the failure-branch surface has 12 namespaces (11 preload
+  // factories + browser). Passing nothing here enumerated only 11 and made the
+  // helper's own EXPECTED_SURFACE assertion fail.
+  const failure = await runShimFailureBranch({ shimText: SHIM_SOURCE, swiftOnly: loadSwiftOnlyAdditions() })
   assert.equal(failure.attempts, 11, '1 + INFO_MAX_ATTEMPTS rejections must have been observed')
   assert.deepEqual(failure.scalars, { controlPlaneUrl: null, dshVersion: null, version: null, platform: null })
-  assert.equal(failure.namespaces.length, 11)
+  assert.equal(failure.namespaces.length, 12)
   assert.ok(failure.warnings.some((warning) => /info failed after 10 attempts/.test(warning)), 'the degradation must be loud')
 })
 test('re-injecting the installed shim is a no-op (P-19 marker) (G22)', async () => {

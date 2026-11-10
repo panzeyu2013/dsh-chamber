@@ -18,12 +18,13 @@
  * method channel must be in the manifest, and every manifest invoke channel
  * must be exposed by a method (except the internal hydration channel).
  *
- * Count semantics: EXPECTED_SURFACE's 56 invoke is the namespace-exposed
+ * Count semantics: EXPECTED_SURFACE's 62 invoke is the namespace-exposed
  * surface (the two internal channels — `dsh-chamber:info` hydration and
  * `dsh-chamber:native-theme-set` — are not counted); bridge-manifest.json
- * counts.invoke=58 (both internals included) + 9 push = 67, and the
+ * counts.invoke=64 (both internals included) + 13 push = 77, and the
  * desktopSsh namespace alone is 26 invoke + 2 push (host-key probe/trust), with
- * the forward namespace adding 4 invoke, 0 push — design 28 §7. The user plugin write
+ * the forward namespace adding 4 invoke, 0 push — design 28 §3. The browser
+ * namespace (Swift-only, 6 invoke + 4 push) is likewise manifest-locked; the user plugin write
  * surface (apply / undo / materialize / npm search / local add-remove) was
  * retired with the 2026-09 C layering ruling.
  *
@@ -32,8 +33,10 @@
  * side is frozen, so a channel may exist only on the Swift shim. For those entries
  * the gate waives the two-side equality but still proves that the shim really
  * implements the declared member/channel/direction, that preload NEVER exposes it,
- * and that the committed manifest lists the channel. The committed table is empty,
- * so the current pass is unchanged (65 members; every printed total identical).
+ * and that the committed manifest lists the channel. The committed table currently
+ * carries the Swift-only browser namespace (6 invoke + 4 push); counts are NOT
+ * hand-written here — EXPECTED_SURFACE below is the single source of the surface
+ * totals, and each whitelist entry is proven against the shim itself.
  *
  * It is static text parsing on purpose: no runtime dependency, no surface
  * execution, the same discipline as bridge-shim-surface.test.ts. Changing a
@@ -122,12 +125,14 @@ export function swiftOnlySurfaceSets(swiftOnly = []) {
  * row. Counts are per `FACTORY_TO_NAMESPACE` namespace.
  */
 export const EXPECTED_SURFACE = {
-  namespaces: 11,
-  members: 65,
-  invoke: 56,
-  push: 9,
+  namespaces: 12,
+  members: 75,
+  invoke: 62,
+  push: 13,
   perNamespace: {
     badge: 1,
+    // Swift-only native guest carrier (design 28 v3 §3): 6 invoke + 4 push.
+    browser: 10,
     deepLink: 3,
     desktopSsh: 26,
     // Remote Browser v4 (design 28 §7): 4 invoke, 0 push — v1 polls list().
@@ -674,7 +679,10 @@ export function comparePayloadShapes({ preloadText, shimText, manifest, swiftOnl
 
   // Whitelist entries that open a NEW shim-only namespace: no preload factory
   // exists to pair against, so only the shim implementation + manifest are proven.
+  // Their members ARE part of the declared Swift surface: count them into the
+  // surface pin (otherwise a whole Swift-only namespace could vanish silently).
   const preloadNamespaces = new Set(Object.values(FACTORY_TO_NAMESPACE))
+  const swiftOnlyNamespaceMembers = new Map()
   for (const entry of swiftOnly.filter(item => !preloadNamespaces.has(item.namespace))) {
     let shimMembers
     try {
@@ -683,6 +691,12 @@ export function comparePayloadShapes({ preloadText, shimText, manifest, swiftOnl
       mismatches.push(entry.namespace + ': Swift-only whitelist namespace is missing from the shim')
       continue
     }
+    let bucket = swiftOnlyNamespaceMembers.get(entry.namespace)
+    if (bucket === undefined) {
+      bucket = new Set()
+      swiftOnlyNamespaceMembers.set(entry.namespace, bucket)
+    }
+    bucket.add(entry.method)
     checkSwiftOnlyImplementation({
       entry,
       shimSpan: shimMembers.get(entry.method),
@@ -694,6 +708,11 @@ export function comparePayloadShapes({ preloadText, shimText, manifest, swiftOnl
       shimInvokeChannels,
       mismatches,
     })
+  }
+  for (const [namespace, methods] of swiftOnlyNamespaceMembers) {
+    namespaces += 1
+    perNamespace[namespace] = methods.size
+    checked += methods.size
   }
 
   const methodInvokeChannels = new Set([...preloadInvokeChannels, ...shimInvokeChannels])
@@ -879,6 +898,7 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
   // Swift-only namespaces that do not exist on the preload side are not in the
   // factory loop above: require their members to be callable on the live surface.
   const preloadNamespaces = new Set(Object.values(FACTORY_TO_NAMESPACE))
+  const swiftOnlyRuntimeMembers = new Map()
   for (const entry of swiftOnly.filter(item => !preloadNamespaces.has(item.namespace))) {
     const members = surface[entry.namespace]
     const key = entry.namespace + '.' + entry.method
@@ -886,7 +906,22 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
       mismatches.push(entry.namespace + ': Swift-only runtime namespace is missing from the shim surface')
     } else if (typeof members[entry.method] !== 'function') {
       mismatches.push(key + ': Swift-only runtime member is not a function')
+    } else {
+      // Declared Swift-only surface: counted (preload has no counterpart arm to drive).
+      let bucket = swiftOnlyRuntimeMembers.get(entry.namespace)
+      if (bucket === undefined) {
+        bucket = new Set()
+        swiftOnlyRuntimeMembers.set(entry.namespace, bucket)
+      }
+      bucket.add(entry.method)
+      seen.add(key)
+      if (entry.direction === 'invoke') invoked += 1
+      else subscribed += 1
     }
+  }
+  for (const [namespace, methods] of swiftOnlyRuntimeMembers) {
+    namespaces += 1
+    perNamespace[namespace] = methods.size
   }
   for (const key of expected.keys()) {
     if (!seen.has(key)) mismatches.push(key + ': preload call site never driven on the runtime surface')
@@ -901,7 +936,7 @@ export async function compareRuntimePayloads({ preloadText, shimText, token = ma
  * @param {{ shimText: string, token?: string, attempts?: number, retryMs?: number }} input - inputs.
  * @returns {Promise<{ attempts: number, scalars: Record<string, null>, namespaces: string[], warnings: string[] }>} observed facts.
  */
-export async function runShimFailureBranch({ shimText, token = makeNativeToken(), attempts = 11, retryMs = 50 } = {}) {
+export async function runShimFailureBranch({ shimText, swiftOnly = [], token = makeNativeToken(), attempts = 11, retryMs = 50 } = {}) {
   const harness = createShimHarness({ shimText, token })
   const answered = new Set()
   const deadline = Date.now() + attempts * retryMs + 3_000
@@ -928,6 +963,14 @@ export async function runShimFailureBranch({ shimText, token = makeNativeToken()
   const namespaces = [...new Set(Object.values(FACTORY_TO_NAMESPACE))].sort().filter((namespace) => {
     return surface[namespace] !== null && typeof surface[namespace] === 'object'
   })
+  // Swift-only whitelist namespaces exist on the shim surface but have no preload
+  // factory to enumerate them: count them into the exposed-namespace pin too.
+  for (const namespace of new Set(swiftOnly.map(entry => entry.namespace))) {
+    if (!Object.values(FACTORY_TO_NAMESPACE).includes(namespace)
+      && surface[namespace] !== null && typeof surface[namespace] === 'object') {
+      namespaces.push(namespace)
+    }
+  }
   if (namespaces.length !== EXPECTED_SURFACE.namespaces) {
     throw new Error('failure branch exposed ' + namespaces.length + ' namespace(s), expected ' + EXPECTED_SURFACE.namespaces)
   }
@@ -1043,7 +1086,7 @@ async function main() {
   let reinjection
   try {
     runtime = await compareRuntimePayloads({ preloadText, shimText, swiftOnly })
-    failure = await runShimFailureBranch({ shimText })
+    failure = await runShimFailureBranch({ shimText, swiftOnly })
     reinjection = await assertShimReinjectionNoop({ shimText })
   } catch (error) {
     console.error('shim payload shape (runtime): FAILED — ' + (error instanceof Error ? error.message : String(error)))
