@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  acceptsForwardNegotiation, acceptsStatePush, canonicalOrigin, historyAdoptAction, historyAdvances,
+  acceptsForwardNegotiation, acceptsStatePush, canonicalOrigin, historyAdoptAction,
   isLoopbackNegotiationTarget, planLeaseSettle, projectAckFailure, transitionForwarded,
 } from '../../src/client/browser/guest-state.ts'
 
@@ -35,11 +35,6 @@ test('leaving the alias origin drops the forwarded projection', () => {
   assert.equal(canonicalOrigin('javascript:alert(1)'), undefined)
 })
 
-test('history advances only on a real URL change', () => {
-  assert.equal(historyAdvances('http://a/', 'http://a/'), false)
-  assert.equal(historyAdvances(undefined, 'http://a/'), true)
-  assert.equal(historyAdvances('http://a/', 'http://a/#x'), true)
-})
 test('a late forward negotiation is dropped unless generation/lease still hold (R4-01)', () => {
   const ok = { disposed: false, generationMatches: true, leaseMatches: true }
   assert.equal(acceptsForwardNegotiation(ok), true)
@@ -54,6 +49,17 @@ test('a forward negotiation target must be a loopback target (R4-01)', () => {
   assert.equal(isLoopbackNegotiationTarget('http://127.0.0.1:5173/'), true)
   assert.equal(isLoopbackNegotiationTarget('http://localhost:3000/app'), true)
   assert.equal(isLoopbackNegotiationTarget('http://[::1]:8080/'), true)
+  // m1: Swift canonicalHost normalizes the mapped IPv6 spellings to 127.0.0.1
+  // before it pushes forward-needed, so this class gate must accept them; the
+  // resolver then answers the failure bar (the forward target set is only
+  // 127.0.0.1/localhost) instead of the push being silently dropped.
+  assert.equal(isLoopbackNegotiationTarget('http://[::ffff:7f00:1]:8080/'), true)
+  assert.equal(isLoopbackNegotiationTarget('http://[::ffff:127.0.0.1]:8080/'), true,
+    'the URL parser normalizes the dotted mapped form to [::ffff:7f00:1]')
+  // D6 tail-dot: the FQDN root spelling compares equal to the plain loopback host
+  // (mirrors Swift canonicalHost's trailing-dot strip).
+  assert.equal(isLoopbackNegotiationTarget('http://localhost.:3000/'), true)
+  assert.equal(isLoopbackNegotiationTarget('http://127.0.0.1.:3000/'), true)
   // Anything else is not a negotiation target, whatever main claims.
   assert.equal(isLoopbackNegotiationTarget('https://example.com/'), false)
   assert.equal(isLoopbackNegotiationTarget('http://127.0.0.2:5173/'), false)

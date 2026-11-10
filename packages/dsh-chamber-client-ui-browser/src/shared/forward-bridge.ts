@@ -1,6 +1,6 @@
 /**
  * Remote Browser forward client — the launcher's LOCAL contract for the
- * trusted main-process forward manager (design 28 §16, wire v2).
+ * trusted main-process forward manager (design 28 §16, forward wire v3).
  *
  * The carrier is the trusted `chamberForward` namespace (preload/Swift shim);
  * the renderer adapter translates the wire contract into this small face. This
@@ -12,18 +12,18 @@
  *   release({sourceId, sourceFingerprint, id, consumer?}) -> {ok} | {ok:false, code}
  *   list({sourceId, sourceFingerprint})
  *       -> {ok: true, records} | {ok:false, code}
- *     (the LOCAL identity is accepted on list only; the v2 local-frame origin
- *      projection was retired with the iframe carrier)
+ *     (the LOCAL identity is accepted on list only; the iframe-era local-frame
+ *      origin projection is retired with the iframe carrier and wire v3)
  *   openInBrowser({sourceId, sourceFingerprint, id, path?}) -> {ok} | {ok:false, code}
  *
- * v2 shape decisions (design 28 §3; the v3 native guest keeps this face):
+ * v3 shape decisions (design 28 §3; the native guest carrier consumes this face):
  *   - `consumer` is the renderer-minted tab-occurrence id. Present on request =
  *     attach (or renew) this tab's claim; present on release = detach only this
  *     claim (the listener dies with the LAST consumer); absent = the v1
  *     pinned/force-close semantics used by the system-browser leg.
- *   - `frameUrl` is main-composed: the renderer never builds an alias host/port
- *     URL. A successful attach only becomes a frame when main returned a
- *     validated frameUrl; the panel checks it once more (frame-policy).
+ *   - `frameUrl` stays a main-composed convenience field; in v3 the guest loads
+ *     from the recordId+path main itself composes, so the renderer never passes
+ *     an alias URL back. The alias exit is the record's display-only projection.
  *   - `record.frameError` is a diagnostic classification main may attach; the v3
  *     guest reports its own load failures through `browser.state`, so no launcher
  *     UI reads it and it never carries page content.
@@ -132,7 +132,6 @@ export type ForwardListResult =
   | {
     ok: true
     records: ForwardRecord[]
-    /** v2 local-frame failures (origin-scoped; local list only). */
   }
   | ForwardFailure
 export type ForwardOpenResult = { ok: true } | ForwardFailure
@@ -184,11 +183,6 @@ export function isBrowserAliasHost(host: string): boolean {
 /** Narrow an untrusted value to a frame-failure classification. */
 export function isForwardFrameError(value: unknown): value is ForwardFrameError {
   return typeof value === 'string' && FORWARD_FRAME_ERRORS.has(value as ForwardFrameError)
-}
-
-/** Narrow an untrusted value to a renderer-minted consumer id. */
-export function isForwardConsumer(value: unknown): value is string {
-  return typeof value === 'string' && FORWARD_CONSUMER_PATTERN.test(value)
 }
 
 /** Narrow an untrusted value to a known launcher failure code. */
@@ -257,33 +251,6 @@ export function parseForwardRecord(value: unknown): ForwardRecord | null {
   }
 }
 
-/** Project an untrusted record list, dropping malformed entries (never the whole list). */
-export function parseForwardRecords(value: unknown): ForwardRecord[] {
-  if (!Array.isArray(value)) return []
-  const out: ForwardRecord[] = []
-  const seen = new Set<string>()
-  for (const entry of value) {
-    const record = parseForwardRecord(entry)
-    if (record === null || seen.has(record.id)) continue
-    seen.add(record.id)
-    out.push(record)
-  }
-  return out
-}
-
-/** Project an untrusted list envelope. */
-export function parseForwardListResult(value: unknown): ForwardListResult {
-  if (!isRecord(value)) return { ok: false, code: 'unknown' }
-  if (value.ok === true) {
-    if (!Array.isArray(value.records)) return { ok: false, code: 'unknown' }
-    return {
-      ok: true,
-      records: parseForwardRecords(value.records),
-    }
-  }
-  return parseForwardFailure(value)
-}
-
 /** Project an untrusted request envelope. */
 export function parseForwardRequestResult(value: unknown): ForwardRequestResult {
   if (!isRecord(value)) return { ok: false, code: 'unknown' }
@@ -342,14 +309,6 @@ export function asBrowserForwardBridge(value: unknown): BrowserForwardBridge | n
     if (typeof member !== 'function') return null
   }
   return value as unknown as BrowserForwardBridge
-}
-
-/**
- * Display-only host for one record: scheme + alias + local port. It is NEVER
- * fed back into openInBrowser (main builds the URL from the record id).
- */
-export function forwardDisplayUrl(record: ForwardRecord): string {
-  return `${record.scheme}://${record.aliasHost}:${record.localPort}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -3,22 +3,19 @@
  * untrusted IPC projection out of the launcher, and the display-only URL rule
  * (the renderer never receives a URL it can pass back to openInBrowser).
  *
- * v2 additions: the consumer grammar, the main-composed frameUrl guard, the
- * envelope shapes and the release-timeout failure code. The v2 list paper fields
- * (embedding/frameErrors) are retired (design 28 v3 §3).
+ * v3 additions: the consumer grammar, the main-composed frameUrl guard, the
+ * envelope shapes and the release-timeout failure code. The iframe-era list paper
+ * fields (embedding/frameErrors) are retired (design 28 v3 / forward wire v3).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   asBrowserForwardBridge,
-  forwardDisplayUrl,
   isBrowserAliasHost,
-  isForwardConsumer,
   isForwardFrameError,
   isForwardFrameUrl,
   parseForwardAck,
   parseForwardRecord,
-  parseForwardRecords,
   parseForwardRequestResult,
 } from '../../src/shared/forward-bridge.ts'
 
@@ -94,27 +91,6 @@ test('the alias range is exactly 127.0.0.2-254', () => {
   assert.equal(isBrowserAliasHost('localhost'), false)
 })
 
-test('records are de-duplicated by id and malformed entries dropped', () => {
-  const records = parseForwardRecords([RECORD, RECORD, { ...RECORD, id: 'fwd-2', remotePort: 8080 }, null])
-  assert.deepEqual(records.map((record) => record.id), ['fwd-1', 'fwd-2'])
-})
-
-test('non-array record lists project to an empty list', () => {
-  assert.deepEqual(parseForwardRecords(undefined), [])
-  assert.deepEqual(parseForwardRecords({ length: 1 }), [])
-})
-
-
-
-test('the consumer grammar matches the wire pattern', () => {
-  for (const value of ['a'.repeat(8), 'a'.repeat(64), '9f8e7d6c-5b4a-3210-9876-543210fedcba']) {
-    assert.equal(isForwardConsumer(value), true, value)
-  }
-  for (const value of ['a'.repeat(7), 'a'.repeat(65), 'has space', 'bad/dot', 7, null]) {
-    assert.equal(isForwardConsumer(value), false, String(value))
-  }
-})
-
 test('the frameUrl guard only accepts bounded absolute http(s) URLs', () => {
   assert.equal(isForwardFrameUrl('http://127.0.0.2:41000/app?x=1'), true)
   assert.equal(isForwardFrameUrl('https://localhost:8443/'), true)
@@ -164,8 +140,4 @@ test('the bridge probe requires all four methods', () => {
   assert.equal(asBrowserForwardBridge({}), null)
   assert.equal(asBrowserForwardBridge(null), null)
   assert.equal(asBrowserForwardBridge('bridge'), null)
-})
-
-test('the display URL is derived, never echoed from the record', () => {
-  assert.equal(forwardDisplayUrl(parseForwardRecord({ ...RECORD, scheme: 'https' })!), 'https://127.0.0.2:41000')
 })

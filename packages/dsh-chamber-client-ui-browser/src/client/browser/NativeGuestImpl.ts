@@ -9,6 +9,26 @@
  * carrier integration suite):
  *  - an acquire that settles after dispose releases its minted lease, and a FAILED
  *    acquire is retryable (the next navigation/reload re-attempts it);
+ *  - the live lease is mirrored onto the placeholder as
+ *    `data-chamber-browser-lease` (the input replay targets it) and cleared on
+ *    release/dispose (D12);
+ *  - the snapshot is PROJECTED from the application history/cursor, never from the
+ *    last bridge payload: a requested load shows its entry before the navigate
+ *    invoke, and a forwarded page keeps its LOGICAL target while the guest sits on
+ *    main's alias origin (D14);
+ *  - a pushed address/title only ADOPTS on a SETTLED push (`loading:false`, the
+ *    commit/finish boundary): a late loading push may still carry the PREVIOUS
+ *    page's URL (Swift didStartProvisionalNavigation), so adopting it would roll
+ *    the requested target back to A after the user asked for B (D14 fix 2);
+ *  - an empty pushed url never adopts anything and keeps the forwarded projection
+ *    and alias exit;
+ *  - a non-empty pushed title on a settled push updates the current history entry
+ *    and is persisted (D15);
+ *  - the external exit is DISABLED (`null`) while a target resolves and after a
+ *    forwarded target fails: the logical address of a remote-loopback page is never
+ *    handed to THIS machine's system browser (design 28 §3). A direct page keeps
+ *    its logical URL as the exit (`undefined`) and only a failed direct ack leaves
+ *    that fallback in place;
  *  - a refused navigate ack surfaces the failure bar and drops the alias exit;
  *  - a late forward negotiation only lands when the same generation/lease is still
  *    current; the pushed URL is the SUSPENDED target (never the address on screen),
@@ -25,6 +45,7 @@ import type { BrowserFrameReport, BrowserGuestState, BrowserKeyCombo, NativeGues
 import { parseBrowserForwardNeeded, parseBrowserGuestState, parseBrowserOpenRequest } from './BrowserBridge.ts'
 import type { BrowserTargetRefResolver, BrowserTargetRef } from './ForwardFrameResolver.ts'
 import { planKeymapPush } from './keymap-push.ts'
+import { shouldReportGuestFrame } from './guest-geometry.ts'
 import { createSnapshotStore, type SnapshotStore } from './snapshot-store.ts'
 import {
   acceptsForwardNegotiation,
@@ -65,6 +86,11 @@ export class NativeGuestImpl implements BrowserFrame {
   private externalUrl: string | null | undefined
   private forwarded = false
   private forwardedOrigin: string | undefined
+  /** Whether the projected target is a requested navigation or an observed URL. */
+  private addressMode: 'requested' | 'observed' = 'requested'
+  private loading = false
+  private canGoBack = false
+  private canGoForward = false
   private pendingFrame: BrowserFrameReport | undefined
   private keymapScheduled = false
   private lastKeymap: string | undefined
@@ -92,7 +118,8 @@ export class NativeGuestImpl implements BrowserFrame {
       this.history = options.initial.entries.map(entry => ({ kind: entry.kind, url: entry.url, title: entry.title }))
       this.cursor = options.initial.index
     }
-    this.store = createSnapshotStore({ ...emptyFrame(), address: this.cursor < 0 ? 'empty' : 'requested' })
+    // D14: the snapshot is a projection of the application history/cursor.
+    this.store = createSnapshotStore(this.projectState())
     this.observePushes()
     const combos = this.carrier.bridge.combos
     if (combos !== undefined) {
@@ -109,7 +136,7 @@ export class NativeGuestImpl implements BrowserFrame {
   start(): Promise<boolean> {
     if (this.disposed) return Promise.resolve(false)
     if (this.acquiring !== undefined) return this.acquiring
-    const report = this.pendingFrame ?? { frame: { x: 0, y: 0, width: 0, height: 0 }, visible: false, occluded: true }
+    const report = this.pendingFrame ?? IDLE_FRAME_REPORT
     const key = this.carrier.resolveWorkspaceKey === undefined
       ? Promise.resolve(this.carrier.workspaceKey)
       : this.carrier.resolveWorkspaceKey().catch(() => this.carrier.workspaceKey)
@@ -131,6 +158,7 @@ export class NativeGuestImpl implements BrowserFrame {
       if (plan.failure !== undefined) {
         if (!this.disposed) {
           this.error = { code: undefined, description: plan.failure }
+          this.loading = false
           this.publish()
         }
         // Retryable: the next start() (navigation/reload) attempts a fresh acquire.
@@ -138,11 +166,15 @@ export class NativeGuestImpl implements BrowserFrame {
         return false
       }
       this.lease = plan.adopt as string
+      // D12: the input replay finds this occurrence's placeholder by its lease.
+      this.presentation.setLease(this.lease)
       this.scheduleKeymap()
+      this.sendAcquiredPendingFrame(report)
       return true
     }).catch(() => {
       if (!this.disposed) {
         this.error = { code: undefined, description: 'unavailable' }
+        this.loading = false
         this.publish()
       }
       if (this.acquiring === attempt) this.acquiring = undefined
@@ -195,11 +227,29 @@ export class NativeGuestImpl implements BrowserFrame {
     }).catch(() => undefined)
   }
 
+  /**
+   * D16: the acquire carried the report captured when it started. A placeholder
+   * report that changed while the acquire was in flight is sent immediately after
+   * the lease lands — otherwise the guest keeps a stale frame until the next
+   * geometry change.
+   */
+  private sendAcquiredPendingFrame(acquiredWith: BrowserFrameReport): void {
+    const latest = this.pendingFrame
+    const lease = this.lease
+    if (latest === undefined || lease === undefined) return
+    if (!shouldReportGuestFrame(acquiredWith, latest)) return
+    void this.carrier.bridge.frame({
+      tabId: this.options.tabId, lease,
+      frame: latest.frame, visible: latest.visible, occluded: latest.occluded,
+    }).catch(() => undefined)
+  }
+
   /** Release the current lease once (idempotent). */
   private async releaseLease(): Promise<void> {
     const lease = this.lease
     this.lease = undefined
     this.lastKeymap = undefined
+    this.presentation.setLease(undefined)
     if (lease === undefined) return
     await this.carrier.bridge.release({ tabId: this.options.tabId, lease }).catch(() => undefined)
   }
@@ -209,8 +259,8 @@ export class NativeGuestImpl implements BrowserFrame {
     const failure = projectAckFailure(ack)
     if (failure === undefined) return
     this.error = failure
-    const current = this.store.getSnapshot()
-    this.store.set({ ...current, loading: false, error: failure })
+    this.loading = false
+    this.publish()
   }
 
   /** Load one logical entry (append-on-change; reload keeps the cursor). */
@@ -225,9 +275,17 @@ export class NativeGuestImpl implements BrowserFrame {
     }
     const target: BrowserTarget = { kind: entry.kind, url: entry.url, title: entry.title }
     this.error = undefined
+    // D14: project the requested target BEFORE the navigate invoke and persist it,
+    // so the address bar/title never show a stale page while the target resolves.
+    // The external exit is disabled while resolving: a forwarded target's logical
+    // URL (a remote loopback) must never reach this machine's system browser.
+    const revision = ++this.requestRevision
+    this.loading = true
+    this.addressMode = 'requested'
+    this.externalUrl = null
     this.publish()
     const generation = ++this.generation
-    await this.resolveAndNavigate({ revision: ++this.requestRevision, target }, generation)
+    await this.resolveAndNavigate({ revision, target }, generation)
   }
 
   private async resolveAndNavigate(
@@ -241,6 +299,7 @@ export class NativeGuestImpl implements BrowserFrame {
       this.forwarded = false
       this.forwardedOrigin = undefined
       this.error = { code: undefined, description: 'forward-unavailable' }
+      this.loading = false
       this.publish()
       return
     }
@@ -248,15 +307,21 @@ export class NativeGuestImpl implements BrowserFrame {
     if (this.disposed || generation !== this.generation) return
     if (!started || this.lease === undefined) return
     this.applyTargetRef(ref)
+    // D14: externalUrl is part of the projected snapshot (the external exit).
     this.publish()
     const ack = await this.carrier.bridge.navigate({ tabId: this.options.tabId, lease: this.lease, target: toGuestTarget(ref) })
       .catch(() => ({ ok: false as const, code: 'unavailable' }))
     if (this.disposed || generation !== this.generation) return
-    if (!ack.ok) this.externalUrl = undefined
+    // A failed FORWARD keeps the exit disabled; a failed DIRECT page keeps the
+    // logical URL fallback so it can still be opened in the system browser.
+    if (!ack.ok) this.externalUrl = this.forwarded ? null : undefined
     this.projectAck(ack)
   }
 
-  /** Adopt one resolved target ref (forwarded alias projection or direct). */
+  /**
+   * Adopt one resolved target ref (forwarded alias projection or direct).
+   * The CALLER publishes afterwards, so `externalUrl` enters the snapshot.
+   */
   private applyTargetRef(ref: BrowserTargetRef): void {
     if (ref.kind === 'forward') {
       this.forwarded = true
@@ -330,6 +395,17 @@ export class NativeGuestImpl implements BrowserFrame {
     }))
   }
 
+  /**
+   * Project one accepted state push (D14/D15).
+   *
+   * Only a SETTLED (`loading:false`) push is a commit boundary: it adopts a
+   * non-empty URL and its title. A `loading:true` push describes a provisional
+   * navigation and may still carry the PREVIOUS page's URL (Swift publishes on
+   * didStartProvisionalNavigation), so it must never move the target backwards —
+   * the requested projection from load() stays authoritative until the finish
+   * push. While the guest stays on a forwarded alias origin the LOGICAL target is
+   * kept on screen; an empty URL never adopts.
+   */
   private applyState(value: BrowserGuestState): void {
     if (!acceptsStatePush(this.disposed, this.options.tabId, value, this.lease)) return
     // Symmetric occlusion projection (R3B-04): an explicit occluded wins; a
@@ -337,29 +413,49 @@ export class NativeGuestImpl implements BrowserFrame {
     const occluded = value.occluded ?? (value.visible === undefined ? undefined : !value.visible)
     if (occluded !== undefined) this.presentation.setOccluded(occluded)
     this.error = value.error === undefined ? undefined : { code: value.error.code, description: value.error.description }
-    const current = this.store.getSnapshot()
-    const transition = transitionForwarded(this.forwarded, this.forwardedOrigin, value.url)
-    this.forwarded = transition.forwarded
-    this.forwardedOrigin = transition.origin
-    if (!transition.forwarded) this.externalUrl = undefined
-    const target = transition.forwarded && current.target !== undefined ? current.target : this.adopt(value.url)
-    this.store.set({
-      target,
-      address: target === undefined ? 'empty' : 'observed',
-      loading: value.loading,
-      canGoBack: value.canGoBack,
-      canGoForward: value.canGoForward,
-      error: this.error,
-      externalUrl: this.externalUrl,
-    })
+    this.loading = value.loading
+    this.canGoBack = value.canGoBack
+    this.canGoForward = value.canGoForward
+    // D14 fix 2: only the finish/commit push may adopt. A late loading push that
+    // carries page A must not roll the requested target B back to A.
+    if (!value.loading) {
+      if (value.url !== '') {
+        const transition = transitionForwarded(this.forwarded, this.forwardedOrigin, value.url)
+        this.forwarded = transition.forwarded
+        this.forwardedOrigin = transition.origin
+        if (transition.forwarded) {
+          // The alias origin won the push: keep showing the logical target.
+          if (this.currentEntry() !== undefined) this.addressMode = 'observed'
+        } else {
+          this.externalUrl = undefined
+          if (this.adopt(value.url, value.title) !== undefined) this.addressMode = 'observed'
+        }
+      }
+      this.applyTitle(value.title)
+    }
+    // publish() persists: the adopted address/title must survive a restart (D15).
+    this.publish()
+  }
+
+  /**
+   * Project a pushed title onto the current history entry (D15): only a REAL
+   * change replaces the entry; the entry is immutable, so a new object is stored.
+   */
+  private applyTitle(title: string): void {
+    if (title === '') return
+    const entry = this.currentEntry()
+    if (entry === undefined || entry.title === title) return
+    this.history[this.cursor] = { ...entry, title }
   }
 
   /** Adopt a guest-reported URL: cursor moves on an existing entry (R2-B). */
-  private adopt(url: string): BrowserTarget | undefined {
+  private adopt(url: string, pushedTitle?: string): BrowserTarget | undefined {
+    if (url === '') return undefined
     if (canonicalOrigin(url) === undefined) return undefined
     let parsed: URL
     try { parsed = new URL(url) } catch { return undefined }
-    const entry: HistoryEntry = { kind: parsed.protocol === 'https:' ? 'https' : 'http', url: parsed.toString(), title: parsed.host }
+    const title = pushedTitle !== undefined && pushedTitle !== '' ? pushedTitle : parsed.host
+    const entry: HistoryEntry = { kind: parsed.protocol === 'https:' ? 'https' : 'http', url: parsed.toString(), title }
     const action = historyAdoptAction(this.history.map(item => item.url), this.cursor, entry.url)
     if (action.kind === 'reuse') {
       this.cursor = action.index
@@ -379,8 +475,13 @@ export class NativeGuestImpl implements BrowserFrame {
     // the link lives on (A). A != B is the normal case, so the URL is gated by
     // class (loopback target), never by equality with the current address (R4-01).
     if (!isLoopbackNegotiationTarget(url)) return
-    const generation = this.generation
+    // D14: the negotiation is a NEW navigation intent — bump the generation and the
+    // request revision immediately, so an in-flight older load can never land.
+    const generation = ++this.generation
+    this.requestRevision += 1
     const entry: HistoryEntry = { kind: url.startsWith('https:') ? 'https' : 'http', url, title: '' }
+    // The exit is disabled while the negotiation resolves (see load()).
+    this.externalUrl = null
     const ref = await this.resolver.resolve({ kind: entry.kind, url, title: entry.title }).catch(() => undefined)
     if (!acceptsForwardNegotiation({
       disposed: this.disposed,
@@ -390,19 +491,29 @@ export class NativeGuestImpl implements BrowserFrame {
     if (ref === undefined) {
       this.error = { code: undefined, description: 'forward-unavailable' }
       this.externalUrl = null
+      this.loading = false
       this.publish()
       return
     }
     const started = await this.start()
-    if (!started || this.lease === undefined || this.disposed) return
+    // D14: re-verify AFTER the acquire await — disposed, a newer navigation or a
+    // rotated lease must all drop this negotiation.
+    if (!started || this.disposed || this.lease === undefined || generation !== this.generation) return
+    if (lease !== undefined && lease !== this.lease) return
     // The negotiation IS the navigation intent: record B before loading its alias,
     // so the address bar and history show B instead of the page the link lived on.
     this.adopt(url)
+    this.error = undefined
+    this.loading = true
+    this.addressMode = 'requested'
     this.applyTargetRef(ref)
     this.publish()
     const ack = await this.carrier.bridge.navigate({ tabId: this.options.tabId, lease: this.lease, target: toGuestTarget(ref) })
       .catch(() => ({ ok: false as const, code: 'unavailable' }))
-    if (!ack.ok) this.externalUrl = undefined
+    if (this.disposed || generation !== this.generation) return
+    // The negotiation's target is a remote loopback: a failure must leave the
+    // exit DISABLED, never fall back to the logical URL.
+    if (!ack.ok) this.externalUrl = null
     this.projectAck(ack)
   }
 
@@ -410,8 +521,9 @@ export class NativeGuestImpl implements BrowserFrame {
     return this.cursor >= 0 ? this.history[this.cursor] : undefined
   }
 
+  /** Write the projected snapshot and the persisted navigation checkpoint. */
   private publish(): void {
-    this.store.set(this.store.getSnapshot())
+    this.store.set(this.projectState())
     this.options.persist({
       entries: [...this.history],
       index: this.cursor,
@@ -419,6 +531,20 @@ export class NativeGuestImpl implements BrowserFrame {
       navigation: this.cursor < 0 ? { status: 'empty' } : { status: 'known', revision: this.requestRevision },
       failure: undefined,
     })
+  }
+
+  /** Project the snapshot from the application history/cursor (D14). */
+  private projectState(): BrowserFrameState {
+    const target = this.currentEntry()
+    return {
+      target,
+      address: target === undefined ? 'empty' : this.addressMode,
+      loading: this.loading,
+      canGoBack: this.canGoBack,
+      canGoForward: this.canGoForward,
+      error: this.error,
+      externalUrl: this.externalUrl,
+    }
   }
 }
 
@@ -429,10 +555,9 @@ function toGuestTarget(ref: BrowserTargetRef): BrowserGuestTarget {
     : { kind: 'forward', recordId: ref.recordId, path: ref.path }
 }
 
-/** Idle state for a tab that has not navigated yet. */
-function emptyFrame(): BrowserFrameState {
-  return {
-    target: undefined, address: 'empty', loading: false, canGoBack: false, canGoForward: false,
-    error: undefined, externalUrl: undefined,
-  }
+/** Idle placeholder report used when the acquire starts before the first report. */
+const IDLE_FRAME_REPORT: BrowserFrameReport = {
+  frame: { x: 0, y: 0, width: 0, height: 0 },
+  visible: false,
+  occluded: true,
 }

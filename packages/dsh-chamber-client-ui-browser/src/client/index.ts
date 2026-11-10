@@ -233,8 +233,7 @@ function workspaceKeyResolver(ctx: Context, sessionId: string): (() => Promise<s
     const snapshot = (): { phase?: unknown; items?: unknown } => {
       try { return (read.call(list) as { phase?: unknown; items?: unknown }) ?? {} } catch { return {} }
     }
-    const pick = (): string | undefined => {
-      const current = snapshot()
+    const pick = (current: { phase?: unknown; items?: unknown }): string | undefined => {
       if (!Array.isArray(current.items)) return undefined
       for (const item of current.items) {
         if (typeof item !== 'object' || item === null) continue
@@ -243,23 +242,45 @@ function workspaceKeyResolver(ctx: Context, sessionId: string): (() => Promise<s
       }
       return undefined
     }
-    const immediate = pick()
-    if (immediate !== undefined || typeof subscribe !== 'function') { resolve(immediate ?? sessionId); return }
+    const current = snapshot()
+    const immediate = pick(current)
+    // D16: a settled list is authoritative — a 'ready' snapshot that does not name
+    // this Session means "no workspace", so fall back NOW instead of waiting for a
+    // subscribe event that will never come (and never arming the timer).
+    if (immediate !== undefined || current.phase === 'ready' || typeof subscribe !== 'function') {
+      resolve(immediate ?? sessionId)
+      return
+    }
     let done = false
     let stop: (() => void) | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
     const finish = (value: string): void => {
       if (done) return
       done = true
-      if (stop !== undefined) stop()
+      if (timer !== undefined) clearTimeout(timer)
+      timer = undefined
+      const unsubscribe = stop
+      stop = undefined
+      if (unsubscribe !== undefined) { try { unsubscribe() } catch { /* fail-safe */ } }
       resolve(value)
     }
     const off = subscribe.call(list, () => {
-      const found = pick()
+      const current = snapshot()
+      const found = pick(current)
       if (found !== undefined) finish(found)
+      else if (current.phase === 'ready') finish(sessionId)
     })
     stop = typeof off === 'function' ? off : undefined
+    // A synchronous first emission already resolved: drop the subscription the
+    // listener just handed us (the timer was never armed yet).
+    if (done) {
+      const unsubscribe = stop
+      stop = undefined
+      if (unsubscribe !== undefined) { try { unsubscribe() } catch { /* fail-safe */ } }
+      return
+    }
     // Bounded: the Workspace list is a boot fact; never block the lease on it.
-    setTimeout(() => { finish(pick() ?? sessionId) }, 1500)
+    timer = setTimeout(() => { finish(pick(snapshot()) ?? sessionId) }, 1500)
   })
 }
 

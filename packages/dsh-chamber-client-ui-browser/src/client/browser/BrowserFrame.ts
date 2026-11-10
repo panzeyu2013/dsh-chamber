@@ -11,8 +11,13 @@ export interface BrowserLoadError {
 /**
  * State consumed by the common browser chrome, without carrier identifiers.
  *
- * `address` has no `unknown` member: the native guest always reports the
- * observed URL (design 28 §4.3), so the chrome can always show it.
+ * The native guest carrier PROJECTS this state from its application history and
+ * cursor (D14): a controlled load shows its requested entry before the guest
+ * navigate invoke, and a pushed guest URL becomes the observed address.
+ *
+ * `address` has no `unknown` member: the carrier always knows whether the
+ * address is requested or observed (design 28 §4.3), so the chrome can always
+ * show it.
  */
 export interface BrowserFrameState {
   readonly target: BrowserTarget | undefined

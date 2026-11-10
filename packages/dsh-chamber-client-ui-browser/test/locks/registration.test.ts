@@ -8,7 +8,8 @@
  *     SHA-256 digests (a re-copy after an upstream pin upgrade must regenerate
  *     the table deliberately — upstream-touchpoints discipline);
  *   - the iframe carrier is GONE: no `IframeImpl`/`IframePresentation`, no
- *     sandbox switch, no `unknown` address state;
+ *     sandbox switch reader, no `unknown` address state in UI code (the frozen
+ *     upstream `locales.ts` keeps the retired copy keys byte-for-byte);
  *   - the native guest carrier is present: bridge guard + acquire/navigate/
  *     command/frame + the four pushes, and the forward resolver answers a
  *     recordRef instead of a frame URL.
@@ -31,18 +32,20 @@ function sha256(text: string): string {
 }
 
 /**
- * Files still copied from upstream (v3 carrier keeps the upstream UI, address,
- * persistence and history model; the carrier-only files left this table when the
- * native guest replaced the iframe). BrowserNavigation.ts carries comment-only v3
- * rewording (iframe → native guest); its digest pins that deliberate text so an
- * upstream re-copy is still noticed.
+ * Files copied byte-for-byte from upstream (v3 carrier keeps the upstream UI,
+ * address, persistence, history, copy and stylesheet model). BrowserPage.ts is
+ * the ONE upstream-derived file that left this table: the v3 page contract adds
+ * the tab id + carrier identity fields, so it is a fork-diff file, not a verbatim
+ * copy. A pin upgrade regenerates this table deliberately.
  */
 const UPSTREAM_VERBATIM: Readonly<Record<string, string>> = {
-  'src/client/browser/BrowserNavigation.ts': '1ae29f62f9f9ed90871c66f96a5ba48d40ab4350cf078d5bf57ff59ffe543f66',
+  'src/client/browser/BrowserNavigation.ts': '5f832a734641dce4d4442c58988f260a7cc5416c8ca2210e7fc6c26521d22ebc',
   'src/client/browser/BrowserPersistence.ts': '8eb0c5db55901a101df62a432ec377cd47dc14946407cc317396b5c8363ad245',
   'src/client/browser/url.ts': 'd182addd84c9a8b080622012ded2176ce6b438f998f4d6b1de220e8bd93ca0f6',
   'src/client/view/BrowserPresentation.ts': '49f421cab07c3e59c056263959af9420c51e5f2e8d753d1f2a0aea8ef0c33f17',
   'src/client/view/BrowserTitle.tsx': '52f0ca11ed86f31b488e165ebd4a5285fe8d45bda1916deb5bae1703491fb728',
+  'src/client/view/Browser.module.css': 'b4acf8f453c9692ea66904c75237dc73153c4f15d2db228d751ea0c1ead54880',
+  'src/client/locales.ts': 'c1443907749770d62c3c9017ca422d002553be48cb70833810dfa5c3c0961f7c',
   'src/index.ts': 'eda8f35390ed2ed274f44e678fa74d7b12e74c2bef0ba4003452810b194d8fc7',
 }
 
@@ -93,13 +96,40 @@ test('the forward resolver answers a recordRef, never a frame URL', () => {
   assert.match(resolver, /'localhost'/)
 })
 
-test('iframe-era chrome is gone: no sandbox switch, no unknown address state', () => {
+test('iframe-era chrome is gone: no sandbox switch, no unknown address state in UI code', () => {
+  // The eight upstream-verbatim files are digest-locked above; locales.ts still
+  // carries the retired copy keys byte-for-byte (upstream text, frozen). What must
+  // be gone is every UI/carrier READER of that chrome surface.
+  for (const file of [
+    'src/client/view/BrowserBody.tsx',
+    'src/client/view/BrowserTitle.tsx',
+    'src/client/browser/BrowserFrame.ts',
+    'src/client/browser/BrowserController.ts',
+  ]) {
+    assert.doesNotMatch(read(file), /setSandbox|sandboxEnabled|BrowserSandboxControl|addressUnknown|address\.changed|address\.unknown/, file + ' still reads sandbox/unknown chrome')
+  }
+  // The v3 address projection has no 'unknown' member (the guest always reports
+  // the observed URL), and the carrier never reads the frozen locale keys.
+  assert.doesNotMatch(read('src/client/browser/BrowserFrame.ts'), /'unknown'/)
+  assert.doesNotMatch(read('src/client/browser/NativeGuestImpl.ts'), /sandbox\.|address\.changed|address\.unknown/)
+})
+
+test('the keyboard lease mirror and hidden-frame semantics are wired in the carrier', () => {
+  const presentation = read('src/client/view/NativeGuestPresentation.ts')
+  assert.match(presentation, /setLease/)
+  assert.match(presentation, /chamberBrowserLease/, 'the placeholder must expose data-chamber-browser-lease')
+  const pages = read('src/client/pages.ts')
+  assert.match(pages, /hiddenGuestFrame/, 'a hidden report keeps the last placement and zeroes the rect')
+})
+
+test('the guest placeholder is an aria-hidden geometry marker (W-23 / design 28 §8-15)', () => {
   const body = read('src/client/view/BrowserBody.tsx')
-  assert.doesNotMatch(body, /setSandbox|sandbox\.|addressUnknown|address\.changed|address\.unknown/)
-  const frame = read('src/client/browser/BrowserFrame.ts')
-  assert.doesNotMatch(frame, /'unknown'|sandboxEnabled|BrowserSandboxControl/)
-  const locales = read('src/client/locales.ts')
-  assert.doesNotMatch(locales, /sandbox\.|address\.changed|address\.unknown/)
+  // The native guest is a sibling platform view with its own accessibility tree;
+  // the DOM placeholder is geometry only. It must be hidden from AT and carry no
+  // accessible name of its own (the address input and toolbar keep their names).
+  assert.match(body, /<div id=\{viewportId\} className=\{css\.viewport\} aria-hidden="true" \/>/u)
+  assert.doesNotMatch(body, /aria-label=\{t\('type\.label'\)\}/u, 'the placeholder must not carry an accessible name')
+  assert.match(body, /aria-label=\{t\('address\.placeholder'\)\}/u, 'the address input keeps its own name')
 })
 
 test('the tab implementation id stays chamber-owned and the kind stays upstream', () => {

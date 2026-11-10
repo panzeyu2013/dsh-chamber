@@ -12,7 +12,6 @@ import {
   REQUIRED_BROWSER_INVOKES,
   asBrowserBridge,
   parseBrowserForwardNeeded,
-  parseBrowserGuestInput,
   parseBrowserGuestState,
   parseBrowserOpenRequest,
   type BrowserBridge,
@@ -68,12 +67,9 @@ test('pushed state projection drops malformed payloads and keeps the diagnostic'
   assert.equal(parseBrowserGuestState(null), null)
 })
 
-test('the other three push projections are narrow', () => {
+test('the remaining push projections are narrow', () => {
   assert.deepEqual(parseBrowserOpenRequest({ tabId: 't', url: 'https://a.example/' }), { tabId: 't', url: 'https://a.example/' })
   assert.equal(parseBrowserOpenRequest({ tabId: 't' }), null)
-  assert.deepEqual(parseBrowserGuestInput({ tabId: 't', code: 'KeyT', modifiers: ['meta', 7] }), { tabId: 't', code: 'KeyT', modifiers: ['meta'] })
-  // A non-array modifiers value is tolerated as the legacy shape (empty set).
-  assert.deepEqual(parseBrowserGuestInput({ tabId: 't', code: 'KeyT', modifiers: 'meta' }), { tabId: 't', code: 'KeyT', modifiers: [] })
   assert.deepEqual(parseBrowserForwardNeeded({ tabId: 't', url: 'http://127.0.0.1:3000/' }), { tabId: 't', url: 'http://127.0.0.1:3000/' })
   assert.equal(parseBrowserForwardNeeded({ tabId: 't', url: 9 }), null)
 })
@@ -171,28 +167,14 @@ test('RT-11: the open-request projection carries the opener lease (bounded, opti
   assert.equal(parseBrowserOpenRequest({ tabId: 't', url: 'https://a.example/', lease: 'x'.repeat(129) }), null)
 })
 
-test('guest-input normalization: canonical wins, legacy booleans are a fallback, repeat passes through', () => {
-  // Canonical shape.
-  assert.deepEqual(parseBrowserGuestInput({ tabId: 't', code: 'KeyT', modifiers: ['meta', 'shift'], repeat: true }),
-    { tabId: 't', code: 'KeyT', modifiers: ['meta', 'shift'], repeat: true })
-  // Legacy boolean shape: primary maps to meta; the sibling legacy flags map to the DOM names.
-  assert.deepEqual(parseBrowserGuestInput({ tabId: 't', code: 'KeyT', primary: true, alt: true, shift: true, control: true, repeat: false }),
-    { tabId: 't', code: 'KeyT', modifiers: ['meta', 'alt', 'shift', 'control'], repeat: false })
-  // Both shapes: canonical wins; legacy primary is not unioned in.
-  assert.deepEqual(parseBrowserGuestInput({ tabId: 't', code: 'KeyT', modifiers: ['alt'], primary: true }),
-    { tabId: 't', code: 'KeyT', modifiers: ['alt'] })
-  // Mixed-case/unknown tokens pass the shape guard; the replay below ignores them.
-  assert.deepEqual(parseBrowserGuestInput({ tabId: 't', code: 'KeyT', modifiers: ['META', 'hyper'] }),
-    { tabId: 't', code: 'KeyT', modifiers: ['META', 'hyper'] })
-  assert.equal(parseBrowserGuestInput({ tabId: 't', code: 'KeyT', modifiers: [], repeat: 'yes' }), null)
-})
-
 // ── NativeGuestImpl state machine over a fake bridge/presentation ─────────────
 
 interface FakeOptions {
   readonly failAcquire?: number
   readonly failNavigate?: boolean
   readonly failKeymap?: boolean
+  /** Hold the FIRST acquire open until the test calls releaseAcquire (D16). */
+  readonly holdAcquire?: boolean
 }
 
 /** One effective combo the fake shortcut source reports. */
@@ -200,7 +182,9 @@ const COMBO = { code: 'KeyT', primary: true, alt: false, shift: false, control: 
 
 function fakeCarrier(options: FakeOptions = {}) {
   const calls = { acquire: 0, release: [] as string[], navigate: [] as unknown[], command: [] as string[], frame: 0, keymap: 0 }
+  const frameInputs: unknown[] = []
   let leaseSeq = 0
+  let releaseHeld: (() => void) | undefined
   let statePush: ((value: unknown) => void) | undefined
   let openRequestPush: ((value: unknown) => void) | undefined
   let forwardPush: ((value: unknown) => void) | undefined
@@ -208,13 +192,16 @@ function fakeCarrier(options: FakeOptions = {}) {
     async acquire() {
       calls.acquire += 1
       if (options.failAcquire !== undefined && calls.acquire <= options.failAcquire) return { ok: false as const, code: 'spawn-failed' }
+      if (options.holdAcquire === true && calls.acquire === 1) {
+        await new Promise<void>((resolve) => { releaseHeld = resolve })
+      }
       leaseSeq += 1
       return { ok: true as const, lease: 'lease-' + String(leaseSeq) }
     },
     async release(input: { lease: string }) { calls.release.push(input.lease); return { ok: true as const } },
     async navigate(input: unknown) { calls.navigate.push(input); return options.failNavigate === true ? { ok: false as const, code: 'forward-not-bound' } : { ok: true as const } },
     async command(input: { command: string }) { calls.command.push(input.command); return { ok: true as const } },
-    async frame() { calls.frame += 1; return { ok: true as const } },
+    async frame(input: unknown) { calls.frame += 1; frameInputs.push(input); return { ok: true as const } },
     async keymap() {
       calls.keymap += 1
       return options.failKeymap === true ? { ok: false as const, code: 'stale-lease' } : { ok: true as const }
@@ -228,13 +215,24 @@ function fakeCarrier(options: FakeOptions = {}) {
     },
   }
   const carrier = { bridge, sessionId: 's1', sourceId: 'local', sourceFingerprint: 'local', workspaceKey: 'local' }
-  return { bridge, carrier, calls, pushState: (value: unknown) => statePush?.(value), pushOpenRequest: (value: unknown) => openRequestPush?.(value), pushForward: (value: unknown) => forwardPush?.(value) }
+  return { bridge, carrier, calls, frameInputs, releaseAcquire: () => { releaseHeld?.() }, pushState: (value: unknown) => statePush?.(value), pushOpenRequest: (value: unknown) => openRequestPush?.(value), pushForward: (value: unknown) => forwardPush?.(value) }
 }
 
 function fakePresentation() {
   const reported: unknown[] = []
   const occluded: boolean[] = []
-  return { reported, occluded, mount: () => () => {}, dispose: () => {}, setOccluded: (value: boolean) => { occluded.push(value) }, report: (value: unknown) => { reported.push(value) } }
+  const leases: (string | undefined)[] = []
+  return {
+    reported,
+    occluded,
+    leases,
+    mount: () => () => {},
+    dispose: () => {},
+    setOccluded: (value: boolean) => { occluded.push(value) },
+    // D12: the live lease is mirrored onto the placeholder dataset.
+    setLease: (value: string | undefined) => { leases.push(value) },
+    report: (value: unknown) => { reported.push(value) },
+  }
 }
 
 const DIRECT = { resolve: async () => ({ kind: 'direct' as const, url: 'https://example.com/' }), dispose: async () => {} }
@@ -273,14 +271,27 @@ test('an acquire that settles after dispose releases the minted lease', async ()
   assert.deepEqual(calls.release, ['lease-1'], 'the late minted lease is released, not leaked')
 })
 
-test('a refused navigate ack surfaces the failure bar and drops the alias exit', async () => {
+test('a refused forward navigate ack surfaces the failure bar and DISABLES the external exit', async () => {
   const { frame } = await makeFrame({ failNavigate: true }, FORWARDED as never)
   frame.loadUrl({ kind: 'http', url: 'http://127.0.0.1:5173/', title: '127.0.0.1' })
   await settle()
   const state = frame.getSnapshot()
   assert.equal(state.error?.description, 'forward-not-bound')
   assert.equal(state.loading, false)
-  assert.equal(state.externalUrl, undefined)
+  // A failed FORWARD must never leave a directly-openable logical URL behind: the
+  // logical address is the REMOTE loopback, so the external exit stays disabled.
+  assert.equal(state.externalUrl, null)
+  assert.notEqual(state.externalUrl, state.target?.url)
+  await frame.dispose()
+})
+
+test('a refused direct navigate ack keeps the logical URL as the external exit', async () => {
+  const { frame } = await makeFrame({ failNavigate: true })
+  frame.loadUrl({ kind: 'https', url: 'https://example.com/', title: 'example.com' })
+  await settle()
+  const state = frame.getSnapshot()
+  assert.equal(state.error?.description, 'forward-not-bound')
+  assert.equal(state.externalUrl, undefined, 'a direct page can still be opened in the system browser')
   await frame.dispose()
 })
 
@@ -434,5 +445,172 @@ test('visibility-only state pushes clear a previous hide (symmetric occlusion, R
   push({ occluded: false })
   await settle()
   assert.deepEqual(presentation.occluded, [true, false, true, false], 'visible:true clears a hide; the flags stay symmetric')
+  await frame.dispose()
+})
+
+/** Last persisted checkpoint (D14/D15 projection assertions). */
+function lastPersisted(persisted: unknown[]): {
+  readonly entries: { url: string; title: string }[]
+  readonly index: number
+  readonly request?: { readonly revision: number; readonly target: { readonly url: string } }
+} {
+  return persisted[persisted.length - 1] as {
+    entries: { url: string; title: string }[]
+    index: number
+    request?: { revision: number; target: { url: string } }
+  }
+}
+
+test('D14: a requested load is projected into the snapshot before the navigate invoke', async () => {
+  const { frame } = await makeFrame()
+  frame.loadUrl({ kind: 'https', url: 'https://example.com/', title: 'example.com' })
+  const state = frame.getSnapshot()
+  assert.equal(state.target?.url, 'https://example.com/', 'the requested entry is projected synchronously')
+  assert.equal(state.address, 'requested')
+  assert.equal(state.loading, true)
+  assert.equal(state.externalUrl, null, 'the external exit is disabled while the target resolves')
+  await settle()
+  assert.equal(frame.getSnapshot().externalUrl, undefined, 'a resolved DIRECT target keeps the logical URL exit')
+  await frame.dispose()
+})
+
+test('D14: a forwarded page keeps its logical target while the guest sits on the alias', async () => {
+  const { frame, pushState, calls } = await makeFrame({}, FORWARDED as never)
+  frame.loadUrl({ kind: 'http', url: 'http://127.0.0.1:5173/', title: '127.0.0.1' })
+  assert.equal(frame.getSnapshot().externalUrl, null, 'the remote-loopback exit is disabled while resolving')
+  await settle()
+  // applyTargetRef publishes: the alias exit is part of the snapshot (D14).
+  let state = frame.getSnapshot()
+  assert.equal(state.target?.url, 'http://127.0.0.1:5173/')
+  assert.equal(state.externalUrl, 'http://127.0.0.7:41000/')
+  assert.equal(calls.navigate.length, 1)
+  const lease = (frame as unknown as { lease: string }).lease
+  pushState({ tabId: 'tab-1', lease, url: 'http://127.0.0.7:41000/app', title: 'Alias Page', canGoBack: false, canGoForward: false, loading: false })
+  await settle()
+  state = frame.getSnapshot()
+  assert.equal(state.target?.url, 'http://127.0.0.1:5173/', 'the alias commit never replaces the logical target')
+  assert.equal(state.target?.title, 'Alias Page', 'D15: the pushed title lands on the logical entry')
+  assert.equal(state.externalUrl, 'http://127.0.0.7:41000/')
+  assert.equal(state.address, 'observed')
+  // An empty/loading projection must not clear the forwarded/external state.
+  pushState({ tabId: 'tab-1', lease, url: '', title: '', canGoBack: false, canGoForward: false, loading: true })
+  await settle()
+  state = frame.getSnapshot()
+  assert.equal(state.target?.url, 'http://127.0.0.1:5173/', 'an empty url never adopts')
+  assert.equal(state.externalUrl, 'http://127.0.0.7:41000/', 'a loading push keeps the alias exit')
+  assert.equal(state.loading, true)
+  await frame.dispose()
+})
+
+test('D15: a pushed title updates the current history entry and is persisted', async () => {
+  const { frame, pushState, persisted } = await makeFrame()
+  frame.loadUrl({ kind: 'https', url: 'https://example.com/', title: 'example.com' })
+  await settle()
+  const lease = (frame as unknown as { lease: string }).lease
+  pushState({ tabId: 'tab-1', lease, url: 'https://example.com/', title: 'Example Domain', canGoBack: false, canGoForward: false, loading: false })
+  await settle()
+  assert.equal(frame.getSnapshot().target?.title, 'Example Domain')
+  const checkpoint = lastPersisted(persisted)
+  assert.equal(checkpoint.entries[checkpoint.index]?.title, 'Example Domain', 'the observed title is persisted')
+  // Adoption prefers the pushed title over the host fallback.
+  pushState({ tabId: 'tab-1', lease, url: 'https://b.example/', title: 'B Page', canGoBack: true, canGoForward: false, loading: false })
+  await settle()
+  assert.equal(frame.getSnapshot().target?.title, 'B Page')
+  const next = lastPersisted(persisted)
+  assert.equal(next.entries[next.index]?.url, 'https://b.example/')
+  assert.equal(next.entries[next.index]?.title, 'B Page')
+  await frame.dispose()
+})
+
+test('D14: an in-page negotiation projects target B and bumps the request revision', async () => {
+  const { frame, pushForward } = await makeFrame({}, FORWARDED as never)
+  frame.loadUrl({ kind: 'https', url: 'https://dsh-remote.example/', title: 'remote' })
+  await settle()
+  const lease = (frame as unknown as { lease: string }).lease
+  const before = (frame as unknown as { requestRevision: number }).requestRevision
+  pushForward({ tabId: 'tab-1', url: 'http://127.0.0.1:5173/app', lease })
+  await settle()
+  assert.equal((frame as unknown as { requestRevision: number }).requestRevision, before + 1,
+    'the negotiation advances the request revision on entry')
+  assert.equal(frame.getSnapshot().target?.url, 'http://127.0.0.1:5173/app')
+  await frame.dispose()
+})
+
+test('D16: a placeholder report that changed during acquire is sent once the lease lands', async () => {
+  const { frame, calls, frameInputs, releaseAcquire } = await makeFrame({ holdAcquire: true })
+  frame.reportFrame({ frame: { x: 1, y: 2, width: 100, height: 80 }, visible: true, occluded: false })
+  await settle()
+  assert.equal(calls.acquire, 1)
+  assert.equal(calls.frame, 0, 'no frame invoke before the lease exists')
+  const latest = { frame: { x: 3, y: 4, width: 120, height: 90 }, visible: true, occluded: false }
+  frame.reportFrame(latest)
+  releaseAcquire()
+  await settle()
+  assert.equal(calls.frame, 1, 'the latest pending frame crosses the bridge')
+  const sent = frameInputs[0] as { frame: { x: number; y: number; width: number; height: number } }
+  assert.deepEqual(sent.frame, latest.frame)
+  await frame.dispose()
+})
+
+test('D12: the live lease is mirrored onto the presentation and cleared on release', async () => {
+  const { frame, presentation } = await makeFrame()
+  await frame.start()
+  await settle()
+  assert.deepEqual(presentation.leases, ['lease-1'])
+  await frame.dispose()
+  assert.deepEqual(presentation.leases, ['lease-1', undefined], 'dispose/release clears the mirror')
+})
+
+test('m1: a mapped IPv6 forward-needed reaches the resolver and shows the failure bar', async () => {
+  let calls = 0
+  const ref = { kind: 'forward' as const, recordId: 'fwd-1', path: '/', externalUrl: 'http://127.0.0.7:41000/' }
+  const resolver = {
+    resolve: async () => { calls += 1; return calls === 1 ? ref : undefined },
+    dispose: async () => {},
+  }
+  const { frame, pushForward } = await makeFrame({}, resolver as never)
+  frame.loadUrl({ kind: 'https', url: 'https://dsh-remote.example/', title: 'remote' })
+  await settle()
+  const lease = (frame as unknown as { lease: string }).lease
+  // Swift canonicalHost maps ::ffff:7f00:1 to 127.0.0.1 and pushes the negotiation;
+  // the renderer class gate must accept it so the resolver's refusal (D6) becomes
+  // the failure bar instead of a silently dropped push.
+  pushForward({ tabId: 'tab-1', url: 'http://[::ffff:7f00:1]:5173/app', lease })
+  await settle()
+  const state = frame.getSnapshot()
+  assert.equal(state.error?.description, 'forward-unavailable')
+  assert.equal(state.externalUrl, null, 'the exit stays disabled: never hand a remote loopback to the system browser')
+  await frame.dispose()
+})
+
+test('D14 fix 2: a late loading push never rolls the target back to the previous page', async () => {
+  const { frame, pushState, persisted } = await makeFrame()
+  frame.loadUrl({ kind: 'https', url: 'https://a.example/', title: 'a' })
+  await settle()
+  frame.loadUrl({ kind: 'https', url: 'https://b.example/', title: 'b' })
+  await settle()
+  assert.equal(frame.getSnapshot().target?.url, 'https://b.example/')
+  assert.equal(frame.getSnapshot().address, 'requested')
+  const lease = (frame as unknown as { lease: string }).lease
+  // Swift publishes on didStartProvisionalNavigation, so the PREVIOUS page's URL
+  // can arrive late with loading:true. It must not move the target backwards.
+  pushState({ tabId: 'tab-1', lease, url: 'https://a.example/', title: 'A stale title', canGoBack: true, canGoForward: false, loading: true })
+  await settle()
+  let state = frame.getSnapshot()
+  assert.equal(state.target?.url, 'https://b.example/', 'a loading push must not adopt the stale url')
+  assert.equal(state.address, 'requested', 'the requested projection stays until the commit push')
+  assert.equal(state.loading, true)
+  assert.equal(state.target?.title, 'b', 'a loading push must not adopt the stale title either')
+  const pending = lastPersisted(persisted)
+  assert.equal(pending.entries[pending.index]?.url, 'https://b.example/')
+  assert.equal(pending.request?.target.url, 'https://b.example/', 'the persisted request never points at the stale page')
+  // The finish push of B is the commit boundary: adopt and converge.
+  pushState({ tabId: 'tab-1', lease, url: 'https://b.example/', title: 'B Page', canGoBack: true, canGoForward: false, loading: false })
+  await settle()
+  state = frame.getSnapshot()
+  assert.equal(state.target?.url, 'https://b.example/')
+  assert.equal(state.target?.title, 'B Page')
+  assert.equal(state.address, 'observed')
+  assert.equal(state.loading, false)
   await frame.dispose()
 })

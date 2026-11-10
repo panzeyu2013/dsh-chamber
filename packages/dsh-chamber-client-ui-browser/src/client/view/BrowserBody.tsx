@@ -93,7 +93,11 @@ export function BrowserBody(props: BrowserBodyProps): ReactNode {
         : t('load.failed')}</div>}
       {failure !== undefined && <div className={css.failure} role="alert">{t(`error.${failure}`)}</div>}
       <div className={css.content} aria-busy={frame.loading}>
-        <div id={viewportId} className={css.viewport} aria-label={t('type.label')} />
+        {/* Geometry marker only: the native guest (a sibling platform view, not this
+            DOM node) owns the content's accessibility tree. Hidden from AT so an
+            empty, unlabeled "browser" region is not announced; the address input
+            and the toolbar controls carry their own names (design 28 §8-15). */}
+        <div id={viewportId} className={css.viewport} aria-hidden="true" />
         {restoreTarget !== undefined && <section className={css.restore} aria-label={t('restore.previous')}>
           <p className={css.restoreLabel}>{t('restore.previous')}</p>
           <p className={css.restoreTitle}>{restoreTarget.title}</p>

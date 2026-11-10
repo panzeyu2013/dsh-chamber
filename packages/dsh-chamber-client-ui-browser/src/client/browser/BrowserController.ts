@@ -36,7 +36,7 @@ export interface BrowserControllerOptions {
   readonly createPage: BrowserPageFactory
   /** Native guest carrier identity (bridge + boot-bound lease identity). */
   readonly carrier: NativeGuestCarrier
-  /** Clock seam for the popup rate limit (defaults to Date.now). */
+  /** Clock seam for the popup rate limit (defaults to the monotonic clock, RT-05). */
   readonly now?: () => number
   readonly openTab: (url: string) => void
 }
@@ -244,7 +244,9 @@ export function createBrowserControllers(actions: BoundActions<BrowserStore>, cr
           held.signal.removeEventListener('abort', held.forget)
           void held.controller.dispose()
         }
-        const created = new BrowserController({ ...request, actions: currentActions, createPage, carrier, now: () => Date.now() })
+        // RT-05: the popup window is a duration — a wall clock that jumps backwards
+        // must not widen it; monotonicNow() is the single clock seam (D16).
+        const created = new BrowserController({ ...request, actions: currentActions, createPage, carrier, now: monotonicNow })
         const forget = (): void => {
           controllers.delete(tabId)
           // Plugin unload also aborts occurrences; only layout removal deletes saved navigation.

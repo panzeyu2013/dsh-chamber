@@ -111,15 +111,46 @@ export function acceptsForwardNegotiation(gates: {
   return !gates.disposed && gates.generationMatches && gates.leaseMatches
 }
 
-/** Loopback hostnames main may negotiate a forward lease for (design 28 section 2.10). */
-const NEGOTIATION_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
+/**
+ * Host comparison form (single source; mirrors the pre-IPv4/IPv6 steps of Swift
+ * `BrowserGuestPolicy.canonicalHost`): trim, lowercase and strip every trailing
+ * dot, so the FQDN root spelling `localhost.` compares equal to `localhost`
+ * (D6 tail-dot ruling). URL-parsed hosts are already lowercase; the normalization
+ * still keeps untrusted pushed spellings and hand-built hosts on one rule.
+ *
+ * @param host - a URL hostname (an IPv6 literal keeps its brackets).
+ * @returns the comparison form.
+ */
+export function normalizeForwardHost(host: string): string {
+  let value = host.trim().toLowerCase()
+  while (value.endsWith('.')) value = value.slice(0, -1)
+  return value
+}
+
+/**
+ * Loopback hostnames main may negotiate a forward lease for (design 28 §2.10).
+ *
+ * Swift's canonicalHost normalizes the mapped IPv6 spellings to 127.0.0.1 before
+ * it decides to push forward-needed, so the renderer's class gate must accept
+ * them too (m1); the resolver then answers the failure bar (the forward target
+ * set is only 127.0.0.1/localhost). `[::ffff:127.0.0.1]` parses to
+ * `[::ffff:7f00:1]`, and both spellings are listed so the contract reads whole.
+ */
+const NEGOTIATION_HOSTS: ReadonlySet<string> = new Set([
+  '127.0.0.1',
+  'localhost',
+  '[::1]',
+  '[::ffff:7f00:1]',
+  '[::ffff:127.0.0.1]',
+])
 
 /**
  * Whether a pushed forward-needed URL is a loopback navigation target.
  *
  * Main only pushes loopback targets; the renderer refuses to act on anything else
  * rather than trusting the push blindly. Non-http(s) and unparsable input is not a
- * negotiation target.
+ * negotiation target. Hosts are compared in {@link normalizeForwardHost} form, so
+ * `localhost.` (the FQDN root spelling) is the same target as `localhost`.
  *
  * @param url - the URL main pushed in the forward-needed push.
  * @returns true when it is an http(s) URL on a loopback host.
@@ -128,7 +159,7 @@ export function isLoopbackNegotiationTarget(url: string): boolean {
   let parsed: URL
   try { parsed = new URL(url) } catch { return false }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-  return NEGOTIATION_HOSTS.has(parsed.hostname.toLowerCase())
+  return NEGOTIATION_HOSTS.has(normalizeForwardHost(parsed.hostname))
 }
 
 /** Application-history cursor action for one adopted guest URL. */
@@ -169,16 +200,4 @@ export function canonicalOrigin(url: string): string | undefined {
   } catch {
     return undefined
   }
-}
-
-/**
- * History action for one adopted guest URL: only a REAL url change appends an
- * entry (otherwise clicking/redirecting to the same page would pollute history).
- *
- * @param currentUrl - the logical address currently at the history cursor.
- * @param nextUrl - the guest-reported URL.
- * @returns true when the navigation history must advance.
- */
-export function historyAdvances(currentUrl: string | undefined, nextUrl: string): boolean {
-  return currentUrl !== nextUrl
 }

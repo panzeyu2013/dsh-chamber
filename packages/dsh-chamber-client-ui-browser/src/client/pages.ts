@@ -1,7 +1,8 @@
 /** Assemble native guest navigation and presentation without platform branches in consumers. */
 import type { BrowserPage, BrowserPageOptions } from './browser/BrowserPage.ts'
 import type { BrowserTargetRefResolver } from './browser/ForwardFrameResolver.ts'
-import type { NativeGuestCarrier } from './browser/BrowserBridge.ts'
+import type { BrowserFrameReport, NativeGuestCarrier } from './browser/BrowserBridge.ts'
+import { hiddenGuestFrame } from './browser/guest-geometry.ts'
 import { NativeGuestImpl } from './browser/NativeGuestImpl.ts'
 import { NativeGuestPresentation } from './view/NativeGuestPresentation.ts'
 
@@ -22,9 +23,13 @@ export function createNativeGuestPage(
   resolver: BrowserTargetRefResolver,
 ): BrowserPage {
   let frame: NativeGuestImpl | undefined
+  /** Last reported placement: a hidden report keeps it while zeroing the rect. */
+  let lastReport: BrowserFrameReport | undefined
   const presentation = new NativeGuestPresentation({
-    report: (next) => { frame?.reportFrame(next) },
-    hidden: () => { frame?.reportFrame({ frame: { x: 0, y: 0, width: 0, height: 0 }, visible: false, occluded: true }) },
+    report: (next) => { lastReport = next; frame?.reportFrame(next) },
+    // D16: hide with the hiddenGuestFrame semantics — keep the last placement and
+    // zero the rect (a 0,0 report would move the native layer to the origin).
+    hidden: () => { frame?.reportFrame(hiddenGuestFrame(lastReport)) },
   }, options.tabId)
   frame = new NativeGuestImpl(options, carrier, presentation, resolver)
   return { frame, presentation: presentation }

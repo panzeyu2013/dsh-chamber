@@ -1,4 +1,4 @@
-/** Bounded, application-known history for the native guest carrier. */
+/** Bounded, application-known history used only by the iframe provider. */
 import type { BrowserTarget } from './url.ts'
 import type { BrowserHistoryEntry, BrowserTabState } from './BrowserPersistence.ts'
 
@@ -6,9 +6,8 @@ import type { BrowserHistoryEntry, BrowserTabState } from './BrowserPersistence.
 export const MAX_BROWSER_HISTORY = 100
 
 /**
- * Owns the application-known URL history and the native-guest observation state
- * machine. The first load for a request keeps its URL authoritative; another load
- * marks it unknown.
+ * Owns the application-known URL history and the iframe observation state machine.
+ * The first load for a request keeps its URL authoritative; another load marks it unknown.
  */
 export class BrowserNavigation {
   private value: BrowserTabState
@@ -62,12 +61,12 @@ export class BrowserNavigation {
     return this.value
   }
 
-  /** Whether the native guest can safely use the application-owned Back entry. */
+  /** Whether the Web iframe can safely use the application-owned Back entry. */
   get canGoBack(): boolean {
     return BrowserNavigation.canGoBack(this.value)
   }
 
-  /** Whether the native guest can safely use the application-owned Forward entry. */
+  /** Whether the Web iframe can safely use the application-owned Forward entry. */
   get canGoForward(): boolean {
     return BrowserNavigation.canGoForward(this.value)
   }

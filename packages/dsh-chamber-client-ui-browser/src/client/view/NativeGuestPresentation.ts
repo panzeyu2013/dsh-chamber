@@ -13,6 +13,12 @@
  * as ONE sample is won by a foreign layer; `setOccluded` stays the explicit seam
  * for overlay sources we cannot see (native modals, hover layers outside the DOM,
  * partially transparent scrims — see the FW2 report blind spots).
+ *
+ * Lease identity (design 28 v3 §3:89): the live guest lease is mirrored onto the
+ * placeholder as `data-chamber-browser-lease`, so the page-level `browser.input`
+ * replay can synthesize the key event on the element that owns the focused guest.
+ * The tab id dataset stays for the older-shim compatibility arm. Both are cleared
+ * on unmount/release; the lease is attribution only, never a credential.
  */
 import type { BrowserPresentation } from './BrowserPresentation.ts'
 import {
@@ -42,6 +48,8 @@ export class NativeGuestPresentation implements BrowserPresentation {
   private readonly observers: { disconnect(): void }[] = []
   private readonly listeners: { target: EventTarget; type: string; listener: EventListener; capture: boolean }[] = []
   private frame: BrowserFrameReport | undefined
+  /** Current guest lease (data-chamber-browser-lease); undefined before acquire/release. */
+  private lease: string | undefined
   private pending = false
   private occluded = false
   /** Overlay-candidate cache: the DOM is queried at most every 250 ms (RT-04). */
@@ -66,6 +74,7 @@ export class NativeGuestPresentation implements BrowserPresentation {
     if (host === null) throw new Error('native guest presentation: viewport is not mounted')
     this.host = host
     host.dataset.chamberBrowserTab = this.tabId
+    this.writeLease()
     const schedule = (): void => { this.schedule() }
     const resizeObserver = new ResizeObserver(schedule)
     resizeObserver.observe(host)
@@ -81,6 +90,7 @@ export class NativeGuestPresentation implements BrowserPresentation {
     return () => {
       if (this.host !== host) return
       this.teardown()
+      delete host.dataset.chamberBrowserLease
       this.host = undefined
       // Only a previously VISIBLE guest needs an explicit hide; a mount that never
       // reported (never acquired) must not emit a spurious hidden report.
@@ -89,6 +99,19 @@ export class NativeGuestPresentation implements BrowserPresentation {
         this.events.hidden()
       }
     }
+  }
+
+  /**
+   * Mirror the live guest lease onto the placeholder (design 28 v3 §3:89).
+   *
+   * @param lease - the lease adopted by this tab occurrence, or undefined when the
+   *   lease is released/disposed. The tab id dataset remains the compatibility arm
+   *   for an older shim whose input push carries no lease.
+   */
+  setLease(lease: string | undefined): void {
+    if (this.lease === lease) return
+    this.lease = lease
+    this.writeLease()
   }
 
   /** @param occluded - a DOM/native layer may cover the panel; hide the native layer. */
@@ -102,8 +125,18 @@ export class NativeGuestPresentation implements BrowserPresentation {
   dispose(): void {
     this.disposed = true
     this.teardown()
+    const host = this.host
+    if (host !== undefined) delete host.dataset.chamberBrowserLease
     this.host = undefined
     this.frame = undefined
+  }
+
+  /** Write/clear the lease dataset on the current placeholder. */
+  private writeLease(): void {
+    const host = this.host
+    if (host === undefined) return
+    if (this.lease === undefined) delete host.dataset.chamberBrowserLease
+    else host.dataset.chamberBrowserLease = this.lease
   }
 
   private listen(target: EventTarget, type: string, listener: EventListener, capture: boolean): void {

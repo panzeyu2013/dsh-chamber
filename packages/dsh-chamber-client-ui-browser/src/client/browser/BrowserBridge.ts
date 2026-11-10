@@ -2,8 +2,11 @@
  * Native guest carrier contract (design 28 v3 §3/§4, ADR-0004).
  *
  * The Swift shell owns one child WKWebView per tab. The renderer never touches
- * the guest: it acquires a lease, sends navigation intents, reports the
- * placeholder geometry and consumes pushed state. The page-level carrier is the
+ * the guest: it acquires a lease, sends navigation intents (navigate / command /
+ * frame / keymap), reports the placeholder geometry and consumes the four pushed
+ * event faces (state / openRequested / input / forwardNeeded). The live lease is
+ * mirrored onto the placeholder as `data-chamber-browser-lease` so the page-level
+ * input replay addresses the focused occurrence (D12). The page-level carrier is the
  * Swift-only `dshChamber.browser` namespace (whitelisted in
  * `packages/desktop/bridge-swift-only-additions.json`); a page without it does
  * NOT register the Browser row (fail-closed — the iframe carrier is retired).
@@ -66,9 +69,16 @@ export interface BrowserGuestOpenRequest {
 
 /**
  * Pushed primary-modifier key from a focused guest (main → renderer; design 28
- * §3:89). Canonical wire shape = `{tabId, code, modifiers: ['meta'|'alt'|'shift'|'control'], repeat?}`.
+ * §3:89). Canonical wire shape =
+ * `{tabId, code, modifiers: ['meta'|'alt'|'shift'|'control'], repeat?, lease?}`.
  * The legacy boolean shape (`primary/alt/shift/control/repeat`) stays accepted so
  * a shim/Swift rollout order cannot break the replay.
+ *
+ * `lease` is the focused tab occurrence's live guest lease (D12). The page-level
+ * replay prefers the placeholder carrying `data-chamber-browser-lease` (written by
+ * `NativeGuestPresentation.setLease`) and falls back to `data-chamber-browser-tab`
+ * when the push has no lease (older shim). It is attribution only, never a
+ * credential.
  */
 export interface BrowserGuestInput {
   readonly tabId: string
@@ -77,6 +87,8 @@ export interface BrowserGuestInput {
   readonly repeat?: boolean
   /** Legacy alias for the primary modifier (maps to meta). */
   readonly primary?: boolean
+  /** The focused occurrence's live guest lease; absent = older-shim compatibility arm. */
+  readonly lease?: string
 }
 
 /**
@@ -244,30 +256,6 @@ export function parseBrowserOpenRequest(value: unknown): BrowserGuestOpenRequest
   return { tabId: value.tabId, url: value.url, ...(typeof value.lease === 'string' ? { lease: value.lease } : {}) }
 }
 
-/** Narrow an untrusted guest-input push (canonical string[] OR the legacy boolean shape). */
-export function parseBrowserGuestInput(value: unknown): BrowserGuestInput | null {
-  if (!isRecord(value)) return null
-  if (!isBoundedString(value.tabId, 128)) return null
-  if (!isBoundedString(value.code, 64)) return null
-  const modifiers = new Set<string>()
-  if (Array.isArray(value.modifiers)) {
-    // Canonical shape wins; the legacy booleans are not unioned into it.
-    for (const modifier of value.modifiers) {
-      if (typeof modifier === 'string' && modifier.length <= 32) modifiers.add(modifier)
-    }
-  } else {
-    // Legacy boolean shape (fallback only): primary is the primary modifier
-    // (meta on the wire).
-    if (value.primary === true) modifiers.add('meta')
-    for (const [flag, modifier] of [['alt', 'alt'], ['shift', 'shift'], ['control', 'control']] as const) {
-      if (value[flag] === true) modifiers.add(modifier)
-    }
-  }
-  const repeat = value.repeat
-  if (repeat !== undefined && typeof repeat !== 'boolean') return null
-  return { tabId: value.tabId, code: value.code, modifiers: [...modifiers], ...(repeat === undefined ? {} : { repeat }) }
-}
-
 /** Narrow an untrusted forward-needed push (url is only classified as loopback later). */
 export function parseBrowserForwardNeeded(value: unknown): BrowserGuestForwardNeeded | null {
   if (!isRecord(value)) return null
@@ -276,7 +264,11 @@ export function parseBrowserForwardNeeded(value: unknown): BrowserGuestForwardNe
   return { tabId: value.tabId, url: value.url, ...(typeof value.lease === 'string' ? { lease: value.lease } : {}) }
 }
 
-/** Structural probe for the carrier bridge (the four invokes + the event faces). */
+/**
+ * Structural probe for the carrier bridge: the five required invokes plus the
+ * optional `keymap` sixth, and the four event faces (`state`, `openRequested`,
+ * `input`, `forwardNeeded`).
+ */
 export function asBrowserBridge(value: unknown): BrowserBridge | null {
   if (!isRecord(value)) return null
   for (const method of REQUIRED_BROWSER_INVOKES) {
