@@ -393,8 +393,9 @@ final class ShellIdentityTests: XCTestCase {
                       "隐藏标题文字（可见标题仍投影为窗口标题）")
         XCTAssertTrue(source.contains("window.isMovableByWindowBackground = true"),
                       "保留的原生兜底（只对 AppKit 自有命中视图生效；页面内容的拖动面见 ShellWindowDrag）")
-        XCTAssertTrue(source.contains("window.contentMinSize = NSSize(width: 880, height: 600)"),
-                      "chamber 自有最小内容尺寸（上游 desktop main 是 520×600，三栏布局装不下）")
+        XCTAssertTrue(source.contains("window.contentMinSize = WindowMetrics.minContentSize"),
+                      "最小视口单源 = WindowMetrics（官方最小外框 520×600 − 28pt 标题栏 = "
+                      + "520×572；数值由 ShellWindowChromeTests 钉住）")
         XCTAssertTrue(source.contains(
             "webView.underPageBackgroundColor = Self.windowBackgroundColor"))
         // 真实生效路径 = DSHChamberWebKitSupport 的异常安全包装
@@ -513,5 +514,62 @@ final class ShellIdentityTests: XCTestCase {
                       "非不透明，否则材质采样到的是窗口自己的色")
         XCTAssertTrue(material.contains("window.backgroundColor = .clear"),
                       "窗口底色必须清空")
+    }
+
+    /// P10/P03/P11 的接线锁（Swift 编译/XCTest/GUI 全部 NOT RUN：源码锁是当前
+    /// 唯一可跑的静态证据）。逐条对应任务书判据：
+    ///  - 注销/关机：willPowerOff 注册在 NSWorkspace 自己的通知中心、置位/复位腿、
+    ///    applicationShouldTerminate **最前**的 sessionEnding 门（早于 isConfirmed/
+    ///    beginDecision）、确认框在开时 abortModal、已确认后取消回复被忽略；
+    ///  - 前台/唤醒 nudge：两个调用点各一行（判据在 AppUpdater 纯函数）；
+    ///  - 窗口几何：windowSize/contentMinSize 都引用 WindowMetrics 单源。
+    func testParityWiringForSessionEndingNudgeAndWindowMetrics() throws {
+        let app = try uncommentedSource("Sources/DSHChamber/AppDelegate.swift")
+        // 注销/关机：注册点必须是 NSWorkspace 的通知中心（注册到 default center 永不触发）。
+        XCTAssertTrue(app.contains("NSWorkspace.shared.notificationCenter.addObserver("),
+                      "willPowerOff 必须注册在 NSWorkspace 自己的通知中心")
+        XCTAssertTrue(app.contains(
+            "forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main"),
+            "willPowerOff 通知名/主队列投递")
+        XCTAssertTrue(app.contains("self.sessionEnding = true"), "willPowerOff 到达即置位")
+        XCTAssertTrue(app.contains(
+            "forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main"),
+            "复位腿 = AppDelegate 自己注册 didBecomeActive")
+        XCTAssertTrue(app.contains("self.sessionEnding = false"), "didBecomeActive 复位")
+        // 豁免门必须在 applicationShouldTerminate 的**最前**：早于 isConfirmed 与
+        // beginDecision（否则确认框/在飞决策会让 beginDecision 失败并 .terminateCancel）。
+        guard let functionRange = app.range(of:
+                "func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {")
+        else { return XCTFail("applicationShouldTerminate 必须可定位") }
+        let rest = functionRange.upperBound..<app.endIndex
+        guard let sessionGate = app.range(of: "if sessionEnding {", range: rest),
+              let confirmedGate = app.range(of: "if quitGate.isConfirmed {", range: rest),
+              let decisionGate = app.range(of: "guard quitGate.beginDecision() else {", range: rest)
+        else { return XCTFail("退出链三段门必须可定位") }
+        XCTAssertLessThan(sessionGate.lowerBound, confirmedGate.lowerBound,
+                          "sessionEnding 门必须在 isConfirmed 之前（第一行）")
+        XCTAssertLessThan(sessionGate.lowerBound, decisionGate.lowerBound,
+                          "sessionEnding 门必须在 beginDecision 之前（登出不被挡住）")
+        XCTAssertTrue(app.contains("if quitGate.isConfirming {"), "确认框在开要先看 confirming")
+        XCTAssertTrue(app.contains("NSApp.abortModal()"),
+                      "确认框在开时 abortModal（否则登出被 .terminateCancel 挡住）")
+        // .terminateLater 必须置 awaiting（复用既有已确认分支）：否则 reply 变 no-op
+        // 且 5s 硬顶守卫失效（挂死）——锁住该行仍在。
+        XCTAssertTrue(app.contains("if later { awaitingTerminateReply = true }"))
+        XCTAssertTrue(app.contains("if !proceed, quitGate.isConfirmed {"),
+                      "已确认（含注销豁免）后取消回复必须被忽略（唯一取消闸口）")
+        // P03：两个调用点各一行（判据/合并窗在 AppUpdater 纯函数，壳里不加定时器）。
+        let controller = try uncommentedSource("Sources/DSHChamber/MainWindowController.swift")
+        XCTAssertEqual(
+            controller.components(separatedBy: "AppUpdater.shared.nudgeBackgroundCheck()").count - 1, 2,
+            "唤醒与激活两个调用点各一次（不新增第三处）")
+        XCTAssertTrue(controller.contains("private func hostWakeUp(_ note: Notification)"),
+                      "唤醒腿存在（nudge 挂在既有事件腿而非新定时器）")
+        // P11：窗口几何只经 WindowMetrics 单源引用。
+        XCTAssertTrue(controller.contains(
+            "private static let windowSize = WindowMetrics.defaultContentSize"),
+            "初始内容尺寸必须引用 WindowMetrics（不再裸字面量）")
+        XCTAssertTrue(controller.contains("window.contentMinSize = WindowMetrics.minContentSize"),
+                      "最小内容尺寸必须引用 WindowMetrics")
     }
 }

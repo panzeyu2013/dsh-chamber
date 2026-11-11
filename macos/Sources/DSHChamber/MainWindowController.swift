@@ -84,16 +84,42 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 只暴露其脚本内实现的方法，未暴露方法在页面层即 stub——两处均以 manifest
     /// 为准，全量 shim（chamber-bridge.stub.js）由生成物承载。
     private static let invokeWhitelist: Set<String> = BridgeManifest.invokeChannels
-    /// 窗口默认内容尺寸（2026-12 用户裁决：按官方形态单侧对齐）。
-    /// 这里的尺寸是**内容区**尺寸（NSWindow(contentRect:) + contentView =
-    /// webView）；Electron 侧 BrowserWindow 的 1280x800 是**窗口外框**
-    /// （main.ts 未设 useContentSize；Electron 43 只在 use_content_size 为真时
-    /// 才 SetContentSize），其 web 视口实为 1280x772——差的 ~28pt 是 macOS
-    /// 标准标题栏。裁决取官方视口 1280x772 为基准，放弃此前的 786 折中，
-    /// 两端视口高度一致（差异只剩外框，属 flavor 自身形态）。
-    /// 本值只影响**高度**；内容列宽等宽度偏好是 per-flavor 页面存储
-    /// 不随本值收敛。
-    private static let windowSize = NSSize(width: 1280, height: 772)
+    /// 窗口几何单源（P11，design 25 §5.6）：**先把官方数值立成窗口外框**，再按
+    /// macOS 标题栏 28pt 折算成本壳内容尺寸。
+    /// - 官方 Electron（main.ts 的 createMainWindow）不设 useContentSize，
+    ///   1280×820 / min 520×600 都是**窗口外框**；hiddenInset 不带
+    ///   NSWindowStyleMaskFullSizeContentView，其 web 视口 = 外框 − 28pt 标题栏
+    ///   = 1280×792 / min 520×572。
+    /// - 本壳窗口带 `.fullSizeContentView`：contentView 铺满整窗（Apple：content
+    ///   区域 "consumes the full size of the window"），contentRect 尺寸**就是**
+    ///   视口/内容尺寸。故内容尺寸取官方视口值 = 视口 parity（1280×792、
+    ///   min 520×572）；本壳窗口外框相应比官方外框少 28pt（标题栏计入了内容区），
+    ///   属 flavor 自身形态。
+    /// - 只影响初始/最小视口；内容列宽等宽度偏好是 per-flavor 页面存储，不随本值
+    ///   收敛。
+    /// 引用点：setupWindow 的 NSWindow(contentRect:)/webView frame 用 windowSize，
+    /// contentMinSize 用 minContentSize（2026-11 用户任务书授权的 parity 改动）。
+    /// internal 可见性：@testable 单测直接钉住数值单源（不做源码文本锁）。
+    enum WindowMetrics {
+        /// 官方窗口外框（Electron main.ts createMainWindow 的 width/height）。
+        static let upstreamFrameSize = NSSize(width: 1280, height: 820)
+        /// 官方最小窗口外框（minWidth/minHeight）。
+        static let upstreamMinFrameSize = NSSize(width: 520, height: 600)
+        /// macOS 标准标题栏高度（官方外框 → 其 web 视口的差）。
+        /// 本壳内容区即视口，折算只减这一项。
+        static let titlebarInset: CGFloat = 28
+        /// 本壳内容（= web 视口）尺寸 = 官方视口（外框 − 标题栏）。
+        static let defaultContentSize = NSSize(
+            width: upstreamFrameSize.width,
+            height: upstreamFrameSize.height - titlebarInset)
+        /// 本壳最小内容（= 最小视口）尺寸 = 官方最小视口（外框 − 标题栏）。
+        static let minContentSize = NSSize(
+            width: upstreamMinFrameSize.width,
+            height: upstreamMinFrameSize.height - titlebarInset)
+    }
+
+    /// 窗口默认内容尺寸（内容区 == 视口，见 WindowMetrics 注释）。
+    private static let windowSize = WindowMetrics.defaultContentSize
 
     /// 原生壳**可见**产品名（dsh-chamber）：
     /// 窗口标题 / 失败说明页 / fatal 提示框共用。不可见名（SwiftPM target/module =
@@ -740,8 +766,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // （标记行 → 原生 performDrag）。本开关保留：它仍覆盖命中 AppKit 自有视图
         // （标题栏层）的位置。
         window.isMovableByWindowBackground = true
-        // 上游同款最小内容尺寸：没有它窗口会被缩到侧栏/composer 不可用的尺寸。
-        window.contentMinSize = NSSize(width: 880, height: 600)
+        // 上游同款最小视口（官方最小外框 520×600 − 28pt 标题栏 = 520×572；
+        // 没有它窗口会被缩到侧栏/composer 不可用的尺寸）。数值单源 = WindowMetrics。
+        window.contentMinSize = WindowMetrics.minContentSize
         // 材质面：装上后窗口转非不透明、底色 clear（`.behindWindow` 采样窗后桌面），页面
         // 透明区露出材质；首帧/重载仍有 underPageBackgroundColor 的骨架色兜住"不白闪"
         // （构造时先置 #0f1115，页面事实到达后由 reconcileThemedBackground 接管）。
@@ -915,6 +942,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 证明「发过」也不能证明「没发」，真机验收因此分不开「壳没发」与
         // 「页面没消费」。
         shellLog("[shell] 系统唤醒——发送 __host.systemResume")
+        // P03：唤醒也是静默检查的一个触发点（Electron 的 powerMonitor resume →
+        // noteActivity 对偶）。判据/合并窗在 AppUpdater.nudgeBackgroundCheck，
+        // 壳里**不**新增定时器、不改 600s 周期与退避（节奏仍归 Sparkle 调度器）。
+        AppUpdater.shared.nudgeBackgroundCheck()
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(
@@ -954,6 +985,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     @objc private func appDidBecomeActive(_ note: Notification) {
         clearUpdateAttention()
+        // P03：回前台与唤醒共用同一个 nudge（60s 合并窗避免同一次解锁双触发）。
+        AppUpdater.shared.nudgeBackgroundCheck()
         sendMainWindowShownIfEdge()
     }
 

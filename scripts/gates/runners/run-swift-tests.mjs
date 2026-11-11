@@ -108,6 +108,7 @@ export const SWIFT_TEST_MANIFEST = [
   'macos/Tests/DSHChamberTests/ExternalOpenBudgetTests.swift',
   'macos/Tests/DSHChamberTests/FileOpenPanelTests.swift',
   'macos/Tests/DSHChamberTests/FrameCodecTests.swift',
+  'macos/Tests/DSHChamberTests/FullscreenPreparationTests.swift',
   'macos/Tests/DSHChamberTests/HostFactsDiffTests.swift',
   'macos/Tests/DSHChamberTests/HostPathCatalogTests.swift',
   'macos/Tests/DSHChamberTests/IngestReconcileSeamTests.swift',

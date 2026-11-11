@@ -180,6 +180,15 @@ public final class QuitGate {
         return decisionInFlight
     }
 
+    /// 确认框是否在开（只读）：注销/关机豁免要在 runModal 阻塞期间中止它
+    /// （AppDelegate.applicationShouldTerminate 的 sessionEnding 分支）。
+    /// markConfirmed 同时清 confirming（已确认分支无需再 abort）。
+    public var isConfirming: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return confirming
+    }
+
     /// 进入决策请求（单飞）；已在决策/确认中 → false（调用方保守处理）。
     public func beginDecision() -> Bool {
         lock.lock()

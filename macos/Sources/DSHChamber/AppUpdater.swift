@@ -31,6 +31,14 @@ import Sparkle
 ///   （页面按钮 / App 菜单）仍走标准 Sparkle 窗口。
 /// - 安装前回调：Sparkle 替换 bundle 期间不能留着活着的 sidecar/本地 dsh，故
 ///   willInstallUpdate 里先跑 onWillInstall（AppDelegate 注入清理链）。
+/// - 安装前**显示**准备（P20-B）：设置行/页面的「重启并安装」先经
+///   performInstall 等主窗退出全屏（≤5s，FullscreenPreparation），确认面不在
+///   全屏 Space 里弹出；超时以稳定码 fullscreen-timeout 拒绝并可重试。App 菜单
+///   与 scheduled 的标准窗路径不经过该准备（残余登记 design 25 §7）。
+/// - 前台/唤醒 nudge（P03）：hostWakeUp / appDidBecomeActive 各调一次
+///   nudgeBackgroundCheck——复用 noteActivity 判据（相位门 + lastUpdateCheckDate
+///   满 checkInterval + 60s 合并窗）补一次 checkForUpdatesInBackground；周期与
+///   退避仍归 Sparkle 调度器，壳不新增定时器。
 /// - 阶段上报：SPUUpdaterDelegate 回调经 note 投影成页面同款七值
 ///   阶段，再由 AppDelegate 经冻结线 __host.nativeUpdatePhase
 ///   {phase, version, error} 交 sidecar（sidecar 映射进 update-state 投影）。
@@ -462,6 +470,103 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         }
         if kind == .check { note(.checkStarted) }
         shellLog("[shell] 原生更新动作：\(kind.rawValue)（交给 Sparkle 标准窗口）")
+        controller.checkForUpdates(nil)
+        return .accepted
+    }
+
+    // MARK: - 前台/唤醒 nudge（P03）与安装前显示准备（P20-B）
+
+    /// 唤醒与激活两次 nudge 的合并窗（秒）：解锁回前台通常同时产生
+    /// didWake + didBecomeActive 两条通知，不合并会连发两次后台检查
+    /// （与 Electron/headless 的 noteActivity 一次性语义对齐）。
+    static let nudgeCoalescingWindow: TimeInterval = 60
+
+    /// 最近一次 nudge 触发时刻（只服务合并窗；nudge 只在主线程调用）。
+    private var lastNudgeAt: Date?
+
+    /// nudge 的纯判据（单测直测；与 update-headless.noteActivity 同语义）：
+    /// - 相位 ∈ {checking, downloading, downloaded, installing} → false
+    ///   （在飞会话不得打断；downloaded 是该版本终局，后台检查绝不能把它改回
+    ///   available——与 updater.ts 的 final-state 纪律同向）；
+    /// - 距上次**完成**检查 < checkInterval（缺省 600s）→ false
+    ///   （Sparkle 自己的调度器才是周期权威，这里只补一次即时性）；
+    /// - 距上次 nudge < nudgeCoalescingWindow → false（唤醒+激活合并）。
+    static func shouldNudgeBackgroundCheck(phase: NativeUpdatePhase?,
+                                           lastCheckDate: Date?,
+                                           checkInterval: TimeInterval,
+                                           lastNudgeAt: Date?,
+                                           now: Date) -> Bool {
+        if let phase,
+           [NativeUpdatePhase.checking, .downloading, .downloaded, .installing].contains(phase) {
+            return false
+        }
+        if let lastCheckDate, now.timeIntervalSince(lastCheckDate) < max(checkInterval, 0) {
+            return false
+        }
+        if let lastNudgeAt, now.timeIntervalSince(lastNudgeAt) < nudgeCoalescingWindow {
+            return false
+        }
+        return true
+    }
+
+    /// 前台/唤醒的静默检查 nudge（design 25 §7）：把 Electron/headless 的
+    /// noteActivity 判据搬到 Sparkle 上——两个调用点 = MainWindowController 的
+    /// hostWakeUp 与 appDidBecomeActive。**不改周期/退避**（周期归 Sparkle
+    /// 调度器，S-21）；只补「用户刚回到壳」这一刻的即时性，判据见纯函数。
+    func nudgeBackgroundCheck() {
+        guard isAvailable, let controller, controller.updater.canCheckForUpdates else { return }
+        let now = Date()
+        let interval = configuration?.checkInterval ?? 600
+        guard Self.shouldNudgeBackgroundCheck(phase: phaseProjector.lastReport?.phase,
+                                              lastCheckDate: controller.updater.lastUpdateCheckDate,
+                                              checkInterval: interval,
+                                              lastNudgeAt: lastNudgeAt,
+                                              now: now) else { return }
+        lastNudgeAt = now
+        let phase = phaseProjector.lastReport?.phase.rawValue ?? "nil"
+        let lastCheck = controller.updater.lastUpdateCheckDate?.description ?? "nil"
+        // interval 原样打印（不转 Int）：坏 plist 的 NaN/±inf 不能在这里 trap。
+        shellLog("[shell] 前台/唤醒触发静默检查（P03）：phase=\(phase)"
+            + " lastCheck=\(lastCheck) interval=\(interval)s")
+        controller.updater.checkForUpdatesInBackground()
+    }
+
+    /// 安装前的显示准备闭包（P20-B：AppDelegate 注入；默认 nil = 不准备）。
+    /// 返回 nil = 可以继续安装；非 nil = 稳定错误码（"fullscreen-timeout"）。
+    /// 标注 @MainActor：闭包要碰主窗 / NSWindow，由 performInstall 在
+    /// MainActor 任务里 await（Swift 5 模式下非隔离 async 函数也可等待它）。
+    var prepareInstallForDisplay: (@MainActor () async -> String?)?
+
+    /// kind=install 的异步入口（P20-B）：5s 等窗口退全屏只能在主线程异步等，
+    /// 同步 respond 会把 BridgeClient 读线程卡在等待上，故由 SwiftEdgeHostLegs
+    /// 的 canHandleAsync/respondAsync 把 install 分流到这里。判据与 perform 一致：
+    /// 不可用/忙都显式拒绝；准备超时同样拒绝（绝不假 ok:true）。顺序 =
+    /// 忙门 → await 准备 → 再忙门（5s 内 Sparkle 可能已进入新会话）→
+    /// accepted + checkForUpdates（= perform(.install) 的既有入口，零新通道）。
+    /// P20-B 单飞：两次「重启并安装」并发（页面+菜单/重复点击）只做一次全屏准备与一次
+    /// Sparkle 入口，后到者按忙拒绝（与既有 canCheckForUpdates 忙门同一语义）。
+    private var installPreparationInFlight = false
+
+    func performInstall() async -> NativeUpdateActionOutcome {
+        guard isAvailable, let controller else {
+            return .refused(reason: unavailableReason)
+        }
+        guard !installPreparationInFlight else {
+            return .refused(reason: "native-updater-busy")
+        }
+        installPreparationInFlight = true
+        defer { installPreparationInFlight = false }
+        guard controller.updater.canCheckForUpdates else {
+            return .refused(reason: "native-updater-busy")
+        }
+        if let prepare = prepareInstallForDisplay, let reason = await prepare() {
+            shellLog("[shell] 原生更新安装被拒绝：显示准备失败（\(reason)）")
+            return .refused(reason: reason)
+        }
+        guard controller.updater.canCheckForUpdates else {
+            return .refused(reason: "native-updater-busy")
+        }
+        shellLog("[shell] 原生更新动作：install（显示准备完成，交给 Sparkle 标准窗口）")
         controller.checkForUpdates(nil)
         return .accepted
     }

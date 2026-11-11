@@ -211,6 +211,60 @@ final class AppUpdaterTests: XCTestCase {
             "潜伏钩子已删除——重新接线必须是有意识的决定（并同步 Electron 的自动下载语义）")
     }
 
+    // MARK: - 前台/唤醒 nudge 判据（P03）
+
+    /// nudge 纯判据（与 update-headless.noteActivity 同语义）：相位门 + 距上次
+    /// 完成检查满 checkInterval + 60s 合并窗，三个条件都成立才触发。
+    func testNudgeBackgroundCheckGatesOnPhaseIntervalAndCoalescingWindow() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        func ago(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(-seconds) }
+        // 基态：无相位、从未检查、无 nudge → 触发。
+        XCTAssertTrue(AppUpdater.shouldNudgeBackgroundCheck(
+            phase: nil, lastCheckDate: nil, checkInterval: 600, lastNudgeAt: nil, now: now))
+        // 相位门：在飞/终局相位一律不触发（downloaded 不得被后台检查改回 available）。
+        for phase in [NativeUpdatePhase.checking, .downloading, .downloaded, .installing] {
+            XCTAssertFalse(AppUpdater.shouldNudgeBackgroundCheck(
+                phase: phase, lastCheckDate: nil, checkInterval: 600,
+                lastNudgeAt: nil, now: now),
+                phase.rawValue + " 不得触发后台检查")
+        }
+        // 其余相位（idle/available/up-to-date/failed）不拦，只由间隔/合并窗决定。
+        for phase in [NativeUpdatePhase.idle, .available, .upToDate, .failed] {
+            XCTAssertTrue(AppUpdater.shouldNudgeBackgroundCheck(
+                phase: phase, lastCheckDate: nil, checkInterval: 600,
+                lastNudgeAt: nil, now: now),
+                phase.rawValue + " 可触发（间隔与合并窗均满足）")
+        }
+        // 间隔门：距上次完成检查 < checkInterval 不触发，满 interval 才触发。
+        XCTAssertFalse(AppUpdater.shouldNudgeBackgroundCheck(
+            phase: nil, lastCheckDate: ago(599), checkInterval: 600,
+            lastNudgeAt: nil, now: now))
+        XCTAssertTrue(AppUpdater.shouldNudgeBackgroundCheck(
+            phase: nil, lastCheckDate: ago(600), checkInterval: 600,
+            lastNudgeAt: nil, now: now))
+        // 合并窗：解锁回前台的唤醒+激活两条通知只放行第一次。
+        XCTAssertFalse(AppUpdater.shouldNudgeBackgroundCheck(
+            phase: nil, lastCheckDate: ago(600), checkInterval: 600,
+            lastNudgeAt: ago(59), now: now))
+        XCTAssertTrue(AppUpdater.shouldNudgeBackgroundCheck(
+            phase: nil, lastCheckDate: ago(600), checkInterval: 600,
+            lastNudgeAt: ago(60), now: now))
+        // 相位门优先于间隔/合并窗（downloaded 终局即便很久没检查也不触发）。
+        XCTAssertFalse(AppUpdater.shouldNudgeBackgroundCheck(
+            phase: .downloaded, lastCheckDate: ago(10_000), checkInterval: 600,
+            lastNudgeAt: ago(10_000), now: now))
+        XCTAssertEqual(AppUpdater.nudgeCoalescingWindow, 60, accuracy: 0.0001,
+                       "唤醒/激活合并窗 = 60s（design 25 §7）")
+    }
+
+    // MARK: - 安装前显示准备（P20-B）
+
+    /// install 的异步入口在无装配时与 perform 同词表诚实拒绝（绝不假 accepted）。
+    func testPerformInstallRefusesWithoutUpdater() async {
+        let outcome = await AppUpdater.shared.performInstall()
+        XCTAssertEqual(outcome, .refused(reason: "native-updater-unavailable"))
+    }
+
     // MARK: - 原生阶段投影（fake-delegate 假事件覆盖）
 
     func testProjectorMapsDelegateEventsToPagePhases() {

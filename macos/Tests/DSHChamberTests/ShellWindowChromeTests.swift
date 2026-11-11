@@ -8,6 +8,8 @@
 //
 //  这里只锁目标值与写出的表达式；副作用（改按钮 frame、evaluateJavaScript、装视图）与
 //  接线由 ShellIdentityTests 的源码锁负责，真机观感由实机验收负责。
+//  另：窗口几何单源（WindowMetrics，P11）——官方外框 → 本壳视口的 28pt 折算值
+//  同处钉住（同一组本机同形窗量）。
 //
 import XCTest
 @testable import DSHChamber
@@ -111,5 +113,35 @@ final class ShellWindowChromeTests: XCTestCase {
         XCTAssertEqual(ShellWindowMaterial.fallbackFill(pageIsDark: false),
                        NSColor(srgbRed: 249 / 255, green: 250 / 255, blue: 251 / 255, alpha: 1),
                        "最小化/隐藏兜底底：浅色 = 上游 #f9fafb")
+    }
+
+    // MARK: - 窗口几何单源（P11）
+
+    /// 官方外框 → 本壳视口的折算单源（design 25 §5.6，P11）：官方 Electron
+    /// （main.ts createMainWindow）的 1280×820 / min 520×600 是**窗口外框**；
+    /// 本壳 `.fullSizeContentView` 下 contentRect == 视口，故内容尺寸 = 外框 −
+    /// 28pt 标题栏 = 1280×792 / min 520×572（视口 parity，不保留 880×600 的混合层）。
+    func testWindowMetricsKeepTheOfficialFrameAndConvertToViewport() {
+        XCTAssertEqual(MainWindowController.WindowMetrics.upstreamFrameSize,
+                       NSSize(width: 1280, height: 820),
+                       "官方窗口外框单源（不是 800、也不是旧折中值）")
+        XCTAssertEqual(MainWindowController.WindowMetrics.upstreamMinFrameSize,
+                       NSSize(width: 520, height: 600),
+                       "官方最小外框单源")
+        XCTAssertEqual(MainWindowController.WindowMetrics.titlebarInset, 28, accuracy: 0.0001,
+                       "官方外框与 web 视口的差 = macOS 标准标题栏高度")
+        XCTAssertEqual(MainWindowController.WindowMetrics.defaultContentSize,
+                       NSSize(width: 1280, height: 792),
+                       "初始视口 parity = 官方 1280×820 − 28")
+        XCTAssertEqual(MainWindowController.WindowMetrics.minContentSize,
+                       NSSize(width: 520, height: 572),
+                       "最小视口 parity = 官方 520×600 − 28")
+        // 同一算式而非两份常量：外框 − 标题栏 == 内容尺寸。
+        XCTAssertEqual(MainWindowController.WindowMetrics.defaultContentSize.height,
+                       MainWindowController.WindowMetrics.upstreamFrameSize.height
+                        - MainWindowController.WindowMetrics.titlebarInset)
+        XCTAssertEqual(MainWindowController.WindowMetrics.minContentSize.height,
+                       MainWindowController.WindowMetrics.upstreamMinFrameSize.height
+                        - MainWindowController.WindowMetrics.titlebarInset)
     }
 }

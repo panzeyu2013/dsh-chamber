@@ -370,6 +370,36 @@ public final class SwiftEdgeHostLegs {
             // 交互腿经异步入口应答——模态在主线程执行、完成才 reply，
             // 既不占住管道读取线程，也不在 1s 处丢弃模态结果。
             performInteractiveUI(method: method, payload: payload, completion: completion)
+        case "updateNativeAction":
+            // 更新动作：**只有 kind=install 走异步**——安装确认前要先退出全屏
+            // （P20-B，最多 5s），同步面会把 BridgeClient 的管道读取线程卡在等待
+            // 上；check/download 与未知 kind 仍走同步 respond（结果与改前逐字
+            // 一致，node 侧普通 edge 30s 预算足够 5s 等待，sidecar-entry.ts）。
+            let requestedKind: String
+            if case .object(let dict)? = payload, case .string(let value)? = dict["kind"] {
+                requestedKind = value
+            } else {
+                // 与 respond 的缺省一致：缺 kind 视作 check（同步面自己会拒绝坏 kind）。
+                requestedKind = AppUpdater.NativeUpdateActionKind.check.rawValue
+            }
+            guard requestedKind == AppUpdater.NativeUpdateActionKind.install.rawValue else {
+                let outcome = respond(method: method, payload: payload)
+                completion(outcome.result, outcome.error)
+                return
+            }
+            Task { @MainActor in
+                let outcome = await AppUpdater.shared.performInstall()
+                switch outcome {
+                case .accepted:
+                    completion(.object(["ok": .bool(true),
+                                        "kind": .string(requestedKind)]), nil)
+                case .refused(let reason):
+                    // 拒绝原因**原样**透传（含 fullscreen-timeout 字面量）：
+                    // node 侧 trigger 把它原封不动回给页面（sidecar-entry.ts）。
+                    shellLog("[shell] 原生更新动作被拒绝：install → \(reason)")
+                    completion(nil, reason)
+                }
+            }
         default:
             let outcome = respond(method: method, payload: payload)
             completion(outcome.result, outcome.error)
@@ -378,10 +408,13 @@ public final class SwiftEdgeHostLegs {
 
     /// 异步腿面（canShowUI 为真时由本类真实接管，BridgeClient 默认应答器据此
     /// 走 respondAsync）：showNativeNotification 调度 + showMessage 交互模态
-    /// （10 分钟上限，完成才 reply）。
+    /// （10 分钟上限，完成才 reply）+ updateNativeAction 的 kind=install
+    /// （P20-B：安装前退全屏 ≤5s；其余 kind 在 respondAsync 内回落同步 respond）。
+    /// canHandleAsync 不接收 payload，故这里按**方法**整体放行（UI 可用时）；
+    /// 「仅 install 异步」的分流在 respondAsync 内按 kind 判定。
     public func canHandleAsync(method: String) -> Bool {
         switch method {
-        case "showNativeNotification", "showMessage":
+        case "showNativeNotification", "showMessage", "updateNativeAction":
             return self.config.canShowUI()
         default:
             return false

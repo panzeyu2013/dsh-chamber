@@ -353,6 +353,40 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertNil(outcome.result)
         XCTAssertEqual(outcome.error, "swift-edge-unimplemented:launchApp")
     }
+    // MARK: - P20-B：updateNativeAction 的异步分流
+
+    /// install 需要 ≤5s 的全屏等待，必须走异步应答面（同步面会卡住管道读取
+    /// 线程）；check/download 仍回落同步 respond。测试宿主无 Sparkle 配置 ⇒
+    /// 两条腿都必回诚实拒绝（native-updater-unavailable，绝不假 accepted）。
+    func testUpdateNativeActionInstallUsesAsyncLeg() {
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
+        XCTAssertTrue(legs.canHandleAsync(method: "updateNativeAction"),
+                      "install 的 5s 全屏等待不能在同步 respond 里做")
+        XCTAssertFalse(SwiftEdgeHostLegs().canHandleAsync(method: "updateNativeAction"),
+                       "UI 不可用（headless）时保持既有同步面诚实降级")
+
+        let installBox = SyncBox<(AnyCodable?, String?)>()
+        legs.respondAsync(method: "updateNativeAction",
+                          payload: .object(["kind": .string("install")])) { result, error in
+            installBox.set((result, error))
+        }
+        XCTAssertTrue(pumpMainRunLoop(until: Date().addingTimeInterval(2.0),
+                                      condition: { installBox.value != nil }),
+                      "install 腿未在 2s 内应答")
+        XCTAssertNil(installBox.value?.0, "无更新器时不得假 ok")
+        XCTAssertEqual(installBox.value?.1, "native-updater-unavailable")
+
+        // check 仍走同步 respond（respondAsync 内部回落），拒绝词表不变。
+        let checkBox = SyncBox<(AnyCodable?, String?)>()
+        legs.respondAsync(method: "updateNativeAction",
+                          payload: .object(["kind": .string("check")])) { result, error in
+            checkBox.set((result, error))
+        }
+        XCTAssertNotNil(checkBox.value, "check 的同步回落必须当场应答")
+        XCTAssertNil(checkBox.value?.0)
+        XCTAssertEqual(checkBox.value?.1, "native-updater-unavailable")
+    }
+
     // MARK: - 交互腿异步应答（10 分钟上限、超时弃权、非交互短界保持）
 
     /// 跨线程单值盒（回执在后台/主线程写，断言线程读）。

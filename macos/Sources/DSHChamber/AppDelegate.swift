@@ -52,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var terminateRequestedWhileDeciding = false
     /// 是否在等待 `reply(toApplicationShouldTerminate:)`（每次 .terminateLater 一轮）。
     private var awaitingTerminateReply = false
+    /// 注销/关机在途（design 14 §D2 豁免行）：NSWorkspace.willPowerOff 到达即置位，
+    /// 回到前台（用户取消注销/关机）复位。为 true 时 applicationShouldTerminate
+    /// **第一行**豁免退出确认——否则确认框/在飞决策会把系统登出挡回去。
+    private var sessionEnding = false
     /// SIGTERM/SIGINT 的 DispatchSource（必须常驻持有，否则信号监听失效）。
     private var signalSources: [DispatchSourceSignal] = []
     /// 原生崩溃最小诊断的安装结果（正常退出时据此清「上次异常退出」标记）。
@@ -100,6 +104,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         ) { [weak self] _ in
             shellLog("[shell] 收到二次启动显窗请求（S-40）")
             self?.restoreMainWindow()
+        }
+        // 注销/关机退出确认豁免（P10，design 14 §D2 / design 25 §5 E9）：系统注销/
+        // 关机在 AppKit 看来也是一次 terminate，但此时会话正在结束，再弹「退出确认」
+        // 只会挂住系统流程。willPowerOff 到达即置位，下一次 applicationShouldTerminate
+        // 第一行豁免确认；回到前台（用户取消注销/关机，或会话继续）复位。
+        // NSWorkspace 的通知**必须**注册在它自己的通知中心上（SDK NSWorkspace.h
+        // 明示；同款既有注释见 MainWindowController 的 didWake 接线）——注册到
+        // NotificationCenter.default 永不触发，豁免会静默失效。
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.sessionEnding = true
+            shellLog("[shell] 系统注销/关机：退出确认豁免已置位（design 14 §D2）")
+        }
+        // 复位腿 = NSApplication.didBecomeActiveNotification（AppDelegate 自己注册，
+        // 不转接 MainWindowController 的激活回调——那个回调的语义是
+        // mainWindowShown/唤醒腿）。「登出被其他应用取消」时本 flag 可能残留到
+        // 下一次激活前的短暂窗口，登记为残余（真机验收）。
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.sessionEnding else { return }
+            self.sessionEnding = false
+            shellLog("[shell] 回到前台：退出确认豁免已复位")
         }
         // 打包态判定 + 资源根（PackagedLayout 纯函数解析，见 ChamberResources）。
         let resourcesDir = Bundle.main.resourceURL?.path
@@ -666,6 +695,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
             }
         }
+        // P20-B：安装前的**显示**准备（design 25 §7）——设置行/页面的「重启并
+        // 安装」在交给 Sparkle 前先让主窗退出全屏（≤5s），确认面因此不在全屏
+        // Space 里弹出；5s 未退出 → 拒绝安装并透传稳定码 fullscreen-timeout。
+        // 闭包在 AppUpdater.performInstall 的 MainActor 任务里 await；窗口 provider
+        // 取当前主窗（窗口已关闭 → nil = 无全屏面可退，安装照常继续）。
+        AppUpdater.shared.prepareInstallForDisplay = { [weak self] in
+            await FullscreenPreparation.prepareForInstall(
+                window: self?.mainWindowController?.window)
+        }
         // beta 订阅偏好（chamber-settings.json 的 betaUpdates）在启动期读一次，
         // 交给 Sparkle 算初始生效通道。缺文件 / 缺键 = 未订阅；损坏 = loud + 按
         // 未订阅处理（绝不猜一个值去切通道）。
@@ -738,6 +776,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 决策请求失败且实例仍在 → NSAlert「继续等待/强制退出」（绝不静默取消）；
     /// sidecar 已停 → 无保护内容，放行退出（绝不静默放行有实例的退出）。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // 注销/关机豁免（P10，design 14 §D2）必须在**最前**——早于 isConfirmed 与
+        // beginDecision。确认框在开或在飞决策时 beginDecision 会失败（单飞门），
+        // 下方分支返回 .terminateCancel，那正好把系统登出挡回去（登出挂起）。
+        if sessionEnding {
+            shellLog("[shell] 注销/关机退出：豁免退出确认（design 14 §D2 / design 25 §5 E9）")
+            // 确认框正阻塞在 runModal 里（用户在 Cmd+Q 确认面时注销/关机）：先中止
+            // 它，否则它稍后会把这一轮登出 reply 成「取消」（presentQuitConfirmation
+            // 的 abort 分支已按已确认态跳过恢复与 reply）。
+            if quitGate.isConfirming {
+                shellLog("[shell] 注销/关机：中止在开的退出确认框（abortModal）")
+                NSApp.abortModal()
+            }
+            quitGate.markConfirmed()
+        }
         if quitGate.isConfirmed {
             // 已确认分支同样要走 .terminateLater（清理链），必须置位 awaiting——
             // 否则 reply(toApplicationShouldTerminate:) 变 no-op，重入退出时会挂死。
@@ -859,6 +911,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         cancelButton.keyEquivalent = "\r"
         let response = Self.runQuitConfirmationAlert(alert)
         quitGate.endConfirm()
+        if quitGate.isConfirmed {
+            // 注销/关机（sessionEnding 门）在确认框打开期间接管了退出：上面
+            // abortModal 让本框以 .abort 返回，退出链归已确认分支所有——这里不得
+            // 恢复窗口，也不得回 .terminateCancel（会把系统登出挡回去）。
+            shellLog("[shell] 退出确认被注销/关机豁免接管（不再取消退出）")
+            return
+        }
         if response == .alertFirstButtonReturn {
             quitGate.markConfirmed()
             if !beginTerminationCleanup() {
@@ -922,6 +981,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         waitButton.keyEquivalent = "\r"
         let response = alert.runModal()
         quitGate.endConfirm()
+        if quitGate.isConfirmed {
+            // 注销/关机豁免接管：同 presentQuitConfirmation 的 abort 分支——
+            // 不恢复窗口、不取消那一轮登出。
+            shellLog("[shell] 退出不可得提示被注销/关机豁免接管（不再取消退出）")
+            return
+        }
         if response == .alertSecondButtonReturn {
             shellLog("[shell] 用户选择强制退出（quitFacts 不可得）：走既有清理链")
             quitGate.markConfirmed()
@@ -987,6 +1052,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// `reply(toApplicationShouldTerminate:)` 恰一次（每轮 .terminateLater）。
     private func replyTerminate(_ proceed: Bool) {
         guard awaitingTerminateReply else { return }
+        // 已确认（含注销/关机豁免 markConfirmed）后不再接受「取消」回复：那一轮
+        // .terminateLater 由退出清理链 reply(true) 收尾。若这里放行 false（例如
+        // 确认框被 abortModal 中止后走到取消分支、或在途决策回调晚到），系统登出
+        // 会被这条取消挡住。本行是**唯一**的取消闸口。
+        if !proceed, quitGate.isConfirmed {
+            shellLog("[shell] 退出已确认：忽略取消回复（清理链负责 reply(true)）")
+            return
+        }
         awaitingTerminateReply = false
         NSApp.reply(toApplicationShouldTerminate: proceed)
     }

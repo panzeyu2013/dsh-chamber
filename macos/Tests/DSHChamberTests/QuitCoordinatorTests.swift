@@ -156,6 +156,21 @@ final class QuitCoordinatorTests: XCTestCase {
         gate.endConfirm()
     }
 
+    /// P10：注销/关机豁免要在确认框打开时 abortModal——门必须能读出 confirming
+    /// （runModal 阻塞在模态循环里，没有别的可见事实源）；markConfirmed 同时清
+    /// confirming（已确认分支无需再 abort）。
+    func testGateExposesConfirmingOnlyWhileConfirmOpen() {
+        let gate = QuitGate()
+        XCTAssertFalse(gate.isConfirming)
+        XCTAssertTrue(gate.beginConfirm())
+        XCTAssertTrue(gate.isConfirming, "确认框在开（注销/关机要 abortModal）")
+        gate.endConfirm()
+        XCTAssertFalse(gate.isConfirming)
+        XCTAssertTrue(gate.beginConfirm())
+        gate.markConfirmed()
+        XCTAssertFalse(gate.isConfirming, "markConfirmed 必须同时清 confirming")
+    }
+
     func testGateDecisionBlocksWhileConfirming() {
         let gate = QuitGate()
         XCTAssertTrue(gate.beginConfirm())
