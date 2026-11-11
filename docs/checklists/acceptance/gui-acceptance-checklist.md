@@ -73,7 +73,8 @@
 逐张看 `shots/`，只判「人眼才能判」的事；看不出来就写「未判」，不要写成通过：
 
 - 首帧与切换：骨架→内容无 FOUC/双骨架；侧栏、设置面在浅/深色下都不漏底、不叠字（design 06 §4.6）。
-- 设置面：导航高亮跟随、来源下拉显示当前来源、每页标题与分组层级正确（design 05 §5）。
+- 设置面：导航高亮跟随、来源下拉显示当前来源、每页标题与分组层级正确（design 05 §5）；宽栏触发行在更新可用时可见指示器。
+- 窗口尺寸：初始视口 1280×792、最小可拖到 520×572（design 25 §5.6）。
 - 会话头视图 More/折叠（`entry-customization` 面）：先在实例里建/选一个工作区（一次性实例无工作区时会先拉起目录选择器）；打开含 ≥2 个视图的会话，窄列下被折叠的视图出现在 More 菜单；点「浏览」后设置面打开在「插件管理」分节；右栏 guide More 的「浏览」同一落点；侧栏 panel More 在桌面复合体**不出现**、gateway 官方侧栏出现（design 05 §5 / STATUS §4.2）。
 - 移动端 More/标签（触屏档）：会话头 More 命中盒 ≥44×44、长标签按上游 88px 省略、菜单行 44px 底线；判据 = 真机抽检 + 目检（design 17 §18.6 真机项；移动布局由上游前端提供）。
 - 多来源侧栏：分组归属（来源 → 工作区 → 会话）、状态点、待办条带与角标不串行（design 05/06）。
@@ -87,6 +88,7 @@
 |面|权威|
 |---|---|
 |安装/更新事务、quitAndInstall、缓存清理|design 11 §9|
+|桌面更新补充面（nudge / 失败技术详情 / 全屏安装准备）、`dsh-chamber://open` 深链前置、初始/最小视口、快捷键持久化、更新指示器|design 14 §D2、design 16 §3.1、design 25 §5.6/§7/§8.4、design 05 §5；逐项见 §4.2 真机表|
 |dsh 运行时版本事务（激活/回退/恢复）|design 18 §3.5–§3.6、§9|
 |通知与未读徽标、Dock/托盘/任务栏三形态|design 19|
 |子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）|design 19 §3.2/§3.5|
@@ -132,6 +134,19 @@
 |B 桥载荷 parity|`pnpm run verify:shim-payload`（macOS 腿）|preload ↔ shim 的成员/通道/载荷键一致|脚本收尾行|
 
 **只能真机（工具箱不可替代）**：更新通道订阅（design 25 §7：稳定构建开/关订阅后的后台检查与 beta 发现、beta 构建默认只收正式版、打开订阅后继续 beta、final 收口后偏好保留、构建缺两条通道 feed URL 时开关禁用+原因；逐项记录 `[shell] Sparkle 更新通道=…` 日志与设置行状态）、`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在 design 25 §8（§8.1 门定义、§8.5 实机矩阵）与 `scripts/perf/README.md`，本节只固定怎么跑与留什么。**右栏浏览器 v3 载体验收（W-13…W-30）按 [`remote-browser-acceptance.md`](./remote-browser-acceptance.md) §E2 真机执行**：本工具箱不实现（native 壳无 CDP；`--dev`/`--attach`/`--require-embed`/`--embed-port`/`--ssh-fixture` 属归档 Electron CDP 腿，native driver 拒绝这些参数）；主 frame 导航门、app-host 定义、`NSAllowsArbitraryLoadsInWebContent`（只放宽 Web 内容）、下载 cancel、证书/权限/对话框策略由 design 28 §5 规定。
+
+**桌面壳补充真机项（逐项判据在 design，本节只固定怎么跑/看什么/留什么）**：
+
+| 检查 | 怎么跑 | 看什么 | 判据 |
+|---|---|---|---|
+| 系统关机/注销豁免 | 打包态运行本地实例后注销/关机；再正常 Cmd+Q 一次 | 注销/关机无退出确认、`shell.log` 有 willPowerOff 行；正常 Cmd+Q 确认不变 | [design 14 §D2](../../design/runtime/14-sleep-background.md) |
+| 前台/唤醒补充检查 | 隐藏/最小化后回前台、系统唤醒各一次（距上次检查 ≥600s 或启动后首检；否则 nudge 按判据不触发属预期） | `shell.log` 有检查相位、无新弹窗、`downloaded` 不被改回 `available` | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
+| 失败技术详情 | 一次下载/检查失败后看失败行 | 可展开「技术详情」（已脱敏、无弹窗） | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
+| 初始/最小视口 | 打包态首启；拖到最小尺寸 | 初始视口 1280×792、最小 520×572（目检） | [design 25 §5.6](../../design/desktop/25-macos-swift-native-shell.md) |
+| `dsh-chamber://open` 深链 | 已有主窗（含最小化）时打开 `dsh-chamber://open`；再试非法变体 | 窗口前置/还原，不导航、不启 VS Code；非法变体 loud | [design 16 §3.1](../../design/desktop/16-vscode-deeplink.md) |
+| 更新指示器 | 有可用更新时看设置触发行；点击；折叠侧栏 | 指示器可见（icon + tooltip/aria）、点击进 `__general` 更新组、折叠钮徽标仍无 | [design 05 §5](../../design/control-plane/05-connection-manager.md)、[design 15 D1](../../design/client/15-chamber-settings-page.md) |
+| 快捷键持久化 | 改键 → 退出 → 重启；再制造写失败/坏文档 | 键位恢复；写失败可见且不假保存；坏文档不被覆盖 | [design 25 §8.4](../../design/desktop/25-macos-swift-native-shell.md) |
+| 全屏安装准备 | 全屏下点「重启并安装」；另一次人为拖 5s；全屏下点「更新（下载）」 | ≤5s 退全屏进确认；超时状态行显示超时文案并保持可重试；全屏下 Sparkle 标准窗可见/可操作（标准窗路径未前置准备，作为残余观察） | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
 
 ## 5. 证据与记录纪律
 

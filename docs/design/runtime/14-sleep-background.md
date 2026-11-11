@@ -36,6 +36,8 @@
 - 开关开启且**本地实例运行中**——判据 = 状态机 running（含 starting/restarting 在途态）**且实际有存活进程**（`localProcessAlive`，经控制面`hasLiveProcess`；状态字符串不是存活事实——restart 序列中 restarting 期间新进程尚未 spawn、死亡进程在下次探活前滞留 ready/degraded）→ 退出确认（**Swift**：`NSAlert`，design 25 §5 E9；Electron 归档面 `dialog.showMessageBox`）：「退出将停止正在运行的本地 dsh 实例」。确认后走既有退出路径。
 - 对齐 OpenChamber quitRisk；这是**唯一允许的退出确认对话框**，与设计 11「更新无弹窗」纪律不冲突（更新提示仍不弹窗）。
 - **豁免：更新安装退出不确认**——updater 状态为 `downloaded` 且未install-blocked 时（设计 11 `autoInstallOnAppQuit`：用户已点过「更新」并被告知「退出时安装」），**跳过退出确认直接退出**（对齐 OpenChamber `if (state.installingUpdate) return;`），避免确认框阻塞/误导已确认的安装流程。
+- **豁免：系统关机/注销不确认**——`NSWorkspace.willPowerOffNotification`（注册在 `NSWorkspace.shared.notificationCenter`）置 `sessionEnding`；`applicationShouldTerminate` 最前复用已确认分支，跳过 quitFacts 与确认框（确认框在开时先 `abortModal`），应用重新激活（`NSApplication.didBecomeActiveNotification`）时复位。依据 = 上游桌面 `powerMonitor` 的 shutdown 分支置 `sessionEnding`（归档参考）。复位腿 = 应用激活；登出被取消且应用始终未失活时标志可能残留到下一次激活（真机验收项）。
+- **被否方案（关机/注销豁免）**：不观察 `willPowerOff`（无法区分系统结束与应用内退出）；用 `NSWorkspaceSessionDidResignActive`（Fast User Switching 也发，会误置位）；在关窗委托里豁免（系统注销走 terminate，不必然经关窗）。
 - **单飞**：`quitRequested` 标志置位后不再重复弹确认（防连点/双路径触发两次对话框）；异步退出清理也有独立 single-flight（Electron 归档面 `will-quit`），第二次 quit 事件继续 `preventDefault`，不能因首轮已把 controlPlane holder 清空而提前退出。
 - renderer 崩溃/无响应恢复 timer 由窗口生命周期持有（**Swift**：`RendererHangWatchdog` / `RendererRecoveryPolicy`，design 25 §5 E19；Electron 归档面 `render-process-gone`/unresponsive 支路）：新导航、恢复或窗口 close 会清旧 timer，quit 在途禁止 reload/show/loadURL 失败路径复活窗口或重入 teardown。
 

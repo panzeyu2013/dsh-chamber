@@ -5,7 +5,7 @@
 ## 1. 壳形态
 
 - `SettingsShell`（`packages/dsh-chamber-client-ui-settings-bridge`）：服务器下拉（local 默认 + 远程按连接态着色）→ **选中来源自己 boot ctx 的 `settings.section` 台账**（models/agent-presets/plugins/… 及该来源自己的第三方分节，完整桥接见 [05](../control-plane/05-connection-manager.md) §5）→ `navDivider` → **固定 chamber 全局入口平铺**：`__connections`（连接）、`__general`（客户端——含设计 11 的更新块）。
-- 壳 chrome 与上游对齐（细节见 design 05 §5）：头部不重复分节标题、触发器行 42px、面板圆角 32px、关闭后焦点还给触发器。
+- 壳 chrome 与上游对齐（细节见 design 05 §5）：头部不重复分节标题、触发器行 42px、面板圆角 32px、关闭后焦点还给触发器；触发行 = 触发按钮 + 更新指示器（与「更新」组共用同一 update-store 快照，不新开订阅/通道；仅 wide 渲染——chamber 无 `connectionIndicator`，指示器的 hidden 退化为 wide）。官方 indicator 的 failed / opening 视图位不与本壳同形（chamber 以 `phase=error` 红点、opening 并入 busy）；N-ctx 下每个已挂载设置壳各自订阅同一只读 update-store 快照（接受）。
 - chamber 全局组件内嵌渲染（不依赖选中服务器连接）。
 - 设置面**不为选中来源二次装载插件**，故不存在「设置组装诊断」块（未激活/未落座/能力降级的报告）；仍然可见的是连接页该来源卡片上的「客户端插件状态」（`pluginDiagnostic`，来自 boot/extra-row 诊断通道）。该事实的可操作面**不回 nav**：选中来源的插件刷新事实（restart / 挂载失败）以 header 区的 `role="status"` 事实条呈现（壳 chrome，见 [§3](#3-完整桥接形态)），nav 分组语义不变；**跨实例冲突不在其中**（无就地动作，其面 = 连接页：每实例诊断行 + 由它打开的插件对话框，见 §3）。
 - 插件管理在连接页内（`PluginSyncModal`/`PluginAddView`，经 `desktop_ssh_plugin_*` IPC）——**不搬家**。
@@ -14,13 +14,13 @@
 
 ### D1 固定入口平铺扩展
 
-- divider 下固定入口为 2 个：`__connections` / `__general`（**客户端 / Desktop**，`clientNav`；命名与官方分节 `general.nav` 区分——同名会让两个不同的面在 nav 上不可分辨。本页是 chamber 全局的桌面客户端设置，分组见下。nav 单元与页面自身 `<h2>` 共用这一个键，不出现「导航一个名字、页面另一个名字」）。`FIXED_SECTION_IDS` 是机器可读的权威（`nav-active.ts`，`nav-active.test.ts` 钉死）。**更新（设计 11）不单列入口**——并入 `__general` 视图的常规组末尾（`UpdateSection` 控制组：当前版本 +「检查更新」按钮 + 低调状态行，见 [11](../archive/11-auto-update.md) §3.2）；视图最末是调试专用的「性能与内存」组（D5）。
+- divider 下固定入口为 2 个：`__connections` / `__general`（**客户端 / Desktop**，`clientNav`；命名与官方分节 `general.nav` 区分——同名会让两个不同的面在 nav 上不可分辨。本页是 chamber 全局的桌面客户端设置，分组见下。nav 单元与页面自身 `<h2>` 共用这一个键，不出现「导航一个名字、页面另一个名字」）。`FIXED_SECTION_IDS` 是机器可读的权威（`nav-active.ts`，`nav-active.test.ts` 钉死）。**更新（设计 11）不单列入口**——并入 `__general` 视图的常规组末尾（`UpdateSection` 控制组：当前版本 +「检查更新」按钮 + 低调状态行，见 [11](../archive/11-auto-update.md) §3.2）；视图最末是调试专用的「性能与内存」组（D5）。固定入口触发行的更新指示器与「更新」组共用同一 update-store 快照（见 §1），点击打开 `__general` 更新组（既有 `openSection(GENERAL_SECTION_ID)` 语义，不消费 `dshDesktop.updates.open`）；呈现取舍（不 import 官方指示器、不做折叠钮徽标）见 [design 05 §5](../control-plane/05-connection-manager.md) 末尾的被否方案。
 - `__general` 视图（`GeneralView`，settings-bridge 壳内）：**设计 14 全部设置落点**，按 OpenChamber 式**控制组**组织（组标题 + 平铺行，settings-panel 设计语言）——
   - **启动与关闭**：关闭窗口行为（`windowCloseBehavior`：hide-to-tray / quit，可设）；登录自启（`launchAtLogin`，可设；macOS/Windows/Linux）；
   - **运行**：保持唤醒（`keepAwake`，默认关）；退出确认（`quitConfirmation`，可设开关，默认开——仅本地实例运行中时确认，远程隧道不影响关闭，更新已下载时豁免，见 [14](../runtime/14-sleep-background.md) D2）；VS Code 新窗口（`vscodeOpenInNewWindow`，默认开——在 VS Code 新窗口打开会话目录，避免其运行中复用/替换最近活动窗口；见 [16](../desktop/16-vscode-deeplink.md) §3.3）；
   - **会话待办区**（sidebar todo area，契约见 D4 与 [06](./06-sidebar-enhancements.md) §8）；
   - **通知**（[19](./19-notifications.md) §3.4：主开关 + 通知时机 + 事件开关 + 发送测试通知）；
-  - **更新**（设计 11，并入；组标题 + 导语 + 版本行 +「检查更新」按钮 + 相位状态行 + **调试模式**开关——位置由用户裁决放在本组内（与更新行为不耦合，只是同一低矮分组的邻居），契约见 [25](../desktop/25-macos-swift-native-shell.md) §5.1.1：默认关、仅 Swift 原生壳支持（Electron 腿未接线 → 禁用 + 原因）、状态行只报宿主 `debugRuntime` 回读；另有「接收预览版（beta）更新」订阅开关（纯用户偏好；仅 Swift 原生壳且构建期注入了两条通道 feed URL 时可用；beta 构建默认关闭，打开后继续接收 beta，契约见 design 25 §7）。
+  - **更新**（设计 11，并入；组标题 + 导语 + 版本行 +「检查更新」按钮 + 相位状态行 + **调试模式**开关——位置由用户裁决放在本组内（与更新行为不耦合，只是同一低矮分组的邻居），契约见 [25](../desktop/25-macos-swift-native-shell.md) §5.1.1：默认关、仅 Swift 原生壳支持（Electron 腿未接线 → 禁用 + 原因）、状态行只报宿主 `debugRuntime` 回读；另有「接收预览版（beta）更新」订阅开关（纯用户偏好；仅 Swift 原生壳且构建期注入了两条通道 feed URL 时可用；beta 构建默认关闭，打开后继续接收 beta，契约见 design 25 §7）；触发行指示器复用同一 update-store（不新开订阅），点击进本组。
   - **性能与内存**（只读 + 手动释放；契约见 D5；**仅调试模式开启时挂载**）：本视图**页尾**的最后一个组，紧贴在「更新」组之后——即直接位于该组最后一行「调试模式」开关下方；常驻来源表（状态/隐藏时长/DOM 节点数）+「释放 UI」两次点击确认 + 内存读数（`settings.get` 可选 `system`，缺失显示「不可得」）+ 固定「每壳内存不可得」说明；不新增设置块、不持久化、不参与 `validatePatch`；关闭调试模式即卸载，手动释放随面板缺席。
   - 样式与官方设置段一致（标题 + 导语 + 分组标题 + 平铺行 + 胶囊按钮，`--dsw-alias-*` tokens）；控制组之间以 `--dsw-alias-border-l2` hairline 分隔。
   - **控件用官方原语**：所有动作胶囊是 `ui-primitives` `Button`（`variant="outline|primary" size="sm"`）；**顶层开关行**是官方 `Switch`（36×20 轨道 / 圆形 thumb / 120ms / `aria-checked` 选中色 / **必填 `label`**，即本行的可访问名）。卡片网格与通知事件行里的勾选框仍是原生 `<input type="checkbox">`（`ToggleCard` / `ToggleEvent`），整行 `<label>` 即命中区。

@@ -49,10 +49,11 @@
 dsh-chamber://open-vscode?instance=<id>&path=<远端绝对路径>
 ```
 
-- 用 `new URL()` 解析；`hostname` 必须精确等于 `open-vscode`（其余 host 一律拒绝，不猜测、不归一化）。
+- 用 `new URL()` 解析；`hostname` 必须精确等于 `open-vscode` 或 `open`（见下条窗口唤醒 intent；其余 host 一律拒绝，不猜测、不归一化）。
 - `instance`：`INSTANCE_ID_PATTERN`（`/^(?!local$)[a-zA-Z0-9_-]{1,64}$/`）+ 注册表实查（`transportManager.listInstances()`），查无或 `transport !== 'ssh'` → 确定性拒绝 + loud；**`local` 显式放行**（走 §3.4 local 分支，不查注册表）。
 - `path`：必须以 `/` 开头（绝对路径），拒绝控制字符 / CR / LF / NUL，长度 ≤ 4096；缺失/非法 → loud 错误。
 - 幂等/去重：macOS `open-url` 与 argv 可能以不同 raw URL 拼写双触发同一目标；parse 后以 `(instanceId,path)` 归一化 key 做 pending+in-flight single-flight。启动与 renderer replay 队列各 64 条硬上限（覆盖 pending + 未 ACK）；满时 loud 丢弃最旧 pending，**无 pending 可淘汰时返回 `saturated`** 并 loud 拒新 intent（绝不冒充已接收）。renderer 投递 key 直到精确 ACK 才 complete，send-return 后的 reload 窗口仍保持 single-flight；ACK 后允许再次打开相同目标。
+- **窗口唤醒 intent（`open`，官方 `dsh://open` 同义）**：格式 `dsh-chamber://open`；`new URL()` 解析，scheme 复用 `dsh-chamber:`，`hostname` 必须精确等于 `open`，`pathname` 只允许空串或 `/`，`username`/`password`/`port`/`search`/`hash` 必须为空（任一携带即确定性拒绝），不携带任何参数。命中 = 前置已有主窗（宿主边 `focusMainWindow`：最小化先 deminiaturize、再 activate），不启动 VS Code、不导航页面。
 
 ### 3.2 authority 构造（与 SSH_HOST_PATTERN 解耦）
 
@@ -97,11 +98,13 @@ interface DeepLinkHandler {
 
 vscode handler 为第一个实现；未来「在终端打开/浏览器打开」等深链动作只增 handler，核心零改动（镜像 05 §7.6「新来源接入 = 新 provider + kind 注册」）。
 
+`dsh-chamber://open`（见 §3.1）不新增 handler：`deep-link.ts` 的解析在 VS Code handler 之外先识别 open intent（core 层 `enqueueDeepLink` 分支），执行复用 `HostEdges.focusMainWindow`（既有宿主边，自此不再零消费者）；IPC 装配前到达的 open intent 由 core 入口 loud 拒绝（不聚焦、不静默丢弃）。open intent 属显式用户入口：冷启动时可在首个已提交内容之前抬升/呈现主窗（与 Dock reopen/二次启动同 S-42 例外），不阻塞首载。
+
 ### 4.2 生命周期接线
 
 - `app.on('open-url')` **在模块顶层注册**（whenReady 之前，与 second-instance 同层）——冷启动深链先于 startup 到达，必须入 `pendingIntents`；startup 完成（transportManager 装载 + 主窗口创建）后顺序 drain，成功拉起只交给独立 `pendingRendererIntents`，不直接向未订阅的 frame 发送。冷启动 argv 在 `whenReady` 内解析（macOS argv 含 `-psn_` 噪声；非深链 argv 零副作用、绝不 throw 打断启动）。
 - preload 暴露 `deepLink.onIntent()` + `ready()`（Electron 归档面；Swift 壳的深链在 Info.plist/AppDelegate，见 [25-macos-swift-native-shell.md](./25-macos-swift-native-shell.md) §4.5）；App 按 listener-before-ready 握手。导航开始/renderer crash/窗口关闭复位 ready；`did-finish-load` 与 ready handler 都尝试 drain（覆盖「React 已握手但慢子资源仍令 isLoading=true」）；App 对 ready 瞬时失败做 5×500ms 有界重试、耗尽即 loud；旧窗口事件不得改变新窗口状态。`webContents.send` 返回只转 in-flight，不代表消费成功；renderer 在完整 intent 接受/入有界 roster 队列后调用 trusted `deep-link-ack(deliveryId,attempt)`，仅精确当前 attempt 释放容量与 single-flight key。reload/crash/start-loading/closed 把未 ACK 前缀按 FIFO 放回队首，下次发送递增 attempt，旧 document 迟到 ACK 无效；同步 send throw 只 rollback 当前 intent，早先前缀继续等 ACK。仅仍为 current 的失败窗口可撤销 readiness，ready IPC 返回 false 令 renderer 进入下一次有界握手。本级 replay 后远程 intent 仍按 §2 的 roster generation + sourceFingerprint 二级 hold/replay（防误判已删除、防旧来源代激活同 id replacement）。
-- Win/Linux：`second-instance(event, commandLine, …)` 扫描 argv；**无深链 argv → 仅 `showMainWindow()`**；`quitRequested` 置位后（before-quit 确认在途 / will-quit 清理）到达的深链直接 ignore——不启动 VS Code、不重建窗口。
+- Win/Linux：`second-instance(event, commandLine, …)` 扫描 argv；**无深链 argv → 仅 `showMainWindow()`**；`quitRequested` 置位后（before-quit 确认在途 / will-quit 清理）到达的深链（含 `open` intent）直接 ignore——不启动 VS Code、不聚焦/重建窗口。
 
 ### 4.3 协议注册（打包门控）
 
@@ -188,12 +191,13 @@ detectVscodeAvailability(platform): { available: boolean }
 ## 8. 安全不变量
 
 - 深链是 OS 级不可信输入：instance 过白名单 + 注册表实查（`local` 走独立分支）；path 过 §3.1/§3.3 编码纪律（local 分支同款：绝对路径、无控制字符、逐段编码）；scheme 硬编码 `vscode:`；`openExternal` 仅主进程且注入点复验 `vscode://vscode-remote/` 与 `vscode://file/` 前缀；authority 构造与 `SSH_HOST_PATTERN` 解耦（§3.2）；sshPort 非 22 确定性拒绝；渲染层经 IPC（open-in 面）传入的 path/instanceId 同样视为不可信（主进程统一校验）。
+- `open` intent 无参数：pathname 只允许空串或 `/`，query/fragment/userinfo/port 任一出现即确定性拒绝；该 intent 不做 `openExternal`，只抬升已有主窗，绝不把原始 URL 透传给任何打开面。
 - 探测零副作用、绝不执行 PATH 中的 `code`（仅文件/可执行位检查）；失败全 loud（对话框/日志/`{error}`），绝不静默假成功；fail-closed 优先（探测未知 → 入口隐藏）。
 - `runVscodeLaunch` 在 registry/availability/URL 构造/openExternal 全链外设异常边界；`describeUnknownError` 对 hostile message getter/Proxy/toString 二次 throw 仍返回稳定 `unknown error`，公共 Promise 不落 transport rejection。
 
 ## 9. 验证门
 
-- 自动化门：`test:desktop`（deep-link 纯函数套件：parse / argv 扫描 / authority / URL 编码 / 恶意输入；队列与 ACK 语义）、`typecheck`、`typecheck:open-in`、`test:sidebar` 回归、`build:renderer`、`verify:i18n`（无 DRIFTED）。测试数字与分发证据不写进设计文档。
+- 自动化门：`test:desktop`（deep-link 纯函数套件：parse / argv 扫描 / authority / URL 编码 / 恶意输入；队列与 ACK 语义；`open` intent 的正负用例 = 两种合法拼写 `dsh-chamber://open` 与 `dsh-chamber://open/`、非法变体、open-vscode 不回归）、`typecheck`、`typecheck:open-in`、`test:sidebar` 回归、`build:renderer`、`verify:i18n`（无 DRIFTED）。测试数字与分发证据不写进设计文档。
 - 实机项（macOS 深链冷/热启动、打包态协议注册、N-ctx、local 源、VS Code 缺失、sshPort 非 22、托盘/退出在途）按 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) 执行；Windows 打包态深链随归档腿（[23-windows-support.md](../archive/23-windows-support.md)）。
 
 ## 10. 边界与已知限制
@@ -207,6 +211,12 @@ detectVscodeAvailability(platform): { available: boolean }
 7. 可用性探测是 coarse proxy（存在性/可执行位），不覆盖 Insiders / Cursor / VSCodium；时机 = coordinator attach 单飞 + getter 每次实探。
 8. 深链到不存在的路径 → VS Code 自会报错/开空目录（文案明示「不做路径校验」）。
 9. a11y：aria-label / tooltip / 键盘聚焦（click-through opt-in 条目必须可聚焦）。
+
+## 11. 被否方案
+
+- 不新增 `dsh` scheme 做窗口唤醒：官方 `dsh://open` 属另一 runtime 的 scheme，本仓只用已注册的 `dsh-chamber://`，`open` 与 `open-vscode` 同 scheme 路由，协议注册面零增量。
+- 不在 Swift 壳直接拦截 `dsh-chamber://open`：深链的 scheme/host 语义归 core（`deep-link.ts` 解析、`shell-core` 入队），壳只执行宿主边；在壳层匹配 host 会把同一份 URL 语义拆成两份。
+- 不为 `open` 新建 B 边：`HostEdges.focusMainWindow` 已是「restore + activate、无窗则重建」的既有宿主叶，新增边等于同一动作两个所有者。
 
 ## 相关文档
 
