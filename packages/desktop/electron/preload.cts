@@ -375,6 +375,11 @@ export interface ChamberSettings {
   /** 接收预览版（beta）更新：可选（缺省 = 未设置）；镜像 desktop/chamber-settings.ts
    *  与 renderer global.d.ts 的同名字段。 */
   betaUpdates?: boolean
+  /** 桌面快捷键偏好文档的原始 JSON 文本（design 25 §8.4）：镜像 desktop/
+   *  chamber-settings.ts 与 renderer global.d.ts 的同名字段。类型镜像属共享契约、随
+   *  契约演进（docs/progress/electron-frozen.md:29）：本文件只做**接口声明镜像**，
+   *  运行期代码不读不写该字段。 */
+  shortcutsDocument?: string
 }
 
 /** 调试模式子块：开启后 Swift 原生壳置 WKWebView.isInspectable（Safari Web

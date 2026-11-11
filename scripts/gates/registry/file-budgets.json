@@ -16,9 +16,9 @@
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 1323,
+      "lines": 1342,
       "target": 1450,
-      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)；+2（2026-11，design 28 §16 revoke 漏斗）= onRendererLifecycle 顶部的注释 1 行 + revokeForwardRenderer(event) 调用 1 行（单漏斗：Electron main 与 Swift node-edges 都汇到该入口；替代方案是两处 entry glue 各 +1 行，但那会失去单漏斗语义）；+3（2026-11，beta 更新通道）= chamberSettingsStatus 的 supported 增加 betaUpdatesSupported 能力门（Swift 壳 + 构建期注入 beta feed 才允许订阅 beta；组合门在 core，纯函数 computeSupported 第 4 参只回填事实，Electron 恒 false）——raise 由本次 review 记录",
+      "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)；+2（2026-11，design 28 §16 revoke 漏斗）= onRendererLifecycle 顶部的注释 1 行 + revokeForwardRenderer(event) 调用 1 行（单漏斗：Electron main 与 Swift node-edges 都汇到该入口；替代方案是两处 entry glue 各 +1 行，但那会失去单漏斗语义）；+3（2026-11，beta 更新通道）= chamberSettingsStatus 的 supported 增加 betaUpdatesSupported 能力门（Swift 壳 + 构建期注入 beta feed 才允许订阅 beta；组合门在 core，纯函数 computeSupported 第 4 参只回填事实，Electron 恒 false）——raise 由本次 review 记录；+19（2026-11，design 16 §3.1）= dsh-chamber://open intent 接入（deep-link parse + focusMainWindowLeaf 模块叶 + enqueueDeepLink open 分支；不新增 A/B 通道）。",
       "kind": "ceiling"
     },
     {
@@ -367,15 +367,15 @@
     },
     {
       "path": "macos/Sources/DSHChamber/MainWindowController.swift",
-      "lines": 3239,
-      "target": 3239,
-      "note": "FROZEN, no adjudicated target: WKWebView host + A/B-bridge site + navigation guard + hostFacts source + notify routing in one window controller; raised by the design 28 v3 native-guest carrier (guest layer install, browser IPC dispatch, document-generation reclaim, focus/zoom routing). The row locks further growth only; an extraction needs a navigation/edge seam decision first."
+      "lines": 3272,
+      "target": 3272,
+      "note": "FROZEN, no adjudicated target: WKWebView host + A/B-bridge site + navigation guard + hostFacts source + notify routing in one window controller; raised by the design 28 v3 native-guest carrier (guest layer install, browser IPC dispatch, document-generation reclaim, focus/zoom routing). The row locks further growth only; an extraction needs a navigation/edge seam decision first. +33（2026-11，design 25 §5.6 / §7）= WindowMetrics 单源（官方 1280×820/min 520×600 外框经 28pt 标题栏折为内容 1280×792/min 520×572）+ P03 前台/唤醒 nudge 两调用点。"
     },
     {
       "path": "macos/Sources/DSHChamber/AppDelegate.swift",
-      "lines": 2087,
-      "target": 2087,
-      "note": "FROZEN, no adjudicated target: app lifecycle assembly (env/packaged-path resolution, BridgeClient creation, sidecar start, main window, tray, quit confirmation). The row locks growth only."
+      "lines": 2160,
+      "target": 2160,
+      "note": "FROZEN, no adjudicated target: app lifecycle assembly (env/packaged-path resolution, BridgeClient creation, sidecar start, main window, tray, quit confirmation). The row locks growth only. +73（2026-11，design 14 §D2 / design 25 §5 E9）= 系统关机/注销退出确认豁免（NSWorkspace.willPowerOff 观察器 + applicationShouldTerminate 最前 sessionEnding 门/abortModal/awaiting 回复 + 激活复位）。"
     },
     {
       "path": "macos/Sources/DSHChamber/BridgeClient.swift",

@@ -661,6 +661,27 @@ test('⑰ S-38 坏配置：能力探测原因必须记录、保持 blocked，che
 })
 
 
+test('⑰b P20-B：原生安装触发的 edge reject 收敛为逐字拒绝回执（fullscreen-timeout 专文案可达）', async () => {
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger,
+    request: fakeFetch([release('v0.2.3')]),
+    nativeUpdater: {
+      async available() { return { available: true } },
+      async trigger(kind: 'check' | 'download' | 'install') {
+        if (kind === 'install') throw new Error('fullscreen-timeout')
+        return { ok: true as const }
+      },
+    },
+  })
+  controller.applyNativePhase({ phase: 'downloaded', version: '0.2.3', error: null })
+  assert.deepEqual(await controller.restartAndInstallAsync!(),
+    { ok: false, error: 'fullscreen-timeout' },
+    '拒绝原因必须逐字透传（页面 update-gate 严格相等识别；不得变成 Error: 前缀或 reject）')
+  assert.equal(controller.state().phase, 'downloaded', '拒绝安装不得改变已下载相位（行内可重试）')
+  controller.stop()
+})
+
 // --- 2026-12 复审方向 A：headless nudge 门反 / stop 终局 / 启动日志（A4/A7/A9） ---
 
 /** 捕获 setTimeout 调用（不真正排程）：用例按记录的 ms/fn 手动驱动。 */

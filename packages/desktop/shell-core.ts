@@ -41,6 +41,7 @@ import {
   describeUnknownError,
   detectVscodeAvailability,
   parseOpenVscodeIntent,
+  parseOpenWindowIntent,
   runVscodeLaunch,
 } from './deep-link.ts';
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
@@ -752,18 +753,31 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 }
 
 // OS 深链启动队列 + 外链打开预算器（模块级业务状态）：有界 64 条 single-flight
-// 启动队列；消费循环闭包在 installIpcHandlers 内装配（装配前到达的深链只入队，
-// 装配后按触发消费），quit 门 = quittingLeaf。外链统一入口 openExternally：URL
-// 规范化 + 10s/8 次预算 + 超限 30s 冷却（log-and-drop）；宿主叶 = 装配期快照的
-// edges.openExternal（白名单/预算/冷却/规范化留 core，edge 只执行 open）。
+// 启动队列；消费循环闭包在 installIpcHandlers 内装配（装配前到达的 VS Code 深链只
+// 入队，装配后按触发消费），quit 门 = quittingLeaf。`dsh-chamber://open` 不经过该
+// 队列——它只经装配期快照的 edges.focusMainWindow 抬升已有主窗（零新通道）。外链
+// 统一入口 openExternally：URL 规范化 + 10s/8 次预算 + 超限 30s 冷却（log-and-drop）；
+// 宿主叶 = 装配期快照的 edges.openExternal（白名单/预算/冷却/规范化留 core，edge 只执行 open）。
 const pendingIntents = new BoundedVscodeIntentQueue(64);
 let drainingPendingIntents = false;
 /** 消费循环装配槽：installIpcHandlers 装配后赋值；null = 未装配（只入队不消费）。 */
 let drainPendingIntents: (() => void) | null = null;
 
-/** 深链入队：quit 在途 ignore（不启动 VS Code）；目标 single-flight；解析失败 loud。 */
+/** 深链入队：quit 在途 ignore（不启动 VS Code）；`dsh-chamber://open` = 只抬升已有主窗
+ *  （不进 VS Code 队列，聚焦叶未装配时 loud）；其余目标 single-flight；解析失败 loud。 */
 export function enqueueDeepLink(rawUrl: string): void {
   if (quittingLeaf()) return;
+  if (parseOpenWindowIntent(rawUrl).ok) {
+    const focus = focusMainWindowLeaf;
+    if (typeof focus !== 'function') {
+      console.error('[dsh-chamber] open 深链在 IPC 装配前到达：focusMainWindow 未装配——拒绝（不静默丢弃）');
+      return;
+    }
+    void focus().catch((error) => {
+      console.error('[dsh-chamber] open 深链聚焦主窗口失败：', describeUnknownError(error));
+    });
+    return;
+  }
   const parsed = parseOpenVscodeIntent(rawUrl);
   if (!parsed.ok) {
     console.error(`[dsh-chamber] 深链解析失败：${parsed.error}`);
@@ -795,6 +809,9 @@ const externalOpenTimes: number[] = [];
 let externalOpenCooldownUntil = 0;
 /** 宿主打开叶（装配期快照 deps.edges.openExternal；null = 未装配，静默跳过）。 */
 let externalOpenLeaf: ((url: string) => Promise<void>) | null = null;
+/** 窗口聚焦叶（装配期快照 deps.edges.focusMainWindow；null = 未装配，loud 拒绝——
+ *  open 深链不得在 IPC 装配前静默丢弃）。 */
+let focusMainWindowLeaf: (() => Promise<void>) | null = null;
 
 /**
  * 打开外链的统一入口：以规范化后的 href 交给宿主打开叶（避免 raw 字符串中
@@ -868,6 +885,8 @@ export function installIpcHandlers(deps: ShellIpcDeps): void {
   quittingLeaf = deps.ctx.isQuitting;
   // 外链打开宿主叶快照（规范化/预算/冷却留 core，edge 只执行 open）。
   externalOpenLeaf = deps.edges.openExternal;
+  // 窗口聚焦叶快照（open 深链：只抬升已有窗口，零新通道）。
+  focusMainWindowLeaf = deps.edges.focusMainWindow;
   const {
     hostFacts,
     settingsIO,

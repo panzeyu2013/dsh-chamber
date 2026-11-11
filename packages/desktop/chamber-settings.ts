@@ -84,6 +84,11 @@ export interface ChamberSettings {
    *  （读作未订阅）；false = 明确关闭；true = 订阅。只在两条通道 feed URL 成对注入的
    *  Swift 原生壳构建生效；v4 起版本后缀不参与通道判定（纯用户偏好）。 */
   betaUpdates?: boolean
+  /** 桌面快捷键偏好文档（design 25 §8.4）：**可选，原始 JSON 文本**（不解析存储，
+   *  保原文以便坏/未来版本文档被拒写而不被覆盖）；缺省 = 从未持久化。上限见
+   *  MAX_SHORTCUTS_DOCUMENT_CHARS。bridge-shim 的 desktopShortcuts 经
+   *  settings-get/set 读写本字段（只在此处持久化，不落 userData/keybindings.json）。 */
+  shortcutsDocument?: string
 }
 
 /** 系统内存快照（“resident” 阀门的输入，D4；非秘密、只读投影）。
@@ -183,6 +188,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'sessionTodo',
   'debug',
   'betaUpdates',
+  'shortcutsDocument',
 ];
 
 /** Normalize a registry origin (design 18 M4): a valid https:// URL with no
@@ -210,6 +216,41 @@ function normalizeRegistryOrigin(raw: unknown): string | null {
 /** Settings-file size bound, mirroring Swift StartupSettings (1 << 20).
  *  An oversized document is corruption, never a truncated read. */
 export const MAX_SETTINGS_FILE_BYTES = 1 << 20;
+
+/** Desktop shortcut-preferences document bound (design 25 §8.4; the shim enforces the
+ *  same bound before writing). The field travels as raw JSON text so a bad/future
+ *  document is preserved verbatim instead of being forced through this store's
+ *  corrupt-settings discipline; an oversized document is dropped on read and refused by
+ *  validatePatch, never parsed. */
+export const MAX_SHORTCUTS_DOCUMENT_CHARS = 65536;
+
+/** Shortcut document shape check (raw JSON text): `{schemaVersion: 1|2, profiles:
+ *  plain object}`. Unknown keys (top-level and inside profiles) pass through untouched —
+ *  this store is the pipe, the shim owns the document semantics (design 25 §8.4). A
+ *  schemaVersion ABOVE 2 is a future document: readable text, but not installable, so the
+ *  shim keeps defaults and never overwrites it. */
+function validateShortcutsDocument(raw: string): { ok: true } | { ok: false; error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: 'shortcutsDocument must be valid JSON' };
+  }
+  if (!isPlainRecord(parsed)) {
+    return { ok: false, error: 'shortcutsDocument must be a JSON object' };
+  }
+  const version = parsed.schemaVersion;
+  if (typeof version === 'number' && version > 2) {
+    return { ok: false, error: 'shortcutsDocument schemaVersion is newer than supported' };
+  }
+  if (version !== 1 && version !== 2) {
+    return { ok: false, error: 'shortcutsDocument schemaVersion must be 1 or 2' };
+  }
+  if (!isPlainRecord(parsed.profiles)) {
+    return { ok: false, error: 'shortcutsDocument.profiles must be an object' };
+  }
+  return { ok: true };
+}
 
 /** Encoding discipline mirroring Swift StartupSettings.hasRejectedEncoding:
  *  a UTF-8 BOM (U+FEFF) or a raw NUL byte (what a UTF-16/UTF-32 document
@@ -466,6 +507,12 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   // beta 偏好可选：缺省保持「未设置」（绝不把缺省落成 false，否则一次读盘就把
   // 「未表态」变成「明确关闭」，未来默认值无法演进）。
   if (typeof record.betaUpdates === 'boolean') base.betaUpdates = record.betaUpdates;
+  // 快捷键文档可选：读路径**不解析**（保原文），只判 string + 字节上限；坏 JSON/未来
+  // 版本故意留到 shim 侧判「不可读」——那样原文仍在文件里、首次编辑绝不覆盖它。
+  if (typeof record.shortcutsDocument === 'string'
+    && record.shortcutsDocument.length <= MAX_SHORTCUTS_DOCUMENT_CHARS) {
+    base.shortcutsDocument = record.shortcutsDocument;
+  }
   return base;
 }
 
@@ -826,6 +873,17 @@ export function validatePatch(
       const validated = validateDebugSettingsPatch(record[key]);
       if (!validated.ok) return validated;
       (result as Record<string, unknown>)[key] = validated.patch;
+    } else if (key === 'shortcutsDocument') {
+      const raw = record[key];
+      if (typeof raw !== 'string') {
+        return { ok: false, error: 'shortcutsDocument must be a string' };
+      }
+      if (raw.length > MAX_SHORTCUTS_DOCUMENT_CHARS) {
+        return { ok: false, error: `shortcutsDocument exceeds ${MAX_SHORTCUTS_DOCUMENT_CHARS} characters` };
+      }
+      const validated = validateShortcutsDocument(raw);
+      if (!validated.ok) return { ok: false, error: validated.error };
+      result.shortcutsDocument = raw;
     } else if (typeof record[key] !== 'boolean') {
       return { ok: false, error: `${key} must be a boolean` };
     } else {

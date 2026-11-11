@@ -190,6 +190,9 @@ export const GROUPS = {
     // 本地 dsh 端口基址的 env 覆盖（与在跑实例并存；I-15 验收腿的前置）
     'test/desktop-shell/dsh-port-base.test.ts',
     'test/desktop-shell/deep-link.test.ts',
+    // P19：dsh-chamber://open 的 core 分支（quit 门 / focusMainWindow 叶快照 / 非法变体
+    // loud），fake edges+ctx 驱动真实 installIpcHandlers（零通道改动由 bridge manifest 测试锁）。
+    'test/desktop-shell/deep-link-open-intent.test.ts',
     'test/desktop-shell/open-in.test.ts',
     'test/desktop-shell/updater.test.ts',
     'test/desktop-shell/updater-restart-install.test.ts',

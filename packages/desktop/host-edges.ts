@@ -58,7 +58,7 @@ export type HostSetBadgeResult =
  *  resources 推送不被消费（Swift 侧可继续推送，未知事实键按前向兼容
  *  忽略）。
  *  **零 core 消费者的有意保留面**（design 25 §4.1 注；全仓 `.member(` 调用点
- *  为零，排除测试）：isPackaged、trayAvailable、focusMainWindow、launchApp 与
+ *  为零，排除测试）：isPackaged、trayAvailable、launchApp 与
  *  同步 setKeepAwake/setLoginItem。它们保留的是**契约本身**（两 flavor 的同形
  *  seam + 逐成员 doc 注释）而不是用户路径；逐成员退役判据：
  *    - launchApp（E12/S-05）：两 flavor 均无实现，等第一个消费者——消费者出现即
@@ -70,9 +70,10 @@ export type HostSetBadgeResult =
  *    - trayAvailable/isPackaged（E2/B1）：Electron 侧本就未实现，Swift 侧托盘恒建
  *      （T-15）、打包路径由 ctx/参数解析；关闭行为与打包裁决不再需要经本 seam
  *      暴露 → 删除成员与 node-edges 的宿主事实缓存。
- *    - focusMainWindow（D3）：Electron 通知 click 在 electron-edges 内用
- *      host.showMainWindow、Swift 在 SwiftEdgeHostLegs 内自办；core 不需要可复用
- *      的聚焦入口 → 删除成员。
+ *    - focusMainWindow（D3）已离开保留面：core 的 enqueueDeepLink 消费
+ *      `dsh-chamber://open`（design 16 §3.1），只抬升已有主窗；该成员是这条腿的
+ *      唯一宿主叶（Electron 通知 click 仍走 electron-edges 内 host.showMainWindow、
+ *      Swift 通知 click 在 SwiftEdgeHostLegs 内自办）。
  *  这些成员不在 preload/bridge-manifest 暴露面内（HostEdges 是主进程内部 seam），
  *  删除不动 A 桥；保留的唯一依据是 design 25 §4.1 的明确保留声明。
  *  electron/electron-edges.ts 头注释列出已实现集合；每个成员标注其设计行来源，
@@ -130,7 +131,8 @@ export interface HostEdges {
   onMainWindowShown(cb: () => void): void
   /** 任一窗口是否聚焦（通知裁决的窗口焦点事实）。 */
   isFocused(): boolean
-  /** 通知 click 激活腿（D3）：restore+focus，无窗则重建，完成后 resolve。 */
+  /** 窗口激活腿（D3）：restore+focus，无窗则重建，完成后 resolve。两个消费者 =
+   *  通知 click 的宿主实现与 core 的 `dsh-chamber://open` 深链（只抬升已有主窗）。 */
   focusMainWindow(): Promise<void>
   /** 渲染器可用性门（B3）：webContents 是否仍在加载。实现侧窗口守卫：无主窗/
    *  已销毁视同加载中（投递门恒不通过）。 */

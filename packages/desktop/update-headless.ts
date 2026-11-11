@@ -518,7 +518,19 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
           return { ok: false as const, error: 'restart already in progress' }
         }
         if (state.phase === 'downloaded') {
-          return deps.nativeUpdater.trigger('install')
+          // B 桥边应答 ok:false 会以 reject 到达（sidecar-entry 的 pendingEdges 对 error 帧
+          // reject(new Error(frame.error))）：必须收敛成普通拒绝回执，页面才能拿到**逐字**
+          // 原因（P20-B 的 fullscreen-timeout 专文案依赖它；否则 IPC 错误帧 + String(error)
+          // 会变成 "Error: fullscreen-timeout"）。
+          try {
+            return await deps.nativeUpdater.trigger('install')
+          } catch (error) {
+            const message = error instanceof Error && error.message !== ''
+              ? error.message
+              : 'native updater failed'
+            deps.logger.warn('[updater-headless] 原生安装触发失败，按拒绝回执透传：' + message)
+            return { ok: false as const, error: message }
+          }
         }
       }
       return { ok: false as const, error: NATIVE_SHELL_RESTART_REFUSAL }

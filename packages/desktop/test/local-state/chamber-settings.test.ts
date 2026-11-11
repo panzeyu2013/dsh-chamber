@@ -17,6 +17,7 @@ import path from 'node:path';
 import {
   DEFAULT_CHAMBER_SETTINGS,
   MAX_SETTINGS_FILE_BYTES,
+  MAX_SHORTCUTS_DOCUMENT_CHARS,
   closeToTrayRecoveryAvailable,
   computeQuitRisk,
   computeSupported,
@@ -1235,4 +1236,102 @@ test('S-E settings-set: betaUpdates=true 在无 beta feed 的构建上被响亮�
   const electron = installSettingsHarness(leaves, { flavor: 'electron', nativeBetaChannelSwitch: true });
   const electronStatus = await electron.invoke(IPC_CHANNELS.SETTINGS_GET, null);
   assert.equal((electronStatus as { supported: ChamberSettingsSupported }).supported.betaUpdatesSupported, false);
+});
+
+// ---------------------------------------------------------------------------
+// shortcutsDocument（design 25 §8.4，P08）：原始 JSON 文本持久化 —— 读路径不解析
+// （坏/未来文档留在文件里，由 shim 判 unreadable 并拒绝覆盖），写入口只做形状校验。
+// ---------------------------------------------------------------------------
+
+const VALID_SHORTCUTS_TEXT = JSON.stringify({
+  schemaVersion: 2,
+  profiles: { 'desktop:macos': { 'test.open': null } },
+});
+
+test('shortcutsDocument: validatePatch 接受合法 JSON 文本并原样保留（不重新序列化）', () => {
+  assert.deepEqual(validatePatch({ shortcutsDocument: VALID_SHORTCUTS_TEXT }),
+    { ok: true, patch: { shortcutsDocument: VALID_SHORTCUTS_TEXT } });
+  // 未知顶层键与未知 profile 内容整体透传（前向兼容：未来 profile/命令 id 不拒绝）。
+  const unknownKeys = '{"schemaVersion":1,"profiles":{"desktop:macos":{"future.command":{"code":"KeyK","modifiers":[]}}},"extra":1}';
+  assert.deepEqual(validatePatch({ shortcutsDocument: unknownKeys }),
+    { ok: true, patch: { shortcutsDocument: unknownKeys } });
+});
+
+test('shortcutsDocument: validatePatch 拒绝非字符串/超限/坏 JSON/坏形状（未来版本号单独拒绝）', () => {
+  const rejections: Array<[unknown, RegExp]> = [
+    [42, /must be a string/],
+    [null, /must be a string/],
+    ['x'.repeat(MAX_SHORTCUTS_DOCUMENT_CHARS + 1), /exceeds 65536 characters/],
+    ['not json', /valid JSON/],
+    ['null', /JSON object/],
+    ['[]', /JSON object/],
+    ['{}', /schemaVersion must be 1 or 2/],
+    ['{"schemaVersion":3,"profiles":{}}', /newer than supported/],
+    ['{"schemaVersion":"2","profiles":{}}', /schemaVersion must be 1 or 2/],
+    ['{"schemaVersion":1}', /profiles must be an object/],
+    ['{"schemaVersion":1,"profiles":[]}', /profiles must be an object/],
+  ];
+  for (const [value, pattern] of rejections) {
+    const result = validatePatch({ shortcutsDocument: value });
+    assert.equal(result.ok, false, JSON.stringify(value).slice(0, 60));
+    if (!result.ok) assert.match(result.error, pattern);
+  }
+});
+
+test('shortcutsDocument: normalize 读路径只认 string + 上限，绝不解析也绝不把坏文档拖成整文件损坏', () => {
+  // 合法 JSON：原样保留（读路径不重新序列化）。
+  assert.equal(normalizeSettings({ shortcutsDocument: VALID_SHORTCUTS_TEXT }).shortcutsDocument,
+    VALID_SHORTCUTS_TEXT);
+  // 坏 JSON 文本同样保留：判定在 shim（unreadable + 拒写），store 只是管道。
+  assert.equal(normalizeSettings({ shortcutsDocument: 'not json' }).shortcutsDocument, 'not json');
+  // 上限边界：恰好 MAX 保留，MAX+1 丢弃；非 string 丢弃。
+  assert.equal(normalizeSettings({ shortcutsDocument: 'x'.repeat(MAX_SHORTCUTS_DOCUMENT_CHARS) })
+    .shortcutsDocument?.length, MAX_SHORTCUTS_DOCUMENT_CHARS);
+  assert.equal('shortcutsDocument' in normalizeSettings({ shortcutsDocument: 'x'.repeat(MAX_SHORTCUTS_DOCUMENT_CHARS + 1) }), false);
+  assert.equal('shortcutsDocument' in normalizeSettings({ shortcutsDocument: 42 }), false);
+  assert.equal('shortcutsDocument' in normalizeSettings({}), false, '缺省 = 从未持久化（不伪造空文档）');
+  assert.equal('shortcutsDocument' in DEFAULT_CHAMBER_SETTINGS, false, 'DEFAULT 不含该字段');
+});
+
+test('readSettingsFile/writeSettingsFile: shortcutsDocument 原样往返；坏文本不触发整文件 corrupt', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-shortcuts-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeSettingsFile(file, { ...DEFAULT_CHAMBER_SETTINGS, shortcutsDocument: VALID_SHORTCUTS_TEXT });
+    const roundTrip = readSettingsFile(file);
+    assert.equal(roundTrip.state, 'ok');
+    assert.equal(roundTrip.settings.shortcutsDocument, VALID_SHORTCUTS_TEXT, '原始文本逐字往返');
+
+    // 手工放入坏 JSON 文本：整文件仍 ok（不是 corrupt），原文保留给 shim 判 unreadable。
+    writeFileSync(file, JSON.stringify({ shortcutsDocument: 'not json' }), 'utf8');
+    const unreadable = readSettingsFile(file);
+    assert.equal(unreadable.state, 'ok', '坏文档不得把整份 chamber 设置拖成 corrupt');
+    assert.equal(unreadable.settings.shortcutsDocument, 'not json');
+
+    // 非 string / 超限：前向兼容容忍（丢弃该字段），文件本身仍 ok。
+    for (const malformed of [{ shortcutsDocument: 42 }, { shortcutsDocument: 'x'.repeat(MAX_SHORTCUTS_DOCUMENT_CHARS + 1) }]) {
+      writeFileSync(file, JSON.stringify(malformed), 'utf8');
+      const read = readSettingsFile(file);
+      assert.equal(read.state, 'ok');
+      assert.equal('shortcutsDocument' in read.settings, false, '非法读值丢弃，其余设置照常采信');
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('S-E settings-set: shortcutsDocument 合法补丁 → 持久化 + holder + settings-get；非法补丁响亮拒绝且不落盘', async () => {
+  const leaves = { setKeepAwake: async () => {}, setLoginItem: async () => ({ ok: true as const }) };
+  const harness = installSettingsHarness(leaves);
+  const accepted = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { shortcutsDocument: VALID_SHORTCUTS_TEXT } });
+  assert.equal(settingsOf(accepted).shortcutsDocument, VALID_SHORTCUTS_TEXT);
+  assert.equal(harness.holder().shortcutsDocument, VALID_SHORTCUTS_TEXT);
+  assert.equal(harness.persistCalls.at(-1)?.shortcutsDocument, VALID_SHORTCUTS_TEXT);
+  assert.ok(harness.pushes.length > 0, '成功应用必须推送 settings-changed');
+
+  const rejected = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { shortcutsDocument: '{broken' } });
+  assert.deepEqual(rejected, { error: 'shortcutsDocument must be valid JSON' });
+  assert.equal(harness.persistCalls.length, 1, '被拒绝的补丁绝不持久化');
+  assert.equal(settingsOf(await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null)).shortcutsDocument,
+    VALID_SHORTCUTS_TEXT, 'settings-get 回旧值（内存未被污染）');
 });

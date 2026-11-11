@@ -178,12 +178,13 @@ preload 暴露 `window.dshChamber` = **4 个 info 标量**（`controlPlaneUrl`/`
 
 ### 零 core 消费者的保留面（退役判据）
 
-HostEdges 的 `trayAvailable`/`setKeepAwake`/`focusMainWindow`/`launchApp`/`setLoginItem`/`isPackaged` 当前全仓无调用点（core 未 Pick；`.member(` grep 排除测试）。它们保留的是**两 flavor 同形的契约面**而不是用户路径，删除会让 Electron/Swift 两条 HostEdges 实现失去锁步面；HostEdges 不在 preload/bridge-manifest 内，删除不会动 A 桥暴露面：
+HostEdges 的 `trayAvailable`/`setKeepAwake`/`launchApp`/`setLoginItem`/`isPackaged` 当前全仓无调用点（core 未 Pick；`.member(` grep 排除测试）。它们保留的是**两 flavor 同形的契约面**而不是用户路径，删除会让 Electron/Swift 两条 HostEdges 实现失去锁步面；HostEdges 不在 preload/bridge-manifest 内，删除不会动 A 桥暴露面：
 
 - `launchApp`（design 25 E12/S-05）：两 flavor 均无实现，等第一个消费者；消费者出现即在两侧实现，若 open-in 最终确认永不由壳执行（实例内 seed-open-in 包独占），随该裁决删除。
 - 同步 `setKeepAwake`/`setLoginItem`：settings 路径走装配 ctx 的 async 叶（`shell-assembly-ctx.ts`）；到保留面复核时仍无 HostEdges 直接调用方 → 删除成员、保留 ctx 叶。
 - `trayAvailable`/`isPackaged`（E2/B1）：Electron 侧本就未实现；关闭行为与打包裁决不再需要经本 seam 暴露 → 删除成员与 node-edges 缓存。
-- `focusMainWindow`（D3）：Electron 通知 click 由 electron-edges 的 `host.showMainWindow` 承担、Swift 在 `SwiftEdgeHostLegs` 内自办；core 不需要可复用聚焦入口 → 删除成员。
+
+`focusMainWindow` 已**离开**该保留面：core 的 `enqueueDeepLink` 消费 `dsh-chamber://open`（design 16 §3.1），只抬升已有主窗、零新通道；Swift 实现把该成员折算成 `sendEdge('focusMainWindow')`（restore+activate），通知 click 仍在各自宿主内自办。
 
 `dsh-chamber:info` 的 `flavor` 字段同为 E2 有意保留的零消费者字段（preload 不镜像）；`hostFacts.flavor`（`electron/main.ts`/`sidecar-ctx.ts`）仍由 `chamber-settings` 的能力门消费，二者不是一回事。
 

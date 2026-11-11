@@ -57,6 +57,7 @@ export interface ShellIpcDeps {
     | 'webViewLoading'
     | 'webViewContentAlive'
     | 'showMessage'
+    | 'focusMainWindow'
     | 'openExternal'
     | 'openPath'
     | 'showItemInFolder'

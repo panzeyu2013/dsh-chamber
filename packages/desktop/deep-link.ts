@@ -4,6 +4,7 @@
  *
  * ALL deep-link validation happens here — the OS deep link is untrusted input:
  * parseOpenVscodeIntent (scheme/host/instance/path validated, loud failures),
+ * parseOpenWindowIntent (the parameter-free `dsh-chamber://open` window-raise intent),
  * buildVscodeRemoteUrl (IPv6 bracketing, host:port and sshPort≠22 rejected, segment-wise
  * encoding, hardcoded `vscode:` scheme), detectVscodeAvailability (pure fs + PATH scan,
  * never spawns) and runVscodeLaunch (shared pipeline: registry → authority → availability
@@ -537,6 +538,41 @@ export function parseOpenVscodeIntent(raw: string): { ok: true; intent: VscodeLa
     : validateRemotePath(pathParam)
   if (!validatedPath.ok) return validatedPath
   return { ok: true, intent: { instanceId: instance, path: validatedPath.path } }
+}
+
+/** Parse the parameter-free window-raise deep link `dsh-chamber://open`: the OS link
+ * only asks the shell to raise its existing main window (nothing is launched and no page
+ * state changes). Hostname must be exactly `open`, the path is the empty string or `/`,
+ * and no userinfo/port/query/fragment may ride along — a link carrying any of them is
+ * refused loudly instead of silently dropped, because the URL is untrusted input.
+ * Sibling of parseOpenVscodeIntent (same scheme, disjoint hosts); the caller tries this
+ * first and falls back to the VS Code parser so the two intent kinds never overlap. */
+export function parseOpenWindowIntent(raw: string): { ok: true } | { ok: false; error: string } {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return { ok: false, error: 'invalid deep-link URL' }
+  }
+  if (!isDeepLinkProtocol(url.protocol)) {
+    return { ok: false, error: `unsupported deep-link scheme: ${url.protocol}` }
+  }
+  if (url.hostname !== 'open') {
+    return { ok: false, error: `not a window-open deep link: ${url.hostname}` }
+  }
+  if (url.username !== '' || url.password !== '') {
+    return { ok: false, error: 'open deep-link must not carry userinfo' }
+  }
+  if (url.port !== '') {
+    return { ok: false, error: 'open deep-link must not carry a port' }
+  }
+  if (url.pathname !== '' && url.pathname !== '/') {
+    return { ok: false, error: 'open deep-link must not carry a path' }
+  }
+  if (url.search !== '' || url.hash !== '') {
+    return { ok: false, error: 'open deep-link must not carry query or fragment' }
+  }
+  return { ok: true }
 }
 
 /**

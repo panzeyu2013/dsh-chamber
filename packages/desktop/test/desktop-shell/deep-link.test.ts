@@ -29,6 +29,7 @@ import {
   linuxProtocolDesktopEntry,
   describeUnknownError,
   parseOpenVscodeIntent,
+  parseOpenWindowIntent,
   quoteDesktopExecValue,
   resolveLinuxLaunchExecutable,
   runVscodeLaunch,
@@ -116,6 +117,37 @@ test('parseOpenVscodeIntent rejects malformed URLs without throwing', () => {
   const result = parseOpenVscodeIntent('not a url')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /invalid deep-link/i)
+})
+
+test('parseOpenWindowIntent accepts the two window-raise spellings and nothing else', () => {
+  assert.deepEqual(parseOpenWindowIntent('dsh-chamber://open'), { ok: true })
+  assert.deepEqual(parseOpenWindowIntent('dsh-chamber://open/'), { ok: true })
+})
+
+test('parseOpenWindowIntent refuses every parameter-bearing variant loudly (untrusted OS input)', () => {
+  const rejected: Array<[string, RegExp]> = [
+    ['dsh-chamber://open/foo', /path/],
+    ['dsh-chamber://open//', /path/],
+    ['dsh-chamber://open?instance=web-1', /query or fragment/],
+    ['dsh-chamber://open#section', /query or fragment/],
+    ['dsh-chamber://user:pass@open', /userinfo/],
+    ['dsh-chamber://open:4444', /port/],
+    ['dsh-chamber://open-vscode?instance=local&path=/foo', /not a window-open/],
+    ['https://open', /unsupported deep-link scheme/],
+    ['not a url', /invalid deep-link/],
+  ]
+  for (const [raw, pattern] of rejected) {
+    const result = parseOpenWindowIntent(raw)
+    assert.equal(result.ok, false, raw)
+    if (!result.ok) assert.match(result.error, pattern, raw)
+  }
+})
+
+test('parseOpenWindowIntent does not disturb parseOpenVscodeIntent (hosts stay disjoint)', () => {
+  const vscode = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=local&path=/foo')
+  assert.equal(vscode.ok, true)
+  const openWindow = parseOpenWindowIntent('dsh-chamber://open-vscode?instance=local&path=/foo')
+  assert.equal(openWindow.ok, false)
 })
 
 test('BoundedVscodeIntentQueue deduplicates normalized intents while pending/in-flight and allows a later retry', () => {

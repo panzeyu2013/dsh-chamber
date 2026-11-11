@@ -513,6 +513,10 @@ export interface ChamberSettings {
   /** 接收预览版（beta）更新：可选（缺省 = 未设置，读作未订阅；false = 明确关闭；
    *  true = 订阅）。镜像 desktop/chamber-settings.ts 与 preload.cts 的同名字段。 */
   betaUpdates?: boolean
+  /** 桌面快捷键偏好文档的原始 JSON 文本（design 25 §8.4）：镜像 desktop/
+   *  chamber-settings.ts 与 preload.cts 的同名字段；消费方是 Swift shim 的
+   *  dshDesktop.shortcuts 适配器（settings-get/set），renderer 设置页不直接解析。 */
+  shortcutsDocument?: string
 }
 
 /** 调试模式子块——结构与 desktop/chamber-settings.ts 的 ChamberDebugSettings

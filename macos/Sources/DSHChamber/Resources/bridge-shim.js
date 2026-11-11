@@ -110,9 +110,13 @@
  * the revision owned by the in-memory shortcuts adapter below. Boundary: only
  * main-document key events (no embedded-frame or webview source, no native menu
  * interception, no preventDefault — the page still sees the same key);
- * preferences live in session memory only (edits apply until reload), and
- * window close stays owned by the native menu (the A bridge has no close
- * channel, so dshDesktop.keyboard.closeWindow rejects loudly).
+ * preference documents persist through the chamber settings store
+ * (settings-get/set `shortcutsDocument` raw JSON text, design 25 §8.4) and are
+ * re-hydrated on the next launch; until hydration settles the snapshot stays
+ * 'loading' and edits answer write-failed, so a default document can never
+ * overwrite persisted bindings (an unreadable persisted document keeps defaults
+ * and refuses writes). Window close stays owned by the native menu (the A bridge
+ * has no close channel, so dshDesktop.keyboard.closeWindow rejects loudly).
  *
  * Trust note: page-world injection means page code can observe these globals
  * and forge resolve/emit frames. The Swift-side fences (main frame / origin /
@@ -309,6 +313,9 @@
   function sidecarReady(token) {
     requireNativeToken(token)
     window.dispatchEvent(new Event('dsh-chamber:sidecar-ready'))
+    // P08：hydrate 起点之一（另一处 = info 首次成功）。先派事件再 hydrate，渲染端
+    // 先看到 ready 边沿，随后的 shortcuts 快照推送才是同一次就绪的后果。
+    noteBridgeReady()
   }
 
   // ---- push subscriptions ------------------------------------------------
@@ -694,8 +701,9 @@
   // The official shortcuts service constructs during boot and THROWS when the
   // document is platform-marked but dshDesktop.keyboard is absent; the same
   // service accepts native input only when its revision equals the accepted
-  // preference revision. keyboard + an in-memory shortcuts adapter therefore
-  // ship together: the adapter owns the revision this shim stamps on input.
+  // preference revision. keyboard + a settings-backed shortcuts adapter
+  // therefore ship together: the adapter owns the revision this shim stamps on
+  // input and persists the document through chamber settings (design 25 §8.4).
   // WKWebView has no before-input-event, so input is DOM-sourced (boundary and
   // native-menu limits are stated in the file header).
 
@@ -708,21 +716,195 @@
     : /darwin|mac|iphone|ipad/i.test(hostNavigatorPlatform()) ? 'macos' : 'linux'
   var SHORTCUT_PROFILE = 'desktop:' + SHORTCUT_PLATFORM
 
+  // P08 持久化（design 25 §8.4）：偏好文档经 chamber-settings 的 shortcutsDocument
+  // （原始 JSON 文本）持久化，重启后恢复。hydrate 只在 A 桥就绪后开始，起点有两条且
+  // 幂等：① sidecar-ready 事件（活文档内 sidecar 重启）；② info 首次成功——冷启动文档
+  // 是在 sidecar ready **之后**才装载的（MainWindowController.noteSidecarReady →
+  // startLoadingIfNeeded），事件已派发给上一份 about:blank 文档，只挂事件会让每次
+  // 正常启动都回落默认。落定前 status='loading'、编辑 write-failed：默认文档绝不可能
+  // 覆盖磁盘上的真实文档。
+  var SHORTCUTS_HYDRATE_MAX_ATTEMPTS = 5
+  var SHORTCUTS_HYDRATE_RETRY_MS = 200
+  var SHORTCUTS_HYDRATE_WAIT_MS = 2000
+
   var shortcutsDocument = { schemaVersion: 1, profiles: {} }
   var shortcutsUsingDefaults = true
   var shortcutsSequence = 0
   var shortcutsRevision = newUuid()
   var shortcutsSubscribers = []
+  var shortcutsHydrationState = 'unhydrated' // unhydrated | loading | ready | unreadable
+  var shortcutsHydrationError = null // null | 'read' | 'invalid' | 'future'
+  var shortcutsHydrationPromise = null
+  var shortcutsHydrated = false
+  var shortcutsHydrationWaiters = []
+  var shortcutsBridgeReady = false
+  var shortcutsWriteChain = Promise.resolve()
 
   function shortcutsSnapshot() {
+    var status = 'loading'
+    if (shortcutsHydrationState === 'ready') status = 'ready'
+    else if (shortcutsHydrationState === 'unreadable') status = 'unreadable'
     return {
       revision: shortcutsRevision,
       sequence: shortcutsSequence,
       document: shortcutsDocument,
-      status: 'ready',
-      error: null,
+      status: status,
+      error: shortcutsHydrationError,
       usingDefaults: shortcutsUsingDefaults
     }
+  }
+
+  /** 持久文档形状（镜像上游 dsh-client-shortcuts 的 parseShortcutDocument）：null = 合法，
+   *  'invalid' / 'future' = 不可读。页面直接信任本 shim 装入的 document，故这里必须与
+   *  上游同严格（顶层未知键、profile 名、command id、binding 字段字形都判 invalid）；
+   *  未来版本号只拒装载（保留原文，绝不覆盖）。 */
+  function shortcutPlainRecord(value) {
+    return value !== null && typeof value === 'object' && Object.prototype.toString.call(value) !== '[object Array]'
+  }
+  var SHORTCUT_COMMAND_PATTERN = /^[a-z][a-zA-Z0-9-]*(?:\.[a-zA-Z][a-zA-Z0-9-]*)+$/
+  var SHORTCUT_PROFILE_PATTERN = /^(desktop|web):(macos|windows|linux)$/
+  var SHORTCUT_MODIFIERS = ['primary', 'control', 'alt', 'shift', 'meta']
+  var SHORTCUT_CODE_PATTERN = /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4]))$/
+  var SHORTCUT_KEY_NAMES = {
+    Slash: true, Comma: true, Period: true, Backslash: true, Backquote: true, Minus: true, Equal: true,
+    BracketLeft: true, BracketRight: true, Semicolon: true, Quote: true, Enter: true, Escape: true,
+    Space: true, Tab: true, Backspace: true, Delete: true, ArrowUp: true, ArrowDown: true,
+    ArrowLeft: true, ArrowRight: true
+  }
+  function shortcutBindingIssue(binding, schemaVersion) {
+    if (binding === null) return null
+    if (!shortcutPlainRecord(binding)) return 'invalid'
+    var keys = Object.keys(binding)
+    for (var k = 0; k < keys.length; k += 1) {
+      if (keys[k] !== 'code' && keys[k] !== 'secondCode' && keys[k] !== 'modifiers') return 'invalid'
+    }
+    if (typeof binding.code !== 'string' || !Array.isArray(binding.modifiers)) return 'invalid'
+    if (Object.prototype.hasOwnProperty.call(binding, 'secondCode') && typeof binding.secondCode !== 'string') return 'invalid'
+    var modifiers = binding.modifiers
+    for (var m = 0; m < modifiers.length; m += 1) {
+      if (typeof modifiers[m] !== 'string' || SHORTCUT_MODIFIERS.indexOf(modifiers[m]) === -1) return 'invalid'
+    }
+    var codes = binding.secondCode === undefined ? [binding.code] : [binding.code, binding.secondCode]
+    codes.sort()
+    for (var c = 0; c < codes.length; c += 1) {
+      if (!SHORTCUT_CODE_PATTERN.test(codes[c])
+        && Object.prototype.hasOwnProperty.call(SHORTCUT_KEY_NAMES, codes[c]) !== true) return 'invalid'
+    }
+    if (codes.length === 2 && codes[0] === codes[1]) return 'invalid'
+    if (schemaVersion === 1 && binding.secondCode !== undefined) return 'invalid'
+    return null
+  }
+  function shortcutDocumentIssue(raw) {
+    var document
+    try {
+      document = JSON.parse(raw)
+    } catch (err) {
+      return 'invalid'
+    }
+    if (!shortcutPlainRecord(document)) return 'invalid'
+    var version = document.schemaVersion
+    if (typeof version === 'number' && version > 2) return 'future'
+    var topKeys = Object.keys(document)
+    for (var t = 0; t < topKeys.length; t += 1) {
+      if (topKeys[t] !== 'schemaVersion' && topKeys[t] !== 'profiles') return 'invalid'
+    }
+    if (version !== 1 && version !== 2) return 'invalid'
+    if (!shortcutPlainRecord(document.profiles)) return 'invalid'
+    var profiles = document.profiles
+    var profileNames = Object.keys(profiles)
+    for (var p = 0; p < profileNames.length; p += 1) {
+      var profile = profileNames[p]
+      if (!SHORTCUT_PROFILE_PATTERN.test(profile) || !shortcutPlainRecord(profiles[profile])) return 'invalid'
+      var overrides = profiles[profile]
+      var commandIds = Object.keys(overrides)
+      for (var i = 0; i < commandIds.length; i += 1) {
+        if (!SHORTCUT_COMMAND_PATTERN.test(commandIds[i])) return 'invalid'
+        if (shortcutBindingIssue(overrides[commandIds[i]], version) !== null) return 'invalid'
+      }
+    }
+    return null
+  }
+
+  /** hydrate 落定：发布一帧快照并唤醒所有有界等待者（get/edit 的 await 汇点）。 */
+  function settleShortcutsHydration(state, error) {
+    shortcutsHydrationState = state
+    shortcutsHydrationError = error
+    shortcutsHydrated = state === 'ready'
+    shortcutsAccept()
+    var waiters = shortcutsHydrationWaiters
+    shortcutsHydrationWaiters = []
+    for (var i = 0; i < waiters.length; i += 1) {
+      if (waiters[i].timer !== null) clearTimeout(waiters[i].timer)
+      waiters[i].resolve()
+    }
+  }
+
+  /** 读一次 settings-get 并解析 settings.shortcutsDocument；not-ready 有界重试，
+   *  其余失败/坏文档 = unreadable（保留默认、原文不覆盖，loud）。 */
+  function hydrateShortcutsDocument(attempt) {
+    return invoke('dsh-chamber:settings-get', null).then(function (status) {
+      var settings = status !== null && typeof status === 'object' ? status.settings : null
+      var raw = settings !== null && typeof settings === 'object' ? settings.shortcutsDocument : undefined
+      if (typeof raw !== 'string') {
+        // 无持久文档：默认值即真相（首次编辑才写盘）。
+        settleShortcutsHydration('ready', null)
+        return
+      }
+      var issue = shortcutDocumentIssue(raw)
+      if (issue !== null) {
+        console.error('[dsh-chamber] 持久快捷键文档不可读（' + issue + '）：保留默认且不覆盖原文')
+        settleShortcutsHydration('unreadable', issue)
+        return
+      }
+      shortcutsDocument = JSON.parse(raw)
+      shortcutsUsingDefaults = false
+      settleShortcutsHydration('ready', null)
+    }, function (error) {
+      var notReady = error !== null && typeof error === 'object' && error.code === 'ipc_not_ready'
+      if (notReady && attempt + 1 < SHORTCUTS_HYDRATE_MAX_ATTEMPTS) {
+        return delay(SHORTCUTS_HYDRATE_RETRY_MS).then(function () {
+          return hydrateShortcutsDocument(attempt + 1)
+        })
+      }
+      console.error('[dsh-chamber] 快捷键偏好读取失败（' + (notReady ? 'bridge not ready' : String(error))
+        + '）：保留默认且本次会话禁止改写')
+      settleShortcutsHydration('unreadable', 'read')
+    })
+  }
+
+  function startShortcutsHydration() {
+    if (shortcutsHydrationPromise !== null) return shortcutsHydrationPromise
+    if (!shortcutsBridgeReady) return null
+    shortcutsHydrationState = 'loading'
+    shortcutsHydrationPromise = hydrateShortcutsDocument(0)
+    return shortcutsHydrationPromise
+  }
+
+  /** A 桥就绪汇点（两条来源，见上方 P08 注释）；read 失败后的再次就绪允许重新 hydrate
+   *  （invalid/future 永不再读——绝不覆盖原文）。 */
+  function noteBridgeReady() {
+    shortcutsBridgeReady = true
+    if (shortcutsHydrationState === 'unreadable' && shortcutsHydrationError === 'read') {
+      shortcutsHydrationState = 'unhydrated'
+      shortcutsHydrationError = null
+      shortcutsHydrationPromise = null
+    }
+    startShortcutsHydration()
+  }
+
+  /** 有界等待 hydrate（不 reject）：未开始 → 立即返回；loading → 等落定或超时。
+   *  get() 用它避免在即将到达的真实文档前先返回默认值；超时如实返回 loading 快照。 */
+  function awaitShortcutsHydration() {
+    if (shortcutsHydrationState !== 'loading') return Promise.resolve()
+    return new Promise(function (resolve) {
+      var waiter = { resolve: resolve, timer: null }
+      waiter.timer = setTimeout(function () {
+        var index = shortcutsHydrationWaiters.indexOf(waiter)
+        if (index !== -1) shortcutsHydrationWaiters.splice(index, 1)
+        resolve()
+      }, SHORTCUTS_HYDRATE_WAIT_MS)
+      shortcutsHydrationWaiters.push(waiter)
+    })
   }
 
   /** preload ShortcutPersistence.accept parity: bump the version pair, then
@@ -744,7 +926,9 @@
 
   /** Apply one validated edit to the active desktop profile (upstream
    *  editShortcutDocument subset: set / reset / reset-all, schemaVersion 2 for
-   *  the desktop macOS profile). Malformed input throws; callers classify. */
+   *  the desktop macOS profile) and RETURN the candidate document: nothing is
+   *  committed until settings-set accepts it (a failed write keeps memory).
+   *  Malformed input throws; callers classify. */
   function shortcutsApplyEdit(edit) {
     if (edit === null || typeof edit !== 'object') throw new Error('Invalid shortcut edit')
     var profiles = {}
@@ -771,7 +955,50 @@
       throw new Error('Invalid shortcut edit')
     }
     profiles[SHORTCUT_PROFILE] = overrides
-    shortcutsDocument = { schemaVersion: 2, profiles: profiles }
+    return { schemaVersion: 2, profiles: profiles }
+  }
+
+  /** 单笔编辑事务（由 edit 的串行队列调用）：revision 判定 → hydrate 等待 → 候选校验
+   *  → settings-set 原始文本 → 成功才提交内存/revision（失败不改内存、不假保存）。 */
+  function runShortcutEdit(edit, revision) {
+    if (revision !== shortcutsRevision) return Promise.resolve({ status: 'stale', snapshot: shortcutsSnapshot() })
+    return awaitShortcutsHydration().then(function () {
+      // hydrate 落定会换代：await 之后再判一次，绝不拿旧 revision 写新文档。
+      if (revision !== shortcutsRevision) return { status: 'stale', snapshot: shortcutsSnapshot() }
+      if (!shortcutsHydrated) {
+        // 未 hydrate（loading/unreadable）：编辑会用默认文档覆盖磁盘真实文档，拒绝。
+        return { status: 'write-failed', snapshot: shortcutsSnapshot() }
+      }
+      var candidate
+      try {
+        candidate = shortcutsApplyEdit(edit)
+      } catch (err) {
+        console.error('[dsh-chamber] 快捷键编辑校验失败：', err)
+        return { status: 'write-failed', snapshot: shortcutsSnapshot() }
+      }
+      // 候选先与持久文档同严格校验（页面来的 edit.binding 是运行期数据）：坏 binding
+      // 绝不落盘，否则下次启动读成 unreadable 后只能手动修文件。
+      if (shortcutDocumentIssue(JSON.stringify(candidate)) !== null) {
+        console.error('[dsh-chamber] 快捷键编辑候选非法，拒绝写盘（write-failed）')
+        return { status: 'write-failed', snapshot: shortcutsSnapshot() }
+      }
+      // 写盘 = settings-set 的原始 JSON 文本；成功（无 error 键且不 reject）才提交
+      // 内存文档/revision/usingDefaults。
+      return invoke('dsh-chamber:settings-set', { patch: { shortcutsDocument: JSON.stringify(candidate) } })
+        .then(function (result) {
+          if (result !== null && typeof result === 'object' && typeof result.error === 'string') {
+            console.error('[dsh-chamber] 快捷键偏好写入失败：' + result.error)
+            return { status: 'write-failed', snapshot: shortcutsSnapshot() }
+          }
+          shortcutsDocument = candidate
+          shortcutsUsingDefaults = false
+          shortcutsAccept()
+          return { status: 'saved', snapshot: shortcutsSnapshot() }
+        }, function (error) {
+          console.error('[dsh-chamber] 快捷键偏好写入请求失败：', error)
+          return { status: 'write-failed', snapshot: shortcutsSnapshot() }
+        })
+    })
   }
 
   var desktopShortcuts = {
@@ -779,19 +1006,19 @@
       // Definitions only describe command ownership; this shim never matches
       // input locally (the page registry does), so the catalog itself is not
       // retained -- the accepted revision is what the renderer consumes here.
-      shortcutsAccept()
-      return Promise.resolve(shortcutsSnapshot())
+      return awaitShortcutsHydration().then(function () {
+        shortcutsAccept()
+        return shortcutsSnapshot()
+      })
     },
     edit: function (edit, revision) {
-      if (revision !== shortcutsRevision) return Promise.resolve({ status: 'stale', snapshot: shortcutsSnapshot() })
-      try {
-        shortcutsApplyEdit(edit)
-      } catch (err) {
-        return Promise.resolve({ status: 'write-failed', snapshot: shortcutsSnapshot() })
-      }
-      shortcutsUsingDefaults = false
-      shortcutsAccept()
-      return Promise.resolve({ status: 'saved', snapshot: shortcutsSnapshot() })
+      // 写事务串行化（镜像上游 ShortcutPersistence 的 serialize 队列）：同一时刻只跑一个
+      // edit；后到请求在队内按**已提交**的 revision 重新判定（同 revision 的第二笔 → stale）。
+      var run = shortcutsWriteChain.then(function () {
+        return runShortcutEdit(edit, revision)
+      })
+      shortcutsWriteChain = run.then(function () {}, function () {})
+      return run
     },
     subscribe: function (listener) {
       if (typeof listener !== 'function') return noopUnsubscribe
@@ -1030,6 +1257,9 @@
   function fetchInfo(attemptsLeft) {
     return invoke(INFO_CHANNEL, null).then(function (info) {
       applyInfo(info)
+      // P08：info 成功 = A 桥已就绪（冷启动文档在 ready 之后才装载，sidecar-ready
+      // 事件已派发给上一份文档）；hydrate 幂等。
+      noteBridgeReady()
       // 与 preload 同序：info 成功 → 用真实标量暴露公开面；成功前
       // 不暴露（页面按自己的重试链等，避免拿到半成品）。1+10 次全败由下方
       // 失败分支用 null 标量暴露（preload.cts 的失败分支同款），两端一致。
@@ -1044,6 +1274,9 @@
         })
       }
       console.warn('[dsh-chamber] dsh-chamber:info failed after ' + INFO_MAX_ATTEMPTS + ' attempts; exposing the bridge with null scalars')
+      // P08：info 全败 = A 桥本次不可用，hydrate 永远不会开始；把快照落到
+      // unreadable(read) 而不是永久 loading（改造前该场景返回默认文档；现在至少如实可读）。
+      if (shortcutsHydrationState === 'unhydrated') settleShortcutsHydration('unreadable', 'read')
       // 与 preload.cts 的失败分支一致——1+10 次全败仍暴露
       // 公开面，四个标量保持 null（preload.cts:923-940 同款），而不是让
       // window.dshChamber 不存在。两端降级因此一致：桥在、标量 null，页面可走
