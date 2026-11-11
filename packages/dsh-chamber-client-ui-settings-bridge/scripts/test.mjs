@@ -35,7 +35,8 @@ const GROUPS = {
     // 测试通知失败原因映射（design 19 §3.3/§4）
     'test/settings/notify-test-result.test.ts',
   ],
-  // update: 设计 11 更新按钮门与模块级 restart 单飞 store
+  // update: 设计 11 更新按钮门与模块级 restart 单飞 store；P05/P02/P20-B 的呈现
+  // 纯门（技术详情折叠 / 触发行指示器 / 全屏准备超时映射）是真值表 + 源码文本锚。
   update: [
     'test/update/update-gate.test.ts',
     'test/update/update-store.test.ts',
@@ -50,6 +51,9 @@ const GROUPS = {
     // section seam lock: the embedded plugin page is a settings.section; its own
     // h1 + div.pageIntro stay visible, and the containment hides/re-tracks nothing.
     'test/shell/embedded-plugin-page-seam.test.ts',
+    // P02 触发行/更新指示器结构锁（wide triggerRow + rail 单按钮 + CSS 行度量恢复）；
+    // 行为面在 update 组的纯门真值表里。
+    'test/shell/settings-trigger-row.test.ts',
   ],
   // bridge: 完整桥接面——outlet cell dispatch / source face / 桥接契约锁 / onboarding
   bridge: [

@@ -45,6 +45,9 @@ import {
 } from './settings-navigation.ts'
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import type { BridgeStandardSeats } from './bridge-outlet.tsx'
+import { getUpdateState, subscribeUpdateState } from './update-store.ts'
+import { updateIndicatorView } from './update-gate.ts'
+import { UpdateIndicator } from './UpdateIndicator.tsx'
 import {
   onboardingStage, sessionsSeatOf,
 } from './onboarding.ts'
@@ -669,6 +672,11 @@ export function SettingsShell(props: SettingsShellProps) {
   // useSessionPendingInteraction / root props) arrive beside it.
   const wide = props.wide === true
   const { t, connectionsT, chamberInstanceId, navigation } = props
+  // 设置触发行更新指示器（P02 / design 05 §5）：复用「更新」组同一个 update-store 模块
+  // 单例快照（不新开订阅、不新开通道）；更新状态是 app 全局的（一个桌面包），N-ctx 下
+  // 每个 settings 壳实例各自订阅同一份只读投影。
+  const update = useSyncExternalStore(subscribeUpdateState, getUpdateState)
+  const updateView = updateIndicatorView(update, wide)
   const [open, setOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [servers, setServers] = useState<BridgeServerRow[]>(() => getServers())
@@ -842,23 +850,48 @@ export function SettingsShell(props: SettingsShellProps) {
     setActiveId(id)
     setOpen(true)
   }, [])
+  // 指示器点击 = 打开设置并落在「客户端」页的更新组（GENERAL_SECTION_ID 内由
+  // GeneralView 渲染 UpdateSection）；不消费 dshDesktop.updates.open，不滚动（见
+  // design 15 §1 被否方案）。
+  const openUpdateSection = useCallback(() => {
+    openSection(GENERAL_SECTION_ID)
+  }, [openSection])
 
   return (
     <>
-      <button
-        ref={triggerButton}
-        type="button"
-        className={clsx(css.trigger, !wide && css.rail)}
+      {wide ? (
+        // 宽栏：上游的 42px triggerRow 行（按钮 flex:1 + 右侧更新指示器）；指示器见
+        // UpdateIndicator（P02）。窄栏（rail）只渲染单个 36x36 按钮，与官方一致。
+        <div className={css.triggerRow}>
+          <button
+            ref={triggerButton}
+            type="button"
+            className={css.trigger}
+            aria-label={t('trigger')}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            onClick={() => { setOpen(true) }}
+          >
+            <IconSettingsOutlineRegular size={16} />
+            <span className={css.triggerLabel}>{t('trigger')}</span>
+          </button>
+          <UpdateIndicator wide={wide} view={updateView} t={t} onOpen={openUpdateSection} />
+        </div>
+      ) : (
         // The rail (narrow) form renders the icon only, so the accessible name
         // must come from the label the official trigger slot also carries.
-        aria-label={t('trigger')}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => { setOpen(true) }}
-      >
-        {wide ? <IconSettingsOutlineRegular size={16} /> : <IconSettingsOutlineRegular size={18} />}
-        {wide && <span className={css.triggerLabel}>{t('trigger')}</span>}
-      </button>
+        <button
+          ref={triggerButton}
+          type="button"
+          className={clsx(css.trigger, css.rail)}
+          aria-label={t('trigger')}
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => { setOpen(true) }}
+        >
+          <IconSettingsOutlineRegular size={18} />
+        </button>
+      )}
       {open && (
         <SettingsPanel
           servers={servers}

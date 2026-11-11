@@ -10,18 +10,30 @@
 
 /* ---- sidebar trigger (official chrome rhythm) ---- */
 
-/* The trigger row is upstream's 42px row
-   (SettingsRoot.module.css `.triggerRow` + `.trigger`). The chamber renders the
-   button alone, so the wrapper's row metrics (100%+4px wide, 4px/-2px margin)
-   are folded into it; `.trigger.rail` below keeps upstream's railRow box. */
-.trigger {
+/* Upstream's 42px trigger row (SettingsRoot.module.css `.triggerRow` + `.trigger`).
+   The chamber used to render the button alone, folding the wrapper's row metrics
+   (100%+4px wide, 4px/-2px margin) into it; the P02 update indicator shares the
+   row again, so the row carries the gutter metrics and the button flexes inside
+   it. The rail keeps the single 36x36 button (`.trigger.rail` below). */
+.triggerRow {
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
   width: calc(100% + 4px);
-  height: 42px;
   margin: 4px -2px;
+}
+
+.trigger {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  height: 42px;
+  margin: 0;
   padding: 0 10px 0 8px;
   box-sizing: border-box;
   border: none;
@@ -46,6 +58,7 @@
 
 /* Rail trigger: the same 36x36 circle box as the other rail controls. */
 .trigger.rail {
+  flex: none;
   width: 36px;
   height: 36px;
   margin: 8px 0 10px;
@@ -59,6 +72,66 @@
 .triggerLabel {
   overflow: hidden;
   white-space: nowrap;
+}
+
+/* ---- update indicator in the trigger row (P02 / design 05 §5) ---- */
+
+/* The update indicator's icon-only chamber form (the official
+   DesktopUpdateIndicator renders an icon + label + Tooltip; the 42px chamber row
+   carries no room for the label and the settings panel's update group shows the
+   full status row). Colour follows the page's business-blue「attention」convention
+   (same reasoning as .generalCardCheck) — the error state uses the error dot. */
+.updateIndicator {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.updateIndicator:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.updateIndicator:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+.updateIndicatorIcon {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+
+.updateIndicatorErrorDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  corner-shape: round;
+  background: var(--dsw-alias-state-error-primary);
+}
+
+.updateIndicatorSpinner {
+  animation: updateIndicatorSpin 1s linear infinite;
+}
+
+@keyframes updateIndicatorSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .updateIndicatorSpinner {
+    animation: none;
+  }
 }
 
 /* ---- modal layer (official geometry) ---- */
@@ -1006,6 +1079,23 @@
    in the accessibility tree, which would make the live region inert). */
 .updateStatus {
   display: block;
+}
+
+/* 失败行的行内「技术详情」折叠（P05 / design 25 §7）：纯文本、等宽、可换行。
+   在 .updateStatusLine（flex-wrap）里以 flex-basis:100% 整行下移；检查失败行
+   （无状态行容器）按普通块渲染。绝不用 dialog/tooltip（design 11「更新无弹窗」）。 */
+.updateTechDetails {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+.updateTechDetails pre {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ---- dsh runtime block (design 18 M4) ----

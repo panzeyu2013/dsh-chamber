@@ -4,8 +4,14 @@
  * the flow, or once「已下载，退出时安装」is final for this version. The phases are
  * flavor-neutral: the native flavor pushes Sparkle's checking/installing phases
  * through the same projection, so the page adds no discovery of its own.
+ *
+ * The file also owns the presentation decisions the section makes without a render
+ * harness (this package has NO React test facility): the failure row's
+ * technical-details disclosure (P05), the sidebar trigger's update indicator (P02)
+ * and the restart-refusal map (P20-B).
  */
-import type { UpdatePhase } from '../ambient/update-bridge.d.ts'
+import type { UpdatePhase, UpdateState } from '../ambient/update-bridge.d.ts'
+import type { SettingsBridgeKey } from '../locales.ts'
 
 export function updateCheckDisabled(phase: UpdatePhase | undefined): boolean {
   // 'installing' (native/Sparkle install in flight) owns the flow exactly like downloading/downloaded.
@@ -83,4 +89,68 @@ export function betaUpdatesSwitchState(input: {
     return { checked: false, disabled: true, reason: 'unavailable' }
   }
   return { checked: input.update.channel === 'beta', disabled: false, reason: null }
+}
+
+/**
+ * ⟨P05⟩ 失败行的「技术详情」折叠是否可见（design 25 §7）：`update.error` 是主进程写入点
+ * 已脱敏的原文投影（updater.sanitizeErrorText + 原生入站 512 上限），空/纯空白错误不渲染
+ * 折叠入口——绝不给出一个展开后什么都没有的 details。判定抽在这里，组件只做接线。
+ */
+export function updateTechDetailsVisible(error: string | null | undefined): boolean {
+  return typeof error === 'string' && error.trim() !== ''
+}
+
+/**
+ * ⟨P20-B⟩ 「重启并安装」被拒的回执映射（design 25 §7）：原生壳在安装动作前先退出全屏，
+ * 5s 内未退出即以 `fullscreen-timeout`（对齐上游 DesktopUpdateFailureKind 的 id）原样拒绝
+ * 安装；该码是唯一有专属文案的拒绝，行内保留「重启并安装」可重试。其余拒绝（过期回答 /
+ * 载荷非法 / 相位门 / 未知壳错误）一律走既有通用面 updateActionRefused——绝不把未知错误
+ * 说成超时。
+ */
+const UPDATE_FULLSCREEN_TIMEOUT_ERROR = 'fullscreen-timeout'
+
+export type RestartFailureView = 'none' | 'fullscreen-timeout' | 'refused'
+
+export function restartFailureView(error: string | null | undefined): RestartFailureView {
+  if (error === null || error === undefined) return 'none'
+  return error === UPDATE_FULLSCREEN_TIMEOUT_ERROR ? 'fullscreen-timeout' : 'refused'
+}
+
+/**
+ * ⟨P02⟩ 设置触发行「更新指示器」的呈现真值表（design 05 §5 / design 15 §1）：纯门，
+ * 组件只做图标 / tooltip 映射。
+ *
+ * 渲染门 = wide（窄栏 rail 只渲染触发按钮；官方 DesktopUpdateIndicator 同样 !wide → null）
+ * 且更新面已水合（update === null = 桥未就绪：未知不等于「无更新」，绝不渲染）。
+ * 相位映射：checking / downloading / installing = busy（转圈）；available / downloaded =
+ * download（下载图标）；error = error（红点）；idle / up-to-date = none。
+ * `labelKey` 同时是 tooltip 与 aria-label 的词条——指示器没有可见文本（42px 触发行放不下
+ * 官方那枚 label）。
+ */
+export type UpdateIndicatorKind = 'none' | 'busy' | 'download' | 'error'
+
+export interface UpdateIndicatorView {
+  kind: UpdateIndicatorKind
+  /** Tooltip / aria-label dictionary key; null when the indicator is not rendered. */
+  labelKey: SettingsBridgeKey | null
+}
+
+export function updateIndicatorView(update: UpdateState | null, wide: boolean): UpdateIndicatorView {
+  if (!wide || update === null) return { kind: 'none', labelKey: null }
+  switch (update.phase) {
+    case 'checking':
+      return { kind: 'busy', labelKey: 'updateIndicatorChecking' }
+    case 'downloading':
+      return { kind: 'busy', labelKey: 'updateIndicatorDownloading' }
+    case 'installing':
+      return { kind: 'busy', labelKey: 'updateIndicatorInstalling' }
+    case 'available':
+      return { kind: 'download', labelKey: 'updateIndicatorAvailable' }
+    case 'downloaded':
+      return { kind: 'download', labelKey: 'updateIndicatorDownloaded' }
+    case 'error':
+      return { kind: 'error', labelKey: 'updateIndicatorError' }
+    default:
+      return { kind: 'none', labelKey: null }
+  }
 }

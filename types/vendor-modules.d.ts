@@ -431,6 +431,8 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconCloseFillRegular: IconComponent
   export const IconCloseOutlineRegular: IconComponent
   export const IconDataOutlineRegular: IconComponent
+  /** Update-indicator download glyph (P02; vendor icons/index.tsx). */
+  export const IconDownloadOutlineRegular: IconComponent
   export const IconEditOutlineRegular: IconComponent
   export const IconEllipsisOutlineRegular: IconComponent
   export const IconFlatListOutlineRegular: IconComponent

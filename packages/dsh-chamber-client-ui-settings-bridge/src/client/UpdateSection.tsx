@@ -17,7 +17,10 @@ import { debugFactsCard, debugFactsCardVisible, debugStatusKind, debugSupported,
 import {
   getUpdateState, subscribeUpdateState, requestUpdateCheck, requestUpdateDownload, requestUpdateRestart, requestOpenReleasePage,
 } from './update-store.ts'
-import { betaUpdatesSwitchState, updateCheckDisabled, updateCheckPlatformBlocked, updateRestartAvailable } from './update-gate.ts'
+import {
+  betaUpdatesSwitchState, restartFailureView, updateCheckDisabled, updateCheckPlatformBlocked,
+  updateRestartAvailable, updateTechDetailsVisible,
+} from './update-gate.ts'
 import { classifyBlockedReason } from './blocked-reason.ts'
 import css from './SettingsShell.module.css'
 
@@ -43,6 +46,22 @@ function blockedCopy(update: UpdateState, t: UpdateTranslate): string {
  */
 function checkImpossible(update: UpdateState): boolean {
   return updateCheckDisabled(update.phase)
+}
+
+/**
+ * 失败行的行内「技术详情」折叠（P05 / design 25 §7）：展示主进程推送的已脱敏
+ * `update.error` 原文（sanitizeErrorText + 512 上限）；error 为空不渲染 details——
+ * 判定在 update-gate 的纯门里，这里只做接线。行内展开，绝不用 dialog/tooltip（design 11
+ * 「更新无弹窗」）；restart 失败已有 restartFailureText 行，本折叠不重复它。
+ */
+function TechDetails({ update, t }: { update: UpdateState; t: UpdateTranslate }) {
+  if (!updateTechDetailsVisible(update.error)) return null
+  return (
+    <details className={css.updateTechDetails}>
+      <summary>{t('updateTechDetails')}</summary>
+      <pre>{update.error}</pre>
+    </details>
+  )
 }
 
 /** One phase-specific status line (plain text, actions aligned right). */
@@ -200,15 +219,21 @@ function StatusRow({
       case 'error':
         // latestVersion null → a CHECK failure; set → a DOWNLOAD failure (+ retry, never
         // without a fresh check). A RESTART failure keeps phase `downloaded`.
+        // 技术详情（P05）：失败行内以 <details> 展开 update.error（已脱敏原文，512 上限），
+        // error 为空不渲染折叠入口（纯门 updateTechDetailsVisible）。
         return latestVersion !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>{t('updateDownloadFailed')}</span>
             <Button variant="primary" size="sm" onClick={onUpdate} disabled={busy}>
               {t('updateAction')}
             </Button>
+            <TechDetails update={update} t={t} />
           </div>
         ) : (
-          <p className={css.updateStatusText}>{t('updateCheckFailed')}</p>
+          <>
+            <p className={css.updateStatusText}>{t('updateCheckFailed')}</p>
+            <TechDetails update={update} t={t} />
+          </>
         )
       default:
         // 'idle' — not checked yet (or not hydrated): current-version line only, never a fake "up to date".
@@ -389,6 +414,10 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
   // VISIBLE: the main process logs loudly, but a silent no-op would read as a broken button.
   // Cleared on the next click (a refusal's resync push must NOT clear it immediately).
   const [actionRefused, setActionRefused] = useState(false)
+  // 「重启并安装」被拒时的原始 error（P20-B）：只保存，呈现走纯门 restartFailureView——
+  // fullscreen-timeout（壳在安装前 5s 内未能退出全屏）显示专属文案并保持行内重试按钮；
+  // 其余拒绝仍落 actionRefused 通用面。
+  const [restartError, setRestartError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
 
   // Confirmation actions answer from the RENDERED snapshot (design 11 §4): the revision
@@ -413,15 +442,21 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
       return
     }
     setActionRefused(false)
+    setRestartError(null)
     setBusyKind('restart')
     // ok → quitAndInstall armed: the app is on its way out, so keep the button
     // disabled (the main-process single-flight would refuse a second click anyway).
     // Only a refused/failed call re-enables the row for an in-place retry.
+    // Failure split (P20-B): fullscreen-timeout keeps the retry row and surfaces the
+    // dedicated copy; every other refusal keeps the generic actionRefused face.
     void requestUpdateRestart(revision).then((result) => {
-      if (!result.ok) {
-        setActionRefused(true)
-        setBusyKind(null)
+      if (result.ok) return
+      setBusyKind(null)
+      if (restartFailureView(result.error) === 'fullscreen-timeout') {
+        setRestartError(result.error)
+        return
       }
+      setActionRefused(true)
     })
   }, [revision])
 
@@ -467,6 +502,11 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
       </div>
       {update !== null && (
         <StatusRow update={update} busyKind={busyKind} onUpdate={onUpdate} onRestart={onRestart} t={t} />
+      )}
+      {/* 「重启并安装」全屏准备超时（P20-B）：专属原因 + 行内可重试（downloaded 行仍
+          重新启用）；其它拒绝走下面的通用面。 */}
+      {restartFailureView(restartError) === 'fullscreen-timeout' && (
+        <p className={css.generalError} aria-live="polite">{t('updateFullscreenTimeout')}</p>
       )}
       {actionRefused && (
         <p className={css.generalError} aria-live="polite">{t('updateActionRefused')}</p>

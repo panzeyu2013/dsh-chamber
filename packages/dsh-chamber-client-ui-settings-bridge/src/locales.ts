@@ -153,6 +153,20 @@ export const zh = {
   updateBetaUpdatesLabel: '接收预览版（beta）更新',
   updateBetaUpdatesDesc: '开启后接收 beta 版本；关闭时只收正式版',
   updateBetaUpdatesUnsupported: '当前构建没有可用的 beta 通道：需要原生壳构建，且构建时注入两条通道 feed',
+  // 失败行的行内「技术详情」折叠（P05 / design 25 §7）：展示主进程推送的已脱敏
+  // update.error 原文；错误为空不渲染入口。
+  updateTechDetails: '技术详情',
+  // 设置触发行更新指示器（P02 / design 05 §5 / design 15 §1）：无可见文本——同一词条
+  // 同时做 tooltip 与无障碍名；窄栏 rail 形态不渲染指示器（官方同样 !wide → null）。
+  updateIndicatorChecking: '正在检查更新',
+  updateIndicatorAvailable: '有可用更新，打开设置查看',
+  updateIndicatorDownloading: '正在下载更新',
+  updateIndicatorDownloaded: '更新已下载，打开设置安装',
+  updateIndicatorInstalling: '正在安装更新',
+  updateIndicatorError: '更新失败，打开设置查看',
+  // 「重启并安装」的全屏准备超时（P20-B / design 25 §7）：壳在安装前先退出全屏，5s 内
+  // 未退出即拒绝安装；downloaded 行保留「重启并安装」可重试。
+  updateFullscreenTimeout: '无法退出全屏以准备安装（超时），请退出全屏后重试',
   dshRuntimeTitle: 'dsh 运行时',
   // 与 dshRuntimeTitle 同文案是刻意的：nav 标签与段标题复用同一短名。
   runtimeNav: 'dsh 运行时',
@@ -476,6 +490,21 @@ export const en: Record<keyof typeof zh, string> = {
   updateBetaUpdatesLabel: 'Receive preview (beta) updates',
   updateBetaUpdatesDesc: 'When on, receive beta builds; when off, only stable releases',
   updateBetaUpdatesUnsupported: 'The beta channel is unavailable in this build: it requires the native shell with both channel feeds injected at build time',
+  // Failure row's inline "technical details" disclosure (P05 / design 25 §7): shows the
+  // sanitized raw update.error; an empty error renders no disclosure at all.
+  updateTechDetails: 'Technical details',
+  // Settings-trigger update indicator (P02 / design 05 §5 / design 15 §1): no visible
+  // text — one key serves both the tooltip and the accessible name; the rail renders none.
+  updateIndicatorChecking: 'Checking for updates',
+  updateIndicatorAvailable: 'A new version is available — open settings',
+  updateIndicatorDownloading: 'Downloading update',
+  updateIndicatorDownloaded: 'Update downloaded — open settings to install',
+  updateIndicatorInstalling: 'Installing update',
+  updateIndicatorError: 'Update failed — open settings',
+  // Full-screen preparation timeout for "Restart & Install" (P20-B / design 25 §7): the
+  // shell leaves full screen before installing and refuses the install after 5s; the
+  // downloaded row keeps the retry action.
+  updateFullscreenTimeout: 'Could not leave full screen to prepare the install (timed out); leave full screen and retry',
   dshRuntimeTitle: 'dsh runtime',
   // Same copy as dshRuntimeTitle on purpose: nav label and section title share the short name.
   runtimeNav: 'dsh runtime',
