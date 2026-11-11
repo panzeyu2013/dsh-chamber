@@ -329,107 +329,112 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 > I-8 的人工覆盖台账（registry 条目 + 本表两份同源；`verify-registry.mjs` ⑤E 做双向覆盖检查与 chamber 对照点路径存在性检查，非 C 编号门）。pin 升级时按 §7 第 6 步逐条照面：
 > `mirror` 行必须仍有对应 chamber 席位与门；`different-adopted` 行必须仍是显式取舍；`not-applicable`
 > 行一旦被采用（chamber 开始渲染/依赖该上游产品面）即转 mirror 条目。审计对象 = 当前 pin 的 vendor
-> 子模块 `apps/desktop/src` 全量文件（以 pin 树为准；`apps/desktop-host/src` 不在审计对象内，
-> 其 cli/windows-cli-signals 由 §4.6 与 registry evidence 另行登记）。registry 落点：
-> `mirror.dsh-desktop-carrier-seats`（data-platform/dshDesktop 载体/caption/native theme/`__DSH_HOST_PATHS__`）、
-> `mirror.dsh-desktop-shortcuts-seat`（keyboard/keybindings）、`mirror.dsh-desktop-native-chrome-seats`
-> （locale/tray/single-instance/quit-confirmation/fatal-recovery/crash-report）、`mirror.dsh-desktop-update-chain`
-> （更新链：覆盖 attention/presentation，传输/弹窗面为收窄后的形态）。registry 的 `upstream` 字段受 schema 约束、必须是
-> pin 树内存在的单一路径（故四条 mirror 条目仍写 `apps/desktop/src`，逐文件覆盖清单写在各条目 evidence 与本表行内）。
-> Swift 腿窗口量不单列条目：由 design 25
-> §5.6 逐值重锚（T-04 记明上游无 Sparkle、Swift 更新链自建；mobile anchors 门已随 mobile 包退役）。
+> 子模块 `apps/desktop/src`（以 pin 树为准）：逐文件裁决中**有 chamber 对照结论者逐行入表**；not-applicable
+> 汇总面（`command-installation.ts` / `command-management.ts` / `command-manager-entry.ts`、`duration-env.ts`）
+> 见下方「计数与落点」表；`login-shell-environment.ts` 见 §4.6。`apps/desktop-host/src` 不属于本表审计对象，
+> 其 11 个宿主侧文件按 §4.6「desktop-host 宿主侧文件」表登记。registry 落点：
+> `mirror.dsh-desktop-carrier-seats`（data-platform/dshDesktop 载体/`__DSH_HOST_PATHS__`/浏览器 guest 载体）、
+> `mirror.dsh-desktop-shortcuts-seat`（DOM 键桥与会话内存快捷键适配器）、`mirror.dsh-desktop-native-chrome-seats`
+> （single-instance/quit-confirmation/startup-error）、`mirror.dsh-desktop-update-chain`
+> （更新链：coordinator/schedule/journal/presentation，传输/弹窗面为收窄后的形态）。registry 的 `upstream` 字段受
+> schema 约束、必须是 pin 树内存在的单一路径（故四条 mirror 条目仍写 `apps/desktop/src`，逐文件覆盖清单写在
+> 各条目 evidence 与本表行内；`ours` 同受单一路径约束，出货腿的 Swift 落点写在 evidence）。Swift 腿窗口量不单列条目：
+> 由 design 25 §5.6 逐值重锚（T-04 记明上游无 Sparkle、Swift 更新链自建；mobile anchors 门已随 mobile 包退役）。
 >
-> **TODO(pin-vendor) 官方 `ui-sidebar-browser` 行**：本表 `browser-guests.ts` / `preload-browser.ts` 的
-> `not-applicable` 只覆盖上游桌面的 webview 租客/preload 文件，**不是**官方
-> `@deepseek-ai/dsh-client-ui-sidebar-browser` 客户端行在 pin 的 web profile 是否加载的证据。
-> 该行目前没有 vendored pin 证据，保持 TODO/not-applicable；W0 必须用真实 `vendor/harness-checkout`
-> 复核 `bundle/web-app/cordis.patch.yml` 与 web profile。若加载，按 design 28 §5.1 / design 09 §3.5
-> 加 covered 家族③ skip + 负例。在拿到证据前不得写“已证明不加载”。
+> **官方 `ui-sidebar-browser` 客户端行**：pin 住的 `packages/bundle/web-app/cordis.patch.yml` 以
+> `disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"` 停用该行；本仓托管宿主恒以 `--profile web` 启动
+> （`packages/control-plane/src/spawn-dsh.ts`），故官方 ui-sidebar-browser 客户端行在 pin 的 web profile 不加载，
+> 页面浏览器行 = 本仓 deferred row（`packages/renderer/src/chamber-covered.ts`）。`browser-guests.ts` / `preload-browser.ts`
+> 的 mirror 分类只表达载体语义对齐（design 28 / ADR-0004，唯一 delta = SSH 反代），不依赖官方客户端行加载。
 
 | 上游文件 | 分类 | chamber 对照点 | 一句理由 |
 |---|---|---|---|
-| `account-backend.ts` | not-applicable | 无（对照面：`packages/control-plane` 的无认证 loopback 模型） | 上游 DeepSeek 账号后端（WebSocket 账号流 + 会话 cookie）；chamber 是匿名 loopback 连接管理器，无账号面。 |
+| `account-backend.ts` | not-applicable | 无（对照面：`packages/control-plane` 的无认证 loopback 模型；缺口见 `docs/progress/STATUS.md` §4.2 与 §1.7） | 上游 DeepSeek 账号后端（WebSocket 账号流 + 会话 cookie）；本仓不采用原生账号后端（TODO C§1 非目标），账号登录闭环缺口单独登记，不藏进「无账号面」。 |
 | `backend-controller.ts` | different-adopted | `packages/control-plane/src/local-connection.ts`、`packages/desktop/host-assembly.ts` | 本地 dsh 后端的启动/就绪/失败状态机归控制面持有，desktop 只消费 PlaneHandle，不再由 Electron 主进程自持 backend。 |
 | `background-notice.ts` | not-applicable | `packages/desktop/chamber-settings.ts`（windowCloseBehavior）、`packages/desktop/electron/main.ts`（maybeCreateTray） | 上游 Windows「首次隐藏到托盘」的一次性确认+标记文件；chamber 的关窗行为是设置项 + 托盘恢复入口，没有该确认产品面。 |
-| `browser-guests.ts` | not-applicable | `packages/desktop/README.md`（webPreferences 无 webviewTag） | 上游为官方 sidebar-browser 的 webview 租客做分区/租约隔离；chamber 单窗口无 webviewTag。该客户端行在 pin 的 web profile 是否加载见上方 TODO(pin-vendor)，未复核前不写“已证明不加载”。 |
+| `browser-guests.ts` | mirror | `macos/Sources/DSHChamber/{BrowserGuestRegistry.swift,BrowserGuestPolicy.swift}`、`macos/Sources/DSHChamber/Resources/bridge-shim.js` | 上游为 sidebar-browser 的 webview 租客做分区/租约/权限/导航门；本仓 Swift 原生 guest（每 tab 一个 WKWebView、非持久 data store）承载同一载体语义（design 28 / ADR-0004），唯一 delta = SSH 反代别名。 |
 | `client-metadata.ts` | not-applicable | 无 | 账号客户端元数据（版本/语言）供账号平台使用；chamber 无账号面。 |
 | `client/WelcomePage.tsx` | not-applicable | 无 | 上游欢迎/登录页 React 组件（账号登录 UI）；chamber 不采用 welcome 产品面。 |
 | `client/styles.d.ts` | not-applicable | 无 | 欢迎页 CSS module 类型垫片，随 welcome 面一起不采用。 |
 | `client/welcome.tsx` | not-applicable | 无 | 欢迎页渲染入口（createRoot + theme CSS）；不采用。 |
 | `core-package-set.ts` | different-adopted | `packages/dsh-runtime/src/registry-integrity.ts`、`packages/dsh-runtime/src/anchor-version.ts`、`packages/desktop/vendor/dsh/pnpm-lock.yaml` | chamber 的运行树完整性由 registry 版本 + 已提交 lockfile 锚管理（design 18），不下载/校验上游 desktop-packages.json 的 tgz 包集与 sha512。 |
-| `crash-report.ts` | mirror | `packages/desktop/fatal-report.ts`（FATAL_REPORT_FILE / CONSOLE_RING_BYTES=64KiB / REPORT_DETAIL_LIMIT）、`packages/desktop/electron/main.ts`（crashReporter uploadToServer=false） | 落盘崩溃报告 + 有界渲染端 console 环 + 本地留证与上游 fatal diagnostics 同口径；有意差异 = 不做 10 份轮转、只追加。 |
+| `crash-report.ts` | mirror | `macos/Sources/DSHChamber/CrashDiagnostics.swift`、`packages/desktop/fatal-report.ts`（Electron 归档参考） | 落盘崩溃留证口径对齐（崩溃记录 + 启动期 marker）；本仓出货腿只有 shell-crash.log + marker，无 crash-*.log 报告文件/10 份轮转/Finder reveal（导出缺口见 STATUS §1.7），故 mirror 只钉留证位而非报告导出链。 |
+| `device-info.ts` | different-adopted | `packages/desktop/shell-ipc-settings.ts`、`macos/Sources/DSHChamber/Resources/bridge-shim.js` | 上游 readDeviceInfo 的 platform/os/app_arch/cpu/memory_gib 同形实现由 sidecar 产出、carrier 按需读 info.deviceInfo；等价物已存在，故从「不适用汇总面」移入表内。 |
 | `directory-picker.ts` | not-applicable | `packages/renderer/src/chamber-covered.ts` 有意跳过名单（directory-picker-native） | 上游为 native 目录选择行提供窗口级对话框 IPC；chamber 把该行列为「covered 但不加载」，picker 交互钉在 browse。 |
-| `fatal-recovery.ts` | mirror | `packages/desktop/startup-error.ts`（planStartupRecovery / resolveStartupRecoveryAction / SAFE_MODE_ENV）、`packages/desktop/electron/main.ts` 恢复框接线 | 三选恢复框 + 安全模式重启是上游 fatal-recovery 的等价物；有意差异（S-43 默认项/Esc 落安全项、不实现 disableAllPlugins/sanitizeProfile）已登记在源码头注。 |
+| `fatal-recovery.ts` | mirror | `macos/Sources/DSHChamber/NativeText.swift`、`packages/desktop/startup-error.ts`（Electron 归档参考） | 启动失败恢复框席位镜像（退出/重启/安全模式重启；安全项默认、Esc 落安全项；实现于 AppDelegate+StartupRecovery.swift）；动作集收窄：无「禁用第三方插件 + 备份 profile patch」与取报告（缺口见 STATUS §1.7），故 mirror 只钉恢复框存在与默认取向。 |
+| `file-actions.ts` | not-applicable | `macos/Sources/DSHChamber/Resources/bridge-shim.js`；缺口见 `docs/progress/STATUS.md` §1.7 | 上游 save（另存为）/readClipboardImage 原生臂不采用：dshDesktop 缺 fileActions 成员，页面 BridgeFileActions 降级（另存为不可达、跨域原图走 fetch）；缺口登记 §1.7。 |
+| `file-drag-files.ts` | not-applicable | `docs/progress/STATUS.md` §2.3（拖出原生臂缺载体） | 上游拖出原字节借用与临时文件保留（64MiB/60s）不采用；随包 ui-file-drag 走浏览器臂（objectURL + DownloadURL），拖到 Finder 是「下载式」。 |
+| `file-drag.ts` | not-applicable | `docs/progress/STATUS.md` §2.3（拖出原生臂缺载体） | 上游 dshDesktop.fileDrag prepare/cancel/start/release 原生臂不采用（载体缺 fileDrag 成员），原因同上。 |
 | `host-process.ts` | different-adopted | `packages/control-plane/src/spawn-dsh.ts`、`packages/control-plane/src/reaper.ts`、`packages/desktop/host-assembly.ts` | 本地 dsh 子进程的 spawn/就绪探测/回收在控制面，desktop 不做上游的 Electron 子进程协议与 quit inspection。 |
 | `host-protocol.ts` | different-adopted | `packages/desktop/sidecar-entry.ts`（B 桥 NDJSON）、`packages/desktop/sidecar-exit-codes.ts` | chamber 的双 flavor 宿主协议是自持 B 桥与退出码分级，没有上游 Desktop host protocol v4 这一 Electron↔host 版本面。 |
 | `ipc.ts` | mirror | `packages/desktop/ipc-events.ts`、`packages/desktop/shortcuts-bridge.ts`（DESKTOP_SHORTCUTS_CHANNELS 六个字面量与上游同名）、`packages/desktop/electron/preload.cts`、`packages/desktop/test/ipc/desktop-carrier-surface.test.ts` | 通道表与 DesktopUpdatePresentation/失败分类形状镜像上游；native-theme 通道改用 chamber 前缀 `dsh-chamber:native-theme-set`（upstream-seats 钉住）。 |
-| `keybindings.ts` | mirror | `packages/desktop/electron/main.ts`（userData/keybindings.json，注释点名 upstream 同位文件）、`packages/desktop/shortcuts-bridge.ts`（revision 化事务） | 快捷键偏好持久化事务与存储位置镜像上游。 |
-| `keyboard.ts` | mirror | `packages/desktop/shortcuts-bridge.ts`（before-input-event 决策表/scopedDesktop 门/投递门）、`packages/desktop/electron/main.ts` glue | 原生键盘桥语义按上游当前代实现；上游协议实现本身从运行树加载而非重写。 |
-| `locale.ts` | mirror | `packages/desktop/shell-locale.ts`、`packages/desktop/shell-locale.test.ts` | typed en/zh 字典与 `zh*`→zh-CN 判定镜像上游，范围收窄到原生 chrome（tray/错误框/退出框/恢复框）。 |
+| `keybindings.ts` | mirror | `macos/Sources/DSHChamber/Resources/bridge-shim.js`（shortcutsDocument 会话内存适配器）、`packages/desktop/shortcuts-bridge.ts`（Electron 归档参考） | 快捷键偏好席位镜像（revision 化事务、编辑/订阅/录制语义）；出货腿只把 preferences 存会话内存、不落 keybindings.json（差异 S-54 已登记）。 |
+| `keyboard.ts` | mirror | `macos/Sources/DSHChamber/Resources/bridge-shim.js`（DOM keydown/keyup 归一）、`macos/Sources/DSHChamber/KeyboardBridge.swift`（guest 快捷键转发）、`packages/desktop/shortcuts-bridge.ts`（Electron 归档参考） | 键盘桥席位镜像（投递门与偏好事务）；出货腿为 DOM 键桥 + 会话内存适配器，无 before-input-event/子 frame/guest 源注入、无录制期菜单抑制、closeWindow loud reject（差异 S-54 已登记）。 |
+| `locale-cache.ts` | different-adopted | `macos/Sources/DSHChamber/NativeText.swift`、`macos/Sources/DSHChamber/AppDelegate.swift` | 官方 locale 缓存 + AppleLanguages 面在壳侧复刻为「页面事实 → 原生文案/菜单重建 + AppleLanguages 所有权」；方向相反（页面事实驱动原生），保留 zh/en 与运行期 override。 |
+| `locale.ts` | mirror | `macos/Sources/DSHChamber/NativeText.swift`、`macos/Sources/DSHChamber/AppDelegate.swift`、`packages/desktop/shell-locale.ts`（共享 typed 字典，Electron 归档参考） | 原生 chrome 语言归属席位镜像（typed 字典 + 语言判定方向）；范围收窄到 zh/en 且由页面事实驱动原生菜单/托盘重建（上游 8 语言 typed 字典不镜像）。 |
 | `main.ts` | different-adopted | `packages/desktop/electron/main.ts`（单帧加载控制面 origin）、`packages/desktop/shell-core.ts`、`macos/Sources/DSHChamber/*` | 上游是单进程桌面宿主（web document + account + overlay + app menu）；chamber 是连接管理器单帧 + 双 flavor core，仅 win32 caption、darwin 窗口 chrome（hiddenInset/红绿灯/vibrancy/透明底逐值）、tray/quit 等席位是镜像子集。 |
 | `mandatory-update-ipc.ts` | not-applicable | 无 | 上游强制更新 IPC 表；chamber 无强制更新面。 |
 | `mandatory-update-policy.ts` | not-applicable | 无 | 上游强制更新策略（semver 门 + 策略页）；chamber 更新一律用户确认、无强制门。 |
 | `mandatory-update-window.ts` | not-applicable | 无 | 上游强制更新窗口（下载/安装/稍后）；不采用。 |
-| `microphone-permissions.ts` | different-adopted | `packages/desktop/electron/main.ts`（setPermissionRequestHandler / setPermissionCheckHandler + isChamberPermissionGranted） | chamber 的权限面是「默认拒绝，只放行 clipboard-sanitized-write」，不实现上游的麦克风主帧白名单。 |
+| `microphone-permissions.ts` | different-adopted | `packages/desktop/electron/main.ts`（setPermissionRequestHandler / setPermissionCheckHandler + isChamberPermissionGranted，归档参考）、`macos/Sources/DSHChamber/MainWindowController.swift`（媒体采集恒 deny） | chamber 的权限面是「默认拒绝，只放行 clipboard-sanitized-write」，不实现上游的麦克风主帧白名单；出货腿的媒体采集门在 MainWindowController 恒拒（无 NS*UsageDescription）。 |
 | `node-environment.ts` | different-adopted | `packages/control-plane/src/spawn-dsh.ts`（resolveNodeExecutable）、`packages/desktop/host-assembly.ts`（pnpm 子进程 ELECTRON_RUN_AS_NODE 分支） | 同样用 Electron-as-node，但 node 解析由控制面单源（process.execPath + ELECTRON_RUN_AS_NODE + --expose-internals），无上游的 launcher 目录 / DSH_DESKTOP_NODE_EXECUTABLE / PATH 契约。 |
+| `operation-history.ts` | not-applicable | `docs/progress/STATUS.md` §1.7 | 上游插件操作历史的有界读（64KiB/100 条）不采用：插件安装/启停不可取证、诊断报告无「最近插件操作」附节；缺口登记 §1.7。 |
+| `operation-journal.ts` | not-applicable | `docs/progress/STATUS.md` §1.7 | 插件操作 journal（两段 256KiB/记录 4KiB）零实现；update-journal.ts 只记更新相位，不是该 journal。 |
+| `operation-report-job.ts` | not-applicable | `docs/progress/STATUS.md` §1.7 | 诊断报告附节的任务采样（Worker 500ms 预算）不采用，原因同 operation-report。 |
+| `operation-report-worker.ts` | not-applicable | `docs/progress/STATUS.md` §1.7 | 诊断报告 Worker 装配零实现（宿主侧 operation-diagnostics 无消费者）；缺口登记 §1.7。 |
+| `operation-report.ts` | not-applicable | `docs/progress/STATUS.md` §1.7 | 诊断报告附节（插件操作记录/宿主输出）不采用；与 operation-history/journal 同属「取证链」缺口，统一登记 §1.7。 |
 | `owned-directory.ts` | different-adopted | `packages/dsh-runtime/src/dsh-runtime-store.ts`、`packages/dsh-runtime/src/private-fs.ts` | chamber 的受管目录清理/校验在 dsh-runtime（lstat + 符号链接拒绝 + 私有 FS 纪律），没有上游那个专用于 Electron 递归 rm 的 junction-safe 删除助手。 |
 | `paths.ts` | different-adopted | `packages/desktop/chamber-lock.ts`（`<userData>/.dsh-chamber.lock`）、`packages/desktop/host-root-lease.ts` | chamber 的路径根 = Electron userData + 双 flavor 锁/租约；上游 `profiles/desktop` profile 布局不采用。 |
 | `platform-ipc.ts` | not-applicable | 无 | 账号平台视图 IPC 表（locale bootstrap 等）；无账号面。 |
-| `platform-view.ts` | not-applicable | 无 | 账号登录 WebContentsView（cookie 合并 / platform headers）；chamber 无账号登录面。 |
+| `platform-view.ts` | not-applicable | 无（缺口见 `docs/progress/STATUS.md` §4.2 与 §1.7） | 本仓不采用原生账号后端/应用内平台视图（TODO C§1 非目标）；账号登录闭环缺口见 STATUS §4.2 设置/账户与 §1.7，避免把缺口藏掉。 |
 | `policy-test-auth.ts` | not-applicable | 无 | 上游强制更新策略的登录测试助手；不适用。 |
-| `preload-app.ts` | mirror | `packages/desktop/electron/preload.cts`（exposeDesktopCarrier：protocolVersion 1 + updates/keyboard/shortcuts；exposeHostPaths：webUtils.getPathForFile + painted-source 门控）、`macos/Sources/DSHChamber/Resources/bridge-shim.js`（dshDesktop + `__DSH_HOST_PATHS__`：HostPathCatalog 拖拽板快照 × 事件批次）、`packages/renderer/src/host-path-scope.ts`（data-chamber-painted-source）、`packages/desktop/upstream-seats.test.ts`（S-52/S-56） | dshDesktop 载体与 `__DSH_HOST_PATHS__` 宿主路径面的存在、成员、安装时机与值契约双 flavor 锁步（S-56）；本地实例的 @ 引用入口，远端/浏览器回退上传；browser 臂不采用（chamber 无 webview 租客）。 |
-| `preload-browser.ts` | not-applicable | 无 | sidebar-browser 的 preload 桥；chamber 无 webview 租客。官方客户端行是否在 pin 的 web profile 加载见上方 TODO(pin-vendor)。 |
+| `preload-app.ts` | mirror | `packages/desktop/electron/preload.cts`（exposeDesktopCarrier：protocolVersion 1 + updates/keyboard/shortcuts；exposeHostPaths：webUtils.getPathForFile + painted-source 门控）、`macos/Sources/DSHChamber/Resources/bridge-shim.js`（dshDesktop + `__DSH_HOST_PATHS__`：HostPathCatalog 拖拽板快照 × 事件批次）、`packages/renderer/src/host-path-scope.ts`（data-chamber-painted-source）、`packages/desktop/upstream-seats.test.ts`（S-52/S-56） | dshDesktop 载体与 `__DSH_HOST_PATHS__` 宿主路径面的存在、成员、安装时机与值契约双 flavor 锁步（S-56）；成员级三分：fileActions/fileDrag 未实现（缺口见 STATUS §1.7）、browser 换成 `dshChamber.browser` 命名空间（design 28）、dshOnboarding/dshPlatform/dshDesktopBoot/`__DSH_LOCALE__`/`__DSH_DIRECTORY_PICKER__` 不采用（非目标/已登记）。 |
+| `preload-browser.ts` | mirror | `macos/Sources/DSHChamber/{BrowserGuestRegistry.swift,BrowserGuestPolicy.swift}`、`macos/Sources/DSHChamber/Resources/bridge-shim.js` | 上游 sidebar-browser preload 的 acquire/release/onOpenRequested 改为 `dshChamber.browser` 命名空间的 Swift A 桥（design 28 / ADR-0004）；页面浏览器行 = 本仓 deferred row，官方客户端行不在 web profile 加载（见上方复核结论）。 |
 | `preload-mandatory-overlay.ts` | not-applicable | 无 | 强制更新遮罩 preload；不采用。 |
 | `preload-mandatory.ts` | not-applicable | 无 | 强制更新窗口 preload；不采用。 |
-| `preload-menu.ts` | not-applicable | `packages/desktop/electron/main.ts`（唯一 Menu 是托盘上下文菜单，无 setApplicationMenu） | 上游 Windows 应用菜单（原生菜单 + 窗口控制）；chamber 无应用菜单产品面。 |
+| `preload-menu.ts` | not-applicable | `macos/Sources/DSHChamber/AppDelegate.swift#makeMainMenu`（完整主菜单；Windows caption 面平台外） | 上游文件是 Windows caption 自绘菜单；darwin 唯一出货、主菜单由 AppKit makeMainMenu 承担，Windows 面仅冻结/复活参考，故平台外不采用。 |
 | `preload-platform-account.ts` | not-applicable | 无 | 账号平台 preload；不采用。 |
 | `preload-platform.ts` | mirror | `packages/desktop/electron/preload.cts`（markDocumentPlatform 逐字）、`packages/desktop/electron/main.ts`（全屏标记推送：进出全屏 + 装载后重放）、`macos/Sources/DSHChamber/ShellWindowFullscreenMark.swift`（fullscreen 原生半边）、`packages/desktop/upstream-seats.test.ts`（S-51/S-53） | `dataset.platform` 与 fullscreen 标记镜像上游；**两 flavor 都写 fullscreen**（Electron `main.ts` 的 pushFullscreenMark / Swift `ShellWindowFullscreenMark`，`dataset.fullscreen = 'true'` / `delete` 逐字同形，design 25 §5.6）。 |
 | `preload-theme.ts` | mirror | `packages/desktop/electron/preload.cts`（syncNativeTheme observer）、`packages/desktop/shell-ipc-settings.ts`（NATIVE_THEME_SET）、`packages/desktop/electron/electron-edges.ts`（nativeTheme.themeSource）、`packages/desktop/node-edges.ts`（显式 no-op） | `data-ds-theme-source` 观察者与宿主投影镜像上游（macOS-only）；Swift 腿按页面事实跟随，通道保留成员。 |
 | `preload-update-dialog.ts` | not-applicable | 无 | 上游更新对话框 preload（update-dialog 窗口）；chamber 更新面无该窗口。 |
 | `preload-welcome.ts` | not-applicable | 无 | 欢迎页 preload；不采用。 |
-| `preload-windows.ts` | mirror | `packages/desktop/electron/preload.cts`（markWindowsTitlebar：`data-windows-titlebar` + `--dsh-windows-titlebar-height`）、`packages/desktop/electron/main.ts`（titleBarStyle hidden + titleBarOverlay）、`windows-layout.ts` 常数 | Windows caption 席位逐值镜像（高度 40），preload/main 两份常数相等由 upstream-seats 钉住。 |
+| `preload-windows.ts` | mirror | `packages/desktop/electron/preload.cts`（markWindowsTitlebar：`data-windows-titlebar` + `--dsh-windows-titlebar-height`）、`packages/desktop/electron/main.ts`（titleBarStyle hidden + titleBarOverlay）、`windows-layout.ts` 常数 | Windows caption 席位逐值镜像（高度 40），preload/main 两份常数相等由 upstream-seats 钉住；darwin 唯一出货，Windows 面仅冻结/复活参考。 |
 | `project-manager.ts` | different-adopted | `packages/dsh-runtime/src/runtime-installer.ts`、`packages/desktop/dsh-runtime-controller.ts` | chamber 用 registry 版本安装 + override 机制（design 18）管理运行树，不建上游的 desktop-runtime pnpm 工程/profile 元数据。 |
-| `quit-confirmation.ts` | mirror | `packages/desktop/chamber-settings.ts`（computeQuitRisk）、`packages/desktop/electron/main.ts`（before-quit 对话框） | 「退出会打断什么才确认」的席位镜像；检查面收窄为本地实例运行中（上游 = host 活跃/计划任务探测）。 |
+| `quit-confirmation.ts` | mirror | `packages/desktop/chamber-settings.ts`（computeQuitRisk）、`macos/Sources/DSHChamber/QuitCoordinator.swift`、`packages/desktop/electron/main.ts`（before-quit 对话框，归档参考） | 「退出会打断什么才确认」的席位镜像；检查面收窄为本地实例运行中（上游 = host 活跃/计划任务探测），Swift 执行线在 QuitCoordinator。 |
 | `release.ts` | different-adopted | `packages/desktop/package.json`（version）、`packages/desktop/vendor/dsh/pnpm-lock.yaml`、`packages/desktop/primary-runtime-lock.json` | chamber 的版本身份单源 = 包版本 + lockfile 锚；不读上游 desktop-runtime.json 的 release 元数据（node/pnpm 版本）。 |
 | `runtime-tree.ts` | different-adopted | `packages/dsh-runtime/src/dsh-runtime-store.ts`、`packages/desktop/runtime-tree-check.ts` | 运行树清单/校验在 dsh-runtime + 启动期闭包抽样，不采用上游 desktop-runtime.json 描述符与 shared package inventory。 |
-| `single-instance.ts` | mirror | `packages/desktop/electron/main.ts`（requestSingleInstanceLock + second-instance 路由）、`packages/desktop/chamber-lock.ts`（O_EXLOCK 跨 flavor） | 单实例所有权与二次启动聚焦镜像上游，另加一层跨 flavor 目录锁（design 25 §6.3）。 |
+| `settings.ts` | different-adopted | `packages/desktop/chamber-settings.ts` | 本仓壳配置 = chamber-settings.json（chamber-settings.ts），没有上游 desktop/settings.json 文档面；allowTestAuthPopupWindow 属强制更新面，不适用。 |
+| `single-instance.ts` | mirror | `packages/desktop/chamber-lock.ts`（O_EXLOCK，冻结 Electron 归档参考）、`macos/Sources/DSHChamber/SidecarSupervisor.swift`（flock LOCK_EX/LOCK_NB，出货腿）、`macos/Sources/DSHChamber/AppDelegate.swift`（二次启动恢复与深链转发） | 单实例所有权与二次启动聚焦镜像上游，另加一层跨 flavor 目录锁（design 25 §6.3）；出货腿的锁实现与恢复入口在 Swift 侧。 |
 | `startup-error.ts` | mirror | `packages/desktop/startup-error.ts`（desktopErrorState 同形） | 启动失败态的形状/文案投影与上游同名同义。 |
-| `tray.ts` | mirror | `packages/desktop/electron/main.ts`（maybeCreateTray：tooltip + 显示/退出菜单）、`packages/desktop/shell-locale.ts` | 「常驻托盘 = 回到窗口 + 显式退出的入口」席位镜像；chamber 仅打包态且图标存在时创建。 |
-| `update-attention.ts` | mirror | `packages/desktop/updater.ts`（Dock 注意力 / flashFrame / parent.isFocused 注入）、`packages/desktop/test/desktop-shell/updater-attention.test.ts` | 更新就绪注意力语义镜像（mac Dock bounce + win flashFrame + 聚焦闩锁，每目标一次）。 |
+| `tray.ts` | mirror | `macos/Sources/DSHChamber/StatusItemIcon.swift`、`macos/Sources/DSHChamber/AppDelegate.swift`（NSStatusItem 恒建） | 托盘位语义镜像（常驻 = 回窗 + 显式退出）；官方 tray 构造点仅 win32、macOS 官方无托盘，本壳 NSStatusItem 是壳独有增量（EXTRA+），该行只钉「回窗/退出」位语义而非平台存在性。 |
+| `update-attention.ts` | mirror | `macos/Sources/DSHChamber/MainWindowController.swift`（raiseUpdateAttention） | 更新就绪注意力席位镜像（每目标一次、聚焦闩锁）；官方该类只服务强制更新窗，本仓用于普通更新 downloaded 的 Dock 注意力，属壳增量用法。 |
+| `update-channel.ts` | different-adopted | `macos/Sources/DSHChamber/AppUpdater.swift`（stable/beta 双 appcast + betaUpdates 偏好） | 官方通道 = 安装包封签（nightly/latest），无用户偏好；本仓通道 = Sparkle 双 appcast + 用户 betaUpdates 订阅（env 可硬覆盖），属壳增量。 |
 | `update-coordinator.ts` | mirror | `packages/desktop/updater.ts`（相位机/焦点 nudge/单飞/quitAndInstall 武装）、`packages/desktop/update-headless.ts`（Swift 腿同相位） | 更新编排的相位/注意力/安装语义镜像（§22.3.5）；传输面有意不同（见 update-http-executor）。 |
 | `update-dialog.ts` | different-adopted | `packages/dsh-chamber-client-ui-settings-bridge`（UpdateSection / update-store / update-gate） | chamber 的更新面是 settings 普通状态行，无对话框/遮罩窗口（design 11 §2 无弹窗硬约束）。 |
 | `update-error.ts` | different-adopted | `packages/desktop/updater.ts`（failureKind + 相位保持 + 一次性 restartFailureText） | 无上游 preparationFailure 家族（停止失败/任务变更/任务不可用）——chamber 没有安装前任务检查面。 |
 | `update-http-executor.ts` | different-adopted | `packages/desktop/updater.ts`（idle 看门狗 + 忽略迟到事件） | registry 明载：替换 electron-updater 传输需注入私有字段（Electron 升级即碎），chamber 改用外部 watchdog + 忽略迟到事件。 |
-| `update-journal.ts` | mirror | `packages/desktop/update-journal.ts`、`packages/desktop/update-journal.test.ts` | 白名单字段 JSONL 取证日志同名镜像（同 env 开关 DSH_DESKTOP_UPDATE_JOURNAL_DIR、同白名单、失败自禁用）。 |
+| `update-journal.ts` | mirror | `packages/desktop/update-journal.ts`、`packages/desktop/update-journal.test.ts` | 白名单字段 JSONL 取证日志同名镜像（同 env 开关 DSH_DESKTOP_UPDATE_JOURNAL_DIR、同白名单、失败自禁用）；已核验差异 = 本仓单文件追加、无 action 里程碑（上游 started/workspace-ready/安装确认等动作面未移植）。 |
 | `update-overlay.ts` | different-adopted | `packages/desktop/electron/main.ts`（唯一 BrowserWindow）、settings-bridge UpdateSection | 上游用遮罩子窗阻塞父窗输入；chamber 只有一个主窗 + settings 状态行，无遮罩面。 |
-| `update-presentation.ts` | mirror | `packages/desktop/electron/preload.cts`（toUpstreamUpdatePresentation 相位映射）、`packages/desktop/updater.ts`（failureKind）、`packages/desktop/upstream-seats.test.ts`（S-52 失败归类） | 对官方设置壳的相位/失败归类呈现契约镜像（downloaded→ready、downloading→download…）；上游的本地化文案面不镜像（文案在 settings 壳）。 |
-| `update-schedule.ts` | mirror | `packages/desktop/update-schedule.ts`、`packages/desktop/update-schedule.test.ts` | 600s 基准 ±20% 抖动、失败退避封顶 1h、同 env 名镜像；有意差异 = 非法 env 回退默认并 loud 警告而非抛错。 |
-| `web-document.ts` | different-adopted | `packages/control-plane/src/static-serving.ts`、`packages/control-plane/src/instance-proxy.ts` | 静态前端与请求转发由控制面 loopback origin 提供，不使用上游 `dsh-app:` scheme / boot 注入 / cookie 转发。 |
+| `update-presentation.ts` | mirror | `packages/desktop/electron/preload.cts`（toUpstreamUpdatePresentation 相位映射）、`packages/desktop/updater.ts`（failureKind）、`packages/desktop/upstream-seats.test.ts`（S-52 失败归类） | 对官方设置壳的相位/失败归类呈现契约镜像（downloaded→ready、downloading→download…）；已核验差异 = 呈现相位表无 verifying（及其进度呈现），失败分类只覆盖本模式可检测的两种网络类。 |
+| `update-schedule.ts` | mirror | `packages/desktop/update-schedule.ts`、`packages/desktop/update-schedule.test.ts` | 600s 基准 ±20% 抖动、失败退避封顶 1h、同 env 名镜像；有意差异 = 非法 env 回退默认并 loud 警告而非抛错；native 腿节奏归 Sparkle（固定 600s，无抖动/退避），本文件调度只服务无原生腿的 sidecar。 |
+| `update-window.ts` | different-adopted | `packages/desktop/updater.ts`、`macos/Sources/DSHChamber/AppUpdater.swift`；缺口见 `docs/progress/STATUS.md` §1.7 | 官方独立 update-dialog 窗口 + 安装前全屏退出准备；本仓是 Sparkle 标准窗 + 设置页状态行（design 11 无弹窗），全屏准备缺口登记 §1.7。 |
+| `web-document.ts` | different-adopted | `packages/control-plane/src/static-serving.ts`、`packages/control-plane/src/instance-proxy.ts` | 不用 `dsh-app:` scheme：boot 注入与凭据注入由控制面以同源 HTTP + CSP nonce 完成（static-serving 注入 boot 对象、instance-proxy 注入凭据），不是「不做注入」。 |
 | `welcome-api.ts` | not-applicable | 无 | 欢迎 API 与「是否需要登录」判定；chamber 无账号面。 |
 | `welcome-backend.ts` | not-applicable | 无 | 欢迎后端连接（账号流）；不采用。 |
 | `welcome-window.ts` | not-applicable | 无 | 欢迎窗口；不采用。 |
-| `windows-layout.ts` | mirror | `packages/desktop/electron/main.ts`（WINDOWS_TITLEBAR_HEIGHT = 40）、`packages/desktop/electron/preload.cts`（同值副本） | caption 高度常数逐值镜像（上游 40），两份副本相等由 upstream-seats 钉住。 |
+| `windows-layout.ts` | mirror | `packages/desktop/electron/main.ts`（WINDOWS_TITLEBAR_HEIGHT = 40）、`packages/desktop/electron/preload.cts`（同值副本） | caption 高度常数逐值镜像（上游 40），两份副本相等由 upstream-seats 钉住；darwin 唯一出货，Windows 面仅冻结/复活参考。 |
 
 ### 计数与落点
 
 | 分类 | 计数 | 登记方式 |
 |---|---|---|
-| mirror | 20 | 四条 `mirror.dsh-desktop-*` 条目 + 各自 relatedGates（本表逐行给出对照点） |
-| different-adopted | 18 | 逐条写进对应 mirror 条目的 rationale / evidence（本表给出对照点与差异）；登录 shell 读取见 §4.6 行 |
-| not-applicable | 29 | 本节一行式「有意不采用」列表（welcome/account/mandatory-update/browser-guest 等上游桌面产品面），不建条目；新增 command-installation / command-management / command-manager-entry（随包 CLI 命令安装管理：本仓不提供用户级 dsh 命令安装面，该动机在本仓无消费者）、duration-env.ts（上游把时长解析抽成工具，本仓 updater 告警回退行为不变）、device-info.ts（上游反馈问卷机器描述；本仓由桌面 carrier 自持 deviceInfo） |
-| **合计** | **67** | — |
+| mirror | 22 | 四条 `mirror.dsh-desktop-*` 条目 + 各自 relatedGates（本表逐行给出对照点） |
+| different-adopted | 23 | 逐条写进对应 mirror 条目的 rationale / evidence（本表给出对照点与差异）；登录 shell 读取见 §4.6 行 |
+| not-applicable | 34 | 本节一行式「有意不采用」列表（welcome/account/mandatory-update/file-actions/operation-* 等上游桌面产品面），不建条目；另有 command-installation / command-management / command-manager-entry（随包 CLI 命令安装管理：本仓不提供用户级 dsh 命令安装面，该动机在本仓无消费者）、duration-env.ts（上游把时长解析抽成工具，本仓 updater 告警回退行为不变） |
+| **合计** | **79** | — |
 
-bucket 明细：mirror = crash-report / fatal-recovery / ipc / keybindings / keyboard / locale / preload-app /
-preload-platform / preload-theme / preload-windows / quit-confirmation / single-instance / startup-error / tray /
-update-attention / update-coordinator / update-journal / update-presentation / update-schedule / windows-layout。
-different-adopted = backend-controller / core-package-set / host-process / host-protocol / main / microphone-permissions /
-node-environment / owned-directory / paths / project-manager / release / runtime-tree / update-dialog / update-error /
-update-http-executor / update-overlay / web-document / login-shell-environment（自有实现，见 §4.6）。not-applicable = account-backend / background-notice / browser-guests /
-client-metadata / client/WelcomePage.tsx / client/styles.d.ts / client/welcome.tsx / directory-picker / mandatory-update-ipc /
-mandatory-update-policy / mandatory-update-window / platform-ipc / platform-view / policy-test-auth / preload-browser /
-preload-mandatory-overlay / preload-mandatory / preload-menu / preload-platform-account / preload-update-dialog /
-preload-welcome / welcome-api / welcome-backend / welcome-window / command-installation / command-management /
-command-manager-entry / duration-env / device-info.ts。
+bucket 明细：mirror = browser-guests / crash-report / fatal-recovery / ipc / keybindings / keyboard / locale / preload-app / preload-browser / preload-platform / preload-theme / preload-windows / quit-confirmation / single-instance / startup-error / tray / update-attention / update-coordinator / update-journal / update-presentation / update-schedule / windows-layout。
+different-adopted = backend-controller / core-package-set / device-info / host-process / host-protocol / locale-cache / main / microphone-permissions / node-environment / owned-directory / paths / project-manager / release / runtime-tree / settings / update-channel / update-dialog / update-error / update-http-executor / update-overlay / update-window / web-document / login-shell-environment（自有实现，见 §4.6）。not-applicable = account-backend / background-notice / client-metadata / client/WelcomePage.tsx / client/styles.d.ts / client/welcome.tsx / directory-picker / file-actions / file-drag / file-drag-files / mandatory-update-ipc / mandatory-update-policy / mandatory-update-window / operation-history / operation-journal / operation-report / operation-report-job / operation-report-worker / platform-ipc / platform-view / policy-test-auth / preload-mandatory-overlay / preload-mandatory / preload-menu / preload-platform-account / preload-update-dialog / preload-welcome / welcome-api / welcome-backend / welcome-window / command-installation / command-management / command-manager-entry / duration-env。
 
 门覆盖：`mirror.dsh-desktop-update-chain` 原有的 `packages/desktop/upstream-seats.test.ts` 已迁到 carrier 条目
 （S-51 文档平台标记 / S-52 dshDesktop 载体与失败归类归载体席位）；`upstream-seats.test.ts` 在 desktop 套件内执行
@@ -467,8 +472,27 @@ command-manager-entry / duration-env / device-info.ts。
 | `ui-workspace/…/stores.ts` 的 `FLAT_SESSION_ORDER_KEY` + `tree.ts` 的 `deriveFlat`/`sessionMemberIds` | client-core `flat-account.ts`（`FLAT_ACCOUNT_KEY` + NUL 哨兵账号键）+ `ServerSection.tsx` 平铺渲染 + `sidebar-root-drag.ts` 本地提交 | 行为镜像 | 每来源一个平铺账号：manual=`flatOrder[sourceId]`、updated=NUL 哨兵账号，拖拽只写本地（上游 flat 账号同规则）；**成员集与 workspace 折叠无关**（上游 `sessionMemberIds`）；不渲染工作区头；不做跨来源平铺 | `test/session-rows/flat-list.test.ts` | 上游改 flat 账号 / `deriveFlat` / 成员集规则即重放 |
 | `apps/desktop/src/login-shell-environment.ts` | `packages/control-plane/src/login-shell-env.ts` + `hostEnv` 选项（Electron main 与 Swift sidecar 两个入口发起 promise，spawn-dsh 首次 spawn 前 await；duration-env.ts 未移植） | 行为镜像 | 显式 failures 列表进启动日志；进程级一次读取 memo；探测会话变量、PROBE_ENVIRONMENT 键集与 `DSH_*`/`ELECTRON_*` 保护；候选链/`-ilc` + `env -0` 标记/超时杀进程组/成功不杀/cwd=homedir/Windows 跳过与上游同形；gateway/standalone 不调用（服务自管环境） | `packages/control-plane/test/host-lifecycle/login-shell-env.test.ts` | 上游改探测脚本 / 候选链 / 合并规则 / PROBE_ENVIRONMENT 键集即重放；上游把读取搬进宿主或改用其他 flavor 供给 ⇒ 上报待裁 |
 | `packages/client/ui-sidebar-files` 的 `sidebar.right.tab.files.actions` 声明 + 官方 `ui-open-in-app` 占座 | `packages/dsh-chamber-client-ui-open-in` 以自有 id `open-in` 同槽占座（owner `{ absolutePath }`，一个组件服务头部 + 文件页两处入口） | 声明镜像 + 同槽占座 | per-source 目录与 per-source 记忆、远端门照旧；官方条保持 inert（document-relative `open-in-app/*` 在 N-ctx 落到控制面 SPA 回退） | `test/ui-lock/files-seat-declaration.test.ts`（含 vendor 声明断言）+ `test/launch-flow/open-in-path.test.ts` | 座席形状 / 官方占用者语义变化即复核；上游给中性 base 钩子则重评「自有占座」；同槽双条复活 ⇒ 上报待裁 |
-| `ui-sidebar/…/SidebarRoot.tsx` 的 brand 按钮（上游无 Tooltip 包裹） | `SidebarRoot.tsx` brand 洞直接渲染 button（有意去掉 Tooltip 包裹层；aria-label / aria-keyshortcuts 保留） | 形态副本（有意去掉包裹层） | a11y 名与键帽仍在按钮上；无专项测试锁，登记于本条 || `ui-workspace/…/session-actions/SessionId.tsx`（#5982，`menu.sessionId`） | `dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx`（行菜单项 + `writeClipboard`）+ `locales.ts` | 行为镜像 | 复制完整会话 id；成功/失败走来源级瞬态 notice（`SourceNoticeKind` 三态） | `test/session-rows/session-row-actions.test.ts` 字面量锁 | SessionId 菜单项 / notice 文案或 kind 变动 |
+| `ui-sidebar/…/SidebarRoot.tsx` 的 brand 按钮（上游无 Tooltip 包裹） | `SidebarRoot.tsx` brand 洞直接渲染 button（有意去掉 Tooltip 包裹层；aria-label / aria-keyshortcuts 保留） | 形态副本（有意去掉包裹层） | a11y 名与键帽仍在按钮上；无专项测试锁，登记于本条 |
+| `ui-workspace/…/session-actions/SessionId.tsx`（#5982，`menu.sessionId`） | `dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx`（行菜单项 + `writeClipboard`）+ `locales.ts` | 行为镜像 | 复制完整会话 id；成功/失败走来源级瞬态 notice（`SourceNoticeKind` 三态） | `test/session-rows/session-row-actions.test.ts` 字面量锁 | SessionId 菜单项 / notice 文案或 kind 变动 |
 | `ui-workspace/…/WorkspaceBrowser.tsx`（#6062 注意力水位） | `dsh-chamber-client-ui-sidebar/src/client/ServerSection.tsx` + `dsh-chamber-client-core/src/session-row-window.ts` | 行为镜像 | 注意力行（running / 子代理在跑 / pending / 未读完成 / 当前行）把前缀窗口抬到覆盖它；按非 ghost 且非 blank 行计数、自动上限 50、每工作区单调 floor | `test/session-rows/session-row-window.test.ts`（4 个注意力用例） | 上游 requiredWatermark / raiseWatermarks 或 blank 语义变动 |
+
+### desktop-host 宿主侧文件（非 `apps/desktop/src`）
+
+`apps/desktop-host/src` 是上游 Desktop 的 Host 侧入口与宿主适配层（Desktop profile 的 CLI/引导/诊断/退出/更新任务等）；本仓以控制面宿主生命周期 + 共享 sidecar 装配替代其中多数面，下列逐文件给落点裁决（不重复 §4.5 的 `apps/desktop/src` 行）。
+
+| 上游锚（vendor 树） | chamber 落点 | 移植形态 | 有意分歧 / 我方增量 | 今日钉法 | 升 pin 复核触发 |
+|---|---|---|---|---|---|
+| `apps/desktop-host/src/cli.ts`（`runDesktopCli`：bundled runtime + reserved-profile plugin access） | `packages/cli/src/index.ts`（管理面薄壳：serve/status/connections/host logs） | 未移植（无等价面） | 本仓不提供桌面 profile 的 CLI 入口，dsh 命令走运行树自身 bin；管理面由 CLI 薄壳 + 控制面 REST 承担 | `packages/cli/test/cli-contract.test.ts`（薄壳契约，不覆盖该面） | 上游把 reserved-profile plugin access 变成 dsh 公共行为、或本仓需要用户级 dsh 命令面时重裁 |
+| `apps/desktop-host/src/fatal-diagnostic.ts`（有界 Host 失败详情：64KiB + 启动元数据 8KiB） | `macos/Sources/DSHChamber/SidecarStartupFailure.swift`、`packages/desktop/fatal-report.ts` | 行为镜像（收窄） | Swift 腿只留 stderr 末 6 行 / 600 字符，无 startup entries 与 composition 观测；宿主启动诊断粒度缺口登 `docs/progress/STATUS.md` §1.7 | `packages/desktop/test/desktop-shell/fatal-report.test.ts` | 上游改 fatal 诊断字段或预算即复核 Swift 落盘形状与缺口条 |
+| `apps/desktop-host/src/file-drag.ts`（`localDragResource`：Host 侧本地文件引用解析） | 无（随包 `ui-file-drag` 走浏览器臂） | 未移植 | dshDesktop 载体缺 fileDrag 成员（§4.5 file-drag* 行；`docs/progress/STATUS.md` §2.3） | 无专项门（负向：载体成员零命中） | 上游改拖拽协议或本仓补原生拖出臂时重裁 |
+| `apps/desktop-host/src/index.ts`（Desktop profile 启动 + URL 上报 Electron） | `packages/control-plane/src/spawn-dsh.ts`、`packages/desktop/host-assembly.ts`、`packages/desktop/sidecar-entry.ts` | 行为镜像（落点不同） | 本仓托管宿主恒 `--profile web`，生命周期（ready/reaper/health/logs）归控制面；无 Electron URL 上报面 | `packages/control-plane/test/host-lifecycle/spawn-dsh.test.ts`、`packages/control-plane/test/host-lifecycle/lifecycle.test.ts` | 上游 profile boot 钩子、启动事件或 URL 契约变化即复核 |
+| `apps/desktop-host/src/office-engine.ts`（ASAR 感知的引擎清单解析） | `packages/desktop/scripts/prepare-office-assets.mjs`、`packages/desktop/sidecar-entry.ts`（`officeSkillsDir` sibling 装配） | 行为镜像（落点不同） | 本仓无 ASAR/Electron 引擎解析：office skills 由 sidecar 装配 sibling 目录并注入外部 assetRoot（design 18 §4.2） | `packages/desktop/scripts/prepare-office-assets.test.mjs` | 上游改 office 载荷布局或解析规则即复核装配与 `--verify` |
+| `apps/desktop-host/src/office.ts`（`desktop-office` 组合：office-skills + workspace 依赖） | `packages/control-plane/src/startup-plugin-rows.ts`、`packages/desktop/sidecar-entry.ts` | 行为镜像（收窄） | 只有本地 Swift 实例提供 office-skills 启动行（S-58）；缺件时本仓 fail-open（只告警不挂行）、上游 fail-closed，缺口登 `docs/progress/STATUS.md` §1.7 | S-58 + `packages/control-plane/test/plugins/startup-plugin-rows.test.ts` | 上游改 office 组合或缺件姿态时复核 S-58 与缺口条 |
+| `apps/desktop-host/src/operation-diagnostics.ts`（插件操作诊断的有界 IPC 投递） | 无（`operation-*` 五文件零实现） | 未移植 | 诊断报告无「最近插件操作」附节（§4.5 operation-* 行；`docs/progress/STATUS.md` §1.7） | 无专项门（负向：operation 诊断零命中） | 上游改记录形状或本仓补取证链时重裁 |
+| `apps/desktop-host/src/platform-session.ts`（Platform 凭据 ↔ 账号 provider 绑定） | 无（无 `dshPlatform` / 原生账号后端） | 未移植 | 本仓不采用原生账号后端与应用内平台视图（TODO C§1 非目标）；登录闭环缺口见 `docs/progress/STATUS.md` §4.2 与 §1.7 | 无专项门（负向：`dshPlatform` 零命中） | 上游账号 provider 契约变化或本仓重开账号面时重裁 |
+| `apps/desktop-host/src/quit-inspection.ts`（退出时检查中断性工作/已武装提醒） | `packages/desktop/chamber-settings.ts`（`computeQuitRisk`）、`macos/Sources/DSHChamber/QuitCoordinator.swift` | 行为镜像（收窄） | 检查面收窄为本地实例运行中，不含 scheduledTasks/子代理/计划任务的宿主侧全量（§4.5 quit-confirmation 行） | `macos/Tests/DSHChamberTests/QuitCoordinatorTests.swift` | 上游 quit inspection 事实面增项即复核收窄取舍 |
+| `apps/desktop-host/src/update-tasks.ts`（更新安装准入 + 任务检查） | 无（§4.5 update-error 行已登记收窄） | 未移植 | 有任务在跑仍直接退出安装；缺口登 `docs/progress/STATUS.md` §1.7 | 无专项门（负向：activeTasks/inspectQuit/updateTasks 零命中） | 上游改任务检查语义或本仓补安装前检查时重裁 |
+| `apps/desktop-host/src/windows-cli-signals.ts`（Windows 控制台中断，koffi kernel32） | 无（平台外） | 未移植 | Windows 腿随 Electron 冻结、不发布；darwin 出货面无该面 | 无 | Windows 腿复活时按 `docs/progress/electron-frozen.md` 复活清单重裁 |
 
 ## 5. 再生物登记
 
@@ -557,7 +581,7 @@ command-manager-entry / duration-env / device-info.ts。
 | `mirror.dsh-api-session-controller-goal` | mirror | `packages/api/session-controller` | `packages/control-plane` | — | packages/control-plane/test/protocol/session-mux.test.ts, packages/renderer/test/session-state/source-mux-facts-goal.test.ts | accepted |
 | `mirror.dsh-session-status-write-face` | mirror | `packages/api/session-controller` | `packages/dsh-chamber-client-ui-sidebar/src/client/status-write-face.ts` | — | packages/dsh-chamber-client-ui-sidebar/test/session-state/status-write-face.test.ts, packages/dsh-chamber-client-ui-sidebar/test/session-state/vendor-session-fact-contract.test.ts | accepted |
 | `mirror.dsh-desktop-carrier-seats` | mirror | `apps/desktop/src` | `packages/desktop` | — | S-56, macos/Tests/DSHChamberTests/HostPathCatalogTests.swift, packages/desktop/test/ipc/bridge-shim-document.test.ts, packages/desktop/test/ipc/bridge-shim-host-paths.test.ts, packages/desktop/test/ipc/desktop-carrier-surface.test.ts, packages/desktop/upstream-seats.test.ts, packages/renderer/test/frame-chrome/host-path-scope.test.ts | accepted |
-| `mirror.dsh-desktop-shortcuts-seat` | mirror | `apps/desktop/src` | `packages/desktop/shortcuts-bridge.ts` | — | packages/desktop/test/ipc/desktop-shortcuts-bridge.test.ts | accepted |
+| `mirror.dsh-desktop-shortcuts-seat` | mirror | `apps/desktop/src` | `macos/Sources/DSHChamber/Resources/bridge-shim.js` | — | S-54, packages/desktop/test/ipc/desktop-shortcuts-bridge.test.ts | accepted |
 | `mirror.dsh-desktop-native-chrome-seats` | mirror | `apps/desktop/src` | `packages/desktop` | — | packages/desktop/chamber-lock.test.ts, packages/desktop/shell-locale.test.ts, packages/desktop/test/desktop-shell/fatal-report.test.ts, packages/desktop/test/desktop-shell/startup-recovery.test.ts | accepted |
 | `mirror.dsh-desktop-update-chain` | mirror | `apps/desktop/src` | `packages/desktop` | — | packages/desktop/test/desktop-shell/updater-attention.test.ts, packages/desktop/test/desktop-shell/updater-channel-seal.test.ts, packages/desktop/test/desktop-shell/updater-main-wiring.test.ts, packages/desktop/test/desktop-shell/updater-revision.test.ts, packages/desktop/test/desktop-shell/updater-watchdog.test.ts, packages/desktop/test/ipc/shell-ipc-update.test.ts, packages/desktop/update-journal.test.ts, packages/desktop/update-schedule.test.ts | accepted |
 | `mirror.dsh-client-hmr-events-endpoint` | mirror | `packages/client/hmr` | `packages/renderer/src/live-graph.ts` | — | packages/control-plane/test/page-channel/page-channel-flow.test.ts, packages/renderer/test/lifecycle/live-graph.test.ts | accepted |
