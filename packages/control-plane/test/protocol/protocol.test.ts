@@ -372,9 +372,20 @@ test('terminateChild waits past leader exit and kills a stubborn same-group desc
   let termination: Promise<void> | null = null
   try {
     assert.ok(leaderPid !== undefined && leaderPid > 0)
-    await waitFor(() => existsSync(marker), 3_000, 'stubborn descendant readiness')
-    descendantPid = Number(readFileSync(marker, 'utf8'))
-    assert.ok(Number.isInteger(descendantPid) && descendantPid > 0)
+    // writeFileSync creates the marker file before writing its content, so a
+    // bare existsSync can observe an empty file on a loaded CI worker; wait for
+    // a parseable pid instead of the path alone.
+    const readDescendantPid = (): number => {
+      try {
+        const value = Number(readFileSync(marker, 'utf8'))
+        return Number.isInteger(value) && value > 0 ? value : 0
+      } catch {
+        return 0
+      }
+    }
+    await waitFor(() => readDescendantPid() > 0, 3_000, 'stubborn descendant readiness')
+    descendantPid = readDescendantPid()
+    assert.ok(descendantPid > 0)
 
     const leaderExited = new Promise<void>(resolve => leader.once('exit', () => resolve()))
     termination = terminateChild(leader, 750)
