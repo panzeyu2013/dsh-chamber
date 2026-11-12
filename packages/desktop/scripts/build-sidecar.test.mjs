@@ -85,7 +85,6 @@ function writeVendorDshDocs(vendorDir) {
   writeFileSync(path.join(docsDir, 'upgrade-guide', 'README.md'), '# guides\n')
 }
 
-
 test('① 参数解析：缺省值、单 Node 开关与错误', () => {
   const defaults = parseBuildSidecarArgs([])
   assert.equal(defaults.outDir, path.join(desktopDir, 'release', 'sidecar'))

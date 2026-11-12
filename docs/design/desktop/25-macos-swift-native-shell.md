@@ -330,7 +330,7 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动 chrom
 
 **两层语义**：壳自建文案跟随应用内设置（页面语言，切换即生效：菜单/托盘/对话框/失败页/面板）；系统与框架面默认跟随系统语言（Sparkle 标准窗与其提示、AppKit 内建按钮与 About 标签、WebKit 右键菜单、Services 子项与帮助搜索框）。只有语言族不同（中文 ↔ 非中文）时才写 `AppleLanguages` 把这些面一起切到应用内语言（下次启动生效）；同族不覆盖是有意选择（例：日/韩/法/德系统 + 英文页面 ⇒ 框架面保持系统语言；zh-Hant 系统 + 简体页面 ⇒ 框架面保持繁体）。语言匹配已本机实测（`Bundle.preferredLocalizations`）：`["zh-Hans"]→zh_CN`、`["zh-Hans-CN"]→zh_CN`、`["en"]→en`、`["ja-JP"]→ja`、`["zh-Hant-TW"]→zh_TW`。
 
-**外观**：默认 nil（跟系统；HIG 不鼓励 app 专属外观开关）；仅页面显式主题与系统主题不同才覆盖为 darkAqua/aqua（`ShellAppearancePolicy`，应用点 `AppDelegate.swift#applyAppearance`），页面回到「跟随系统」即重置 nil；系统深浅读 `AppleInterfaceStyle`，不读被覆盖后的 effectiveAppearance。**不采纳 rc.2 的 Host 主题起步读取**：上游桌面壳在启动期读 Host `ui-theme` 命名空间来定 welcome/壳外观（`apps/desktop/src/welcome-backend.ts` 的 Host theme preference，Electron-only 臂）；Swift 壳不读 Host 设置——**页面 document 事实是唯一权威**（本节开头），有意不采纳该臂。
+**外观**：默认 nil（跟系统；HIG 不鼓励 app 专属外观开关）；仅页面显式主题与系统主题不同才覆盖为 darkAqua/aqua（`ShellAppearancePolicy`，应用点 `AppDelegate.swift#applyAppearance`），页面回到「跟随系统」即重置 nil；系统深浅读 `AppleInterfaceStyle`，不读被覆盖后的 effectiveAppearance。**不采纳上游当前 pin 的 Host 主题起步读取**：上游桌面壳在启动期读 Host `ui-theme` 命名空间来定 welcome/壳外观（`apps/desktop/src/welcome-backend.ts` 的 Host theme preference，Electron-only 臂）；Swift 壳不读 Host 设置——**页面 document 事实是唯一权威**（本节开头），有意不采纳该臂。
 
 **露底色的两段语义**：① 建窗即按 last-known 对账：`#setupWindow` 末尾调 `reconcileThemedBackground`（读 `ShellPageFactsStore.lastKnown` 幂等收敛），首帧不再是骨架常量；只有无事实时才用骨架常量 `#0f1115`——页面骨架与主题无关（`packages/renderer/index.html` 明示「不跟随 prefers-color-scheme」），跟骨架走才不会首帧反向闪色。② 透明露底经异常安全包装：WKWebView 缺省白底会首帧/重载白闪，故经包装置 `drawsBackground` = false；包装失败仅降级 WebKit 白底 + 日志，绝不崩（`responds(to:)` 探测实测恒 false，不再作门）。③ 事实到达后按主题换 `underPageBackgroundColor` 与窗口底色（`themedBackgroundColor`：light → 浅色内容底、dark/无事实 → 骨架常量；装材质后窗口底转 clear、露底色在 WebKit 真能透明时也转 clear，见 §5.6），缩放/全屏/重载的露底与页面一致。
 
@@ -449,7 +449,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 - SSH 密码镜像（ssh-passwords.json v2）：endpoint-bound 0600 明文，Swift flavor 语义不变。
 - gateway-secrets（v3，safeStorage|plaintext 判别）：Swift flavor 无 safeStorage → 新写一律 plaintext 判别 + 0600 原子写（既有诚实回退）；读旧 safeStorage 判别条目 → 解密不可用 → **保留文件与绑定、标记禁用待重录**（复用「legacy 保留禁用」语义；判别路径补单测 S1）。
 - 静态加密按决策 7（Keychain 持随机文件密钥 + HostEdges encrypt/decrypt edge）设计，不在当前范围。
-- **宿主鉴权 cookie 不落 WKWebView jar**：host browser-auth cookie 由控制面**只放内存**（`packages/control-plane/src/browser-auth-cookie.ts`；never persisted/logged/returned to renderer），代理响应剥离 `set-cookie`（`instance-proxy.ts` 的响应头白名单），主窗口 WKWebView 因此不持有 `dsh-auth-*`；上游 rc.2 的 Electron「按 hostname 清旧 cookie」修法在本壳没有对应宿主面。残余（**未证实**）= 远端实例页面或第三方插件对 `WKWebsiteDataStore.httpCookieStore` 的写入累积；验证 = 连续启动 N 次后读该 store 的 cookie 数是否随启动次数增长。
+- **宿主鉴权 cookie 不落 WKWebView jar**：host browser-auth cookie 由控制面**只放内存**（`packages/control-plane/src/browser-auth-cookie.ts`；never persisted/logged/returned to renderer），代理响应剥离 `set-cookie`（`instance-proxy.ts` 的响应头白名单），主窗口 WKWebView 因此不持有 `dsh-auth-*`；上游当前 pin 的 Electron「按 hostname 清旧 cookie」修法在本壳没有对应宿主面。残余（**未证实**）= 远端实例页面或第三方插件对 `WKWebsiteDataStore.httpCookieStore` 的写入累积；验证 = 连续启动 N 次后读该 store 的 cookie 数是否随启动次数增长。
 
 ## 7. 更新（design 11 的 Swift 侧形态）
 
