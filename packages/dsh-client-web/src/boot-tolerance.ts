@@ -19,9 +19,11 @@ export type SweepFiberLabel =
  * The two id sets the post-await audit reasons with.
  *
  * `required` is the page's minimum fatal set: those entries must ACTIVE or the boot
- * rejects. It is deliberately small — the upstream roster the policy came from
- * (packages/client/web/src/boot-client.ts) is composite-covered here, so of its ids
- * only the kernel-adopted rows can ever exist as loader entries (boot-rows.ts).
+ * rejects. The upstream roster the policy came from (packages/client/web/src/
+ * boot-client.ts) is composite-covered here, so of its ids only the kernel-adopted
+ * rows can ever exist as loader entries (boot-rows.ts); the page's build-time manifest
+ * rows (the chamber composite bundle) are added to the fatal set by the boot kernel
+ * when the audit runs (every manifest row is corruption if inactive, never version skew).
  *
  * `tolerated` is the per-instance extra-row set: a newer/older backend can ship rows
  * this shell cannot run, which is version skew rather than corruption. A tolerated id
@@ -36,10 +38,10 @@ export interface SweepPolicy {
 
 /**
  * Verdict for ONE loader entry in the post-await sweep. `ok`: usable. `degraded`:
- * the row did not activate but the boot continues (an optional entry — rc.2 writes
- * one warning and leaves active siblings running; the extra-row case is the same
- * version-skew reading). `fatal`: a required entry is inactive — fail loud with the
- * reason (the sweep compensates for cordis inject waiting having no timeout).
+ * the row did not activate but the boot continues (a per-instance extra row — rc.2
+ * writes one warning and leaves active siblings running; that is the version-skew
+ * reading). `fatal`: a required entry is inactive — fail loud with the reason (the
+ * sweep compensates for cordis inject waiting having no timeout).
  */
 export type SweepVerdict =
   | { kind: 'ok' }

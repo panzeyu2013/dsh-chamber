@@ -80,7 +80,7 @@ test('vendor heal contract: Session.open() short-circuits on open and on a pendi
 test('vendor heal contract: failEventStream latches the error state the ladder keys on', () => {
   assert.match(
     session,
-    /private failEventStream\(events: SessionEventStream, generation: number, error: unknown\): void \{ if \(generation !== this\.openGeneration \|\| this\.events !== events\) return if \(!isRemoteFailure\(error\)\) throw error this\.openGeneration\+\+ this\.events = undefined this\.openPromise = null this\.openState = 'error' this\.openError = error/,
+    /private failEventStream\(events: SessionEventStream, generation: number, error: unknown\): void \{ if \(generation !== this\.openGeneration \|\| this\.events !== events\) return if \(!isRemoteFailure\(error\)\) throw error this\.openGeneration\+\+ this\.clearOlderHistory\(\) this\.events = undefined this\.openPromise = null this\.openState = 'error' this\.openError = error/,
     "the terminal journal failure no longer latches openState = 'error' with a cleared open promise — the ladder keys on that state, so the recovery arm must be re-derived",
   )
 })

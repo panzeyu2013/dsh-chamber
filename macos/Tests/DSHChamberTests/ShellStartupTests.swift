@@ -934,6 +934,8 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(pasteAndMatchAlias.keyEquivalent, "v")
         XCTAssertEqual(pasteAndMatchAlias.keyEquivalentModifierMask, [.command, .option, .shift],
                        "隐藏别名保留 Electron 44 的 ⌥⇧⌘V")
+        XCTAssertTrue(pasteAndMatchAlias.allowsKeyEquivalentWhenHidden,
+                      "隐藏项的 key equivalent 默认不参与 command matching——必须显式开启（AppKit 10.13+；Electron acceleratorWorksWhenHidden 同义）")
         XCTAssertNotNil(editMenu.items.first { $0.action == Selector(("delete:")) },
                         "Edit 菜单应含「删除」")
         XCTAssertNotNil(editMenu.items.first { $0.action == #selector(NSText.selectAll(_:)) },

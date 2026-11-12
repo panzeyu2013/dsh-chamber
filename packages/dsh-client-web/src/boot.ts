@@ -265,18 +265,22 @@ export class AppWebEntry {
 
   /**
    * Audit every loader entry after quiescence (rc.2 runtime policy, re-derived here):
-   * a required entry (`REQUIRED_BOOT_ROW_IDS`, the kernel-adopted rows) that did not
-   * activate rejects the boot; every other inactive entry — a manifest row or a
-   * per-instance extra row — degrades: it is marked 'failed' on the boot page and the
-   * boot reports ONE warning, leaving active siblings running. A failed fiber's
-   * recorded activation error is read through `activationFailure` (cordis exposes it
-   * only through `await()`). The decision rules live in boot-tolerance.ts.
+   * a required entry — the kernel-adopted rows plus every build-time manifest row
+   * (the manifest carries only the chamber composite bundle) — that did not activate
+   * rejects the boot; every other inactive entry is a per-instance extra row and
+   * degrades: it is marked 'failed' on the boot page and the boot reports ONE
+   * warning, leaving active siblings running. A failed fiber's recorded activation
+   * error is read through `activationFailure` (cordis exposes it only through
+   * `await()`). The decision rules live in boot-tolerance.ts.
    * @param toleratedIds - the per-instance extra-row ids (version skew by construction).
    */
   private async auditEntries(toleratedIds: ReadonlySet<string>): Promise<void> {
     const ctx = this.ctx!
     const policy = {
-      required: new Set(REQUIRED_BOOT_ROW_IDS),
+      // Build-time manifest rows are part of the fatal set: they are not per-instance
+      // host-graph facts (the only manifest row is the chamber composite bundle), so a
+      // failure there is corruption, not version skew.
+      required: new Set([...REQUIRED_BOOT_ROW_IDS, ...this.manifest.plugins.map(row => row.id)]),
       tolerated: toleratedIds,
     }
     const failures: SweepFailure[] = []

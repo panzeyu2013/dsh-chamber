@@ -239,7 +239,7 @@ export const GROUPS = {
     // python 载荷 machinery（C5：锁校验 / 解包器 / dry-run 离线保证 / 摘要纪律 /
     // full 载荷的 pnpm 半边：版本单源、拷贝/prune、manifest/digest、--verify）
     'scripts/prepare-python-payload.test.mjs',
-    // Office 技能资产（上游 skill-office 的 8 文件）：源解析/逐文件 temp+rename/
+    // Office 技能资产（上游 skill-office 的 4 文件）：源解析/逐文件 temp+rename/
     // README 保留/清残留/verify sha256/CLI dry-run 与真实往返
     'scripts/prepare-office-assets.test.mjs',
     // 上游 pnpm patch 通道（§17-C）：pin 集合 → 运行期 workspace → runtime lock 的锁步

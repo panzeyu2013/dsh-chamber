@@ -31,7 +31,7 @@
 - **目标活跃期通知/未读压制（design 19 §3.2）**：`activation unknown` 需上游只读面；围栏双发（F30）待裁。
 - **事实健康环**：仅无壳 mux 快照、无 in-app 读面；收口 = gateway 采样 + 只读环。
 - **归档清理/管理器（design 24）**：残余 = 上游 wire no-op、维护期 force、保护边界；缺陷 = `errors` 通道混用；清理残留 = projcache 4KB、迁移代际窗口；tombstone 由孤儿清扫收敛。
-- **上游 worktree reclamation 与归档面的并存（design 24 §11 / design 08 §7.2）**：上游 `worktree` 服务在归档时清**它自己创建且 owned 的** checkout（`retainOnArchive` 默认 false，分支保留），而本域清会话**内容**；两面对同一动作叠加，用户文案与归档管理器提示须分别陈述，且不得承诺「归档不动工作树」。本域不因该能力退役（上游仍无 `sessions.delete` wire）；上游把 `cleanupOf` 升为公共 wire 后复评是否显示「checkout 已清理」回执。
+- **上游 worktree reclamation 与归档面的并存**：机制与文案纪律见 design 08 §7.2，域边界与不退役判据见 design 24 §11（上游仍无 `sessions.delete` wire）；观察项 = 上游 `cleanupOf` 若升为公共 wire，复评是否显示「checkout 已清理」回执。
 - **工作区删除意图（design 05 §2.2.1）**：列表中部删除不滑尾、最后一行无位移、确定性拒绝不闪回（限单次删除）；四类登记例外与两类派生窄窗（见设计）；上游 order/remove 原子化后退役（§2.3）。
 - **侧栏收敛四项 + 整源降级**：会话创建/fork/归档、打开意图/工作区回声（`early-open.ts` 去留）、新 checkout 首帧五项（位置/淡入/确认层/tooltip 裁剪/`data-hover-gate`，判据见 design 06 §7）、会话待办区 10 项。
 - **双帧 status**：需宿主轮次键/可信 host 尾时间；无壳观察者 follow 走 remote.mux。
@@ -46,7 +46,8 @@
 
 ### 1.5 平台、运行时与外部凭据
 
-- **运行时线 vs 源码线（rc.2）**：源码线 pin 已切 dsh-v0.2.2-rc.2（`harness.commit`）；运行时线仍为 0.2.2-rc.1（`packages/desktop/vendor/dsh/pnpm-lock.yaml`），因上游 rc.2 的 npm 包未发布。待发布后再跑 `bundle:dsh` 重生成运行时锁，收口 C10/C11 并复跑升级 checklist §2/§5。
+- **运行时线 vs 源码线（rc.2）**：源码线 pin 已切 dsh-v0.2.2-rc.2（`harness.commit`）；运行时线仍为 0.2.2-rc.1（`packages/desktop/vendor/dsh/pnpm-lock.yaml`），因上游 rc.2 的 npm 包未发布。待发布后再跑 `bundle:dsh` 重生成运行时锁，收口 C10/C11 并复跑升级 checklist §2/§5。本窗口内**唯一允许红集 = C10/C11/upstream-patches**（其余任一红都按真回归处理）；且在运行时线升到 rc.2 前，**带 capabilities 的 Swift 本地 spawn 会在 office 行 fail-closed**——当前运行时 web-app bundle 里没有可关的 `skill-office` 行，`resolveBundleRowDisables` 拒绝启动；本地实例的 office/启动冒烟须等 runtime bump 后做。
+- **宿主鉴权 cookie 与 WKWebView jar（未证实残余）**：审计 P1「`dsh-auth-*` 累积致多次启动失败」在本仓**不同构**——控制面把 host browser-auth cookie **只放内存**（`packages/control-plane/src/browser-auth-cookie.ts`，never persisted/logged/returned），代理响应剥离 `set-cookie`（`instance-proxy.ts` 响应头白名单；`test/proxy/response-encoding.test.ts` 有负向断言）⇒ 主窗口 WKWebView 不写 host auth cookie。残余（**未证实**）：远端实例页面/第三方插件改写 `WKWebsiteDataStore.httpCookieStore` 后的累积；最便宜验证 = 连续启动 N 次后读 cookie 数是否随启动次数单调增长。**不做代码**（无证据）；若复现，收口 = 启动/换源时按 hostname 清 `dsh-auth-*` 前缀（上游 rc.2 `apps/desktop/src/web-document.ts` 的 `removeLegacyHostCookies` 为同形修法）。
 - **P5b 工作树统一（代码残余）**：node PATH shim / string-only 解析；打包面判据见 design 08 §7.5 与 `docs/checklists/release/packaging-closure-checklist.md`。
 - **gateway**：ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
 - **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；客户端只能拿到 socket 级的归因文案（按 ECONNREFUSED/ECONNRESET/EPIPE 分类并指向 gateway 服务与隧道，`packages/desktop/gateway-session.ts` 的登录传输分类），看不到持有者类别与拒绝依据，把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
@@ -60,6 +61,7 @@
 ### 1.6 一致性债务与门禁缺口
 
 - **门禁局部面**：`i18n` 的 CI/release 落位见 `gate-surfaces.json` 的 `workflow` 生成块；`md-links` / `test-wiring` / `no-dead-exports` / `styles` 按 local-only 决策只在本地跑（`check:static`/`check:full`），不生成 CI 步骤。
+- **三 fork devDeps 漂移**：`packages/dsh-{client-connection,client-web,api-gateway}/package.json` 的 `zod` devDep 仍 4.4.3（上游当前 pin = 4.6.6）；C5 只比 fork `version`，devDeps 不在门覆盖内 ⇒ 下次 fork 重放时按上游逐 fork 对齐（3 文件；devDep 只参与构建/测试类型面，不影响运行期闭包）。
 - **导出/门禁**：type-only 导出不判；无入口叶子模块不判（方向 = 孤儿模块门）；`TEST_ONLY_EXPORT_ALLOWLIST` 是规则化名单；`run-checks tests` 零覆盖可过；`verify:styles` 不覆盖 docs token；`verify:anchors` 无 Windows 覆盖；`install-gateway.sh` 走 npm 绕单源；`test:gateway` 仍有 2 处真装器 spawn。
 - **重构/测试**：`ssh-<id>` 别名、跨包重复 0 组（[TODO.md](./TODO.md) D§1）；god-file 预算条目与阈值见 `scripts/gates/registry/file-budgets.json`（`node scripts/gates/checks/verify-file-budgets.mjs --report` 的缺口只按可减目标合计，`kind:ceiling` 单列），但新模块仍需**人工**登记才受保护；CI 打包排练 CPU；Swift 串行 113s（并行会丢 XCTSkip 判据）。
 - **隐私/平台**：`DSH_TELEMETRY_DISABLED` 不覆盖 `session-log-deepseek`，桌面是否默认 opt-out 未裁；docs 锚点过期（D15）；私有文件纪律三实现；`client-web` 未用 `ui-theme`；layout `ThemePresenter` 残留；wire A–F、sanitize/win-probes、dashboard 第三份 UI、A-U3/A-F16、dual-host。
@@ -94,6 +96,7 @@
 
 - **U1–U6 未裁**（pin 残余 / 时间列 / 快捷键 / 重命名 / search / 侧栏 More）：候选、证据与维持理由见 [TODO.md](./TODO.md) A§15.1；本文件 §2.2 只记已裁差异。
 - **U7 侧栏新契约键未裁**（上游 pin 的 `sidebar.panel.icon` factory、`workspaces` hookContext、`panellist` 归属）：默认**不采纳**（chamber 侧栏自绘，design 05/06 拥有该面）；采纳 = 整包重放上游 `ui-sidebar`，代价与 U6 同批；触点登记归触点表/registry（本轮不新增 registry 条目）。裁决定在重启侧栏交互面时并做。
+- **U8 open-in 会话级统一菜单未裁**（上游 pin 把 open-in 的会话级入口收进 `session-open-with`、删除 `session-reveal`）：默认**不采纳**（design 20 的自有分体控件与 seed `dsh-chamber-seed-open-in` 拥有该面；官方 client 行只提供文件级席位）；采纳 = 按 `session-open-with` 的槽位/命令形状对齐，代价与 U7 同批；裁决定在重启 open-in 交互面时并做。
 
 ### 2.2 已裁的功能与呈现差异
 

@@ -20,7 +20,10 @@ import {
 const KERNEL = '@deepseek-ai/dsh-client-modules'
 const MANIFEST = '@deepseek-ai/dsh-client-ui-tool'
 const EXTRA = '@third-party/plugin-a'
-const REQUIRED = new Set([KERNEL])
+// The page's fatal set: kernel-adopted rows plus the build-time manifest rows (the
+// manifest carries only the chamber composite bundle); per-instance extras degrade.
+const REQUIRED = new Set([KERNEL, MANIFEST])
+const OPTIONAL = '@example/non-required-row'
 const POLICY: SweepPolicy = { required: REQUIRED, tolerated: new Set([EXTRA]) }
 const EMPTY: SweepFailure[] = []
 
@@ -41,18 +44,21 @@ test('sweep: an inactive REQUIRED row is fatal with its reason', () => {
     { kind: 'fatal', reason: 'failed: boom' })
 })
 
-// ── classifySweepEntry: optional (manifest + extra) rows degrade ───────────
-
-test('sweep: an inactive OPTIONAL manifest row degrades instead of failing the boot', () => {
-  // rc.2: only the required roster fails startup; other inactive entries warn and
-  // leave active siblings running — here that is every host-graph manifest row.
-  assert.deepEqual(classifySweepEntry(MANIFEST, undefined, POLICY, [], 'Failed to fetch dynamically imported module'),
-    { kind: 'degraded', reason: 'import failed: Failed to fetch dynamically imported module' })
-  assert.deepEqual(classifySweepEntry(MANIFEST, 'pending', POLICY, ['a', 'b']),
-    { kind: 'degraded', reason: 'pending (waiting for services: a, b)' })
+test('sweep: an inactive REQUIRED manifest row is fatal — build-time manifest rows are required', () => {
   assert.deepEqual(classifySweepEntry(MANIFEST, 'failed', POLICY, [], undefined, 'failed: Error: apply exploded'),
+    { kind: 'fatal', reason: 'failed: Error: apply exploded' })
+})
+
+// ── classifySweepEntry: non-required rows degrade; required rows are fatal ──
+
+test('sweep: an inactive non-required row degrades instead of failing the boot', () => {
+  assert.deepEqual(classifySweepEntry(OPTIONAL, undefined, POLICY, [], 'Failed to fetch dynamically imported module'),
+    { kind: 'degraded', reason: 'import failed: Failed to fetch dynamically imported module' })
+  assert.deepEqual(classifySweepEntry(OPTIONAL, 'pending', POLICY, ['a', 'b']),
+    { kind: 'degraded', reason: 'pending (waiting for services: a, b)' })
+  assert.deepEqual(classifySweepEntry(OPTIONAL, 'failed', POLICY, [], undefined, 'failed: Error: apply exploded'),
     { kind: 'degraded', reason: 'failed: Error: apply exploded' })
-  assert.deepEqual(classifySweepEntry(MANIFEST, 'disposed', POLICY, []),
+  assert.deepEqual(classifySweepEntry(OPTIONAL, 'disposed', POLICY, []),
     { kind: 'degraded', reason: 'disposed' })
 })
 
@@ -95,15 +101,15 @@ test('report: no failures produce neither a fatal report nor a warning', () => {
   assert.equal(sweepWarningReport(EMPTY, REQUIRED), undefined)
 })
 
-test('report: only optional failures produce ONE warning (no fatal report)', () => {
+test('report: only non-required failures produce ONE warning (no fatal report)', () => {
   const failures = [
-    { name: MANIFEST, reason: 'import failed: boom' },
+    { name: OPTIONAL, reason: 'import failed: boom' },
     { name: EXTRA, reason: 'failed: boom' },
   ]
   assert.equal(sweepFatalReport(failures, REQUIRED), undefined)
   assert.equal(sweepWarningReport(failures, REQUIRED),
     'web boot: warning: 2 entries did not activate\n'
-    + `${MANIFEST}: import failed: boom\n${EXTRA}: failed: boom`)
+    + `${OPTIONAL}: import failed: boom\n${EXTRA}: failed: boom`)
 })
 
 test('report: a required failure rejects with every failure listed and required ids marked', () => {
@@ -112,11 +118,10 @@ test('report: a required failure rejects with every failure listed and required 
     { name: MANIFEST, reason: 'import failed: sku' },
   ]
   assert.equal(sweepFatalReport(failures, REQUIRED),
-    'web boot: 1 required entry did not activate\n'
-    + `${KERNEL} (required): failed: boom\n${MANIFEST}: import failed: sku`)
+    'web boot: 2 required entries did not activate\n'
+    + `${KERNEL} (required): failed: boom\n${MANIFEST} (required): import failed: sku`)
   // rc.2 writes no warning alongside a required failure.
-  assert.equal(sweepWarningReport(failures, REQUIRED),
-    'web boot: warning: 1 entry did not activate\n' + `${MANIFEST}: import failed: sku`)
+  assert.equal(sweepWarningReport(failures, REQUIRED), undefined)
   // …and the boot never reaches the warning path: the fatal report exists.
   assert.notEqual(sweepFatalReport(failures, REQUIRED), undefined)
 })

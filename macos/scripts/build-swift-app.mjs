@@ -1166,7 +1166,7 @@ export async function runBuildSwiftApp(
     if ((nodeStat.mode & 0o111) === 0) {
       throw new Error(`payload node 没有可执行位：${payloadNode}（mode ${(nodeStat.mode & 0o777).toString(8)}）`)
     }
-    // office 技能资产与 payload 平级：装配面必须带齐（8 文件清单的完整核对由
+    // office 技能资产与 payload 平级：装配面必须带齐（4 文件清单的完整核对由
     // prepare-office-assets --verify / build:sidecar --require-office-assets 负责；
     // 这里断结构锚点，防手工装配目录漏拷整棵 office-skills）。
     const officeSkills = path.join(layout.sidecarDir, 'office-skills')

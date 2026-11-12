@@ -219,3 +219,95 @@ test('restore: a missing dependency GROUP is created in alphabetical position an
   assert.match(merged, /    dependencies:[\s\S]*    devDependencies:\n      '@example\/tool':\n        specifier: 2\.0\.0/)
   assert.match(result.stdout, /specifier 边 1 条/, 'a new group must count once, not twice')
 })
+
+// rc.2 vendor-upgrade regression: five members declare the SAME name in both
+// dependencies and devDependencies, while the pnpm-generated lockfile keeps only the
+// dependencies entry. The union must add at most one edge per name — a second
+// declaration makes `pnpm install --frozen-lockfile` fail at update-vendor step 6.
+const CROSS_GROUP_DUPLICATES = [
+  { member: 'dsh-agent-preset', name: '@deepseek-ai/schemastery', specifier: 'workspace:~', version: 'link:../schemastery' },
+  { member: 'dsh-experimental-tool-worktree', name: '@deepseek-ai/dsh-experimental-worktree', specifier: 'workspace:*', version: 'link:../dsh-experimental-worktree' },
+  { member: 'dsh-plugin-market', name: '@deepseek-ai/dsh-app-boot', specifier: 'workspace:*', version: 'link:../dsh-app-boot' },
+  { member: 'dsh-settings', name: 'yaml', specifier: '^2.8.1', version: '2.9.0' },
+  { member: 'dsh-ssh-helper-runtime', name: '@deepseek-ai/cordis', specifier: 'workspace:~', version: 'link:../cordis' },
+]
+
+/** How pnpm writes one importer entry name (scoped names quoted, plain names bare). */
+function quoteEntryName(name) {
+  return /^[A-Za-z0-9._-]+$/.test(name) ? name : "'" + name + "'"
+}
+
+/** The dependency group one importer entry lives in, across the whole importer record. */
+function importerGroupOf(text, member, name) {
+  const key = '  vendor/harness-packages/@deepseek-ai/' + member + ':'
+  const start = text.indexOf(key)
+  if (start < 0) return null
+  const rest = text.slice(start + key.length)
+  const end = rest.indexOf('\n  vendor/harness-packages/@deepseek-ai/')
+  const lines = (end < 0 ? rest : rest.slice(0, end)).split('\n')
+  let group = null
+  for (const line of lines) {
+    const header = /^    ([A-Za-z]+):/.exec(line)
+    if (header !== null) { group = header[1]; continue }
+    const entry = /^      (?:'([^']+)'|([^:]+)):$/.exec(line)
+    if (entry !== null && (entry[1] ?? entry[2]) === name) return group
+  }
+  return null
+}
+
+/** Number of importer entries for one name in the merged lockfile (must never exceed 1). */
+function entryCount(text, name) {
+  return text.split('\n      ' + quoteEntryName(name) + ':\n').length - 1
+}
+
+for (const case_ of CROSS_GROUP_DUPLICATES) {
+  test('restore: canonical cross-group duplicate stays one entry — ' + case_.member + '/' + case_.name, () => {
+    const { linkDir, current, head } = fixture()
+    const recorded = lockfile([importerBlock(case_.member, [
+      '    dependencies:',
+      '      ' + quoteEntryName(case_.name) + ':',
+      '        specifier: ' + case_.specifier,
+      '        version: ' + case_.version,
+      '    devDependencies:',
+      "      '@example/tool':",
+      '        specifier: 2.0.0',
+      '        version: 2.0.0',
+    ].join('\n'))])
+    writeFileSync(current, recorded)
+    writeFileSync(head, recorded)
+    writeManifest(linkDir, case_.member, {
+      dependencies: { [case_.name]: case_.specifier },
+      devDependencies: { [case_.name]: case_.specifier, '@example/tool': '2.0.0' },
+    })
+    const before = readFileSync(current, 'utf8')
+    const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+    assert.equal(result.code, 0, result.stdout)
+    assert.equal(readFileSync(current, 'utf8'), before, 'an already-canonical record must stay byte-identical')
+    assert.match(result.stdout, /无需修复/)
+    assert.equal(entryCount(before, case_.name), 1)
+    assert.equal(importerGroupOf(before, case_.member, case_.name), 'dependencies')
+  })
+
+  test('restore: a missing cross-group duplicate is added once under dependencies — ' + case_.member + '/' + case_.name, () => {
+    const { linkDir, current, head } = fixture()
+    const recorded = lockfile([importerBlock(case_.member, [
+      '    dependencies: {}',
+      '    devDependencies:',
+      "      '@example/tool':",
+      '        specifier: 2.0.0',
+      '        version: 2.0.0',
+    ].join('\n'))])
+    writeFileSync(current, recorded)
+    writeFileSync(head, recorded)
+    writeManifest(linkDir, case_.member, {
+      dependencies: { [case_.name]: case_.specifier },
+      devDependencies: { [case_.name]: case_.specifier, '@example/tool': '2.0.0' },
+    })
+    const result = run({ RESTORE_LOCKFILE_PATH: current, RESTORE_LOCKFILE_HEAD: head, RESTORE_VENDOR_LINK_DIR: linkDir })
+    assert.equal(result.code, 0, result.stdout)
+    const merged = readFileSync(current, 'utf8')
+    assert.equal(entryCount(merged, case_.name), 1, 'one name = one importer entry, never a second copy')
+    assert.equal(importerGroupOf(merged, case_.member, case_.name), 'dependencies', 'dependencies wins')
+    assert.match(result.stdout, /specifier 边 1 条/, 'the duplicate declaration must count once')
+  })
+}

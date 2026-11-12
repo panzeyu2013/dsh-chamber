@@ -16,7 +16,8 @@
  *
  * 落位纪律（产物是**生成目录**，只提交本目录的 README.md）：
  * - 逐文件「同目录 temp + rename」覆盖：任一步失败都不会让已有产物消失/半写；
- * - 保留仓库提交的 README.md，并清掉非期望顶层残留（旧版本留下的目录/文件）；
+ * - 保留仓库提交的 README.md，并**递归**清掉非期望文件/目录（旧版本留下的技能目录、
+ *   期望目录内的陈旧文件，例如 8→4 后残留的 office/references/sidecar.md）；
  * - 写完立即以源为基准自查（清单文件全部在场 + sha256 逐文件一致），不一致即失败；
  * - 源可用时 `--verify` 逐文件比对 sha256；源不可用（干净 checkout 没初始化 vendor）
  *   时降级为「清单文件在场」并打印提示——发布腿在打包后的路径上复核同一命令。
@@ -204,7 +205,40 @@ function removeStaleTempFiles(rootDir) {
 }
 
 /**
- * 真实落位（唯一会写盘的入口）：逐文件 temp+rename，保留 README，清非期望顶层残留，
+ * 清掉落点里不在资产清单内的文件/目录（递归）：旧版本技能目录、期望目录内的陈旧文件
+ * （如 8→4 之后的 office/references/sidecar.md）、顶层杂文件；committed README 保留。
+ * 只删清单之外的路径，清单内文件由落位步骤覆盖。
+ * @param {string} outDir - 落点目录（已存在）。
+ * @returns {string[]} 被清掉的相对路径（/ 分隔）。
+ */
+function removeUnexpectedAssets(outDir) {
+  const expected = new Set(OFFICE_SKILL_FILES)
+  const removed = []
+  const walk = (dir, relative) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const rel = relative === '' ? entry.name : relative + '/' + entry.name
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        const holdsExpected = OFFICE_SKILL_FILES.some((file) => file.startsWith(rel + '/'))
+        if (!holdsExpected) {
+          rmSync(full, { recursive: true, force: true })
+          removed.push(rel)
+          continue
+        }
+        walk(full, rel)
+        continue
+      }
+      if (rel === COMMITTED_README || expected.has(rel)) continue
+      rmSync(full, { force: true })
+      removed.push(rel)
+    }
+  }
+  walk(outDir, '')
+  return removed
+}
+
+/**
+ * 真实落位（唯一会写盘的入口）：逐文件 temp+rename，保留 README，递归清非期望文件，
  * 最后以源为基准自检（源缺件在动盘之前就拒绝，避免写一半）。
  * @returns {{ written: number, removed: string[], temps: number, verify: object }}
  */
@@ -230,14 +264,10 @@ export function materializeOfficeAssets(options = {}) {
     renameSync(temp, to)
     written += 1
   }
-  // 清非期望顶层残留（旧技能目录/临时文件），README 与 4 个期望目录保留。
-  const removed = []
-  for (const entry of readdirSync(outDir, { withFileTypes: true })) {
-    if (entry.name === COMMITTED_README || OFFICE_SKILL_TOP_LEVEL.includes(entry.name)) continue
-    rmSync(path.join(outDir, entry.name), { recursive: true, force: true })
-    removed.push(entry.name)
-  }
+  // 先清上次中断留下的 temp 文件（计数与「递归清残留」分开），再递归清非期望文件：
+  // 旧技能目录、期望目录内的陈旧文件（8→4 的 sidecar.md 等）都不许留在产物里。
   const temps = removeStaleTempFiles(outDir)
+  const removed = removeUnexpectedAssets(outDir)
   // 写完自检：源可用，清单文件必须全部在场且 sha256 全对（fail-closed）。
   const verify = verifyOfficeAssets(outDir, { source: source.source })
   if (!verify.ok) {

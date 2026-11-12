@@ -65,6 +65,9 @@ function installBootHarness(
     manifest: {
       plugins: options.immediate === true ? [{ id: '@example/manifest-row', immediately: true }] : [],
     },
+    // The fork-boundary chunk-owner adapter expects the module system's boot-row
+    // index; extra-row boots exercise it (registerExtraChunkOwners).
+    graphRows: new Map(),
     prefetch() {
       return options.onPrefetch?.() ?? Promise.resolve()
     },
@@ -194,16 +197,35 @@ test('configureContext: hostile thrown values settle through bootError without r
 // inactive entry degrades with one warning instead of failing the instance shell.
 // ---------------------------------------------------------------------------
 
-test('sweep: an inactive OPTIONAL manifest row degrades — one warning, bootError stays unset', async () => {
-  const { warned, restore } = installBootHarness({ immediate: true }, true)
+test('sweep: an inactive manifest row rejects the boot — required build-time row', async () => {
+  const { restore } = installBootHarness({ immediate: true }, true)
   resetBootRuntimeEvents()
   setBootScenario([{ name: '@example/manifest-row', state: 3, activationError: 'apply exploded' }])
   const entry = new AppWebEntry(new ElementStub() as unknown as HTMLElement, {})
   try {
     await entry.run()
+    assert.equal(entry.bootError,
+      'web boot: 1 required entry did not activate\n'
+      + '@example/manifest-row (required): failed: Error: apply exploded')
+  } finally {
+    setBootScenario()
+    await entry.dispose()
+    restore()
+  }
+})
+
+test('sweep: an inactive per-instance extra row degrades — one warning, bootError stays unset', async () => {
+  const { warned, restore } = installBootHarness({ immediate: true }, true)
+  resetBootRuntimeEvents()
+  setBootScenario([{ name: '@example/extra-row', state: 3, activationError: 'extra exploded' }])
+  const entry = new AppWebEntry(new ElementStub() as unknown as HTMLElement, {
+    extraRows: [{ id: '@example/extra-row', url: '', initialUrl: '', rev: '', inject: [], external: [] }],
+  })
+  try {
+    await entry.run()
     assert.equal(entry.bootError, undefined)
     assert.deepEqual(warned, [
-      'web boot: warning: 1 entry did not activate\n@example/manifest-row: failed: Error: apply exploded',
+      'web boot: warning: 1 entry did not activate\n@example/extra-row: failed: Error: extra exploded',
     ])
   } finally {
     setBootScenario()

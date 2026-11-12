@@ -164,6 +164,30 @@ test('③ 真实落位：4 文件 + 保留 README + 清非期望顶层残留 + �
   })
 })
 
+test('③ 8→4 升级残留：期望目录内的陈旧文件与旧技能目录都被递归清掉', () => {
+  withTempDir((dir) => {
+    const source = writeOfficeSource(path.join(dir, 'source'))
+    const outDir = path.join(dir, 'out')
+    mkdirSync(path.join(outDir, 'office-render'), { recursive: true })
+    writeFileSync(path.join(outDir, 'office-render', 'SKILL.md'), '# legacy\n')
+    mkdirSync(path.join(outDir, 'office', 'references'), { recursive: true })
+    writeFileSync(path.join(outDir, 'office', 'references', 'sidecar.md'), '# legacy sidecar\n')
+    writeFileSync(path.join(outDir, 'office', 'stray.txt'), 'stray\n')
+    writeFileSync(path.join(outDir, COMMITTED_README), '# committed readme\n')
+    const result = materializeOfficeAssets({ source, outDir })
+    assert.equal(result.verify.ok, true, result.verify.problems.join('；'))
+    assert.equal(existsSync(path.join(outDir, 'office-render')), false, '旧顶层技能目录必须清掉')
+    assert.equal(existsSync(path.join(outDir, 'office', 'references')), false,
+      '期望目录内的陈旧子目录（8→4 的 references/sidecar.md）必须递归清掉')
+    assert.equal(existsSync(path.join(outDir, 'office', 'stray.txt')), false, '期望目录内的杂文件必须清掉')
+    assert.equal(readFileSync(path.join(outDir, COMMITTED_README), 'utf8'), '# committed readme\n')
+    assert.deepEqual(readdirSync(outDir).sort(), [...OFFICE_SKILL_TOP_LEVEL, COMMITTED_README].sort())
+    assert.ok(result.removed.includes('office-render'), result.removed.join(','))
+    assert.ok(result.removed.includes('office/references'), result.removed.join(','))
+    assert.ok(result.removed.includes('office/stray.txt'), result.removed.join(','))
+  })
+})
+
 test('③ 中断残留：上次进程留下的 <file>.tmp-<pid> 必须被清掉', () => {
   withTempDir((dir) => {
     const source = writeOfficeSource(path.join(dir, 'source'))

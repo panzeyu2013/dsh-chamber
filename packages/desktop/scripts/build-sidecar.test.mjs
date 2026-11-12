@@ -11,7 +11,7 @@
  *  ③e 内嵌 pnpm 版本 pin：单源 desktop dependencies.pnpm + 构建期 fail-closed；
  *  ③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）；
  *  ④ office 技能资产：copyOfficeAssets 替换式落位 / 缺源跳过 = 缺位 /
- *     --require-office-assets fail-closed（8 文件清单来自单源常量）；
+ *     --require-office-assets fail-closed（4 文件清单来自单源常量）；
  *  ⑤ 单 Node 归因：resolveNodeExecutable 对 basename=node 的 execPath 直用
  *     （design 25 §4.3 A5 再反转；helper 基名随单 Node 裁决退场）；
  *  ⑥ 真实装配（--skip-node/--skip-vendor）与 --dry-run 子进程：输入校验通过、

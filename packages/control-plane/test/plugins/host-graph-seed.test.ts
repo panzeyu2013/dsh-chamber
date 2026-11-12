@@ -22,7 +22,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hostGraphPlane, skipSymlinksUnavailable, tempDir, writeLocalProfileFixture } from '../support/utils.ts'
 import {
@@ -46,6 +46,7 @@ import {
 import { webProfileArgs, DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import { createLocalConnection } from '../../src/local-connection.ts'
 import { resolveLocalHostGraphOverlay } from '../../src/local-host-seeding.ts'
+import { WEB_APP_SKILL_OFFICE_ROW } from '../../src/bundle-row-disables.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -698,7 +699,7 @@ test('resolveLocalHostGraphOverlay: a NOT-enabled forge bundle skips the disable
     `the skip must be diagnosed: ${logs.join(' | ')}`)
 })
 
-test('resolveLocalHostGraphOverlay: a misspelled row id in an ENABLED bundle is fail-closed', t => {
+test('resolveLocalHostGraphOverlay: a RENAMED row id (same package) in an ENABLED bundle is fail-closed', t => {
   const dir = tempDir(t)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
   const sourceDir = writeBuiltSeedSource(dir, true)
@@ -712,7 +713,7 @@ test('resolveLocalHostGraphOverlay: a misspelled row id in an ENABLED bundle is 
       log() {},
       warn() {},
     }),
-    /mounts no row with id 'forge-githb'.*fail-closed/,
+    /binds package '@deepseek-ai\/dsh-experimental-forge-github'.*instead of 'forge-githb'.*fail-closed/,
   )
 })
 
@@ -1372,15 +1373,17 @@ const WEB_APP_SKILL_OFFICE_DISABLE_ROW = `- id: skill-office
 `
 
 /** Install a profile-layer web-app bundle whose patch declares the skill-office row. */
-function enableWebAppBundle(dshHome: string): void {
+function enableWebAppBundle(
+  dshHome: string,
+  patch = "- insert:\n    - id: skill-office\n      name: '@deepseek-ai/dsh-skill-office'\n",
+): void {
   const packageDir = join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai', 'dsh-web-app')
   mkdirSync(packageDir, { recursive: true })
   writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
     name: '@deepseek-ai/dsh-web-app',
     dsh: { bundle: { patch: './cordis.patch.yml' } },
   }))
-  writeFileSync(join(packageDir, 'cordis.patch.yml'),
-    "- insert:\n    - id: skill-office\n      name: '@deepseek-ai/dsh-skill-office'\n")
+  writeFileSync(join(packageDir, 'cordis.patch.yml'), patch)
 }
 
 /** The exact startup block the Swift planner produces for the fixture above. */
@@ -1514,6 +1517,72 @@ test('resolveLocalHostGraphOverlay: the rc.2 web-app office row is disabled besi
     WEB_APP_SKILL_OFFICE_DISABLE_ROW + expectedStartupBlock(fixture, dshHome),
     'the bundle duplicate is force-disabled ahead of the startup insert object (two live skill-office mounts would throw)',
   )
+})
+
+test('resolveLocalHostGraphOverlay: an incomplete office asset tree never over-disables the bundle row', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const fixture = writeStartupPluginFixture(dir)
+  rmSync(fixture.officeSkillsDir, { recursive: true, force: true })
+  enableWebAppBundle(dshHome)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    startupPluginCapabilities: fixture.capabilities,
+    log() {},
+    warn() {},
+  })
+  const text = readFileSync(overlay as string, 'utf8')
+  assert.equal(text.includes(`id: ${WEB_APP_SKILL_OFFICE_ROW.id}`), false,
+    'the local office row is skipped, so the bundle row must stay enabled (no over-disable)')
+  assert.equal(text.includes('chamber-office-skills'), false, 'no half office row is mounted')
+  assert.ok(text.includes('chamber-workspace-dependencies'), 'the independent payload row still mounts')
+})
+
+test('resolveLocalHostGraphOverlay: a user-layer skill-office row is a live mount and disables the bundle duplicate', t => {
+  const dir = tempDir(t)
+  const userPatch = "- insert:\n    - id: user-office-skills\n      name: '@deepseek-ai/dsh-skill-office'\n"
+  const dshHome = writeLocalProfileFixture(dir, userPatch)
+  const fixture = writeStartupPluginFixture(dir)
+  enableWebAppBundle(dshHome)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    startupPluginCapabilities: fixture.capabilities,
+    log() {},
+    warn() {},
+  })
+  const text = readFileSync(overlay as string, 'utf8')
+  assert.ok(text.includes(`- id: ${WEB_APP_SKILL_OFFICE_ROW.id}\n`),
+    'a user-mounted skill-office row needs the same duplicate guard as the planner row')
+  assert.equal(text.includes('chamber-office-skills'), false,
+    'the planner reuses the user identity instead of repeating it')
+})
+
+test('resolveLocalHostGraphOverlay: an OLDER runtime without the bundle office row still spawns (rollback safety)', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const fixture = writeStartupPluginFixture(dir)
+  // rc.1 web-app mounts only office-to-pdf: no skill-office row to disable.
+  enableWebAppBundle(dshHome, "- insert:\n    - id: office-to-pdf\n      name: '@deepseek-ai/dsh-office-to-pdf'\n")
+  const logs: string[] = []
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    startupPluginCapabilities: fixture.capabilities,
+    log: message => logs.push(message),
+    warn() {},
+  })
+  const text = readFileSync(overlay as string, 'utf8')
+  assert.equal(text.includes('- id: skill-office'), false, 'nothing to disable in the older runtime')
+  assert.ok(text.includes('chamber-office-skills'), 'the local office row is still mounted')
+  assert.ok(logs.some(message => message.includes('nothing to disable')), logs.join(' | '))
 })
 
 test('resolveLocalHostGraphOverlay: safe mode suppresses startup rows and clears the overlay', t => {

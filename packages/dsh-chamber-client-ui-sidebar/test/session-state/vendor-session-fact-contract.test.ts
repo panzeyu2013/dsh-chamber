@@ -8,9 +8,10 @@
  *  2. 客户端半 `ctx.remote.$on('api-session/status')` → `sessions.handleSessionStatus(...)`；
  *  3. `ClientSessions.handleSessionStatus` 是**公开**方法（且不在 `ISessions` 契约里 ——
  *     写回因此是「上游公开但非契约」的面，pin 升级必须在此处见红而不是静默降级）；
- *  4. 它一次写三处：list summaries（`recordMutation` 的 `status` mutation，rc.2 起
- *     同时落 `agentAvailable: true`）、物化 Session（`handleRunning`，聊天面）与子代理
- *     父可用性（`updateParentAvailability`，rc.2 取代旧 catalog activity）；
+ *  4. 它一次写两处：list summaries（`recordMutation` 的 `status` mutation，rc.2 起
+ *     同时落 `agentAvailable: true`；applyMutation 把该事实与 `parentSessionId`
+ *     补充边一并落到 summaries，取代旧的 `updateParentAvailability` 全量刷新）与
+ *     物化 Session（`handleRunning`，聊天面）；
  *  5. `refreshList()` 对 remote 失败**照常 resolve**（只置 `listState='error'`）并把权威
  *     running 下推已物化会话；
  *  6. `mergeOrderedBaseline` **移除**权威基线里缺席的 id（⑨ 缺席行不会永久留存）。
@@ -106,7 +107,7 @@ vendorTest('上游：客户端订阅 api-session/status 并交给 handleSessionS
     '订阅体必须仍直连 handleSessionStatus')
 })
 
-vendorTest('上游：handleSessionStatus 是公开方法、且一次写 summaries + 物化 Session + catalog activity', () => {
+vendorTest('上游：handleSessionStatus 是公开方法、且一次写 summaries（agentAvailable 事实）+ 物化 Session', () => {
   const service = readVendor('dsh-api-session-controller/src/client/sessions/service.ts')
   assert.match(service, /handleSessionStatus\(\.\.\.args: Parameters<SessionManager\['handleSessionStatus'\]>\): void \{/,
     'chamber 的 tier-3 写回调用 ClientSessions.handleSessionStatus —— 签名/可见性一变，写回即须重推')
@@ -119,8 +120,13 @@ vendorTest('上游：handleSessionStatus 是公开方法、且一次写 summarie
     '必须仍写 list summaries（侧栏行）并落 agentAvailable 事实（rc.2 的行可用性语义；写回因此不能让行变成不可用）')
   assert.match(manager, /this\.sessions\.get\(sessionId\)\?\.handleRunning\(running\)/,
     '必须仍写物化 Session（聊天面 running）')
-  assert.match(manager, /this\.updateParentAvailability\(\)/,
-    '必须仍刷新子代理父可用性（rc.2 取代旧 updateCatalogActivity；语义变了 ⇒ 写回的副作用须重推）')
+  // rc.2 移除了 updateParentAvailability（旧的全量刷新）；子代理父可用性改由 summaries
+  // 的 agentAvailable 事实 + parentSessionId 补充边承载（applyMutation）。写回的副作用
+  // 因此仍覆盖父可用性，但载体变了 —— 恢复全量刷新或丢掉该事实都必须在这里见红。
+  assert.match(manager, /agentAvailable: mutation\.agentAvailable/,
+    'applyMutation 必须仍落 summaries 的 agentAvailable 事实（rc.2 的父可用性载体）')
+  assert.match(manager, /parentSessionId: mutation\.summary\.parentSessionId/,
+    'applyMutation 必须仍保留 summary 的 parentSessionId 补充边（父可用性事实的载体）')
 })
 
 vendorTest('契约锁：ISessions 仍未长出 status 写面（长出即扩 CONTRACT_STATUS_WRITE_METHODS 并翻转探测）', () => {

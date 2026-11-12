@@ -86,7 +86,7 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
   // 计数以本文件下方 verifierForks 的 deepEqual 为唯一来源，注释不重复计数。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
-    'b24e1f3262ee2801',
+    'e7b0aa6aa2d3de27',
     '分类桶形状变了（桶间搬家或增删文件）——必须同批改本断言的哈希；当前形状：' + JSON.stringify(shape),
   )
   assert.deepEqual(
@@ -175,7 +175,7 @@ test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类�
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    [[10, 4, 4, 3], [9, 4, 1, 5], [8, 8, 1, 11], [4, 4, 1, 7], [5, 5, 1, 12], [11, 1, 3, 6]],
+    [[10, 4, 4, 3], [9, 4, 1, 5], [8, 8, 1, 11], [4, 4, 1, 7], [5, 5, 1, 12], [11, 1, 3, 8]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')
   assert.equal(forks[4].versionAnchor, 'chamber')

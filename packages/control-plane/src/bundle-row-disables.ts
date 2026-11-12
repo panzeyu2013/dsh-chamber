@@ -12,9 +12,14 @@
  *
  *   - bundle NOT enabled (P5b is opt-in, so this is the default) → the row will not exist
  *     at boot: the target is skipped with a diagnostic (idempotent, never a boot failure);
- *   - bundle ENABLED → the row must be provable. An absent id, a row bound to another
- *     package, an unreadable bundle, or two rows claiming the id are fail-closed (throw):
- *     booting with the row enabled would silently contradict the plan.
+ *   - bundle ENABLED but the target id ABSENT → skipped with a diagnostic: that is the
+ *     legitimate shape of an OLDER dsh runtime whose bundle does not mount the row yet
+ *     (runtime rollback must keep spawning), and a retired row has nothing to disable;
+ *   - bundle ENABLED and the row is present but unprovable → fail-closed (throw): a row
+ *     bound to another package (name mismatch), the same package name bound to a DIFFERENT
+ *     loader id (upstream rename — the id-targeted disable would silently no-op and the
+ *     duplicate mount would only surface later), an unreadable bundle, or two rows
+ *     claiming the id.
  *
  * IO is injected (the enabled-bundle list and a patch reader) so the decision is
  * unit-testable without a dsh installation; {@link profileBundlePatchReader} is the
@@ -78,12 +83,14 @@ export const WEB_APP_SKILL_OFFICE_ROW: BundleRowDisableTarget = {
 export const BUNDLE_ROW_DISABLES: readonly BundleRowDisableTarget[] = [FORGE_GITHUB_ROW]
 
 /**
- * The disable targets one LOCAL spawn must carry. The web-app office-row disable is
- * conditional on the spawn actually mounting the local office-skills row (the Swift
- * sidecar passes an office `assetRoot` in its capabilities): a caller without that
- * capability (Electron/CLI/tests) mounts no local office row, so the bundle row is its
- * only office mount and must stay enabled (subject to prune, which is a payload concern,
- * not a spawn-plan concern).
+ * The disable targets one LOCAL spawn must carry. `mountsLocalOfficeSkills` is the
+ * caller's PLAN RESULT — "this spawn will actually mount a local skill-office row"
+ * (the planner's `chamber-office-skills` row, or a user-profile layer row with the same
+ * identity), never mere capability presence: an incomplete assets/workspace state skips
+ * the local row, so disabling the bundle row there would remove the only office mount
+ * (over-disable). A caller without a local mount (Electron/CLI/tests, or an incomplete
+ * Swift resource set) leaves the bundle row enabled; the upstream row is then the only
+ * mount, subject to payload prune (a payload concern, not a spawn-plan concern).
  */
 export function bundleRowDisableTargetsForSpawn(input: {
   readonly mountsLocalOfficeSkills: boolean
@@ -141,11 +148,12 @@ function describeNames(names: readonly string[]): string {
 /**
  * Resolve the disable rows this spawn must carry for bundle-mounted rows.
  *
- * Idempotency: a target whose bundle is not enabled is skipped with a diagnostic — the
- * bundle is opt-in, so before the user enables it the row simply does not exist and the
- * host must boot normally. Fail-closed: once the bundle IS enabled, every target must be
- * provable against the bundle's own patch (see the module comment); any doubt throws so
- * the instance fails loudly instead of booting with the row silently enabled.
+ * Idempotency/rollback: a target whose bundle is not enabled, or whose bundle patch does
+ * not mount the target id at all (an older runtime/pin, or a retired row), is skipped with
+ * a diagnostic — there is nothing to disable, and failing here would break the supported
+ * dsh-runtime version switch/rollback. Fail-closed: once the id IS present, it must be
+ * provable (see the module comment); a rename (same package name, different id) throws so
+ * the duplicate mount cannot silently reappear behind a no-op disable.
  */
 export function resolveBundleRowDisables(input: BundleRowDisableInput): CordisDisablePatch[] {
   const targets = input.targets ?? BUNDLE_ROW_DISABLES
@@ -171,12 +179,24 @@ export function resolveBundleRowDisables(input: BundleRowDisableInput): CordisDi
           + `cannot prove row '${target.id}' — refusing to start (fail-closed)`,
       )
     }
-    const rows = parsePatchRows(read.patches.join('\n')).filter(row => row.id === target.id)
+    const allRows = parsePatchRows(read.patches.join('\n'))
+    const rows = allRows.filter(row => row.id === target.id)
     if (rows.length === 0) {
-      throw new Error(
-        `bundle row disable: bundle '${target.bundle}' is enabled but its patch mounts no row with id '${target.id}' `
-          + '(misspelled id, or an upstream pin renamed/removed it) — refusing to start (fail-closed)',
-      )
+      // Absent target id = an older runtime/pin whose bundle does not mount the row yet
+      // (runtime rollback must keep spawning), or a retired row: nothing to disable.
+      // A row bound to the same PACKAGE under another id is a rename, not an absence —
+      // the id-targeted disable would silently no-op, so that stays fail-closed.
+      const renamed = allRows.filter(row => row.names.includes(target.name))
+      if (renamed.length > 0) {
+        throw new Error(
+          `bundle row disable: bundle '${target.bundle}' binds package '${target.name}' to loader id(s) `
+            + `${JSON.stringify(renamed.map(row => row.id))} instead of '${target.id}' — the row was renamed; `
+            + 'an id-targeted disable would silently no-op (fail-closed)',
+        )
+      }
+      log(`bundle row disable: bundle '${target.bundle}' mounts no row with id '${target.id}' `
+        + '(older runtime/pin, or the row was retired); nothing to disable — skipped')
+      continue
     }
     if (rows.length > 1) {
       throw new Error(

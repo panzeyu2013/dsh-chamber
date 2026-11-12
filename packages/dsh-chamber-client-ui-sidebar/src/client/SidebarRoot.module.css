@@ -263,36 +263,25 @@
 }
 
 /* macOS: the themed elevated fill reads as a foreign slab on the vibrancy
-   sidebar; a white wash sits in the glass like native macOS sidebar
-   controls. Dark keeps the same white ink at lower alpha. */
+   sidebar; the glass tokens sit in the glass like native macOS controls and
+   lower their alpha in dark mode. */
 :global([data-platform='darwin'][data-window-vibrancy]) .newSession {
-  background: rgb(255 255 255 / 0.55);
+  background: var(--dsw-specific-sidebar-glass-fill);
 }
 
 :global([data-platform='darwin'][data-window-vibrancy]) .newSession:hover {
-  background: rgb(255 255 255 / 0.3);
+  background: var(--dsw-specific-sidebar-glass-hover);
 }
 
 /* The vibrancy gate lifts the darwin fills, so the rail’s plain `.collapsed`
    override below would lose. Re-establish the pair under the same gate — in the
-   position upstream’s specificity order puts it: the light darwin fill ties with
-   `.collapsed` (both reduced to the same specificity once gated) and loses by
-   source order, while the dark darwin fill outranks `.collapsed` and keeps the
-   white wash. So these sit after the light pair and before the dark pair. */
+   position upstream’s specificity order puts it: after the light pair. */
 :global([data-platform='darwin'][data-window-vibrancy]) .collapsed .newSession {
-  background: transparent;
+  background: var(--dsw-specific-sidebar-glass-collapsed-fill);
 }
 
 :global([data-platform='darwin'][data-window-vibrancy]) .collapsed .newSession:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-:global([data-platform='darwin'][data-window-vibrancy]) :global([data-ds-dark-theme]) .newSession {
-  background: rgb(255 255 255 / 0.15);
-}
-
-:global([data-platform='darwin'][data-window-vibrancy]) :global([data-ds-dark-theme]) .newSession:hover {
-  background: rgb(255 255 255 / 0.2);
+  background: var(--dsw-specific-sidebar-glass-collapsed-hover);
 }
 
 .collapsed .newSession {

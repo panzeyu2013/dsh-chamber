@@ -26,6 +26,15 @@
  *     恢复的记录来自 HEAD，升级新增的 specifier 边它没有；workspace 边写
  *     `link:../<member>`，registry 范围原样落 version，交给 frozen 响亮拒绝
  *     （不猜解析版本，fail-closed）；
+ *     同一个包名同时出现在 dependencies / devDependencies / optionalDependencies
+ *     时按该顺序**只取一条**（pnpm canonical 对每个 name 只记一条，且 dependencies
+ *     优先；rc.2 升级实测有 5 个 vendor 成员撞到该形态：dsh-agent-preset/
+ *     schemastery、dsh-experimental-tool-worktree/dsh-experimental-worktree、
+ *     dsh-plugin-market/dsh-app-boot、dsh-settings/yaml、
+ *     dsh-ssh-helper-runtime/cordis——按组各补一条会写出同一 name 的重复声明，
+ *     使 `pnpm install --frozen-lockfile` 在 update-vendor 第 6 步必然失败）；
+ *     若该 name 已被记录在 importer 的任一依赖组里，union 不再补第二条（分组
+ *     迁移等不解析的差异留给 frozen 响亮拒绝）；
  *   - 新增块按 pnpm 的归一化键排序落位，diff 最小。
  * 然后照常以 `pnpm install --frozen-lockfile` 收尾验证。
  *
@@ -87,9 +96,13 @@ function vendorMemberExists(name) {
 }
 
 /** Canonical dependency-group order pnpm emits inside an IMPORTER record (alphabetical).
- *  peerDependencies is deliberately absent: measured on the committed lockfile, importers
- *  carry only these three groups (peers live in the packages section) — unioning a peer
- *  into an importer would write a key pnpm never emits there. */
+ *  Also the dedupe precedence for one manifest name declared in several groups: pnpm's
+ *  lockfile carries ONE entry per name and the installed/canonical group is the regular
+ *  `dependencies` one (measured on the rc.2 vendor upgrade: 5 members declare the same name
+ *  in dependencies+devDependencies, while the pnpm-generated lockfile only keeps the
+ *  dependencies entry). peerDependencies is deliberately absent: measured on the committed
+ *  lockfile, importers carry only these three groups (peers live in the packages section) —
+ *  unioning a peer into an importer would write a key pnpm never emits there. */
 const DEP_GROUPS = ['dependencies', 'devDependencies', 'optionalDependencies']
 
 /** One workspace member's manifest through the link tree; null when absent/unreadable. */
@@ -112,14 +125,22 @@ function readMemberManifest(member) {
   }
 }
 
-/** Declared edges of one manifest: [{ group, name, specifier }] (workspace and registry alike). */
+/** Declared edges of one manifest: [{ group, name, specifier }] (workspace and registry alike).
+ *  A name declared in several dependency groups collapses to ONE edge in the first group of
+ *  DEP_GROUPS (dependencies wins): pnpm records a single importer entry, so unioning the
+ *  duplicate copy would grow a second declaration frozen rejects. */
 function manifestEdges(manifest) {
   const edges = []
+  const declared = new Set()
   for (const group of DEP_GROUPS) {
     const deps = manifest[group]
     if (typeof deps !== 'object' || deps === null) continue
     for (const [name, specifier] of Object.entries(deps)) {
-      if (typeof specifier === 'string' && specifier !== '') edges.push({ group, name, specifier })
+      if (declared.has(name)) continue
+      if (typeof specifier === 'string' && specifier !== '') {
+        edges.push({ group, name, specifier })
+        declared.add(name)
+      }
     }
   }
   return edges
@@ -165,9 +186,11 @@ function buildEdgeLines(edge) {
  * pnpm prunes the whole record on a structural re-resolve, so the restored HEAD record
  * predates edges the upgrade just added; restoring it alone leaves frozen with no repair
  * path. Existing lines are never reordered or rewritten: additions are spliced into the
- * pnpm-sorted positions (groups alphabetical, entries by name). A registry range is
- * written verbatim as the version so frozen rejects it loudly — never a guessed version.
- * Returns the number of edges added (0 = block untouched).
+ * pnpm-sorted positions (groups alphabetical, entries by name). A name the record already
+ * carries in ANY group is never duplicated (pnpm keeps one entry per name; manifestEdges
+ * already collapses a name declared in several groups to the dependencies-first edge).
+ * A registry range is written verbatim as the version so frozen rejects it loudly — never
+ * a guessed version. Returns the number of edges added (0 = block untouched).
  */
 function unionImporterEdges(lines, manifest) {
   const edges = manifestEdges(manifest)
@@ -187,6 +210,12 @@ function unionImporterEdges(lines, manifest) {
     }
     groups.set(header[1], { name: header[1], headerIndex: index, end, names, inlineEmpty: header[2] !== undefined })
   }
+  // pnpm records ONE importer entry per name. A name already restored from HEAD in ANY
+  // group must not be duplicated when the CURRENT manifest names another group as winner
+  // (the 5 rc.2 cross-group cases: the HEAD record keeps `dependencies`, the manifest also
+  // declares `devDependencies`). A genuine group migration is left for frozen to reject.
+  const recordedNames = new Set()
+  for (const group of groups.values()) for (const entry of group.names) recordedNames.add(entry.name)
   const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
   const buckets = new Map()
   const bucketFor = (at) => {
@@ -198,6 +227,7 @@ function unionImporterEdges(lines, manifest) {
   const missingGroups = new Map()
   let added = 0
   for (const edge of edges) {
+    if (recordedNames.has(edge.name)) continue
     const group = groups.get(edge.group)
     if (group === undefined) {
       if (!missingGroups.has(edge.group)) missingGroups.set(edge.group, [])
@@ -438,7 +468,7 @@ if (addedImporters === 0 && unionedEdges === 0 && addedPackages === 0 && addedSn
 }
 
 if (checkOnly) {
-  console.error(`[restore-lockfile] 检测到缺失：vendor importer ${addedImporters} 条、specifier 边 ${unionedEdges} 条、packages ${addedPackages} 条、snapshots ${addedSnapshots} 条。`)
+  console.error(`[restore-lockfile] 检测到缺失：vendor importer ${addedImporters} 条、specifier 边 ${unionedEdges} 条（同一包名跨依赖组只补一条，dependencies 优先）、packages ${addedPackages} 条、snapshots ${addedSnapshots} 条。`)
   console.error('[restore-lockfile] 请执行 node scripts/upstream/pin/restore-lockfile-vendor-records.mjs 修复后再提交。')
   process.exit(1)
 }

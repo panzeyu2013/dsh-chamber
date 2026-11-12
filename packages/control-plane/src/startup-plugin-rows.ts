@@ -193,8 +193,11 @@ function workspacePackageAnchors(workspacePath: string): [string, string] {
 }
 
 /** True when the user profile patch already mounts this loader id or package name.
- *  Reuse is the loader contract: a duplicated identity would fail the next boot. */
-function profileOwnsStartupRow(profilePatch: string | null, identity: StartupPluginIdentity): boolean {
+ *  Reuse is the loader contract: a duplicated identity would fail the next boot.
+ *  Exported for the local overlay's bundle-row disable decision: a user-mounted
+ *  skill-office row is a live local mount too, so it needs the same duplicate guard as
+ *  the planner's own row. */
+export function profileOwnsStartupRow(profilePatch: string | null, identity: StartupPluginIdentity): boolean {
   if (profilePatch === null) return false
   return parseLoaderRows(profilePatch).some(row => row.ids.includes(identity.id) || row.names.includes(identity.name))
 }

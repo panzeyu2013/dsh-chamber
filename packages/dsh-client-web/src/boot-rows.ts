@@ -14,18 +14,19 @@ export const MODULES_ID = '@deepseek-ai/dsh-client-modules'
 export const UI_RENDERER_ID = '@deepseek-ai/dsh-client-ui-renderer'
 
 /**
- * The loader entries whose inactivity fails the boot: the two kernel-adopted rows,
- * and only those.
+ * Kernel-adopted loader entries whose inactivity fails the boot.
  *
  * rc.2 moved the audit to a required-name roster (packages/client/web/src/boot-client.ts:
  * "the minimum fatal set"). Re-derived for the chamber page it collapses to the kernel
  * rows: every other id in that roster is composite-covered — the composite statically
  * registers it and the host-graph merge drops its row (chamber-covered.ts) — so it can
  * never exist as a loader entry here, and a name absent from the manifest has no effect.
- * Manifest rows and per-instance extra rows are host-graph facts that version-skew
- * independently of this page, so they degrade instead of failing the boot; the shell's
- * required-service probe (renderer required-extra-rows.ts) reports the gaps a degraded
- * row leaves behind.
+ * The page's build-time manifest row(s) are appended to the fatal set when the audit runs:
+ * the manifest is built at build time (it carries only the chamber composite bundle), so
+ * an inactive manifest row is corruption, not version skew. Per-instance extra rows are
+ * host-graph facts that DO version-skew independently of this page, so they degrade
+ * instead of failing the boot; the shell's required-service probe (renderer
+ * required-extra-rows.ts) reports the gaps a degraded row leaves behind.
  */
 export const REQUIRED_BOOT_ROW_IDS: readonly string[] = [MODULES_ID, UI_RENDERER_ID]
 

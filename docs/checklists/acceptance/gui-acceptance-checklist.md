@@ -126,7 +126,7 @@
 
 |腿|怎么跑|看什么|留什么|
 |---|---|---|---|
-|装配|先 `node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm` + `node packages/desktop/scripts/prepare-office-assets.mjs`；再 `pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`/发布腿 `--require-*`）|装配目录齐 sidecar.js / dist/control-plane / vendor / pnpm / primary-runtime（payload：node·pnpm·python）/ office-skills（8 文件）；单 Node 在 primary-runtime 内|命令与退出码|
+|装配|先 `node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm` + `node packages/desktop/scripts/prepare-office-assets.mjs`；再 `pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`/发布腿 `--require-*`）|装配目录齐 sidecar.js / dist/control-plane / vendor / pnpm / primary-runtime（payload：node·pnpm·python）/ office-skills（4 文件）；单 Node 在 primary-runtime 内|命令与退出码|
 |本机 .app|`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）|`.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/primary-runtime/dependencies/node/bin/node` 可执行、`sidecar/office-skills/office/SKILL.md`、`Sparkle.framework`|产物路径 + `du`/`hdiutil attach` 结论|
 |Swift 套件|`pnpm run test:swift`|executed>0、failures==0、**skipped==0**（G23 no-skip 纪律）|runner 收尾行|
 |macOS JS 腿|`pnpm run test:macos`|darwin 锁断言 + 打包脚本套件；skipped>0 即红|退出码|

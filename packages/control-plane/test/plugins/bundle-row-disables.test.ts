@@ -192,7 +192,10 @@ test('the panel ids are addressable after the rc.2 flatten (no group row)', () =
     'top-level rows are found at the depth the loader indexes them')
 })
 
-test('a misspelled/absent id in an ENABLED bundle is fail-closed', () => {
+test('a RENAMED row (same package, other id) in an ENABLED bundle is fail-closed', () => {
+  // The disable is id-targeted; if upstream moved the package to another id the overlay
+  // would silently no-op and the duplicate mount would only surface later. The package
+  // name is still present, so this is a rename, never a legitimate absence.
   assert.throws(
     () => resolveBundleRowDisables({
       enabledBundles: [FORGE_BUNDLE_PACKAGE_NAME],
@@ -200,7 +203,59 @@ test('a misspelled/absent id in an ENABLED bundle is fail-closed', () => {
       targets: [{ ...TARGET, id: 'forge-githb' }],
       log() {},
     }),
-    /mounts no row with id 'forge-githb'.*fail-closed/,
+    /binds package '@deepseek-ai\/dsh-experimental-forge-github'.*instead of 'forge-githb'.*fail-closed/,
+  )
+})
+
+// rc.1 web-app mount list: no skill-office row at all (the row only appeared in rc.2).
+const RC1_WEB_APP_PATCH = `- insert:
+    - id: office-to-pdf
+      name: '@deepseek-ai/dsh-office-to-pdf'
+`
+
+test('an ABSENT target row is skipped with a diagnostic (older runtime rollback must spawn)', () => {
+  const logs: string[] = []
+  const disables = resolveBundleRowDisables({
+    enabledBundles: ['@deepseek-ai/dsh-base', WEB_APP_BUNDLE_PACKAGE_NAME],
+    readBundlePatches: readable([RC1_WEB_APP_PATCH]),
+    targets: [WEB_APP_SKILL_OFFICE_ROW],
+    log: message => { logs.push(message) },
+  })
+  assert.deepEqual(disables, [], 'nothing to disable in an older runtime: the row does not exist')
+  assert.equal(logs.length, 1)
+  assert.ok(logs[0]!.includes('skill-office'), logs[0])
+  assert.match(logs[0]!, /nothing to disable — skipped/)
+})
+
+test('the rc.2 row present still yields the disable (absence tolerance does not weaken rc.2)', () => {
+  const v2 = `- insert:
+    - id: skill-office
+      name: '@deepseek-ai/dsh-skill-office'
+`
+  assert.deepEqual(
+    resolveBundleRowDisables({
+      enabledBundles: [WEB_APP_BUNDLE_PACKAGE_NAME],
+      readBundlePatches: readable([v2]),
+      targets: [WEB_APP_SKILL_OFFICE_ROW],
+      log() {},
+    }),
+    [{ id: WEB_APP_SKILL_OFFICE_ROW.id, name: WEB_APP_SKILL_OFFICE_ROW.name }],
+  )
+})
+
+test('a renamed skill-office row (same package, other id) stays loud', () => {
+  const renamed = `- insert:
+    - id: office-skills
+      name: '@deepseek-ai/dsh-skill-office'
+`
+  assert.throws(
+    () => resolveBundleRowDisables({
+      enabledBundles: [WEB_APP_BUNDLE_PACKAGE_NAME],
+      readBundlePatches: readable([renamed]),
+      targets: [WEB_APP_SKILL_OFFICE_ROW],
+      log() {},
+    }),
+    /binds package '@deepseek-ai\/dsh-skill-office'.*instead of 'skill-office'.*fail-closed/,
   )
 })
 

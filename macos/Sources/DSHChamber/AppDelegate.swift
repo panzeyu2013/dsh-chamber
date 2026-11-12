@@ -1476,7 +1476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let pasteAndMatch = editMenu.addItem(withTitle: pasteAndMatchStyleTitle, action: Selector(("pasteAndMatchStyle:")), keyEquivalent: "v")
         pasteAndMatch.keyEquivalentModifierMask = [.command, .shift]  // rc.2 主 binding = ⇧⌘V（vendor main.ts:1171-1196）
         let pasteAndMatchAlias = editMenu.addItem(withTitle: pasteAndMatchStyleTitle, action: Selector(("pasteAndMatchStyle:")), keyEquivalent: "v")
-        pasteAndMatchAlias.keyEquivalentModifierMask = [.command, .option, .shift]
+        pasteAndMatchAlias.keyEquivalentModifierMask = [.command, .option, .shift]; pasteAndMatchAlias.allowsKeyEquivalentWhenHidden = true
         pasteAndMatchAlias.isHidden = true  // 兼容别名 = Electron 44 的 ⌥⇧⌘V（visible:false + acceleratorWorksWhenHidden 同义）
         editMenu.addItem(withTitle: NativeText.string(.menuDelete), action: Selector(("delete:")), keyEquivalent: "")
         editMenu.addItem(withTitle: NativeText.string(.menuSelectAll), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")

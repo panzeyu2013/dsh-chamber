@@ -25,7 +25,9 @@ import {
 import { planHostLogBridge } from './host-log-bridge.ts'
 import { isSafeModeEnabled } from './safe-mode.ts'
 import {
+  STARTUP_PLUGIN_ROWS,
   planStartupPluginRows,
+  profileOwnsStartupRow,
   renderStartupPluginInserts,
   type StartupPluginCapabilities,
   type StartupPluginRow,
@@ -227,29 +229,14 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   // The callback fires on the empty set too, so a previously seeded plane resets instead of keeping a stale domain list.
   input.onSeededProbeDomains?.(available.flatMap(entry => entry.probeDomains))
 
-  // P5b-0: resolve the bundle-row disables BEFORE any profile write and BEFORE the
-  // no-seed-entries early return. A disable-only overlay is valid; skipping the
-  // resolution when every chamber seed row is absent would leave a forge-enabled
-  // GitHub provider enabled. An enabled bundle whose row identity cannot be proven
-  // is fail-closed here, so a misspelled id never leaves a half-refreshed profile.
-  const bundleDisables = resolveBundleRowDisables({
-    enabledBundles: profileBundleLayer(dshHome),
-    readBundlePatches: profileBundlePatchReader({ dshHome, dshWorkspacePath: input.dshWorkspacePath }),
-    // Tests pin their own list; the production default adds the web-app office-row
-    // disable exactly when this spawn mounts the local office-skills row (rc.2 double
-    // mount would throw in the skill registry — see bundle-row-disables.ts).
-    targets: input.bundleRowDisables ?? bundleRowDisableTargetsForSpawn({
-      mountsLocalOfficeSkills: input.startupPluginCapabilities?.officeSkillsDir !== undefined,
-    }),
-    log,
-  })
   // The user profile patch is read ONCE here: the startup rows' reuse decision and the
   // chamber rows' identity reconciliation below must see the same layer.
   const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
   const profilePatch = existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null
-  // Startup upstream rows (Swift local-only): gated per capability root, appended to this
-  // same overlay. Planner failures are limited to relative capability roots (programming
-  // errors); a missing payload/assets tree or a user-owned row is a diagnosed skip.
+  // Startup upstream rows (Swift local-only): pure planning (no writes), gated per
+  // capability root and appended to this same overlay. Planner failures are limited to
+  // relative capability roots (programming errors); a missing payload/assets tree or a
+  // user-owned row is a diagnosed skip.
   let startupRows: StartupPluginRow[] = []
   if (input.startupPluginCapabilities !== undefined) {
     if (input.dshWorkspacePath === undefined || input.dshWorkspacePath === null) {
@@ -265,6 +252,28 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
       })
     }
   }
+  // Does THIS spawn actually mount a local skill-office row? Only then may the bundle's
+  // own row be force-disabled: capability presence alone is not a mount (the planner
+  // skips on an absent/incomplete assets tree or an uninstalled workspace package), and
+  // disabling there would remove the only office mount. A user-profile row with the same
+  // identity is a live local mount too (the planner's own row is reused, not repeated).
+  const mountsLocalOfficeSkills = input.startupPluginCapabilities !== undefined
+    && (startupRows.some(row => row.id === STARTUP_PLUGIN_ROWS.officeSkills.id)
+      || profileOwnsStartupRow(profilePatch, STARTUP_PLUGIN_ROWS.officeSkills))
+  // P5b-0: resolve the bundle-row disables BEFORE any profile write and BEFORE the
+  // no-seed-entries early return. A disable-only overlay is valid; skipping the
+  // resolution when every chamber seed row is absent would leave a forge-enabled
+  // GitHub provider enabled. An enabled bundle whose row identity cannot be proven
+  // is fail-closed here, so a misspelled id never leaves a half-refreshed profile.
+  const bundleDisables = resolveBundleRowDisables({
+    enabledBundles: profileBundleLayer(dshHome),
+    readBundlePatches: profileBundlePatchReader({ dshHome, dshWorkspacePath: input.dshWorkspacePath }),
+    // Tests pin their own list; the production default adds the web-app office-row
+    // disable exactly when this spawn mounts a local office row (rc.2 double mount would
+    // throw in the skill registry — see bundle-row-disables.ts).
+    targets: input.bundleRowDisables ?? bundleRowDisableTargetsForSpawn({ mountsLocalOfficeSkills }),
+    log,
+  })
   if (available.length === 0 && bundleDisables.length === 0 && startupRows.length === 0) {
     clearHostGraphPatchOverlay(stateDir)
     return null

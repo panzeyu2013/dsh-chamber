@@ -177,8 +177,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // while dsh-chamber-seed-open-in is seeded — so both directory entries render null
   // here. The effective directory-open entry is
   // @dsh-chamber/dsh-chamber-client-ui-open-in (id open-in) in BOTH slots (header
-  // order -10 beside the vendor Session log; the rc.2 Files hole at the default
-  // order the official occupant uses); the ids differ, so list entries coexist, and
+  // order -10 beside the vendor Session log; the Files-tab actions hole at the
+  // default order the official occupant uses); the ids differ, so list entries coexist, and
   // if the official entries ever become live the shell shows two directory entries —
   // the residual risk registered in design 20 §7.2 and the checklist §4.6 row.
 ]
