@@ -453,9 +453,10 @@
 
 /* Row hover card (chamber-owned port): RowHoverCard portals the
    card to document.body with the official HoverCard's card box — 244 wide, r12,
-   pad 12/16, the menu card's elevation, #2C2C2E in both themes (figma value,
-   not a theme token, exactly as ui-primitives/HoverCard.module.css declares
-   it). The atom is chamber-owned because the vendored one strands a card when
+   pad 12/16, the menu card's elevation, #2C2C2E in both themes (the same value
+   as the upstream --dsw-alias-hovercard-bg token; the vendored box tokenizes it,
+   this port keeps the literal). The atom is chamber-owned because the vendored
+   one strands a card when
    the pointer leaves inside its open-commit window; the measured defect is
    documented in dsh-chamber-client-core/src/hover-intent.ts. The card is hit-testable on
    purpose: resting the pointer on it holds it open (the intent's grace close

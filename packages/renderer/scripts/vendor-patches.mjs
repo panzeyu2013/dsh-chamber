@@ -249,7 +249,7 @@ export const VENDOR_PATCHES = Object.freeze([
     ]),
     noRetireForm: NO_RETIRE_FORM_ENTRY_BASE_API,
     vendorFile: 'dsh-session-log-export/src/client/controller.ts',
-    reason: 'document-relative export URL resolves to the control-plane root in the N-ctx shell (the /export dialog and header action 404)',
+    reason: 'document-relative export URL resolves to the control-plane root in the N-ctx shell (the /export dialog URL and shell.overlay download 404)',
     edits: Object.freeze([
       Object.freeze({
         expect: '  readonly store: SnapshotStore<SessionLogDownloadState> = createSnapshotStore(INITIAL)\n'
@@ -749,7 +749,8 @@ export const VENDOR_PATCHES = Object.freeze([
         // The overlay registration was the only writer of that flag
         // (:278-280 setVisible/publish), so gating the branch alone would leave
         // desktopOnboardingVisible truthy forever and permanently suppress the
-        // upstream AccountNoticeStack (AccountMenu reads !desktopOnboardingVisible).
+        // upstream account menu (AccountMenu reads !desktopOnboardingVisible; the
+        // rc.2 AccountNoticeStack component itself no longer exists).
         expect: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop,',
         replace: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop && (globalThis as { __dshChamberAccountOverlay?: boolean }).__dshChamberAccountOverlay === true,',
       }),

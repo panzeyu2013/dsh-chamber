@@ -24,7 +24,7 @@ office-xlsx/SKILL.md
 ```sh
 # 演练（不写盘）：
 node packages/desktop/scripts/prepare-office-assets.mjs --dry-run
-# 真实落位（逐文件 temp+rename 覆盖；保留本 README；清非期望顶层残留；写完自检）：
+# 真实落位（逐文件 temp+rename 覆盖；保留本 README；递归清非期望文件/目录（含期望目录内陈旧文件）；写完自检）：
 node packages/desktop/scripts/prepare-office-assets.mjs
 # 完整性判定（清单文件全部在场；源可用时逐文件 sha256；打包后对 bundle 内路径复核同一命令）：
 node packages/desktop/scripts/prepare-office-assets.mjs --verify packages/desktop/resources/office-skills

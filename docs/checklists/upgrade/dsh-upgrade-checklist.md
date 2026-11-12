@@ -32,7 +32,7 @@
 - [ ] 首屏耦合审计：上游新增/改名的官方 client 行若被复合首屏 inject → 同步 host-graph 降级注释；探针集合是派生的（不用加名字），但命名空间不再导出 `inject` 的漂移由 `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐 id 表兜底。
 - [ ] 上游 release body 的四节（新增功能 / 体验优化 / 问题修复 / 其他变更）与 `docs/upgrade-guide/<tag>/` 逐条过一遍（该目录**可能整代缺席**，缺席不等于无破坏变更）：落在 chamber 托管面（profile patch / bundles、chamber 注入的 settings、chamber 读的 session 日志、chamber 渲染的官方客户端面）的破坏写进 design / STATUS；不落本仓的记「无消费者」一句。
 - [ ] SlotMap 座席键差集：对 `packages/client/**/src` 抽取 `SlotMap` 声明键与各洞的占用者（注册方），与上一代逐键对比；新增/改名/删除的键与新增占用者逐条列出——**侧栏（`sidebar.*`）与 `sidebar.right.*` 的新内容一律上报用户裁决**，其余新座席也登记，不静默跟随（与 §7 第 5 步同一纪律）。
-- [ ] **P5b forge 面（升级即复验）**：目标 pin 仍提供 `@deepseek-ai/dsh-experimental-forge-bundle` 与六个依赖包（worktree / tool-worktree / forge / forge-github / forge-session / client-ui-forge）；`cordis.patch.yml` 的六个平铺 loader 行形状未变（当前 pin = `worktree`、`tool-worktree`、`forge`、`forge-github`、`forge-session`、`forge-panel`，单一 `worktree` 服务；若上游重新引入组行/隔离服务，先改 overlay 与单测再放行）；bundle 仍默认 OPTIONAL / EXPERIMENTAL 且未预置启用。另复验归档清树面：`retainOnArchive` 默认 false、只清本服务创建且 owned 的 checkout、无 `sessions.delete` wire（design 24 §11 的边界段）。P5b-0 的 `bundle-row-disables` 用例须绿：未启用 bundle = 幂等跳过 + 诊断；已启用但 id 缺失 / 绑错包 / patch 不可读 / 重复 = fail-closed。若上游改了行 id 或组形状，先改 overlay 与单测，不得放行实例启动。
+- [ ] **P5b forge 面（升级即复验）**：目标 pin 仍提供 `@deepseek-ai/dsh-experimental-forge-bundle` 与六个依赖包（worktree / tool-worktree / forge / forge-github / forge-session / client-ui-forge）；`cordis.patch.yml` 的六个平铺 loader 行形状未变（当前 pin = `worktree`、`tool-worktree`、`forge`、`forge-github`、`forge-session`、`forge-panel`，单一 `worktree` 服务；若上游重新引入组行/隔离服务，先改 overlay 与单测再放行）；bundle 仍默认 OPTIONAL / EXPERIMENTAL 且未预置启用。另复验归档清树面：`retainOnArchive` 默认 false、只清本服务创建且 owned 的 checkout、无 `sessions.delete` wire（design 24 §11 的边界段）。P5b-0 的 `bundle-row-disables` 用例须绿：未启用 bundle = 幂等跳过 + 诊断；已启用但目标 id 缺失 = 跳过 + 诊断（旧运行时/退役行）；改名（同包名换 id）/ 绑错包 / patch 不可读 / id 重复 = fail-closed。若上游改了行 id 或组形状，先改 overlay 与单测，不得放行实例启动。
 - [ ] vendor 补丁退休评估（drift I-7）：C9 三分——锚点命中 = 绿；锚点缺失且某条 `retireCheck` 命中 = `retire-candidate`（**仍 release-blocking**），remediation = 把该条移入 `vendor-patches.mjs` 的 `RETIRED_PATCHES`（`ensure` = 上游修复原文、必须唯一命中），同批删除补丁条目与 `verify-vendor-patch-applied` 的产物 marker，并同步 design 09 §3.6/§3 与触点表；锚点缺失且 `retireCheck` 未命中 = drift，按新 pin 重导补丁。`noRetireForm` 条目以登记理由为准。新增/重放补丁按 design 09 §3.6 的四类准入裁决；第四类（多实例正确性）只在页面级事实无法由 chamber 包重新 scoped 时准入：scope 取 per-entry `chamberBasePath`（页面级事实），或取监听器所属挂载自己的 DOM 子树祖先（document 级事件注册表，per-mount；禁页面全局事实与 URL 猜测，且每个 document 级副作用都要同一判定）；上游自带 scope 后删除。
 
 ## 2. 双线 pin 一致性
@@ -60,12 +60,14 @@
 
 - [ ] 源码线锁文件由 `update-vendor.mjs` 原子重生成（非 frozen → `restore-lockfile-vendor-records.mjs` 补回 → frozen 验证）；**重生成前不要单独跑 `ensure` 默认模式**（断言滞后属预期）。
 - [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/upstream/pin/restore-lockfile-vendor-records.mjs` 补回（只补 HEAD 已有成员）；**新增 vendor 包的 importer 由 `update-vendor` 第 6 步的非 frozen install 自动写入**（整块 dependencies/devDependencies，无需手写），restore 补不回新成员；仅当 pnpm 把新成员也裁掉时才 `pnpm install --lockfile-only` 重生成后重跑 restore。已删除成员不得被复活（守卫见其 `.test.mjs`）。
-- [ ] 已有成员的依赖集变化：脚本只增不减，pnpm 裁掉该段时会复活旧记录（缺新依赖边）⇒ frozen 报 `specifiers don't match`。判据 = `update-vendor` 第 6 步的 frozen 安装；失败时按字母序手工补该成员的新依赖边。
+- [ ] 已有成员的依赖集变化：restore 按**包名去重**（优先级 dependencies > devDependencies > optional）后只补缺失边，**同包跨依赖组的重复声明自动收敛为一条**；pnpm 裁掉整段时仍会复活 HEAD 旧记录，缺新依赖边 ⇒ frozen 报 `specifiers don't match`。判据 = `update-vendor` 第 6 步的 frozen 安装；仅**分组迁移**（同包从 deps 移到 dev 等，pnpm canonical 只保留胜出组）需人工裁决，以 frozen 报错为准。
 - [ ] 收口：`pnpm install --frozen-lockfile` 通过、`ensure-harness-vendor.mjs --check` 通过、`git diff --exit-code -- pnpm-lock.yaml` 为空。
 
 ## 5. 捆绑运行时
 
 - [ ] 换 pin 必须显式驱动版本：`DSH_CHAMBER_DSH_VERSION=<目标版本> pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile`（runtime 锁文件版本变化时必须 `--refresh-lockfile`，否则 `ERR_PNPM_OUTDATED_LOCKFILE`）。脚本的默认版本从**已提交的** runtime 锁派生（`lockfileDshVersion()`），只改锚不会让默认值变成目标版本，`--force` 会把旧版本原地刷新（版本已对齐且无需重装时 `--force` 可省）。
+- [ ] 运行时锁的 `patchedDependencies` 哈希随 `--refresh-lockfile` 派生：上游补丁字节（如 `@yao-pkg/pkg`）变化后旧锁哈希会让 `upstream-patches.test.mjs` 红，重生成即转绿（不手工改锁）。
+- [ ] C11 白名单按**新运行时锁**重 derive：`packages/control-plane/src/runtime-family.ts` 的 `RUNTIME_FAMILY_OPT_IN_ALLOWED` 只登记**实测在运行时闭包内**的 `dsh-experimental-*` 名字；运行时有增删时按新锁增删——源码线增删不影响该白名单（C11 的 F 分量只认运行时锁）。
 - [ ] 冒烟：`node packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version` = 目标版本。
 - [ ] `allowBuilds` / `DENY_BUILDS` 复核：上游新增原生依赖时显式裁决（单源生成点 + 测试钉住），不留沉默的 ignored builds。
 - [ ] 上游 patch 集合变化（§17-C）：先 `cmp` 新旧补丁文件内容——**文件名变化不等于语义变化**（同字节改名只换登记锚）；内容确有变化才按四类准入重导 / 重锚。随后对拍 `vendor/harness-checkout/{pnpm-workspace.yaml,patches/}` 的 `patchedDependencies` 与 registry 的 `patches`（`node --test scripts/upstream/registry/registry.test.mjs`），再跑 `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile` 让 runtime lock 记录 patch set；`node --test packages/desktop/scripts/upstream-patches.test.mjs` 在集合漂移或 runtimeClosure 条目未解析出 patch_hash 时红（pnpm 对「图外条目」与「在图但版本不符」的条目都只警告；本仓的 `assertPatchesApplied` 对**图内**条目缺失 `patch_hash` 直接红，补丁**字节**漂移由 `upstream-patches.test.mjs` 的 vendor sha256 对拍 + 冻结安装的 `patchedDependencies` 配置校验兜底）。
@@ -84,5 +86,5 @@
 
 - [ ] 迁移叙述（pin、fork rebase 面、适配面、验证结论）写 `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节——**发版时才写**（升级提交本身不动 CHANGELOG），随后 `node scripts/gates/checks/verify-i18n.mjs --write` 刷新 i18n 记录。
 - [ ] 触点结构变更走 registry：`registry.json` → `registry-views.mjs --write` → `verify-registry.mjs` 绿。
-- [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop README、本目录）更新版本号，历史叙述保留；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
+- [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop README、本目录）按**单源指针**更新（`harness.commit` / `packages/desktop/vendor/dsh/pnpm-lock.yaml`），**design/checklists 不写当前版本值**（docs/AGENTS §3）；历史叙述保留并按需标注「历史证据，不随本仓 pin 移动」；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
 - [ ] 遗留偏差登记进 [`../../progress/STATUS.md`](../../progress/STATUS.md)（只写仍 open 的项，不留已完成台账）；实机门禁按 release / acceptance 清单执行，不在 STATUS 登记。版本值不写进 checklist。

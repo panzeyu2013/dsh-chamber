@@ -2,12 +2,12 @@
 /**
  * prepare-python-payload.mjs —— python 载荷（primary runtime）的下载 / 校验 / 落位。
  *
- * 上游口径（vendor/harness-checkout/apps/desktop/scripts/prepare-primary-runtime.ts）：
+ * 上游口径（vendor/harness-checkout/scripts/primary-runtime/prepare.ts）：
  * 打包态不自带宿主机装的解释器，而是按一份锁下载 relocatable 的 CPython + 平台轮子，
  * 解到 bundle 内的只读载荷目录，再在首次使用时**安装**到可写的 dsh home
- * （apps/desktop-host/src/primary-runtime.ts 的 installPrimaryRuntime），最后由宿主工具
+ * （packages/skill/tool-workspace-dependencies/src/index.ts 的 installPrimaryRuntime），最后由宿主工具
  * load_workspace_dependencies 把绝对路径交给模型——**不改 PATH、不注入 env**
- * （apps/desktop-host/src/workspace-dependencies.ts 的工具描述逐字写明）。
+ * （同文件的工具描述逐字写明）。
  * 本脚本负责前半段：解析锁 → 按 URL 下载 → 逐件 sha256 校验 → 解到载荷布局 → 写
  * runtime.json；后半段（安装 + 路径暴露）属上游 desktop-host app，本仓不运行它。
  *

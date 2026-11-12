@@ -4,7 +4,7 @@
    (`conversation.session.header.utilities`, the same right-aligned row as the
    vendor "Session log" action), so this control adopts the OFFICIAL open-in
    split button's own geometry rule for rule — copied from the pinned vendor
-   `@deepseek-ai/dsh-client-ui-open-in-app/lib/client.js`
+   `@deepseek-ai/dsh-client-ui-open-in-app/src/client/OpenInAppAction.module.css`
    (`OpenInAppAction.module.css`): `.split` 28px / `border-l4` / r14, `.main`
    a 15px mark, `.chevron` an 11px mark behind a `border-left` hairline, menu
    rows an 18px mark. That is exactly the row's own control height measured

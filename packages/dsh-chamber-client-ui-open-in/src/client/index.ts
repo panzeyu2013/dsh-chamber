@@ -66,7 +66,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-/** The official conversation header utilities slot (beside "Session log"). */
+/** The official conversation header utilities slot (page-own open-in entry). */
 const OPEN_IN_HEADER_SLOT = 'conversation.session.header.utilities' as const
 /** The official Files-tab directory-actions slot (rc.2). */
 const FILES_ACTIONS_SLOT = 'sidebar.right.tab.files.actions' as const
@@ -148,8 +148,8 @@ export function apply(ctx: ClientContext): void {
     // coexist: the registry THROWS on a duplicate id at one priority.
     id: 'open-in',
     // Row order ascends by `order` (default 0). -10 is the official `open-in-app`
-    // row's own value, which keeps the vendor "Session log" entry (0) at the far
-    // right and places this button to its left.
+    // row's own value; the vendor Session-log header action this used to neighbour
+    // was removed upstream, so the button sorts left of default-0 entries.
     order: -10,
     // Neutral entry label (slot diagnostics — the user-facing copy comes from the component).
     label: () => t('titleOpen'),
@@ -166,8 +166,8 @@ export function apply(ctx: ClientContext): void {
     name: FILES_ACTIONS_SLOT,
     id: 'open-in',
     // No order: the official occupant keeps the default 0 and this hole has no
-    // "Session log at order 0" neighbour to sort against — list rows otherwise
-    // render in ledger order. Same inject closure as the header seat, so both
+    // default-0 neighbour to sort against — list rows otherwise render in ledger
+    // order. Same inject closure as the header seat, so both
     // seats share one per-source adapter and one per-source choice.
     label: () => t('titleOpen'),
     inject: injected,

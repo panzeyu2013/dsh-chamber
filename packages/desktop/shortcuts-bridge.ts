@@ -18,7 +18,7 @@
  *
  * Upstream parity: the before-input-event decision table, the chord/dead-key
  * bookkeeping, the 'only matching input is delivered' rule and the persistence
- * transaction are the rc.2 apps/desktop/src/keyboard.ts + keybindings.ts
+ * transaction are the pinned upstream apps/desktop/src/keyboard.ts + keybindings.ts
  * semantics, including the scopedDesktop gate: Linux keeps DOM dispatch for
  * main-document shortcuts and only forwards accepted embedded-frame bindings.
  * The upstream protocol implementation itself is loaded from the

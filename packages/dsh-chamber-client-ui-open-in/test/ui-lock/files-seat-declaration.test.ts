@@ -71,7 +71,7 @@ test('the header seat keeps its own registration (id/order/component/label)', ()
   assert.ok(headerEnd > 0, 'the header registration block must close on its component')
   const headerBlock = header.slice(0, headerEnd)
   assert.match(headerBlock, /id: 'open-in'/)
-  assert.match(headerBlock, /order: -10/, 'keeps the vendor Session log (order 0) at the far right')
+  assert.match(headerBlock, /order: -10/, 'matches the official open-in row order (sorts before default-0 entries)')
   assert.match(headerBlock, /inject: injected,/)
   const registrations = [...index.matchAll(/ctx\.slots\.register\(/g)]
   assert.equal(registrations.length, 2, 'exactly two seat registrations (header + rc.2 Files hole)')

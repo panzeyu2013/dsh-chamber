@@ -23,7 +23,7 @@
  * （warn 门 = 实测 + ~1% = 329,500，同为 warn-only）。阈值不是历史账本：结构改动
  * 落地后按新实测值回填阈值并更新本注释，防止它变成下一份过期注释。
  *
- * 上一版阈值（chamberEntry 7,829,000 / headCss 304,300）量自 0.2.1-alpha.3 代
+ * 上一版阈值（chamberEntry 7,829,000 / headCss 304,300）量自 0.2.1-alpha.3 代（0.2.2-rc.2 代实测 8,556,539 / 339,104，本版按实测 + ~1% 回填 warn 8,650,000 / 342,500；mainGraph 仍 1,914,607 不动）
  * （实测 7,751,254 / 301,241），此后跨 0.2.1-rc.3、0.2.2-alpha.2、0.2.2-alpha.3 三代
  * pin 未再回填：0.2.2-alpha.2 代构建已到 8,182,347 / 320,696（当时代只 warn 未回填），
  * 0.2.2-alpha.3 到 8,443,546 / 326,261。同一跨度内共享图只 +0.3%（1,908,997 →
@@ -53,8 +53,8 @@ const SIZES_OUT = fileURLToPath(new URL('../../desktop/dist/web/perf-sizes.json'
 /** 阈值（raw bytes）。校准基线见文件头注释。 */
 const THRESHOLDS = {
   mainGraphRaw: { warn: 1_950_000, fail: 2_060_000 },
-  chamberEntryRaw: { warn: 8_528_000 },
-  headCssRaw: { warn: 329_500 },
+  chamberEntryRaw: { warn: 8_650_000 },
+  headCssRaw: { warn: 342_500 },
 }
 
 function fail(message) {

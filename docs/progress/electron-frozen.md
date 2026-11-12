@@ -40,6 +40,7 @@
 
 ## 3. 仍共享的契约（不冻结）
 
+
 | 契约 / 文件 | 单源与落点 | 为什么必须继续维护 |
 |---|---|---|
 | `packages/desktop/ipc-events.ts` | `IPC_CHANNELS`：主进程侧通道名单一来源 | A 桥 / B 桥、manifest 生成物、preload 锁步测试都读它；新通道唯一入口 |
@@ -47,6 +48,7 @@
 | `packages/desktop/shell-core.ts` | Electron-free 业务装配 + IPC 处理器注册面 | Swift sidecar 的运行核心 |
 | `packages/desktop/host-assembly.ts` | 两 flavor 共享的宿主装配单一实现（`createHostAssembly(deps)`） | `main.ts`（冻结）与 `sidecar-ctx.ts`（现行）只注入各自 edge 差异；不得因冻结而拆回两套 |
 | `packages/desktop/{shell-assembly-ctx,shell-ipc-*,runtime-startup-host,host-registry-transition,host-exit,node-edges,sidecar-entry,sidecar-ctx}.ts` | sidecar / 共享业务装配 | Swift 腿现行代码 |
+| `packages/renderer/src/global.d.ts` 的 `DshDesktopCarrier`/`DesktopUpdatePresentation` 类型镜像 | 页面侧 `dshDesktop` 类型声明（实现由 Swift shim 提供） | 与官方 carrier 面保持 sync：当前**未补** rc.2 optional 成员（`DesktopUpdateState.downloadFailure?`、更新呈现 `configurationError?`、`updates.channels` 渠道桥）——**仅声明面、无运行期差异**，下次桥面重放补齐或显式登记不采纳 |
 | `packages/desktop/updater.ts` 的纯函数 | 更新控制器共享叶 | Swift `update-headless.ts` 直接复用（见 §2）；改动需双 flavor（Electron 冻结时只保证 Swift 腿 + 纯函数契约） |
 | `packages/desktop/bridge-manifest.json` + `macos/Sources/DSHChamber/Generated/BridgeManifest.swift` + `macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js` | A 桥 manifest 三生成物（`packages/desktop/scripts/emit-bridge-manifest.mjs` 产出） | Swift 白名单 / shim 的通道单源；生成器仍读 `ipc-events.ts` 与 `MAIN_SIDE_FILES`（含归档的 `electron/main.ts` / `electron-edges.ts`，见 §5 白名单政策） |
 | `scripts/gates/checks/verify-electron-artifacts.mjs`、`packages/desktop/scripts/electron-shared.mjs` | 归档件，但被**共享测试/工具只读引用** | 登记为只读依赖：`verify-electron-artifacts.mjs` 的纯判定函数仍被 `run-checks.test.mjs` 与 `after-pack-adhoc-sign.test.mjs` 引用（执行面 `--check-dir` 默认不跑）；`electron-shared.mjs` 仍被 renderer 构建路径契约 / `test:macos` 打包套件与 FROZEN `electron-shared.test.mjs` 引用。改这两个文件先确认引用方仍按只读语义使用 |
