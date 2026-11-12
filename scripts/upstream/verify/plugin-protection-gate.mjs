@@ -64,7 +64,12 @@ export const FAMILY_OPT_IN_ALLOWED = RUNTIME_FAMILY_OPT_IN_ALLOWED
  *  一个名字只有在**仍在闭包里**时才需要这条豁免。树里多出来的名字不靠这条挡（extra 臂
  *  从不看白名单）；风险在反方向：名字回到闭包而本平台树缺它时，留着的白名单会静默放行。
  *  故离开闭包的包必须同步从这里删掉，回到闭包时再显式加回。 */
-const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-)/u
+// Platform-split packages: they sit in the runtime lock closure but the installed tree
+// only materializes the current platform's variant (node-addon-*/libreoffice-kit-* are
+// os/cpu-specific; dsh-experimental-cua-macos is an os:darwin optional dep). Their
+// absence from a Linux tree is expected, so C11's closure-vs-tree equivalence exempts
+// them instead of breaking on the platform difference.
+const PLATFORM_PACK_RE = /^@deepseek-ai\/(?:node-addon-system-|libreoffice-kit-|dsh-experimental-cua-macos$)/u
 
 /** 闭包解析的健全性下限：解析坏了必须响亮（真实规模由 C11 的族集合与锁文件断言，这里只兜「明显不完整」）。 */
 const MIN_FAMILY_SIZE = 200

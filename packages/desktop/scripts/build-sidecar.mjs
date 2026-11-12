@@ -332,12 +332,40 @@ export function verifyVendorDshRuntime(vendorDir, platform = process.platform) {
   return { version: recordedVersion, platform: runtimeManifest.dsh.platform }
 }
 
+/**
+ * dsh-doc 资料面的载荷断言（M19）：rc.2 起 `@deepseek-ai/dsh` 随包发布 `docs/`，dsh-doc 的
+ * `references/locate-docs.md` 在安装布局里读 `<root>/docs/user/index.md` 与
+ * `<root>/docs/upgrade-guide/README.md`。缺目录/缺入口/不可读 = 发布物里文档能力静默失效，
+ * 与 payload/office 资产同姿态在装配期 fail-closed。
+ * @param {string} vendorDir - vendor/dsh 装配树（`package.json` 已存在）。
+ * @returns {void}
+ */
+export function verifyVendorDshDocs(vendorDir) {
+  const docsDir = path.join(vendorDir, 'node_modules', '@deepseek-ai', 'dsh', 'docs')
+  if (!existsSync(docsDir)) {
+    throw new Error('vendor/dsh 缺 @deepseek-ai/dsh/docs —— dsh-doc 资料面缺失（M19 payload docs）')
+  }
+  for (const relative of ['user/index.md', 'upgrade-guide/README.md']) {
+    const file = path.join(docsDir, relative)
+    if (!existsSync(file)) {
+      throw new Error(`vendor/dsh 的 dsh docs 缺 ${relative}（M19 payload docs）`)
+    }
+    try {
+      readFileSync(file, 'utf8')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`vendor/dsh 的 dsh docs 不可读：${file}（${message}）——M19 payload docs`)
+    }
+  }
+}
+
 /** 拷贝内置 dsh 工作区（缺源时返回 false；调用方 fail closed，见 runBuildSidecar）。
  *  版本/平台漂移的 vendor 树在任何写盘之前 fail closed，拷贝产物再验一次。 */
 export function copyVendorDsh(sourceDir, destDir, { platform = process.platform } = {}) {
   const manifest = path.join(sourceDir, 'package.json')
   if (!existsSync(manifest)) return false
   verifyVendorDshRuntime(sourceDir, platform)
+  verifyVendorDshDocs(sourceDir)
   rmSync(destDir, { recursive: true, force: true })
   mkdirSync(destDir, { recursive: true })
   for (const file of VENDOR_DSH_FILES) {
@@ -694,6 +722,11 @@ export async function runBuildSidecar(options, io = {}) {
       }
       if (!vendorPresent) {
         io.warn(`[build-sidecar] 警告：未找到内置 dsh 工作区 ${options.vendorDshDir}（干净 checkout 正常；release 腿先跑 bundle:dsh）`)
+      } else {
+        // dry-run 也必须是真校验：存在性通过不等于 payload 可用。G39（版本/平台/kit 引擎
+        // 闭包）与 M19（dsh-doc docs 面）在 vendor 在场时同样 fail-closed。
+        verifyVendorDshRuntime(options.vendorDshDir, process.platform)
+        verifyVendorDshDocs(options.vendorDshDir)
       }
       if (!pnpmPresent) {
         io.warn(`[build-sidecar] 警告：未找到 pnpm ${options.pnpmDir}（先 pnpm install）`)

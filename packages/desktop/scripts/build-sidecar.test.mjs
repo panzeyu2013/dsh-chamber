@@ -60,6 +60,7 @@ import {
   runBuildSidecar,
   sidecarLayout,
   verifyPayloadNodeAndPnpm,
+  verifyVendorDshDocs,
   verifyVendorDshRuntime,
 } from './build-sidecar.mjs'
 // office 资产的 4 文件清单与在场判定单源 = prepare-office-assets.mjs（装配侧不另抄一份）。
@@ -74,6 +75,16 @@ const script = path.join(here, 'build-sidecar.mjs')
 /** vendor/dsh 的平台前缀（装配断言读它；实际形如 darwin-arm64）。 */
 const HOST_ARCH = process.arch === 'x64' ? 'x64' : 'arm64'
 const HOST_PLATFORM = `${process.platform}-${HOST_ARCH}`
+
+/** M19：rc.2 起 @deepseek-ai/dsh 随包 docs；装配断言要求两份读者入口在场且可读。 */
+function writeVendorDshDocs(vendorDir) {
+  const docsDir = path.join(vendorDir, 'node_modules', '@deepseek-ai', 'dsh', 'docs')
+  mkdirSync(path.join(docsDir, 'user'), { recursive: true })
+  mkdirSync(path.join(docsDir, 'upgrade-guide'), { recursive: true })
+  writeFileSync(path.join(docsDir, 'user', 'index.md'), '# user\n')
+  writeFileSync(path.join(docsDir, 'upgrade-guide', 'README.md'), '# guides\n')
+}
+
 
 test('① 参数解析：缺省值、单 Node 开关与错误', () => {
   const defaults = parseBuildSidecarArgs([])
@@ -270,6 +281,7 @@ test('③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）
     }))
     writeFileSync(path.join(vendorSrc, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'),
       JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.0' }))
+    writeVendorDshDocs(vendorSrc)
     // LibreOffice kit 闭包 + 宿主平台引擎：verifyVendorDshRuntime 要求 kit 在场且引擎文件可执行面在场。
     const kitSrc = path.join(vendorSrc, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
     mkdirSync(kitSrc, { recursive: true })
@@ -668,6 +680,7 @@ test('G39 vendor/dsh 版本 + 平台装配断言：漂移的 vendor 树在拷贝
         name: 'dsh', dependencies: { '@deepseek-ai/dsh': version }, dsh: { platform },
       }))
       writeFileSync(path.join(dshDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+      writeVendorDshDocs(vendor)
       writeEngine(platform)
     }
     const dest = path.join(dir, 'out', 'vendor', 'dsh')
@@ -691,6 +704,38 @@ test('G39 vendor/dsh 版本 + 平台装配断言：漂移的 vendor 树在拷贝
     writeTree('0.2.0', 'darwin-arm64')
     rmSync(path.join(dshDir, 'package.json'))
     assert.throws(() => verifyVendorDshRuntime(vendor, 'darwin'), /vendor\/dsh 装配不完整/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('G39c payload docs（M19）：dsh 随包 docs 的读者入口在场且可读，缺失/不可读即 fail-closed', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-vendor-docs-'))
+  try {
+    const vendor = path.join(dir, 'vendor')
+    const dshDir = path.join(vendor, 'node_modules', '@deepseek-ai', 'dsh')
+    mkdirSync(dshDir, { recursive: true })
+    writeFileSync(path.join(vendor, 'package.json'), JSON.stringify({
+      name: 'dsh', dependencies: { '@deepseek-ai/dsh': '0.2.2-rc.2' }, dsh: { platform: 'darwin-arm64' },
+    }))
+    writeFileSync(path.join(dshDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2-rc.2' }))
+    writeVendorDshDocs(vendor)
+    // 正例：两份读者入口在场且可读。
+    assert.doesNotThrow(() => verifyVendorDshDocs(vendor))
+
+    // 缺 user/index.md → 该入口的 loud 失败。
+    rmSync(path.join(dshDir, 'docs', 'user', 'index.md'))
+    assert.throws(() => verifyVendorDshDocs(vendor), /缺 user\/index\.md/)
+
+    // 入口存在但不可读（目录顶替文件：existsSync 为真、readFileSync 抛）→ loud 失败。
+    writeVendorDshDocs(vendor)
+    rmSync(path.join(dshDir, 'docs', 'upgrade-guide', 'README.md'))
+    mkdirSync(path.join(dshDir, 'docs', 'upgrade-guide', 'README.md'), { recursive: true })
+    assert.throws(() => verifyVendorDshDocs(vendor), /dsh docs 不可读/)
+
+    // 整棵 docs 缺失 → loud 失败。
+    rmSync(path.join(dshDir, 'docs'), { recursive: true, force: true })
+    assert.throws(() => verifyVendorDshDocs(vendor), /缺 @deepseek-ai\/dsh\/docs/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
