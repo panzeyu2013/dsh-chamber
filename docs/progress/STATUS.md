@@ -31,6 +31,7 @@
 - **目标活跃期通知/未读压制（design 19 §3.2）**：`activation unknown` 需上游只读面；围栏双发（F30）待裁。
 - **事实健康环**：仅无壳 mux 快照、无 in-app 读面；收口 = gateway 采样 + 只读环。
 - **归档清理/管理器（design 24）**：残余 = 上游 wire no-op、维护期 force、保护边界；缺陷 = `errors` 通道混用；清理残留 = projcache 4KB、迁移代际窗口；tombstone 由孤儿清扫收敛。
+- **上游 worktree reclamation 与归档面的并存（design 24 §11 / design 08 §7.2）**：上游 `worktree` 服务在归档时清**它自己创建且 owned 的** checkout（`retainOnArchive` 默认 false，分支保留），而本域清会话**内容**；两面对同一动作叠加，用户文案与归档管理器提示须分别陈述，且不得承诺「归档不动工作树」。本域不因该能力退役（上游仍无 `sessions.delete` wire）；上游把 `cleanupOf` 升为公共 wire 后复评是否显示「checkout 已清理」回执。
 - **工作区删除意图（design 05 §2.2.1）**：列表中部删除不滑尾、最后一行无位移、确定性拒绝不闪回（限单次删除）；四类登记例外与两类派生窄窗（见设计）；上游 order/remove 原子化后退役（§2.3）。
 - **侧栏收敛四项 + 整源降级**：会话创建/fork/归档、打开意图/工作区回声（`early-open.ts` 去留）、新 checkout 首帧五项（位置/淡入/确认层/tooltip 裁剪/`data-hover-gate`，判据见 design 06 §7）、会话待办区 10 项。
 - **双帧 status**：需宿主轮次键/可信 host 尾时间；无壳观察者 follow 走 remote.mux。
@@ -39,11 +40,13 @@
 
 - **设置面残余**：写路径 4–8 人日（台账/字段描述符/密钥存在性）；面板要求源壳挂载（常驻策略下关闭面板后该源成为普通常驻壳，design 05 §4.1）。
 - **Git 工作树恢复的 reload 出口**：证明失败/超预算、`path-unavailable` 重放、`git-timeout`/`git-spawn-failed`/`state-source-*`、终态 receipt 重放、create 的未尝试探测失败仍无关闭入口（退出 = reload 后按 fresh Git 事实核对）；细则 = design 08 §6.2。
+- **boot 降级行可见性（design 09 §3.3）**：rc.2 政策下非 required 的 manifest/extra 行失败只写一条 console warn + boot page 行，连接页/失败浮层不列（`collectFailedEntries` 只在 `bootError` 时跑）；收口 = 把降级行投影进连接页诊断或插件诊断面。
 - **未接入的上游服务面**：会话被动 API（events/state/wait/projections/follow）、`pluginChanges`、异步 `sessionProjections` 句柄迁移（seed-git-worktree 仍懒读 `ctx.get` 并保留 `header.cwd` 回退）；接入点 = design 09 §3.5/§3.6 的复合入口与 seam，需要时按同一注册表接入。
 - **N-ctx 第三方插件 base-path 契约 v1（design 09 §4）与静态层非 GET/HEAD 405（design 04 §5）待验收**：待验收 = Super 等第三方插件在 ready 实例经 `/api/i/<id>/super` 端到端、旧版硬编码插件在非 GET/HEAD 宿主路由上得到 405 JSON、非文档导航未知 GET/HEAD 得到 404 JSON、打包态回归；Super 现实现 sanitize 失败回落 origin root 属插件迁移缺口；运行期 fetch 失败不在 chamber 插件诊断面（连接页 ok 只表示图/行装载健康）。判据 = design 09 §4 + control-plane static-serving 测试 + renderer 契约测试（含真实 Cordis）+ 实机。
 
 ### 1.5 平台、运行时与外部凭据
 
+- **运行时线 vs 源码线（rc.2）**：源码线 pin 已切 dsh-v0.2.2-rc.2（`harness.commit`）；运行时线仍为 0.2.2-rc.1（`packages/desktop/vendor/dsh/pnpm-lock.yaml`），因上游 rc.2 的 npm 包未发布。待发布后再跑 `bundle:dsh` 重生成运行时锁，收口 C10/C11 并复跑升级 checklist §2/§5。
 - **P5b 工作树统一（代码残余）**：node PATH shim / string-only 解析；打包面判据见 design 08 §7.5 与 `docs/checklists/release/packaging-closure-checklist.md`。
 - **gateway**：ssh/http cookie 注入未覆盖；旧来源插件播种 400（重建未排期）；运维页缺 `recover-metadata`/`cleanup-version`/`restore-pre-rollback`；S0/S2-c 未实现；设计 21 对齐（只读/seed 端到端、tooltip、英文串）。
 - **gateway 启动失败原因对 chamber 不可见**：`state_root_locked` 的 holder 与判定依据只进 journal；客户端只能拿到 socket 级的归因文案（按 ECONNREFUSED/ECONNRESET/EPIPE 分类并指向 gateway 服务与隧道，`packages/desktop/gateway-session.ts` 的登录传输分类），看不到持有者类别与拒绝依据，把结构化原因回传需要一条新的远程诊断面（读 state 根的启动失败记录或 journal 尾）——未排期，是「错误透传」的剩余部分。
@@ -90,6 +93,7 @@
 ### 2.1 待裁（与 chamber 功能/契约相冲）
 
 - **U1–U6 未裁**（pin 残余 / 时间列 / 快捷键 / 重命名 / search / 侧栏 More）：候选、证据与维持理由见 [TODO.md](./TODO.md) A§15.1；本文件 §2.2 只记已裁差异。
+- **U7 侧栏新契约键未裁**（上游 pin 的 `sidebar.panel.icon` factory、`workspaces` hookContext、`panellist` 归属）：默认**不采纳**（chamber 侧栏自绘，design 05/06 拥有该面）；采纳 = 整包重放上游 `ui-sidebar`，代价与 U6 同批；触点登记归触点表/registry（本轮不新增 registry 条目）。裁决定在重启侧栏交互面时并做。
 
 ### 2.2 已裁的功能与呈现差异
 
@@ -153,7 +157,7 @@
 - **视觉/交互**：标题墨色不照官方；动作簇 4px；会话行键盘不可达；命中盒 <24px；`gap: 4px`；漏事件补丁未落；动作簇键盘入口/roving tabindex 待裁。
 - **会话投影**：标签跨代际保留（0.6–0.8s；`updatedAt` 前进即停）。
 - **P5b 工作树统一（开放取舍）**：①**Swift 保留**原生壳与 sidecar；Node 统一取 primary-runtime payload（单 Node 裁决，sidecar.js 与托管 dsh 同一 `process.execPath`，进程名 `node`；不再有独立 `dsh-chamber-helper`）；Electron 分支随冻结归档、不在本裁决内（`process.execPath` 不被改写），不做 sidecar 移除或回退形态；②forge bundle **opt-in**（默认关、启用/关闭需重启，GitHub provider disabled），不预置进 profile；③旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**；升级前逐树 `workspace.delete`（归档需保留的会话）+ `git worktree remove/prune` 是 **0.4.4 一次性历史迁移**的前提（design 08 §7.4），后续版本不再作为发布前提；④filters 与 forge 两步 parity，接受 LFS/clean-smudge 降级（checkout 为指针文件，需手动 `git lfs pull`）；⑤restore 仅 forge record（seed 树无 restore）；⑥`checkoutOrder` 只在本机 localStorage 持久化、不跨实例同步；⑦同一 checkout 允许 0..N 会话共享 HEAD/index（无默认提示、无硬锁）；⑧只发布池内 checkout，池外手工树不可见。判据 = design 08 §3/§5/§7。
-- **上游并存**：experimental worktree 默认关**仍真**（P5b 为 opt-in，需在实例插件页开启并重启）；P5b 下 forge 与 seed 共用 `<repo>/.agents/worktrees` 池，checkout 由 design 08 的派生行呈现，官方 `create_worktree` 工具与 composer 都复用同一池（“其产物由 design 08 接管、不复用 create”的旧裁决不再适用）；GitHub provider 由 overlay disabled；cua 不接入。
+- **上游并存**：experimental worktree 默认关**仍真**（P5b 为 opt-in，需在实例插件页开启并重启）；P5b 下 forge 与 seed 共用 `<repo>/.agents/worktrees` 池，checkout 由 design 08 的派生行呈现，官方 `create_worktree` 工具与 composer 都复用同一池（“其产物由 design 08 接管、不复用 create”的旧裁决不再适用）；rc.2 起该 bundle 平铺六个 loader 行、只挂一个 `worktree` 服务，并在归档时清理它自己创建的 clean checkout（`retainOnArchive` 默认 false；边界见 design 08 §7.2 / design 24 §11）；GitHub provider 由 overlay disabled；cua 不接入。
 - **设置/账户**：设置壳自绘 chrome/源壳必须挂载/离线占位/body portal；上游对齐轮偏差（首启门、`sectionsEmpty`、失败屏深引、`Switch` 属性、业务蓝、schedule 事实、状态标记/Dock/通知）；桌面账户登录不可闭环（`/oauth/callback` 未反代；待做与边界见 [TODO.md](./TODO.md) C§1）；`__dshChamberAccountOverlay` 与安全网互搏（待裁）；另有构建期 `DSH_CLIENT_VERSION` 未注入（见 §1.7）使账号调用必抛。
 - **跨实例 rev 冲突 = 静默复用 + 连接页提示**（design 09 §3.5）：跨实例一律沿用页面已有 factory（`reuseForeignBuilds`），实例 boot 不因该冲突失败；代价 = 跨发布构建可能与宿主预期不一致（缺块/行为异常），由连接页诊断点名两侧发布版本与收口，且 local 无图降级时构建来源可能反转（design 09 §3.5 残余风险）。
 - **右栏浏览器 v3（[design 28](../design/client/28-remote-browser.md) / [ADR-0004](../design/decisions/0004-swift-guest-per-tab.md)）**：载体语义 = 上游 Electron 桌面 guest（独立 web content process、非持久分区、顶层文档 ⇒ XFO/`frame-ancestors` 站点可嵌、失败可见、站内 `_blank` 在面板开新 tab），**残余取舍** = 引擎差异上限（S-64）、子帧导航引擎可拦截性待探针（content rule 资源级兜底，S-59）、非 GET popup 不可承载（S-60）、z-order/rect 走 9 点命中 + overlay 候选（S-61）、分区键含 source（S-62）、remote-source 可驱动本机 guest 访问内网（S-63）；唯一功能 delta = SSH 反代。沿用 v1/forward 取舍 = 无共享 `127.0.0.1` 回退（Host 被拒/421 = 可读错误，不降级）、OTP/2FA 主机不支持（每条 forward 独立 ssh）、`kill -9` 后 listener 存活到下次启动、8/source + 32 全局与 spawn 1/2s 节流、确认记忆按 `namespace:targetPort`、站点数据非持久（重启失登录态、无清除 UI）、alias 同 namespace 多端口共享 host（cookie 按 host，文案明示）、`localhost` 归一为远端 `127.0.0.1` 目标、ssh 来源直接 loopback 子资源由 content rule 拦截（正则子集残面见 S-59）、被转发页面可无预检访问本机 loopback（PNA 残余）、guest 不设数量配额（总量交 N-ctx 源壳硬上限 12 与 WebKit 内存压力）。均登记为已知取舍，不是待修缺陷。

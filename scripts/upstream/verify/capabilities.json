@@ -160,7 +160,7 @@
     },
     {
       "id": "plugin-navigation/openList",
-      "note": "上游 rc.3 新增的 pluginNavigation.openList（entry-customization 在会话头/右栏 More，以及 gateway 官方侧栏 More 的「浏览」调用）：chamber 的 settings-plugin-manager 提供者必须实现它，否则点击即 TypeError；这是本地提供者必须对齐的上游契约。",
+      "note": "上游 pin 的 pluginNavigation.openList（entry-customization 在会话头/右栏 More，以及 gateway 官方侧栏 More 的「浏览」调用）：chamber 的 settings-plugin-manager 提供者必须实现它，否则点击即 TypeError；这是本地提供者必须对齐的上游契约。",
       "probe": {
         "anchors": [
           "packages/client/ui-plugin-manager/src/client/index.ts#=literal:openList(): void"

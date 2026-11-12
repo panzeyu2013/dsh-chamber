@@ -21,16 +21,31 @@
 //  （AppKit 的窗口拖拽循环接管，直到抬键）。合成事件的位置取窗口坐标系下的当前鼠标
 //  点——与真实 mousedown 的 locationInWindow 同口径，起拖瞬间抓取偏移为零，窗口不跳。
 //
-//  判定三条纪律（与 base.css / window-drag/regions.ts 对齐）：
+//  判定三条纪律（与 base.css / window-drag/regions.ts 的 rc.2 显式拖拽域对齐）：
 //   1. 只有标记行是拖拽面：未标记处（正文、滚动区）永不触发；Electron 侧靠几何盒
-//      合成，本侧靠 DOM 真实命中，二者要求同一批标记；
+//      合成，本侧靠 DOM 真实命中，二者要求同一批标记（DRAG_MARK）；
 //   2. 控件优先：命中控件（button/a/input/… 见 interactiveSelector）一律不拖，点击、
 //      文本选择与页签原行为不变；
 //   3. 修饰键按下时不拖（⌘/⌃/⌥/⇧ + 拖动留给页面，与 app-region 一致）。
-//  与 base.css 的两处已知偏差（有意）：不消费 data-window-drag-recall 脉冲（那是
-//  Electron 重采集几何的专用脉冲，本侧不缓存几何、无需重采集）；命中用 DOM 命中而
-//  非几何盒序——可见且被按下的那一层决定结果（几何盒序在「后声明的覆盖层压在标记行
-//  之下」这类堆叠怪例上与命中不同，此时本侧更贴近用户所见）。
+//
+//  rc.2 的显式拖拽域（vendor/harness-checkout/packages/client/web/src/base.css:90-105、
+//  window-drag/regions.ts:1-13）：Electron 侧新增两种显式声明——
+//   - data-window-drag-exclude：一个可见视口/覆盖层整盒声明 no-drag（被裁切的后代不再
+//     参与几何盒，避免「滚出视口的可聚焦内容减掉 chrome 行」）；
+//   - data-window-drag-controls：控件减除的作用域限定（控件只在标记行或该作用域内被减除）。
+//  本侧等价判定：exclude 属性出现在按下元素或其祖先链上即不拖（祖先最近命中，与
+//  「最后一个盒决定」同序；exclude 与控件同属 no-drag 侧，先于 drag 判定）。控件作用域
+//  无需判定——INTERACTIVE_SELECTOR 在本侧全局减除，是 rc.2 作用域规则的可见等价超集：
+//  不在标记行内时两种规则都不产生拖拽，在行内时两者都减除控件；exclude 盒内控件由
+//  exclude 祖先先命中，结果同样是不拖。
+//  与 base.css 的三处已知偏差（有意）：
+//   ① 不消费 data-window-drag-recall 脉冲（那是 Electron 重采集几何的专用脉冲，
+//      本侧不缓存几何、无需重采集）；
+//   ② 命中用 DOM 命中而非几何盒序——可见且被按下的那一层决定结果（几何盒序在
+//      「后声明的覆盖层压在标记行之下」这类堆叠怪例上与命中不同，本侧更贴近用户所见）；
+//   ③ 不消费 -webkit-app-region 的继承与几何剪裁语义（rc.2 修的两个 Electron 专属
+//      缺陷——属性继承让后代越界减除、几何盒不做 overflow/clip 裁剪——在 WKWebView
+//      不消费该属性、且本侧按真实 DOM 命中判定时不适用）。
 //
 //  安全边界：mousedown 是页面事件，本通道**不接受**页面指定「拖哪个窗、挪到哪」——
 //  载荷只有 {kind:"drag"}，窗口与位置都取自壳自己的事实（控制器持有的窗、当前鼠标
@@ -52,6 +67,15 @@ enum ShellWindowDragScript {
     /// 页面标记属性：窗口 chrome 行（与 ui-web `DRAG_MARK` / base.css 的 app-region
     /// 规则同源）。
     static let dragMarkAttribute = "data-window-drag"
+
+    /// rc.2 显式拖拽域：一块可见视口/覆盖层整盒声明 no-drag（base.css:90-93）。本侧按
+    /// DOM 命中判定：属性出现在按下元素或其祖先链上即不拖（祖先最近命中，见文件头）。
+    static let excludeAttribute = "data-window-drag-exclude"
+
+    /// rc.2 控件减除作用域（base.css:99-105）。Electron 侧控件只在标记行或该作用域内
+    /// 被减除；本侧 INTERACTIVE_SELECTOR 全局减除是可见等价超集（见文件头等价判定段），
+    /// 脚本不判定该属性。名字在此登记，供说明与测试锁字面量。
+    static let controlsScopeAttribute = "data-window-drag-controls"
 
     /// 载荷 kind：本通道只有一种请求（开始拖拽），其余一律丢弃。
     static let payloadKind = "drag"
@@ -94,6 +118,9 @@ enum ShellWindowDragScript {
           var INTERACTIVE = \(interactiveSelectorJSON);
           var NO_DRAG = ':is(' + INTERACTIVE.join(', ') + ')';
           var RECALL = 'data-window-drag-recall';
+          var EXCLUDE = '\(excludeAttribute)';
+          // data-window-drag-controls：控件减除作用域。本侧 INTERACTIVE_SELECTOR 全局
+          // 减除已是可见等价超集（见文件头等价判定段），故脚本不判该属性。
           // 幂等：同文档重复执行只挂一个监听器（导航会整份重来，这里防的是重注入）。
           if (window.__dshShellWindowDrag === CHANNEL) { return; }
           window.__dshShellWindowDrag = CHANNEL;
@@ -105,10 +132,12 @@ enum ShellWindowDragScript {
           }
 
           // 与 base.css 的 no-drag 规则同源：控件/raised surface 自身；body 旁的
-          // portal 层（body > :not(#root)）；recall 脉冲标记（只需认识它）。
+          // portal 层（body > :not(#root)）；recall 脉冲标记（只需认识它）；
+          // rc.2 显式域 data-window-drag-exclude（整盒 no-drag，base.css:90-93）。
           function isNoDrag(el) {
             if (el.matches(NO_DRAG)) { return true; }
             if (el.hasAttribute(RECALL)) { return true; }
+            if (el.hasAttribute(EXCLUDE)) { return true; }
             var parent = el.parentElement;
             return !!(parent && parent === document.body && el.id !== 'root');
           }
@@ -116,7 +145,7 @@ enum ShellWindowDragScript {
           // 最近的匹配者定胜负：DOM 序里后代盒在祖先盒之后且包含祖先盒的点，故
           // 「按下的元素链上第一个匹配者」= base.css 的「最后一个盒决定」。
           // 同一元素同时命中 drag 与 no-drag 时 base.css 的 no-drag 规则靠后，
-          // 故先判 no-drag。
+          // 故先判 no-drag（exclude 与控件同属 no-drag 侧）。
           function isDragRow(target) {
             for (var el = target; el && el.nodeType === 1; el = el.parentElement) {
               if (isNoDrag(el)) { return false; }

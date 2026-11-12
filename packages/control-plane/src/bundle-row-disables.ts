@@ -40,6 +40,9 @@ export interface BundleRowDisableTarget {
 /** The forge bundle (official OPTIONAL bundle; P5b is opt-in). */
 export const FORGE_BUNDLE_PACKAGE_NAME = '@deepseek-ai/dsh-experimental-forge-bundle'
 
+/** The web-app bundle: the managed web profile's always-enabled surface bundle. */
+export const WEB_APP_BUNDLE_PACKAGE_NAME = '@deepseek-ai/dsh-web-app'
+
 /**
  * The forge bundle's GitHub provider row. P5b keeps GitHub off: with the provider disabled
  * the worktree UI/tool stay complete (it only injects the GitHub host half), and the
@@ -52,8 +55,41 @@ export const FORGE_GITHUB_ROW: BundleRowDisableTarget = {
   name: '@deepseek-ai/dsh-experimental-forge-github',
 }
 
+/**
+ * rc.2 web-app mounts its own `skill-office` row in EVERY profile (from the package's
+ * packaged assets). The Swift sidecar payload's runtime tree is pruned — every non-`docs/`
+ * Markdown is deleted, including the packaged `SKILL.md` files — so that row cannot serve
+ * skills from the payload; the local spawn mounts its own `chamber-office-skills` row with
+ * `assetRoot` pointing at the prune-surviving sibling copy. Two live skill-office mounts
+ * would register the same `dsh-office` skill provider twice, and the skill registry makes
+ * the second registration throw (packages/skill/skill/src/index.ts: registerProvider
+ * duplicate-name guard), so the bundle row MUST be force-disabled whenever the local row
+ * is mounted. The rc.2 workspace-dependencies row needs no disable: its
+ * `profileContext?.name !== 'desktop' || !DSH_PRIMARY_RUNTIME` gate keeps it disabled under
+ * the managed `--profile web` host, so the chamber row is the only mount there.
+ */
+export const WEB_APP_SKILL_OFFICE_ROW: BundleRowDisableTarget = {
+  bundle: WEB_APP_BUNDLE_PACKAGE_NAME,
+  id: 'skill-office',
+  name: '@deepseek-ai/dsh-skill-office',
+}
+
 /** The canonical bundle-row disable registry (the local overlay applies it every spawn). */
 export const BUNDLE_ROW_DISABLES: readonly BundleRowDisableTarget[] = [FORGE_GITHUB_ROW]
+
+/**
+ * The disable targets one LOCAL spawn must carry. The web-app office-row disable is
+ * conditional on the spawn actually mounting the local office-skills row (the Swift
+ * sidecar passes an office `assetRoot` in its capabilities): a caller without that
+ * capability (Electron/CLI/tests) mounts no local office row, so the bundle row is its
+ * only office mount and must stay enabled (subject to prune, which is a payload concern,
+ * not a spawn-plan concern).
+ */
+export function bundleRowDisableTargetsForSpawn(input: {
+  readonly mountsLocalOfficeSkills: boolean
+}): readonly BundleRowDisableTarget[] {
+  return input.mountsLocalOfficeSkills ? [...BUNDLE_ROW_DISABLES, WEB_APP_SKILL_OFFICE_ROW] : BUNDLE_ROW_DISABLES
+}
 
 /** Loader ids are plain words; bundle/row package names are scoped package specifiers. */
 const TARGET_ID_PATTERN = /^[a-zA-Z0-9._-]+$/

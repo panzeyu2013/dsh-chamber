@@ -1472,12 +1472,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         editMenu.addItem(withTitle: NativeText.string(.menuCut), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: NativeText.string(.menuCopy), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: NativeText.string(.menuPaste), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        // Electron 默认 Edit 菜单的其余标准项（缺了网页输入框里
-        // Cmd+Opt+Shift+V 与 Delete 会无效）。
-        let pasteAndMatch = editMenu.addItem(withTitle: NativeText.string(.menuPasteAndMatchStyle),
-                                             action: Selector(("pasteAndMatchStyle:")),
-                                             keyEquivalent: "v")
-        pasteAndMatch.keyEquivalentModifierMask = [.command, .option, .shift]
+        let pasteAndMatchStyleTitle = NativeText.string(.menuPasteAndMatchStyle)
+        let pasteAndMatch = editMenu.addItem(withTitle: pasteAndMatchStyleTitle, action: Selector(("pasteAndMatchStyle:")), keyEquivalent: "v")
+        pasteAndMatch.keyEquivalentModifierMask = [.command, .shift]  // rc.2 主 binding = ⇧⌘V（vendor main.ts:1171-1196）
+        let pasteAndMatchAlias = editMenu.addItem(withTitle: pasteAndMatchStyleTitle, action: Selector(("pasteAndMatchStyle:")), keyEquivalent: "v")
+        pasteAndMatchAlias.keyEquivalentModifierMask = [.command, .option, .shift]
+        pasteAndMatchAlias.isHidden = true  // 兼容别名 = Electron 44 的 ⌥⇧⌘V（visible:false + acceleratorWorksWhenHidden 同义）
         editMenu.addItem(withTitle: NativeText.string(.menuDelete), action: Selector(("delete:")), keyEquivalent: "")
         editMenu.addItem(withTitle: NativeText.string(.menuSelectAll), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())

@@ -4,11 +4,10 @@
  * Covers the Swift implementation contract (swift-impl-contract.md):
  *   - planStartupPluginRows: two independent resource gates (primary-runtime payload /
  *     office-skills assets + the ACTIVE workspace installs the plugin package), the
- *     platform/arch pin, the payload Node passed when present (payload python-only →
- *     omitted, process.execPath fallback), the workspace CLI present→path / absent→
- *     `cli: false` decision, the pnpm SOURCE layout (apps/cli/node_modules) next to the
- *     installed layout, the user-profile reuse skip, and the absent-capabilities /
- *     relative-root edges;
+ *     platform/arch pin, the rc.2 office config (`assetRoot` only — node/cli are gone and
+ *     pythonEnvironment keeps its schema default), the pnpm SOURCE layout
+ *     (apps/cli/node_modules) next to the installed layout, the user-profile reuse skip,
+ *     and the absent-capabilities / relative-root edges;
  *   - renderStartupPluginInserts: golden bytes of the second top-level `- insert:`
  *     patch object, YAML single-quote escaping, and every loud rejection (allowlist,
  *     config key whitelist, required keys, absolute/control-free values, duplicates).
@@ -39,9 +38,6 @@ const OFFICE_SKILL_NAMES = [
   'office-docx',
   'office-pptx',
   'office-xlsx',
-  'office-render',
-  'office-recalculate',
-  'office-export-pdf',
 ] as const
 
 type WorkspaceLayout = 'installed' | 'source'
@@ -76,17 +72,13 @@ interface FixtureOptions {
   /** Default true: write both workspace package manifests. */
   workspaceDependenciesPackage?: boolean
   skillOfficePackage?: boolean
-  /** Default true: write <anchor>/@deepseek-ai/libreoffice-kit/lib/cli.js. */
-  libreofficeKitCli?: boolean
   /** Default true: create the primary-runtime payload dir. */
   primaryRuntime?: boolean
   /** `null` omits runtime.json; a string replaces the default manifest. */
   runtimeJson?: string | null
   /** Default true: dependencies/python/bin/python3 file + lib/python3.12/site-packages dir. */
   pythonPayload?: boolean
-  /** Default true: the payload carries dependencies/node/bin/node (Swift full payload). */
-  payloadNode?: boolean
-  /** Default true: create the seven skill dirs + office/references/sidecar.md. */
+  /** Default true: create the four skill dirs. */
   officeSkills?: boolean
   /** Skip one skill's SKILL.md (the assets tree is then incomplete). */
   missingSkill?: string
@@ -98,7 +90,6 @@ interface Fixture {
   dshHome: string
   primaryRuntimeDir: string
   officeSkillsDir: string
-  cliPath: string
   capabilities: { primaryRuntimeDir: string; officeSkillsDir: string }
 }
 
@@ -112,15 +103,9 @@ function buildFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
   mkdirSync(workspacePath, { recursive: true })
   mkdirSync(dshHome, { recursive: true })
   const anchor = packageAnchor(workspacePath, layout)
-  // Real pnpm SOURCE layouts hoist libreoffice-kit into the skill package's own
-  // node_modules; installed trees expose it directly under the workspace anchor.
-  const cliPath = layout === 'source'
-    ? join(anchor, '@deepseek-ai', 'dsh-skill-office', 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js')
-    : join(anchor, '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js')
 
   if (options.workspaceDependenciesPackage !== false) writeWorkspacePackage(anchor, WORKSPACE_DEPS.name)
   if (options.skillOfficePackage !== false) writeWorkspacePackage(anchor, OFFICE_SKILLS.name)
-  if (options.libreofficeKitCli !== false) write(cliPath, 'export {}\n')
 
   if (options.primaryRuntime !== false) {
     const runtimeJson = options.runtimeJson === undefined
@@ -131,9 +116,6 @@ function buildFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
       write(join(primaryRuntimeDir, 'dependencies', 'python', 'bin', 'python3'), '#!/usr/bin/env python3\n')
       mkdirSync(join(primaryRuntimeDir, 'dependencies', 'python', 'lib', 'python3.12', 'site-packages'), { recursive: true })
     }
-    if (options.payloadNode !== false) {
-      write(join(primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node'), '#!/usr/bin/env node\n')
-    }
   }
 
   if (options.officeSkills !== false) {
@@ -141,7 +123,6 @@ function buildFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
       if (skillName === options.missingSkill) continue
       write(join(officeSkillsDir, skillName, 'SKILL.md'), `---\ndescription: ${skillName}\n---\n`)
     }
-    write(join(officeSkillsDir, 'office', 'references', 'sidecar.md'), '# sidecar\n')
   }
 
   return {
@@ -150,7 +131,6 @@ function buildFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
     dshHome,
     primaryRuntimeDir,
     officeSkillsDir,
-    cliPath,
     capabilities: { primaryRuntimeDir, officeSkillsDir },
   }
 }
@@ -186,11 +166,7 @@ test('planner: a complete Swift payload + assets emits both rows (installed work
     },
     {
       ...identityOf(OFFICE_SKILLS),
-      config: {
-        assetRoot: fixture.officeSkillsDir,
-        node: join(fixture.primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node'),
-        cli: fixture.cliPath,
-      },
+      config: { assetRoot: fixture.officeSkillsDir },
     },
   ])
 })
@@ -202,28 +178,20 @@ test('planner: the pnpm SOURCE layout (apps/cli/node_modules) is a first-class w
     'source-layout dev workspaces must not silently miss the rows')
   const office = rows.find(row => row.id === OFFICE_SKILLS.id)
   assert.ok(office !== undefined)
-  assert.equal(office!.config.cli, fixture.cliPath)
-  assert.ok(fixture.cliPath.includes(join('apps', 'cli', 'node_modules')), fixture.cliPath)
-  assert.ok(fixture.cliPath.includes(join('dsh-skill-office', 'node_modules')), fixture.cliPath)
-})
-
-test('planner: source layout without the package-internal kit CLI becomes cli: false', t => {
-  const fixture = buildFixture(t, { layout: 'source', libreofficeKitCli: false })
-  const rows = plan(fixture)
-  const office = rows.find(row => row.id === OFFICE_SKILLS.id)
-  assert.ok(office !== undefined)
-  assert.equal(office!.config.cli, false, 'missing kit must be an explicit disabled capability')
+  assert.deepEqual(office!.config, { assetRoot: fixture.officeSkillsDir })
+  const anchor = join(fixture.workspacePath, 'apps', 'cli', 'node_modules')
+  assert.ok(anchor.includes(join('apps', 'cli', 'node_modules')), anchor)
 })
 
 test('planner: a missing runtime.json drops only the workspace-dependencies row (warned)', t => {
   const fixture = buildFixture(t, { runtimeJson: null })
   const warns: string[] = []
   const rows = plan(fixture, { warn: message => warns.push(message) })
-  assert.deepEqual(rows.map(row => row.id), [OFFICE_SKILLS.id], 'the office row is independently gated')
-  assert.equal(Object.hasOwn(rows[0]!.config, 'node'), false, 'a payload without runtime.json contributes no node')
-  assert.ok(warns.some(message => message.includes(WORKSPACE_DEPS.id)), warns.join(' | '))
-  assert.ok(warns.some(message => message.includes(WORKSPACE_DEPS.id) && message.includes('runtime.json is missing')), warns.join(' | '))
-  assert.ok(warns.some(message => message.includes(OFFICE_SKILLS.id) && message.includes('node')), warns.join(' | '))
+  assert.deepEqual(rows, [{ ...identityOf(OFFICE_SKILLS), config: { assetRoot: fixture.officeSkillsDir } }],
+    'the office row is independently gated and carries no payload-derived config in rc.2')
+  assert.equal(warns.length, 1, 'only the workspace-dependencies row is warned about')
+  assert.ok(warns[0]!.includes(WORKSPACE_DEPS.id), warns.join(' | '))
+  assert.ok(warns[0]!.includes('runtime.json is missing'), warns.join(' | '))
 })
 
 test('planner: a platform/arch mismatch drops the workspace-dependencies row', t => {
@@ -234,8 +202,8 @@ test('planner: a platform/arch mismatch drops the workspace-dependencies row', t
   const warns: string[] = []
   const rows = plan(fixture, { warn: message => warns.push(message) })
   assert.deepEqual(rows.map(row => row.id), [OFFICE_SKILLS.id])
-  assert.equal(Object.hasOwn(rows[0]!.config, 'node'), false,
-    'office must not receive a node from a payload claiming another platform/arch')
+  assert.deepEqual(rows[0]!.config, { assetRoot: fixture.officeSkillsDir },
+    'the office row carries only assetRoot; the rc.2 schema default owns pythonEnvironment')
   assert.ok(warns.some(message => message.includes('targets') && message.includes(process.platform)), warns.join(' | '))
 })
 
@@ -255,32 +223,22 @@ test('planner: a payload without python3 or site-packages drops the workspace-de
 })
 
 test('planner: one missing office SKILL.md drops only the office row (no half assets)', t => {
-  const fixture = buildFixture(t, { missingSkill: 'office-export-pdf' })
+  const fixture = buildFixture(t, { missingSkill: 'office-pptx' })
   const warns: string[] = []
   const rows = plan(fixture, { warn: message => warns.push(message) })
   assert.deepEqual(rows.map(row => row.id), [WORKSPACE_DEPS.id], 'the workspace-dependencies row is independently gated')
   assert.equal(warns.length, 1)
-  assert.ok(warns[0]!.includes('office-export-pdf'), warns[0])
+  assert.ok(warns[0]!.includes('office-pptx'), warns[0])
   assert.ok(warns[0]!.includes('SKILL.md is missing'), warns[0])
 })
 
-test('planner: a missing workspace CLI becomes the explicit cli: false (operations disabled)', t => {
-  const fixture = buildFixture(t, { libreofficeKitCli: false })
+test('planner: the office row is assetRoot-only for a python-only payload too (no rc.1 node/cli wiring)', t => {
+  const fixture = buildFixture(t)
+  rmSync(join(fixture.primaryRuntimeDir, 'dependencies', 'node'), { recursive: true, force: true })
   const rows = plan(fixture)
   const office = rows.find(row => row.id === OFFICE_SKILLS.id)
   assert.ok(office !== undefined)
-  assert.equal(office!.config.cli, false)
-  assert.equal(office!.config.node, join(fixture.primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node'),
-    'the payload Node is still passed: only the Kit CLI is disabled')
-})
-
-test('planner: a python-only payload omits node (skill-office falls back to process.execPath)', t => {
-  const fixture = buildFixture(t, { payloadNode: false })
-  const rows = plan(fixture)
-  const office = rows.find(row => row.id === OFFICE_SKILLS.id)
-  assert.ok(office !== undefined)
-  assert.equal(Object.hasOwn(office!.config, 'node'), false)
-  assert.equal(office!.config.cli, fixture.cliPath)
+  assert.deepEqual(office!.config, { assetRoot: fixture.officeSkillsDir })
 })
 
 test('planner: rows already mounted by the user profile patch are reused (skipped with a log)', t => {
@@ -385,8 +343,6 @@ test('renderer: golden bytes — the second top-level insert object, fixed key o
     `      name: '${OFFICE_SKILLS.name}'`,
     '      config:',
     `        assetRoot: '${fixture.officeSkillsDir}'`,
-    `        node: '${join(fixture.primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node')}'`,
-    `        cli: '${fixture.cliPath}'`,
     '',
   ].join('\n')
   const text = renderStartupPluginInserts(plan(fixture))
@@ -394,11 +350,12 @@ test('renderer: golden bytes — the second top-level insert object, fixed key o
   assert.ok(text.endsWith('\n'))
 })
 
-test('renderer: a missing CLI row renders the literal cli: false', t => {
-  const fixture = buildFixture(t, { libreofficeKitCli: false })
+test('renderer: the rc.2 office row renders exactly one config key (no node/cli lines)', t => {
+  const fixture = buildFixture(t)
   const text = renderStartupPluginInserts(plan(fixture))
   assert.ok(text.includes(`        assetRoot: '${fixture.officeSkillsDir}'\n`), text)
-  assert.ok(text.includes('        cli: false\n'), text)
+  assert.equal(/        node:/.test(text), false, 'node is not part of the rc.2 skill-office schema')
+  assert.equal(/        cli:/.test(text), false, 'cli is not part of the rc.2 skill-office schema')
 })
 
 test('renderer: zero rows render the empty string (no overlay block at all)', () => {
@@ -422,7 +379,8 @@ test('renderer: invalid rows throw (allowlist, config keys, required keys, value
     ['missing required key', { ...identityOf(WORKSPACE_DEPS), config: { source: '/tmp/runtime' } }, /missing required key 'root'/],
     ['relative value', { ...identityOf(WORKSPACE_DEPS), config: { source: 'runtime', root: '/tmp/root' } }, /must be an absolute path/],
     ['control character', { ...identityOf(WORKSPACE_DEPS), config: { source: '/tmp/a\nb', root: '/tmp/root' } }, /contains a control character/],
-    ['false outside cli', { ...identityOf(WORKSPACE_DEPS), config: { source: '/tmp/runtime', root: false } }, /may only be a string or cli: false/],
+    ['rc.1 node key on the office row', { ...identityOf(OFFICE_SKILLS), config: { assetRoot: '/tmp/office', node: '/tmp/node' } }, /config key 'node' is not allowed/],
+    ['rc.1 cli key on the office row', { ...identityOf(OFFICE_SKILLS), config: { assetRoot: '/tmp/office', cli: '/tmp/cli.js' } }, /config key 'cli' is not allowed/],
     ['duplicate row', [
       { ...identityOf(WORKSPACE_DEPS), config: validConfig },
       { ...identityOf(WORKSPACE_DEPS), config: validConfig },

@@ -440,15 +440,18 @@ export const VENDOR_PATCHES = Object.freeze([
           + '      return',
       }),
       Object.freeze({
+        // rc.2 refactor: flush() now delegates to publishing()/publishSnapshot()
+        // (assistant-turn publication error recovery). The scheduler timestamp
+        // stays at the flush ENTRY, not in publishing(): publishing() also serves
+        // activate(), and stamping there would reset the slice clock on target
+        // activation, a behavior the pre-refactor flush() did not have.
         expect: '  private flush(): void {\n'
-          + '    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n'
-          + '    this.openTurn.set(this.assembler.openTurn())\n'
+          + '    this.publishing(() => this.assembler.flush())\n'
           + '  }',
         replace: '  private flush(): void {\n'
           + '    // chamber patch: the slice scheduler measures from the last flush.\n'
           + '    this.lastFlushAt = performance.now()\n'
-          + '    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n'
-          + '    this.openTurn.set(this.assembler.openTurn())\n'
+          + '    this.publishing(() => this.assembler.flush())\n'
           + '  }',
       }),
     ]),

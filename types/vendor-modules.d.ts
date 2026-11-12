@@ -354,7 +354,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     selectedIds?: readonly string[] | undefined; onSelect?: (id: string) => void
     autoFocus?: boolean; align?: 'start' | 'end'; side?: 'bottom' | 'top' | 'right'
     portal?: boolean; closeOnPointerLeave?: boolean; dense?: boolean; compact?: boolean
-    selection?: 'check' | 'fill'; getAnchorRect?: () => DOMRect | null
+    selection?: 'check' | 'fill'
     className?: string | undefined; listClassName?: string | undefined
   }
   export function Menu(props: MenuProps): JSX.Element | null

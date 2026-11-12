@@ -13,7 +13,7 @@ import { stripComments } from '../../../scripts/dev/test-support/source-text.ts'
 
 /**
  * The pinned assembly contract: the package list `dsh-api-remotes`' client
- * half mounts into `ctx.remote()`, in apply() mount order (27 rows). Mount
+ * half mounts into `ctx.remote()`, in apply() mount order (30 rows). Mount
  * order is runtime-significant, so it is the ONE ordered table. The `/remote`
  * import selection has no runtime order semantics: callers compare its SET
  * against this same table (single source — the lockstep test
@@ -27,14 +27,16 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-client-product-analytics',
   '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-commands',
+  '@deepseek-ai/dsh-agent-team',
   '@deepseek-ai/dsh-api-settings-controller',
-  '@deepseek-ai/dsh-api-account-controller',
+  '@deepseek-ai/dsh-deepseek-account',
   '@deepseek-ai/dsh-goal',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-cordis-host-runner',
   '@deepseek-ai/dsh-schedule',
   '@deepseek-ai/dsh-host-plugin-inventory',
   '@deepseek-ai/dsh-plugin-manager',
+  '@deepseek-ai/dsh-mcp-manager',
   '@deepseek-ai/dsh-plugin-market',
   '@deepseek-ai/dsh-client-ui-plugin-manager',
   '@deepseek-ai/dsh-client-ui-trajectory',
@@ -49,8 +51,9 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-api-workspace-files',
   '@deepseek-ai/dsh-api-terminal-controller',
-  '@deepseek-ai/dsh-office-to-pdf',
+  '@deepseek-ai/dsh-office-kit',
   '@deepseek-ai/dsh-user-questions',
+  '@deepseek-ai/dsh-web',
 ])
 
 /**

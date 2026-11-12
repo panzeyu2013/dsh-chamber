@@ -111,6 +111,7 @@ import {
   sparkleChannelFeedsProblem,
   isBundledPayloadNode,
   isBundledLibreOfficeHelper,
+  libreOfficeHelperCandidates,
   assertBundledLibreOfficeHelperEntitlements,
 } from '../../../macos/scripts/build-swift-app.mjs'
 // 滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
@@ -453,31 +454,38 @@ test('④ payload node 签名判定：只有装配内唯一 Node 拿 node entitl
   assert.equal(isBundledPayloadNode('/tmp/other/primary-runtime/dependencies/node/bin/node', sidecarDir), false)
 })
 
-test('④ LibreOffice kit native helper 签名判定：只匹配运行时线引擎包里的 bin/libreoffice-kit', () => {
+test('④ LibreOffice kit native helper 签名判定：引擎包 bin/ 下的 Mach-O（含 rc.2 dsoffice 改名）', () => {
   const sidecarDir = '/tmp/fake.app/Contents/Resources/sidecar'
-  const helper = (arch) => path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
-    'libreoffice-kit-darwin-' + arch, 'bin', 'libreoffice-kit')
+  const helper = (arch, name = 'dsoffice') => path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
+    'libreoffice-kit-darwin-' + arch, 'bin', name)
   assert.equal(isBundledLibreOfficeHelper(helper('arm64'), sidecarDir), true)
   assert.equal(isBundledLibreOfficeHelper(helper('x64'), sidecarDir), true)
+  // rc.1 的 helper 名（kit 0.1.5）在过渡窗口里仍必须拿到 JIT。
+  assert.equal(isBundledLibreOfficeHelper(helper('arm64', 'libreoffice-kit'), sidecarDir), true)
   // eslint-disable-next-line no-script-url
   assert.equal(isBundledLibreOfficeHelper(path.join(sidecarDir, 'libreoffice-kit'), sidecarDir), false)
   assert.equal(isBundledLibreOfficeHelper(path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
     'libreoffice-kit-darwin-arm64', 'program', 'LibreOfficeDev.app', 'Contents', 'MacOS', 'soffice'), sidecarDir), false)
-  assert.equal(isBundledLibreOfficeHelper('/tmp/other/vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/libreoffice-kit', sidecarDir), false)
+  assert.equal(isBundledLibreOfficeHelper('/tmp/other/vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/bin/dsoffice', sidecarDir), false)
 })
 
 test('④ LibreOffice helper 签后断言：缺 allow-jit 即 fail-closed，注入 runner 覆盖负例', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-libreoffice-helper-'))
   try {
     const sidecarDir = path.join(dir, 'sidecar')
-    const helper = path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
-      'libreoffice-kit-darwin-arm64', 'bin', 'libreoffice-kit')
+    const engineDir = path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai',
+      'libreoffice-kit-darwin-arm64')
+    const helper = path.join(engineDir, 'bin', 'dsoffice')
     // 未装引擎：不调用 runner、不抛（引擎存在性由 build-sidecar 断言）。
     let calls = 0
     assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => { calls++; return { status: 0 } })
     assert.equal(calls, 0)
+    assert.deepEqual(libreOfficeHelperCandidates(engineDir), ['bin/dsoffice', 'bin/libreoffice-kit'],
+      'prebuilds.json 缺失时按已知名字回退（rc.2 dsoffice / rc.1 libreoffice-kit）')
     mkdirSync(path.dirname(helper), { recursive: true })
     writeFileSync(helper, 'fake')
+    writeFileSync(path.join(engineDir, 'prebuilds.json'), JSON.stringify({ engine: { kind: 'native', executable: 'bin/dsoffice' } }))
+    assert.deepEqual(libreOfficeHelperCandidates(engineDir), ['bin/dsoffice'])
     assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => {
       calls++
       return { status: 0, stdout: '<plist><key>com.apple.security.cs.allow-jit</key><true/></plist>' }
@@ -487,6 +495,13 @@ test('④ LibreOffice helper 签后断言：缺 allow-jit 即 fail-closed，注�
       /LibreOffice helper 缺 allow-jit entitlement/)
     assert.throws(() => assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => ({ status: 1, stderr: 'bad' })),
       /LibreOffice helper 缺 allow-jit entitlement/)
+    // 引擎包在场但上游又改名（prebuilds 声明的可执行不在场且旧名也不在）：fail-closed。
+    writeFileSync(path.join(engineDir, 'prebuilds.json'), JSON.stringify({ engine: { kind: 'native', executable: 'bin/renamed-helper' } }))
+    rmSync(helper)
+    assert.throws(
+      () => assertBundledLibreOfficeHelperEntitlements(sidecarDir, () => { calls++; return { status: 0 } }),
+      /找不到 helper 可执行文件/,
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -737,7 +752,8 @@ test('⑥ sidecar 拷贝：payload Node / office 资产进 .app；旧布局 node
     assert.ok((statSync(payloadNode).mode & 0o111) !== 0, 'payload node 必须可执行')
     assert.ok(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office', 'SKILL.md')),
       'office 技能资产必须随装配进 .app')
-    assert.ok(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office', 'references', 'sidecar.md')))
+    assert.ok(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office-xlsx', 'SKILL.md')),
+      'rc.2 资产面：四个 SKILL.md 都在场（sidecar.md 已随旧技能一起删除）')
     assert.ok(result.layout)
 
     // 反例：顶层 node*/dsh-chamber-helper（旧布局残留）→ loud。

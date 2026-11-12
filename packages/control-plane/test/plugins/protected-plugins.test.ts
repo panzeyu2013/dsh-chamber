@@ -220,10 +220,10 @@ test('resolveRuntimeFamily: 可信闭包优先；无锁文件退回树枚举；�
       assert.equal(unregistered.ok, false, 'an unregistered opt-in name must be rejected')
       assert.match(unregistered.ok ? '' : unregistered.reason, /unregistered official opt-in package/)
       writeFileSync(join(lockOnly, 'pnpm-lock.yaml'), ['lockfileVersion: \'9.0\'', 'packages:',
-        ...core, "  '@deepseek-ai/dsh-experimental-agent-team-profile@0.1.5-rc.2':"].join('\n'))
+        ...core, "  '@deepseek-ai/dsh-experimental-forge-bundle@0.1.5-rc.2':"].join('\n'))
       const registered = resolveRuntimeFamily(lockOnly)
       assert.equal(registered.ok, true, 'a registered opt-in name is a legitimate F member')
-      assert.ok(registered.ok && registered.names.includes('@deepseek-ai/dsh-experimental-agent-team-profile'))
+      assert.ok(registered.ok && registered.names.includes('@deepseek-ai/dsh-experimental-forge-bundle'))
       writeFileSync(join(lockOnly, 'pnpm-lock.yaml'), ['lockfileVersion: \'9.0\'', 'packages:',
         "  '@deepseek-ai/dsh@0.1.5-rc.2':"].join('\n'))
       const partial = resolveRuntimeFamily(lockOnly)

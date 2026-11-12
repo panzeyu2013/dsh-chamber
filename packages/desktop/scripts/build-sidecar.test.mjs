@@ -62,7 +62,7 @@ import {
   verifyPayloadNodeAndPnpm,
   verifyVendorDshRuntime,
 } from './build-sidecar.mjs'
-// office 资产的 8 文件清单与在场判定单源 = prepare-office-assets.mjs（装配侧不另抄一份）。
+// office 资产的 4 文件清单与在场判定单源 = prepare-office-assets.mjs（装配侧不另抄一份）。
 import { OFFICE_SKILL_FILES, verifyOfficeAssets } from './prepare-office-assets.mjs'
 import { platformExecutableName, resolveElectronPackageDir, sharedDistDirFor } from './electron-shared.mjs'
 import { payloadNodePath } from '../../../scripts/lib/sidecar-assembly.mjs'
@@ -386,7 +386,7 @@ test('③f payload 门控纯函数：node/pnpm 存在性 + 可执行位 + target
   }
 })
 
-/** 造 8 个 office 资产文件（与 OFFICE_SKILL_FILES 同形；omit 用于缺件用例）。 */
+/** 造 office 资产文件（与 OFFICE_SKILL_FILES 同形；omit 用于缺件用例）。 */
 function writeOfficeAssetsFixture(root, { omit = [] } = {}) {
   for (const relative of OFFICE_SKILL_FILES) {
     if (omit.includes(relative)) continue
@@ -400,11 +400,11 @@ function writeOfficeAssetsFixture(root, { omit = [] } = {}) {
 test('④ office 技能资产：替换式落位 / 缺源跳过 = 缺位 / --require-office-assets fail-closed', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-office-'))
   try {
-    assert.equal(OFFICE_SKILL_FILES.length, 8, 'office 资产清单必须恰好 8 个文件')
+    assert.equal(OFFICE_SKILL_FILES.length, 4, 'office 资产清单必须恰好 4 个文件（rc.2 资产面）')
     const source = writeOfficeAssetsFixture(path.join(dir, 'assets'))
     const sourceStatus = verifyOfficeAssets(source)
     assert.equal(sourceStatus.ok, true)
-    assert.equal(sourceStatus.checked, 8, '8 个资产文件都必须被核对')
+    assert.equal(sourceStatus.checked, 4, '4 个资产文件都必须被核对')
     const absentStatus = verifyOfficeAssets(path.join(dir, 'nope'))
     assert.equal(absentStatus.ok, false)
     assert.match(absentStatus.problems.join('\n'), /缺文件：office\/SKILL\.md/)

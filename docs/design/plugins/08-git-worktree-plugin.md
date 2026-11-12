@@ -28,7 +28,7 @@
                 │ 同一池（<repo>/.agents/worktrees）
                 ▲
 ┌─ 官方 forge-bundle（P5b，opt-in）──────────────────────────┐
-│ 顶层 worktree（tool create_worktree）+ 组内 forge-worktree   │
+│ 单一 worktree 服务（tool create_worktree）+ 平铺 forge-panel  │
 │ composer/创建卡/hold/restore/右栏 tab；GitHub 行 disabled    │
 └───────────────────────────────────────────────────────────┘
 ```
@@ -253,12 +253,13 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - 打包前必须重建 host 产物（`build:artifacts` / `build:host-packages`），再拷贝到 desktop `dist/`。
 
 ### 7.2 P5b：forge bundle、GitHub 关闭与 node
-- **opt-in**：官方 `@deepseek-ai/dsh-experimental-forge-bundle`（OPTIONAL/EXPERIMENTAL）在实例前端 Plugins → More 开启 “Change requests & worktrees”；启用/关闭需重启。chamber 不在默认 profile 里预置该 bundle，也不提供页内开关。启用后其 patch 插入六个包、七个 loader 行（worktree 在组内重复）： `worktree`、`tool-worktree`、`forge`、`forge-github`、`forge-session`，以及 `optional-forge-panel` 组（`isolate:{worktrees:true}`）内的 `forge-worktree` + `client-ui-forge`。**不能与单独启用 `tool-worktree` 叠加**（同名行重复）。
+- **opt-in**：官方 `@deepseek-ai/dsh-experimental-forge-bundle`（OPTIONAL/EXPERIMENTAL）在实例前端 Plugins → More 开启 “Change requests & worktrees”；启用/关闭需重启。chamber 不在默认 profile 里预置该 bundle，也不提供页内开关。启用后其 patch 插入六个包、六个平铺 loader 行：`worktree`、`tool-worktree`、`forge`、`forge-github`、`forge-session`、`forge-panel`（`client-ui-forge`）。当前 pin 起该 bundle 只挂一个 `worktree` 服务（面板与 `create_worktree` 工具共用），原先的 `optional-forge-panel` 组与 `isolate:{worktrees:true}` 已删除，`forge` 与 `forge-panel` 行平铺到顶层。**不能与单独启用 `tool-worktree` 叠加**（同名行重复）。
 - **GitHub 关闭（P5b-0）**：chamber 的本地 `--patch` overlay 支持 **id-targeted `disabled`**（bundle 层行，含 group 内行），对 `forge-github` 注入 disabled。语义： **bundle 未启用 ⇒ 跳过 + 诊断（幂等，host 照常启动）**；**bundle 已启用但 id 缺失/绑错包/ patch 不可读/重复 ⇒ fail-closed**（不能让行静默保持启用；pin 升级若改 id，宿主 fail-closed，真实 vendor patch 测试钉住该 id）。`directory` 默认已是 `.agents/worktrees`，不必配；`config` 能力仅作远程/兜底。
+- **上游归档清树（当前 pin 的 reclamation，与 design 24 的边界）**：当前 pin 的 `worktree` 服务在 `workspace/session-archived` 时后台清理**它自己 `create()` 且 owned 的** checkout（无未归档会话引用、创建者策略非只读、Git 无 tracked/untracked 改动、无子模块/lock/detached；`git worktree remove` 非 force，分支与提交保留；失败只 warn 并保留分支），开关 `retainOnArchive` 默认 false（Plugins 页可改）。**它只认自己的创建记录**：seed 树、手工树与池外树永不被它清扫，所以 chamber 的池内行、删除确认与保护边界仍由 design 08 拥有；反之，归档任何**由 forge 服务创建**的会话会立刻移除其 checkout（用户可见的「归档」净后果因此变大），design 24 的归档管理器与提示必须按这个事实陈述，不得承诺「归档不动工作树」。
 - **node**：由 control-plane 统一保证。优先复用现有 PATH shim（`pnpm-shim.ts`）让默认 `nodeCommand:'node'` 解析到真实 node；若 shim 不在 host PATH，用 **string-only** 的 `resolvePlainNodeExecutable()`（跳过 Electron 分支；null → `node-unavailable`）。 **绝不写 `process.execPath`**（Electron 二进制不是 node）；两实例同一路径；失败 fail-fast
 + 诊断，不设计回退。node 实际创建必须含**打包态 + Finder 启动**。
 - **远程**：overlay 只服务本机 spawn；SSH 远程用 bundle 默认 `node` + 部署方 PATH，**不上传本地绝对路径**；远程只做诊断。
-- **两实例**：顶层 `worktree`（tool）与组内 `forge-worktree`（panel）；P0 验收各实际建一次。
+- **单服务两入口**：当前 pin 起面板与 `create_worktree` 工具共用一个顶层 `worktree` 服务（无第二个实例）；P0 验收 = 面板与工具各实际建一次，且两次创建都由同一服务记录（session log 的 `plugin:worktree/created` + `worktree` projection）。
 - **filters**：forge 与 seed 使用同一两段 + 枚举 + required 语义（§2.3）；LFS/clean-smudge 降级登记，发布说明写明手动 `git lfs pull`。
 
 ### 7.3 Swift 腿与 node 来源

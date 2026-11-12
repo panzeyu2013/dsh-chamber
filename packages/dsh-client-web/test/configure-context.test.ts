@@ -10,11 +10,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { AppWebEntry } from '../src/boot.ts'
+import { MODULES_ID } from '../src/boot-rows.ts'
 import {
   bootRuntimeEvents,
   Context,
   recordBootRuntimeEvent,
   resetBootRuntimeEvents,
+  setBootScenario,
 } from './fixtures/boot-runtime.mjs'
 
 class ElementStub {
@@ -66,14 +68,24 @@ function installBootHarness(
     prefetch() {
       return options.onPrefetch?.() ?? Promise.resolve()
     },
+    importError() {
+      return undefined
+    },
   }
   const originalConsoleError = console.error
+  const originalConsoleWarn = console.warn
   const logged: unknown[] = []
-  if (captureConsole) console.error = reason => { logged.push(reason) }
+  const warned: unknown[] = []
+  if (captureConsole) {
+    console.error = reason => { logged.push(reason) }
+    console.warn = message => { warned.push(message) }
+  }
   return {
     logged,
+    warned,
     restore() {
       console.error = originalConsoleError
+      console.warn = originalConsoleWarn
       if (previousModules === undefined) delete globals.__DSH_MODULES__
       else globals.__DSH_MODULES__ = previousModules
       if (previousDom === undefined) delete globals.document
@@ -173,6 +185,45 @@ test('configureContext: hostile thrown values settle through bootError without r
     await assert.doesNotReject(entry.run())
     assert.equal(entry.bootError, 'unknown error')
   } finally {
+    await entry.dispose()
+    restore()
+  }
+})
+// ---------------------------------------------------------------------------
+// The post-await audit (rc.2 policy): the kernel rows are required, every other
+// inactive entry degrades with one warning instead of failing the instance shell.
+// ---------------------------------------------------------------------------
+
+test('sweep: an inactive OPTIONAL manifest row degrades — one warning, bootError stays unset', async () => {
+  const { warned, restore } = installBootHarness({ immediate: true }, true)
+  resetBootRuntimeEvents()
+  setBootScenario([{ name: '@example/manifest-row', state: 3, activationError: 'apply exploded' }])
+  const entry = new AppWebEntry(new ElementStub() as unknown as HTMLElement, {})
+  try {
+    await entry.run()
+    assert.equal(entry.bootError, undefined)
+    assert.deepEqual(warned, [
+      'web boot: warning: 1 entry did not activate\n@example/manifest-row: failed: Error: apply exploded',
+    ])
+  } finally {
+    setBootScenario()
+    await entry.dispose()
+    restore()
+  }
+})
+
+test('sweep: an inactive REQUIRED kernel row rejects the boot through bootError', async () => {
+  const { restore } = installBootHarness({ immediate: true }, true)
+  resetBootRuntimeEvents()
+  setBootScenario([{ name: MODULES_ID, state: 3, activationError: 'kernel exploded' }])
+  const entry = new AppWebEntry(new ElementStub() as unknown as HTMLElement, {})
+  try {
+    await entry.run()
+    assert.equal(entry.bootError,
+      'web boot: 1 required entry did not activate\n'
+      + MODULES_ID + ' (required): failed: Error: kernel exploded')
+  } finally {
+    setBootScenario()
     await entry.dispose()
     restore()
   }

@@ -66,7 +66,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const VERSION = positional[0]
-const FORK_VERSION = flags.forkVersion ?? '0.2.2-rc.1'
+const FORK_VERSION = flags.forkVersion ?? '0.2.2-rc.2'
 
 /** `--help` 的用法文本：入口与可用旗标；检查项与既有约定见文件头注释。 */
 function printUsage() {

@@ -19,7 +19,10 @@ import {
   BUNDLE_ROW_DISABLES,
   FORGE_BUNDLE_PACKAGE_NAME,
   FORGE_GITHUB_ROW,
+  WEB_APP_BUNDLE_PACKAGE_NAME,
+  WEB_APP_SKILL_OFFICE_ROW,
   assertBundleRowDisableTargets,
+  bundleRowDisableTargetsForSpawn,
   profileBundlePatchReader,
   resolveBundleRowDisables,
   type BundleRowDisableTarget,
@@ -37,15 +40,8 @@ const FORGE_PATCH = `- insert:
       name: '@deepseek-ai/dsh-experimental-forge-github'
     - id: forge-session
       name: '@deepseek-ai/dsh-experimental-forge-session'
-    - id: optional-forge-panel
-      group: true
-      isolate:
-        worktrees: true
-      insert:
-        - id: forge-worktree
-          name: '@deepseek-ai/dsh-experimental-worktree'
-        - id: forge-panel
-          name: '@deepseek-ai/dsh-experimental-client-ui-forge'
+    - id: forge-panel
+      name: '@deepseek-ai/dsh-experimental-client-ui-forge'
 `
 
 const TARGET: BundleRowDisableTarget = {
@@ -95,6 +91,53 @@ test('the pinned forge bundle still mounts the row the overlay must disable', t 
   )
 })
 
+test('the web-app office-row disable is conditional on the local office mount', () => {
+  // The canonical registry stays forge-only: a caller that mounts no local office row
+  // (Electron/CLI/tests) must leave the bundle row enabled, since it is the only mount.
+  assert.deepEqual(bundleRowDisableTargetsForSpawn({ mountsLocalOfficeSkills: false }), [FORGE_GITHUB_ROW])
+  assert.deepEqual(
+    bundleRowDisableTargetsForSpawn({ mountsLocalOfficeSkills: true }),
+    [FORGE_GITHUB_ROW, WEB_APP_SKILL_OFFICE_ROW],
+    'the Swift sidecar mounts the local skill-office row, so the bundle duplicate must be disabled',
+  )
+  assert.equal(WEB_APP_SKILL_OFFICE_ROW.bundle, '@deepseek-ai/dsh-web-app')
+  assert.equal(WEB_APP_SKILL_OFFICE_ROW.id, 'skill-office')
+  assert.equal(WEB_APP_SKILL_OFFICE_ROW.name, '@deepseek-ai/dsh-skill-office')
+})
+
+test('the pinned rc.2 web-app bundle mounts the office row our local row replaces', t => {
+  // Read the row exactly the way the PRODUCTION reader does: every patch file the bundle's
+  // dsh.bundle.patch declares, in application order, joined into one patch list. The
+  // fail-closed proof requires the id to be unique and bound to the exact package name.
+  const bundleDir = fileURLToPath(new URL('../../../../vendor/harness-checkout/packages/bundle/web-app/', import.meta.url))
+  const manifestPath = join(bundleDir, 'package.json')
+  if (!existsSync(manifestPath)) {
+    t.skip('vendor/harness-checkout is not materialized')
+    return
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const declared = manifest.dsh?.bundle?.patch
+  const files = Array.isArray(declared) ? declared : [declared]
+  assert.ok(files.length > 1, 'web-app declares its patch list (cordis.patch.yml + presets)')
+  const patches = files.map(file => readFileSync(join(bundleDir, file), 'utf8'))
+  const rows = parsePatchRows(patches.join('\n'))
+  const officeRows = rows.filter(row => row.id === WEB_APP_SKILL_OFFICE_ROW.id)
+  assert.equal(officeRows.length, 1, 'exactly one skill-office row across the declared patch set')
+  assert.deepEqual(officeRows[0]!.names, [WEB_APP_SKILL_OFFICE_ROW.name])
+  // The workspace-dependencies row exists but is profile-gated: it is NOT a disable target.
+  const wsdeps = rows.find(row => row.id === 'workspace-dependencies')
+  assert.ok(wsdeps, 'the pinned web-app patch mounts the gated workspace-dependencies row')
+  assert.deepEqual(
+    resolveBundleRowDisables({
+      enabledBundles: [WEB_APP_BUNDLE_PACKAGE_NAME],
+      readBundlePatches: readable(patches),
+      targets: [WEB_APP_SKILL_OFFICE_ROW],
+      log() {},
+    }),
+    [{ id: WEB_APP_SKILL_OFFICE_ROW.id, name: WEB_APP_SKILL_OFFICE_ROW.name }],
+  )
+})
+
 // ---------------------------------------------------------------------------
 // resolveBundleRowDisables — idempotent skip vs fail-closed
 // ---------------------------------------------------------------------------
@@ -132,9 +175,11 @@ test('an enabled bundle with its row present yields the exact id-targeted disabl
   )
 })
 
-test('a row INSIDE a group entry is addressable by id (the panel rows)', () => {
+test('the panel ids are addressable after the rc.2 flatten (no group row)', () => {
+  // rc.2 removed the optional-forge-panel group and its isolate.worktrees: the panel
+  // rows are top-level again (one worktree service), so a disable addresses them flat.
   const targets: BundleRowDisableTarget[] = [
-    { ...TARGET, id: 'forge-worktree', name: '@deepseek-ai/dsh-experimental-worktree' },
+    { ...TARGET, id: 'worktree', name: '@deepseek-ai/dsh-experimental-worktree' },
     { ...TARGET, id: 'forge-panel', name: '@deepseek-ai/dsh-experimental-client-ui-forge' },
   ]
   const disables = resolveBundleRowDisables({
@@ -143,8 +188,8 @@ test('a row INSIDE a group entry is addressable by id (the panel rows)', () => {
     targets,
     log() {},
   })
-  assert.deepEqual(disables.map(row => row.id), ['forge-worktree', 'forge-panel'],
-    'group children are found at the depth the loader indexes them')
+  assert.deepEqual(disables.map(row => row.id), ['worktree', 'forge-panel'],
+    'top-level rows are found at the depth the loader indexes them')
 })
 
 test('a misspelled/absent id in an ENABLED bundle is fail-closed', () => {

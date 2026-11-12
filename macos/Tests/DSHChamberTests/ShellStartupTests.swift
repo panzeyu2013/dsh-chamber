@@ -917,10 +917,23 @@ final class ShellStartupTests: XCTestCase {
         guard let editMenu = section(menu, AppDelegate.editSectionTag) else {
             return XCTFail("主菜单缺少「编辑」子菜单")
         }
-        let pasteAndMatch = editMenu.items.first { $0.action == Selector(("pasteAndMatchStyle:")) }
-        XCTAssertNotNil(pasteAndMatch, "Edit 菜单应含「粘贴并匹配样式」（S-24）")
-        XCTAssertEqual(pasteAndMatch?.keyEquivalent, "v")
-        XCTAssertEqual(pasteAndMatch?.keyEquivalentModifierMask, [.command, .option, .shift])
+        // rc.2 macOS Edit 菜单语义：⇧⌘V 为主 binding（macOS 标准），Electron 44 的
+        // ⌥⇧⌘V 保留为隐藏别名（vendor rc.2 apps/desktop/src/main.ts:1171-1196）。
+        let pasteAndMatchItems = editMenu.items.filter { $0.action == Selector(("pasteAndMatchStyle:")) }
+        XCTAssertEqual(pasteAndMatchItems.count, 2,
+                       "「粘贴并匹配样式」= 主项 + 兼容别名（S-24 / rc.2 语义）")
+        guard let pasteAndMatch = pasteAndMatchItems.first(where: { !$0.isHidden }) else {
+            return XCTFail("「粘贴并匹配样式」主项必须可见")
+        }
+        XCTAssertEqual(pasteAndMatch.keyEquivalent, "v")
+        XCTAssertEqual(pasteAndMatch.keyEquivalentModifierMask, [.command, .shift],
+                       "主 binding = ⇧⌘V（macOS 标准；rc.2 main.ts pasteAndMatchStyle）")
+        guard let pasteAndMatchAlias = pasteAndMatchItems.first(where: { $0.isHidden }) else {
+            return XCTFail("⌥⇧⌘V 必须保留为隐藏兼容别名（Electron acceleratorWorksWhenHidden 同义）")
+        }
+        XCTAssertEqual(pasteAndMatchAlias.keyEquivalent, "v")
+        XCTAssertEqual(pasteAndMatchAlias.keyEquivalentModifierMask, [.command, .option, .shift],
+                       "隐藏别名保留 Electron 44 的 ⌥⇧⌘V")
         XCTAssertNotNil(editMenu.items.first { $0.action == Selector(("delete:")) },
                         "Edit 菜单应含「删除」")
         XCTAssertNotNil(editMenu.items.first { $0.action == #selector(NSText.selectAll(_:)) },

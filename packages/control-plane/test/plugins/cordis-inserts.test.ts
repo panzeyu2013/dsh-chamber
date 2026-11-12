@@ -233,40 +233,61 @@ test('parsePatchRows reads every top-level insert row of a bundle patch', () => 
 })
 
 test('parsePatchRows finds rows nested in a group entry, in block insert and config shapes', () => {
-  // The forge bundle's group row mounts its panel rows one level deeper; an id-targeted
-  // patch still addresses them by id, so the verification lookup must see them.
+  // Other bundles still mount panel rows one level deeper behind a group row; an
+  // id-targeted patch still addresses them by id, so the lookup must see them.
   const blockInsert = `- insert:
-    - id: optional-forge-panel
+    - id: some-optional-group
       group: true
-      isolate:
-        worktrees: true
       insert:
-        - id: forge-worktree
-          name: '@deepseek-ai/dsh-experimental-worktree'
-        - id: forge-panel
-          name: '@deepseek-ai/dsh-experimental-client-ui-forge'
+        - id: grouped-child
+          name: '@example/grouped-child'
+        - id: grouped-panel
+          name: '@example/grouped-panel'
 `
   const rows = parsePatchRows(blockInsert)
-  assert.deepEqual(rows.map(row => row.id), ['optional-forge-panel', 'forge-worktree', 'forge-panel'])
+  assert.deepEqual(rows.map(row => row.id), ['some-optional-group', 'grouped-child', 'grouped-panel'])
   assert.deepEqual(rows[0]!.names, [], 'the group row itself carries no name')
-  assert.deepEqual(rows[2]!.names, ['@deepseek-ai/dsh-experimental-client-ui-forge'])
+  assert.deepEqual(rows[2]!.names, ['@example/grouped-panel'])
 
   const blockConfig = `- insert:
-    - id: optional-forge-panel
+    - id: some-optional-group
       group: true
       config:
-        - id: forge-worktree
-          name: '@deepseek-ai/dsh-experimental-worktree'
+        - id: grouped-child
+          name: '@example/grouped-child'
 `
-  assert.deepEqual(parsePatchRows(blockConfig).map(row => row.id), ['optional-forge-panel', 'forge-worktree'])
-  assert.deepEqual(parsePatchRows(blockConfig)[1]!.names, ['@deepseek-ai/dsh-experimental-worktree'])
+  assert.deepEqual(parsePatchRows(blockConfig).map(row => row.id), ['some-optional-group', 'grouped-child'])
+  assert.deepEqual(parsePatchRows(blockConfig)[1]!.names, ['@example/grouped-child'])
 
   const flowConfig = `- insert:
-    - id: optional-forge-panel
+    - id: some-optional-group
       group: true
-      config: [{ id: forge-worktree, name: '@deepseek-ai/dsh-experimental-worktree' }]
+      config: [{ id: grouped-child, name: '@example/grouped-child' }]
 `
-  assert.deepEqual(parsePatchRows(flowConfig).map(row => row.id), ['optional-forge-panel', 'forge-worktree'])
+  assert.deepEqual(parsePatchRows(flowConfig).map(row => row.id), ['some-optional-group', 'grouped-child'])
+})
+
+test('parsePatchRows reads the rc.2 flat forge-bundle shape (one worktree service, no group)', () => {
+  // rc.2 removed the optional-forge-panel group (and its isolate.worktrees): the
+  // panel rows are top-level again, so a bundle-row disable must address them flat.
+  const patch = `- insert:
+    - id: worktree
+      name: '@deepseek-ai/dsh-experimental-worktree'
+    - id: tool-worktree
+      name: '@deepseek-ai/dsh-experimental-tool-worktree'
+    - id: forge
+      name: '@deepseek-ai/dsh-experimental-forge'
+    - id: forge-github
+      name: '@deepseek-ai/dsh-experimental-forge-github'
+    - id: forge-session
+      name: '@deepseek-ai/dsh-experimental-forge-session'
+    - id: forge-panel
+      name: '@deepseek-ai/dsh-experimental-client-ui-forge'
+`
+  const rows = parsePatchRows(patch)
+  assert.deepEqual(rows.map(row => row.id),
+    ['worktree', 'tool-worktree', 'forge', 'forge-github', 'forge-session', 'forge-panel'])
+  assert.deepEqual(rows[5]!.names, ['@deepseek-ai/dsh-experimental-client-ui-forge'])
 })
 
 test('parsePatchRows ignores comments, config keys and rows without exactly one id', () => {

@@ -7,7 +7,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from '../src/boot-rows.ts'
+import { MODULES_ID, REQUIRED_BOOT_ROW_IDS, UI_RENDERER_ID, composeBootRows } from '../src/boot-rows.ts'
+
+test('required: only the kernel-adopted rows fail the boot (the rc.2 roster re-derived)', () => {
+  assert.deepEqual(REQUIRED_BOOT_ROW_IDS, [MODULES_ID, UI_RENDERER_ID])
+  // Every other id in the upstream required roster is composite-covered, so it can
+  // never exist as a loader entry on this page; an absent name has no effect.
+  for (const covered of ['@deepseek-ai/dsh-api-session-controller', '@deepseek-ai/dsh-client-ui-session',
+    '@deepseek-ai/dsh-client-ui-chat', '@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-ui-layout']) {
+    assert.equal(REQUIRED_BOOT_ROW_IDS.includes(covered), false, covered)
+  }
+})
 
 test('rows: kernel entries lead, manifest follows minus the two, extras last', () => {
   const manifest = ['@deepseek-ai/dsh-client-modules', '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-tool']

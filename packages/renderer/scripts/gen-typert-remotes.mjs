@@ -62,8 +62,8 @@ const REMOTE_PACKAGES = remotePackagesFromAssembly(readFileSync(REMOTE_ASSEMBLY_
  * Self-mounted Remote faces outside the dsh-api-remotes assembly: the alpha.3
  * access-control client value-imports its own `./remote` face, and the chamber
  * composite covers that client first-screen (ui-session/ui-workspace inject
- * `remoteAccess`), so its artifact must be generated without joining the C4
- * assembly table (which stays 26). Single source: typert-remote-contract.mjs.
+ * `remoteAccess`), so its artifact must be generated without joining the
+ * ordered C4 assembly table. Single source: typert-remote-contract.mjs.
  */
 const SELF_MOUNTED_REMOTE_PACKAGES = EXPECTED_SELF_MOUNTED_REMOTES
 const GENERATED_REMOTE_PACKAGES = [...REMOTE_PACKAGES, ...SELF_MOUNTED_REMOTE_PACKAGES]

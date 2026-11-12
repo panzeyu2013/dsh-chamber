@@ -17,6 +17,7 @@ import {
   type SeedEntry,
 } from './host-graph-seed.ts'
 import {
+  bundleRowDisableTargetsForSpawn,
   profileBundlePatchReader,
   resolveBundleRowDisables,
   type BundleRowDisableTarget,
@@ -234,7 +235,12 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   const bundleDisables = resolveBundleRowDisables({
     enabledBundles: profileBundleLayer(dshHome),
     readBundlePatches: profileBundlePatchReader({ dshHome, dshWorkspacePath: input.dshWorkspacePath }),
-    targets: input.bundleRowDisables,
+    // Tests pin their own list; the production default adds the web-app office-row
+    // disable exactly when this spawn mounts the local office-skills row (rc.2 double
+    // mount would throw in the skill registry — see bundle-row-disables.ts).
+    targets: input.bundleRowDisables ?? bundleRowDisableTargetsForSpawn({
+      mountsLocalOfficeSkills: input.startupPluginCapabilities?.officeSkillsDir !== undefined,
+    }),
     log,
   })
   // The user profile patch is read ONCE here: the startup rows' reuse decision and the

@@ -8,7 +8,8 @@
  * run() is module face first: adopt/install the shared module system → draw the loading
  * page → prefetch the `immediately` tier while mounting the Loader (`internal` injected
  * BEFORE any entry exists) → await the tier and create the entries → sweep for ACTIVE
- * (extras degrade) → mount through `uiRenderer`.
+ * (required rows fail the boot; every other inactive row degrades with one warning)
+ * → mount through `uiRenderer`.
  */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -22,9 +23,11 @@ import type {
 // the import also pulls its Context augmentation (`ctx.uiRenderer`) in.
 import * as UiRenderer from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { BootPage } from './boot-page.ts'
-import { MODULES_ID, UI_RENDERER_ID, composeBootRows } from './boot-rows.ts'
+import { MODULES_ID, REQUIRED_BOOT_ROW_IDS, UI_RENDERER_ID, composeBootRows } from './boot-rows.ts'
 import { registerExtraChunkOwners } from './extra-chunk-owners.ts'
-import { classifySweepEntry } from './boot-tolerance.ts'
+import {
+  activationFailure, classifySweepEntry, sweepFatalReport, sweepWarningReport, type SweepFailure,
+} from './boot-tolerance.ts'
 import { getStaticModules } from './seed.ts'
 import { STATE_LABELS } from './loader-status.ts'
 import { installWindowDragRecall } from './window-drag/recall.ts'
@@ -257,17 +260,26 @@ export class AppWebEntry {
     perfMark('dsh:boot:rows-created')
     await loader.await()
     perfMark('dsh:boot:loader-awaited')
-    this.assertEntriesActive(toleratedIds)
+    await this.auditEntries(toleratedIds)
   }
 
   /**
-   * Reject entries that failed import/apply or still wait on missing services.
-   * `toleratedIds` (extra rows) are swept but never fail the boot — they only mark
-   * 'failed'. The decision rules live in boot-tolerance.ts; this loop drives them.
+   * Audit every loader entry after quiescence (rc.2 runtime policy, re-derived here):
+   * a required entry (`REQUIRED_BOOT_ROW_IDS`, the kernel-adopted rows) that did not
+   * activate rejects the boot; every other inactive entry — a manifest row or a
+   * per-instance extra row — degrades: it is marked 'failed' on the boot page and the
+   * boot reports ONE warning, leaving active siblings running. A failed fiber's
+   * recorded activation error is read through `activationFailure` (cordis exposes it
+   * only through `await()`). The decision rules live in boot-tolerance.ts.
+   * @param toleratedIds - the per-instance extra-row ids (version skew by construction).
    */
-  private assertEntriesActive(toleratedIds: ReadonlySet<string> = new Set()): void {
+  private async auditEntries(toleratedIds: ReadonlySet<string>): Promise<void> {
     const ctx = this.ctx!
-    const failures: string[] = []
+    const policy = {
+      required: new Set(REQUIRED_BOOT_ROW_IDS),
+      tolerated: toleratedIds,
+    }
+    const failures: SweepFailure[] = []
     for (const entry of ctx.loader.entries()) {
       const name = entry.options.name
       const fiber = entry.fiber
@@ -275,7 +287,7 @@ export class AppWebEntry {
       const verdict = classifySweepEntry(
         name,
         fiberLabel,
-        toleratedIds,
+        policy,
         // The missing-service list is only meaningful for a PENDING fiber.
         fiberLabel === 'pending' && fiber !== undefined
           ? Object.keys(fiber.inject).filter(service => ctx.get(service) === undefined)
@@ -283,17 +295,17 @@ export class AppWebEntry {
         // 无 fiber = import/apply 失败：模块系统记录了原因就用它，没有才回落「看 console」
         //（上游 boot-client.ts 的 assertEntriesActive 同口径，§22.4.2-1）。
         fiberLabel === undefined ? this.modules.importError(name)?.message : undefined,
+        // reading the recorded error awaits only settled fibers, so the sweep stays bounded.
+        fiberLabel === 'failed' && fiber !== undefined ? await activationFailure(fiber) : undefined,
       )
       if (verdict.kind === 'ok') continue
-      if (verdict.kind === 'degraded') {
-        this.page.setState(name, 'failed')
-        continue
-      }
-      failures.push(verdict.reason)
+      if (verdict.kind === 'degraded') this.page.setState(name, 'failed')
+      failures.push({ name, reason: verdict.reason })
     }
-    if (failures.length > 0) {
-      throw new Error(`web boot: ${String(failures.length)} entr${failures.length === 1 ? 'y' : 'ies'} did not activate\n${failures.join('\n')}`)
-    }
+    const fatal = sweepFatalReport(failures, policy.required)
+    if (fatal !== undefined) throw new Error(fatal)
+    const warning = sweepWarningReport(failures, policy.required)
+    if (warning !== undefined) console.warn(warning)
   }
 
   /**

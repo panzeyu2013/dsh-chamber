@@ -628,17 +628,16 @@ const FORGE_GITHUB_DISABLE_ROW = `- id: forge-github
 const FORGE_PATCH = `- insert:
     - id: worktree
       name: '@deepseek-ai/dsh-experimental-worktree'
+    - id: tool-worktree
+      name: '@deepseek-ai/dsh-experimental-tool-worktree'
+    - id: forge
+      name: '@deepseek-ai/dsh-experimental-forge'
     - id: forge-github
       name: '@deepseek-ai/dsh-experimental-forge-github'
-    - id: optional-forge-panel
-      group: true
-      isolate:
-        worktrees: true
-      insert:
-        - id: forge-worktree
-          name: '@deepseek-ai/dsh-experimental-worktree'
-        - id: forge-panel
-          name: '@deepseek-ai/dsh-experimental-client-ui-forge'
+    - id: forge-session
+      name: '@deepseek-ai/dsh-experimental-forge-session'
+    - id: forge-panel
+      name: '@deepseek-ai/dsh-experimental-client-ui-forge'
 `
 
 /** Enable the forge bundle in the managed profile (manifest layer + installed package). */
@@ -717,7 +716,9 @@ test('resolveLocalHostGraphOverlay: a misspelled row id in an ENABLED bundle is 
   )
 })
 
-test('resolveLocalHostGraphOverlay: a group-inner row id is addressable (the panel worktree row)', t => {
+test('resolveLocalHostGraphOverlay: a panel row id is addressable after the rc.2 flatten', t => {
+  // rc.2 removed the optional-forge-panel group: the worktree row is top-level again,
+  // so a panel row disable is addressed at that depth.
   const dir = tempDir(t)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
   const sourceDir = writeBuiltSeedSource(dir, true)
@@ -728,7 +729,7 @@ test('resolveLocalHostGraphOverlay: a group-inner row id is addressable (the pan
     entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
     bundleRowDisables: [{
       bundle: FORGE_BUNDLE_NAME,
-      id: 'forge-worktree',
+      id: 'worktree',
       name: '@deepseek-ai/dsh-experimental-worktree',
     }],
     log() {},
@@ -736,7 +737,7 @@ test('resolveLocalHostGraphOverlay: a group-inner row id is addressable (the pan
   })
   assert.equal(
     readFileSync(overlay as string, 'utf8'),
-    EXPECTED_OVERLAY + `- id: forge-worktree
+    EXPECTED_OVERLAY + `- id: worktree
   name: '@deepseek-ai/dsh-experimental-worktree'
   disabled: true
 `,
@@ -1346,26 +1347,40 @@ function writeStartupPluginFixture(dir: string): StartupPluginFixture {
   writeFileSync(join(primaryRuntimeDir, 'runtime.json'), JSON.stringify({ platform: process.platform, arch: process.arch, python: '3.12.14' }))
   writeFileSync(join(primaryRuntimeDir, 'dependencies', 'python', 'bin', 'python3'), '#!/usr/bin/env python3\n')
   writeFileSync(join(primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node'), '#!/usr/bin/env node\n')
-  for (const skill of ['office', 'office-docx', 'office-pptx', 'office-xlsx', 'office-render', 'office-recalculate', 'office-export-pdf']) {
+  // rc.2: four skill directories (no render/recalculate/export-pdf, no sidecar.md).
+  for (const skill of ['office', 'office-docx', 'office-pptx', 'office-xlsx']) {
     mkdirSync(join(officeSkillsDir, skill), { recursive: true })
     writeFileSync(join(officeSkillsDir, skill, 'SKILL.md'), '---\ndescription: ' + skill + '\n---\n')
   }
-  mkdirSync(join(officeSkillsDir, 'office', 'references'), { recursive: true })
-  writeFileSync(join(officeSkillsDir, 'office', 'references', 'sidecar.md'), '# sidecar\n')
   for (const name of ['dsh-tool-workspace-dependencies', 'dsh-skill-office']) {
     const packageDir = join(workspace, 'node_modules', '@deepseek-ai', name)
     mkdirSync(packageDir, { recursive: true })
     writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/' + name }))
   }
-  const kitDir = join(workspace, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
-  mkdirSync(join(kitDir, 'lib'), { recursive: true })
-  writeFileSync(join(kitDir, 'lib', 'cli.js'), 'export {}\n')
   return {
     workspace,
     primaryRuntimeDir,
     officeSkillsDir,
     capabilities: { primaryRuntimeDir, officeSkillsDir },
   }
+}
+
+/** The rc.2 web-app office row the local overlay force-disables when mounting its own. */
+const WEB_APP_SKILL_OFFICE_DISABLE_ROW = `- id: skill-office
+  name: '@deepseek-ai/dsh-skill-office'
+  disabled: true
+`
+
+/** Install a profile-layer web-app bundle whose patch declares the skill-office row. */
+function enableWebAppBundle(dshHome: string): void {
+  const packageDir = join(dshHome, 'profiles', 'web', 'node_modules', '@deepseek-ai', 'dsh-web-app')
+  mkdirSync(packageDir, { recursive: true })
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+    name: '@deepseek-ai/dsh-web-app',
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  }))
+  writeFileSync(join(packageDir, 'cordis.patch.yml'),
+    "- insert:\n    - id: skill-office\n      name: '@deepseek-ai/dsh-skill-office'\n")
 }
 
 /** The exact startup block the Swift planner produces for the fixture above. */
@@ -1376,8 +1391,6 @@ function expectedStartupBlock(fixture: StartupPluginFixture, dshHome: string): s
     + `        root: '${join(dshHome, 'dsh-runtimes', 'dsh-primary-runtime')}'\n`
     + "    - id: chamber-office-skills\n      name: '@deepseek-ai/dsh-skill-office'\n      config:\n"
     + `        assetRoot: '${fixture.officeSkillsDir}'\n`
-    + `        node: '${join(fixture.primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node')}'\n`
-    + `        cli: '${join(fixture.workspace, 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js')}'\n`
 }
 
 test('buildPatchOverlay: the 4th startupOverlayText appends after the chamber rows; 3-arg bytes stay canonical', t => {
@@ -1419,6 +1432,9 @@ test('resolveLocalHostGraphOverlay: startup capabilities alone yield a startup-o
     dshWorkspacePath: fixture.workspace,
     entries: [],
     startupPluginCapabilities: fixture.capabilities,
+    // Pin the startup-only composition here; the web-app office-row disable is covered
+    // by its own integration case below (an installed bundle package is required to prove it).
+    bundleRowDisables: [],
     log() {},
     warn() {},
   })
@@ -1440,6 +1456,7 @@ test('resolveLocalHostGraphOverlay: startup rows append after the chamber insert
     dshWorkspacePath: fixture.workspace,
     entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
     startupPluginCapabilities: fixture.capabilities,
+    bundleRowDisables: [],
     log() {},
     warn() {},
   })
@@ -1460,6 +1477,7 @@ test('resolveLocalHostGraphOverlay: startup rows disappearing clear the previous
     dshWorkspacePath: fixture.workspace,
     entries: [],
     startupPluginCapabilities: fixture.capabilities,
+    bundleRowDisables: [],
     log() {},
     warn() {},
   })
@@ -1475,6 +1493,27 @@ test('resolveLocalHostGraphOverlay: startup rows disappearing clear the previous
   assert.equal(second, null, 'with no capability roots the spawn passes no --patch')
   assert.equal(existsSync(stale), false,
     'a leftover overlay would report rows this spawn does not mount')
+})
+
+test('resolveLocalHostGraphOverlay: the rc.2 web-app office row is disabled beside the local office row', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const fixture = writeStartupPluginFixture(dir)
+  enableWebAppBundle(dshHome)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    dshWorkspacePath: fixture.workspace,
+    entries: [],
+    startupPluginCapabilities: fixture.capabilities,
+    log() {},
+    warn() {},
+  })
+  assert.equal(
+    readFileSync(overlay as string, 'utf8'),
+    WEB_APP_SKILL_OFFICE_DISABLE_ROW + expectedStartupBlock(fixture, dshHome),
+    'the bundle duplicate is force-disabled ahead of the startup insert object (two live skill-office mounts would throw)',
+  )
 })
 
 test('resolveLocalHostGraphOverlay: safe mode suppresses startup rows and clears the overlay', t => {

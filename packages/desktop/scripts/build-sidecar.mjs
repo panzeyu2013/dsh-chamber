@@ -9,7 +9,7 @@
  *                                  control-plane-module 的相对动态 import
  *                                  加载——包外裸说明符在打包态不可解析）
  *   <out>/primary-runtime/         全量 payload（python/node/pnpm）的拷贝；
- *   <out>/office-skills/           office 技能资产的拷贝（8 个 markdown）。
+ *   <out>/office-skills/           office 技能资产的拷贝（4 个 SKILL.md；rc.2 资产面）。
  *                                  **单 Node 裁决（swift-impl-contract）**：不再
  *                                  下载/固定/重命名独立 Node，也没有
  *                                  `dsh-chamber-helper`——装配内唯一的 Node 就是
@@ -134,7 +134,7 @@ export function sidecarLayout(outDir) {
     primaryRuntime: path.join(outDir, 'primary-runtime'),
     payloadNode: payloadNodePath(outDir),
     payloadPnpmEntry: path.join(outDir, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'),
-    // office 技能资产（8 个 markdown）：与 Electron extraResources 同布局，
+    // office 技能资产（4 个 SKILL.md，rc.2 资产面）：与 Electron extraResources 同布局，
     // 随 build-swift-app 进 Contents/Resources/sidecar/office-skills。
     officeSkills: path.join(outDir, 'office-skills'),
   }
@@ -293,8 +293,10 @@ export function verifyVendorDshRuntime(vendorDir, platform = process.platform) {
     )
   }
   // LibreOffice 引擎载荷完整性（G39 延伸）：dsh 运行时闭包必须带 kit 闭包与
-  // 目标平台引擎包——缺引擎不会让构建变红，只会在运行期让 office 的
-  // convert/recalculate/render 静默降级（cli:false），故构建期 fail-closed。
+  // 目标平台引擎包（rc.2 由 @deepseek-ai/dsh-office-kit 解析 Kit 与其引擎，Kit
+  // 0.2.3 的引擎包名不变：libreoffice-kit-<platform> / -wasm）——缺引擎不会让
+  // 构建变红，只会在运行期让 office 转换静默降级（office-kit unavailable），故
+  // 构建期 fail-closed。
   const kitDir = path.join(vendorDir, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
   if (!existsSync(kitDir)) {
     throw new Error(

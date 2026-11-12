@@ -13,6 +13,19 @@ export function resetBootRuntimeEvents() {
   events.length = 0
 }
 
+/**
+ * Per-name fiber plans for the post-await sweep tests. Absent names keep the default
+ * active fiber; a plan can be fiberless (import failed), carry a state value
+ * (0 pending / 1 loading / 2 active / 3 failed / 4 disposed / 5 unloading) and an
+ * activation error rethrown through `fiber.await()` the way cordis does.
+ */
+const scenario = new Map()
+
+export function setBootScenario(rows = []) {
+  scenario.clear()
+  for (const row of rows) scenario.set(row.name, row)
+}
+
 export function bootRuntimeEvents() {
   return [...events]
 }
@@ -29,10 +42,17 @@ export class Context {
       internal: undefined,
       async create({ name }) {
         events.push(`materialize:${name}`)
-        const entry = {
-          options: { name },
-          fiber: { state: 2, inject: {} },
-        }
+        const planned = scenario.get(name)
+        const entry = planned?.fiberless === true
+          ? { options: { name }, fiber: undefined }
+          : {
+            options: { name },
+            fiber: {
+              state: planned?.state ?? 2,
+              inject: {},
+              async await() { if (planned?.activationError !== undefined) throw new Error(planned.activationError) },
+            },
+          }
         entries.set(name, entry)
         return name
       },

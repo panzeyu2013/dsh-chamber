@@ -4,8 +4,16 @@
  *
  *   - `@deepseek-ai/dsh-tool-workspace-dependencies` (the primary-runtime payload behind
  *     the `load_workspace_dependencies` tool), and
- *   - `@deepseek-ai/dsh-skill-office` (the seven Office skill directories plus the
- *     LibreOffice Kit CLI wiring).
+ *   - `@deepseek-ai/dsh-skill-office` (the four Office skill directories, mounted with
+ *     an explicit `assetRoot` pointing at the prune-surviving sibling copy).
+ *
+ * rc.2 moved Office into the web-app bundle: the bundle's own `skill-office` row mounts
+ * in EVERY profile from the package's packaged assets, but the sidecar payload's runtime
+ * tree is pruned (every non-`docs/` Markdown is deleted, including the packaged
+ * SKILL.md files), so that row cannot serve skills from the payload. This plane keeps
+ * mounting `chamber-office-skills` with `assetRoot` -> `<sidecar>/office-skills` and the
+ * local overlay force-disables the bundle row by id (bundle-row-disables.ts) — mounting
+ * both would register the `dsh-office` skill provider twice and fail the second mount.
  *
  * Scope is the LOCAL Swift instance only: the resource roots ship inside the sidecar
  * assembly and a remote (gateway/SSH) instance never sees them, so no capability is
@@ -44,9 +52,10 @@ export interface StartupPluginCapabilities {
    *  sidecar entry: packaged `<sidecar>/primary-runtime`, dev
    *  `packages/desktop/resources/primary-runtime`. */
   readonly primaryRuntimeDir?: string
-  /** Office skill assets dir (the seven skill folders + office/references/sidecar.md),
-   *  a sibling of the payload: packaged `<sidecar>/office-skills`, dev
-   *  `packages/desktop/resources/office-skills`. */
+  /** Office skill assets dir (the four skill folders carrying SKILL.md), a sibling of
+   *  the payload: packaged `<sidecar>/office-skills`, dev
+   *  `packages/desktop/resources/office-skills`. The dir survives runtime prune, which
+   *  deletes the packaged markdown inside `node_modules`. */
   readonly officeSkillsDir?: string
 }
 
@@ -56,11 +65,12 @@ export interface StartupPluginIdentity {
   readonly name: string
 }
 
-/** One rendered startup row: a loader insert identity plus its plugin config mapping. */
+/** One rendered startup row: a loader insert identity plus its plugin config mapping.
+ *  rc.2 startup configs carry only string values (assetRoot / source / root). */
 export interface StartupPluginRow {
   readonly id: string
   readonly name: string
-  readonly config: Readonly<Record<string, string | false>>
+  readonly config: Readonly<Record<string, string>>
 }
 
 /**
@@ -81,7 +91,12 @@ export const STARTUP_PLUGIN_ROWS = {
 /** Per-row config key allowlist, in the fixed render order (design contract). */
 const STARTUP_PLUGIN_CONFIG_KEYS: Readonly<Record<string, readonly string[]>> = {
   [STARTUP_PLUGIN_ROWS.workspaceDependencies.id]: ['source', 'root'],
-  [STARTUP_PLUGIN_ROWS.officeSkills.id]: ['assetRoot', 'node', 'cli'],
+  // rc.2 skill-office Config = {assetRoot?, pythonEnvironment?}; node/cli are gone.
+  // pythonEnvironment is intentionally omitted: the rc.2 schema default is
+  // 'workspace-dependencies', which is exactly the desktop semantics (the bundled
+  // Python from the primary-runtime payload), and the renderer only renders this
+  // allowlist.
+  [STARTUP_PLUGIN_ROWS.officeSkills.id]: ['assetRoot'],
 }
 
 /** Config keys a row MUST carry (an emitted row may never be half-configured). */
@@ -90,21 +105,17 @@ const STARTUP_PLUGIN_REQUIRED_KEYS: Readonly<Record<string, readonly string[]>> 
   [STARTUP_PLUGIN_ROWS.officeSkills.id]: ['assetRoot'],
 }
 
-/** The seven Office skill directories dsh-skill-office loads, in upstream order. */
+/** The four Office skill directories dsh-skill-office loads (rc.2 SKILL_NAMES). */
 const OFFICE_SKILL_NAMES = [
   'office',
   'office-docx',
   'office-pptx',
   'office-xlsx',
-  'office-render',
-  'office-recalculate',
-  'office-export-pdf',
 ] as const
 
-/** The upstream packages the active workspace must install (and the kit the CLI comes from). */
+/** The upstream packages the active workspace must install. */
 const WORKSPACE_DEPENDENCIES_NAME = STARTUP_PLUGIN_ROWS.workspaceDependencies.name
 const SKILL_OFFICE_NAME = STARTUP_PLUGIN_ROWS.officeSkills.name
-const LIBREOFFICE_KIT_NAME = '@deepseek-ai/libreoffice-kit'
 
 /** Inputs of one per-spawn startup-row plan (see {@link planStartupPluginRows}). */
 export interface PlanStartupPluginRowsInput {
@@ -246,64 +257,15 @@ function hasPythonSitePackages(libDir: string): boolean {
     /^python\d+\.\d+$/u.test(entry) && isDirectory(join(libDir, entry, 'site-packages')))
 }
 
-/** The Office assets gate: seven skill directories each with SKILL.md plus the shared
- *  office/references/sidecar.md. */
+/** The Office assets gate: the four skill directories each with SKILL.md (rc.2 no longer
+ *  ships the shared office/references/sidecar.md). */
 function missingOfficeAssets(officeSkillsDir: string): string[] {
   const missing: string[] = []
   for (const skillName of OFFICE_SKILL_NAMES) {
     const skillPath = join(officeSkillsDir, skillName, 'SKILL.md')
     if (!isFile(skillPath)) missing.push(`${skillPath} is missing`)
   }
-  const sidecarPath = join(officeSkillsDir, 'office', 'references', 'sidecar.md')
-  if (!isFile(sidecarPath)) missing.push(`${sidecarPath} is missing`)
   return missing
-}
-
-/** The workspace-installed LibreOffice Kit CLI entry: directly under either package
- *  anchor, or inside the skill package's own node_modules (pnpm SOURCE layout). The CLI
- *  is optional: absent means the operations are explicitly disabled (`cli: false`). */
-function workspaceLibreOfficeCli(workspacePath: string): string | null {
-  const anchors = workspacePackageAnchors(workspacePath)
-  // Hoisted/installed trees expose libreoffice-kit directly under the workspace anchor.
-  for (const anchor of anchors) {
-    const cli = join(workspacePackageDir(anchor, LIBREOFFICE_KIT_NAME), 'lib', 'cli.js')
-    if (isFile(cli)) return cli
-  }
-  // A pnpm SOURCE workspace installs the kit inside the skill package's own
-  // node_modules (that is where the host's package-scoped resolution finds it);
-  // the anchor path may itself be a link into the package, so probing through it
-  // is layout-faithful.
-  for (const anchor of anchors) {
-    const nested = join(
-      workspacePackageDir(anchor, SKILL_OFFICE_NAME),
-      'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js',
-    )
-    if (isFile(nested)) return nested
-  }
-  return null
-}
-
-/** The payload's standalone Node binary, when the payload carries one. The Swift
- *  sidecar itself runs on this Node; when absent (dev/CI caller Node) the Office row
- *  simply omits `node` and skill-office falls back to process.execPath. */
-function payloadNodeBinary(primaryRuntimeDir: string | undefined): string | null {
-  if (primaryRuntimeDir === undefined) return null
-  const node = join(primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node')
-  if (!isFile(node)) return null
-  // Reuse the payload's own platform/arch claim: a cross-platform dev payload must
-  // not hand skill-office a node that cannot execute here (the wsdeps row is gated
-  // on the same metadata; office should not silently depend on it).
-  const runtimeJsonPath = join(primaryRuntimeDir, 'runtime.json')
-  if (!existsSync(runtimeJsonPath)) return null
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(runtimeJsonPath, 'utf8'))
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
-    const metadata = parsed as Record<string, unknown>
-    if (metadata.platform !== process.platform || metadata.arch !== process.arch) return null
-  } catch {
-    return null
-  }
-  return node
 }
 
 /**
@@ -356,11 +318,10 @@ function planWorkspaceDependenciesRow(
 }
 
 /**
- * Plan the office-skills row: the assets tree and the workspace install gate it. The
- * payload Node is passed explicitly only when the payload carries one AND its manifest
- * targets this host (all Swift hosts share the payload); the workspace CLI entry is passed
- * when present and explicitly disabled (`cli: false`) otherwise, so the three operation
- * skills state the disabled capability instead of failing on a nonexistent path.
+ * Plan the office-skills row: the assets tree and the workspace install gate it. rc.2
+ * skill-office takes only `assetRoot` (+ `pythonEnvironment`, whose schema default
+ * 'workspace-dependencies' is the desktop semantics); the rc.1 `node`/`cli` wiring is
+ * gone with the LibreOffice Kit CLI, which office-kit now resolves itself.
  */
 function planOfficeSkillsRow(
   input: PlanStartupPluginRowsInput,
@@ -392,25 +353,7 @@ function planOfficeSkillsRow(
     warnIncomplete(identity, missing, warn)
     return null
   }
-  const config: Record<string, string | false> = { assetRoot: officeSkillsDir }
-  const node = payloadNodeBinary(input.capabilities?.primaryRuntimeDir)
-  if (node !== null) {
-    config.node = node
-  } else if (input.capabilities?.primaryRuntimeDir !== undefined) {
-    const candidate = join(input.capabilities.primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node')
-    if (isFile(candidate)) {
-      // The payload carries a Node but its manifest is missing/invalid or targets another
-      // platform/arch. The wsdeps row usually warns about the same payload; if the profile
-      // owns that row the office row must still say why `node` is omitted.
-      warn(
-        `startup plugin row '${identity.id}' (${identity.name}): payload node ${candidate} is not usable `
-        + 'on this host (runtime.json missing/invalid or platform/arch mismatch); node omitted — '
-        + 'skill-office falls back to process.execPath',
-      )
-    }
-  }
-  config.cli = workspaceLibreOfficeCli(input.workspacePath) ?? false
-  return { id: identity.id, name: identity.name, config }
+  return { id: identity.id, name: identity.name, config: { assetRoot: officeSkillsDir } }
 }
 
 /**
@@ -454,15 +397,9 @@ function yamlSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function renderStartupConfigValue(rowId: string, key: string, value: string | false): string {
-  if (value === false) {
-    if (key !== 'cli') {
-      throw new Error(`startup plugin insert render: row '${rowId}' config '${key}' may only be a string or cli: false`)
-    }
-    return 'false'
-  }
+function renderStartupConfigValue(rowId: string, key: string, value: string): string {
   if (typeof value !== 'string') {
-    throw new Error(`startup plugin insert render: row '${rowId}' config '${key}' must be a string or false`)
+    throw new Error(`startup plugin insert render: row '${rowId}' config '${key}' must be a string`)
   }
   if (value === '') {
     throw new Error(`startup plugin insert render: row '${rowId}' config '${key}' must not be empty`)
@@ -518,7 +455,7 @@ export function renderStartupPluginInserts(rows: readonly StartupPluginRow[]): s
     text += `    - id: ${row.id}\n      name: ${yamlSingleQuote(row.name)}\n      config:\n`
     for (const key of allowedKeys) {
       if (!Object.hasOwn(row.config, key)) continue
-      text += `        ${key}: ${renderStartupConfigValue(row.id, key, row.config[key] as string | false)}\n`
+      text += `        ${key}: ${renderStartupConfigValue(row.id, key, row.config[key] as string)}\n`
     }
   }
   return text

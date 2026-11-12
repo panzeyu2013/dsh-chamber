@@ -54,8 +54,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
-  // rc.2: the official ui-layout/ui-workspace inject faces name `shortcuts`,
-  // whose ONLY provider is @deepseek-ai/dsh-client-shortcuts (inject: ['locale']).
+  // The official ui-layout/ui-workspace inject faces name `shortcuts`, whose
+  // ONLY provider is @deepseek-ai/dsh-client-shortcuts (inject: ['locale']).
   // Uncovered it was a second reverse dependency on a host-graph row: a degraded
   // or failed graph channel left the layout/workspace fibers PENDING and the
   // whole shell unregistered while boot still reported success; the covered
@@ -167,8 +167,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // fork prefixes per entry (design 09 §3.6); the document seats carry only an
   // absolutePath and stay on their own per-instance source, not on open-in's host
   // half. Its directory entries — the header one (id open-in-app at
-  // conversation.session.header.utilities) and, since rc.2, the Files-tab one
-  // (same id at sidebar.right.tab.files.actions, owner {absolutePath}) — read the
+  // conversation.session.header.utilities) and the Files-tab one (same id at
+  // sidebar.right.tab.files.actions, owner {absolutePath}) — read the
   // document-relative open-in-app/* routes, which resolve to the control-plane
   // origin this composite page is served from (only host-graph bundle urls get
   // the per-instance prefix — host-graph.ts toExtraRows; the control plane answers
@@ -222,8 +222,8 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
-  // rc.2: the official ui-layout/ui-workspace inject faces name `shortcuts`,
-  // whose ONLY provider is @deepseek-ai/dsh-client-shortcuts (inject: ['locale']).
+  // The official ui-layout/ui-workspace inject faces name `shortcuts`, whose
+  // ONLY provider is @deepseek-ai/dsh-client-shortcuts (inject: ['locale']).
   // Uncovered it was a second reverse dependency on a host-graph row: a degraded
   // or failed graph channel left the layout/workspace fibers PENDING and the
   // whole shell unregistered while boot still reported success; the covered

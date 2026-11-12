@@ -103,6 +103,18 @@ final class ShellWindowDragTests: XCTestCase {
                       "必须 capture 段监听：先于页面处理器 preventDefault + stopPropagation")
         XCTAssertTrue(source.contains("'data-window-drag-recall'"),
                       "recall 脉冲只需认识：壳不缓存几何，不做重采集")
+        // rc.2 显式拖拽域（vendor base.css:90-105）：exclude 整盒 no-drag；controls 作用域
+        // 在本侧由全局 INTERACTIVE_SELECTOR 等价覆盖，脚本只需写明不判定的理由。
+        XCTAssertEqual(ShellWindowDragScript.excludeAttribute, "data-window-drag-exclude",
+                       "exclude 属性必须与 rc.2 base.css 同字面量")
+        XCTAssertTrue(source.contains("var EXCLUDE = '\(ShellWindowDragScript.excludeAttribute)';"),
+                      "exclude 属性必须以变量下发（脚本只判属性存在，不判几何）")
+        XCTAssertTrue(source.contains("if (el.hasAttribute(EXCLUDE)) { return true; }"),
+                      "exclude 祖先命中必须进入 isNoDrag（行为表有 2 个依赖它的负向对照场景）")
+        XCTAssertEqual(ShellWindowDragScript.controlsScopeAttribute, "data-window-drag-controls",
+                       "controls 作用域名必须与 rc.2 base.css 同字面量（本侧全局减除已覆盖）")
+        XCTAssertTrue(source.contains("data-window-drag-controls"),
+                      "注入源码必须写明 controls 作用域无需判定的理由（见文件头显式拖拽域段）")
         XCTAssertFalse(source.contains("__INTERPOLATE__"), "不得留下未替换占位符")
     }
 
@@ -110,8 +122,8 @@ final class ShellWindowDragTests: XCTestCase {
 
     /// 脚本只读 window/document 与元素链上的 matches/hasAttribute/parentElement/id/
     /// nodeType，故最小假 DOM 足够。断言「谁被拖、谁被放行」：标记行内的非控件面可拖且
-    /// 事件被吞；控件、未标记面、修饰键、非左键、已被按下的默认行为、recall 标记一律
-    /// 原样放行（不改页面的点击/焦点/选择语义）。
+    /// 事件被吞；控件、未标记面、修饰键、非左键、已被按下的默认行为、recall 标记、
+    /// rc.2 的 data-window-drag-exclude 视口一律原样放行（不改页面的点击/焦点/选择语义）。
     func testScriptDecisionAgainstAFakeDOM() throws {
         let context = try XCTUnwrap(JSContext())
         context.evaluateScript(fakeDOMSource())
@@ -147,6 +159,13 @@ final class ShellWindowDragTests: XCTestCase {
         "非左键 → 不拖",
         "已被页面 preventDefault → 不拖",
         "recall 标记元素 → 不拖",
+        "exclude 视口本身 → 不拖",
+        "exclude 视口内的非控件子节点 → 不拖（祖先最近命中）",
+        "标记行内的 exclude 视口子节点 → 不拖（no-drag 先于 drag）",
+        "标记行内的 exclude 视口内非控件子节点 → 不拖（祖先最近命中）",
+        "标记行内的 exclude 视口内控件 → 不拖（exclude 祖先先命中）",
+        "exclude 祖先内的标记行子节点 → 拖（最近匹配者胜出）",
+        "标记行内 controls 作用域内的控件 → 不拖（全局减控件等价）",
         "非元素目标 → 不拖且不抛",
     ]
 
@@ -179,6 +198,7 @@ final class ShellWindowDragTests: XCTestCase {
             drag: !!o.drag,
             nodrag: !!o.nodrag,
             recall: !!o.recall,
+            exclude: !!o.exclude,
             matches: function (sel) {
               // 脚本只问这两个选择器：标记属性与 :is(控件选择器串)。
               if (sel === '[data-window-drag]') { return this.drag; }
@@ -186,7 +206,9 @@ final class ShellWindowDragTests: XCTestCase {
               return false;
             },
             hasAttribute: function (name) {
-              return name === 'data-window-drag-recall' ? this.recall : false;
+              if (name === 'data-window-drag-recall') { return this.recall; }
+              if (name === 'data-window-drag-exclude') { return this.exclude; }
+              return false;
             }
           };
           return el;
@@ -233,6 +255,19 @@ final class ShellWindowDragTests: XCTestCase {
           var portal = fakeEl({ id: 'portal', parent: docBody });
           var rowInPortal = fakeEl({ drag: true, parent: portal });
           var recallEl = fakeEl({ recall: true });
+          // rc.2 显式拖拽域（base.css:90-105）：
+          var excludeViewport = fakeEl({ exclude: true });
+          var insideExclude = fakeEl({ parent: excludeViewport });
+          var excludeInRow = fakeEl({ parent: strip, exclude: true });
+          var insideExcludeInRow = fakeEl({ parent: excludeInRow });
+          var controlInExcludeInRow = fakeEl({ parent: excludeInRow, nodrag: true });
+          // exclude 祖先内的标记行：最近匹配者胜出（后代 drag 盒在祖先 exclude 盒之后）。
+          var excludeOuter = fakeEl({ parent: strip, exclude: true });
+          var rowInsideExclude = fakeEl({ drag: true, parent: excludeOuter });
+          var textInRowInsideExclude = fakeEl({ parent: rowInsideExclude });
+          // controls 作用域：控件减除在本侧全局生效，无需作用域属性也照样不拖。
+          var controlsScopeInRow = fakeEl({ parent: strip });
+          var controlInScope = fakeEl({ parent: controlsScopeInRow, nodrag: true });
 
           record('标记行内的非控件子节点 → 拖', true, titleText);
           record('标记行内的控件 → 不拖', false, toggleButton);
@@ -246,6 +281,13 @@ final class ShellWindowDragTests: XCTestCase {
           record('非左键 → 不拖', false, titleText, { button: 2 });
           record('已被页面 preventDefault → 不拖', false, titleText, { defaultPrevented: true });
           record('recall 标记元素 → 不拖', false, recallEl);
+          record('exclude 视口本身 → 不拖', false, excludeViewport);
+          record('exclude 视口内的非控件子节点 → 不拖（祖先最近命中）', false, insideExclude);
+          record('标记行内的 exclude 视口子节点 → 不拖（no-drag 先于 drag）', false, excludeInRow);
+          record('标记行内的 exclude 视口内非控件子节点 → 不拖（祖先最近命中）', false, insideExcludeInRow);
+          record('标记行内的 exclude 视口内控件 → 不拖（exclude 祖先先命中）', false, controlInExcludeInRow);
+          record('exclude 祖先内的标记行子节点 → 拖（最近匹配者胜出）', true, textInRowInsideExclude);
+          record('标记行内 controls 作用域内的控件 → 不拖（全局减控件等价）', false, controlInScope);
           record('非元素目标 → 不拖且不抛', false, { nodeType: 3 });
           return out;
         }

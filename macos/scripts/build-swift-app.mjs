@@ -75,7 +75,7 @@ import { isCliEntry, runCliTool } from '../../scripts/lib/cli.mjs'
 // sidecar 装配同源，绝不允许两份实现漂移。
 import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/build-sidecar.mjs'
 import { payloadNodePath } from '../../scripts/lib/sidecar-assembly.mjs'
-// office 资产清单单源（8 个 markdown；生成器 = prepare:office-assets）。
+// office 资产清单单源（4 个 SKILL.md，rc.2 资产面；生成器 = prepare:office-assets）。
 import { OFFICE_SKILL_FILES } from '../../packages/desktop/scripts/prepare-office-assets.mjs'
 // beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
 // 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
@@ -367,18 +367,42 @@ export function isBundledPayloadNode(file, sidecarDir) {
 
 /**
  * 嵌套 Mach-O 是否为 dsh 运行时线里 LibreOffice kit 的原生 helper
- * （`vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-<arch>/bin/libreoffice-kit`）。
+ * （`vendor/dsh/node_modules/@deepseek-ai/libreoffice-kit-darwin-<arch>/bin/<helper>`）。
  * 该 helper 需要且只需要 JIT（`allow-jit`）：LibreOffice 的 C++/binary UNO bridge
  * 在运行期生成机器码（LibreOffice core 的 hardened_runtime.xcent.in 原文；
  * 上游 desktop 同样只给 helper jit-entitlements.plist）。纯函数，签名循环按它
  * 决定是否带 entitlements.jit.plist。
+ *
+ * 文件名不写死：kit 0.1.5 的 helper 是 `bin/libreoffice-kit`，kit 0.2.3（rc.2）
+ * 改为 `bin/dsoffice`；上游 rc.2 的 macOS 运行时签名判定同样只匹配 `bin/<file>`
+ * （apps/desktop/scripts/macos-runtime.ts）。写死旧名会让改名后的 helper 静默
+ * 丢掉 JIT 权限，运行期 UNO bridge 直接崩——所以按目录形状匹配，具体可执行名由
+ * assertBundledLibreOfficeHelperEntitlements 从 prebuilds.json 读取。
  * @param {string} file - 待签名的嵌套文件绝对路径。
  * @param {string} sidecarDir - .app 内 sidecar 目录。
  * @returns {boolean}
  */
 export function isBundledLibreOfficeHelper(file, sidecarDir) {
   const relative = path.relative(path.resolve(sidecarDir), path.resolve(file)).split(path.sep).join('/')
-  return /^vendor\/dsh\/node_modules\/@deepseek-ai\/libreoffice-kit-darwin-(?:arm64|x64)\/bin\/libreoffice-kit$/u.test(relative)
+  return /^vendor\/dsh\/node_modules\/@deepseek-ai\/libreoffice-kit-darwin-(?:arm64|x64)\/bin\/[^/]+$/u.test(relative)
+}
+
+/**
+ * 引擎包声明的 helper 相对路径：优先读 prebuilds.json 的 `engine.executable`（Kit
+ * 0.2.3 的契约），读不到时回退两个已知名字（0.2.3 dsoffice / 0.1.5 libreoffice-kit），
+ * 让核验在两步升级窗口里都成立。
+ * @param {string} engineDir - 引擎包目录绝对路径。
+ * @returns {string[]} 候选相对路径（相对引擎包目录）。
+ */
+export function libreOfficeHelperCandidates(engineDir) {
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(engineDir, 'prebuilds.json'), 'utf8'))
+    const entry = manifest?.engine?.executable
+    if (typeof entry === 'string' && entry !== '') return [entry]
+  } catch {
+    // 缺/坏 prebuilds.json 时回退已知名字；文件在场性仍由下面的核验 fail-closed。
+  }
+  return ['bin/dsoffice', 'bin/libreoffice-kit']
 }
 
 /**
@@ -390,12 +414,27 @@ export function isBundledLibreOfficeHelper(file, sidecarDir) {
  */
 export function assertBundledLibreOfficeHelperEntitlements(sidecarDir, runner = quiet) {
   for (const engine of ['libreoffice-kit-darwin-arm64', 'libreoffice-kit-darwin-x64']) {
-    const helper = path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai', engine, 'bin', 'libreoffice-kit')
-    if (!existsSync(helper)) continue
-    const result = runner('codesign', ['-d', '--entitlements', ':-', helper])
-    const text = `${result.stdout ?? ''}${result.stderr ?? ''}`
-    if (result.status !== 0 || !text.includes('com.apple.security.cs.allow-jit')) {
-      throw new Error(`LibreOffice helper 缺 allow-jit entitlement（design 25 §3.2）：${helper}`)
+    const engineDir = path.join(sidecarDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai', engine)
+    if (!existsSync(engineDir)) continue
+    let checked = 0
+    for (const relative of libreOfficeHelperCandidates(engineDir)) {
+      const helper = path.join(engineDir, relative)
+      if (!existsSync(helper)) continue
+      checked += 1
+      const result = runner('codesign', ['-d', '--entitlements', ':-', helper])
+      const text = `${result.stdout ?? ''}${result.stderr ?? ''}`
+      if (result.status !== 0 || !text.includes('com.apple.security.cs.allow-jit')) {
+        throw new Error(`LibreOffice helper 缺 allow-jit entitlement（design 25 §3.2）：${helper}`)
+      }
+    }
+    // 引擎包在场却找不到任何已知 helper 名 = 上游又改名了：静默跳过会让 helper 漏签
+    // JIT 权限，所以 fail-closed（比运行期 UNO bridge 崩溃便宜）。
+    if (checked === 0) {
+      throw new Error(
+        `LibreOffice 引擎包在场但找不到 helper 可执行文件（${engine}；候选：`
+        + `${libreOfficeHelperCandidates(engineDir).join(', ')}，prebuilds.json 的 engine.executable 为准）——`
+        + '上游引擎布局变更，先核对 kit 版本再发布（design 25 §3.2）',
+      )
     }
   }
 }

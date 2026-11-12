@@ -2,10 +2,12 @@
 /**
  * prepare-office-assets.mjs —— 上游 Office 技能资产的落位 / 校验（只读源 → 构建产物目录）。
  *
- * 上游口径：`@deepseek-ai/dsh-skill-office` 把 8 个技能资产（7 个 SKILL.md + 共享的
- * `office/references/sidecar.md`）随包发布；上游 desktop 在构建载荷时把
- * `assets` 整树拷到 primary-runtime 的 sibling 目录 `office-skills/`
- * （vendor/harness-checkout/scripts/primary-runtime/prepare.ts 的 prepareOfficeSkillAssets）。
+ * 上游口径（rc.2）：`@deepseek-ai/dsh-skill-office` 只随包发布 4 个技能资产
+ * （`office`/`office-docx`/`office-pptx`/`office-xlsx` 的 SKILL.md）；上游
+ * primary-runtime prepare 自 rc.2 起不再产出 `office-skills/` sibling（桌面由
+ * web-app bundle 的 skill-office 行读包内 assets）。本仓仍落位这份 sibling：载荷
+ * 内的运行时树会被 prune 删掉非 `docs/` 下的 Markdown（包括包内 SKILL.md），
+ * 启动行必须用 `assetRoot` 指向未被裁剪的这份拷贝。
  * 本仓没有安装上游包，因此源按以下顺序解析（第一个存在的目录）：
  *   1. vendor/harness-packages/@deepseek-ai/dsh-skill-office/assets
  *      （指向 pin 子模块的只读链接树；有它时与运行时看到的包内容一致）
@@ -15,9 +17,9 @@
  * 落位纪律（产物是**生成目录**，只提交本目录的 README.md）：
  * - 逐文件「同目录 temp + rename」覆盖：任一步失败都不会让已有产物消失/半写；
  * - 保留仓库提交的 README.md，并清掉非期望顶层残留（旧版本留下的目录/文件）；
- * - 写完立即以源为基准自查（8 文件在场 + sha256 逐文件一致），不一致即失败；
+ * - 写完立即以源为基准自查（清单文件全部在场 + sha256 逐文件一致），不一致即失败；
  * - 源可用时 `--verify` 逐文件比对 sha256；源不可用（干净 checkout 没初始化 vendor）
- *   时降级为「8 文件在场」并打印提示——发布腿在打包后的路径上复核同一命令。
+ *   时降级为「清单文件在场」并打印提示——发布腿在打包后的路径上复核同一命令。
  *
  * 离线纪律：本脚本不联网，只读 vendor 源 + 写 resources 目录；--dry-run 不写盘。
  * 依赖纪律：只用 node 内置（crypto/fs/path/url）。
@@ -49,21 +51,18 @@ export const DEFAULT_SOURCE_CANDIDATES = [
 /** 仓库提交的目录说明文件名（唯一允许在落点里长期存在的非资产文件）。 */
 export const COMMITTED_README = 'README.md'
 /**
- * 资产清单（唯一单源）：上游 skill-office 的 assets 树恰好是这 8 个文件；
- * 三个技能用 `../office/references/sidecar.md` 相对引用共享文档，整树缺一不可。
- * 上游新增/改名技能时改这一处 + 重新 prepare。
+ * 资产清单（唯一单源）：上游 skill-office 的 assets 树恰好是这 4 个文件
+ * （rc.2 删除了 office-render/office-recalculate/office-export-pdf 与共享的
+ * office/references/sidecar.md）。上游新增/改名技能时改这一处 + 重新 prepare，
+ * 并同批同步 control-plane 启动行的 OFFICE_SKILL_NAMES 门控。
  */
 export const OFFICE_SKILL_FILES = Object.freeze([
   'office/SKILL.md',
-  'office/references/sidecar.md',
   'office-docx/SKILL.md',
-  'office-export-pdf/SKILL.md',
   'office-pptx/SKILL.md',
-  'office-recalculate/SKILL.md',
-  'office-render/SKILL.md',
   'office-xlsx/SKILL.md',
 ])
-/** 落点顶层允许出现的期望项（7 个技能目录 + committed README）。 */
+/** 落点顶层允许出现的期望项（4 个技能目录 + committed README）。 */
 export const OFFICE_SKILL_TOP_LEVEL = Object.freeze(
   [...new Set(OFFICE_SKILL_FILES.map((relative) => relative.split('/')[0]))],
 )
@@ -119,7 +118,7 @@ export function missingOfficeAssetFiles(sourceDir) {
   return missing
 }
 
-/** dry-run 打印与落位共用的事实（源/落点/8 文件映射）。 */
+/** dry-run 打印与落位共用的事实（源/落点/清单文件映射）。 */
 export function officeAssetPlan(source, outDir = DEFAULT_OUT_DIR) {
   const sourceDir = typeof source === 'string' ? path.resolve(source) : source.source
   return {
@@ -136,7 +135,7 @@ export function officeAssetPlan(source, outDir = DEFAULT_OUT_DIR) {
 }
 
 /**
- * 落点完整性判定（不出网）：8 文件在场；给了 source（源可用）时逐文件比对 sha256。
+ * 落点完整性判定（不出网）：清单文件全部在场；给了 source（源可用）时逐文件比对 sha256。
  * @param outDir - 落点目录。
  * @param options.source - 源目录字符串 / null（无源时只做在场校验；缺省 null）。
  * @returns {{ ok: boolean, problems: string[], checked: number, compared: number, source: string|null, files: Record<string, string> }}
@@ -231,7 +230,7 @@ export function materializeOfficeAssets(options = {}) {
     renameSync(temp, to)
     written += 1
   }
-  // 清非期望顶层残留（旧技能目录/临时文件），README 与 7 个期望目录保留。
+  // 清非期望顶层残留（旧技能目录/临时文件），README 与 4 个期望目录保留。
   const removed = []
   for (const entry of readdirSync(outDir, { withFileTypes: true })) {
     if (entry.name === COMMITTED_README || OFFICE_SKILL_TOP_LEVEL.includes(entry.name)) continue
@@ -239,7 +238,7 @@ export function materializeOfficeAssets(options = {}) {
     removed.push(entry.name)
   }
   const temps = removeStaleTempFiles(outDir)
-  // 写完自检：源可用，必须 8 文件 + sha256 全对（fail-closed）。
+  // 写完自检：源可用，清单文件必须全部在场且 sha256 全对（fail-closed）。
   const verify = verifyOfficeAssets(outDir, { source: source.source })
   if (!verify.ok) {
     throw new Error('office 资产落位自检失败（' + verify.problems.join('；') + '）——落点未达契约，请重跑 prepare')
@@ -284,7 +283,7 @@ export function formatPlan(plan) {
   const lines = [
     '[office-assets] source: ' + plan.source,
     '[office-assets] out: ' + plan.outDir,
-    '[office-assets] files: ' + String(plan.files.length) + '（7x SKILL.md + office/references/sidecar.md）',
+    '[office-assets] files: ' + String(plan.files.length) + '（' + String(plan.topLevel.length) + 'x SKILL.md）',
   ]
   for (const entry of plan.files) lines.push('[office-assets]   ' + entry.relative + ' ← ' + entry.source)
   lines.push('[office-assets] 保留顶层：' + [...plan.keep, ...plan.topLevel].join(' / '))
@@ -310,7 +309,7 @@ async function main() {
   if (options.verifyDir !== null) {
     const source = resolveVerifySource(options.source)
     if (source === null) {
-      console.log('[office-assets] 源不可用（vendor 未初始化）：本次只做 8 文件在场校验，不比对 sha256')
+      console.log('[office-assets] 源不可用（vendor 未初始化）：本次只做清单文件在场校验，不比对 sha256')
     }
     const result = verifyOfficeAssets(options.verifyDir, { source })
     if (result.ok) {
