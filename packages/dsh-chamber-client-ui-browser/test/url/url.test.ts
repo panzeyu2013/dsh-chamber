@@ -1,6 +1,6 @@
 /**
  * Upstream Browser address policy (fork: copied verbatim from
- * ui-sidebar-browser 0.2.2-rc.1 tests/url.client.spec.ts, node:test dialect).
+ * ui-sidebar-browser 0.2.2-rc.2 tests/url.client.spec.ts, node:test dialect).
  *
  * The fork keeps the upstream HTTP(S) allowlist byte for byte: bare input
  * defaults to HTTPS (NOT the v1 chamber default-http table), explicit

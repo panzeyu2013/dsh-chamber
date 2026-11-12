@@ -29,7 +29,7 @@
  * the constant below (never a parameter). Redirecting the remote side would be
  * a different protocol decision, not a formatting option.
  *
- * TODO(W0): confirm the pinned 0.2.2-rc.1 ssh-provider constants and whether
+ * TODO(W0): confirm the pinned ssh-provider constants and whether
  * this builder should be REUSED by the transport provider instead of mirrored
  * (design 28 records the temporary duplication; the keepalive lockstep test is
  * the retirement condition).

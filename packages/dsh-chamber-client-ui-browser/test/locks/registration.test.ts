@@ -4,7 +4,7 @@
  * The node runner cannot mount React/DOM, so this suite pins the WIRING and the
  * FORK SURFACE as text:
  *   - the files copied byte-for-byte from upstream
- *     `@deepseek-ai/dsh-client-ui-sidebar-browser` 0.2.2-rc.1 are locked by
+ *     `@deepseek-ai/dsh-client-ui-sidebar-browser` 0.2.2-rc.2 are locked by
  *     SHA-256 digests (a re-copy after an upstream pin upgrade must regenerate
  *     the table deliberately — upstream-touchpoints discipline);
  *   - the iframe carrier is GONE: no `IframeImpl`/`IframePresentation`, no
@@ -51,7 +51,7 @@ const UPSTREAM_VERBATIM: Readonly<Record<string, string>> = {
 
 test('every upstream-derived file still matches its frozen digest', () => {
   for (const [file, digest] of Object.entries(UPSTREAM_VERBATIM)) {
-    assert.equal(sha256(read(file)), digest, file + ' drifted from its frozen 0.2.2-rc.1/v3 text')
+    assert.equal(sha256(read(file)), digest, file + ' drifted from its frozen 0.2.2-rc.2/v3 text')
   }
 })
 

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-browser",
   "description": "Chamber remote-browser client plugin (design 28 v3, ADR-0004): upstream @deepseek-ai/dsh-client-ui-sidebar-browser chrome/address/history/store on the Swift shell's native guest carrier (one child WKWebView guest per tab, acquired only through the Swift-only `browser` bridge). The iframe carrier is retired. The ONLY behavior difference is the SSH reverse proxy: an SSH source's remote loopback target attaches the per-source forward lease and main loads the composed alias URL (the bar/history keep the logical URL; the external exit uses the alias, disabled while resolving/failing); other http(s) loads directly",
-  "version": "0.4.5-beta.4",
+  "version": "0.4.5-beta.5",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

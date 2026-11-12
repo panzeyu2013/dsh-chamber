@@ -8,7 +8,7 @@
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  *
  * The Browser plugin keeps upstream `@deepseek-ai/dsh-client-ui-sidebar-browser`
- * (0.2.2-rc.1) chrome/address/history and drives the Swift shell's native guest
+ * (0.2.2-rc.2) chrome/address/history and drives the Swift shell's native guest
  * (one child WKWebView per tab, design 28 v3 / ADR-0004). The only behavior
  * difference is the SSH reverse proxy (forward recordRef + alias external exit).
  * The URL and navigation suites are node:test dialects of the upstream specs, the

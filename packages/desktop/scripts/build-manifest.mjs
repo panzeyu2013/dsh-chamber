@@ -387,6 +387,12 @@ function diagnosticInputsNewer(manifest, inputs) {
     // while their content is unchanged. Naming them would misdirect the
     // operator; the content digest still reports the drift.
     .filter((entry) => !entry.path.startsWith('packages/renderer/src/generated/'))
+    // Newest first: when several inputs changed, naming the most recently
+    // modified ones is both more useful to the operator and stable against the
+    // millisecond-truncated `builtAt` (a file created in the same millisecond as
+    // the manifest write also counts as "newer" and must not crowd the drift
+    // out of the first-5 window).
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
     .map((entry) => entry.path)
     .slice(0, 5)
   if (newer.length === 0) return ''

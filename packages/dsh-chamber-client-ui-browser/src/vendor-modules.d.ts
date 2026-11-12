@@ -3,7 +3,7 @@
  * union in types/vendor-modules.d.ts.
  *
  * This package is a faithful fork of upstream
- * `@deepseek-ai/dsh-client-ui-sidebar-browser` 0.2.2-rc.1 client sources. The
+ * `@deepseek-ai/dsh-client-ui-sidebar-browser` 0.2.2-rc.2 client sources. The
  * repo-level ambient union predates that fork, so the handful of upstream
  * imports it does not declare yet are declared/augmented here — package-local,
  * exactly the loose-face convention the reference file documents.

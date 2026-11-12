@@ -19,7 +19,7 @@
 |---|---|
 |vendor链接数|由 `ensure-harness-vendor` 断言 == 锁文件importer集合——源码线，不是F|
 |运行时线族集合（F）|`packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包里的 `@deepseek-ai/*` 名字集合（C11硬门）：含核心 `dsh`/`dsh-base`/`dsh-web-app`，不含dev/test与源码线harness段；官方opt-in（`dsh-experimental-*`）只放行**登记白名单**内的名字（运行时根包自己声明的opt-in依赖属于F；未登记名字出现/已登记名字不再出现都红）；本行与上一行是两条线，数量相近但集合不同，不可互推|
-|typert remote装配契约|27（C4；apply 挂载表定序；import 选择无运行时顺序语义，按集合与挂载集合相等断言）|
+|typert remote装配契约|30（C4；apply 挂载表定序；import 选择无运行时顺序语义，按集合与挂载集合相等断言）|
 |covered / factory|`chamber-covered.ts` 的两个集合（factory ⊆ covered，chamber-entry锁步断言；含 `ui-dockkit`、`client-file-upload` 的covered factory与 `session-log-export`（deferred）、两个有意跳过id（hmr/directory-picker-native））|
 |种子域|`clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`、`openInApp/probe`（C7双门）|
 
@@ -308,7 +308,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 
 |上游属主|chamber契约镜像点|保鲜|
 |---|---|---|
-|dsh-api-remotes（client）|typert remote装配（27）与message-feedback / session-reference / subagent等wire面|`gen-typert-remotes` + C4（挂载顺序表 + 选择/挂载集合相等）|
+|dsh-api-remotes（client）|typert remote装配（30）与message-feedback / session-reference / subagent等wire面|`gen-typert-remotes` + C4（挂载顺序表 + 选择/挂载集合相等）|
 |dsh-api-session-controller|api-gateway fork的journal-stream帧（无游标notification）：帧词表与帧形状都在 `packages/dsh-api-gateway/src/stream-protocol.ts`（纯文件集内）|形状 = C1逐字节；行为 = 升级时人工重放一次journal-stream通路（C1只证形状未变）|
 |client/connection（recovery）|recovery-config共享schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` == schema默认 `backoffMaxMs`）|liveness-triggers钉值 + C1|
 | dsh-api-session-controller（客户端半的会话事实语义；**人工登记，无 C 编号门**） | **运行位活性守卫押在四条上游语义上**（vendor lockstep 共 6 个断言）（design 14 §D4）：① `sessions.refresh()` → `refreshList()` 单飞并把权威 summary 的 running 回灌已物化会话（`handleRunning`）；② `api-session/status` 是 `mode:'emit'` 转发事件（无重传/无 ack）；③ **`session.list` 拉取失败**（`result.ok===false`，含 carrier 失败被折叠成结果失败）时 `refreshList()` **照常 resolve**，只把 `listState` 置 `'error'`；非 remote 异常仍 reject（emit 本身不触发 `refreshList`）——故 chamber 的 probe 必须用独立权威读取判定（不依赖 refresh 成败，见 design 14 §D4「会话事实单一权威」）；④ **`ClientSessions.handleSessionStatus(sessionId, running)` 是具体类公开方法**（`ISessions` 契约只暴露 `refresh()`），一次调用同时写 list summaries、物化 Session 的 `running`（聊天面）与 catalog activity —— chamber 的 tier-3 写回押在它上面（只写 false、写后自校验、无 TTL；方法缺失即 WARN 一次并降级到升级阶梯） | 现有钉法：`packages/renderer/test/wiring/session-authority-wiring.test.ts`（架构守卫：App 无第二 planner、写回只写 false + 能力守卫、30s tick 唯一驱动、保留视图 90s 接线）＋
@@ -515,7 +515,7 @@ different-adopted = backend-controller / core-package-set / device-info / host-p
 - 参数守卫与退出码（措辞与脚本头注同源）：默认模式会就地重建并还原构建期生成物（唯一写盘路径），因此任何未知参数/位置参数都由 `verify-upstream-touchpoints-args.mjs` 判为用法错误——`--help`/`-h` = 打印权威用法文本、exit 0，不跑任何门、不写盘；未知参数（如拼错的 `--no-artifact-rebuid`）、位置参数、重复flag或 `--tags` 缺值 = exit 2（用法错误）且不先跑门；门硬失败 = exit 1；全部通过 = exit 0。拼错的flag以前被静默忽略并照跑全量写盘门，故这里响亮失败而非容错。判定逻辑是纯函数（单测 `verify-upstream-touchpoints-args.test.mjs`）。
 - C1 pure字节恒等 / C3完整性（fork每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5过期锚扫描 / C6 EXCLUDED存在性 —— CI在Bootstrap后fail-loud；
-- C4 roster（covered/factory哨兵 + remote契约27的集合与顺序）—— 本地/CI均可；
+- C4 roster（covered/factory哨兵 + remote契约30的集合与顺序）—— 本地/CI均可；
 - C7种子域锁步、C8生成物 == src（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回mtime advisory）、C9 vendor补丁锚**唯一**命中（硬失败）、C10版本锚一致性 + 活版本字面量白名单（硬失败，判据见 §3：运行时版本单一来源、六锚 + 3 fork等值、未登记「活」版本字面量即红、具名常量按上限1处白名单）—— CI与本地均跑（CI分pre/post-install两段）。
 - C11–C14受保护集合与代耦合（硬失败，只读，CI两段都跑；判据纯函数在 `plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`）：
   C11运行时线族集合——F分量**只**认已提交的运行时锁文件闭包（见 §0；实例树物化时另做等价性交叉校验，允许差集 = 其他平台 `node-addon-system-*` / `libreoffice-kit-*`；离开闭包的名字不再豁免，回到闭包必须显式重新登记）；官方opt-in按登记白名单（`RUNTIME_FAMILY_OPT_IN_ALLOWED`，只登记实测在闭包里的名字；新增未登记/移除已登记都红）；锁文件原文出现 `@dsh-chamber/` 引用即红（F 来源被污染/取错锁文件——解析器只取 `@deepseek-ai/*`，故按原文判定）；同一闭包也是design 21 §6.11装后复验所用name→version事实的来源，但本门只判名字集（版本事实不进门禁）；

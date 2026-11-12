@@ -1,6 +1,6 @@
 /**
  * Upstream BrowserNavigation state machine (node:test dialect of
- * ui-sidebar-browser 0.2.2-rc.1 tests/browser-navigation.client.spec.ts).
+ * ui-sidebar-browser 0.2.2-rc.2 tests/browser-navigation.client.spec.ts).
  *
  * The fork keeps the upstream bounded application-known history: first frame
  * load after a controlled request is `known`, a second one turns `unknown`
