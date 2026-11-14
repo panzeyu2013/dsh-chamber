@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
-import { BUNDLE_PNPM_INSTALL_ATTEMPTS, bundlePnpmLaunch, isTransientPnpmEagain } from './bundle-pnpm-launcher.mjs';
+import { BUNDLE_PNPM_INSTALL_ATTEMPTS, bundlePnpmLaunch, isTransientPnpmEagain, mergePnpmInstallOutput, pnpmInstallRetryEnv } from './bundle-pnpm-launcher.mjs';
 import { PRUNE_RULES_REVISION, collectDeclaredDetailFiles, renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
@@ -196,26 +196,33 @@ function run(args, what) {
 }
 
 /**
- * 安装命令执行：捕获 stderr（转发的同时供分类），瞬时 `ERR_PNPM_EAGAIN`
- * （ZFS 建链，首次失败二次成功）有界重试一次；其它失败立即退出，绝不重试。
+ * 安装命令执行：捕获 stdout + stderr（转发的同时供分类——瞬时 `ERR_PNPM_EAGAIN`
+ * 行可能落在任一流），瞬时失败（ZFS 建链，首次失败二次成功）有界重试一次，重试尝试
+ * 强制 hardlink 导入（`npm_config_package_import_method=hardlink`）；其它失败立即
+ * 退出，绝不重试。stdin 仍继承（pnpm 的交互/审批提示保持原语义）；两个输出管道各自
+ * 转发，捕获上限显式放宽到 64 MiB（spawnSync 默认 1 MiB 会让大树安装的进度输出
+ * 触发 ENOBUFS，反而把可重试失败变成硬失败）。
  */
 function runPnpmInstall(args, what) {
   for (let attempt = 1; attempt <= BUNDLE_PNPM_INSTALL_ATTEMPTS; attempt += 1) {
     console.log(`[bundle-dsh] ${what}${attempt === 1 ? '' : `（第 ${attempt} 次尝试）`}`);
     const result = spawnSync(args[0], args.slice(1), {
       cwd: work,
-      stdio: ['inherit', 'inherit', 'pipe'],
+      stdio: ['inherit', 'pipe', 'pipe'],
       shell: bundlePnpmLaunch().shell,
       encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      env: pnpmInstallRetryEnv(attempt),
     });
+    if (result.stdout) process.stdout.write(result.stdout);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.error) {
       console.error(`[bundle-dsh] 无法执行 ${args[0]}：${result.error.message}`);
       process.exit(1);
     }
     if (result.status === 0) return;
-    if (attempt < BUNDLE_PNPM_INSTALL_ATTEMPTS && isTransientPnpmEagain(result.stderr)) {
-      console.warn('[bundle-dsh] pnpm 安装瞬时失败（ERR_PNPM_EAGAIN，ZFS 建链），有界重试一次…');
+    if (attempt < BUNDLE_PNPM_INSTALL_ATTEMPTS && isTransientPnpmEagain(mergePnpmInstallOutput(result.stdout, result.stderr))) {
+      console.warn('[bundle-dsh] pnpm 安装瞬时失败（ERR_PNPM_EAGAIN，ZFS 建链），用 hardlink 导入有界重试一次…');
       continue;
     }
     console.error(`[bundle-dsh] ${what} 失败（exit code ${result.status}），封装未完成`);

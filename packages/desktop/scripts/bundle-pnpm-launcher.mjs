@@ -25,3 +25,26 @@ export function isTransientPnpmEagain(output) {
   if (typeof output !== 'string' || output === '') return false
   return /ERR_PNPM_EAGAIN/.test(output) || /\bEAGAIN\b/.test(output)
 }
+
+/**
+ * pnpm 安装输出合并：stdout / stderr 各管道分块保序（stdout 块在前、stderr 块在后）。
+ * 瞬时判定不得只看 stderr——pnpm 的 ERR_PNPM_EAGAIN 行可能落在 stdout。
+ * @param {string | undefined} stdout - 捕获的 stdout（可为空）
+ * @param {string | undefined} stderr - 捕获的 stderr（可为空）
+ * @returns {string} 合并后的输出（分类与转发的单一来源）
+ */
+export function mergePnpmInstallOutput(stdout, stderr) {
+  return [stdout, stderr].filter((chunk) => typeof chunk === 'string' && chunk !== '').join('\n')
+}
+
+/**
+ * 每次安装尝试的 spawn env：第一次原样，后续尝试强制 hardlink 导入方式
+ * （ZFS 上 ERR_PNPM_EAGAIN 是建 hardlink 的瞬时失败；hardlink 是最轻的物理落盘路径）。
+ * @param {number} attempt - 1-based 尝试序号
+ * @param {NodeJS.ProcessEnv} [baseEnv] - 基础 env（测试注入；默认 process.env）
+ * @returns {NodeJS.ProcessEnv} 该次尝试的 env
+ */
+export function pnpmInstallRetryEnv(attempt, baseEnv = process.env) {
+  if (attempt <= 1) return baseEnv
+  return { ...baseEnv, npm_config_package_import_method: 'hardlink' }
+}
