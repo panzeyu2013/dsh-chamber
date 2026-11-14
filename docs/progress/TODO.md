@@ -249,10 +249,10 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 
 > 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/desktop/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与契约落点；
 > 决策 D1–D7、双线防漂移门禁的明细按收口删除（原文存 git 历史）；W1–W7 判定已迁入 design 25 §8.5；A1–A8 中止点、性能/产物体积 A/B 协议与 dev 约定的明细同样按收口删除（原文存 git 历史），
-> 契约落点 = design 25 §3–§10；开放状态归 STATUS。
+> 契约落点 = design 25 §3–§9；开放状态归 STATUS。
 
 #### 1.1 决策结果索引（D1–D7）
-D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blocked-available→Sparkle、`macos/` SwiftPM、原生 UI 渐进不做、Node 版本与架构、静态凭据 0600 明文）见 design 25 §10（正式签核仍开放）。
+D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blocked-available→Sparkle、`macos/` SwiftPM、原生 UI 渐进不做、Node 版本与架构、静态凭据 0600 明文）见 design 25 §5 与 §8（正式签核仍开放）。
 
 #### 1.3 WBS 任务号索引（W-01…W-32 → 契约落点）
 |任务|内容|契约落点|
@@ -506,7 +506,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 #### 3.2 E2 首屏 markdown 家族按需化（mainGraph 唯一大池）
 
-**证据（结构实测 + 可推算）**：mainGraph ≈1.91 MB（1,910,110 B）中静态 `langs/vendor` chunk 747,390 B（39.1%），来源是 vendor `ui-primitives` 的 markdown 家族静态 import（shiki core/JS engine + 3 个 boot grammar、katex + katex.min.css、micromark）；katex + shiki 家族（`@shikijs/*` + oniguruma-to-es）在 sourcesContent 中合计 1,145,439/1,685,217 = 68%，估算可移出 ≈529 KB（主图 −27.7%；纯 `katex|shiki` 包名口径为 61.65%）。次大 = zod ≈238 KB（page-language chunk 38.1%）。
+**证据（结构实测 + 可推算）**：mainGraph ≈1.91 MB（1,910,110 B）中静态 `langs/vendor` chunk 747,385 B（39.1%），来源是 vendor `ui-primitives` 的 markdown 家族静态 import（shiki core/JS engine + 3 个 boot grammar、katex + katex.min.css、micromark）；katex + shiki 家族（`@shikijs/*` + oniguruma-to-es）在当前精确树 map 的 sourcesContent 中合计约 1,125,114/1,655,299 = 68%，估算可移出 ≈508 KB（主图 −26.6%；纯 `katex|shiki` 包名口径为 62.76%）。次大 = zod ≈238 KB（page-language chunk 38.1%）。
 
 **设计**：markdown 高亮/公式渲染改动态 import（首块先纯文本、空闲后升级，或按会话是否已出现代码块/公式预取）；zod 侧改 `zod/mini` 或把非 boot 路径（sidebar-right persistence 等）改惰性 import。shiki/katex 在 vendor 源内，需 vendor patch（第二类准入 = macOS 同机 A/B：首个代码块/公式 TTI + 帧成本）或上游接受；chamber 自有副本（connection/web）的 zod 可先改。
 
@@ -548,7 +548,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 **验证**：现有回归集 + 新不变量测试；macOS heap profile / `__dshChamberRenderCounters` 前后对比。
 
-**未闭环测试 / owner 登记**：⑤ A6/A7⑤ 签名缓存的行为测试需把 `reportSignatureOf`/`snapshotSignatureOf` 抽成纯工厂（当前仅源码锁）；⑥ Swift 纯函数缺 XCTest（macOS 测试 target；本机 NOT RUN）：`MainWindowController` 的 `shellVisibilityFacts`/`shellVisibilityScript` 与 `SwiftEdgeHostLegs` 的 keep-awake `desired = keepAwakeRequested && windowVisible` 判据；⑦ W2 hairline `--dsh-hairline-width` 页面级 refcount（每个 ctx.effect 各自写/还原，A dispose 会删仍在的 B 的值；上游同形态，本补丁未扩大）；⑧ D2 恢复补偿 hook 行为测（当前源码锁；门序已改为先判统一相位门、后记 250ms 去重，仍缺行为测试）；⑨ A1 摘要行 key 与 `start()` 重置回归测试（同内容换 id 必须交付、新订阅寿命首帧必交付）；⑩ 1s 桶两份字面量（`source-mux-facts.ts` 的 `FACT_AT_PUBLISH_BUCKET_MS` 与 `derive.ts` 的 `FACT_AT_SIGNATURE_BUCKET_MS`）统一到单源；⑪ A3 打开态 A/B 必须包含「隐藏壳静默死亡 >~5min + 恢复」场景（mounted 为 sticky 权威位，observer 可能已不存在）；⑫ InstanceView 1Hz stall 采样门控（隐藏/遮挡期停采样 + 隐藏边沿 re-anchor）：真实路径 `components/InstanceView.tsx`，其 effect 被 `instance-view-sampling.test.ts` 的 `with(scope)` 插桩直接执行，注入 `shouldRunBackgroundPhase`/`subscribeShellVisibility` 须同批改该测试的注入 helper（改法见 `packages/renderer/src/components/InstanceView.tsx` 的采样 effect 与 `packages/renderer/test/lifecycle/instance-view-sampling.test.ts` 的插桩 helper）；当前仅登记。
+**未闭环测试 / owner 登记**：⑤ A6/A7⑤ 签名缓存的行为测试需把 `reportSignatureOf`/`snapshotSignatureOf` 抽成纯工厂（当前仅源码锁）；⑥ Swift 纯函数缺 XCTest（macOS 测试 target；本机 NOT RUN）：`MainWindowController` 的 `shellVisibilityFacts`/`shellVisibilityScript` 与 `SwiftEdgeHostLegs` 的 keep-awake `desired = keepAwakeRequested && windowVisible` 判据；`pushShellVisibility` 接线（AppDelegate 4 处恢复入口 + 3 处 orderOut 双保险、SwiftEdgeHostLegs focusMainWindow 腿）同样缺 XCTest/源文本锁；⑦ W2 hairline `--dsh-hairline-width` 页面级 refcount（每个 ctx.effect 各自写/还原，A dispose 会删仍在的 B 的值；上游同形态，本补丁未扩大）；⑧ D2 恢复补偿 hook 行为测（当前源码锁；门序已改为先判统一相位门、后记 250ms 去重，仍缺行为测试）；⑨ A1 摘要行 key 与 `start()` 重置回归测试（同内容换 id 必须交付、新订阅寿命首帧必交付）；⑩ 1s 桶两份字面量（`source-mux-facts.ts` 的 `FACT_AT_PUBLISH_BUCKET_MS` 与 `derive.ts` 的 `FACT_AT_SIGNATURE_BUCKET_MS`）统一到单源；⑪ A3 打开态 A/B 必须包含「隐藏壳静默死亡 >~5min + 恢复」场景（mounted 为 sticky 权威位，observer 可能已不存在）；⑫ InstanceView 1Hz stall 采样门控（隐藏/遮挡期停采样 + 隐藏边沿 re-anchor）：真实路径 `components/InstanceView.tsx`，其 effect 被 `instance-view-sampling.test.ts` 的 `with(scope)` 插桩直接执行，注入 `shouldRunBackgroundPhase`/`subscribeShellVisibility` 须同批改该测试的注入 helper（改法见 `packages/renderer/src/components/InstanceView.tsx` 的采样 effect 与 `packages/renderer/test/lifecycle/instance-view-sampling.test.ts` 的插桩 helper）；当前仅登记。
 
 ### 4. 多实例常驻的后续研究（未排期）
 

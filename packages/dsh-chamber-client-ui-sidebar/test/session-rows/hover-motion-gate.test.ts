@@ -84,15 +84,53 @@ test('行键对拍前置条件漂移锁：keyed 行没有 CSS 动画/过渡，WA
   const offenders = srcFiles.filter((name) => name !== 'rows/animated-rows.tsx'
     && read('../../src/client/' + name).includes('.animate('))
   assert.deepEqual(offenders, [], 'element.animate 只允许出现在 port（animated-rows.tsx）')
-  // 行元素自身（选择器最后一个复合段）不得带动画/过渡；`.sessionRow:hover .sessionTitle`
+  // 行元素自身（选择器 subject = 最后一个顶层复合段）不得带动画/过渡；`.sessionRow:hover .sessionTitle`
   // 这类后代规则动画的是子元素，不违反「keyed 行动画唯一来源 = FLIP」的前提。
-  const rowSelector = /(?:data-row-key|sessionRow|\.row\b|\[data-session)/iu
-  const lastCompound = (selector: string) => selector.trim().split(/[\s>+~]+/u).filter(Boolean).at(-1) ?? ''
+  // 切分必须尊重 () [] 与引号：`:nth-child(2n+1)` / `[data-row-key~="k"]` / `:has(.a + .b)`
+  // 里的 + ~ 空白不是组合符，按朴素 split 会把行规则切成非行段（FN，漂移锁失效）。
+  const rowSelector = /(?:data-row-key|sessionRow(?!s)|\.row\b|\[data-session)/iu
+  const splitTopLevel = (selector: string): string[] => {
+    const parts: string[] = []
+    let depth = 0
+    let quote = ''
+    let start = 0
+    for (let index = 0; index < selector.length; index += 1) {
+      const ch = selector[index]
+      if (quote !== '') { if (ch === quote) quote = ''; continue }
+      if (ch === '"' || ch === "'") { quote = ch; continue }
+      if (ch === '(' || ch === '[') { depth += 1; continue }
+      if (ch === ')' || ch === ']') { depth = Math.max(0, depth - 1); continue }
+      if (depth === 0 && ch === ',') { parts.push(selector.slice(start, index)); start = index + 1 }
+    }
+    parts.push(selector.slice(start))
+    return parts.map((part) => part.trim()).filter((part) => part !== '')
+  }
+  const subjectCompound = (selector: string): string => {
+    let depth = 0
+    let quote = ''
+    for (let index = selector.length - 1; index >= 0; index -= 1) {
+      const ch = selector[index]
+      if (quote !== '') { if (ch === quote) quote = ''; continue }
+      if (ch === '"' || ch === "'") { quote = ch; continue }
+      if (ch === ')' || ch === ']') { depth += 1; continue }
+      if (ch === '(' || ch === '[') { depth = Math.max(0, depth - 1); continue }
+      if (depth === 0 && (ch === '>' || ch === '+' || ch === '~' || /\s/u.test(ch))) return selector.slice(index + 1).trim()
+    }
+    return selector.trim()
+  }
+  // FN 回归：下面三者的 subject 仍是行元素（+ ~ 只在 () [] 内），必须被判定为行元素。
+  for (const probe of [
+    '.sessionRow:nth-child(2n+1)',
+    '.sessionRow[data-row-key~="k"]',
+    '.sessionRow:has(.icon + .label)',
+  ]) {
+    assert.ok(rowSelector.test(subjectCompound(probe)), 'subject 解析漏检行元素：' + probe)
+  }
   for (const { name, text } of CSS_SOURCES) {
     const animatedBlocks = [...text.matchAll(/^([^{}@]+)\{([^{}]*)\}/gmu)]
       .filter(([, , body]) => /\b(?:animation|transition)\s*:/u.test(body))
     for (const [, selector, body] of animatedBlocks) {
-      const offenders = selector.split(',').map(lastCompound).filter((compound) => rowSelector.test(compound))
+      const offenders = splitTopLevel(selector).map(subjectCompound).filter((compound) => rowSelector.test(compound))
       assert.deepEqual(offenders, [],
         `${name}：行元素自身不得带 animation/transition：` + selector.trim() + ' => ' + body.trim())
     }

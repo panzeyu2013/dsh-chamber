@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { shouldRunBackgroundPhase } from '../../src/background-phase.ts'
 import {
   SHELL_VISIBILITY_EVENT,
@@ -147,16 +148,22 @@ test('接线锁：background-phase 单一叠加壳可见性，七个相位消费
   }
 })
 
-test('接线负控：门序/双门/通知事实与壳边沿回退都会变红', () => {
-  const compensation = readRepoFile('packages/renderer/src/app-hooks/use-visibility-compensation.ts')
+test('接线负控：门序/四处相位门/通知事实与壳边沿回退都会变红', () => {
+  const compensation = stripComments(readRepoFile('packages/renderer/src/app-hooks/use-visibility-compensation.ts'))
   const gateAt = compensation.indexOf('if (!shouldRunBackgroundPhase(document.visibilityState)) return')
   const dedupeAt = compensation.indexOf('lastCompensationAt = now')
   assert.ok(gateAt !== -1 && dedupeAt !== -1 && gateAt < dedupeAt,
     '补偿必须先过统一相位门再记录 250ms 去重时间戳')
-  const resident = readRepoFile('packages/renderer/src/app-hooks/use-resident-guard.ts')
-  assert.ok((resident.match(/shouldRunBackgroundPhase\(/gu) ?? []).length >= 3,
-    '压力阀入口/快照后/错峰释放三处都必须经统一门')
-  const notifications = readRepoFile('packages/renderer/src/app-hooks/use-notifications.ts')
+  const resident = stripComments(readRepoFile('packages/renderer/src/app-hooks/use-resident-guard.ts'))
+  assert.equal((resident.match(/shouldRunBackgroundPhase\(/gu) ?? []).length, 4,
+    '压力阀四处（入口 / 快照后 / 错峰释放 / 页面恢复）都必须经统一门')
+  assert.match(resident, /if \(stopped \|\| sampling \|\| !shouldRunBackgroundPhase\(/u, '入口门')
+  assert.match(resident, /if \(stopped \|\| !shouldRunBackgroundPhase\(document\.visibilityState\)\) return/u, '快照后门')
+  assert.match(resident,
+    /setTimeout\(\(\) => \{[\s\S]{0,160}?shouldRunBackgroundPhase\([\s\S]{0,160}?releaseSource\(id, 'pressure'\)/u,
+    '错峰释放的 setTimeout 内必须再判一次统一门')
+  assert.match(resident, /const onVisibility = \(\): void => \{ if \(shouldRunBackgroundPhase\(/u, '页面恢复门')
+  const notifications = stripComments(readRepoFile('packages/renderer/src/app-hooks/use-notifications.ts'))
   assert.match(notifications, /requireHidden[\s\S]{0,900}?isShellVisible\(\)/u,
     'requireHidden 必须叠壳可见性事实（遮挡/另一 Space 不误抑制）')
   assert.match(compensation, /subscribeShellVisibility\(/u, '壳可见边沿订阅不得丢失')

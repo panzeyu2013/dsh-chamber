@@ -29,9 +29,9 @@
  * 0.2.2-alpha.3 到 8,443,546 / 326,261。同一跨度内共享图只 +0.3%（1,908,997 →
  * 1,914,607），增长落在复合入口与首屏样式（covered 行逐代累加，末段是
  * `ui-context-menu` 与其语言表）——故只按实测回填这两个 warn 项，不动 mainGraph 硬门。
- * 当前 pin 代（对齐批后）实测 mainGraph 1,938,922 / chamberEntry 8,560,639 /
- * headCss 339,301（本版按各自实测 + ~1% 回填 warn 1,950,000 / 8,650,000 / 342,500；
- * mainGraph 硬门 2,060,000 不动）。
+ * **E1 之前**（对齐批后，历史基线）实测 mainGraph 1,938,922 / chamberEntry 8,560,639 /
+ * headCss 339,301，当时按各自实测 + ~1% 回填 warn 1,950,000 / 8,650,000 / 342,500
+ * （chamberEntry warn 已随 E1 下调到 3,390,000，见下段；mainGraph 硬门 2,060,000 不动）。
  *
  * E1（simple-icons 改走 ESM 入口 + Rollup tree-shaking；解析见
  * scripts/simple-icons-entry.mjs）后在**主 checkout 精确树全新构建**实测
@@ -39,7 +39,8 @@
  * worktree 里经 vendor 符号链接构建的 1,941,324 / 3,354,214 偏大，非精确树证据，
  * 勿再引用）：chamberEntry warn 3,390,000 = 实测 +4.1%，mainGraph warn 1,950,000
  * = 实测 +2.1%、fail 2,060,000 = 实测 +7.8%，headCss warn 342,500 = 实测 +0.9%。
- * 阈值不主动上调；mainGraph 硬门与既有 warn 基线不动。
+ * 测量基校正（如 worktree 符号链接 → 主 checkout 的构建口径变化）不回填阈值，
+ * 只有结构改动才按新实测回填；阈值不主动上调，mainGraph 硬门与既有 warn 基线不动。
  *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite
