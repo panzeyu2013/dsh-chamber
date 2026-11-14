@@ -33,6 +33,9 @@ const factsMode = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/session-facts-mode.ts', import.meta.url)), 'utf8'))
 const clientCore = stripComments(readFileSync(
   fileURLToPath(new URL('../../../dsh-chamber-client-core/src/derive.ts', import.meta.url)), 'utf8'))
+const factsLifecycleRaw = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-session-facts-lifecycle.ts', import.meta.url)), 'utf8')
+const factsLifecycle = stripComments(factsLifecycleRaw)
 // The frame is ENUMERATED (App.tsx + every app-hooks module), never concatenated by
 // hand: a newly extracted hook cannot fall out of the frame and turn the doesNotMatch
 // locks below vacuously true.
@@ -323,8 +326,52 @@ test('facts decidability has ONE owner: no consumer may re-spell the rule', () =
   assert.ok(factsMode.includes("return isFactsDecisionUsable(snapshot) ? 'full' : 'degraded'"))
   assert.ok(!factsMode.includes("snapshot.stale === true ? 'degraded'"))
 })
-test('every RENDERED runtime row field rides the report signature (factAt)', () => {
+test('every RENDERED runtime row field rides the report signature (factAt, quantized to a 1s bucket)', () => {
   // runtimeReportSignature 是 App 提交运行时事实前的去重键：漏签一个渲染字段，
   // 该字段的单独变化就被整个丢弃（factAt 冻结 ⇒ data-chamber-fact-at 永远首见值）。
-  assert.match(clientCore, /\(facts\.factAt \?\? 0\) > 0 \? facts\.factAt : ''/, 'factAt 必须进行编码（0/缺席同为「无观察者事实」，不制造 churn）')
+  // 但原始 factAt 每次观测都前进（实机风暴约 27 次/秒发布），去重门永不命中；因此签名
+  // 只签 1000ms 桶（桶内观测不重发布、跨桶仍重发布），原始值仍原样进 report 供渲染。
+  assert.match(clientCore, /const FACT_AT_SIGNATURE_BUCKET_MS = 1_000/, 'factAt 的签名桶宽必须是 1000ms')
+  assert.match(
+    clientCore,
+    /const factAtBucket = factAt > 0 \? Math\.floor\(factAt \/ FACT_AT_SIGNATURE_BUCKET_MS\) : ''/,
+    'factAt 只签量化桶（0/缺席同为「无观察者事实」，不制造 churn）',
+  )
+  assert.ok(!clientCore.includes("? facts.factAt : ''"), '不得回到按原始 factAt 签名（那是发布风暴的来源）')
+})
+
+test('A3 dev flag wiring: default OFF, arm-time read, mounted-gated plan, and the S2 risk is documented', () => {
+  // 开关 = devtools A/B 面（默认关）；打开后已挂载壳来源不进 facts 订阅面。锁四件事：
+  // ① 名与极性（只认显式 true；缺省/false/其它真值一律关）；② arm/渲染时读取无缓存；
+  // ③ mounted 表只在开关开时驱动重算（默认路径不新增 listener）；④ 期望态只剩规划器一份。
+  assert.match(factsLifecycle, /const A3_SKIP_MOUNTED_FACTS_GLOBAL = '__DSH_CHAMBER_A3_SKIP_MOUNTED_FACTS__'/,
+    'the dev flag name is pinned')
+  assert.match(factsLifecycle, /\[A3_SKIP_MOUNTED_FACTS_GLOBAL\] === true/,
+    'only an explicit boolean true enables the dev flag (default OFF)')
+  assert.ok(!factsLifecycle.includes('!== false'), 'the A3 flag must not borrow the default-ON polarity of live sync')
+  assert.match(factsLifecycleRaw, /默认关闭/, 'the flag must document that it ships off')
+  // ② arm-time read, no module-level cache: the read happens in the hook body.
+  assert.match(factsLifecycle, /const a3SkipMountedFacts = readA3SkipMountedFacts\(\)/,
+    'the flag is read at arm/render time in the hook body (no cache)')
+  assert.doesNotMatch(factsLifecycle, /(?:^|\n)(?:let|const) a3SkipMountedFacts/,
+    'no module-level cached copy of the flag')
+  assert.match(factsLifecycle, /readA3SkipMountedFacts\(scope: unknown = globalThis\): boolean/,
+    'the reader keeps the injectable scope seam for tests')
+  // ③ the mounted store drives recomputation ONLY when the flag is on (default path adds no listener).
+  assert.match(factsLifecycle, /a3SkipMountedFacts \? mountedSources\.subscribe\(onStoreChange\) : \(\) => \{\}/,
+    'the mounted subscription is a no-op unless the flag is on')
+  assert.match(factsLifecycle, /useSyncExternalStore\(\s*subscribeMountedFacts,/,
+    'the hook consumes the mounted table through the React store binding')
+  // ④ one planner owns the desired set; default path passes undefined (= pre-flag behavior).
+  assert.match(factsLifecycle, /planSessionFactsSources\(servers, a3SkipMountedFacts \? mountedFactsTable : undefined\)/,
+    'the render-time plan keeps the flag-off path byte-identical (undefined mounted)')
+  assert.equal((factsLifecycle.match(/mountedSources\.getSnapshot\(\) : undefined/g) ?? []).length, 2,
+    'both lifecycle effects read the same planner input (gateway + mux)')
+  assert.equal((factsLifecycle.match(/sessionFactsSpecSignature\(factsSourcePlan\./g) ?? []).length, 2,
+    'both specs are derived from the single plan')
+  assert.ok(!factsLifecycle.includes("server.id + ':' + server.sourceFingerprint"),
+    'the two pre-flag inline spec formulas must not come back')
+  // 文档义务：teardown 的 S2 换代风险必须在源码里写清（只许调试 A/B）。
+  assert.match(factsLifecycleRaw, /S2/, 'the flag docblock must name the S2 generation-swap risk')
+  assert.match(factsLifecycleRaw, /绝不默认启用/, 'the flag docblock must say it is debug-only')
 })

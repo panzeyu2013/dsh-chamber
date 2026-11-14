@@ -15,10 +15,15 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
-import { HOVER_GATE_ATTR, HOVER_GATE_SELECTOR, needsHoverGate } from '../../src/client/hover-motion-gate.ts'
+import {
+  HOVER_GATE_ATTR,
+  HOVER_GATE_SELECTOR,
+  needsHoverGate,
+  rowKeySequenceDiffers,
+} from '../../src/client/hover-motion-gate.ts'
 
 /** Source locks must see code, not comments: a commented-out line must not satisfy them. */
 const read = (rel: string): string => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
@@ -30,6 +35,12 @@ const SECTION = read('../../src/client/ServerSection.tsx')
 const ROWS = read('../../src/client/ServerSectionRows.tsx')
 const CARD = read('../../src/client/RowHoverCard.tsx')
 const CSS = readCss('../../src/client/sidebar-chamber.module.css')
+/** 全部 CSS 模块（漂移锁半径 = 断言名里的「行选择器/行级 :hover」，不是单个文件）：
+ *  新模块给行加过渡、或新增漏带门控条款的行级揭示，同样必须变红。 */
+const CSS_SOURCES = readdirSync(fileURLToPath(new URL('../../src/client/', import.meta.url)),
+  { recursive: true, encoding: 'utf8' })
+  .filter((name) => name.endsWith('.css'))
+  .map((name) => ({ name, text: readCss('../../src/client/' + name) }))
 
 test('only a row that moved under a stationary pointer is gated', () => {
   // 位移前就在指针下的行保留揭示：用户真实悬停绝不掉。
@@ -39,6 +50,56 @@ test('only a row that moved under a stationary pointer is gated', () => {
   assert.equal(needsHoverGate(false, true), false, '未位移且已 hover 的行不受影响')
   assert.equal(HOVER_GATE_ATTR, 'data-hover-gate')
   assert.equal(HOVER_GATE_SELECTOR, '[data-hover-gate]')
+})
+
+test('the expensive animation scan runs only when the row-key sequence changed (B6)', () => {
+  // 真值表：null（首次）/长度 / 顺序 / 内容变化 → 需要扫描；全等 → 跳过 getAnimations。
+  assert.equal(rowKeySequenceDiffers(null, 0, () => undefined), true, '首次扫描没有可比序列')
+  assert.equal(rowKeySequenceDiffers(null, 1, () => 'a'), true, '首次扫描且已有行')
+  assert.equal(rowKeySequenceDiffers(['a'], 1, index => ['a'][index]), false,
+    '序列未变 ⇒ 本提交不可能有新 FLIP 位移，跳过分配主站')
+  assert.equal(rowKeySequenceDiffers(['a', 'b'], 2, index => ['a', 'b'][index]), false)
+  assert.equal(rowKeySequenceDiffers(['a'], 2, index => ['a', 'b'][index]), true, '行数变化')
+  assert.equal(rowKeySequenceDiffers(['a', 'b'], 2, index => ['b', 'a'][index]), true,
+    '顺序变化 = FLIP 位移的真实信号')
+  assert.equal(rowKeySequenceDiffers(['a', 'b'], 2, index => ['a', 'c'][index]), true, '内容变化')
+  assert.equal(rowKeySequenceDiffers(['a'], 0, () => undefined), true, '行被清空')
+
+  // 接线顺序（源码文本）：对拍必须先于 getAnimations，且读的是 data-row-key 的真实序列。
+  const gateAt = GATE.indexOf('rowKeySequenceDiffers(lastRowKeys')
+  const scanAt = GATE.indexOf('getAnimations({ subtree: true })')
+  assert.ok(gateAt !== -1 && scanAt !== -1 && gateAt < scanAt,
+    '行键对拍必须在 getAnimations 之前（否则热点没有降下来）')
+  assert.match(GATE, /querySelectorAll<HTMLElement>\('\[data-row-key\]'\)/u)
+  assert.match(GATE, /!root\.isConnected/u, '离屏 / 卸载中的 section 不扫')
+  assert.match(GATE, /lastRoot = null[\s\S]{0,160}?lastRowKeys = null/u, 'dispose 清掉缓存')
+})
+
+test('行键对拍前置条件漂移锁：keyed 行没有 CSS 动画/过渡，WAAPI 只在 port 里创建', () => {
+  // 前置条件 = keyed 行的唯一动画来源是 FLIP（port）。任何给行选择器加 animation/
+  // transition、或在别处直接 element.animate 的改动都会让 B6 静默漏门控。
+  const srcFiles = readdirSync(fileURLToPath(new URL('../../src/client/', import.meta.url)),
+    { recursive: true, encoding: 'utf8' })
+    .filter((name) => /\.(?:ts|tsx)$/u.test(name))
+  const offenders = srcFiles.filter((name) => name !== 'rows/animated-rows.tsx'
+    && read('../../src/client/' + name).includes('.animate('))
+  assert.deepEqual(offenders, [], 'element.animate 只允许出现在 port（animated-rows.tsx）')
+  // 行选择器（含 class 选择器）不得带动画/过渡；statusSpinner/foldChevron 等字形站点不在 keyed 行上。
+  const rowSelector = /(?:data-row-key|sessionRow|\.row\b|\[data-session)/iu
+  for (const { name, text } of CSS_SOURCES) {
+    const animatedBlocks = [...text.matchAll(/^([^{}@]+)\{([^{}]*)\}/gmu)]
+      .filter(([, , body]) => /\b(?:animation|transition)\s*:/u.test(body))
+    for (const [, selector, body] of animatedBlocks) {
+      assert.ok(!rowSelector.test(selector),
+        `${name}：行选择器不得带 animation/transition：` + selector.trim() + ' => ' + body.trim())
+    }
+  }
+  const port = read('../../src/client/rows/animated-rows.tsx')
+  assert.match(port, /\.animate\(/u, 'port 是唯一允许 element.animate 的文件')
+  const motion = read('../../src/client/rows/animated-rows-motion.tsx')
+  assert.match(motion, /import \{ AnimatedRows \} from '\.\/animated-rows\.tsx'/u)
+  assert.match(motion, /extends AnimatedRows/u)
+  assert.match(motion, /shouldAnimateRowMotion\(this\.motionStartedAt, now\)/u)
 })
 
 test('the machine stays React-free and releases only on real pointer input', () => {
@@ -100,17 +161,18 @@ test('every row-level hover reveal carries the gate clause', () => {
     '.workspaceRenaming:hover:not([data-hover-gate]) .foldToggleFolder .foldFolder,',
   ]) assert.ok(CSS.includes(selector), `重命名抑制缺少与揭示同级的门控条款：${selector}`)
 
-  // 漂移锁：行级 :hover 选择器不得漏带条款（注释散文不算）。
-  const stripped = CSS.replace(/\/\*[\s\S]*?\*\//gu, '')
+  // 漂移锁：行级 :hover 选择器不得漏带条款（注释散文不算；半径 = src/client/**/*.css）。
   const offenders: string[] = []
-  for (const raw of stripped.split('\n')) {
-    const line = raw.trim()
-    if (!line.endsWith('{') && !line.endsWith(',')) continue
-    if (!/(?:\.workspaceHeader:hover|\.sessionRow:hover)/u.test(line)) continue
-    if (line.includes(':not([data-hover-gate])')) continue
-    if (line.includes('archiveManager') || line.includes('workspaceRenaming') || line.includes(':has(')) continue
-    if (line.includes('ungroupedGroup')) continue
-    offenders.push(line)
+  for (const { name, text } of CSS_SOURCES) {
+    for (const raw of text.split('\n')) {
+      const line = raw.trim()
+      if (!line.endsWith('{') && !line.endsWith(',')) continue
+      if (!/(?:\.workspaceHeader:hover|\.sessionRow:hover)/u.test(line)) continue
+      if (line.includes(':not([data-hover-gate])')) continue
+      if (line.includes('archiveManager') || line.includes('workspaceRenaming') || line.includes(':has(')) continue
+      if (line.includes('ungroupedGroup')) continue
+      offenders.push(name + ': ' + line)
+    }
   }
   assert.deepEqual(offenders, [], '行级 :hover 揭示必须带 :not([data-hover-gate])')
 })

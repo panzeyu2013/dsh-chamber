@@ -32,6 +32,8 @@ export const GROUPS = {
   scripts: [
     'scripts/typert-remote-contract.test.mjs',
     'scripts/vendor-patches.test.mjs',
+    // E1: simple-icons 必须解析到 ESM 入口（回落到 CJS 会把全量图标表带回 chamber 首屏）。
+    'scripts/simple-icons-entry.test.mjs',
     // Real-Cordis provide/get join for the public client-plugin base-path contract (design 09 §4).
     {
       file: 'scripts/chamber-base-path-real-context.test.mjs',
@@ -58,6 +60,8 @@ export const GROUPS = {
     // 证据有效性层：页面调度记录（rAF 心跳/焦点/可见性 → 调度缺口）与有界持久证据账本。
     'test/lifecycle/page-schedule.test.ts',
     'test/lifecycle/evidence-log.test.ts',
+    // 壳窗口可见性事实（design 14 §D1）：无事件默认可见 + 前台相位门单一判定 + Swift 契约锁。
+    'test/lifecycle/shell-visibility.test.ts',
     // 页面级同源 HTTP 预算：有界派发、local 保留槽、未派发到期=非来源事实、fail-open/kill switch。
     'test/lifecycle/http-budget.test.ts',
     // 活实例 ctx 的客户端插件热同步：帧解析 / id 集 diff / 装-卸-rev 诊断 / 撤臂栅栏。

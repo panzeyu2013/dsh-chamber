@@ -37,6 +37,9 @@ import { HttpBudgetUnscheduledError, acquireHttpBudget, httpBudgetLaneFor, httpB
 import type {
   SessionFactsCompletedAtSource, SessionFactsRow, SessionFactsSnapshot, SessionFactsTurnEnd,
 } from './session-facts-source.ts'
+// 行字段集的唯一 owner（gateway 平面同一份签名）：交付去重必须与 gateway 空发去重同规，
+// 行 wire 字段增删只改那一处，这里不另写第二份字段清单。
+import { sessionFactsRowSignature } from './session-facts-source.ts'
 import {
   FOLLOW_MAX_MESSAGES,
   REMOTE_EVENT_STREAM_ENDPOINT,
@@ -125,6 +128,14 @@ export const DEFAULT_BASELINE_FAILURE_RETRY_MAX_MS = 5_000
 export const DEFAULT_CARRIER_GRACE_MS = 3_000
 /** 可用 host 时间（epoch ms）的下界；小于它的数字不是 host 域观测，绝不臆造。 */
 export const HOST_EPOCH_MS_FLOOR = 1e12
+/**
+ * 交付去重里 factAt 的量化桶宽（毫秒），与 client-core `derive.ts` 的 factAt 发布签名桶
+ * 同一语义（1000ms）：同一秒内的连续观测是同一份「这一行有多新」的读数，重复 status/心跳帧
+ * 不得让 factsStore 换对象；跨桶仍交付，锚点最坏晚一个桶边界。刻意保持模块私有——那个常量
+ * 在 derive.ts 也是模块私有值，为一个整数扩大 client-core 公共导出面不划算（出现第三个消费者
+ * 时再抽单源）。
+ */
+const FACT_AT_PUBLISH_BUCKET_MS = 1_000
 
 /**
  * 一行观察者事实。除 gateway SessionFactsRow 字段外，多一个**客户端内部**的时间域
@@ -762,6 +773,11 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
   /** 行集提示闩锁（emit 的唯一判据）：只有前进的 api-session/* 版本或新基线才提示一次。 */
   let hintedEventRevision = 0
   let hintedBaselines = 0
+  /**
+   * 上次**交付**的快照内容摘要（A1' 交付去重的唯一判据；null = 还没交付过，下一拍必交付）。
+   * 见 {@link snapshotDigest}：只含渲染/判定输入与 factAt 的 1000ms 桶。
+   */
+  let publishedDigest: string | null = null
   let baselineRequest = 0
   let runVersion = 0
   let edges = 0
@@ -973,10 +989,50 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     }
   }
 
+  /**
+   * 快照**内容摘要**（A1' 交付去重的唯一判据）：来源级渲染/判定输入（verdict /
+   * degradation / serviceable / stale / baselines）+ 每条快照行的 wire/判定字段（复用
+   * gateway 平面同一份 {@link sessionFactsRowSignature}）+ 本模块自有的
+   * completedAtDomain / 客户端本地位 + factAt 的 1000ms 桶。
+   *
+   * WHY：`handleStatus` 对 running 位未变的重复 status 帧也写 `factAt: now()` 后 emit；
+   * 每次交付都让 factsStore 换状态对象 → App 重派生投影、重跑完成观测/修正臂、侧栏重渲染
+   * （实机发布风暴的一类）。摘要不变 ⇒ 不交付；真实内容变化与状态边沿（running/pending/
+   * completed/goal、added/removed、可判性、baselines）都改摘要 ⇒ 必交付，通知候选不会被吞。
+   * lastEventAt 与 cursor 刻意不进摘要：本模块外无读取（cursor 恒 0 只是结构占位）。
+   */
+  function snapshotDigest(next: SessionFactsSnapshot): string {
+    const parts: string[] = [
+      next.verdict,
+      next.degradation ?? '-',
+      next.serviceable ? '1' : '0',
+      next.stale ? '1' : '0',
+      next.baselines === undefined ? 'u' : String(next.baselines),
+    ]
+    for (const row of Object.values(next.rows)) {
+      parts.push(
+        JSON.stringify(row.sessionId) + '\u0000' + sessionFactsRowSignature(row)
+        + '|' + (row.completedAtDomain ?? '')
+        + '|' + (row.factAt > 0 ? String(Math.floor(row.factAt / FACT_AT_PUBLISH_BUCKET_MS)) : '')
+        + '|' + (row.firstSeenByDelta === true ? 'f' : '')
+        + '|' + (row.identityConfirmed === false ? '0' : ''),
+      )
+    }
+    return parts.join('\u0001')
+  }
+
   function emit(): void {
     // stop() 之后到达的在途事件（基线/读尾）不得再推快照。
     if (stopped) return
-    deps.onSnapshot(snapshot())
+    const next = snapshot()
+    const digest = snapshotDigest(next)
+    // 空发去重（A1'）：内容摘要没变 ⇒ 不交付。只有 factAt 前进且未跨 1s 桶的帧（重复
+    // status/就绪帧/心跳）到此为止——state 里的 rows 与相位标志始终是最新值，下一次真实
+    // 变化的交付会带上它们；factsStore 保留的上一份快照在判定/渲染字段上与之逐字段相同
+    // （内容不变，不是「旧帧覆盖新帧」）。
+    if (digest === publishedDigest) return
+    publishedDigest = digest
+    deps.onSnapshot(next)
     // 与 gateway 事实源同规：事实可能变了才提示一次聚合拉取。ready/心跳/降级等不改变行集的
     // 发布不再触发拉取（代价上限的第一道；消费者侧的四拒 + 1s floor 是第二道）。
     if (eventRevision !== hintedEventRevision || baselines !== hintedBaselines) {
@@ -1928,6 +1984,9 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
     start(): void {
       if (!stopped) return
       stopped = false
+      // 新订阅寿命必须先交付一份快照（stop() 退役快照已把 store 改成不可判）：交付摘要
+      // 不跨寿命继承，否则内容恰好相同时新一代的第一份事实会被去重吞掉。
+      publishedDigest = null
       // 新订阅寿命：可判性相位清零（失败/基线计数按观察者对象累计，属于诊断不重置）。
       carrierLostAt = null
       clearCarrierGrace()

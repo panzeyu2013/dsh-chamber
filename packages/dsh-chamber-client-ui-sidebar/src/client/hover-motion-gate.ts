@@ -18,6 +18,15 @@
  * 本模块零 React 依赖：纯判定与门控机器留在可被 plain-node 行为测直接 import 的模块里，
  * hook 在兄弟文件 use-hover-motion-gate.ts（本包测试无 DOM/React 环境，见
  * row-render-cost.test.ts 头注）。
+ *
+ * 扫描预算（B6，渲染 P0）：hook 每次提交都调 scan（layout 阶段不可省——`matches(':hover')`
+ * 必须在浏览器把 hover 更新到位移后位置之前读），但 `root.getAnimations({subtree:true})`
+ * 是分配主站：它会给子树里每个动画/过渡（常驻的 statusSpin、折叠 chevron 过渡……）各生成
+ * 新的 JS wrapper，而门控只关心 keyed 行。唯一会让 keyed 行位移的是 FLIP（port 仅在行键
+ * 序列变化时启动），故 scan 先做一次 O(行数) 的行键序列对拍，**序列没变就跳过
+ * getAnimations**；序列变化（= 本提交确有行位移的候选）才进入原扫描。
+ * 逐 rAF 合并被否决：同一帧内的第二次提交可能搬动第一次扫描看不到的行，压到下一 rAF 会
+ * 丢掉那次门控（位移前的 hover 真相也只在本次 layout 阶段可读）。
  */
 export const HOVER_GATE_ATTR = 'data-hover-gate'
 
@@ -33,6 +42,25 @@ export function needsHoverGate(moved: boolean, hoveredBefore: boolean): boolean 
   return moved && !hoveredBefore
 }
 
+/**
+ * 本提交的行键序列是否与上次扫描不同（B6；纯判定，行为测直测）。
+ *
+ * 访问器形式（length + keyAt）而不是行键数组：没变的常见路径（facts 风暴 27×/s 的每一
+ * 提交）不需要为全量行键建数组，只逐项读 `dataset.rowKey` 对拍。null = 首次扫描（没有
+ * 可比的上一提交，保守进入一次原扫描）。
+ */
+export function rowKeySequenceDiffers(
+  previous: readonly string[] | null,
+  length: number,
+  keyAt: (index: number) => string | undefined,
+): boolean {
+  if (previous === null || previous.length !== length) return true
+  for (let index = 0; index < length; index += 1) {
+    if (previous[index] !== keyAt(index)) return true
+  }
+  return false
+}
+
 export interface HoverMotionGate {
   /** 每次提交后的 layout effect 调用；root 为该节段（section）根。 */
   scan(root: Element | null): void
@@ -41,11 +69,15 @@ export interface HoverMotionGate {
 }
 
 /** 每个来源 section 一台机器（hook 挂在 ServerSection 上，各自只扫自己的子树）：N 个来源 =
- * N 台机器、2N 个 document 监听，每次提交各做一次子树 `getAnimations` 扫描。 */
+ * N 台机器、2N 个 document 监听；每次提交只做一次行键序列对拍，序列变化才做子树
+ * `getAnimations` 扫描。 */
 export function createHoverMotionGate(): HoverMotionGate {
   const gated = new Set<HTMLElement>()
   let lastX = Number.NaN
   let lastY = Number.NaN
+  /** 上次扫描的根与行键序列（根变了 = 换了一个 section 的 DOM，必须重扫一次）。 */
+  let lastRoot: HTMLElement | null = null
+  let lastRowKeys: string[] | null = null
 
   const release = (): void => {
     if (gated.size === 0) return
@@ -77,7 +109,17 @@ export function createHoverMotionGate(): HoverMotionGate {
 
   return {
     scan(root) {
-      if (!(root instanceof HTMLElement)) return
+      if (!(root instanceof HTMLElement) || !root.isConnected) return
+      // B6 扫描预算：先对拍行键序列（O(行数) 属性读，不建数组）——序列没变 ⇒ 本提交不可能
+      // 有新的 FLIP 位移（port 只在行键序列变化时建动画），直接跳过分配主站。
+      if (root !== lastRoot) {
+        lastRoot = root
+        lastRowKeys = null
+      }
+      const rows = root.querySelectorAll<HTMLElement>('[data-row-key]')
+      if (!rowKeySequenceDiffers(lastRowKeys, rows.length,
+                                 index => rows[index]?.dataset.rowKey)) return
+      lastRowKeys = Array.from(rows, row => row.dataset.rowKey ?? '')
       // 只有 keyed 行会被 FLIP 位移；退出克隆体没有 data-row-key，天然排除；行内常驻控件的
       // CSS 过渡/转圈也不是 keyed 行，一并排除。
       for (const animation of root.getAnimations({ subtree: true })) {
@@ -92,6 +134,8 @@ export function createHoverMotionGate(): HoverMotionGate {
     },
     dispose() {
       release()
+      lastRoot = null
+      lastRowKeys = null
       document.removeEventListener('pointermove', onPointer, { capture: true })
       document.removeEventListener('pointerdown', onPointer, { capture: true })
     },

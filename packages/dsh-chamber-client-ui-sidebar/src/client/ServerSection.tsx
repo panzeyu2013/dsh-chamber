@@ -52,7 +52,7 @@ import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
 // only admits a relative import of an `export function` — cannot register it).
 // The port's constants and body are locked against the pinned source by
 // test/session-rows/animated-rows.test.ts.
-import { AnimatedRows } from './rows/animated-rows.tsx'
+import { AnimatedRowsMotion } from './rows/animated-rows-motion.tsx'
 import { useHoverMotionGate } from './use-hover-motion-gate.ts'
 import { ServerSectionRenameForm } from './server-section-controls.tsx'
 import { ROW_CARD_OPEN_DELAY_MS, createdLabel, dragOverState, hasCreationFact, projectionHasSession, projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
@@ -613,7 +613,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                       <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
                     </div>
                   ) : (
-                    <AnimatedRows
+                    <AnimatedRowsMotion
                       className={cc.workspaceList}
                       // The browse tree keeps the tree/treeitem semantics the search
                       // branch replaces with its own named tree (upstream: caller props).
@@ -1393,7 +1393,7 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                           <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/add-workspace`]}</div>
                         )}
                       </>
-                    </AnimatedRows>
+                    </AnimatedRowsMotion>
                   )}
                   </>
                   )

@@ -232,7 +232,7 @@ interface HostEdges {
 
 ## 5. 原生边沿逐项设计（Electron → Swift 映射）
 
-本节的 Swift 实现均在 `macos/Sources/DSHChamber/` 下（XCTest 在 `macos/Tests/DSHChamberTests/`），符号名以该树为单源；行号不写进设计（按符号 grep 现取）。
+本节的 Swift 实现均在 `macos/Sources/DSHChamber/` 下（XCTest 在 `macos/Tests/DSHChamberTests/`），符号名以该树为单源；行号不写进设计（按符号 grep 现取）。本节与 §10 的 E/W/D 编号（E2/E7/E21、W2 菜单快捷键、D4 刷新率降档等）是本设计自己的边沿/验收项编号，**不是渲染 P0 批的工作名**（批名单源见 [TODO.md](../../progress/TODO.md) §3）。
 
 | # | Electron 现状（main.ts/…，归档面） | Swift 对应 | 备注 |
 |---|---|---|---|
@@ -242,7 +242,7 @@ interface HostEdges {
 | E4 | `Notification` + `Notification.isSupported`；**session 权限 handler 显式拒绝网页 Notification** | `UNUserNotificationCenter`；授权请求时机与现状一致 | **网页 Notification 双路径风险**：WKWebView 无等价预拒绝 API，网页 requestPermission 会绕过 chamber 裁决直发——以实测官方 UI 是否存在网页通知入口并处置 |
 | E5 | `app.setBadgeCount`（平台门 + badgeEnabled 裁决在 core） | `NSApp.dockTile.badgeLabel` | 门控逻辑留 core（badge.ts） |
 | E6 | `powerMonitor.on('resume')` + held lastResume 补发（挂在 win.on('show')） | `NSWorkspace.didWakeNotification` + HostEdges.onMainWindowShown（窗口显示/恢复事件）→ core 补发语义原样 | 推送 `dsh-chamber:system-resume {timestamp}` |
-| E7 | `powerSaveBlocker`（keep-awake 断言） | `ProcessInfo.beginActivity(.idleSystemSleepDisabled…)` 或 IOKit 断言 | 触发条件随 core 状态机原样（网关会话保持等，14）；**启动期 reconcile** `<userData>/chamber-settings.json` 的 `keepAwake`（缺省 off / 损坏 loud+off） |
+| E7 | `powerSaveBlocker`（keep-awake 断言） | `ProcessInfo.beginActivity(.idleSystemSleepDisabled…)` 或 IOKit 断言 | 触发条件 = 设置开启**且窗口可见**（orderOut/最小化/切 Space 遮挡即释放，恢复可见重持；`clearKeepAwake` 退出链语义不变；core 状态机不再单独决定持有，14 §D1）；**启动期 reconcile** `<userData>/chamber-settings.json` 的 `keepAwake`（缺省 off / 损坏 loud+off）；取舍与被否形态见 [14 §D5](../runtime/14-sleep-background.md) |
 | E8 | `dialog.showOpenDialog`（唯一 = 插件源 folder\|.tgz 一体化 picker，darwin 双模式） | `NSOpenPanel`（canChooseDirectories + canChooseFiles 双模式） | 归档清理（design 24）无任何文件对话框 |
 | E9 | `dialog.showErrorBox/showMessageBox`（fatal 启动/前端崩溃/退出确认 D2）+ fatal 边界（uncaughtException → app.exit(1)） | `NSAlert`（sheet 或 app-modal）+ **sidecar fatal 边界：stderr + 非零退出码分级，Supervisor 分流文案** | 退出确认三分支与 5s 硬顶（§2.3）；系统关机/注销（`sessionEnding`）豁免不确认 |
 | E10 | `shell.openExternal`（外链/发布页/`openVscodeUrl`） | `NSWorkspace.shared.open(URL)`（URL 规范化/预算/冷却在 core） | open-release 亦此 |
@@ -256,6 +256,7 @@ interface HostEdges {
 | E18 | `requestSingleInstanceLock`/second-instance | NSRunningApplication 或锁文件二次激活（bundle id 相同时 LaunchServices 已保证） | 双 flavor 互斥见 §6.3 |
 | E19 | renderer 崩溃/卡死恢复（installRendererRecovery：render-process-gone、unresponsive 与前台 JS/rAF 进度探针；共用有界重载预算） | **三事件映射**：didStartProvisionalNavigation（复位 + requeue）/ didFinish（drain）/ webViewWebContentProcessDidTerminate（复位 + requeue + 500ms 有界重载，60s ≤3 次 + NSAlert） | **unresponsive 腿 v1 不可移植**（WKWebView 无该事件）→ 以心跳探针替代（`RendererHangWatchdog`：didFinish 后武装，前台可见且无导航时每 5s 取 JS 回执与主动 rAF 计数；连续 3 次 3s 超时/求值失败/帧计数不前进后共用有界重载；键鼠输入不清除证据，隐藏或导航复位，迟到回调按探针编号丢弃；期限使用单调系统 uptime，免受系统时钟调整影响；导航抢先发生时取消待执行重载并退还该次预算）。boot 死区收敛后，**前端 boot 不 settle 的逃生由页面侧拥有**（[05-connection-manager.md](../control-plane/05-connection-manager.md) §4.3：可操作遮罩 + 相位感知就绪门 + ⌘R 提示），原生仍不观察/不超时前端 boot 状态。**崩溃归因轮**：崩溃日志行带「距上次加载完成 X.XXs（boot 窗口内/已稳定）+ 本窗口第 N 次崩溃」，恢复落地再记一条「崩溃后 X.XXs 重载完成」（`RendererCrashAttribution` 纯值 + `RendererRecoveryTests` 单测；`MainWindowController` 记 `lastLoadFinishedAt`/`crashesSinceLoad`/`recoveringFromCrash`）。**候选放大器（待真机验证）**：P2b facts 观察者的 45s 静默换代机制与实测数字由 [19-notifications.md](../client/19-notifications.md) §3.5 单源持有；本条只保留本机验收：同窗口 30 分钟前台 soak 的页面 socket 连续性（已采：2 socket / 0 换代） |
 | E20 | `app.on('activate'/'window-all-closed')`（darwin 且 close-behavior='quit' 时也必须 quit） | `applicationShouldHandleReopen` 等 + windowShouldClose 判 close-behavior：'quit' → NSApp.terminate 走完整确认链，绝不无窗常驻 | 14 D1 语义 |
+| E21 | （无对等面；Chromium 由页面可见性/遮挡节流覆盖） | **宿主可见性事实**：`NSWindow` 遮挡/orderOut/最小化/应用显隐/失去 key/导航完成 → `evaluateJavaScript` 派发 `dsh-chamber:shell-visibility`（`{visible, occluded}`；同值去重、失败 loud 不阻断、didFinish 首注 + 每次导航重放）；事件是页面唯一事实通道 | 页面 `background-phase` 叠加门 + 恢复补偿（[14 §D1](../runtime/14-sleep-background.md)）；另一可见 Space 下 WebKit 仍报 visible，故必须有此事实；macOS 验收见 14 §5 |
 
 **Rejected alternatives（E2 的托盘图标产出方式）**：① 继续把共享的 `NSApp.applicationIconImage` 改 size 再交给按钮——除首次布局竞态外还有全局副作用（Sparkle/关于面板等消费者会看到被改成 18pt 的共享图），否；② 专用菜单栏资产（36px PNG / asset catalog）——观感更常规，但要连带改 `Package.swift` 的逐条 `.process` 资源、`build-swift-app.mjs` 的 icns 装配链与本表 E2 行 / T-15 的「图标=应用图标」语义，属独立变更，不夹带；③ `isTemplate` 模板图——把彩色应用图标变单色剪影，改外观契约，否；④ `NSImage(size:flipped:drawingHandler:)`——代码更短，但 rep 是 0px 延迟 rep，「绘制域 = rep.size」这条唯一真会回归的断言无法表达，否；⑤ 只留单个 rep——非 Retina 外接屏走降采样发虚，收益极小，否。结论 = 自持 18pt 位图副本（`StatusItemIcon`），几何与时序无关。
 
@@ -275,6 +276,8 @@ interface HostEdges {
 - **低电量模式 ×2 不覆盖（accepted）**：该状态由 WebContent 进程内 `WebCore::LowPowerModeNotifier` 直读系统状态；WebKit 内确有强制「关」的钩子（`Page::setLowPowerModeEnabledOverrideForTesting(false)` + `m_throttlingReasonsOverridenForTesting`），但只经 `Internals`（`window.internals`）暴露给布局测试，WKWebView/UI 进程无可达面 ⇒ 结论是「无应用级开关」，不是「不存在能强制关的钩子」。关闭偏好后低电量模式页面更新上限 = 显示器刷新率 ÷ 2（120Hz 屏 = 60fps；偏好仍开时是 nearest(nominal) ÷ 2 = 30fps）；要满 120fps 只能退出低电量模式（系统设置 > 电池），壳只如实写日志。系统级限制按 accepted 登记差异，不追求注入 bundle 覆盖原型。
 - **`DSH_CHAMBER_SHELL_DEBUG` 帧率观测**：`DSH_CHAMBER_SHELL_DEBUG=1` 注入 rAF 计数（每 2s 一行 `[shell-fps]`，走既有 shellConsole 回传）；缺省/打包态不注入（S14/T-11 调试面纪律不变）。
 - **启动日志（唯一对照口径）**：`[shell] 刷新率：显示器刷新率 120fps（当前模式）；prefer-60fps 偏好=已关闭(跟随显示器刷新率)；低电量模式=开 → 页面更新上限约 60fps（…）`——由 `RefreshRatePolicy.startupLogLine` 产出。刷新率取窗口所在屏的当前模式（`CGDisplayCopyDisplayMode`；取不到回落面板上限 `NSScreen.maximumFramesPerSecond` 并标「面板上限」）；建窗后立即记一次，并在换屏/屏幕参数变化（同屏改刷新率）/低电量模式切换/首次获得 key（上屏兜底）时按值去重补记（`MainWindowController.logRefreshRateIfChanged`）。`RefreshRatePolicyTests` 钉住 60/120/30 三个实测点、上游整数除法折算、接线时序（apply 先于 `WKWebView` 构造）与 SPI 不可用时的诚实降级（unknown 按 WebKit 默认折算，绝不虚报 120）；同屏改刷新率时 WebKit 是否重读 nominal 未证实，验收以 `[shell-fps]` 实测为准。
+
+**隐藏/电池降频（D4，不采纳；本设计 §5.1 编号，非渲染 P0 批）**：现有 C target 只有单向「关偏好」函数（`DSHChamberWebKitSupport.h`），且建页后改偏好实测不生效（上文「创建后再改不生效」）⇒ 隐藏/遮挡/低电量时把偏好置回 near-60 只能建页时定型或重建视图；扩 C target 双向函数并重建视图的成本/收益未证，**不采纳**——隐藏期由 D2 相位门 + keep-awake 条件降载，真机若仍见 GPU/合成开销再按 §5.1 测量协议重开。
 
 **Rejected alternatives（本决策）**：① 接受 60fps、不做——同机 Electron/Chromium 是 120fps，双 flavor 刷新率不同且原生侧更差，无产品理由保留；关闭偏好只是一个 SPI 调用的成本。② 等 WebKit 公开开关——无时间表，期间 60fps 上限持续（S-48）；落地已按「SPI 缺失即 Unknown 降级」设计，换公开 API 只需替换 `apply(to:)` 一处。③ 页面内规避（CSS 合成/自绘）——节流点在引擎调度器，页面拿不到旁路；流式文本必须走渲染更新。④ 按显示器能力门控（仅 `NSScreen.maximumFramesPerSecond > 60` 时关偏好）——页面创建后再改偏好不生效，换屏后无法重配；60Hz 屏 `nominal = 60`、`framesPerSecondNearestFullSpeed(60) = 60` 本不额外限制；建窗前 `NSScreen.main` 未必是最终屏。⑤ 覆盖低电量模式（injected bundle / UI 进程转发 / dyld interpose）——注入面（`_WKProcessPoolConfiguration.injectedBundleURL`，所属类自 macOS 12 deprecated）存在但未实测，覆盖需自建 bundle 并链接 WebCore 测试钩子，代价远超收益；UI 进程不转发。⑥ 换渲染引擎（Chromium/CEF）——唯一能在低电量模式拿满 120fps 的路径，但超出路线 A 定义，发布/签名代价巨大；电池场景替代品是 Electron flavor（已归档）。
 
@@ -510,7 +513,7 @@ A 桥 P0 判定：`macos/` 最小壳加载控制面 origin 的壳文档（`/`）
 
 ### 8.3 Swift 壳 v1 实施与双端 harness
 
-E1–E20 按 §5 实现（E15 走 §6.4）；manifest 生成与三件锁步护栏（§4.4.3）；Supervisor 与启动序列（§3.3）；A 桥 shim 全通道对拍；双端 harness 冒烟（`swift-harness-driver`：node 集成测试拉起 Swift harness 断言真实窗口/桥，`loopback-http-test-server.ts` 同款思路）需 GUI 会话，验收按 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md)。
+E1–E21 按 §5 实现（E15 走 §6.4）；manifest 生成与三件锁步护栏（§4.4.3）；Supervisor 与启动序列（§3.3）；A 桥 shim 全通道对拍；双端 harness 冒烟（`swift-harness-driver`：node 集成测试拉起 Swift harness 断言真实窗口/桥，`loopback-http-test-server.ts` 同款思路）需 GUI 会话，验收按 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md)。
 
 ### 8.4 发布产物装配与桌面集成（DMG / SwiftPM 资源 / 构建链）
 

@@ -250,22 +250,49 @@ public final class SwiftEdgeHostLegs {
         return true
     }
 
-    /// keep-awake activity token（ProcessInfo 防休眠；nil = 未激活）。
+    /// keep-awake activity token（ProcessInfo 防休眠；nil = 未持有）。
     private var keepAwakeActivity: NSObjectProtocol?
+    /// keep-awake 设置意图（settings 壳的 setKeepAwake；默认 off）。
+    private var keepAwakeRequested = false
+    /// 最近一次收到的窗口可见性（D3）。无接线 / headless = 默认可见 → 旧行为。
+    private var windowVisible = true
 
     /// 只防【系统】休眠，不阻止显示器关闭——Electron 用 powerSaveBlocker
     /// prevent-app-suspension（main.ts），design 14 D5 亦写明「仅防应用挂起，
     /// 不阻止显示器关闭」。.idleDisplaySleepDisabled（屏幕永不熄灭）与
     /// Electron 可感不一致，故不采用。
+    ///
+    /// D3 按需：断言 = 设置开启 **且** 窗口可见。可见性事实来自 D2 的宿主可见性腿
+    /// （MainWindowController.pushShellVisibility → windowVisibilityDidChange），
+    /// 与渲染侧前台相位门同源；窗口隐藏 / 遮挡 / 最小化期间不再持长期断言
+    /// （实机症状 = 无窗数月仍持 89h）。隐藏期「前台任务」（需保活的长任务）判据
+    /// 未落；登记见 docs/progress/STATUS.md §1.7。「遮挡即释放」的产品取舍同为待裁项。
     private func updateKeepAwake(enabled: Bool) {
-        if enabled, keepAwakeActivity == nil {
+        keepAwakeRequested = enabled
+        reconcileKeepAwake()
+    }
+
+    /// 窗口可见性变化（前台相位允许 = visible && !occluded；D2 宿主腿回调）。
+    /// 无接线（headless / 测试）时保持默认可见，故旧语义不变。
+    public func windowVisibilityDidChange(visible: Bool) {
+        windowVisible = visible
+        reconcileKeepAwake()
+    }
+
+    /// 断言收敛：只在持有状态真的变化时 begin/end，并各落盘一行（按值去重）。
+    private func reconcileKeepAwake() {
+        let desired = keepAwakeRequested && windowVisible
+        if desired, keepAwakeActivity == nil {
             keepAwakeActivity = ProcessInfo.processInfo.beginActivity(
                 options: [.idleSystemSleepDisabled],
-                reason: "dsh-chamber keep-awake (edge setKeepAwake)"
+                reason: "dsh-chamber keep-awake (edge setKeepAwake; window visible)"
             )
-        } else if !enabled, let token = keepAwakeActivity {
+            shellLog("[shell] keep-awake 断言已持有（setting=on，窗口可见=是）")
+        } else if !desired, let token = keepAwakeActivity {
             ProcessInfo.processInfo.endActivity(token)
             keepAwakeActivity = nil
+            shellLog("[shell] keep-awake 断言已释放（setting=\(keepAwakeRequested ? "on" : "off")"
+                + "，窗口可见=\(windowVisible ? "是" : "否")）")
         }
     }
 
@@ -593,6 +620,9 @@ public final class SwiftEdgeHostLegs {
                 }
                 // focusMainWindow 也是恢复入口（最小化窗口先 deminiaturize）。
                 MainWindowController.restoreWindow(window)
+                // 可见性事实恢复腿（D2）：与 AppDelegate 三个恢复入口同口径；只抬升已 key 的
+                // 窗口可能不发 didBecomeKey（窗口的 controller 即 MainWindowController）。
+                (window.windowController as? MainWindowController)?.pushShellVisibility()
                 NSApp.activate(ignoringOtherApps: true)
                 return (nil, nil)
             }

@@ -1,12 +1,13 @@
 /**
  * Dev-only page RENDER counters (design 05 §3 发布门与投影缓存的诊断面).
  *
- * WHY. The P2 work (sidebar context split, factAt quantization) is measured by
- * publish rate, per-publish changed-source count, signature-cache hit rate and
- * sidebar row derivations — today only the two END points of the publish storm
- * are known (27 publishes/s under the badge storm, ~0 at rest); the distribution
- * in between is unmeasurable. This module is that instrument: four numbers that
- * turn "structural upper bound" into measured numbers.
+ * WHY. The page-side performance work (sidebar context split, the factAt 1s
+ * signature bucket — implemented: `runtimeReportSignature` signs factAt/1000) is
+ * measured by publish rate, per-publish changed-source count, signature-cache hit
+ * rate and sidebar row derivations — today only the two END points of the publish
+ * storm are known (27 publishes/s under the badge storm, ~0 at rest); the
+ * distribution in between is unmeasurable. This module is that instrument: four
+ * numbers that turn "structural upper bound" into measured numbers.
  *
  * SURFACE. One page-global read function ({@link RENDER_COUNTERS_GLOBAL_KEY}), the
  * same devtools-only channel as `globalThis.__dshChamberHttpBudget()` /

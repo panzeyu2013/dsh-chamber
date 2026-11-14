@@ -953,6 +953,14 @@ export function runningRingVisible(_channelRunning: boolean | undefined, polledR
   return polledRunning === true
 }
 
+/**
+ * factAt 进签名前的量化桶宽（毫秒）。签名只回答「是否重发布」：同一秒内的连续观测
+ * 是同一份新鲜度读数，按原始值签名会让去重门永不命中（实机风暴约 27 次/秒）。原始
+ * factAt 仍原样进入 report 供渲染（行的 `data-chamber-fact-at` 数据不变），桶只粗化
+ * 发布判据，不产生第二个持久化的时间值。
+ */
+const FACT_AT_SIGNATURE_BUCKET_MS = 1_000
+
 /** Content signature of one runtime-facts report (current + per-session facts;
  *  `running` always, `completed`/`pending`/`runningSubagents` as sparse extras).
  *
@@ -981,13 +989,25 @@ export function runtimeReportSignature(
   const rows = Object.entries(report.sessions)
     .filter(([id]) => onlyIds === undefined || onlyIds.has(id))
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([id, facts]) =>
+    .map(([id, facts]) => {
       // factAt is RENDERED (the row's `data-chamber-fact-at` evidence anchor) and it
       // is the only clock a facts-only source can advance: leaving it out of the
       // signature let the App's report dedupe freeze the anchor at its first-seen
-      // value, so every freshness readout lied. Sparse on purpose: 0 and absent
-      // both mean "no observer fact", so the encoding invents no churn for them. `corrected`（I-3 修正 provenance）像 `running` 一样只签身份路径：它必须重发（否则 App 的去重会吞掉修正标记），而投影从不渲染它、不得为它单独重发布。
-      `${id}:${includeRunning && facts.running === true ? 'r' : ''}${includeRunning && facts.corrected === true ? 'x' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}:${(facts.factAt ?? 0) > 0 ? facts.factAt : ''}${goalFactSignature(facts.goal)}`)
+      // value, so every freshness readout lied. But signing the RAW value is a
+      // publish storm: the observer refreshes it on every observation (27 publishes/s
+      // measured on device), so the dedupe gate never hits and every facts frame
+      // re-publishes. The signature therefore signs a 1000 ms BUCKET
+      // (`Math.floor(factAt / FACT_AT_SIGNATURE_BUCKET_MS)`): observations inside one
+      // second are the same freshness reading and do not re-publish, bucket crossings
+      // do. The report keeps the raw factAt untouched for rendering — the anchor's
+      // worst case is a sub-second lag at a bucket boundary, never a frozen first-seen
+      // value — so this coarsens ONLY the "re-publish?" criterion, never the data.
+      // Sparse on purpose: 0 and absent both mean "no observer fact", so the encoding
+      // invents no churn for them. `corrected`（I-3 修正 provenance）像 `running` 一样只签身份路径：它必须重发（否则 App 的去重会吞掉修正标记），而投影从不渲染它、不得为它单独重发布。
+      const factAt = facts.factAt ?? 0
+      const factAtBucket = factAt > 0 ? Math.floor(factAt / FACT_AT_SIGNATURE_BUCKET_MS) : ''
+      return `${id}:${includeRunning && facts.running === true ? 'r' : ''}${includeRunning && facts.corrected === true ? 'x' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}:${factAtBucket}${goalFactSignature(facts.goal)}`
+    })
   // L1 对账回执也是事实内容的一部分，必须进签名——App 的运行时事实提交按本签名
   // 去重：回执若不入签名，一次「事实没变、只有回执结算」的上报会被整个丢弃，守卫
   // 随后误判「对账通道无回执」并升级 reconnect/L3。只签在 `includeRunning` 路径；

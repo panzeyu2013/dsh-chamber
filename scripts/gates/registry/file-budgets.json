@@ -55,9 +55,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1838,
+      "lines": 1858,
       "target": 1200,
-      "note": "−17（2026-11 死链清理：hasActiveSchedule 会话投影回落链随 pin 移除 schedule projection 删除，见 design 06 §4.3）= derive 投影/签名稀疏位/跨代际保留。; aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。; +53 = the pin per-source view options threaded through derive (publish-gate inputs, sessionVisible three-state rewrite, search/derive filter plumbing, type aliases; the three derivation modules live in pin-partition.ts / flat-account.ts / workspace-tree.ts) plus the 4-line sessionFacts publish-gate fix; +76 = PR2 derived checkout rows (design 08 §5.2): ONE sessionProjectionRow builder replaces the two duplicated row literals (−net), deriveServerWorkspaces gains layouts/layoutVersion and emits family main→checkout rows with allSessionIds, the only-filter keeps a family anchored on placed members, the producer signature carries workingDirectory, the App publish gate carries kind/repoKey/familyMainId/allSessionIds, and findReusableBlankSession compares the EFFECTIVE directory so a checkout's blank row is never reused by the source '+' (dirty/locked deliberately excluded — the Git occupant reads them from its own layout facts)"
+      "note": "−17（2026-11 死链清理：hasActiveSchedule 会话投影回落链随 pin 移除 schedule projection 删除，见 design 06 §4.3）= derive 投影/签名稀疏位/跨代际保留。; aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。; +53 = the pin per-source view options threaded through derive (publish-gate inputs, sessionVisible three-state rewrite, search/derive filter plumbing, type aliases; the three derivation modules live in pin-partition.ts / flat-account.ts / workspace-tree.ts) plus the 4-line sessionFacts publish-gate fix; +76 = PR2 derived checkout rows (design 08 §5.2): ONE sessionProjectionRow builder replaces the two duplicated row literals (−net), deriveServerWorkspaces gains layouts/layoutVersion and emits family main→checkout rows with allSessionIds, the only-filter keeps a family anchored on placed members, the producer signature carries workingDirectory, the App publish gate carries kind/repoKey/familyMainId/allSessionIds, and findReusableBlankSession compares the EFFECTIVE directory so a checkout's blank row is never reused by the source '+' (dirty/locked deliberately excluded — the Git occupant reads them from its own layout facts)；+20（2026-11 渲染 P0）= factAt 发布签名量化（A2a）：runtimeReportSignature 只签 1000ms 桶（FACT_AT_SIGNATURE_BUCKET_MS 常量 + 契约注释改写 + map 块体），原始 factAt 仍原样进 report 供 data-chamber-fact-at 渲染；净变化全在注释/常量，逻辑面只有量化表达式一句"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
@@ -187,15 +187,15 @@
     },
     {
       "path": "packages/renderer/src/app-hooks/use-bridge-subscriptions.ts",
-      "lines": 1002,
+      "lines": 1048,
       "target": 984,
-      "note": "Bridge-subscription cluster (deep-link/echo/mount snapshot/runtime report). Registered after the completeness review found >200-line hooks unguarded. Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first. +3 = PR2 echo workingDirectory passthrough (design 08 §5.3): the creation fact carries the intended checkout path into recordPendingSession, so the derived row places immediately instead of flashing in the source row (feature, review-justified raise; the split debt is unchanged).；+18 = 同一失败事实的 App 订阅（作废放置意图；feature，review-justified raise，登记 STATUS）"
+      "note": "Bridge-subscription cluster (deep-link/echo/mount snapshot/runtime report). Registered after the completeness review found >200-line hooks unguarded. Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first. +3 = PR2 echo workingDirectory passthrough (design 08 §5.3): the creation fact carries the intended checkout path into recordPendingSession, so the derived row places immediately instead of flashing in the source row (feature, review-justified raise; the split debt is unchanged).；+18 = 同一失败事实的 App 订阅（作废放置意图；feature，review-justified raise，登记 STATUS）；+24（2026-11 渲染 P0）= A6 runtime report 去重签名单算：已提交 report 的内容签名按对象身份 WeakMap 缓存（reportSignatureOf + committedReportSignatures），每次上报只算新 report 一次而非 current/report 两次；去重语义逐字不变（feature，review-justified raise）；+22（2026-11 渲染 P0 批次4）= A7 ⑤ 挂载快照去重同款：已提交 aggregate snapshot 的 instanceSnapshotSignature 按对象身份 WeakMap 缓存（snapshotSignatureOf + committedSnapshotSignatures），每次 push 只算新对象一次而非 current/retained 两次；去重语义逐字不变（feature，review-justified raise）"
     },
     {
       "path": "packages/renderer/src/app-hooks/use-notifications.ts",
-      "lines": 663,
+      "lines": 667,
       "target": 663,
-      "note": "Notification projection cluster (completion observation/ledger/native outbox). Unregistered until the completeness review; guard it so the next addition is reviewed. Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first."
+      "note": "Notification projection cluster (completion observation/ledger/native outbox). Unregistered until the completeness review; guard it so the next addition is reviewed. Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first.；+4（pre-merge P2-1 / D2 事实接入，review-justified raise）= `requireHidden` 的「用户正在看」证据叠加壳可见性事实 isShellVisible()（另一 Space / 完全遮挡 / orderOut 下 document.visibilityState 仍 visible，会误抑制完成横幅 ⇒ 漏通知）+ 注释同步；target 保留 663 作为重构债"
     },
     {
       "path": "packages/renderer/src/app-hooks/use-aggregate-refresh.ts",
@@ -217,9 +217,9 @@
     },
     {
       "path": "packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts",
-      "lines": 270,
+      "lines": 366,
       "target": 270,
-      "note": "Session-facts lifecycle cluster (facts sources / shell-less observers / pagehide flush). No focus/blur completion arm: HEAD registers no such listener and this cut adds none (a refocused window does not restep the arm); the arm advances on facts/status events only."
+      "note": "Session-facts lifecycle cluster (facts sources / shell-less observers / pagehide flush). No focus/blur completion arm: HEAD registers no such listener and this cut adds none (a refocused window does not restep the arm); the arm advances on facts/status events only.；+94（2026-11 渲染 P0 批次4）= A3 调试开关（默认关）：dev-flag 读取器 + 期望态纯规划器 planSessionFactsSources/sessionFactsSpecSignature（把原先两份内联过滤合并成单一 owner）、mounted 表按开关条件订阅（useSyncExternalStore，关时 no-op）、两个 spec/effect 改吃同一份计划；默认路径产出字节不变（feature/调试面，review-justified raise；target 保持 270 作为重构债）；+2（pre-merge P2-1 / D2 事实接入，review-justified raise）= 行刷新提示的 visible 判定改传上游唯一门 shouldRunBackgroundPhase（页面可见 + 壳窗口可见/未遮挡）+ import/注释同步（与 T14 拆分边界重复 import 的一行已去重；默认无壳事实时等价旧行为；target 保持 270）"
     },
     {
       "path": "packages/desktop/transport-health.ts",
@@ -367,15 +367,15 @@
     },
     {
       "path": "macos/Sources/DSHChamber/MainWindowController.swift",
-      "lines": 3272,
+      "lines": 3381,
       "target": 3272,
-      "note": "FROZEN, no adjudicated target: WKWebView host + A/B-bridge site + navigation guard + hostFacts source + notify routing in one window controller; raised by the design 28 v3 native-guest carrier (guest layer install, browser IPC dispatch, document-generation reclaim, focus/zoom routing). The row locks further growth only; an extraction needs a navigation/edge seam decision first. +33（2026-11，design 25 §5.6 / §7）= WindowMetrics 单源（官方 1280×820/min 520×600 外框经 28pt 标题栏折为内容 1280×792/min 520×572）+ P03 前台/唤醒 nudge 两调用点。"
+      "note": "FROZEN, no adjudicated target: WKWebView host + A/B-bridge site + navigation guard + hostFacts source + notify routing in one window controller; raised by the design 28 v3 native-guest carrier (guest layer install, browser IPC dispatch, document-generation reclaim, focus/zoom routing). The row locks further growth only; an extraction needs a navigation/edge seam decision first. +33（2026-11，design 25 §5.6 / §7）= WindowMetrics 单源（官方 1280×820/min 520×600 外框经 28pt 标题栏折为内容 1280×792/min 520×572）+ P03 前台/唤醒 nudge 两调用点。+109（2026-11 ROUND2 render-p0 D2；review 后按删除 hostFacts 死键缩 3 行）= 壳窗口可见性事实（ShellVisibilityFacts + 纯事实变换/派发脚本/按值去重派发 + NSWindow.didChangeOcclusionState 观察者 + orderOut/最小化/应用显隐/willClose/didFinish 首注与恢复补发接线；事件是页面唯一事实通道）——renderer 前台相位门（background-phase.ts）的宿主半边（design 14 §D1 / STATUS §1.7）；target 不随之抬高（剩余压缩量如实变大）。"
     },
     {
       "path": "macos/Sources/DSHChamber/AppDelegate.swift",
-      "lines": 2160,
+      "lines": 2182,
       "target": 2160,
-      "note": "FROZEN, no adjudicated target: app lifecycle assembly (env/packaged-path resolution, BridgeClient creation, sidecar start, main window, tray, quit confirmation). The row locks growth only. +73（2026-11，design 14 §D2 / design 25 §5 E9）= 系统关机/注销退出确认豁免（NSWorkspace.willPowerOff 观察器 + applicationShouldTerminate 最前 sessionEnding 门/abortModal/awaiting 回复 + 激活复位）。"
+      "note": "FROZEN, no adjudicated target: app lifecycle assembly (env/packaged-path resolution, BridgeClient creation, sidecar start, main window, tray, quit confirmation). The row locks growth only. +73（2026-11，design 14 §D2 / design 25 §5 E9）= 系统关机/注销退出确认豁免（NSWorkspace.willPowerOff 观察器 + applicationShouldTerminate 最前 sessionEnding 门/abortModal/awaiting 回复 + 激活复位）。+14（2026-11，ROUND2 render-p0 D2/D3）= 可见性事实恢复腿（Dock reopen / restoreMainWindow / 托盘「显示窗口」各补发一枪）+ keep-awake 可见性腿接线（controller.onShellVisibilityDidChange → legs.windowVisibilityDidChange）；+8（pre-merge P2 恢复腿双保险，review-justified raise）= orderOut 后补发 pushShellVisibility ×3 + 通知点击恢复腿补发 ×1 + 对应单行注释（已激活/已 key 形态可能不发 didBecomeKey；AppKit 时序 macOS NOT RUN）；target 不随之抬高。"
     },
     {
       "path": "macos/Sources/DSHChamber/BridgeClient.swift",

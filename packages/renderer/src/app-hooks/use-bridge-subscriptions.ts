@@ -60,6 +60,7 @@ import {
   sweepPendingWorkspaces,
   voidPendingSessionPlacement,
   type InstanceAggregate,
+  type InstanceRuntimeReport,
   type InstanceSnapshot,
   type IntentPrewarmBudget,
   type PluginGraphDiagnostic,
@@ -77,6 +78,43 @@ import type { RemotesStore } from '../host/remotes-store.ts'
 
 /** 会话列表刷新合并窗（唯一消费者在本 hook）。 */
 const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
+
+/**
+ * 已提交 runtime report 的内容签名缓存（A6）：`runtimeReportSignature` 要遍历所有行并
+ * 拼接字符串，而 store 里那份 report 是 identity-preserving 的不可变对象（唯一可变字段
+ * `reportedAt` 不进签名），因此它的签名可以键在**对象身份**上复用——每次上报只算
+ * **新** report 一次，与记住的旧签名比较（原实现同一拍要算 current 与 report 两次）。
+ * 去重语义逐字不变：仍是「内容签名相等 ⇒ 不换对象、只刷新 liveness 戳」。
+ * WeakMap 随 report 对象一起回收，不引入跨代际残留。
+ */
+const committedReportSignatures = new WeakMap<object, string>()
+
+/** 一份已提交 report 的内容签名：命中对象身份缓存则 O(1)，未命中算一次并记住。 */
+function reportSignatureOf(report: InstanceRuntimeReport): string {
+  const remembered = committedReportSignatures.get(report)
+  if (remembered !== undefined) return remembered
+  const signature = runtimeReportSignature(report)
+  committedReportSignatures.set(report, signature)
+  return signature
+}
+
+/**
+ * 已提交 aggregate 快照的内容签名缓存（A7 ⑤）：`instanceSnapshotSignature` 要遍历
+ * workspaces/sessions 并拼串，而 store 里的 aggregate 是 identity-preserving 的不可变
+ * 对象（换内容才换对象），因此它的签名可以键在**对象身份**上复用——每次挂载快照推送
+ * 只算**新**对象一次，与记住的旧签名比较（原实现同一拍算 current 与 retained 两次）。
+ * 去重语义逐字不变：仍是「内容签名相等 ⇒ 不换 state 对象」。
+ */
+const committedSnapshotSignatures = new WeakMap<object, string>()
+
+/** 一份已提交 aggregate 快照的内容签名：命中对象身份缓存则 O(1)，未命中算一次并记住。 */
+function snapshotSignatureOf(aggregate: Parameters<typeof instanceSnapshotSignature>[0]): string {
+  const remembered = committedSnapshotSignatures.get(aggregate)
+  if (remembered !== undefined) return remembered
+  const signature = instanceSnapshotSignature(aggregate)
+  committedSnapshotSignatures.set(aggregate, signature)
+  return signature
+}
 
 /**
  * 桌面桥面探测判定（App 的 500ms 探测 effect 维护，见 App.tsx 的 `bridgeVerdict`）：
@@ -853,9 +891,13 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         const retained = current !== undefined && current.state === 'ok'
           ? { ...snapshot, sessions: retainSessionLabels(current.sessions, snapshot.sessions) }
           : snapshot
+        // A7 ⑤：新对象每拍必算一次；store 里旧对象的签名走身份缓存（去重语义不变）。
+        const retainedSignature = instanceSnapshotSignature(retained)
         if (current !== undefined && current.state === 'ok'
-          && instanceSnapshotSignature(current) === instanceSnapshotSignature(retained)) return prev
-        return { ...prev, [sourceId]: { state: 'ok', ...retained, error: null } }
+          && snapshotSignatureOf(current) === retainedSignature) return prev
+        const stored = { state: 'ok' as const, ...retained, error: null }
+        committedSnapshotSignatures.set(stored, retainedSignature)
+        return { ...prev, [sourceId]: stored }
       })
       // 收割完成：该源的首个挂载推送就是权威基线，标记已满足并立即回收后台壳；非收割
       // 挂载的推送同样满足基线需求——不标记会让已推送过的源在回收后又被收割白 boot 一次。
@@ -917,13 +959,17 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
           return next
         }
         // identity-preserving：同内容上报不换 state 对象，避免每次上报重派生 servers。
+        // A6：新 report 的签名每次上报只算一次；已提交对象的签名走身份缓存（去重语义不变）。
+        const signature = runtimeReportSignature(report)
         const current = prev[sourceId]
-        if (current !== undefined && runtimeReportSignature(current) === runtimeReportSignature(report)) {
+        if (current !== undefined && reportSignatureOf(current) === signature) {
           // 事实权威门的年龄输入（design 19 §3.5）：同内容上报只刷新 liveness 戳，不换对象。
           current.reportedAt = Date.now()
           return prev
         }
-        return { ...prev, [sourceId]: { ...report, reportedAt: Date.now() } }
+        const stored: InstanceRuntimeReport = { ...report, reportedAt: Date.now() }
+        committedReportSignatures.set(stored, signature)
+        return { ...prev, [sourceId]: stored }
       })
       if (report === undefined) {
         // 壳上报撤回（shell 重连/重 boot 窗口）：provenance = 壳轨——facts 载体未换代，

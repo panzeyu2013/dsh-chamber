@@ -59,6 +59,27 @@ struct MainWindowShownGate {
     }
 }
 
+/// 壳窗口可见性事实（design 14 §D1「隐藏窗口不消耗前台算力」/ design 25 §5 E21）：
+/// 渲染侧前台相位门（renderer background-phase.ts）的宿主事实半边。
+///
+/// 为什么需要：WKWebView 在「另一 Space / 完全遮挡 / orderOut 隐藏」时
+/// `document.visibilityState` 仍是 visible（宿主只持有窗口级观察面），只读页面状态的
+/// 前台相位门因此从不生效。本壳把下列两个事实推给页面（事件
+/// `dsh-chamber:shell-visibility`，载荷 = 本结构），页面侧只做一次判定：
+///   - visible：窗口在屏且未最小化 / 未隐藏（orderOut / 最小化 / Cmd+H → false）；
+///   - occluded：窗口被完全遮挡或不在当前可见 Space（只有 visible 为 true 时才载）。
+/// 无窗口（首位启动期 / 无窗常驻）按 .hidden 处理。
+struct ShellVisibilityFacts: Equatable {
+    var visible: Bool
+    var occluded: Bool
+
+    /// 不在屏（orderOut / 最小化 / 应用隐藏 / 窗口关闭）：前台相位必须停。
+    static let hidden = ShellVisibilityFacts(visible: false, occluded: false)
+
+    /// 前台相位是否允许（与 renderer 侧 isShellVisible 同式：visible && !occluded）。
+    var foregroundAllowed: Bool { visible && !occluded }
+}
+
 final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, NSWindowDelegate {
 
     // MARK: - 常量
@@ -292,6 +313,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 最近一次刷新率对照日志的**整行文本**（startupLogLine 是纯函数，行相等 ⟺ 全部事实
     /// 相等，所以整行去重天然覆盖新增事实字段）。
     private var lastRefreshRateLogLine: String?
+
+    /// 壳窗口可见性事实的最近一次派发值（按值去重；nil = 尚未派发过）。
+    private var lastShellVisibilityFacts: ShellVisibilityFacts?
+    /// 可见性事实变化回调（AppDelegate 装配期接 keep-awake 可见性腿，D3）。
+    /// 参数 = foregroundAllowed（与 renderer 前台相位门同式）；不参与派发决策。
+    var onShellVisibilityDidChange: ((Bool) -> Void)?
 
     /// 启动呈现门——首个可呈现内容（didCommit）才允许亮出启动主窗，且只触发一次
     /// （后续重载/重试/失败页后的再次导航不重复呈现）。同一状态机承载失败说明页的
@@ -824,6 +851,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             center.addObserver(self, selector: #selector(windowBackdropVisibilityDidChange(_:)),
                                name: name, object: nil)
         }
+        // 可见性事实（D2）：遮挡状态把「另一 Space / 完全遮挡」变成可观察事件；
+        // 最小化 / 应用显隐复用上面的材质兜底观察者（其内部先派发可见性事实）。
+        center.addObserver(self, selector: #selector(shellVisibilityDidChange(_:)),
+                           name: NSWindow.didChangeOcclusionStateNotification, object: window)
         // 换屏与低电量模式切换都会改变实际上限（WebKit 侧实时生效），
         // 对照日志按值去重补记（见 logRefreshRateIfChanged）。
         center.addObserver(self, selector: #selector(refreshRateWindowDidChangeScreen(_:)),
@@ -992,6 +1023,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 窗口恢复在屏（Dock/托盘/通知恢复 orderOut 或最小化窗口的路径）。
     @objc private func windowDidRestoreToScreen(_ note: Notification) {
+        pushShellVisibility()
         sendMainWindowShownIfEdge()
     }
 
@@ -1005,6 +1037,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// orderFront（应用仍激活）时 didBecomeKey 会被门当作重复而抑制。
     func noteWindowHiddenExplicitly() {
         mainWindowShownGate.windowDidLeaveScreen()
+        // orderOut 型隐藏没有 AppKit 可见性通知可挂：按「即将不在屏」强制派发
+        // （紧随的 orderOut → resignKey 只会带着同值事实被去重）。三处 hide 分支
+        // 都在 orderOut 前调本方法（AppDelegate.handleWindowCloseRequest）。
+        dispatchShellVisibility(.hidden, force: true)
     }
 
     /// 唯一的 `__host.mainWindowShown` 发送点（窗口在屏腿与应用激活腿共用）：
@@ -1438,6 +1474,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     @objc private func hostFactsWindowDidBecomeKey(_ notification: Notification) {
         mainWindowDeliverable = true
         pushHostFacts(["mainWindowAlive": true, "focused": true])
+        // 窗口在屏 / 获得 key（启动首显、orderOut 恢复、Dock 重开）→ 可见性事实补发。
+        pushShellVisibility()
         // 上屏兜底一拍——若首次记录时窗口还不在屏上（screen == nil），
         // 这里补进真实上限；正常路径被整行去重吞掉，不产生重复行。
         logRefreshRateIfChanged()
@@ -1448,6 +1486,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// isFocused = 可见且聚焦的实时查询的事件化等价）。
     @objc private func hostFactsWindowDidResignKey(_ notification: Notification) {
         pushHostFacts(["focused": false])
+        // 失 key 是 orderOut 型隐藏（hide-to-tray）与最小化的伴随事件 → 可见性事实补发。
+        pushShellVisibility()
     }
 
     /// NSWindow.willCloseNotification：主窗关闭（隐藏到 Dock 常驻语义，窗口
@@ -1458,7 +1498,70 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     @objc private func hostFactsWindowWillClose(_ notification: Notification) {
         mainWindowDeliverable = false
         pushHostFacts(["mainWindowAlive": false])
+        // willClose 时窗口对象仍在且 isVisible 可能还是 true：按「即将不在屏」强制派发。
+        dispatchShellVisibility(.hidden, force: true)
         sendRendererLifecycle("closed")
+    }
+
+    // MARK: - 壳窗口可见性事实（design 14 §D1 / design 25 §5 E21）
+
+    /// 可见性事件名（跨语言契约单源；renderer 侧 SHELL_VISIBILITY_EVENT 同字面量，
+    /// 由 packages/renderer/test/lifecycle/shell-visibility.test.ts 源文本锁步）。
+    static let shellVisibilityEventName = "dsh-chamber:shell-visibility"
+
+    /// 纯事实变换（无窗口环境可直测）：任何一项「不在屏」都归 visible = false；
+    /// occluded 只在窗口在屏时才有意义（AppKit 对离屏窗口也可能保留 .visible 位）。
+    static func shellVisibilityFacts(isVisible: Bool, isMiniaturized: Bool,
+                                     appIsHidden: Bool,
+                                     occlusionState: NSWindow.OcclusionState) -> ShellVisibilityFacts {
+        let visible = isVisible && !isMiniaturized && !appIsHidden
+        return ShellVisibilityFacts(visible: visible,
+                                    occluded: visible && !occlusionState.contains(.visible))
+    }
+
+    /// 页面派发脚本（纯函数）：detail 与 renderer shell-visibility.ts 的
+    /// ShellVisibilityDetail 同形状（visible + occluded 都是布尔）。
+    static func shellVisibilityScript(_ facts: ShellVisibilityFacts) -> String {
+        "window.dispatchEvent(new CustomEvent('\(shellVisibilityEventName)', "
+            + "{detail: {visible: \(facts.visible), occluded: \(facts.occluded)}}))"
+    }
+
+    /// 当前窗口可见性事实（纯读数，不做派发）；无窗口 = 不在屏。
+    private func currentShellVisibilityFacts() -> ShellVisibilityFacts {
+        guard let window else { return .hidden }
+        return Self.shellVisibilityFacts(isVisible: window.isVisible,
+                                         isMiniaturized: window.isMiniaturized,
+                                         appIsHidden: NSApp.isHidden,
+                                         occlusionState: window.occlusionState)
+    }
+
+    /// 当前「前台相位允许」读数（D3 keep-awake 联动 + 恢复路径补发用）。
+    var shellForegroundVisible: Bool { currentShellVisibilityFacts().foregroundAllowed }
+
+    /// 读当前事实并派发（按值去重；force = 每次加载完成 / 恢复路径补一枪）。
+    func pushShellVisibility(force: Bool = false) {
+        dispatchShellVisibility(currentShellVisibilityFacts(), force: force)
+    }
+
+    /// 派发一条可见性事实：页面事件（按值去重）+ D3 联动回调；hostFacts 不再携带该事实。
+    /// 失败 loud 一行、不阻断：页面未就绪 / 文档已换时，下一次导航的 didFinish
+    /// 会 force 补发（页面侧监听器随模块重装）。
+    private func dispatchShellVisibility(_ facts: ShellVisibilityFacts, force: Bool = false) {
+        guard force || facts != lastShellVisibilityFacts else { return }
+        lastShellVisibilityFacts = facts
+        onShellVisibilityDidChange?(facts.foregroundAllowed)
+        shellLog("[shell] 页面可见性事实 visible=\(facts.visible) occluded=\(facts.occluded)"
+            + "（前台相位\(facts.foregroundAllowed ? "允许" : "暂停")）")
+        evaluateJS(Self.shellVisibilityScript(facts)) { error in
+            if let error {
+                shellLog("[shell] 页面可见性事实派发失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// AppKit 遮挡状态变化（另一 Space / 完全遮挡 / 恢复）。
+    @objc private func shellVisibilityDidChange(_ note: Notification) {
+        pushShellVisibility()
     }
 
     // MARK: - 渲染器生命周期上报（design 25 §4.5/§5 E19）
@@ -1778,7 +1881,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// 最小化/隐藏期间的材质兜底（上游 darwin `applyBackdrop` 的等价面）。
+    /// 同一观察者覆盖 didMiniaturize / didDeminiaturize / 应用 didHide / didUnhide：
+    /// 先派发可见性事实（D2），再走材质分支（guard 掉材质时事实仍已派发）。
     @objc private func windowBackdropVisibilityDidChange(_ note: Notification) {
+        pushShellVisibility()
         guard let window, let windowMaterial else { return }
         let suppressed = window.isMiniaturized || !window.isVisible || NSApp.isHidden
         ShellWindowMaterial.applyBackdrop(suppressed: suppressed, effect: windowMaterial,
@@ -2333,6 +2439,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 渲染进程终止后的恢复导航成功也在此把 alive 收敛回 true（崩溃回调
         // webViewWebContentProcessDidTerminate 推 false 并触发 E19 有界重载）。
         pushHostFacts(Self.navigationFacts(for: .finished))
+        // 首次注入 / 每次文档装载后重放（导航重置 document，页面侧监听器随模块重装；
+        // 页面加载前的宿主派发（启动首显的 didBecomeKey）会丢，这里 force 补一枪）。
+        pushShellVisibility(force: true)
         // E19 三事件映射之二：加载完成 = core 的确定性 replay 边（drain 待发
         // 通知点击/深链 intent）。
         sendRendererLifecycle("did-finish-load")

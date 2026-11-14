@@ -1339,16 +1339,40 @@ test('round-3 restore: replaced receipt variants and report signatures', () => {
   assert.notEqual(runtimeReportSignature({ sessions: { s1: { completed: true } } }, undefined, false), runtimeReportSignature({ sessions: { s1: {} } }, undefined, false), 'rendered facts still matter in the projection path')
   assert.notEqual(runtimeReportSignature(a, new Set(['s1'])), runtimeReportSignature(a, new Set(['s2'])), 'different visible subsets differ')
   // factAt 是渲染字段（行的 data-chamber-fact-at 证据锚），必须像其他渲染字段一样动签名：
-  // 漏签时「行不变、只有观察者时钟前进」的上报被去重丢弃，锚点冻结在首见值。
+  // 漏签时「行不变、只有观察者时钟前进」的上报被去重丢弃，锚点冻结在首见值。但原始 factAt
+  // 每次观测都前进（实机风暴约 27 次/秒发布），故签名只签 1000ms 桶 floor(factAt/1000)：
+  // 桶内观测是同一份新鲜度读数、不重发布；跨桶仍重发布（原始值仍原样进 report 供渲染）。
   assert.notEqual(
     runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_000 } } }),
     runtimeReportSignature({ sessions: { s1: { running: false, factAt: 2_000 } } }),
-    'factAt-only change must republish on the identity path',
+    'a bucket-crossing factAt change must republish on the identity path',
   )
   assert.notEqual(
     runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_000 } } }, undefined, false),
     runtimeReportSignature({ sessions: { s1: { running: false, factAt: 2_000 } } }, undefined, false),
-    'factAt is rendered, so the projection path signs it too',
+    'factAt is rendered, so the projection path signs the same bucket',
+  )
+  // 桶内等值：1000 与 1999 同属 [1000,2000) 桶 ⇒ 同一份读数，不得重发布。
+  assert.equal(
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_000 } } }),
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_999 } } }),
+    'two observations inside one bucket are one publish',
+  )
+  assert.equal(
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_500 } } }, undefined, false),
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_999 } } }, undefined, false),
+    'the projection path uses the same bucket',
+  )
+  // 桶边界：999/1000 与 1999/2000 分属相邻桶 ⇒ 必须重发布（锚点最坏晚一个桶边界）。
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 999 } } }),
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_000 } } }),
+    'a bucket boundary (999 → 1000) moves the signature',
+  )
+  assert.notEqual(
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 1_999 } } }),
+    runtimeReportSignature({ sessions: { s1: { running: false, factAt: 2_000 } } }),
+    'a bucket boundary (1999 → 2000) moves the signature',
   )
   assert.equal(
     runtimeReportSignature({ sessions: { s1: { running: false } } }),

@@ -20,6 +20,7 @@ const read = (relative: string): string =>
 
 const PORT = read('../../src/client/rows/animated-rows.tsx')
 const PORT_CSS = read('../../src/client/rows/animated-rows.module.css')
+const MOTION = read('../../src/client/rows/animated-rows-motion.tsx')
 const SECTION = read('../../src/client/ServerSection.tsx')
 const ROWS = read('../../src/client/ServerSectionRows.tsx')
 
@@ -123,26 +124,29 @@ test('only the browse branch is wrapped; search and aggregate keep a plain list'
   const browse = SECTION.indexOf('{merged !== undefined ? (')
   const searchList = SECTION.indexOf('<div className={cc.workspaceList}>', browse)
   const aggregateList = SECTION.indexOf('<div className={cc.workspaceList}>', searchList + 1)
-  const wrapper = SECTION.indexOf('<AnimatedRows')
+  const wrapper = SECTION.indexOf('<AnimatedRowsMotion')
   assert.ok(browse >= 0 && searchList > browse && aggregateList > searchList && wrapper > aggregateList,
     'the animator must wrap the last ternary arm (browse), after both plain-list arms')
   assert.equal(SECTION.split('<div className={cc.workspaceList}>').length - 1, 2,
     'exactly two plain list containers: the search and the aggregate-error branches')
-  assert.ok(SECTION.indexOf('</AnimatedRows>') > wrapper)
+  assert.ok(SECTION.indexOf('</AnimatedRowsMotion>') > wrapper)
 })
 
 test('the wrapper carries the vendor gates', () => {
   assert.match(SECTION,
     /const rowKeys: string\[\] = \(flatGroupBy \? flatSessions\.length === 0 : server\.workspaces\.length === 0\)/u,
     'the empty seed key uses the same flat/non-flat expression as the empty gate')
-  assert.match(SECTION, /import \{ AnimatedRows \} from '\.\/rows\/animated-rows\.tsx'/u,
-    'the browse tree consumes the local port (registry C16 admits only relative imports of an export function)')
+  assert.match(SECTION, /import \{ AnimatedRowsMotion \} from '\.\/rows\/animated-rows-motion\.tsx'/u,
+    'the browse tree consumes the budgeted shell, which extends the local port (registry C16 admits only relative imports of an export function)')
+  assert.match(MOTION, /import \{ AnimatedRows \} from '\.\/animated-rows\.tsx'/u,
+    'the shell delegates to the verbatim port instead of copying it')
+  assert.match(MOTION, /extends AnimatedRows/u)
   // Window covers the caller-supplied attribute block (class, role, label, keys): upstream
   // made role/label props of the shared primitive, so the wrapper lists them before rowKeys.
-  assert.match(SECTION, /<AnimatedRows[\s\S]{0,460}?rowKeys=\{rowKeys\}/u)
+  assert.match(SECTION, /<AnimatedRowsMotion[\s\S]{0,460}?rowKeys=\{rowKeys\}/u)
   // The port makes role/label optional (upstream callers such as ui-settings-models omit them),
   // so THIS caller must pin the tree semantics: dropping them silently strips role/aria-label.
-  assert.match(SECTION, /<AnimatedRows[\s\S]{0,420}?role="tree" label=\{t\('section\.sessions'\)\}/u,
+  assert.match(SECTION, /<AnimatedRowsMotion[\s\S]{0,420}?role="tree" label=\{t\('section\.sessions'\)\}/u,
     'the browse tree must keep role="tree" AND its accessible name (the primitive no longer hardcodes either)')
   assert.match(SECTION, /ready=\{server\.aggregateReady === true && workspaceDrag === null && sessionDrag === null\}/u,
     'a drag in flight or an unloaded aggregate must stand the motion down')

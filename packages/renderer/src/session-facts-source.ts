@@ -546,11 +546,22 @@ function bodyHasDisabledCode(body: unknown): boolean {
  * 行内容签名（变更检测；字段顺序固定，JSON 串即可）。goal 三值必须进签名：
  * 只翻相位/activation 的一次增量也要产生 row hint，否则侧栏行与收敛器读不到
  * 新相位（unknown/null/对象三态各自成码）。
+ *
+ * 字段集与 {@link sameRowFacts} **逐字一致**（A7 ①：两处必须同时改字段，否则一处把
+ * 语义相等判成变化、另一处判成不变）。`lastTurnEnd` 刻意归一成四元组
+ * (kind, cause ?? null, at, seq ?? null) 而不是整个对象进 JSON：整对象序列化会把属性
+ * 顺序与未知可枚举字段也算成变化（legacy `snapshot.tail.turn.reason` 原样 cast 的路径
+ * 会带入任意字段），与逐字段比较的判据不一致。
+ * 生产消费者 = mux 观察者的交付摘要（source-mux-facts.snapshotDigest）；增量变更检测
+ * 走 {@link sameRowFacts}（不分配 JSON 串）。
  */
 export function sessionFactsRowSignature(row: SessionFactsRow): string {
   return JSON.stringify([
     row.running, row.pendingKind, row.subagentCount, row.lineageVerified === true, row.subagentKnown === true, row.updatedAt,
-    row.completedAt, row.completedAtSource, row.lastTurnEnd,
+    row.completedAt, row.completedAtSource,
+    row.lastTurnEnd === null
+      ? null
+      : [row.lastTurnEnd.kind, row.lastTurnEnd.cause ?? null, row.lastTurnEnd.at, row.lastTurnEnd.seq ?? null],
     row.goal === undefined ? 'u' : row.goal === null ? 'n' : [
       row.goal.goalId, row.goal.revision, row.goal.phase,
       row.goal.activation ?? null, row.goal.updatedAt ?? null,
@@ -560,10 +571,10 @@ export function sessionFactsRowSignature(row: SessionFactsRow): string {
 
 /**
  * 两行的 **payload 字段集** 是否等价：与 {@link sessionFactsRowSignature} 完全同一字段
- * （含 `=== true` 归一化与 goal 三元），但逐字段比较、不产生 JSON 字符串。整量快照
- * 里 12k 行的变更检测因此不再为每行分配两份签名串（实测 5.4 ms → 逐字段比较可忽略）。
- * 只比较 wire 白名单字段：客户端本地位（factAt/firstSeenByDelta/identityConfirmed）不
- * 进签名，也不该触发 row hint。
+ * （含 `=== true` 归一化、lastTurnEnd 四元组与 goal 三元），但逐字段比较、不产生 JSON
+ * 字符串。整量快照与增量 delta 的变更检测因此不再为每行分配签名串（实测 5.4 ms →
+ * 逐字段比较可忽略）。只比较 wire 白名单字段：客户端本地位
+ * （factAt/firstSeenByDelta/identityConfirmed）不进签名，也不该触发 row hint。
  */
 function sameTurnEnd(left: SessionFactsRow['lastTurnEnd'], right: SessionFactsRow['lastTurnEnd']): boolean {
   if (left === right) return true
@@ -648,7 +659,9 @@ export function applySessionFactsDelta(current: SessionFactsSnapshot, value: unk
   for (const [sessionId, row] of Object.entries(rows)) {
     const before = nextRows[sessionId]
     if (before === undefined) added += 1
-    else if (sessionFactsRowSignature(before) !== sessionFactsRowSignature(row)) changed += 1
+    // A7 ①：逐字段比较（不产生签名串）。字段集与 sessionFactsRowSignature 逐字一致，
+    // 见该函数的契约注释；两处字段集必须同批修改。
+    else if (!sameRowFacts(before, row)) changed += 1
     // 行来源位不在网关平面赋值（P1）：added/activity/tombstone 行都会误带该位；上游
     // observeRunning 的第二支只由 status 事件触发——该位只由无壳观察者的 status 首建
     // （source-mux-facts.handleStatus），增量帧只写 wire 行。
@@ -1228,9 +1241,31 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const outcome = applySessionFactsDelta(current, value)
     if (outcome.refetch) { void refetchSnapshot(); return }
     if (outcome.next === null) return
-    state.snapshot = { ...outcome.next, lastEventAt: now() }
-    emit()
-    emitHint(outcome.hint)
+    const next = outcome.next
+    // 增量**空发去重**（P0 facts 发布风暴）：应用后的快照只在**内容**变化时发布——行集/行
+    // wire 内容变化（outcome.hint !== null）或快照级渲染/判定输入（hostState / serviceable /
+    // mode / stale）任一变化。只有 cursor / lastEventAt 前进的空帧（同一基线的 host 帧、
+    // 重复项）不通知 listener、不发 hint，但 state.snapshot 仍更新为最新（后续 emit 读到的是
+    // 最新值）——一次 emit 会让下游 factsStore 换快照对象、重派生侧栏投影并重跑完成判定，
+    // 内容不变时这三种工作全是空转。
+    // 消费者复核（2026-11）：cursor / lastEventAt 在本模块外零读取（cursor 只作单调门与
+    // 诊断，lastEventAt 无 UI 消费者）；行 factAt 是渲染字段（host/servers.ts 的
+    // factsOverlay）。网关平面多数增量帧只在行存储事实真变时携带该行，但 applyAdded / 重结算
+    // 路径也可能出现只动 factAt 的行（gateway store.ts 的 deltaSessions 判据只看渲染字段，
+    // 见 :613/:742-750）——这类帧被本去重静默，data-chamber-fact-at 证据锚最坏落后到下一次
+    // 整量快照（probe/sync）；判定/通知字段不在 factAt 上，不受影响。发布速率量级由
+    // runtimeReportSignature 的 factAt 1s 桶承担。stale 比较是必需的：增量帧是 admissible success，会把
+    // stale true 翻回 false，那是一次真实的载体恢复，必须发布。
+    const changed = outcome.hint !== null
+      || next.hostState !== current.hostState
+      || next.serviceable !== current.serviceable
+      || next.mode !== current.mode
+      || next.stale !== current.stale
+    state.snapshot = { ...next, lastEventAt: now() }
+    if (changed) {
+      emit()
+      emitHint(outcome.hint)
+    }
     // 增量帧不带 diagnostics：闩锁若仍是 0，每代最多补 SESSION_FACTS_DIAGNOSTICS_REFETCH_MAX
     // 次 unary 快照（有界收敛，不动 wire）。一次性去重会被首个「仍是 0」的快照消耗掉，闩锁
     // 永久卡在 0（listComplete=false ⇒ 权威列表清除与 beforeBaseline 支悬空）；连续 0 重试、

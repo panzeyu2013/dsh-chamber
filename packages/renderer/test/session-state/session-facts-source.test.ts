@@ -19,6 +19,9 @@ import {
   parseSessionFactsGoalFact,
   parseSessionFactsRow,
   parseSessionFactsSnapshotValue,
+  sessionFactsRowSignature,
+  type SessionFactsRow,
+  type SessionFactsSnapshot,
   type SessionFactsSubscriptionHandlers,
 } from '../../src/session-facts-source.ts'
 import { PAGE_CHANNEL_KEEPALIVE_EVENT } from '../../../dsh-chamber-client-core/src/page-channel.ts'
@@ -589,6 +592,90 @@ test('delta: hint priority is added > removed > changed (a mixed frame pulls onc
   assert.equal(pureRemoval.hint, 'removed')
 })
 
+test('A7 ①: the delta change detector and sessionFactsRowSignature judge the SAME field set', () => {
+  // 结构共享的前提（A7）：delta 用 sameRowFacts 逐字段比较，mux 交付摘要用签名串；两者
+  // 字段集必须逐字一致，否则同一行一处判「变」、另一处判「不变」。下面逐字段改动一行，
+  // 断言「delta 报 changed」⇔「签名不同」——字段集/归一化任何一处漂移都会在这里变红。
+  const baseWire = {
+    sessionId: 's1', running: false, pendingKind: null, subagentCount: 0, updatedAt: 10,
+    completedAt: null, completedAtSource: null,
+    lastTurnEnd: { kind: 'completed', cause: 'user', at: 5, seq: 3 },
+    goal: { goalId: 'g1', revision: 1, phase: 'active' },
+  }
+  const baseRow = parseSessionFactsRow(baseWire)!
+  const current = {
+    verdict: 'ok' as const, degradation: null, mode: 'sse' as const,
+    hostState: 'ready', serviceable: true, stale: false, cursor: 7,
+    rows: { s1: baseRow }, lastEventAt: null,
+  }
+  const wireVariants: Array<[string, Record<string, unknown>]> = [
+    ['running', { running: true }],
+    ['pendingKind', { pendingKind: 'approval' }],
+    ['subagentCount', { subagentCount: 2 }],
+    ['lineageVerified', { lineageVerified: true }],
+    ['subagentKnown', { subagentKnown: true }],
+    ['updatedAt', { updatedAt: 11 }],
+    ['completedAt', { completedAt: 10 }],
+    ['completedAtSource', { completedAtSource: 'observed' }],
+    ['lastTurnEnd.kind', { lastTurnEnd: { kind: 'aborted', cause: 'user', at: 5, seq: 3 } }],
+    ['lastTurnEnd.cause', { lastTurnEnd: { kind: 'completed', cause: 'parent', at: 5, seq: 3 } }],
+    ['lastTurnEnd.at', { lastTurnEnd: { kind: 'completed', cause: 'user', at: 6, seq: 3 } }],
+    ['lastTurnEnd.seq', { lastTurnEnd: { kind: 'completed', cause: 'user', at: 5, seq: 4 } }],
+    ['goal.phase', { goal: { goalId: 'g1', revision: 1, phase: 'paused' } }],
+    ['goal.revision', { goal: { goalId: 'g1', revision: 2, phase: 'active' } }],
+    ['goal.goalId', { goal: { goalId: 'g2', revision: 1, phase: 'active' } }],
+    ['goal.updatedAt', { goal: { goalId: 'g1', revision: 1, phase: 'active', updatedAt: 9 } }],
+    ['goal.activation', { goal: { goalId: 'g1', revision: 1, phase: 'active', activation: 'armed' } }],
+    ['goal:null', { goal: null }],
+    ['goal:unknown', { goal: undefined }],
+  ]
+  for (const [label, patch] of wireVariants) {
+    const mutated = parseSessionFactsRow({ ...baseWire, ...patch })!
+    assert.notEqual(sessionFactsRowSignature(baseRow), sessionFactsRowSignature(mutated),
+      'mutation ' + label + ' must move the signature')
+    const outcome = applySessionFactsDelta(current, { cursor: 8, sessions: [{ ...baseWire, ...patch }] })
+    assert.equal(outcome.hint, 'changed', 'mutation ' + label + ' must be detected as changed')
+  }
+  // 客户端本地位（factAt / firstSeenByDelta / identityConfirmed）不进判据，也不算变化。
+  const withLocalBits: SessionFactsRow = { ...baseRow, factAt: 999, firstSeenByDelta: true, identityConfirmed: true }
+  assert.equal(sessionFactsRowSignature(baseRow), sessionFactsRowSignature(withLocalBits),
+    'client-local row bits stay out of the signature')
+  assert.equal(
+    applySessionFactsDelta(current, { cursor: 8, sessions: [{ ...baseWire, factAt: 999 }] }).hint,
+    null,
+    'a factAt-only forward is not a row change',
+  )
+  // 同一行什么都不改：签名与 delta 一致判「不变」。
+  assert.equal(applySessionFactsDelta(current, { cursor: 8, sessions: [baseWire] }).hint, null)
+})
+
+test('A7 ①: lastTurnEnd is a four-tuple in the signature — wire property order and unknown enumerable fields are not changes', () => {
+  // 旧签名把 lastTurnEnd 整个对象喂 JSON.stringify：属性顺序与未知可枚举字段都会造出假差异
+  // （legacy snapshot.tail.turn.reason 原样 cast 的路径会带入任意字段），与逐字段比较的
+  // 判据不一致。A7 把两边统一成 (kind, cause ?? null, at, seq ?? null)。
+  const row = parseSessionFactsRow({
+    sessionId: 's1', running: false, updatedAt: 1,
+    lastTurnEnd: { kind: 'completed', cause: null, at: 5, seq: null },
+  })!
+  const reordered: SessionFactsRow = {
+    ...row,
+    lastTurnEnd: { seq: undefined, at: 5, kind: 'completed' },
+  }
+  assert.equal(sessionFactsRowSignature(row), sessionFactsRowSignature(reordered),
+    'wire-level null vs absent and property order are one fact')
+  const withLegacyNoise: SessionFactsRow = {
+    ...row,
+    lastTurnEnd: { kind: 'completed', at: 5, message: 'legacy-noise' } as unknown as SessionFactsRow['lastTurnEnd'],
+  }
+  assert.equal(sessionFactsRowSignature(row), sessionFactsRowSignature(withLegacyNoise),
+    'unknown enumerable fields on a raw-cast turn end are not part of the judged fact')
+  // 归一化不得吃掉真实字段：cause 出现 / seq 出现仍必须移动签名。
+  const withCause: SessionFactsRow = { ...row, lastTurnEnd: { kind: 'completed', cause: 'user', at: 5 } }
+  const withSeq: SessionFactsRow = { ...row, lastTurnEnd: { kind: 'completed', at: 5, seq: 7 } }
+  assert.notEqual(sessionFactsRowSignature(row), sessionFactsRowSignature(withCause))
+  assert.notEqual(sessionFactsRowSignature(row), sessionFactsRowSignature(withSeq))
+})
+
 test('firstSeenByDelta is observer-only: gateway delta/snapshot frames never write the local bit', () => {
   const base = parseSessionFactsSnapshotValue(SNAPSHOT)!
   const current = {
@@ -1104,6 +1191,138 @@ test('snapshot hints: an identical snapshot frame does not re-hint; a changed ro
     }
     await waitFor(() => hints.length === 2)
     assert.equal(hints[1], 'changed')
+  } finally {
+    source.stop()
+  }
+})
+
+// ── 增量空发去重（P0 facts 发布风暴）：内容不变的增量帧不得 emit ─────────────
+// 每条增量帧原先都 emit() 一份新快照对象：下游 factsStore 换对象 → 重派生侧栏投影 →
+// 重跑完成判定，内容不变时全是空转（实机锚点 = 徽标 1,098 次翻转/40.8 s）。判据 = 行集/
+// 行 wire 内容（outcome.hint）或快照级渲染/判定输入（hostState / serviceable / mode /
+// stale）任一变化；只有 cursor / lastEventAt 前进时静默，但 state.snapshot 仍推进到最新。
+
+/** mode='sse' + 一条完整基线计数的探测载荷：订阅接管增量面，且不触发诊断补快照。 */
+const DELTA_PROBE_BODY = { ...SSE_PROBE_BODY, diagnostics: { baselines: 1 } }
+
+function deltaHarness(sourceId: string) {
+  const channel = channelHarness()
+  const fetchImpl = (async () => new Response(JSON.stringify(DELTA_PROBE_BODY), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })) as unknown as typeof fetch
+  const emissions: (SessionFactsSnapshot | undefined)[] = []
+  const hints: string[] = []
+  const source = createSessionFactsSource({
+    sourceId,
+    fetchImpl,
+    silenceMs: 0,
+    subscribeSessionFacts: channel.option,
+  })
+  source.subscribe(snapshot => { emissions.push(snapshot) })
+  source.onRowHint(hint => { hints.push(hint) })
+  return { channel, source, emissions, hints }
+}
+
+test('A1: a delta that only advances the cursor still advances the snapshot but notifies nobody', async () => {
+  const { channel, source, emissions, hints } = deltaHarness('gw-delta-empty')
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.cursor === 3)
+    const published = emissions.length
+    // 整量快照（探测/通道 sync）本来就发 hint（既有语义），基线只比较本条增量之后的增量。
+    const hinted = hints.length
+    channel.item('delta', { cursor: 4, sessions: [], removedSessionIds: [], host: null, mode: null })
+    assert.equal(source.getSnapshot()?.cursor, 4, 'state.snapshot 必须推进到最新游标（后续 emit 用最新值）')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(emissions.length, published, '只有 cursor / lastEventAt 前进的增量帧不得 emit')
+    assert.equal(hints.length, hinted, '内容未变的增量帧不发 row hint')
+  } finally {
+    source.stop()
+  }
+})
+
+test('A1: a baseline host frame with identical hostState/serviceable is silent; a real host change publishes', async () => {
+  const { channel, source, emissions } = deltaHarness('gw-delta-host')
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.cursor === 3)
+    const published = emissions.length
+    // 每条完整基线都以 host 帧结束，host.now 每次前进但 state/serviceable 不变 ⇒ 空帧。
+    channel.item('delta', {
+      cursor: 4, sessions: [], removedSessionIds: [],
+      host: { now: 1_700_000_000_900, serviceable: true, state: 'ready' }, mode: null,
+    })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(emissions.length, published, '同名 hostState/serviceable 的 host 帧不得 emit')
+    // 真实降级：state/serviceable 变化是渲染/判定输入，必须发布。
+    channel.item('delta', {
+      cursor: 5, sessions: [], removedSessionIds: [],
+      host: { now: 1_700_000_001_000, serviceable: false, state: 'stopped' }, mode: null,
+    })
+    assert.equal(emissions.length, published + 1, 'hostState/serviceable 变化必须 emit')
+    assert.equal(source.getSnapshot()?.hostState, 'stopped')
+    assert.equal(source.getSnapshot()?.serviceable, false)
+  } finally {
+    source.stop()
+  }
+})
+
+test('A1: a mode change publishes (transport档 is rendered and judged)', async () => {
+  const { channel, source, emissions } = deltaHarness('gw-delta-mode')
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.mode === 'sse')
+    const published = emissions.length
+    channel.item('delta', { cursor: 4, sessions: [], removedSessionIds: [], host: null, mode: 'poll' })
+    assert.equal(emissions.length, published + 1, 'mode 变化必须 emit')
+    assert.equal(source.getSnapshot()?.mode, 'poll')
+  } finally {
+    source.stop()
+  }
+})
+
+test('A1: an admissible delta that clears stale publishes even with no row change', async () => {
+  const { channel, source, emissions } = deltaHarness('gw-delta-stale')
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.stale === false)
+    channel.error('channel_closed', 'carrier gone')
+    assert.equal(source.getSnapshot()?.stale, true, '订阅级失败必须标 stale（既有语义不变）')
+    const published = emissions.length
+    // 增量帧是 admissible success：stale true → false 是一次真实的载体恢复，必须发布。
+    channel.item('delta', { cursor: 4, sessions: [], removedSessionIds: [], host: null, mode: null })
+    assert.equal(emissions.length, published + 1, '清 stale 必须 emit')
+    assert.equal(source.getSnapshot()?.stale, false)
+    assert.equal(source.getSnapshot()?.verdict, 'ok', '降级分类不得被去重路径改写')
+  } finally {
+    source.stop()
+  }
+})
+
+test('A1: a changed row publishes once with its hint; the same row with only factAt moved stays silent', async () => {
+  const { channel, source, emissions, hints } = deltaHarness('gw-delta-row')
+  try {
+    source.update({ fingerprint: 'f1', connected: true })
+    await waitFor(() => channel.liveCount() === 1 && source.getSnapshot()?.cursor === 3)
+    // 整量快照（探测/通道 sync）本来就发 hint（既有语义），基线只比较增量帧的提示。
+    const hinted = hints.length
+    const row = { sessionId: 's1', running: true, updatedAt: 11, factAt: 5_000 }
+    channel.item('delta', { cursor: 4, sessions: [row], removedSessionIds: [], host: null, mode: null })
+    assert.deepEqual(hints.slice(hinted), ['added'], '新增行发一次 added')
+    const published = emissions.length
+    // factAt 是渲染字段，但行 wire 白名单字段（sessionFactsRowSignature 的字段集）未变：
+    // 只动 factAt 的行（含 applyAdded / 重结算路径）不重发布 ⇒ 证据锚最坏落后到下一次整量
+    // 快照；判定/通知字段不在 factAt 上，不受影响（见 applyItem 的消费者复核注）。
+    channel.item('delta', { cursor: 5, sessions: [{ ...row, factAt: 9_000 }], removedSessionIds: [], host: null, mode: null })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(emissions.length, published, '行内容未变（仅 factAt 前进）不得 emit')
+    assert.deepEqual(hints.slice(hinted), ['added'], '行内容未变不发第二个 hint')
+    // 行内容真变：一次 emit + 一次 changed。
+    channel.item('delta', { cursor: 6, sessions: [{ ...row, factAt: 9_000, running: false }], removedSessionIds: [], host: null, mode: null })
+    assert.equal(emissions.length, published + 1, '行内容变化必须 emit')
+    assert.deepEqual(hints.slice(hinted), ['added', 'changed'])
+    assert.deepEqual(Object.keys(source.getSnapshot()?.rows ?? {}), ['s1'])
   } finally {
     source.stop()
   }

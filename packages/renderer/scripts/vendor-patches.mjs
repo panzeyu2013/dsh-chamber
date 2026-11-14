@@ -36,11 +36,15 @@
  * MEASURED on the target hardware and which a chamber package cannot express
  * (hashed CSS-module class names are unselectable from outside; the publication
  * scheduler is module-private). Such an entry MUST state the A/B measurement in
- * `reason` (same Electron/display, renderer+GPU process CPU via
- * `app.getAppMetrics` cumulative deltas) and is held to the same C9 anchor gate
- * as a correctness patch, so a pin bump re-derives it loudly instead of
- * silently dropping it. Never widen this class for a perf change that a chamber
- * package or a visibility gate can already express.
+ * `reason` (same machine/display, renderer+GPU process CPU cumulative deltas;
+ * the shipping Swift shell measures via Activity Monitor/ps plus Web Inspector
+ * Layout counts, while the frozen Electron leg named `app.getAppMetrics`) and is
+ * held to the same C9 anchor gate as a correctness patch, so a pin bump
+ * re-derives it loudly instead of silently dropping it. An entry whose reason
+ * says ADMISSION PENDING is a worktree candidate only: it must not ride a
+ * release build until the A/B is recorded (gate = release checklist + STATUS).
+ * Never widen this class for a perf change that a chamber package or a
+ * visibility gate can already express.
  *
  * THIRD ADMITTED CLASS (logic defect in a module-private state machine, admitted
  * by maintainer ruling): an upstream behaviour that is observable in the shipped
@@ -95,6 +99,25 @@
  * cannot be resolved while chamber views ARE mounted, state the accepted
  * trade-off and the measured symptom in reason, and carry `noRetireForm`
  * (upstream has no N-shell notion to anchor on).
+ *
+ * FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) -
+ * ADMISSION PENDING（fourth-form ruling）; see the two ui-theme entries): the
+ * page-global fact is a DOM resource every mounted instance shell installs for
+ * itself - identical theme stylesheets and one icon sprite - so N shells multiply
+ * a single page-wide artifact N times and a hidden shell keeps its copy alive.
+ * Unlike the per-mount form above, the fix is DEDUPE, not re-scoping: publish the
+ * resource ONCE per document behind a page-level registry keyed on a global symbol
+ * (`Symbol.for`, because each shell may run its own bundle instance, so
+ * module-private state is per instance, never page-wide) and release it only when
+ * the last owner disposes. Such an entry MUST state the measured per-shell DOM
+ * symptom and the accepted trade-off in reason, stay DOM-equivalent to upstream on
+ * a single-instance page (one resource, removed on dispose, no chamber knob), and
+ * carry `noRetireForm` until upstream defines a page-level singleton contract of
+ * its own. ADMISSION PENDING: the maintainer ruling that admits this form has NOT
+ * been recorded, so these entries are worktree candidates only (the pending
+ * class② measurement discipline above applies): they must NOT ride a release build, and
+ * the ruling must be recorded in design 09 §3.6 before any release carries them -
+ * tracked by the release checklist's fourth-form blocking row.
  *
  * RETIREMENT (upstream-drift batch-2 I-7): every entry declares EITHER
  * `retireCheck` (the pinned-upstream shape that carries the fix) or
@@ -756,6 +779,318 @@ export const VENDOR_PATCHES = Object.freeze([
       }),
     ]),
   }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-theme/src/client/styles.ts',
+      'packages/client/ui-theme/src/client/styles.ts',
+    ]),
+    noRetireForm: 'no stable upstream text shape: the fix is a page-level singleton/refcount contract for the theme DOM resources, which upstream has no N-shell notion to assert against. C9 drift failure + maintainer ruling, not an automated retire check.',
+    vendorFile: 'dsh-client-ui-theme/src/client/styles.ts',
+    reason: 'N-ctx multi-instance correctness (FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) - ADMISSION PENDING（fourth-form ruling）): the single page mounts one shell per instance; ui-theme itself is a page-level module singleton, but installThemeStyles runs once per mounted shell ctx and appends its own eight <style data-plugin-css> sheets per shell - the measured multi-shell page carried 575 <style> / 736 CSSStyleSheet nodes and a hidden shell keeps its eight alive. The sheets are module constants, identical across shells, and no chamber package can dedupe a DOM node another plugin owns; module-private state may differ per bundle instance, so the dedupe registry must sit on the document behind Symbol.for. This edit publishes each sheet once per document behind a document-level registry keyed on Symbol.for and refcounts it; the last owner removes it. Accepted trade-off: on a multi-shell page every shell shares the same eight sheets (identical content, so nothing changes visually) and a hidden shell no longer holds its own copy; the sheets stay until the last shell disposes, not until the first. A single-instance page gets the upstream DOM exactly (one sheet per name, removed on dispose) and no chamber knob is involved. ADMISSION PENDING: the maintainer ruling that admits this fourth form has not been recorded, so this entry is a worktree candidate only and must not ride a release build until the ruling is recorded (design 09 §3.6; tracked by the fourth-form release blocking row in the release checklist).',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '/**\n'
+          + ' * Mount global theme sheets; window-backed documents also publish the DPR-aware stroke width.\n'
+          + ' * @param ctx - Owning plugin context.\n'
+          + ' */\n'
+          + 'export function installThemeStyles(ctx: Context): void {',
+        replace: '/**\n'
+          + ' * chamber patch (FOURTH CLASS, FOURTH ADMITTED FORM - page-global singleton;\n'
+          + ' * ADMISSION PENDING（fourth-form ruling）): one page hosts N mounted shell ctxs;\n'
+          + ' * ui-theme is a page-level module singleton, but installThemeStyles runs once\n'
+          + ' * per shell ctx and appends the same eight <style data-plugin-css> sheets per\n'
+          + ' * shell (measured multi-shell page: 575 <style> / 736 CSSStyleSheet nodes, and\n'
+          + ' * a hidden shell keeps its eight alive). The sheets are module constants,\n'
+          + ' * identical across shells. Publish each sheet ONCE per document and refcount\n'
+          + ' * it; the registry lives on the document behind `Symbol.for` so it also\n'
+          + ' * survives bundle/rev drift (module-private state may differ per instance).\n'
+          + ' * The last owner removes the node - the upstream single-instance DOM.\n'
+          + ' */\n'
+          + 'const CHAMBER_PAGE_STYLES = Symbol.for(\'dsh-chamber:page-theme-styles\')\n'
+          + '\n'
+          + 'type ChamberPageStyleEntry = { el: HTMLStyleElement; refs: number }\n'
+          + '\n'
+          + '/** Acquire one page-global theme sheet for this owner; returns its release. */\n'
+          + 'function acquirePageStyle(name: string, css: string): () => void {\n'
+          + '  const host = document as unknown as { [key: symbol]: Map<string, ChamberPageStyleEntry> | undefined }\n'
+          + '  let registry = host[CHAMBER_PAGE_STYLES]\n'
+          + '  if (registry === undefined) {\n'
+          + '    registry = new Map()\n'
+          + '    host[CHAMBER_PAGE_STYLES] = registry\n'
+          + '  }\n'
+          + '  let entry = registry.get(name)\n'
+          + '  if (entry === undefined) {\n'
+          + '    const tag = document.createElement(\'style\')\n'
+          + '    tag.dataset.plugin = PLUGIN_ID\n'
+          + '    tag.dataset.pluginCss = `${PLUGIN_ID}/${name}`\n'
+          + '    tag.textContent = css\n'
+          + '    document.head.appendChild(tag)\n'
+          + '    entry = { el: tag, refs: 0 }\n'
+          + '    registry.set(name, entry)\n'
+          + '  }\n'
+          + '  // chamber patch: an external all-document sweep (removeOwnedStyles-style) can detach\n'
+          + '  // the shared sheet; a newly mounted shell must never reuse a detached node.\n'
+          + '  if (entry.el.isConnected === false) document.head.appendChild(entry.el)\n'
+          + '  const shared = entry\n'
+          + '  shared.refs += 1\n'
+          + '  return () => {\n'
+          + '    shared.refs -= 1\n'
+          + '    if (shared.refs > 0) return\n'
+          + '    shared.el.remove()\n'
+          + '    if (registry.get(name) === shared) registry.delete(name)\n'
+          + '  }\n'
+          + '}\n'
+          + '\n'
+          + '/**\n'
+          + ' * Mount global theme sheets; window-backed documents also publish the DPR-aware stroke width.\n'
+          + ' * @param ctx - Owning plugin context.\n'
+          + ' */\n'
+          + 'export function installThemeStyles(ctx: Context): void {',
+      }),
+      Object.freeze({
+        expect: '  for (const [name, css] of STYLES) {\n'
+          + '    ctx.effect(() => {\n'
+          + '      const tag = document.createElement(\'style\')\n'
+          + '      tag.dataset.plugin = PLUGIN_ID\n'
+          + '      tag.dataset.pluginCss = `${PLUGIN_ID}/${name}`\n'
+          + '      tag.textContent = css\n'
+          + '      document.head.appendChild(tag)\n'
+          + '      return () => { tag.remove() }\n'
+          + '    }, `ui-theme: ${name} stylesheet`)\n'
+          + '  }',
+        replace: '  for (const [name, css] of STYLES) {\n'
+          + '    // chamber patch: the sheet is page-global and refcounted; see acquirePageStyle.\n'
+          + '    ctx.effect(() => acquirePageStyle(name, css), `ui-theme: ${name} stylesheet`)\n'
+          + '  }',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-theme/src/client/icon-sprite.ts',
+      'packages/client/ui-theme/src/client/icon-sprite.ts',
+    ]),
+    noRetireForm: 'no stable upstream text shape: the fix is a page-level singleton/refcount contract for the icon sprite, which upstream has no N-shell notion to assert against. C9 drift failure + maintainer ruling, not an automated retire check.',
+    vendorFile: 'dsh-client-ui-theme/src/client/icon-sprite.ts',
+    reason: 'N-ctx multi-instance correctness (FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) - ADMISSION PENDING（fourth-form ruling）): the single page mounts one shell per instance; installIconSprite runs once per mounted shell ctx and prepends its own <svg data-dsh-icon-sprite> with every ICON_SYMBOLS <symbol> rendered once per shell - the measured multi-shell page carried 23,932 SVGSymbolElement nodes and a hidden shell keeps its sprite alive. No chamber package owns this component and module-private state is per bundle instance, so the page-wide fact must live on the document behind Symbol.for. This edit publishes one sprite per document with a refcount and a SHARED markup map, so an identical theme applied by a second shell is a no-op; the last owner removes the sprite. Accepted trade-off: the theme is a document-level singleton, so the shared sprite reflects the LAST theme/change applied by any shell (last write wins); a single-instance page gets the upstream DOM exactly (one sprite, removed on dispose) and no chamber knob is involved. ADMISSION PENDING: the maintainer ruling that admits this fourth form has not been recorded, so this entry is a worktree candidate only and must not ride a release build until the ruling is recorded (design 09 §3.6; tracked by the fourth-form release blocking row in the release checklist).',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '/**\n'
+          + ' * Mount the sprite and keep each symbol on the active theme\'s replacement or\n'
+          + ' * the ui-primitives default; plugin disposal removes the sprite.\n'
+          + ' * @param ctx - owning plugin context; `theme/change` snapshots drive updates.\n'
+          + ' * @param icons - replacements of the theme active at install time.\n'
+          + ' */\n'
+          + 'export function installIconSprite(ctx: Context, icons: IconReplacements | undefined): void {\n'
+          + '  if (typeof document === \'undefined\') return\n'
+          + '  const sprite = document.createElementNS(SVG_NS, \'svg\')\n'
+          + '  sprite.setAttribute(\'aria-hidden\', \'true\')\n'
+          + '  sprite.setAttribute(\'data-dsh-icon-sprite\', \'\')\n'
+          + '  sprite.style.cssText = \'position: absolute; width: 0; height: 0; overflow: hidden\'\n'
+          + '  const rendered = new Map<string, SVGSymbolElement>()\n'
+          + '  const markups = new Map<string, string>()\n'
+          + '  const apply = (replacements: IconReplacements = {}): void => {\n'
+          + '    for (const [id, fallback] of Object.entries(ICON_SYMBOLS) as [IconSymbolId, string][]) {\n'
+          + '      const markup = replacements[id] ?? fallback\n'
+          + '      if (markups.get(id) === markup) continue\n'
+          + '      const symbol = toSymbol(id, markup)\n'
+          + '      const previous = rendered.get(id)\n'
+          + '      if (previous === undefined) sprite.append(symbol)\n'
+          + '      else previous.replaceWith(symbol)\n'
+          + '      rendered.set(id, symbol)\n'
+          + '      markups.set(id, markup)\n'
+          + '    }\n'
+          + '  }\n'
+          + '  apply(icons)\n'
+          + '  ctx.effect(() => {\n'
+          + '    document.body.prepend(sprite)\n'
+          + '    return () => { sprite.remove() }\n'
+          + '  }, \'ui-theme: icon sprite\')\n'
+          + '  ctx.on(\'theme/change\', (snapshot) => { apply(snapshot.active.icons) })\n'
+          + '}',
+        replace: '/**\n'
+          + ' * chamber patch (FOURTH CLASS, FOURTH ADMITTED FORM - page-global singleton;\n'
+          + ' * ADMISSION PENDING（fourth-form ruling）): one page hosts N mounted shell ctxs;\n'
+          + ' * installIconSprite runs once per shell ctx and prepends one sprite per shell\n'
+          + ' * (measured multi-shell page: 23,932 SVGSymbolElement nodes and one\n'
+          + ' * <svg data-dsh-icon-sprite> per shell). The page-wide fact must live on the\n'
+          + ' * document behind `Symbol.for` (module-private state may differ per bundle\n'
+          + ' * instance); the sprite is published once and refcounted, and its markup map\n'
+          + ' * is shared so an identical theme applied by a second shell is a no-op. The\n'
+          + ' * last owner removes the sprite - the upstream single-instance DOM.\n'
+          + ' */\n'
+          + 'const CHAMBER_PAGE_ICON_SPRITE = Symbol.for(\'dsh-chamber:page-icon-sprite\')\n'
+          + '\n'
+          + 'type ChamberPageSprite = {\n'
+          + '  readonly sprite: SVGSVGElement\n'
+          + '  refs: number\n'
+          + '  readonly rendered: Map<string, SVGSymbolElement>\n'
+          + '  readonly markups: Map<string, string>\n'
+          + '}\n'
+          + '\n'
+          + '/** Acquire the page-global sprite for this owner; returns its state and release. */\n'
+          + 'function acquirePageSprite(): { state: ChamberPageSprite; release: () => void } {\n'
+          + '  const host = document as unknown as { [key: symbol]: ChamberPageSprite | undefined }\n'
+          + '  let state = host[CHAMBER_PAGE_ICON_SPRITE]\n'
+          + '  if (state === undefined) {\n'
+          + '    const sprite = document.createElementNS(SVG_NS, \'svg\')\n'
+          + '    sprite.setAttribute(\'aria-hidden\', \'true\')\n'
+          + '    sprite.setAttribute(\'data-dsh-icon-sprite\', \'\')\n'
+          + '    sprite.style.cssText = \'position: absolute; width: 0; height: 0; overflow: hidden\'\n'
+          + '    state = { sprite, refs: 0, rendered: new Map(), markups: new Map() }\n'
+          + '    host[CHAMBER_PAGE_ICON_SPRITE] = state\n'
+          + '  }\n'
+          + '  // chamber patch: re-attach a detached shared sprite before a new owner claims it.\n'
+          + '  if (state.sprite.isConnected === false && typeof document.body !== \'undefined\' && document.body !== null) {\n'
+          + '    document.body.prepend(state.sprite)\n'
+          + '  }\n'
+          + '  const shared = state\n'
+          + '  const release = (): void => {\n'
+          + '    shared.refs -= 1\n'
+          + '    if (shared.refs > 0) return\n'
+          + '    shared.sprite.remove()\n'
+          + '    if (host[CHAMBER_PAGE_ICON_SPRITE] === shared) delete host[CHAMBER_PAGE_ICON_SPRITE]\n'
+          + '  }\n'
+          + '  return { state: shared, release }\n'
+          + '}\n'
+          + '\n'
+          + '/**\n'
+          + ' * Mount the page-global sprite and keep each symbol on the active theme\'s\n'
+          + ' * replacement or the ui-primitives default; disposal releases this owner\'s\n'
+          + ' * share and removes the sprite only when it was the last owner.\n'
+          + ' * @param ctx - owning plugin context; `theme/change` snapshots drive updates.\n'
+          + ' * @param icons - replacements of the theme active at install time.\n'
+          + ' */\n'
+          + 'export function installIconSprite(ctx: Context, icons: IconReplacements | undefined): void {\n'
+          + '  if (typeof document === \'undefined\') return\n'
+          + '  const page = acquirePageSprite()\n'
+          + '  const apply = (replacements: IconReplacements = {}): void => {\n'
+          + '    for (const [id, fallback] of Object.entries(ICON_SYMBOLS) as [IconSymbolId, string][]) {\n'
+          + '      const markup = replacements[id] ?? fallback\n'
+          + '      if (page.state.markups.get(id) === markup) continue\n'
+          + '      const symbol = toSymbol(id, markup)\n'
+          + '      const previous = page.state.rendered.get(id)\n'
+          + '      if (previous === undefined) page.state.sprite.append(symbol)\n'
+          + '      else previous.replaceWith(symbol)\n'
+          + '      page.state.rendered.set(id, symbol)\n'
+          + '      page.state.markups.set(id, markup)\n'
+          + '    }\n'
+          + '  }\n'
+          + '  apply(icons)\n'
+          + '  ctx.effect(() => {\n'
+          + '    if (page.state.refs === 0) document.body.prepend(page.state.sprite)\n'
+          + '    page.state.refs += 1\n'
+          + '    return page.release\n'
+          + '  }, \'ui-theme: icon sprite\')\n'
+          + '  ctx.on(\'theme/change\', (snapshot) => { apply(snapshot.active.icons) })\n'
+          + '}',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
+      'packages/client/ui-chat/src/client/chat/use-chat-viewport.ts',
+    ]),
+    retireCheck: Object.freeze({
+      probes: Object.freeze([
+        Object.freeze({
+          // Upstream carries the fix when the onScroll HANDLER ITSELF coalesces delivery (rAF / a
+          // flush helper / microtask). The probe anchors to the handler declaration and stops at
+          // the handler's own closing brace: a bare `onScroll` hit (the addEventListener call site
+          // is the first one in this file) followed by a fixed-size window would read unrelated
+          // frame code in ANOTHER method as the upstream fix the moment pin drift moves the two
+          // into that window - a pure anchor drift must stay a drift, not a bogus release-blocking
+          // retire-candidate (P2-3). `\n  }` is the class-method terminator at its 2-space indent;
+          // nested blocks close at 4+ spaces, so it cannot stop early.
+          match: Object.freeze([
+            /private readonly onScroll = \(event: Event\): void => \{(?:(?!\n  \})[\s\S])*?(?:requestAnimationFrame|flushScroll|queueMicrotask)/,
+          ]),
+        }),
+      ]),
+      note: 'Upstream batches scroll delivery to one geometry read per frame (the onScroll handler itself coalesces via rAF/flush/microtask). Delete this entry + its artifact marker, move the coalesced-delivery shape into RETIRED_PATCHES, and keep the A/B evidence with the release note.',
+    }),
+    vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
+    reason: 'SECOND ADMITTED CLASS (measured shell frame cost) - ADMISSION PENDING: the same-machine macOS A/B this class requires has NOT been executed yet; the protocol (patched vs unpatched build, same machine/session, 10 s of scrolling, renderer+GPU process CPU cumulative delta, layout counts from the Web Inspector timeline) is part of the class policy in design 09 §3.6 and must be recorded in this entry before the release that carries it; instrument = the shipping Swift leg (Activity Monitor / ps cpu + Web Inspector Layout counts), since the Electron leg that named app.getAppMetrics is frozen and not shipped. Measured symptom from the shipped WKWebView shell: the scroll listener synchronously reads geometry (use-chat-viewport.ts onScroll: scroller.scrollTop for the landing-echo check, then readScroll -> scrollMetrics: clientHeight/scrollTop/scrollHeight), and the shell trace shows that read forcing Document::updateLayout -> full re-layout of the 160-level Flex transcript, once per scroll event while streaming content keeps the layout dirty. This edit coalesces scroll deliveries to ONE geometry read per animation frame (the read then happens on the frame the paint already needs, not per event) and keeps delivery ahead of scrollend by flushing the pending frame synchronously in onScrollEnd. Follow semantics are unchanged: the coalesced delivery is the same readScroll result (FOLLOW_THRESHOLD 24 px, animating/scrollend settle, movedByReader attribution, jump/toBottom all stay in use-scroll-follow.ts); accepted trade-offs are a delivery that can arrive one frame later than the event and geometry read at that frame rather than at event time; the landing-echo suppression still skips the flush. Fallback: when requestAnimationFrame is unavailable the handler flushes synchronously (upstream behaviour). Delete this entry once upstream batches scroll delivery itself (see retireCheck).',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  /** Discards a closing measurement that no size observation consumed by the end of its frame. */\n'
+          + '  private closingFrame: number | null = null',
+        replace: '  /** Discards a closing measurement that no size observation consumed by the end of its frame. */\n'
+          + '  private closingFrame: number | null = null\n'
+          + '  /** Coalesced scroll delivery waiting for the next frame (chamber patch; see onScroll). */\n'
+          + '  private scrollFrame: number | null = null',
+      }),
+      Object.freeze({
+        expect: '    this.observer?.disconnect()\n'
+          + '    this.observer = null\n'
+          + '    this.elements = null',
+        replace: '    this.observer?.disconnect()\n'
+          + '    this.observer = null\n'
+          + '    // chamber patch: a coalesced scroll delivery must not run after detach.\n'
+          + '    if (this.scrollFrame !== null && typeof cancelAnimationFrame === \'function\') cancelAnimationFrame(this.scrollFrame)\n'
+          + '    this.scrollFrame = null\n'
+          + '    this.elements = null',
+      }),
+      Object.freeze({
+        expect: '  private readonly onScroll = (event: Event): void => {\n'
+          + '    if (this.elements === null || event.target !== this.elements.scroller) return\n'
+          + '    if (this.observation.landing !== null && this.elements.scroller.scrollTop === this.observation.top) return\n'
+          + '    this.invalidate()\n'
+          + '    if (this.paging !== null) {\n'
+          + '      this.events?.resize()\n'
+          + '      return\n'
+          + '    }\n'
+          + '    const scroll = this.readScroll()\n'
+          + '    if (scroll !== null) this.events?.scroll(scroll)\n'
+          + '  }',
+        replace: '  private readonly onScroll = (event: Event): void => {\n'
+          + '    if (this.elements === null || event.target !== this.elements.scroller) return\n'
+          + '    // chamber patch: a scroll event can arrive while the transcript layout is dirty\n'
+          + '    // (streaming content mutated in the same frame), so the synchronous geometry read\n'
+          + '    // below forces Document::updateLayout once PER EVENT. Coalesce delivery to one read\n'
+          + '    // per frame; follow policy is unchanged because the read then happens on the frame\n'
+          + '    // the paint already needs, and onScrollEnd flushes the pending delivery first.\n'
+          + '    if (typeof requestAnimationFrame !== \'function\' || typeof cancelAnimationFrame !== \'function\') {\n'
+          + '      this.flushScroll()\n'
+          + '      return\n'
+          + '    }\n'
+          + '    if (this.scrollFrame === null) {\n'
+          + '      this.scrollFrame = requestAnimationFrame(() => {\n'
+          + '        this.scrollFrame = null\n'
+          + '        this.flushScroll()\n'
+          + '      })\n'
+          + '    }\n'
+          + '  }\n'
+          + '\n'
+          + '  /** Deliver the frame\'s coalesced scroll from one geometry read (chamber patch). */\n'
+          + '  private flushScroll(): void {\n'
+          + '    if (this.elements === null) return\n'
+          + '    if (this.observation.landing !== null && this.elements.scroller.scrollTop === this.observation.top) return\n'
+          + '    this.invalidate()\n'
+          + '    if (this.paging !== null) {\n'
+          + '      this.events?.resize()\n'
+          + '      return\n'
+          + '    }\n'
+          + '    const scroll = this.readScroll()\n'
+          + '    if (scroll !== null) this.events?.scroll(scroll)\n'
+          + '  }',
+      }),
+      Object.freeze({
+        expect: '    if (event.target === this.elements?.scroller) {\n'
+          + '      this.events?.scrollEnd(true)',
+        replace: '    if (event.target === this.elements?.scroller) {\n'
+          + '      // chamber patch: deliver the frame\'s coalesced scroll before scrollend, so the\n'
+          + '      // settle sees the scroll-then-scrollend order the unbatched handler had.\n'
+          + '      if (this.scrollFrame !== null) {\n'
+          + '        if (typeof cancelAnimationFrame === \'function\') cancelAnimationFrame(this.scrollFrame)\n'
+          + '        this.scrollFrame = null\n'
+          + '        this.flushScroll()\n'
+          + '      }\n'
+          + '      this.events?.scrollEnd(true)',
+      }),
+    ]),
+  }),
 
 ])
 
@@ -1243,6 +1578,23 @@ function retireCheckVerdict(patch, vendorRoot, cache) {
     }
   }
   return { ok: true, detail: 'all retire probes agree' }
+}
+
+/**
+ * Evaluate one entry's `retireCheck` against the pinned (unpatched) tree, exposed
+ * for the live-probe fence in vendor-patches.test.mjs. C9 only evaluates
+ * `retireCheck` after an anchor has drifted, so a probe that already matches the
+ * CURRENT pin (a tautology, or an upstream fix that arrived without moving our
+ * anchors) would otherwise stay invisible until it is reported with the wrong
+ * remediation. A hit here is C9's retire-candidate phase: retire the entry, move
+ * the upstream shape into RETIRED_PATCHES and delete its artifact marker.
+ * @param {VendorPatch} patch - entry that declares `retireCheck`.
+ * @param {string} [vendorRoot] - override for tests.
+ * @returns {{ ok: boolean, detail: string }}
+ */
+export function probeVendorPatchRetirement(patch, vendorRoot = VENDOR_ROOT) {
+  if (patch.retireCheck === undefined) throw new Error(`${patch.vendorFile}: no retireCheck to probe`)
+  return retireCheckVerdict(patch, vendorRoot, new Map())
 }
 
 /**

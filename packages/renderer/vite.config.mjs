@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VENDOR_PATCHES, applyVendorPatches } from './scripts/vendor-patches.mjs'
+import { resolveSimpleIconsEsmEntry } from './scripts/simple-icons-entry.mjs'
 
 /**
  * dsh-chamber renderer build (design 05 §2/§3.6).
@@ -45,6 +46,13 @@ function rejectStandaloneServe() {
  * renderer's own install tree instead (declared in packages/renderer
  * devDependencies — the bundler-consumer pattern apps/web uses). Workspace
  * (@deepseek-ai) and relative specifiers are left to the other plugins.
+ *
+ * `simple-icons` is the one specifier that must NOT ride `require` resolution:
+ * its package exports pick the CJS `index.js` under the `require` condition,
+ * and Rollup cannot tree-shake that 5.2 MB icon table — the chamber entry then
+ * ships every artwork although vendor ui-primitives' SiteGlyph imports 34. It
+ * resolves to the package's ESM entry instead (scripts/simple-icons-entry.mjs),
+ * so Rollup keeps only the imported icons.
  */
 const requireFromRenderer = createRequire(import.meta.url)
 
@@ -54,6 +62,7 @@ function npmFallback() {
     enforce: 'pre',
     resolveId(specifier) {
       if (typeof specifier !== 'string') return undefined
+      if (specifier === 'simple-icons') return resolveSimpleIconsEsmEntry(requireFromRenderer)
       if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('node:')
         || specifier.startsWith('@deepseek-ai/')) return undefined
       try {

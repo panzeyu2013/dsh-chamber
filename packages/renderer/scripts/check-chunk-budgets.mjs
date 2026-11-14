@@ -33,6 +33,12 @@
  * headCss 339,301（本版按各自实测 + ~1% 回填 warn 1,950,000 / 8,650,000 / 342,500；
  * mainGraph 硬门 2,060,000 不动）。
  *
+ * E1（simple-icons 改走 ESM 入口 + Rollup tree-shaking；解析见
+ * scripts/simple-icons-entry.mjs）后实测 mainGraph 1,941,324 / chamberEntry
+ * 3,354,214 / headCss 339,301：只把 chamberEntry warn 回填到 3,390,000（实测
+ * + ~1%，让「整包图标表回到首屏」重新成为可见的 warn）；mainGraph 的 warn/fail
+ * 与 headCss warn 不动。
+ *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite
  * outDir，下次 build 覆写——跨构建趋势请存档代表点，口径见
@@ -56,7 +62,7 @@ const SIZES_OUT = fileURLToPath(new URL('../../desktop/dist/web/perf-sizes.json'
 /** 阈值（raw bytes）。校准基线见文件头注释。 */
 const THRESHOLDS = {
   mainGraphRaw: { warn: 1_950_000, fail: 2_060_000 },
-  chamberEntryRaw: { warn: 8_650_000 },
+  chamberEntryRaw: { warn: 3_390_000 },
   headCssRaw: { warn: 342_500 },
 }
 

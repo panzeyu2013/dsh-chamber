@@ -24,10 +24,13 @@
 - 设置 = `quit` 时关窗仍受 D2 退出确认保护（本地实例运行中先确认再退出；远程隧道/连接不影响关闭——D2），非 darwin 行为与现状一致（关窗即退出）。
 - 三平台一致：macOS/win/linux 同走 `windowCloseBehavior`；macOS 系统惯例（红点/Cmd+W = hide、Cmd+Q = 退出）在 hide-to-tray 语义下天然一致。
 - **前置门控：hide-to-tray 仅在恢复入口可用时生效**：托盘/状态项缺失（图标资源缺失 → Electron 归档面 `maybeCreateTray` 跳过 / Swift `statusItem` 构造跳过）时，非 darwin 回退现状（关窗即退出，仍受 D2 确认保护）——**绝不允许窗口被隐藏后无任何恢复入口**。macOS 无托盘也安全（Dock 图标常驻可恢复，`recoveryAvailable` 恒 true，hide 是系统惯例）。
-- **隐藏窗口不消耗前台算力（行为契约）**：隐藏期 renderer 不得继续推进前台动画/发布——前台相位门 `packages/renderer/src/background-phase.ts#shouldRunBackgroundPhase` 必须生效。归档的 Electron 腿（`createMainWindow` webPreferences 不设置 `backgroundThrottling: false`）在 Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz 上的实测对照（**归档参考**；Swift 腿由 WKWebView 的隐藏态节流天然满足）：
+- **隐藏窗口不消耗前台算力（行为契约）**：隐藏期 renderer 不得继续推进前台动画/发布——前台相位门 `packages/renderer/src/background-phase.ts#shouldRunBackgroundPhase` 必须生效。归档的 Electron 腿（`createMainWindow` webPreferences 不设置 `backgroundThrottling: false`）在 Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz 上的实测对照（**归档参考**）：
   - 关闭节流的真实后果是 Electron **永久抑制隐藏态**（`disable_hidden_ = !backgroundThrottling_`，`shell/browser/api/electron_api_web_contents.cc`）：窗口隐藏后 rAF 仍 120/s、帧照画照交换、`document.visibilityState` 恒 `'visible'`、`visibilitychange` 0 次。于是 `packages/renderer/src/background-phase.ts#shouldRunBackgroundPhase` 的前台相位门控在Electron 上 **从不生效**，隐藏期 renderer CPU 最高 28.1%（上游常驻动画 19.0% + 发布 19.4%）。
   - 恢复默认节流后同一测量台：隐藏期 rAF 0、CSS 动画暂停、`visibilitychange` 恢复，renderer CPU 0.0–0.1%；**网络流不受影响**（该轮实测的载体是页面 SSE；design 26 §D6 之后长活流走页面通道 WS，同为网络流、结论不变）（隐藏 9s 收 9/9 条、`maxGap` 1005ms、0 错误），唤醒即时重连走唤醒事件（Swift：`didWakeNotification` → `__host.systemResume`；Electron 归档面 `powerMonitor.on('resume')`）→ `dsh-chamber:system-resume` 的推送（非计时器，不受节流影响）。被节流的只有<1s 定时器（100ms→1Hz；1s 保持 1Hz），3s/15s/30s/60s/120s 各档看门狗节奏不变。
-  - **Rejected alternatives**：① 保留 `backgroundThrottling: false` + 新增「窗口隐藏」IPC 推送由渲染侧暂停动画/发布——多一条宿主桥面（preload / bridge manifest / 锁步测试）而收益已被恢复节流完全覆盖（隐藏期已是 0.0%），故不采纳；② 运行时`webContents.backgroundThrottling = true`——实测对**已隐藏**窗口不生效（rAF 仍120/s、`visibilityState` 仍 visible），只在建窗时有效，故不作为恢复手段。
+  - **Swift 腿**：实机取证确认窗口隐藏时（未区分最小化与其他 Space）WebContent 仍 24–25% CPU 且 `document.visibilityState` 仍为 `visible`（WebKit 不把「不在可见 Space / 完全遮挡」映射到页面可见性）⇒ 宿主在可见性变化时向页面派发 `dsh-chamber:shell-visibility` 事件（`detail = {visible, occluded}`，覆盖 orderOut/最小化/Cmd+H/失去 key/遮挡与另一可见 Space/恢复/导航重放；`occluded = visible && !window.occlusionState.contains(.visible)`；同值去重、失败 loud 不阻断、didFinish 首次注入并每次导航重放）；页面 `shell-visibility.ts` 归一后供 `background-phase.ts#shouldRunBackgroundPhase = document.visibilityState === 'visible' && isShellVisible()`（无事件默认可见，浏览器直开/SSR 保持旧行为），相位消费方统一经该门判定、不在消费方另开第二判断；恢复补偿订阅同一事件的 visible 边沿（visible 且未遮挡）并与页面 visibilitychange 共用一轮去重（250ms），隐藏态没有页面事件也不会漏掉「恢复后补偿一轮」。**边界**：这只停页面级 polling/watchdog 相位，不断 vendor 会话流；隐藏壳的 WS/React 仍跑（[STATUS](../../progress/STATUS.md) §4.2 的隐藏壳降载裁决）。**验收**：手工清单归 §5（本机 NOT RUN）；进度状态归 [STATUS](../../progress/STATUS.md) §1.1。
+  - **keep-awake 条件**：`ProcessInfo.beginActivity` 只在 `keepAwake` 开启**且**窗口可见时持有；orderOut/最小化/切 Space（遮挡）后释放、恢复可见重新持有；默认 off 与启动期 reconcile 语义不变（[design 25 §5 E7](../desktop/25-macos-swift-native-shell.md)）。
+  - **Rejected alternatives（Electron 归档面）**：① 保留 `backgroundThrottling: false` + 新增「窗口隐藏」IPC 推送由渲染侧暂停动画/发布——多一条宿主桥面（preload / bridge manifest / 锁步测试）而收益已被恢复节流完全覆盖（隐藏期已是 0.0%），故不采纳；② 运行时`webContents.backgroundThrottling = true`——实测对**已隐藏**窗口不生效（rAF 仍120/s、`visibilityState` 仍 visible），只在建窗时有效，故不作为恢复手段。
+  - **Rejected alternatives（Swift 隐藏态）**：① 只读 `document.visibilityState`——另一可见 Space/完全遮挡下 WebKit 仍报 visible（实机证据），门不生效；② 私有 SPI 改 WKWebView 可见性/节流——非公开面、升级即碎；③ 隐藏期暂停/断开每壳 vendor 会话流——与「会话保活」及「mounted shell 是行权威」冲突（[STATUS](../../progress/STATUS.md) §4.2），需产品裁决，不采纳；④ 隐藏/电池时把刷新率降回 60fps——建页后改 `PreferPageRenderingUpdatesNear60FPSEnabled` 实测不生效（[design 25 §5.1](../desktop/25-macos-swift-native-shell.md)），不采纳。
 - `showMainWindow()` 保留：隐藏 ≠ 销毁，`activate` / `second-instance` /托盘点击 → `show()+focus()`；销毁后才走重建分支（现有逻辑已覆盖）。
 
 ### D2 退出确认（quitRisk 投影）
@@ -214,7 +217,9 @@
 
 ### D5 keep-awake（v1 设置项，默认关）
 
-- 行为契约：设置项 `keepAwake`（默认关，settings 壳「通用」入口，设计 15）开启时防应用挂起、退出/停用即释放；仅防应用挂起，不阻止显示器关闭，不引入后台任务。**Swift 落点**：`ProcessInfo.processInfo.beginActivity`（`SwiftEdgeHostLegs.swift`；design 25 §5 E7）；**Electron 归档面**：`powerSaveBlocker.start('prevent-app-suspension')`。
+- 行为契约：设置项 `keepAwake`（默认关，settings 壳「通用」入口，设计 15）在**开启且窗口可见**（visible 且未遮挡，见 §D1）时防应用挂起；orderOut/最小化/Cmd+H/切 Space 遮挡期间释放，恢复可见重新持有；退出/停用即释放。仅防应用挂起，不阻止显示器关闭，不引入后台任务。隐藏期长任务可睡 = 当前取舍（是否新增「无条件保持」显式选项待产品裁决，登记见 [STATUS](../../progress/STATUS.md) §1.7 的「隐藏窗口渲染活性」行）。**Swift 落点**：`ProcessInfo.processInfo.beginActivity`（`SwiftEdgeHostLegs.swift` 的 `desired = keepAwakeRequested && windowVisible`；design 25 §5 E7）；**Electron 归档面**：`powerSaveBlocker.start('prevent-app-suspension')`。
+
+**Rejected alternatives（keep-awake 可见性门）**：① 维持「设置开启即无条件持有」的旧行为——隐藏/遮挡期仍阻止应用挂起（实机取证：keep-awake 断言已持约 89 h、整机放电约 34 W），与「隐藏窗口不消耗前台算力」的相位目标相反，且隐藏期会话本可随系统睡眠由宿主重连恢复；② 只改默认值或在设置面加说明而不动持有判据——默认值已是关，用户开启后的持有范围问题原样存在，等于用文档偏移代替行为修正；③ 按需可见（现行）——`desired = keepAwakeRequested && windowVisible`，orderOut/最小化/Cmd+H/遮挡即释放、恢复可见重持；接受代价 = 隐藏期长任务可能随系统睡眠暂停，是否新增「无条件保持」显式选项待产品裁决（见上）。
 
 ### D6 登录自启（v1 设置项）+ 后台启动（v1 不做）
 
@@ -259,7 +264,7 @@
 
 、`test:sidebar`（`test/session-state/session-fact-reconcile.test.ts`（执行端：probe 节流 / N=2 / 写回 / 恢复）、`test/session-state/session-authority-escalation.test.ts`（真实执行端 × App 升级 ladder 的端到端时序）、`test/session-state/vendor-session-fact-contract.test.ts`（读 vendor 源的六条语义 lockstep；缺树默认失败）、`test/session-rows/derive.test.ts`（含原 completed-dots-signatures / workspace-membership 的回执投影边界））、`test:control-plane`（`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端、`test:open-in`（`test/session-health/session-stream-health.test.ts` 阶梯真值表 + `test/ui-lock/instance-view-guard.test.ts` 座席接线锁 +`vendor-heal-contract.test.ts`：retain/resync 所依赖的三条 vendor 事实的 lockstep，pin 升级语义变化即红）、`verify:test-wiring`（**仓内全部 test manifest 必须登记在案**）、`test:swift`（ShellLogTests 全部用例，含新增的 sidecar 文件名/轮转名/落盘三条+ CrossLanguageLockstepTests 的 sidecar sink 锁步）；
 
-手工清单：关窗 → 隧道存活 → 托盘恢复 → 退出确认（含**更新已下载时退出不弹确认**）→ 唤醒秒级重连 → 无窗口常驻期间 resume 补发 → **托盘缺失回退**（dev 模式关窗即退、窗口不消失）→ **对话流健康臂可见性**（对同一来源反复拆 mux socket，制造`openState='error'`：不整页刷新即自动恢复，恢复后聊天面继续渲染；无第二个会话时只出现「对话通道未恢复」提示；`loading` 停滞满 20s 才出提示）→ **单一权威可见性**（按`docs/checklists/session-authority-calibration.md` 注入丢帧/载波半死：位在 probe 预算内掉落、完成通知恰好一条；横幅出现后「重新连接」生效、「忽略」在来源恢复前不再弹、「重新加载」才丢页面态；判据回 STATUS「会话运行位卡死」）。
+手工清单：关窗 → 隧道存活 → 托盘恢复 → 退出确认（含**更新已下载时退出不弹确认**）→ 唤醒秒级重连 → 无窗口常驻期间 resume 补发 → **托盘缺失回退**（dev 模式关窗即退、窗口不消失）→ **对话流健康臂可见性**（对同一来源反复拆 mux socket，制造`openState='error'`：不整页刷新即自动恢复，恢复后聊天面继续渲染；无第二个会话时只出现「对话通道未恢复」提示；`loading` 停滞满 20s 才出提示）→ **单一权威可见性**（按`docs/checklists/session-authority-calibration.md` 注入丢帧/载波半死：位在 probe 预算内掉落、完成通知恰好一条；横幅出现后「重新连接」生效、「忽略」在来源恢复前不再弹、「重新加载」才丢页面态；判据回 STATUS「会话运行位卡死」）。**壳可见性事实（D1）与 keep-awake（D5）**：shell.log 可见性事实线同值去重、Web Inspector 里事件与 shell.log 逐工况一致（orderOut/最小化/Cmd+H/失 key/遮挡/另一可见 Space/导航重放）、隐藏 60s WebContent CPU/电池 A/B、`pmset -g assertions` 的 keep-awake 出现/消失、恢复后补偿一轮（隐藏期诊断日志与恢复后首轮 watchdog/刷新时点）。
 
 ## 6. 关联
 

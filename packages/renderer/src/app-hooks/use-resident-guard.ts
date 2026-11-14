@@ -4,9 +4,9 @@
  * One owner for: (a) per-shell last-active / last-input observations, (b) the page-level
  * resident snapshot published to the settings panel, (c) hard-cap release, (d) manual
  * release requests from the panel, and (e) the v1.1 memory-pressure valve (armed only
- * while more than one shell is mounted and the document visible; it probes the host
- * memory snapshot through settings.get and degrades to no-op when the platform cannot
- * answer).
+ * while more than one shell is mounted and the front phase is runnable; it probes the
+ * host memory snapshot through settings.get and degrades to no-op when the platform
+ * cannot answer).
  *
  * The policy itself is pure (../resident-policy.ts) and the published projection is a pure
  * builder too (../resident-snapshot.ts, node-tested directly): this hook only observes,
@@ -18,11 +18,14 @@
  * re-boot what the user (or the valve) just released.
  *
  * Performance budget: the steady state installs no timer (the pressure valve is the only
- * periodic task and exists only while >1 shell is mounted and visible); DOM node counts
+ * periodic task and exists only while >1 shell is mounted and the front phase is
+ * runnable (page visible AND the shell window visible/unoccluded through the one upstream
+ * gate shouldRunBackgroundPhase); DOM node counts
  * are collected ONLY while the settings panel is subscribed, and the snapshot is built at
  * most once per relevant React commit (one dedicated publish effect).
  */
 import { useCallback, useEffect, useRef } from 'react'
+import { shouldRunBackgroundPhase } from '../background-phase.ts'
 import { useInputActivity } from './use-input-activity.ts'
 import {
   residentBridge,
@@ -72,7 +75,7 @@ export interface ResidentGuardDeps {
 
 /** Switch-settle delay before an automatic release: never race a View Transition. */
 const AUTO_RELEASE_SETTLE_MS = 1_500
-/** Pressure sampling cadence while armed (visible + more than one mounted shell). */
+/** Pressure sampling cadence while armed (front phase runnable + more than one mounted shell). */
 const PRESSURE_POLL_MS = 30_000
 /** Stagger between two automatic releases so teardown never lands in one long task. */
 const RELEASE_STAGGER_MS = 250
@@ -276,7 +279,8 @@ export function useResidentGuard(deps: ResidentGuardDeps): { releaseSource: (id:
   // Panel opened: republish now that DOM counts are worth collecting (the panel subscribes first).
   useEffect(() => residentBridge.onRefresh(() => { publish() }), [publish])
 
-  // v1.1 pressure valve: armed only while visible with more than one mounted shell. The
+  // v1.1 pressure valve: armed only while the front phase is runnable with more than one
+  // mounted shell (page visible + shell window visible/unoccluded; one upstream gate). The
   // dependency is the boolean, not the count: 2→3 mounts must not rebuild the interval.
   const pressureArmed = deps.mountedViews.length > 1
   useEffect(() => {
@@ -285,7 +289,7 @@ export function useResidentGuard(deps: ResidentGuardDeps): { releaseSource: (id:
     let stopped = false
     let sampling = false
     const poll = async (): Promise<void> => {
-      if (stopped || sampling || document.visibilityState !== 'visible') return
+      if (stopped || sampling || !shouldRunBackgroundPhase(document.visibilityState)) return
       if (depsRef.current.mountedViews.length <= 1) return
       const settings = (window as unknown as { dshChamber?: { settings?: { get?: () => Promise<unknown> } } }).dshChamber?.settings
       if (settings?.get === undefined) return
@@ -298,9 +302,10 @@ export function useResidentGuard(deps: ResidentGuardDeps): { releaseSource: (id:
         const decision = classifyPressure({ freeRatio, previous: pressureRef.current, now: monotonicNow() })
         pressureRef.current = decision
         if (decision.band === 'normal') return
-        // The document may have been hidden while the snapshot was in flight: a hidden
-        // window must not start tearing shells down.
-        if (stopped || document.visibilityState !== 'visible') return
+        // The front phase may have stopped while the snapshot was in flight (document
+        // hidden, or the shell window occluded/ordered out): a hidden window must not
+        // start tearing shells down.
+        if (stopped || !shouldRunBackgroundPhase(document.visibilityState)) return
         const releases = pickPressureReleases(buildContext(), decision.band)
         releases.forEach((id, index) => {
           setTimeout(() => { if (!stopped) releaseSource(id, 'pressure') }, index * RELEASE_STAGGER_MS)
@@ -310,7 +315,7 @@ export function useResidentGuard(deps: ResidentGuardDeps): { releaseSource: (id:
     }
     void poll()
     const timer = setInterval(() => { void poll() }, PRESSURE_POLL_MS)
-    const onVisibility = (): void => { if (document.visibilityState === 'visible') void poll() }
+    const onVisibility = (): void => { if (shouldRunBackgroundPhase(document.visibilityState)) void poll() }
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
       stopped = true

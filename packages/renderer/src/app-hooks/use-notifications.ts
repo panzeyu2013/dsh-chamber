@@ -35,6 +35,7 @@ import type { DeliveryOutcome, NotificationOutbox, PendingNotification } from '.
 import type { NotificationTitleId } from '../notification-projection.ts'
 import { completionWatermark } from '../watermark.ts'
 import { isFactsDecisionUsable, type SessionFactsSnapshot } from '../session-facts-source.ts'
+import { isShellVisible } from '../shell-visibility.ts'
 import { virtualRuntimeReport } from '../virtual-runtime-report.ts'
 import {
   createNotificationSaveCoalescer,
@@ -303,11 +304,14 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     const attempt = notificationOutboxRef.current.begin(entry.key)
     if (attempt === null) return true
     // 遮挡/隐藏证据门：hasFocus 在窗口被遮挡/最小化的平台上仍可能为 true，
-    // 只有「本文档可见」才能诚实地宣称用户正在看这个会话；否则不抑制横幅。
+    // 而页面级 visible 在「另一 Space / 完全遮挡 / orderOut」时同样恒真（WKWebView 事实）。
+    // 只有「前台相位可运行」——文档可见 **且** 壳窗口可见/未遮挡——才能诚实地宣称用户
+    // 正在看这个会话；否则不抑制横幅（宁可多一条通知，不漏）。
     const requireHidden = viewStore.getSnapshot().painted === entry.sourceId
       && factsStore.getSnapshot().runtime[entry.sourceId]?.current === entry.sessionId
       && document.hasFocus()
       && document.visibilityState === 'visible'
+      && isShellVisible()
     const ledgerBase = {
       at: Date.now(), sourceId: entry.sourceId, sessionId: entry.sessionId, kind: entry.kind,
       ...(entry.watermark === undefined ? {} : { watermark: entry.watermark }), requireHidden,

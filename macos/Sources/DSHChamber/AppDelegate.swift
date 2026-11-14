@@ -491,6 +491,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }))
         legs.mainWindowProvider = { [weak controller] in controller?.window }
         bridge.edgeHostLegs = legs
+        // D3：keep-awake 按需——消费渲染侧前台相位门的宿主同源事实（D2）：
+        // 窗口隐藏 / 遮挡 / 最小化期间释放 ProcessInfo activity，恢复可见且 setting
+        // 仍 on 时重新持有（默认 off 语义不变；隐藏期「前台任务」判据见 design 14 §D1
+        // 的产品待裁项）。接线即按当前事实收敛一次。
+        controller.onShellVisibilityDidChange = { [weak legs] shellVisible in
+            legs?.windowVisibilityDidChange(visible: shellVisible)
+        }
+        legs.windowVisibilityDidChange(visible: controller.shellForegroundVisible)
         self.bridge = bridge
         // Supervisor（design 25 §3.3(1)(4)）：真实 sidecar 形态
         // （sidecar.js / sidecar-entry.ts）先取目录锁再 spawn，运行中崩溃按
@@ -739,6 +747,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // 恢复入口必须先 deminiaturize（makeKeyAndOrderFront 对最小化
             // 窗口不解除最小化）。
             MainWindowController.restoreWindow(mainWindowController?.window)
+            // 可见性事实恢复腿（D2）：应用未激活时 didBecomeKey 可能不发，显式补一枪。
+            mainWindowController?.pushShellVisibility()
         }
         return true
     }
@@ -862,6 +872,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 shellLog("[shell] 关窗 → 隐藏（缓存事实即时决策，S3·V9）")
                 mainWindowController?.noteWindowHiddenExplicitly()
                 mainWindowController?.window?.orderOut(nil)
+                // D2 双保险：orderOut 后按真实事实补发一次（同值去重；纠正 isVisible 翻转前抢先投递的 visible 事实）。
+                mainWindowController?.pushShellVisibility()
             case .terminate:
                 shellLog("[shell] 关窗 → 退出（close-behavior='quit'，缓存事实即时决策）")
                 NSApp.terminate(nil)
@@ -878,6 +890,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 shellLog("[shell] 关窗决策获取失败：保守隐藏窗口（不关闭、不退出）")
                 self.mainWindowController?.noteWindowHiddenExplicitly()
                 self.mainWindowController?.window?.orderOut(nil)
+                // D2 双保险：orderOut 后按真实事实补发一次（同值去重）。
+                self.mainWindowController?.pushShellVisibility()
                 return
             }
             switch QuitCoordinator.closeAction(facts: facts) {
@@ -885,6 +899,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 shellLog("[shell] 关窗 → 隐藏（Dock 常驻恢复入口）")
                 self.mainWindowController?.noteWindowHiddenExplicitly()
                 self.mainWindowController?.window?.orderOut(nil)
+                // D2 双保险：orderOut 后按真实事实补发一次（同值去重）。
+                self.mainWindowController?.pushShellVisibility()
             case .terminate:
                 shellLog("[shell] 关窗 → 退出（close-behavior='quit'）")
                 NSApp.terminate(nil)
@@ -1077,6 +1093,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard let controller = mainWindowController, let window = controller.window else { return }
         // 取消退出/决策失败后的恢复同样要解除最小化。
         MainWindowController.restoreWindow(window)
+        // 可见性事实恢复腿（D2）：orderOut 恢复后页面前台相位门立即放行。
+        controller.pushShellVisibility()
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -1888,6 +1906,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         mainWindowController?.showWindow(nil)
         // 托盘「显示窗口」是最小化窗口的恢复入口，必须 deminiaturize。
         MainWindowController.restoreWindow(mainWindowController?.window)
+        // 可见性事实恢复腿（D2）：托盘恢复不必然获得 key，显式补一枪。
+        mainWindowController?.pushShellVisibility()
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -2126,6 +2146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         defer { completionHandler() }
         // 通知点击唤醒窗口同属恢复入口（最小化 → 先 deminiaturize）。
         MainWindowController.restoreWindow(mainWindowController?.window)
+        // 可见性事实恢复腿（D2）：已激活/已 key 形态可能不发 didBecomeKey，显式补一枪。
+        mainWindowController?.pushShellVisibility()
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {

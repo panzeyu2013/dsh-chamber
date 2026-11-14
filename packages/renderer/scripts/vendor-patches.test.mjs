@@ -28,7 +28,8 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   applyVendorPatches, checkRetiredPatches, checkVendorPatchSources, countSourcemapSegments,
-  decodeSourcemapMappings, RETIRED_PATCHES, VENDOR_PATCHES, vendorPatchRegistryProblems,
+  decodeSourcemapMappings, probeVendorPatchRetirement, RETIRED_PATCHES, VENDOR_PATCHES,
+  vendorPatchRegistryProblems,
 } from './vendor-patches.mjs'
 import {
   VENDOR_PATCH_MARKERS,
@@ -70,6 +71,9 @@ const FILES = {
   reading: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
   workspaceNavigation: VENDOR + 'dsh-client-ui-workspace/src/client/navigation.ts',
   workspaceIndex: VENDOR + 'dsh-client-ui-workspace/src/client/index.ts',
+  themeStyles: VENDOR + 'dsh-client-ui-theme/src/client/styles.ts',
+  iconSprite: VENDOR + 'dsh-client-ui-theme/src/client/icon-sprite.ts',
+  chatViewport: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
 }
 
 /** Module ids in both forms: the symlinked vendor path and the realpath'd submodule path. */
@@ -95,6 +99,9 @@ const IDS = {
   workspaceNavigation: '/x/vendor/harness-checkout/packages/client/ui-workspace/src/client/navigation.ts',
   workspaceIndex: '/x/vendor/harness-checkout/packages/client/ui-workspace/src/client/index.ts',
   readingReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
+  themeStylesReal: '/x/vendor/harness-checkout/packages/client/ui-theme/src/client/styles.ts',
+  iconSpriteReal: '/x/vendor/harness-checkout/packages/client/ui-theme/src/client/icon-sprite.ts',
+  chatViewportReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-viewport.ts',
 }
 
 /** Strip a leading export keyword so a sliced declaration can run inline. */
@@ -929,6 +936,70 @@ test('C9 verdicts separate a retired upstream fix from a construction drift (I-7
   assert.equal(checkVendorPatchSources(fixture.root, [noCheck])[0].verdict, 'drift')
 })
 
+test('live retire probes miss the current pin (a hit is C9 retire-candidate, not drift)', () => {
+  // C9 evaluates retireCheck only AFTER an anchor has drifted, so a probe that
+  // already matches the pinned source is invisible there: it is either a
+  // tautology (a later anchor drift would be misreported as "upstream fixed it")
+  // or the upstream fix arrived without moving our anchors. This fence turns red
+  // exactly when C9's retire-candidate phase starts: retire the entry, move the
+  // upstream shape into RETIRED_PATCHES and delete its artifact marker (I-7).
+  let probed = 0
+  for (const patch of VENDOR_PATCHES) {
+    if (patch.retireCheck === undefined) continue
+    probed += 1
+    const verdict = probeVendorPatchRetirement(patch)
+    assert.equal(
+      verdict.ok,
+      false,
+      patch.vendorFile + ': retireCheck matches the CURRENT pin (' + verdict.detail + ') - C9 would report retire-candidate: retire the entry + its marker',
+    )
+  }
+  assert.ok(probed > 0, 'the live fence must cover at least one retireCheck entry')
+})
+
+test('the viewport retire probe anchors to the onScroll handler, not a 900-char window (P2-3)', () => {
+  // The pre-tightening regex (`/onScroll[\s\S]{0,900}?(?:rAF|flushScroll|queueMicrotask)/`)
+  // started at ANY `onScroll` occurrence - including the addEventListener
+  // registration - so unrelated frame code moving into that window turned a pure
+  // anchor drift into a release-blocking retire-candidate with the wrong
+  // remediation. These decoys PASS on the old shape and fail on the tightened one.
+  const entry = VENDOR_PATCHES.find((patch) => patch.vendorFile === 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts')
+  assert.notEqual(entry, undefined, 'the use-chat-viewport entry exists')
+  assert.notEqual(entry.retireCheck, undefined, 'the viewport entry declares a retireCheck')
+  const patterns = entry.retireCheck.probes.flatMap((probe) => probe.match ?? [])
+  const misses = (text) => patterns.every((pattern) => {
+    pattern.lastIndex = 0
+    return !pattern.test(text)
+  })
+
+  // Decoy 1: rAF right after the listener registration (inside the old window).
+  assert.equal(misses(
+    "    scroller.addEventListener('scroll', this.onScroll, { passive: true })\n"
+    + '    const closingFrame = requestAnimationFrame(() => {})\n',
+  ), true, 'unrelated frame code after the registration is not the upstream fix')
+
+  // Decoy 2: the NEXT method coalesces while the handler still reads per event
+  // (the old declaration + fixed window crossed the handler boundary).
+  assert.equal(misses(
+    '  private readonly onScroll = (event: Event): void => {\n'
+    + '    const scroll = this.readScroll()\n'
+    + '  }\n'
+    + '  private readonly onScrollEnd = (event: Event): void => {\n'
+    + '    const frame = requestAnimationFrame(() => {})\n'
+    + '  }\n',
+  ), true, 'the probe must stop at the handler boundary')
+
+  // Positive control: the handler coalescing inside its own body IS the fix.
+  for (const body of [
+    '    this.scrollFrame = requestAnimationFrame(() => this.flushScroll())\n',
+    '    queueMicrotask(() => this.flush())\n',
+    '    this.flushScroll()\n',
+  ]) {
+    assert.equal(misses('  private readonly onScroll = (event: Event): void => {\n' + body + '  }\n'), false,
+      'an upstream onScroll that coalesces in its own body must match')
+  }
+})
+
 test('retired patches are fenced by their ensure assertion', () => {
   const fixture = retireFixtureRoot()
   fixture.write('fixed.ts', 'const engineIndependent = true;' + NL)
@@ -1333,6 +1404,9 @@ test('each patch artifact marker matches its own bundled source, and no other (f
     { vendorFile: 'dsh-client-ui-attachment/src/client/ComposerAttachments.tsx', key: 'attachmentComponent', real: IDS.attachmentComponentReal, loader: 'tsx', route: '' },
     { vendorFile: 'dsh-client-ui-workspace/src/client/navigation.ts', key: 'workspaceNavigation', real: IDS.workspaceNavigation, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-workspace/src/client/index.ts', key: 'workspaceIndex', real: IDS.workspaceIndex, loader: 'ts', route: '' },
+    { vendorFile: 'dsh-client-ui-theme/src/client/styles.ts', key: 'themeStyles', real: IDS.themeStylesReal, loader: 'ts', route: '' },
+    { vendorFile: 'dsh-client-ui-theme/src/client/icon-sprite.ts', key: 'iconSprite', real: IDS.iconSpriteReal, loader: 'ts', route: '' },
+    { vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts', key: 'chatViewport', real: IDS.chatViewportReal, loader: 'ts', route: '' },
   ]
   assert.deepEqual(
     [...new Set(sources.map((source) => source.vendorFile))].sort(),
@@ -1627,3 +1701,485 @@ test('the upstream viewport-left reset and dragend still clear the overlay (esca
   assert.deepEqual(active, [true, false, true, false], 'dragend still resets')
 })
 
+/* ------------------------------------------------------------------------- *
+ * ui-theme page-global singletons: eight stylesheets + the icon sprite
+ * ------------------------------------------------------------------------- */
+
+/** Upstream sheet order and the fixture CSS bodies the patched module emits. */
+const THEME_STYLE_NAMES = [
+  'base.css', 'corner-shape.css', 'design-platform.css', 'focus.css',
+  'onboarding.css', 'scrollbar.css', 'gradient-shadow-text.css', 'shiki.css',
+]
+const THEME_STYLE_CSS = THEME_STYLE_NAMES.map((name) => '/* ' + name + ' */')
+
+/** One fake page (head shared by N module instances) for the stylesheet tests. */
+function createThemePage() {
+  const head = []
+  const documentStub = {
+    defaultView: null,
+    head: {
+      // Real DOM appendChild moves an existing child instead of duplicating it.
+      appendChild: (element) => {
+        const existing = head.indexOf(element)
+        if (existing !== -1) head.splice(existing, 1)
+        head.push(element)
+      },
+    },
+    createElement: (tag) => {
+      assert.equal(tag, 'style', 'the patched theme installer still creates <style> elements')
+      return {
+        dataset: {},
+        textContent: '',
+        removed: false,
+        get isConnected() {
+          return head.includes(this)
+        },
+        remove() {
+          this.removed = true
+          const index = head.indexOf(this)
+          if (index !== -1) head.splice(index, 1)
+        },
+      }
+    },
+  }
+  return { document: documentStub, head }
+}
+
+/** Evaluate the patched (or upstream) styles module against one fake page. */
+function loadThemeStyles(code, documentStub) {
+  const start = code.indexOf('const PLUGIN_ID =')
+  assert.notEqual(start, -1, 'theme styles slice start marker not found')
+  const js = esbuild.transformSync(unexport(code.slice(start)), { loader: 'ts' }).code
+  return new Function(
+    'document', 'base', 'cornerShape', 'designPlatform', 'focus', 'onboarding', 'scrollbar', 'gradientShadowText', 'shiki',
+    js + NL + 'return installThemeStyles',
+  )(documentStub, ...THEME_STYLE_CSS)
+}
+
+/** Cordis ctx surface these modules use: inline effects + captured event listeners. */
+function createThemeCtx() {
+  const cleanups = []
+  const listeners = new Map()
+  return {
+    effect: (fn) => {
+      const cleanup = fn()
+      cleanups.push(cleanup)
+      return cleanup
+    },
+    on: (event, handler) => {
+      const list = listeners.get(event) ?? []
+      list.push(handler)
+      listeners.set(event, list)
+    },
+    emit: (event, payload) => {
+      for (const handler of listeners.get(event) ?? []) handler(payload)
+    },
+    dispose: () => {
+      while (cleanups.length > 0) cleanups.pop()()
+    },
+  }
+}
+
+test('the theme stylesheets are page-global singletons with refcounting (executed patched installer)', () => {
+  const source = readFileSync(FILES.themeStyles, 'utf8')
+  const patched = applyVendorPatches(IDS.themeStylesReal, source)
+  assert.notEqual(patched, undefined)
+  assert.deepEqual(patched.applied, ['dsh-client-ui-theme/src/client/styles.ts'])
+  assert.ok(patched.code.includes("Symbol.for('dsh-chamber:page-theme-styles')"),
+    'the page registry is keyed on a page-global symbol')
+  assert.ok(patched.code.includes('acquirePageStyle(name, css)'),
+    'the install loop routes through the page-global acquire')
+
+  const page = createThemePage()
+  const ctxA = createThemeCtx()
+  const ctxB = createThemeCtx()
+  // Two INDEPENDENT module evaluations = the N-ctx case (each shell may run its own bundle instance).
+  const installA = loadThemeStyles(patched.code, page.document)
+  const installB = loadThemeStyles(patched.code, page.document)
+  installA(ctxA)
+  assert.equal(page.head.length, 8, 'one shell publishes the eight theme sheets')
+  installB(ctxB)
+  assert.equal(page.head.length, 8, 'a second bundle instance reuses the same eight nodes')
+  for (const [index, element] of page.head.entries()) {
+    assert.equal(element.dataset.plugin, '@deepseek-ai/dsh-client-ui-theme')
+    assert.equal(element.dataset.pluginCss, '@deepseek-ai/dsh-client-ui-theme/' + THEME_STYLE_NAMES[index])
+    assert.equal(element.textContent, THEME_STYLE_CSS[index])
+  }
+  ctxB.dispose()
+  assert.equal(page.head.length, 8, 'a surviving owner keeps the sheets alive')
+  ctxA.dispose()
+  assert.equal(page.head.length, 0, 'the last owner removes every sheet')
+  // The registry entry is released too: the next mount publishes a fresh set.
+  const ctxC = createThemeCtx()
+  installA(ctxC)
+  assert.equal(page.head.length, 8, 'the page registry entry is gone after the last owner disposed')
+  ctxC.dispose()
+
+  // An official-layout / single-instance page must keep the upstream DOM exactly.
+  const patchedPage = createThemePage()
+  loadThemeStyles(patched.code, patchedPage.document)(createThemeCtx())
+  const upstreamPage = createThemePage()
+  loadThemeStyles(source, upstreamPage.document)(createThemeCtx())
+  const describe = (head) => head.map((element) => [element.dataset.plugin, element.dataset.pluginCss, element.textContent])
+  assert.equal(upstreamPage.head.length, 8)
+  assert.deepEqual(describe(patchedPage.head), describe(upstreamPage.head),
+    'a single-instance page keeps the upstream stylesheet DOM')
+
+  // Negative control: upstream appends eight sheets per bundle instance (the measured 575 <style> page).
+  const rawPage = createThemePage()
+  loadThemeStyles(source, rawPage.document)(createThemeCtx())
+  loadThemeStyles(source, rawPage.document)(createThemeCtx())
+  assert.equal(rawPage.head.length, 16, 'negative control: upstream appends eight sheets per bundle instance')
+})
+
+test('a detached shared sheet is re-attached by the next acquire (external all-document sweep)', () => {
+  const source = readFileSync(FILES.themeStyles, 'utf8')
+  const patched = applyVendorPatches(IDS.themeStylesReal, source)
+  assert.notEqual(patched, undefined)
+  const page = createThemePage()
+  const ctxA = createThemeCtx()
+  const install = loadThemeStyles(patched.code, page.document)
+  install(ctxA)
+  assert.equal(page.head.length, 8)
+  const first = page.head[0]
+  // Simulate an external removeOwnedStyles-style sweep: the nodes are gone, the owner still lives.
+  page.head.length = 0
+  assert.equal(first.isConnected, false, 'the fixture models real DOM membership')
+  const ctxB = createThemeCtx()
+  install(ctxB)
+  assert.equal(page.head.length, 8, 'a newly mounted shell re-attaches the shared sheets')
+  assert.ok(page.head.every((element) => element.isConnected === true))
+  ctxB.dispose()
+  assert.equal(page.head.length, 8, 'the original owner still holds its refcount')
+  ctxA.dispose()
+  assert.equal(page.head.length, 0, 'last owner removes the re-attached sheets')
+})
+
+/** One fake SVG page (body shared by N module instances) for the sprite tests. */
+function createSpritePage() {
+  const body = []
+  const createdSymbols = []
+  const makeNode = (kind, markup) => {
+    const node = {
+      kind,
+      markup,
+      id: '',
+      attrs: {},
+      children: [],
+      parent: null,
+      removed: false,
+      get isConnected() {
+        return body.includes(this)
+      },
+      style: { cssText: '' },
+      setAttribute(name, value) {
+        this.attrs[name] = value
+      },
+      append(...nodes) {
+        for (const child of nodes) {
+          child.parent = this
+          this.children.push(child)
+        }
+      },
+      replaceWith(next) {
+        const index = this.parent === null ? -1 : this.parent.children.indexOf(this)
+        if (index !== -1) this.parent.children[index] = next
+        next.parent = this.parent
+        this.removed = true
+      },
+      remove() {
+        const index = this.parent === null ? -1 : this.parent.children.indexOf(this)
+        if (index !== -1) this.parent.children.splice(index, 1)
+        this.removed = true
+      },
+    }
+    if (kind === 'symbol') createdSymbols.push(node)
+    return node
+  }
+  const documentStub = {
+    createElementNS: (_namespace, kind) => makeNode(kind),
+    importNode: (node) => node,
+    body: {
+      // Real DOM prepend moves an existing child instead of duplicating it.
+      prepend: (node) => {
+        const existing = body.indexOf(node)
+        if (existing !== -1) body.splice(existing, 1)
+        node.parent = { children: body }
+        body.unshift(node)
+      },
+    },
+  }
+  class FakeDomParser {
+    parseFromString(markup) {
+      return { documentElement: { attributes: [], childNodes: [{ kind: 'path', markup }] } }
+    }
+  }
+  return { document: documentStub, DOMParser: FakeDomParser, body, createdSymbols }
+}
+
+/** Evaluate the patched (or upstream) sprite module against one fake page. */
+function loadIconSprite(code, page, iconSymbols) {
+  const start = code.indexOf('const SVG_NS =')
+  assert.notEqual(start, -1, 'icon sprite slice start marker not found')
+  const js = esbuild.transformSync(unexport(code.slice(start)), { loader: 'ts' }).code
+  return new Function('document', 'DOMParser', 'ICON_SYMBOLS', js + NL + 'return installIconSprite')(
+    page.document, page.DOMParser, iconSymbols,
+  )
+}
+
+test('the icon sprite is a page-global singleton with a shared markup map (executed patched installer)', () => {
+  const source = readFileSync(FILES.iconSprite, 'utf8')
+  const patched = applyVendorPatches(IDS.iconSpriteReal, source)
+  assert.notEqual(patched, undefined)
+  assert.deepEqual(patched.applied, ['dsh-client-ui-theme/src/client/icon-sprite.ts'])
+  assert.ok(patched.code.includes("Symbol.for('dsh-chamber:page-icon-sprite')"),
+    'the sprite registry is keyed on a page-global symbol')
+
+  const iconSymbols = { alpha: '<svg data-icon="alpha"/>', beta: '<svg data-icon="beta"/>' }
+  const page = createSpritePage()
+  const ctxA = createThemeCtx()
+  const ctxB = createThemeCtx()
+  const installA = loadIconSprite(patched.code, page, iconSymbols)
+  const installB = loadIconSprite(patched.code, page, iconSymbols)
+  installA(ctxA)
+  assert.equal(page.body.length, 1, 'one shell prepends one sprite')
+  const sprite = page.body[0]
+  assert.equal(sprite.attrs['data-dsh-icon-sprite'], '')
+  assert.equal(sprite.attrs['aria-hidden'], 'true')
+  assert.equal(sprite.style.cssText, 'position: absolute; width: 0; height: 0; overflow: hidden')
+  assert.deepEqual(sprite.children.map((symbol) => symbol.id), ['alpha', 'beta'])
+  assert.equal(page.createdSymbols.length, 2, 'one <symbol> per icon id')
+  installB(ctxB)
+  assert.equal(page.body.length, 1, 'a second bundle instance reuses the same sprite')
+  assert.deepEqual(sprite.children.map((symbol) => symbol.id), ['alpha', 'beta'],
+    'an identical theme does not rebuild symbols')
+  assert.equal(page.createdSymbols.length, 2, 'the shared markup map skips the second shell')
+
+  // theme/change updates the ONE shared sprite; only the changed icon re-parses.
+  ctxA.emit('theme/change', { active: { icons: { alpha: '<svg data-icon="alpha-2"/>' } } })
+  const alpha = sprite.children.find((symbol) => symbol.id === 'alpha')
+  assert.equal(alpha.children[0].markup, '<svg data-icon="alpha-2"/>',
+    'the shared sprite follows the last theme/change')
+  assert.equal(page.createdSymbols.length, 3, 'only the changed symbol is rebuilt')
+  assert.equal(sprite.children.length, 2, 'the sprite keeps one symbol per icon id')
+
+  // refcount: a surviving owner keeps the sprite, the last owner removes it.
+  ctxB.dispose()
+  assert.equal(page.body.length, 1, 'a surviving owner keeps the shared sprite')
+  ctxA.dispose()
+  assert.equal(page.body.length, 0, 'the last owner removes the shared sprite')
+
+  // An official-layout / single-instance page must keep the upstream DOM exactly.
+  const patchedPage = createSpritePage()
+  loadIconSprite(patched.code, patchedPage, iconSymbols)(createThemeCtx())
+  const upstreamPage = createSpritePage()
+  loadIconSprite(source, upstreamPage, iconSymbols)(createThemeCtx())
+  const describe = (spriteElement) => ({
+    attrs: spriteElement.attrs,
+    cssText: spriteElement.style.cssText,
+    ids: spriteElement.children.map((symbol) => symbol.id),
+  })
+  assert.equal(upstreamPage.body.length, 1)
+  assert.deepEqual(describe(patchedPage.body[0]), describe(upstreamPage.body[0]),
+    'a single-instance page keeps the upstream sprite DOM')
+
+  // Negative control: upstream prepends one sprite per bundle instance and re-renders every symbol.
+  const rawPage = createSpritePage()
+  loadIconSprite(source, rawPage, iconSymbols)(createThemeCtx())
+  loadIconSprite(source, rawPage, iconSymbols)(createThemeCtx())
+  assert.equal(rawPage.body.length, 2, 'negative control: one sprite per bundle instance')
+  assert.equal(rawPage.createdSymbols.length, 4, 'negative control: every symbol rendered twice')
+})
+
+test('a detached shared sprite is re-attached by the next acquire (external all-document sweep)', () => {
+  const source = readFileSync(FILES.iconSprite, 'utf8')
+  const patched = applyVendorPatches(IDS.iconSpriteReal, source)
+  assert.notEqual(patched, undefined)
+  const iconSymbols = { alpha: '<svg data-icon="alpha"/>' }
+  const page = createSpritePage()
+  const ctxA = createThemeCtx()
+  const install = loadIconSprite(patched.code, page, iconSymbols)
+  install(ctxA)
+  assert.equal(page.body.length, 1)
+  const sprite = page.body[0]
+  // Simulate an external all-document sweep: the sprite is gone, the owner still lives.
+  page.body.length = 0
+  assert.equal(sprite.isConnected, false)
+  const ctxB = createThemeCtx()
+  install(ctxB)
+  assert.equal(page.body.length, 1, 'a new owner re-attaches the shared sprite')
+  assert.equal(page.body[0], sprite, 'the same shared sprite node is re-used')
+  ctxB.dispose()
+  assert.equal(page.body.length, 1)
+  ctxA.dispose()
+  assert.equal(page.body.length, 0)
+})
+
+/* ------------------------------------------------------------------------- *
+ * ui-chat scroll geometry: one read per frame (use-chat-viewport)
+ * ------------------------------------------------------------------------- */
+
+/** Fake scrollport with geometry read counters; frames are drained manually. */
+function createViewportHarness(code, { animate = true } = {}) {
+  const start = code.indexOf('const READING_INTENTS')
+  const end = code.indexOf('/**\n * Bind viewport resource ownership')
+  assert.notEqual(start, -1, 'chat viewport slice start marker not found')
+  assert.notEqual(end, -1, 'chat viewport slice end marker not found')
+  const js = esbuild.transformSync(unexport(code.slice(start, end)), { loader: 'ts' }).code
+
+  const geometry = { top: 0, height: 600, content: 2000 }
+  const reads = { top: 0, height: 0, content: 0 }
+  const scroller = {
+    style: {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    ownerDocument: { addEventListener: () => {}, removeEventListener: () => {} },
+    querySelector: () => null,
+    closest: () => scroller,
+  }
+  Object.defineProperties(scroller, {
+    scrollTop: {
+      get: () => {
+        reads.top += 1
+        return geometry.top
+      },
+      set: (value) => {
+        geometry.top = value
+      },
+    },
+    clientHeight: {
+      get: () => {
+        reads.height += 1
+        return geometry.height
+      },
+    },
+    scrollHeight: {
+      get: () => {
+        reads.content += 1
+        return geometry.content
+      },
+    },
+  })
+  const list = { closest: () => scroller, querySelector: () => null, contains: () => true, style: {} }
+  const column = { querySelector: () => null, children: [] }
+  const frames = []
+  const dispatches = []
+  let nextFrame = 0
+  const requestFrame = animate
+    ? (callback) => {
+      nextFrame += 1
+      frames.push({ id: nextFrame, callback })
+      return nextFrame
+    }
+    : undefined
+  const cancelFrame = (id) => {
+    for (const frame of frames) if (frame.id === id) frame.callback = null
+  }
+  const scrollMetricsStub = (element) => {
+    const height = element.clientHeight
+    return { top: element.scrollTop, height, floor: Math.max(0, element.scrollHeight - height) }
+  }
+  const createFlowMotion = () => ({
+    clear: () => {}, foldActive: () => false, inputActive: () => false, active: () => false,
+  })
+  class ScrollFollowStub { static forElement() { return undefined } }
+  const ChatViewport = new Function(
+    'scrollMetrics', 'ScrollFollow', 'createFlowMotion', 'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver',
+    js + NL + 'return ChatViewport',
+  )(scrollMetricsStub, ScrollFollowStub, createFlowMotion, requestFrame, animate ? cancelFrame : undefined, undefined)
+  const viewport = new ChatViewport()
+  viewport.attach(list, column)
+  viewport.connect({
+    scroll: (scroll) => { dispatches.push({ scroll }) },
+    scrollEnd: (outer) => { dispatches.push({ scrollEnd: outer }) },
+    resize: () => { dispatches.push({ resize: true }) },
+    interact: () => {},
+  })
+  const flushFrame = () => {
+    const pending = frames.splice(0)
+    for (const frame of pending) if (frame.callback !== null) frame.callback()
+  }
+  return { viewport, geometry, reads, frames, dispatches, flushFrame, scroller }
+}
+
+test('chat scroll geometry is read once per frame instead of once per scroll event (executed patched handler)', () => {
+  const source = readFileSync(FILES.chatViewport, 'utf8')
+  const patched = applyVendorPatches(IDS.chatViewportReal, source)
+  assert.notEqual(patched, undefined)
+  assert.deepEqual(patched.applied, ['dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts'])
+  assert.ok(patched.code.includes('private flushScroll(): void'), 'the coalesced delivery is its own method')
+  assert.ok(patched.code.includes('this.scrollFrame === null'), 'the handler owns a frame slot')
+
+  const harness = createViewportHarness(patched.code)
+  harness.geometry.top = 120
+  harness.viewport.onScroll({ target: harness.scroller })
+  harness.viewport.onScroll({ target: harness.scroller })
+  assert.equal(harness.frames.length, 1, 'two scroll events share one frame')
+  assert.equal(harness.dispatches.length, 0, 'the patched handler does not dispatch synchronously')
+  assert.deepEqual({ ...harness.reads }, { top: 0, height: 0, content: 0 },
+    'no synchronous geometry read runs in the scroll events')
+  harness.flushFrame()
+  assert.equal(harness.dispatches.length, 1, 'one coalesced delivery per frame')
+  assert.equal(harness.dispatches[0].scroll.metrics.top, 120)
+  assert.equal(harness.dispatches[0].scroll.movedByReader, true, 'movement attribution is the same readScroll result')
+  assert.deepEqual({ ...harness.reads }, { top: 1, height: 1, content: 1 }, 'the frame pays exactly one geometry read')
+
+  // Negative control: upstream reads and dispatches per scroll event (the measured forced layout).
+  const raw = createViewportHarness(source)
+  raw.geometry.top = 120
+  raw.viewport.onScroll({ target: raw.scroller })
+  raw.viewport.onScroll({ target: raw.scroller })
+  assert.equal(raw.dispatches.length, 2, 'negative control: upstream dispatches per event')
+  assert.deepEqual({ ...raw.reads }, { top: 2, height: 2, content: 2 }, 'negative control: upstream reads geometry per event')
+})
+
+test('the coalesced viewport keeps landing suppression, scrollend ordering and detach/cancel (executed patched handlers)', () => {
+  const source = readFileSync(FILES.chatViewport, 'utf8')
+  const patched = applyVendorPatches(IDS.chatViewportReal, source)
+  assert.notEqual(patched, undefined)
+
+  // 1) Self-authored landing echo: a scroll event at the written position must not redeliver.
+  const echo = createViewportHarness(patched.code)
+  echo.viewport.observation = { top: 150, landing: { metrics: { top: 150, floor: 1400, height: 600 }, position: null, turn: null } }
+  echo.geometry.top = 150
+  echo.viewport.onScroll({ target: echo.scroller })
+  echo.flushFrame()
+  assert.deepEqual(echo.dispatches, [], 'the landing echo is still suppressed')
+
+  // 2) scrollend flushes the coalesced delivery BEFORE the settle (the unbatched order).
+  const end = createViewportHarness(patched.code)
+  end.geometry.top = 200
+  end.viewport.onScroll({ target: end.scroller })
+  assert.equal(end.dispatches.length, 0, 'the delivery waits for its frame')
+  end.viewport.onScrollEnd({ target: end.scroller })
+  assert.deepEqual(end.dispatches.map((entry) => Object.keys(entry)[0]), ['scroll', 'scrollEnd'],
+    'the scroll delivery precedes scrollend')
+  assert.equal(end.dispatches[0].scroll.metrics.top, 200)
+  end.flushFrame()
+  assert.equal(end.dispatches.length, 2, 'the flushed frame is cancelled, not delivered twice')
+
+  // 3) The dispatched payload is the same readScroll result upstream computes for that geometry.
+  const current = createViewportHarness(patched.code)
+  const reference = createViewportHarness(source)
+  current.geometry.top = 320
+  reference.geometry.top = 320
+  current.viewport.onScroll({ target: current.scroller })
+  current.flushFrame()
+  assert.deepEqual(current.dispatches[0].scroll, reference.viewport.readScroll(),
+    'same metrics + movedByReader attribution as the upstream read')
+
+  // 4) A pending frame never runs after detach.
+  const detached = createViewportHarness(patched.code)
+  detached.viewport.onScroll({ target: detached.scroller })
+  assert.equal(detached.frames.length, 1)
+  detached.viewport.detach()
+  detached.flushFrame()
+  assert.deepEqual(detached.dispatches, [], 'a coalesced delivery is cancelled by detach')
+
+  // 5) No requestAnimationFrame (SSR/test environment): flush synchronously like upstream.
+  const synchronous = createViewportHarness(patched.code, { animate: false })
+  synchronous.geometry.top = 64
+  synchronous.viewport.onScroll({ target: synchronous.scroller })
+  assert.equal(synchronous.dispatches.length, 1, 'the fallback stays synchronous')
+  assert.equal(synchronous.dispatches[0].scroll.metrics.top, 64)
+})

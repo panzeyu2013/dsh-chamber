@@ -6,8 +6,17 @@
  * sweep. Skipped
  * probes during hidden time would otherwise let the drain act on a stale projection.
  * Split out of App.tsx (B1-3g); all dependencies arrive as refs.
+ *
+ * Both edges (page visibilitychange and the shell's visible edge) share ONE round: the
+ * predicate runs before the 250ms dedupe so an edge that arrives while the shell is still
+ * hidden never consumes the dedupe slot of the real shell resume edge (P2-2).
  */
 import { useEffect } from 'react'
+import { shouldRunBackgroundPhase } from '../background-phase.ts'
+import { subscribeShellVisibility } from '../shell-visibility.ts'
+
+/** 同一恢复边沿可能同时到达页面 visibilitychange 与宿主事件；一轮补偿只跑一次。 */
+const COMPENSATION_DEDUPE_MS = 250
 
 export interface VisibilityCompensationInputs {
   runStalenessWatchdogRef: { current: () => void }
@@ -26,8 +35,16 @@ export function useVisibilityCompensation(inputs: VisibilityCompensationInputs):
   useEffect(() => {
     let compensationTimer: number | undefined
     let disposed = false
-    const onVisibilityChange = (): void => {
-      if (document.visibilityState !== 'visible') return
+    let lastCompensationAt = Number.NEGATIVE_INFINITY
+    const compensate = (): void => {
+      // 统一前台相位门（页面可见 ∧ 壳窗口可见未遮挡，D2；不在这里另读第二份事实）：
+      // 必须在记去重时间戳**之前**判——页面可见边沿可能先到而壳事实仍 hidden（此时
+      // probe/drain 都会被相位门拒绝），若先记 lastCompensationAt，<250ms 内真正的壳
+      // 恢复边沿会被当成重复吞掉，该轮 drain/harvest 延后（P2-2）。
+      if (!shouldRunBackgroundPhase(document.visibilityState)) return
+      const now = Date.now()
+      if (now - lastCompensationAt < COMPENSATION_DEDUPE_MS) return
+      lastCompensationAt = now
       runStalenessWatchdogRef.current()
       void refreshConnectionsRef.current()
       void refreshRemotesRef.current()
@@ -39,15 +56,22 @@ export function useVisibilityCompensation(inputs: VisibilityCompensationInputs):
         if (disposed) return
         compensationTimer = window.setTimeout(() => {
           compensationTimer = undefined
-          if (document.visibilityState !== 'visible') return
+          if (!shouldRunBackgroundPhase(document.visibilityState)) return
           drainPrewarmRef.current()
           reclaimHiddenViewsRef.current()
         }, 0)
       }).catch(() => undefined)
     }
+    const onVisibilityChange = (): void => compensate()
+    // 宿主壳可见性（orderOut / 最小化 / Cmd+H / 遮挡 / 另一 Space）不产生页面
+    // visibilitychange；恢复可见边沿同样必须补偿一轮（design 14 §D1）。
+    const unsubscribeShell = subscribeShellVisibility((detail) => {
+      if (detail.visible && !detail.occluded) compensate()
+    })
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       disposed = true
+      unsubscribeShell()
       if (compensationTimer !== undefined) window.clearTimeout(compensationTimer)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }

@@ -2036,3 +2036,88 @@ test('B2/A3: an unattributable added subagent de-verifies the lineage, and repar
   }
 })
 
+// ── A1' 交付去重：mux 观察者的重复帧不再每次换快照对象 ───────────────────────
+// 交付判据 = 快照内容摘要（来源级判定输入 + 行 wire/判定字段 + factAt 的 1s 桶）。重复
+// status/ready 帧（只有 factAt 前进）不交付；真实内容变化与状态边沿必须**同步**交付，
+// 完成/通知候选不得被吞。
+
+test("A1': a duplicate status frame publishes nothing inside one factAt bucket; the edge and the bucket crossing do", async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, { running?: boolean; pendingKind?: string | null; factAt?: number }> }> = []
+  let clock = 100_000
+  const facts = createSourceMuxFacts({
+    sourceId: 'dedupe-status', origin: 'http://cp', now: () => clock,
+    onSnapshot: snapshot => snapshots.push(snapshot as never),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 7 }] }) }) as never,
+    reconcileIntervalMs: 60_000,
+  })
+  const row = () => snapshots.at(-1)?.rows.s1
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'baseline did not settle')
+    const published = snapshots.length
+    assert.equal(row()?.running, false)
+    // 真实边沿 false→true：**同步**交付（通知候选的边沿证据不得被去重吞掉）。
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    assert.equal(snapshots.length, published + 1, 'a real running edge must publish immediately')
+    assert.equal(row()?.running, true)
+    // 重复 status(true)：行 wire 字段全等、factAt 未跨桶 ⇒ 不交付（实机风暴的形状）。
+    clock += 500
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    assert.equal(snapshots.length, published + 1, 'a duplicate status frame must not publish')
+    // 跨 1s 桶：内容不变但锚点读数前进 ⇒ 交付（渲染锚点最坏晚一个桶边界）。
+    clock += 500
+    socket.item({ type: 'emit', event: 'api-session/status', args: ['s1', true] })
+    assert.equal(snapshots.length, published + 2, 'crossing a factAt bucket must publish')
+    assert.equal(row()?.factAt, clock, 'the delivered snapshot carries the RAW factAt (never the bucket)')
+    // 同桶内的真实内容变化（pending 边沿）仍必须即时交付。
+    clock += 1
+    socket.item({ type: 'waterfall', event: 'approval/request', eventId: 'e1', agentId: 's1' })
+    assert.equal(snapshots.length, published + 3, 'a pending edge must publish inside a bucket')
+    assert.equal(row()?.pendingKind, 'approval')
+  } finally { facts.stop() }
+})
+
+test("A1': repeated ready frames dedupe; baseline count, added/removed and activity edges publish immediately", async () => {
+  const socket = new FakeSocket()
+  const snapshots: Array<{ rows: Record<string, unknown>; baselines?: number }> = []
+  const facts = createSourceMuxFacts({
+    sourceId: 'dedupe-source', origin: 'http://cp',
+    onSnapshot: snapshot => snapshots.push(snapshot as never),
+    openSocket: () => socket,
+    fetchImpl: rpcFetch({ 'session/list': () => ({ items: [{ sessionId: 's1', running: false, updatedAt: 7 }] }) }) as never,
+    reconcileIntervalMs: 60_000,
+  })
+  try {
+    facts.start()
+    socket.open()
+    socket.item({ type: 'ready', clientId: 'c' })
+    await waitFor(() => facts.status().ready, 'baseline did not settle')
+    const published = snapshots.length
+    // 重复 ready 帧：可判性相位与内容都没变 ⇒ 不交付。
+    for (let i = 0; i < 3; i += 1) socket.item({ type: 'ready', clientId: 'c' })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(snapshots.length, published, 'repeated ready frames must not re-deliver a snapshot')
+    // 完整基线计数前进（listComplete 的判定输入）⇒ 必须交付。
+    facts.reconcile()
+    await waitFor(() => snapshots.length > published, 'a new complete baseline must publish')
+    assert.equal((snapshots.at(-1)?.baselines ?? 0) >= 2, true)
+    // added 边沿：新行即刻交付。
+    const afterBaseline = snapshots.length
+    socket.item({ type: 'emit', event: 'api-session/added', args: [{ sessionId: 's2', running: true, updatedAt: 9 }] })
+    assert.equal(snapshots.length, afterBaseline + 1, 'an added row must publish immediately')
+    assert.notEqual(snapshots.at(-1)?.rows.s2, undefined)
+    // removed 边沿：行退役即刻交付。
+    socket.item({ type: 'emit', event: 'api-session/removed', args: ['s2'] })
+    assert.equal(snapshots.length, afterBaseline + 2, 'a removed row must publish immediately')
+    assert.equal(snapshots.at(-1)?.rows.s2, undefined)
+    // activity 边沿（host 域水位前进）即刻交付。
+    const afterRemoved = snapshots.length
+    socket.item({ type: 'emit', event: 'api-session/activity', args: ['s1', 8] })
+    assert.equal(snapshots.length, afterRemoved + 1, 'an activity watermark must publish')
+  } finally { facts.stop() }
+})
+

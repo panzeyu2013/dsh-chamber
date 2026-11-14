@@ -45,10 +45,19 @@ test('the retained value is what both commits compare and STORE (data-flow floor
   // 2026-10 review M1: computing `retained` but comparing/storing the raw push
   // would regress the 0.6-0.8s directory-name flash while every helper test
   // stays green. Pin the data flow itself, not just the call.
+  // A7 ⑤（2026-11）: the push now caches the STORE object's signature by identity
+  // (`snapshotSignatureOf(current)`); the RETAINED candidate is still the only
+  // signature computed per push, and the raw push never becomes a comparison input.
   assert.match(pushCommit, /instanceSnapshotSignature\(\s*retained\s*\)/u,
-    'the push compares the RETAINED bytes, never the raw push')
-  assert.doesNotMatch(pushCommit, /instanceSnapshotSignature\(\s*snapshot\s*\)/u,
+    'the push computes the RETAINED bytes (once per push)')
+  assert.match(pushCommit, /snapshotSignatureOf\(\s*current\s*\)\s*===\s*retainedSignature/u,
+    'the push compares the retained candidate against the cached store signature')
+  assert.doesNotMatch(pushCommit, /snapshotSignatureOf\(\s*snapshot\s*\)/u,
     'the raw push must not be the comparison input')
+  assert.doesNotMatch(pushCommit, /instanceSnapshotSignature\(\s*snapshot\s*\)\s*===/u,
+    'the raw push must not be compared directly either')
+  assert.doesNotMatch(pushCommit, /instanceSnapshotSignature\(\s*snapshot\s*\)/u,
+    'the raw push must never be hashed directly (not even into a local)')
   assert.match(pushCommit, /\.\.\.retained,\s*error: null/u,
     'the push commits the retained rows')
   assert.match(unaryCommit, /instanceSnapshotSignature\(\s*next\s*\)/u,

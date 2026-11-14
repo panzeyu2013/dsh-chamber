@@ -16,7 +16,7 @@
 |A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐、§17 客户端插件页面 base path 上游化|A§1–A§15、A§17|
 |B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
-|D 工程|结构性重构、产物新鲜度、页面性能 P2、多实例常驻后续研究、右栏浏览器 v3 落地债|D§1–D§5|
+|D 工程|结构性重构、产物新鲜度、页面性能残项、多实例常驻后续研究、右栏浏览器 v3 落地债|D§1–D§5|
 
 ## A. 上游依赖（A 类）
 
@@ -262,7 +262,7 @@ D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blo
 |W-09…W-13|core seam（node-edges/shell-core、IPC 面镜像、core 禁 electron 门）；sidecar 入口与 stdio JSON-RPC（sidecar-entry/sidecar-ctx/bridge manifest 管道）|design 25 §3.2、§4.1|
 |W-14/W-15|Electron 零回归证明（分层 gate）；SidecarSupervisor（退避重启 + 退出码分级）与目录锁|design 25 §4.1、§3.3、§6.3、§8.2|
 |W-16…W-18|B 桥客户端（FrameCodec + 生命周期）；bridge-manifest 生成物（JSON + Swift 白名单 + stub）与 shim 表面锁步|design 25 §4.4.2、§4.4.3|
-|W-19/W-20|HostEdges 原生腿（SwiftEdgeHostLegs：对话/面板/文件/通知）|design 25 §5 E1–E20、§4.5|
+|W-19/W-20|HostEdges 原生腿（SwiftEdgeHostLegs：对话/面板/文件/通知）|design 25 §5 E1–E21、§4.5|
 |W-21|窗口/菜单/通知/深链/渲染器恢复（MainWindowController/RendererRecovery）|design 25 §4.5、§5|
 |W-22/W-25|更新 v1（blocked-available）→ Sparkle 预研/实现（S-01）|design 25 §7|
 |W-23/W-24|sidecar 打包（payload node + dist/web）与 .app 组装/Info.plist/ATS|design 25 §3.2、§4.3|
@@ -474,11 +474,11 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 - Swift `.app` 装配腿（`macos/scripts/build-swift-app.mjs`）在 `--skip-sidecar` 复用旧装配时没有等价 G5 兜底——是否接线到该脚本需 macos owner 决定（同一 `assertPackArtifactsFresh` 一行调用）。
 - G3 输入集的 vendor 只按 `harness.commit` 计入（不逐文件哈希 2 万文件/190MB），同 semver 范围内第三方小版本漂移不改变 `inputsHash`；发布/打包链靠「全新构建 + 构建顺序」兜底。
 
-### 3. 页面侧性能 P2 残项（推迟中）
+### 3. 页面侧性能残项（推迟中）
 
-> 本节只承载页面侧性能修订中**未实现**的两项 P2 残项（侧栏 T2、factAt 量化）；
-> 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §7（观察者对账与页面恢复：隐藏期不采样）、19 §3.2.4（桥探测长尾）、
-> 24 F5（purged 孤儿键收敛）。两项都保留证据与设计以便下次决策，落地前不进入任何提交面。
+> 本节只承载页面侧性能修订中**未实现**的残项（侧栏 T2、E2 首屏 markdown 按需化、A5 重订阅修正、B2 style 归属测量、B5 虚拟化 spike、A7 剩余）；
+> 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §7（观察者对账与页面恢复：隐藏期不采样）、19 §3.5（覆盖边界与诚实性：`factAt` 1s 签名桶、facts/mux 空帧去重）、
+> 24 F5（purged 孤儿键收敛）。各项都保留证据与设计以便下次决策，落地前不进入任何提交面。本节条目 ID（E2/A5/B2/B5/A7 与 STATUS 里的 E1/W2/D4/B1/B6 等）是渲染 P0 批的工作名，只在本节与 STATUS 渲染性能条目内有效；与各 design 文档的既有编号（design 25 §5 的 E2/E7/E21、design 14 §D4、design 25 §10 W2、design 06 §3.4 B6、design 28 §E2 等）无关。
 
 #### 3.1 侧栏 T2：更细的上下文拆分与按来源缓存
 
@@ -504,25 +504,51 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 **验证**：sidebar 包全部测试 + renderer 接线锁；实机用 Web Inspector 记录「单击 kebab 后的重渲染行数」与
 「搜索键入一次的通知次数」前后对比。
 
-#### 3.2 factAt 量化（产品取舍）
+#### 3.2 E2 首屏 markdown 家族按需化（mainGraph 唯一大池）
 
-**证据（代码 + 实机）**：运行时事实里的 factAt（该行事实的观察时刻，host 域 ms）被刻意纳入
-runtimeReportSignature（见 client-core 的 derive.ts 中 runtimeReportSignature 的注释与实现），于是每次观测都会
-换签名并触发一次发布；实机风暴锚点为 Dock 徽标 1,098 次翻转 / 40.8 秒（约 27 次/秒），静息期趋近 0。
-行的 data-chamber-fact-at 就是这条时间戳。
+**证据（结构实测 + 可推算）**：mainGraph ≈1.94 MB（1,941,324 B）中静态 `langs/vendor` chunk 778,028 B（40.1%），来源是 vendor `ui-primitives` 的 markdown 家族静态 import（shiki core/JS engine + 3 个 boot grammar、katex + katex.min.css、micromark）；katex + shiki 家族（`@shikijs/*` + oniguruma-to-es）在 sourcesContent 中合计 1,145,439/1,685,217 = 68%，估算可移出 ≈529 KB（主图 −27%；纯 `katex|shiki` 包名口径为 61.65%）。次大 = zod ≈238 KB（page-language chunk 38.1%）。
 
-**设计**：把 factAt 量化到固定桶（例如 1 秒）后再进签名，桶内的观测不再改变签名；原始值仍按原样进入 runtime
-facts 供渲染，只在「是否需要重发布」的判据上用量化值。
+**设计**：markdown 高亮/公式渲染改动态 import（首块先纯文本、空闲后升级，或按会话是否已出现代码块/公式预取）；zod 侧改 `zod/mini` 或把非 boot 路径（sidebar-right persistence 等）改惰性 import。shiki/katex 在 vendor 源内，需 vendor patch（第二类准入 = macOS 同机 A/B：首个代码块/公式 TTI + 帧成本）或上游接受；chamber 自有副本（connection/web）的 zod 可先改。
 
-**预期收益**：风暴期发布频率从「每次观测」降到「每桶至多一次」，是当前已知的最大单一项；按 27 次/秒的峰值上界，
-量化到 1 秒最多把发布压到 1 次/秒量级（真实收益取决于观测节奏，需仪表）。
+**风险**：首块纯文本回落带来视觉抖动与时序契约变化，首屏 TTI 与块级体验冲突需真机 A/B；动态 import 后的 chunk 预算与预取策略要同批核。
 
-**风险**：这是**产品取舍**而非纯性能修复——行的「事实观察时刻」呈现粒度变粗（数据本身不变），任何依赖
-「factAt 一变就重发布」的消费面（新鲜度读数、完成边沿的判定）都要逐一复核；derive.ts 里那条「刻意纳入」的注释
-是契约，改动必须同时改写它。发布速率目前无仪表，收益需先加计数再谈。
+**验证**：`build:renderer` 前后 perf-sizes（mainGraph/headCss/chunk 数）；macOS Web Inspector 记录首个代码块/公式 TTI、滚动帧时；失败即回退（不改 vendor 静态图）。
 
-**验证**：derive 单测（量化桶边界、桶内等值不发布、桶外仍发布）；实机风暴复测（发布计数与徽标翻转数）；
-真机确认行的新鲜度读数仍可接受。
+#### 3.3 page-channel/sessionFacts 重订阅修正（A5）
+
+**证据（实机计数 + 代码）**：2026-11 取证每来源 sessionFacts 29–31 次重订阅。判据（零新仪表）：`[session-facts] session-facts channel failed (<code>)` 诊断行 + page-channel 证据账本 code 分布——`channel_closed` = socket 级（全体同拍；最可疑 30s 心跳漏 1 拍拆链 / 控制面 1012），`upstream_end` = 订阅级（gateway SSE 背压/实例重启），`instance_unavailable` = link park。
+
+**设计（按性价比）**：① socket 级若为心跳拆链：`WS_PING_MISSES_BEFORE_TEARDOWN` 1→2–3（真死链晚报 30–60s）或隐藏期放宽判定（用 D2 可见性事实）；② 订阅级：查实例重启节奏与 gateway SSE `MAX_SSE_PENDING_FRAMES` 是否被慢 ack 打穿；③ link park 只做归因不改。真机 code 分布确认前不动代码。
+
+**验证**：macOS 真机 30 分钟采集 code 分桶（诊断行 + 证据账本）；修复后同口径重订阅次数、断流恢复时延与通知完整性回归。
+
+#### 3.4 N-ctx style 归属测量（B2 收口前置）
+
+**证据（代码纠正）**：插件 `.module.css` 已是页级一份（构建期 tagId 去重 + 页级 module table），「每壳一份」按代码不成立；每壳重复只剩 ctx.effect 内联样式（theme 8 个按页面单例设计，见 design 09 §3.6）。实机 575 `<style>` 的归属未证实。
+
+**测量协议（macOS）**：Web Inspector 里按 `style[data-plugin]`/`data-plugin-css` 分组计数并记录每壳归属（同一时刻壳数 N、隐藏壳数），对照 `[data-dsh-icon-sprite]` 数；若仍有按壳重复的包 ⇒ 按方案 B（chamber 侧包补丁，0.5–2 人日/条 + 每 pin 0–0.5）逐包页面单例化；若总量来自非模块注入（shiki/katex/内联），转 §3.2 或其他条目。**不得**用总 style 数当判据。
+
+**验证**：打/不打 W2 两版对比 style/sprite/symbol 计数与隐藏壳切换后的增长。
+
+#### 3.5 B5 聊天行虚拟化（唯一值得 fork 的路线，spike 先行）
+
+**证据**：vendor `ChatFlow` 对全部 entries map 成行；行级 content-visibility 已否决（rail 落点/scrollHeight/跟随/active mark 被估算破坏，`packages/renderer/src/styles.css`）。上游唯一横向手段 = 真行虚拟化（fork ui-chat + ui-conversation）。
+
+**判据（任一红即停）**：rail 跳转、scrollHeight/settledContent、跟随（FOLLOW_THRESHOLD/scrollend settle）、active mark 四几何消费者回归；前置测量（macOS）= 240-turn 合成会话的行数/DOM 节点数/`document.getAnimations()` 数、滚动 10s 帧时/长任务/layout 次数、`[shell-fps]`、四消费者各 10 样本 A/B 基线。成本口径 = 热点 4 包 72–128 人日、深改 107–208、每 pin 8–21；虚拟化单项 60–120（spike 先行）。
+
+**验证**：spike 通过后按四消费者回归 + macOS A/B；不通过即停，不进入 fork 脚手架。
+
+#### 3.6 facts 快照账本化与投影 memo（A7 剩余）
+
+**证据（代码）**：无内容变化的 delta 仍构造成新 snapshot/rows map（`session-facts-source.ts` 的 `applySessionFactsDelta` 返回对象 + `applyItem` 覆盖 `lastEventAt`）；`mergeRuntimeFacts` 每次新 sessions map + 逐行 spread（`derive.ts`）；`sessionProjectionRow` 每来源每发布全量重建成新行对象。
+
+**设计**：① 把 cursor/lastEventAt 从快照对象移入内部账本，下一次真实交付再合成快照（需同批改 4 处游标门：`applyItem`、`publishCompleteSnapshot`、`publishProbe` priorCursor、reset/stop）；② `mergeRuntimeFacts` 按 (runtime, correctionArms, overlay, stale) 四元组身份 memo——前置是 `factsOverlay` 按快照身份 memo（否则 overlay 每次新建、零命中）；③ `sessionProjectionRow` 按 (行对象身份, archived/pinned/pinSetKnown) memo；④ mux 交付摘要的每事件 O(rows) 分配：`snapshotDigest` 对全量行算 `sessionFactsRowSignature`（JSON.stringify），行对象身份稳定时可对签名做按行对象 WeakMap 缓存（须先证 source-mux-facts 复用 row 身份、不原地改行），收益 = 省每事件全表序列化。
+
+**风险**：① 会让 `data-chamber-fact-at` 在内容不变期更旧（渲染字段语义变化，需裁决）；②③ 收益在 A2a/A1' 后约每来源 ≤1 次/秒，需 heap allocation profile 证明占比再落地。
+
+**验证**：现有回归集 + 新不变量测试；macOS heap profile / `__dshChamberRenderCounters` 前后对比。
+
+**未闭环测试 / owner 登记**：⑤ A6/A7⑤ 签名缓存的行为测试需把 `reportSignatureOf`/`snapshotSignatureOf` 抽成纯工厂（当前仅源码锁）；⑥ Swift 纯函数缺 XCTest（macOS 测试 target；本机 NOT RUN）：`MainWindowController` 的 `shellVisibilityFacts`/`shellVisibilityScript` 与 `SwiftEdgeHostLegs` 的 keep-awake `desired = keepAwakeRequested && windowVisible` 判据；⑦ W2 hairline `--dsh-hairline-width` 页面级 refcount（每个 ctx.effect 各自写/还原，A dispose 会删仍在的 B 的值；上游同形态，本补丁未扩大）；⑧ D2 恢复补偿 hook 行为测（当前源码锁；250ms 去重对 <250ms 第二次合法边沿的风险未证实）；⑨ A1 摘要行 key 与 `start()` 重置回归测试（同内容换 id 必须交付、新订阅寿命首帧必交付）；⑩ 1s 桶两份字面量（`source-mux-facts.ts` 的 `FACT_AT_PUBLISH_BUCKET_MS` 与 `derive.ts` 的 `FACT_AT_SIGNATURE_BUCKET_MS`）统一到单源；⑪ A3 打开态 A/B 必须包含「隐藏壳静默死亡 >~5min + 恢复」场景（mounted 为 sticky 权威位，observer 可能已不存在）；⑫ InstanceView 1Hz stall 采样门控（隐藏/遮挡期停采样 + 隐藏边沿 re-anchor）：真实路径 `components/InstanceView.tsx`，其 effect 被 `instance-view-sampling.test.ts` 的 `with(scope)` 插桩直接执行，注入 `shouldRunBackgroundPhase`/`subscribeShellVisibility` 须同批改该测试的注入 helper（精确改法见本轮 pre-merge 修复证据）；当前仅登记。
 
 ### 4. 多实例常驻的后续研究（未排期）
 
@@ -531,7 +557,7 @@ facts 供渲染，只在「是否需要重发布」的判据上用量化值。
 
 | # | 工作 | 触发条件 | 说明 / 验收方向 |
 |---|---|---|---|
-| 1 | 侧边栏单实例化 / 隐藏壳监听门控 | 来源 ≥8，或实测 p95（切源/首帧/流式）劣化 | N 壳共享一个 renderer：隐藏壳的 React 更新与监听仍跑。先有帧时/输入延迟度量面，再评估「仅屏上壳订阅/暂停隐藏壳监听」；不得改变「会话保活」契约 |
+| 1 | 侧边栏单实例化 / 隐藏壳监听门控 | 来源 ≥8，或实测 p95（切源/首帧/流式）劣化 | N 壳共享一个 renderer：隐藏壳的 React 更新与监听仍跑。先有帧时/输入延迟度量面，再评估「仅屏上壳订阅/暂停隐藏壳监听」；不得改变「会话保活」契约。**2026-11 取证**：page-channel 9 subs / 8 upstreams、4 个 sessionFacts 与已挂载壳并存（`use-session-facts-lifecycle.ts` 的 spec 未按 `mountedSources` 门控）⇒ 触发条件已满足；注意 gateway facts teardown 会触发 S2 换代语义（假完成风险），需先定设计。**A3 实验面 = 默认关闭的调试开关** `__DSH_CHAMBER_A3_SKIP_MOUNTED_FACTS__`（只认显式 true；mounted 边沿走 teardown ⇒ S2 换代风险，只许 A/B），A/B 判据 = page-channel 订阅数/WebContent CPU/通知四项对拍，未通过不开默认 |
 | 2 | 进程 / 视图隔离（`WebContentsView` / 独立 WKWebView） | 来源 >8，或「一个壳的长任务卡住整页」真机复现 | design 05 §9 的重评触发；开做前先取整页卡顿证据（rAF/帧时/长任务），不以猜测开做 |
 | 3 | 每壳内存研究 | 面板/实测定标显示 N=5 稳态内存不可接受，或需要按壳归因的统计 | 单 renderer 下无每壳字节读数；方向 = Electron `app.getAppMetrics()`（仅 Electron）与 DOM/节点计数代理，**不伪造**每壳字节；Swift 腿只有整机内存 |
 | 4 | upstream freeze（vendor pin 升级冻结） | 常驻改造（D1–D4）未收口前冻结；出现上游安全修复/阻断则解冻单次并回归 | 避免 pin 升级把 vendor 隐藏壳行为/补丁面与常驻改造改动混进同一回归窗口；收口后按既有升级 checklist 恢复 |

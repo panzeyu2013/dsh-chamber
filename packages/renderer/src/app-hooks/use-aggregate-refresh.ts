@@ -204,7 +204,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
         if (aggregateRetryTimersRef.current.get(instanceId) === retryTimer) {
           aggregateRetryTimersRef.current.delete(instanceId)
         }
-        // 窗口隐藏期不维持 3s 失败重试链；恢复可见由 visibilitychange 的 watchdog 补偿。
+        // 窗口隐藏期不维持 3s 失败重试链；恢复可见由 visibilitychange 或宿主壳可见边沿的 watchdog 补偿。
         if (!shouldRunBackgroundPhase(document.visibilityState)) return
         const mayRetry = mutationTag === undefined
           ? stillCurrent()
