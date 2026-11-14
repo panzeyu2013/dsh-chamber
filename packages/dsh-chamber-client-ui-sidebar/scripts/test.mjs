@@ -209,6 +209,10 @@ export const GROUPS = {
     'test/visual-lock/keyboard-reveal-reachability.test.ts',
     // 六个 <24px 图标钮的命中盒 = 视觉盒几何（design 06 §7 命中区纪律）。
     'test/visual-lock/icon-hit-box-geometry.test.ts',
+    // rc.3 New-session 行几何（`sidebar.session.action` HOC 槽）：行的 flex/gap/节奏、
+    // 按钮与 rail 两态的伸缩，以及「不得出现裸 `.newSessionRow > *`/入场动画/冻结 Windows
+    // 规则」的负向锁。不读 vendor 树（故按组纪律留在 vendor 成员之前）。
+    'test/visual-lock/new-session-row.test.ts',
     // Row motion (the ported AnimatedRows + its key wiring, design 06 §7): the
     // byte-fidelity lock compares against the pinned vendor source.
     'test/session-rows/animated-rows.test.ts',

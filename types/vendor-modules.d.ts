@@ -242,7 +242,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   /** Owner runtime share (loose; the vendor conditional type is the source of truth). */
   export type PropsRuntime<N extends string> = Record<string, any>
   export type PropsRenderSlots<H extends string> = {
-    renderSlot: (hole: H, props?: any, opts?: { entryKey?: string; only?: string; fallback?: ReactNode }) => ReactNode
+    renderSlot: (hole: H, props?: any, opts?: {
+      entryKey?: string; only?: string; fallback?: ReactNode
+      /** Content a `hoc` key's layers wrap (vendor `HocRenderOpts.children`). */
+      children?: ReactNode
+    }) => ReactNode
   }
   export function resolveSlotLabel(label: SlotLabel | undefined): string | undefined
 }

@@ -75,7 +75,7 @@ import {
 export type {
   SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
   SidebarPanelIconOwnerProps, SidebarPanelMetadata, SidebarRootComponentProps, SidebarRootInjected,
-  SidebarSettingsOwnerProps, SidebarWorkspaceGitContext, SidebarWorkspaceGitOwnerProps,
+  SidebarSessionActionOwnerProps, SidebarSettingsOwnerProps, SidebarWorkspaceGitContext, SidebarWorkspaceGitOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
 
@@ -201,6 +201,11 @@ export function apply(ctx: ClientContext): void {
         'sidebar.session.row.hover': { kind: 'list', scope: 'root' },
         'sidebar.settings': { kind: 'single', scope: 'root' },
         'sidebar.footer.action': { kind: 'list', scope: 'root' },
+        // rc.3 同步：New-session 行内容的外部 HOC 层（与上游同一声明）。当前占位者
+        // 是 optional 包 deepseek-chat-import 的导入入口；未启用时无 occupant，出口按
+        // 上游语义原样渲染 children（不多包一层盒）。声明必须在运行时表里：只留型别
+        // 声明会让占用者的 slots.inject 永久等待而静默缺席。
+        'sidebar.session.action': { kind: 'hoc', scope: 'root' },
       },
       inject: injectProps,
     }, SidebarRoot)),

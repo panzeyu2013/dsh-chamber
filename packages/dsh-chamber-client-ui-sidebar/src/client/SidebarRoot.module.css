@@ -232,19 +232,34 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* New Session row (upstream rc.3 shape): the shell's button and every
+   `sidebar.session.action` occupant's controls share ONE row. The renderer
+   inserts its `display: contents` `[data-slot]` anchor between the row and the
+   content, so the row's flex children are the buttons themselves and no wrapper
+   box joins the row. Geometry stays chamber's own rhythm (2px inset / 12px
+   below); the rail stacks an occupant's controls under the button. */
+.newSessionRow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px 12px;
+}
+
 /* New Session: the pinned upstream bar (38px, radius-md, l3 hairline, the
    label mask + hover keycap); collapsed it renders as the rail's plain icon
    control. */
 .newSession {
   box-sizing: border-box;
   position: relative;
-  flex: none;
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0;
   height: 38px;
-  margin: 0 2px 12px;
+  margin: 0;
   padding: 8px 12px;
   border: 0.5px solid var(--dsw-alias-border-l3);
   border-radius: var(--dsw-radius-md);
@@ -284,12 +299,21 @@
   background: var(--dsw-specific-sidebar-glass-collapsed-hover);
 }
 
+/* The rail stacks an occupant's controls under the New Session icon (the
+   row owns the vertical rhythm; the button is a plain 36px control). */
+.collapsed .newSessionRow {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0 0 12px;
+}
+
 .collapsed .newSession {
-  align-self: flex-start;
+  flex: none;
   width: 36px;
   height: 36px;
   padding: 0;
-  margin: 0 0 12px;
+  margin: 0;
   gap: 0;
   border-color: transparent;
   background: transparent;

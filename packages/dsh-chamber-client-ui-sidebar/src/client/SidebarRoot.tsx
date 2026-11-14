@@ -348,28 +348,39 @@ export function SidebarRoot({
       </div>
 
       {/* Expanded, the button carries its own label plus the hover keycap; the
-          tooltip is only on the rail. Upstream ui-sidebar SidebarRoot.tsx同款。 */}
-      <Tooltip label={t('session.new.label')} shortcutKeys={newShortcut?.keys} delayMs={500} disabled={wide}>
-        <button
-          type="button"
-          className={css.newSession}
-          aria-label={t('session.new.label')}
-          aria-keyshortcuts={newShortcut?.aria}
-          onClick={() => { startSession() }}
-        >
-          <span className={css.newSessionLabelMask}>
-            <span className={css.newSessionContent}>
-              {wide ? <IconNewChatOutlineMedium size={14} /> : <IconNewChatOutlineRegular size={18} />}
-              {wide && <span className={css.newSessionLabel}>{t('session.new')}</span>}
-            </span>
-          </span>
-          {wide && newShortcut !== undefined && newShortcut.keys.length > 0 && (
-            <span className={css.newSessionShortcut} aria-hidden="true">
-              <ShortcutKeys keys={newShortcut.keys} />
-            </span>
-          )}
-        </button>
-      </Tooltip>
+          tooltip is only on the rail. Upstream ui-sidebar SidebarRoot.tsx同款。
+          行内容经 `sidebar.session.action` HOC 层（rc.3 同步）：占用方（如启用的
+          deepseek-chat-import）把按钮作为 children 收到并追加自己的控件；无 occupant
+          时出口原样渲染 children（renderer 的 display:contents 锚点让按钮仍是行的
+          flex 子项，不多一层盒）。只此一处渲染该槽：字标按钮/shell.leading/工作区 + 与
+          上游同形不装饰。 */}
+      <div className={css.newSessionRow}>
+        {renderSlot('sidebar.session.action', { wide }, {
+          children: (
+            <Tooltip label={t('session.new.label')} shortcutKeys={newShortcut?.keys} delayMs={500} disabled={wide}>
+              <button
+                type="button"
+                className={css.newSession}
+                aria-label={t('session.new.label')}
+                aria-keyshortcuts={newShortcut?.aria}
+                onClick={() => { startSession() }}
+              >
+                <span className={css.newSessionLabelMask}>
+                  <span className={css.newSessionContent}>
+                    {wide ? <IconNewChatOutlineMedium size={14} /> : <IconNewChatOutlineRegular size={18} />}
+                    {wide && <span className={css.newSessionLabel}>{t('session.new')}</span>}
+                  </span>
+                </span>
+                {wide && newShortcut !== undefined && newShortcut.keys.length > 0 && (
+                  <span className={css.newSessionShortcut} aria-hidden="true">
+                    <ShortcutKeys keys={newShortcut.keys} />
+                  </span>
+                )}
+              </button>
+            </Tooltip>
+          ),
+        })}
+      </div>
 
       {/* 全局面板轴（仅 rail）：宽态的入口进 owning source 的 server 头动作簇
           （ServerSectionHeader 的 PanelHeaderEntry），折叠态没有分组头可言，故保留

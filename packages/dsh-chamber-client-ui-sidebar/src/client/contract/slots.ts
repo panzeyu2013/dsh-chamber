@@ -71,6 +71,18 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     /** Optional actions beside Settings at the foot; each receives only the
      *  column state. */
     'sidebar.footer.action': { kind: 'list'; scope: 'root'; owner: SidebarFooterActionOwnerProps }
+    /**
+     * HOC layer around the New-session row's content (upstream rc.3). The shell
+     * passes its Tooltip + button as `children`; an occupant returns them,
+     * possibly wrapped, together with its own controls, so the row is decorated
+     * without adding a wrapper box. Occupants nest around the content instead of
+     * rendering beside it: one that adds nothing must return `children`, and
+     * with no occupant the content renders unchanged. The renderer inserts its
+     * `display: contents` `[data-slot]` anchor between the row and the content,
+     * so the row's flex children are the buttons themselves.
+     * Declared by this package's 'sidebar' entry; lowest `order` is outermost.
+     */
+    'sidebar.session.action': { kind: 'hoc'; scope: 'root'; owner: SidebarSessionActionOwnerProps }
   }
 }
 
@@ -157,6 +169,12 @@ export interface SidebarFooterActionOwnerProps {
   wide: boolean
 }
 
+/** Owner share of the New-session row's HOC layer. */
+export interface SidebarSessionActionOwnerProps {
+  /** Whether the sidebar renders wide content (false = 56px rail). */
+  wide: boolean
+}
+
 /** Registrant-private injected share (via the register inject factory): the
  *  shell's own controls — New Session, column toggle, panel selection — plus
  *  the chamber instance id for the active-source highlight. */
@@ -196,6 +214,7 @@ export type SidebarRootComponentProps =
     | 'sidebar.workspace.git'
     | 'sidebar.settings'
     | 'sidebar.footer.action'
+    | 'sidebar.session.action'
     | 'sidebar.session.row.leading'
     | 'sidebar.session.row.hover'
   >
