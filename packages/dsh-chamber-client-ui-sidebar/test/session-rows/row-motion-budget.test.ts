@@ -34,10 +34,10 @@ const SECTION = read('../../src/client/ServerSection.tsx')
 const PORT_GLIDE_MS = Number(PORT.match(/const ROW_GLIDE_MS = (\d+)/u)?.[1])
 
 test('a FLIP batch starts at most once per interval; normal cadence is untouched', () => {
-  // 设计下限（design 06 §4「每列表 ≥250ms」）用**精确值**钉住，并对照 port 的 ROW_GLIDE_MS：
+  // 设计下限（design 06 §3.3「每列表 ≥250ms」）用**精确值**钉住，并对照 port 的 ROW_GLIDE_MS：
   // 旧的 200–500 宽窗允许把常量改成 200–249（仍小于一次滑行，批与批叠加）而不变红。
   assert.ok(Number.isFinite(PORT_GLIDE_MS), 'port 的 ROW_GLIDE_MS 必须可从源文本解析')
-  assert.equal(ROW_MOTION_MIN_INTERVAL_MS, 250, '阈值 = 设计下限 250ms（design 06 §4）')
+  assert.equal(ROW_MOTION_MIN_INTERVAL_MS, 250, '阈值 = 设计下限 250ms（design 06 §3.3）')
   assert.ok(ROW_MOTION_MIN_INTERVAL_MS > PORT_GLIDE_MS,
     '阈值必须大于一次滑行时长（ROW_GLIDE_MS = ' + PORT_GLIDE_MS + 'ms）')
   assert.equal(shouldAnimateRowMotion(Number.NEGATIVE_INFINITY, 1_000), true, '首次提交')

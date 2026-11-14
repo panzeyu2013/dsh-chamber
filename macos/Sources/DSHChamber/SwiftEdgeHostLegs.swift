@@ -620,7 +620,7 @@ public final class SwiftEdgeHostLegs {
                 }
                 // focusMainWindow 也是恢复入口（最小化窗口先 deminiaturize）。
                 MainWindowController.restoreWindow(window)
-                // 可见性事实恢复腿（D2）：与 AppDelegate 三个恢复入口同口径；只抬升已 key 的
+                // 可见性事实恢复腿（D2）：与 AppDelegate 四个恢复入口同口径；只抬升已 key 的
                 // 窗口可能不发 didBecomeKey（窗口的 controller 即 MainWindowController）。
                 (window.windowController as? MainWindowController)?.pushShellVisibility()
                 NSApp.activate(ignoringOtherApps: true)

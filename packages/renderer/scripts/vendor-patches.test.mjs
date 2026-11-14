@@ -953,6 +953,8 @@ test('live retire probes miss the current pin (a hit is C9 retire-candidate, not
       false,
       patch.vendorFile + ': retireCheck matches the CURRENT pin (' + verdict.detail + ') - C9 would report retire-candidate: retire the entry + its marker',
     )
+    assert.ok(!verdict.detail.includes('unreadable'),
+      patch.vendorFile + ': retireCheck could not read the pinned source, so this fence proves nothing (' + verdict.detail + ')')
   }
   assert.ok(probed > 0, 'the live fence must cover at least one retireCheck entry')
 })

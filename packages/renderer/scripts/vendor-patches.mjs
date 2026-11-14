@@ -101,7 +101,7 @@
  * (upstream has no N-shell notion to anchor on).
  *
  * FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) -
- * ADMISSION PENDING（fourth-form ruling）; see the two ui-theme entries): the
+ * ADMISSION PENDING（fourth-form ruling）; see the two ui-theme entries. The
  * page-global fact is a DOM resource every mounted instance shell installs for
  * itself - identical theme stylesheets and one icon sprite - so N shells multiply
  * a single page-wide artifact N times and a hidden shell keeps its copy alive.
@@ -795,8 +795,8 @@ export const VENDOR_PATCHES = Object.freeze([
           + ' */\n'
           + 'export function installThemeStyles(ctx: Context): void {',
         replace: '/**\n'
-          + ' * chamber patch (FOURTH CLASS, FOURTH ADMITTED FORM - page-global singleton;\n'
-          + ' * ADMISSION PENDING（fourth-form ruling）): one page hosts N mounted shell ctxs;\n'
+          + ' * chamber patch - FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton).\n'
+          + ' * ADMISSION PENDING（fourth-form ruling）: one page hosts N mounted shell ctxs;\n'
           + ' * ui-theme is a page-level module singleton, but installThemeStyles runs once\n'
           + ' * per shell ctx and appends the same eight <style data-plugin-css> sheets per\n'
           + ' * shell (measured multi-shell page: 575 <style> / 736 CSSStyleSheet nodes, and\n'
@@ -909,8 +909,8 @@ export const VENDOR_PATCHES = Object.freeze([
           + '  ctx.on(\'theme/change\', (snapshot) => { apply(snapshot.active.icons) })\n'
           + '}',
         replace: '/**\n'
-          + ' * chamber patch (FOURTH CLASS, FOURTH ADMITTED FORM - page-global singleton;\n'
-          + ' * ADMISSION PENDING（fourth-form ruling）): one page hosts N mounted shell ctxs;\n'
+          + ' * chamber patch - FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton).\n'
+          + ' * ADMISSION PENDING（fourth-form ruling）: one page hosts N mounted shell ctxs;\n'
           + ' * installIconSprite runs once per shell ctx and prepends one sprite per shell\n'
           + ' * (measured multi-shell page: 23,932 SVGSymbolElement nodes and one\n'
           + ' * <svg data-dsh-icon-sprite> per shell). The page-wide fact must live on the\n'

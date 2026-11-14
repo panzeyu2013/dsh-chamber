@@ -34,10 +34,12 @@
  * mainGraph 硬门 2,060,000 不动）。
  *
  * E1（simple-icons 改走 ESM 入口 + Rollup tree-shaking；解析见
- * scripts/simple-icons-entry.mjs）后实测 mainGraph 1,941,324 / chamberEntry
- * 3,354,214 / headCss 339,301：只把 chamberEntry warn 回填到 3,390,000（实测
- * + ~1%，让「整包图标表回到首屏」重新成为可见的 warn）；mainGraph 的 warn/fail
- * 与 headCss warn 不动。
+ * scripts/simple-icons-entry.mjs）后在**主 checkout 精确树全新构建**实测
+ * mainGraph 1,910,110 / chamberEntry 3,255,021 / headCss 339,301（此前在
+ * worktree 里经 vendor 符号链接构建的 1,941,324 / 3,354,214 偏大，非精确树证据，
+ * 勿再引用）：chamberEntry warn 3,390,000 = 实测 +4.1%，mainGraph warn 1,950,000
+ * = 实测 +2.1%、fail 2,060,000 = 实测 +7.8%，headCss warn 342,500 = 实测 +0.9%。
+ * 阈值不主动上调；mainGraph 硬门与既有 warn 基线不动。
  *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite

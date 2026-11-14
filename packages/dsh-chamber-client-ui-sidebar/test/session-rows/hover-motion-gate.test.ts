@@ -84,14 +84,17 @@ test('行键对拍前置条件漂移锁：keyed 行没有 CSS 动画/过渡，WA
   const offenders = srcFiles.filter((name) => name !== 'rows/animated-rows.tsx'
     && read('../../src/client/' + name).includes('.animate('))
   assert.deepEqual(offenders, [], 'element.animate 只允许出现在 port（animated-rows.tsx）')
-  // 行选择器（含 class 选择器）不得带动画/过渡；statusSpinner/foldChevron 等字形站点不在 keyed 行上。
+  // 行元素自身（选择器最后一个复合段）不得带动画/过渡；`.sessionRow:hover .sessionTitle`
+  // 这类后代规则动画的是子元素，不违反「keyed 行动画唯一来源 = FLIP」的前提。
   const rowSelector = /(?:data-row-key|sessionRow|\.row\b|\[data-session)/iu
+  const lastCompound = (selector: string) => selector.trim().split(/[\s>+~]+/u).filter(Boolean).at(-1) ?? ''
   for (const { name, text } of CSS_SOURCES) {
     const animatedBlocks = [...text.matchAll(/^([^{}@]+)\{([^{}]*)\}/gmu)]
       .filter(([, , body]) => /\b(?:animation|transition)\s*:/u.test(body))
     for (const [, selector, body] of animatedBlocks) {
-      assert.ok(!rowSelector.test(selector),
-        `${name}：行选择器不得带 animation/transition：` + selector.trim() + ' => ' + body.trim())
+      const offenders = selector.split(',').map(lastCompound).filter((compound) => rowSelector.test(compound))
+      assert.deepEqual(offenders, [],
+        `${name}：行元素自身不得带 animation/transition：` + selector.trim() + ' => ' + body.trim())
     }
   }
   const port = read('../../src/client/rows/animated-rows.tsx')

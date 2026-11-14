@@ -336,7 +336,7 @@ export const chamberBridge: {
 
 - **策略 = keep-all（用户意图壳常驻）**：任何被用户打开过的来源壳（`mountedViews` 中的非 local视图）在页面生命周期内常驻，**没有常规空闲退役**——旧「隐藏壳最多保留 1 个 + 连续隐藏 ≥60s超限回收」的 chamber retention 机制整体删除（`RETAINED_HIDDEN_VIEWS`/`VIEW_RECLAIM_GRACE_MS`/ `VIEW_RECLAIM_TICK_MS`/`decideReclaimCandidates` 均不存在）。local 恒留。系统投机壳（空闲预热 /首屏基线收割）仍受 **≤1 个后台槽**约束，不与用户意图壳混算。
 - **状态模型（每壳一个，页面级投影）**：`active`（选择集合中的活动视图）/ `resident`（已 settle的后台常驻壳）/ `booting`（挂载中、未 settle）/ `failed`（boot 失败，失败覆盖层持有，壳已释放）/ `released`（壳已释放、视图已卸载，来源仍在注册表）。状态由渲染端从既有事实投影（`viewStore` 的active/painted、`shellStates` 的 settled/error、挂载集合），**单一快照经页面级`packages/dsh-chamber-client-core/src/resident-store.ts#residentBridge` 发布**（发布者 = 常驻阀`packages/renderer/src/app-hooks/use-resident-guard.ts#useResidentGuard`，投影由零依赖纯模块`packages/renderer/src/resident-snapshot.ts#buildResidentSnapshot` 构建；内存 store、无 wire、不落盘；panel 契约见 design 15 §D5）。快照 `sources` = 挂载壳（挂载序，local 在列）+ 已释放但仍注册的来源（`state === 'released'` 追加在末尾）——手动/自动释放后该行**转为「已释放」而不是消失**。
-- **唯一自动退役 = 硬上限 + 平台化内存压力阀**：硬上限`packages/renderer/src/resident-policy.ts#RESIDENT_HARD_CAP`（=12），只在挂载数超过上限时由纯函数`packages/renderer/src/resident-policy.ts#pickHardCapRelease` 选一个可释放壳（local 计入挂载数、但不在可释放池；先自动预热壳，再按最近活动时间 LRU）；压力阀在文档可见且挂载壳 >1（local 计入）时按 30s 采样整机内存（`packages/desktop/system-memory.ts#readSystemMemory` →`settings.get()` 的只读 `system` 快照），按可用比分类（`packages/renderer/src/resident-policy.ts#classifyPressure`：**按档位**连续 2 次 <15% 才 `constrained`、**按档位**连续 2 次 <8% 才 `critical`；档位交替（一次 12% 后一次 7%）重置计数，单次瞬时低水位不释放全部壳；探针失败 = unsupported，不猜测），释放由`packages/renderer/src/resident-policy.ts#pickPressureReleases` 选择——`constrained` 保留至多 1 个最近使用的常驻壳，`critical` 释放全部可释放壳；**一次只释放一个（250ms 错峰）**，绝不与 View Transition / 切换同拍。
+- **唯一自动退役 = 硬上限 + 平台化内存压力阀**：硬上限`packages/renderer/src/resident-policy.ts#RESIDENT_HARD_CAP`（=12），只在挂载数超过上限时由纯函数`packages/renderer/src/resident-policy.ts#pickHardCapRelease` 选一个可释放壳（local 计入挂载数、但不在可释放池；先自动预热壳，再按最近活动时间 LRU）；压力阀在**前台相位可运行**（`packages/renderer/src/background-phase.ts#shouldRunBackgroundPhase`：页面可见且宿主壳窗口可见/未遮挡，[design 14](../runtime/14-sleep-background.md) §D1）且挂载壳 >1（local 计入）时按 30s 采样整机内存（`packages/desktop/system-memory.ts#readSystemMemory` →`settings.get()` 的只读 `system` 快照），按可用比分类（`packages/renderer/src/resident-policy.ts#classifyPressure`：**按档位**连续 2 次 <15% 才 `constrained`、**按档位**连续 2 次 <8% 才 `critical`；档位交替（一次 12% 后一次 7%）重置计数，单次瞬时低水位不释放全部壳；探针失败 = unsupported，不猜测），释放由`packages/renderer/src/resident-policy.ts#pickPressureReleases` 选择——`constrained` 保留至多 1 个最近使用的常驻壳，`critical` 释放全部可释放壳；**一次只释放一个（250ms 错峰）**，绝不与 View Transition / 切换同拍。
 - **释放路径全表**（release 一律走 App 唯一拆除入口，与注册表删除同原语）：
 
   | 路径 | 触发 | 语义 |
@@ -356,7 +356,7 @@ export const chamberBridge: {
 - **条件 watchdog（稳态无 20s tick）**：135s 放弃臂与收割截止/放弃只在一个条件成立时武装——存在未
   settle 的挂载壳，或存在待处理的收割意图（调度 hook 的 `watchdogNeeded`）；否则不创建 20s interval
   （前台相位门仍由 `packages/renderer/src/background-phase.ts#shouldRunBackgroundPhase` 承担）。
-  压力阀的 30s 采样是**唯一**可能常驻的周期任务，只在「文档可见且挂载壳 >1（local 计入）」时武装；
+  压力阀的 30s 采样是**唯一**可能常驻的周期任务，只在「前台相位可运行且挂载壳 >1（local 计入）」时武装；
   **不新增 IPC 通道**（读 30s TTL 的 `settings.get` 缓存快照）。
 - **平台矩阵（压力阀）**：Linux `/proc/meminfo` 的 `MemAvailable/MemTotal`；Windows
   `os.freemem()/os.totalmem()`；macOS `vm_stat` 派生

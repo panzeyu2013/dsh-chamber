@@ -232,7 +232,7 @@ interface HostEdges {
 
 ## 5. 原生边沿逐项设计（Electron → Swift 映射）
 
-本节的 Swift 实现均在 `macos/Sources/DSHChamber/` 下（XCTest 在 `macos/Tests/DSHChamberTests/`），符号名以该树为单源；行号不写进设计（按符号 grep 现取）。本节与 §10 的 E/W/D 编号（E2/E7/E21、W2 菜单快捷键、D4 刷新率降档等）是本设计自己的边沿/验收项编号，**不是渲染 P0 批的工作名**（批名单源见 [TODO.md](../../progress/TODO.md) §3）。
+本节的 Swift 实现均在 `macos/Sources/DSHChamber/` 下（XCTest 在 `macos/Tests/DSHChamberTests/`），符号名以该树为单源；行号不写进设计（按符号 grep 现取）。本节的 E 编号（§5 原生边沿）与 W 编号（§8 parity 判定）是本设计自己的边沿/验收项编号，**不是渲染 P0 批的工作名**（批名单源见 [TODO.md](../../progress/TODO.md) §3）；渲染批的 D2/D4 等与本节 E/W 编号无关。
 
 | # | Electron 现状（main.ts/…，归档面） | Swift 对应 | 备注 |
 |---|---|---|---|
@@ -277,7 +277,7 @@ interface HostEdges {
 - **`DSH_CHAMBER_SHELL_DEBUG` 帧率观测**：`DSH_CHAMBER_SHELL_DEBUG=1` 注入 rAF 计数（每 2s 一行 `[shell-fps]`，走既有 shellConsole 回传）；缺省/打包态不注入（S14/T-11 调试面纪律不变）。
 - **启动日志（唯一对照口径）**：`[shell] 刷新率：显示器刷新率 120fps（当前模式）；prefer-60fps 偏好=已关闭(跟随显示器刷新率)；低电量模式=开 → 页面更新上限约 60fps（…）`——由 `RefreshRatePolicy.startupLogLine` 产出。刷新率取窗口所在屏的当前模式（`CGDisplayCopyDisplayMode`；取不到回落面板上限 `NSScreen.maximumFramesPerSecond` 并标「面板上限」）；建窗后立即记一次，并在换屏/屏幕参数变化（同屏改刷新率）/低电量模式切换/首次获得 key（上屏兜底）时按值去重补记（`MainWindowController.logRefreshRateIfChanged`）。`RefreshRatePolicyTests` 钉住 60/120/30 三个实测点、上游整数除法折算、接线时序（apply 先于 `WKWebView` 构造）与 SPI 不可用时的诚实降级（unknown 按 WebKit 默认折算，绝不虚报 120）；同屏改刷新率时 WebKit 是否重读 nominal 未证实，验收以 `[shell-fps]` 实测为准。
 
-**隐藏/电池降频（D4，不采纳；本设计 §5.1 编号，非渲染 P0 批）**：现有 C target 只有单向「关偏好」函数（`DSHChamberWebKitSupport.h`），且建页后改偏好实测不生效（上文「创建后再改不生效」）⇒ 隐藏/遮挡/低电量时把偏好置回 near-60 只能建页时定型或重建视图；扩 C target 双向函数并重建视图的成本/收益未证，**不采纳**——隐藏期由 D2 相位门 + keep-awake 条件降载，真机若仍见 GPU/合成开销再按 §5.1 测量协议重开。
+**隐藏/电池降频（不采纳；渲染 P0 批工作名 D4，非本设计编号）**：现有 C target 只有单向「关偏好」函数（`DSHChamberWebKitSupport.h`），且建页后改偏好实测不生效（上文「创建后再改不生效」）⇒ 隐藏/遮挡/低电量时把偏好置回 near-60 只能建页时定型或重建视图；扩 C target 双向函数并重建视图的成本/收益未证，**不采纳**——隐藏期由 D2 相位门 + keep-awake 条件降载，真机若仍见 GPU/合成开销再按 §5.1 测量协议重开。
 
 **Rejected alternatives（本决策）**：① 接受 60fps、不做——同机 Electron/Chromium 是 120fps，双 flavor 刷新率不同且原生侧更差，无产品理由保留；关闭偏好只是一个 SPI 调用的成本。② 等 WebKit 公开开关——无时间表，期间 60fps 上限持续（S-48）；落地已按「SPI 缺失即 Unknown 降级」设计，换公开 API 只需替换 `apply(to:)` 一处。③ 页面内规避（CSS 合成/自绘）——节流点在引擎调度器，页面拿不到旁路；流式文本必须走渲染更新。④ 按显示器能力门控（仅 `NSScreen.maximumFramesPerSecond > 60` 时关偏好）——页面创建后再改偏好不生效，换屏后无法重配；60Hz 屏 `nominal = 60`、`framesPerSecondNearestFullSpeed(60) = 60` 本不额外限制；建窗前 `NSScreen.main` 未必是最终屏。⑤ 覆盖低电量模式（injected bundle / UI 进程转发 / dyld interpose）——注入面（`_WKProcessPoolConfiguration.injectedBundleURL`，所属类自 macOS 12 deprecated）存在但未实测，覆盖需自建 bundle 并链接 WebCore 测试钩子，代价远超收益；UI 进程不转发。⑥ 换渲染引擎（Chromium/CEF）——唯一能在低电量模式拿满 120fps 的路径，但超出路线 A 定义，发布/签名代价巨大；电池场景替代品是 Electron flavor（已归档）。
 

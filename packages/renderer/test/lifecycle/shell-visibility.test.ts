@@ -147,6 +147,23 @@ test('接线锁：background-phase 单一叠加壳可见性，七个相位消费
   }
 })
 
+test('接线负控：门序/双门/通知事实与壳边沿回退都会变红', () => {
+  const compensation = readRepoFile('packages/renderer/src/app-hooks/use-visibility-compensation.ts')
+  const gateAt = compensation.indexOf('if (!shouldRunBackgroundPhase(document.visibilityState)) return')
+  const dedupeAt = compensation.indexOf('lastCompensationAt = now')
+  assert.ok(gateAt !== -1 && dedupeAt !== -1 && gateAt < dedupeAt,
+    '补偿必须先过统一相位门再记录 250ms 去重时间戳')
+  const resident = readRepoFile('packages/renderer/src/app-hooks/use-resident-guard.ts')
+  assert.ok((resident.match(/shouldRunBackgroundPhase\(/gu) ?? []).length >= 3,
+    '压力阀入口/快照后/错峰释放三处都必须经统一门')
+  const notifications = readRepoFile('packages/renderer/src/app-hooks/use-notifications.ts')
+  assert.match(notifications, /requireHidden[\s\S]{0,900}?isShellVisible\(\)/u,
+    'requireHidden 必须叠壳可见性事实（遮挡/另一 Space 不误抑制）')
+  assert.match(compensation, /subscribeShellVisibility\(/u, '壳可见边沿订阅不得丢失')
+  assert.match(compensation, /if \(detail\.visible && !detail\.occluded\) compensate\(\)/u,
+    '只有 visible 且未遮挡的边沿才补偿')
+})
+
 test('跨语言契约：Swift 派发的事件名 / detail 形状 / 窗口观察面与 renderer 同字面量', () => {
   const swift = readRepoFile('macos/Sources/DSHChamber/MainWindowController.swift')
   assert.ok(swift.includes(SHELL_VISIBILITY_EVENT), 'Swift 必须派发同一事件名')

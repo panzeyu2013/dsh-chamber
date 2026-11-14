@@ -308,7 +308,10 @@ export function useResidentGuard(deps: ResidentGuardDeps): { releaseSource: (id:
         if (stopped || !shouldRunBackgroundPhase(document.visibilityState)) return
         const releases = pickPressureReleases(buildContext(), decision.band)
         releases.forEach((id, index) => {
-          setTimeout(() => { if (!stopped) releaseSource(id, 'pressure') }, index * RELEASE_STAGGER_MS)
+          setTimeout(() => {
+            // 错峰窗内可能已隐藏/遮挡：相位门在真正拆壳前再判一次（隐藏窗口不得拆壳）。
+            if (!stopped && shouldRunBackgroundPhase(document.visibilityState)) releaseSource(id, 'pressure')
+          }, index * RELEASE_STAGGER_MS)
         })
       } catch { /* unavailable snapshot: stay on the hard-cap path only */ }
       finally { sampling = false }
