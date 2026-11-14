@@ -39,9 +39,13 @@ import {
   type LiveGraphSync, type LiveLoaderFace,
 } from './live-graph.ts'
 import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
+import { classifyClientPluginBundle, type ClientPluginPatch } from './client-plugin-patches.ts'
+import {
+  executePatchedBundle, fetchPluginBundleText, loadPatchedBundle,
+} from './patched-bundle-load.ts'
 import { BundleLoadTimeoutError, forgetInstanceGraphRelease } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
-import { evictHttpBudgetSource, httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
+import { evictHttpBudgetSource } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 // 插件刷新收敛（design 09 §3.7 / design 15 §6）：重订阅式的 client 图重同步 +
 // 有界 restart 事实窗口；预算与流恢复的 document-reload 域独立。壳只做接线，
 // reload 闸门与 per-boot 栅栏在 plugin-refresh-control.ts（可单测）。
@@ -136,9 +140,6 @@ export function collectFailedEntries(
  */
 const QUEUED_OPEN_TIMEOUT_MS = BOOT_TIMEOUT_MS + OPEN_WAIT_MS
 
-/** Cap for one cross-instance content-identity read (a plugin bundle, not an asset dump). */
-const IDENTITY_BUNDLE_MAX_BYTES = 4 * 1024 * 1024
-
 /**
  * Read one served plugin bundle for cross-instance CONTENT identity (host-graph's
  * `readPluginBundle` seam): same-origin through the instance proxy, page-budgeted,
@@ -147,34 +148,25 @@ const IDENTITY_BUNDLE_MAX_BYTES = 4 * 1024 * 1024
  */
 async function readPluginBundleText(sourceId: string, url: string): Promise<string | null> {
   try {
-    return await runWithHttpBudget({
-      sourceId,
-      kind: 'bundle',
-      lane: 'background',
-      leaseMs: httpBudgetLeaseFor(15_000),
-      // Queue rather than refuse on a momentarily busy page: the boot is about to
-      // decide interchangeability, and a budget refusal must not become a source fact.
-      queueDeadlineAt: Date.now() + 1_500,
-      label: 'plugin-identity:' + url,
-    }, async () => {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-      if (!response.ok) return null
-      // Only a JavaScript body is a bundle: an error page / JSON answer must never
-      // compare equal across two hosts and masquerade as verified content.
-      const contentType = response.headers.get('content-type') ?? ''
-      if (!/(?:java|ecma)script/i.test(contentType)) return null
-      const declared = Number(response.headers.get('content-length') ?? '')
-      if (Number.isFinite(declared) && declared > IDENTITY_BUNDLE_MAX_BYTES) return null
-      const text = await response.text()
-      return text.length > IDENTITY_BUNDLE_MAX_BYTES ? null : text
-    })
+    return await fetchPluginBundleText(url, { budget: 'acquire', sourceId, timeoutMs: 10_000 })
   } catch {
     return null
   }
 }
 
-/** Same-origin module-script loader (ESM chunks; the stock loader uses classic scripts). */
+/**
+ * Same-origin module-script loader (ESM chunks; the stock loader uses classic scripts).
+ * A URL registered in the page runtime patch table (client-plugin-patches.ts) loads as
+ * PATCHED TEXT through loadPatchedModuleBundle; every other URL keeps the script-element
+ * path byte for byte.
+ */
 function loadModuleBundle(url: string): Promise<void> {
+  const match = classifyClientPluginBundle(url)
+  // A registered package in a non-single-id combo shape is refused outright: loading it
+  // unpatched would silently send the owner-only upload to the control-plane root
+  // (fail-closed; the message carries the patch reason and anchor count for diagnostics).
+  if (match.kind === 'refuse') return Promise.reject(new Error(match.message))
+  if (match.kind === 'patch') return loadPatchedModuleBundle(url, match.patch)
   return new Promise((resolve, reject) => {
     const el = document.createElement('script')
     el.type = 'module'
@@ -218,8 +210,39 @@ function loadModuleBundle(url: string): Promise<void> {
   })
 }
 
+/**
+ * Wire the page runtime patch loader (`patched-bundle-load.ts`) with the real
+ * dependencies: the caller-held page-budget text read (the loader kernel already owns
+ * this dispatch's bundle slot; the read deadline keeps a margin above the loader budget
+ * so the loader's own BundleLoadTimeoutError owns the timeout verdict), the page
+ * executor, real timers, and the kernel's BundleLoadTimeoutError type.
+ * @param url - the served bundle URL.
+ * @param patch - the registered patch for that bundle.
+ * @returns resolves when the patched bundle executed and registered its factory.
+ */
+function loadPatchedModuleBundle(url: string, patch: ClientPluginPatch): Promise<void> {
+  return loadPatchedBundle(url, patch, {
+    readText: (target) => fetchPluginBundleText(target, {
+      budget: 'caller-held',
+      timeoutMs: PATCHED_BUNDLE_READ_TIMEOUT_MS,
+    }),
+    execute: executePatchedBundle,
+    createTimeoutError: (message, bundleOutcome) => new BundleLoadTimeoutError(message, bundleOutcome),
+    setTimeout: (callback, ms) => setTimeout(callback, ms),
+    clearTimeout: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
+    timeoutMs: BUNDLE_LOAD_TIMEOUT_MS,
+  })
+}
+
 /** How long one extra-bundle script load may take before it fails loud (parallel to the graph fetch's 30s budget). */
 const BUNDLE_LOAD_TIMEOUT_MS = 30_000
+
+/**
+ * Text-read deadline for a patched bundle: a margin ABOVE the loader budget so the
+ * loader's own BundleLoadTimeoutError owns the timeout verdict (the read then settles
+ * as the observed bundle outcome instead of racing the loader).
+ */
+const PATCHED_BUNDLE_READ_TIMEOUT_MS = BUNDLE_LOAD_TIMEOUT_MS + 5_000
 
 /** Per-instance shell lifecycle. */
 export interface ShellState {

@@ -1087,10 +1087,11 @@ const PAGE_FETCH_ALLOWLIST: Record<string, number> = {
   'packages/dsh-chamber-client-core/src/wire-common.ts': 1,
   'packages/dsh-chamber-client-ui-settings-connections/src/client/restart-action.ts': 1,
   'packages/renderer/src/host-graph.ts': 2,
-  // shell.ts: the cross-instance plugin-CONTENT identity read (host-graph's
-  // readPluginBundle seam) — one same-origin GET inside runWithHttpBudget, bounded
-  // in time/size and only for profile rows a foreign instance already claimed.
-  'packages/renderer/src/shell.ts': 1,
+  // The served plugin-bundle text read (host-graph's readPluginBundle identity seam
+  // AND the runtime patch loader): ONE same-origin GET inside the page budget (the
+  // patched path rides the loader kernel's already-held slot), bounded in time/size,
+  // and only for profile rows / registered patch packages.
+  'packages/renderer/src/patched-bundle-load.ts': 1,
   'packages/renderer/src/session-facts-source.ts': 1,
   'packages/renderer/src/source-mux-facts.ts': 1,
 }

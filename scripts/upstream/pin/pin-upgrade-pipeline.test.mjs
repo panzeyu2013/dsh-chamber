@@ -253,16 +253,27 @@ test('parseArgs accepts one tag plus flags and aggregates usage problems', () =>
 
 test('pipelineSteps keeps the mechanical batch order and the write/check modes', () => {
   const write = pipelineSteps({})
-  assert.deepEqual(write.map((step) => step.id), ['registry-views', 'verify-i18n', 'verify-upstream-touchpoints'])
+  assert.deepEqual(write.map((step) => step.id), ['registry-views', 'verify-i18n', 'verify-upstream-touchpoints', 'verify-runtime-plugin-patches'])
   assert.deepEqual(write[0].args, ['--write'])
   assert.deepEqual(write[1].args, ['--write'])
   assert.deepEqual(write[2].args, [])
+  assert.deepEqual(write[3].args, [])
   const check = pipelineSteps({ check: true })
   assert.deepEqual(check[0].args, ['--check'])
   assert.deepEqual(check[1].args, [])
   assert.deepEqual(check[2].args, ['--no-artifact-rebuild'])
+  assert.deepEqual(check[3].args, [], 'the runtime patch anchor gate is read-only in both modes')
   assert.deepEqual(pipelineSteps({ noArtifactRebuild: true })[2].args, ['--no-artifact-rebuild'])
+  assert.deepEqual(pipelineSteps({ noArtifactRebuild: true })[3].args, [])
   for (const step of write) assert.equal(typeof step.script, 'string')
+})
+
+test('the runtime patch anchor gate step is registered after the touchpoints gate and stays read-only', () => {
+  const step = pipelineSteps({}).at(-1)
+  assert.equal(step.id, 'verify-runtime-plugin-patches')
+  assert.equal(step.script, 'scripts/upstream/verify/verify-runtime-plugin-patches.mjs')
+  assert.deepEqual(step.args, [], 'the script owns its loud-skip/--require semantics; the pipeline never passes --require')
+  assert.match(step.label, /真实锚点/u)
 })
 
 test('runPipeline prints the plan then runs the mechanical batch in order', () => {
@@ -280,7 +291,7 @@ test('runPipeline prints the plan then runs the mechanical batch in order', () =
     },
   })
   assert.equal(code, 0)
-  assert.deepEqual(calls, ['registry-views|--write', 'verify-i18n|--write', 'verify-upstream-touchpoints|'])
+  assert.deepEqual(calls, ['registry-views|--write', 'verify-i18n|--write', 'verify-upstream-touchpoints|', 'verify-runtime-plugin-patches|'])
   const text = lines.join('\n')
   assert.match(text, /锚点汇总：9\/9 已是目标版本/u)
   assert.match(text, /六锚 \+ 3 fork 字面量均已对齐目标版本/u)
@@ -305,7 +316,7 @@ test('runPipeline warns that pending anchors need manual application; --strict t
   }
   const advisory = run(false)
   assert.equal(advisory.code, 0, 'pending anchors are normal output, not a failure')
-  assert.deepEqual(advisory.calls, ['registry-views', 'verify-i18n', 'verify-upstream-touchpoints'])
+  assert.deepEqual(advisory.calls, ['registry-views', 'verify-i18n', 'verify-upstream-touchpoints', 'verify-runtime-plugin-patches'])
   assert.match(advisory.text, /仍有 8 处锚字面量待人工应用/u)
   assert.match(advisory.text, /本管线只打印 diff、不写锚/u)
   const strict = run(true)
@@ -331,7 +342,7 @@ test('runPipeline requires the derived lockfile anchor to be aligned too under -
   }
   const advisory = run(false)
   assert.equal(advisory.code, 0, 'an unregenerated derived anchor is reported, not fatal')
-  assert.deepEqual(advisory.calls, ['registry-views', 'verify-i18n', 'verify-upstream-touchpoints'])
+  assert.deepEqual(advisory.calls, ['registry-views', 'verify-i18n', 'verify-upstream-touchpoints', 'verify-runtime-plugin-patches'])
   assert.match(advisory.text, /字面量已对齐，派生锚（运行时锁文件）待 bundle:dsh 重生成/u)
   const strict = run(true)
   assert.equal(strict.code, 1)

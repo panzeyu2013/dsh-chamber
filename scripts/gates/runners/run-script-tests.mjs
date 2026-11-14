@@ -102,6 +102,8 @@ export const GROUPS = {
     'scripts/upstream/registry/registry.test.mjs',
     'scripts/upstream/anchors/check-anchors.test.mjs',
     'scripts/upstream/verify/plugin-protection-gate.test.mjs',
+    // 运行期插件补丁的真实锚点门（bundled payload 上的 raw/served 锚点与 fail-closed 控制）。
+    'scripts/upstream/verify/verify-runtime-plugin-patches.test.mjs',
     'scripts/upstream/pin/lockfile-store-path-mappings.test.mjs',
     'scripts/upstream/pin/roster-parity.test.mjs',
     'scripts/upstream/pin/workspace-range-ratchet.test.mjs',

@@ -51,6 +51,10 @@ export const GROUPS = {
     'test/lifecycle/safe-mode.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
     'test/lifecycle/host-graph.test.ts',
+    // 页面级运行期插件补丁（design 09 §4 base backfill）：URL 断言 / 正反锚点 / 执行冒烟 / 壳分派与 fail-closed 锁。
+    'test/lifecycle/client-plugin-patches.test.ts',
+    // 装载半行为测试（loader 契约/超时 outcome/fetch 文本守卫/new Function 注入面）。
+    'test/lifecycle/patched-bundle-load.test.ts',
     // 证据有效性层：页面调度记录（rAF 心跳/焦点/可见性 → 调度缺口）与有界持久证据账本。
     'test/lifecycle/page-schedule.test.ts',
     'test/lifecycle/evidence-log.test.ts',

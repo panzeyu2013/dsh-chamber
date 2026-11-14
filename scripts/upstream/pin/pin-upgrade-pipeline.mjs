@@ -5,7 +5,10 @@
  * 由给定 tag 推导**六锚 + 3 个 fork 字面量**的应改值，把 diff 打印出来（只打印、
  * 不写锚），随后自动跑机械面收尾：`registry-views.mjs --write`（registry canonical +
  * §2/§9 生成视图）→ `verify-i18n.mjs --write`（双语记录重录）→
- * `verify-upstream-touchpoints.mjs`（触点门全量收尾）。不自动 commit、不改任何判据。
+ * `verify-upstream-touchpoints.mjs`（触点门全量收尾）→
+ * `verify-runtime-plugin-patches.mjs`（运行期插件补丁的**真实锚点门**：读 bundled payload，
+ * 对 raw 与 served combo 形态各验锚；尚未 bundle 的源码检出按 loud skip 通过）。
+ * 不自动 commit、不改任何判据。
  *
  * 用法：
  *   node scripts/upstream/pin/pin-upgrade-pipeline.mjs <tag> [--check] [--no-artifact-rebuild] [--strict]
@@ -296,7 +299,7 @@ export function renderPlanSummary(plan) {
   return lines.join('\n')
 }
 
-/** 机械面收尾步骤（顺序固定：生成视图 → 双语记录 → 触点门）。 */
+/** 机械面收尾步骤（顺序固定：生成视图 → 双语记录 → 触点门 → 运行期补丁锚点门）。 */
 export function pipelineSteps({ check = false, noArtifactRebuild = false } = {}) {
   return [
     {
@@ -316,6 +319,14 @@ export function pipelineSteps({ check = false, noArtifactRebuild = false } = {})
       label: '上游触点门（C1/C3–C16 收尾）',
       script: 'scripts/upstream/verify/verify-upstream-touchpoints.mjs',
       args: noArtifactRebuild || check ? ['--no-artifact-rebuild'] : [],
+    },
+    {
+      id: 'verify-runtime-plugin-patches',
+      label: '运行期插件补丁真实锚点门（bundled payload；无 payload 时 loud skip）',
+      script: 'scripts/upstream/verify/verify-runtime-plugin-patches.mjs',
+      // Read-only in both modes (no write leg); missing payload is the script's own loud skip
+      // (source-only checkout), so --require is deliberately NOT passed here.
+      args: [],
     },
   ]
 }
@@ -340,7 +351,8 @@ export const USAGE = [
   '--help / -h            打印本用法',
   '',
   '行为：由 tag 推导六锚 + 3 fork 字面量的应改值并打印 diff（不写锚、不提交、不改判据），',
-  '随后跑 registry-views --write → verify-i18n --write → verify-upstream-touchpoints。',
+  '随后跑 registry-views --write → verify-i18n --write → verify-upstream-touchpoints →',
+  'verify-runtime-plugin-patches（只读；尚未 bundle 的检出 loud skip 通过）。',
 ].join('\n')
 
 /**
