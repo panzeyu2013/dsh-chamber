@@ -65,6 +65,7 @@
 
 ## 5. 捆绑运行时
 
+- [ ] **新检出前置**：`pnpm run build:dsh-runtime`（`packages/dsh-runtime` 的 dist 不在仓；`bundle:dsh` 依赖其构建产物，缺失即失败）。
 - [ ] 换 pin 必须显式驱动版本：`DSH_CHAMBER_DSH_VERSION=<目标版本> pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile`（runtime 锁文件版本变化时必须 `--refresh-lockfile`，否则 `ERR_PNPM_OUTDATED_LOCKFILE`）。脚本的默认版本从**已提交的** runtime 锁派生（`lockfileDshVersion()`），只改锚不会让默认值变成目标版本，`--force` 会把旧版本原地刷新（版本已对齐且无需重装时 `--force` 可省）。
 - [ ] 运行时锁的 `patchedDependencies` 哈希随 `--refresh-lockfile` 派生：上游补丁字节（如 `@yao-pkg/pkg`）变化后旧锁哈希会让 `upstream-patches.test.mjs` 红，重生成即转绿（不手工改锁）。
 - [ ] C11 白名单按**新运行时锁**重 derive：`packages/control-plane/src/runtime-family.ts` 的 `RUNTIME_FAMILY_OPT_IN_ALLOWED` 只登记**实测在运行时闭包内**的 `dsh-experimental-*` 名字；运行时有增删时按新锁增删——源码线增删不影响该白名单（C11 的 F 分量只认运行时锁）。
@@ -73,6 +74,7 @@
 - [ ] 上游 patch 集合变化（§17-C）：先 `cmp` 新旧补丁文件内容——**文件名变化不等于语义变化**（同字节改名只换登记锚）；内容确有变化才按四类准入重导 / 重锚。随后对拍 `vendor/harness-checkout/{pnpm-workspace.yaml,patches/}` 的 `patchedDependencies` 与 registry 的 `patches`（`node --test scripts/upstream/registry/registry.test.mjs`），再跑 `pnpm --filter @dsh-chamber/desktop run bundle:dsh -- --force --refresh-lockfile` 让 runtime lock 记录 patch set；`node --test packages/desktop/scripts/upstream-patches.test.mjs` 在集合漂移或 runtimeClosure 条目未解析出 patch_hash 时红（pnpm 对「图外条目」与「在图但版本不符」的条目都只警告；本仓的 `assertPatchesApplied` 对**图内**条目缺失 `patch_hash` 直接红，补丁**字节**漂移由 `upstream-patches.test.mjs` 的 vendor sha256 对拍 + 冻结安装的 `patchedDependencies` 配置校验兜底）。
 - [ ] 根锁的孤立快照（无 importer / snapshot 引用边的 `packages:`/`snapshots:` 条目）pnpm 默认保留、不自动清：确需清理时按可达性删条目，并三项核验——`pnpm install --lockfile-only` 零 diff（幂等、不回填）、`CI=true pnpm install --frozen-lockfile` 成功、CI 三平台 frozen 安装绿；任何被回填的条目说明它确有解析边，以回填为准。
 - [ ] **Swift 本地能力载荷（升级同批）**：`packages/desktop/primary-runtime-lock.json` 的 `provenance.upstreamCommit` 必须等于新 `harness.commit`（`node packages/desktop/scripts/prepare-python-payload.test.mjs` 的锁步用例；`pnpm run test:desktop` 已包含），漏改即红；随后确认全量载荷计划仍可解析（`prepare-python-payload --dry-run --with-node --with-pnpm`，python+node+pnpm）且 office 资产仍能从新 pin 源物化（`prepare-office-assets --dry-run`）。payload 的 node / pnpm / python 与 office 资产 4 文件的 `--verify` 语义随 `pnpm run test:desktop`（scripts 组）复绿；Swift 单 Node 的 `build-sidecar --require-*` / `build-swift-app` 装配断言（payload 内唯一 Node、office-skills sibling、顶层无独立 Node 条目）随 darwin 上的 `pnpm run test:macos` 复绿。上游删除 / 改名 Office 技能文件、payload lock 结构或载荷布局时，先按 design 18 / 25 改脚本与测试，再动 pin；版本字面量仍只由 lock 承载，本清单不写。发布前的 pin 对齐机械核验见 [`pin-alignment-checklist.md`](./pin-alignment-checklist.md)。
+- [ ] `bundle:dsh` 完成后跑**运行期装载补丁锚点门**：`node scripts/upstream/verify/verify-runtime-plugin-patches.mjs --require`（对刚物化的 `packages/desktop/vendor/dsh` 产物；锚点缺失/重复/形态漂移即红 → 同批更新 `packages/renderer/src/client-plugin-patches.ts` 的补丁表，或上游已修时按 design 09 §4 的删除条件删条目）。
 
 ## 6. 回归
 
@@ -81,6 +83,7 @@
 - [ ] macOS 腿（darwin）：`pnpm run test:macos`——build-sidecar / build-swift-app 装配与打包锁步套件（chamber-lock 等 darwin 专属；payload / office-assets 脚本单测在 `test:desktop` 的 scripts 组，不在本腿）；前提缺失是 loud failure 而不是 skip。改过装配链时先 `pnpm run build:swift-app --dry-run --no-sign` 核对计划里的 sidecar 布局（payload 内唯一 Node、office-skills sibling、顶层无独立 Node 条目）。
 - [ ] 门禁复绿（§0 的四条）：`verify-upstream-touchpoints.mjs`（触点门全量；`--no-artifact-rebuild` 可跳产物重建）、`verify-registry.mjs`（改了 `registry.json` 必须 `registry-views.mjs --write`，生成块禁手改）、`check-anchors.mjs`（预算只降不升；迁移后 `--update-budget` 调低）、`verify-capabilities.mjs`（能力面对齐；`chamber-behind` / `chamber-ahead-broken` 先修消费面，`upstream-landed` 按条目的 `retireWhen` 排退役）。C11–C14 变红时先判上游漂移还是派生写错，再改派生（B₀ 快照 / F 来源 / S 注册表 / wire 镜像）。
 - [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>|<上一版 commit 短哈希>" packages/ scripts/ docs/ .github/ harness.commit` 仅剩注释与历史叙述；生产源码 / 脚本 / 配置里的「活」版本字面量必须登记在 C10 白名单，docs 的当前值以本仓全量 grep 为准（C10 不扫 docs）。
+- [ ] 运行期装载补丁锚点门已随 §5 以 `--require` 复跑；打包态 GUI 探针（eval 可用性 / 上传 200 NDJSON / served 文本一致性）按 [gui-acceptance-checklist](../acceptance/gui-acceptance-checklist.md) §4.3 执行。
 
 ## 7. 文档与记录
 
@@ -88,3 +91,4 @@
 - [ ] 触点结构变更走 registry：`registry.json` → `registry-views.mjs --write` → `verify-registry.mjs` 绿。
 - [ ] 引用基线版本的文档（design 09/11/17/18/20/24、根 README、DEVELOPMENT、desktop README、本目录）按**单源指针**更新（`harness.commit` / `packages/desktop/vendor/dsh/pnpm-lock.yaml`），**design/checklists 不写当前版本值**（docs/AGENTS §3）；历史叙述保留并按需标注「历史证据，不随本仓 pin 移动」；以全仓 `git grep <旧版本字面量>` 的命中清单为准（design 文档无门禁兜底）。
 - [ ] 遗留偏差登记进 [`../../progress/STATUS.md`](../../progress/STATUS.md)（只写仍 open 的项，不留已完成台账）；实机门禁按 release / acceptance 清单执行，不在 STATUS 登记。版本值不写进 checklist。
+- [ ] 运行期装载补丁的每 pin 复核证据（`verify-runtime-plugin-patches --require` 输出）随 PR 记录；删除条件与上游 seam 状态按 design 09 §4 与 [TODO.md](../../progress/TODO.md) A§17 更新。

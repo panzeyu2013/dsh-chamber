@@ -148,6 +148,16 @@
 | 快捷键持久化 | 改键 → 退出 → 重启；再制造写失败/坏文档 | 键位恢复；写失败可见且不假保存；坏文档不被覆盖 | [design 25 §8.4](../../design/desktop/25-macos-swift-native-shell.md) |
 | 全屏安装准备 | 全屏下点「重启并安装」；另一次人为拖 5s；全屏下点「更新（下载）」 | ≤5s 退全屏进确认；超时状态行显示超时文案并保持可重试；全屏下 Sparkle 标准窗可见/可操作（标准窗路径未前置准备，作为残余观察） | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
 
+### 4.3 运行期装载补丁探针（打包态）
+
+先决：打包态实例启用实验性 chat-import（插件页 More → 实验性插件），按插件页提示重启/等图刷新后重载页面；每步记「操作 → 观察到什么 → 证据路径」。
+
+1. **eval 可用性**：主窗口页面控制台执行 `new Function('return 1')()`，期望 `1`；抛 `EvalError` / CSP 拒绝 ⇒ 记「CSP/eval 不支持」并阻断后续（本探针面 = design 09 §4 的 classic-script 与 CSP `'unsafe-eval'` 前提，与锚点无关）。
+2. **上传路由**：侧栏 New Session 行点导入钮、选 <300 MiB 的导出 ZIP；DevTools Network 断言 `POST /api/i/<源 id>/api/deepseek-chat-import/archive?workspaceId=…` 返回 200 且 `application/x-ndjson`（若干 progress 行后 1 条 outcome 行）。负向对照：控制面根 `POST /api/deepseek-chat-import/archive` ⇒ 404 JSON；>300 MiB ⇒ 413。
+3. **served 文本一致性**：经代理取该实例 `GET /api/i/<源 id>/plugins/??@deepseek-ai/dsh-deepseek-chat-import/client.js&rev=…` 的响应文本，与 `packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh-deepseek-chat-import/lib/client.js` 按同一 serving 变换（剥 trailer / 补换行）后比较 sha256（变换实现单源 = `verify-runtime-plugin-patches.mjs`；未变换字节直接比 sha 不成立）。
+4. **失败分类**：① 步骤 1 失败 ⇒ eval/CSP 面；② 连接页出现 `bundle-load-failed` 且诊断点名补丁 `reason`/`anchors` ⇒ 锚点或 URL 形态漂移，按 design 09 §4 更新补丁表；③ 上传 404 ⇒ 补丁未生效或前缀错误（先核步骤 2 的 URL）；④ 413 ⇒ 上传超代理上限（登记 512/300 MiB 偏差，不属本机制失败）。
+5. **gateway 形态 smoke**：gateway 页面（官方前端、单实例）启用该 bundle 后按步骤 2 上传一次；URL 无 `/api/i/` 前缀（root 直达），期望同样 200 NDJSON（验证「gateway 不需要该机制」的契约）。
+
 ## 5. 证据与记录纪律
 
 - PR 里附 `gui-live-report.md`（或 `.json`）与 `gui-walkthrough-report.json` + 关键截图；目检结论逐条一句（「看了什么、看到什么、哪条未判」）。

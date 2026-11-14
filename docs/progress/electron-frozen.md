@@ -38,6 +38,8 @@
 > 说明：本表的 `packages/desktop/electron/` 路径是归档迁移后的落位；迁移前旧路径为
 > `packages/desktop/{main.ts,electron-edges.ts,preload.cts}`，两者内容一致，旧路径只留在 git 历史中。
 
+**冻结腿继承的上游修复（本仓不移植）**：vendor `apps/desktop/installer/restart-status.h` 的 Windows 更新重启状态窗 cwd 修复（`CreateProcessW` 的 `lpCurrentDirectory` 改指 Windows 系统目录，避免状态窗以安装目录为 cwd 钉住安装器的目录 rename ⇒ 应用内更新失败、应用不自动重开）随 pin 在 vendor 树内前移，属**冻结的 Windows 安装/更新腿**；本仓该腿冻结，且无 NSIS 目录 promotion、无重启状态助手实现（冻结更新链走 electron-updater `quitAndInstall`）⇒ **无对应实现、不移植**，也不新增兼容代码；复活 Windows 腿时按 §6 从 pin 自动取得该修复，并在 §6 第 5/8 步把「状态窗 cwd / 目录 promotion」纳入复核。
+
 ## 3. 仍共享的契约（不冻结）
 
 | 契约 / 文件 | 单源与落点 | 为什么必须继续维护 |

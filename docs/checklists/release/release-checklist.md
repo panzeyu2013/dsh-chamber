@@ -40,6 +40,7 @@
 - [ ] 运行时 pin 对齐（只读）：`node scripts/release/preflight/verify-pin-alignment.mjs` 全绿；升级过 pin 的版本同批执行 [pin-alignment-checklist.md](../upgrade/pin-alignment-checklist.md)。
 - [ ] vendor 树由 `node scripts/dev/bootstrap/ensure-harness-vendor.mjs` 建链，且与 `harness.commit` 一致；构建期产物（C8）由 `node scripts/dev/bootstrap/ensure-artifacts.mjs --check` / 全新重建核对。
 - [ ] 上游触点面（改了 pin 或触点时）：`node scripts/upstream/registry/verify-registry.mjs`、`node scripts/upstream/anchors/check-anchors.mjs`、`node scripts/upstream/verify/verify-upstream-touchpoints.mjs`、`node scripts/upstream/verify/verify-capabilities.mjs` 全绿（升级流程见 [dsh-upgrade-checklist.md](../upgrade/dsh-upgrade-checklist.md)）。
+- [ ] 运行期装载补丁锚点门：`node scripts/upstream/verify/verify-runtime-plugin-patches.mjs --require` 通过（`bundle:dsh` 产物已物化后跑；升级阶段步骤见 [dsh-upgrade-checklist.md](../upgrade/dsh-upgrade-checklist.md) §5）。
 - [ ] ARCHIVED（本版不执行）：Electron 侧 `build.files` / `extraResources` / dmg/zip feed 的旧清单与 revive 基线保留在 [electron-frozen.md](../../progress/electron-frozen.md) §5，不随发布执行。
 
 ## 3. 精确发布提交上的全量套件（§3 = 完整单测，不在 preflight 里跑）
@@ -58,6 +59,7 @@
 - [ ] 产物名义校验：`node scripts/release/preflight/release-artifacts.mjs <版本> --check-dir macos/release`（native 产物命名/清单；Electron 名族为 ARCHIVED 复活基线）。
 - [ ] 编译 sidecar 冒烟：`pnpm run test:sidecar:compiled`（`compiled-sidecar-smoke.mjs`，需已构建 sidecar）。
 - [ ] 原生装配门：`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`；真机/打包态 GUI 走查按 [gui-acceptance-checklist.md](../acceptance/gui-acceptance-checklist.md) §4.2 执行并留证据。
+- [ ] 打包态运行期装载补丁探针：按 [gui-acceptance-checklist.md](../acceptance/gui-acceptance-checklist.md) §4.3 执行（eval 可用性 + 上传 200 NDJSON + served 文本一致性 + 失败分类），gateway 形态补一步 smoke；本项为发布前必验。
 - [ ] 打包态真机验收（发布阻断项，本清单登记）：无系统 node/python 的机器上 Office 能力（`load_workspace_dependencies` + docx 编辑/渲染/PDF 导出）与 primary-runtime 首装；不得以 dev 状态代替打包态。
 - [ ] 更新链（ARCHIVED 部分不执行）：Sparkle stable/beta 通道、appcast 双 feed、beta 滚动 feed 的形状与签名按 [design 25](../../design/desktop/25-macos-swift-native-shell.md) §7 与 §6 验证；Electron electron-updater feed 为 ARCHIVED（[electron-frozen.md](../../progress/electron-frozen.md)）。
 

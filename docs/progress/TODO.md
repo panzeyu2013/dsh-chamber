@@ -207,6 +207,8 @@ search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 
 conversation region 分支）；本壳未声明该洞、不渲染，registry 对上游 `panel-pins.ts` 登记 `dropped`。候选 A 采纳（声明洞 + 渲染 More +
 消费面板 pin；侧栏新增内容须先交用户裁决）；B 维持不采纳（当前；gateway 官方侧栏仍显示）。证据：`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 子洞表、registry `dropped`。
 
+**U9 New Session 的 access 门**：上游侧栏以 `useRemoteAccess('session/create')` 作为 New Session 的渲染门（`SidebarRoot` 与 `HeaderLeadingControls` 各一处），本仓三处入口（`SidebarRoot` 行、字标快捷按钮、`shell.leading` 单席）均无该门 ⇒ 无权限 Peer 仍看到入口。候选 A 与上游同门（三处共用一条 access 快照，需接入 `remoteAccess` 注入面）；B 维持现状（当前）。证据：STATUS §2.1 U9。
+
 #### 15.2 维持的差异与裁决
 
 - **品牌/文案/workspace 卡**：mark 保持 chamber `BrandWordmark`（rail 用上游 FishLogo）、name 洞空回退；搜索 aria 用 `search.sessions.aria`、workspace 复制用 `action.copy`；workspace 卡维持标题+路径+创建时间，不加会话数行。
@@ -226,11 +228,16 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 2. 非导出纯函数 → 逐字拷入 + 出处注 + 语义锁（先例 `session-title-marquee.ts`）；
 3. 结构不同可见面 → 只复用片段（CSS/JSX/字典键），逐值对照。
 
+#### 15.5 同步采纳的上游扩展点
+
+- **`sidebar.session.action`（New Session 行 HOC 装饰座）**：采用上游形态——owner props `{ wide }`、占用者收 `children` 并返回「包裹后的内容 + 自有控件」、只装饰 `SidebarRoot` 的 New Session 行（字标快捷按钮 / `shell.leading` 单席 / workspace 行 `+` 不装饰）；契约见 design 05 §2、几何见 design 06 §7。本项不再是差异候选。残留 = 旧版 document-relative 插件的运行期 base 补齐与上游 seam（A§17）。
+
 ### 17. 客户端插件页面 base path 上游化
 
 > 阻塞来源 = 上游；chamber 侧公开契约 v1 见 design 09 §4，本条只记上游化路径。
 
 - **17.1**：上游 `ConnectionInstallOptions` 无 `basePath`（仅 chamber fork 有），且官方 web shell 的插件契约仍假定页面由宿主在 origin root 提供；上游若引入「页面挂载前缀 / 宿主路由基址」通用 seam（client ctx 服务或 boot 配置），chamber 改为消费该键并在至少一个正式发布版本内双读 `chamberBasePath` 后删私有键（CHANGELOG 为发布单源）。触发 = 上游接受 RFC 或 dsh 发布该 seam；退出 = 私有键删除、design 09 §4 改指上游键。
+- **17.2**：旧版 document-relative 插件的运行期 base 补齐（design 09 §4）是上游 seam 缺失期的有界实现：页面装载期对登记 bundle 做两锚点文本补丁（fail-closed，锚点失效即拒绝装载）。**删除条件 = 17.1 的上游 seam 落地**：上游发布「宿主路由基址 / 页面挂载前缀」通用 seam 后，删除补丁条目与补丁表（`packages/renderer/src/client-plugin-patches.ts`）并停用每 pin 锚点 gate（`node scripts/upstream/verify/verify-runtime-plugin-patches.mjs --require`，步骤见 [dsh-upgrade-checklist](../checklists/upgrade/dsh-upgrade-checklist.md) §5/§6）；`chamberBasePath` 按 17.1 的双读期结束后删私有键（CHANGELOG 为发布单源）。
 
 ## B. 平台、契约索引与冻结基线（B 类）
 

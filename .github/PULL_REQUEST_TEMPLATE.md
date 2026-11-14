@@ -45,6 +45,7 @@
 - [ ] 无上游接触面改动（新增 `@deepseek-ai/*` 深导入、改 fork 副本、镜像 wire、新再生物、covered/assembly 行）——或已登记进 `scripts/upstream/registry/registry.json` 并重生成生成块
 - [ ] `node scripts/upstream/verify/verify-upstream-touchpoints.mjs` 通过（若改动触及触点面）
 - [ ] `node scripts/upstream/registry/verify-registry.mjs` 与 `node scripts/upstream/anchors/check-anchors.mjs` 通过（结构登记改动时；新锚点写 `path#symbol`）
+- [ ] 运行期装载补丁不进 registry（design 09 §4）：若改/删 `packages/renderer/src/client-plugin-patches.ts`，在 PR 描述写清删除条件与每 pin 复核证据（`node scripts/upstream/verify/verify-runtime-plugin-patches.mjs --require`）
 
 ## Risks and failure behavior
 
