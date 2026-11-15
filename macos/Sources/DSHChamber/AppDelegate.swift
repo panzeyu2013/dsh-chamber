@@ -460,8 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // app.exit(1)）：shim 资源缺失/为空时绝不带着无桥页面开窗。
         let shimSource = MainWindowController.readShimSource() ?? ""
         if let shimFailure = MainWindowController.shimStartupFailure(source: shimSource) {
-            // 内部资源名（bridge-shim.js）与 bundle 名只进落盘日志，不进用户
-            // 可见提示框；考古面在 <userData>/logs/shell.log。
+            // 内部资源名只进落盘日志（<userData>/logs/shell.log），不进用户可见提示框。
             ShellLog.shared.append("[shell] 内部 shim 资源名："
                 + "\(MainWindowController.shimResourceName)（bundle=\(ChamberResources.bundleName)）")
             fatalStartup(shimFailure)
@@ -471,9 +470,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         controller.closeDelegate = self
         // 页面事实（语言/主题）变化 → 原生席位（菜单重建 + 外观 + 进程语言）。
         controller.pageFactsSink = self
+        shellLog(ShellPerf.bootLine("webViewReady"))
         mainWindowController = controller
-        // 首个已提交内容（didCommit，含失败说明页）才亮出主窗——
-        // 装配期绝不无条件 makeKeyAndOrderFront（那会先亮出 1~2s 无内容空窗）。
+        // 首个已提交内容（didCommit，含失败页）才亮主窗；装配期不无条件 makeKeyAndOrderFront。
         controller.onFirstCommittedContent = { [weak self] in
             self?.presentMainWindow()
         }
@@ -538,6 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 // catch 路径里，恢复重启腿读的是 self.supervisor（nil 会被误判成
                 // 「本进程未创建 supervisor、没取过目录锁」并带锁重启）。
                 self.supervisor = supervisor
+                shellLog(ShellPerf.bootLine("sidecarSpawned"))
                 try supervisor.start()
             } catch {
                 // 二次直接启动：Electron 的

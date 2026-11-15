@@ -141,6 +141,8 @@
 |---|---|---|---|
 | 系统关机/注销豁免 | 打包态运行本地实例后注销/关机；再正常 Cmd+Q 一次 | 注销/关机无退出确认、`shell.log` 有 willPowerOff 行；正常 Cmd+Q 确认不变 | [design 14 §D2](../../design/runtime/14-sleep-background.md) |
 | 前台/唤醒补充检查 | 隐藏/最小化后回前台、系统唤醒各一次（距上次检查 ≥600s 或启动后首检；否则 nudge 按判据不触发属预期） | `shell.log` 有检查相位、无新弹窗、`downloaded` 不被改回 `available` | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
+| 冷启动首帧（2xx 即开载） | 打包态连跑 5 次：`node scripts/perf/collect-boot.mjs --runs 5 --yes` | 每轮 `firstFrame`（document commit）与 `pageReady`（renderer handshake）两列；窗口出现后本地实例行先 `starting`、宿主 ready 后自动挂载，不出现「无插件」永久态；另做两次故障目检：① 初次启动即让本地宿主失败（坏 profile patch）② 宿主 ready 后再让它进入 `restart-exhausted`，两次都要能回到可操作的恢复入口 | [design 25 §3.3](../../design/desktop/25-macos-swift-native-shell.md) |
+| 隐藏期降载 | 最小化与「另一可见 Space」各 60s；打包态读 Activity Monitor 的 WebContent CPU/内存 与 `pmset -g assertions`，另可带 `DSH_CHAMBER_SHELL_DEBUG=1` 的 dev 构建读 `[shell-fps]`（打包态不注入该探针） | 隐藏期无前台动画/发布推进（design 14 §D1 行为契约）；读数与工况写进 PR 报告（不写 STATUS——验收结果不属于进度记录）；阈值在读数定稿后回填 design/STATE 之外的单源 | [design 14 §D1](../../design/runtime/14-sleep-background.md) |
 | 失败技术详情 | 一次下载/检查失败后看失败行 | 可展开「技术详情」（已脱敏、无弹窗） | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
 | 初始/最小视口 | 打包态首启；拖到最小尺寸 | 初始视口 1280×792、最小 520×572（目检） | [design 25 §5.6](../../design/desktop/25-macos-swift-native-shell.md) |
 | `dsh-chamber://open` 深链 | 已有主窗（含最小化）时打开 `dsh-chamber://open`；再试非法变体 | 窗口前置/还原，不导航、不启 VS Code；非法变体 loud | [design 16 §3.1](../../design/desktop/16-vscode-deeplink.md) |

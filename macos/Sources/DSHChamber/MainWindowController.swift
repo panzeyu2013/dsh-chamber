@@ -1115,11 +1115,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             case giveUp
         }
 
-        /// The local host starts asynchronously after the sidecar announces ready. A terminal
-        /// state must still expose the management UI so the user can inspect/recover it; transient
-        /// states stay behind the first navigation until the host is serviceable.
+        /// The local host starts asynchronously after the sidecar announces ready. `ready` and the
+        /// two in-flight words navigate at once (page skeleton; the per-instance serving gate takes
+        /// over the local graph fetch); a terminal state must still expose the management UI.
         enum LocalReadiness: Equatable {
-            case ready
+            /// 立即开载；status 原样进日志（在途词不再伪装成 ready）。
+            case ready(status: String)
             case waiting(status: String)
             case showRecovery(status: String)
         }
@@ -1149,14 +1150,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                   !status.isEmpty else {
                 return .waiting(status: "unavailable")
             }
-            // 静止态 vs 在途态（design 25 §3）：只有**有进展在途**的两个词才等待，其余一律立即
-            // 呈现（ready → 应用；stopped/error/degraded/restart-exhausted → 控制面诊断与恢复入口）。
-            // stopped / restart-exhausted 是**真终态**（与 client-core 的 MANAGED_RUNTIME_DOWN_STATES
-            // 同词表）：等它们永远不会结束，只会把「启动实例」这个唯一的恢复入口一起藏掉。
-            // 未知词按静止处理——无法证明它在途，就不能无限等待（无兜底、无第二个时间所有者）。
+            // 控制面 2xx 即开载（design 25 §3.3 首载门）：ready 与两个在途词都**立即**导航——
+            // 页面自己画骨架，本地实例取图由 waitForServing 承接（预算 SERVING_WAIT_MS=BOOT_TIMEOUT_MS，
+            // host-graph 另有 70s 自愈预算）；把窗口压在宿主就绪上会把首帧推迟整段冷启动（实测 3.7s）。
+            // stopped/restart-exhausted 等真终态仍立即呈现（等它们等于藏掉恢复入口）；未知词按静止处理。
             switch status {
-            case "ready": return .ready
-            case "starting", "restarting": return .waiting(status: status)
+            case "ready", "starting", "restarting": return .ready(status: status)
             default: return .showRecovery(status: status)
             }
         }
@@ -1212,11 +1211,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 let statusCode = (response as? HTTPURLResponse)?.statusCode
                 if let statusCode, Self.isHealthyResponse(statusCode: statusCode) {
                     switch Self.StartupLoadPlan.localReadiness(statusCode: statusCode, body: data) {
-                    case .ready:
+                    case .ready(let status):
                         self.localReadinessProbeAttempts = 0
                         self.lastLocalReadinessStatus = nil
                         self.lastLocalReadinessLogAt = nil
-                        self.loadControlPlaneAfterProbe(localStatus: "ready")
+                        self.loadControlPlaneAfterProbe(localStatus: status)
                     case .waiting(let status):
                         self.scheduleLocalReadinessRetry(status: status)
                     case .showRecovery(let status):

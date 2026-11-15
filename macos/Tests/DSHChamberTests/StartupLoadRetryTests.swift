@@ -153,20 +153,21 @@ final class StartupLoadRetryTests: XCTestCase {
                       "sidecar fatal 必须停重试并立即显示真实原因")
     }
 
-    // MARK: - 首屏就绪门：静止态 vs 在途态（design 25 §3）
+    // MARK: - 首屏就绪门：2xx 即开载（design 25 §3.3）
 
     private func healthBody(_ status: String) -> Data {
         Data("{\"ok\":true,\"dsh\":{\"status\":\"\(status)\",\"port\":0}}".utf8)
     }
 
-    func testLocalReadinessWaitsOnlyForInFlightStates() {
-        // 在途 = 有进展正在进行；这两个词之外的任何词都不能无限等待。
-        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody("starting")),
-                       .waiting(status: "starting"))
-        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody("restarting")),
-                       .waiting(status: "restarting"))
-        XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody("ready")),
-                       .ready)
+    func testLocalReadinessNavigatesOnEveryServiceableOrInFlightState() {
+        // 首载门 = 控制面 2xx：ready 与两个在途词都立即导航（status 原样进日志，不伪装成 ready）。
+        // 本地实例的取图由渲染端每实例服务门承接（waitForServing 等 ready，预算
+        // SERVING_WAIT_MS = BOOT_TIMEOUT_MS；host-graph 另有 70s 自愈兜底），
+        // 把窗口压在宿主就绪上会把首帧推迟宿主冷启动的整段。
+        for status in ["ready", "starting", "restarting"] {
+            XCTAssertEqual(MainWindowController.StartupLoadPlan.localReadiness(statusCode: 200, body: healthBody(status)),
+                           .ready(status: status), "\(status) 必须立即开载")
+        }
     }
 
     func testLocalReadinessPresentsEveryQuiescentState() {
