@@ -25,6 +25,7 @@ import {
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { GRAPH_RETURN_PROBE_INTERVAL_MS, planGraphReturn, type GraphRebootMark } from '../graph-return.ts'
+import { shouldRunBackgroundPhase } from '../background-phase.ts'
 import { planDegradedSelfHeal, type ShellRetryDispatch } from '../source-readiness.ts'
 import type { ShellState } from '../shell.ts'
 
@@ -67,6 +68,9 @@ export function useShellRetry(deps: ShellRetryDeps): void {
   latestRef.current = { servers, shellStates, pluginDiagnostics }
 
   const graphReturnPass = useCallback((): void => {
+    // 前台相位门（design 14 §D1）：隐藏期不做每源 60s 的图返回探针（经 SSH 的 unary）。
+    // 不 clearInterval：恢复后由下一次状态变化或下一拍补，最坏延后一个 interval（≤60s）。
+    if (typeof document !== 'undefined' && !shouldRunBackgroundPhase(document.visibilityState)) return
     const plan = planGraphReturn({
       servers: latestRef.current.servers,
       shells: latestRef.current.shellStates,

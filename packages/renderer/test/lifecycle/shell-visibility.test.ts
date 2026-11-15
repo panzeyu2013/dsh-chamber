@@ -126,7 +126,7 @@ test('恢复补偿：宿主可见边沿也补偿一轮，且不新增第二前�
   assert.match(compensation, /visibilitychange/, '页面级 visibilitychange 补偿不得丢失')
 })
 
-test('接线锁：background-phase 单一叠加壳可见性，七个相位消费方不另开第二判断', () => {
+test('接线锁：background-phase 单一叠加壳可见性，十个相位消费方不另开第二判断', () => {
   const backgroundPhase = readRepoFile('packages/renderer/src/background-phase.ts')
   assert.match(backgroundPhase, /isShellVisible\(\)/, '前台相位门必须叠加壳可见性事实')
   assert.match(backgroundPhase, /visibilityState === 'visible'/, '文档可见性判定必须仍在门内')
@@ -138,6 +138,11 @@ test('接线锁：background-phase 单一叠加壳可见性，七个相位消费
     'packages/renderer/src/app-hooks/use-host-health-stream.ts',
     'packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts',
     'packages/renderer/src/app-hooks/use-resident-guard.ts',
+    // design 14 §D1：1Hz 会话健康采样走统一门（Swift 腿 visibilityState 恒 visible）。
+    'packages/renderer/src/components/InstanceView.tsx',
+    // 隐藏期不做每源 60s 图返回探针 / 静默对账（design 14 §D1）。
+    'packages/renderer/src/app-hooks/use-shell-retry.ts',
+    'packages/renderer/src/session-facts-source.ts',
   ]
   for (const consumer of consumers) {
     const source = readRepoFile(consumer)

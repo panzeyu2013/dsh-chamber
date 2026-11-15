@@ -14,6 +14,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { clearHostPathScope, publishHostPathScope } from '../host-path-scope.ts'
+import { shouldRunBackgroundPhase } from '../background-phase.ts'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 import { createListenerSet, dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-core'
 import {
@@ -244,6 +245,11 @@ export default function InstanceView({
       scheduleStallRef.current = null
       inputBlockStallRef.current = null
       resyncDispatchedForRef.current = undefined
+      // The open-health ledger is also a gap: a pre-gap `since` (e.g. a loading face that
+      // spans a 10-minute occlusion) would report a 10-minute stall on the first visible
+      // sample and could trigger an open-stall resync. Dropping it makes that first sample
+      // a fresh reading.
+      sessionOpenHealthRef.current = null
     }
     const sample = (): void => {
       // Hidden is a gap like a seat switch: evidence sampled before an arbitrary
@@ -251,7 +257,10 @@ export default function InstanceView({
       // fire reboot/reload on pre-gap streaks. Re-anchor instead of freezing.
       // The gate is FIRST: a sample that already read health, advanced the open
       // ledger or wrote state is not a gap any more.
-      if (document.visibilityState === 'hidden') {
+      // 统一前台相位门（页面可见 ∧ 壳窗口可见未遮挡，design 14 §D1）：
+      // Swift 腿遮挡时 document.visibilityState 仍为 visible，单读页面状态会让本门失效。
+      // 隐藏期只清三处 re-anchor 引用，不读健康/不推 ladder/不 setState；间隔保留（不 clear）。
+      if (typeof document !== 'undefined' && !shouldRunBackgroundPhase(document.visibilityState)) {
         reanchorAfterHiddenGap()
         return
       }
@@ -384,10 +393,7 @@ export default function InstanceView({
     // first must not decide anything either) and samples once on resume, so the
     // first visible sample is a fresh reading rather than a pre-gap conclusion.
     const onVisibilityChange = (): void => {
-      if (document.visibilityState === 'hidden') {
-        reanchorAfterHiddenGap()
-        return
-      }
+      if (!shouldRunBackgroundPhase(document.visibilityState)) { reanchorAfterHiddenGap(); return }
       sample()
     }
     sample()

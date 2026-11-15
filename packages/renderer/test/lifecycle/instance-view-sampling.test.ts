@@ -73,8 +73,12 @@ function mountSampler(options: SeatOptions = {}) {
     inputBlock: { current: { sessionId: 's1', start: 12 } as unknown },
     resync: { current: 13 as unknown },
   }
+  // 统一前台相位门（背景相位 = 页面隐藏 ∧ 壳窗口遮挡/不在屏，design 14 §D1）：
+  // 桩保持与真实实现同形——页面可见但壳不可见时也必须判为背景相位。
+  let shellVisible = true
   const cleanup = scopedRun({
     document: documentStub,
+    shouldRunBackgroundPhase: (state: string): boolean => shellVisible && state === 'visible',
     active: options.active ?? true,
     shell: { booted: options.settled ?? true, error: undefined },
     currentSessionId: options.sessionId === null ? undefined : (options.sessionId ?? 's1'),
@@ -109,6 +113,8 @@ function mountSampler(options: SeatOptions = {}) {
     phaseWrites: () => counters.phaseWrites,
     tick: (): void => { for (const interval of intervals) interval.handler() },
     setVisible: (visible: boolean): void => { documentStub.visibilityState = visible ? 'visible' : 'hidden' },
+    /** 只翻转壳事实（document.visibilityState 保持 visible）——Swift 腿的真实隐藏形态。 */
+    setShellVisible: (visible: boolean): void => { shellVisible = visible },
     fireVisibility: (): void => {
       for (const handler of listeners.get('visibilitychange') ?? []) handler()
     },
@@ -145,6 +151,26 @@ test('only an on-screen, settled seat with a session mounts the 1 Hz sampler', (
   seated.dispose()
   assert.equal(seated.listenerCount('visibilitychange'), 0, 'disposing detaches the visibility listener')
   assert.equal(seated.clearedIntervals().length, 1, 'disposing clears the 1 Hz table')
+})
+
+test('an occluded shell (page still visible) re-anchors and reads nothing', () => {
+  // design 14 §D1：WebKit 在遮挡/另一 Space 下 document.visibilityState 仍是 visible，
+  // 单读页面状态绝不能让 1Hz 采样继续读健康（Swift 腿的真实形态）。
+  const seated = mountSampler()
+  const readsAtMount = seated.reads()
+  seated.refs.schedule.current = { sessionId: 's1', start: 31 }
+  // A stale open-health ledger (loading since before the gap) must be dropped too: keeping it
+  // would report the whole gap as an open stall on the first visible sample.
+  seated.refs.sessionOpenHealth.current = { sessionId: 's1', state: 'loading', since: 0, now: 0 }
+  seated.setShellVisible(false)
+  seated.tick()
+  assert.equal(seated.reads(), readsAtMount, 'an occluded tick performs no health read')
+  assert.equal(seated.refs.schedule.current, null, 'the occluded tick re-anchors the streaks')
+  assert.equal(seated.refs.sessionOpenHealth.current, null, 'the occluded tick drops the open-health ledger')
+  seated.setShellVisible(true)
+  seated.tick()
+  assert.equal(seated.reads(), readsAtMount + 1, 'the next tick samples again once the shell is visible')
+  seated.dispose()
 })
 
 test('hidden re-anchors before any health read, ladder advance or setState', () => {

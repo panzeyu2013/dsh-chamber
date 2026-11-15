@@ -73,6 +73,7 @@ import {
   type SessionTurnEndCause,
   type SessionTurnEndKind,
 } from '@dsh-chamber/dsh-chamber-client-core/session-state'
+import { shouldRunBackgroundPhase } from './background-phase.ts'
 import { isWatermark } from './watermark.ts'
 import { isPlainRecord } from './plain-record.ts'
 import { hadSchedulingGap, recordEvidence } from '@dsh-chamber/dsh-chamber-client-core'
@@ -1106,6 +1107,9 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     if (silenceMs <= 0 || state.silenceTimer !== null) return
     state.silenceTimer = setInterval(() => {
       if (state.stopped) return
+      // 前台相位门（design 14 §D1）：隐藏期不做静默对账（会经 SSH 拉整量快照）。
+      // 定时器不 clear：恢复后的第一拍自然补一次对账。
+      if (typeof document !== 'undefined' && !shouldRunBackgroundPhase(document.visibilityState)) return
       const at = now()
       if (at - state.lastFrameAt <= silenceMs) return
       const transportAlive = state.lastLivenessAt > 0 && at - state.lastLivenessAt <= silenceMs
