@@ -10,6 +10,17 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [0.4.5-beta.7] - 2026-11-15
+
+### Changed
+- **The window no longer waits for the local host to be ready** - any 2xx answer from the control plane (`ready` and the in-flight `starting`/`restarting`) navigates immediately, the window paints its own skeleton, and the local instance joins once the host is actually ready; the first frame used to sit behind the whole local host cold start (3.7s measured on this machine). Host failures and unknown phases still surface the actionable diagnostic/recovery entry at once (design 25 §3.3).
+- **Two waits leave the cold-start critical path** - the login-shell environment probe now runs in parallel with the sidecar assembly (~0.65s probe, 1.19s cold tail, ~1.1s assembly), and the identity probe retries immediately once after a 401 acquires the cookie instead of sleeping a fixed 500ms. Only that one retry is free: a persistent 401 still backs off at 500ms, so the probe cannot become a hot loop (design 02 §3.2).
+- **Page-level polling and recovery compensation also stop while the window is hidden or occluded** - continuing the 0.4.5-beta.6 hidden-window work: the 1Hz session-health sampler, the fact-silence reconciliation and the graph-return probe now go through the unified foreground phase gate (page visible and shell window not occluded), because the Swift leg keeps the page's own `visibilityState` at `visible` while occluded; coming back re-anchors the sampling and the open-health ledger so the gap is not counted as a failure (design 14 §D1).
+- **WebSocket frame scanning is no longer byte-by-byte** - a non-CLOSE frame skips its payload in one step (cross-chunk frames only subtract what the chunk carried; CLOSE still takes the byte path for the close code), so a busy long-lived instance proxy no longer makes a full byte pass per frame.
+
+### Fixed
+- **Restarting the runtime over a UDS tunnel no longer answers ECONNREFUSED** - the restart request forwards `socketPath` again, so an uploaded runtime bundle over an SSH tunnel takes effect immediately instead of waiting for the next natural spawn.
+
 ## [0.4.5-beta.6] - 2026-11-14
 
 ### Added
