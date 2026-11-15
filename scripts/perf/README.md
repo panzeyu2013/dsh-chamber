@@ -23,6 +23,7 @@ paint/resource，buffered），boot/eval 每个 run 还执行 `Page.reload`（sw
 | `disk-walk-baseline.mjs` | T3 磁盘统计曲线：合成 .pnpm-store 形态 fixture（深层嵌套/符号链接/硬链接去重面）上同步 vs 异步实现描点（`--async` 切换测量目标） |
 | `measure-ui.mjs` | **稳态基线尺子**（2026 性能整改验收）：附加运行中实例，采 DOM 节点/挂载视图数/JS 堆基数 + 空闲 N 秒长任务 + 合成输入帧间隔 + 可选 5s CPU profile，输出固定 schema 基线 JSON 供 A/B 对照 |
 | `switch-frame-probe.mjs` | 切源帧判据采集：注入 `perf-marks` 标记 → 采样帧 → 用 `switchFrameVerdict` 判「无可见视图帧 / 平色 #fff 帧 / 主题不匹配进度面」三形态白帧（Leg A rAF + Leg B 屏幕录制 `--screencast`） |
+| `collect-boot.mjs` | **启动账采集（现行 Swift 腿）**：`[perf] boot` 的壳侧 6 锚点（`logConfigured`/`webViewReady`/`sidecarSpawned`/`sidecarReady`/`controlPlaneReady`/`firstFrame`）+ `[perf] sidecar` 的 7 分段标记与 `pageReady`（renderer handshake）。**`firstFrame` = document commit（窗口呈现），`pageReady` = 页面可用**，两者分开汇报。按每次重启的字节偏移切片（轮转安全），p50/p95 用 nearest-rank。会重启 app：必须 `--yes`；退出先等进程真正退出（最多 15s，优雅清理最坏 ~7s），再 SIGTERM，SIGKILL 另需 `--force-quit`；`--self-test` 跑解析/轮转/分位自检 |
 | `budget-check.mjs` | **分档预算验收判据**（plan 决定 9）：读入基线 A 与候选 B 两份采集 JSON，对「每壳 DOM + p95 帧时 + 长任务 + 堆 + 档位一致性」逐项给上限与判决，超限 exit 1；`--warn-only` 只看不拦，`--self-test` 跑内置 6 例 |
 | `data/*.json` | 各轮测量落盘（基线/中间态/after），`gitignore` 白名单入库供前后对照 |
 
