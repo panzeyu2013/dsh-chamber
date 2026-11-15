@@ -163,7 +163,8 @@ wrapper 准备失败只响亮记一行、PATH 原样保留（上游的ENOENT/127
 ```
 starting ──① TCP connect 127.0.0.1:P（250ms 间隔轮询，总窗口 90s = LISTEN_WAIT_MS）
               └─ 失败/超时 → 若子进程已退出：启动失败；否则继续轮询
-          ──② 统一身份探针（90s 窗口内无限重试，重试间隔 500ms）→ 成功 = ready
+          ──② 统一身份探针（90s 窗口内无限重试；浏览器鉴权 cookie 刚 mint 的
+             第一次重试立即发起，其余失败按 500ms 退避）→ 成功 = ready
               └─ 失败（非 JSON / 非 200 / 契约不匹配）→ 重试
                  —— TCP 通但身份探针失败 = 端口被无关服务占用（协议不匹配），
                     杀子进程 → 按 §2.2 以 P+1 重试
@@ -174,6 +175,8 @@ ready
 - 就绪失败（超时 / 进程退出 / 重试耗尽）：显式启动失败，附完整启动输出与 `--dump-config`建议（`dsh --profile web --dump-config` 检查组合树）。
 - **探针 = 统一身份契约（rpc-envelope.ts 单源；`probeHostIdentity`）**：POST `/api/session/canOpenWorkspacePath`（SessionController `session` namespace 零参 boolean Remote，钉住上游 dsh ≥ 0.1.2-rc.1；纯同步平台检测，不读会话数据、不激活 Agent、无 IO），200 + rpcId 回显 + `result.ok === true` + boolean value（**true/false 均健康**）即通过；响应上限 64 KiB（探针专用 per-call cap）。HTTP 404 = 部分 0.1.2-alpha.x 早期树 / dsh < 0.1.2-rc.1（无此方法）→ 自动回退 legacy `session/list`（默认 1 MiB 上限，与旧版语义逐位一致，老树不劣化）；**回退成功后**写 warning（双 404/transient 安静；每连续 legacy 期至多一条——STATUS 挂账⑦），使上游未来方法漂移可见、不静默；404 之外（401 认证门、5xx、超时、畸形）一律如实失败、不回退。
 - 身份探针响应为固定小体积 boolean，只用于就绪与健康探活，不作任何会话级消费（协议细节以 dsh wire /vendor 源码为权威）——探针体积与宿主会话数量彻底解耦；控制面 unary fetch carrier 对单个 JSON 响应实施流式字节上限（身份探针 64 KiB / legacy 回退 1 MiB），声明长度与实际流均受约束，异常宿主不能借探活把响应无界缓冲进控制面。
+
+**Rejected alternatives（重试节奏）**：① 统一去掉 500ms 退避——未就绪或端口被无关服务占用时会把有界重试变成热自旋，故只免「cookie 刚 mint」这一次；② 把退避降到 100ms——对 401 之外的真实失败（5xx/畸形）没有收益，只是把重试次数抬高一个量级。
 
 ### 3.3 进程记录文件（managed-dsh/<pid>.json）
 

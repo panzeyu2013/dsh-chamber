@@ -205,9 +205,16 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
   // 主进程白名单/去重/裁决 + 原生通知；invoke 实参对象解构在处理器内完成（registrar 只收单参 unknown）。
   deps.ipc.handle(IPC_CHANNELS.NOTIFY, (payload: unknown) =>
     maybeShowNativeNotification((payload as { payload?: unknown }).payload));
+  // 页面可用锚点（启动账）：renderer 在 onOpen 注册后发的首个 handshake。与
+  // [perf] boot firstFrame（document commit = 窗口呈现）分开记，避免把「窗口早开」当成「内容可用」。
+  let pageReadyMarked = false
   // Renderer 通知就绪信号：onOpen 监听注册后调用，通知点击推送只在就绪后放行
   // （did-finish-load 早于监听注册）；返回 true 与 preload 的 Promise<boolean> 一致。
   deps.ipc.handle(IPC_CHANNELS.NOTIFICATIONS_READY, () => {
+    if (!pageReadyMarked) {
+      pageReadyMarked = true
+      console.log('[perf] sidecar pageReady +' + String(Math.round(process.uptime() * 1000)) + 'ms')
+    }
     state.notificationOpenDrainReady = true;
     const drainAccepted = drainPendingNotificationOpens();
     // A send race can revoke ready inside the drain; returning false makes the renderer's bounded readiness retry re-establish the handshake.

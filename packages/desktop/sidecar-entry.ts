@@ -440,6 +440,18 @@ let hostRootLease: StateRootLease | null = null
 let shuttingDown = false
 /** Login-shell probe lifetime: aborted by shutdown so no detached group outlives the sidecar. */
 let loginShellAbort: AbortController | null = null
+
+/** `[perf] sidecar` 分段（启动账，与壳侧 `[perf] boot sidecarSpawned` 对齐）：毫秒 = 本进程
+ *  起点起算。stdout 是 B 协议写面，故只走 console.log（已重定向到 stderr + 落盘日志）。 */
+function perfMark(stage: string): void {
+  console.log('[perf] sidecar ' + stage + ' +' + String(Math.round(process.uptime() * 1000)) + 'ms')
+}
+
+/** 中止登录 shell 探针：fatal 早退与优雅退出都必须调用，否则会留下游离的 shell 进程组。 */
+function abortLoginShell(): void {
+  loginShellAbort?.abort()
+  loginShellAbort = null
+}
 /** 更新检查定时器的测试注入门（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS 同纪律；仅 dev/测试态
  * 生效、装配态忽略）：spawn 用例不需要真实出网，也避免 15s 首检改变 update-state 投影的确定性。 */
 const TEST_NO_UPDATE_CHECK_ENV = 'DSH_SIDECAR_TEST_NO_UPDATE_CHECK'
@@ -449,12 +461,27 @@ async function boot(): Promise<void> {
   // registry/凭据/runtime 树写者身份，先于 buildHeadlessCtx 的装配写入与 createControlPlane
   // 构造。冲突/不可读 = 另一写者占用 → 可诊断 stderr（state_root_locked + holder pid/flavor
   // + root）+ EXIT_STARTUP_FAILURE=70 退出（Supervisor 视作 fatal，不重启）。
+  perfMark('boot-begin')
   try {
     hostRootLease = acquireHostRootLease(args.userDataDir, 'sidecar')
   } catch (error) {
     console.error('[sidecar] ' + describeHostRootLeaseFailure(error))
     process.exit(EXIT_STARTUP_FAILURE)
   }
+  // E1（启动账）：登录 shell 探针与 buildHeadlessCtx（≈1.1s 的装配）重叠。此前它在装配之后
+  // 才发起，0.64s（冷尾实测 1.19s）整段落在首帧关键路径上；语义不变——仍是「入口发起、
+  // 首个宿主 spawn 前 await」，退出/致命早退由 abortLoginShell() 中止。
+  loginShellAbort = new AbortController()
+  const loginShellEnvironment = startLoginShellEnvironment(
+    message => { console.error(`[sidecar] ${message}`) },
+    { signal: loginShellAbort.signal },
+  )
+  const loginShellStartedAt = performance.now()
+  void loginShellEnvironment.then(
+    () => perfMark('loginShellEnv-settled(' + String(Math.round(performance.now() - loginShellStartedAt)) + 'ms)'),
+    () => {},
+  )
+  perfMark('loginShellEnv-started')
 
   // 无头 ctx（async：启动前导 reap 本地插件写进程账目；edges = 上方 nodeEdges 同一实例——
   // 单装配不变式，publish/确认对话框/设置副作用与 installIpcHandlers 投递状态机同对象）。
@@ -492,10 +519,12 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
     nativeBetaChannelSwitch: args.nativeUpdaterBeta,
   })
   ctx = headless.ctx
+  perfMark('headlessCtx')
 
   // shell-core 装配（61/61 注册体；installIpcHandlers 恰一次、先于 ready——invoke 只在 ready 帧后到达）。
   installIpcHandlers({ ipc: ipcRegistrar, edges: nodeEdges, ctx: headless.ctx })
   console.log('[sidecar] installIpcHandlers 完成：' + registry.size + ' 通道注册')
+  perfMark('ipcHandlers')
 
   let webDistDir = args.webDistDir
   if (webDistDir === null) {
@@ -515,6 +544,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   const legacyStart = process.env.DSH_SIDECAR_LEGACY_START === '1'
   if (legacyStart && isPackagedSidecarRuntime()) {
     console.error('[sidecar] DSH_SIDECAR_LEGACY_START 在装配态被拒绝（绕过启动门，仅限 dev 循环）')
+    abortLoginShell()
     process.exit(EXIT_STARTUP_FAILURE)
   }
   type SpawnGateShape = {
@@ -535,14 +565,6 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
         canExposeLocal: () => true,
       }
     : (headless!.localSpawnGates as unknown as SpawnGateShape)
-  // Dock 启动只继承 session manager 环境：与 Electron 腿同一读取（rc.2 对齐，
-  // design 02 §3.1 姊妹项）。读取在入口发起、首个宿主 spawn 前才 await；失败或
-  // 非法 timeout env 只告警并回退继承环境；shutdown 中止仍在跑的探测组。
-  loginShellAbort = new AbortController()
-  const loginShellEnvironment = startLoginShellEnvironment(
-    message => { console.error(`[sidecar] ${message}`) },
-    { signal: loginShellAbort.signal },
-  )
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
     stateDir: stateRootDir(args.userDataDir),
@@ -576,13 +598,16 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
     canExposeLocal: () => spawnGates.canExposeLocal(),
   })
 
+  perfMark('planeStart-begin')
   try {
     await controlPlane.start()
   } catch (err) {
     console.error('[sidecar] 控制面启动失败（fatal）：' + String(err))
+    abortLoginShell()
     process.exit(EXIT_STARTUP_FAILURE)
   }
   console.log('[sidecar] control plane listening on http://127.0.0.1:' + controlPlane.port)
+  perfMark('planeListening')
   controlPlaneInstance = controlPlane
 
   // plane 晚绑定（代理注册/会话 refresh/restart 宿主腿/connectionState 投影/
@@ -674,8 +699,7 @@ async function shutdown(code: number): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
   // The probe runs detached; a graceful shutdown aborts it so no shell group outlives us.
-  loginShellAbort?.abort()
-  loginShellAbort = null
+  abortLoginShell()
   const cleanupDeadlineMs = quitCleanupDeadlineMs()
   // 更新控制器停表：定时器已 unref，退出路径再显式停掉，清理收尾期间绝不再发起网络检查；
   // stop 是 headless 附加成员（控制器契约面只保证 UpdateController）。
@@ -735,6 +759,7 @@ void boot().catch((err) => {
   // String(err)。释放 best-effort：绝不因释放异常改写 fatal 退出码。
   const detail = describeStateRootLeaseError(err) ?? String(err)
   console.error(`[sidecar] boot 失败（fatal exit ${EXIT_STARTUP_FAILURE}）：` + detail)
+  abortLoginShell()
   try { hostRootLease?.release() } catch { /* exit listener 兜底 */ }
   process.exit(EXIT_STARTUP_FAILURE)
 })
@@ -770,9 +795,14 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 
 process.on('uncaughtException', (err) => {
   console.error(`[sidecar] uncaughtException（fatal exit ${EXIT_RUNTIME_CRASH}）：` + String(err))
+  abortLoginShell()
   process.exit(EXIT_RUNTIME_CRASH)
 })
 process.on('unhandledRejection', (reason) => {
   console.error(`[sidecar] unhandledRejection（fatal exit ${EXIT_RUNTIME_CRASH}）：` + String(reason))
+  abortLoginShell()
   process.exit(EXIT_RUNTIME_CRASH)
 })
+// 最后一道：任何未显式覆盖的 process.exit（含未来新增的 fatal 分支）都不得留下游离的
+// 登录 shell 进程组。admission 是同步的 best-effort；显式调用点仍是主路径。
+process.on('exit', () => { try { abortLoginShell() } catch { /* never mask the exit code */ } })

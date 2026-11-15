@@ -890,13 +890,8 @@ async function spawnAttempt({
   if (signal?.aborted) controller.abort()
   else signal?.addEventListener('abort', onGenerationAbort, { once: true })
   const probeTimer = setTimeout(() => controller.abort(), LISTEN_WAIT_MS)
-  /**
-   * One bounded wait for the `dsh web:` launch-token line plus its exchange; resolves
-   * 'minted' or a failure message. Re-armable: the host mounts /api routes (401)
-   * before the loader prints the line, so the first 401 can arrive with the line
-   * outstanding and the caller may open a second window. A line that WAS seen is
-   * final and never re-armed.
-   */
+  /** One bounded wait for the `dsh web:` line plus its exchange → 'minted' or a reason.
+   *  Re-armable once: the first 401 can arrive before the line prints; a seen line is final. */
   const waitForLaunchToken = async (): Promise<'minted' | string> => {
     const bootstrapController = new AbortController()
     const bootstrapTimer = setTimeout(() => bootstrapController.abort(), authBootstrapWaitMs ?? AUTH_BOOTSTRAP_WAIT_MS)
@@ -946,9 +941,10 @@ async function spawnAttempt({
   // that predate the identity method.
   let lastProbeError: unknown
   let bootstrapRearmed = false
-  // The LATEST bootstrap outcome, not the first window's: after a re-arm the original
-  // promise still holds the expired-window failure, so re-reading it would mislabel a
-  // later 401 even though a cookie was minted.
+  /** 401→mint 后的第一次重试不再睡 500ms（同一探针实测 1.7–2.6ms）；只免一次，防 401 自旋。 */
+  let mintedRetryUsed = false
+  // LATEST bootstrap outcome (a re-arm keeps the expired-window failure in the original
+  // promise; re-reading it would mislabel a later 401 even though a cookie was minted).
   let lastAuthOutcome: 'minted' | string | null = null
   try {
     for (;;) {
@@ -971,10 +967,8 @@ async function spawnAttempt({
         if (probeError instanceof RpcTransportError && probeError.status === 401) {
           if (lastAuthOutcome === null) lastAuthOutcome = await authBootstrapPromise
           let authOutcome: 'minted' | string = lastAuthOutcome
-          // The host answers /api with 401 as soon as the listener is up and prints the
-          // URL line only after its loader settles, so the FIRST 401 can arrive while the
-          // token line is outstanding: re-arm ONE fresh bounded window. A line that was
-          // seen (with or without a token) is final.
+          // First 401 can arrive before the URL line prints: re-arm ONE bounded window;
+          // a line that WAS seen (with or without a token) is final.
           if (authOutcome !== 'minted' && !bootstrapRearmed && !dshWebLine.settled) {
             bootstrapRearmed = true
             log('browser-auth: no launch token yet when the host answered 401 — re-arming the bootstrap window once')
@@ -989,7 +983,13 @@ async function spawnAttempt({
               { stderr: stderrDigest },
             )
           }
-          // Cookie minted — fall through and retry the probe with it.
+          // Cookie minted → retry at once (same probe measured 1.7–2.6ms); the old
+          // unconditional 500ms sleep was 514ms of cold start.
+          if (!mintedRetryUsed) {
+            mintedRetryUsed = true
+            lastProbeError = probeError
+            continue
+          }
         }
         lastProbeError = probeError
         await waitForRetry(500, controller.signal)

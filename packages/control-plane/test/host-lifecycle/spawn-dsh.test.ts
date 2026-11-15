@@ -1173,3 +1173,114 @@ async function waitForNoEntryProcess(entryPath: string, timeoutMs: number): Prom
     await new Promise(resolve => setTimeout(resolve, 50))
   }
 }
+
+test('spawnDsh: a minted cookie retries the identity probe without the 500ms sleep', async () => {
+  // Cold-start budget (B1.2): after the 401 the host mints the browser-auth cookie and
+  // the probe used to wait a flat 500ms before retrying (measured 514ms on the real
+  // cold path). The fake host records the gap between its 401 answer and the retry —
+  // the old code cannot produce a gap below ~500ms, so this is a behavioral assertion,
+  // not a machine-speed one.
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const gapFile = join(stateDir, 'retry-gap.txt')
+  writeFakeDshEntry(dshWorkspacePath, [
+    ...FAKE_DSH_PREAMBLE,
+    'const writeFileSync = require("node:fs").writeFileSync',
+    `const gapFile = ${JSON.stringify(gapFile)}`,
+    'let first401At = 0',
+    "const printTokenLine = () => console.log('dsh web: http://127.0.0.1:' + port + '/?token=fast-retry')",
+    'const server = createServer((req, res) => {',
+    "  if (req.url === '/?token=fast-retry') {",
+    "    res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
+    '    res.end(); return',
+    '  }',
+    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
+    "    const authed = (req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')",
+    '    if (authed) {',
+    "      if (first401At !== 0) { try { writeFileSync(gapFile, String(Date.now() - first401At)) } catch {} }",
+    "      let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "        res.writeHead(200, { 'content-type': 'application/json' })",
+    "        res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
+    '      return',
+    '    }',
+    '    first401At = Date.now(); printTokenLine(); res.writeHead(401); res.end("unauthorized"); return',
+    '  }',
+    '  res.writeHead(404); res.end()',
+    '})',
+    "server.listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
+  try {
+    spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs: 5000 })
+    assert.ok(existsSync(gapFile), 'the fake host saw the second identity probe')
+    const gapMs = Number(readFileSync(gapFile, 'utf8'))
+    assert.ok(Number.isFinite(gapMs) && gapMs >= 0, 'gap is a duration')
+    assert.ok(gapMs < 400, `401→retry gap ${gapMs}ms must not carry the old 500ms sleep`)
+    await reapSpawned(spawned)
+  } finally {
+    controller.abort()
+    spawned?.child.kill()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+
+test('spawnDsh: the free immediate retry happens once — a still-401 minted probe falls back to 500ms', async () => {
+  // Guard coverage for design 02 §3.3 Rejected alternatives ①: only the FIRST retry
+  // after the cookie mint skips the 500ms sleep. Without the guard a host that mints a
+  // cookie and keeps answering 401 would spin the identity probe with no backoff for the
+  // whole 90s listen window. Both gaps are measured between AUTHED attempts, so the
+  // launch-token exchange is not part of either number.
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const gapsFile = join(stateDir, 'gaps.txt')
+  writeFakeDshEntry(dshWorkspacePath, [
+    ...FAKE_DSH_PREAMBLE,
+    'const writeFileSync = require("node:fs").writeFileSync',
+    `const gapsFile = ${JSON.stringify(gapsFile)}`,
+    'const authedAt = []',
+    "console.log('dsh web: http://127.0.0.1:' + port + '/?token=one-free-retry')",
+    'const server = createServer((req, res) => {',
+    "  if (req.url === '/?token=one-free-retry') {",
+    "    res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
+    '    res.end(); return',
+    '  }',
+    "  if (req.url !== '/api/session/canOpenWorkspacePath') { res.writeHead(404); res.end(); return }",
+    "  const authed = (req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')",
+    '  if (!authed) { res.writeHead(401); res.end("unauthorized"); return }',
+    '  authedAt.push(Date.now())',
+    '  writeFileSync(gapsFile, authedAt.join(" "))',
+    '  if (authedAt.length <= 3) { res.writeHead(401); res.end("still unauthorized"); return }',
+    '  let body = ""',
+    '  req.on("data", chunk => { body += chunk })',
+    '  req.on("end", () => {',
+    '    let rpcId = null',
+    '    try { rpcId = JSON.parse(body).rpcId } catch {}',
+    "    res.writeHead(200, { 'content-type': 'application/json' })",
+    "    res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: true } }))",
+    '  })',
+    '})',
+    "server.listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  let spawned: Awaited<ReturnType<typeof spawnDsh>> | undefined
+  try {
+    spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs: 5000 })
+    const stamps = readFileSync(gapsFile, 'utf8').trim().split(/\s+/u).map(Number)
+    assert.ok(stamps.length >= 4, 'the host saw four authed attempts (three 401s then a 200)')
+    // Anti-spin contract, ONE free retry: attempt 2 may follow immediately, but attempt 3
+    // must pay the 500ms backoff. A guard that frees twice makes gap(2->3) a few ms.
+    const gap23 = stamps[2] - stamps[1]
+    assert.ok(gap23 >= 450, 'the second still-401 pays the backoff (gap ' + String(gap23) + 'ms)')
+    await reapSpawned(spawned)
+  } finally {
+    controller.abort()
+    spawned?.child.kill()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
