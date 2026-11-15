@@ -200,3 +200,82 @@ test('ws-frames: control scanner still detects pongs alongside closes', () => {
   assert.equal(hit.pong, true)
   assert.equal(hit.close, 1001)
 })
+
+// ── payload fast path (skip-payload scanner) ──────────────────────────────
+// The scanner must only inspect payload bytes for CLOSE frames; every other
+// opcode's payload is skipped in one step. These lock the equivalence with the
+// byte-at-a-time implementation and the cross-chunk bookkeeping.
+
+/** Build a frame of any opcode/length (masked or not, FIN可控) for skip-path fixtures. */
+function anyFrame(opcode: number, payload: Buffer, masked: boolean, fin = true): Buffer {
+  const head = Buffer.alloc(2)
+  head[0] = (fin ? 0x80 : 0) | opcode
+  const len = payload.length
+  const parts: Buffer[] = [head]
+  if (len < 126) {
+    head[1] = (masked ? 0x80 : 0) | len
+  } else if (len <= 0xffff) {
+    head[1] = (masked ? 0x80 : 0) | 126
+    const ext = Buffer.alloc(2)
+    ext.writeUInt16BE(len, 0)
+    parts.push(ext)
+  } else {
+    head[1] = (masked ? 0x80 : 0) | 127
+    const ext = Buffer.alloc(8)
+    ext.writeBigUInt64BE(BigInt(len), 0)
+    parts.push(ext)
+  }
+  if (masked) {
+    const key = Buffer.from([3, 1, 4, 1])
+    parts.push(key)
+    const body = Buffer.allocUnsafe(len)
+    for (let i = 0; i < len; i += 1) body[i] = payload[i] ^ key[i % 4]
+    parts.push(body)
+  } else {
+    parts.push(payload)
+  }
+  return Buffer.concat(parts)
+}
+
+test('ws-frames: control scanner skips a 1 MiB payload without desync', () => {
+  const scanner = new ControlFrameScanner()
+  const big = anyFrame(0x1, Buffer.alloc(1024 * 1024, 0x61), true)
+  for (let i = 0; i < big.length; i += 16 * 1024) {
+    const hit = scanner.push(big.subarray(i, Math.min(i + 16 * 1024, big.length)))
+    assert.equal(hit.pong, false)
+    assert.equal(hit.close, undefined)
+  }
+  // The next frame still parses: the skipped payload left no residual state.
+  assert.equal(scanner.push(anyFrame(0x8, Buffer.from([0x03, 0xe8]), true)).close, 1000)
+})
+
+test('ws-frames: control scanner keeps close attribution when payload and close share a chunk', () => {
+  const scanner = new ControlFrameScanner()
+  const hit = scanner.push(Buffer.concat([
+    anyFrame(0x1, Buffer.alloc(200_000, 0x62), false),
+    anyFrame(0x8, Buffer.from([0x03, 0xf3]), false),
+  ]))
+  assert.equal(hit.close, 1011)
+})
+
+test('ws-frames: control scanner reports a masked pong with payload (skip path)', () => {
+  const scanner = new ControlFrameScanner()
+  const hit = scanner.push(anyFrame(0xa, Buffer.alloc(125, 0x70), true))
+  assert.equal(hit.pong, true)
+  assert.equal(hit.close, undefined)
+})
+
+test('ws-frames: control scanner handles FIN=0 fragments and an interleaved ping', () => {
+  const scanner = new ControlFrameScanner()
+  const first = anyFrame(0x1, Buffer.alloc(300, 0x63), true, false)
+  const middle = anyFrame(0x9, Buffer.from('p'), true)
+  const last = anyFrame(0x0, Buffer.alloc(120, 0x64), true, true)
+  const close = anyFrame(0x8, Buffer.from([0x03, 0xe8]), true)
+  for (const chunk of [first, middle, last, close]) {
+    const hit = scanner.push(chunk)
+    assert.equal(hit.pong, false, 'ping is not a pong')
+    if (chunk === close) assert.equal(hit.close, 1000)
+    else assert.equal(hit.close, undefined)
+  }
+})
+

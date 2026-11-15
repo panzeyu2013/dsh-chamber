@@ -124,6 +124,20 @@ export class ControlFrameScanner {
           break
         }
         case 'payload': {
+          // 快路径：只有 CLOSE 需要 payload 的前 2 字节（close code）；PONG 只要头部 opcode。
+          // 逐字节走完整 payload 是 3.6–4.9ms/MiB/次（双向共 3 个 scanner，实测见
+          // .tmp/perf-2026-11-15/ws-bench*.mjs）；这里一跳跳过，跨 chunk 时只扣剩余长度。
+          if (this.opcode !== WS_OPCODE_CLOSE) {
+            const take = Math.min(chunk.length - index, this.payloadRemaining)
+            // 不可达（stage==='payload' 时 payloadRemaining>0），但「原地不前进」会把代理变成
+            // 事件循环停摆；防御性收帧比静默死循环好诊断。
+            if (take === 0) { this.finishFrame(); break }
+            this.payloadConsumed += take
+            this.payloadRemaining -= take
+            index += take - 1
+            if (this.payloadRemaining === 0) this.finishFrame()
+            break
+          }
           const unmasked = this.masked ? byte ^ this.maskKey[this.payloadConsumed % 4] : byte
           if (this.opcode === WS_OPCODE_CLOSE && this.closeBytes.length < 2) this.closeBytes.push(unmasked)
           this.payloadConsumed += 1
