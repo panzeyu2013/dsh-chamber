@@ -126,6 +126,8 @@ export const GROUPS = {
     'test/gateway/gateway-sync-registry.test.ts',
     'test/gateway/gateway-session.test.ts',
     'test/gateway/gateway-session-lifecycle.test.ts',
+    // POSIX UDS 隧道上的 plugin sync：重启腿必须与探针/上传同一拨号面（B0 回归锁）。
+    'test/gateway/gateway-plugin-sync-uds.test.ts',
   ],
   // plugins: the plugin READ face (manifest/rows/redaction) and the main.ts plugin wiring gates
   plugins: [
@@ -137,6 +139,8 @@ export const GROUPS = {
   // runtime: managed dsh runtime controller, renderer<->main action lockstep, and the main.ts decision gates
   runtime: [
     'test/runtime/runtime-lockstep.test.ts',
+    // E1 启动账：探针前移 + fatal/shutdown abort + [perf] 分段标记（源码锁步）。
+    'test/runtime/sidecar-boot-marks.test.ts',
     'test/runtime/dsh-runtime-controller.test.ts',
     'test/runtime/main-decision-gates.test.ts',
     // 同步 spawn 解析器的三态 fail-closed（B3 2.2/2.3：corrupt|unknown 绝不落 builtin）

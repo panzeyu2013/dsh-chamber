@@ -1221,14 +1221,13 @@ export async function syncGatewayChamberPlugins(options: {
         if (firstFailure === null) firstFailure = failure
         continue
       }
-      // Byte-identical upload → nothing to apply; only an actual cache change warrants a restart.
+      // Byte-identical upload → nothing to apply; only a real cache change warrants a restart.
       if ((put.payload as { changed?: unknown })?.changed !== true) continue
       uploaded = true
       options.logger.log(`[dsh-chamber] gateway plugin sync: uploaded ${pkg.name} v${localVersion}`)
     }
     if (uploaded) {
-      // The running profile picks the packages up only on the next spawn — ask for the
-      // controlled restart; a failure only warns (the next natural spawn re-seeds anyway).
+      // The running profile picks packages up only on the next spawn — ask for a controlled restart.
       try {
         const restart = await gatewayJsonRequest(`${origin}/chamber/runtime/restart`, {
           method: 'POST',
@@ -1236,6 +1235,8 @@ export async function syncGatewayChamberPlugins(options: {
           insecure,
           spkiPin: options.spkiPin,
           timeoutMs,
+          // UDS 隧道：与探针/上传同一拨号面（漏传 → 127.0.0.1:<远程端口> 永远 ECONNREFUSED）。
+          ...(options.socketPath === undefined ? {} : { socketPath: options.socketPath }),
         })
         if (restart.status !== 202 && restart.status !== 200) {
           options.logger.warn(`[dsh-chamber] gateway plugin sync: dsh restart after upload returned HTTP ${restart.status}; packages apply on the next natural spawn`)
@@ -1258,4 +1259,3 @@ export async function syncGatewayChamberPlugins(options: {
     }
   }
 }
-
