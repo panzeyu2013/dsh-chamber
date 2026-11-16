@@ -129,7 +129,6 @@ final class HostPathCatalogService {
 
     func start() {
         guard timer == nil else { return }
-        lastChangeCount = changeCount()
         let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.poll()
         }
@@ -143,6 +142,29 @@ final class HostPathCatalogService {
     func stop() {
         timer?.invalidate()
         timer = nil
+    }
+
+    /// 观测开关（前台相位漏斗的唯一入口）：遮挡只停表（窗口仍在屏、拖拽会话可能仍在进行），
+    /// 隐藏才按「会话结束」清掉 drag 快照（指针门必失败、会话已结束）。`start()`/`stop()` 仍是
+    /// 纯定时器操作，本方法只加相位语义；`.picked` 快照不随相位清空。
+    func setObserving(_ observing: Bool, clearDragSnapshot: Bool = false) {
+        guard observing else {
+            stop()
+            if clearDragSnapshot, source == .drag || adoptInFlight {
+                adoptRequest += 1
+                adoptInFlight = false
+                catalog = HostPathCatalogModel()
+                source = .none
+                // 不清 lastChangeCount：恢复时按「板子是否真的变了」决定是否补采，
+                // 避免 Cmd+H 后点回窗口时无条件采纳旧拖拽板。
+                publish()
+            }
+            return
+        }
+        start()
+        // 恢复可见时若指针已在窗内且按键仍按下，立刻补一次 poll：停表期间开始的拖拽
+        // 不必等下一个 0.15s tick 才被采纳（drop 可能先到）。
+        if isPointerInsideWindow(), isDragInsideWindow() { poll() }
     }
 
     /// 观察一次拖拽会话：指针离开窗框（或窗口不可见/最小化）才清掉**拖拽**快照；

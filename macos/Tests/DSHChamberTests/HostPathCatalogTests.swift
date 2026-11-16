@@ -1,7 +1,8 @@
 //
 //  HostPathCatalogTests.swift — 桌面宿主路径面（HostPathCatalog.swift）纯逻辑与服务接线：
 //  来源顺序/去重/封顶（含跨语言 256 锁步）、目录大小归一、只在 changeCount 变化时采纳、
-//  指针门（窗外不读拖拽板、离开清拖拽快照、回形针快照不受影响）、载荷形状与代际。
+//  指针门（窗外不读拖拽板、离开清拖拽快照、回形针快照不受影响）、载荷形状与代际、
+//  前台相位开关（遮挡停表/隐藏清表，含在途采纳失效）与相位漏斗的源码锁。
 //
 import XCTest
 @testable import DSHChamber
@@ -85,6 +86,19 @@ final class HostPathCatalogTests: XCTestCase {
         model.adopt(urls: [try makeFile("a.txt", bytes: 1)])
         model.adopt(urls: [])
         XCTAssertTrue(model.entries.isEmpty)
+    }
+
+    /// 模型的两个降级臂：非文件 URL 直接丢弃；stat 失败按「非目录 + 0 字节」登记
+    /// （失败闭合：页面按精确 size 配对会失配 → 文件回退上传；残余见 deviations S-56）。
+    func testAdoptDropsNonFileURLsAndFallsBackToZeroBytesWhenStatFails() throws {
+        let missing = scratch.appendingPathComponent("never-created.bin")
+        var model = HostPathCatalogModel()
+        model.adopt(urls: [try XCTUnwrap(URL(string: "https://example.com/a.txt")), missing])
+        XCTAssertEqual(model.entries.map(\.name), ["never-created.bin"], "non-file URLs are dropped")
+        XCTAssertEqual(model.entries.first?.path, missing.path)
+        XCTAssertEqual(model.entries.first?.isDirectory, false)
+        XCTAssertEqual(model.entries.first?.size, 0,
+                       "an unstattable path degrades to a zero-byte file, never to a directory")
     }
 
     func testServicePushesOnlyWhenChangeCountMoves() throws {
@@ -357,6 +371,41 @@ final class HostPathCatalogTests: XCTestCase {
         XCTAssertEqual(pushed.count, 2, "the superseded snapshot must not publish")
     }
 
+    /// 隐藏相位（漏斗的 clearDragSnapshot 臂）必须让**在途**采纳失效。
+    /// 这条只由 `source == .drag || adoptInFlight` 的右臂触发：采纳只在发布落地时才写
+    /// `source = .drag`，故在途期 `source` 恒为 `.none`——删掉右臂本测试必红
+    /// （可达性证据：.tmp/perf-2026-11-16/power/final/probe/adopt-arms-probe.swift C 场景）。
+    func testHidingTheWindowCancelsAnInFlightDragSnapshot() throws {
+        var pending: (() -> Void)?
+        var changeCount = 10
+        let file = try makeFile("hidden.txt", bytes: 2)
+        let service = HostPathCatalogService(
+            changeCount: { changeCount },
+            readFileURLs: { [file] },
+            scheduleAdopt: { work in pending = work },
+            deliver: { work in work() },
+            pollInterval: 60)
+        service.isDragInsideWindow = { true }
+        service.isPointerInsideWindow = { true }
+        var pushed: [AnyCodable] = []
+        service.push = { pushed.append($0) }
+
+        service.setObserving(true)
+        changeCount = 11
+        service.poll()
+        XCTAssertEqual(pushed.count, 1, "the invalidation publishes before the background snapshot")
+        XCTAssertNotNil(pending, "the drag adopt must still be in flight")
+        XCTAssertEqual(entryCount(pushed.last), 0)
+
+        service.setObserving(false, clearDragSnapshot: true)
+        XCTAssertFalse(service.isRunning, "the hidden phase stops the board poll")
+        XCTAssertEqual(pushed.count, 2, "hiding must cancel the in-flight adopt and publish the empty snapshot")
+        XCTAssertEqual(entryCount(pushed.last), 0)
+
+        pending?()
+        XCTAssertEqual(pushed.count, 2, "the superseded snapshot must not reach the page while hidden")
+    }
+
     /// 面板选择必须让在途的拖拽快照失效（否则慢 stat 会覆盖回形针结果）。
     func testPanelSelectionSupersedesAnInFlightDragSnapshot() throws {
         var pending: (() -> Void)?
@@ -448,5 +497,174 @@ final class HostPathCatalogTests: XCTestCase {
         guard case let .object(object)? = payload,
               case let .array(entries)? = object["entries"] else { return nil }
         return entries.count
+    }
+
+    /// 源码锁的函数体提取（花括号定界，不用固定长度窗口）：签名 → 首个 `{` 起算深度，
+    /// 回到 0 即止；函数长度变化不会让锁假绿或假红。前提：签名本身不含花括号（两个锁都满足）。
+    private func functionBody(of functionSignature: String, in source: String) -> String? {
+        guard let start = source.range(of: functionSignature) else { return nil }
+        var depth = 0
+        var opened = false
+        var extracted = ""
+        for character in source[start.lowerBound...] {
+            extracted.append(character)
+            if character == "{" { depth += 1; opened = true }
+            if character == "}" {
+                depth -= 1
+                if opened, depth == 0 { return extracted }
+            }
+        }
+        return nil
+    }
+    /// 前台相位漏斗：遮挡/隐藏期停表并按「会话结束」清拖拽快照；可见时重建且 start 幂等。
+    func testPhaseObservationStopsPollingAndClearsTheDragSnapshot() throws {
+        let file = try makeFile("drag.txt", bytes: 5)
+        var pushes: [Int] = []
+        // The service seeds lastChangeCount at init: flip the board count after start so the
+        // first poll is a real change (otherwise the change-gate returns before adopting).
+        var boardCount = 0
+        let service = makeService(changeCount: { boardCount }, readFileURLs: { [file] })
+        service.push = { payload in
+            guard case .object(let object) = payload,
+                  case .array(let entries)? = object["entries"] else { return }
+            pushes.append(entries.count)
+        }
+        XCTAssertFalse(service.isRunning, "no observation before start")
+        service.setObserving(true)
+        XCTAssertTrue(service.isRunning, "visible phase starts the board poll")
+        boardCount = 1
+        service.poll()
+        XCTAssertEqual(pushes.last, 1, "a visible drag publishes one snapshot")
+        service.setObserving(false, clearDragSnapshot: true)
+        XCTAssertFalse(service.isRunning, "hidden phase stops the 6.7Hz board poll")
+        XCTAssertEqual(pushes.last, 0, "the drag snapshot must not survive the phase change")
+        service.setObserving(false)
+        XCTAssertFalse(service.isRunning, "stopping twice stays stopped")
+        service.setObserving(true)
+        XCTAssertTrue(service.isRunning, "visible phase restarts observation")
+    }
+
+    /// B1 回归：停表期间开始的拖拽必须在恢复可见后被采纳（start() 不得重新播种 changeCount）。
+    func testPhaseRestartAdoptsADragThatBeganWhileOccluded() throws {
+        let file = try makeFile("late.txt", bytes: 4)
+        var pushes: [Int] = []
+        var boardCount = 0
+        let service = makeService(changeCount: { boardCount }, readFileURLs: { [file] })
+        service.push = { payload in
+            guard case .object(let object) = payload,
+                  case .array(let entries)? = object["entries"] else { return }
+            pushes.append(entries.count)
+        }
+        service.setObserving(true)
+        boardCount = 1
+        service.poll()
+        XCTAssertEqual(pushes.last, 1, "a visible drag publishes one snapshot")
+        service.setObserving(false, clearDragSnapshot: true)
+        XCTAssertEqual(pushes.last, 0, "hidden phase clears the drag snapshot")
+        boardCount = 2  // the user starts a drag while the window is occluded
+        service.setObserving(true)
+        XCTAssertEqual(pushes.last, 1, "a drag begun while occluded is adopted on resume")
+    }
+
+    /// 恢复可见的补读只在「指针在窗内且按键仍按下」时发生：指针还在窗内但已松手时
+    /// 不得读拖拽板（读门含按键；setObserving 的补读与 poll 的 tick 共用同一条门）。
+    func testResumingObservationWithTheButtonUpDoesNotReadTheBoard() throws {
+        var reads = 0
+        var pushes: [Int] = []
+        let service = makeService(changeCount: { 7 },
+                                  readFileURLs: { reads += 1; return [] },
+                                  inside: false, pointerInside: true)
+        service.push = { payload in
+            guard case .object(let object) = payload,
+                  case .array(let entries)? = object["entries"] else { return }
+            pushes.append(entries.count)
+        }
+        service.setObserving(true)
+        XCTAssertTrue(service.isRunning)
+        XCTAssertEqual(reads, 0, "a resume with the pointer inside but no button held must not read the board")
+        XCTAssertEqual(pushes.count, 0)
+        service.poll()
+        XCTAssertEqual(reads, 0, "the drag gate also stops the tick while the button is up")
+        XCTAssertEqual(pushes.count, 0)
+        service.stop()
+    }
+
+    /// 遮挡 ≠ 隐藏：遮挡时窗口仍在屏，拖拽会话可能仍在进行 ⇒ 只停表、保留快照。
+    func testOcclusionStopsPollingButKeepsTheDragSnapshot() throws {
+        let file = try makeFile("covered.txt", bytes: 3)
+        var pushes: [Int] = []
+        var boardCount = 0
+        let service = makeService(changeCount: { boardCount }, readFileURLs: { [file] })
+        service.push = { payload in
+            guard case .object(let object) = payload,
+                  case .array(let entries)? = object["entries"] else { return }
+            pushes.append(entries.count)
+        }
+        service.setObserving(true)
+        boardCount = 1
+        service.poll()
+        XCTAssertEqual(pushes.last, 1)
+        let beforeOcclusion = pushes.count
+        service.setObserving(false)  // occluded by another window: the drag is still alive
+        XCTAssertFalse(service.isRunning, "the board poll stops while occluded")
+        XCTAssertEqual(pushes.count, beforeOcclusion, "an occluded window must not publish or clear the snapshot")
+    }
+
+    /// 相位到定时器的映射（纯值）：可见=跑两表；遮挡=停两表但保留快照；隐藏=停两表并清快照。
+    func testShellPhasePlanMapsOcclusionAndHiddenDifferently() {
+        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: false)),
+                       ShellPhasePlan(observeHostPaths: true, runHangWatchdog: true, clearDragSnapshot: false))
+        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: true)),
+                       ShellPhasePlan(observeHostPaths: false, runHangWatchdog: false, clearDragSnapshot: false))
+        XCTAssertEqual(ShellPhasePlan.plan(for: .hidden),
+                       ShellPhasePlan(observeHostPaths: false, runHangWatchdog: false, clearDragSnapshot: true))
+    }
+
+    /// 回形针快照是跨相位语义：停表只清 drag 快照，picked 不受影响。
+    func testPhaseStopKeepsThePickedSnapshot() throws {
+        let picked = try makeFile("picked.txt", bytes: 6)
+        var pushes: [Int] = []
+        let service = makeService()
+        service.push = { payload in
+            guard case .object(let object) = payload,
+                  case .array(let entries)? = object["entries"] else { return }
+            pushes.append(entries.count)
+        }
+        service.setObserving(true)
+        service.adoptPicked([picked])
+        XCTAssertEqual(pushes.last, 1)
+        service.setObserving(false, clearDragSnapshot: true)
+        XCTAssertEqual(pushes.last, 1, "a picked snapshot is not a drag session: it survives the phase change")
+    }
+
+    /// 唯一出口：`dispatchShellVisibility` 必须调用漏斗，否则遮挡边沿不会停表。
+    func testShellVisibilityDispatchRunsThePhaseFunnel() throws {
+        let macosRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: macosRoot.appendingPathComponent("Sources/DSHChamber/MainWindowController.swift"),
+            encoding: .utf8)
+        // 花括号定界（不用固定长度窗口）：函数变短/变长都不会让锁假绿或假红。
+        // 旧实现是 `prefix(1200)`：调用被删而窗口里另有同名文本时假绿，函数缩到窗口外时假红。
+        guard let dispatchBody = functionBody(of: "private func dispatchShellVisibility(", in: source) else {
+            return XCTFail("dispatchShellVisibility not found")
+        }
+        XCTAssertTrue(dispatchBody.contains("applyPhaseTimers(facts)"),
+                      "the single visibility exit must drive the phase timer funnel")
+        XCTAssertTrue(source.contains("hostPaths?.setObserving(plan.observeHostPaths, clearDragSnapshot: plan.clearDragSnapshot)"),
+                      "the funnel must gate the host-path board poll")
+        guard let funnelBody = functionBody(of: "private func applyPhaseTimers(", in: source) else {
+            return XCTFail("applyPhaseTimers not found")
+        }
+        XCTAssertTrue(funnelBody.contains("hangProbeTimer?.invalidate()"),
+                      "the funnel must stop the 1Hz hang probe while occluded")
+        XCTAssertTrue(funnelBody.contains("hangWatchdog.reset()"),
+                      "the funnel must drop hang evidence when it stops the watchdog")
+        XCTAssertTrue(funnelBody.contains("guard plan.runHangWatchdog"),
+                      "the watchdog must be driven by the plan, not by an ad-hoc boolean")
+        XCTAssertTrue(funnelBody.contains("startPhaseRecheckTimer()"),
+                      "the stopped phase must keep a low-frequency recheck")
+        XCTAssertTrue(funnelBody.contains("startHangWatchdog()"),
+                      "a foreground edge must rebuild the watchdog when the funnel stopped it")
     }
 }

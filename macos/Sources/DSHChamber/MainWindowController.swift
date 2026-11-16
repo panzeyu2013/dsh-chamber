@@ -80,6 +80,20 @@ struct ShellVisibilityFacts: Equatable {
     var foregroundAllowed: Bool { visible && !occluded }
 }
 
+/// 相位 → 原生常驻定时器的映射（纯值，单测直测）：遮挡时窗口仍在屏、拖拽会话可能仍在进行，
+/// 所以只停表、保留快照；隐藏时指针门必失败、会话已结束，才清 drag 快照。
+struct ShellPhasePlan: Equatable {
+    let observeHostPaths: Bool
+    let runHangWatchdog: Bool
+    let clearDragSnapshot: Bool
+
+    static func plan(for facts: ShellVisibilityFacts) -> ShellPhasePlan {
+        ShellPhasePlan(observeHostPaths: facts.foregroundAllowed,
+                       runHangWatchdog: facts.foregroundAllowed,
+                       clearDragSnapshot: !facts.visible)
+    }
+}
+
 final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, NSWindowDelegate {
 
     // MARK: - 常量
@@ -221,6 +235,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 可见页面的 JS/rAF 进度判定器与定时器。
     private var hangWatchdog = RendererHangWatchdog()
     private var hangProbeTimer: Timer?
+    /// 停表期低频兜底（30s）：漏接一条「可见」通知时自愈；0.03 次/s，不参与节能账。
+    private var phaseRecheckTimer: Timer?
     /// 自动恢复已放弃（超限后不再重载，只 loud/弹窗一次）。
 
 
@@ -368,6 +384,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     deinit {
         hangProbeTimer?.invalidate()
+        phaseRecheckTimer?.invalidate()
         hostPaths?.stop()
     }
 
@@ -1549,6 +1566,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         guard force || facts != lastShellVisibilityFacts else { return }
         lastShellVisibilityFacts = facts
         onShellVisibilityDidChange?(facts.foregroundAllowed)
+        applyPhaseTimers(facts)
         shellLog("[shell] 页面可见性事实 visible=\(facts.visible) occluded=\(facts.occluded)"
             + "（前台相位\(facts.foregroundAllowed ? "允许" : "暂停")）")
         evaluateJS(Self.shellVisibilityScript(facts)) { error in
@@ -2540,6 +2558,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         healthProbeTask = nil
         hangProbeTimer?.invalidate()
         hangProbeTimer = nil
+        phaseRecheckTimer?.invalidate()
+        phaseRecheckTimer = nil
     }
 
     // MARK: - 菜单动作：重新加载 / 页面缩放
@@ -2699,6 +2719,37 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
       return state.frames;
     })()
     """
+
+    /// 前台相位定时器漏斗（唯一出口 = `dispatchShellVisibility`）：遮挡/隐藏期停掉只服务可见
+    /// 交互的两个常驻定时器——6.7Hz 拖拽板轮询与 1Hz 渲染看门狗。看门狗在遮挡期本来每个 tick
+    /// 都 reset、不累计证据，停表只是把空转唤醒也去掉；恢复可见时重建并从零开始计证据。
+    private func applyPhaseTimers(_ facts: ShellVisibilityFacts) {
+        guard !quitting else { return }
+        let plan = ShellPhasePlan.plan(for: facts)
+        hostPaths?.setObserving(plan.observeHostPaths, clearDragSnapshot: plan.clearDragSnapshot)
+        phaseRecheckTimer?.invalidate()
+        phaseRecheckTimer = nil
+        guard plan.runHangWatchdog else {
+            hangProbeTimer?.invalidate()
+            hangProbeTimer = nil
+            hangWatchdog.reset()
+            startPhaseRecheckTimer()
+            return
+        }
+        if hangProbeTimer == nil { startHangWatchdog() }
+        // 可见边沿后 250ms 补读一次（同值命中派发去重，不成环），吸收边沿抖动。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.pushShellVisibility() }
+    }
+
+    /// 停表期兜底：30s 重读一次可见性事实。边沿是唯一事实通道，漏接一条「可见」通知
+    /// 时靠这条低频重读自愈（0.03 次/s，远小于被停掉的 7.7 次/s）。
+    private func startPhaseRecheckTimer() {
+        phaseRecheckTimer?.invalidate()
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.pushShellVisibility() }
+        timer.tolerance = 5  // 兜底只需量级正确，允许合并到系统唤醒窗
+        RunLoop.main.add(timer, forMode: .common)
+        phaseRecheckTimer = timer
+    }
 
     /// 一秒 tick 使单次探针的三秒超时按真实期限生效。
     private func startHangWatchdog() {
