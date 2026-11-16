@@ -294,7 +294,7 @@ host插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游README（api
 
   ③ 模块私有状态机的逻辑缺陷类（维护者裁决）：`ui-chat` 的 `chat/use-chat-reading.ts` 采样settle——残余偏移在跟随容差（`FOLLOW_THRESHOLD`=24px）内不再保留（实测12px非reader偏移在 `data-chat-following-tail` 保持时永久残留、任一后续布局变化即回贴；触发侧为直接bash调用的 preparing→started 整行替换，scroll侧成因未定，PTC子调用不复现），上游携带修复后删除条目；第三类的第二实例 = `util-values` 的 `hasIntrinsicConstructor` 严格单行比较（上述 JavaScriptCore 多行 native source 缺陷）已退役、由 `RETIRED_PATCHES` 钉住上游的引擎无关比较句，症状/取舍/删除条件见 design 09 §3.6。
 
-  ④ 多实例正确性类（维护者裁决，四形态）：`ui-workspace` 的 `client/navigation.ts` 选择键 per-entry scope + 座席所有权转移 + `ui-attachment` 的 drag/drop per-mount DOM containment + `ui-theme` 的页面级单例（theme 样式表 / icon sprite，dedupe；其维护者裁决 `ADMISSION PENDING`，见 design 09 §3.6 第四形态）（四形态都写明理由；座席转移、per-mount 与页面单例为 `noRetireForm`）。
+  ④ 多实例正确性类（维护者裁决，四形态）：`ui-workspace` 的 `client/navigation.ts` 选择键 per-entry scope + 座席所有权转移 + `ui-attachment` 的 drag/drop per-mount DOM containment + `ui-theme` 的页面级单例（theme 样式表 / icon sprite，dedupe；其维护者裁决已落库（2026-11-16），见 design 09 §3.6 第四形态）（四形态都写明理由；座席转移、per-mount 与页面单例为 `noRetireForm`）。
 
   门：C9（锚点**唯一命中**）+ `vendor-patches.test.mjs`（锚点/行为/id形态）+ vite `buildEnd` 的 applied 覆盖（按注册表逐条，未 apply 即构建失败）+ `verify-vendor-patch-applied`（产物侧每补丁 present 标记）。新增补丁前先问「能否在chamber自己的包里修」；性能类还须先证明成本是每帧的、且chamber侧门控覆盖不到它；逻辑缺陷类（第三类）须写明实测症状、接受的取舍与删除条件。
 
