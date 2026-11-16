@@ -204,10 +204,9 @@ test('an empty authoritative list is not evidence that the anchor is gone', () =
 })
 
 test('PR1: the Git plugin publishes no workspace placement (checkout create has no workspace positioning)', () => {
-  // The worktree create/adopt flow used to be the placement failure-side producer:
-  // it repositioned the adopted workspace after its main checkout and voided the
-  // intent when insertBefore failed. PR1 removes that whole leg (a checkout is not
-  // a workspace), so the intent/void ledger now belongs to the sidebar's own
+  // A checkout is not a workspace: the worktree create/adopt flow publishes no
+  // placement, so the intent/void ledger belongs to the sidebar's own
+  // workspace-create path only.
   // workspace-create path only.
   const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\s+/g, ' ')
   const coordinator = read('../../../dsh-chamber-client-ui-git/src/shared/coordinator.ts')

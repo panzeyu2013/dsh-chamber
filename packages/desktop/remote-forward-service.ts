@@ -40,10 +40,10 @@
  * (wire guards + sender/frame trust + the fingerprint proof). This module only
  * builds adapters; it never widens what the renderer can ask for.
  *
- * ENVIRONMENT / TODO(S1/W0). This tree has no node_modules, no real SSH source,
+ * ENVIRONMENT. This tree has no node_modules, no real SSH source,
  * and neither macOS nor Windows: the real ssh/askpass spawn, the packaged
  * private-file adapter, the darwin process probe, and the real ssh/askpass
- * spawn are TODO and are NOT exercised here. Windows CIM parsing is pure and
+ * spawn are NOT exercised here. Windows CIM parsing is pure and
  * unit-tested in test/forward/forward-windows.test.ts; the service adapters are
  * driven by fakes in test/forward/forward-service.test.ts.
  */
@@ -279,7 +279,7 @@ function createPrivateJsonFile(
 /**
  * Ledger ownership attestation: a group/world-reachable children file is not a
  * trusted kill list, so the reaper kills nothing. win32 ACLs (icacls) are
- * TODO(S1/W0); the ledger still fails closed on read/parse there.
+ * The ledger still fails closed on read/parse there.
  */
 async function verifyLedgerOwner(file: string): Promise<boolean> {
   if (process.platform === 'win32') return true
@@ -296,7 +296,7 @@ async function verifyLedgerOwner(file: string): Promise<boolean> {
  * no-follow). Imported lazily because the desktop package reaches that primitive
  * through control-plane-module.ts, whose workspace resolution needs the pnpm link
  * tree — tests inject storage and never take this path.
- * TODO(S1/W0): verify the packaged (compiled control-plane) adapter and the
+ * Verification target: the packaged (compiled control-plane) adapter and the
  * owner-only ACL on a real install.
  */
 async function createDefaultStorage(dataDir: string): Promise<ForwardServiceStorage> {
@@ -321,7 +321,7 @@ async function createDefaultStorage(dataDir: string): Promise<ForwardServiceStor
  * the userData root and the forward plane lives at <userData>/remote-browser,
  * next to the other desktop-owned state files. A flavor that ever injects a
  * different root shape moves this directory with it; the derivation is the
- * single place to change. TODO(S1/W0): confirm against a packaged install and a
+ * single place to change. Confirm against a packaged install and a
  * Swift sidecar (its --user-data shape) before release.
  */
 function resolveDataDir(ctx: ShellIpcCtx, options: RemoteForwardServiceOptions): string {
@@ -869,7 +869,7 @@ function signalForwardTree(pid: number, pgid: number | null, signal: NodeJS.Sign
 /**
  * Real stop: SIGTERM to the process group, SIGKILL after the grace (POSIX), or
  * taskkill /T /F on win32 (no Job Object addon in this package).
- * TODO(S1/W0): verify the escalation window on a real ssh child (macOS/Windows).
+ * Verification target: the escalation window on a real ssh child (macOS/Windows).
  */
 function createDefaultStopProcess(
   platform: NodeJS.Platform,
@@ -915,7 +915,7 @@ async function defaultStartTime(pid: number, platform: NodeJS.Platform): Promise
 /**
  * Askpass lease for one child; lazily loaded so the pure test slice never needs
  * the workspace link tree (ssh-provider reaches the control-plane facade).
- * TODO(S1/W0): verify against a password-auth source on a real machine.
+ * Verification target: a password-auth source on a real machine.
  */
 async function defaultAuthLease(ctx: ShellIpcCtx, sourceId: string): Promise<TransportSpawnLease | null> {
   const instance = ctx.deps.ctx.transportManager
@@ -1113,7 +1113,6 @@ async function launchForwardChild(deps: ForwardLauncherDeps, input: ForwardLaunc
   // already exited would have emitted 'exit' into the stream's buffered state
   // (stderr) / been missed (exit); the manager's probe then reports a bind-like
   // timeout and the ledger tombstone is reaped at the next start.
-  // TODO(S1/W0): drill a fast-dying ssh (bad host) on a real machine.
   void exit.then(() => {
     releaseLease()
     // A failed removal only leaves a tombstone for the next start's reaper.

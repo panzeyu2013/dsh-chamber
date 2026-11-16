@@ -160,7 +160,7 @@ test('loadPluginInventory: malformed envelopes and invalid snapshots are loud Ty
 })
 
 /**
- * rc.2 re-anchor (RC-C1): the read view projects ONLY the Loader `entries`. Host display
+ * The read view projects ONLY the Loader `entries`. Host display
  * metadata (`meta`), `managementAvailable` and the per-preset `agentPresets` compositions
  * have no consumer in this repo, so they are neither declared nor validated: a payload
  * carrying them parses to exactly the entries projection.

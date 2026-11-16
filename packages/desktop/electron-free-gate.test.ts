@@ -165,7 +165,7 @@ function hasStaticElectronImport(code: string): boolean {
 /** 顶层仍可 import electron 的文件（updater.ts 是 electron-free 共享面的
  *  typed 例外，仍留在 packages/desktop 根）。 */
 const WHITELIST = ['updater.ts']
-/** 冻结归档在 electron/ 子目录的 Electron 入口/边沿/preload（2026-11 用户裁决）：
+/** 冻结归档在 electron/ 子目录的 Electron 入口/边沿/preload：
  *  不参与顶层面 A，但仍是期望文件（缺失即红）、仍须确实依赖 electron（面 B 正例），
  *  且归档目录不得夹带未登记的源码文件（防新文件逃出扫描面）。 */
 const ARCHIVED_ENTRY_FILES = ['electron/main.ts', 'electron/electron-edges.ts', 'electron/preload.cts']

@@ -52,7 +52,6 @@ test('runtimeFamilyNames: 版本去重（同一包两个版本只出一个名字
 
 test('C11 负例：锁文件文本出现 @dsh-chamber/ 引用即红（F 来源被污染）', () => {
   // 解析器按 scope 只取 @deepseek-ai/*，所以「chamber 包混入闭包」只能由锁文件原文判定
-  // （round-2 review F5：原来的 names 遍历是死分支，已改成对原文的真实扫描）。
   const names = healthyNames()
   const clean = familyFindings({
     names,

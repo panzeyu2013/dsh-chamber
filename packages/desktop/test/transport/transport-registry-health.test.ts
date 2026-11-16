@@ -177,7 +177,7 @@ test('F16/A4+F19: degraded startup + a failed save transaction stays degraded an
 
   // The authoritative proposal leg fails (simulated registry write failure);
   // the compensation leg reaches the REAL manager, which is exactly the path
-  // that used to clear the gate by writing [] successfully.
+  // that must not clear the gate by writing [] successfully.
   let authoritativeAttempts = 0
   const deps: SaveConnectionTransactionDeps = {
     listInstances: () => manager.listInstances(),

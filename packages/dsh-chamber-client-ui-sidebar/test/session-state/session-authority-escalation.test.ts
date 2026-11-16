@@ -5,8 +5,7 @@
  *
  * WHY THIS EXISTS: the executor and the ladder were unit-tested separately and the
  * App wiring only source-text locked. This composes the REAL reconciler with the REAL
- * ladder and pins the cross-module behaviour the old (deleted) session-liveness wiring
- * test used to assert by hand: healthy long runs never escalate; stuck evidence
+ * ladder and pins the cross-module behaviour: healthy long runs never escalate; stuck
  * reconnects once at the reconnect threshold and surfaces one notice at the notice
  * threshold; a healthy verdict clears the streak and suppresses the notice.
  */

@@ -25,11 +25,11 @@
  * desktopSsh namespace alone is 26 invoke + 2 push (host-key probe/trust), with
  * the forward namespace adding 4 invoke, 0 push — design 28 §3. The browser
  * namespace (Swift-only, 6 invoke + 4 push) is likewise manifest-locked; the user plugin write
- * surface (apply / undo / materialize / npm search / local add-remove) was
- * retired with the 2026-09 C layering ruling.
+ * surface (apply / undo / materialize / npm search / local add-remove) is
+ * retired.
  *
  * Swift-only A-bridge additions (packages/desktop/bridge-swift-only-additions.json,
- * docs/progress/electron-frozen.md §5.2) are the ONE bounded exemption: the Electron
+ * 冻结面 A 桥白名单政策) are the ONE bounded exemption: the Electron
  * side is frozen, so a channel may exist only on the Swift shim. For those entries
  * the gate waives the two-side equality but still proves that the shim really
  * implements the declared member/channel/direction, that preload NEVER exposes it,
@@ -65,7 +65,7 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..
 export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info', 'dsh-chamber:native-theme-set'])
 
 /**
- * Committed Swift-only A-bridge additions whitelist (docs/progress/electron-frozen.md
+ * Committed Swift-only A-bridge additions whitelist (仓库冻结登记
  * §5.2). Entries are channels/namespaces/methods that exist ONLY on the Swift shim
  * and are intentionally absent from preload.cts / the frozen Electron main. They are
  * exempt from the two-side equality below, but the gate still proves the shim really
@@ -86,7 +86,7 @@ export const SWIFT_ONLY_ADDITIONS_FILE = 'packages/desktop/bridge-swift-only-add
 export function loadSwiftOnlyAdditions(file = SWIFT_ONLY_ADDITIONS_FILE, root = REPO_ROOT) {
   const parsed = JSON.parse(readFileSync(join(root, file), 'utf8'))
   if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.entries)) {
-    throw new Error('Swift-only whitelist must be { version: 1, entries: [...] } (docs/progress/electron-frozen.md §5.2)')
+    throw new Error('Swift-only whitelist must be { version: 1, entries: [...] } (frozen-surface A-bridge whitelist policy)')
   }
   for (const entry of parsed.entries) {
     if (entry === null || typeof entry !== 'object'
@@ -566,7 +566,7 @@ function checkSwiftOnlyImplementation({
 /**
  * Compare every namespace member's payload shape across the two surfaces.
  *
- * Swift-only whitelist entries (docs/progress/electron-frozen.md §5.2) are exempt
+ * Swift-only whitelist entries (frozen-surface A-bridge whitelist policy) are exempt
  * from the two-side method-set equality (the Electron side is frozen and cannot be
  * extended), but the gate still proves: shim implements the declared member/channel/
  * direction, preload never exposes it, and the committed manifest lists the channel.

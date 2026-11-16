@@ -45,7 +45,7 @@ export interface CompletionArmStepInput {
   /**
    * 官方列表**基数已知**（facts 快照的 `baselines !== undefined`）。未知 ≠ 未就绪：第二支
    * 只在「已知且未就绪」时启用，未知时关闭——绝不把"没有清单事实"当"清单未就绪"凭空武装
-   * （假完成点，P1）。缺席 = false；有壳路径无消费者（inert）。
+   * （假完成点）。缺席 = false；有壳路径无消费者（inert）。
    */
   listKnown?: boolean
   /** A stale (disconnected) report is never arm evidence. */

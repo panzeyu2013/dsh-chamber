@@ -3,7 +3,7 @@
  * UI-free and backend-free core of the model view PluginDialog renders — the
  * installed-row projection. The write model (apply classification, batch
  * policy, gateway task projection, undo derive and the diff/apply boundary)
- * was retired with the plugin write faces (D1); this module now carries the
+ * is not part of this read-only model; the module carries the
  * read face alone.
  *
  * Discipline: PURE + LOCALE-FREE (no runtime imports, no window surface, no localized
@@ -18,7 +18,7 @@
  * - projectInstalledRows：已安装列表行投影。行集 = profile 的依赖表——安装自带组合（B₀）
  *   与 chamber 播种物（S）不造行（chamber 组件有自己的表；官方组合是运行时基线）。受保护名若
  *   出现在依赖表里仍只读可见。行投影缺失/非数组 = 显式空投影（同版本发行恒有 `rows`；
- *   §6.11.7 的旧 gateway 回退已删除），绝不回落到 `dependencies` 过滤。
+ *   不再回落到 gateway 的 `dependencies` 过滤）。
  * 本模块不重算保护集合。 */
 
 /** 行角色（wire 单源的字面量并集；渲染端只渲染，绝不推导）。一行已安装事实的唯一声明在

@@ -1801,7 +1801,7 @@ test('the heartbeat uses the tight watch cadence after a ready edge, then relaxe
   // DISCRIMINATOR for the watch tier: inside the 200ms window a 40ms cadence fires
   // ~4 times, while the 300ms stable cadence fires 0–1 times. Asserting only "≥2
   // eventually" would also pass with the watch tier deleted (the stable beat would
-  // supply the two probes), which is exactly how this test used to be fake-green.
+  // supply the two probes), which is exactly the fake-green shape the probes rule out.
   await sleep(180)
   const inWindow = probes - atReady
   assert.ok(inWindow >= 3, `the watch tier sampled ${String(inWindow)}x inside its 200ms window (a deleted watch tier yields 0-1)`)

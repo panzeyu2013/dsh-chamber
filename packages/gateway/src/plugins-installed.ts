@@ -5,8 +5,8 @@
  * Never a silent empty list: absent manifest → profile_absent; present but
  * unreadable/unsafe (permissions, symlinked leaf/dir, oversized) or
  * unparseable → profile_corrupt with evidence in `error` (a torn read lands
- * here too). The user plugin write surface was retired with the 2026-09 C
- * layering ruling, so this module is a plain read: it takes no lease and never
+ * here too). The user plugin write surface is not served here, so this module
+ * is a plain read: it takes no lease and never
  * blocks. Local-path values are masked by the shared ruler below.
  */
 

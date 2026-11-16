@@ -1,12 +1,12 @@
 /**
- * Chamber host-domain wiring lockstep (audit arch-03 P1-1).
+ * Chamber host-domain wiring lockstep.
  *
  * CHAMBER_HOST_PACKAGES (src/host-graph-seed.ts) is the single source for each
  * domain's IDENTITY (loader insert id/name + probe method/args). Making a new
  * domain actually reach all three delivery paths — the local profile seed, the
  * ssh remote + gateway upload, and the activation probes — additionally needs
- * six hand-registered wire-ups, and three of them used to skip silently for a
- * missing row. This suite drives every assertion from the registry itself, so a
+ * six hand-registered wire-ups, and a missing row must not skip silently. This
+ * suite drives every assertion from the registry itself, so a
  * new domain that is not wired everywhere is RED:
  *
  *   ① the three sourceDir registrations cover every registry row:
@@ -30,7 +30,7 @@
  *   ④/⑤ the remote seed constructor (plugin-sync.ts chamberHostPackageSeedsFrom)
  *      and its built-artifact filter: a non-localOnly row without a sourceDir
  *      key THROWS; only an existsSync-missing dist/index.js may skip.
- *   ⑥ the superseded official open-in wire face (audit arch-03 P2-3): the
+ *   ⑥ the superseded official open-in wire face: the
  *      vendored web bundle still mounts the official host row this local
  *      overlay disables, and NO chamber production source calls its
  *      `/open-in-app/*` routes (the renderer page-own-skips the official client
@@ -319,7 +319,7 @@ test('⑤ chamberHostPackageSeedsFrom: every non-localOnly row needs its sourceD
 })
 
 // ---------------------------------------------------------------------------
-// ⑥ the superseded official open-in wire face (audit arch-03 P2-3)
+// ⑥ the superseded official open-in wire face
 // ---------------------------------------------------------------------------
 
 /** Source extensions the route-caller scan reads (never build output/data). */

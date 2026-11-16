@@ -34,8 +34,8 @@
  * intended trade-off: silently uploading to the control-plane root is worse.
  *
  * DELETE CONDITION. Remove an entry once upstream exposes a host-route base seam on the
- * page transport (or the plugin reads the chamber context key itself) and this batch's
- * pin no longer needs the patch; see design 09 §4 (runtime base backfill) and TODO A§17.
+ * page transport (or the plugin reads the chamber context key itself); the current pin
+ * does not need the patch (design 09 §4, runtime base backfill).
  */
 
 /** One registered served-bundle patch. */

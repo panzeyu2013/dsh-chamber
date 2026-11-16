@@ -796,7 +796,7 @@ test('⑥ 缺 payload Node / 无执行位 / 缺 office 资产 → loud（runtime
   try {
     writeFileSync(path.join(sidecar, 'sidecar.js'), '// fake')
     writeFileSync(path.join(sidecar, 'package.json'), '{}')
-    // ① payload 内没有 Node → loud（单 Node 后顶层 helper 不再被接受）。
+    // ① payload 内没有 Node → loud（单 Node 下顶层 helper 不被接受）。
     await assert.rejects(
       runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
       /缺 payload Node/,
@@ -1370,8 +1370,7 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
     const stage = path.join(out, 'stage')
     // 卷名唯一化：/Volumes 是全局命名空间，而这条腿在 check:full 里进的是**全局文件池**
     // （默认 8 jobs，与其它包的数百个文件并发；包内腿只有 3 个文件）。固定卷名会让
-    // hdiutil 的 create/attach 偶发失败（2026-09-30 实测：包内腿 37/37 绿、check:full 内
-    // 同一条测试红）。唯一卷名同时保住「卷名 = --app-name」这条判据。
+    // hdiutil 的 create/attach 偶发失败（check:full 并发池下同一条测试偶发红）。唯一卷名同时保住「卷名 = --app-name」这条判据。
     const volumeName = `dsh-chamber-t${process.pid}-${Math.random().toString(36).slice(2, 6)}`
     // macOS 27 起 hdiutil create 被弃用并在 stderr 恒定打弃用警告：它是**警告不是失败**
     // （用户实测 create.status 仍为 0），断言消息里滤掉；status 仍严格判 0。

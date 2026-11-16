@@ -506,7 +506,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       }
       for (const row of [...rows.values()]) {
         if (seen.has(row.sessionId)) continue
-        // 单阶段删除（2026-12 收尾，按上游 ready-即删对齐；design 17 §10.7）：一次
+        // 单阶段删除（按上游 ready-即删对齐；design 17 §10.7）：一次
         // **成功且完整**的基线缺席即离表——进 removedSessionIds 并从 store 删除，不再有
         // 「首次隐藏、二次剪枝」的容忍窗。删除不是完成：不发 running:false、不产完成
         // 边沿（缺 wire 行 = 客户端离表清臂 + 随行退役记忆）。

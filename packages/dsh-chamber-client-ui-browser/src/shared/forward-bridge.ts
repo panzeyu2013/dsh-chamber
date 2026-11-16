@@ -13,7 +13,7 @@
  *   list({sourceId, sourceFingerprint})
  *       -> {ok: true, records} | {ok:false, code}
  *     (the LOCAL identity is accepted on list only; the iframe-era local-frame
- *      origin projection is retired with the iframe carrier and wire v3)
+ *      origin projection belongs only to the archived iframe carrier (wire v2))
  *   openInBrowser({sourceId, sourceFingerprint, id, path?}) -> {ok} | {ok:false, code}
  *
  * v3 shape decisions (design 28 §3; the native guest carrier consumes this face):

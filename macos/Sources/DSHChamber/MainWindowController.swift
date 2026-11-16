@@ -133,7 +133,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// - 只影响初始/最小视口；内容列宽等宽度偏好是 per-flavor 页面存储，不随本值
     ///   收敛。
     /// 引用点：setupWindow 的 NSWindow(contentRect:)/webView frame 用 windowSize，
-    /// contentMinSize 用 minContentSize（2026-11 用户任务书授权的 parity 改动）。
+    /// contentMinSize 用 minContentSize（parity 对齐）。
     /// internal 可见性：@testable 单测直接钉住数值单源（不做源码文本锁）。
     enum WindowMetrics {
         /// 官方窗口外框（Electron main.ts createMainWindow 的 width/height）。
@@ -796,8 +796,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 可见标题 = dsh-chamber（功能对齐 Electron 的标题冻结行为；不可见
         // target/可执行名保持 DSHChamber）。
         window.title = Self.displayName
-        // 上游 macOS 窗口形态（官方 desktop titleBarStyle:'hiddenInset' 的 AppKit 等价物，
-        // 2026-09 跟随上游）：标题栏透明、内容延伸进标题栏，红绿灯浮在侧栏顶部——页面按
+        // 上游 macOS 窗口形态（官方 desktop titleBarStyle:'hiddenInset' 的 AppKit 等价物）：
+        // 标题栏透明、内容延伸进标题栏，红绿灯浮在侧栏顶部——页面按
         // data-platform=darwin 自行留出侧栏空白。灯组位置由 ShellTrafficLightInset 内缩到
         // 页面 chrome 行（AppKit 默认比那条带高 9pt，见该文件实测）；窗背后是
         // ShellWindowMaterial 的侧栏材质（上游 vibrancy:'sidebar' 的等价面）。
@@ -946,8 +946,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 当前显示模式的刷新率（读数，不是 WebKit 的 nominal 本体）。与 WebKit **同源但不等价**：
     /// WebKit 用 `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`（DisplayLinkMac 取整），
-    /// 且只在 display link 初始化时缓存一次（`DisplayLink::displayPropertiesChanged()` 仍是
-    /// FIXME 空实现），取不到时回落 60；本函数读 `CGDisplayCopyDisplayMode().refreshRate`
+    /// 且只在 display link 初始化时缓存一次（`DisplayLink::displayPropertiesChanged()` 在 WebKit 侧为
+    /// 空实现），取不到时回落 60；本函数读 `CGDisplayCopyDisplayMode().refreshRate`
     /// （内置屏上该值可能为 0），取不到回落面板上限并标记 isPanelMaximum = true。
     /// 所以验收一律以 `[shell-fps]` 实测仲裁（见 design 25 §5.1），日志只作对照。
     /// 窗口没有所在屏时返回 (nil, false)。

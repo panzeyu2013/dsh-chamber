@@ -2,9 +2,8 @@
  * Observation validity — the ONE classifier every chamber liveness deadline consumes
  * (design 14 §D4，I5「缺席不作证据」推广到**活性证据**).
  *
- * Chamber's liveness machinery used to read "my deadline fired" as "the source is
- * broken". In a WKWebView that reading is wrong whenever the page itself was not
- * scheduled: WebKit throttles/suspends an occluded or unfocused window while
+ * Reading "my deadline fired" as "the source is broken" is wrong in a WKWebView
+ * whenever the page itself was not scheduled: WebKit throttles/suspends an occluded
  * \`document.visibilityState\` still says \`visible\`, so a 5s wall-clock deadline can
  * expire with the request never having been given a chance to complete. The same
  * shape shows up when our own teardown/replacement aborts an in-flight request.

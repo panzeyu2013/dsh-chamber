@@ -513,9 +513,8 @@ test('v2 W-15: the local identity crosses the bridge verbatim (payload keys unch
   const { bridge } = installedBridge(host)
   await bridge.list({ sourceId: 'local', sourceFingerprint: 'local' })
   assert.deepEqual(calls, [{ method: 'list', input: { sourceId: 'local', sourceFingerprint: 'local' } }])
-  // The wire keeps the local list arm; the v2 list paper fields are retired with
-  // the iframe carrier and the wire (design 28 v3 §3), so neither source may
-  // reintroduce them.
+  // The wire keeps the local list arm; the v2 list paper fields are not on the
+  // wire (design 28 v3 §3), so neither source may introduce them.
   assert.ok(WIRE_SOURCE.includes('FORWARD_LOCAL_SOURCE_ID'))
   assert.equal(WIRE_SOURCE.includes('readonly frameErrors?:'), false)
   assert.equal(ADAPTER_SOURCE.includes('LauncherForwardFrameErrorEntry'), false)

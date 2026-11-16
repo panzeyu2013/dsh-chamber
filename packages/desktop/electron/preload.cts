@@ -1,10 +1,10 @@
 // ============================================================================
-// ARCHIVED / FROZEN — Electron flavor: preload.cts (2026-11 user ruling).
+// ARCHIVED / FROZEN — Electron flavor: preload.cts.
 // Electron 已冻结归档：本文件不参与默认开发 / 门禁 / 发布，仅作为可复活参考保留。
-// 冻结范围与复活清单：docs/progress/electron-frozen.md；目录说明：./ARCHIVED.md
+// 冻结范围与复活清单见仓库冻结登记；目录说明：./ARCHIVED.md
 // 位置变更：从 packages/desktop/ 根迁入本归档目录（old → new 见 ./ARCHIVED.md）。
 // 沙箱 preload 仍编译为 dist/preload.cjs（tsconfig.preload.build.json / build-preload.mjs 同步）。
-// 默认不要修改本文件；需要解冻时先按 docs/progress/electron-frozen.md 执行。
+// 默认不要修改本文件；需要解冻时按仓库冻结登记执行。
 // ============================================================================
 import type { IpcRendererEvent } from 'electron';
 import type {
@@ -377,7 +377,7 @@ export interface ChamberSettings {
   betaUpdates?: boolean
   /** 桌面快捷键偏好文档的原始 JSON 文本（design 25 §8.4）：镜像 desktop/
    *  chamber-settings.ts 与 renderer global.d.ts 的同名字段。类型镜像属共享契约、随
-   *  契约演进（docs/progress/electron-frozen.md:29）：本文件只做**接口声明镜像**，
+   *  契约演进：本文件只做**接口声明镜像**，
    *  运行期代码不读不写该字段。 */
   shortcutsDocument?: string
 }

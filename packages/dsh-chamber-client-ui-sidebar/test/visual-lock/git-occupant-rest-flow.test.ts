@@ -166,8 +166,8 @@ test('the hook crosses the package boundary as an attribute alone', () => {
   assert.match(gitCss, /\.headerGit\s*\{/u, 'the plugin still owns the revealed container styling')
   // The plugin brings NO reveal of its own: its action is `display: none` at rest, so a
   // CSS `:focus-visible` flip inside the plugin sheet could never fire anyway — the host
-  // owns every reveal state. This is the regression lock for the rule retired with the
-  // align merge (nothing else reads the plugin sheet's reveal surface).
+  // owns every reveal state. This is the regression lock for that rule (nothing else
+  // reads the plugin sheet's reveal surface).
   for (const rule of rules(gitCss)) {
     if (!rule.selector.includes(':focus-visible')) continue
     assert.doesNotMatch(

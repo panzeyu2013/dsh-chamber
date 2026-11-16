@@ -7,8 +7,8 @@
 //  上游页面在 `[data-platform='darwin'][data-fullscreen]` 下把红绿灯那条带让给座位：
 //  ui-layout 的 `--dsh-frame-leading-clearance` 从 160 收到 84、`.leadingSeat` 左移到
 //  12px，ui-sidebar 的 `.topStrip` 改成左对齐（灯没了，开关让位）。这些规则只在**壳把
-//  窗口全屏状态写到 html 上**时生效；上游由 Electron preload 打标，Swift 壳此前没有
-//  等价面（页面样式表自认"今天不生效"）——全屏时页面仍按有灯留白，座位因此错位。
+//  窗口全屏状态写到 html 上**时生效；上游由 Electron preload 打标；Swift 壳直接写等价面
+//  （页面样式表自认"今天不生效"，不写标记时全屏页面仍按有灯留白、座位错位）。
 //
 //  这里只有三件纯事：通知名 → 标记值、样式掩码 → 是否全屏、以及一行幂等属性写入。
 //  写入形态与上游 preload 逐字同形（`dataset.fullscreen = 'true'` / `delete`，见 vendor

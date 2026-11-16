@@ -683,7 +683,7 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient, signal?: 
       sessionId: row.sessionId,
     })
     if (typeof summary.parentSessionId === 'string') row.parentSessionId = summary.parentSessionId
-    // 投影块水印（上游 SessionProjectionHints）：探针此前收到就丢。两个字段一起带走，
+    // 投影块水印（上游 SessionProjectionHints）：探针保留这两个字段一起带走，
     // 消费方按 kind 决定能不能比较（cached 的 asOfSeq 属缓存记录自己的空间）。
     const hints = summary?.projections
     if (hints?.kind === 'cached' || hints?.kind === 'sequenced') row.projectionKind = hints.kind

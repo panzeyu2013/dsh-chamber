@@ -7,7 +7,7 @@
  *                               (that direction is owned by the renderer's
  *                               transport-source.ts; the desktop never needs it)
  *
- * They used to be converted ad hoc at every boundary. The failure-driven probe
+ * They are converted only here, not ad hoc at a boundary. The failure-driven probe
  * and the link-busy signal cross the boundary in BOTH directions, and a mismatch
  * fails SILENTLY (`states.get(unknownId)` is simply undefined), so both
  * conversions live here, are tested, and are the only place allowed to do it.

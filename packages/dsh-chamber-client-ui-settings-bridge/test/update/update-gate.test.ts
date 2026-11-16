@@ -111,7 +111,7 @@ test('betaUpdatesSwitchState: 可用构建上开关 = 壳推送的生效通道�
 });
 
 test('betaUpdatesSwitchState: v4 纯偏好——纯门不看安装版本后缀（beta 构建也是普通开关）', () => {
-  // 契约 v4 删除了「X.Y.Z-beta.N → beta」：门只收 update/supported 两个事实，版本后缀
+  // 门只收 update/supported 两个事实：版本后缀
   // 不再产生特殊态。源码锚：纯门里不得重新出现版本形状/后缀判定或 preview-build 态。
   const here = path.dirname(fileURLToPath(import.meta.url));
   const gate = readFileSync(path.resolve(here, '../../src/client/update-gate.ts'), 'utf8');

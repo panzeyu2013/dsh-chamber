@@ -77,7 +77,7 @@ export { isRemoteStreamAuthCloseCode, REMOTE_STREAM_AUTH_CLOSE_CODES } from './s
 /** Physical Remote stream socket failure that may be retried by a domain transport. */
 export class RemoteStreamCarrierError extends Error {
   /**
-   * P1-4: per-stream spread (0–250 ms) the mux attaches when ONE carrier failure fans
+   * per-stream spread (0–250 ms) the mux attaches when ONE carrier failure fans
    * out to every logical stream. RemoteStream waits this long before its FIRST reopen
    * so the retry lanes do not stampede the replacement socket; the failure itself is
    * delivered synchronously, so teardown ordering is unchanged.

@@ -74,7 +74,7 @@ public enum ShellPageFactsScript {
     /// 页面 → 壳的事实上报通道名（独立于 A 桥 dshChamber）。
     public static let messageName = "dshChamberFacts"
 
-    /// dark 判定的唯一实现（S1 收口，2026-12）：body[data-ds-dark-theme] 存在，
+    /// dark 判定的唯一实现（唯一实现）：body[data-ds-dark-theme] 存在，
     /// 或 html 内联 color-scheme 以 dark 开头（如 'dark' / 'dark light'）。
     /// source() 与 snapshotSource() 都插值本串，两份脚本不得各自维护判定
     /// （ShellPageFactsTests.testSharedDarkPredicateIsSingleSource 钉住两份产物

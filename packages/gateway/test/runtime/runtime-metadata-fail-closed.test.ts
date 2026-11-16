@@ -1,5 +1,5 @@
 /**
- * 2026-12 Phase B (B2): the gateway runtime manager's authority consumption
+ * The gateway runtime manager's authority consumption
  * fails closed on corrupt/unreadable override / current / known-good material.
  * Corrupt or unknown material proves neither absence nor a legal record, so it
  * must never be projected as "no override" / builtin / zero failures — every

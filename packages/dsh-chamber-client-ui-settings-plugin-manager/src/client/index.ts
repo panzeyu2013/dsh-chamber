@@ -31,7 +31,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** Cross-plugin navigation to the Plugins page (upstream shape, rc.3 adds openList). */
+    /** Cross-plugin navigation to the Plugins page (upstream shape). */
     pluginNavigation: {
       openBundle(packageName: string): void
       openList(): void
@@ -75,7 +75,7 @@ interface ChamberPluginRefreshControl {
 }
 
 const MANAGER_CHILDREN = {
-  // v0.2.1-alpha.1: the upstream page renders this seat in the add-plugin menu
+  // The upstream page renders this seat in the add-plugin menu
   // (PluginManagerPage AddPluginMenu); we embed the page without its apply(),
   // so our registration MUST declare every upstream child or renderSlot throws
   // SlotOwnershipError. Locked by test/dom-seam/vendor-page-dom-seam.test.ts.
@@ -135,7 +135,7 @@ export function apply(ctx: ClientContext): void {
       return () => { unsubscribe() }
     }, 'settings-plugin-manager: plugin refresh convergence')
   } else if ((ctx as ClientContext & { chamberInstanceId?: unknown }).chamberInstanceId !== undefined) {
-    // A chamber shell lacking the seam would silently stop converging (the 2026-10 fix is
+    // A chamber shell lacking the seam would silently stop converging (the seam is
     // wired by string key + structural type across packages): stay loud, like other
     // missing-seat diagnostics in this package.
     console.warn('[dsh-chamber] settings-plugin-manager: chamberPluginRefresh control missing; plugin refresh will not converge')

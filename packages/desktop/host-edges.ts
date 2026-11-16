@@ -67,8 +67,7 @@ export type HostSetBadgeResult =
  *    - 同步 setKeepAwake/setLoginItem：settings 路径走装配 ctx 的 async 叶
  *      （shell-assembly-ctx.ts），这两个成员只服务未来的 HostEdges 直接调用方；
  *      到保留面复核时仍无直接调用方 → 删除成员、保留 ctx 叶。
- *    - trayAvailable/isPackaged（E2/B1）：Electron 侧本就未实现，Swift 侧托盘恒建
- *      （T-15）、打包路径由 ctx/参数解析；关闭行为与打包裁决不再需要经本 seam
+ *      （T-15）、打包路径由 ctx/参数解析；关闭行为与打包裁决不经本 seam
  *      暴露 → 删除成员与 node-edges 的宿主事实缓存。
  *    - focusMainWindow（D3）已离开保留面：core 的 enqueueDeepLink 消费
  *      `dsh-chamber://open`（design 16 §3.1），只抬升已有主窗；该成员是这条腿的
@@ -76,8 +75,8 @@ export type HostSetBadgeResult =
  *      Swift 通知 click 在 SwiftEdgeHostLegs 内自办）。
  *  这些成员不在 preload/bridge-manifest 暴露面内（HostEdges 是主进程内部 seam），
  *  删除不动 A 桥；保留的唯一依据是 design 25 §4.1 的明确保留声明。
- *  electron/electron-edges.ts 头注释列出已实现集合；每个成员标注其设计行来源，
- *  未实现前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
+ *  electron/electron-edges.ts 头注释列出实现集合；每个成员标注其设计行来源，
+ *  未接入前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
 export interface HostEdges {
   /** 主窗口渲染器 push 叶：channel 为 opaque
    *  通道名（Electron 侧恒为 IPC_CHANNELS 常量值），payload 为纯非秘密投影；
@@ -156,7 +155,7 @@ export interface HostEdges {
   showItemInFolder(p: string): void
   /** open-in 原生拉起（design 25 §5 E12）。 */
   launchApp(appId: string, path: string): Promise<boolean>
-  // —— 对话框 ——（2026-09 C 分层：插件源 picker 随插件写面整族移除）
+  // —— 对话框 ——（C 分层：插件源 picker 随插件写面整族移除）
   /** dialog.showErrorBox 包装。 */
   showError(title: string, detail: string): void
   /** dialog.showMessageBox 包装（与草案 Promise<buttonId> 的偏差：buttonId

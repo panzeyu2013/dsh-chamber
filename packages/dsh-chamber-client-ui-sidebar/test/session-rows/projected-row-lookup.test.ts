@@ -1,7 +1,7 @@
 /**
- * Projected-row lookup (search surface): the three search-row derivations used to walk
- * the projected workspaces independently (label, running bit, archived bit).
- * findProjectedRow is now the single traversal; this pins its order contract.
+ * Projected-row lookup (search surface): findProjectedRow is the single traversal of
+ * the projected workspaces for label, running bit and archived bit; this pins its
+ * order contract.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'

@@ -101,9 +101,9 @@ export function runtimeRefusalText(
 }
 
 /* ---- Gateway READ-side fence ----
- * The retired A1 plugin write surface used to fence the read `GET /chamber/plugins/installed`
- * (write in flight → 409 `runtime_busy`, never a torn projection). The write face is gone with
- * the 2026-09 C layering ruling, so the current gateway never answers that 409 here; the
+ * No write surface fences the read `GET /chamber/plugins/installed` (the A1 plugin
+ * write face does not exist): a gate could answer 409 `runtime_busy`, never a torn
+ * projection. The gateway never answers that 409 here; the
  * classifier stays as a defensive read-side shape for older gateways. That 409 is a RETRYABLE
  * BUSY STATE, never a read failure and never folded into an ok shape; both helpers reuse the
  * SAME 409 classifier as the runtime actions, and the copy follows runtimeRefusalText's shape. */

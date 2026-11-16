@@ -9,7 +9,7 @@
  *  - scripts/upstream/verify/verify-upstream-touchpoints.mjs C8 - deterministic
  *    rebuild-and-byte-compare per group (script + output paths);
  *  - scripts/gates/checks/verify-artifact-freshness.mjs cites C8 as the owner of the
- *    seed-dist freshness invariant (it no longer keeps a second seed list).
+ *    seed-dist freshness invariant (it keeps no second seed list).
  *
  * A group is one build script and its outputs: the script is what C8 re-runs,
  * 'build' is the narrow pnpm command ensure-artifacts prints, and 'reason'

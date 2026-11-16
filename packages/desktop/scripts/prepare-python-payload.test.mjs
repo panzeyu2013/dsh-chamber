@@ -2,7 +2,7 @@
  * prepare-python-payload.test.mjs —— python 载荷 machinery 的行为与纪律用例（C5）。
  *
  * 覆盖六件事：
- *  ① 锁是唯一版本/摘要来源：结构校验、未出货目标拒绝、node 版本/摘要不再有 sidecar
+ *  ① 锁是唯一版本/摘要来源：结构校验、未出货目标拒绝、node 版本/摘要没有 sidecar
  *     第二 pin、脚本里不得出现写死的 64 位摘要；
  *  ② 最小解包器（tar.gz / zip，node 内置）在真实布局（符号链接、权限位、
  *     dist-info）上工作，并在越出载荷根 / CRC 不符 / 未知安装 scheme 时拒绝；
@@ -283,7 +283,7 @@ function fixtureFetch(pythonBytes, wheelBytes, nodeBytes = undefined) {
 
 test('① 锁：结构、登记目标与来源字段', () => {
   assert.equal(assertLock(LOCK), LOCK)
-  // x64 腿 2026-12 暂时移除（STATUS）：锁与白名单都只登记 arm64。
+  // x64 腿未启用：锁与白名单都只登记 arm64。
   assert.deepEqual(Object.keys(LOCK.targets).sort(), ['mac-arm64'])
   assert.deepEqual(Object.keys(REGISTERED_TARGETS).sort(), ['mac-arm64'])
   assert.match(LOCK.pythonVersion, /^\d+\.\d+\.\d+$/u)
@@ -319,7 +319,7 @@ test('① 锁：未出货目标 / 坏摘要 / 空清单一律拒绝', () => {
 
 test('① 目标解析与 URL 派生（上游同式）', () => {
   assert.equal(resolveTarget(LOCK, 'darwin', 'arm64'), 'mac-arm64')
-  // x64 暂时移除：darwin/x64 不再有登记目标，必须响亮拒绝（不是回退 arm64）。
+  // x64 暂时移除：darwin/x64 没有登记目标，必须响亮拒绝（不是回退 arm64）。
   assert.throws(() => resolveTarget(LOCK, 'darwin', 'x64'), /没有登记 darwin\/x64/u)
   assert.throws(() => resolveTarget(LOCK, 'linux', 'x64'), /没有登记 linux\/x64/u)
   assert.throws(() => resolveTarget(LOCK, 'win32', 'x64'), /没有登记 win32\/x64/u)
@@ -353,7 +353,7 @@ test('① 计划：条目来自锁，node 可选；pnpm 版本进入 components 
   assert.equal(nodeEntry.sha256, LOCK.targets['mac-arm64'].nodeSha256)
   assert.equal(withNode.components.node, LOCK.nodeVersion)
 
-  // node 版本/摘要的唯一来源是载荷锁：Swift 单 Node 后 build-sidecar 不再另存 pin
+  // node 版本/摘要的唯一来源是载荷锁：Swift 单 Node 后 build-sidecar 不另存 pin
   // （本用例因此不再 import build-sidecar；锁字段自证归档名与摘要形状）。
   assert.match(LOCK.nodeVersion, /^\d+\.\d+\.\d+$/u)
   assert.equal(nodeArchiveName(LOCK, 'mac-arm64'), 'node-v' + LOCK.nodeVersion + '-darwin-arm64.tar.gz')
@@ -616,7 +616,7 @@ test('③ verifyPayload：错版本 dist-info / 缺 pythonPackages 都必须红�
 
     // 解释器基线：CPython 的 install_only 载荷自带 pip（版本随解释器构建变化），
     // 上游 smoke.py 的期望集合是「声明的发行版 ∪ {pip}」——pip 必须按名字放行，
-    // 其余未登记发行版仍然红（release dry run 曾因漏掉这条基线而假红）。
+    // 其余未登记发行版仍然红（漏掉这条基线会假红）。
     const baseline = buildPayload('interpreter-baseline', manifestOf({ numpy: '2.3.5' }))
     mkdirSync(path.join(baseline, layout.sitePackages, 'numpy-2.3.5.dist-info'), { recursive: true })
     mkdirSync(path.join(baseline, layout.sitePackages, 'pip-26.2.1.dist-info'), { recursive: true })
@@ -681,7 +681,7 @@ test('⑤ CLI（main 级）：不带 --target 时按宿主解析，显式未登�
     assert.match(dryRun.stdout, new RegExp('target: ' + hostTarget[0] + '（'))
   }
 
-  // 修掉 null 守卫后，显式 --target 的登记校验不得放宽（mac-x64 腿 2026-12 已移除）。
+  // 修掉 null 守卫后，显式 --target 的登记校验不得放宽（mac-x64 腿未启用）。
   const unregistered = runCli(['--dry-run', '--target', 'mac-x64'])
   assert.equal(unregistered.status, 1)
   assert.match(unregistered.stderr, /未登记的 --target mac-x64/u)
@@ -781,7 +781,7 @@ test('⑥ 源锁：上游 parsePrimaryRuntime 的接受规则行仍在（改了�
  * ⑦ pin 恒等：锁 provenance 的 upstreamCommit 必须等于 harness.commit；同时本锁的
  * node/python 坐标（含 nodeSha256）必须逐项等于上游 pin 的 scripts/primary-runtime/
  * lock.json——本仓相对上游只允许收窄 targets（design 18 §4.2 的出货平台裁决）。
- * pin 升级时本锁与上游锁同批移动；此前升级漏改过 provenance——本文件把这种漏改变成红。
+ * pin 升级时本锁与上游锁同批移动；升级漏改 provenance 会被本文件判红。
  */
 test('⑦ 锁 provenance 的 upstreamCommit 与 harness.commit 一致（pin 升级必须同批）', () => {
   const provenance = JSON.parse(LOCK_TEXT).provenance

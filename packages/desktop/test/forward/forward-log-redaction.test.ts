@@ -13,7 +13,7 @@
  *   - the refusals satisfy the wire's `ForwardError` guard (the closed table).
  *
  * The launcher adapter's stderr redaction (`redactSshStderr`, askpass lease) is
- * tested with the ssh child adapter (TODO S1): this file never claims it.
+ * tested with the ssh child adapter this file never claims it.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

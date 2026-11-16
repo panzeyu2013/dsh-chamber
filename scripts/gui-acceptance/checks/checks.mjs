@@ -885,7 +885,7 @@ export function veilLayeringVerdict({ veilFrames = 0, samples = [], error = null
  * Kept here instead of importing the browser package: checks.mjs is the
  * dependency-free judgement layer and the package is a source-only renderer
  * package. The mirrored iframe constants are frozen with the archived leg
- * (`view/IframePresentation.ts` no longer exists); checks.test.mjs still mirrors
+ * (`view/IframePresentation.ts` does not exist in the tree); checks.test.mjs still mirrors
  * the LIVE pieces from `view/BrowserBody.tsx`, `definition.tsx`,
  * `shared/source.ts` and `browser/ForwardFrameResolver.ts`, plus the vendored
  * upstream guide/chip markers.

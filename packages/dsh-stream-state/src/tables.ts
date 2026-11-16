@@ -96,9 +96,8 @@ export const LADDER_TABLES = {
   /**
    * The session-fact authority:
    * ONE set of numbers for two hosts of the same engine - the sidebar executor's
-   * probe cadence and the App's reconnect/notice escalation. They replace the
-   * former renderer-local SESSION_LIVENESS_DEFAULTS and the sidebar's 190 s
-   * receipt chain (both retired by P2).
+   * probe cadence and the App's reconnect/notice escalation — one table, no former
+   * renderer-local SESSION_LIVENESS_DEFAULTS and no sidebar 190 s receipt chain.
    */
   authority: {
     /** Probes (independent authority reads) per running episode. */

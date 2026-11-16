@@ -627,7 +627,7 @@ export function observeSource(input: {
         }
       }
     } else if ((factsUsable || factsCandidatePushed) && factsCandidateRow !== undefined && running !== 'running') {
-      // I1（Wave6）**契约**（design 19 §3.2.3 已落地，与本实现逐字一致）：running 权威为
+      // I1 **契约**（design 19 §3.2.3，与本实现逐字一致）：running 权威为
       // running 时**不得**消费 facts 水位记忆（不推进 memory.factsWatermark、不吸收进
       // pending），候选保持可重提——两通道可能相差一个 commit（facts 已报完成、壳仍停在
       // 上一回合的 running），此刻 reconcile 会按 running 早退丢弃候选；若这里已推进水位，

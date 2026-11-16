@@ -21,8 +21,8 @@ import {
   REMOTE_STREAM_RETRY_BASE_MS,
   REMOTE_STREAM_STABLE_CARRIER_MIN_MS,
 } from '../../src/client/remote-retry-policy.ts'
-// P3: the opening deadline and the teardown floor are table values now (the fork
-// copies were retired with their G-G lockstep entries).
+// The opening deadline and the teardown floor are table values now (the old fork
+// copies are gone; the tables are the single source).
 import { OPENING_TIMEOUT_MS, SILENT_TEARDOWN_MIN_MS } from '@dsh-chamber/dsh-stream-state'
 
 class FakeSocket {
@@ -957,7 +957,7 @@ test('a stream answered by its opening item clears the request miss streak', asy
   // Delivery IS the opening's success (R2): the delivered opening clears the request
   // key's consecutive-miss count, so the NEXT timeout of the same request is a FIRST
   // miss again - below the escalation threshold - instead of inheriting a count the
-  // answered sibling no longer deserves.
+  // answered sibling does not deserve.
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const client = new RemoteStreamMuxClient({ waitForReconnect: true })
@@ -1118,12 +1118,12 @@ test('an open frame is refused when the socket was replaced before the send', as
 })
 
 /* ---------------------------------------------------------------------------
- * P1-4: the self-heal cadence resets only on recovery EVIDENCE. A bare open (a
+ * The self-heal cadence resets only on recovery EVIDENCE. A bare open (a
  * listener that accepts and immediately drops) or a lane-driven replacement is
  * not evidence; a delivered frame or a socket that outlives the stability window
  * is. These tests drive the REAL mux on a virtual clock and pin the exact rungs,
- * so removing either evidence arm makes them red (the negative control used while
- * implementing P1-4 removed the gate and watched the first test fail here).
+ * so removing either evidence arm makes them red (a negative control removes the
+ * gate and the first test fails here).
  * ------------------------------------------------------------------------- */
 
 /**
@@ -1388,7 +1388,7 @@ test('a live generation paces the reopen with the episode backoff', async (t) =>
   await flushMicrotasks()
   assert.equal(opens, 2, 'the first failure reopens immediately')
   // The second failure is paced by the base backoff — the live-generation
-  // branch, so the no-generation bound plays no part here. P1-4 adds half-jitter, so
+  // branch, so the no-generation bound plays no part here. The half-jitter makes
   // the reopen is bounded by [half, full] of the base instead of an exact instant:
   // nothing may fire before the floor, and the ceiling guarantees it has fired.
   t.mock.timers.tick(REMOTE_STREAM_RETRY_BASE_MS / 2 - 1)

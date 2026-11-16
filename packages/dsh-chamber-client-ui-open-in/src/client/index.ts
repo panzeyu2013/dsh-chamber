@@ -141,15 +141,15 @@ export function apply(ctx: ClientContext): void {
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
     name: OPEN_IN_HEADER_SLOT,
     // Our own id, deliberately NOT the official row's `open-in-app`. The official
-    // client row now loads from the host graph (chamber-covered.ts no longer skips
+    // client row loads from the host graph (chamber-covered.ts does not skip
     // it) for its file-level seats; its own header entry stays inert on this page
     // because it reads document-relative `open-in-app/*` routes that resolve to
     // the control-plane origin. Distinct list ids are what let both entries
     // coexist: the registry THROWS on a duplicate id at one priority.
     id: 'open-in',
     // Row order ascends by `order` (default 0). -10 is the official `open-in-app`
-    // row's own value; the vendor Session-log header action this used to neighbour
-    // was removed upstream, so the button sorts left of default-0 entries.
+    // row's own value; the vendor Session-log header action is gone upstream, so
+    // the button sorts left of default-0 entries.
     order: -10,
     // Neutral entry label (slot diagnostics — the user-facing copy comes from the component).
     label: () => t('titleOpen'),

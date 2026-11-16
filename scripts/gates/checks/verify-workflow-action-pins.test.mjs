@@ -3,7 +3,7 @@
  * mirrors. A silent divergence is the failure mode, so every case below pins a
  * drift as a finding (and the real repository as finding-free).
  *
- * The static-gate set no longer needs a parity test here: the gate registry is the
+ * The static-gate set does not need a parity test here: the gate registry is the
  * single source, run-checks derives from it and ci.yml/release.yml render from it
  * (freshness covered by gate-workflow-views.test.mjs).
  */

@@ -209,7 +209,7 @@ test('entries carry the title/workspace/updatedAt presentation facts when presen
   assert.equal(entry?.workspaceTitle, '工作区 repo-a')
   assert.equal(entry?.updatedAt, 1234)
   // An empty title stays empty in the DURABLE field — the component's unnamed
-  // copy is no longer reachable for it: the entry carries the official display
+  // copy is not reachable for it: the entry carries the official display
   // label (here the row's id, since the derived row has no cwd fact), so the
   // todo strip can never claim 「未命名会话」 for a session the host simply
   // could not title.

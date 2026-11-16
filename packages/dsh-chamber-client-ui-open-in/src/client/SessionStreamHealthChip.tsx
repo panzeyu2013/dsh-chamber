@@ -9,8 +9,8 @@
  * React wiring and the markup; the visible surface (notice, whether to keep
  * ticking) is the pure projection in `session-stream-health-chip-face.ts`, so it
  * can be behaviour-tested without a DOM. It renders at most one line of status
- * text and NO control: the manual reload/rebuild lever was retired (user
- * ruling — upstream has no such control), and nothing here reloads, re-opens,
+ * text and NO control (upstream has no manual reload/rebuild lever), and
+ * nothing here reloads, re-opens,
  * rebuilds or navigates on its own.
  */
 import { useEffect, useState, type ReactElement } from 'react'

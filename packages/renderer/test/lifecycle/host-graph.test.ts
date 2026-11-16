@@ -551,7 +551,7 @@ test('toExtraRows: normalizes root-relative and document-relative bundle urls, d
   const out: ExtraModuleRow[] = toExtraRows(rows, '/api/i/ssh-42')
   assert.deepEqual(out.map((r) => r.id), ['@scope/pkg', 'pkg-relative', 'pkg-doc-combo'])
   assert.equal(out[0].url, '/api/i/ssh-42/plugins/??@scope/pkg&rev=abc123')
-  // 0.1.7：document-relative 行必须归一进实例前缀（此前被整行丢弃 = 实例丢光 profile 插件）
+  // document-relative 行必须归一进实例前缀（整行丢弃会让实例丢光 profile 插件）
   assert.equal(out[1].url, '/api/i/ssh-42/plugins/p/client.js?rev=r')
   assert.equal(out[2].url, '/api/i/ssh-42/plugins/??a.js,b.js&rev=r', 'combo 语法原样随行')
 })

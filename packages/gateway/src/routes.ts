@@ -3,9 +3,8 @@
  * auth gate (dispatch.ts) — the desktop-synced host-package seed cache, the
  * managed-profile plugin READ projection (installed), the read-only
  * session-state watcher, the browser dashboard, and the separately dispatched
- * `/chamber/runtime/*` controller. The user plugin
- * write surface (install / materialize / remove / undo / tasks) was retired
- * with the 2026-09 C layering ruling. Every route reads/writes gateway-owned
+ * `/chamber/runtime/*` controller. No user plugin write route exists (install /
+ * materialize / remove / undo / tasks). Every route reads/writes gateway-owned
  * state; authoritative dsh facts stay on dsh.
  */
 
@@ -164,8 +163,8 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
 
     // GET /chamber/plugins/installed: the gateway readManifest projection of the
     // MANAGED dsh web profile manifest the desktop's localPluginList reads.
-    // Read-only; the user plugin write surface was retired with the 2026-09
-    // C layering ruling, so no writer fence is consulted. Status matrix:
+    // Read-only; the user plugin write surface is not served, so no writer
+    // fence is consulted. Status matrix:
     //   200 profile present (ok + dependencies/rows/profileExists)
     //   404 profile_absent (not made)
     //   500 profile_corrupt (unreadable; detail logged, not echoed — it may
@@ -221,9 +220,8 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
   // The public boundary is the `/` proxy to the managed dsh
   // (gateway-proxy.ts), the READ routes above, the desktop-synced seed cache
   // (PUT /chamber/plugins — chamber provisioning), and the separately
-  // dispatched /chamber/runtime controller. No user plugin write route exists:
-  // the install/materialize/remove/undo/tasks surface was retired with the
-  // 2026-09 C layering ruling.
+  // dispatched /chamber/runtime controller. The install/materialize/remove/undo/
+  // tasks surface is not served here.
   return {
     async handle(req, res, pathname): Promise<boolean> {
       return handleRoute(req, res, pathname)

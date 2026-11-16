@@ -11,7 +11,7 @@
 //
 //  降级语义（headless/无窗/self.config.canShowUI()==false → 一律诚实错误
 //  "swift-edge-ui-unavailable:<method>"，绝不静默假装成功）：
-//  - 已实现腿（全部带守卫）：focusMainWindow /
+//  - 腿（全部带守卫）：focusMainWindow /
 //    showMessage（异步 NSAlert 消费）/ showNativeNotification
 //    （UNUserNotificationCenter + click 回灌 __host.notifyClicked）/
 //    openExternal / openPath / showItemInFolder / setBadge（dockTile）/
@@ -265,8 +265,7 @@ public final class SwiftEdgeHostLegs {
     /// D3 按需：断言 = 设置开启 **且** 窗口可见。可见性事实来自 D2 的宿主可见性腿
     /// （MainWindowController.pushShellVisibility → windowVisibilityDidChange），
     /// 与渲染侧前台相位门同源；窗口隐藏 / 遮挡 / 最小化期间不再持长期断言
-    /// （实机症状 = 无窗数月仍持 89h）。隐藏期「前台任务」（需保活的长任务）判据
-    /// 未落；登记见 docs/progress/STATUS.md §1.7。「遮挡即释放」的产品取舍同为待裁项。
+    /// （实机症状 = 无窗数月仍持 89h）。隐藏期「前台任务」（需保活的长任务）不适用本判据；「遮挡即释放」的取舍由产品裁决。
     private func updateKeepAwake(enabled: Bool) {
         keepAwakeRequested = enabled
         reconcileKeepAwake()

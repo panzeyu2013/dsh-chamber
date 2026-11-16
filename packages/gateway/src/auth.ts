@@ -347,8 +347,8 @@ export function seedCredentialsFromConfig(config: AuthConfig, store: GatewayStor
     if (tokenRecord === null || tokenRecord.source === 'config') {
       // SHAPE-AWARE comparison: an hmac verifier is proven with the token key, a
       // legacy scrypt verifier with scrypt. Comparing an hmac record through the
-      // scrypt path always fails, which used to rewrite scrypt on every boot and
-      // silently undo the O(1) fast path (design 17 §7.2).
+      // scrypt path always fails, which must not rewrite scrypt on boot nor undo
+      // the O(1) fast path (design 17 §7.2).
       const unchanged = tokenRecord !== null && tokenVerifierMatches(configToken, tokenRecord.verifier, store)
       if (!unchanged) store.setTokenHash(hashToken(configToken, store.ensureTokenKey()), 'config')
     } else {

@@ -468,8 +468,8 @@ async function boot(): Promise<void> {
     console.error('[sidecar] ' + describeHostRootLeaseFailure(error))
     process.exit(EXIT_STARTUP_FAILURE)
   }
-  // E1（启动账）：登录 shell 探针与 buildHeadlessCtx（≈1.1s 的装配）重叠。此前它在装配之后
-  // 才发起，0.64s（冷尾实测 1.19s）整段落在首帧关键路径上；语义不变——仍是「入口发起、
+  // E1（启动账）：登录 shell 探针与 buildHeadlessCtx（≈1.1s 的装配）重叠。它在装配之后
+  // 才发起会把 0.64s（冷尾实测 1.19s）落在首帧关键路径上；语义不变——仍是「入口发起、
   // 首个宿主 spawn 前 await」，退出/致命早退由 abortLoginShell() 中止。
   loginShellAbort = new AbortController()
   const loginShellEnvironment = startLoginShellEnvironment(
@@ -579,7 +579,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
     // Swift native guest carrier (a top-level WKWebView document), so the shell keeps
     // the control-plane default short claim (`frame-src blob:`, document previews
     // only) — do NOT pass frameSources here again. The frozen Electron entry keeps
-    // the retired v2 widening in its own archived file (electron-frozen.md);
+    // the retired v2 widening in its own archived file;
     // gateway/cli/standalone never pass it either.
 
     ...(args.hostGraphDir !== null ? { hostGraphPackageSourceDir: args.hostGraphDir } : {}),

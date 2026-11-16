@@ -1,7 +1,7 @@
 /**
  * Gateway chamber plugin sync over a POSIX UDS tunnel (design 17 §9.3).
  *
- * The controlled-restart leg used to omit the tunnel dial target: the probe and
+ * The controlled-restart leg must not omit the tunnel dial target: the probe and
  * the upload dialed the UDS listener, while `POST /chamber/runtime/restart` fell
  * back to `127.0.0.1:<remote port>` and could only ever ECONNREFUSED (observed
  * 4× in the shipped 0.4.5-beta.6 log). An uploaded package therefore waited for

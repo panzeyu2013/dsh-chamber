@@ -4,7 +4,7 @@
  * 状态面（design 19 §3.2.3）：**三张 durable 表 + 五项易失 per-source 表**：
  *   - notified（durable）：facts 入口的已通知水位（每 (source, session, kind)，单调只升）；
  *   - outcomes（durable）：目标/中性标题的**一次性身份**（每 (source, goalId) 的水位）——
- *     R2-A/TL1：同一 goalId 的「目标已完成/已受阻/未继续运行」至多发一次，其后一律回落
+ *     TL1：同一 goalId 的「目标已完成/已受阻/未继续运行」至多发一次，其后一律回落
  *     「会话已完成」；
  *   - pending（durable）：目标活跃期间被压制的完成结算位（每 (source, session)）；
  *   - armed（volatile）：壳边沿的「已发 complete 直到重新 running」武装位；

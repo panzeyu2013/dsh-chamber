@@ -43,7 +43,7 @@ test('the live-generation branch never throws — a keep-failing carrier cannot 
 })
 
 test('the reopen loop keeps the revision/abort guards around the retry', () => {
-  // P1-4: attempt 1 also carries the mux's per-stream reopen spread (0 on failures the
+  // attempt 1 also carries the mux's per-stream reopen spread (0 on failures the
   // mux did not fan out), so a failure fan-out does not reopen every stream in one tick.
   assert.match(
     carrier,
@@ -119,7 +119,7 @@ test('non-carrier escapes are still marked terminal for consumers', () => {
 test('the pacing policy stays import-free so it is unit-testable without the vendor graph', () => {
   assert.doesNotMatch(policy, /^import /mu, 'the policy module must not import anything')
   assert.doesNotMatch(policy, /@deepseek-ai\//u, 'the policy module must not reach a vendor specifier')
-  // P1-4: the delay now carries a half-jitter with an injectable RNG (default
+  // the delay carries a half-jitter with an injectable RNG (default
   // Math.random), so tests can pin the distribution; the carrier keeps calling it with
   // the attempt alone.
   assert.match(policy, /export function remoteStreamRetryDelayMs\(attempt: number, random: \(\) => number = Math\.random\): number/u)

@@ -90,8 +90,8 @@ export const MAX_REMOTE_DSH_HOME_CHARS = 1024
 /** Content bounds SINGLE-SOURCED in control-plane `plugin-spec.ts` and consumed through
  *  control-plane-module.ts (packaged → compiled dist, dev → workspace source), the same rule as
  *  the rpc-envelope primitives; re-exported here so this provider's consumers keep one unchanged
- *  import surface. The user plugin write surface (and with it the spec/name whitelist family)
- *  was retired with the 2026-09 C layering ruling. */
+ *  import surface. No user plugin write surface (and with it no spec/name whitelist
+ *  family) exists here (C layering ruling). */
 export { MAX_SSH_PASSWORD_CHARS, RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES }
 
 /** Bound of the redacted stderr detail attached to failed `run` errors. */

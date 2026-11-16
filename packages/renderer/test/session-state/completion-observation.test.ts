@@ -1988,7 +1988,7 @@ test('CONTROL(C4-X2): the recovery-batch seeding is a no-op without a fence, so 
 })
 
 test('REGRESSION(C4-X3): a stale shell snapshot produces no complete/ask/request edge, including on stale true→false', () => {
-  // 反例：stale 快照的 running false / vendor completed / pending 变化此前仍会被当成
+  // 反例：stale 快照的 running false / vendor completed / pending 变化不得被当成
   // 壳边沿证据产候选。stale = 断连来源上附加的只读事实，不得作运行证据。
   const first = observeSource({
     sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
@@ -2646,7 +2646,7 @@ test('R1: an old anchor is never borrowed (the edge stays anchorless and the ide
 
 // ── C1：壳上报撤回按 provenance 分域（facts 载体未换代只清壳轨） ─────────────
 //
-// 回归形状：桥面 `onRuntimeReport(undefined)`（shell 重连/重 boot 窗口）此前走整代
+// 回归形状：桥面 `onRuntimeReport(undefined)`（shell 重连/重 boot 窗口）不得走整代
 // 撤回（删观测状态 + 账本 withdraw）。facts 载体并未换代，窗口内到达的 observed+host
 // 完成本应经 facts 轨通知一次；观测状态被删 ⇒ 下一批是 freshState/G2 播种批，水位被
 // 吸收进 memory.factsWatermark，候选永不产生（通知丢发，重放也补不回），prevRunning

@@ -251,7 +251,7 @@ export function SidebarRoot({
   // macOS 隐藏标题栏（红绿灯浮在侧栏顶，Swift 壳 titlebarAppearsTransparent；上游官方
   // 桌面 titleBarStyle:'hiddenInset' 同形）：该带与红绿灯同一行，展开/折叠两态都把面板
   // 开关停在这一行——上游同一块（ui-sidebar SidebarRoot.tsx 的 darwin 分支）；chamber
-  // fork 此前整块缺失，字标因此直接贴在红绿灯下沿（web 无窗控件，同一布局看着正常）。
+  // fork 补齐该带，字标与红绿灯同行（web 无窗控件，同一布局看着正常）。
   // 判定读壳写的 <html data-platform>（Electron preload / Swift bridge-shim 的
   // markDocumentPlatform，documentStart 注入 + DOMContentLoaded 兜底）；侧栏经 client-plugin
   // 图加载后才挂载，此刻标记必已就位，故渲染期直读即可（上游同款读法）。

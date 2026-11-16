@@ -21,7 +21,7 @@
  * re-export face is judged). An export with no importer is red unless it is
  * covered by a documented exemption.
  *
- * KNOWN REMAINING HOLE (measured 2026-09): the own-entry skip below covers the
+ * KNOWN REMAINING HOLE: the own-entry skip below covers the
  * \`import {…} from\` loop only. A package's own \`export {…} from\` barrel line still
  * counts as a consumer, so barrel-only names stay green. Completing the skip there
  * surfaces 31 test-only runtime exports across control-plane (15), dsh-runtime (14),
@@ -73,8 +73,8 @@
  * the reason a reviewer accepted and where the consumer lands. A stale exemption
  * (the export is imported or gone) is red: the list may not lie.
  *
- * RETIRED PLUGIN WRITE SURFACE. The 2026-09 C layering ruling (D1) deleted every
- * user-reachable plugin write IPC method; RETIRED_PLUGIN_WRITE_FACE_NAMES is the
+ * RETIRED PLUGIN WRITE SURFACE. Every user-reachable plugin write IPC method is
+ * retired; RETIRED_PLUGIN_WRITE_FACE_NAMES is the
  * single owner of that set, and this gate scans the shipped surfaces (package
  * sources incl. the renderer type face, the desktop sidecar stub and the native
  * shell's shim/manifest sources) so a write method cannot quietly reappear in a
@@ -274,7 +274,7 @@ export const ENTRYLESS_SEAMS = [
 ]
 
 /**
- * The retired user plugin WRITE face (2026-09 C layering ruling / D1): IPC
+ * The retired user plugin WRITE face: IPC
  * method and channel names that must not reappear in any shipped surface. The
  * settings-connections read-face lockstep suite imports this constant, so the
  * set has one owner; the gate scans the surfaces in retiredWriteFaceScanFiles().
@@ -457,12 +457,12 @@ export const INTERNAL_SURFACE_PACKAGES = {
 
 /**
  * Accepted implementation exports with no production importer and no self-use
- * (R4 review 2026-11-10; narrowed by the browser v3 fix batch). Each entry must
+ * (narrowed by the browser v3 fix batch). Each entry must
  * STAY dead: a production importer, a self-use, or a vanished export makes the
  * entry stale (red), exactly like the other exemption tables. The remaining entry
- * is upstream-verbatim text kept under a SHA lock; the test-only carrier guards
- * that used to be listed here were DELETED with their tests (design 28 v3 §3,
- * D16) instead of being allowlisted, so do not re-add them.
+ * is upstream-verbatim text kept under a SHA lock; test-only carrier guards are
+ * deleted with their tests (design 28 v3 §3, D16) instead of being allowlisted,
+ * so do not re-add them.
  * @type {readonly { package: string, name: string, reason: string }[]}
  */
 export const INTERNAL_SURFACE_ALLOWLIST = [

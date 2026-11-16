@@ -129,9 +129,9 @@ test('a dormancy backoff keeps a quiet stream from probing forever', () => {
 })
 
 test('EVERY publication advances the silence window (notification/prepend included)', () => {
-  // P1-4: the field comment always claimed every published value is progress, while
-  // the code gated on replace/append — so a notification-only assistant stream was
-  // probed at 45 s even though its Host was producing. Prepend (a delivered page) and
+  // Every published value is progress (not only replace/append, so a notification-only
+  // assistant stream is not probed as silent while its Host is producing). Prepend (a
+  // delivered page) and
   // cursorless notifications arrive over the LIVE generation, so they are delivery
   // evidence too; the fork patch's lock pins the unconditional mark.
   assert.match(

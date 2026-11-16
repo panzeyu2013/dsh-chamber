@@ -6,8 +6,8 @@
  * WHY: the boot fetch (`renderer/src/host-graph.ts` fetchHostGraph) and the
  * channel self-heal recheck (`plugin-graph-recheck.ts`) answer the same wire
  * question for the same instance, and the recheck's write-back discipline is that
- * its verdict is word-for-word what the next shell boot would report. Both used to
- * carry their own branch tree and message literals; this module is that tree once.
+ * its verdict is word-for-word what the next shell boot would report. This
+ * module is that branch tree and those message literals once — never duplicated.
  * A consumer MUST classify through `classifyPluginGraphOutcome` and take its copy
  * from the verdict — neither may re-test a status code or re-spell a
  * `host-boot-graph` literal.

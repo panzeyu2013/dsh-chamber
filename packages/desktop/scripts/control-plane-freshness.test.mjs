@@ -11,8 +11,8 @@
  * Two facts are pinned on the REAL artifact:
  *   - the bundle carries the CURRENT protected-set READ-face copy (markers
  *     below; the esbuild bundle preserves the operator-facing strings); the
- *     user plugin write-face verifier was retired with the 2026-09 C layering
- *     ruling, so the markers pin the derivation/resolution facts only;
+ *     user plugin write-face verifier is retired (C layering), so the markers
+ *     pin the derivation/resolution facts only;
  *   - the bundle is SELF-CONTAINED: every import/export specifier is a `node:`
  *     builtin. A bare workspace specifier (`@dsh-chamber/dsh-chamber-wire`,
  *     whose source ships as .ts under node_modules) or a relative hop resolves

@@ -272,7 +272,7 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
    *
    * **闸只包 apply 一步，绝不包 reconcile/arm**：`pendingOutboxClaimsRef` 是**页级单格**
    * （apply 写、reconcile 取并清），把 reconcile 延后会把「写-清」拆到两个栈，导致 A/B 两来源
-   * 同任务的认领互相覆盖/误清、让行门失效 ⇒ 同一完成可双横幅（2026-09-30 R1/R2/R4 复核发现）。
+   * 同任务的认领互相覆盖/误清、让行门失效 ⇒ 同一完成可双横幅。
    * 因此 reconcile 保持 inline guarded、arm 保持自己的闸，两者语义与改动前逐字一致。
    *
    * 载荷：重入被延后时只保留**最新**一份（快照累积且游标单调，见 session-facts-source），
@@ -639,7 +639,7 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     delete prevRunningRef.current[sourceId]
     completionObservationRef.current.delete(sourceId)
     // 撤回即作废待排空 facts：否则闸活跃期内登记的快照会在 dropSession 之后跑，
-    // 把已删来源的 facts 行复活（2026-09-30 R1 复核 F2）。
+    // 把已删来源的 facts 行复活。
     pendingFactsRef.current.forget(sourceId)
     applyPoolRef.current?.forget(sourceId)
     completeLedgerRef.current.withdraw(sourceId)

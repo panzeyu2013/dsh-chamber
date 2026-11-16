@@ -24,7 +24,7 @@
  *             `runningRingVisible` 只负责拒绝渲染面再长出第二个权威。
  * 纯函数、零依赖：node 直跑。
  *
- * goal 呈现门（design 19 §3.2.1/§3.2.5，2026-12）：本模块同时是 goal
+ * goal 呈现门（design 19 §3.2.1/§3.2.5）：本模块同时是 goal
  * 三值事实与该门的**零依赖叶模块**——{@link GoalFact}、{@link
  * goalSuppressesPresentation}、{@link goalHoldsCompletion} 都从这里导出，供
  * derive.ts（解析/签名）、todo-attention.ts（待办压制）与客户端呈现面共用；徽标

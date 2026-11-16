@@ -87,7 +87,7 @@ test('gateway start: a swap-attempted block keeps the gateway up with dsh stoppe
   }
 })
 
-/** 3.1 (2026-12 review): the boot metadata-recovery preflight is tri-state and
+/** 3.1: the boot metadata-recovery preflight is tri-state and
  *  fail-closed — ONLY an explicit `false` may fall through to startLocal(). */
 test('gateway start: metadata preflight stops the managed dsh for pending AND unreadable metadata', async () => {
   const cases = [

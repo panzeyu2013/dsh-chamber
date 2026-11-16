@@ -1,5 +1,5 @@
 /**
- * P1-4 retry jitter — the cross-cutting acceptance suite (plan §4.8).
+ * Retry jitter — the cross-cutting acceptance suite.
  *
  * WHY THIS FILE EXISTS. The carrier retry lane is the one place a single physical
  * failure fans out to every logical stream, so the pacing math must both widen (no
@@ -171,7 +171,7 @@ test('the mux resets its cadence only through the one evidence-gated method', ()
     'exactly one assignment to the cadence may exist')
   const note = bodyBetween(client, 'private noteStableCarrier(): void {', '  private maintain()')
   assert.match(note, /this\.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS/u)
-  // The bare handshake no longer resets it (the regression this gate removes).
+  // The bare handshake does not reset it; this gate locks that.
   const opened = bodyBetween(client, 'const opened = (): void => {', 'const failed = (): void => {')
   assert.match(opened, /this\.socketOpenedAt = Date\.now\(\)/u, 'an open starts the stability clock')
   assert.doesNotMatch(opened, /maintainIntervalMs/u, 'a bare open must not reset the cadence')

@@ -10,7 +10,7 @@
  *                                  加载——包外裸说明符在打包态不可解析）
  *   <out>/primary-runtime/         全量 payload（python/node/pnpm）的拷贝；
  *   <out>/office-skills/           office 技能资产的拷贝（4 个 SKILL.md；rc.2 资产面）。
- *                                  **单 Node 裁决（swift-impl-contract）**：不再
+ *                                  **单 Node 裁决（swift-impl-contract）**：不
  *                                  下载/固定/重命名独立 Node，也没有
  *                                  `dsh-chamber-helper`——装配内唯一的 Node 就是
  *                                  payload 的
@@ -554,7 +554,7 @@ export function buildPlan(options) {
     steps.push(`[3d] 拷贝内置 dsh 工作区 → ${layout.vendorDsh}（${VENDOR_DSH_FILES.join(' / ')} + node_modules）`)
     steps.push(`[3e] 拷贝内嵌 pnpm → ${layout.pnpm}（package.json + bin/pnpm.{cjs,mjs} + dist）`)
   }
-  // 单 Node 裁决：不再有「Node 捆绑」步骤；装配内唯一的 Node 来自 payload。
+  // 单 Node 裁决：没有「Node 捆绑」步骤；装配内唯一的 Node 来自 payload。
   if (options.skipPython) steps.push('[4] 跳过 python 载荷（--skip-python）')
   else {
     steps.push(`[4] python 载荷：${options.pythonPayloadDir} → ${layout.primaryRuntime}`
@@ -769,7 +769,7 @@ export async function runBuildSidecar(options, io = {}) {
   mkdirSync(layout.outDir, { recursive: true })
 
   // 0. 迁移清理：旧布局的独立 Node 产物（<out>/node 与 dsh-chamber-helper）会被
-  // build-swift-app 原样拷进 .app 一起签名发布；单 Node 裁决后它们不再被任何运行期
+  // build-swift-app 原样拷进 .app 一起签名发布；单 Node 裁决下它们不被任何运行期
   // 解析（装配内唯一的 Node 在 payload 里），必须从持久装配目录清掉。
   rmSync(path.join(layout.outDir, 'node'), { force: true })
   rmSync(path.join(layout.outDir, 'dsh-chamber-helper'), { force: true })
@@ -780,7 +780,7 @@ export async function runBuildSidecar(options, io = {}) {
     rmSync(layout.vendorDsh, { recursive: true, force: true })
     rmSync(layout.pnpm, { recursive: true, force: true })
   }
-  // --skip-node 不再产/清任何独立 Node（单 Node）：它只表达「不要求 payload node」。
+  // --skip-node 不产/不清任何独立 Node（单 Node）：它只表达「不要求 payload node」。
   // python 载荷的跳过 = 清空缺位（持久 <out> 里的旧载荷会被 build-swift-app 原样
   // 拷进 .app 一起签名发布）；payload 里的 node/pnpm 随之一起缺位。
   if (options.skipPython) rmSync(layout.primaryRuntime, { recursive: true, force: true })
@@ -947,10 +947,10 @@ if (isCliEntry(import.meta.url)) {
       '       [--require-python] [--require-node] [--require-pnpm] [--require-office-assets] [--help]',
     ],
     parse: parseBuildSidecarArgs,
-    // G5（design 21 §7；TODO D§2.2）：装配成功后对现行出货腿消费的输入产物做
+    // G5（design 21 §7）：装配成功后对现行出货腿消费的输入产物做
     // 存在 + 新鲜度兜底（dist/web 的 .build-manifest.json 摘要与
     // dist/control-plane 的输入 mtime）。dry-run 不查：它不写盘，也不代表产物
-    // 会进入打包。Electron 复活时按 electron-frozen §6 在 before-pack 里改用
+    // 会进入打包。Electron 复活时按冻结登记的复活清单在 before-pack 里改用
     // requirePresence: true + mode: 'electron-pack' 即可（同一份 guard）。
     run: async (options) => {
       const result = await runBuildSidecar(options)

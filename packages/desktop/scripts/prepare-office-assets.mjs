@@ -4,7 +4,7 @@
  *
  * 上游口径（rc.2）：`@deepseek-ai/dsh-skill-office` 只随包发布 4 个技能资产
  * （`office`/`office-docx`/`office-pptx`/`office-xlsx` 的 SKILL.md）；上游
- * primary-runtime prepare 自 rc.2 起不再产出 `office-skills/` sibling（桌面由
+ * primary-runtime prepare 不产出 `office-skills/` sibling（桌面由
  * web-app bundle 的 skill-office 行读包内 assets）。本仓仍落位这份 sibling：载荷
  * 内的运行时树会被 prune 删掉非 `docs/` 下的 Markdown（包括包内 SKILL.md），
  * 启动行必须用 `assetRoot` 指向未被裁剪的这份拷贝。
@@ -16,7 +16,7 @@
  *
  * 落位纪律（产物是**生成目录**，只提交本目录的 README.md）：
  * - 逐文件「同目录 temp + rename」覆盖：任一步失败都不会让已有产物消失/半写；
- * - 保留仓库提交的 README.md，并**递归**清掉非期望文件/目录（旧版本留下的技能目录、
+ * - 保留仓库提交的 README.md，并**递归**清掉非期望文件/目录（陈旧技能目录、
  *   期望目录内的陈旧文件，例如 8→4 后残留的 office/references/sidecar.md）；
  * - 写完立即以源为基准自查（清单文件全部在场 + sha256 逐文件一致），不一致即失败；
  * - 源可用时 `--verify` 逐文件比对 sha256；源不可用（干净 checkout 没初始化 vendor）
@@ -205,7 +205,7 @@ function removeStaleTempFiles(rootDir) {
 }
 
 /**
- * 清掉落点里不在资产清单内的文件/目录（递归）：旧版本技能目录、期望目录内的陈旧文件
+ * 清掉落点里不在资产清单内的文件/目录（递归）：陈旧技能目录、期望目录内的陈旧文件
  * （如 8→4 之后的 office/references/sidecar.md）、顶层杂文件；committed README 保留。
  * 只删清单之外的路径，清单内文件由落位步骤覆盖。
  * @param {string} outDir - 落点目录（已存在）。

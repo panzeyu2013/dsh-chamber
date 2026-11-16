@@ -296,7 +296,7 @@ test('⑨ 订阅者抛错不反噬控制器：check 不卡死、二次检查仍�
 })
 
 test('⑩ start()：15s 静默首检 + 上游节奏（update-schedule 单一来源），unref/幂等/stop 可停；失败轮退避且不抛穿', async () => {
-  // 2026-09 跟随上游：节奏收敛到 update-schedule.ts（600s 基准 ±20% 抖动 + 失败退避
+  // 节奏收敛到 update-schedule.ts（600s 基准 ±20% 抖动 + 失败退避
   // 封顶 1h + DSH_DESKTOP_UPDATE_CHECK_* env）。两侧都必须从那里取，写死周期即红。
   const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)))
   const updaterSource = readFileSync(path.join(here, 'updater.ts'), 'utf8')
@@ -682,7 +682,7 @@ test('⑰b P20-B：原生安装触发的 edge reject 收敛为逐字拒绝回执
   controller.stop()
 })
 
-// --- 2026-12 复审方向 A：headless nudge 门反 / stop 终局 / 启动日志（A4/A7/A9） ---
+// --- headless nudge 门 / stop 终局 / 启动日志（A4/A7/A9） ---
 
 /** 捕获 setTimeout 调用（不真正排程）：用例按记录的 ms/fn 手动驱动。 */
 function captureHeadlessTimeouts(): { calls: { fn: () => void; ms: number }[]; restore: () => void } {
@@ -776,7 +776,7 @@ test('A7 回归：stop() 是终局——在飞的 runScheduledCheck 结算后不
     controller.stop() // sidecar 退出路径：停表 + 终局
     settleRequest?.({ ok: true, status: 200, json: async () => [] })
     await flushHeadlessAsync()
-    // 修复前：stop() 只清了当前 timer，在飞的检查完成后仍 arm 下一轮（≈600s）。
+    // 不变量：stop() 后不得再 arm 下一轮（在飞检查完成也不得重排）。
     // 只数 >60s 的排程：检查内部的 fetch 超时定时器（10s）不是排程。
     assert.equal(timers.calls.filter((call) => call.ms > 60_000).length, 0,
       'stop() 后结算的检查不得再 arm（修复前这里会排下一轮）')

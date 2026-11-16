@@ -182,7 +182,7 @@ function buildEdgeLines(edge) {
 }
 
 /**
- * Union one importer block with the member's CURRENT package.json edges (TODO A§16.4).
+ * Union one importer block with the member's CURRENT package.json edges.
  * pnpm prunes the whole record on a structural re-resolve, so the restored HEAD record
  * predates edges the upgrade just added; restoring it alone leaves frozen with no repair
  * path. Existing lines are never reordered or rewritten: additions are spliced into the
@@ -391,7 +391,7 @@ function merge(currentText, headText) {
     }
   }
 
-  // TODO A§16.4: restoring the HEAD record is not enough when the CURRENT member
+  // Restoring the HEAD record is not enough when the CURRENT member
   // package.json declares edges that record predates (a structural re-resolve prunes
   // the whole record, so those edges have no other repair path). Union them in:
   // workspace edges become local links, registry ranges stay fail-closed at frozen.

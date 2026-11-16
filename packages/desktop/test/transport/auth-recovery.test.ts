@@ -1,6 +1,6 @@
 /**
  * The auth-recovery DRIVER (design 27 §3.3) with an injected clock and timer
- * surface: this is the "assembly form" test for the wiring that used to live
+ * surface: this is the "assembly form" test for the wiring that lives
  * inline in host-assembly (decision → microtask/timer → attempt), including the
  * same-tick double push and the deferred attempt that must not be dropped.
  */

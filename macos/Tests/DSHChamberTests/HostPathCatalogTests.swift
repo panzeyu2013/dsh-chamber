@@ -374,7 +374,6 @@ final class HostPathCatalogTests: XCTestCase {
     /// 隐藏相位（漏斗的 clearDragSnapshot 臂）必须让**在途**采纳失效。
     /// 这条只由 `source == .drag || adoptInFlight` 的右臂触发：采纳只在发布落地时才写
     /// `source = .drag`，故在途期 `source` 恒为 `.none`——删掉右臂本测试必红
-    /// （可达性证据：.tmp/perf-2026-11-16/power/final/probe/adopt-arms-probe.swift C 场景）。
     func testHidingTheWindowCancelsAnInFlightDragSnapshot() throws {
         var pending: (() -> Void)?
         var changeCount = 10

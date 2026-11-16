@@ -205,7 +205,7 @@ final class QuitCoordinatorTests: XCTestCase {
     }
 
     /// 键映射纯函数：三个「取消」键（Return / 小键盘 Enter / Esc）映射到安全项，
-    /// 其余键必须原样放行（nil）。取代旧版往真实模态里投中性键的做法——AppKit 对
+    /// 其余键必须原样放行（nil）。不往真实模态里投中性键——AppKit 对
     /// 未处理键会响系统警告音，测试不该制造它。
     func testQuitConfirmationKeyMappingPassesOtherKeysThrough() {
         for code: UInt16 in [36, 76, 53] {

@@ -1328,7 +1328,7 @@ test('A1: a changed row publishes once with its hint; the same row with only fac
   }
 })
 
-// ── probe outcome → 快照（2026-12 单源化：classifier 是唯一判定 owner） ─────────
+// ── probe outcome → 快照（classifier 是唯一判定 owner） ─────────
 // 404 legacy 的成立面由上面的 F2 用例覆盖（verdict / degradation / mode null /
 // stale false / 有界重探），这里只留 unversioned 的发布契约。
 
@@ -1692,7 +1692,7 @@ test('404 after a good snapshot keeps the rows as presence evidence: unavailable
   const channel = factsChannelOf(legacy)
   assert.equal(channel?.usable, false)
   assert.deepEqual(Object.keys(channel?.rows ?? {}).sort(), ['s1', 's2'], '保留的行必须仍是 facts 通道的在场证据')
-  // 404 持续：第二次及以后不得把保留行丢成空权威集（曾有历史是持久事实）。
+  // 404 持续：第二次及以后不得把保留行丢成空权威集。
   const beforeSecond404 = probeGets
   await waitFor(() => probeGets > beforeSecond404, 1_000)
   assert.deepEqual(Object.keys(source.getSnapshot()?.rows ?? {}).sort(), ['s1', 's2'], '持续 404 不得在第二轮清掉保留行')

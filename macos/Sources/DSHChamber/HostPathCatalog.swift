@@ -47,8 +47,7 @@ struct HostPathCatalogModel: Equatable {
             guard !path.isEmpty, !seen.contains(path) else { continue }
             seen.insert(path)
             // stat 失败（网络卷掉线/权限/竞态）按「非目录 + 0 字节」登记：这是失败闭合
-            // 的降级（页面按精确 size 配对会失配 → 文件回退上传），不是静默放行；残余登记见
-            // docs/progress/deviations.md S-56。
+            // 的降级（页面按精确 size 配对会失配 → 文件回退上传），不是静默放行。
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
             let isDirectory = values?.isDirectory ?? false
             next.append(HostPathCatalogEntry(

@@ -3,10 +3,9 @@
  * 本层只做三件事：root 去主面板 padding/height/scroll、三条 chrome 行清零 28px inset、
  * 页根 activation 槽占位者取页面列宽。
  *
- * 回归史：2026-10 实机截图显示「更多」页标题右移、返回图标消失——旧规则把所有
- * [data-window-drag] 当页头做 subgrid 并隐藏首子内容，More 头的首子是返回按钮，
- * 于是图标被 display:none、标题被放进控件轨。同一套规则还假设分组是页根直接子
- * （data-plugin-group 提轨），在当前 pin 的 installedPanel 包装下早已不命中。
+ * 本层不把 [data-window-drag] 当页头做 subgrid、也不隐藏首子内容：More 头的首子是
+ * 返回按钮（隐藏会让图标消失、标题移进控件轨）。分组也不是页根直接子（当前 pin 的
+ * installedPanel 包装），故不按 data-plugin-group 提轨。
  * 本文件把「只消费这三个自有钩子、不得重新引入隐藏/两轨/分组规则」钉死。
  *
  * 此处不读 vendor，因此不随 `DSH_CHAMBER_VENDOR_ABSENT` 跳过。

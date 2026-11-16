@@ -1,5 +1,5 @@
 /**
- * ARCHIVED（2026-11，Electron 冻结；docs/progress/electron-frozen.md）：CDP 采集公共库，
+ * ARCHIVED（Electron 冻结）：CDP 采集公共库，
  * 需复活后的 Electron dev；现行测量 = shell.log/[shell-fps] + Safari Inspector。
  *
  * CDP 采集公共库 —— `scripts/gui-acceptance/drivers/cdp.mjs` 的薄封装：

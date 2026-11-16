@@ -151,7 +151,7 @@ test('INV3/#1: running voids the pending and settles notified; unknown running n
 
 test('#3: paused / null / changed goal drops the pending and settles without notifying', () => {
   // origin 表值逐项钉住：三者覆盖 #3 的全部条件，也是 goalDropOrigin 仅有的三个
-  // 可达命名（旧 'goal-drop' 兜底不可达，F14 已删除；若将来出现第四个命名，这里
+  // 可达命名（旧 'goal-drop' 兜底不可达；命名若出现第四个，这里
   // 必须失败）。
   for (const [changed, expectedOrigin] of [
     [goal({ phase: 'paused' }), 'goal-paused'],

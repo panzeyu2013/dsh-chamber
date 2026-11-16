@@ -4,9 +4,9 @@
  * imports electron or a real SSH host. Manifest reads ride `exec(id, run, cat)`;
  * the seed writes via `write-file`; a successful `run` carries the captured
  * stdout that manifest parsing and the hash-skip rely on. The user plugin write
- * surface (install/remove/materialize/undo) was retired with the 2026-09 C
- * layering ruling — this module keeps only the read projections and the chamber
- * seed, whose remote paths all derive from `remoteDshHome`.
+ * surface (install/remove/materialize/undo) is not served here — this module
+ * keeps only the read projections and the chamber seed, whose remote paths all
+ * derive from `remoteDshHome`.
  */
 
 import { createHash } from 'node:crypto'
@@ -63,7 +63,7 @@ export const CHAMBER_SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(d
 
 /** 读面保护事实：`familySource: runtime`（默认）时 familyNames 是已解析的 F，
  * 缺席 ⇒ **降级态**：P 退到 B₀ ∪ S（只收紧不放松）；`familySource: none`（ssh）没有族
- * 事实源，同降级形态。用户插件写面已退役，本接口只服务读面判定。 */
+ * 事实源，同降级形态。本接口只服务读面判定（写面不存在）。 */
 export interface PluginProtectionFacts {
   familyNames?: readonly string[] | null
   familySource?: 'runtime' | 'none'

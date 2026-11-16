@@ -1129,7 +1129,7 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       // data-chamber-facts-mode): a facts-source markStale() flips it without any
       // other signature field moving, so omitting it froze the note.
       sessionFacts: server.sessionFacts ?? null,
-      // pluginDiagnostic STAYS in the publish gate: the sidebar no longer
+      // pluginDiagnostic STAYS in the publish gate: the sidebar does not
       // renders it, but the settings-bridge derives the connections page's
       // pluginDiagnostics from the same chamberBridge channel, so a
       // diagnostic-only flip must still re-publish.

@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chamberBridge, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { isChannelClassDiagnostic, recheckPluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
-// The classifier single source (audit arch-03 P2-2): the pinned HTTP literal and
+// The classifier single source: the pinned HTTP literal and
 // the lockstep expectations below come FROM it, never from a second copy here.
 import {
   classifyPluginGraphOutcome,

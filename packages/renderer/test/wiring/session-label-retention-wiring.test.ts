@@ -1,8 +1,8 @@
 /**
  * 会话投影事实（标签）跨代际保留的接线锁：规则只有一个定义处（纯聚合模块），两处提交点
  * （推送提交 / unary 提交）都必须经过它——任一处漏掉，代际清空窗口或 unary 弱标签
- * 就会再次把权威名字覆盖成 cwd basename（2026-10-01 实机：Harness 源会话行
- * 「阅读工作区文档并制定执行计划」在 socket 关闭后的 0.7s 内显示为「photo」）。
+ * 就会再次把权威名字覆盖成 cwd basename（实机症状：权威标题在 socket 关闭后约
+ * 0.7s 内显示为 cwd 目录名）。
  *
  * These are source-text locks, not behavior tests: the rule's behavior lives in
  * test/aggregate/aggregate-refresh.test.ts. They exist so that dropping the
@@ -42,10 +42,10 @@ test('both session-row commit sites route through retainSessionLabels', () => {
 })
 
 test('the retained value is what both commits compare and STORE (data-flow floor)', () => {
-  // 2026-10 review M1: computing `retained` but comparing/storing the raw push
-  // would regress the 0.6-0.8s directory-name flash while every helper test
-  // stays green. Pin the data flow itself, not just the call.
-  // A7 ⑤（2026-11）: the push now caches the STORE object's signature by identity
+  // computing `retained` but comparing/storing the raw push would regress the
+  // 0.6-0.8s directory-name flash while every helper test stays green. Pin the
+  // data flow itself, not just the call.
+  // the push caches the STORE object's signature by identity
   // (`snapshotSignatureOf(current)`); the RETAINED candidate is still the only
   // signature computed per push, and the raw push never becomes a comparison input.
   assert.match(pushCommit, /instanceSnapshotSignature\(\s*retained\s*\)/u,

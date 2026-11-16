@@ -599,9 +599,8 @@ test('cordis contract: the pinned LoggerService still matches what the generated
   }
   // (1) the facts the bridge's single mount path rests on: `exporter()` registers
   // through `this.ctx.effect(...)` (so the disposer IS collected by the calling
-  // fiber) and, since 0.1.7, its disposer deletes the id IT registered — the
-  // pre-0.1.7 counter bug (`delete(this._snExporter)`) is gone, which is why the
-  // generated plugin no longer writes into the public map itself.
+  // fiber) and its disposer deletes the id IT registered (counter invariant), which
+  // is why the generated plugin does not write into the public map itself.
   const exporterBody = source.match(/exporter\(exporter: Exporter\)\s*\{([\s\S]*?)\n {2}\}/)
   assert.ok(exporterBody !== null, 'LoggerService.exporter(exporter) must still exist')
   assert.match(exporterBody![1]!, /return this\.ctx\.effect\(/, 'exporter() must register through this.ctx.effect and return its disposer')

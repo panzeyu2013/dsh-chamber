@@ -421,9 +421,8 @@ test('openInstanceSession: the request record is dropped for a same-id re-add �
 })
 
 test('openInstanceSession: a click presents through the official view owner and retains the session (no silent no-op)', async (t) => {
-  // The rc.2 breakage this locks: ISessions.open no longer exists, so a
-  // dispatch still calling it would throw (the fixture face has no `open`) or
-  // silently do nothing. The fixture mirrors the vendor composition —
+  // This locks the current pin: ISessions.open does not exist, so a dispatch still
+  // calling it would throw (the fixture face has no `open`) or silently do nothing. The fixture mirrors the vendor composition —
   // uiWorkspace.openSession retains the target with source 'mainView' and
   // releases the reference it replaced — so this is the click-really-opens lock,
   // not a source-text proxy.

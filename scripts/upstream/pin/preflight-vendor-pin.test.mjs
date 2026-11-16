@@ -224,9 +224,9 @@ test('splitTopLevelCommas / addedNameTokens: only top-level commas split multi-d
   assert.deepEqual(splitTopLevelCommas("a = 1, b = 2"), ['a = 1', ' b = 2'])
   assert.deepEqual(splitTopLevelCommas('o = { a: 1, b: 2 }'), ['o = { a: 1, b: 2 }'])
   assert.deepEqual(splitTopLevelCommas("s = 'x, y', t = 2"), ["s = 'x, y'", ' t = 2'])
-  // The shapes below used to mint pseudo export tokens (object property / arrow
-  // parameter / type annotation / array element / string body) that could suppress
-  // a real miss on the copy side.
+  // The shapes below must NOT mint pseudo export tokens (object property / arrow
+  // parameter / type annotation / array element / string body): such a token could
+  // suppress a real miss on the copy side.
   assert.deepEqual(addedNameTokens(['export const o = { a: 1, total: 2 }']).map(t => t.name), ['o'])
   assert.deepEqual(addedNameTokens(['export const f = (x, total) => x + total']).map(t => t.name), ['f'])
   assert.deepEqual(addedNameTokens(['export const fn: (a: string, total: number) => void = null']).map(t => t.name), ['fn'])

@@ -359,7 +359,7 @@ test('a stored row that predates the identity field is repaired once and keeps i
   const disk = storage()
   // 旧构建写下的行：没有任何 host 域判别符（无水位/事件序），也没有 runId——匿名 ask/request 与
   // 无锚完成都长这样。它必须被补上一个身份**并写回**，否则每次装载都会 mint 一个新 nonce：
-  // 行键漂移、与宿主已持回执脱钩（共享常量身份曾把这一点掩盖成"稳定"）。
+  // 行键漂移、与宿主已持回执脱钩（共享常量身份会把这掩盖成"稳定"）。
   disk.values.set(NOTIFICATION_OUTBOX_KEY, JSON.stringify([
     { sourceId: 'ssh-a', sourceFingerprint: 'host-1', sessionId: 's1', kind: 'complete', attempts: 0, nextAttemptAt: 0, blocked: false },
   ]))

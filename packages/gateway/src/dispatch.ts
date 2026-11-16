@@ -810,7 +810,7 @@ export function createGatewayDispatch(
     }
     // 4. Chamber surface: the gateway's own operations surface — dashboard
     // assets, the plugin seed cache and the managed-profile plugin READ route
-    // (user plugin writes were retired with the 2026-09 C layering ruling).
+    // (user plugin writes are not part of this surface).
     // NOT ready-gated: stays pollable.
     if (pathname.startsWith('/chamber/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true

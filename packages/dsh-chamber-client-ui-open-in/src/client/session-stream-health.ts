@@ -63,8 +63,8 @@
  *    its own grace instead of inheriting this heal's settle clock);
  *  - `openState === 'loading'` held past the stall threshold ⇒ the
  *    'loading-stall' notice, then 'loading-failed': visibility only, on two
- *    pure timers. The manual rebuild/reload controls were retired (user ruling):
- *    upstream has no such control and every recovery is automatic (the host's
+ *    pure timers. There is no manual rebuild/reload control (upstream has none);
+ *    every recovery is automatic (the host's
  *    opening machine; the page's bounded delivery ladder; the error arm's heal
  *    below);
  *  - a ladder that is OUT of levers (no concrete resync face, or the budget
@@ -77,7 +77,7 @@
  * loading/error notices are deliberately scoped out of that arm for the same reason:
  * this module has no observable "no progress" signal to condition it on, and a
  * timer here would be a blind timeout, not a decision. That residual is
- * recorded in `docs/progress/STATUS.md` together with the two paths that can
+ * recorded against two candidate closure paths that can
  * close it (an upstream keepalive, or the carrier-retry policy patch) — never a
  * blind timeout here.
  *
@@ -325,10 +325,9 @@ export function planSessionStreamHealth(
     }
 
     // The automatic arm is exhausted or cooling here. No manual lever replaces
-    // it (user ruling): the page's own bounded ladder escalates (resync →
+    // it: the page's own bounded ladder escalates (resync →
     // instance reboot → document reload) while this notice reports the state.
-    // The arm threshold still times the notice exactly as it did when it also
-    // opened the control; only the control is gone.
+    // The arm threshold only times the notice; no control is opened.
     const armReached = held >= config.errorGraceMs
       && observation.resyncAvailable === true
     const hopeless = held >= config.errorGraceMs + config.healSettleMs
@@ -383,7 +382,7 @@ export function planSessionStreamHealth(
   // every clock and the notice. The heal budget survives recovery so a flapping
   // source cannot be healed once per recovery forever. 'open' is NOT proof that
   // events flow, but with the retry patch pacing carrier failures the reopening
-  // is silent by design (the reconnecting notice was retired).
+  // is silent by design (there is no reconnecting notice).
   return {
     state: {
       phase: 'idle',

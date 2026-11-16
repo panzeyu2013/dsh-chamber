@@ -2,7 +2,7 @@
 /**
  * release-artifacts.mjs —— 双端同 tag 产物清单（design 25 §8.4/§六）
  *
- * ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）：Electron 产物族与
+ * ARCHIVED（Electron 冻结）：Electron 产物族与
  * `*.yml` feed 不再随发布产出；本模块保留其命名清单作为**复活基线**（`releaseManifest`
  * 仍列出两族，且两族仍在断言里互不碰撞），而 `--check-dir` 只断言实际出货的 native 产物。
  * 冻结前单 tag 下两个 macOS 产物族并存：

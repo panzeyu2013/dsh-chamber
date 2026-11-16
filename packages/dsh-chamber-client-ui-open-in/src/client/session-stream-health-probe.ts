@@ -14,13 +14,12 @@
  * chamber-side `current` mirror.
  *
  * `resync()` has ONE entry point: the ladder's automatic arm (the manual
- * control was retired), which may fire only on POSITIVE evidence that no open
+ * control), which may fire only on POSITIVE evidence that no open
  * is in flight — an in-flight open is a slow Host being waited on, never
  * interrupted.
  *
- * The page-level terminal-opening ledger that used to consume
- * `dsh-chamber:stream-forensics` was retired together with the in-repo
- * api-gateway opening phase machine: only non-terminal transport diagnostics
+ * No page-level terminal-opening ledger consumes `dsh-chamber:stream-forensics`:
+ * only non-terminal transport diagnostics
  * remain on that channel, and this module reads none of them.
  *
  * The vendor face is read through a loose structural slice (no d.ts tree is
@@ -194,7 +193,7 @@ export function sessionStreamResyncInFlight(sessions: SessionsLoose | undefined,
 
 /**
  * Rebuild one session's stream through the concrete vendor method. Called from
- * the error arm's automatic heal only (the manual control was retired); the seat
+ * the error arm's automatic heal only (there is no manual control); the seat
  * accounts each attempt against the session ledger. The async `resync()` may
  * reject and
  * is settled with a no-op catch — the chip is a status surface, not an error

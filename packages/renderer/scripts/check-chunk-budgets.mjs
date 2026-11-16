@@ -15,29 +15,22 @@
  *  - headCssRaw：dist/index.html 中全部 render-blocking 样式表合计——warn。
  *
  * 校准基线（raw bytes，最新实测见 dist/web/perf-sizes.json，随上游 dsh 版本
- * 与合并内容合法漂移）。0.2.2-alpha.3 代实测（0.2.1-alpha.2 代快照为
- * mainGraph 1,434,814）：mainGraph 1,914,607（App 拆分后的新实测：warn 1,950,000
+ * 与合并内容合法漂移）。0.2.2-alpha.3 代实测：mainGraph 1,914,607（App 拆分后的新实测：warn 1,950,000
  * = 实测 +1.8%，fail 2,060,000 = 实测 +7.6%）；chamberEntry 8,443,546（warn 门 = 实测 + ~1%
  * = 8,528,000——该项**有意只有 warn、不设硬门**：体积随上游 dsh 版本合法漂移，
  * 硬门会误伤升级，超限只提示评估拆分/懒化，不阻断构建）；headCss 326,261
  * （warn 门 = 实测 + ~1% = 329,500，同为 warn-only）。阈值不是历史账本：结构改动
  * 落地后按新实测值回填阈值并更新本注释，防止它变成下一份过期注释。
  *
- * 上一版阈值（chamberEntry 7,829,000 / headCss 304,300）量自 0.2.1-alpha.3 代
- * （实测 7,751,254 / 301,241），此后跨 0.2.1-rc.3、0.2.2-alpha.2、0.2.2-alpha.3 三代
- * pin 未再回填：0.2.2-alpha.2 代构建已到 8,182,347 / 320,696（当时代只 warn 未回填），
- * 0.2.2-alpha.3 到 8,443,546 / 326,261。同一跨度内共享图只 +0.3%（1,908,997 →
- * 1,914,607），增长落在复合入口与首屏样式（covered 行逐代累加，末段是
- * `ui-context-menu` 与其语言表）——故只按实测回填这两个 warn 项，不动 mainGraph 硬门。
- * **E1 之前**（对齐批后，历史基线）实测 mainGraph 1,938,922 / chamberEntry 8,560,639 /
+ * 增长落在复合入口与首屏样式（covered 行逐代累加，末段是 `ui-context-menu`
+ * 与其语言表）。
+ * **E1 之前**（基线）实测 mainGraph 1,938,922 / chamberEntry 8,560,639 /
  * headCss 339,301，当时按各自实测 + ~1% 回填 warn 1,950,000 / 8,650,000 / 342,500
  * （chamberEntry warn 已随 E1 下调到 3,390,000，见下段；mainGraph 硬门 2,060,000 不动）。
  *
  * E1（simple-icons 改走 ESM 入口 + Rollup tree-shaking；解析见
  * scripts/simple-icons-entry.mjs）后在**主 checkout 精确树全新构建**实测
- * mainGraph 1,910,110 / chamberEntry 3,255,021 / headCss 339,301（此前在
- * worktree 里经 vendor 符号链接构建的 1,941,324 / 3,354,214 偏大，非精确树证据，
- * 勿再引用）：chamberEntry warn 3,390,000 = 实测 +4.1%，mainGraph warn 1,950,000
+ * mainGraph 1,910,110 / chamberEntry 3,255,021 / headCss 339,301（非精确树证据不采用）：chamberEntry warn 3,390,000 = 实测 +4.1%，mainGraph warn 1,950,000
  * = 实测 +2.1%、fail 2,060,000 = 实测 +7.8%，headCss warn 342,500 = 实测 +0.9%。
  * 测量基校正（如 worktree 符号链接 → 主 checkout 的构建口径变化）不回填阈值，
  * 只有结构改动才按新实测回填；阈值不主动上调，mainGraph 硬门与既有 warn 基线不动。
@@ -51,7 +44,7 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
-// G3（design 21 §7；TODO D§2.2）：本次构建的成功末尾写 .build-manifest.json
+// G3（design 21 §7）：本次构建的成功末尾写 .build-manifest.json
 // （输入摘要 + 工具链 + 输出指纹）。writer/verifier 的规则单源在
 // packages/desktop/scripts/build-manifest.mjs —— dist/web 是 renderer 包的
 // vite outDir，而一致性比对在 verify-artifact-freshness（非注册门）。

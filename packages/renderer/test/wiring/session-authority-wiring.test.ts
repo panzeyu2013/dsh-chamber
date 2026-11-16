@@ -292,11 +292,10 @@ test('the escalation ladder gates both levers on stuck evidence', () => {
 })
 
 test('facts decidability has ONE owner: no consumer may re-spell the rule', () => {
-  // 缺陷史：判定面曾有三份各写一遍的可用性规则——overlay 的 isFactsUsable、未读接线的
-  // 恒真 factsVerified、completion-observation 内联的 !stale 变体。前者渲染用（含 stale），
-  // 后两者判定用；一条规则三个写法两个答案，载体抖动时账本在两条通道间来回重算。
-  // 现在 owner 唯一（session-facts-source 导出两支谓词；元组 helper 已删，判定面直接
-  // 引用 isFactsDecisionUsable），本锁保证没有第四份。
+  // 判定面只有一份可用性规则（owner = session-facts-source 导出的两支谓词，判定面直接
+  // 引用 isFactsDecisionUsable）：渲染面用 isFactsUsable（含 stale），判定面用
+  // isFactsDecisionUsable；不得新增恒真 factsVerified、内联 !stale 等第三/第四种写法
+  // ——载体抖动时账本会在两条通道间来回重算。
   assert.ok(factsSource.includes('export function isFactsUsable('))
   assert.ok(factsSource.includes('export function isFactsDecisionUsable('))
   assert.ok(factsSource.includes("verdict === 'ok' && snapshot.serviceable !== false && snapshot.stale !== true"))
@@ -310,12 +309,12 @@ test('facts decidability has ONE owner: no consumer may re-spell the rule', () =
     assert.ok(!text.includes('factsDecisionInput'), label + ' 不得引用已删除的元组 helper')
     assert.ok(!text.includes('stale !== true'), label + ' 不得内联可判性规则')
     // 判定面**不得**触及渲染支谓词：留着它就能用 isFactsUsable(x) && x.stale === false
-    // 越过「唯一判据」的命名锁（审计 B 的已验证逃逸路径）。
+    // 越过「唯一判据」的命名锁（已验证逃逸路径）。
     assert.ok(!text.includes('isFactsUsable'), label + ' 是判定面，不得引用渲染支谓词')
   }
   // 修正臂装配的唯一接入点：快照可用性取自 owner（恒真 factsVerified 已删）。
   assert.ok(notificationsHook.includes('const usable = isFactsDecisionUsable(snapshot)'))
-  // 回归锁：曾经那一行是「可用 ? serviceable!==false : true」——恒真，规则 0 成了死代码。
+  // 回归锁：禁止把该判据写成恒真（「可用 ? serviceable!==false : true」会让规则 0 成死代码）。
   assert.ok(!notificationsHook.includes('serviceable !== false'), 'hook 不得内联可判性规则')
   assert.ok(!notificationsHook.includes('factsVerified') && !notificationsHook.includes('usableFacts'))
   // App 不再有第二处判据（读水位/全部已读已退役）：元组 helper 与渲染支谓词都不得复活。

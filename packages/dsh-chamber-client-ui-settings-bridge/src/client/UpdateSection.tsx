@@ -261,7 +261,7 @@ function StatusRow({
 }
 
 /**
- * 「调试模式」行（放在「更新」section 内，用户裁决）：主 switch + 状态行。
+ * 「调试模式」行（放在「更新」section 内）：主 switch + 状态行。
  *
  * 状态来自 settings 投影的 `debugRuntime`（宿主实测回读），**不是** `enabled` 的
  * 回声：缺省 = 本进程尚未应用过 → 「未知」；`inspectable:false` 且带 reason →

@@ -1,10 +1,10 @@
 // ============================================================================
-// ARCHIVED / FROZEN — Electron flavor: electron-edges.ts (2026-11 user ruling).
+// ARCHIVED / FROZEN — Electron flavor: electron-edges.ts.
 // Electron 已冻结归档：本文件不参与默认开发 / 门禁 / 发布，仅作为可复活参考保留。
-// 冻结范围与复活清单：docs/progress/electron-frozen.md；目录说明：./ARCHIVED.md
+// 冻结范围与复活清单见仓库冻结登记；目录说明：./ARCHIVED.md
 // 位置变更：从 packages/desktop/ 根迁入本归档目录（old → new 见 ./ARCHIVED.md）。
 // 相对 import 已上移一层（../shell-core.ts 等）。
-// 默认不要修改本文件；需要解冻时先按 docs/progress/electron-frozen.md 执行。
+// 默认不要修改本文件；需要解冻时按仓库冻结登记执行。
 // ============================================================================
 /**
  * Electron HostEdges flavor (design 25 §4.1) — a face-B file: it imports

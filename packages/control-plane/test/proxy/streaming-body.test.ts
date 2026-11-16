@@ -1,11 +1,9 @@
 /**
  * P1-1: streaming request bodies (design 27 §3.4 "streaming" mode).
  *
- * forwardHttp used to buffer EVERY body before it created the upstream request:
- * a body above the byte budget could not be forwarded at all, the client paid the
- * inbound budget twice (read, then flush) and the upstream saw its first byte
- * only after the last one had arrived. Above the declared 8MiB threshold the body
- * now streams — ONE overlapped transfer with:
+ * forwardHttp must not buffer the whole body before creating the upstream
+ * request: above the declared 8MiB threshold the body streams — ONE overlapped
+ * transfer with:
  *   - the client's own content-length forwarded unchanged (never recomputed),
  *   - a single size-derived budget charged from the first body byte,
  *   - zero body bytes before the peer is proven (SPKI pin),

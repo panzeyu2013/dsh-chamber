@@ -260,8 +260,8 @@ function hasPythonSitePackages(libDir: string): boolean {
     /^python\d+\.\d+$/u.test(entry) && isDirectory(join(libDir, entry, 'site-packages')))
 }
 
-/** The Office assets gate: the four skill directories each with SKILL.md (rc.2 no longer
- *  ships the shared office/references/sidecar.md). */
+/** The Office assets gate: the four skill directories each with SKILL.md (the shared
+ *  office/references/sidecar.md is not shipped). */
 function missingOfficeAssets(officeSkillsDir: string): string[] {
   const missing: string[] = []
   for (const skillName of OFFICE_SKILL_NAMES) {

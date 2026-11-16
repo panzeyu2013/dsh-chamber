@@ -3,7 +3,7 @@
  *
  * 覆盖：
  *  ① 参数解析与布局（缺省 out、各开关、--skip-node 与 --require-node 互斥、
- *     未知参数 loud；**单 Node 裁决**：布局不再有独立 helper/node 字段，装配内
+ *     未知参数 loud；**单 Node 裁决**：布局没有独立 helper/node 字段，装配内
  *     唯一的 Node 在 primary-runtime payload 里）；
  *  ② 计划文本（payload node/pnpm/target arch/office 与 --skip-* 的步骤差异）；
  *  ③ payload 门控纯函数：verifyPayloadNodeAndPnpm（node 存在 + 可执行位、pnpm
@@ -460,7 +460,7 @@ test('⑤ 单 Node 归因：resolveNodeExecutable 对 basename=node 的 execPath
 
   // 正例：payload node 的基名就是 node（单 Node 裁决不重命名）→ 直用 execPath、
   // 零额外 args/env。归因改由应用派生的子进程关系承担（design 25 §4.3 A5 再反转），
-  // 不再依赖 grep 基名表；spawn-dsh 侧对 {node,node.exe} 的直用分支保留（task-10 域）。
+  // 不依赖 grep 基名表；spawn-dsh 侧对 {node,node.exe} 的直用分支保留（spawn-dsh 域）。
   const payloadNode = '/tmp/assembled-sidecar/primary-runtime/dependencies/node/bin/node'
   const direct = run(payloadNode)
   assert.deepEqual(direct, { file: payloadNode, args: [], env: {} })

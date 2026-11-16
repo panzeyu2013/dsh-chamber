@@ -1,5 +1,5 @@
 /**
- * P1-3 auth-close vocabulary, kept dependency-free so the classification suite
+ * Auth-close vocabulary, kept dependency-free so the classification suite
  * can run without the vendor client graph.
  *
  * The proxy completes a local WebSocket handshake and closes 4401/4403 when the

@@ -55,8 +55,7 @@ export class ChamberListBoundary extends Component<{ children: ReactNode }, { er
  *  a panel switch re-renders the affected rows instead of the whole column. This is
  *  the upstream row's RAIL form only — the upstream wide half (16px glyph, title
  *  span, `disabled` tooltip) can never render here since the wide entry moved into
- *  the source header, so it was removed in the 2026-10 cleanup instead of being
- *  kept as unreachable code. */
+ *  the source header, so the wide half is not carried here. */
 export function PanelRow({
   id,
   label,

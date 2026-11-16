@@ -1,11 +1,10 @@
 /**
- * Official Plugins page capability probe (design 05 §5 + design 21 §6.2 注;
- * C 分层 2026-09 用户裁决).
+ * Official Plugins page capability probe (design 05 §5 + design 21 §6.2 注).
  *
  * After the C-layering narrowing the chamber owns NO user-facing plugin
  * management: install / remove / enable / configure belong to the instance's
  * own official Plugins page (upstream `ui-plugin-manager` + `dsh-plugin-manager`,
- * composed into `dsh-web-app` since dsh 0.1.6-alpha.2). The chamber's plugin
+ * composed into `dsh-web-app`). The chamber's plugin
  * area only shows the host packages it seeds.
  *
  * Whether that official page EXISTS in a given instance is a fact about the
@@ -21,7 +20,7 @@
  * non-2xx answer, a malformed envelope or a graph whose `entries` is not an
  * array is `unknown` — the UI then says nothing rather than claiming the
  * instance cannot manage plugins. `unavailable` is reserved for a READABLE
- * graph that simply has no such row (a pre-alpha.2 runtime), which is the
+ * graph that simply has no such row (an older runtime), which is the
  * case the capability gate exists for: the chamber shows the honest note and
  * still does NOT grow a second writer.
  *

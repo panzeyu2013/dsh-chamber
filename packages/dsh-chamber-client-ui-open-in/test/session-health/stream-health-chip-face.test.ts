@@ -9,8 +9,8 @@
  * label that ignores the notice, a ticker that stops re-planning, a `setPlan`
  * that never de-duplicates) green.
  *
- * The manual reload/rebuild controls were retired (user ruling: upstream has no
- * such control), so the face is a two-field REPORT (label + marker) and this
+ * There is no manual reload/rebuild control (upstream has none), so the face is
+ * a two-field REPORT (label + marker) and this
  * suite pins that it has no action surface at all.
  */
 import assert from 'node:assert/strict'

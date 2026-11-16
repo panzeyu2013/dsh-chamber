@@ -132,7 +132,7 @@ export const GROUPS = {
     'test/aggregate/watermark.test.ts',
     // complete 通知账本内核（两轨：水位 + 武装；撤回只清武装轨 / forget / prune）。
     'test/aggregate/complete-ledger.test.ts',
-    // I2 回归（Wave6 收口）：#11 goal 未知的直发完成也必须 arm，
+    // I2 回归：#11 goal 未知的直发完成也必须 arm，
     // 否则同一完成的延迟壳边沿会产生第二条 notification。
     'test/aggregate/goal-unknown-arm.test.ts',
     'test/aggregate/badge-count.test.ts',
@@ -200,11 +200,11 @@ export const GROUPS = {
     // 完成点步进的 #185 重入闸：非重入同步、步骤体永不嵌套、按 id 去重、微任务补跑。
     'test/wiring/step-gate.test.ts',
     // facts apply 纯机制（每来源闸 + 最新载荷槽）的行为契约：文本锁挡不住 first-wins /
-    // 丢载荷 / 撤回后复活这类变异（2026-09-30 复核）。
+    // 丢载荷 / 撤回后复活这类变异。
     'test/wiring/facts-apply-pool.test.ts',
     // F6 回归：durable 通知三表 + outbox 剪枝必须门控在权威 roster 水合后
     // （源码锁 + 纯谓词/假存储双证据），并锁完成修正臂的接线形状。
-    // 该文件运行时导入 use-bridge-subscriptions.ts，其模块图（2026-10 起）经 shell.ts
+    // 该文件运行时导入 use-bridge-subscriptions.ts，其模块图经 shell.ts
     // 触达 @deepseek-ai/dsh-client-web：只需 web-only 夹具负载器，不能用替换 client-core
     // 的 shell shim（本测试已加载真实 barrel）。
     { file: 'test/wiring/unread-prune-roster-gate.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-dsh-web-register.mjs'] },

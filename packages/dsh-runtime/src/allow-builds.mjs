@@ -34,7 +34,7 @@ export const ALLOW_BUILDS = [
  *   pnpm-workspace 的裁决一致。
  * - node-addon-require-builtin：上游 pnpm-workspace 显式 `false`；本仓运行时锁文件里
  *   有它，但该版本**没有**任何 install/preinstall/postinstall 脚本（已实测），
- *   所以这一条是惰性的防御性登记——将来版本若加上安装脚本，pnpm 会按我们的裁决
+ *   所以这一条是惰性的防御性登记——本包若加上安装脚本，pnpm 会按我们的裁决
  *   拒绝执行而不是硬失败。
  *
  * 与上游的**有意差异**（登记，不擅自改行为）：`protobufjs`（postinstall）与

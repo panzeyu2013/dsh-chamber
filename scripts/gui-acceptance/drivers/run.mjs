@@ -6,7 +6,7 @@
  *   pnpm run acceptance:gui -- --attach         # native default: probe a running native shell control plane
  *   pnpm run acceptance:gui -- --dev --flavor electron # ARCHIVED Electron dev walkthrough (revival only)
  *
- * Electron flavor is **frozen/archived** (2026-11, docs/progress/electron-frozen.md): --dev/--attach
+ * Electron flavor is **frozen/archived** (frozen-surface registry): --dev/--attach
  * default to the shipped native flavor; requesting Electron requires an explicit --flavor electron
  * and a revived Electron dev environment.
  *
@@ -127,7 +127,7 @@ if (flavor !== 'electron' && flavor !== 'native') {
 }
 if (values.dev && flavor !== 'electron') {
   console.error('--dev 依赖 Electron dev（已冻结归档，2026-11）。原生壳请用 --attach --flavor native；'
-    + '确需复活 Electron dev 时按 docs/progress/electron-frozen.md §6 操作并显式传 --flavor electron。')
+    + '确需复活 Electron dev 时按 仓库冻结登记 §6 操作并显式传 --flavor electron。')
   process.exit(2)
 }
 if (values['ssh-fixture'] && (!values.dev || flavor !== 'electron')) {
@@ -135,11 +135,11 @@ if (values['ssh-fixture'] && (!values.dev || flavor !== 'electron')) {
   process.exit(2)
 }
 if (flavor === 'electron' && (values.dev || values.attach)) {
-  console.warn('ARCHIVED: Electron flavor 已冻结归档（2026-11，docs/progress/electron-frozen.md）；'
+  console.warn('ARCHIVED: Electron flavor 已冻结归档（2026-11，仓库冻结登记）；'
     + '本模式需要复活后的 Electron dev/CDP 环境。')
 }
 if (values['require-hover'] && (!(values.dev || values.attach) || flavor !== 'electron')) {
-  console.error('--require-hover 只属于归档的 Electron CDP 走查：需 --attach/--dev --flavor electron（docs/progress/electron-frozen.md）')
+  console.error('--require-hover 只属于归档的 Electron CDP 走查：需 --attach/--dev --flavor electron（仓库冻结登记）')
   process.exit(2)
 }
 if (values['require-embed'] && flavor !== 'electron' && (values.dev || values.attach)) {

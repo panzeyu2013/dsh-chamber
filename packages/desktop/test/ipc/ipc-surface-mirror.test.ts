@@ -419,7 +419,7 @@ test('renderer connection target/input/spec mirrors desktop v2 fields including 
 test('the renderer SshStatusProjection mirrors the desktop transport projection, link shape included', () => {
   // preload.cts aliases the desktop type, so the renderer's hand-written mirror is
   // the only place this shape can drift. Field names AND the nested link shape are
-  // compared: renaming linkEpoch used to pass every gate.
+  // compared: renaming linkEpoch passes no gate.
   const names = (block: string): string[] => block
     // Flatten the one nested field object so its members do not masquerade as
     // top-level projection fields.
@@ -452,7 +452,7 @@ test('DesktopSshSurface stays in lockstep across preload / renderer mirrors (L3)
 
 test('SshInstancesHealth is a type-identical preload/renderer mirror and instances_health stays declared in both surfaces (L3)', () => {
   // instances_health 的载荷是注册表降级门（degraded/rosterIncomplete）的
-  // renderer 侧判定输入；此前它只被方法名锁覆盖，字段名/可选性/类型无守卫。
+  // renderer 侧判定输入；字段名/可选性/类型均有守卫。
   // preload.cts 是权威面，renderer global.d.ts 是手写镜像 —— 一个 '?' 的
   // 漂移就会让「旧生产者缺字段按 false/0 读」的兼容断言在类型面失效。
   const authoritative = interfaceFieldSignatures(preload, 'SshInstancesHealth')
@@ -906,7 +906,7 @@ test('the apply-result and notification/sessionTodo settings shapes are type-ide
   )
   // ChamberDebugSettings (nested under ChamberSettings.debug) + ChamberSettingsSupported
   // (the supported capability gates): both were extracted from inline literals, which is
-  // exactly when a '?' marker or a field can drift unseen — the nested field names used to
+  // exactly when a '?' marker or a field can drift unseen — the nested field names could
   // be swept as part of the enclosing literal, and are not any more.
   for (const name of ['ChamberDebugSettings', 'ChamberSettingsSupported', 'ChamberSystemMemory']) {
     const authoritative = interfaceFieldSignatures(preload, name)
@@ -1075,7 +1075,7 @@ const mainHandleChannels = collectMainChannels(mainSideSource(), MAIN_HANDLE_CAL
 const mainSendChannels = collectMainSendChannels(mainSideSource())
 const preloadInvokeChannels = collectPreloadChannels(preload, 'invoke')
 const preloadOnChannels = collectPreloadChannels(preload, 'on')
-/** Swift-only A 桥白名单（docs/progress/electron-frozen.md §5.2）：这些 IPC_CHANNELS 键只有
+/** Swift-only A 桥白名单（冻结面 A 桥白名单政策）：这些 IPC_CHANNELS 键只有
  *  Swift shim 实现、主进程（Electron 侧）按定义零注册——死键检查对它们豁免；
  *  但 preload 不得暴露其通道（只有 shim 实现），且白名单键在 main 侧一旦出现引用
  *  就判红（两侧都注册的通道属于常规通道，不得进白名单）。空表 = 全部 no-op。 */

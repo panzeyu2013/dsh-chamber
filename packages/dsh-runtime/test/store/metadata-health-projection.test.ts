@@ -67,7 +67,7 @@ test('needsRecovery follows the status plus the caller-computed marker rescue', 
 })
 
 test('the boot gate blocks the two unconditional statuses whatever the rescue seam says', () => {
-  // 2026-12 audit 3.1: the boot path may NOT reuse needsRecovery (it adds the
+  // The boot path may NOT reuse needsRecovery (it adds the
   // recoverable selection-corrupt and subtracts marker-corrupt-without-rescue
   // through the seam). Only an unfinished transaction or a corrupt recovery
   // marker blocks the managed dsh, and the rescue flag does not soften it.

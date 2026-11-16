@@ -168,7 +168,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
           if (revision !== this.revision) continue
           attempt++
           try {
-            // P1-4: the mux spreads the FIRST reopen of a failure fan-out so the retry
+            // The mux spreads the FIRST reopen of a failure fan-out so the retry
             // lanes do not stampede one replacement socket; later attempts use the
             // jittered exponential backoff.
             const retryOutcome = await waitForRemoteStreamRetry(

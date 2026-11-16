@@ -174,9 +174,8 @@ const generalViewSource = readFileSync(
   'utf8',
 );
 /**
- * desktop 权威默认值源（跨包漂移守卫的真对象）。此前本文件 "mirrors the desktop
- * defaults" 的镜像断言只把常量与同文件字面量自比，从不读 desktop 源：desktop
- * 侧改值不会失败。这里把默认值钉到权威源文本上。
+ * desktop 权威默认值源（跨包漂移守卫的真对象）：只把常量与同文件字面量自比、从不读
+ * desktop 源的断言会让 desktop 侧改值不失败；这里把默认值钉到权威源文本上。
  */
 const desktopChamberSettingsSource = readFileSync(
   join(import.meta.dirname, '..', '..', '..', 'desktop', 'chamber-settings.ts'),

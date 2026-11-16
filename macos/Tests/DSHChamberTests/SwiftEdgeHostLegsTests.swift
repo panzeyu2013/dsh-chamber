@@ -3,7 +3,7 @@
 //  DSHChamberTests
 //
 //  SwiftEdgeHostLegs 纯逻辑单测（无 GUI 分支——GUI 腿属集成
-//  + 实机硬门禁，见 SwiftEdgeHostLegs.swift 各腿 TODO 注释）。
+//  + 实机硬门禁，见 SwiftEdgeHostLegs.swift 各腿守卫注释）。
 //
 import XCTest
 import UserNotifications
@@ -210,7 +210,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         }
     }
 
-    /// 决策核心（此前零覆盖：所有用例都走 no-window）：请求值必须交给宿主、回读必须
+    /// 决策核心（既有用例都走 no-window，本用例覆盖决策核心）：请求值必须交给宿主、回读必须
     /// 原样上报。把实现写成取反或回声意图都会让这条红。（真实 NSWindow 在 xctest
     /// 进程里无法构造——AppKit 未初始化会 SIGSEGV——故直接测注入施加体的核心。）
     func testDebugModeApplyCorePassesRequestThroughAndReportsMeasuredReadBack() {

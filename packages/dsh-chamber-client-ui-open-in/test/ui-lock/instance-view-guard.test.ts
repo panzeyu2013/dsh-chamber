@@ -118,7 +118,7 @@ test('the header registration mirrors the official row (order), with our own id'
   // plugin registers `order: -10` at this same slot), so any third-party row
   // sorts exactly as it would upstream.
   assert.ok(client.includes("'conversation.session.header.utilities'"), 'the official header utilities slot')
-  // Block-scoped assertions: rc.2 added a second registration into the Files
+  // Block-scoped assertions: the pinned client has a second registration into the Files
   // hole, so file-wide includes can now be satisfied by the wrong block (or by
   // the slot constant alone). Deleting the header block must redden this test.
   const header = client.slice(client.indexOf('OPEN_IN_HEADER_SLOT, () => ctx.slots.register'))
@@ -239,7 +239,7 @@ test('stream-health seat: registered before the open-in gates, ladder state in t
   assert.match(seat, /const storeLadder = \(sessionId: string, state: SessionStreamHealthState\): void => \{/,
     'per-session state must survive a chip remount through one shared store')
   assert.match(seat, /reflect\.get\('sessions', false\)/, 'an absent cordis service must not throw through the ctx proxy')
-  // rc.2: the stage-move detour (and its presented-recency memory) is gone; the
+  // the stage-move detour (and its presented-recency memory) is not part of this seat; the
   // automatic heal executes the concrete resync on the presented target.
   assert.doesNotMatch(seat, /previousPresented|rememberPresented|healSessionStream|hasHealRoute/)
 })
@@ -261,7 +261,7 @@ test('stream-health seat: the page delivery owner owns every rebuild, the header
   // The automatic rebuild moved to the page-level delivery owner (one ladder, one
   // ledger); the retired planner must never return to the view.
   assert.doesNotMatch(page, /planSessionOpenAutoRebuild\(/)
-  // The failure overlay is text-only now (user ruling): the manual rebuild/reload
+  // The failure overlay is text-only now (by design): the manual rebuild/reload
   // buttons must not come back to the view.
   assert.doesNotMatch(page, /sessionOpen\.rebuild|sessionOpen\.reload/)
   assert.doesNotMatch(page, /instance-session-open-actions/)
@@ -295,8 +295,8 @@ test('stream-health seat: the page delivery owner owns every rebuild, the header
     'the retired stage-move helpers must not return to the shell')
   assert.match(page, /decision\.action\?\.tier === 'resync'/)
   assert.match(page, /rebuildInstanceSessionStream\(instanceId, currentSessionId\)/)
-  // The manual lever is retired (user ruling: upstream has no such control): the
-  // header must not expose a reload, a rebuild, or the stamp that used to pace it.
+  // There is no manual lever (upstream has no such control): the
+  // header must not expose a reload, a rebuild, or a pacing stamp.
   assert.doesNotMatch(seat, /lastManualResyncAt|MANUAL_RESYNC_GUARD_MS|sessionStreamResyncInFlight/)
   assert.doesNotMatch(stripComments(seat), /reload:|resync:/)
 })
@@ -328,8 +328,8 @@ test('stream-health evidence: the page notice is timer-driven and the parked-loa
   // crosses a pending open" is unchanged.
   assert.match(owner, /open\?\.openInFlight === true/)
   assert.match(owner, /open\?\.resyncInFlight === true/)
-  // The page-level notice no longer consumes a terminal fact (retired with the
-  // forensics ledger); the health phase is derived in the 1 Hz sampler and only
+  // The page-level notice consumes no terminal fact (the forensics ledger is gone);
+  // the health phase is derived in the 1 Hz sampler and only
   // its RESULT is state: storing the fresh per-second health object would
   // re-render the whole view on every sample.
   assert.match(view, /presentedSessionOpenRecoveryPhase\(\s*health, currentSessionId, currentSessionKnownBlank === true,?\s*\)/)

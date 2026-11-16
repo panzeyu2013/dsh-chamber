@@ -3,7 +3,7 @@
  *
  * 单一来源：本模块是「哪些名字属于受保护组合 / 每个已安装行是什么角色」的唯一实现。
  * desktop 经 facade 双路径消费，gateway 直引；渲染端不镜像。用户插件写面
- * （install/remove/materialize）已随 2026-09 C 分层退役，本模块只保留读面事实。
+ * （install/remove/materialize）不在服务面内，本模块只保留读面事实。
  *
  * 规则要点：
  * - P = B₀ ∪ S ∪ F：B₀ = profile 安装自带组合（模板默认快照，不含用户后加的层）、

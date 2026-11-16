@@ -15,7 +15,7 @@
  *
  * Platform split (same precedent as packages/control-plane/scripts/test.mjs):
  * `test` runs GROUPS below; `test:frozen` runs FROZEN_GROUPS via --frozen (the
- * Electron-only tests, 2026-11 freeze); `test:macos` runs MACOS_FILES via --macos.
+ * Electron-only tests, Electron freeze); `test:macos` runs MACOS_FILES via --macos.
  * WIN32_FILES / --win32 is retained for the ARCHIVED Windows leg (no package
  * script while that leg is frozen; the flag still runs the set if the archived CI
  * leg is restored). win-acl.test.ts exercises the icacls argument builders /
@@ -24,7 +24,7 @@
  * The macOS-only files need macOS tools (O_EXLOCK/plutil/codesign/ditto), so
  * --macos is their only entry point and they never ride the ubuntu leg.
  *
- * Electron freeze (2026-11, docs/progress/electron-frozen.md): Electron-only tests
+ * Electron freeze (frozen-surface registry): Electron-only tests
  * moved to FROZEN_GROUPS. The default `test` run never schedules them (they are still
  * registered here so verify-test-wiring keeps them wired); `test:frozen` (`--frozen`)
  * is their only entry point. The shared lockstep suites (bridge manifest / shim
@@ -34,7 +34,7 @@
  * NOT frozen: besides the frozen preload literals it pins the LIVE Swift shim carrier
  * key set, the shared shell-ipc-settings.ts deviceInfo description format and the
  * A-bridge ∥ dshDesktop channel-domain separation, so freezing it would silently
- * drop those live/shared assertions (review 2026-11).
+ * drop those live/shared assertions.
  * macOS leg skip discipline: the packaging suites
  * carry five environment-conditional `t.skip` sites (codesign/hdiutil, the
  * SwiftPM .build/release product, the resolved Sparkle artifact). A skipped case
@@ -179,7 +179,7 @@ export const GROUPS = {
     // dshDesktop 官方 desktop carrier 面：preload↔shim 键集相等（③）、
     // 共享 shell-ipc-settings.ts 的 deviceInfo 描述格式（⑦，Swift sidecar 现行面）、
     // dshDesktop 通道域 ∥ IPC_CHANNELS 零交集（⑥，A 桥白名单不得落入该域）。
-    // 2026-11 review 起留在默认组：冻结它会让三类活契约静默失去校验。
+    // 这些用例留在默认组：冻结它们会让三类活契约静默失去校验。
     'test/ipc/desktop-carrier-surface.test.ts',
     'test/ipc/bridge-shim-document.test.ts',
     // 宿主路径面（上游 __DSH_HOST_PATHS__）：painted-source 门控 / 批次配对 / 消费一次。
@@ -210,7 +210,7 @@ export const GROUPS = {
     'test/desktop-shell/updater-revision.test.ts',
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
-    // 上游节奏单源 + 可选取证 JSONL（2026-09 对齐）
+    // 上游节奏单源 + 可选取证 JSONL
     'update-schedule.test.ts',
     'update-journal.test.ts',
   ],
@@ -252,7 +252,7 @@ export const GROUPS = {
 }
 
 /**
- * Electron-only FROZEN tests (2026-11 Electron freeze; docs/progress/electron-frozen.md).
+ * Electron-only FROZEN tests (Electron freeze).
  *
  * 冻结面 = 依赖归档入口/边沿/preload（`electron/main.ts` / `electron/electron-edges.ts` /
  * `electron/preload.cts`）或 Electron 打包/更新工具链、且不覆盖 Swift 腿 / 共享契约的测试。
@@ -263,8 +263,7 @@ export const GROUPS = {
  * bridge-shim / bridge-shim-surface / ipc-surface-mirror / desktop-carrier-surface /
  * upstream-seats / node-edges / notifications / badge / cross-package-contract /
  * host-root-lease 等——它们锁的是 Swift 腿仍在用的共享契约，冻结文件只作为只读对照
- * 参与，不需要 Electron 侧同步改动。desktop-carrier-surface 例外地留在默认组（2026-11
- * review 修正）：它的 ③/⑥/⑦ 分别锁活 Swift shim 的 dshDesktop 键集、共享
+ * 参与，不需要 Electron 侧同步改动。desktop-carrier-surface 例外地留在默认组：它的 ③/⑥/⑦ 分别锁活 Swift shim 的 dshDesktop 键集、共享
  * shell-ipc-settings.ts 的 deviceInfo 格式与 A 桥∥dshDesktop 通道域隔离，冻结即静默丢校验。
  */
 export const FROZEN_GROUPS = {
@@ -296,7 +295,7 @@ export const WIN32_FILES = [
   // platform-neutral (the ssh binary differs, the argv contract does not), so
   // the Windows leg runs the same lockstep. The win32-only forward pieces
   // (`taskkill /T`, no Job Object) live in forward-lifecycle's injected seam and
-  // a dedicated forward-win32 suite is still TODO (S1); do not move the other
+  // a dedicated forward-win32 suite is not in the default suite; do not move the other
   // forward files here — they would then stop running on the POSIX legs.
   'test/forward/ssh-forward-args.test.ts',
 ]

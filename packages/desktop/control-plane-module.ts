@@ -133,9 +133,9 @@ export const RUN_STDOUT_MAX_BYTES = controlPlaneModule.RUN_STDOUT_MAX_BYTES
 export const WRITE_FILE_MAX_BYTES = controlPlaneModule.WRITE_FILE_MAX_BYTES
 
 // Protected-plugin READ face (protected-plugins.ts): P = B₀ ∪ S ∪ F derivation and the
-// read-face row projection, same single source as the whitelist family. The user plugin
-// write face was retired with the 2026-09 C layering ruling, so no mutation-decision
-// re-export lives here anymore.
+// read-face row projection, same single source as the whitelist family. No user plugin
+// write face exists here (C layering ruling), so no mutation-decision
+// re-export lives here.
 export const derivePluginRows = controlPlaneModule.derivePluginRows
 export const deriveProtectedSet = controlPlaneModule.deriveProtectedSet
 export const PLUGIN_MATERIALIZED_VALUE_MASK = controlPlaneModule.PLUGIN_MATERIALIZED_VALUE_MASK

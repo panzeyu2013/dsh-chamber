@@ -379,7 +379,7 @@ final class ShellIdentityTests: XCTestCase {
                        "窗口底不得在材质面之外被改写（install/applyBackdrop 独家）")
         XCTAssertTrue(source.contains("webViewIsTransparent = drawsBackgroundOutcome == .applied"),
                       "WebKit 能否透明必须取自异常安全包装的真实结果，不得假设")
-        // 上游 macOS 窗口形态（2026-09 跟随上游，升级计划 §12.6）：内容延伸进标题栏 +
+        // 上游 macOS 窗口形态：内容延伸进标题栏 +
         // 透明标题栏 + 最小内容尺寸 + hiddenInset 灯位 + `.sidebar` 材质
         // （ShellWindowMaterial；上游 = vibrancy:'sidebar' + visualEffectState:'active'）。
         // 「背景可拖」不在其中：命中视图恒为 WKWebView 而它的 mouseDownCanMoveWindow
@@ -491,7 +491,7 @@ final class ShellIdentityTests: XCTestCase {
             "setWindowTitle(Self.displayName + \" — \" + NativeText.string(.rendererCrashTitle))"),
             "崩溃放弃标题必须走 setWindowTitle")
         // 裸写窗口标题会静默丢掉灯位（换值重排且不发通知）；计数锁能拦下所有字面形态，
-        // 包括曾经漏掉的 didFail 分支（design 25 §5.6）。
+        // 包括 didFail 分支（design 25 §5.6）。
         XCTAssertEqual(controller.components(separatedBy: "window?.title =").count - 1, 0,
                        "不得裸写窗口标题（didFail/恢复路径都必须走 setWindowTitle）")
         XCTAssertEqual(controller.components(separatedBy: "window.title =").count - 1, 2,

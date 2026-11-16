@@ -120,8 +120,7 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
   // release callback so credential rotation can revoke it like a WS splice.
   const liveHttpRequests = new Set<{ request: ProxyRequest; response: ProxyResponse }>()
   // The gateway has ONE upstream for its lifetime, so it owns one keep-alive pool
-  // and destroys it with the proxy (previously the shared module-level pool was
-  // never destroyed here).
+  // and destroys it with the proxy (the pool is not shared at module level).
   const agents = createProxyAgentPair()
 
   const forwardDeps: ProxyForwardDeps = {

@@ -18,7 +18,7 @@
 //      拼进定长栈缓冲；标记用 open(O_CREAT|O_TRUNC|O_NOFOLLOW|O_NONBLOCK) +
 //      fstat(常规文件且 nlink==1) + write + close。
 //    - 只用 Darwin `man 2 sigaction` 名单内的调用：**gmtime_r 不在名单内**
-//      （2026-12 审查方向 B B3），时间换算改成本文件内的整数运算；lstat 与
+//      ，时间换算改成本文件内的整数运算；lstat 与
 //      ftruncate 同样不在名单内，故标记判据只用 open+fstat（O_TRUNC 的残余见
 //      openMarkerLeaf 注释）。
 //    - 处理器内绝不做：Swift 分配（Array/字典/String 插值/Formatter）、锁、
@@ -133,8 +133,7 @@ public enum CrashDiagnostics {
         utcFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(epoch)))
     }
 
-    /// epoch 秒 → UTC 年月日时分秒（**纯整数 civil-date 换算**；2026-12 审查
-    /// 方向 B B3）。
+    /// epoch 秒 → UTC 年月日时分秒（**纯整数 civil-date 换算**）。
     ///
     /// 为什么不用 libc 时间函数：处理器只能调 Darwin `man 2 sigaction` 名单内的
     /// async-signal-safe 调用，`gmtime_r` 不在名单里。这里实现 Howard Hinnant 的

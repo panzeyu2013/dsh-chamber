@@ -210,7 +210,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
   let scheduleTimer: ReturnType<typeof setTimeout> | null = null
   let lastCheckCompletedAt: number | null = null
   let checkAttempt = 0
-  // A7 (2026-12 复审方向 A): stop() 必须终局。旧实现只清「当前」timer；若 stop 时有
+  // A7: stop() 必须终局。只清「当前」timer 时，若 stop 时有
   // runScheduledCheck 卡在 await（fetch 未结算），它完成后仍会 arm ⇒ sidecar 退出
   // 路径停不干净。stopped 之后 arm() 一律空操作，start() 也不复活定时器。
   let started = false
@@ -469,7 +469,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     noteActivity(reason) {
       if (deps.nativeUpdater !== undefined) return
       // A4: 与 Electron(updater.ts 的 noteActivity) 同一语义——最后一次完成检查
-      // 早于 interval（或从未完成）才触发，此前只做合并。旧实现把门写反
+      // 早于 interval（或从未完成）才触发，此前只做合并。门的方向不得反置
       // （scheduleTimer === null && elapsed < interval 才查）⇒ 首检定时器在挂时
       // 永不触发，headless 的 focus/resume nudge 形同虚设。
       if (!started || stopped) return

@@ -676,8 +676,8 @@ test('resolvePlainNodeExecutable: a non-Electron process whose own basename IS n
     knownLocations: [],
     home: root,
   }), '/usr/bin/node')
-  // The retired helper basename no longer takes the direct branch: only the caller's node
-  // may run dsh, and a bare PATH miss stays null rather than guessing.
+  // The helper basename never takes the direct branch: only the caller's node may
+  // run dsh, and a bare PATH miss stays null rather than guessing.
   assert.equal(resolvePlainNodeExecutable({
     electron: undefined,
     execPath: '/opt/sidecar/dsh-chamber-helper',
@@ -1175,11 +1175,9 @@ async function waitForNoEntryProcess(entryPath: string, timeoutMs: number): Prom
 }
 
 test('spawnDsh: a minted cookie retries the identity probe without the 500ms sleep', async () => {
-  // Cold-start budget (B1.2): after the 401 the host mints the browser-auth cookie and
-  // the probe used to wait a flat 500ms before retrying (measured 514ms on the real
-  // cold path). The fake host records the gap between its 401 answer and the retry —
-  // the old code cannot produce a gap below ~500ms, so this is a behavioral assertion,
-  // not a machine-speed one.
+  // Cold-start budget: after the 401 the host mints the browser-auth cookie; the
+  // retry must not wait a flat 500ms (the fake host records the gap between its 401
+  // answer and the retry, so this is a behavioral assertion, not a machine-speed one).
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   const gapFile = join(stateDir, 'retry-gap.txt')

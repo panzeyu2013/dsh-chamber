@@ -154,7 +154,7 @@
   padding: 3px 4px;
   border-radius: 6px;
   cursor: pointer;
-  /* P2-8: the row is a <button role="treeitem"> (keyboard-activatable like
+  /* The row is a <button role="treeitem"> (keyboard-activatable like
      the official SearchResultItem); strip UA button chrome so it renders
      exactly like the former div row. */
   box-sizing: border-box;

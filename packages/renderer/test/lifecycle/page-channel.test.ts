@@ -1142,7 +1142,7 @@ test('a wave larger than the slot table releases exactly one subscription immedi
     ready = true
     epoch = 1
     for (const listener of [...listeners]) listener('dsh-a')
-    // The wrap used to put the 18th subscription back on slot 0 (a second
+    // The wrap must not put the 18th subscription back on slot 0 (a second
     // same-tick subscribe); exactly one immediate release is the contract.
     assert.equal(frames(), 1, 'only the first parked subscription resumes immediately')
     t.mock.timers.tick(1_920)

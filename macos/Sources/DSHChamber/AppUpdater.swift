@@ -620,7 +620,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     /// 变化，页面不再无限停在 checking/downloading——超时投一次 failed（原因词与
     /// S-38 同表）。每次相位变化都重置；deadline 可注入供单测。
     ///
-    /// B4（2026-12 审查方向 B）：下载与检查用**不同**的 deadline。Sparkle 没有
+    /// B4：下载与检查用**不同**的 deadline。Sparkle 没有
     /// 下载进度回调（SPUUpdaterDelegate 只有 willDownloadUpdate / didDownloadUpdate /
     /// 失败），进入 `.downloading` 之后到落地前不再有任何相位变化，共用 60s 会把
     /// 任何稍慢的正常下载误杀成 `native-update-stalled:downloading`。E 的 60s 是

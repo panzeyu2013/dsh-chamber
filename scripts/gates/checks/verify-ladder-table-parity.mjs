@@ -88,7 +88,7 @@ export const LOCKSTEP = [
  *  - `reference`: the exact `LADDER_TABLES.<ladder>` expression that makes the
  *    import the driver, matched against comment-stripped source (a comment
  *    claiming it does not count);
- *  - `retiredNames`: constants the module used to own; a new declaration of one
+ *  - `retiredNames`: constants retired from the module's ownership; a new declaration of one
  *    (const/let/var) is a regression, a prose mention is not;
  *  - the leaves of the ladder object are additionally checked as "must not be
  *    assigned a numeric literal" (`leaf: 123`), which is the shape a re-declared

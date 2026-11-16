@@ -346,7 +346,7 @@ test('the ui-deliverables controller prefixes both present routes (executed patc
   const makeController = (code, basePath) => {
     const calls = []
     const Controller = evaluateSlice(code, {
-      // 0.2.2: the controller file no longer declares PRESENTED_SUCCESS_HOLD_MS; the class is
+      // The controller file does not declare PRESENTED_SUCCESS_HOLD_MS; the class is
       // the stable slice root (its imports are supplied as params below).
       from: 'export class PresentedOpenController',
       params: {
@@ -1032,7 +1032,7 @@ test('the live registry declares a retirement form per patch and no orphan artif
     assert.ok(entry.reason.length > 0)
     assert.equal(typeof entry.ensure, 'string')
   }
-  // A previously retired entry (the command-row sweep) stays deleted.
+  // The retired command-row sweep entry must stay out of the registry.
   assert.equal(
     VENDOR_PATCHES.find((patch) => patch.vendorFile.includes('GenericCommandCard')),
     undefined,
@@ -1243,8 +1243,8 @@ const PATCHED_BUNDLED_DEPENDENCY_IDS = Object.freeze(['@deepseek-ai/dsh-util-val
  * directory-picker-native) — page-own rows the composite replaces
  * plus host rows the shell drops on purpose. Without this subtraction the covered
  * check below would vouch for a package no module of which reaches the build — the
- * recorded ui-sidebar-documentpreview failure mode reached through the dedupe list
- * instead of an instance bundle.
+ * ui-sidebar-documentpreview case can enter through the dedupe list instead of an
+ * instance bundle.
  */
 const COVERED_BUT_NEVER_LOADED_IDS = Object.freeze([
   '@deepseek-ai/dsh-client-hmr',
@@ -1253,8 +1253,7 @@ const COVERED_BUT_NEVER_LOADED_IDS = Object.freeze([
 
 test('every registered vendor patch targets a composite-covered package or dependency', () => {
   // A patch applies only to modules THIS build transforms. Registering one for an
-  // instance-bundled row can never apply and fails buildEnd (the ⑫
-  // ui-sidebar-documentpreview lesson), so assert graph membership here for early
+  // instance-bundled row can never apply and fails buildEnd (the ui-sidebar-documentpreview case), so assert graph membership here for early
   // feedback instead of waiting for a full build to fail. buildEnd stays the
   // authority: this names the boot-dedupe set minus the documented skips, not the
   // transformed-module set itself.

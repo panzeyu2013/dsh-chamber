@@ -1,8 +1,8 @@
 /**
  * The session-face open-liveness evidence, SINGLE SOURCE.
  *
- * Two client halves used to carry this tri-state read verbatim (mobile
- * session-stall.ts and open-in session-stream-health-probe.ts); both already
+ * Both client halves read this tri-state evidence verbatim (mobile
+ * session-stall.ts and open-in session-stream-health-probe.ts); they
  * depend on client-core, so the evidence function lives here once.
  *
  * Contract (unchanged from both copies):

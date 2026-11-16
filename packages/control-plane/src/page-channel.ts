@@ -102,7 +102,7 @@ const PAGE_CHANNEL_STATS_INTERVAL_MS = 60_000
 
 /**
  * 4xx 里「这次不行、等会儿可能行」的状态：401/403 的 Authorization 是传输层
- * 注入的，token 刷新/轮换后同一条请求会成功（review R1-C：把 401/403 判永久会让
+ * 注入的，token 刷新/轮换后同一条请求会成功（把 401/403 判永久会让
  * 认证刷新后的订阅永远不复活）；408/425/429 是时间/限流。其余 4xx 是上游对
  * **请求本身**的拒绝（缺路由/不存在/已删除），重发只会得到同一个拒绝。
  */
@@ -380,7 +380,7 @@ function createSseParser(maxChars: number): { push(chunk: Buffer): SseEvent[]; e
   }
   // 上一行进终止符是块尾的 `\r`：下一块若以 `\n` 开头，那是同一个 CRLF 的后半，要吃掉。
   let pendingCrLfTail = false
-  // 扫描游标：一条跨块的大事件（3 MB 单行）此前每次 push 都从 0 重扫整个累积
+  // 扫描游标：一条跨块的大事件（3 MB 单行）若每次 push 都从 0 重扫整个累积
   // buffer，整体是 O(n²/chunk)——64 KiB 分块实测 90 ms、8 KiB 分块 757 ms，全部落在
   // sidecar 主线程上。游标让每个字符只被看一次；任何一次 buffer 前移都要把游标归零
   // （已消费的前缀不再属于后续扫描）。
@@ -649,7 +649,7 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     logger.log('page-channel: subscription ' + sub.id + ' ready (health)')
     sendFrame(sub.socketState, pageChannelReadyFrame(sub.id))
     accepting = true
-    // 订阅即快照（与退役的 /api/host/health-events 同一语义）：只订阅未来的转移会
+    // 订阅即快照（与 health-events 端点同一语义）：只订阅未来的转移会
     // 漏掉订阅前已经发生的状态，页面会一直停在过期快照上直到下一次转移。放在 ready
     // 之后，消费方拿到的帧序恒定是 [ready, 当前快照 item, ...后续转移]。
     if (deps.currentHealthSnapshot !== undefined) {
@@ -896,8 +896,8 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     const previous = state.subscriptions.get(id)
     if (previous !== undefined) teardownSubscription(previous)
     // 没有订阅数上限：一条订阅对应页面的一条流，上游数 = O(活动订阅数)（design 26 D5）。
-    // 这里曾有一个 resource_exhausted 的容量闸门，它把「第 N+1 条流」变成永远重试的
-    // 静默降级——容量属于控制面的上游管理器，不是一个需要闸门的稀缺资源。
+    // 这里不存在 resource_exhausted 容量闸门：把它引入会把「第 N+1 条流」变成永远
+    // 重试的静默降级——容量属于控制面的上游管理器，不是一个需要闸门的稀缺资源。
     const sub: SubscriptionState = {
       id,
       socketState: state,

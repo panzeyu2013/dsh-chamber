@@ -1,10 +1,10 @@
 /**
  * verify-i18n.test.mjs — 双语记录门的 **sidecar 发现面**负例测试（临时仓根，spawn 真门）。
  *
- * 为什么需要：sidecar 的键此前只认行首（平铺记录），于是 4 个用 en:/zh: 缩进映射的
- * sidecar 全部被静默跳过；hash 也只认 64 位 sha-256，2 个沿用 git blob（40 位 sha1）
- * 的上游拷贝包同样 0 对——「记录文件在、其实没校验任何一对」。这里把真实门跑在
- * 临时仓根上钉住：缩进键 / 两种 hash 都会被校验，陈旧即红，解析不出任何一对也红。
+ * 为什么需要：只认行首键（平铺记录）会让缩进映射的 sidecar 被静默跳过；hash 只认
+ * 64 位 sha-256 会让沿用 git blob（40 位 sha1）的上游拷贝包同样 0 对——「记录文件在、
+ * 其实没校验任何一对」。这里把真实门跑在临时仓根上钉住：缩进键 / 两种 hash 都会被
+ * 校验，陈旧即红，解析不出任何一对也红。
  *
  * 跑法：node --test scripts/gates/checks/verify-i18n.test.mjs（run-script-tests.mjs gates 组）。
  */

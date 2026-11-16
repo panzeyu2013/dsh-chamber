@@ -1,8 +1,8 @@
 /**
  * shell-ipc-plugins-ssh — domain IPC registrations: the ssh plugin READ face
  * (manifest cat → projection) plus the manual chamber host-package seed
- * fallback. The user plugin write surface (apply/undo/materialize) was retired
- * with the 2026-09 C layering ruling; seeding is chamber provisioning, not a
+ * fallback. No user plugin write surface (apply/undo/materialize) exists in
+ * this file; seeding is chamber provisioning, not a
  * plugin-model write (design 21 §6.11), so SSH_SEED_HOST_GRAPH stays.
  */
 import type { ShellIpcCtx } from './shell-ipc-ctx.ts'

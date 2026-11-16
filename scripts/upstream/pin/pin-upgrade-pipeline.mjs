@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * pin-upgrade-pipeline.mjs — 上游 pin 升级的「机械面单批管线」（docs/progress/TODO.md A§16.3）。
+ * pin-upgrade-pipeline.mjs — 上游 pin 升级的「机械面单批管线」。
  *
  * 由给定 tag 推导**六锚 + 3 个 fork 字面量**的应改值，把 diff 打印出来（只打印、
  * 不写锚），随后自动跑机械面收尾：`registry-views.mjs --write`（registry canonical +
@@ -40,7 +40,7 @@
  *   - **不写锚**：六锚 / 3 fork 字面量只打印 diff，落笔仍由人工按 diff 应用
  *     （本脚本绝不改 pin 值、不写 harness.commit / registry.json 语义 / vendor 树）；
  *   - 派生锚（运行时锁文件）由 `bundle:dsh` 拥有，只报当前/目标与重生成命令；
- *   - 机械面收尾步骤只在 `--check` 下退化为只读，其余情况按 TODO A§16.3 写生成视图；
+ *   - 机械面收尾步骤只在 `--check` 下退化为只读，其余情况写生成视图；
  *   - 前提：`update-vendor.mjs <tag>` 已把源码线（submodule gitlink + harness.commit +
  *     vendor 链 + 根锁文件）切到该 tag，且 `@deepseek-ai/dsh@<version>` 已发布 npm、
  *     `bundle:dsh` 已刷新运行时锁（双线互斥窗口见 dsh-upgrade-checklist.md §2/§5）。

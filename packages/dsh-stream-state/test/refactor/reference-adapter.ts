@@ -5,9 +5,9 @@
  *
  * This file ports the THREE independent replacement entries and their
  * predicates verbatim. It deliberately does NOT import the fork: the oracle
- * must be able to run in a tree without node_modules. These are FROZEN pre-R2
+ * must be able to run in a tree without node_modules. These are FROZEN
  * references — their behaviour checks live in differential-harness.test.ts, and
- * the widening formula they once mirrored was retired (single-tier 30 s).
+ * current widening formula is the single-tier 30 s one.
  *
  * The old design's defining property is that deciding to replace is spread over
  * three call sites with three different bounds:

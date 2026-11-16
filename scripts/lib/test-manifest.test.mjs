@@ -5,8 +5,8 @@
  * The negative cases are the point: a child that exits 0 without executing a
  * node:test body, a manifest that lists nothing, and an empty group must all be
  * refused; only real pass/fail/skip corpora count as executed. The manifests
- * themselves are read as text (one table-driven source lock) so a package can
- * no longer carry a private copy of the guard to pin its own data.
+ * themselves are read as text (one table-driven source lock) so a package
+ * cannot carry a private copy of the guard to pin its own data.
  */
 
 import { test } from 'node:test'
@@ -642,9 +642,9 @@ test('runTestManifest：显式 jobs 覆盖必须真正生效（此前被静默�
 })
 
 /**
- * The package manifests used to carry five per-package guard tests that each
- * re-asserted the shared runner's verdicts (evaluateChildRun negatives,
- * requireNoSkips, the lockstep preflight). Those cases are owned here; what is
+ * The package manifests carry no per-package guard tests re-asserting the shared
+ * runner's verdicts (evaluateChildRun negatives, requireNoSkips, the lockstep
+ * preflight) — those cases are owned here; what is
  * genuinely package-specific is the WIRING — which legs, options and tables a
  * manifest hands to the shared runner. This one test reads every package
  * manifest as text (never imports one: an importable manifest must not run on
@@ -669,7 +669,7 @@ const MANIFEST_SPECIFIC_WIRING = {
     /platformFiles: \{ win32: WIN32_FILES \}/u,
   ],
   desktop: [
-    // Electron freeze (2026-11): the default leg rides the frozen group through
+    // Electron freeze: the default leg rides the frozen group through
     // platformFiles.frozen, and the --frozen leg hands GROUPS back as 'rest'; both
     // shapes are pinned so a forgotten FROZEN_GROUPS registration fails here.
     /platformFiles: \{ win32: WIN32_FILES, macos: MACOS_FILES, frozen: flatFiles\(FROZEN_GROUPS\) \}/u,

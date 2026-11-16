@@ -11,7 +11,7 @@
  *     spawned detached, so a missed abort leaves a stray shell process group.
  *
  * The `[perf] sidecar` marks are pinned too — they are the only attribution
- * this 1.1s block has (see .tmp/perf-2026-11-15/report.md §1).
+ * this 1.1s block has — the mark itself is the attribution record.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

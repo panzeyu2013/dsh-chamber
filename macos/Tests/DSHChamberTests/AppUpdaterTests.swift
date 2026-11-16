@@ -417,7 +417,7 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertEqual(received.count, 1, "用户发起路径不追加阶段")
     }
 
-    /// 就绪注意力判据（上游 update-attention.ts 的等价物，2026-09 跟随上游）：
+    /// 就绪注意力判据（上游 update-attention.ts 的等价物）：
     /// 只有「已下载待安装」抬注意力（Dock 跳动），其余相位一律不打扰。
     func testUpdateAttentionDecision() {
         XCTAssertTrue(MainWindowController.shouldRaiseUpdateAttention(phase: .downloaded))

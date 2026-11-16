@@ -1546,9 +1546,9 @@ test('copy mirrors: the acceptance label allowlists cover the upstream zh dictio
   for (const [role, labels] of Object.entries(BROWSER_TOOLBAR_LABELS)) {
     assert.notEqual(labels.indexOf(zhValue(role)), -1, 'toolbar mirror missing ' + role)
   }
-  // v3 (design 28 §1/§4, ADR-0004): the sandbox toggle is retired with the
-  // iframe carrier (the native guest cannot be sandboxed), so the zh dictionary
-  // no longer carries sandbox.* and there is no label mirror to drift.
+  // v3 (design 28 §1/§4, ADR-0004): there is no sandbox toggle (the native guest
+  // cannot be sandboxed), so the zh dictionary
+  // carries no sandbox.* keys, so there is no label mirror to drift.
 })
 
 test('CSP frame-src mirrors: the retired v2 extended set stays readable as the SH-7 negative fixture; no shipped startup passes frameSources', () => {
@@ -1569,8 +1569,8 @@ test('CSP frame-src mirrors: the retired v2 extended set stays readable as the S
   assert.match(CONTROL_PLANE_FRAME_SOURCES, /DEFAULT_BROWSER_FRAME_SOURCES: readonly string\[\] = Object\.freeze\(\['blob:'\]\)/u)
   assert.match(CONTROL_PLANE_FRAME_SOURCES, /isAllowedBrowserFrameSource/u)
   // v3 (design 28 §5「CSP」, ADR-0004): the embedded browser is the Swift native
-  // guest carrier (a top-level document), so the SHIPPED sidecar startup no longer
-  // passes ControlPlaneOptions.frameSources — the shell keeps the default short claim.
+  // guest carrier (a top-level document), so the SHIPPED sidecar startup does not
+  // pass ControlPlaneOptions.frameSources — the shell keeps the default short claim.
   assert.doesNotMatch(DESKTOP_SIDECAR_SOURCE, /frameSources\s*:/u, 'sidecar-entry.ts must not pass frameSources (v3 CSP narrowing)')
   // The FROZEN Electron archive keeps the retired v2 widening in its own file; it
   // never ships and must not be "synced" back into the shipped sidecar.
@@ -1856,10 +1856,10 @@ function browserScene({ origin = 'http://127.0.0.1:41234', sessionOpen = true, f
     button(BROWSER_TOOLBAR_LABELS.reload[0]),
     button(BROWSER_TOOLBAR_LABELS.go[0]),
     button(BROWSER_TOOLBAR_LABELS.external[0]),
-    // v3: the sandbox toggle is retired with the iframe carrier (the product
-    // locales dropped the sandbox.* keys, so there is no label allowlist any
-    // more). The W-13 verdict layer still inspects this fixture slot until its
-    // own v3 rewrite lands (E2/E5) — keep a literal zh label, not a mirror.
+    // v3: there is no sandbox toggle (the product locales dropped the sandbox.*
+    // keys, so there is no label allowlist). The W-13 verdict layer still
+    // inspects this fixture slot until its own v3 rewrite lands (E2/E5) — keep a
+    // literal zh label, not a mirror.
     fakeNode({ attrs: { 'aria-label': '关闭沙箱限制', 'aria-pressed': 'false' } }),
   ]
   const frame = fakeNode({

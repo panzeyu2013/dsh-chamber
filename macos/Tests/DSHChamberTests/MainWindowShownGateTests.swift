@@ -63,7 +63,7 @@ final class MainWindowShownGateTests: XCTestCase {
     /// 接线锁（源文本）：唯一发送点 + 两条恢复腿 + 两条离屏复位 + orderOut
     /// 隐藏入口的显式复位都必须留在源里——删掉任一观察者/钩子时上面的纯值用例
     /// 仍绿，故这里钉住。AppKit 不向 Swift 导出 orderOn/OffScreen 通知
-    /// （2026-12 用 swiftc -typecheck 核实），恢复面用 didBecomeKey +
+    /// （用 swiftc -typecheck 核实），恢复面用 didBecomeKey +
     /// didDeminiaturize，orderOut 型隐藏没有通知可挂，必须由隐藏入口手动复位。
     func testControllerWiresBothEdgesThroughTheSingleSendPoint() throws {
         let root = URL(fileURLWithPath: #filePath)

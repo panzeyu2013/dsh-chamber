@@ -2,8 +2,8 @@
  * 来源级普通警示（design 06 §3.4）：点击归档行不可打开时，在**触发它的来源
  * section 内**给一行瞬态警示（上游单浏览器 overlay 的 N-ctx 实例化），per-shell
  * 瞬态、与 rowErrors 同纪律：新的警示替换同来源旧条，3s（上游 Toast 默认 hold）
- * 后自动消失；跨 shell 不共享。归档成功 / 停止并归档的就地提示条已按用户裁决
- * 移除，本 hook 只服务这条普通警示。规则在框架无关的 sidebar-notices-model.ts。
+ * 后自动消失；跨 shell 不共享。归档成功 / 停止并归档的就地提示条（design 06 §3.4 的
+ * Rejected alternatives）不在此面，本 hook 只服务这条普通警示。规则在框架无关的 sidebar-notices-model.ts。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {

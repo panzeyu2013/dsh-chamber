@@ -93,7 +93,7 @@ test('dist carries the CURRENT protected-set READ projection (a stale bundle sil
   // These markers are operator-facing copy,
   // which minification preserves; reword the copy ⇒ move the marker with it.
   // The user plugin write surface (and with it the post-install verifier's copy)
-  // was retired with the 2026-09 C layering ruling; the read projection still
+  // is not served; the read projection still
   // derives the protected set from the runtime family facts, so its copy is the
   // freshness marker now.
   const markers = [

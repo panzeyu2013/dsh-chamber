@@ -100,8 +100,8 @@
  * trade-off and the measured symptom in reason, and carry `noRetireForm`
  * (upstream has no N-shell notion to anchor on).
  *
- * FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) - ADMITTED
- * 2026-11-16 by maintainer ruling (design 09 §3.6); see the two ui-theme entries. The
+ * FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) — admitted form
+ * (design 09 §3.6); see the two ui-theme entries. The
  * page-global fact is a DOM resource every mounted instance shell installs for
  * itself - identical theme stylesheets and one icon sprite - so N shells multiply
  * a single page-wide artifact N times and a hidden shell keeps its copy alive.
@@ -113,12 +113,11 @@
  * symptom and the accepted trade-off in reason, stay DOM-equivalent to upstream on
  * a single-instance page (one resource, removed on dispose, no chamber knob), and
  * carry `noRetireForm` until upstream defines a page-level singleton contract of
- * its own. ADMITTED: the maintainer ruling that admits this form was recorded on
- * 2026-11-16 in design 09 §3.6, so these entries may ride release builds; the
+ * its own. Admitted entries may ride release builds (design 09 §3.6); the
  * class② measurement discipline above still governs future entries, and the
  * deletion conditions (`noRetireForm` / an upstream page-singleton contract) stay.
  *
- * RETIREMENT (upstream-drift batch-2 I-7): every entry declares EITHER
+ * RETIREMENT (I-7): every entry declares EITHER
  * `retireCheck` (the pinned-upstream shape that carries the fix) or
  * `noRetireForm` (why no stable text shape can be named). C9 keeps a missing
  * anchor release-blocking but evaluates `retireCheck` first: a hit reports
@@ -1688,8 +1687,8 @@ export function vendorPatchRegistryProblems(patches = VENDOR_PATCHES) {
 }
 
 /**
- * Patches upstream has fixed and chamber has retired (upstream-drift batch-2
- * I-7). Each entry is an `ensure` assertion: the fix must still be present
+ * Patches upstream has fixed and chamber has retired (I-7). Each entry is an
+ * `ensure` assertion: the fix must still be present
  * exactly once, or C9 goes red (regression fence). A `retire-candidate` verdict
  * is accepted by moving the entry here; the VENDOR_PATCHES entry and its artifact
  * marker are deleted in the same change.

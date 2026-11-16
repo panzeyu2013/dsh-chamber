@@ -445,7 +445,7 @@ test('stats percentiles read the positive queue wait, not the zero-wait grants a
     holder.slot.release()
     const queued = granted(await waiting)
     // The granted waiter holds the only slot: leaving it held makes the first instant
-    // grant wait out the lease (the 65 s overload this test used to carry).
+    // grant wait out the lease.
     queued.slot.release()
     for (let index = 0; index < 20; index += 1) {
       const slot = granted(await acquireHttpBudget(request('fast')))

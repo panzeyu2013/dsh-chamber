@@ -33,7 +33,7 @@ export const NOTIFICATIONS_V1_KEY = 'dsh-chamber.notifications.v1'
 export const LEGACY_UNREAD_V4_KEY = 'dsh-chamber.unread.v4'
 /** 旧未读 v2 载荷：历史迁移来源（notified/事件序 → 身份哨兵）。 */
 export const LEGACY_UNREAD_V2_KEY = 'dsh-chamber.unread.v2'
-/** 旧 v5 影子键：只写不读，迁移/收敛时显式清理（此前从无 removeItem 清它）。 */
+/** 旧 v5 影子键：只写不读，迁移/收敛时显式清理（无 removeItem 清理路径）。 */
 export const LEGACY_UNREAD_V5_KEY = 'dsh-chamber.unread.v5'
 /** 更老的 v3 / v1 键：v2 之前的历史载荷，随收敛一并清理（不再解析）。 */
 export const LEGACY_UNREAD_V3_KEY = 'dsh-chamber.unread.v3'

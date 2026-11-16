@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * build-manifest.mjs — G3「构建输入摘要」清单模块（design 21 §7；TODO D§2.2）。
+ * build-manifest.mjs — G3「构建输入摘要」清单模块（design 21 §7）。
  *
  * 为什么需要：packages/desktop/dist/web/** 与 dist/host-*-package/** 在
  * .gitignore 里，干净 checkout 的「缺失」是正常态；要防的是本地/打包态的
@@ -23,7 +23,7 @@
  * 语义（与 verify-artifact-freshness 同款）：
  *   - 目录缺失（clean checkout）⇒ `missing`，**不是**陈旧，调用方按需 SKIP；
  *   - 目录在但 manifest 缺失/损坏/摘要不符/产物不符 ⇒ `stale`，绝不自动修复；
- *   - 失败信息必须给重建命令（TODO D§2.3「操作者只看到红、不知下一步」）。
+ *   - 失败信息必须给重建命令（操作者只看到红、不知下一步）。
  *
  * 已知覆盖边界（登记而非静默）：vendor 上游源码树（vendor/harness-checkout，
  * 2 万文件 / ~190MB）不逐文件哈希，pin 只以 `harness.commit`（声明式 pin）
@@ -46,7 +46,7 @@ export const HOST_PACKAGE_ARTIFACT_ID = 'desktop/dist/host-*-package'
 /** Contract of THREE places (vite outDir / main-side webDistDir / build-swift-app). */
 export const WEB_DIST_RELATIVE = 'packages/desktop/dist/web'
 
-/** Rebuild commands named by every failure message (single source; TODO D§2.3). */
+/** Rebuild commands named by every failure message (single source). */
 export const WEB_DIST_REBUILD_COMMAND = 'pnpm run build:renderer'
 export const HOST_PACKAGE_REBUILD_COMMAND = 'pnpm --filter @dsh-chamber/desktop run build:host-graph-package（前置：pnpm run build:host-packages）'
 
@@ -426,7 +426,7 @@ function compareOutputs(dir, manifest) {
 
 /**
  * Pack-time / gate-time problem list: append the rebuild command to every
- * stale verdict (TODO D§2.3 — a red without a next step is a dead end).
+ * stale verdict (a red without a next step is a dead end).
  * @param {{ problems: readonly string[] }} verdict
  * @param {string} rebuildCommand
  * @returns {string}

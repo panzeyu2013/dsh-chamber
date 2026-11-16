@@ -82,8 +82,8 @@ type BranchReadPlan = 'start' | 'keep' | 'reset'
 
 /**
  * ONE decision for the dialog's single read effect (open / workspace resolution / Existing-tab
- * staleness). A second effect used to race this one on reopen: both called the read in the same
- * commit, aborting and re-dispatching the first request. `reset` also owns the close-abort.
+ * staleness). A single effect owns the read on reopen (two concurrent effects would both call it
+ * in the same commit, aborting and re-dispatching the first request). `reset` also owns the close-abort.
  */
 export function planBranchQuery(input: {
   readonly open: boolean

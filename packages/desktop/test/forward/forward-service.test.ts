@@ -12,7 +12,7 @@
  * EVERY OS EFFECT IS FAKE. No ssh is spawned, no port is bound, no file is
  * written: the spawn/stop/start-time/ports/probe/storage/edges seams are all
  * injected. The real adapters (net bind/connect, /proc, ps, taskkill, the
- * 0600 private-file writer) are NOT exercised here — TODO(S1/W0) on their real
+ * 0600 private-file writer) are NOT exercised here; their real
  * platforms, which this tree cannot provide.
  */
 import { test } from 'node:test'

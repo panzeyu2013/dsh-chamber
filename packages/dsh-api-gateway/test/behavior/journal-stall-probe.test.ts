@@ -268,11 +268,11 @@ test('a probe that finds no Host advance never restarts the generation', async (
 })
 
 test('a notification-only flow is never probed as silent (progress, not replace/append, is delivery)', async () => {
-  // P1-4: the field comment claimed every published value is progress while the code
-  // only marked replace/append, so a stream whose assistant output arrives as cursorless
-  // notifications looked silent and was probed at the 45 s window. This suite compresses
-  // that window (30 ms) and drives REAL notification frames: under the old gate the
-  // watchdog probes while the train is still arriving.
+  // Progress is every published value, not only replace/append: a stream whose assistant
+  // output arrives as cursorless
+  // notifications is delivering, so it must not be probed as silent. This suite compresses
+  // the window (30 ms) and drives REAL notification frames: the watchdog must not
+  // probe while the train is still arriving.
   const timing = {
     tickMs: 5,
     probeAfterMs: 30,

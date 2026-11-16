@@ -7,7 +7,7 @@
 //  上游 macOS 窗口**背后是材质**：ui-web base.css 在 `html[data-platform='darwin']` 下把
 //  html/body 的背景设为透明（"the window's sidebar vibrancy shows only through a
 //  transparent page background"），ui-layout 的窗格只染半透明层，材质因此透出。Swift 壳
-//  此前没有材质腿：窗口是不透明主题色，页面透明区域露出的是那层色（本机登记的取舍）。
+//  不装材质腿时窗口是不透明主题色，页面透明区域露出的是那层色。
 //
 //  这里装上游同形的面：`material = .sidebar`（Chromium 的 `sidebar` vibrancy 就是它）、
 //  `blendingMode = .behindWindow`（采样窗后桌面 = 真正的 vibrancy）、`state = .active`

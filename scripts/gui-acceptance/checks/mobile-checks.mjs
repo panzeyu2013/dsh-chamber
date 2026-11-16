@@ -1,5 +1,5 @@
 /**
- * ARCHIVED (2026-11, Electron frozen; docs/progress/electron-frozen.md): pure judgement
+ * ARCHIVED (Electron frozen): pure judgement
  * layer of the archived CDP mobile walkthrough; kept for revival.
  *
  * Pure judgement layer of the CDP mobile walkthrough.

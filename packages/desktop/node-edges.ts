@@ -435,7 +435,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     nativeThemeSet(_source: 'light' | 'dark' | 'system') {
-      // 显式 no-op（2026-09 裁决 + §12.6 坑①）：Swift 壳的外观已由页面事实承担
+      // 显式 no-op（C 分层裁决 + §12.6 坑①）：Swift 壳的外观已由页面事实承担
       // （ShellPageFacts → applyAppearance，design 25 §5.3），再转一条边等于给同一
       // 事实加第二个调色板源。保留成员只为共享 HostEdges 面完整与 A/B 桥载荷锁步；
       // Electron 腿的真实现见 electron/electron-edges.ts（归档面；nativeTheme.themeSource）。
@@ -512,7 +512,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       return result !== false
     },
 
-    // 2026-09 C 分层：插件源 pick 叶随写面整族移除（Swift 侧同名宿主腿同批删除）。
+    // C 分层：插件源 pick 叶随写面整族移除（Swift 侧同名宿主腿一并删除）。
 
     showError(title: string, detail: string) {
       // 错误框是深链/更新失败路径的可见面：只把 leg 失败 catch 成一行 stderr 会让主线程

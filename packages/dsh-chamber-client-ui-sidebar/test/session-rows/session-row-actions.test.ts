@@ -140,7 +140,7 @@ test('the pin surfaces are the upstream forms: menu order 100 first, hover butto
   const marker = ROWS.slice(markerAt, ROWS.indexOf('</div>', markerAt))
   assert.ok(marker.includes(`className={cc.pinSlot} role="img" aria-label={t('row.pinned')} title={t('row.pinned')}`))
   assert.ok(marker.includes('<IconPinFillRegular size={14} />'))
-  // 上游 PinnedIndicator 是**非交互** span：换成带 onClick/tabIndex 的 button 曾是全绿（变异实测）。
+  // 上游 PinnedIndicator 是**非交互** span：带 onClick/tabIndex 的 button 必须被判红（变异实测）。
   assert.ok(marker.includes('<span className={cc.pinSlot}'), 'the marker keeps the non-interactive span form')
   assert.equal(/onClick|tabIndex|type="button"/u.test(marker), false,
     'the resting marker must stay non-interactive (no click handler, no tab stop)')
@@ -196,8 +196,8 @@ test('the pin funnel mirrors the archive funnel: in-flight guard by key, toggle 
 })
 
 test('the pin copy is upstream verbatim in both dictionaries', () => {
-  // 上游 zh 的「置顶」承诺排序（pin 会写 pinSessionOrder）；本仓首落未接置顶序——该差异
-  // 登记在 design 06 §5 与 TODO.md A§15.1 U1，文案仍取上游逐字。
+  // 上游 zh 的「置顶」承诺排序（pin 会写 pinSessionOrder）；本仓不接置顶序（差异
+  // 见 design 06 §5），文案仍取上游逐字。
   assert.equal(zh['menu.pinSession'], '置顶会话')
   assert.equal(zh['menu.unpinSession'], '取消置顶')
   assert.equal(zh['actions.pin'], '置顶会话')

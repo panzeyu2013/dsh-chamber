@@ -1,7 +1,7 @@
 /**
  * bridge-swift-only-additions.test.mjs — Swift-only A 桥白名单的最小解析/合并单测。
  *
- * 政策与 schema：docs/progress/electron-frozen.md §5.2；生成器
+ * 政策与 schema：冻结面 A 桥白名单政策；生成器
  * scripts/emit-bridge-manifest.mjs。这里锁「白名单解析 + 校验 + 合入 manifest +
  * 空表三产物逐字节不变」+ 白名单与 dshDesktop 域不相交 + verify-shim-payload-shape
  * 的白名单豁免（正例/负例/空表不变）——通道面本身仍由 bridge-manifest.test.ts /

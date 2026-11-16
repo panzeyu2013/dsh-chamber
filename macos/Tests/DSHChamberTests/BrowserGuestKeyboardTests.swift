@@ -59,7 +59,7 @@ extension BrowserGuestKeyboardTests {
 
     func testFocusGateBlocksWhenShellPageFocused() {
         // 回归：即使键位表命中、activeTabId 存在，只要 firstResponder 不在 guest 上，
-        // 必须 pass-through（此前 bug：壳页输入 Cmd+T 会被吞）。
+        // 必须 pass-through（否则壳页输入 Cmd+T 会被吞）。
         XCTAssertNil(KeyboardBridge.consumeDecision(activeTabId: "t1", guestFocused: false,
                                                     stroke: stroke("KeyT"), combos: tab([combo("KeyT")])))
     }

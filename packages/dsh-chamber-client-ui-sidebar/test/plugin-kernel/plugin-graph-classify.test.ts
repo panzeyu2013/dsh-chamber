@@ -1,5 +1,5 @@
 /**
- * plugin-graph-classify unit tests (audit arch-03 P2-2): the SINGLE SOURCE of
+ * plugin-graph-classify unit tests: the SINGLE SOURCE of
  * the host boot-graph channel classification. Every HTTP status / envelope
  * branch and every Chinese message literal is pinned verbatim here, and the
  * consumer lock at the bottom keeps renderer/src/host-graph.ts (fetchHostGraph)

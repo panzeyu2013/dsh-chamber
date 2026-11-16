@@ -1,8 +1,8 @@
 /**
  * shell-ipc-plugins-local — domain IPC registration: the LOCAL plugin manifest
- * READ projection (`desktop_local_plugin_list`). The local plugin write surface
- * (npm search / add / picker install / remove) was retired with the 2026-09 C
- * layering ruling.
+ * READ projection (`desktop_local_plugin_list`). No local plugin write surface
+ * (npm search / add / picker install / remove) exists here (C layering
+ * ruling).
  */
 import type { ShellIpcCtx } from './shell-ipc-ctx.ts'
 import { IPC_CHANNELS } from './ipc-events.ts'

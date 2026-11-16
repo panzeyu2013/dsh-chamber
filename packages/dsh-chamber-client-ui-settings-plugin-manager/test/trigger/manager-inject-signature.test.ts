@@ -1,5 +1,5 @@
 /**
- * vendor rc.2 三参 `PluginManagerController.inject` 的源锁（design 05 §5；dsh-upgrade-checklist §3/§7 第 6 步）。
+ * vendor 三参 `PluginManagerController.inject` 的源锁（design 05 §5；dsh-upgrade-checklist §3/§7 第 6 步）。
  *
  * 本包没有自己的 tsconfig；它经 renderer 的 chamber-entry 动态 import 进入根 pnpm run typecheck
  * 程序（与 vendor manager 源一起），其余 12 个 face 配置不含它。三参顺序的编译面依赖这条动态链，

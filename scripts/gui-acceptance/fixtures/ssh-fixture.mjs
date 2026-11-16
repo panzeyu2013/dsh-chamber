@@ -1,5 +1,5 @@
 /**
- * ARCHIVED (2026-11, Electron frozen; docs/progress/electron-frozen.md): the local SSH
+ * ARCHIVED (Electron frozen): the local SSH
  * fixture feeds the archived Electron/CDP packaged/attached GUI legs; kept for revival.
  *
  * W-14b's local SSH fixture: a REAL transport path with no external host.

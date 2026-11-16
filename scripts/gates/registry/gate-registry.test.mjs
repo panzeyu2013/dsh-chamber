@@ -51,10 +51,10 @@ test('the shipped registry resolves to the documented per-mode counts', () => {
     const modes = deriveModes(registry, { platform })
     return [modes.static.length, modes.typecheck.length, modes.tests.length, modes.full.length]
   }
-  // 2026-11-10 R4: +1 static gate payload.bridge-manifest (emit-bridge-manifest --check).
+  // static includes payload.bridge-manifest (emit-bridge-manifest --check): keep the counts golden in sync.
   assert.deepEqual(counts('linux'), [22, 13, 22, 57], 'linux mode counts drifted: a gate was added/removed without updating this golden')
-  // 2026-11 Electron freeze: the two darwin-only Electron packaging gates left the
-  // default tests set (they stay archived in the tree, not in the gate registry).
+  // The two darwin-only Electron packaging gates are archived (in the tree, not in
+  // the gate registry).
   assert.deepEqual(counts('darwin'), [22, 13, 28, 63], 'darwin mode counts drifted')
   const linux = deriveModes(registry, { platform: 'linux' })
   assert.deepEqual(linux.full, [...linux.static, ...linux.typecheck, ...linux.tests], 'full must be exactly static+typecheck+tests')
@@ -76,9 +76,8 @@ test('the gate identity surface is a golden (id -> command, and the proof set)',
 })
 
 test('the archived Electron packaging gates are not part of the default gate set', () => {
-  // 2026-11 Electron freeze: the Electron compiled-artifact smoke and the preload
-  // build stay in the tree as archived tools, but the default tests mode must not
-  // run them any more (docs/progress/electron-frozen.md).
+  // The Electron compiled-artifact smoke and the preload build stay in the tree as
+  // archived tools; the default tests mode must not run them (frozen-surface registry).
   const registry = loadGateRegistry()
   for (const id of ['macos.preload-build', 'macos.electron-artifacts']) {
     assert.equal(registry.gates.some(gate => gate.id === id), false, id + ' must stay out of the gate registry while the Electron flavor is frozen')

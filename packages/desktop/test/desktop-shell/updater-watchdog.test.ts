@@ -1,6 +1,6 @@
 /**
  * updater.ts (design 11) unit tests — part 4: the idle watchdogs added by the
- * 2026-12 P0 work (台账 §8.a) — a check or download that goes silent becomes a
+ *  a check or download that goes silent becomes a
  * NAMED failure ('check-network' / 'download-network') instead of an endless
  * checking/downloading phase. electron-updater cannot be aborted, so a late
  * result from an abandoned attempt is handled explicitly.
@@ -98,7 +98,7 @@ test('下载看门狗：停滞判定后恢复必须撤回判定，且仍是受�
 })
 
 
-// --- 2026-12 复审方向 A / C：静默链、start 幂等与停滞待决（A2/A3/A6/C2） ---
+// --- 静默链、start 幂等与停滞待决（A2/A3/A6/C2） ---
 
 /** 捕获 setTimeout 调用（不真正排程）：用例按记录的 ms/fn 手动驱动。
  *  注意：捕获期间不得再调用 waitFor（它内部依赖 setTimeout）。 */
@@ -174,7 +174,7 @@ test('A3 回归：到点的静默检查撞上在飞下载时必须重排一轮�
     controller.start()
     assert.equal(timers.calls.length, 1, 'start() 恰排一枚 15s 首检')
     assert.equal(timers.calls[0]!.ms, 15_000)
-    // 首检到点并完成 → 排下一轮；runCheck 内部的 watchdog 也是 setTimeout，会占位。
+    // 首检到点并完成 → 排下一次；runCheck 内部的 watchdog 也是 setTimeout，会占位。
     timers.calls[0]!.fn()
     await flushAsync()
     assert.equal(fake.checkCalls, 1)
@@ -190,7 +190,7 @@ test('A3 回归：到点的静默检查撞上在飞下载时必须重排一轮�
     fake.emit('download-progress', { percent: 5 })
     assert.equal(controller.state().phase, 'downloading')
 
-    // 周期到点：runCheck 因 downloadInFlight / 相位 downloading 早退——本轮没跑成。
+    // 周期到点：runCheck 因 downloadInFlight / 相位 downloading 早退——本次没跑成。
     const before = timers.calls.length
     periodic.fn()
     await flushAsync()

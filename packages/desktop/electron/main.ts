@@ -1,10 +1,9 @@
 // ============================================================================
-// ARCHIVED / FROZEN — Electron flavor: main.ts (2026-11 user ruling).
+// ARCHIVED / FROZEN — Electron flavor: main.ts.
 // Electron 已冻结归档：本文件不参与默认开发 / 门禁 / 发布，仅作为可复活参考保留。
-// 冻结范围与复活清单：docs/progress/electron-frozen.md；目录说明：./ARCHIVED.md
-// 位置变更：从 packages/desktop/ 根迁入本归档目录（old → new 见 ./ARCHIVED.md）。
+// 冻结范围与复活清单见仓库冻结登记；目录说明：./ARCHIVED.md
 // 相对 import 已上移一层；pkgDir 显式解析回 packages/desktop（package.json/dist 锚不变）。
-// 默认不要修改本文件；需要解冻时先按 docs/progress/electron-frozen.md 执行。
+// 默认不要修改本文件；需要解冻时按仓库冻结登记执行。
 // ============================================================================
 /**
  * dsh-chamber desktop main process (connection-manager form).
@@ -76,7 +75,7 @@ import type { SshCredentialCryptoAdapter } from '../ssh-credentials.ts';
 // privileged main process may be inconsistent and must fail closed rather than
 // keep serving IPC, transports and persistence from an indeterminate state.
 let fatalExceptionInProgress = false;
-// 渲染端 console 错误的**有界环**（64KiB，只留尾部）：主进程此前零 hook，
+// 渲染端 console 错误的**有界环**（64KiB，只留尾部）：由主进程注入 hook，
 // 打包态 renderer 白屏只剩系统考古；环只进本地 fatal 报告，绝不外发、不转发。
 const rendererConsoleRing = new ConsoleRing();
 
@@ -272,7 +271,7 @@ app.on('child-process-gone', (_event, details) => {
   if (details.type === 'GPU' || details.type === 'Utility') {
     const summary = `子进程退出：type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name ?? ''}`;
     console.error('[dsh-chamber] ' + summary);
-    // 同一份报告：GPU/Utility 消失是「白屏/黑屏」的常见根因，此前只进 console。
+    // 同一份报告：GPU/Utility 消失是「白屏/黑屏」的常见根因，现与其它终止原因同报告。
     try {
       noteFatalReport({
         event: 'child-process-gone',
@@ -734,7 +733,8 @@ function installRendererRecovery(win: BrowserWindow): void {
     frameWatchdog.reset();
     clearUnresponsiveTimer();
     clearCrashReloadTimer();
-    // 终止原因进同一份报告（此前只进 console，退出码/reason 随进程消失）。
+    // 终止原因进同一份报告（退出码/reason 与 console 同进一份报告）。
+    // 报告字段与退出码同源，不依赖控制台留存。
     try {
       noteFatalReport({
         event: 'renderer-gone',
@@ -1442,7 +1442,7 @@ if (!gotTheLock) {
       },
       setKeepAwake: enabled => setKeepAwakeActive(enabled),
       setLoginItem: enabled => applyLaunchAtLogin(enabled),
-      // 调试模式：Electron 腿本版未接线（外部调试端口 / DevTools 自动化推迟）。
+      // 调试模式：本 flavor 不接受外部调试端口 / DevTools 自动化（debugInspectable 恒 false）。
       // 回读诚实说明平台侧无此能力——绝不假装已开启；设置页据 supported
       // .debugInspectable=false 禁用开关并给出原因。
       setDebugMode: () => ({ inspectable: false, apiAvailable: false, reason: 'electron-debug-mode-unwired' }),

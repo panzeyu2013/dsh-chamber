@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * pack-input-guards.mjs — G5「打包前输入兜底」断言（design 21 §7；TODO D§2.2）。
+ * pack-input-guards.mjs — G5「打包前输入兜底」断言（design 21 §7）。
  *
  * 为什么需要：C8 只保证 seed/runtime 的 dist 与 src 一致，标记守卫只保证
  * control-plane / gateway 产物里出现过当前契约串；dist/web 与 host 包无论文可锁，
@@ -9,16 +9,16 @@
  * 再断言一次：存在 + 新鲜（manifest 摘要 / mtime），失败信息带重建命令。
  *
  * 挂点：`pnpm run build:sidecar`（build-sidecar.mjs 的 CLI 成功后、非 dry-run 时
- * 运行）。原 TODO 建议挂在 electron-builder 的 before-pack：Electron flavor 已冻结
- * （docs/progress/electron-frozen.md §2/§5.1，before-pack.mjs 归档只读），所以现行
+ * 运行）。挂点原本建议用 electron-builder 的 before-pack：Electron flavor 已冻结
+ * （仓库冻结登记 §2/§5.1，before-pack.mjs 归档只读），所以现行
  * 挂点 = Swift 出货链的 sidecar 装配；Electron 复活时按 §6 在 before-pack 里调用
  * `assertPackArtifactsFresh({ requirePresence: true })` 即可（本模块支持严格档）。
  *
- * 「fresh checkout 缺失另判」（TODO D§2.2 原话）：
+ * 「fresh checkout 缺失另判」（原文）：
  *   - 缺失（未构建）⇒ status='missing'：sidecar 腿的缺省档 loud SKIP（不是陈旧；
  *     clean checkout 的 dist 缺失是正常态），调用方传 requirePresence=true 时升级为失败；
  *   - 存在但陈旧 ⇒ status='stale'：一律失败，绝不自动修复（自动重建会让操作者以为
- *     产物被检查过），错误文案给重建命令（TODO D§2.3）。
+ *     产物被检查过），错误文案给重建命令。
  *
  * 覆盖的四类（G5 原文）：dist/web、dist/preload.cjs、dist/host-*-package、
  * dist/control-plane。两种模式：

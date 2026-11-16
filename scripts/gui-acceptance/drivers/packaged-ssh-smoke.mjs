@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ARCHIVED (2026-11, Electron frozen; docs/progress/electron-frozen.md): this is the
+ * ARCHIVED (Electron frozen): this is the
  * Electron packaged/CDP counterpart; the shipped native shell has no CDP endpoint.
  *
  * Packaged-app SSH smoke: run the W-13…W-15b walkthrough against an already

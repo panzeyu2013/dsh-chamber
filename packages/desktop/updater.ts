@@ -540,7 +540,7 @@ export interface UpdateController {
 
 /** The update feed repository (single source: update-discovery.ts). */
 export { GITHUB_OWNER, GITHUB_REPO } from './update-discovery.ts'
-/** Windows 任务栏注意力（2026-12 复审方向 E F8）：`UpdateControllerDeps.flashFrame`
+/** Windows 任务栏注意力：`UpdateControllerDeps.flashFrame`
  *  的宿主 seam。窗口归宿主所有（updater.ts 不 import electron），宿主在
  *  createUpdateController 的构造对象里接上它，注意力路径只负责调用（调用点已有
  *  try/catch，宿主 seam 自身绝不把异常反噬进更新状态机）。
@@ -899,7 +899,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     restartWatchdog.unref?.()
   }
 
-  // C2 residual race (2026-12 复审方向 C): a check that was already in flight
+  // C2 residual race: a check that was already in flight
   // BEFORE the download finished — the post-stall latch cannot stop it, it
   // started earlier — may still deliver its result. A check RESULT must never
   // clobber the terminal download phases (exactly the two phases runCheck gates
@@ -907,7 +907,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // mid-transition). Without this guard a late `update-not-available` after a
   // late `update-downloaded` regresses `downloaded` to `up-to-date` and wipes
   // latestVersion — losing the「重启并安装」row and the before-quit exemption,
-  // the exact regression the 2026-08 downloadInFlight flag exists to prevent.
+  // the regression `downloadInFlight` exists to prevent.
   // The result is dropped (loud), never projected.
   const downloadPhaseIsFinal = (): boolean => state.phase === 'downloaded' || state.phase === 'downloading'
   autoUpdater.on('checking-for-update', checkScoped(() => setState({ phase: 'checking', error: null })))
@@ -1020,14 +1020,14 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // periodic re-check started in that window would pass the phase gate and, resolving
   // after the download, clobber `downloaded` back (losing the row AND the quit exemption).
   let downloadInFlight = false
-  // C2 (2026-12 复审方向 C): a stalled download's underlying electron-updater
+  // C2: a stalled download's underlying electron-updater
   // promise CANNOT be aborted. The stall judgment must release `downloadInFlight`
   // (the user has to be able to retry) — but it must NOT release the
   // check-exclusion: a check started in the post-stall window races the
   // abandoned download, and its late `update-not-available` would clobber the
   // `downloaded` phase that a late `update-downloaded` legitimately produced
   // (losing the「重启并安装」row and the before-quit exemption — exactly the
-  // regression the 2026-08 downloadInFlight flag exists to prevent).
+  // regression `downloadInFlight` exists to prevent).
   // `stalledDownloadGeneration` names the abandoned attempt whose promise is
   // still pending; checks stay excluded until that promise settles (success or
   // failure), until the download demonstrably resumes (a progress event), or
@@ -1039,8 +1039,8 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const downloadStallPending = (): boolean => stalledDownloadGeneration !== null
   // Upstream-shaped scheduling (update-schedule.ts owns the policy): a
   // self-rescheduling timer whose delay grows on consecutive failures and is
-  // jittered, plus a coalesced foreground/resume nudge. Replaces the fixed
-  // 6h setInterval (2026-09 parity batch).
+  // jittered, plus a coalesced foreground/resume nudge.
+  // 策略单源 = update-schedule.ts（失败退避 + 抖动 + 合并前台/resume nudge）。
   let started = false
   let scheduleTimer: ReturnType<typeof setTimeout> | null = null
   let lastCheckCompletedAt: number | null = null
@@ -1142,8 +1142,8 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const runScheduledCheck = async (): Promise<void> => {
     const checkRan = await runCheck()
     if (!checkRan) {
-      // A3 (2026-12 复审方向 A): 本轮「没跑成」（在飞检查 / 在飞下载 / 停滞待决）
-      // 不是静默链的终点——旧实现只看相位，撞上在飞下载时直接 return 且不 arm，
+      // A3: 本次「没跑成」（在飞检查 / 在飞下载 / 停滞待决）
+      // 不是静默链的终点——只看相位会在撞上在飞下载时直接 return 且不 arm，
       // 一次碰撞就整条静默链死掉。这里按当前退避档位重排一轮（本轮既非成功也非
       // 失败，不退避也不重置）；downloaded 是终局（退出时安装），不再排。
       if (state.phase === 'downloaded') return
@@ -1203,7 +1203,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     // that produces no response within the deadline becomes a NAMED failure
     // instead of an endless 'checking'. electron-updater cannot be aborted, so
     // the abandoned attempt's late events are ignored until the next check.
-    // A2 (2026-12 复审方向 A): the watchdog ALSO unblocks runCheck through
+    // A2: the watchdog ALSO unblocks runCheck through
     // `watchdogFired` — electron-updater dedupes an in-flight check (a user
     // retry just re-awaits the same promise), so without the race a
     // checkForUpdates() that never settles would park runScheduledCheck on
@@ -1267,7 +1267,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       return () => listeners.delete(listener)
     },
     start() {
-      // A6 (2026-12 复审方向 A): 幂等门。重复 start() 曾重复 attach focus 监听
+      // A6: 幂等门。重复 start() 会重复 attach focus 监听
       // 并把 15s 首检重新计时（整条静默节奏被推后），故第二次起一律空操作。
       if (started) return
       // Linux shape gate (design 21): a packaged writable AppImage may

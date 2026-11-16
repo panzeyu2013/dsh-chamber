@@ -325,8 +325,9 @@ test('resolvePackageTestPlan: a dump expands to entries; a chain step stays one 
 })
 test('resolvePackageTestPlan: an entry-level guard survives the dump→plan hop', async () => {
   // The desktop manifest marks its root+sshd acceptance 'registered' because
-  // it can only run on a privileged Linux leg; the plan builder used to write
-  // the package default over every entry, which re-tightened that file on CI.
+  // it can only run on a privileged Linux leg; the plan builder must preserve the
+  // per-entry guard instead of writing the package default over every entry (that
+  // re-tightened the file on CI).
   const dump = {
     label: 'test:desktop', packageRoot: '/pkg', leg: null, guard: 'executed', timeoutMs: null,
     requireNoSkips: false, zeroTestAllowlist: [],
@@ -406,8 +407,8 @@ test('G32/G33: the darwin tests mode carries the native executed-assembly gates 
     'test:sidecar:compiled',
     'node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web',
   ]
-  // 2026-11 Electron freeze: these two gates are archived with the Electron flavor
-  // (docs/progress/electron-frozen.md) and must never re-enter the default modes
+  // These two gates are archived with the Electron flavor
+  // (frozen-surface registry) and must never re-enter the default modes
   // silently; a revival is a deliberate edit of this test.
   const archivedElectronGates = [
     'node scripts/gates/checks/verify-electron-artifacts.mjs',
@@ -863,7 +864,7 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   const preloadEntry = join(DEFAULT_DESKTOP_DIST, 'preload.cjs')
   if (!existsSync(controlPlaneEntry) || !existsSync(preloadEntry)) {
     // ARCHIVED Electron artifact smoke: ci.yml does not run this gate any more (Electron
-    // frozen, docs/progress/electron-frozen.md); the case stays as a unit-only check of
+    // frozen, 仓库冻结登记); the case stays as a unit-only check of
     // the archived tool and skips loudly when the compiled artifacts are absent.
     t.diagnostic('SKIP: archived Electron artifact smoke — compiled artifacts absent under ' + DEFAULT_DESKTOP_DIST
       + ' (not run by default; Electron frozen)')
@@ -874,7 +875,7 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   assert.ok(verdict.port > 0)
   // G34 产物臂：`>= 60` 下限会让陈旧的 dist 在本机一路绿，故仍按精确钉子比对；红时先跑 `pnpm --filter @dsh-chamber/desktop run build:preload` 刷新编译产物。
   // 预载可见面 = 钉子全集减去「只存在于 Swift shim 的命名空间」：`browser` 登记在
-  // packages/desktop/bridge-swift-only-additions.json（政策 electron-frozen §5.2、design 28 v3 §3），
+  // packages/desktop/bridge-swift-only-additions.json（政策 = 冻结面 A 桥白名单、design 28 v3 §3），
   // 冻结的 Electron preload 没有它的 factory，故编译产物合法地只暴露子集。数量按同一份白名单派生，
   // 不另写死魔数——真实成员增删仍会让本断言变红。
   const preloadNamespaces = new Set(BRIDGE_NAMESPACE_KEYS)

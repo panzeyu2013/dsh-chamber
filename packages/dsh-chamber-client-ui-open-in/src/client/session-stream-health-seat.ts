@@ -11,11 +11,11 @@
  * remounts, keyed by sessionId.
  *
  * EXECUTION DISCIPLINE: `step` executes the automatic per-session `resync()`
- * for an error face (rc.2; the stage-move lever died with its `sessions.open`
- * API). The renderer's page-level recovery seat owns the automatic rebuild for
+ * for an error face (no stage-move lever in the pinned `sessions.open` API). The
+ * renderer's page-level recovery seat owns the automatic rebuild for
  * a face the header cannot heal, so it also runs when the conversation header
  * never mounts. The plan has no user-triggered action (the manual reload/rebuild
- * controls were retired); the chip only reports, and every escalation is
+ * controls); the chip only reports, and every escalation is
  * automatic.
  *
  * Registered BEFORE the open-in gates: a source whose open-in id does not parse
@@ -128,7 +128,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   const face: SessionStreamHealthInjected = {
     t,
     step,
-    // No user-triggered action exists (retired by user ruling); the face's only
+    // No user-triggered action exists; the face's only
     // side effect is the automatic heal executed by `step`.
   }
 

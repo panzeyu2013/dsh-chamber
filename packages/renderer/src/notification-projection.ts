@@ -565,7 +565,7 @@ function applyRunningAuthority(
  * 观测会重复产生通知，调用方不得绕过观测层（design 19 §3.2 的 INV6 措辞仍按
  * complete 单轨叙述，ask/request 的边沿去重属于 §3.2 事实表语义）。
  *
- * **I1 契约**（design 19 §3.2.3 已落地，与本实现逐字一致）：running 权威 = running 时观测层
+ * **I1 契约**（design 19 §3.2.3，与本实现逐字一致）：running 权威 = running 时观测层
  * 不吸收 facts 水位、候选保持可重提，本函数按 #1 早退——因此**不消费候选身份**
  * （不推进 notified / 不入 pending），壳追平 idle 后同一候选照常重提，保证「facts
  * 先到、壳仍 running」的完成不丢发。唯一时序例外是同批播种证据（options.keepFence，

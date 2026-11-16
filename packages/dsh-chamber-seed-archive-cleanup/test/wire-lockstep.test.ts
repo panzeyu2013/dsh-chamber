@@ -16,7 +16,7 @@
  * host-package registry must both track the shared table. The registry
  * itself keeps its probe string as source text because control-plane must
  * not depend on a SEED package (the seed is assembled against the
- * registry, never the other way round); the desktop build no longer pins
+ * registry, never the other way round); the desktop build does not pin
  * `rootDir` either (: `build:control-plane` = tsc --noEmit + esbuild
  * bundle, so an import would inline fine) — the layering rule is the
  * reason, and the drift lock lives HERE. Both sides pin the same wire

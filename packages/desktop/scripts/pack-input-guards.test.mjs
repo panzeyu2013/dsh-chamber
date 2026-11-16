@@ -237,7 +237,7 @@ test('wiring lock: the shipped sidecar CLI runs the guard after a successful ass
   assert.ok(wrapper !== -1, 'the CLI run wrapper must call runBuildSidecar')
   assert.ok(guardCall > wrapper, 'the guard must run AFTER a successful assembly (non-dry-run only)')
   assert.match(sidecar, /result\.dryRun !== true/, 'dry-run must not be judged (it does not write or package anything)')
-  // Electron freeze (docs/progress/electron-frozen.md §2/§5.1): before-pack.mjs is
+  // Electron freeze (仓库冻结登记 §2/§5.1): before-pack.mjs is
   // archived read-only; G5 must not be wired there without a user scope reopening.
   const beforePack = readFileSync(BEFORE_PACK_SCRIPT, 'utf8')
   assert.ok(!beforePack.includes('pack-input-guards'), 'before-pack.mjs is frozen — do not wire G5 into it without a scope reopening')

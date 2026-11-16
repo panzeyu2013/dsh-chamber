@@ -15,8 +15,8 @@
  * by the scanner, never re-read from the log.
  *
  * The plugin mounts through `LoggerService.exporter()`, the documented invite API:
- * since 0.1.7 its disposer deletes the id it registered, so unloading any exporter's
- * fiber no longer removes the newest registration (the pre-0.1.7 counter bug).
+ * its disposer deletes the id it registered, so unloading any exporter's fiber
+ * never removes the newest registration (counter invariant).
  *
  * `DSH_CHAMBER_HOST_LOG_LEVEL` switches it: unset/empty/off/0/false/no ⇒ no bridge row and
  * no generated file (the overlay stays byte-identical to the disabled shape); a level name

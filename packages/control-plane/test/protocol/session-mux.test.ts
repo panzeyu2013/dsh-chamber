@@ -578,7 +578,7 @@ test('waterfall: a successful delegation releases the hold and its pending mirro
   await flush()
   // The host removes this client from the delivery set the moment it answers, so no cancel
   // can arrive for this eventId: the entry must leave the ledger (every later emit scans it)
-  // and the local pending mirror must be released right here (review finding O-A).
+  // and the local pending mirror must be released right here.
   assert.equal(h.mux.status().heldWaterfalls, 0, 'an answered hold must not stay in the ledger')
   assert.deepEqual(h.cancels, ['e1'])
   h.mux.stop()
@@ -795,7 +795,7 @@ test('followTurnEndOnce: null before ready and null on timeout (no resident foll
 test('followTurnEndOnce: a settle after a carrier replacement never cancels on the successor socket', async () => {
   // The follow stream lives on ONE socket. When that socket dies before the follow settles,
   // the successor never carried the streamId, so the timeout must not emit a cancel frame at
-  // it (review finding F3-CANCEL).
+  // it.
   const h = makeHarness({ followTimeoutMs: 120, reconnectMinMs: 5, reconnectMaxMs: 5 })
   await startSession(h)
   const late = h.mux.followTurnEndOnce('s1')

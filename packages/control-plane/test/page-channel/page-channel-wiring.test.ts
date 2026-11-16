@@ -105,7 +105,7 @@ test('wiring: the plane serves /api/page-channel and stop() closes the page sock
 test('wiring: 半路放行的 upgrade 在 stop() 之后不得复活通道（黑盒行为锁；闩锁是纵深防御）', async (t) => {
   // 升级过的 socket 不在 HTTP server 的连接跟踪里，理论上存在一个「stop() 之后仍被放行」的
   // 同 tick 窗口；这里锁的是黑盒结论：这种放行必须失败收尾、绝不复活通道。注意它证明不了
-  // accepting 闩锁被单独触发（stop() 的收尾本身就让传输消失；第三轮测试审计实测：把闩锁
+  // accepting 闩锁被单独触发（stop() 的收尾本身就让传输消失；实测：把闩锁
   // 恒置 true 该用例仍绿）。闩锁语义由重启用例与「stop(); start(); stop()」用例从行为面
   // 锁住，闩锁本身是那个窗口的纵深防御。
   let releaseGate: () => void = () => undefined
@@ -151,7 +151,7 @@ test('wiring: 已启动状态下再次 start() 是 no-op，绝不关掉活着的
   assert.equal(client.ws.readyState, WebSocket.OPEN, '重复 start() 不得动活 socket')
   // 端口断言抓「早退守卫被删」这类变异：漏掉守卫时 start() 会另起一个 candidate，本地
   // 断言（socket 还活着/还能 subscribe）可能照样过，但 plane.port 会漂到新端口、旧 server
-  // 变成孤儿（第三轮测试审计：只靠断言全过、只有进程不退出能察觉）。
+  // 变成孤儿（只靠断言全过、只有进程不退出能察觉）。
   assert.equal(harness.plane.port, port, '重复 start() 必须原地不动，不得另起监听')
   client.send({ type: 'subscribe', id: 'health-b', family: 'health' })
   await client.waitForType('ready', 'health-b')

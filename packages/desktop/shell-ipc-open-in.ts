@@ -24,7 +24,7 @@ import type { ForwardFrameError } from './remote-forward-manager.ts'
  * creation failures: the service exists and fails CLOSED per call with a typed
  * `forward_failed`, so the launcher can show a real error instead of a lie.
  *
- * TODO(S1/W0): persist the "browser enabled" decision and confirm the real
+ * Persist the "browser enabled" decision and confirm the real
  * ssh/askpass spawn, the packaged private-file adapter and the
  * darwin/win32 process adapters on their platforms.
  */

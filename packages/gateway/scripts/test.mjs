@@ -64,8 +64,7 @@ const GROUPS = {
     'test/runtime/registry-source.test.ts',
   ],
   // plugins: the managed-profile plugin READ face - spec whitelists lockstep only
-  // (the write pipeline journal/executor/tgz-scan/orchestrator retired with the
-  // 2026-09 C layering ruling).
+  // (the write pipeline journal/executor/tgz-scan/orchestrator is not served).
   plugins: [
     'test/plugins/plugin-spec-lockstep.test.ts',
   ],

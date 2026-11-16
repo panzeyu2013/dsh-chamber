@@ -171,7 +171,7 @@ export function installHeaderDeadline(
   // Both events must share ONE accounting path: when createLimitedServer has a
   // checkContinue listener, Node does NOT emit 'request' for that exchange. If
   // only 'request' clears the timer, a slow Expect body is killed at the header
-  // deadline even though its headers arrived long ago (merge review A-M1).
+  // deadline even though its headers arrived long ago.
   const trackRequest = (req: IncomingMessage, res: ServerResponse): void => {
     const socket = req.socket
     clear(socket)

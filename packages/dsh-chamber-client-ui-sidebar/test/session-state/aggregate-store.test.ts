@@ -160,7 +160,7 @@ test('session-list refresh requests broadcast to every subscriber with the sourc
 
 test('session-list refresh requests carry the optional reason through unchanged (create/enter vs the reason-less tick)', () => {
   // reason 是 create/enter 收敛臂的开关（design 05 §2.2.1）：缺省 = 30s tick / 归档 purge
-  // 旧路径，必须与此前行为一致；两个显式 reason 才允许挂载壳调用官方 refresh。
+  // 路径，行为与 reason-less tick 一致；两个显式 reason 才允许挂载壳调用官方 refresh。
   const received: string[] = []
   const off = chamberBridge.onRequestSessionListRefresh((sourceId, reason) => {
     received.push(`${sourceId}:${reason ?? 'none'}`)

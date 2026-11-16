@@ -235,7 +235,7 @@ export function SidebarWorkspaceGitLine({
             // and the count badge (the user-ruled B+C form).
             //
             // The hook is a data attribute — CSS modules hash classes — and it stays
-            // this capsule's DOM/test hook. The host no longer swaps the capsule out
+            // this capsule's DOM/test hook. The host does not swap the capsule out
             // on its own: the occupant container owns the whole cluster's visibility.
             <span className={css.checkoutStatus} data-git-checkout-status="">
               {/* Upstream `Tag`: a hand-rolled capsule with a neutral fill would

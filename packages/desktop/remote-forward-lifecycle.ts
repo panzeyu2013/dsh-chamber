@@ -24,7 +24,7 @@
  *
  * WHAT IS NOT HERE.
  * - Spawning, signal escalation and askpass leases belong to the launcher
- *   adapter (remote-forward-manager.ts ForwardChildLauncher; integration TODO).
+ *   adapter (remote-forward-manager.ts ForwardChildLauncher; integration seam).
  * - Reading /proc, ps or CIM belongs to ForwardProcessProbe; building the
  *   actual taskkill argv is the one pure win32 piece exported below so it can
  *   be asserted without a Windows host.

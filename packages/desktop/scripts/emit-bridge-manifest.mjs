@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * emit-bridge-manifest.mjs — 通道 manifest 生成管线（design 25 §4.4.3；
- * docs/progress/TODO.md 的对应行）。
+ * 对应行）。
  *
  * 输入（三份，缺一不可）：
  *   ① 名单源 packages/desktop/ipc-events.ts 的 `IPC_CHANNELS` 常量表：
@@ -15,7 +15,7 @@
  *        `(?:ipcMain|deps\.ipc).handle(IPC_CHANNELS.X`  →  invoke（64）
  *        `(?:webContents\.send|rendererPush)(IPC_CHANNELS.X` →  push（13）
  *   ③ Swift-only 白名单 packages/desktop/bridge-swift-only-additions.json（schema =
- *      docs/progress/electron-frozen.md §5.2）：只登记只存在于 Swift shim、无需
+ *      冻结面 A 桥白名单政策）：只登记只存在于 Swift shim、无需
  *      Electron preload / 主进程注册的 A 桥通道。条目方向由白名单给（invoke|push）；
  *      死键检查对该白名单键豁免，但白名单键一旦在 main 侧也出现引用即 loud
  *      （两侧都注册 = 常规通道，不得进白名单）。默认空表：三件生成物与加白名单前
@@ -102,7 +102,7 @@ export const COMMITTED_SHIM_STUB = join(
 )
 
 /** Swift-only A 桥 additions 白名单提交物（冻结政策单源；schema 见
- *  docs/progress/electron-frozen.md §5.2）。空表 = 当前没有任何 Swift-only 通道：
+ *  冻结面 A 桥白名单政策）。空表 = 当前没有任何 Swift-only 通道：
  *  生成器按空表合入时三件生成物与加白名单前逐字节一致。 */
 export const COMMITTED_SWIFT_ONLY = join(desktopDir, 'bridge-swift-only-additions.json')
 
@@ -210,7 +210,7 @@ export function parseIpcChannels(source) {
   return entries
 }
 
-/** Swift-only A 桥 additions 白名单条目的 schema（docs/progress/electron-frozen.md §5.2）。
+/** Swift-only A 桥 additions 白名单条目的 schema（冻结面 A 桥白名单政策）。
  *  只登记只存在于 Swift shim、无需 Electron preload / 主进程注册的通道：key 必须在
  *  ipc-events.ts 的 IPC_CHANNELS 表里（通道名单一来源），但 main 侧注册文件对该 key
  *  的引用必须为零（两侧都注册的通道属于常规通道，不得进白名单）。
@@ -227,7 +227,7 @@ export function loadSwiftOnlyAdditions(path = COMMITTED_SWIFT_ONLY) {
     throw new Error(`Swift-only 白名单不可读或不是合法 JSON：${path}（${error instanceof Error ? error.message : String(error)}）`)
   }
   if (parsed === null || typeof parsed !== 'object' || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
-    throw new Error('Swift-only 白名单必须是 { version: 1, entries: [...] } 形状（docs/progress/electron-frozen.md §5.2）')
+    throw new Error('Swift-only 白名单必须是 { version: 1, entries: [...] } 形状（冻结面 A 桥白名单政策）')
   }
   return parsed.entries
 }
@@ -656,8 +656,7 @@ const USAGE = '[emit-bridge-manifest] 用法：node scripts/emit-bridge-manifest
   + '（不带参数写提交物默认位；--check 只读校验）'
 
 /**
- * CLI argv 解析（先于任何生成/写入）：未知 flag 一律 loud —— 历史故障是
- * `--check` 被 filter 静默丢掉后退化成写模式，直接重写三件生成物。
+ * CLI argv 解析（先于任何生成/写入）：未知 flag 一律 loud —— `--check` 被 filter 静默丢掉会退化成写模式并重写三件生成物。
  * @param {string[]} argv
  * @returns {{ check: boolean, positional: string[] } | { error: string }}
  */

@@ -7,8 +7,8 @@
  *    desktop/control-plane-module.ts (packaged → compiled dist, dev → this
  *    source), which ssh-provider.ts re-exports and plugin-sync.ts imports;
  *  - the gateway imports '@dsh-chamber/control-plane' directly.
- * The user plugin write surface was retired with the 2026-09 C layering ruling,
- * so the constants here now serve the surviving read/protection paths alone.
+ * The user plugin write surface is read-only, so the constants here serve the
+ * read/protection paths alone.
  */
 
 /** Package-spec length cap: bounds add/remove inputs before any whitelist test or remote argv construction. */

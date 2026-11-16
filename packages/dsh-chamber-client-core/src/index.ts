@@ -119,7 +119,7 @@ export { linkEpochOf, linkReady } from './link-projection.ts'
 export type * from './plugin-refresh-requests.ts'
 export { onClientGraphResyncRequest, requestClientGraphResync } from './plugin-refresh-requests.ts'
 // 常驻壳页面级单例（N-ctx 壳常驻 v1.1）：常驻阀发布快照，设置面的性能与内存面板订阅并发出
-// 释放命令。只有一个运行时符号经桶导出；快照/事实/释放类型走同批的 `export type *` 面。
+// 释放命令。只有一个运行时符号经桶导出；快照/事实/释放类型走同一个 `export type *` 面。
 export type * from './resident-store.ts'
 export { residentBridge } from './resident-store.ts'
 // 页面级面板轴（N-ctx 多实例）：每个挂载壳的侧栏发布本 ctx 的 sidebar.panellist 条目快照，

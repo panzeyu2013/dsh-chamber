@@ -86,8 +86,8 @@ export interface PurgedSessionStorage {
 /**
  * Fingerprint index (new key): instanceId segment → recently used source
  * fingerprints, MRU first. A source re-registration mints a NEW fingerprint data
- * key while the previous incarnation's key used to leak forever (nothing ever
- * called removeItem). The index records last-used times and is itself bounded;
+ * key; the previous incarnation's data key is removed explicitly, and the index
+ * records last-used times and is itself bounded;
  * per instanceId only the current fingerprint plus the newest
  * PURGED_SESSION_FINGERPRINT_KEEP - 1 others keep their data key.
  */

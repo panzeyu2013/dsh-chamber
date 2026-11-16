@@ -16,7 +16,7 @@ function basename(path: string): string {
 /** One option per repository whose MAIN checkout is a registered workspace.
  *
  *  PR1/V6: the source must be the main checkout (design 08 I1). A linked
- *  worktree or a subdirectory is no longer offered as a fallback — the host
+ *  worktree or a subdirectory is not offered as a fallback — the host
  *  refuses it with `source-not-main-checkout` because the source-root containment
  *  and the session root would be wrong. A repo whose main is unregistered
  *  (I9) has no create option at all. */

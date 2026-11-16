@@ -140,7 +140,7 @@ test('desktop main：flock → host-root 租约 → plane，quit 先放 L2 再�
   assert.ok(planeAt > leaseAt, 'host-root 租约必须早于 control-plane 构造（state-root 租约在构造期自取）')
   assert.match(main, /createControlPlane\(\{[\s\S]{0,400}?pnpmEntry,/u,
     'main 必须把随包 pnpm 入口交给控制面（design 02 §3.1）')
-  // C4 启动与修复（2026-12）：租约冲突不再走单键 showErrorBox，而是走统一的
+  // C4 启动与修复：租约冲突走统一的（非单键 showErrorBox）
   // 三选恢复框（reportFatalStartupFailure）；标题仍经 shell-locale，不写死语言。
   assert.match(main, /reportFatalStartupFailure\(\s*\{ title: shellStrings\(app\.getLocale\(\)\)\.startupFailedTitle, detail \},\s*'startup',/u,
     '租约冲突必须 loud 到原生恢复框（标题经 shell-locale，不写死语言）')

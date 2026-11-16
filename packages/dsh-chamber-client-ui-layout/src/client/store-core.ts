@@ -243,7 +243,7 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
    * reschedules a ~150ms trailing timer, so a drag settles into exactly ONE
    * write (last width wins) and a paused gesture flushes early. A pending write
    * is ALSO flushed on pagehide/beforeunload, so a reload/quit inside the
-   * debounce window no longer loses the last drag. The STORE value stays
+   * debounce window does not lose the last drag. The STORE value stays
    * immediate. Shared per environment, so the last drag in any shell wins.
    * A drag landing on the already-persisted width skips the whole persist/notify
    * path (and cancels a stale pending write).

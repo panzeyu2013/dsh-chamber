@@ -2,7 +2,7 @@
  * P0.1（台账 §8.a）：Swift 侧更新静默看门狗 —— Sparkle 检查/下载长时间无相位变化时
  * 投一次 failed，页面不再无限停在 checking/downloading。相位转变必须取消看门狗。
  *
- * B4（2026-12 审查方向 B）：下载与检查使用**不同**的 deadline。Sparkle 没有下载
+ * B4：下载与检查使用**不同**的 deadline。Sparkle 没有下载
  * 进度回调，进入 downloading 后到落地前不再有任何相位变化，共用 60s 会把正常慢
  * 下载误杀成 native-update-stalled:downloading（E 的 60s 是字节 idle，S 看不到
  * 字节）。迟到的真实相位：检查被判定停滞之后，被放弃检查的结果抑制到下一次

@@ -1,5 +1,5 @@
 /**
- * Shell-owned copy lock (2026-09 parity batch): the Electron flavor resolves the
+ * Shell-owned copy lock: the Electron flavor resolves the
  * native-chrome strings from one typed dictionary pair, mirroring upstream
  * apps/desktop/src/locale.ts (zh* → zh-CN, else en). Scope = tray, error boxes and
  * the quit dialog; the Web UI keeps its own i18n.

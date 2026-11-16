@@ -280,7 +280,7 @@ final class ShellPageFactsTests: XCTestCase {
                        "对账表达式不得安装 observer（只返回快照）")
     }
 
-    /// 2026-12 收口：dark 判定只能有一个实现——source() 与 snapshotSource()
+    /// dark 判定只能有一个实现——source() 与 snapshotSource()
     /// 都插值同一个 readDark() 函数（ShellPageFactsScript.readDarkJS），各自的
     /// 产物里 body 深色判定只出现一次；任一脚本退回内联重算即红。
     func testSharedDarkPredicateIsSingleSource() {

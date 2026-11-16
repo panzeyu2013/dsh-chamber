@@ -1252,7 +1252,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     // 重复项）不通知 listener、不发 hint，但 state.snapshot 仍更新为最新（后续 emit 读到的是
     // 最新值）——一次 emit 会让下游 factsStore 换快照对象、重派生侧栏投影并重跑完成判定，
     // 内容不变时这三种工作全是空转。
-    // 消费者复核（2026-11）：cursor / lastEventAt 在本模块外零读取（cursor 只作单调门与
+    // 消费者约束：cursor / lastEventAt 在本模块外零读取（cursor 只作单调门与
     // 诊断，lastEventAt 无 UI 消费者）；行 factAt 是渲染字段（host/servers.ts 的
     // factsOverlay）。网关平面多数增量帧只在行存储事实真变时携带该行，但 applyAdded / 重结算
     // 路径也可能出现只动 factAt 的行（gateway store.ts 的 deltaSessions 判据只看渲染字段，

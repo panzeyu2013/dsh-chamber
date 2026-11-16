@@ -28,7 +28,7 @@
  * absent is the host's explicit "no current goal" (that session's cache is
  * cleared), and `goal.id` binds the value to its goal so an edge for ANOTHER
  * goal never lands on the currently projected one. The P2b row rule is unified
- * here (2026-12/F14) for the BOUND-ID-MISMATCH case only: a bound edge whose
+ * here for the BOUND-ID-MISMATCH case only: a bound edge whose
  * projection names a DIFFERENT goalId is RETAINED — whatever ids the
  * projection moves through in between — and the identity guard
  * ({@link GoalActivationTracker.activationOf}) withholds it the whole time.
@@ -228,11 +228,11 @@ interface ActivationEntry {
    * Goal identity the value is bound to (event `goal.id`, or the observed fact
    * at delivery time for the unbound legacy shape). The value is only ever
    * merged while the observed projection names this same id; a projection
-   * naming any other goal merely withholds it. F14 unified this with P2a/P2b
-   * for the mismatch case only: a bound edge is never dropped merely because a
-   * projection step names ANOTHER goalId (the old third-goalId exit is gone) —
+ * naming any other goal merely withholds it. For the mismatch case a bound edge
+ * is never dropped merely because a
+ * projection step names ANOTHER goalId —
    * but a projection that explicitly reports NO goal (goal:null) still drops
-   * it (P1's existing delete-on-null semantics). Otherwise it leaves only with
+ * it (delete-on-null semantics). Otherwise it leaves only with
    * the session/row, an explicit no-goal delivery, a new event overwriting it,
    * or reset/dispose.
    */
@@ -327,9 +327,9 @@ export function createGoalActivationTracker(deps: GoalActivationTrackerDeps): Go
    * terminal facts drop an entry (session left / explicit no-goal — the
    * latter INCLUDING a goal:null projection row); an unknown fact retains the
    * last-known cache, and a bound edge whose projection names a DIFFERENT
-   * goal is retained too (P2b row rule, unified here 2026-12/F14 — P1 used to
-   * drop on the third goalId; retention is the mismatch case only, never
-   * null). Retention is safe and bounded: one
+   * goal is retained too (P2b row rule: an intermediate goalId never drops it;
+   * retention is the mismatch case only, and a null projection is not a mismatch).
+   * Retention is safe and bounded: one
    * entry per session, overwritten by the next event, and cleared by
    * reset/dispose / the session leaving / an explicit no-goal delivery; the
    * value can never land on a foreign goal because activationOf withholds a
@@ -380,10 +380,10 @@ export function createGoalActivationTracker(deps: GoalActivationTrackerDeps): Go
     }
     const goal = observedGoals.get(parsed.sessionId)
     const observedGoalId = goal === undefined || goal === null ? undefined : goal.goalId
-    // P2b row rule (unified 2026-12/F14), MISMATCH ONLY: the event's OWN
+    // P2b row rule, MISMATCH ONLY: the event's OWN
     // goal.id wins and the edge is retained while the projection names some
     // OTHER goal (or stays unknown) — an edge that raced ahead of the
-    // projection must not land on the goal it replaced, and is no longer
+    // projection must not land on the goal it replaced, and is not
     // discarded merely because the projection moves through other ids before
     // it can confirm it. A projection that explicitly reports NO goal
     // (goal:null) is not a mismatch: the next scan drops the entry (P1's
@@ -573,7 +573,7 @@ export function createGoalActivationTracker(deps: GoalActivationTrackerDeps): Go
       // consumer skips non-object goal facts, so it cannot attach there; a
       // DIFFERENT goal id withholds the value from this pass's merge while the
       // cached edge stays available for a later projection that names its goal
-      // (F14: retention covers the mismatch case only — it no longer ends at a
+      // (retention covers the mismatch case only — it does not end at a
       // third goalId; an explicit goal:null PROJECTION is a drop point in
       // scan(), never a retention case).
       if (goal === undefined || goal === null || goal.goalId === entry.goalId) return entry.activation

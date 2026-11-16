@@ -3,7 +3,7 @@
  *
  * 为什么锁这条：worktree 行没有 kebab（design 08 §3.2），而 PR3 之后已注册 worktree
  * 的 Git occupant 不渲染任何动作（registered remove 已删除），目录被外部删除、Git
- * 记录也被 prune 的行**没有任何 Git 侧删除控件**，此前的唯一出口是「已消失」状态徽标。
+ * 记录也被 prune 的行**没有任何 Git 侧删除控件**，出口由下面的常驻清理钮承担。
  * 清理钮把出口显式化、常驻化，并与徽标
  * 共用 onDeleteWorkspace（同一 orphan 确认文案、同一层 Modal 门、同一条拖拽尾随 click 门）。
  *

@@ -424,7 +424,7 @@ test('P2b: goal edges never disturb the status completion edge', async () => {
   }
 })
 
-// ── no-goal 边的即时语义与 bound 边保留（2026-12 修复批次） ──────────────────────
+// ── no-goal 边的即时语义与 bound 边保留 ──────────────────────
 
 function itemFor(sessionId: string, goal: Record<string, unknown>): Record<string, unknown> {
   return { ...leakyItem({ goal }), sessionId }

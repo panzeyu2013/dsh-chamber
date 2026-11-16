@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ARCHIVED（2026-11，Electron 冻结；docs/progress/electron-frozen.md）：CDP 移动走查依赖
+ * ARCHIVED（Electron 冻结）：CDP 移动走查依赖
  * 复活后的 Electron dev/CDP；现行移动验收按 docs/checklists 的 native/真机项执行。
  *
  * CDP 移动档走查（独立入口；design 17 §18.6「CDP 设备模拟 + 真机抽检」的
@@ -567,6 +567,6 @@ async function main(argv) {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.warn('ARCHIVED: CDP 移动走查随 Electron 冻结归档（docs/progress/electron-frozen.md）；现行移动验收见 docs/checklists。')
+  console.warn('ARCHIVED: CDP 移动走查随 Electron 冻结归档（仓库冻结登记）；现行移动验收见 docs/checklists。')
   await main(process.argv.slice(2))
 }

@@ -113,7 +113,7 @@ test('offline version listing retains every valid local cache tree', async () =>
     )
     assert.equal(result.versions.find(entry => entry.version === TEST_BUILTIN_VERSION)?.cached, false,
       'the active builtin anchor stays visible but is not mislabeled as an installed cache tree')
-    // 3.5 (2026-12 review): the removable-candidates read has its OWN projection
+    // 3.5: the removable-candidates read has its OWN projection
     // field, so a ledger read failure can never be read as "no candidates" (and
     // it stays distinguishable from the registry error above).
     assert.deepEqual(result.removableVersions, ['2.0.0', '1.0.0'],

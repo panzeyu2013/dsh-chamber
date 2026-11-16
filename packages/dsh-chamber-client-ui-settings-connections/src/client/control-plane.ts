@@ -9,8 +9,8 @@
  * method surface and the RETAINED plugin IPC wrappers: the plugin read face
  * (plugin_list / local_plugin_list) and chamber host-package provisioning
  * (seed_host_graph / gateway_plugin_sync). The user plugin write wrappers
- * (apply/remove/materialize/undo/npm search) and the gateway admin write routes
- * were retired (D1). Every value is non-secret: tunnel URLs and SSH material
+ * (apply/remove/materialize/undo/npm search) and no gateway admin write routes.
+ * Every value is non-secret: tunnel URLs and SSH material
  * never cross this module.
  */
 
@@ -127,8 +127,8 @@ export const cp = {
  * and chamber host-package provisioning (seed_host_graph / gateway_plugin_sync), riding
  * the desktop SSH surface (window.dshChamber.desktopSsh.*) — the main process is the only
  * authority for exec/whitelisting/seed-cache upload; the renderer computes the view and
- * forwards explicit user intents. The user plugin write wrappers were retired with the
- * write surfaces. The bridge appears after dsh-chamber:info; a null surface is a loud
+ * forwards explicit user intents. There are no user plugin write wrappers. The
+ * bridge appears after dsh-chamber:info; a null surface is a loud
  * error, never a silent no-op.
  */
 

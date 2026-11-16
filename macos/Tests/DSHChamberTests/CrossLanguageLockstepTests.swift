@@ -276,7 +276,7 @@ final class CrossLanguageLockstepTests: XCTestCase {
                       "served markup 必须声明 lang=\"zh-CN\"（页面语言兜底单源）")
     }
 
-    /// ready/pre-spawn 次序锁步（design 25 §3.1 的 2026-12 次序裁定）：
+    /// ready/pre-spawn 次序锁步（design 25 §3.1 的次序裁定）：
     /// ready 帧先于 runtime 启动尾部（pre-spawn 在尾部事务内）。这不是实现细节
     /// 而是启动次序契约：若改回「先 pre-spawn 再 ready」，全新 profile 的
     /// runtime 探针/安装会把 ready 帧推迟数秒到数分钟，Swift 壳的呈现门（S-42）

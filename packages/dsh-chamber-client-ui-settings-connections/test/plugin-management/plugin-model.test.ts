@@ -3,8 +3,8 @@
  * plugin-row model layer — the installed-row projection (design 21 §6.11.5), including
  * the authoritative empty-rows answer and the explicit-empty projection for a missing or
  * malformed `rows` payload (no legacy dependencies fallback). The write model (apply
- * classification, task projection, undo derive, diff/apply boundary) was retired with the
- * plugin write surfaces (D1).
+ * classification, task projection, undo derive, diff/apply boundary) is not part of
+ * this read-only model.
  */
 
 import { test } from 'node:test'

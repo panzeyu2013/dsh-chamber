@@ -748,8 +748,8 @@ cmd_update
 
 test('update re-bakes the local launcher with the node it runs under', () => {
   // The service runs the interpreter baked into $BASE_DIR/bin/gateway at install time.
-  // An update invoked from a newer node used to leave that path stale, so the floor
-  // check could pass while the service kept a node that may not exist any more.
+  // An update invoked from a newer node must re-bake that path: otherwise the floor
+  // check could pass while the service keeps a node that may no longer exist.
   const base = mkdtempSync(join(tmpdir(), 'gateway-installer-update-launcher-'))
   const bin = join(base, 'node-bin')
   mkdirSync(bin, { recursive: true })

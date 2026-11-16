@@ -21,7 +21,7 @@
  *    `git hash-object` 记录；这里用 sha1("blob <字节数>\0" + 内容) 原地重算，
  *    不启动 git）。
  * 解析不到任何一对的 sidecar 直接判红：一个存在却读不出行对的记录文件是「静默空扫」，
- * 不能当通过（这正是 4 个嵌套 sidecar 此前被整包跳过、2 个 git-blob 包被位数过滤的盲区）。
+ * 不能当通过（嵌套映射与 git-blob 位数记录漏出发现面即静默空扫）。
  */
 
 import { createHash } from 'node:crypto'

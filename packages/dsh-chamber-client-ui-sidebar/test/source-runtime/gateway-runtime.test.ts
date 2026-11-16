@@ -661,7 +661,7 @@ test('versions parsing: whitelist projection, error fields preserved (registry +
   }), {
     registryOrigin: 'https://registry.npmjs.org', versions: [], removableVersions: ['1.0.0', '0.9.0'],
   })
-  // 2026-12: a ledger read failure rides `removableVersionsError`; the candidate
+  // a ledger read failure rides `removableVersionsError`; the candidate
   // list fails closed with it (settings row hidden, cleanup guard refusing).
   assert.deepEqual(parseRemoteVersions({
     registryOrigin: 'https://registry.npmjs.org',

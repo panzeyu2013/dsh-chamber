@@ -32,10 +32,9 @@ export interface SourceLifecycleState {
   /**
    * A settled-degraded mount with a retryable gap whose ready epoch has not been seen
    * yet. The arm is a FACT (the settle), never a moment: a settle that lands before the
-   * source turns ready used to lose the self-heal entirely, because the emit was gated
-   * on the ready phase at the settle tick and nothing re-armed it afterwards - only a
-   * page reload could recover (real-machine P4/P5). Cleared when the heal is emitted and
-   * by retryForgotten.
+   * source turns ready would otherwise lose the self-heal (the emit is gated on the
+   * ready phase at the settle tick and nothing re-arms it afterwards); cleared when
+   * the heal is emitted and by retryForgotten.
    */
   readonly healPending: boolean
   /** Background boots that own the single prewarm slot. */

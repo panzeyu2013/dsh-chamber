@@ -107,8 +107,7 @@ export const zh = {
   'menu.fork': '分叉会话',
   // 置顶动词逐字取上游 ui-workspace 字典（menu.pinSession/menu.unpinSession、actions.pin/
   // unpin、row.pinned）。zh 的「置顶」承诺了排序（上游 pin 会写 pinSessionOrder）；本仓的
-  // 渲染分区已落地，未做的只是把置顶写进本地账号，该差异登记在 design 06 §5/§7 与
-  // TODO.md A§15.1 U1。
+  // 渲染分区见 design 06 §5/§7；置顶不写本地账号。
   'menu.pinSession': '置顶会话',
   'menu.unpinSession': '取消置顶',
   'menu.archiveSession': '归档会话',
@@ -139,8 +138,8 @@ export const zh = {
   // 归档行的恢复钮无障碍名（同一条行名参数化政策；上游用泛化 `menu.unarchiveSession`）。
   'action.unarchive.aria': '取消归档“{name}”',
   'action.orphanedCleanup.aria': '清理“{name}”的工作区注册（文件夹已不存在）',
-  // 归档活动确认（官方 SessionArchiveConfirmDialog 逐字文案）：归档筛选与恢复入口已落地
-  // （design 06 §3.4），desc 与上游一致地承诺「可在全部对话（显示已归档）中恢复」。
+  // 归档活动确认（官方 SessionArchiveConfirmDialog 逐字文案）：归档筛选与恢复入口（design 06 §3.4），
+  // desc 与上游一致地承诺「可在全部对话（显示已归档）中恢复」。
   'archive.confirm.title': '停止并归档此会话？',
   'archive.confirm.desc': '“{title}”仍有正在进行的工作。归档会先停止这些工作；之后可在侧栏筛选“全部对话（显示已归档）”中恢复会话，被停止的工作不会自动继续。',
   'archive.confirm.activity': '将被停止的工作',

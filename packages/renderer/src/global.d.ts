@@ -942,7 +942,7 @@ export type DesktopShortcutInput = { readonly revision: string } & (
     /** The shipping Swift shim only emits main-document input (kind 'keyboard',
      *  frameName ''); the frozen Electron preload still declares 'iframe'/'webview'
      *  and is deliberately NOT mirrored here — a renderer branching on those kinds
-     *  would be dead code on the shipped flavor (docs/progress/electron-frozen.md). */
+     *  would be dead code on the shipped flavor (frozen-surface registry). */
     readonly kind: 'keyboard'
     readonly frameName: string
     readonly code: string

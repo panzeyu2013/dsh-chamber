@@ -1,8 +1,8 @@
 /**
  * shell-ipc-plugins-gateway — domain IPC registrations: the manual chamber
- * host-package seed-cache sync fallback (`desktop_gateway_plugin_sync`). The
- * gateway plugin WRITE bridge (apply/materialize/undo) was retired with the
- * 2026-09 C layering ruling; seeding is chamber provisioning, not a
+ * host-package seed-cache sync fallback (`desktop_gateway_plugin_sync`). There is no
+ * gateway plugin write bridge (apply/materialize/undo); seeding is chamber
+ * provisioning, not a
  * plugin-model write (design 21 §6.11), so the sync handler stays.
  */
 import type { ShellIpcCtx } from './shell-ipc-ctx.ts'

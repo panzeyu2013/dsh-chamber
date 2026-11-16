@@ -83,7 +83,7 @@ vendorTest('页根仍调用 plugins.bundle.activation（CSS 的 > [data-slot] �
 })
 
 /**
- * 注册子座席表锁（v0.2.1-alpha.1 升级补）：本包内嵌官方插件管理页组件，但不加载其 apply()
+ * 注册子座席表锁：本包内嵌官方插件管理页组件，但不加载其 apply()
  * （官方行在复合壳里是 covered-skip），页面里的 renderSlot(...) 绑定的是本包 registration 的
  * children 表。React 把 {renderSlot('plugins.add.actions', …)} 作为 children 传给 Menu 时即求值
  * （与菜单是否展开无关），未声明就抛 SlotOwnershipError: slot 'plugins.add.actions' is not
@@ -144,7 +144,7 @@ vendorTest('注册子座席表：MANAGER_CHILDREN 与上游 registration 的 chi
   assert.deepEqual(undeclaredUsage, [],
     '页面 renderSlot 直接消费但本包未声明的子座席（运行期 SlotOwnershipError）：' + undeclaredUsage.join(', '))
   assert.ok(used.length > 0, '页面至少消费一个子座席（抽取失效即红，别把空集当绿）')
-  // 负控：夹具证明抽取器能看见 kind/scope 与「少一个键」（首版只比 key、且用恒真式负控）。
+  // 负控：夹具证明抽取器能看见 kind/scope 与「少一个键」（且负控非恒真式）。
   const fixture = specsOf("{ 'plugins.add.actions': { kind: 'list', scope: 'root' }, 'plugins.bundle.config': { kind: 'keyed', scope: 'root' } }")
   assert.deepEqual(fixture, [
     { key: 'plugins.add.actions', kind: 'list', scope: 'root' },

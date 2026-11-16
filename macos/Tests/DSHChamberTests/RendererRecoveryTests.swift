@@ -62,7 +62,7 @@ final class RendererRecoveryTests: XCTestCase {
 
     func testBootWindowBoundCoversTheObservedIncidents() {
         // 边界只表达「窗口事实」（见 RendererCrashAttribution 类型注释）：早期观测有
-        // 21.0s / 33.9s 两次；2026-09-30 的 16 份复核显示存活时长 4.5min–17.6h、中位
+        // 21.0s / 33.9s 两次；复核显示存活时长 4.5min–17.6h、中位
         // 3.4h，故 60s 不是归因阈值，只是「刚加载就崩」的窗口界。
         XCTAssertLessThan(21.0, RendererCrashAttribution.bootWindowSeconds)
         XCTAssertLessThan(33.9, RendererCrashAttribution.bootWindowSeconds)

@@ -12,7 +12,7 @@
  * Backends: local (local manifest read), ssh (plugin_list / local_plugin_list reads),
  * gateway (gatewayInstalled + seed-cache + Loader inventory reads), http (Loader inventory
  * read only). Every USER plugin write surface (add/import/npm search/diff/apply/remove/undo/
- * materialize/task journal) was retired; only chamber provisioning remains.
+ * materialize/task journal); only chamber provisioning remains.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -96,7 +96,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const gatewayId = target.kind === 'gateway' ? target.sourceId.slice('gateway-'.length) : null
   /** Official Plugins page verdict for THIS instance ('probing' = no claim yet). */
   const [officialPage, setOfficialPage] = useState<OfficialPluginsPageCapability | 'probing'>('probing')
-  // Official Plugins page capability (design 05 §5, C 分层 2026-09): the instance's
+  // Official Plugins page capability (design 05 §5): the instance's
   // own page is reachable exactly when its client boot graph carries the
   // ui-plugin-manager row. `unknown` renders NOTHING — a failed probe must never be
   // presented as "this instance cannot manage plugins".
@@ -291,9 +291,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   }, [isSsh, isLocal, loadRemoteList, loadLocalList])
 
   /**
-   * SSH live Loader 快照（只做展示）：实例的 loader 行状态此前只有 gateway/http 拿得到，
-   * SSH 行只有 profile manifest；同一控制面代理对 canonical `dsh-<id>` 同样能读上游
-   * `pluginInventory/list`（升级计划 §22.4.3「SSH live 判词」）。读失败 = 不显示状态，
+   * SSH live Loader 快照（只做展示）：实例的 loader 行状态由同一控制面代理读；
+   * 对 canonical `dsh-<id>` 同样能读上游 `pluginInventory/list`（升级计划 §22.4.3
+   * 「SSH live 判词」）。读失败 = 不显示状态，
    * 不产生任何「未注入」类判词。
    */
   const sshLiveSourceId = isSsh ? officialPluginsPageSourceId(target) : null

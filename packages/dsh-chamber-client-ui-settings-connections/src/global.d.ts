@@ -27,7 +27,7 @@ import type { DshChamberBridge } from '@dsh-chamber/renderer/global.d.ts'
  * every registry-returning path.
  *
  * The user plugin WRITE types (apply/materialize/undo/npm-search/local add) were
- * retired with the write surfaces (D1); only the plugin READ face
+ * is not part of this surface; only the plugin READ face
  * (LocalPluginManifest / RemotePluginManifest) and chamber provisioning
  * (SshSeedHostGraphResult / GatewayPluginSyncIpcResult) are re-exported.
  */

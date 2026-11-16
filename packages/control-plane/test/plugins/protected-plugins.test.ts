@@ -1,7 +1,7 @@
 /**
  * protected-plugins.ts 单测（design 21 §6.11）：受保护集合派生、读面行投影、
  * 运行时线族解析（锁文件优先 / 树兜底 / 都没有则 fail-closed）与版本事实。
- * 用户插件写面已随 2026-09 C 分层退役，本套件只覆盖读面事实。
+ * 用户插件写面不在服务面内，本套件只覆盖读面事实。
  *
  * Run directly: node packages/control-plane/test/plugins/protected-plugins.test.ts
  */

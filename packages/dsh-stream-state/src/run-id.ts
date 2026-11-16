@@ -1,9 +1,9 @@
 /**
  * SessionRunId - the identity spine for one running episode.
  *
- * WHY. "Running / completed / notified / unread / pending delivery" used to be keyed by
- * (sourceId, sessionId) plus watermark heuristics; when one status frame is lost the
- * watermark and the running edge disagree, and same-millisecond completions become
+ * "Running / completed / notified / unread / pending delivery" keyed by
+ * (sourceId, sessionId) plus watermark heuristics would let one lost status frame
+ * desynchronise the watermark from the running edge and make same-millisecond
  * indistinguishable. One identity per episode removes the heuristics: two families
  * exist and NEVER compare or merge - a host-provided run key when the host has one,
  * and the chamber's own namespace derived from its observed episode ordinal.

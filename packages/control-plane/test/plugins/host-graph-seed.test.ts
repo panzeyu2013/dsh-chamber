@@ -542,7 +542,7 @@ function writeBuiltHostSource(dir: string, packageName: string, label: string, c
   return sourceDir
 }
 
-/** The exact id-targeted disable row the local overlay appends (audit P2-3). */
+/** The exact id-targeted disable row the local overlay appends. */
 const OFFICIAL_OPEN_IN_DISABLE_ROW = `- id: open-in-app
   name: '@deepseek-ai/dsh-host-open-in-app'
   disabled: true

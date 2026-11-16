@@ -7,7 +7,7 @@
  *      aliases, impossible ports, error/state mismatch, timestamp lies);
  *   2. the wire tables are the SINGLE vocabulary: the desktop manager's local
  *      mirror must agree with them exactly until the desktop takes the type-only
- *      dependency (TODO W0), and the alias table must agree with the namespace
+ *      dependency, and the alias table must agree with the namespace
  *      allocator. A drift here would either ship an enum the renderer drops or
  *      an alias range the manager never allocates.
  */

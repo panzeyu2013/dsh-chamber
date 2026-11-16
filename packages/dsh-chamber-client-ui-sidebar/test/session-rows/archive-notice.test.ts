@@ -1,7 +1,7 @@
 /**
  * 来源级普通警示模型（design 06 §3.4）：3s TTL（上游 Toast 默认 hold）与断连裁剪
  * （TTL 内重连不得弹回）；hook 的计时与 shell 接线由源码锁承重。归档成功 / 停止并归档
- * 两态的就地提示条已按用户裁决移除，模型只剩「点击归档行不可打开」这一条警示。
+ * 两态的就地提示条（design 06 §3.4 的 Rejected alternatives），模型只剩「点击归档行不可打开」这一条警示。
  * 本包测试跑在 plain node 下，模型保持无 React 依赖。
  * Run directly: node test/session-rows/archive-notice.test.ts
  */

@@ -106,7 +106,7 @@ test('restore: a broken symlink counts as removed (upstream deleted the target)'
   assert.match(result.stdout, /跳过 1 条/)
 })
 
-// TODO A§16.4: the HEAD record predates edges the upgrade just added. Restoring the
+// The HEAD record predates edges the upgrade just added. Restoring the
 // raw record is not enough — the CURRENT member package.json edges must be unioned
 // in, otherwise frozen fails with no repair path.
 

@@ -17,7 +17,7 @@
  *   - `openInBrowser`: main composes `scheme://alias:port + path` and awaits the
  *     platform open; the renderer never passes a URL (security ruling).
  *
- * WHAT IT DOES NOT OWN (typed adapters + TODO, never a frozen-file edit):
+ * WHAT IT DOES NOT OWN (typed adapters, never a frozen-file edit):
  *   - process spawning and ssh auth (askpass leases) — ForwardChildLauncher;
  *   - the actual ssh argv — buildForwardArgs() in remote-forward-args.ts;
  *   - local port probing/listener probing — ForwardPortAllocator;
@@ -27,7 +27,7 @@
  *     singleton (8/10s + 30s cooldown) is deliberately NOT reused, so a remote
  *     source cannot starve the app's own link leg;
  *   - native confirmation + persisting "browser enabled" — the `authorize`
- *     seam; the registrar persists the decision (TODO S1 wiring);
+ *     seam; the registrar persists the decision (wiring seam);
  *   - child reaping after kill -9 — remote-forward-lifecycle.ts.
  *
  * WIRE MIRROR. The state/error tables and the record shape are a structural
@@ -38,7 +38,7 @@
  * and a dependency/lockfile update is outside this slice. `test/forward/forward-wire.test.ts`
  * asserts the two tables/shapes agree in both directions; when the desktop dep
  * lands, replace these declarations with `import type`/value imports from
- * '@dsh-chamber/dsh-chamber-wire/forward' (TODO W0 integration).
+ * '@dsh-chamber/dsh-chamber-wire/forward' (integration seam).
  *
  * TRUST. Every input here is assumed to be already guarded by the IPC registrar
  * (wire guards + sender/frame trust + the three-step fingerprint proof). The

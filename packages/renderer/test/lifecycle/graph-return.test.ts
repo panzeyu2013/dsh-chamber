@@ -291,7 +291,7 @@ test('wiring lockstep: App delegates to the hook, the hook drives the planner an
   // the two-pass shape from reappearing in the module that would silently lose the re-boot.
   const readiness = stripComments(await readFile(new URL('../../src/source-readiness.ts', import.meta.url), 'utf8'))
   // BOTH arms read the effect back: the phase arm pays the arm a settle left PENDING
-  // (a settle that landed before ready used to lose the re-boot entirely), and the
+  // (a settle landing before ready must not lose the re-boot entirely), and the
   // settle arm covers a source that was already ready when the settle arrived.
   assert.match(readiness, /const effect = facts\.dispatch\(server\.id, \{ kind: 'phaseChanged', phase: server\.phase \}\)/)
   assert.match(readiness, /if \(effect\?\.e === 'degradedSelfHeal'\) retry\.push\(server\.id\)/)

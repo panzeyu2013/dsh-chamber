@@ -329,7 +329,7 @@ async function openForward(
  * assembly injection point, so the main-frame/shell-document checks stay there).
  *
  * `service` is the assembled ForwardManager (S1 wiring) or null while the
- * adapters are still TODO — null keeps the channels present and answers a typed
+ * adapters are absent — null keeps the channels present and answers a typed
  * refusal instead of disappearing from the bridge surface.
  */
 export function registerForwardHandlers(

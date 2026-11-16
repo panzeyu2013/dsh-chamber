@@ -2,7 +2,7 @@
 /**
  * verify-electron-artifacts.mjs —— executed Electron-compiled-artifact gate.
  *
- * **ARCHIVED（2026-11 Electron 冻结，docs/progress/electron-frozen.md）**：默认门禁 / CI /
+ * **ARCHIVED（Electron 冻结）**：默认门禁 / CI /
  * 发布流程不再调用本 CLI（`gate-surfaces.json` 已移除 `macos.electron-artifacts`，ci.yml
  * 的 Electron compiled-artifacts smoke 步已删）。文件保留为复活基线：其纯判定函数仍被
  * `scripts/gates/runners/run-checks.test.mjs` 与 `packages/desktop/scripts/after-pack-adhoc-sign.test.mjs`

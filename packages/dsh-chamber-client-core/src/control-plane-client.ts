@@ -153,7 +153,7 @@ export interface HealthEventsHandle {
  * 通道断开只触发 `onerror`（调用方据此做一次性 /health 回退），本订阅由通道自己重连并重订阅，
  * 调用方不排自己的重连阶梯。
  *
- * 这是 App 与设置页**唯一**的一份实现：两边曾各包一层同形句柄、各写一个诊断前缀，
+ * 这是 App 与设置页**唯一**的一份实现：两边不各包同形句柄、不各写诊断前缀，
  * 而本模块（共享控制面客户端）正是该面的单源所在，漂移面必须只剩这里一处。
  */
 export function subscribeHostHealth(): HealthEventsHandle {

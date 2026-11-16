@@ -1,5 +1,5 @@
 /**
- * ARCHIVED (2026-11, Electron frozen; docs/progress/electron-frozen.md): the CDP
+ * ARCHIVED (Electron frozen): the CDP
  * walkthrough needs a revived Electron dev/CDP environment. The shipped GUI path is
  * `run.mjs --flavor native` plus the real-machine checklist.
  *

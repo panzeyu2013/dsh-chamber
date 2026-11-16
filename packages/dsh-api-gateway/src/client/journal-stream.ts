@@ -305,8 +305,8 @@ export abstract class RemoteJournalStream<
    *  EVERY published value is delivery evidence: the opening/replacement window, live
    *  appends, prepends and cursorless notifications all arrive over the live generation,
    *  so a notification-only assistant stream must not be judged silent at the 45 s probe
-   *  window while its Host keeps producing (the field comment always said so; the code
-   *  used to gate on replace/append only). */
+   *  window while its Host keeps producing (the field comment says so; the code gates
+   *  on every published value, not replace/append only). */
   private publish(change: RemoteJournalChange<Page, Entry, Notification>): void {
     if (this.disposed) return
     this.lastProgressAt = elapsedClock()

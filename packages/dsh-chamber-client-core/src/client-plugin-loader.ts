@@ -394,7 +394,7 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
  * against the record the first one publishes. Callers use it BEFORE any bundle
  * executes for two decisions: drop a same-instance rebuild (`restart`) and report a
  * cross-instance drift (`version`) — with `reuseForeignBuilds` the kernel never
- * refuses a foreign row, so this scan no longer gates the boot's success. A claim
+ * refuses a foreign row, so this scan does not gate the boot's success. A claim
  * that appears after this scan still reaches {@link loadClientPluginRows}.
  * @param sourceId - the caller's source (instance) id.
  * @param rows - candidate rows.

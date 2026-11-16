@@ -5,7 +5,7 @@
  * is recovered by the concrete per-session `Session.resync()` the pinned
  * controller ships off-contract (reached through the guarded structural slice):
  * the `'error'` arm runs it AUTOMATICALLY after its grace, the parked
- * `'loading'` arm only REPORTS (its manual control was retired), and the fact is the
+ * `'loading'` arm only REPORTS (it has no manual control), and the fact is the
  * official main view's `retainedBy.mainView` retention — a chamber-side
  * `current` mirror must never come back. Assertions live at the decision
  * boundary (pure module) and the effect boundary (a fake sessions face),
@@ -214,14 +214,13 @@ test('stream-health: the presented error heals automatically, and an exhausted b
   assert.equal(routed.action, 'heal')
   // With every automatic heal in the rolling window spent, the SAME observation
   // must not dispatch another one, and the notice now has no control to open:
-  // the page's own bounded ladder owns the escalation (the manual lever was
-  // retired by user ruling). The threshold still times the notice exactly as it
-  // did when it also opened the control.
+  // the page's own bounded ladder owns the escalation. The threshold only times
+  // the notice; no control is opened.
   const spent: SessionStreamHealthState = { phase: 'error-hold', since: T0, healStamps: [T0, T0 + C, T0 + 2 * C] }
   const spentNotice = planAt(spent, observe('error', { resyncAvailable: true }), T0 + C + S)
   assert.equal(spentNotice.action, 'none')
   // The chip reports the state: a spent automatic lane with a reachable face still
-  // shows the failure notice (the timing the arm used to share), it just has no
+  // shows the failure notice, it just has no
   // control to offer.
   assert.equal(spentNotice.notice, 'heal-failed')
   // Fail-closed without the concrete face: no action is ever invented, and the

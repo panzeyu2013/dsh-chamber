@@ -5,9 +5,8 @@
  * into an addressable page fact (zero imports: dispatch is injected; the browser
  * default only touches globals the page already owns).
  *
- * DIAGNOSTICS ONLY since the chamber chip's reconnecting notice was retired (user
- * ruling, design 14 §D4): no in-repo consumer reads this event (the zero-consumer
- * register is STATUS ⑩); DevTools is its only reader.
+ * DIAGNOSTICS ONLY: there is no reconnecting notice and no in-repo consumer of this
+ * event (design 14 §D4); DevTools is its only reader.
  */
 
 /** Document-level event name carrying one {@link CarrierFailureFact}. */

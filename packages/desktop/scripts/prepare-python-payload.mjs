@@ -13,7 +13,7 @@
  *
  * node / pnpm（--with-node / --with-pnpm；后者隐含前者）：
  * - node：归档版本与 sha256 只在 primary-runtime-lock.json 声明（单一来源）；Swift 单
- *   Node 裁决后 sidecar 不再另存 pin，payload 的 dependencies/node/bin/node 是唯一宿主
+ *   Node 裁决后 sidecar 不另存 pin，payload 的 dependencies/node/bin/node 是唯一宿主
  *   与工具 Node（build-sidecar 只做存在性校验，见 swift-impl-contract）。
  * - pnpm：来源是构建机 node_modules/pnpm（版本必须等于 desktop package.json 的
  *   dependencies.pnpm——同一版本单源），整包 dereference 拷到 dependencies/pnpm，并按
@@ -64,7 +64,7 @@ export const PAYLOAD_ABSENT = 'absent'
 
 /**
  * 本仓登记的目标（键名与上游锁一致）。没有登记的平台 = 不出货，resolveTarget 拒绝。
- * linux/windows 上游有目标而本仓尚未发布（design 22/23 外部门禁未闭），故意缺席。
+ * linux/windows 目标不在本仓发布面（design 22/23），故意缺席。
  */
 export const REGISTERED_TARGETS = {
   'mac-arm64': { platform: 'darwin', arch: 'arm64' },
@@ -646,7 +646,7 @@ export function isDirectory(target) {
 
 /**
  * pnpm 版本唯一来源：desktop package.json 的 dependencies.pnpm。
- * 与 Electron after-pack / build-sidecar 的 pnpm pin 同一处声明（本仓不再另立表）。
+ * 与 Electron after-pack / build-sidecar 的 pnpm pin 同一处声明（本仓不另立表）。
  */
 export function desktopPnpmVersion(manifest = DESKTOP_MANIFEST) {
   const version = manifest?.dependencies?.pnpm
@@ -805,7 +805,7 @@ export function copyPnpmIntoPayload(sourceDir, destination, options = {}) {
  * `scripts/primary-runtime/smoke.py`（第 28–30 行）把期望集合定义为
  * 「声明的发行版 ∪ {pip}」——pip 属于**解释器基座**，不是载荷锁的成员（版本随
  * 解释器构建变化，上游也只按名字放行）。反向精确集合因此必须按名字放行它；其余
- * 任何未登记发行版依然红。2026-09 release dry run 正是因为漏掉这条基线而假红。
+ * 任何未登记发行版依然红。漏掉这条基线会让检查假红。
  */
 export const INTERPRETER_BASELINE_DISTRIBUTIONS = new Set(['pip'])
 
@@ -1081,7 +1081,7 @@ async function main() {
   // 显式 --target 也要过登记表：否则未出货架构会在下游以'Cannot read properties of undefined' 的形态炸掉。
   if (options.target !== null && !Object.prototype.hasOwnProperty.call(REGISTERED_TARGETS, options.target)) {
     throw new Error('未登记的 --target ' + options.target + '——本仓只出货 ' + Object.keys(REGISTERED_TARGETS).join(' / ')
-      + '（x64 腿 2026-12 暂时移除，见 docs/progress/STATUS.md）')
+      + '（x64 腿不在本版出货范围）')
   }
   const target = options.target ?? resolveTarget(lock)
   const pnpm = options.withPnpm ? resolvePnpmSource({ source: options.pnpmSource }) : null

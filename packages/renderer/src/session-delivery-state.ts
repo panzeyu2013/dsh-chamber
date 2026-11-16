@@ -31,8 +31,8 @@ import {
 // The production-import face of these three stream-state exports: their only other
 // consumers are stream-state's own suites, so dropping this re-export turns
 // `verify:no-dead-exports` (check:static) red. Whether to delete the underlying
-// exports, wire them into a real consumer, or exempt them is an open owner call
-// (docs/progress/STATUS.md) - do not silently drop the face.
+// exports, wire them into a real consumer, or exempt them is an open owner
+// call - do not silently drop the face.
 export { deliveryLadder, describeRunId, unresolvedRetryDelayMs }
 export type { DeliverySymptom, SessionRunId }
 

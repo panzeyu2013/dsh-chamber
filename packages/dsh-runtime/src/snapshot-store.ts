@@ -733,7 +733,7 @@ async function runRestoreTransaction(
       return cleanReport('complete')
     }
   } catch (error) {
-    // A real exception no longer masquerades as "the disk state is merely resumable": the outcome
+    // A real exception never masquerades as "the disk state is merely resumable": the outcome
     // describes the durable state while cause/error carry the failure.
     return {
       outcome: interruptedOutcome(marker, dshHome),

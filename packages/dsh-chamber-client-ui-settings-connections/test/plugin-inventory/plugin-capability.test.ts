@@ -1,6 +1,6 @@
 /**
  * Official Plugins page capability gate tests (design 05 §5 + design 21 §6.2
- * 注; C 分层 2026-09): the pure graph verdict, the target → proxy-source-id
+ * 注): the pure graph verdict, the target → proxy-source-id
  * mapping, and the probe's classification discipline (every unreadable path is
  * `unknown`, never a claim). Plain node:test — no dsh, no React.
  */

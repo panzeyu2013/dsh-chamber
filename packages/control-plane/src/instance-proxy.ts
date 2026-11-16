@@ -1084,7 +1084,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
       }
       // A same-id registration is a NEW incarnation: bump AFTER releaseConnectionPool,
       // which deletes the old entry; bumping before it would leave the new incarnation
-      // at 0 and re-open the ABA window on the second replacement (R5 A-M1).
+      // at 0 and re-open the ABA window on the second replacement.
       transportGenerations.set(connectionId, ++incarnationSeq)
       transports.set(connectionId, {
         baseUrl,

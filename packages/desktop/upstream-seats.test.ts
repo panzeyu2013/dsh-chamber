@@ -1,5 +1,5 @@
 /**
- * Upstream desktop seat lock (2026-09 calibration S-52): both flavors install the
+ * Upstream desktop seat lock: both flavors install the
  * \`globalThis.dshDesktop\` carrier the official Web client looks for, and the carrier
  * keeps the upstream shape (protocolVersion 1 + status/open/subscribe) with an
  * identical phase mapping on both sides (one chamber UpdateState source).
@@ -131,7 +131,7 @@ test('S-52: the carrier is installed before info hydration', () => {
   )
   // lastIndexOf: the rehydrate helper declares an earlier fetchInfo call, the
   // kick-off at the end of the IIFE is the one that must follow the carrier.
-  // Both indexes must exist: a renamed carrier previously made this assertion
+  // Both indexes must exist: a renamed carrier would make this assertion
   // vacuously true (-1 < n).
   const carrierInstall = shim.indexOf("defineWindowGlobal('dshDesktop', dshDesktopApi)")
   const hydrationKickoff = shim.lastIndexOf('fetchInfo(INFO_MAX_ATTEMPTS + 1)')

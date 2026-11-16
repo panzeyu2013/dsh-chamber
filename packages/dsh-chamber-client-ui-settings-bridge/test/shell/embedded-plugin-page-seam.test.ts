@@ -1,5 +1,5 @@
 /**
- * EMBEDDED PLUGIN PAGE SEAM LOCK (finding M-7/V5-08; 2026-10 section revision).
+ * EMBEDDED PLUGIN PAGE SEAM LOCK.
  *
  * The embedded upstream plugin page is now the content of its own settings
  * SECTION, not a tab under the inventory section: its own h1 + intro row,

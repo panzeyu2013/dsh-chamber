@@ -41,9 +41,8 @@ test('an absent session face has a deadline while a genuinely blank face does no
 })
 
 test('the loading failure is the page timer alone and another session never inherits it', () => {
-  // R3: the terminal-opening evidence that used to short-circuit the timer was
-  // retired with the api-gateway opening phase machine, so the 20s/90s windows
-  // are the whole decision.
+  // The terminal-opening evidence does not short-circuit the timer (the api-gateway
+  // opening phase machine owns it), so the 20s/90s windows are the whole decision.
   const loading = advanceSessionOpenHealth(null, 's1', { openState: 'loading' }, 0)
   assert.equal(presentedSessionOpenRecoveryPhase(loading, 's1', false), 'quiet', 'the timer stays quiet this early')
   assert.equal(presentedSessionOpenRecoveryPhase(loading, 's2', false), 'quiet',

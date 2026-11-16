@@ -971,7 +971,7 @@ export function createSourceMuxFacts(deps: SourceMuxDeps): SourceMuxFacts {
       // （出口判据正是"不依赖 gateway 版本"）。这里是 $events WebSocket 观察者，
       // 全程走 WS mux + unary、从不轮询——'sse'/'poll' 都是 gateway 平面的词，
       // 在这里是谎报；新增 'ws' 需同步 gateway 镜像三处白名单，收益为 0
-      // （2026-12 审计 §6.1.3）。快照的 mode 因此诚实报 null，而不是照抄一个
+      // 。快照的 mode 因此诚实报 null，而不是照抄一个
       // 它并不使用的传输档（唯一消费 mode 的 session-facts-source.startDelivery
       // 只读自己 payload 的 mode，不读这里）。
       verdict: usable ? 'ok' : 'degraded',

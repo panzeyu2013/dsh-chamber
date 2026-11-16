@@ -500,7 +500,7 @@ test('main.ts keeps restart-dsh on its own gate, outside the unsupported-platfor
 })
 
 test('shell-ipc-runtime keeps the resolve≠success whitelist on restart-dsh (ready/degraded only)', () => {
-  // The renderer's own readiness wait was retired with the window-reload completion, so this
+  // The renderer keeps no readiness wait of its own (window-reload completion owns it), so this
   // guard is now the ONLY thing between restartLocal() resolving from restart-exhausted/stopped
   // and a false "已重启" note: keep it, and keep it loud.
   const handleStart = desktopMain.indexOf('.handle(IPC_CHANNELS.RUNTIME_RESTART')

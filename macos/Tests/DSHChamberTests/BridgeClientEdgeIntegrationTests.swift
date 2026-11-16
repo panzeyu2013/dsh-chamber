@@ -599,7 +599,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         // onNotify 预挂（先于 invoke——push 与响应同 tick 写 stdout，可能先到）。
         // 一次 settings-set 可能发多条 rendererPush（持久化 watcher 与响应投影各一条），
         // 而 XCTest 默认 assertForOverFulfill：二次兑现是未捕获异常，会直接崩掉整个测试
-        // 进程（2026-09 CI 实测）。只认 settings-changed 的第一条，其余忽略。
+        // 进程。只认 settings-changed 的第一条，其余忽略。
         let push = expectation(description: "rendererPush notify（dsh-chamber:settings-changed）")
         let pushPayload = SyncBox<AnyCodable>()
         let pushFulfilled = SyncBox<Bool>()

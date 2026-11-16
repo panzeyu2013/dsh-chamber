@@ -516,7 +516,7 @@ interface PendingFollow {
   timer: ReturnType<typeof setTimeout> | null
   settle: (value: SessionTurnEnd | null) => void
   /** The socket this follow was opened on: a settle after a carrier replacement must
-   *  not cancel a streamId the successor socket never carried (review finding F3-CANCEL). */
+   *  not cancel a streamId the successor socket never carried */
   carrier: MuxSocket
 }
 
@@ -872,7 +872,7 @@ export function createSessionMux(deps: SessionMuxDeps): SessionMux {
           // delivery set, so no cancel ever arrives and the entry would stay here forever -
           // scanned by every later emit while its pending mirror stays alive. Release it
           // exactly as a real cancel would (the host handler is a get/delete, so a later
-          // real cancel stays harmless) - review finding O-A.
+          // real cancel stays harmless).
           clearTimer(held.timer)
           heldWaterfalls.delete(held.eventId)
           if (held.kind !== null) deps.onCancel?.(held.eventId, now())

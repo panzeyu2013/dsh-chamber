@@ -61,7 +61,7 @@ test('release workflow policy: commit-bound, published-immutable, beta-isolated,
   assert.match(workflow, /cancel-in-progress: false/)
   // Cache keys are GitHub expressions. The shell-looking `${ hashFiles(...) }` is a
   // LITERAL key: every run collides on one stale cache and the cache is never
-  // re-saved (the 2026-11-04 log literally shows "Cache hit for:
+  // re-saved (the log literally shows "Cache hit for:
   // swift-build-${ hashFiles('macos/Package.resolved') }"). ci.yml already used the
   // correct form; release.yml must not regress it again.
   const cacheKeys = workflow.split('\n').filter((line) => /^\s*key:/.test(line)).join('\n')
@@ -936,11 +936,11 @@ test('release workflow policy: commit-bound, published-immutable, beta-isolated,
     ciWorkflow,
     /^\s+tags:\s*\[[^\]]*'v\*'[^\]]*\]\s*$/m,
     'ci.yml must not trigger on tag pushes: release.yml owns the tag path and rejects a commit main never validated')
-  // 2026-11 Electron freeze (docs/progress/electron-frozen.md): the Windows/Linux
+  // Electron freeze (frozen-surface registry): the Windows/Linux
   // desktop legs and the Electron packaging/update legs are ARCHIVED. Their ci.yml
   // jobs must not come back by accident, the proof must not require them, and
   // release.yml keeps the Electron publication legs as explicitly archived
-  // `if: ${{ false }}` jobs — re-opening the scope is a user ruling plus a deliberate
+  // `if: ${{ false }}` jobs — re-opening the scope is an explicit scope decision plus a deliberate
   // edit of this test, never a "restore" from a stale comment.
   assert.doesNotMatch(ciWorkflow, /^  test-windows:/m,
     'the Windows contract leg is archived: restore it only under a user scope ruling')

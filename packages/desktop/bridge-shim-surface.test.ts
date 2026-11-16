@@ -21,7 +21,7 @@
  *  ⑤ 无 poc-unimplemented 兜底残留：shim 不含 pocUnimplemented/rejectMethods
  *     代码形态（头部注记文本仅描述 sidecar 桩，不属于兜底代码）。
  *  ⑥ Swift-only A 桥白名单（bridge-swift-only-additions.json，政策见
- *     docs/progress/electron-frozen.md §5.2）：白名单项只存在于 shim（preload 面外），
+ *     冻结面 A 桥白名单政策）：白名单项只存在于 shim（preload 面外），
  *     ①②③④ 的「两侧相等」对它们豁免；但 shim 必须真的实现它（缺方法/缺通道映射仍红），
  *     preload 不得暴露同名成员、manifest 必须已收录该通道。空表 = 全部 no-op。
  */
@@ -43,7 +43,7 @@ const manifest = JSON.parse(
 ) as { invoke: { channel: string }[]; push: { channel: string }[]; counts: { invoke: number; push: number } }
 const manifestInvoke = new Set(manifest.invoke.map((e) => e.channel))
 const manifestPush = new Set(manifest.push.map((e) => e.channel))
-/** Swift-only A 桥 additions 白名单（docs/progress/electron-frozen.md §5.2）：只存在于
+/** Swift-only A 桥 additions 白名单（冻结面 A 桥白名单政策）：只存在于
  *  Swift shim、无需 Electron preload / 主进程注册的通道。空表时下面所有豁免都是
  *  no-op——本文件的断言行为与加白名单前逐字一致。 */
 interface SwiftOnlyAddition {

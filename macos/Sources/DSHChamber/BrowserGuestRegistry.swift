@@ -335,7 +335,7 @@ final class BrowserGuestRegistry {
                 activeTabId = request.tabId
                 onActiveGuestChanged?(activeTabId)
             }
-            // W-20：首次挂载也打一行 rect-debug（此前只有 frame/重建路径打）。
+            // 首次挂载也打一行 rect-debug（frame/重建路径同样打）。
             emitRectAudit(lease: lease)
             return .success(lease)
         }
@@ -348,7 +348,7 @@ final class BrowserGuestRegistry {
             return .failure(failure)
         case .success(let entry):
             if activeTabId == entry.tabId { activeTabId = nil }
-            // RT-05 的 keymap 清理只在 teardown 做一次（m5：此前 release 与 teardown 重复调用）。
+            // keymap 清理只在 teardown 做一次（release 与 teardown 不重复调用）。
             teardown(lease: lease)
             return .success(())
         }
@@ -914,7 +914,7 @@ final class BrowserGuestController: NSObject, WKNavigationDelegate, WKUIDelegate
     }
 
     /// 文件选择（FW1 ⑤）：显式拒绝——不弹 NSOpenPanel。理由：WebKit 的 runOpenPanel
-    /// 不暴露「是否用户手势」，且返回值会成为远端页面可读取的本机文件 URL；本轮选择
+    /// 不暴露「是否用户手势」，且返回值会成为远端页面可读取的本机文件 URL；
     /// 安全优先（显式取消 + 日志），若后续要开面板必须走用户手势证据 + 只回本 guest 的
     /// 临时授权（登记为最小剩余）。
     func webView(_ webView: WKWebView,

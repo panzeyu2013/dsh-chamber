@@ -14,9 +14,7 @@
  * tripwire ({@link documentedRetirement}). design 17 §18.4 was checked first: it
  * keeps the *host-side* residual (if a first-frame deadline is ever needed it
  * belongs to host/session), not the retirement contract, so design 14 §D4 is the
- * stable sentence. The old check matched /首帧期限/ and /退役/ anywhere in
- * docs/progress/TODO.md — rewriting the plan turned the gate red while proving
- * only that two words existed. A documentation wording change is now a loud
+ * stable sentence. The documentedRetirement inputs stay bound to design 14 §D4. A documentation wording change is now a loud
  * warning, never a code-contract failure; losing the contract registration is a
  * failure because the design reference itself disappeared.
  *

@@ -257,7 +257,7 @@ test('only recovery evidence after a real stability window resets the mux cadenc
 
 
 test('the silent-carrier verdict belongs to the reducer, not this module (P3)', () => {
-  // The predicate that used to live here is retired: stream-client reports the
+  // The verdict predicate lives in the reducer, not here: stream-client reports the
   // frame delta with the rebuild request and reads the verdict back off the
   // effects (`socketNoFrame` vs the threshold-gated `openingStall`). The truth
   // table now lives in the package carrier suite; this pins the wiring so the

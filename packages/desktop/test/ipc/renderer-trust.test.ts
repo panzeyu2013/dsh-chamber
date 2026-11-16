@@ -280,7 +280,7 @@ test('v3 CSP narrowing: only the FROZEN Electron entry keeps frameSources; the s
   const main = readFileSync(new URL('../../electron/main.ts', import.meta.url), 'utf8')
   const sidecar = readFileSync(new URL('../../sidecar-entry.ts', import.meta.url), 'utf8')
   // The frozen Electron archive retains the retired v2 widening in its own file
-  // (electron-frozen.md); it never ships. Do not "sync" the shipped entry to it.
+  // (frozen Electron archive); it never ships. Do not "sync" the shipped entry to it.
   assert.match(main, /frameSources: \[\.\.\.forwardFrameSources\(\), 'http:', 'https:'\]/)
   // design 28 §5 CSP v3 / ADR-0004: the native guest carrier is a top-level
   // WKWebView document, so the shell must keep the control-plane default

@@ -32,8 +32,8 @@ import { fileURLToPath } from 'node:url'
 export const GATE_REGISTRY_PATH = fileURLToPath(new URL('./gate-surfaces.json', import.meta.url))
 
 /** The ci.yml jobs release-proof pins; workflows may only place a gate on one of these.
- *  The Windows/Linux desktop legs are ARCHIVED with the Electron flavor (2026-11,
- *  docs/progress/electron-frozen.md) and no longer exist in ci.yml. */
+ *  The Windows/Linux desktop legs are ARCHIVED with the Electron flavor
+ *  (frozen-surface registry) and do not exist in ci.yml. */
 export const CI_JOB_IDS = ['test', 'test-macos', 'test-macos-pack']
 
 /** Modes the runner recognises; 'full' is derived, never stored. */
@@ -101,7 +101,7 @@ export function validateGateRegistry(registry, { scripts = rootScripts(), exists
     }
     // A static gate runs as its own CI step. Without a placement it is derived into
     // `run-checks static` and never appears in ci.yml while the registry still claims the ci
-    // surface — exactly the drift static-gate-parity caught before it was deleted. A
+    // surface — exactly the drift a workflow-placement parity check must catch. A
     // hand-written composite step (the macOS payload lockstep) must name itself in coveredBy.
     if (surfaces.ci === true && Array.isArray(gate.modes) && gate.modes.includes('static')
       && gate.workflow === undefined

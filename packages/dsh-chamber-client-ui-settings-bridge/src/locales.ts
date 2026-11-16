@@ -495,7 +495,7 @@ export const en: Record<keyof typeof zh, string> = {
   updateActionDismiss: 'Dismiss',
   // 「Receive preview (beta) updates」subscription (design 11 §3.2 / design 25 §7): the channel
   // is pure user preference (v4) — the switch reflects the effective channel pushed by the shell;
-  // the version suffix no longer participates (a beta build is an ordinary switch, default off);
+  // the version suffix does not participate (a beta build is an ordinary switch, default off);
   // a build without usable channel URLs is disabled with the reason.
   updateBetaUpdatesLabel: 'Receive preview (beta) updates',
   updateBetaUpdatesDesc: 'When on, receive beta builds; when off, only stable releases',

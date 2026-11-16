@@ -3,8 +3,8 @@
  *
  * The hover/kebab action clusters (`.rowActions`, the git occupant, and the
  * source header's `.sourceActions`) are `display: none` at rest, so their buttons
- * are not in the Tab order. The keyboard reveal used to be a CSS
- * `:has(:focus-visible)` display change — which LOOKS revealed but is NOT
+ * are not in the Tab order. A CSS
+ * `:has(:focus-visible)` display change LOOKS revealed but is NOT
  * reachable: Blink's Tab navigation does not treat an element whose display was
  * flipped by a `:has()` invalidation as focusable. Controlled experiment (one page,
  * identical CSS, real CDP key events, with and without forced frames): a

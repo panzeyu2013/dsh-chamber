@@ -3,7 +3,7 @@
  *
  * 非注册门（不在 gate-surfaces.json）：tests/CI 在构建前跑，没有产物可比；
  * 发布 checklist §4 在 `build:renderer` / `build:desktop` 之后用 `--require-compare` 手动跑。
- * **ARCHIVED（2026-11 Electron 冻结）**：第 1 类 `dist/preload.cjs` 属 Electron 归档流，
+ * **ARCHIVED（Electron 冻结）**：第 1 类 `dist/preload.cjs` 属 Electron 归档流，
  * 默认构建不再产出，恒 SKIP；该分支保留作复活校验。
  * （design 21 §7 G2–G8）。
  *
@@ -20,7 +20,7 @@
  *   3. packages/gateway/dist/index.js —— build:gateway 的 esbuild 产物（包 exports
  *      的落点）；用包自己的 build.mjs 在临时副本里重建后逐字节比对（模块路径按
  *      packages/gateway cwd 归一），dist 不在场时 loud SKIP。
- *   4/5. G3 构建清单类（design 21 §7；TODO D§2.2）：packages/desktop/dist/web/**
+ *   4/5. G3 构建清单类（design 21 §7）：packages/desktop/dist/web/**
  *      与 dist/host-*-package/** 是忽略态、无稳定文案的产物，构建时由
  *      packages/desktop/scripts/build-manifest.mjs 写 .build-manifest.json
  *      （inputsHash + toolVersion + outputs 指纹）；本门用同一份输入集规则重算并

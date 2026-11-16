@@ -1,6 +1,6 @@
 /**
  * bridge-manifest.test.ts — 通道 manifest 生成管线测试（design 25
- * §4.4.3；docs/progress/TODO.md；§0.1-E8/B12 companion）。
+ * §4.4.3；§0.1-E8/B12 companion）。
  *
  * 被测管线：scripts/emit-bridge-manifest.mjs（输入 ipc-events.ts 的
  * IPC_CHANNELS 常量表 + main 侧三文件 handle/send 注册事实 → 产出
@@ -225,7 +225,7 @@ test('⑥ --check 只读双臂：一致 exit 0；不一致 exit 1 且绝不改�
   assert.equal(consistent.status, 0, `--check 一致臂应 exit 0（stderr：${consistent.stderr?.trim() ?? ''}）`)
   assert.match(consistent.stdout ?? '', /--check ok/u)
 
-  // 未知 flag：历史故障是 --check 被静默忽略后退化成写模式；现在必须 loud（exit 2）。
+  // 未知 flag：未知 flag 不得被静默忽略后退化成写模式；必须 loud（exit 2）。
   const unknownFlag = runCheck(['--bogus'])
   assert.equal(unknownFlag.status, 2, '未知 flag 必须 exit 2，绝不退化成写模式')
   assert.match(unknownFlag.stderr ?? '', /未知参数/u)

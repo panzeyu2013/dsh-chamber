@@ -1398,8 +1398,8 @@ export {
 } from './plugin-spec.ts'
 // The protected-plugin read face: P = B₀ ∪ S ∪ F derivation and the read-face row
 // projection — single source for the desktop main and the gateway. The user plugin
-// write face (install/remove/materialize) was retired with the 2026-09 C layering
-// ruling, so no write-face decision entry lives here anymore.
+// write face (install/remove/materialize) is read-only, so no write-face
+// decision entry lives here.
 export {
   CHAMBER_SCOPE,
   derivePluginRows,

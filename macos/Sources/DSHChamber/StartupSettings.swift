@@ -216,8 +216,8 @@ public enum StartupSettings {
     /// 整文件校验的公共出口（编码 / 重复键 / JSON / 顶层形状 / 已知键取值）。
     ///
     /// **为何单列**：keepAwake 与 debug 两条读取器都必须「先整文件判可信，再取自己的
-    /// 键」。此前 debug 读取器复用 decodeKeepAwake 当校验器——那是隐式耦合：哪天
-    /// invalidSettingsReason 从 decodeKeepAwake 挪走，debug 的整文件校验会**静默失效**
+    /// 键」。若 debug 读取器复用 decodeKeepAwake 当校验器就是隐式耦合：
+    /// invalidSettingsReason 从 decodeKeepAwake 挪走时，debug 的整文件校验会**静默失效**
     /// （它自己只查 debug.enabled 是不是布尔）。
     enum ValidatedSettingsRecord {
         case ok([String: Any])

@@ -316,9 +316,9 @@ test('wiring: the intent is published before the wire, withdrawn on failure, app
   assert.match(app, /updateRemoval\(sweepPendingRemovals\(echoStore\.getSnapshot\(\)\.removal, Date\.now\(\)\)\)/,
     'the removal ledger rides the shared TTL clock (a convergence that never arrives must still expire)')
   assert.match(app, /forgetPendingRemovals\(/, 'source retirement drops the previous generation\'s intents')
-  // PR3 retired every Git-plugin workspace-delete site: registered removal, the
-  // unregistered handoff and the workspace-delete recovery are gone, so the Git
-  // plugin no longer touches a workspace registry row. A future Git removal must
+  // The Git plugin owns no workspace-delete site (registered removal, the
+  // unregistered handoff and the workspace-delete recovery are gone), so it
+  // never touches a workspace registry row. A future Git removal must
   // never reintroduce a bare unary delete (no intent, no convergence).
   const coordinator = read('../../../dsh-chamber-client-ui-git/src/shared/coordinator.ts')
   assert.doesNotMatch(coordinator, /deleteWorkspaceForSource|deleteWorkspace\(getInstanceClient\(/,

@@ -13,7 +13,7 @@
  * animation selectors (chamber retired the whole entrance-animation group; see
  * `sidebar-entrance-visibility.test.ts`) and the Windows
  * `[data-windows-titlebar]` row margin (that leg is frozen and the copy is
- * archived; docs/progress/STATUS.md §2.3). A bare `.newSessionRow > *` rule is
+ * archived). A bare `.newSessionRow > *` rule is
  * forbidden too: it only matches the renderer's boxless anchor, so it would look
  * wired while animating nothing (upstream's own sidebar-styles spec locks this).
  */

@@ -7,7 +7,7 @@
  * this gate, tagging a commit that never went through `main` would skip the
  * linux chain entirely (release.yml's validation is its mechanical superset;
  * the macOS test legs have no release.yml equivalent). The Windows/Linux desktop
- * legs are ARCHIVED with the Electron flavor (2026-11): they are no longer part
+ * legs are ARCHIVED with the Electron flavor (frozen): they are not part
  * of the required set.
  *
  * This gate asserts the proof directly: the release
@@ -46,7 +46,7 @@ import { fileURLToPath } from 'node:url'
  *  validated; `test-macos-pack` carries the executed-assembly gates and the native
  *  dry runs split out of it (the split moved the STEPS to a parallel job, it did
  *  not drop any coverage). The Windows/Linux desktop legs are ARCHIVED with the
- *  Electron flavor (2026-11, docs/progress/electron-frozen.md), so they are not
+ *  Electron flavor (frozen-surface registry), so they are not
  *  part of the proof set. */
 export const REQUIRED_JOBS = [...CI_JOB_IDS]
 
@@ -78,7 +78,7 @@ const NON_GATE_STEPS = {
   // classifier-skipped on a prose-only push) must still fail the proof. The
   // WKWebView UI itself stays a real-machine item (no CDP). The Electron compiled-
   // artifact smoke and the Electron packaging rehearsal left this table with the
-  // 2026-11 Electron freeze.
+  // Electron freeze.
   'test-macos-pack': [
     'Packaging + darwin lock suites (test:macos)',
     'Compiled sidecar smoke (shipped sidecar.js executes)',

@@ -12,8 +12,8 @@
  * launcher exits immediately, and an inherited pipe closes under the child — the
  * Electron main process then aborts with SIGABRT before the window opens.
  *
- * ARCHIVED (2026-11): the Electron dev flow is frozen with the Electron flavor
- * (docs/progress/electron-frozen.md). This launcher is kept as the revival path;
+ * ARCHIVED: the Electron dev flow is frozen with the Electron flavor
+ * (frozen-surface registry). This launcher is kept as the revival path;
  * GUI acceptance defaults to the native flavor.
  */
 import { execFileSync, spawn } from 'node:child_process'

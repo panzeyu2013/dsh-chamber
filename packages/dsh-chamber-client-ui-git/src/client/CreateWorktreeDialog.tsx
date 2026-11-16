@@ -298,7 +298,7 @@ export function CreateWorktreeDialog({
   }, [])
 
   // Candidate choices: the on-demand read when it settled, else the snapshot fallback (old
-  // host / failed read). The static snapshot list is no longer the primary source.
+  // host / failed read). The on-demand read is the primary source; the static list is the fallback.
   const existingBranchChoices = useMemo(
     () => branchChoices(
       currentBranchQuery,

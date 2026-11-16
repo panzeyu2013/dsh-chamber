@@ -1,12 +1,12 @@
 /**
- * updater 宿主接线回归（2026-12 复审方向 A 的 A5 / 方向 E 的 F8）。
+ * updater 宿主接线回归。
  *
  * main.ts 载入 electron，无法在本进程 import；这里锁死两处宿主接线，并直测 F8
  * 的窗口注意力 seam：
  *  - A5：powerMonitor 的 resume 监听必须顺带驱动 updateController.noteActivity('resume')
- *    ——接口/模块头承诺的 system resume 检查腿此前全仓无调用者；
- *  - F8：createUpdateController 的 flashFrame 此前只有定义没有宿主接线（main.ts
- *    构造对象没传），Windows 的任务栏注意力实际从不触发；macOS 继续走既有的
+ *    ——接口/模块头承诺的 system resume 检查腿必须有调用者；
+ *  - F8：createUpdateController 的 flashFrame 必须有宿主接线（main.ts
+ *    构造对象传入），否则 Windows 的任务栏注意力不触发；macOS 继续走既有的
  *    app.dock.bounce，不得双触发。
  */
 import { test } from 'node:test'

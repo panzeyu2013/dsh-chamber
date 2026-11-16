@@ -91,13 +91,12 @@ export const TIMING_ENV = 'DSH_TEST_TIMING'
 /**
  * Manifest lockstep gate — ONE implementation for every package guard.
  *
- * Each package's test-runner guard used to carry its own IGNORED_DIRECTORIES
- * set and discoverTestFiles walk (three verbatim copies plus two near-copies),
- * so a new package or a new evidence rule had to be added in every guard. The
- * semantics are unchanged from those copies: every on-disk *.test.ts|*.test.mjs
- * must be listed, every listed file must exist, no group lists a file twice, a
- * platform leg that must be a subset of GROUPS is checked, and each zero-test
- * allowlist entry carries a reason and a real file.
+ * One implementation for every package: a per-package guard would each carry its
+ * own IGNORED_DIRECTORIES set and discoverTestFiles walk, so every new package or
+ * evidence rule would have to be added in every guard. The gate enforces: every
+ * on-disk *.test.ts|*.test.mjs must be listed, every listed file must exist, no
+ * group lists a file twice, a platform leg that must be a subset of GROUPS is
+ * checked, and each zero-test allowlist entry carries a reason and a real file.
  *
  * 'lib' is ignored here (built bundles can echo test files); the repo-wide walk
  * used by the gates deliberately does NOT ignore it — the two sets differ on
@@ -701,7 +700,7 @@ export async function runEntries(entries, {
           // Record at COMPLETION, not inside the ordered walk: a round-robin
           // schedule launches later-declared steps' files first, so the stop can
           // leave holes before this entry and the walk may never reach it — the
-          // failure used to vanish from `failures` and the run reported success.
+          // failure would vanish from `failures` and the run would report success.
           // Every failure under --continue; exactly the first one without it.
           if (keepGoing || failed === null) {
             const record = { entry, reason: verdict.reason }
@@ -795,8 +794,8 @@ export async function runTestManifest({
 
   // Lockstep over the REAL package root (cheap directory walk): a manifest that
   // forgot an on-disk test file, lists a ghost, duplicates a file or names a leg
-  // outside GROUPS is refused before anything spawns. Same verdict the packages'
-  // own guards used to duplicate; running it here makes runTestManifest — hence
+  // outside GROUPS is refused before anything spawns. Same verdict the per-package
+  // guards would otherwise duplicate; running it here makes runTestManifest — hence
   // every package and the tests-mode dump — fail closed on a drifted manifest.
   const lockstep = manifestLockstepProblems({
     packageRoot,

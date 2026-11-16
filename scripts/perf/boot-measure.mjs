@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ARCHIVED（2026-11，Electron 冻结；docs/progress/electron-frozen.md）：CDP 采集，
+ * ARCHIVED（Electron 冻结）：CDP 采集，
  * 需复活后的 Electron dev；现行测量 = shell.log/[shell-fps] + Safari Inspector。
  *
  * 场景①（启动：骨架 → 内容）实机采集。
