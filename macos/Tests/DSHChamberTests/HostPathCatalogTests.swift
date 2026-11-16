@@ -610,6 +610,32 @@ final class HostPathCatalogTests: XCTestCase {
         XCTAssertEqual(pushes.count, beforeOcclusion, "an occluded window must not publish or clear the snapshot")
     }
 
+    /// Cmd+H 后点回窗口：板子没变时不得无条件采纳旧拖拽板（hide 分支不置 −1 的锁）。
+    func testResumeDoesNotAdoptAnUnchangedPasteboard() throws {
+        let file = try makeFile("stale.txt", bytes: 2)
+        var pushes: [Int] = []
+        var boardCount = 0  // seeded at init: the first poll has nothing to adopt
+        let service = makeService(changeCount: { boardCount }, readFileURLs: { [file] })
+        service.push = { payload in
+            guard case .object(let object) = payload,
+                  case .array(let entries)? = object["entries"] else { return }
+            pushes.append(entries.count)
+        }
+        service.setObserving(true, clearDragSnapshot: false)
+        boardCount = 1
+        service.poll()
+        XCTAssertEqual(pushes.last, 1)
+        service.setObserving(false, clearDragSnapshot: true)   // hidden: clears the snapshot
+        XCTAssertEqual(pushes.last, 0)
+        let before = pushes.count
+        service.setObserving(true, clearDragSnapshot: false)  // resume: pointer inside + button down
+        XCTAssertEqual(pushes.count, before,
+                       "an unchanged pasteboard must not be adopted on resume")
+        boardCount = 2
+        service.poll()
+        XCTAssertEqual(pushes.last, 1, "a real change is adopted")
+    }
+
     /// 相位到定时器的映射（纯值）：可见=跑两表；遮挡=停两表但保留快照；隐藏=停两表并清快照。
     func testShellPhasePlanMapsOcclusionAndHiddenDifferently() {
         XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: false)),
