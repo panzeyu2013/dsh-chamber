@@ -414,11 +414,12 @@ test('restart arm expiry: an installing phase keeps the gate armed (no false tim
 test('a late download answer after the invoke timeout cannot re-lock the gate', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const { surface } = fakeUpdateSurface()
-  let settle: (() => void) | null = null
+  // holder object: an assignment inside the Promise executor is invisible to flow narrowing
+  const settler: { resolve: (() => void) | null } = { resolve: null }
   const slow = surface as unknown as { download: (revision: number) => Promise<{ ok: true }> }
   slow.download = (revision: number) => {
     surface.downloadRevisions.push(revision)
-    return new Promise(resolve => { settle = () => resolve({ ok: true }) })
+    return new Promise(resolve => { settler.resolve = () => resolve({ ok: true }) })
   }
   const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
@@ -429,7 +430,7 @@ test('a late download answer after the invoke timeout cannot re-lock the gate', 
     const timedOut = await first
     assert.equal(timedOut.ok, false)
     assert.match(String((timedOut as { error: string }).error), /timed out/)
-    settle?.()
+    settler.resolve?.()
     for (let i = 0; i < 4; i += 1) await Promise.resolve()
     const second = store.requestUpdateDownload(REVISION)
     t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
@@ -442,12 +443,12 @@ test('a late download answer after the invoke timeout cannot re-lock the gate', 
 test('a late restart ok after the invoke timeout neither arms the expiry nor re-locks the gate', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const { surface } = fakeUpdateSurface()
-  let settle: (() => void) | null = null
+  const settler: { resolve: (() => void) | null } = { resolve: null }
   const slow = surface as unknown as { restartAndInstall: (revision: number) => Promise<{ ok: true }> }
   slow.restartAndInstall = (revision: number) => {
     surface.restartCalls += 1
     surface.restartRevisions.push(revision)
-    return new Promise(resolve => { settle = () => resolve({ ok: true }) })
+    return new Promise(resolve => { settler.resolve = () => resolve({ ok: true }) })
   }
   const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
@@ -459,7 +460,7 @@ test('a late restart ok after the invoke timeout neither arms the expiry nor re-
     t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
     const timedOut = await first
     assert.match(String((timedOut as { error: string }).error), /timed out/)
-    settle?.()
+    settler.resolve?.()
     for (let i = 0; i < 4; i += 1) await Promise.resolve()
     t.mock.timers.tick(store.RESTART_ARM_TIMEOUT_MS)
     assert.equal(expired, 0, 'a timed-out invoke never armed the expiry')
