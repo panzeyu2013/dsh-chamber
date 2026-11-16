@@ -44,7 +44,7 @@
 - [ ] 构建期 vendor 补丁准入（class② 实测帧成本）：`packages/renderer/scripts/vendor-patches.mjs` 中 reason 标 `ADMISSION PENDING` 的 **class②（`SECOND ADMITTED CLASS`）** 条目不得随发布构建（class④ 第四形态条目归下一条）；发布前必须补齐同机 A/B（出货 Swift 腿：renderer+GPU 进程 CPU 累积差 + Web Inspector Layout 计数；通过判据 = 打/不打两版同机同工况同一会话滚动 10s，`CPU 累积差 = 未打补丁 − 打补丁 > 0` 且高于同机同工况未打补丁版 ≥3 次重复测量的极差（噪声界）、Layout 计数下降，且 follow 语义回归项全绿；数值、噪声界与测量条件须登记在该条 A/B 记录（落点 = [STATUS](../../progress/STATUS.md) §1.1 该条），无记录即未过）并移除 pending 标记，或把条目移出 `VENDOR_PATCHES`。当前候选 = B1 scroll 合帧（[STATUS](../../progress/STATUS.md) §1.1）。
 - [ ] 构建期 vendor 补丁准入（class④ 第四形态 / 页面级单例）：`packages/renderer/scripts/vendor-patches.mjs` 中 reason 标 `ADMISSION PENDING（fourth-form ruling）` 的第四形态条目不得随发布构建；发布前必须有维护者裁决的纳入记录（[design 09](../../design/client/09-client-plugin-runtime-loading.md) §3.6 第四形态或 decisions 记录）并移除 pending 标记，否则把条目移出 `VENDOR_PATCHES`。当前候选 = ui-theme 页面级单例（[STATUS](../../progress/STATUS.md) §1.1）。
 - [ ] ARCHIVED（本版不执行）：Electron 侧 `build.files` / `extraResources` / dmg/zip feed 的旧清单与 revive 基线保留在 [electron-frozen.md](../../progress/electron-frozen.md) §5，不随发布执行。
-- **发布偏离记录（2026-11-14 维护者裁决，发布记录）**：class② B1 scroll 合帧与 class④ ui-theme 页面级单例共 3 条 `ADMISSION PENDING` vendor 补丁随本次 beta 出货；同机 macOS A/B 与第四形态正式准入**未执行**，登记为已记录的发布偏离（[STATUS](../../progress/STATUS.md) §1.1 的 B1 与 N-ctx 页面级资源条目）。发布后必须补 A/B 与准入裁决；未过则从 `VENDOR_PATCHES` 移出按条目回滚。
+- **发布偏离记录（2026-11-14 / 2026-11-16 维护者裁决，发布记录）**：class② B1 scroll 合帧与 class④ ui-theme 页面级单例共 3 条 `ADMISSION PENDING` vendor 补丁随 0.4.5 beta 系列与 0.4.5 正式版出货（2026-11-16 裁决：正式版沿用 beta 裁决，不单独回滚）；同机 macOS A/B 与第四形态正式准入**未执行**，登记为已记录的发布偏离（[STATUS](../../progress/STATUS.md) §1.1 的 B1 与 N-ctx 页面级资源条目）。发布后必须补 A/B 与准入裁决；未过则从 `VENDOR_PATCHES` 移出按条目回滚。
 
 ## 3. 精确发布提交上的全量套件（§3 = 完整单测，不在 preflight 里跑）
 
@@ -94,4 +94,4 @@
 - [ ] 失败处置：任何红都 fail-closed（不发半成品）；已转公开的 Release 不可变，修正需新版本；stale draft 只能整体重建（`release.yml` 的「Refuse published release and replace stale drafts」语义）。
 - [ ] 回滚 = 发布一个修复版本（tag 不可移动）；紧急下架只改 Release 状态/资产，不删 tag，并在 `CHANGELOG.md` 发布节记录。
 - [ ] 记录纪律：发布叙述只进 `CHANGELOG.md` 发布节；仍 open 的发布阻断项留在本清单（❌），已落地判据归 design；本清单只留流程，不写版本值、不写门禁计数。
-- [ ] **未消除的发布偏离**：§2 的 3 条 `ADMISSION PENDING` vendor 补丁按 2026-11-14 维护者裁决随本次 beta 出货（post-release A/B 与第四形态准入义务，见 §2 偏离行与 STATUS §1.1）；在 A/B/裁决落库前，后续正式版仍需逐条重新评估该偏离。
+- [ ] **未消除的发布偏离**：§2 的 3 条 `ADMISSION PENDING` vendor 补丁按 2026-11-16 维护者裁决随 0.4.5 正式版出货（沿用 2026-11-14 beta 裁决；post-release A/B 与第四形态准入义务见 §2 偏离行与 STATUS §1.1）；下一版发布前必须落库 A/B/裁决，未过则按 §2 回滚面移出。
