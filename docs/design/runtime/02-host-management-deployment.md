@@ -36,85 +36,26 @@
 ## 2. 设计思路与关键决策
 
 ### 2.1 为什么用内置 web profile（而不是自建 slim / 裸进程）
-
-| 方案 | 结论 |
-|---|---|
-| 自建 slim profile（v2 `dsh-control` patch stack + glue 插件） | **v4 放弃**：生成/维护 profile 目录与补丁层 = 控制面持有"宿主组装权威"，还需出树插件（glue）发布端口；而 dsh 官方 `web` profile 已把"API 面 + 前端 + 信任栅栏 + 命令行端口"整体打包 |
-| **`dsh --profile web --host 127.0.0.1 --port <port> --trusted-host 127.0.0.1:<port>`（选定）** | 官方装配（`apps/cli/reference/README.md`：`web` profile 首次使用自动初始化；`--host/--port` 覆盖组合行；可重复 `--trusted-host` 向 `/api` 浏览器信任栅栏加入权威；`--host 0.0.0.0` 被 dsh 拒绝）。v4 前端本就复用 dsh 官方前端（单 frame 加载控制面同源），进程携带 web bundle 正是所需 |
-
-**决策理由**：v4 界面 = dsh 官方前端（源码复用），本地实例进程形态随之收敛为官方 web profile——"控制面要一个什么样的宿主"由 dsh 官方命令直接表达。`--trusted-host 127.0.0.1:<port>`保证经控制面反代到达的浏览器请求（`Host: 127.0.0.1:<port>`，Origin 为控制面同源）通过 `/api`信任栅栏（`dsh web` 是 `--profile web` 的硬别名）。
+- **选定** `dsh --profile web --host 127.0.0.1 --port <port> --trusted-host 127.0.0.1:<port>`：官方装配已含 API 面 + 前端 + 信任栅栏 + 端口覆盖；`--trusted-host` 保证经控制面反代到达的浏览器请求（Host=127.0.0.1:<port>、Origin 同源）通过 `/api` 信任栅栏（`dsh web` 是 `--profile web` 硬别名；`--host 0.0.0.0` 被 dsh 拒绝）。
+- **被否**：自建 slim profile（v2 `dsh-control` patch stack + glue 插件）——让控制面持有宿主组装权威并需外发 glue 插件；理由：v4 界面 = dsh 官方前端源码复用，进程形态收敛为官方命令。
 
 ### 2.2 端口占用重试（port+1）：固定端口 + 确定性退让
-
-web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定起始端口（本地默认 17510，桌面经 `DSH_CHAMBER_DSH_PORT_BASE` 覆盖、gateway 经 `--dsh-port`/`DSH_GATEWAY_DSH_PORT`；端口不可在 `POST /api/connections` 中显式指定——body仅收 kind/label/accentColor，见 04 §3）后：
-
-```
-尝试端口 P：
-  spawn 后就绪探测（TCP + 统一身份探针，§3.2）成功 → 使用 P
-  TCP 通但身份探针失败 → 端口被无关服务占用（协议不匹配）→ 杀子进程，
-    按 P+1 重试（至多 N 次，如 5 次——MAX_SPAWN_ATTEMPTS）→ 全部失败 → 显式报错（含启动输出）
-  spawn 立即退出 / 启动超时 → 启动失败（fail-loud，附诊断）
-每次重试必须同时更新 --port 与 --trusted-host（两者恒一致：127.0.0.1:<P>）
-```
-
-- 与 v2 的"port 0 随机 + stdout 读端口"相比，固定起点 + P+1 有界退让的代价是占用冲突，收益是可预测范围（`dshPort` 进入 pid ledger 与 live PlaneHandle 投影；不写 catalog），便于防火墙/隧道诊断。
-- **TOCTOU 说明**：spawn 前不做 `net.listen(0)` 预占（释放到绑定之间仍有竞态）；冲突一律以"就绪探测失败 → P+1"的后验方式处理，语义确定。
-- **与在跑安装并存**：起始端口只经 `DSH_CHAMBER_DSH_PORT_BASE` 覆盖（缺省 17510，非法值loud 一次后回落），dev/验收实例因此不必与在跑安装的 17510..17514 相撞。
-
-**Rejected alternatives（起始端口覆盖形态）**
-
-- **占用时自动换空闲基址**：把冲突藏起来——"固定起点 + P+1 有界退让"的可预测范围（pid ledger、隧道/防火墙诊断）随之失效，且同一台机上的第二个实例会静默漂到不同端口。拒绝：覆盖必须显式。
-- **配置文件级端口偏移**：为一个只出现在 dev/验收并存的需求新增持久化面与迁移成本。拒绝：env 是一次进程级选择，语义窄且可回滚。
-- **选定**：仅 env 覆盖基址，默认不变；未知/越界值 fail-loud 后回落默认，绝不半生效。
+web profile 的 `--port` 固定（非 0 随机）。起始端口本地默认 17510（桌面 `DSH_CHAMBER_DSH_PORT_BASE`、gateway `--dsh-port`/`DSH_GATEWAY_DSH_PORT`）；`POST /api/connections` body 只收 kind/label/accentColor，不可指定端口（04 §3）。重试：spawn → 就绪探测（TCP + 统一身份探针 §3.2）成功即用 P；TCP 通但身份探针失败 = 端口被无关服务占用 → 杀子进程、按 P+1（至多 `MAX_SPAWN_ATTEMPTS=5` 次）→ 全败显式报错（含启动输出）；spawn 立即退出/启动超时 = 启动失败（fail-loud，附诊断）。每次重试同时更新 `--port` 与 `--trusted-host`（恒一致）。spawn 前不做 `net.listen(0)` 预占（释放到绑定仍有竞态），冲突一律后验处理。复制：`dshPort` 进 pid ledger 与 live PlaneHandle 投影、不写 catalog。
+- **Rejected alternatives（覆盖形态）**：①占用时自动换空闲基址——冲突被藏起、可预测范围失效、第二个实例静默漂端口；②配置文件级端口偏移——为 dev/验收并存新增持久化面与迁移成本；③选定：仅 env 覆盖基址，未知/越界 fail-loud 后回落默认，绝不半生效。
+- **与在跑安装并存**：dev/验收实例经 `DSH_CHAMBER_DSH_PORT_BASE` 错开在跑安装的 17510..17514。
 
 ### 2.3 孤儿回收直接移植参考实现安全模型
-
-参考实现 `managed-process-registry.js` 的安全模型（记录在案 → 重验身份 →仅 owner 死亡才杀）原样移植，差异点：
-
-| 参考实现（被管 agent） | 本设计（dsh web profile 宿主） |
-|---|---|
-| 命令行含 `--port N`，可直接查命令串 | 命令行含 `--profile web --port N`，端口匹配可查命令串 + `lsof -i :port` 监听者 pid |
-| 注册表 `<参考实现状态目录>/managed-agent/<pid>.json` | `<stateDir>/managed-dsh/<pid>.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写，§3.3） |
-| 记录 `{pid, ownerPid, port, binary, runtime, startedAt}` | 记录 `{pid, ownerPid, ownerInstanceId, port, binary, profile, source, startedAt}`（profile 固定 `'web'`，§3.3） |
-
-每进程一个 JSON 文件（按 pid 命名，每实例只写/删自己的文件，零写竞争）。
+参考实现 `managed-process-registry.js` 的安全模型（记录在案 → 重验身份 → 仅 owner 死亡才杀）原样移植；差异：身份 = 命令行含 `--profile web --port N` + `lsof -i :port` 监听者 pid；注册表 `<stateDir>/managed-dsh/<pid>.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写，§3.3）；记录 `{pid, ownerPid, ownerInstanceId, port, binary, profile, source, startedAt}`（profile 固定 `'web'`）。每进程一个 JSON 文件（按 pid 命名，每实例只写/删自己的，零写竞争）。
 
 ### 2.4 健康监控共享失败计数，避免"重连风暴"误触发重启
-
-沿用 v2（移植参考实现 `lifecycle.js`）：
-
-1. **共享一个失败计数**：周期探活与传输触发走同一个 `runHealthCheckCycle`；
-2. **计频节流**：同一失败窗口（15s）内至多计 1 次；探测结果 750ms 缓存 + 单飞行合并；
-3. **进程死亡分支**：子进程已退出时不计数、直接重启；
-4. **任何一次成功即清零计数**。
-
-**不保留**"忙会话宽限"——控制面不消费会话帧（wire 以 vendor 源码为权威），探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（固定小体积 boolean，见 §3.2），健康判定与宿主业务负载及**会话数据量**双向解耦；模型调用繁忙的慢响应由请求侧超时面处理。
+沿用 v2（移植 `lifecycle.js`）：周期探活与传输触发走同一 `runHealthCheckCycle`；同一失败窗口（15s）至多计 1 次；探测结果 750ms 缓存 + 单飞行合并；子进程已退出不计数、直接重启；任何一次成功即清零。**不保留"忙会话宽限"**——控制面不消费会话帧，探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（小体积 boolean，§3.2），健康判定与会话数据量双向解耦；慢响应由请求侧超时面处理。
 
 ### 2.5 instance-id 仲裁（多控制面实例并存）
+控制面首启以 no-follow `O_EXCL` 在状态目录生成 `instance-id`（规范 UUID、0600），完整写入并 fsync 文件与父目录后才返回；读取固定小体积 single-link 普通文件 + UUID 校验（并发首启 loser 对 winner 空/部分 UUID 有界重读，完整长度非法值立即 fail-loud）；构造 local connection 时捕获该身份，pid 记录携带同一 `ownerInstanceId`（不在 spawn 后重读）。各自 spawn 互不干扰：每实例自己的起始端口 + P+1 重试天然错开、记录按 pid 隔离；reaper 不杀活人（owner 存活即永不回收，两实例并发 reaper 安全）；同端口先就绪者占住，后来者按 P+1 或报冲突，不杀进程。
 
-- 控制面首次运行以 no-follow `O_EXCL` 在状态目录生成 `instance-id`（规范 UUID、`0600`），完整写入并 fsync 文件与父目录后才返回；读取固定为小体积有界、single-link 普通文件 + UUID校验。并发首启中 loser 只对 winner 已公开但未写完的空/部分 UUID 有界重读，完整长度的非法值立即 fail-loud。控制面在构造 local connection 时捕获该稳定身份，后续 pid 记录直接携带同一`ownerInstanceId`——不在 spawn 后重新 best-effort 读取。
-- **各自 spawn 互不干扰**：每实例从自己的起始端口（缺省同一起始端口，可配置偏移）拉起 → 固定端口 + P+1 重试天然错开；记录文件按 pid 隔离。
-- **reaper 不杀活人**：owner 仍存活（`process.kill(pid, 0)` 成功）的条目永不回收——两实例同时跑reaper 也安全。
-- **同端口仲裁**：同一起始端口时，先成功就绪者占住端口；后来者探测到`dshPort` 已属于另一活着的托管记录 → 按 P+1 继续重试或报告冲突，**不杀进程**（先注册先托管）。
 ### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09/20/24；四个 host 包）
-
-官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的 host package（四个：client-graph / git-worktree / archive-cleanup（design 24）/ open-in（design 20 §6，注册表标 `localOnly`——只进本地 profile，远端 seed 与 gateway 上传都跳过））：
-
-| loader id | package | 实例内职责 |
-|---|---|---|
-| `client-graph` | `@dsh-chamber/dsh-chamber-seed-client-graph` | 只读暴露该实例的 client module boot graph |
-| `git-worktree` | `@dsh-chamber/dsh-chamber-seed-git-worktree` | 在该实例进程/用户/文件系统内执行受限 Git worktree 领域操作（设计 08） |
-| `archive-cleanup` | `@dsh-chamber/dsh-chamber-seed-archive-cleanup` | 已归档会话内容清理域 `archiveCleanup/{probe,purge}`：实例进程内权威清除归档集（含 subagent 级联），只删不读（设计 24） |
-| `open-in` | `@dsh-chamber/dsh-chamber-seed-open-in` | 本机应用打开域 `openInApp/{probe,apps,icon,open}`：实例进程内权威解析/校验本机应用目录与图标并拉起（设计 20 §6，注册表标 `localOnly`） |
-
-本地托管实例的接线如下：
-
-1. `createControlPlane` 分别接收 `hostGraphPackageSourceDir`、`hostGitWorktreePackageSourceDir`、`hostArchiveCleanupPackageSourceDir`（缺省落到`DEFAULT_HOST_*_PACKAGE_SOURCE_DIR`；open-in 走 `hostOpenInPackageSourceDir`，design 20 §6）；仅当该源 `dist/index.js` 实际存在时，才把 `package.json + dist/index.js`按内容 hash 幂等复制到 `<DSH_HOME>/profiles/web/node_modules/@dsh-chamber/<package>/`。
-2. 控制面只生成**一个** `<stateDir>/dsh-chamber-graph.patch.yml`，`insert` 列表只含本次确有构建产物的 row（部分构建则只有对应行）；全部缺失时不传 `--patch`，保持原生 web profile 基线。
-3. 复制先于 overlay 写入；已声明构建产物却缺另一必需文件属打包损坏，启动 fail-loud；文件与 overlay都原子写入并保持 0600。
-4. seed thunk 在**每次 spawn（含自动重启）之前**重新求值：`dsh plugin` 使 pnpm 重链并裁掉extraneous host 包后，下次 spawn 自动补回；overlay 按当时实际可用产物重建，不留悬空 row。用户触发的「重启 dsh」（design 18 §3.6 项 8）走同一 spawn 路径：插件挂载在每次 dsh boot 时重新确定，重启 dsh 即刷新、无需重启壳。
-
-这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`、`gitWorktree`、`archiveCleanup` 或 `openInApp` 的领域结果，只做受控文件分发与 loader 挂载。
+官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的 host package（loader id → package → 职责，领域语义见对应 design）：`client-graph`→`@dsh-chamber/dsh-chamber-seed-client-graph`（只读暴露 client module boot graph）；`git-worktree`→`seed-git-worktree`（实例内受限 Git worktree 操作，设计 08）；`archive-cleanup`→`seed-archive-cleanup`（`archiveCleanup/{probe,purge}` 清理归档会话内容，只删不读，设计 24）；`open-in`→`seed-open-in`（`openInApp/{probe,apps,icon,open}` 本机应用打开域，注册表标 `localOnly`——只进本地 profile，远端 seed 与 gateway 上传跳过，设计 20 §6）。
+本地托管实例接线（顺序固定）：① `createControlPlane` 接收各 `host*PackageSourceDir`（缺省 `DEFAULT_HOST_*_PACKAGE_SOURCE_DIR`；open-in 单独 seam），仅当该源 `dist/index.js` 存在时把 `package.json + dist/index.js` 按内容 hash 幂等复制到 `<DSH_HOME>/profiles/web/node_modules/@dsh-chamber/<package>/`；② 生成**一个** `<stateDir>/dsh-chamber-graph.patch.yml`，`insert` 只含本次确有产物的 row，全缺时不传 `--patch`（保持原生 web profile 基线）；③ 复制先于 overlay，声明产物却缺必需文件属打包损坏、启动 fail-loud，文件与 overlay 原子写 + 0600；④ seed thunk 在每次 spawn（含自动重启）前重新求值：`dsh plugin` 重链裁掉 extraneous host 包后下次 spawn 自动补回；用户「重启 dsh」（design 18 §3.6 项 8）走同一 spawn 路径。这不是旧 slim profile/业务 patch stack 的回归：控制面不知道各域结果，只做受控文件分发与 loader 挂载。
 
 ---
 
@@ -332,43 +273,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 远程服务器的 dsh 实例以 systemd 单元持久化（loopback 固定端口；无需 web 前端——UI 由本地复用前端经隧道提供）：
 
 ```ini
-[Unit]
-Description=dsh web profile (remote instance)
-After=network.target
-
-[Service]
-Type=simple
-# 专用非 root 服务账号（示例；建号须带家目录，见下方「目录归属」）。
-# dsh 默认把 home 放在运行账号自己的 ~/.dsh，无需设置 DSH_HOME。
-User=dsh
-Group=dsh
-# --port 与 --trusted-host 恒一致（127.0.0.1:<P>）：浏览器信任栅栏只认
-# chamber 隧道转发来的 Host 头（`dsh web` 是 `--profile web` 的硬别名）。
-# 将 <DSH_PATH> 换成远程机上 `which dsh` 的路径 —— npm 全局
-# 安装在用户 npm prefix 下（如 /usr/local/bin/dsh），不是 /usr/bin。
-ExecStart=<DSH_PATH> --profile web --host 127.0.0.1 --port 30800 --trusted-host 127.0.0.1:30800
-Restart=on-failure
-RestartSec=3
-# dsh 是 node 脚本（shebang `#!/usr/bin/env node`），systemd 默认 PATH 不含
-# nvm 的 node → 服务 status=127 崩溃重启（"/usr/bin/env: 'node': No such
-# file or directory"）。将 <NODE_BIN> 换成 `which node` 的目录。注意
-# Environment= 是整行字面赋值（无追加语法），ExecStart 无变量展开——写全路径。
-Environment=PATH=<NODE_BIN>:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=DSH_TELEMETRY_DISABLED=1
-Environment=DSH_PERMISSION_MODE=workspace-write
-# 目录选择交互 pin（与本地 spawn 同款，05 §4）：directory-picker-auto 在
-# SSH 启动标记下解析 browse——远程实例恒以应用内目录对话框服务。不带此
-# 行的远程 darwin/win32 或有显示会话的 linux 宿主会解析 native，此时
-# host.listDirectory 返回 directory-picker/unavailable、新建工作区对话框
-# 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。该标记的
-# 另一处上游消费（浏览器自启 handoff）见 §3.1；第三处（实例侧官方 open-in 应用
-# 解析）虽仍读该标记，但 chamber 不再使用官方宿主行（设计 20 §6）。
-Environment=SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0
-NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
+systemd 单元完整示例（User/Group/PATH/Environment、gateway 单元形态、用户单元与 linger）见 [remote-dsh-instance.md](../../deploy/remote-dsh-instance.md) 与 [deploy-gateway.md](../../deploy/deploy-gateway.md)；硬契约 = `--host 127.0.0.1`、`--port` 与 `--trusted-host` 恒一致、`Environment=PATH=<node-bin-dir>:…` 整行字面赋值。
 ```
 
 目录归属与无 root 形态（完整单元示例见 docs/deploy/remote-dsh-instance.md，与 README「服务器端部署」一致）：

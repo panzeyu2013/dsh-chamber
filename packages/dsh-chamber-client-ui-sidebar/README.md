@@ -416,5 +416,3 @@ session-echo ledger (`packages/dsh-chamber-client-core/src/session-echo.ts`) and
 - The settings-bridge `remoteRuntimeStatusView` view mapping and its
   SettingsBridgeKey coupling stay in settings-bridge; nothing in this face
   imports settings-bridge.
-
-Test: `node ./scripts/test.mjs`.

@@ -6,7 +6,6 @@
 
 - 目标形态：Windows 11 x64（打包态 NSIS）；macOS/Linux 契约不回退，每次合入保持 mac/linux 全量回归绿。
 - 纪律：① **能力先于开关**——任何 mutation/功能解锁先经 env 门控或后台单测验证，UI 开关最后翻；② **基线先行**——win32 测试 pass/skip 集合与平台门控拒绝码先固化，每个变更的测试变化必须对照基线归因；③ **fail-closed 不撤销**——不可证即保留/拒绝的语义在 Windows 适配中一律维持；④ **妥协即文档**——真实平台事实（§4）写入发布附注，不静默、不伪称等价；⑤ **验证门控不作发布开关**——`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 仅供开发/CI 验证（默认关），发布版用户自行开启不受支持（路径未经真实 Windows 实机验证）。
-- 能力分期（ID 为能力名，不代表进度）：M1 = §2 生命周期契约；M2a = §3 运行时管理后台能力；M2b = UI/门控翻转（纪律①门禁）；M3 = 桌面实机全链（托盘/关窗/通知/唤醒/updater）+ 打包闭包修复；M4 = §4 决策解锁；M5 = 发布面（§7）。
 
 ## 2. 平台适配契约：进程探测与终止
 
@@ -34,12 +33,9 @@
 
 ## 4. 桌面打包态与系统集成
 
-- **打包态身份**：`app.setAppUserModelId('com.dshchamber.desktop')`（win32）——通知/Action Center 归属与任务栏分组的前提。
-- **托盘与 preload**（Electron 归档面：preload 在 `packages/desktop/electron/preload.cts`）：托盘图标候选收敛为只留真实打包资源（两条永不随包的候选路径为跨平台既有边界）；preload 缺失 loud 失败，不静默回退源码 `.cts`。
-- **登录自启**：win32 走 `app.setLoginItemSettings({ openAtLogin, name: WINDOWS_APP_USER_MODEL_ID })`（Electron 43.4.0 在 win32 以该 name 写 HKCU `...\Run`，当前用户、无需管理员；`getLoginItemSettings` 的读回键同为该 name，故读回校验一致——传其它 name 会让读回永久失败），`supported` 恒 true；NSIS 卸载段 include（`packages/desktop/scripts/nsis-uninstall-cleanup.nsh`）清 `dsh-chamber`、`@dsh-chamber/desktop` 与 AUMID `com.dshchamber.desktop` 三个 Run 值（前两个覆盖旧版本/双 flavor 残留）。
-- **深链**：打包态走无参数 `setAsDefaultProtocolClient` 注册（dev 不注册）；`build.protocols` 键已声明（name `dsh-chamber` / scheme `dsh-chamber`），NSIS 是否写 `HKCU\Software\Classes` 以 runner 实证为准（复活前置）。
-- **open-in 本地路径**：本地实例（`instanceId='local'`）走 `validateLocalPath`（盘符/UNC），远程实例走 POSIX 口径 `validateRemotePath`。
-- **SSH 密码门**：win32 无密码字段；密码认证被拒并给出主路径引导（密钥 / ssh-agent / Pageant）。一键免密（密钥推送）UI 为后续独立特性。
+- **打包态身份**：`app.setAppUserModelId('com.dshchamber.desktop')`（通知/Action Center/任务栏分组前提）；preload 缺失 loud 失败。
+- **登录自启**：`app.setLoginItemSettings({openAtLogin, name: AUMID})`（读回键同名）；NSIS 卸载段 include 清 `dsh-chamber`/`@dsh-chamber/desktop`/AUMID 三个 Run 值。
+- **深链/路径/SSH 密码**：打包态无参 `setAsDefaultProtocolClient`（dev 不注册）；本地 open-in 走盘符/UNC 校验、远程走 POSIX 口径；win32 无密码字段，密码认证拒绝并引导密钥/agent/Pageant。
 - **CI 无交互面**：契约腿 + 可选 Playwright 冒烟；人工矩阵只剩 OS 集成面。
 
 ## 5. 妥协点（发布附注，唯一权威）
@@ -57,52 +53,22 @@
 
 | 审计标识 | 事项 | 现行处置 |
 |---|---|---|
-| C1/C2 | 0700/uid 目录权限 | 不作让步：icacls 收紧 + 启动验证（win-acl.ts） |
-| C3 | 目录 fsync | 平台事实（F2）：NTFS journal + 文件级 fsync + journal 重放 |
-| C4 | 只读树删除 | 决策门：win32-only readonly-rm 测试定是否需清属性（runner 裁决） |
-| C5 | 目录 rename | rename-retry + journal 续作 + 惰性删除（残余 F7） |
-| C6/C7/C10 | 信号/双段/grace | 平台事实（F1）：硬终止 + 事务恢复 |
-| C8 | 身份弱化 | 不作让步：PowerShell CIM 命令行/PPID 身份（win-probes） |
-| C9 | 安装后代回收 | 不作让步：taskkill /T /F + 残余 CIM 清扫（supervisor 接线） |
-| C11 | Defender 慢 | 接受（F3）+ 缓解：进度行/文档；MSIX 评估 |
-| C12 | 原生预构建 | 核查项：koffi 官方 win32-x64 预构建随包免编译器；其余逐个核对 |
-| C13 | 验证强度 | 注入矩阵与 POSIX 对齐 |
-| C14 | gateway win 只读 | 范围决策（F4），保持 |
-| C15 | SSH 密码 | 产品增强：win32 门消息引导 keys/Pageant；密码字段隐藏/一键免密 UI = 后续特性 |
-| C16 | 明文回退 | win32 不作让步：safeStorage-only；拒绝落盘，store 内存驻留 |
-| C17 | 深链 | 打包态运行时注册已解锁；NSIS protocols 注册行为以 runner 实证为准 |
-| C18 | 便携无通知 | 行业惯例（F5）；打包态 AUMID 已接 |
-| C19 | 卸载残留 | NSIS include 卸载段清 Run 键（打包验证以 runner 为准） |
-| C20 | safeStorage=DPAPI | 平台事实：Electron 封装即标准做法 |
-| C21 | 签名 | 资源决策（F6）：Azure Trusted Signing 评估 |
-| C22 | CI 无交互面 | 契约腿 + Playwright 冒烟（可选）；人工矩阵仅剩 OS 集成面 |
-| C23 | 图标资产 | 资源实现（打包项） |
+| C1/C2 | 0700/uid 目录权限 | icacls 收紧 + 启动验证（win-acl.ts），不作让步 |
+| C3 / C6-C7 / C10 | fsync、信号、双段、grace | 平台事实（F2/F1）：NTFS journal + 文件级 fsync + journal 重放；硬终止 + 事务恢复 |
+| C4 / C5 / C7 | 只读树删除、目录 rename、残余 | 决策门 + rename-retry + journal 续作 + 惰性删除（残余 F7） |
+| C8 / C9 | 身份弱化、安装后代回收 | 不作让步：PowerShell CIM 身份；taskkill /T /F + 残余 CIM 清扫 |
+| C11-C13 / C16-C20 | Defender 慢、原生预构建、验证强度、明文回退、深链、便携、卸载、DPAPI | 见 F3/F5/F6 与矩阵；win32 safeStorage-only（C16）；其余逐项按 §5/§6 记录 |
+| C14 / C15 / C21-C23 | gateway 只读、SSH 密码、签名、CI、图标 | 范围决策 F4；密码引导 keys/Pageant；签名候选中待裁决；资源/打包项 |
 
 ## 6. 复活验收矩阵（Windows 11 x64 打包态）
 
-| 面 | 验收点 |
-|---|---|
-| 生命周期 | 冷启动 → 本地实例 ready；重启/退出全链；崩溃后 reaper（win 腿）回收或 fail-closed |
-| 托盘/窗口 | 托盘出现与 tooltip；hide-to-tray/quit 两设置；退出确认；无窗常驻恢复 |
-| 通知 | Action Center 显示/点击聚焦/打开（AppUserModelID 验证）；dev/便携不承诺 |
-| 唤醒 | 睡眠唤醒即时重探重连 |
-| 运行时（env 门控态） | 安装（Defender 计时）→ 切换 → 探针失败 → 回滚 → 数据恢复；只读投影对照 |
-| SSH | 密钥隧道 + exec；Pageant/agent；win32 无密码字段 |
-| updater | stable/beta 双通道、确认下载、退出安装（未签名 SmartScreen） |
-| 权限 | icacls 收紧后 userData/secret 文件 ACL 查询结果符合 C1/C2 预期；升级路径不破坏 |
-| 深链 | URL 含 `&`/中文等特殊字符冷/热启动 |
-| 杂项 | loopback 端口无防火墙弹窗；双机对照 windows-2022（契约）vs Win11（交互） |
+复活验收矩阵按 [gui-acceptance-checklist](../../checklists/acceptance/gui-acceptance-checklist.md) 与 [release-checklist](../../checklists/release/release-checklist.md) 执行。
 
 ## 7. 复活风险与发布面
 
-- 风险：上游 dsh win32-x64 实际不可跑（最小复现；若阻断则降级为「Windows 仅远程连接端」）；electron-builder NSIS 不写协议注册表（运行时 no-args 注册已备，必要时补 NSIS include）；原生依赖预构建不随包（koffi 等，逐个核对或随包预构建）；icacls 收紧破坏升级路径（只作用于 `<userData>` 自有目录，升级实测入矩阵）；Defender 计时不可接受（文档 + 排除建议 + MSIX 评估）；windows-2022 与 Win11 行为差异（契约腿在 runner，交互矩阵在真机双机对照）。
-- 签名路径候选：A = Azure Trusted Signing（云签名、CI 免密钥管理、成本低）；B = OV/EV 自购证书；C = 维持未签名（SmartScreen 提示 + 发布说明明示）——首个正式 Windows 发布前决策。
-- 发布形态：NSIS 为主；Defender 首装体验/分发成为用户痛点时评估 MSIX/AppX 附加形态（系统级安装事务、非逐文件实扫、深链/更新通道约束需重审计）。
-- 演练门禁（按 [release-checklist.md](../../checklists/release/release-checklist.md)）：dry-run 全链 → 实机 GitHub Release 安装 → stable/beta 更新全链；未签名产物在演练中同步记录 SmartScreen 首屏路径。
+- 风险：上游 win32-x64 可跑性、NSIS 协议注册、原生预构建、icacls 升级路径、Defender 计时、双机行为差异；签名候选 = Azure Trusted Signing / OV-EV / 未签名（首发前裁决）。
+- 发布形态：NSIS 为主（MSIX 按痛点评估）；演练门禁按 [release-checklist](../../checklists/release/release-checklist.md)（dry-run → 实机安装 → stable/beta 更新全链）。
 
 ## 相关文档
 
-- [electron-frozen.md](../../progress/electron-frozen.md)（冻结范围与复活清单）
-- [22-linux-desktop.md](./22-linux-desktop.md)（Linux 归档腿）
-- [16-vscode-deeplink.md](../desktop/16-vscode-deeplink.md)（深链契约）、[11-auto-update.md](../archive/11-auto-update.md)（更新通道模型，归档参考）
-- [18-dsh-runtime-version.md](../runtime/18-dsh-runtime-version.md)（运行时管理核心）
+- [electron-frozen.md](../../progress/electron-frozen.md)（冻结/复活）、[22](./22-linux-desktop.md)（Linux 归档腿）、[16](../desktop/16-vscode-deeplink.md)（深链）、[11](./11-auto-update.md)（更新通道）、[18](../runtime/18-dsh-runtime-version.md)（运行时管理核心）。

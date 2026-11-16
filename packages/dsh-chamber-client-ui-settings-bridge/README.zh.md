@@ -104,5 +104,3 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 持有 `dsh-chamber.settings.bridge` 字典命名空间（zh 键源；
 `src/locales.ts`）；为内嵌连接分区 bind `dsh-chamber.settings.connections`
 命名空间。
-
-测试：`node ./scripts/test.mjs`。

@@ -141,5 +141,3 @@ from retention reclaim); closing the panel releases both guarantees.
 Owns the `dsh-chamber.settings.bridge` dictionary namespace (zh key source;
 `src/locales.ts`); binds the `dsh-chamber.settings.connections` namespace for
 the embedded connections section.
-
-Test: `node ./scripts/test.mjs`.

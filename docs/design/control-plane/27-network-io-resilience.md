@@ -103,14 +103,14 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 | `packages/desktop/transport-identity` | raw id ⇄ connectionId 的唯一换算 + 两个 seam 适配器（失败驱动复探/busy 双向跨边界） |
 | `packages/desktop/transport-manager` | health 子态、two-failure down、success clear、resume/online、`reverifyAll`、bind-race 重分配、5xx transient |
 | `packages/desktop/transport-provider` | `link` 投影与 `failureKind` |
-| `packages/desktop/ssh-provider/gateway-provider` | failureKind 分类；SSH `ConnectTimeout`/`ExitOnForwardFailure` |
+| `packages/desktop/ssh-provider`、`packages/desktop/gateway-provider` | failureKind 分类；SSH `ConnectTimeout`/`ExitOnForwardFailure` |
 | `packages/desktop/host-assembly` | 装配本体（transport 订阅体已抽成下一行的成对模块）；不 re-register |
 | `packages/desktop/host-transport-subscriptions` | registration key（`onStatusChanged`/`onVerified` 成对）；health-only `setInstanceTransportHealth`；不 re-register |
 | `packages/desktop/transport-registration` | 纯 registration key/fingerprint/decision 单测，锁住 health-only 边沿 |
-| `packages/control-plane/instance-proxy` | health 记录/快速失败；`setInstanceTransportHealth`；每连接 keep-alive 池与生命周期销毁；`isLinkBusy`（≥256KiB 上传窗口 + 2s 下游字节窗口）；上游失败缝（connectionId） |
-| `packages/control-plane/http-limits` | Node 31min 死手/5s 检查周期、应用层 10s 头窗、192 软上限 raw 503/256 硬帽 |
-| `packages/control-plane/proxy-forward` | 上传总预算/IDLE（预算取值来自 wire 契约）、buffered/streaming 双形态（8MiB 声明阈值）、每 owner agent 池、body-transfer 信号、after-body details（只对真正发过体的请求） |
-| `packages/dsh-chamber-wire/net-budget` | 上传/头窗/mutation 预算的唯一推导 + 排序不变量 |
+| `packages/control-plane/src/instance-proxy` | health 记录/快速失败；`setInstanceTransportHealth`；每连接 keep-alive 池与生命周期销毁；`isLinkBusy`（≥256KiB 上传窗口 + 2s 下游字节窗口）；上游失败缝（connectionId） |
+| `packages/control-plane/src/http-limits` | Node 31min 死手/5s 检查周期、应用层 10s 头窗、192 软上限 raw 503/256 硬帽 |
+| `packages/control-plane/src/proxy-forward` | 上传总预算/IDLE（预算取值来自 wire 契约）、buffered/streaming 双形态（8MiB 声明阈值）、每 owner agent 池、body-transfer 信号、after-body details（只对真正发过体的请求） |
+| `packages/dsh-chamber-wire/src/net-budget` | 上传/头窗/mutation 预算的唯一推导 + 排序不变量 |
 | `packages/dsh-chamber-client-core` | page-channel link selector/epoch 唤醒/等待/错峰释放；`link-projection`（ready/epoch 投影的唯一解读）；`MutationOutcomeUnknownError`/`ResponseLostError` |
 | `packages/dsh-client-connection`（vendor fork） | `[patch-mod]`：502/504 + after-body 的官方 unary 分类文案 |
 | `packages/dsh-api-gateway` | closed socket 绕过 rebuild 窗；**证据型** denied 到期一次延迟替换（lane 拒绝不排期）；内部 carrier 事件（不发 wire） |
@@ -170,16 +170,7 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 
 ## 7. 测试与门禁
 
-- `desktop/transport-health`：link reducer 单测（suspect/down/可达失败 10s 节奏/NaN/恢复）。
-- `desktop`：suspect 不累积可达失败、两次 down + 确认窗（测试用短窗 override；生产 30s 由 LINK_POLICY 字面量钉住）、resume/online 复验、reverifyAll 与 online 波次 120ms 错峰、**bind 重分配**（stderr 命中 → 换端口、retryAttempt 不增、第 4 次回退阶梯）、探针复合预算（ready 与 connect 两处 + provider 35s/5s 断言）、**失败驱动强制探针**（节流/仅 healthy/避开 busy/非 ready no-op）、**心跳两级**（ready 后 10s 观察窗 → 稳定档；相邻两拍 180–700ms 判别两档）、**探针取消与链续接**（期限到点的 abort 发生在相位仍 ready 时；in-flight tick 之后心跳链继续）、grace 重开、busy 抑制、linkEpoch 三点、SSH argv、registration key 对象签名/health-only 决策/分隔符碰撞、auth 恢复决策（纯函数）、驱动器（注入时钟的节流/延迟/取消）与恢复守卫（五轴 fail-closed）、口令会话 proof 在瞬时失败后恢复。**传输层加固**：`terminalRetryable` 终态慢重探（正/负控/瞬时失败恢复/复探期投影保持/复探期 auth/hostkey 转类/断开零 spawn/direct 不延展）、post-KEX 就绪延展（一次/延展中转 ready/child 退出不延展）、慢探 ±20% 抖动日志与 NaN 兜底、gateway 429 `Retry-After`（900s/30s 下限/HTTP-date/非法值/stale 不武装）、seed 批量 cat（all-or-fallback + 32 路径上限 + 同长失配回退）、action-hint/badge 在 connecting 保持红态提示。
-- `dsh-stream-state`：流表/Swift parity 保持不变（本设计不改其表）；新增的 `REBUILD_REASON_KIND` + `isEvidenceBackedRebuild`（§4）由 `test/carrier/carrier-lifecycle.test.ts` 的逐 reason 分类用例与 tsc 的穷尽 Record 双重钉住。
-- `control-plane`：suspect 转发（含 suspect 下新订阅可成立）/down 503 与既有同形/health 不 revoke、body-less 与未完成体都不带 after-body、上传 idle 与预算（含 streaming 的声明长度透传、首 chunk 早于 end、`finish` 后才 arm 头窗、abort 清理）、wire 预算排序不变量（buffered/streaming 两形态）、bulk 上传的 busy 事实（≥256KiB 置位、小体不置位、结束即清）、**上游失败缝**（socket 错误、mid-body RST 与「头已到但体停流」通知一次；完整 HTTP 应答与客户端 abort 从不通知）、**下游字节的 busy 窗口**（流中为真、窗口到期为假）、**每连接池真实 socket 复用/销毁**、**page-channel 下行并入同一窗口**（每 chunk 一次、带 connectionId）。
-- `renderer`：page-channel 既有阶梯/握手/信用测试 + link epoch/初始 park/错峰释放（含 18 条 > 16 槽的轮转与「epoch 不清阶梯」）。
-- `dsh-client-connection`（vendor fork）：502/504 + after-body ⇒「可能已生效」分类文案；无 mark/非 JSON/超长体（边读边判 4KiB 上限）保持原 transport 文案。
-- `desktop/transport-identity`：raw id ⇄ connectionId 的换算 + 两个 seam 适配器（manager ⇄ plane 双向，含连字符 id 与畸形 id）。
-- `desktop/gateway-provider`：abort 的探测归类（`boundedGatewayRequest` → network、`timedOut=false`；`verifyGatewayRuntimeIdentity` → 非终态 network failure）。
-- `dsh-api-gateway`：mux self-heal 用例（非 OPEN bypass + `carrier-rebuild-bypass` 取证 + **lane 拒绝不排期（300s 虚拟时钟回归）** + **证据型拒绝仍在窗口边缘替换一次（60s 注入时钟）** + 防抖）。
-- **veth+netem 真实链路验收**（`pnpm run acceptance:netem`，root+CAP_NET_ADMIN，不入 CI，13 项断言 + opt-in 上传 3 项）：300ms RTT+2% 丢包下 ready、never down、heals；黑洞 → suspect → down 且相位在宽限期内保持 ready；宽限期内强制探针恢复**且相位历史无 connecting**；超宽限期离 ready 且**距观测到的 down 边沿 ≥ 2.5s**（实测 3005ms vs grace 3000ms）；恢复后重连成功；`reverifyAll`（OS resume/online）在 ready+down 上 **<1.5s** 恢复（周期节奏为 5s，故只可能来自强制 seam）；**opt-in `NETEM_BULK_UPLOAD=1`**：20MB@2mbit 经真实实例代理完成、busy 窗口观测为真、上传期间链路从不判 down（manager 的 `linkBusy` 即生产接线）。
+测试面与门禁成员见 [gate-surfaces.json](../../../scripts/gates/registry/gate-surfaces.json) 与 [release-checklist](../../checklists/release/release-checklist.md)；本文不重复枚举。
 
 ## 8. Rejected alternatives
 

@@ -232,11 +232,4 @@ P(instance) = B₀ ∪ S ∪ F
 
 ## 9. 验证与测试矩阵
 
-- B/C：`test:connections`（投影/门控/结果分类）、`typecheck:connections`、`verify:i18n`（仅 README 对）；共享模块：`test:sidebar` + `test:settings-bridge`（随迁/拆 split/清单同步；renderer-shell 无迁移项）；模型层（纯 node 无依赖）：后端分派表（含不支持组合）与 `pollGatewayReady` 用例。
-- **受保护集合矩阵（§6.11；纯函数，本地与 gateway 双跑）**：读面 `protected` 判定（name ∈ P ⇒ protected）；来源可信性（解析器矛盾 ⇒ 拒来源；树枚举不要求版本事实，空目录树可作 F）；内建锚仅活动运行时与内建线同版时使用（`shouldPreferPinnedRuntimeLockfile`；env 覆盖兜底仅自身解析失败时生效，`'user'` 不享受）；B₀ 与 live bundles 分离；P 不可派生的降级（行照投、protected 全 false）；路径/registry 值判据（`file:`/`link:`/相对/绝对/`~/`/`C:\` = materialize；`~1.2.0`/`^`/`>=`/`1.x`/dist-tag/workspace/npm 别名/git·url = registry）。
-- **读面投影**：`rows` 三端形状（role/protected）+ 本地 `localPluginList` 行集 = 依赖表（`dependencies: {}` ⇒ 空行集；自己声明的组合/播种名仍是行，role/保护位逐一断言）+ 掩码在 `dependencies` 与 `rows[].spec` 两通道一致 + wire 孪生字段集与行类型（producer↔preload↔renderer，C14 判据含字段名 + role 字面量并集负例）+ rows 缺失按显式空投影（不回退、不列行）+ 受保护行与 bundle 层行均保持状态格中性。
-- **上游保鲜门 C11–C14**：`scripts/upstream/verify/plugin-protection-gate.test.mjs`（真实仓库正向断言 + 改坏派生来源/契约/注册表/镜像的负例），随 `pnpm run test:upgrade-tools` 进 CI。
-- gateway 读面/动作面子矩阵：`GET /chamber/plugins/installed` 的 200/404/500/405 与投影形状（`packages/gateway/test/chamber-surface/chamber-installed.test.ts`）、掩码两通道、`profile_corrupt` 诚实投影、停机实例照常 200/404；`POST /chamber/runtime/start` 停机态门 + 恢复门不被绕过 + 202/poll + 失败诚实。
-- 恢复面：start 闭环（停机 → start → ready）、`profile_corrupt` 诚实投影 + operator runbook、故障注入（坏插件 boot 失败 → restart-exhausted → start 恢复）。
-- desktop：gateway-provider/plugin-sync（上传 + 取消 no-op + SPKI/`--no-auth`/隧道 Host 四态）、ipc-surface-mirror/golden + main handler 清单、`gateway_plugin_sync` 失败显式化；ssh 已安装列表只读投影单测。
-- 实机门禁（发布前）：真实 gateway + 打包 desktop 全闭环、TLS+SPKI、多桌面、registry 实装（传递依赖网络 + lifecycle scripts 实测行为）、start 恢复、故障注入；scripts/env 实测结果回调 §6.7 纪律。
+验证与测试矩阵的成员/落位以 [gate-surfaces.json](../../../scripts/gates/registry/gate-surfaces.json) 与 [release-checklist](../../checklists/release/release-checklist.md) 为准；上游保鲜门 C11–C14 见 [upstream-touchpoints.md](../../checklists/upgrade/upstream-touchpoints.md) §6。

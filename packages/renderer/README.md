@@ -12,4 +12,4 @@
 
 ## 构建与检查
 
-`pnpm run build:renderer`：gen-typert-remotes → vite build → gen-boot-manifest → `check-chunk-budgets` → vendor 补丁校验（产物 `packages/desktop/dist/web`）。测试：`pnpm run test:renderer-shell`。
+`pnpm run build:renderer`：gen-typert-remotes → vite build → gen-boot-manifest → `check-chunk-budgets` → vendor 补丁校验（产物 `packages/desktop/dist/web`）。

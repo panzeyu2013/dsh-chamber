@@ -44,14 +44,7 @@
 
 「客户端」（`__general`）在「运行」与「通知」组之间是「会话待办区」组（D1；交互与派生契约见 [06](./06-sidebar-enhancements.md) §8）：主开关（无边框披露行）+ 展开后三类事件开关（会话完成时 / 代理提问时 / 审批请求时——与「通知」组事件开关共用同一组文案与事件行视觉）。两类事件开关**措辞统一**（不用「已完成未读的会话 / 等待你回答的会话 / 等待你批准的会话」等长句）；待办区主开关与未读角标开关下不渲染说明行（开关标题自明）；事件行勾选框紧跟所属选项文字、宽布局下列间以竖分隔线分割（窄窗降列时无竖线）。对应 chamber 全局设置嵌套块：
 
-```ts
-ChamberSettings.sessionTodo: {
-  enabled: boolean      // 默认 true（被动呈现，空时零占用）
-  onComplete: boolean   // 默认 true
-  onAsk: boolean        // 默认 true（pending 'question'）
-  onRequest: boolean    // 默认 true（pending 'approval' | 'plan-review'）
-}
-```
+`ChamberSettings.sessionTodo = { enabled=true, onComplete=true, onAsk=true, onRequest=true }`（默认值即契约）；类型/校验单源 = `packages/desktop/chamber-settings.ts`，三处镜像 = `preload.cts` / `renderer/src/global.d.ts` / settings-bridge 助手 `session-todo-settings.ts`。
 
 - 持久化：主进程 `<userData>/chamber-settings.json`（`chamber-settings.ts`：类型/默认/白名单/嵌套归一与损坏校验/`validatePatch` 同 notifications 纪律；`shell-core.ts` `applySettingsPatch` 嵌套 deep-merge，绝不全组替换）；
 - 类型镜像三处：`desktop/chamber-settings.ts`（store 权威）、`desktop/electron/preload.cts`（归档面）、`renderer/src/global.d.ts`（preload↔renderer 由 `test/ipc/ipc-surface-mirror.test.ts` 守护，含嵌套类型签名比对；desktop store 为手工镜像）；
@@ -66,7 +59,6 @@ ChamberSettings.sessionTodo: {
 
 **数据**：常驻事实的唯一来源是页面级 `residentBridge`（`packages/dsh-chamber-client-core/src/resident-store.ts#residentBridge`）：`ResidentSnapshot { sources: ResidentSourceFact[]; counts: {mounted, resident, active, released}; lastRelease? }`，`ResidentSourceFact { id, label, state, hiddenSinceMs?, domNodes?, autoPrewarmed?, lastActiveAt?, settingsTarget? }`，`ResidentShellState = 'active'|'resident'|'booting'|'failed'|'released'`；`sources` = 挂载壳（挂载序）+ 已释放但仍注册的 `released` 行（末尾）；`hiddenSinceMs`/`lastActiveAt` 只在 `resident` 壳上携带（屏上/未 settle/失败/已释放壳不带隐藏时长）；`settingsTarget` 只标设置面当前目标（该行显示提示、不提供释放按钮）。已释放行 = 曾挂载且已释放的来源（含系统首屏收割后的释放），重新挂载即回到挂载行，仅来源从注册表删除才彻底出表（标签缺失的跳过）。`publish` 同引用守卫、listener 抛错隔离、**不落盘、无 wire**（页面级内存 store，不新增 page-channel/HTTP 通道）。释放请求通道 `requestRelease`/`onReleaseRequest` 与页面内刷新通道 `requestRefresh`/`onRefresh`（面板打开补一帧）同样只在页面内；执行端仍是 App（唯一拆除入口）。能力差异：**系统内存快照两 flavor 同源**（D4 的 Node 实现由 Electron main 与 Swift sidecar 共用，经同一 `settings.get` 应答）；**页面 JS 堆/进程内存近似读数仅 Electron**（`performance.memory`），Swift 显示「不可得」；**每壳字节两 flavor 皆不可得**（单 renderer 架构）。
 
-**验证**：`test:settings-bridge`（状态文案/时长与字节格式化/禁用条件/arm 逻辑/纯投影；`debug-mode-gate` 的 `debugOnlySectionsVisible` 真值表——仅「已水合 + 调试模式打开」为真、其余三行为假；`resident-panel-model` 的挂载/顺序锁——`GeneralView` 中 `<ResidentPanel>` 紧跟 `<UpdateSection>` 之后且受同一门控）、`test:client-core`（`residentBridge` 单例、同引用与订阅/刷新/释放监听的抛错隔离、订阅计数）、`test:renderer-shell`（`resident-policy` 压力按档位连续判定 + `resident-snapshot` 快照纯构建器（含 released/settingsTarget 行与隐藏事实门控）+ `resident-wiring` 源码接线锁（含面板目标提示/刷新/显示时钟接线））、`verify:i18n`（zh 键集权威 + en 同键集，命名 `generalResident*`）、`verify-md-links`；面板挂载时订阅、关闭调试模式即卸载并取消订阅、无轮询、无新 IPC 的源文本锁；手动释放后该项转「已释放」且后台槽不被立即重 boot（抑制事实）为组件级/真机判据。
 
 **Rejected alternatives**：① CSS 隐藏（`display:none`）常驻挂载——`residentBridge` 订阅、DOM 节点数估读与 1s 显示时钟都随挂载存在，隐藏只把测量成本藏起来，与「面板关闭时快照不估读 DOM 节点」的预算相悖；② 以宿主回读 `debugRuntime.inspectable` 作开启依据——工程上等于「用户关了但宿主撤销未确认」时仍保留诊断面，而这件事实的面是调试模式事实卡；③ 常设只读组（不挂门）——每次进设置页都付订阅/采集成本，且「释放 UI」是诊断性手动控制而非每个用户都要的设置项；④ 保留原位置（「运行」组之后、「会话待办区」之前）——位置按用户裁决改为「更新」组的下邻（紧贴「调试模式」行，开关与面板相邻使因果可见），并作为最后一个只读组不打断设置组序列。
 
@@ -97,9 +89,8 @@ ChamberSettings.sessionTodo: {
 
 ## 5. i18n 与验证门
 
-- **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（客户端页文案，zh/en；`verify:i18n` 必须通过）。
-- **测试**：`test:settings-bridge`（`__general` 入口渲染/active 解析/固定项集合/壳装配隔离不变式/每实例面注册表与完整桥接/`cell-dispatch`（槽单元派发：胜出、fallback、占用但无胜出者的死单元、未声明）/`onboarding`（协调器真值表：blank 或缺席才活跃、有序取第一个未完成、完成集推进）/`update-gate`（检查按钮相位门）/会话待办区与通知设置纯函数）；`test:connections`（plugin-diff 等）；`typecheck:settings-bridge`、`typecheck:connections`、`build:renderer`。（源码文本锁不在正式测试面内。）
-- 验证清单：两个固定入口渲染、chamber 入口在服务器未连接时可用、设置读写经主进程 store、与官方段互不污染、选中来源自己的分节台账渲染（第三方分节与官方分节同形）、i18n 无 DRIFTED。
+- i18n 与判据见 [release-checklist](../../checklists/release/release-checklist.md) 与 `scripts/gates/registry/gate-surfaces.json`；`verify:i18n` 必须通过。
+
 
 ## 6. 关联
 

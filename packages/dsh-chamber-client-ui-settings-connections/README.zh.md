@@ -51,5 +51,3 @@ chamber 连接管理器的应用内管理面——不消费宿主帧，不触碰
 
 持有 `dsh-chamber.settings.connections` 字典命名空间（zh 键源；
 `src/locales.ts`）。
-
-测试：`node ./scripts/test.mjs`。

@@ -41,22 +41,8 @@
 ## 3. 形态与分层
 
 ```text
-┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（复合首屏，08/09 同款）──┐
-│  open-in 头部入口（order -10 = 官方值，会话头部 utilities 槽）→ OpenInButton        │
-│    条目 = buildOpenInViewModel({source, local=机器目录, main})（决策面）             │
-│    机器目录：页级读一次（本机实例的 host 包）；main 池同 id 可用者胜出                 │
-│    local 来源：全量机器目录；ssh 来源：仅 main 池的 remoteCapable；http/畸形：空       │
-│    ≥1 → 官方分体按钮（记住的选择/默认 vscode）+ chevron 下拉（官方唯一形态）          │
-│    门控：桥就绪 ∧ 可用集非空 ∧ 工作区有路径（fail-closed）                             │
-│    下拉打开时 refresh()（窗口 focus 只释放 main 池的 memo，coordinator 单例）          │
-└───────────┬──────────────────────────────────────┬──────────────────────────────────┘
-            │ local 通道：页级机器目录（渲染壳注入 → /api/i/local）│ main 通道：IPC ×2（trustedIpc）
-┌─ 实例进程内 chamber host 包（seed，本地形态）──────────────┐ ┌─ 桌面主进程 packages/desktop/open-in.ts ─┐
-│  @dsh-chamber/dsh-chamber-seed-open-in （fork 自上游宿主半）│ │  OpenInApp 注册表 [vscode]（vscode-only） │
-│  Remote 命名空间 openInApp：probe / apps / icon / open     │ │  vscode：remoteCapable=true；            │
-│  目录探测 + 真实图标抽取 + 绝对目录校验 + 拉起              │ │    available=ctx.vscodeAvailable（注入） │
-│  （实例自身连接/网关栅栏守卫；控制面零执行面）              │ │    open=runVscodeLaunch（深链管线复用）  │
-└───────────────────────────────────────────────────────────┘ └──────────────────────────────────────────┘
+客户端插件（复合首屏）：open-in 头部入口（order -10）→ OpenInButton（机器目录 × main 池视图模型；local 全量机器目录、ssh 仅 remoteCapable、≥1 才渲染，fail-closed）
+IPC（trustedIpc ×2）：local 通道 = 页级机器目录（实例内 host 包 openInApp/*），main 通道 = 桌面主进程 open-in 注册表（仅 vscode；runVscodeLaunch 复用深链管线）
 ```
 
 - **无 vendor 补丁、无 controlled factory 变更、无控制面代码改动**：本地动作在实例进程内由 chamber host 包执行，主进程只保留 VS Code 面（[16-vscode-deeplink.md](./16-vscode-deeplink.md) 形态纪律）。
@@ -90,9 +76,7 @@
 ### 4.3 桌面主进程面
 
 ```text
-dsh-chamber:open-in-apps  ()                                  → { apps: [{id, displayKind, remoteCapable, available}] }
-dsh-chamber:open-in       {appId, instanceId, path, sourceFingerprint} → { ok: true } | { ok: false, error }
-platform: string | null   // 顶层，process.platform，非秘密
+dsh-chamber:open-in-apps () → { apps: [{id, displayKind, remoteCapable, available}] }；dsh-chamber:open-in {appId, instanceId, path, sourceFingerprint} → { ok: true } | { ok: false, error }；platform = process.platform（非秘密）
 ```
 
 IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode delivery/ACK 与有界重放队列、`runOpenInLaunch` 六步管线（[16-vscode-deeplink.md](./16-vscode-deeplink.md) §4.2）全部不变；注册表**依然**只有 `vscode` provider（本地目录由实例内 host 包负责，不是主进程或官方宿主行的事）。
@@ -148,18 +132,10 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 
 ### 7.2 官方没有、我们有的
 
-| # | 能力 | 契约 |
+| # | 官方没有、我们有的 | 契约 |
 |---|---|---|
-| 1 | 远程 ssh 来源：VS Code Remote URL（主进程构造，权威 IPC + 来源代 proof） | 可 |
-| 2 | 每来源独立记忆 + 记忆值可用性降级 | 可 |
-| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts` | 可（官方 `Menu`；无 chamber-owned `AccessibleAppMenu`） |
-| 4 | 与启动标记解耦：任何 runtime 版本、任何 chamber 形态下本地目录都可用 | 可 |
-| 5 | 远程 provider 家族（Insiders / Cursor / Windsurf / JetBrains Gateway / `ssh://` 终端） | 不可（候选登记于 [TODO.md](../../progress/TODO.md) C§3；每个新增项需一次实机 scheme 验证） |
-| 6 | 远程文件级打开（只是 URL 构造；本地仍目录限定） | 不可（候选登记于 [TODO.md](../../progress/TODO.md) C§3） |
-| 7 | 无应用来源的诚实出口（复制远端路径 / 复制 `ssh user@host` / 复制深链，零执行面） | 部分：只保留「复制路径」——侧栏既有 `HoverCard` 复制模式 + 会话行已带 `SessionRow.cwd`，零新 IPC；复制 ssh 命令/深链不做 |
-| 8 | 多入口共用同一执行管线（侧栏会话行右键、快捷键；`runOpenInLaunch` 已是单一管线） | 不做 |
-| 9 | 拉起失败原因用户可见（`Tooltip` 就地呈现域错误/传输异常，随 error 装饰清除） | 可 |
-| 10 | 官方 Files 页签目录座席 `sidebar.right.tab.files.actions`（官方 `ui-open-in-app` 占座但读 document-relative `open-in-app/*` ⇒ N-ctx 下落控制面 SPA 回退、渲染 null）由本插件以自有 id `open-in` 同槽占座：owner `{ absolutePath }` 直取文件树显示目录，per-source 目录/记忆照旧；残余风险 = 官方条若复活会同槽双条 | 可（`test/ui-lock/files-seat-declaration.test.ts` + `test/launch-flow/open-in-path.test.ts`） |
+| 1–4 | 远程 ssh 来源 VS Code Remote URL（主进程构造 + 来源代 proof）；每来源独立记忆 + 可用性降级；官方 `ui-primitives` `Menu` + `Tooltip`；与启动标记解耦（任何 runtime 版本/形态本地目录都可用） | 可 |
+| 5–10 | 远程 provider 家族与远程文件级打开 = 不做（候选见 [TODO.md](../../progress/TODO.md) C§3）；无应用来源的诚实出口只保留「复制路径」；多入口共用管线不做；拉起失败原因就地 Tooltip；官方 Files 页签座席由本插件以自有 id 占座 | 部分/不可 |
 
 ### 7.3 明确不做
 
@@ -169,35 +145,12 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 
 ## 8. 包与文件形态
 
-- **seed 包**：`packages/dsh-chamber-seed-open-in/`（§6；分类见 §6.1）——`src/{catalog,resolver,icons}.ts` 逐字节副本（`pure`），`src/shared.ts`/`src/index.ts` `patched`，`src/core.ts`/`scripts/`/`test/`/`dist/index.js` `own`，上游 `src/internals.ts`/`README*`/`tsdown.config.ts`/`tests/` `dropped`。
-- **客户端包**：`src/client/local-catalog.ts`、`src/shared/open-in-wire.ts`、`src/client/instance-view-guard.ts`、`src/client/machine-catalog.ts`、`test/catalog/{local-catalog,machine-catalog,open-in-labels}.test.ts`、`test/wire-protocol/open-in-wire-lockstep.test.ts`、`test/ui-lock/instance-view-guard.test.ts`；`client/{source-adapter,choice-store,index,open-in-gates,OpenInButton}.tsx?` 与 `shared/{open-in-view-model,capabilities}.ts`、`src/locales.ts`。
-- **页级接线**：`packages/renderer/src/shell.ts` 建唯一一份机器目录并 `ctx.provide('chamberMachineCatalog', …)`；传输复用 `packages/dsh-chamber-client-core/src/instance-api.ts` 的公开 `getInstanceClient('local').callUnary(...)`（同一信封/路由/栅栏，零新增传输面）。
-- **接线面**：§6.2 的八处 + 插件页的 `localOnly` 行集过滤（`plugin-inventory-text.ts` 的 `applicableChamberPackages` + `global.d.ts`/`preload.cts` 的投影字段；该行只列在本地目标）。
-- **不存在面（负面保证）**：无 vendor 补丁、无 composite covered 变更、无 `--no-open`/spawn env 剥离/picker pin overlay 代码路径、无官方路由吸收实现（`official-catalog.ts`）、无 bespoke 菜单三件套、无 VS Code 位图/自造 mark（`VscodeMark`、`'vscode'` mark kind、`assets.d.ts`、`markKindFor`/`OpenInMarkKind` 均不在仓内）。
+- **包与文件形态**：分类（`pure`/`patched`/`own`/`dropped`）单源 = `scripts/upstream/registry/registry.json` 的 `seed.open-in` 条目；客户端包文件清单、页级接线（`shell.ts` 建唯一一份机器目录并 `ctx.provide`，传输复用 `instance-api.ts` 的 `getInstanceClient('local').callUnary`）与 §6.2 的八处接线以源码/registry 为准。
+- **不存在面（负面保证）**：无 vendor 补丁、无 composite covered 变更、无控制面代码改动、无 `--no-open`/spawn env 剥离/picker pin overlay、无官方路由吸收实现（`official-catalog.ts`）、无 bespoke 菜单三件套、无 VS Code 位图/自造 mark（`VscodeMark`/`'vscode'` mark kind/`assets.d.ts`/`markKindFor` 均不在仓内）。
 
 ## 9. 验证门
 
-| 门 | 命令 | 钉住什么 |
-|---|---|---|
-| 客户端类型 | `pnpm run typecheck:open-in` | 客户端包自身构面 |
-| seed 类型 | `pnpm run typecheck:host-open-in` | 复制面 + 域核心（含 `@deepseek-ai/*` 解析） |
-| seed 单测 | `pnpm run test:host-open-in` | 探针零宿主动作、菜单顺序、SSH 标记回归（目录仍解析）、图标 base64/不可用、`open` 的 argv 与全部拒绝分支、ENOENT 重解析恰好两次、`domainResult` 只吞已知错误 |
-| 跨包 wire 契约 | `test/wire-protocol/open-in-wire-lockstep.test.ts`（客户端包） | 命名空间、四个方法名与其全限定常量、`@Remote` 面、错误码集合、图标媒体类型——全部读 seed 源码文本 |
-| 标签覆盖 | `test/catalog/open-in-labels.test.ts`（客户端包） | fork 的 `catalog.ts` 每个 id 都有 zh+en 标签，且标签表无多余行 |
-| 菜单归属守卫 | `test/ui-lock/instance-view-guard.test.ts`（客户端包） | `menuOwnerAllowsInteraction` 的 fail-closed 真值表（断连/隐藏 class/`hidden`/`aria-hidden`/不可见任一不满足即关闭）；纯函数，不依赖浏览器 DOM |
-| 机器池 wire 纪律 | `test/catalog/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、两层信封（传输结果 → 域载体）、fail-closed、`data:` URL 允许表、拉起错误映射 |
-| 机器目录缓存 | `test/catalog/machine-catalog.test.ts`（客户端包） | boot 一次探测 + 每 id 恰好一次图标（刷新不重取）、串行批次（在途批次期间发现的 id 不丢）、单飞只包 id 读取且并发 caller 共享、通知顺序、失败 fail-closed |
-| 页级读取锁步 | `test/lifecycle/page-read-path-lockstep.test.ts`（renderer） | 真实实例客户端（`getInstanceClient('local').callUnary` + 真实 URL/信封/rpcId，fetch 打桩喂宿主字节）经 `createMachineCatalog` 得到目录与真图标；并锁住 `shell.ts` 仍按此接线 |
-| 适配器行为 | `test/launch-flow/source-adapter.test.ts` | 机器池 × main 池合并、远程来源用机器图标、per-entry 通道路由、无机器目录时诚实降级、订阅释放 |
-| 页级注入契约 | `test/lifecycle/shell.test.ts`（renderer） | 两个 entry 拿到同一个 `chamberMachineCatalog` 实例（页级事实，非 per-entry 副本） |
-| 记忆 | `test/launch-flow/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |
-| 桌面投影 | `test:desktop`（plugin-sync / chamber-seed-portability-wiring / open-in / cross-package-contract / renderer-trust） | 远端 seed 丢弃 `localOnly` 行、远端探针对该行零调用、本地投影携带 `localOnly`、打包行集；portability 接线门：main.ts 的注入预检/ready-time 缺口日志/gateway 上传源清单全部读 portable 列表，且「出货」判定用 `builtChamberHostPackageSeeds`（空 `sourceDir` 先被拒，绝不让 `join('','dist/index.js')` 落到进程 CWD） |
-| 插件页行集 | `test/plugin-inventory/chamber-rows.test.ts`（connections 包） | local 4 行 / ssh·gateway·http 3 行（`applicableChamberPackages` 按注册表标志过滤，不做硬编码包名）；ssh 的两个目标级门（needs-seed / restart-pending）与表格共用该过滤后的列表，合成探测行不参与；loadSync 在读远端之前先提交本机投影（错误相位下表格不为空）；退役的 `chamberBadgeLocalOnly` 不得复活 |
-| 状态对象字段集 | `test/ipc/cross-package-contract.test.ts` + `test/ipc/ipc-surface-mirror.test.ts`（L3） | 同一个 wire 状态对象有四份声明（`plugin-sync.ts` 投影 / `renderer/global.d.ts` / `preload.cts` / 客户端 `ChamberPackageState`）：前两者与 client 由新门三向比对（client 允许只少 `probe`），preload ↔ renderer 由既有 L3 门覆盖 ⇒ 四向全闭合 |
-| 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | 网关侧的 `/chamber/plugins` 投影与 PUT 名单由注册表派生 ⇒ 该 localOnly 行自动出现（只有桌面在上传时该行 `version` 恒 null；插件页不在非本地目标列出它）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES` |
-| 注册表锁步 | `test/plugin-inventory/chamber-rows.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行 |
-| 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
-| 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist 重建-比对）+ C9（open-in 包本身不新增补丁；deliverables owner 路由的 per-entry 前缀见 09 §3.6）+ 新 fork 的 C1/C3/C5（registry 的 `seed.*` 条目 + `versionAnchor: 'chamber'` 豁免） |
+门清单与用例登记单源 = `scripts/gates/registry/gate-surfaces.json`；各门命令 = 根 `package.json` 的 `typecheck:*`/`test:*`/`verify:*`（客户端/seed 类型、wire 契约、页级读取、桌面投影、插件页行集、注册表锁步、i18n、触点门）。
 
 ## 10. 已知边界
 

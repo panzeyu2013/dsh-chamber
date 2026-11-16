@@ -12,6 +12,6 @@
 
 ## 运行与交付
 
-`pnpm run build:gateway` 构建；CLI 入口 `node packages/gateway/src/cli.ts serve|auth status|reset-password|clear`。分发走 GitHub Release 的 `.tgz`（**不发布到 npm**）。测试：`pnpm run test:gateway`。
+`pnpm run build:gateway` 构建；CLI 入口 `node packages/gateway/src/cli.ts serve|auth status|reset-password|clear`。分发走 GitHub Release 的 `.tgz`（**不发布到 npm**）。
 
 未完成门禁（重连窗口、运维页缺 `recover-metadata` / `cleanup-version` / `restore-pre-rollback` 等）以 [`docs/progress/STATUS.md`](../../docs/progress/STATUS.md) 为准。

@@ -63,5 +63,3 @@ The dsh design language: CSS modules + `--dsw-alias-*` tokens + ui-primitives
 
 Owns the `dsh-chamber.settings.connections` dictionary namespace (zh key
 source; `src/locales.ts`).
-
-Test: `node ./scripts/test.mjs`.

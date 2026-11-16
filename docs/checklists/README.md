@@ -19,28 +19,15 @@
 每份 checklist 以 `# 标题` 开头，紧随一段元数据列表（保持在文件顶部；**不写版本值**）：
 
 ```markdown
-- 阶段：<上表主阶段之一>
-- 触发：<什么时候必须跑>
-- Owner：<对该阶段结果负责的角色>
-- Timebox：<一次执行的目标时长>
-- 退出标准：<可复核的完成条件>
-- 自动化入口：<命令或脚本链接；门清单指向 scripts/gates/registry/gate-surfaces.json>
-- 证据：<保留在哪里 / 如何复核>
+- 阶段：<上表主阶段之一>；触发：<什么时候必须跑>；Owner：<对该阶段结果负责的角色>；Timebox：<一次执行的目标时长>；退出标准：<可复核的完成条件>；自动化入口：<命令或脚本链接；门清单指向 scripts/gates/registry/gate-surfaces.json>；证据：<保留在哪里 / 如何复核>
 ```
 
 元数据之后写：范围与判据指针（判据权威在 design / STATUS / 源码，本文件只固定流程）→ 可执行步骤（按依赖排序）→ 失败处置 / 记录纪律。跨阶段的判据用链接引用，不复制。
 
 ## 步骤写法
 
-- 每条步骤 = **一条命令**或**一个可观察判据**；机械检查尽量交给脚本，清单只保留判断、跨系统验收与人工证据。
-- 命令从单源读值，不手抄门清单 / 包清单 / 版本值：门清单见 [`scripts/gates/registry/gate-surfaces.json`](../../scripts/gates/registry/gate-surfaces.json)，上游触点见 [`scripts/upstream/registry/registry.json`](../../scripts/upstream/registry/registry.json)。
-- 步骤变更不改判据放行：判据变了先改 owning design / 单源 / 脚本，清单只跟指针（[docs/AGENTS.md](../AGENTS.md) §2）。
-- 清单不记录历史与进度：历史归 `CHANGELOG.md` 与 git，进度归 [`../progress/STATUS.md`](../progress/STATUS.md)。
-- 冻结面（Electron / Windows / Linux 桌面腿）不写成现行义务：步骤标注 **ARCHIVED** 并指 [`../progress/electron-frozen.md`](../progress/electron-frozen.md)；默认发布只走 macOS Swift + 共享契约。
+- 每条步骤 = **一条命令**或**一个可观察判据**；机械检查交给脚本，清单只保留判断、跨系统验收与人工证据。命令与门枚举从单源读值，不手抄：门清单见 [`scripts/gates/registry/gate-surfaces.json`](../../scripts/gates/registry/gate-surfaces.json)，上游触点见 [`scripts/upstream/registry/registry.json`](../../scripts/upstream/registry/registry.json)；判据变了先改 owning design / 单源 / 脚本，清单只跟指针（[docs/AGENTS.md](../AGENTS.md) §2）；清单不记历史与进度（历史归 `CHANGELOG.md` 与 git，进度归 [`../progress/STATUS.md`](../progress/STATUS.md)）。冻结面（Electron / Windows / Linux 桌面腿）不写成现行义务：步骤标注 **ARCHIVED** 并指 [`../progress/electron-frozen.md`](../progress/electron-frozen.md)；默认发布只走 macOS Swift + 共享契约。
 
 ## 维护
 
-- 新增 / 删除 / 改主阶段：同批更新本矩阵、阶段目录与 [`../INDEX.md`](../INDEX.md) 链接；孤立文件视为未登记。
-- 每次 release / upgrade 前试跑相关清单；过期步骤与失效入口在当次 PR 删除，不留「历史上用过」的步骤。
-- GENERATED 块（[`upgrade/upstream-touchpoints.md`](./upgrade/upstream-touchpoints.md) §2/§9）只改单源再重生成，禁止手改（`node scripts/upstream/registry/registry-views.mjs --check` 是保鲜门）。
-- 清单自身的验证：`node scripts/gates/checks/verify-md-links.mjs` 退出 0。
+- 新增 / 删除 / 改主阶段：同批更新本矩阵、阶段目录与 [`../INDEX.md`](../INDEX.md) 链接；孤立文件视为未登记。每次 release / upgrade 前试跑相关清单；过期步骤与失效入口在当次 PR 删除，不留「历史上用过」的步骤；GENERATED 块（[`upgrade/upstream-touchpoints.md`](./upgrade/upstream-touchpoints.md) §2/§9）只改单源再重生成，禁止手改（`node scripts/upstream/registry/registry-views.mjs --check` 是保鲜门）。清单自身的验证：`node scripts/gates/checks/verify-md-links.mjs` 退出 0。

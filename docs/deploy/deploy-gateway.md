@@ -17,11 +17,7 @@ git clone https://github.com/panzeyu2013/dsh-chamber.git
 cd dsh-chamber && bash scripts/install-gateway.sh
 ```
 
-向导为「欢迎页 + 8步配置」（版本通道 → 访问方式 → 登录凭据 → 端口 → 服务方式 → dsh运行时 →
-安装位置 → 预览确认），非法输入红字重问，`q` 退出、`ESC`/`back` 返回上一步；**「精确版本」先列出
-GitHub Releases全部可用版本**（稳定/预发布标记、发布日期、gateway资产标记），输入序号或版本号
-（可带 `v` 前缀）选中。执行前有完整预览（落盘路径与访问地址）；装完询问是否把
-`~/.dsh-chamber/bin` 加入PATH（幂等写 `~/.bashrc` / `~/.zshrc`），并把脚本复制到该目录。默认值：
+向导为「欢迎页 + 8步配置」（版本通道 → 访问方式 → 登录凭据 → 端口 → 服务方式 → dsh运行时 → 安装位置 → 预览确认），非法输入红字重问，`q` 退出、`ESC`/`back` 返回上一步；**「精确版本」先列出 GitHub Releases全部可用版本**（稳定/预发布标记、发布日期、gateway资产标记），输入序号或版本号 （可带 `v` 前缀）选中。执行前有完整预览（落盘路径与访问地址）；装完询问是否把 `~/.dsh-chamber/bin` 加入PATH（幂等写 `~/.bashrc` / `~/.zshrc`），并把脚本复制到该目录。默认值：
 
 |项|默认|
 |---|---|
@@ -49,8 +45,7 @@ GitHub Releases全部可用版本**（稳定/预发布标记、发布日期、ga
 
 先明确两件事，避免误以为数据丢失：
 
-1. Gateway托管的dsh是全新实例，数据目录固定 `<stateDir>/dsh-home`（默认 `~/.dsh-chamber/gateway/data/dsh-home`），与直连实例（单元运行账号的 `~/.dsh`）互不相干；
-2. 安装向导第1步的「接管」**只**接管dsh程序（版本锚/workspace），从不读取或迁移旧数据——装好Gateway打开，旧数据不会出现（旧字节原样保留）。
+1. 两条前提：① Gateway 托管的 dsh 是全新实例，数据目录固定 `<stateDir>/dsh-home`（默认 `~/.dsh-chamber/gateway/data/dsh-home`），与直连实例（单元运行账号的 `~/.dsh`）互不相干；② 安装向导第 1 步的「接管」**只**接管 dsh 程序（版本锚/workspace），从不读取或迁移旧数据——装好 Gateway 打开，旧数据不会出现（旧字节原样保留）。
 
 无缝延续 = 安装后做一次停机态数据迁移（约一分钟，需两实例停止）：
 
@@ -94,14 +89,9 @@ GitHub Releases全部可用版本**（稳定/预发布标记、发布日期、ga
 
    等 `/health` ready后打开实例：旧会话 / 工作区 / 设置应已可见。
 
-版本提示（通常无需处理）：同属当前发布版本时直接可读；读不了/异常时先启动Gateway，在
-`/chamber/runtime` 把托管版本切到与旧实例一致（需该版本在registry或缓存可用；重启生效，
-切换前自动快照）。跨版本格式兼容责任属dsh官方（design 18 §3.7诚实边界）。
+版本提示（通常无需处理）：同属当前发布版本时直接可读；读不了/异常时先启动Gateway，在 `/chamber/runtime` 把托管版本切到与旧实例一致（需该版本在registry或缓存可用；重启生效， 切换前自动快照）。跨版本格式兼容责任属dsh官方（design 18 §3.7诚实边界）。
 
-收尾：旧单元已停用并disable；新实例正常后删除旧数据目录
-（`sudo rm -rf /home/<旧账号>/.dsh`；非root去掉sudo），并在桌面「设置 → 连接」删除旧的
-`dsh + ssh` 来源、改用Gateway来源。想移除旧单元文件再执行
-`sudo rm /etc/systemd/system/dsh.service && sudo systemctl daemon-reload`
+收尾：旧单元已停用并disable；新实例正常后删除旧数据目录 （`sudo rm -rf /home/<旧账号>/.dsh`；非root去掉sudo），并在桌面「设置 → 连接」删除旧的 `dsh + ssh` 来源、改用Gateway来源。想移除旧单元文件再执行 `sudo rm /etc/systemd/system/dsh.service && sudo systemctl daemon-reload`
 （形态B：`rm ~/.config/systemd/user/dsh.service`；按实际单元名调整）。
 
 不要做：
@@ -160,8 +150,7 @@ gateway.example.com {
 
 ## 7. 非交互 / CI
 
-- `--skip-dsh`：不自动装dsh（已有受控锚自动复用；否则需 `--dsh-path` 或 `DSH_GATEWAY_DSH_PATH`）。
-- `-y uninstall` 免二次确认（`--purge` 仅uninstall有效）。
+- `--skip-dsh`：不自动装 dsh（已有受控锚自动复用；否则需 `--dsh-path` 或 `DSH_GATEWAY_DSH_PATH`）；`-y uninstall` 免二次确认（`--purge` 仅 uninstall 有效）。
 
 ```bash
 bash install-gateway.sh install -y \
@@ -247,9 +236,7 @@ test -f "$STATE/tokens.json" && cp -a "$STATE/tokens.json" "$BK/"     # token ve
 test -f "$STATE/auth/token-key" && cp -a "$STATE/auth/token-key" "$BK/" # 必须与 verifier 成对
 ```
 
-`tokens.json` 与 `auth/token-key` **必须成对**备份与恢复：只恢复 verifier 而丢了 key 时，所有 hmac token 都 fail-closed（校验路径读不到 key 时 `verifyToken` 恒为 false），只能改用 §10.2 的 clear 后重设。备份目录按 token 泄露对待（verifier 与 key 同目录，等于可离线穷举），保持 0700、不要放入支持包或共享盘。
-
-**回滚本身不需要**恢复这一对——旧构建读不了 hmac，会按未配置处理（config 里有 token 时会被 scrypt 重新播种）。这一对的用途是之后**升回 HMAC 构建**且仍要沿用原 runtime token 时：停机，把 verifier 与 key **一起**放回原位，再启动；只恢复 verifier 会锁死。不再需要原 runtime token 时可只依赖 config 播种（旧构建写入 scrypt，新构建首次成功校验后就地迁移）。
+`tokens.json` 与 `auth/token-key` **必须成对**备份/恢复：只恢复 verifier 会 fail-closed（`verifyToken` 恒 false），只能按 §10.2 clear 重设；备份目录按 token 泄露对待（0700，不入支持包/共享盘）。**回滚本身不需要**这一对（旧构建读不了 hmac，按未配置处理、config 有 token 时被 scrypt 重新播种）；它的用途是之后**升回 HMAC 构建**且沿用原 runtime token 时成对放回。
 
 ### 10.2 清凭据让旧构建重新播种
 
@@ -259,9 +246,7 @@ STATE="${DSH_GATEWAY_STATE:-$HOME/.dsh-chamber/gateway/data}"
 gateway auth clear --state-dir "$STATE"   # 同时删除 tokens.json 与 password-credential，并先轮换 jwt-secret
 ```
 
-`gateway` 命令来自安装器的 `~/.dsh-chamber/bin/gateway`（未加 PATH 时写全路径），并以 state 目录的属主身份执行（root + systemd 安装即 root；`--service-user` 形态见 §9）。
-
-下次启动从部署配置（`gateway.conf`/`gateway.env` 里的 `--ui-password`/`--api-token` 或 `DSH_GATEWAY_*`）重新播种 verifier。前提是凭据本来就在部署配置里：token 若只经运行时（页面 `/chamber/` 或 API）设置、config 中没有，clear 后需要重新部署一个 token；`--no-auth` 部署 clear 后回到匿名。
+`gateway` 命令来自安装器的 `~/.dsh-chamber/bin/gateway`（未加 PATH 时写全路径），并以 state 目录的属主身份执行（root + systemd 安装即 root；`--service-user` 形态见 §9）。下次启动从部署配置（`gateway.conf`/`gateway.env` 里的 `--ui-password`/`--api-token` 或 `DSH_GATEWAY_*`）重新播种 verifier；前提是凭据本来就在部署配置里（token 若只经运行时设置、config 中没有，clear 后需重新部署一个 token；`--no-auth` 部署 clear 后回到匿名）。
 
 ### 10.3 降级并核对
 

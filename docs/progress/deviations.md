@@ -106,18 +106,9 @@
 
 - D15 open：docs 的 `文件:行` 锚点写死（`docs/**` 迁移后实测 678 处），代码增删即过期且位移不均匀；**不按偏移批量刷**。退役 = 待合并分支落地后按符号 grep 语义重锚、新登记优先写 `path#=literal:…`，并调低锚点预算。工具已进 `check:static`；具体快照与样例存 git 历史。
 
-**待实机核验（盘点未覆盖，不计条目）**
+**待实机核验（冻结期盘点，不计条目）**
 
-- Electron默认菜单项集可由pinned上游`default-menu.ts`/`menu-item-roles.ts`核对（M4）；WKWebView右键菜单项集/禁用可行性属实机（S-11）；缩放 ± 步进语义（0.5 zoomLevel vs ±0.10 pageZoom）属纯像素比对（T-22 resolved）。
-- 文件拖拽（W3-2）的实机行为——S-25回形针/下载腿实现，拖拽是剩余摄入路径。
-- ATS loopback（S-45残余实机）：macOS 14+ 真机验证 Swift 首载 HTTP loopback 与 **v2 iframe 的 Web 内容放行**；v2（旧节号 design 28 §16.11，覆盖 §16.8；v3 映射见 design 28 §13）起 Swift 增 `NSAllowsArbitraryLoadsInWebContent=true`（右栏 iframe 可承载任意 http(s) 页面；Electron 无此键，Chromium 网络栈不受 ATS 管辖）——「双侧 ATS 逐键相同」的旧口径随 v2 退役，改为「主文档 ATS 底线相同 + Swift Web 内容单独放行」；例外域仍不含 `::1`——`DSH_CHAMBER_CP_URL` 指 IPv6 环回时 native 落失败页、Electron 正常（A3）。Electron safeStorage 在目标机 Keychain 恒可用的假设（`packages/desktop/electron/main.ts:1509-1540`）。
-- 隐藏/遮挡态（S-10的开放实机门）：最小化与完全遮挡（未最小化）两工况的rAF/定时器/`visibilityState`/App Nap语义、hide ≥30s的SSE/WS心跳、唤醒重连、隐藏期CPU（W6-3/design 25 §8.1 C1·§8.5 G5）。存储jar与登录态闭环（T-18：登录态不在渲染端jar，控制面自铸内存cookie；仅localStorage UI偏好不跨flavor）。
-- S-32（Dock/托盘恢复最小化窗口）、S-35（放行CSP后的blob文档预览渲染）、S-40（隐藏窗口二次启动的恢复）、S-42（首帧/首个已提交内容时序；打包态首载复验——宿主须不占用17500，否则先命中共享目录锁）、S-43（Return/小键盘Enter/Esc在真实退出确认框）各自的实机观察；S-23版本键映射、S-34 loadedOnce门由单测闭合。
-- 通知：S-44残余——Electron无授权预检/申请，实机看首次投递的弹框/拒绝面是否与Swift等价；授权重置后不主动重问（§5）、已拒绝时add的错误文案与`{shown:false,error}`复核、P-07多横幅淘汰。
-- 纯像素不计条目：字体/文本渲染、滚动条、窗口初始位置（`packages/desktop/electron/main.ts:842-845`不center vs `MainWindowController.swift:245-256` center）、backdrop-filter在目标macOS的渲染。（根级回弹单列S-50。）
-- S-24 菜单入口（Cmd+? → 项目页外部打开预算；File/Force Reload/Substitutions响应链）与「检查更新…」并存观察；打包态菜单无DevTools项（检查器改由设置页开关开启，T-10）。
-- S-21/S-37/S-38/S-39原生更新整链（页面「检查更新」→ `updateNativeAction kind=check` → Sparkle appcast → 页面相位；坏feed/坏密钥、忙态拒绝与标准窗聚焦）实机观察；S-37会话依赖节奏（scheduled投影后到重启前不再后台检查）；S-36真实beta下载+安装（beta.N → beta.N+1 → final可见）——归S-01外部门禁。
-- S-41/P-20打包态登录项read-back（损坏设置不动登录项、requires-approval诚实错误）；G19的CI内签名 .app启动/双击 → sidecar spawn → dist/web装载不可达（凭据 + GUI会话，归release/实机）；native GUI装配验收由G33进CI，剩余 .app双击与WKWebView页面。
+- 双端实机/目检项以 [STATUS.md](./STATUS.md) 与 release/acceptance checklists 为准：S-10 隐藏/遮挡态、S-11 右键菜单项集、S-21/S-36/S-37/S-38/S-39 原生更新整链、S-24 菜单入口、S-25 文件拖拽、S-32/S-35/S-40/S-42/S-43 恢复与预览时序、S-44 通知授权、S-45 ATS loopback、S-50 根回弹、S-56 拖拽路径、S-41/P-20 登录项 read-back、G19/G33 的打包 .app 启动与 WKWebView 面，以及字体/滚动条/初始位置/backdrop-filter 等纯像素项；冻结期明细原文见 git 历史。
 
 ## 5. 未决 / 待评估
 
@@ -127,7 +118,7 @@
 - 打印/页内查找：两端皆无（`electron.d.ts:9653`无print/find role；macos grep printOperation/find = 0）；任一端将来加入口时Swift必须实现`printOperation(with:)`，否则成新缺口。
 - 许可文本随包：两端都不随任何顶层许可/第三方声明（Electron mac打包显式删LICENSE/LICENSES.chromium.html：`electronMac.js:219-221`；Swift只解bin/node：`build-sidecar.mjs`；THIRD_PARTY_NOTICES.md只在release校验）——共同缺口，需单独立项。
 - CSP frame-src（v3 裁定）：Swift 桌面壳回退 `frame-src blob:`（HTML 文档预览），`frame-ancestors 'none'` / XFO / COOP-Corp 不变；`ControlPlaneOptions.frameSources` 不再由 Swift sidecar 启动点传（gateway / cli 维持 v1 最窄面；冻结 Electron 入口仍保留 v2 扩展，见 [electron-frozen.md](./electron-frozen.md) §3）。guest 是顶层文档，XFO / `frame-ancestors` 不再适用于右栏。判据 = design 28 §5「CSP」+ SH-7 桌面 CSP 短头断言。
-- test-windows腿的Windows用户路径缺口由`docs/progress/TODO.md` B§2.2 台账承载，不并入本表。
+- test-windows 腿的 Windows 用户路径缺口由 `docs/progress/TODO.md` B§2 冻结指针承载（原文见 git 历史），不并入本表。
 
 ## 6. 可达性优先：纪律与盘点
 
@@ -142,17 +133,13 @@
 
 > 判据 = core调用点/消费者（全仓grep，排除 .test.ts）；逐成员证据原文留存git历史。
 
-- 可达15（parity必对齐面）：rendererPush、showNativeNotification、notificationSupported、setBadge、badgeCountApiAvailable、onSystemResume、onMainWindowShown、isFocused、webViewLoading、webViewContentAlive、mainWindowAlive、retireNotificationsForSources、openExternal、showError、showMessage。（pickPluginSource 随 2026-09 C 分层插件写面退役删除：宿主腿、edge 契约、Swift picker body 与相关用例同批移除。）
-- 潜伏8（零消费者，不进修复队列）：trayAvailable、isPackaged、focusMainWindow、openPath、showItemInFolder、launchApp（对称缺席，S-05）、setKeepAwake、setLoginItem（成员潜伏；能力经ctx `sidecar-ctx.ts:283`可达）。原notifyClicked/resolveResource随P-03删除。
-- 附注：模态阻塞源见T-09；宿主事实时效见P-08；trayPresent事实 = `packages/desktop/electron/main.ts:1352`的`tray !== null`对照`sidecar-ctx.ts:345`恒true，`chamber-settings.ts:594` darwin短路true。
+- 可达 15（parity 必对齐面）：rendererPush、showNativeNotification、notificationSupported、setBadge、badgeCountApiAvailable、onSystemResume、onMainWindowShown、isFocused、webViewLoading、webViewContentAlive、mainWindowAlive、retireNotificationsForSources、openExternal、showError、showMessage（pickPluginSource 随 2026-09 C 分层插件写面同批退役）。潜伏 8（零消费者，不进修复队列）：trayAvailable、isPackaged、focusMainWindow、openPath、showItemInFolder、launchApp（对称缺席，S-05）、setKeepAwake、setLoginItem（成员潜伏；能力经 ctx `sidecar-ctx.ts:283` 可达）；原 notifyClicked/resolveResource 随 P-03 删除。附注：模态阻塞源见 T-09，宿主事实时效见 P-08，trayPresent 与 `chamber-settings.ts:594` darwin 短路见文件内证据。
 
 ### 6.3 A 桥面（页面 → 壳）可达性（结论修正）
 
 > 判据同旧：surface方法是否有消费调用点（通道字符串不是判据）。
 
-- 有调用点：restartAndInstall/download/openReleasePage（`update-store.ts` 定义 131/108/150、surface 调用点 140/114/154）、runtime-management八项、onIntent、onResume、desktopSsh的instances_get/delete_connection/save_connection/set_password/set_gateway_*（sidebar）、vscodeOpenInNewWindow。
-- 潜伏面：无。`desktopSsh.instances_set` 删除（通道/shim 方法/preload 与 renderer 声明/生成物/pin 计数同步），原「legacy no-op 通道」偏差随之关闭。
-- 更新面修正：`kind=check`单源成立（S-21）且页面消费者真实；`kind=download/install`按kind分派到Sparkle标准窗、忙时带回真实原因（P-15/S-39），能力面携带真实error（S-38）。契约对齐由`bridge-manifest.json` + `bridge-shim-surface.test.ts` + `ipc-surface-mirror.test.ts`锁定；payload与shim运行时执行由`verify-shim-payload-shape.mjs`运行时臂锁住（G22 resolved，计数见G34）。
+- 有调用点：restartAndInstall/download/openReleasePage（`update-store.ts` 定义 131/108/150、surface 调用点 140/114/154）、runtime-management 八项、onIntent、onResume、desktopSsh 的 instances_get/delete_connection/save_connection/set_password/set_gateway_*（sidebar）、vscodeOpenInNewWindow；潜伏面 = 无（`desktopSsh.instances_set` 已删，原「legacy no-op 通道」偏差随之关闭）；更新面：`kind=check` 单源成立（S-21）且页面消费者真实，`kind=download/install` 按 kind 分派 Sparkle 标准窗、忙时带回真实原因（P-15/S-39），能力面携带真实 error（S-38），契约由 bridge-manifest + shim/mirror 锁步测试锁定。
 
 ## 附：已消解条目（id 退役索引）
 
@@ -162,45 +149,5 @@
 - **S 系**：S-02 渲染器卡死无自愈；S-03 非法显式端口/dev 端口耗尽；S-05 原生壳无本地 open 执行面；S-06 page world 可伪造；S-07 网页权限；S-08 close-behavior=quit 时取消退出后的窗口状态；S-14 A 桥错误对象带 .code 的能力差异；S-16 --skip-web-dist 之外的装配一律要求；S-19 原生更新阶段在页面零呈现；S-21 更新发现双源不一致；S-22 beta 通道无原生安装腿；S-23 CFBundleVersion 去掉 beta 后缀；S-25 composer 回形针；S-26 Session 日志导出；S-27 首载失败终态；S-29 跨 flavor 凭据不可读：先 Electron 后 Swift；S-30 LSMinimumSystemVersion 支持矩阵；S-31 Electron DMG 未公证/装订；S-32 最小化窗口的恢复；S-34 Swift 卡死自愈缺 loadedOnce 门；S-35 子 frame 导航策略；S-36 Swift beta 应用内下载 404；S-37 后台检查节奏**只**数值相等；S-38 坏 EdDSA 公钥/feed**不可**用时页面可永久停在「检查中」；S-39 updateNativeAction 忙时静默 no-op + 菜单；S-41 chamber-settings.json 损坏时 Electron 静默；S-42 启动窗口时序；S-43 退出确认框的 Esc 行为；S-45 ATS loopback 配置不对称；S-46 Swift About 面板缺版权行；S-47 打包态 zh 本地化资源被 electron-builder 静默删除；S-40 同 bundle 二次启动恢复（残余实机观察见 §4）；S-49 初始窗口视口高度单侧对齐（实机目检并入 S-48）；S-52 关窗决策在飞时吞 Sparkle quit 事件（本版修复：在飞决策并入退出并持 `.terminateLater`，`QuitGate.isDecisionInFlight` 保护确认框；实机安装验收归发布检查单 §6）；S-57 v2 iframe 内 XFO/frame-ancestors/TLS 失败不可可靠探测（v3 guest 载体改由 `didFail*` 投影失败条）。
 - **T 系**：T-11 打包态开发环境覆盖面；T-12 info 总失败分支的兜底；T-13 信任谓词严格度；T-17 可执行名/进程名；T-22 页面缩放持久化；T-25 排障日志面；T-27 首帧/重载底色。
 - **P 系**：P-01 sidecar 帧长护栏；P-02 ready 帧 port 已校验（不一致 fatal），无消费者的是 shellVersion；P-03 两个保留契约成员 Swift 语义不同；P-04 sidecar 无内建 dsh workspace 回退；P-05 host 包源目录 8 层向上启发式探测；P-06 通知/Badge「已应用」回执缺失败与超时面；P-07 通知满额；P-11 pre-spawn 时间回退；P-12 落盘设置读取严格度；P-13 Swift 布局锁步锚点不全；P-15 update.download/install 在 Swift 零可达消费；P-16 dev 端口退避耗尽的最后一级；P-17 登录自启两条 Swift 侧缺口：reconcile 丢弃应答；P-18 shim 资源缺失 fail-open；P-19 重复注入守卫只在已暴露态惰性；P-20 登录自启失败面的镜像缺口。
-- **G 系**：G1 Swift 测试为一等门禁
-  - G2 run-swift-tests.mjs:102-111,130-131
-  - G3 60 通道冒烟按命名空间对代表通道断言 wire 形状
-  - G4 产物门
-  - G5 build-sidecar.test.mjs（本批随单 Node 重写）
-  - G6 非 dry-run 的 vendor/dsh 与 pnpm 缺源在任何写盘前 fail
-  - G7 SidecarExitCodeLockstepTests.swift
-  - G8 SidecarSupervisor.swift:386-441 先做退出码分级
-  - G9 BridgeClientLineReadTests.swift:45-158
-  - G10 BridgeClient.stop 注释给出与实现一致的 5s 宽限
-  - G11 SidecarSupervisorTests.swift:400-439
-  - G12 CrossLanguageLockstepTests.swift
-  - G13 design 25 §3.1 与实现形状一致
-  - G14 投递门单源为 rendererPushDelivered
-  - G15 RUNTIME_ABORT_REASON 单源在 shell-core.ts
-  - G16 appcast 步移到 notarize/staple 之后并签最终 zip
-  - G17 POC 桩例更名
-  - G18 payload Node 版本/摘要唯一来源 = primary-runtime-lock.json（sidecar 无第二 pin；原 assertNodePinTable 已随单 Node 退役）
-  - G20 新增 scripts/gui-acceptance/drivers/native.mjs
-  - G21 渲染器自愈策略抽成共享纯函数并行为测试
-  - G22 verify-shim-payload-shape.mjs 增运行时臂
-  - G23 Swift 门禁跑 release 配置
-  - G24 verify-test-wiring.mjs:61,344-369 覆盖
-  - G25（细节见 git 历史）
-  - G26 packaging 闭包 checklist 增原生壳节
-  - G27 after-pack-adhoc-sign.mjs
-  - G28 Electron 腿加 release-only 步
-  - G29 Swift 上传用精确产物路径
-  - G30 --dry-run 校验并打印已解析计划
-  - G31 默认回退改为 loud {ok:false,error:…}
-  - G32 G4 的产物冒烟
-  - G33 native 装配验收有 CI 机器门
-  - G34 shim 载荷面总数为断言
-  - G35 RUNTIME_ABORT_REASON 接线锁覆盖两侧
-  - G36 Electron release 验证/装订改按精确产物名
-  - G37 Electron 内建 Node 与捆绑 pin 的映射断言已随单 Node/Electron 分支退场（Node 单源 = payload lock）
-  - G38 图标缺件与 electron-builder 同姿态 fail-closed
-  - G39 build-sidecar 的 copyVendorDsh 在拷贝前与落盘后各…
-  - G40 Swift 装配的 dist/web 拷贝
-  - G41 Electron mac 打包演练进 push 门禁
-  - G42 Sparkle 密钥与发布物 fail-closed 门禁。
+- **G 系**（结论一行/条）：G1 Swift 测试为一等门禁；G2 run-swift-tests.mjs:102-111,130-131；G3 60 通道冒烟按命名空间对代表通道断言 wire 形状；G4 产物门；G5 build-sidecar.test.mjs（本批随单 Node 重写）；G6 非 dry-run 的 vendor/dsh 与 pnpm 缺源在任何写盘前 fail；G7 SidecarExitCodeLockstepTests.swift；G8 SidecarSupervisor.swift:386-441 先做退出码分级；G9 BridgeClientLineReadTests.swift:45-158；G10 BridgeClient.stop 注释给出与实现一致的 5s 宽限；G11 SidecarSupervisorTests.swift:400-439；G12 CrossLanguageLockstepTests.swift；G13 design 25 §3.1 与实现形状一致；G14 投递门单源为 rendererPushDelivered；G15 RUNTIME_ABORT_REASON 单源在 shell-core.ts；G16 appcast 步移到 notarize/staple 之后并签最终 zip；G17 POC 桩例更名；G18 payload Node 版本/摘要唯一来源 = primary-runtime-lock.json（sidecar 无第二 pin；原 assertNodePinTable 已随单 Node 退役）；G20 新增 scripts/gui-acceptance/drivers/native.mjs；G21 渲染器自愈策略抽成共享纯函数并行为测试；G22 verify-shim-payload-shape.mjs 增运行时臂；G23 Swift 门禁跑 release 配置；G24 verify-test-wiring.mjs:61,344-369 覆盖；G25（细节见 git 历史）；G26 packaging 闭包 checklist 增原生壳节；G27 after-pack-adhoc-sign.mjs；G28 Electron 腿加 release-only 步；G29 Swift 上传用精确产物路径；G30 --dry-run 校验并打印已解析计划；G31 默认回退改为 loud {ok:false,error:…}；G32 G4 的产物冒烟；G33 native 装配验收有 CI 机器门；G34 shim 载荷面总数为断言；G35 RUNTIME_ABORT_REASON 接线锁覆盖两侧；G36 Electron release 验证/装订改按精确产物名；G37 Electron 内建 Node 与捆绑 pin 的映射断言已随单 Node/Electron 分支退场（Node 单源 = payload lock）；G38 图标缺件与 electron-builder 同姿态 fail-closed；G39 build-sidecar 的 copyVendorDsh 在拷贝前与落盘后各…；G40 Swift 装配的 dist/web 拷贝；G41 Electron mac 打包演练进 push 门禁；G42 Sparkle 密钥与发布物 fail-closed 门禁。
 - **D 系**：D1 bridge-shim.js 头部改述 sidecar；D2 BridgeShimInjector.swift:6-8 注释按实现改写；D3 preload.cts:394,705 注释与实现一致写 onChanged；D4 design 25 的 sidecar-ctx.ts 锚点刷成当前值；D5 bridge-shim.js:64-67,437 的 loud stub 描述删除；D6 design 25 的 UI 能力门语义与 §7 一致；D7 装配态 web dist 候选序为「resourcesDir/dist/web → sidecar/dist/web」（AppDelegate.swift 的 resourceURL 优先；dev 走 packages/desktop/dist/web；PackagedLayoutTests 钉住）；D8 锚点校正：行为属实但旧锚点错；D9 模板注释/取值与出货行为一致；D10 design 25:467-472 与实现语义一致；D11 scripts/release/preflight/release-artifacts.mjs；D12 锚点校正：行为属实（copyTree 无返回值，直调、无恒假判断）但旧锚点错；D13 权限锚点刷成当前值；D14 Info.plist.template:10-18 的共存注释按 S-04。

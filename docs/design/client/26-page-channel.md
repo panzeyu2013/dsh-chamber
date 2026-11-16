@@ -2,9 +2,7 @@
 
 ## 0. 契约摘要
 
-页面在任一时刻只开**一条属于 HTTP 连接池的长连接**（同源 WebSocket `/api/page-channel`），把三类**长活 HTTP 流**收敛成它的逻辑订阅（升级后的每实例 Remote mux WS 不占池，不计入这一条）：`health` 订阅（控制面原生生产者，取代页面两条健康 SSE）、`pluginGraph` 订阅（控制面上游 GET 目标 `/plugins/events`，取代每已挂载实例 1 条 EventSource）、`sessionFacts` 订阅（控制面上游 GET 目标 `/chamber/session-state/stream`，取代每 gateway 来源 1 条 SSE）。实例在**通道内部**用 `instanceId` 定址；页面侧的连接数**与实例数无关**。容量属于控制面的上游管理器：一个订阅 = 一条上游连接，N 个实例 = N 条上游（在控制面，而不是在浏览器 6 个槽位里）。
-
-**约束（为什么）**：HTTP/1.1 同源并发上限是 6，SSE 占槽、升级后的 WebSocket 不占槽——到 6 是悬崖而非斜坡（请求一个都出不去）。若按每实例长活流设计，页面会持有 `1（App 健康）+ 1（设置页健康）+ N（live-graph EventSource）+ G（gateway 事实镜像）` 条长活 HTTP 流，5 个来源即 10 条 ⇒ 必然 ≥ 6；这是浏览器连接池被长活流占满后对 unary 的饿死，不是网络/服务端问题。
+契约不变量见 §2/§3：页面任一时刻只开一条同源 WebSocket（`/api/page-channel`），三类长活 HTTP 流收敛为它的逻辑订阅，页面池内连接数与实例数无关。
 
 ## 1. 目标与非目标
 
@@ -86,11 +84,7 @@ kill switch 开启即回到无预算语义（派发超时会重新按 `deadline`
 
 ## 4. 验证门
 
-- CI 静态断言：shipped 源码中 `EventSource` 引用与流式 `getReader` 均不得出现（白名单与正控见 §D5）。
-- 单元/集成：wire 解析与构造（族必须是字符串本身，拒绝类型混淆；keepalive 判据 = 事件名 + 空 data）；客户端通道（单 socket、订阅帧、item 分发、信用确认、断线重连后重订阅、关闭语义、宿主不可用/构造失败的如实通知、**通知按轮次去重**：可恢复失败每轮一次、宿主永久属性只一次、**快照迭代**：`onError` 里同步新建的订阅不得继承旧 socket 的关闭、建连 3s 期限退役挂起的 CONNECTING socket、阶梯只在稳定运行后归零、最后一条关闭不遗留零订阅重连、回调一律异步到达）；控制面（health 生产者转发、**同步生产者的帧序恒为 [ready, 快照, …]**、订阅即快照、SSE 上游转发、跨块 CRLF/裸 CR、非 SSE 200 拒绝、4xx/5xx 分类（`upstream_rejected` 永久 vs `upstream_failed` 瞬态）、逐行增量的规模上限、信用暂停/恢复且**只在成功发送后记账**、退订/断线/关停清理、传输撤销、非法帧忽略、非 gateway 的 sessionFacts 拒绝、`logger` 抛错不得打断流、attach 中途失败不留孤儿 socket）。
-- 生命周期：`stop()`/启动失败之后的 upgrade 一律拒绝（accepting 闩锁），重启后恢复服务（闩锁不得变成一次性）；任一 server 收尾路径都必须 `closeAll()`。
-- 现场可观测：`[page-channel]` 日志（socket close code、订阅错误码、重连）、证据账本 `page-channel` 行；`stats()` 的生产消费面是每 60s 的 `page-channel: stats sockets=… subscriptions=… upstreams=…`（无活动 socket 静默）与 `closeAll()` 的 `page-channel: shutdown stats …` 现场行（`PAGE_CHANNEL_STATS_INTERVAL_MS`，测试可注入）。
-- 页面级 HTTP 预算（§D7）：`packages/dsh-chamber-client-core/src/http-budget.ts` 的单元面（上限/保留槽/只对有界调用方生效的队列上界/到期双保险/租约回收/驱逐/kill switch/fail-open/统计只采正等待）在 `packages/renderer/test/lifecycle/http-budget.test.ts`；派发归因的消费面在 `dsh-stream-state` 的 `dispatched` 维度（`observation-validity.test.ts`）；**页面同源 fetch 的唯一所有权**同笔扩成 I-1 的文件级 allowlist + 每文件计数（`page-channel.test.ts`，新增裸调用即红）。
+验证门与用例登记单源 = `scripts/gates/registry/gate-surfaces.json`；静态断言、单元/集成、生命周期、现场可观测与页面级 HTTP 预算的判据见 §2/§3 各条与本包既有测试。
 
 ## 5. Rejected alternatives
 

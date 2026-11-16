@@ -45,15 +45,10 @@
 
 ## 包契约与其它
 
-- 各包职责与测试入口：[`packages/*/README.md`](../packages/control-plane/README.md)（包清单以 `packages/` 目录为准，不在此手抄）。
+- 各包职责：[`packages/*/README.md`](../packages/control-plane/README.md)（包清单以 `packages/` 目录为准，不在此手抄）。
 - 生成块单源：[`scripts/upstream/registry/registry.json`](../scripts/upstream/registry/registry.json) → `registry-views.mjs`；[`scripts/gates/registry/gate-surfaces.json`](../scripts/gates/registry/gate-surfaces.json) → `gate-workflow-views.mjs`。
 - 双语镜像：`docs/*.en-US.md` 与中文主档成对，结构由 [`verify-i18n`](../scripts/gates/checks/verify-i18n.mjs) 校验。
 
 ## 双语镜像
 
-- [README.en-US.md](./README.en-US.md)
-- [CONTRIBUTING.en-US.md](./CONTRIBUTING.en-US.md)
-- [DEVELOPMENT.en-US.md](./DEVELOPMENT.en-US.md)
-- [CHANGELOG.en-US.md](./CHANGELOG.en-US.md)
-- [THIRD_PARTY_NOTICES.en-US.md](./THIRD_PARTY_NOTICES.en-US.md)
-- [deploy/remote-dsh-instance.en-US.md](./deploy/remote-dsh-instance.en-US.md)
+[README](./README.en-US.md)、[CONTRIBUTING](./CONTRIBUTING.en-US.md)、[DEVELOPMENT](./DEVELOPMENT.en-US.md)、[CHANGELOG](./CHANGELOG.en-US.md)、[THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES.en-US.md)、[deploy/remote-dsh-instance](./deploy/remote-dsh-instance.en-US.md)（与中文主档成对，结构由 `verify:i18n` 校验）。

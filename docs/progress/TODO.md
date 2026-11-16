@@ -24,30 +24,12 @@
 
 ### A 部索引（内部 §N = A§N）
 
-|节|主题|触发 / 说明|
-|---|---|---|
-|§1|N-壳 selection 作用域|上游 scope API 落地；chamber 侧另见 STATUS|
-|§2|设置面声明式贡献通道（T3）|其他宿主需要声明式贡献|
-|§3|归档 wire：删除 + 可见查询|上游 delete/查询 wire 落地|
-|§4|会话事实「静默丢帧」自愈|上游提供自愈/心跳/期限/契约|
-|§5|图标资源 id 实例私有|上游两族改用 useId|
-|§6|只读观察者与持久 unread/pending|上游提供 observer 角色/投影|
-|§7|子代理生命周期/计数与完整性信号|上游提供完整性位/生命周期边沿|
-|§8|载波 open 的稳定 episode 身份|上游提供 episodeId 或宿主期限|
-|§9|桌面专属家族门按宿主能力|上游按能力门/加载期限收敛|
-|§10|bundle rev 由内容派生|上游改内容哈希|
-|§11|座席声明可转移|上游声明可委托/页面级座席|
-|§12|workspace 删除 order/remove 原子化|上游原子化 order/remove|
-|§13|插件管理页可嵌入|上游提供 surface=embedded|
-|§14|漂移剩余、待退役块、工程债|下一 pin|
-|§15|UI 对齐候选与维持差异|UI 裁决触发时|
-|§17|客户端插件页面 base path 上游化|上游引入通用页面挂载前缀 seam|
+本节 §N 即 A§N（编号只增不重排），各节主题见下方小标题与文件顶部索引。
 
 ### 1. N-壳宿主下持久化 selection 需要按 shell/入口作用域
 
 - 事实：选择 store 仍是页面级 `persist: { name: 'dsh.sessions.current' }`（无 scope）；store 工厂已支持 `create(scopeKey)`，
-  缺的是调用点传 scope。后果 = A 的 current 被 B 读到、B 校验失败清空共享键；冷 boot 无可恢复会话 ⇒
-  `connectWorkspace()` 在远程宿主最近工作区造空白会话。
+  缺的是调用点传 scope。后果 = A 的 current 被 B 读到、B 校验失败清空共享键；冷 boot 无可恢复会话 ⇒ `connectWorkspace()` 在远程宿主最近工作区造空白会话。
 - 改法：scope 来源 = 每 entry/壳一份（chamber 用 `chamberBasePath`）；持久化名加 scope 后缀；`current === undefined`
   只清自己的 scope。开放 = scope 权威来源、旧单键迁移、是否把会话/工作区 UI 选择整体纳入。
 - chamber 现状：design 05 §2.2.1 的 open 意图本地回显 + `early-open.ts` 只抢时间；vendor store 无法根治。
@@ -71,13 +53,9 @@
 ### 4. 会话事实通道的「静默丢帧」自愈
 
 - 驱动面：`chat.deepDiving` 由 `api-session/status`（emit 型）驱动；emit 无重传、开场帧不重放，唯一收敛
-  `handleConnected → refreshList` 只挂连接代际 ⇒ 丢帧/静默半死时 running 永久 true。chamber 用 tier-1.5 本地判定 +
-  tier-3 写回把症状确定性收敛，但源端仍丢帧。
+  `handleConnected → refreshList` 只挂连接代际 ⇒ 丢帧/静默半死时 running 永久 true。chamber 用 tier-1.5 本地判定 + tier-3 写回把症状确定性收敛，但源端仍丢帧。
 - 上游改法：①事实自愈（周期性 summary 或 running 真但 `$events` 静默 ≥N 秒则 `session.list` 对账）；②应用级
-  keepalive item（现只有 WS ping/pong，浏览器观测不到）；③`session/follow` 首帧/空闲期限，期限到期写
-  `openState='error'`（chamber 单档 30s 只补客户端）；④`refresh()` 显式返回 `{ok,error}`；⑤把
-  `listState/listError` 投影进 store 快照；⑥把 `handleSessionStatus` 写进 `ISessions` 契约；⑦把 `openState` +
-  在途标志写进 `SessionSnapshot`。
+  keepalive item（现只有 WS ping/pong，浏览器观测不到）；③`session/follow` 首帧/空闲期限，期限到期写 `openState='error'`（chamber 单档 30s 只补客户端）；④`refresh()` 显式返回 `{ok,error}`；⑤把 `listState/listError` 投影进 store 快照；⑥把 `handleSessionStatus` 写进 `ISessions` 契约；⑦把 `openState` + 在途标志写进 `SessionSnapshot`。
 - chamber 现状：tier-1.5 + tier-3（只写 false、写后自校验、无 TTL）；第 1/5/6 落地后可删写回与探针；第 2/3 是正交
   可见面/期限。seed 包再断言 `api-session/status`（只覆盖可 seed 实例、需重启），暂缓。
 - 开放：keepalive 的旧客户端兼容（未知 item 会被 `failAll` 关 socket）、隐私/体积、`session.list` 对账成本。
@@ -92,8 +70,7 @@
 
 - 现状：gateway watcher 需无界面进程观察完成边沿；当前靠 `$events` + 每条边沿一次 `session/follow` 读尾巴。
 - 诉求：①`updatedAt` 语义契约（任意 durable 产出推进 ⇒ 可用内容水位判未读；或明确只用户消息推进）；②`turn/end`
-  冻结 + 纳入 `API_REMOTE_FORWARDED_EVENTS`；③observer 角色或 `session/list` pending 投影（避免只读方撞瀑布）；
-  ④宿主持久 per-session unread/pending 投影。
+  冻结 + 纳入 `API_REMOTE_FORWARDED_EVENTS`；③observer 角色或 `session/list` pending 投影（避免只读方撞瀑布）； ④宿主持久 per-session unread/pending 投影。
 - 下游现状：权威 = 官方内存 `completionUnread`（重载即忘）；只读镜像协议
   单源 `packages/dsh-chamber-wire/src/session-state.ts`（浏览器经 client-core 具名面），watcher `packages/gateway/src/session-state.ts`。
 - 退出：上游 1–4 落地后删 watcher 的补洞逻辑。
@@ -116,11 +93,9 @@
 ### 9. 桌面专属家族门应按宿主能力
 
 - 现象：`dsh-client-ui-settings-account` 门是 `'dshDesktop' in globalThis`；chamber 两 flavor 常驻该载体 ⇒
-  家族激活，`desktop-onboarding` 浮层把 `#root` 置 opacity 0 + inert，非官方桌面宿主无表单结算 ⇒ 永久
-  「正在加载设置…」。
+  家族激活，`desktop-onboarding` 浮层把 `#root` 置 opacity 0 + inert，非官方桌面宿主无表单结算 ⇒ 永久 「正在加载设置…」。
 - 改法：门改宿主能力就绪（`dshOnboarding`/configForms 有值）；loading 态给期限/error 收敛。chamber 侧以构建期
-  vendor 补丁关掉 `desktop-onboarding`，并从 DEFERRED 集群加载 `settings-account`；上游落地后
-  删补丁门控。
+  vendor 补丁关掉 `desktop-onboarding`，并从 DEFERRED 集群加载 `settings-account`；上游落地后 删补丁门控。
 
 ### 10. bundle rev 应由内容派生
 
@@ -131,8 +106,7 @@
 ### 11. 座席声明应可转移
 
 - 现象：`sidebar.session.row.leading/hover` 只能由注册所有者声明，实际渲染者不是它；chamber 自建侧栏不能转交
-  声明 ⇒ 官方 schedule 行标记/悬停任务列表必须经本仓自声明座席才渲染（现解法 = 构建期删上游三行、chamber
-  自声明并渲染，vendor 补丁 13；occupant 只对本实例求值，外来源行仍不渲染）。
+  声明 ⇒ 官方 schedule 行标记/悬停任务列表必须经本仓自声明座席才渲染（现解法 = 构建期删上游三行、chamber 自声明并渲染，vendor 补丁 13；occupant 只对本实例求值，外来源行仍不渲染）。
 - 改法：①声明可委托/指定 renderer；②提升为页面级座席（同 id 幂等合并）。退出：上游落地后删 vendor 补丁。
 
 ### 12. workspace 删除的 order/remove 应原子化
@@ -167,17 +141,13 @@
 
 #### 14.4 升级期检查两条闭口（待 vendor 物化）
 
-- **P4 首屏 inject 闭合（并入 C4）**：对每个首屏 covered 行读 vendor client 入口 inject，断言成员由 covered id/factory/
-  种子词提供；缺失即红（`shortcuts` 事故）。阻塞 = 无「包名→client 入口」映射、worktree 无 vendor 树；前置 =
-  在已物化 pin 上写只读探针 + 负例（`test:upgrade-tools`）。
-- **P3 侧栏声明−渲染差集**：上游 `sidebar.*` 声明 − 本仓声明/渲染，逐条判定「渲染 / 有意不渲染（带理由）/ 未决」；
-  按 registry 声明表 + 实际渲染点 grep 落地；阻塞同 P4。
+- **P4 首屏 inject 闭合（并入 C4）**：对每个首屏 covered 行读 vendor client 入口 inject，断言成员由 covered id/factory/种子词提供；缺失即红（`shortcuts` 事故）。阻塞 = 无「包名→client 入口」映射、worktree 无 vendor 树；前置 = 在已物化 pin 上写只读探针 + 负例（`test:upgrade-tools`）。
+- **P3 侧栏声明−渲染差集**：上游 `sidebar.*` 声明 − 本仓声明/渲染，逐条判定「渲染 / 有意不渲染（带理由）/ 未决」；按 registry 声明表 + 实际渲染点 grep 落地；阻塞同 P4。
 - 关闭：两条在某个已物化 pin 各跑通一次（含严格模式），负例覆盖「新增键被吞」与「改名假阳性」。
 
 ### 15. UI 对齐：候选与维持差异
 
-判据口径：`SB`/`WS` = 安装包内未压缩 `ui-sidebar`/`ui-workspace` `lib/client.js` 行号；本仓 =
-`packages/dsh-chamber-client-ui-sidebar`；样式与契约见 design 06 §7、design 05 §2。
+判据口径：`SB`/`WS` = 安装包内未压缩 `ui-sidebar`/`ui-workspace` `lib/client.js` 行号；本仓 = `packages/dsh-chamber-client-ui-sidebar`；样式与契约见 design 06 §7、design 05 §2。
 
 #### 15.1 候选（未定稿）
 
@@ -190,22 +160,17 @@
 - 候选：A 完整对齐（引入第三条持久账号，碰 manual=wire）；B 现分区（不写账号/不动拖拽）；C 不做（已否）。证据：
   `pin-partition.test.ts`、`session-row-actions.test.ts`、`vendor-session-fact-contract.test.ts`。
 
-**U2 会话行时间列**：上游行尾静息 `trailingLabel ?? timeLabel(updatedAt)`，hover 换出；本仓行尾是状态槽（10px/14px），
-时间只在卡片。候选 A 状态槽静息分支/B 双尾随/C 不落。
+**U2 会话行时间列**：上游行尾静息 `trailingLabel ?? timeLabel(updatedAt)`，hover 换出；本仓行尾是状态槽（10px/14px）， 时间只在卡片。候选 A 状态槽静息分支/B 双尾随/C 不落。
 
-**U3 快捷键回调接线**：四活键 = new/fork/archive 调共享服务、rename 走 `shell.overlay`（官方模态真出现）；三死键 =
-search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 门因 pin 了 directory-picker-browse 而放行）。
-注册表 `register` 对重复 id / 默认键冲突抛错 ⇒ 不能覆盖同名 id、不能沿用同键。候选 C1 维持；C2 实机判定（⌘N/⌥⌘F/
-⌥⌘R/⇧⌘A 有效；一次键只出一层；⌘K/⌘O 无反应），再定登记口径。归档走官方两段式，`RowActionToast` 同座席可见。
+**U3 快捷键回调接线**：四活键 = new/fork/archive 调共享服务、rename 走 `shell.overlay`（官方模态真出现）；三死键 = search/add 只写被覆盖 store、openLocal 键被消费无反馈（`noPicker` 门因 pin 了 directory-picker-browse 而放行）。
+注册表 `register` 对重复 id / 默认键冲突抛错 ⇒ 不能覆盖同名 id、不能沿用同键。候选 C1 维持；C2 实机判定（⌘N/⌥⌘F/ ⌥⌘R/⇧⌘A 有效；一次键只出一层；⌘K/⌘O 无反应），再定登记口径。归档走官方两段式，`RowActionToast` 同座席可见。
 
 **U4 重命名**：本仓行内 `ServerSectionRenameForm`（双击，拖拽/pending-click 围着它写）vs 上游 `shell.overlay`
 `SessionRenameDialog`；换模态属交互层重写。
 
 **U5 search**：本仓胶囊常驻（展开即挂载）vs 上游 inline `max-width .18s` + `search-skeleton`；动画/骨架会改 design 06 §1。
 
-**U6 侧栏 More**：上游 entry-customization 向 `sidebar.panellist.actions` 注册面板 More（只有 Browse/Create 两项；折叠视图行只属上游
-conversation region 分支）；本壳未声明该洞、不渲染，registry 对上游 `panel-pins.ts` 登记 `dropped`。候选 A 采纳（声明洞 + 渲染 More +
-消费面板 pin；侧栏新增内容须先交用户裁决）；B 维持不采纳（当前；gateway 官方侧栏仍显示）。证据：`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 子洞表、registry `dropped`。
+**U6 侧栏 More**：上游 entry-customization 向 `sidebar.panellist.actions` 注册面板 More（只有 Browse/Create 两项；折叠视图行只属上游 conversation region 分支）；本壳未声明该洞、不渲染，registry 对上游 `panel-pins.ts` 登记 `dropped`。候选 A 采纳（声明洞 + 渲染 More + 消费面板 pin；侧栏新增内容须先交用户裁决）；B 维持不采纳（当前；gateway 官方侧栏仍显示）。证据：`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 子洞表、registry `dropped`。
 
 **U9 New Session 的 access 门**：上游侧栏以 `useRemoteAccess('session/create')` 作为 New Session 的渲染门（`SidebarRoot` 与 `HeaderLeadingControls` 各一处），本仓三处入口（`SidebarRoot` 行、字标快捷按钮、`shell.leading` 单席）均无该门 ⇒ 无权限 Peer 仍看到入口。候选 A 与上游同门（三处共用一条 access 快照，需接入 `remoteAccess` 注入面）；B 维持现状（当前）。证据：STATUS §2.1 U9。
 
@@ -219,8 +184,7 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 
 #### 15.3 清洁项（非裁决）
 
-- `row-render-cost` 的 13 faces 等号与 key==deps 对账是有意收紧（非缺陷）。
-- `ServerSection.tsx` 两处 IIFE/12 空格缩进可无损改写但动行号与源码锁（收益低，最后处理）。
+- `row-render-cost` 的 13 faces 等号与 key==deps 对账是有意收紧（非缺陷）；`ServerSection.tsx` 两处 IIFE/12 空格缩进可无损改写但动行号与源码锁（收益低，最后处理）。
 
 #### 15.4 复用准则
 
@@ -247,99 +211,30 @@ conversation region 分支）；本壳未声明该洞、不渲染，registry 对
 
 ### 1. macOS Swift 原生壳 v1
 
-> 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/desktop/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与契约落点；
-> 决策 D1–D7、双线防漂移门禁的明细按收口删除（原文存 git 历史）；W1–W7 判定已迁入 design 25 §8.5；A1–A8 中止点、性能/产物体积 A/B 协议与 dev 约定的明细同样按收口删除（原文存 git 历史），
+> 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/desktop/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与契约落点；决策 D1–D7、双线防漂移门禁、A1–A8 中止点、性能/产物体积 A/B 协议与 dev 约定的明细按收口删除（原文存 git 历史），W1–W7 判定已迁入 design 25 §8.5。
 > 契约落点 = design 25 §3–§9；开放状态归 STATUS。
 
 #### 1.1 决策结果索引（D1–D7）
 D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blocked-available→Sparkle、`macos/` SwiftPM、原生 UI 渐进不做、Node 版本与架构、静态凭据 0600 明文）见 design 25 §5 与 §8（正式签核仍开放）。
 
 #### 1.3 WBS 任务号索引（W-01…W-32 → 契约落点）
-|任务|内容|契约落点|
-|---|---|---|
-|W-01…W-05|M0 决策签核与文档同步；Swift 壳脚手架；A 桥雏形（shim/MessageHandler/TrustGuard）；P0 竖切（FrameCodec/BridgeClient/sidecar-stub）|design 25 §3.2、§4.4、§8.1|
-|W-06…W-08|P0 走查与门禁（G1–G5、C1/C2 判定）|design 25 §8.1|
-|W-09…W-13|core seam（node-edges/shell-core、IPC 面镜像、core 禁 electron 门）；sidecar 入口与 stdio JSON-RPC（sidecar-entry/sidecar-ctx/bridge manifest 管道）|design 25 §3.2、§4.1|
-|W-14/W-15|Electron 零回归证明（分层 gate）；SidecarSupervisor（退避重启 + 退出码分级）与目录锁|design 25 §4.1、§3.3、§6.3、§8.2|
-|W-16…W-18|B 桥客户端（FrameCodec + 生命周期）；bridge-manifest 生成物（JSON + Swift 白名单 + stub）与 shim 表面锁步|design 25 §4.4.2、§4.4.3|
-|W-19/W-20|HostEdges 原生腿（SwiftEdgeHostLegs：对话/面板/文件/通知）|design 25 §5 E1–E21、§4.5|
-|W-21|窗口/菜单/通知/深链/渲染器恢复（MainWindowController/RendererRecovery）|design 25 §4.5、§5|
-|W-22/W-25|更新 v1（blocked-available）→ Sparkle 预研/实现（S-01）|design 25 §7|
-|W-23/W-24|sidecar 打包（payload node + dist/web）与 .app 组装/Info.plist/ATS|design 25 §3.2、§4.3|
-|W-26/W-27|CI（`test-macos`）与发布产物（`-native` 命名、appcast、回滚）|design 25 §8.4|
-|W-28…W-32|M5 实机门禁与验收|design 25 §8.5；开放状态见 STATUS|
+W-01…W-32 的判定与契约落点以 design 25 §8.5 与 §3.2–§8.4 为准（本文件不手抄映射表）；开放状态见 [STATUS.md](./STATUS.md)。
 
 ### 2. Windows v1（**冻结，不排期**）
 
-> 契约与决策：`docs/design/archive/23-windows-support.md`（ARCHIVED）。本文只留未实现/外部门禁、基线登记口径与取舍；
-> 每条须真实 Windows/CI 验证才算完成。
->
-> **冻结归档**：Windows 桌面腿随 Electron flavor 冻结、不发布、不排期（见 [electron-frozen.md](./electron-frozen.md)）；本节只在按 §6 复活时执行，原文保留为复活基线。
+> **冻结归档**：Windows 桌面腿随 Electron flavor 冻结、不发布、不排期（见 [electron-frozen.md](./electron-frozen.md)）；复活按 electron-frozen.md §6 与 design 23（ARCHIVED）执行。外部门禁 M0–M6、win32 基线登记口径与平台门控拒绝码基线是冻结期的验收/测试记账，原文保留在 git 历史（本文件不再复述）。
 
-#### 2.1 外部门禁（需真实 Windows runner / 实机 / 产物；**冻结原表，复活后执行**）
+#### 2.1 外部门禁（冻结原表）
 
-- M0：push 后 `test-windows` 首跑绿（连续 3 次）；按 §2.2 基线口径把首份真实数据填入下表。
-- M0.5：上游 `@deepseek-ai/dsh` win32-x64 最小复现 spawn + ready（阻断级 R1）；NSIS 是否写
-  `HKCU\\Software\\Classes`（决定 C17，需 windows-2022 最小构建实证）；Defender 实扫计时；原生依赖预构建核对
-  （koffi 称预构建随包，仍以安装实测为准）。
-- M1：test-windows 腿上 `win32-lifecycle` 集成测试真实跑绿（CIM/netstat/taskkill 实证）；design 02 §5.1 契约改写；
-  mac/linux 全量回归。
-- M2a：Windows runner 上事务矩阵（安装→切换→探针失败→回滚→恢复，env 门控开启态）+ `win32-readonly-rm` 决策门
-  （Node rm 对只读树行为）+ icacls 实机输出核对。（私有状态读写的 win32 身份回退存在，事务首步不再因缺
-  `O_NOFOLLOW` 抛错；矩阵本身仍需 runner。）
-- M2b（纪律门禁：M2a 全绿前不做）：`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS` 门控翻转
-  （main.ts/dsh-runtime-controller/apply-now-gate/UI/i18n/版本 chip）；win32 测试 diff 对照基线全归因；
-  Windows 11 实机故障注入全链 + 只读投影文案移除。
-- M3：design 23 §7 实机矩阵全勾（托盘/关窗/唤醒/SSH 密钥隧道/updater stable+beta/深链特殊字符 URL/
-  防火墙 loopback 无弹窗/ACL 查询）+ 打包产物核对（图标/preload）。
-- M4：登录自启注册表实测/卸载残留（nsis-uninstall-cleanup）、深链冷热启动 + `&` 字符 URL、open-in 盘符实机、
-  NSIS protocols 实证（与 M0.5 合并）。
-- M5：Azure Trusted Signing/MSIX 形态评估（需凭据/发行决策）；dry-run 全链 + 实机 Release 安装 + 更新链路演练
-  （design 23 §8）。
-- M6：妥协清单、支持矩阵文档与 CHANGELOG 条目随正式版本落定（design 23 §1 分期表）。
-- 遗留低优（记录在案）：supervisor win32 sendSignal 无宽限重试（方向 fail-closed）；双模块解析器重复
-  （win-probes/windows-process 互注 + 双端 CI 测试）；decideDeepLink platform 入参保留为显式契约。
+M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 design 23 §7/§8 与 [electron-frozen.md](./electron-frozen.md) §6 执行。
 
-#### 2.2 基线登记口径（M0 首跑后填写；**冻结基线，复活后填写**）
+#### 2.2 基线登记口径（冻结基线）
 
-> 用途：Windows 首版修复前基线。第一次 `test-windows` CI 腿跑绿后，把每个测试在 win32 的 pass/skip 集合与每个
-> 平台门控的拒绝行为填入下表；此后每个里程碑的 win32 测试变化必须对照本表归因（diff = 预期解锁集，不允许
-> 「顺手改绿」）。锚 = 测试文件 + 用例名/描述，不记行号（行号会随实现漂移）。
-
-|套件|win32 pass|win32 skip（用例锚理由）|首跑日期/commit|
-|---|---|---|---|
-|test:runtime|待填|待填|—|
-|test:control-plane|待填|待填|—|
-|test:desktop|待填|待填|—|
-|test:gateway|待填|待填|—|
-|typecheck 全组|待填|—|—|
-
-**已知 skip 清单（翻转前的登记快照）**
-
-|位置|内容|翻转后去向|
-|---|---|---|
-|control-plane `test/protocol/protocol.test.ts`（`terminateChild waits past leader exit and kills a stubborn same-group descendant`、`unproven attempt termination aborts port retries and preserves the pid ledger`）|Unix detached 进程组契约|win32 等价测试（M1 `win32-lifecycle.integration`）或 POSIX-only 注释|
-|dsh-runtime `test/install/runtime-installer.test.ts`（`RuntimeInstallerSupervisor` 进程组回收组：abort/timeout、daemonized descendants、stubborn descendant；`published tree is recursively read-only`）|进程组契约/不可变树/symlink fixture|实现类（树回收/清属性）后 win32 等价；symlink 类标 POSIX-only|
-|dsh-runtime `test/store/metadata-authority.test.ts`（authority-reader symlink、replaced-parent 用例）、`snapshot-store.test.ts`、`known-good-monitor.test.ts`、`runtime-metadata-recovery.test.ts`、`dsh-runtime-store.test.ts`（eviction 只读不可变树）|symlink/权限/只读不可变树 fixture|junction 或普通文件替代后 win32 等价；eviction 由 `win32-readonly-rm` 决策门（清属性实现或 Node rm 自带）决定|
-|gateway `test/auth/store-permissions.test.ts`（POSIX 0700 组：stateDir/子目录/文档 owner-only）|POSIX 0700|有 win32 ACL 保留测试替代，保持 skip|
-|control-plane `test/host-lifecycle/reaper.test.ts`（`reaper: a symlinked pid record is kept as unsafe evidence and never drives a signal`）|symlink fixture（权限与平台相关）|POSIX-only 注释|
-
-**平台门控拒绝码基线（现状断言，翻转时逐个销号）**
-
-|门控|现状（win32）|断言位置|目标|
-|---|---|---|---|
-|dsh 运行时 mutation|`platform_read_only`|gateway runtime-manager；desktop `runtimeManagementSupported=false`（env `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 开启验证态）|desktop 解锁（仅 M2a 真实 win32 验证后，M2b）；gateway 保持|
-|SSH 密码|IPC 拒存（引导 keys/Pageant）|`ssh-provider.ts` sshPasswordSupported/main 门消息|保持；一键免密 UI = 后续特性|
-|登录自启|已解锁（代码）：supported=true、`setLoginItemSettings`（HKCU Run）|`chamber-settings.ts` computeSupported/`main.ts` applyLaunchAtLogin|runner/实机验证注册表与卸载清理|
-|深链注册|已解锁（代码）：打包态 register(no-args)，dev skip|`deep-link.ts` decideDeepLinkProtocolRegistration|runner 实测注册表 + 冷热启动|
-|open-in 本地路径|已解锁（代码）：local 走 validateLocalPath（盘符/UNC）|`open-in.ts` runOpenInLaunch/finder|实机盘符路径打开验证|
-|0700/0600 语义|继承 ACL + no-follow/identity + icacls 启动收紧|store-permissions/private-file/win-acl.ts（main 接线）|runner/实机 ACL 查询核对|
+首跑后的 pass/skip 集合、已知 skip 清单与平台门控拒绝码基线原文见 git 历史；复活首跑后按 design 23 §7 重建本表。
 
 #### 2.3 仍生效的取舍
 
-取舍唯一权威是 `docs/design/archive/23-windows-support.md` §5「妥协点（发布附注，唯一权威）」与
-`docs/progress/STATUS.md`「范围决策与必要取舍」：F1 无进程组等价、能力先于开关（M2a 前只读/禁用）、
-Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记在彼，本文不复述（避免第三份副本漂移）。
+取舍唯一权威是 `docs/design/archive/23-windows-support.md` §5「妥协点（发布附注，唯一权威）」与 `docs/progress/STATUS.md`「范围决策与必要取舍」：F1 无进程组等价、能力先于开关（M2a 前只读/禁用）、Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记在彼，本文不复述（避免第三份副本漂移）。
 
 ## C. 未实现功能想法（C 类）
 
@@ -424,15 +319,13 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 - **session-state 语义单源（A-1/A-2/A-3）**：协议常量、wire 类型、descriptor 解析、capability 分类与 turn-end 分类单源在 `packages/dsh-chamber-wire/src/session-state.ts`；mux 路径、`$events` 端点、follow 载荷、goal 投影白名单与 `goal/activation-changed` 归一化单源在 `packages/dsh-chamber-wire/src/mux-frame.ts`；`isPlainRecord`/`isRecord`/`isWatermark` 单源在 `packages/dsh-chamber-wire/src/json-guards.ts`（浏览器经 client-core 的 `./session-state`、`./mux-frame`、`./json-guards` 具名面）。**刻意的残余差异（不得「顺手统一」）**：①外层 frame 容器解析仍分两处（`parseMuxServerFrame` ⇄ `parseMuxFrame`，容器与返回形状不同，只共享内层语义）；②status args 的对象形仍只有 renderer 接受；③`packages/desktop/store-file-hygiene.ts` 的同名守卫是**宽松**变体（任意非数组对象），已在文件内注明；④fork `dsh-api-gateway/src/stream-protocol.ts` 按 pin 重放纪律保留；源码文本锁步测试只保留 fork 侧与瀑布字面量两类。
 - **第二实现复核**：`openPromise` 三态证据在 `packages/dsh-chamber-client-ui-open-in/src/client/session-stream-health-probe.ts`；`safeStorage` 访问器 5 份（gateway-provider / host-assembly / main / registry-projection / sidecar-ctx）；spec 分类的客户端对照文件需先重新取证再收口。
 - **client/seed god 文件与形态**：`PluginDialog.tsx`（约 32 个 useState）、`ConnectionsSection.tsx`、
-  `ServerSection.tsx`（JSX 内派生状态残留）等已在棘轮内；`packages/dsh-chamber-seed-git-worktree/src/core.ts`、
-  `packages/dsh-chamber-seed-archive-cleanup/src/core.ts`、`packages/renderer/src/live-graph.ts` 是否纳入棘轮由后续裁决定。
+  `ServerSection.tsx`（JSX 内派生状态残留）等已在棘轮内；`packages/dsh-chamber-seed-git-worktree/src/core.ts`、 `packages/dsh-chamber-seed-archive-cleanup/src/core.ts`、`packages/renderer/src/live-graph.ts` 是否纳入棘轮由后续裁决定。
 
 #### 1.6 跨包逐字重复复核（口径与结论）
 
 - 口径：多行函数体（≥3 行）逐字相同且跨包为重复；台账只统计较大函数体，两者差异属**口径**而非新增重复。
 - 结论：在既有约束（不新增抽象包、不动 fork、不引入反向依赖）下**可删 0 组**，登记而非强改。唯一成组的是
-  control-plane `win-probes.ts` ⇄ dsh-runtime `windows-process.ts` 的 parity 锁
-  （`test/protocol/win-probes-parity.test.ts` 钉住，删除即红）；其余为 3–5 行守卫/错误串助手与 fork 内部重复。
+  control-plane `win-probes.ts` ⇄ dsh-runtime `windows-process.ts` 的 parity 锁 （`test/protocol/win-probes-parity.test.ts` 钉住，删除即红）；其余为 3–5 行守卫/错误串助手与 fork 内部重复。
 
 #### 1.7 未删项与判面/锁步依据（非漏做）
 
@@ -455,24 +348,18 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 |---|---|---|---|---|
 |vendor `allowBuilds` 锁步（根 `pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）|人工同步|提交|无|新增原生依赖漏登或漏 deny 会静默漂移|
 
-`dist/` 整族在 `.gitignore`：干净 checkout 的「缺失」是正常态——首批 host/dsh-runtime 产物须先由
-`pnpm run build:artifacts` 自举，其余按需构建；要防的是本地/打包态的「存在但陈旧」——CI 每次全新构建，
-看不到这一类。上表 `scripts/*` 指 `packages/desktop/scripts/*`（Electron 构建脚本；gateway 侧
-`packages/gateway/scripts/*`），非仓库根 `scripts/`。上表剩余的 vendor allowBuilds 已在 G2/G8 登记表登记为带理由的 `exemption`；
+`dist/` 整族在 `.gitignore`：干净 checkout 的「缺失」是正常态——首批 host/dsh-runtime 产物须先由 `pnpm run build:artifacts` 自举，其余按需构建；要防的是本地/打包态的「存在但陈旧」——CI 每次全新构建， 看不到这一类。上表 `scripts/*` 指 `packages/desktop/scripts/*`（Electron 构建脚本；gateway 侧 `packages/gateway/scripts/*`），非仓库根 `scripts/`。上表剩余的 vendor allowBuilds 已在 G2/G8 登记表登记为带理由的 `exemption`；
 `verify-artifact-freshness` 对「门观测到但未登记」「登记了但门没观测」两个方向都判红。
 
 #### 2.2 最小守卫建议
 
 - **P2 G7 vendor allowBuilds 锁步**：断言根 `pnpm-workspace.yaml` 的 `allowBuilds` 与
-  `packages/dsh-runtime/src/allow-builds.mjs` 的 `ALLOW_BUILDS`/`DENY_BUILDS` 镜像关系。成本低；收益：把 AGENTS
-  的硬事实从人工同步变成门。
+  `packages/dsh-runtime/src/allow-builds.mjs` 的 `ALLOW_BUILDS`/`DENY_BUILDS` 镜像关系。成本低；收益：把 AGENTS 的硬事实从人工同步变成门。
 
 #### 2.3 开放问题
 
-- 标记串与输入摘要（G3）当前并存：标记只证明「构建发生过」，摘要才判「输入没变」，两者语义不同，保留。
-- 失败信息带重建命令已是实现约束（G3/G5 共用）；新增守卫必须沿用。
-- Swift `.app` 装配腿（`macos/scripts/build-swift-app.mjs`）在 `--skip-sidecar` 复用旧装配时没有等价 G5 兜底——是否接线到该脚本需 macos owner 决定（同一 `assertPackArtifactsFresh` 一行调用）。
-- G3 输入集的 vendor 只按 `harness.commit` 计入（不逐文件哈希 2 万文件/190MB），同 semver 范围内第三方小版本漂移不改变 `inputsHash`；发布/打包链靠「全新构建 + 构建顺序」兜底。
+- 标记串与输入摘要（G3）当前并存：标记只证明「构建发生过」，摘要才判「输入没变」，两者语义不同，保留。失败信息带重建命令已是实现约束（G3/G5 共用），新增守卫必须沿用。
+- Swift `.app` 装配腿（`macos/scripts/build-swift-app.mjs`）在 `--skip-sidecar` 复用旧装配时没有等价 G5 兜底——是否接线到该脚本需 macos owner 决定（同一 `assertPackArtifactsFresh` 一行调用）。G3 输入集的 vendor 只按 `harness.commit` 计入（不逐文件哈希 2 万文件/190MB），同 semver 范围内第三方小版本漂移不改变 `inputsHash`；发布/打包链靠「全新构建 + 构建顺序」兜底。
 
 ### 3. 页面侧性能残项（推迟中）
 
@@ -482,27 +369,18 @@ Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记�
 
 #### 3.1 侧栏 T2：更细的上下文拆分与按来源缓存
 
-**证据（代码）**：sidebar 的行状态把 menuOpen/renaming/rowErrors 与全量字段 ctxValue 放在同一条更新通道上，
-任何一处的交互都会走到全部 ServerSection 与全部行；搜索通道（client-core 的 search-state.ts）每个按键立即
-notify，menus.ts 与 ServerSection.tsx 都订阅它，所以一次键入会重渲染所有壳的全部行；
+**证据（代码）**：sidebar 的行状态把 menuOpen/renaming/rowErrors 与全量字段 ctxValue 放在同一条更新通道上， 任何一处的交互都会走到全部 ServerSection 与全部行；搜索通道（client-core 的 search-state.ts）每个按键立即 notify，menus.ts 与 ServerSection.tsx 都订阅它，所以一次键入会重渲染所有壳的全部行；
 sessionsOf/orderedWorkspaces/dropEnv 每次渲染按来源重算。
 
 **已知前置**：`ctxValue` 的 useMemo 覆盖全量字段，但各 hook 提供的动作回调（toggleMenu/closeMenu/commitSessionDrag/onNewSession 等）仍每次渲染重建，因此 `ctxValue` 只在回调身份恰好不变时命中；要拿到完整收益需先把这些回调 useCallback 化。
 
 **设计**：menuOpen/renaming/rowErrors 拆成独立 context（只有需要它们的行与 section 订阅）；
-sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) 加一层按来源缓存；搜索通知合并到一次
-（微任务或帧级），把「每键通知」降为「每帧至多一次」。
+sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) 加一层按来源缓存；搜索通知合并到一次 （微任务或帧级），把「每键通知」降为「每帧至多一次」。
 
 **预期收益**：交互提交从 O(全部 section x 全部行) 降到 O(1) 行加 O(1) section；搜索键入从壳数 x 全行降到一次通知；
 派生对象数按来源从每次渲染 N 个降到变化时才新建。结构性倍数，不承诺毫秒。
 
-**风险**：context 拆分会让「同一事实两个座位」的同步面变多（menuOpen 与 renaming 当前共用一个状态源，拆开要
-保持同一行不会出现半开菜单）；搜索通知合帧后，键入的可见反馈上界从「立即」变成「下一帧」，需要实机确认主观延迟。
-现有源码文本锁（session-row-state.test.ts 把 7 个侧栏源文件——6 个 tsx + server-section-model.ts——读成文本
-正则断言）在拆分时必须同步更新，否则锁会失真。
-
-**验证**：sidebar 包全部测试 + renderer 接线锁；实机用 Web Inspector 记录「单击 kebab 后的重渲染行数」与
-「搜索键入一次的通知次数」前后对比。
+**风险与验证**：context 拆分会让「同一事实两个座位」的同步面变多（menuOpen 与 renaming 当前共用一个状态源，拆开要保持同一行不会出现半开菜单）；搜索通知合帧后，键入的可见反馈上界从「立即」变成「下一帧」，需要实机确认主观延迟。现有源码文本锁（session-row-state.test.ts 把 7 个侧栏源文件——6 个 tsx + server-section-model.ts——读成文本 正则断言）在拆分时必须同步更新，否则锁会失真。验证 = sidebar 包全部测试 + renderer 接线锁；实机用 Web Inspector 记录「单击 kebab 后的重渲染行数」与「搜索键入一次的通知次数」前后对比。
 
 #### 3.2 E2 首屏 markdown 家族按需化（mainGraph 唯一大池）
 
@@ -510,9 +388,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 **设计**：markdown 高亮/公式渲染改动态 import（首块先纯文本、空闲后升级，或按会话是否已出现代码块/公式预取）；zod 侧改 `zod/mini` 或把非 boot 路径（sidebar-right persistence 等）改惰性 import。shiki/katex 在 vendor 源内，需 vendor patch（第二类准入 = macOS 同机 A/B：首个代码块/公式 TTI + 帧成本）或上游接受；chamber 自有副本（connection/web）的 zod 可先改。
 
-**风险**：首块纯文本回落带来视觉抖动与时序契约变化，首屏 TTI 与块级体验冲突需真机 A/B；动态 import 后的 chunk 预算与预取策略要同批核。
-
-**验证**：`build:renderer` 前后 perf-sizes（mainGraph/headCss/chunk 数）；macOS Web Inspector 记录首个代码块/公式 TTI、滚动帧时；失败即回退（不改 vendor 静态图）。
+**风险与验证**：首块纯文本回落带来视觉抖动与时序契约变化，首屏 TTI 与块级体验冲突需真机 A/B；动态 import 后的 chunk 预算与预取策略要同批核。验证 = `build:renderer` 前后 perf-sizes（mainGraph/headCss/chunk 数）；macOS Web Inspector 记录首个代码块/公式 TTI、滚动帧时；失败即回退（不改 vendor 静态图）。
 
 #### 3.3 page-channel/sessionFacts 重订阅修正（A5）
 
@@ -544,9 +420,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 **设计**：① 把 cursor/lastEventAt 从快照对象移入内部账本，下一次真实交付再合成快照（需同批改 4 处游标门：`applyItem`、`publishCompleteSnapshot`、`publishProbe` priorCursor、reset/stop）；② `mergeRuntimeFacts` 按 (runtime, correctionArms, overlay, stale) 四元组身份 memo——前置是 `factsOverlay` 按快照身份 memo（否则 overlay 每次新建、零命中）；③ `sessionProjectionRow` 按 (行对象身份, archived/pinned/pinSetKnown) memo；④ mux 交付摘要的每事件 O(rows) 分配：`snapshotDigest` 对全量行算 `sessionFactsRowSignature`（JSON.stringify），行对象身份稳定时可对签名做按行对象 WeakMap 缓存（须先证 source-mux-facts 复用 row 身份、不原地改行），收益 = 省每事件全表序列化。
 
-**风险**：① 会让 `data-chamber-fact-at` 在内容不变期更旧（渲染字段语义变化，需裁决）；②③ 收益在 A2a/A1' 后约每来源 ≤1 次/秒，需 heap allocation profile 证明占比再落地。
-
-**验证**：现有回归集 + 新不变量测试；macOS heap profile / `__dshChamberRenderCounters` 前后对比。
+**风险与验证**：① 会让 `data-chamber-fact-at` 在内容不变期更旧（渲染字段语义变化，需裁决）；②③ 收益在 A2a/A1' 后约每来源 ≤1 次/秒，需 heap allocation profile 证明占比再落地。验证 = 现有回归集 + 新不变量测试；macOS heap profile / `__dshChamberRenderCounters` 前后对比。
 
 **未闭环测试 / owner 登记**：⑤ A6/A7⑤ 签名缓存的行为测试需把 `reportSignatureOf`/`snapshotSignatureOf` 抽成纯工厂（当前仅源码锁）；⑥ Swift 纯函数缺 XCTest（macOS 测试 target；本机 NOT RUN）：`MainWindowController` 的 `shellVisibilityFacts`/`shellVisibilityScript` 与 `SwiftEdgeHostLegs` 的 keep-awake `desired = keepAwakeRequested && windowVisible` 判据；`pushShellVisibility` 接线（AppDelegate 4 处恢复入口 + 3 处 orderOut 双保险、SwiftEdgeHostLegs focusMainWindow 腿）同样缺 XCTest/源文本锁；⑦ W2 hairline `--dsh-hairline-width` 页面级 refcount（每个 ctx.effect 各自写/还原，A dispose 会删仍在的 B 的值；上游同形态，本补丁未扩大）；⑧ D2 恢复补偿 hook 行为测（当前源码锁；门序已改为先判统一相位门、后记 250ms 去重，仍缺行为测试）；⑨ A1 摘要行 key 与 `start()` 重置回归测试（同内容换 id 必须交付、新订阅寿命首帧必交付）；⑩ 1s 桶两份字面量（`source-mux-facts.ts` 的 `FACT_AT_PUBLISH_BUCKET_MS` 与 `derive.ts` 的 `FACT_AT_SIGNATURE_BUCKET_MS`）统一到单源；⑪ A3 打开态 A/B 必须包含「隐藏壳静默死亡 >~5min + 恢复」场景（mounted 为 sticky 权威位，observer 可能已不存在）。
 

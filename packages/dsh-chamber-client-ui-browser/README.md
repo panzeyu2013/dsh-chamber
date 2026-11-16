@@ -46,15 +46,3 @@ Remote Browser（[design 28 v3](../../docs/design/client/28-remote-browser.md)�
 3. 远端 source 必须带 64-hex boot fingerprint（local 是字面量 `local`），否则警告并缺席；注册上游 8 语言 dictionary（`sidebarBrowser` namespace）。
 4. `ctx.inject(['sidebarRight','sidebarRightTabs'])` 等右栏宿主行（deferred chunk 在页面缓存后可能早于宿主行 apply；5s 缺席诊断只发一次）。
 5. 在服务可用上下文执行上游 registration body：store、`browser.new` shortcut、tab type（`multiple:true`、`priority:'builtin'`、guide order 30、`keepMounted:true`）、keyed body/title 两个座位；native guest page factory 注入 `ForwardFrameResolver`。
-
-## 测试
-
-```
-node ./scripts/test.mjs
-```
-
-- `test/url` / `test/navigation`：上游 url/navigation spec 的 node:test 版（地址默认 https、allowlist、bounded history）。
-- `test/forward/resolver.test.ts`：唯一 diff（local 直连 / ssh `127.0.0.1`·`localhost` attach / 离开释放 / 失败失败条 / 串行化 / 每 tab 一个 consumer）。
-- `test/carrier/native-guest.test.ts` / `guest-state.test.ts` / `popup-limit.test.ts`：native guest 桥 guard、push 投影、占位几何、地址/历史投影与 popup 限流。
-- `test/lifecycle/forward-controller.test.ts` / `test/launcher/forward-bridge.test.ts`：既有租约与 forward 契约守卫。
-- `test/registration/registry-wait.test.ts` / `test/locks/registration.test.ts`：右栏服务就绪竞速、8 文件 verbatim digest 表与 `BrowserPage` fork-diff 面、carrier 门（桥缺失不注册）、上游 DOM/copy/definition 锚点。

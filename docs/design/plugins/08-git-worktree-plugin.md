@@ -275,32 +275,9 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - **回滚**：P5b 关闭 bundle + 重启；删除不删用户数据；Swift 保留，无 sidecar 回退项。
 
 ### 7.5 验收矩阵（V1–V22）
-合并/PR 门 = V1/V2/V3/V4/V5/V6/V16 的 dev Swift 子集 + PR CI + build:renderer；其余是发布门（尤其 V8–V15、V17–V22）。未跑项按 release 清单开账，不能用“代码已合”代替。
 
-| ID | 场景 | 判据 | 门 |
-|---|---|---|---|
-| V1 | 主 checkout 创建/新建/提交 | in-repo 创建后源 git status 干净；workspace-write 下 commit 成功 | Merge |
-| V2 | 同一 checkout 多会话 | 行内直接新建两个会话，无默认提示，计数=2 | Merge |
-| V3 | running 所在 checkout 删除 | 被拒（当前/其它 running 均命中） | Merge |
-| V4 | idle 所在 checkout 删除 | 删除成功；下次消息 ensure 回源 | Merge |
-| V5 | dirty checkout 删除 | 先确认 discard，删除成功 | Merge |
-| V6 | linked/子目录源 | source-not-main-checkout；submodule 源被拒 | Merge |
-| V7 | 空仓库/detached HEAD | 可创建并展示短 commit | Release |
-| V8 | forge/tool 创建 | 产物成行、会话按 workingDirectory 放置 | Release |
-| V9 | forge New Session 开关/创建卡/hold | 四项 UI 可点，hold 生效 | Release |
-| V10 | forge restore/删除互操作 | restore 只恢复 forge record；反向行消失 | Release |
-| V11 | 未挂载 connected | facts/行仍出现，交互可用 | Release |
-| V12 | 冷会话放置 | 投影到达后落 checkout，不闪源行 | Release |
-| V13 | 多来源 local+SSH | 行/事实/操作互不串源 | Release |
-| V14 | Windows/macOS 路径 | 大小写/分隔符/规范化不丢行与序 | Release |
-| V15 | 源 workspace 删除 | 行消失，不出现幽灵 | Release |
-| V16 | 拖动/折叠/树/pin | 族内拖动、刷新保持；fold/tree/pin 一致 | Merge |
-| V17 | 窄栏/flat/空态/status-unknown | 无动作/不渲染行/空态/保守健康 | Release |
-| V18 | node 实际创建 | Swift 打包态 + Finder 各建一次（node 来自 sidecar） | Release |
-| V19 | LFS/clean-smudge/required | 指针降级可解释，手动 git lfs pull 后可用 | Release |
-| V20 | 主 checkout 未注册/池注册 | 无行/无入口；池注册以 workspace 行存在 | Release |
-| V21 | Swift 腿完整验收 | 四项 UI、同池三条、node 创建（Electron 归档参考，不验收） | Release |
-| V22 | 分支候选按需读取 | 外部新建本地分支后打开对话框即可见；Existing 页签已检出分支禁用（旧宿主回退列表不具备该事实，豁免）；读取失败显式错误 + 重试；旧宿主回退快照列表；local/ssh/gateway 三形态一致（404 分类/线格式/状态机由单测前置覆盖；旧宿主回退行为在实机 V22 复核） | Release |
+V1–V22 的判据与执行见 [release-checklist](../../checklists/release/release-checklist.md) 与 [STATUS](../../progress/STATUS.md)；未跑项按发布清单开账，不以「代码已合」代替。
+
 ## 8. Rejected alternatives（统一模型与 P5b）
 - **worktree 作为 workspace（旧模型：`workspace.create` + `session.create` + 补偿 saga + 删除时 `workspace.delete`）**：否决。会话/工作区是两个持久化域，创建要补偿、删除要归档前置与 registered 删除；未挂载来源还要回声/位置意图才能看见空工作区；而 workspace-write 沙盒仍要求 checkout 在源 checkout 内。统一模型把 checkout 降为 Git 事实、会话留在源根，用一条 thin `enter` 完成放置，删掉了 workspace/session 生命周期、rollback、echo 与 registered remove。代价 = 旧池必须清空（§7.4）且池外树不可见；接受。
 - **自研 forge / 自建 restore**：否决。forge 已有 composer 开关、创建卡/hold、restore/ continue、右栏 tab 与 agent `create_worktree`；自研等于复制一套执行面与会话耦合，还要自己维护 restore 记录。保留 seed 只做仓库级 inventory/删除/enter，UI 交给 forge；代价 = restore 仅 forge record，seed 树无 restore（接受的不对称）。

@@ -5,8 +5,7 @@
 
 ## Remote dsh instance (systemd)
 
-The remote server only needs the dsh API-side web profile on loopback — no web frontend: the UI
-comes from the locally reused frontend through the `/api/i/dsh-<id>/*` same-origin proxy (SSH transport).
+The remote server only needs the dsh API-side web profile on loopback — no web frontend: the UI comes from the locally reused frontend through the `/api/i/dsh-<id>/*` same-origin proxy (SSH transport).
 
 1. Requirements — a systemd Linux host, Node.js 22+, and SSH access from the chamber-desktop
 machine (key auth; the desktop drives `systemctl` over SSH).

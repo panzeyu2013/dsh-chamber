@@ -20,22 +20,9 @@
 ## 2. 形态与分层
 
 ```text
-┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（编译期打包，08 同款）─┐
-│  conversation.session.header.utilities 条目：会话头部 utilities 行内按钮      │
-│  （order -10，排在 vendor "Session log" 左侧；placement 见 §6.1）             │
-│  coordinator 单例：应用清单/可用性事实（主进程 + 实例内 host 包，单飞共享）  │
-│  门控（§6.3）：来源可用应用集非空 ∧ 该 header 的会话属于有 path 的工作区，     │
-│  否则渲染 null；本地来源走 vscode://file/、远程 ssh 走 ssh-remote+            │
-└───────────────────────────────┬────────────────────────────────────────────┘
-                                │ IPC（trustedIpc 围栏：open-in-apps / open-in）
-┌─ 桌面主进程 deep-link.ts（深链核心）+ 主进程 vscode 覆盖 ────────────────────┐
-│  DeepLinkHandler 注册表（scheme → parse → execute，镜像 TransportProvider）  │
-│  └ vscode handler：instance 白名单+实查 → authority 构造（§3.2）→            │
-│    buildVscodeRemoteUrl（§3.3 编码纪律）→ openExternal（scheme 硬编码）       │
-│  detectVscodeAvailability(platform)：纯 fs + PATH 扫描，绝不 spawn（§5）      │
-│  主进程接线：顶层 open-url + pendingIntents 队列 + 打包门控协议注册           │
-│  + second-instance argv（无深链 argv → 仅 showMainWindow）+ quit guard        │
-└─────────────────────────────────────────────────────────────────────────────┘
+客户端插件（复合首屏）：会话头部 utilities 按钮（order -10）+ coordinator 单例（应用清单/可用性，单飞共享）+ 门控（来源可用集非空 ∧ 工作区有 path，fail-closed）
+IPC（trustedIpc）：open-in-apps / open-in → 桌面主进程 deep-link.ts（DeepLinkHandler 注册表 + vscode handler：instance 白名单实查 → authority → buildVscodeRemoteUrl → openExternal）
+主进程接线：顶层 open-url + pendingIntents 队列 + 打包门控协议注册 + second-instance argv（无深链 argv → 仅 showMainWindow）+ quit guard；可用性探测 detectVscodeAvailability 纯 fs/PATH、绝不 spawn
 ```
 
 - `packages/renderer` 只把插件静态注册进复合 entry（[08-git-worktree-plugin.md](../plugins/08-git-worktree-plugin.md) §7 锁步），不拥有深链事实/业务 UI；`packages/control-plane` 零改动（不经实例反代）；`packages/desktop` 持有深链核心与可用性探测，新 IPC 走既有 `trustedIpc` 围栏（[05-connection-manager.md](../control-plane/05-connection-manager.md) §7.4）。
@@ -67,10 +54,7 @@ dsh-chamber://open-vscode?instance=<id>&path=<远端绝对路径>
 ### 3.3 打开 URL 构造（编码纪律，纯函数）
 
 ```ts
-buildVscodeRemoteUrl(host, user, sshPort, path): string
-// → vscode://vscode-remote/ssh-remote+<authority><encoded-path>   （远程源）
-buildVscodeFileUrl(path): string
-// → vscode://file/<encoded-path>                                  （local 源）
+buildVscodeRemoteUrl(host, user, sshPort, path) → vscode://vscode-remote/ssh-remote+<authority><encoded-path>；buildVscodeFileUrl(path) → vscode://file/<encoded-path>（纯函数，逐段 encodeURIComponent，scheme 硬编码 `vscode:`）
 ```
 
 - scheme **硬编码 `vscode:`**，绝不把原始深链 URL 透传给 `shell.openExternal`（对比 `isAllowedReleaseUrl` 白名单纪律）。
@@ -89,11 +73,7 @@ buildVscodeFileUrl(path): string
 ### 4.1 DeepLinkHandler 注册表
 
 ```ts
-interface DeepLinkHandler {
-  scheme: string                 // 本 handler 处理的深链 scheme
-  parse(url: URL): Intent | null // 校验失败返回 null（+ 日志）
-  execute(intent: Intent): Promise<{ ok: true } | { ok: false; error: string }>
-}
+interface DeepLinkHandler { scheme: string; parse(url): Intent | null; execute(intent): Promise<{ok:true} | {ok:false; error: string}> }
 ```
 
 vscode handler 为第一个实现；未来「在终端打开/浏览器打开」等深链动作只增 handler，核心零改动（镜像 05 §7.6「新来源接入 = 新 provider + kind 注册」）。
@@ -117,9 +97,7 @@ vscode handler 为第一个实现；未来「在终端打开/浏览器打开」�
 
 ### 5.1 判定（纯函数、零副作用）
 
-```ts
-detectVscodeAvailability(platform): { available: boolean }
-```
+可用性判定：`detectVscodeAvailability(platform): { available: boolean }`（纯 fs + PATH 扫描，绝不 spawn、<1ms；只认稳定版 VS Code，Insiders/Cursor/VSCodium 视为不存在）。
 
 - **纯 fs + PATH 扫描，绝不 spawn、绝不执行任何东西**（探测自身无副作用、<1ms）。
 - macOS：`/Applications/Visual Studio Code.app` 或 `~/Applications/Visual Studio Code.app` 存在，或 PATH 中存在 `code`；Linux：PATH 中存在 `code`，或常见安装路径存在；Windows：`%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe` 存在，或 PATH 中存在 `code.cmd`。
@@ -170,21 +148,11 @@ detectVscodeAvailability(platform): { available: boolean }
 
 ### 7.2 客户端插件锁步（10 处，设计 08 §7 + chamber-entry 头注）
 
-1. `chamber-entry.ts` 静态 `import * as UiOpenIn from '.../client'`（首屏）。
-2. `chamber-entry.ts` apply() `ctx.plugin(UiOpenIn)`。
-3. `chamber-entry.ts` `COVERED_FACTORIES` 加 `['@dsh-chamber/dsh-chamber-client-ui-open-in', coveredFactory(UiOpenIn)]`。
-4. `chamber-covered.ts` `CHAMBER_COVERED_IDS` 加 id。
-5. `chamber-covered.ts` `CHAMBER_COVERED_FACTORY_IDS` 加 id（三向锁步由 `assertCoveredFactoryLockstep` + CI host-graph.test.ts 强制）。
-6. `vite.config.mjs` alias 三行（`/`、`/client`、`/shared`）。
-7. 新包 `package.json`（`dsh.client` 声明 inject `['slots','locale']`）+ `tsconfig.json` + 各包 `src/vendor-modules.d.ts` 存根（引用 repo 级 `types/vendor-modules.d.ts`）+ `window.dshChamber.openIn/deepLink` ambient 镜像（参照 connections `global.d.ts` 模式）。
-8. 根 `package.json` 增专属 `typecheck:<插件>`（参照 `typecheck:git`）。
-9. `.github/workflows/ci.yml` typecheck 块增同一脚本。
-10. `locales.ts` zh/en + `LocaleNamespaceMap` 声明（手动锁步——`verify:i18n` 只校验 docs 双语对，不覆盖插件词典，勿声称其为门）。
+十处接线单源 = 设计 [08](../plugins/08-git-worktree-plugin.md) §7 与 `packages/renderer/src/chamber-entry.ts` 头注；三向锁步由 `assertCoveredFactoryLockstep` + CI 的 `host-graph.test.ts` 强制。
 
 ### 7.3 desktop 接线
 
 - **打包面**：`packages/desktop/*.ts`（含 `deep-link.ts`）由 electron-builder `files` 的 `*.ts` glob 整体收入（`!*.test.ts` 排除），新增主进程模块无需逐文件登记；只有必须解包的模块才进 `asarUnpack`（当前 `sanitize-error.ts` / `dsh-runtime-controller.ts`）。**类型面**：根 `tsconfig.json` 以 `packages/desktop/*.ts` / `*.cts` glob 收入。
-- `test:desktop` 脚本逐项列出测试文件（含 `test/desktop-shell/deep-link.test.ts`、`test/desktop-shell/open-in.test.ts`）——新增测试必须登记。
 - `preload.cts` 暴露 `deepLink.onIntent()/ready()/ack()` 与 open-in 面（`openIn.apps()/open()`；`build:preload` 自动编译，**Electron 冻结归档**）；Electron main.ts 接线（§4.2/§4.3）；electron-builder `protocols` 键（`schemes: ['dsh-chamber']`，Electron 冻结归档；Swift 壳的深链在 Info.plist/AppDelegate，现行）。
 - release.yml 版本断言自动纳入：`release-preflight --versions-only` 数据驱动核对「根 + `packages/` 下全部非 fork 包 = 目标版本」（`@deepseek-ai/*` fork 副本按 FORK_VERSION），新包必须与根同版本，不额外手工登记。
 
@@ -197,8 +165,7 @@ detectVscodeAvailability(platform): { available: boolean }
 
 ## 9. 验证门
 
-- 自动化门：`test:desktop`（deep-link 纯函数套件：parse / argv 扫描 / authority / URL 编码 / 恶意输入；队列与 ACK 语义；`open` intent 的正负用例 = 两种合法拼写 `dsh-chamber://open` 与 `dsh-chamber://open/`、非法变体、open-vscode 不回归）、`typecheck`、`typecheck:open-in`、`test:sidebar` 回归、`build:renderer`、`verify:i18n`（无 DRIFTED）。测试数字与分发证据不写进设计文档。
-- 实机项（macOS 深链冷/热启动、打包态协议注册、N-ctx、local 源、VS Code 缺失、sshPort 非 22、托盘/退出在途）按 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) 执行；Windows 打包态深链随归档腿（[23-windows-support.md](../archive/23-windows-support.md)）。
+自动化门 = `test:desktop` 的 deep-link 套件 + `typecheck`/`typecheck:open-in`/`test:sidebar`/`build:renderer`/`verify:i18n`；实机项按 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) 执行；门清单单源 = `scripts/gates/registry/gate-surfaces.json`。
 
 ## 10. 边界与已知限制
 

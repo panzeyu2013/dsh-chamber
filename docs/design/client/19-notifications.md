@@ -4,13 +4,7 @@
 
 ## 1. 事实源与术语
 
-| 项 | 契约事实 | 证据（单一来源） |
-|---|---|---|
-| 会话状态检测 | 06 §4 运行时事实通道：每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（运行位按官方 `status?.running ?? row.running`；`completed` = 官方 `sessionStatus.completionUnread` 位，稀疏携带，App 只 OR 入按行键控的修正臂；`pending = 'approval' \| 'plan-review' \| 'question'` 来自 vendor sessions store 实时 mux 交互状态）；facts 行集 = 顶层会话，子代理行在源侧排除 | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`、`packages/renderer/src/App.tsx`、[06](./06-sidebar-enhancements.md) §4 |
-| 会话标题 / 来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
-| goal 活性事实 | 运行时事实行 `goal?: GoalFact \| null`（三值：缺席 = unknown / `null` = 明确无 goal / 对象 = 有 goal；`{goalId, revision, phase, activation?, updatedAt?}`）。P1 来自挂载壳会话投影 `projectionValues.goal`；P2a/P2b 来自只读 `session/list` 投影 + `$events` 的 activation 事件。类型单源 = `@dsh-chamber/dsh-chamber-wire/session-state`（浏览器经 client-core 的 `./session-state` 具名面 re-export） | `packages/dsh-chamber-client-core/src/derive.ts`、`packages/dsh-chamber-wire/src/session-state.ts`（[17](../gateway/17-server-side-gateway.md) §10.7） |
-| 窗口隐藏场景 | 关窗 hide 到托盘 / 无窗常驻时用户对会话完成与等待输入一无所知（蓝点/pending 徽标只在窗口内） | [14](../runtime/14-sleep-background.md) |
-| 设置存储 | chamber 全局设置 `chamber-settings.json`（主进程权威、`dsh-chamber:settings-get/set` IPC + push、`validatePatch` 白名单） | `packages/desktop/chamber-settings.ts` |
+- 事实源：06 §4 运行时事实通道（每已挂载 ctx 的 generation-safe runtime producer，上报每会话 `{running, completed, pending}`）；会话标题/来源 label 取 App 聚合（`aggregates[sourceId]` / `server.label`）；goal 三值事实类型单源 = `@dsh-chamber/dsh-chamber-wire/session-state`；窗口隐藏场景见 [14](../runtime/14-sleep-background.md)；设置存储 = 主进程 `chamber-settings.json`（`validatePatch` 白名单）。
 
 **术语**：`complete` = 会话回合结束（壳通道 running→idle 边沿；facts 通道按水位严格前进的候选与 G5 武装栅栏裁决——`completed` 位只驱动完成点/角标，不进通知边沿）；`ask` = pending `'question'`；`request` = pending `'approval' | 'plan-review'`。
 
@@ -22,20 +16,7 @@
 
 ### 3.1 分层与定位
 
-```
-各实例 dsh 前端 runtime（每来源一个 ctx shell）
-  └─ 侧边栏插件（每 ctx 挂载）—— 06 §4 事实通道（现成，不改）
-       registerInstanceRuntimeProducer(sourceId, sourceFingerprint).report({current, sessions: …})
-            ↓ chamberBridge（renderer 共享单例，现成）
-renderer App 层
-  ├─ 通知边沿检测（completion-observation.ts，App effect 接线）→ 事件组装（title/body/requireHidden）
-  └─ window.dshChamber.notifications.notify(payload)          ← IPC（invoke）
-            ↓
-宿主边沿（Swift 现行 / Electron 冻结归档）
-  ├─ 设置裁决（chamber-settings.json 权威：主开关/事件开关/模式/聚焦豁免）
-  ├─ 去重 claim（5s TTL）+ 原生通知
-  └─ click → 聚焦窗口 + 推送 dsh-chamber:notification-open → renderer openSession（既有路径）
-```
+分层：各实例 dsh 前端 runtime（每来源 ctx）→ 侧边栏插件 runtime producer（06 §4，现成）→ chamberBridge → renderer App 边沿检测与事件组装（`completion-observation.ts`）→ `window.dshChamber.notifications.notify` IPC → 宿主腿（设置裁决 / 去重 claim / 原生通知 / click 回焦 + 推送 `dsh-chamber:notification-open`）→ renderer `openSession`（既有路径）。控制面零改动、不消费宿主帧、设置权威在主进程（15 D3）。
 
 控制面零改动、无新 host 插件、不消费宿主帧（事实来自既有侧边栏事实通道）；设置 = chamber 全局设置（主进程权威），绝不进实例 dsh home（15 D3）。
 
@@ -43,18 +24,10 @@ renderer App 层
 
 事实源：`chamberBridge.onRuntimeReport`（App 已有订阅）。边沿的唯一现役实现在 `completion-observation.ts`（与完成点状态机——官方 `completionUnread` ∪ 修正臂——并存、互不耦合；完成点带「正在阅读」解除，通知边沿不受解除影响——窗口隐藏到托盘时活动来源的当前会话完成也必须通知，见 §3.3 requireHidden）：
 
-```ts
-interface SessionFacts { running?: boolean; completed?: boolean; pending?: 'approval'|'plan-review'|'question' }
-type NotificationKind = 'complete' | 'ask' | 'request'
-// 唯一边沿实现：observeSource 由 prev 事实 → next 事实 产出壳边沿事件集，
-// 经 applyObservationBatch 交给 reconcile（notification-projection.ts 的单一策略入口）。
-```
+边沿类型：`SessionFacts { running?, completed?, pending? }`、`NotificationKind = 'complete' | 'ask' | 'request'`；唯一边沿实现 = `observeSource` → `applyObservationBatch` → `reconcile`（`completion-observation.ts` / `notification-projection.ts`）。
 
-| 事件 | 边沿定义 | 说明 |
-|---|---|---|
-| `complete` | 壳通道 `running: true → false`；facts 通道由候选（水位严格前进 + G5 武装栅栏）裁决——`completed` 位只驱动完成点/角标（§3.7），不进边沿 | 同一 tick 只发一次；facts 候选的重复/迟到按水位与围栏（§3.3）吸收；父会话回合结束但子代理仍在运行（归一 `subagentActivity === 'running'`，G4）时候选缓行（抑制在去重之前、不记账） |
-| `ask` | `pending` 值变化到 `'question'` | 含直切（question→approval 等不经 undefined 的切换——vendor 组合选择器会正常产生，每个新值都通知一次）；同值重放与清除（→undefined）不发 |
-| `request` | `pending` 值变化到 `'approval' | 'plan-review'` | 直切/重放/清除语义同上 |
+- `complete` = 壳通道 running true→false 边沿 / facts 候选（水位严格前进 + G5 武装栅栏）；同一 tick 只发一次，重复/迟到按水位与围栏吸收，父会话回合结束但子代理仍运行（G4）时缓行。
+- `ask` = pending → `'question'`、`request` = pending → `'approval'|'plan-review'`：每个新值各通知一次，同值重放与清除不发。
 
 - **facts-only provenance 的判定输入**：来源没有官方 ctx 上报时（回收壳/从未 boot），`stepArmNow` 与 `reconcileCompletionsNow` 都读 `runtime ?? virtualRuntimeReport(facts 快照)`（`packages/renderer/src/virtual-runtime-report.ts`）；虚拟投影只在有可判 facts 快照时在场，且 `shellReport: true` 只随虚拟批——reconcile 复用的有壳现行报告不带（壳桥首报由 `onRuntimeReport` 自己带），避免同一份壳行被 facts 快照重复声明为新壳报。虚拟批供逐行 running 边沿与 ask/request：完成仍由 facts 候选（水位严格前进 + G5 武装栅栏）裁决——facts 可用时壳完成边沿本就被 `!factsUsable` 门关掉；ask/request 事实 = P2a 镜像行 `pending`，或 P2b 观察者从 `$events` 的 waterfall/cancel 帧只观察出的 `pendingKind`（`approval/request → approval`、`user-questions/request → question`；`agentId` 即 sessionId），观察者永不发 `$events/result`（不替任何客户端结算审批/提问），`running=true` 清待决。壳/running 记忆只在事实载体真正换代时由整代撤回清除；桥面上报撤回（`report === undefined`，facts 载体未换代）只清壳轨——facts 轨与 `prevRunningRef` 保留（§3.5）。
 - **首报/撤回即播种（壳轨）与窗口内完成的 facts 轨不丢发**：壳轨 `prev === undefined`（含桥面撤回后的首份壳/虚拟报）只播种不发壳事件——wire 只有 `running` 位，无法区分「窗口内完成」与「窗口内被手动停止」，壳轨不补发。窗口内真正到达的 facts `observed+host` 完成不在此列：facts 载体未换代 ⇒ 观测层的 `factsSeeded`/`factsWatermark` 跨撤回保留，完成仍按「水位严格前进」恰好通知一次（C1；§3.5）。同内容重放不重复（facts 水位吸收 + 壳边沿记忆 + 主进程 claim 兜底）。
@@ -65,16 +38,7 @@ type NotificationKind = 'complete' | 'ask' | 'request'
 
 运行时事实行新增 `goal?: GoalFact | null`（`packages/dsh-chamber-client-core/src/session-row-state.ts` 是唯一类型家）：
 
-```ts
-interface GoalFact {
-  goalId: string
-  revision: number
-  phase: 'active' | 'paused' | 'blocked' | 'complete'
-  activation?: 'armed' | 'disarmed'   // §3.2.2 事件缓存；缺席 = unknown
-  updatedAt?: number                  // host 域毫秒；诊断与身份签名，不参与门判定
-}
-// 字段缺席 = unknown（投影还没给出 goal 键）；null = 明确无 goal；对象 = 有 goal
-```
+`GoalFact = { goalId, revision, phase: 'active'|'paused'|'blocked'|'complete', activation?: 'armed'|'disarmed', updatedAt? }`；字段缺席 = unknown、`null` = 明确无 goal、对象 = 有 goal（类型单源 = `packages/dsh-chamber-client-core/src/session-row-state.ts`）。
 
 - **解析（P1，挂载壳）**：`derive.ts` 的 `parseGoalFact` 读会话行 `projectionValues.goal` 的嵌套形 `{ goal: { id, revision, phase }, roundsStarted, updatedAt } | null`，只保留白名单字段（`objective`/`blockedReason` 永不读取——隐私条）；`revision` 必须是 safe integer ≥1、`updatedAt`（若在）必须是 safe integer ≥0，与控制面 P2a 的 `parseProjectedGoalFact` 及 P2b 的 `source-mux-facts.parseProjectedGoalFact` 同规；键缺席/形状不符 = unknown + warn-once，**绝不折叠成 null**。生产者（`client/index.ts`）按来源代保留最后已知事实（`retainGoalFacts`）：unknown 行回填上一份已知值、行消失即 drop；ctx 重挂/来源指纹变化自然清空。P2a/P2b 的只读 `session/list` 投影提供同一三值（§3.5、17 §10.7）。
 - **身份签名**：`runtimeReportSignature` 的行编码必须包含 goal 的全部五个字段（`goalId/revision/phase/activation/updatedAt`），且不得落进 `includeRunning` 分支——activation 是易失缓存，不入签名会被 App 的身份去重冻结在首见值。
@@ -92,18 +56,7 @@ interface GoalFact {
 
 **状态**（`complete-ledger.ts` 的 `CompletionDecisionState`；两级键 `source → session/goalId`）：
 
-```ts
-interface CompletionDecisionState {
-  notified: Record<sourceId, Record<sessionId, Partial<Record<kind, number>>>> // durable
-  pending:  Record<sourceId, Record<sessionId, { watermark?; goalId?; deferred?: 'subagent-busy'; at }>> // durable
-  outcomes: Record<sourceId, Record<goalId, number>>                           // durable
-  armed:       Record<sourceId, Set<sessionId>>  // volatile（壳边沿武装位）
-  armedFloor:  Record<sourceId, Record<sessionId, number>> // volatile（该次消费的已消费水位上界，armSession 写；见 G5）
-  settleFence: Record<sourceId, Record<sessionId, { boundary: number; seededSince?: number }>> // volatile（水位围栏）
-  generation:  Record<sourceId, number>          // volatile（G1 代际门）
-  goalKnown:   Record<sourceId, Set<sessionId>>  // volatile（§3.2.4 结算点记忆）
-}
-```
+账本 `CompletionDecisionState`（键 `source → session/goalId`）：durable = `notified`/`pending`/`outcomes`；volatile = `armed`/`armedFloor`/`settleFence`/`generation`/`goalKnown`（单源 = `complete-ledger.ts`）。
 
 页代 token 不属于账本状态：单源是 `boot-token.ts`（经 `completionIdentity(fingerprint, bootToken)` 进观测层 identity）；账本不读、不存它，`CompleteLedgerOptions.bootToken` 兼容入参已随 beta 线退役（不得加回）。
 
@@ -130,21 +83,11 @@ interface CompletionDecisionState {
 
 **12 条裁决表 + G4 释放（#13）**（`reconcile` 逐条实现；每份观测都跑 pending 结算，不依赖跳变帧）：
 
-| # | 条件 | 动作 |
-|---|---|---|
-| 1 | running 权威 = running（含 idle→running） | pending 作废：结清 `notified` 到 `pending.watermark` 后 drop；解除 armed、清 settleFence（`voided`） |
-| 2 | pending + goal 已知 + complete/blocked | flush 一次：水位 = `max(pending.watermark, goal.updatedAt)`；标题按 outcomes（该 goalId 首见 ⇒「目标已完成/目标已受阻」，已见 ⇒「会话已完成」）；记 outcomes、消费 pending、arm；无 facts 水位的 flush 置 settleFence（`flushed`） |
-| 3 | pending + goal 已知 + paused / null / goalId 变化 | drop：结清 notified，不通知（origin 仅 `goal-paused`/`goal-none`/`goal-changed`） |
-| 4 | pending + goal 已知 + active + disarmed（非基线） | flush 中性「目标未继续运行」一次（该 goalId 首见；已见 ⇒「会话已完成」）；记 outcomes、消费 pending、arm；无 facts 水位置 settleFence（`flushed`） |
-| 5 | pending + goal 已知 + active + activation unknown | keep（等 activation 事件或相位变化），不 emit |
-| 6 | pending + goal 已知 + active + armed | keep |
-| 7 | 无 pending + 候选 + goal 已知 + active+armed | hold：水位吸收进 pending + arm（`held`，origin `goal-armed`） |
-| 8 | 无 pending + 候选 + goal 已知 + active+unknown | hold + 等待 activation 事件（与 #5 同出口；origin `goal-activation-unknown`） |
-| 9 | 无 pending + 候选 + goal 已知 + complete/blocked | 该 goalId 首见 ⇒ 目标标题 + 记 outcomes；已见 ⇒「会话已完成」（直接 emit） |
-| 10 | 无 pending + 候选 + goal 已知 + active+disarmed / paused / null | 「会话已完成」（中性/目标标题只随 pending 消费一次） |
-| 11 | 无 pending + 候选 + goal unknown（本代从未已知） | 「会话已完成」（fail-open 到现状；拿到 goal 事实后转 #7/#8） |
-| 12 | ask / request 候选 | 直通 emit，仅受 G2 播种约束（INV4）——goal 状态不影响提问/审批 |
-| 13 | G4 延迟的 pending 遇释放（busy 结束后的首份观测，基线也释放） | goal unknown ⇒ #11 中性直发；null/paused ⇒ #10 中性直发；active/complete/blocked 不释放（走 #2/#4–#6）；释放消费 pending、推进水位、arm，无 facts 水位时置 settleFence；水位已被通知 ⇒ 只清不重发（settle-guard） |
+`reconcile` 的 13 条裁决（`notification-projection.ts` 单入口实现；每份观测都跑 pending 结算，不依赖跳变帧）：
+- #1–#6 pending 结算：running 权威 = running → 作废；goal 已知时 complete/blocked → flush、paused/null/goalId 变化 → drop、active+disarmed（非基线）→ 中性 flush、active+unknown/armed → keep；
+- #7–#11 无 pending 的候选：goal active+armed/unknown → hold（吸收水位 + arm）；goal complete/blocked 与 disarmed/paused/null → emit；goal unknown 本代 → fail-open 中性 emit；
+- #12 ask/request 直通 emit（仅受 G2 播种约束）；#13 G4 延迟 pending 释放按 goal 三值走 #11/#10 或继续 #2/#4–#6，消费 pending、推进水位、arm。
+- 水位/围栏（settleFence）与恢复批重播种语义见本节下文；账本 durable/volatile 形状单源 = `complete-ledger.ts`。
 
 - **每份观测可产两条通知**：ask/request 直通与 pending 结算不互斥——`reconcile` 先按「无 complete 候选」跑本体（含每份观测的 pending 结算），再直发 ask/request，回执携带有序 `notifications`（结算通知在前、直发在后；标量 `notification` 为结算优先、否则直发）。否则 hold(g1) → 观测（目标 outcome + ask）会只发 ask，pending 要等下一份观测才 flush，期间撤回即丢一次。
 
@@ -231,19 +174,7 @@ interface CompletionDecisionState {
 
 **事件组装**（App effect 内，读 `activeViewRef` + `runtimeFacts` + `aggregates` ref）：
 
-```ts
-interface NotificationRequest {
-  sourceId: string            // 'local' | 'dsh-<id>' | 'gateway-<id>'（'ssh-<id>' 为 v2 迁移前 legacy，17 §2.2/§9.1）
-  sourceFingerprint: string   // 主进程签发的当前来源代 opaque proof
-  sessionId: string
-  kind: NotificationKind | 'test'
-  title: string
-  body: string
-  requireHidden: boolean      // 正在屏幕上查看的会话（见下）
-  watermark?: number          // 内容水位（host 域），complete=completedAt，ask/request=updatedAt；只作内容记账，不进去重身份
-  eventKey?: string           // 投递身份（renderer 待投递账本条目键）；complete/ask/request 必填（IPC 校验强制），仅 'test' 可缺省
-}
-```
+`NotificationRequest = { sourceId, sourceFingerprint, sessionId, kind, title, body, requireHidden, watermark?, eventKey? }`（形状单源 = `renderer/src/global.d.ts` + `packages/desktop/notifications.ts`）。
 
 - **身份与去重键**：renderer 身份生成在 `notification-identity.ts`（`notificationIdentityOf`：`host-turn` / `event-nonce` / `watermark` 分支；run-id 门 `notifiedRun === runId`）；主进程 claim 键 = 五元组 `[sourceId, sourceFingerprint, sessionId, kind, eventKey]`（`packages/desktop/notifications.ts` 的 `notificationDeliveryKey` 与 `NotificationClaimWindow.claim`；`eventKey` 是 renderer 待投递账本条目的稳定身份，重试间不变：同一次完成经壳通道与 facts 源两个入口到达时由同一 outbox 身份派生出同一 `eventKey` ⇒ 合并成一条横幅，新一轮完成是新身份 ⇒ 不得被吞）——`kind` 与 `sourceFingerprint` 必须保留，否则同一会话的 ask/complete 互吞、或 same-id 换宿主继承旧 claim；`'test'` 无身份、不走 claim（每次点击都是新请求）。镜像定义见 `packages/renderer/src/global.d.ts`。
 - `requireHidden = (viewStore.getSnapshot().painted === entry.sourceId && factsStore.getSnapshot().runtime[entry.sourceId]?.current === entry.sessionId && document.hasFocus() && document.visibilityState === 'visible' && isShellVisible())`——用户正看着这个会话（无论主开关/模式都豁免）；后两项 = 统一前台相位门的同源事实（页面可见 ∧ 壳窗口可见且未遮挡，[14 §D1](../runtime/14-sleep-background.md)），遮挡/另一 Space 下不得宣称「正在看」。单窗口下 `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 只在 focused 事实上等价；该事实在「另一 Space 且窗口仍 key」时可能仍为 true（主进程 hidden-only 档的残余门缺口见 [STATUS](../../progress/STATUS.md) §1.7），主进程再查一次作权威。
@@ -271,33 +202,13 @@ interface NotificationRequest {
 
 **preload / 类型**（`preload.cts` 归档面 + `renderer/src/global.d.ts` 镜像，ipc-surface-mirror 锁步）：
 
-```ts
-// window.dshChamber.notifications
-interface NotificationSurface {
-  notify(payload: NotificationRequest): Promise<{ shown: boolean; outcome: 'shown' | 'suppressed' | 'retryable' | 'permanent'; error?: string }>
-  ready(): Promise<boolean>
-  ack(deliveryId: number, attempt: number): Promise<boolean>
-  onOpen(listener: (req: { sourceId: string; sessionId: string; sourceFingerprint: string; deliveryId: number; attempt: number }) => void): () => void
-}
-```
+`window.dshChamber.notifications` = `notify(payload) → { shown, outcome, error? }` / `ready()` / `ack(deliveryId, attempt)` / `onOpen(listener)`；形状单源 = `preload.cts` + `renderer/src/global.d.ts`（ipc-surface-mirror 锁步）。
 
 ### 3.4 设置模型与 UI
 
 **chamber-settings.json 扩展**（`packages/desktop/chamber-settings.ts` + `renderer/src/global.d.ts` 结构镜像同步）：
 
-```ts
-interface ChamberSettings {
-  // …既有 chamber 级键不变（设计 14/16/18 的设置段）
-  notifications: {
-    enabled: boolean          // 主开关；默认 false（低打扰，用户显式开启）
-    mode: 'hidden-only' | 'always'  // 默认 hidden-only
-    onComplete: boolean       // 默认 true
-    onAsk: boolean            // 默认 true
-    onRequest: boolean        // 默认 true
-    badgeEnabled: boolean     // 未读徽标（§3.7）；默认 true
-  }
-}
-```
+`settings.notifications = { enabled=false, mode='hidden-only', onComplete=true, onAsk=true, onRequest=true, badgeEnabled=true }`（默认值即契约）；结构单源 = `packages/desktop/chamber-settings.ts` + `renderer/src/global.d.ts`。
 
 - `normalizeSettings` / `validatePatch` / `SETTINGS_KEYS` 扩展（嵌套对象校验、未知键拒绝；`test/local-state/chamber-settings.test.ts` 补用例）；渲染端助手在 `settings-bridge/src/client/notifications-settings.ts`（`NOTIFICATIONS_DEFAULTS`/`notificationsOf`/`notificationsPatch`），纯函数由 `test/settings/settings-groups.test.ts` 与 `test/settings/notify-test-result.test.ts` 覆盖；主进程在 `dsh-chamber:notify` 裁决时读内存设置（同一次 settings-set 即生效）。
 - `generalNotifyOnComplete` 仍是「会话完成时」开关的既有键名（实现偏差：设置开关文案未改成「完成（含目标结束）」；若改需同步 renderer `locales.ts` 与编译期配对门）
@@ -346,21 +257,8 @@ interface ChamberSettings {
 
 ### 3.7 未读徽标：Dock/任务栏应用图标红气泡
 
-```
-完成未读 = 官方位（通道行 completed）∪ App 修正臂（correctionArms，06 §4.2）
-  （权威是 vendor 内存 Set uiSession.sessionStatus.completionUnread；通道行稀疏携带该位，App 在
-   mergeRuntimeFacts 里只 OR 入按行键控的 N-ctx 修正臂（读一行不清另一行）。纯内存、重载即空、
-   无水位、无持久面；窗口内蓝点与 Dock 角标是同一个析取，两面永不分叉）
-  → projectBadgeCount(correctionArms, badgeSuppressionFacts(runtimeFacts), archivedSessions)
-    （renderer 纯函数，跨来源求「用户实际可见」的未读会话数——goal active、归一为 running 的
-    runningSubagents 与归档行压制；0 = 清除）
-  → window.dshChamber.badge.set(count)                 ← IPC（invoke，等真实回执）
-  → 主进程：白名单校验 → 记录意图（电平；quit 清理也由它守护）→ 设置裁决（badgeEnabled 关 → 强制 0）
-    → 平台门（app.setBadgeCount：darwin/linux；win32 overlay 门控）
-    → 宿主腿：Electron 同步叶即真实结果；Swift 腿写 NSApp.dockTile 后真读回 {count, applied}
-      （Dock 写是应用级状态：不看窗口；同值跳过按读回值判定；失败 loud 且经回执上抛）
-  → 呈现（窗口恢复/重载有重放钩子；applied:false = 未派发 → 与 rejection 同一条有界重试链）
-```
+完成未读 = 官方位（通道行 `completed`）∪ 修正臂（`correctionArms`）→ `projectBadgeCount(correctionArms, badgeSuppressionFacts(runtimeFacts), archivedSessions)`（跨来源、goal/子代理/归档压制；0 = 清除）→ `window.dshChamber.badge.set(count)` IPC → 主进程（设置 `badgeEnabled` 权威 / 平台门）→ 宿主腿：Swift 写 `NSApp.dockTile` 后真读回 `{count, applied}`，同值跳过按读回判定，失败 loud 且有界重试；窗口恢复/重载有重放钩子。
+纯内存、不落盘、无水位；无壳来源按逐行 host 运行边沿武装（06 §4.2），facts 降级窗口只冻结武装、保留记忆；子代理行在源侧排除、永不主体。细节单源 = `packages/dsh-chamber-client-core/src/badge-count.ts` / `use-badge-count.ts` / `packages/desktop/badge.ts`。
 
 - **无壳来源的角标**：修正臂在 `factsOnly` 下对逐行 host `running true → false` 边沿武装（06 §4.2），徽标投影仍走同一析取 `armed = correctionArms[source][session] || row.completed`；facts 降级窗口保留行 + `stale` 只冻结武装、保留记忆，不触发遗忘（丢点方向 fail-closed）。子代理行已在源侧排除（镜像不投递、观察者跳过），永不主体、永不武装、不计徽标。
 - **计数语义**：一个未读会话 = 1（同 OpenChamber「chats with unseen activity」，非通知条数）；pending（ask/request）不计数（窗口内提醒仍由侧边栏 pending 徽标承担）。投影输入只有合并后的完成析取（`projectBadgeCount` 的 `row.completed`）、goal/subagent 压制位与归档行排除集——`pending` 字段不进 `projectBadgeCount`。
@@ -389,9 +287,8 @@ interface ChamberSettings {
 
 ## 4. 验证门与实机验收
 
-- **验证门**：`test:desktop`（chamber-settings 新键 + notifications 覆盖裁决链/未读徽标）、`test:settings-bridge` 含 `test/settings/settings-groups.test.ts` 与 `test/settings/notify-test-result.test.ts`（通知设置纯函数/失败原因映射）、`test:renderer-shell`（`notification-projection` / `completion-observation` / `complete-ledger` / `notification-store` / `badge-count` / `session-authority-wiring` / `facts-apply-pool`（`unread-prune-roster-gate` 剪枝门））、`test:sidebar`（`completion-arm` / `goal-facts` / `goal-activation` / `session-row-state` / `todo-attention`）、`test:control-plane`/`test:gateway`（`session-state` capability、`session-mux` 投影与 goal 加法字段的 wire 往返）、`test:settings-bridge`（通知设置纯函数与失败原因映射），加 `verify:i18n` / `typecheck` / `build:renderer` 与 Swift `.app` 打包态通知冒烟（Electron 腿 ARCHIVED）。门清单与用例登记的单源 = `scripts/gates/registry/gate-surfaces.json`。
-- **打包态冒烟**：macOS 打包态通知冒烟走 `dist:desktop:mac` 产出的 `.app`（Electron 打包腿冻结，Swift 腿见 [25](../desktop/25-macos-swift-native-shell.md)）；验证证据按 [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) 与 PR 模板给出
-- **实机验收**：macOS 通知权限的打包态闭环（拒绝态 → 设置页原因 +「打开系统设置」→ 用户打开后重试成功）、文案定稿、打包态三形态（关窗/托盘/后台）+ 点击打开会话 + 窗口重建、徽标 macOS Dock 打包态三态（武装/解除/退役 + 重载与退出清零）；判据与未完成项归 [`gui-acceptance-checklist.md`](../../checklists/acceptance/gui-acceptance-checklist.md) 与 [`STATUS.md`](../../progress/STATUS.md)。Windows 任务栏 overlay 门控随 [23](../archive/23-windows-support.md) 冻结归档，不排期。
+- 判据与执行见 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) 与 [STATUS.md](../../progress/STATUS.md)；门清单单源 = `scripts/gates/registry/gate-surfaces.json`。
+
 
 ### 4.1 拒绝态的可见性与恢复入口
 

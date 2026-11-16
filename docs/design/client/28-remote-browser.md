@@ -65,39 +65,14 @@ target 恒 `127.0.0.1:<port>`，main 校验 `1..65535`；forward 目标恒远端
 
 ## 3. IPC / wire
 
-forward 面 4 个 invoke 不变（wire version 3：`list` 的 `embedding`/`frameErrors` 已退役，per-record `frameError` 保留为诊断）：
+forward 面 4 个 invoke（wire version 3）：`forward.request({sourceId, sourceFingerprint, port, scheme?, consumer?, path?}) -> {ok:true, record, frameUrl?} | {ok:false,error}`、`forward.release`、`forward.list`、`forward.openInBrowser`；均返回判别形态。
 
-```ts
-forward.request({ sourceId, sourceFingerprint, port, scheme?, consumer?, path? }) -> { ok: true, record, frameUrl? } | { ok: false, error }
-forward.release({ sourceId, sourceFingerprint, id, consumer? }) -> { ok: true } | { ok: false, error }
-forward.list({ sourceId, sourceFingerprint }) -> { ok: true, records, limits }
-forward.openInBrowser({ sourceId, sourceFingerprint, id, path? }) -> { ok: true } | { ok: false, error }
-```
+`browser` 命名空间（main 独占 guest 生命周期，renderer 只发意图与几何）：invoke = `acquire` / `release` / `navigate`（target = direct url | forward `{recordId, path}`）/ `command` / `frame`（renderer 恒全量上报 `{tabId, lease, frame, visible, occluded}`，Swift 解码逐项 optional 容错）/ `keymap`（code + 四个修饰位）；push = `state`（`{canGoBack, canGoForward, loading, address:"observed", error, url?, title?}`，url/title 缺省即省略键）、`openRequested`、`forward-needed`（url 是被挂起导航目标 B，只做类别门：http(s) loopback `127.0.0.1`/`localhost`；`::1` 归一后不建 forward）、`input`（modifiers canonical = meta/alt/shift/control；双键 chord 不推送）。顺序与其它五面一致（manifest/镜像锁步）；`browser` 只存在于 Swift 侧 → 进 `bridge-swift-only-additions.json` 白名单（政策见 [electron-frozen.md](../../progress/electron-frozen.md) §5.2）。
 
-guest 载体新增 `browser` 命名空间（main 独占 guest 生命周期；renderer 只发意图与几何）：
-
-```ts
-browser.acquire({ tabId, sessionId, sourceId, sourceFingerprint, workspaceKey, frame, visible, occluded }) -> { ok, lease }
-browser.release({ tabId, lease }) -> { ok }
-browser.navigate({ tabId, lease, target }) -> { ok }        // target = { kind: "direct", url } | { kind: "forward", recordId, path }
-browser.command({ tabId, lease, command: "goBack" | "goForward" | "reload" | "stop" }) -> { ok }
-// 顺序与其它五面一致（frame 在 keymap 前：BrowserBridge.REQUIRED_BROWSER_INVOKES + keymap、shim、manifest 同序）
-browser.frame({ tabId, lease, frame, visible, occluded }) -> { ok }   // renderer 恒全量上报（frame 必填，BrowserFrameReport）；Swift 解码逐项 optional 仅作容错
-browser.keymap({ tabId, lease, combos: [{ code, primary, alt, shift, control }] }) -> { ok }   // renderer 的 shortcut 键位表（随注册变化更新；primary = 平台主修饰键 ⌘/Ctrl，布尔位与实现一致）
-// push: browser.state({ tabId, lease, canGoBack, canGoForward, loading, address:"observed", error, url?, title? })
-//   （url/title 缺省即省略键：Swift 不再发 JSON null；renderer 按可缺省 string 解析，缺省 = 地址未定/标题未定。address 见下方说明；visible/occluded 未进入 wire（renderer 声明的可选面暂为死字段，登记 TODO D§5 #4）)
-// push: browser.openRequested({ tabId, lease, url })
-//   （Swift 发 lease；renderer 以 lease 归属校验——lease 不匹配即丢弃；缺 lease = 旧 shim 兼容臂，按 tabId 接受；实现点 = `NativeGuestImpl` 的 openRequested 订阅）
-// push: browser.forward-needed({ tabId, lease, url })   // main 在 guest 内主 frame 命中 loopback 目标时请求 renderer 走 forward 面；渲染侧以 lease+generation 匹配为原则；url 是**被挂起导航的目标 B**，不是当前显示地址 A（页面内链接 A≠B 是常态），所以 URL 只做**类别门**（必须是 http(s) loopback 目标 `127.0.0.1`/`localhost`/`[::1]`），**不做**与当前地址的相等比较；协商成功后把 B 记为逻辑地址与历史项。**兼容臂** = 旧 shim 未发 lease 时按 match-any 接受（generation 仍须匹配；实现点 = `NativeGuestImpl.handleForwardNeeded`），缺 lease 不是必拒条件；**forward 目标只有 `127.0.0.1`/`localhost`**：`::1` 等其它 loopback 归一写法通过类别门后 renderer 不建 forward（失败条），不加载本机 loopback
-// push: browser.input({ tabId, lease?, code, modifiers, repeat? })   // modifiers canonical = ['meta'|'alt'|'shift'|'control']（Swift 发 `control`；旧 shim 的 boolean 形态由 renderer adapter 兼容，字符串 `ctrl` 不被接受）；primary 在 wire 上表现为 `meta`。lease 为 Swift 发放的租约（旧 shim 缺失时 renderer 按 tabId 回退）。renderer 侧每页只安装一次 input 派发（同一 document 的多个 entry 共享一个订阅）；双键 chord 不推送（guest 内原样处理，不出现被消费无动作）
-// frame 面：renderer 恒全量上报 {tabId,lease,frame,visible,occluded}；Swift 解码逐项 optional 容错（可选性差异登记 TODO D§5 #4：契约仍为全量，解码容错只是兼容臂）
-```
-
-- `state.address` 是 wire 上的额外字段（Swift 恒发 `observed`），**不是 renderer 字段**：`BrowserGuestState` / `global.d.ts` 都不含 address，renderer 按 target 自算 `empty`/`requested`/`observed`。
-- 信任规则：四次复验（主帧 + 壳文档围栏 → source 指纹证明（`verifySource`：既有 `dsh-chamber:forward-list` 返回 `ok:true` 才成立；`ok:false`/异常 = 拒绝并写审计日志）→ source/session/tab 归属 + lease capability → 异步边界后复验）；lease 绑定 document generation + tabId + sessionId；`acquire` 在 content rule 就绪等待后、mint/建 store/attach 前复验 document 存活与归属。URL 只由 main 构造/放行（direct 亦复核：loopback 目标在 mayForward 来源上由 main 返回 `forwardNeeded` → `navigate(.direct)` 拒绝（invalid payload），不加载本机 loopback）。伪造/越租（他人 tabId/lease、伪造 source）一律拒绝并审计，验收含越权反例；`browser.keymap` 同样以 lease 对回 document+tab 后才写键表（符号锚：`BrowserIPCRouter.dispatch` 的 `BrowserIPCChannel.keymap` 分支 + `BrowserGuestRegistry.authorizeKeymap`）。
-- 载荷上限：`navigate.forward` 的 `recordId` 1–128 字符且**拒收 url 字段**（URL 只由 main 合成）；`path` 进 `normalizePath` 的规则 = `/` 开头、非 `//` 开头、无控制字符/空格/`#`/反斜杠、纯 ASCII、% 必须是 %HH、≤4096 字节（query 只取第一个 `?` 之后并按同规则校验）；`state.url`/`title` 分别 ≤4096/512；`input.code` ≤64（outbound 不变量：Swift 由固定 DOM code 映射生成）；`acquire.workspaceKey` ≤4096；`frame` 数值必须 finite 且按 CSS px 取整。
-- **重编码（实现约束）**：renderer 在发送 forward `path`/query 前会按 Swift `normalizePath` 允许集重编码——合法 `%HH` 保留、裸 `%` 编为 `%25`、其余字符编码为 UTF-8 `%XX`；逻辑 URL 与地址栏不变（重编码只作用于 forward target 的 wire 值，不得把 raw path 变更当成回归）。（实现点：`ForwardFrameResolver.encodeForwardComponent`，与 `BrowserGuestPolicy.isValidPercentEncodedComponent` 同一允许集）
-- 通道登记：`browser` 命名空间只存在于 Swift 侧 → 进 [`bridge-swift-only-additions.json`](../../../packages/desktop/bridge-swift-only-additions.json) 白名单（政策见 [`electron-frozen.md`](../../progress/electron-frozen.md) §5.2），同批重生成 manifest 三件并跑镜像/表面锁步。
+- `state.address` 是 wire 额外字段（Swift 恒发 `observed`）；renderer 的 `BrowserGuestState`/`global.d.ts` 不含它，地址态由 renderer 按 target 自算 `empty/requested/observed`。
+- 信任规则：四次复验（主帧 + 壳文档围栏 → `verifySource` 来源证明（`forward-list` 返回 ok:true 才成立，否则拒绝并写审计日志）→ source/session/tab 归属 + lease capability → 异步边界后复验）；lease 绑定 document generation + tabId + sessionId；`acquire` 在 content rule 就绪后、mint/attach 前复验 document 存活与归属；URL 只由 main 构造/放行（mayForward 来源上 loopback 目标由 main 返回 `forwardNeeded`，`navigate(.direct)` 拒绝）；伪造/越租一律拒绝并审计，验收含越权反例。
+- 载荷上限：`navigate.forward.recordId` 1–128 且拒收 url；`path` 走 `normalizePath`（`/` 开头、非 `//`、无控制字符/空格/`#`/反斜杠、纯 ASCII、`%` 必须 `%HH`、≤4096 字节，query 只取第一个 `?` 后同规则）；`state.url/title` ≤4096/512；`input.code` ≤64；`acquire.workspaceKey` ≤4096；`frame` 数值 finite 且按 CSS px 取整。
+- **重编码（实现约束）**：renderer 发送 forward `path`/query 前按 Swift `normalizePath` 允许集重编码（合法 `%HH` 保留、裸 `%` → `%25`、其余 UTF-8 `%XX`）；逻辑 URL 与地址栏不变。实现点 = `ForwardFrameResolver.encodeForwardComponent`。
 
 ## 4. guest 载体与契约
 
@@ -120,12 +95,7 @@ browser.keymap({ tabId, lease, combos: [{ code, primary, alt, shift, control }] 
 
 | 上游 Electron 事件 | Swift 等价 | 投影 |
 |---|---|---|
-| `did-start-navigation(main)` | `didStartProvisionalNavigation` | `loading=true` |
-| `did-navigate` / SPA 同文档导航（pushState/replaceState/hash） | `didCommit` + KVO `webView.url` | `url`、`title`、`canGoBack/Forward` |
-| `did-stop-loading` | `didFinish` + `isLoading` | `loading=false` |
-| `page-title-updated` | KVO `title` | `title` |
-| `did-fail-load(main, !=-3)` | `didFailProvisionalNavigation` / `didFail` | `error={code, description}` → 失败条 |
-| `render-process-gone` | `webViewWebContentProcessDidTerminate` | `error` + 用户 reload 重建 |
+| did-start-navigation / did-navigate(+SPA pushState/hash) / did-stop-loading / page-title-updated / did-fail-load / render-process-gone | didStartProvisionalNavigation / didCommit + KVO webView.url / didFinish + isLoading / KVO title / didFailProvisionalNavigation·didFail / webViewWebContentProcessDidTerminate | loading、url/title/canGoBack/Forward、失败条 `error={code,description}`（NSURLErrorDomain）、guest 重建 |
 
 失败条沿用上游 `load.failed`/`load.failed.detail` 文案；错误码为 `NSURLErrorDomain`（引擎词汇表差异登记 §8）。地址恒 `observed`（无 `unknown` 态）；SPA 同文档导航由 `webView.url` KVO 刷新并随 state push 投影；历史为 guest 原生 history + renderer 应用历史；重启恢复只存地址 checkpoint（沿用上游 store/restore 语义）。
 
@@ -185,13 +155,7 @@ guest 使用全新 `WKWebViewConfiguration`：无 `userContentController` 注入
 
 ## 9. 验收与门禁
 
-- L1 纯模型：lease/分区键/frame 合并/forward resolver/shortcut 目标。
-- L2 源静态锁：`browser` 通道清单/白名单/manifest 锁步；8 文件 upstream verbatim SHA-256 锁 + `BrowserPage` fork-diff 面；`browser.input`/`browser.state` 键集。
-- L3 纯模型/假 DOM 表达式：占位几何换算、occlusion 判定、地址/历史/title 投影、失败条状态（client 包 node:test + checks.test 的源文本/表达式锁）。
-- L4 真机/打包态（CI 不覆盖）：W-13…W-30 全部按 `docs/checklists/acceptance/remote-browser-acceptance.md` §E2 在 macOS 真机/打包态执行；CI 只有 SH-7 纯 HTTP 短头断言（`run.mjs --live`）与归档 v2 判据。
-- L5 headless 真 sshd：forward 链 attach→alias→HTTP 取回→detach→端口不可达；forward reconnect 与 reaper（guest 加载只能真机，L4/L6）。
-- L6 Swift 真机/打包态：guest 独立进程、z-order/rect、快捷键、IME、拖拽、文件选择、下载取消、权限/证书/对话框、崩溃恢复、内存曲线。
-- 门禁集合以 `scripts/gates/runners/run-checks.mjs` 为机器单源；发布前 `release-preflight` + packaging closure。
+L1–L6 判据与执行见 [remote-browser-acceptance.md](../../checklists/acceptance/remote-browser-acceptance.md) §E2（L4 真机/打包态；CI 只有 SH-7 短头断言与归档 v2 判据）；门禁集合机器单源 = `scripts/gates/runners/run-checks.mjs`，发布前 `release-preflight` + packaging closure。
 
 ## 10. 回退 / 迁移
 

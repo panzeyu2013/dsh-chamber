@@ -8,41 +8,14 @@
 
 ## 1. 形态
 
-```
-Swift 窗口（WKWebView，单 frame，载控制面 origin http://127.0.0.1:17500；design 25）
-└─ dsh 前端（源码构建 · __DSH_BOOT__ 由我们注入；首屏 = 本地实例 dsh shell）
-   ├─ apps/web 式入口 → AppWebEntry → 两阶段 boot（modules prefetch → cordis Loader → entries ACTIVE）
-   ├─ ★ chamber 侧边栏插件（自研，替换官方 ui-sidebar 注册，默认打包）：
-   │    所有来源（local + 各远程实例）的 session 平等呈现，仅按来源分组；
-   │    远程来源以颜色徽标区分；行点击 → 切到该来源 shell 并打开会话；
-   │    连接状态随来源分组展示（非秘密投影）
-   ├─ ★ chamber bridge（renderer 共享单例）：各来源聚合投影 + 连接状态 + open 通道
-   ├─ dsh 原生 ui-* 插件（conversation/goal/jobs/terminal/settings…）零修改
-   └─ N-ctx 多实例：每个来源一个 AppWebEntry（独立 cordis ctx、全量 ui-* 树），
-        隐藏/显示切换；★ 连接客户端补丁（base 路径参数）：rpc 的 origin 解析 +
-        WS 路径前缀，使每个 ctx 经 /api/i/<id>/* 访问自己的实例；会话状态零改动
-        控制面（127.0.0.1:17500）
-        ├─ 前端静态服务：dist/ + 启动图清单 __DSH_BOOT__
-        ├─ 通用反代（每实例路径前缀，HTTP+WS+SSE 全量透传，无方法白名单）
-        │    /api/i/local/*  → 本地 dsh（--profile web --port X）
-        │    /api/i/dsh-<id>/* → 隧道 localPort（ssh-<id> legacy 段）
-        │    /api/i/gateway-<id>/* → 隧道/直连端点（认证头主进程注入，17 §9.3）
-        │    v1 无认证门禁：匿名可达（仅 loopback 监听）
-        ├─ 本地实例托管：spawn/健康状态机/reaper/host-logs
-        └─ 管理 REST：/health、/api/connections(local)、/api/host/logs
-        打包 Node sidecar（共享 host-assembly；Electron 归档参考：electron/main.ts）
-        ├─ transport-manager：通用传输运行时（phase 机 / 两段式重连 —
-        │    快速有界 jitter 退避突发 + 慢速周期重探 /
-        │    环形日志 / 非秘密投影 / 子进程监督 SIGTERM→SIGKILL）
-        ├─ TransportProvider 接口（transport-provider.ts）：来源无关契约 —
-        │    spec 校验 / 传输进程 argv（或 direct-endpoint 直连模式）/
-        │    stderr 分类与脱敏 / 可选 exec 通道；实现 `ssh` 与 `http`
-        │    两个 transport provider（ssh-provider.ts：ssh -N -o ServerAlive…
-        │    -L 隧道 + systemd exec；gateway-provider.ts：http 直连
-        │    direct endpoint，17 §2.2/§9.2）
-        ├─ 实例注册表：<userData>/ssh-instances.json {id,kind,transport,label,host,user,sshPort,remotePort,serviceName,remoteDshHome,insecureHttp,spkiPin}（schema v2 以 03 §2.2 = 17 §9.1 为准；凭据不进注册表）
-        └─ IPC（preload 白名单）
-        远程目标：dsh（API 面 profile）或 gateway；按需使用 SSH+systemd 或 HTTP(S) 直连
+```text
+Swift 窗口（WKWebView，单 frame，载控制面 origin）→ dsh 官方前端（源码构建，__DSH_BOOT__ 注入，首屏 = 本地实例 shell）
+  ├─ chamber 侧边栏插件：所有来源 session 平等呈现、按来源分组、远程颜色徽标；行点击切来源并打开会话
+  ├─ chamberBridge（renderer 共享单例）：各来源聚合投影 + 连接状态 + open 通道
+  └─ N-ctx：每来源一个 AppWebEntry（独立 cordis ctx、全量 ui-* 树）；连接客户端按 base 路径补丁走 /api/i/<id>/*
+控制面（loopback）：前端静态服务（dist + __DSH_BOOT__）｜每实例通用反代（HTTP+WS+SSE）｜本地托管 spawn/健康/reaper/host-logs｜管理 REST
+打包 Node sidecar（共享 host-assembly）：transport-manager（phase 机/两段式重连/环形日志/非秘密投影/子进程监督）｜TransportProvider（ssh/http）｜实例注册表 ssh-instances.json（schema 以 03 §2.2 = 17 §9.1 为准）｜preload 白名单 IPC
+远程目标：dsh（API 面）或 gateway；按需 SSH+systemd 或 HTTP(S) 直连
 ```
 
 ## 2. 侧边栏契约（核心：多来源会话统一导航）
@@ -198,124 +171,29 @@ App 记入渲染端账本，并在同一汇合点按固定顺序并入（第 1�
 
 放在自研侧边栏包的 `shared/` 下；chamber App 层（main entry）、侧边栏插件（chamber bundle entry）与 ui-layout fork（文档级主题投影）共同 import，vite 共享 chunk 保证运行时单例。
 
-```ts
-interface ChamberServerWorkspace {
-  id: string
-  title: string
-  ungrouped?: boolean             // 仅合成"未分组"桶为 true
-  sessions: { id: string; title: string }[]
-}
-interface ChamberServerAggregate {
-  id: string                      // 'local' | 'dsh-<id>' | 'gateway-<id>'（ssh-<id> legacy）
-  sourceFingerprint: string       // 该精确来源代的权威 proof（local='local'）
-  kind: 'local' | 'dsh' | 'gateway'
-  label: string
-  connected: boolean              // 本地：dsh ready；远程：隧道 phase ready
-  phase: string                   // 状态文本（ready/connecting/… 投影）
-  workspaces: ChamberServerWorkspace[]
-  aggregateError?: string         // 最近一次聚合拉取错误文本；缺失 = 正常/未连接
-  runtime?: InstanceRuntimeReport // 该来源自身 ctx 上报的运行时事实（06 §4，仅附加、不轮询）
-  pluginDiagnostic?: PluginGraphDiagnostic // 客户端插件图/额外 bundle 的用户可见诊断
-  updatedAt: number
-}
-interface OpenSessionRequest { sourceId: string; sessionId: string }
-interface WorkspaceCreatedFact {
-  sourceId: string; workspaceId: string; path: string
-  afterWorkspaceId?: string        // 位置锚点（generic workspace create；Git checkout 不使用）
-  title?: string                   // 创建意图标题（generic workspace create；Git checkout 不使用）
-}
-interface WorkspacePlacementFact { sourceId: string; path: string; afterWorkspaceId: string }  // 两条 wire **之前**发布的事实之一（pre-create 位置意图；另一条是 pre-delete 删除意图，见下）；path = 请求路径，回答未到时唯一身份
-interface WorkspacePlacementFailedFact { sourceId: string; workspaceId?: string; path: string }  // 重排永不落地（只发失败侧）：作废该意图，行跟随宿主序。workspaceId 在 create 已回答的 catch 里给（主键）；saga 重排前中止时能带就带，否则只给请求路径
-interface WorkspaceRemovedFact { sourceId: string; workspaceId: string; path: string }  // path 尽力而为（快照未报告该行时为空串；账本同时按 workspaceId 匹配）
-interface WorkspaceRenamedFact { sourceId: string; workspaceId: string; title: string }
-interface WorkspaceRemovingFact { sourceId: string; workspaceId: string }  // 删除意图（pre-delete 半边，§2.2.1）：wire **之前**发布；id-only——删除出口始终持有宿主 id，不依赖路径
-interface WorkspaceRemovingFailedFact { sourceId: string; workspaceId: string }  // 该删除未提交（拒绝 / 断流 / 宿主 order-写后的回滚）：失败侧撤下意图、行还原（成功侧刻意不发——权威 remove 帧即收敛点）
-interface InstanceRuntimeReport {
-  current?: string                // 当前会话 id（06 §4.3 全局单选高亮）
-  sessions: Record<string, {
-    running?: boolean             // 实时 running 位（App 完成蓝点边沿推导）
-    completed?: boolean
-    pending?: 'approval'|'plan-review'|'question'
-    runningSubagents?: number     // 运行中子 agent 计数（>0 稀疏；06 §4.5）
-  }>
-  sessionAuthority?: {            // design 14 §D4：单一权威快照（可选；旧 producer 不带）
-    requestedAt: number           // producer 时钟；仅诊断
-    settledAt?: number            // 缺省 = 在途
-    ok: boolean                   // 最近一次结算无 stuck 证据（拿不到权威结论 = false）
-    runningSince?: number         // 当前 running 时段起点（App 升级 ladder 的症状年龄）
-    stuckSince?: number           // 首次「拿不到权威结论」且尚未被健康裁决清除的时刻
-    progressStamp: number         // 健康裁决计数；前进即重 base 升级 streak
-    probes: number                // 诊断计数（配额内）
-    corrections: number           // 诊断计数（成功的 tier-3 写回）
-    recent: Array<{ at: number; kind: 'probe'|'read-failed'|'correct'|'correct-failed'|'complete'|'recovered'; detail?: string }>  // 有界动作 ring（真机取证）
-  }
-}
-export const chamberBridge: {
-  getServers(): ChamberServerAggregate[]
-  subscribe(listener: () => void): () => void
-  publish(servers: ChamberServerAggregate[]): void        // App 层调用
-  requestOpenSession(sourceId: string, sessionId: string): void
-  onOpenSession(listener: (req: OpenSessionRequest) => void): () => void
-  reportOpenSessionOutcome(outcome: OpenSessionOutcome): void  // App 层调用：一次打开尝试的终态回报（失败带文案）
-  onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
-  requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
-  onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
-  reportWorkspacePlacement(fact: WorkspacePlacementFact): void // create **调用之前**上报位置意图（§2.2.1；generic workspace create 的 PREPEND 短暂态在 id 键回声能存在之前就已渲染）
-  onWorkspacePlacement(listener: (fact: WorkspacePlacementFact) => void): () => void  // App 层订阅：并入位置意图账本
-  reportWorkspacePlacementFailed(fact: WorkspacePlacementFailedFact): void  // 重排永不落地时作废该意图（只发失败侧：create 的 insertBefore catch + saga 中止 catch）
-  onWorkspacePlacementFailed(listener: (fact: WorkspacePlacementFailedFact) => void): () => void  // App 层订阅：从账本撤下
-  reportWorkspaceCreated(fact: WorkspaceCreatedFact): void     // 侧栏 create 成功后上报宿主 workspaceId（§2.2.1 回声事实；单向，绝不请求宿主改动）
-  onWorkspaceCreated(listener: (fact: WorkspaceCreatedFact) => void): () => void  // App 层订阅：并入回声账本
-  reportWorkspaceRemoving(fact: WorkspaceRemovingFact): void   // delete **调用之前**上报删除意图（§2.2.1；宿主 order 帧会把被删行沉到列表尾，等 RPC 返回再发就晚了一帧）
-  onWorkspaceRemoving(listener: (fact: WorkspaceRemovingFact) => void): () => void  // App 层订阅：记入删除账本（含 TTL sweep）
-  reportWorkspaceRemovingFailed(fact: WorkspaceRemovingFailedFact): void  // 删除未提交时撤下意图（只发失败侧；成功侧不撤——RPC 回答可能先于下沉帧渲染）
-  onWorkspaceRemovingFailed(listener: (fact: WorkspaceRemovingFailedFact) => void): () => void  // App 层订阅：从账本撤下
-  reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void     // 侧栏 delete 成功后上报（撤销回声）
-  onWorkspaceRemoved(listener: (fact: WorkspaceRemovedFact) => void): () => void
-  reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void     // 侧栏 rename 成功后上报（改名回声）
-  onWorkspaceRenamed(listener: (fact: WorkspaceRenamedFact) => void): () => void
-  requestSessionListRefresh(sourceId: string, reason?: 'create' | 'enter'): void
-    // reason='create' / 'enter'（§2.2.1 收敛臂）：请求该来源挂载 ctx **强制重跑**官方 session.list。
-    //   'create' = App 收到会话创建回声（新 id 直接带进挂载壳 summaries，open 的 dispatch 门不必等宿主异步广播）；
-    //   'enter'  = Git checkout 会话 enter 成功（projection-only 的 workingDirectory 随重读进 summary，放置意图按「偏离创建 seed」退休；
-    //              该臂在第一次读完成后另有界重读一次，覆盖复用在 enter 前就在飞的基线的情况）。
-    // reason 缺席 = 既有路径：设计 24 §12 的 purge 幽灵行收敛（§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）
-    //   与 design 14 §D4 的 App 30s tick 对账（producer 订阅端驱动 SessionAuthorityReconciler，快照经上面的 sessionAuthority 字段回流）——
-    //   **不**触发官方 refresh（避免每拍一次宿主 disk walk）。
-  onRequestSessionListRefresh(listener: (sourceId: string, reason?: 'create' | 'enter') => void): () => void
-    // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§12：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）。
-    // 处理器只在显式 reason 下调用官方 ctx.sessions.refresh()（单飞 + warn-only 失败），reason 缺席时逐字保持旧的 purge/L1 行为。
-  requestActivateSource(sourceId: string): void           // 点击来源分组头调用
-  onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
-  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string,
-                                  bootGeneration?: number): { // 每个已挂载 ctx 一代生产者（代际栅栏）
-    report(report: InstanceRuntimeReport): void         // token 命中才发布
-    clear(): void                                       // generation-safe teardown
-  }
-  onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined,
-                             sourceFingerprint: string | undefined) => void): () => void
-  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string,
-                                   bootGeneration?: number): { // 每个已挂载 ctx 一代生产者（代际栅栏）
-    report(snapshot: InstanceSnapshot | undefined): void // undefined = baseline 不完整，恢复兜底
-    clear(): void                                         // generation-safe teardown
-  }
-  retireInstanceProducers(sourceId: string): void          // roster 退役时同步撤销 token/cache
-  getInstanceSnapshots(): Readonly<Record<string, InstanceSnapshot>>
-  onInstanceSnapshot(listener: (sourceId: string, snapshot: InstanceSnapshot | undefined,
-                                sourceFingerprint: string | undefined) => void): () => void
-  reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void
-  clearPluginDiagnostic(sourceId: string): void
-  getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
-  onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
-  // 活动视图事实（design 06 §4.6）：文档级状态只有活动视图的实例可以写
-  // ——两条：主题投影（ui-layout fork 的 document-theme）与页面语言
-  // （`<html lang>`，renderer/src/page-language.ts 的页级归属器）。
-  // App 是「谁在屏上」的唯一权威。
-  setActiveSource(sourceId: string | undefined): void     // 同值重发为 no-op；undefined = 未发布
-  getActiveSource(): string | undefined                   // 未发布时 undefined（消费者 fail open）
-  onActiveSource(listener: (sourceId: string | undefined) => void): () => void  // 仅变化时通知
+**契约摘要**（完整类型/方法签名以源码为单源：`packages/dsh-chamber-client-core/src/aggregate-store.ts` 的 `ChamberServerAggregate`/`InstanceRuntimeReport` 与 `chamberBridge` 单例；回声/位置账本在 `workspace-echo.ts`/`workspace-placement.ts`，唯一事实出口在 `workspace-mutations.ts`，意图槽在 `open-intent.ts`）：
+
+```text
+ChamberServerAggregate = { id: 'local'|'dsh-<id>'|'gateway-<id>', sourceFingerprint, kind, label, connected, phase, workspaces[], aggregateError?, runtime?, pluginDiagnostic?, updatedAt }
+  ChamberServerWorkspace = { id, title, ungrouped?, sessions[] }
+InstanceRuntimeReport = { current?, sessions: Record<id,{running?,completed?,pending?('approval'|'plan-review'|'question'),runningSubagents?}>, sessionAuthority? }
+chamberBridge = {
+  getServers/subscribe/publish(servers)                    // App 层唯一发布者；等值不发布、发布数组不可变
+  requestOpenSession(reportOpenSessionOutcome)             // open 意图 + 一次尝试终态回报（失败行内呈现）
+  requestRefresh(onRefresh)                                // 侧栏成功后即时 mutation-pull
+  onWorkspaceCreated|Removed|Renamed                       // 回声账本：create/delete/rename 后上报（未挂载来源收敛）
+  onWorkspacePlacement|PlacementFailed                     // pre-create 位置意图（wire **之前**发布；只发失败侧作废）
+  onWorkspaceRemoving|RemovingFailed                       // pre-delete 删除意图（wire **之前**发布；成功侧不撤，权威 remove 帧收敛）
+  requestSessionListRefresh(sourceId, 'create'|'enter')    // 请求该挂载 ctx 强制重跑官方 session.list（reason 缺席不触发 refresh）
+  requestActivateSource(onActivateSource)                  // 点来源分组头：只切视图、不打开会话
+  registerInstanceRuntimeProducer / registerInstanceSnapshotProducer / retireInstanceProducers
+                                                           // 每 ctx 一代生产者：token+sourceFingerprint+代际栅栏；report 命中才发布，retire 同步撤销
+  reportPluginDiagnostic/clearPluginDiagnostic/getPluginDiagnostics // 客户端插件图 boot 健康（与设置面可渲染不同事实面）
+  setActiveSource/getActiveSource/onActiveSource           // 文档级状态唯一权威 = 活动视图；同值 no-op、未发布 undefined（消费者 fail open）
 }
 ```
+
+**不变式/边界**：页面级单例（vite 共享 chunk）；App 层是 document 级状态（主题/语言）的唯一写入者；来源删除/传输身份编辑时先在等待异步 dispose 前同步撤 producer（旧 ctx 迟到 report 全部失效）；回声/意图账本只持有 id/路径与非秘密文本，不存会话内容。
 
 **App 层（renderer main entry）写入职责**：
 - 启动即 auto-start 本地实例（连接行不存在则 `POST /api/connections`）；按注册表 auto-connect 远程实例（`desktopSsh.connect`）。

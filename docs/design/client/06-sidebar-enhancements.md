@@ -23,9 +23,7 @@
 
 ### 1.3 代码落点
 
-- `packages/dsh-chamber-client-core/src/instance-api.ts`：包装 `searchSessions(client, query, signal)`（信号透传——现有 helper 不带 signal；复用 `resultError`）。
-- `SidebarRoot.tsx` + `sidebar-chamber.module.css` + `locales.ts`（`search.*` 键 zh/en 八组）。
-- `types/vendor-modules.d.ts`（各包 `src/vendor-modules.d.ts` 为 /// reference 存根）：ambient 镜像补新导出。
+- 代码落点：`packages/dsh-chamber-client-core/src/instance-api.ts`（`searchSessions` 包装，信号透传）、`SidebarRoot.tsx` + `sidebar-chamber.module.css` + `locales.ts`（`search.*` zh/en）、各包 `src/vendor-modules.d.ts`（ambient 镜像补新导出）。
 
 ## 2. 拖拽排序（来源内）
 
@@ -71,21 +69,8 @@
 
 - 单键 `dsh-chamber.sidebar.v1`（整页共享 localStorage；所有实例 ctx 共读共写）：
 
-```ts
-{ v: 1,
-  folded: Record<`${sourceId}/${workspaceId}`, boolean>,
-  ungroupedOrder: Record<sourceId, string[]>,
-  orderBy: Record<sourceId, 'manual' | 'updated'>,
-  groupBy?: Record<sourceId, 'workspace' | 'workspace-tree' | 'flat'>,
-  archivedFilter?: Record<sourceId, 'default' | 'show' | 'only'>,
-  flatOrder?: Record<sourceId, string[]>,
-  checkoutOrder?: Record<string, string[]>,   // key = `__checkout__:${sourceId}/<canonicalMainPath>`，value = canonical checkout path 数组
-  updatedOrder: Record<`${sourceId}/${workspaceId}`, string[]>,
-  sessionUpdatedAtByAccount: Record<`${sourceId}/${workspaceId}`, Record<sessionId, number>>,
-  sidebarWidth: number,
-  sourceFolded?: Record<sourceId, boolean>,
-  serverOrder?: string[] }
-```
+存储形状（单源 = `packages/dsh-chamber-client-core/src/view-prefs.ts`）：`folded` / `ungroupedOrder` / `orderBy` / `groupBy?` / `archivedFilter?` / `flatOrder?` / `checkoutOrder?` / `updatedOrder` / `sessionUpdatedAtByAccount` / `sidebarWidth` / `sourceFolded?` / `serverOrder?`，单键 `dsh-chamber.sidebar.v1`（整页共享 localStorage）。
+键语义：可选字段旧数据缺省即默认（v 保持 1 不重播种）；updated 排序的 account 序与簿记键同 `folded`；checkoutOrder 键 = `__checkout__:<sourceId>/<canonicalMainPath>`（仅本机 localStorage，不写宿主、不跨实例同步）；sidebarWidth 由 ui-layout fork 播种/回写。
 
 - **sourceFolded / serverOrder**：来源级收拢 + 来源显示序（§2.4）。可选字段，旧数据无字段即全展开 / 投影序，v 保持 1 不重播种；裁剪同 orderBy（本会话见过、现已消失的来源才裁）。
 - **updatedOrder / sessionUpdatedAtByAccount**：updated 排序的活动序 account 与簿记（§2「会话排序模式」）。键与 folded 同为 `${sourceId}/${workspaceId}`（未分组桶 workspaceId 即 `UNGROUPED_WORKSPACE_ID`），剪裁同 folded；manual 模式不读；v 保持 1，旧数据无字段即从未进入 updated。
@@ -104,8 +89,7 @@
 
 ### 3.3 代码落点
 
-- **渲染结构**：侧栏 context 的动作经 `useStableHandlers` 冻结身份（每属性缓存闭包、调用转发到每次渲染刷新的 ref），状态字段逐项进依赖——于是 `memo(ServerSection)` / `memo(SessionRow)` 真正生效；per-source 账号序**每渲染每工作区只算一次**（resetKey 与 walk 共用同一缓存），flat 账号只对账/分区一次且仅在 flat 态构建（walk 直接渲染 `flatSessions`）；工作区拖拽环境只在**本来源拖拽进行中**构建；树投影与三轴菜单条目各自 `useMemo`，且 ServerSection 以 `useSyncExternalStore(subscribeWorkspaceGitFlags, getWorkspaceGitFlagsVersion, …)` **订阅** git flags 版本（ctxValue 稳定后，只读 getter 的 memo 依赖不是响应式来源，家族锚点/main-fold/worktree 字形会冻结）。回归锁：`row-render-cost.test.ts` / `animated-rows.test.ts` / `workspace-tree.test.ts` / `flat-list.test.ts` / `pin-partition.test.ts`。**行运动预算（B6）**：hover 揭示门的 `getAnimations` 扫描只在行键序列变化时执行（keyed 行动画的唯一来源是 FLIP 的 `sameRows` 门）；FLIP 起始批每列表 ≥250ms、间隔内提交即时落位（`rows/motion-budget.ts` / `rows/animated-rows-motion.tsx`，port 本体与 pinned vendor 逐字节一致）；锁 = `hover-motion-gate.test.ts` / `row-motion-budget.test.ts`。接受代价：预算跳过期间被搬进指针下的行靠原生跳位、无动画可门控；空 diff 也可能占掉一次 250ms 预算；预算拒绝后 port 走 `clear()`，<250ms 的第二次真实变更会把在飞 glide 的行瞬移落位。**Rejected alternatives（行运动预算；B6 = 渲染 P0 批工作名，单源见 [TODO.md](../../progress/TODO.md) §3，与 §3.4 B 类偏差 B6「本地账号成员集」不同义）**：① 不预算、每次提交都完整 FLIP——流式 churn 下动画批次互相叠加，`getBoundingClientRect`/`getAnimations`/KeyframeEffect 分配随 churn 线性涨，正常交互路径被帧级噪声淹没；② 把提交合并到逐 rAF（每帧最多一批）——同一帧内的第二次提交可能搬动第一次扫描看不到的行，压到下一 rAF 会丢掉该次 hover 门控（位移前的 hover 真相只在本次 layout 阶段可读），且 60–120 fps 仍是 60–120 批/秒、不解决分配量；③ 关闭 FLIP、行位移一律即时落位——视觉连续性回退，代价大于收益。故取 250ms 最小起始间隔 + 间隔内即时落位（port 本体零改动）。**已知残余（登记）**：浏览分支专属派生（`orderedWorkspaces` / `visibleOrderedWorkspaces` / `rowKeys` / flat 对账）在搜索/聚合错误/折叠路径仍会计算；`__flat__` 的 DOM/行键命名空间与真实工作区共用（宿主 UUID 下不可达）；只有 `folded`/`sessionRowsExpanded` 用哨兵键；only 空态缺上游 24px 归档/队列字形、非 only 空态复用 `list.noWorkspaces` 而非上游 `empty.none`；归档行的标题双击重命名未保留（上游只拒绝打开）；视图选项菜单未设上游 200px min-width 地板；归档悬停行是纯文本（上游带 14px 归档图标与 `.hoverArchived` 行类）；carry 只保留仍在归档集的隐藏 id，故 `only`→`default` 时被隐藏的**非归档**行仍可能被当作首次观测提升一次（渲染侧拿不到未过滤成员集，无法与"已删除"区分）。
-- `packages/dsh-chamber-client-core/src/view-prefs.ts` 同时承载 `checkoutOrder` 的 schema/parse/write/prune（键 = `__checkout__:${sourceId}/<canonicalMainPath>`，值 = canonical path 数组）；`packages/dsh-chamber-client-core/src/index.ts` 再导出；`SidebarRoot.tsx` 经 `getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs` 读写；`test/session-state/view-prefs.test.ts` 覆盖存储单例/通知/裁剪（node:test 风格）。
+- 代码落点（文件落点单源 = 源码）：`SidebarRoot.tsx`（`useStableHandlers` 冻结动作身份 + memo 边界 + 每渲染每工作区账号序缓存）、`view-prefs.ts`（`checkoutOrder` schema/parse/write/prune + 再导出）、`index.ts` 再导出；行为锁与运动预算见源码与本仓测试。
 
 ### 3.4 视图选项三轴（per-source，对齐上游）
 
@@ -183,11 +167,8 @@
 
 ### 4.4 代码落点
 
-- `packages/dsh-chamber-client-core/src/aggregate-store.ts`（通道 + `ChamberServerAggregate.runtime?` + `completed`/`runningSubagents` 行字段）、`client/index.ts`（订阅与投影上报 + design 24 §12 墓碑抑制/收敛链 + `indexSubagentDescendants` 注入 + 官方 `completionUnread` 采集）、`App.tsx`（runtimeFacts + 修正臂对账/合并/清理；runningSubagents 随事实行透传）、`packages/dsh-chamber-client-core/src/completion-arm.ts` + `packages/renderer/src/host/completed-store.ts`（修正臂纯函数与其内存表：有壳 `current` 行 ∪ 无壳 `factsOnly` 逐行边沿）、`packages/renderer/src/virtual-runtime-report.ts`（无 ctx 来源的判定侧读回退投影——不物化、不写 `factsStore`）、`packages/renderer/src/app-hooks/use-notifications.ts`（两个判定读取点 `stepArmNow`/`reconcileCompletionsNow` + 来源撤离 `withdrawSource`）、`packages/renderer/src/session-facts-source.ts`（`baselines`/`firstSeenByDelta`/`onRowHint` 与降级保行）、`packages/renderer/src/app-hooks/use-session-facts-lifecycle.ts`（`stepRowHint` 是 `facts-row-hint` 的唯一 guard 调用点；
-
-  两个 teardown 调 `withdrawSource`）、`SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 + runningSubagents 分支 + `.railDotButton`）、`ServerSectionRows.tsx`/`RowHoverCard.tsx`（A1 座席渲染：行首 `renderSlot('sidebar.session.row.leading')`（仅 owning 来源）与悬停卡内容位渲染 `sidebar.session.row.hover`；两席由本仓侧栏的 `children` 声明，上游注册里的三行（含 `sidebar.session.row.trailing`）由 vendor 补丁删除，`trailing` 不采纳（见 §10）——座席所有权转移，09 §3.6 第四类第二形态）、`packages/dsh-chamber-client-core/src/derive.ts`（goal 的 `parseGoalFact`/`retainGoalFacts`/`applyGoalActivation`/`goalFactSignature` 与 overlay 填补）、`packages/dsh-chamber-client-core/src/session-row-state.ts`（goal 三值 + 两个谓词 + `sessionRowState` 压制后 state 的零依赖叶模块）、`client/goal-activation.ts`（事件制 activation 缓存 + 有界重试；
-
-  缓存上限 `MAX_ACTIVATION_CACHE = 2000`，LRU 淘汰 + warn-once + `evictedCount` 诊断；不调 `goals/get`）、`packages/dsh-chamber-client-core/src/session-row-window.ts`（`sessionRowWindow` + `sessionRowDisclosure`）、`locales.ts`（`status.waitingApproval/planReview/waitingAnswer/completed` + `status.subagentsRunning.one/other`）。
+- 代码落点（文件落点单源 = 源码）：`aggregate-store.ts`（通道/行字段）、`client/index.ts`（订阅+投影上报+墓碑抑制+`indexSubagentDescendants`）、`App.tsx`（runtimeFacts + 修正臂对账/合并）、`completion-arm.ts` + `renderer/src/host/completed-store.ts`、`virtual-runtime-report.ts`、`use-notifications.ts`、`session-facts-source.ts`、`use-session-facts-lifecycle.ts`、`SidebarRoot.tsx` + `sidebar-chamber.module.css`、`ServerSectionRows.tsx`/`RowHoverCard.tsx`、`derive.ts`、`session-row-state.ts`、`client/goal-activation.ts`、`session-row-window.ts`、`locales.ts`。
+- 接线细节（座席声明、LRU 上限与重试、`sessionRowWindow` 纯函数、A1 座席所有权）以源码头注为准。
 
 ### 4.5 运行中子 agent（runningSubagents 圆环）
 
@@ -216,7 +197,6 @@
   - **失败开放**：无 `chamberInstanceId`（官方单壳形态）/读不到 LocaleFace/绑不到 settings scope 时该壳**不参与归属**，其语言永不被采纳（页面停在当前语言，直到出现可归属来源），但页级归属器仍把它的写入回写为当前页面语言（不会闪）；"vendor 行为完全不变"只对**根本不装归属器**的官方单壳形态成立。`registerDeferred` 挂载同样过 `decorateMount`，未来把受装饰 id 移进 `DEFERRED_ROWS` 时不静默失去归属。
   - **既定结果**：设置桥可编辑**非活动**来源的设置，其中 ctx-free 时间戳渲染（`DshRuntimeSection.tsx` 的 `formatTimestamp`）按页面语言（= 屏上来源）取值——"只有屏上实例能拥有页面语言"的直接推论，不是缺陷；要让设置面跟随被编辑来源的语言需另立规则（未采纳）。
   - **被否的替代方案**：**vendor fork 门控**（`dsh-client-locale` 纳入 in-repo fork 并按 `chamberInstanceId` 门控）语义等价、写入点更干净，但该包要进受保护集合与 upstream-touchpoints 登记、每次升级背维护，而 composite 已有同栈挂载缝（`decorateMount`）；**构建期 vendor patch**（`packages/renderer/scripts/vendor-patches.mjs` 加 C9 锚点，在 `syncDocumentLanguage` 里门控 `ctx.get('chamberInstanceId')`）同样更干净，但埋进 vendor 文本重写、锚点是每次升级的常驻成本，仅在观察者回写被证明不够时升级；**只在框架侧解耦**（框架改读来源事实而非 `document.lang`）只消框架 chrome 闪烁、`document.lang` 本身仍错（a11y `:lang`、语言相关 CSS、settings-bridge 的 ctx-free 读取点仍跳），属症状级；**页面语言长期归本地实例**与 05 §4「文档级全局量由活动视图独占」冲突；**只按活动来源门控、不判"设置面已敲定"** 会让本地实例自己的 provisional 把默认进入闪一次。
-  - **证据**：`packages/renderer/test/frame-chrome/page-language-hook.test.ts`（真实 decorator + 真实归属器、stub DOM 端到端：locale 映射与 writer/reader 配对、规则状态机与挂载世代、同栈回写 / 后台壳 / 切换等待 / fail-open 形状、安装顺序与接线锁）、`frame-locale.test.ts`（frame 读者映射）、`theme-fallback.test.ts`（活动来源发布锁）、`required-extra-rows.test.ts`（两条挂载路径的装饰器形状锁）。
 - **同族残留（非本节修复面）**：同一文档里其它 document-global 状态被逐实例写/监听，属同一"N-ctx 单文档"缺陷族：①**文档级 `drop` 扇出（已修）**——vendor `ui-attachment` `ComposerAttachments.tsx` 在 document 挂 drop 监听且无 containment/活动视图判定，local 与任一挂载远程同时在场时拖入图片会同时附到两个实例的草稿；已按「按 event.target 归属」落地：两条构建期 vendor 补丁（`packages/renderer/scripts/vendor-patches.mjs` 的 drop-events + ComposerAttachments，按 drop 落点所属 `[data-instance]` 子树 containment，[25](../desktop/25-macos-swift-native-shell.md) §5.7）；②**`document.title`**（机制上仍活着，被主进程冻结窗口标题掩盖）——ui-layout fork deep-import 官方 `AppFrame`，其 `DocumentTitle` 每个壳竞争写/清；
 
   它**不**并入页面语言归属器（被拥有值是语言，没有会话标题投影），将来归属点是与 `document-theme` 同址的 ui-layout fork（按 `chamberBridge` 活动来源门控）或 ui-layout vendor patch；③**`--dsh-content-font-size` 播种**（vendor `bootstrapFontSize` 读 body 变量）会读到"上一个 applier"的值，下一次投影自愈；④**portal 逃逸（真实缺陷，部分收窄）**——vendor `ui-primitives/Modal`（含 backdrop）与 chamber 的 SettingsShell 都 portal 到 `document.body`，而 `.instance-hidden` 只隐藏视图子树：视图 A 里打开的模态在程序化切换（深链/通知/注册表回落）后仍盖在 B 上；**唯一收窄的是 open-in 的 chevron 菜单**（[20](../desktop/20-open-in-registry.md) §5）：菜单本体是官方 `ui-primitives` `Menu`（portal 到 body），但 N-ctx 归属守卫 `instance-view-guard.ts` 在菜单所属 `.instance-view` 失活（`instance-hidden`/`instance-pending`/`hidden`/`aria-hidden`/断开）时立刻关闭它；
@@ -267,10 +247,9 @@
 
 ## 6. 验证门
 
-- 纯函数单测：`reconciledSessionOrder`、`view-prefs` 读写/单例通知/裁剪、搜索 sanitize、`todo-attention` 派生、`todo-prefs` 水合（`test/session-rows/derive.test.ts`、`test/session-state/view-prefs.test.ts`、`test/session-rows/todo-attention.test.ts`、`test/session-state/todo-prefs.test.ts`，node:test 风格）。
+- 判据与执行见 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) 与 `scripts/gates/runners/run-checks.mjs`（门清单单源 = `scripts/gates/registry/gate-surfaces.json`）。
 - **上游对齐判据**：以下对齐面仍是契约（判据见该包测试）——归档动词在行菜单，另有同一动词的行内悬停钮（§7「行内操作」）、全包无原生 confirm、workspace 删除是官方 `Modal` chrome（含对话框内 `role="alert"` 失败行与「仅成功才关闭」）、**同一时刻至多一层 chamber Modal**（见下）、completed 走 chamber 品牌蓝点（官方 `done` 绿点因与来源头连接点同 token 被否）、行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且 `compact`、`{name}` 参数化可访问名（pin 的行钮按上游用行菜单长名，是这条政策的**有意例外**，判据在 `test/session-rows/session-row-actions.test.ts`）、**pin 面形态与行级漏斗**（同文件：座席顺序 100/200、静息标记的稀疏集合事实、`pin` 行错误键、in-flight 守卫与 toggle 方向）、上游 pin 形态/座席/文案/线协议的源码 lockstep（`test/session-state/vendor-session-fact-contract.test.ts`）、`data-git-action` 属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边（`test/session-rows/session-row-window.test.ts` 的 disclosure 窗口、`test/plugin-kernel/panel-source.test.ts` 的 `createSnapshotStore` 投影与通知纪律、`test/plugin-kernel/foreign-panel-axis.test.ts` 的跨壳发布/回落与一次性 selectPanel 意图）。
 - **同一时刻至多一层 chamber Modal（对称门）**：官方 `Modal` **没有焦点陷阱**（vendor `ui-primitives/src/Modal.tsx`：一层 body portal 遮罩 + 每个打开实例各自一个 document 级 **BUBBLE** Escape 监听），而「孤儿徽标」与行内孤儿清理钮都是常驻、可 Tab 到的按钮（`ServerSection.tsx` 的 `cc.orphanBadge` / `cc.orphanCleanup`，都在 hover 簇之外，且共用同一个 `onDeleteWorkspace` 打开方），键盘用户可 Tab 到任一遮罩之后武装第二层，两层各注册 Escape 监听、一次 Esc 双关（[24](../plugins/24-archived-session-cleanup.md) §6 项 8 正是归档管理器拒绝第二层的理由）。真不变量落在**打开方**、不在遮罩：`SidebarRoot.tsx` 的单一谓词 `otherChamberDialogOpen(self)` 被**全部四个打开方**咨询——删除武装（`onDeleteWorkspace`）、归档管理器（`onOpenArchiveManager`）、归档活动确认（`openArchiveConfirm`：两段式第二调前的「停止并归档」层）、添加工作区浏览器（`openWorkspaceBrowser`；节 `ServerSection` 只拿得到这个带门的 opener，拿不到裸 setter）——每个子句排除自己那一层，故**任一方向**最多只可能有一层；被拒的控件在该层消失（cancel / X / 遮罩 / Escape 均可）后立刻恢复，能力不丢。
-- 包级门：`pnpm run typecheck`、根 `typecheck`、`typecheck:layout`、`typecheck:sidebar`、`pnpm run build:renderer`、`pnpm run verify:i18n`、`test:sidebar`、`test:layout`、`test:renderer-shell`；control-plane 套件为回归门。
 
 ## 7. 样式定稿
 
@@ -373,10 +352,7 @@
 
 ### 8.4 代码落点
 
-- 派生：`packages/dsh-chamber-client-core/src/todo-attention.ts`（纯函数 + `test/session-rows/todo-attention.test.ts`）；
-- 设置订阅：`packages/dsh-chamber-client-core/src/todo-prefs.ts`（只读水合 + `test/session-state/todo-prefs.test.ts`）；
-- UI：同包 `client/SessionTodoArea.tsx` + `sidebar-chamber.module.css` `.todo*` 类；`SidebarRoot` 在 `regionArea` 内、滚动容器**外**渲染（`wide` 门控；rail 无待办区；在 `ChamberListBoundary` **之内**——region 渲染错误纪律覆盖待办区）。打开经 SidebarRoot 守卫回调（拖拽尾随 click 抑制 + 同会话内联重命名保护），来源色点复用 `packages/dsh-chamber-client-core/src/derive.ts sourceAccentColor`（列表/rail/待办共用）；
-- 设置面：`desktop/chamber-settings.ts`（类型/默认/校验）、`desktop/shell-core.ts`（共享装配，`applySettingsPatch` 嵌套 deep-merge）、`desktop/electron/preload.cts`（归档面）+ `renderer/src/global.d.ts`（镜像）、`settings-bridge`（`session-todo-settings.ts` 助手 + `GeneralView` 新组 + `settings-store.ts` 乐观 overlay 嵌套合并扩展 + zh/en 各 6 键）、sidebar zh/en 各 5 键（`todo.*`）。
+- 代码落点（文件落点单源 = 源码）：派生 `packages/dsh-chamber-client-core/src/todo-attention.ts`；设置订阅同包 `todo-prefs.ts`（只读水合 get + onChanged）；UI `client/SessionTodoArea.tsx` + `sidebar-chamber.module.css` 的 `.todo*`，`SidebarRoot` 在 `regionArea` 内、滚动容器外渲染（wide 门控、rail 无待办区）；设置面 = `desktop/chamber-settings.ts`（类型/默认/校验）+ `shell-core.ts`（deep-merge）+ preload/global.d.ts 镜像 + settings-bridge 助手与 zh/en 键。
 
 ### 8.5 行序与列
 

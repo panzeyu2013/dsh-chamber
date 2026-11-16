@@ -13,7 +13,7 @@
 | How-to / runbook | [`checklists/`](./checklists/README.md) | 按阶段执行、可勾选、可复跑的验证步骤 | 版本值、发布叙述、门禁计数 |
 | How-to / ops | [`deploy/`](./deploy/deploy-gateway.md) | 部署、回滚、远端实例运维步骤 | 设计理由、发布叙述 |
 | Status / records | [`progress/`](./progress/STATUS.md) | 唯一进度记录（STATUS 只记 open 项）、TODO、冻结/归档登记 | 设计契约、可执行步骤 |
-| Reference | [`packages/*/README.md`](../packages/control-plane/README.md) | 包契约：职责、边界、模块、测试入口、已知限制 | 设计全文、其他包事项 |
+| Reference | [`packages/*/README.md`](../packages/control-plane/README.md) | 包契约：职责、边界、模块、已知限制 | 设计全文、其他包事项 |
 | Entry / mirrors | 根 [`AGENTS.md`](../AGENTS.md)、[`README.md`](../README.md)、[`CONTRIBUTING.md`](../CONTRIBUTING.md)、[`DEVELOPMENT.md`](./DEVELOPMENT.md)、`docs/*.en-US.md` | 用户面与双语镜像 | 内部进度 / 决策叙述 |
 
 **生命周期不是目录**：`commit / push(PR) / release / upstream upgrade / acceptance / ops / maintenance` 只出现在 [`checklists/README.md`](./checklists/README.md) 的阶段矩阵与该阶段清单头部；阶段矩阵是阶段-门禁-入口的唯一来源。design 的生命周期状态只由 [`design/INDEX.md`](./design/INDEX.md) 维护（`current / archived / superseded`）。

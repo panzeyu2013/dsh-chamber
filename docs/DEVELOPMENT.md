@@ -14,29 +14,15 @@
 ## 1. 架构总览
 
 ```
-┌───────────────────────────────────────────────────────────────────────┐
-│ Swift 窗口（WKWebView，loadURL 控制面 origin；Electron 归档参考）       │
-│ └─ dsh 官方前端（源码复用）                                             │
-│     ├─ 自研侧边栏插件：dsh 原生侧边栏内多来源会话导航 + chamberBridge     │
-│     ├─ Git worktree 客户端插件：仓库内 checkout 行 + 创建/删除           │
-│     ├─ 桥接宿主（entry 级 React）：首屏 = 本地实例纯 dsh shell           │
-│     └─ N-ctx：每实例一个 dsh shell，经 /api/i/<id>/* 同源访问            │
-├───────────────────────────────────────────────────────────────────────┤
-│ 控制面（127.0.0.1:17500）                                               │
-│  ├─ 管理 REST：/health · /api/connections · /api/host/logs              │
-│  ├─ 每实例反代：/api/i/local/* → 本地 dsh（web profile）                 │
-│  │              /api/i/dsh-<id>/*、/api/i/gateway-<id>/* → 已注册传输    │
-│  │              （普通桌面 v1 匿名可达，仅 loopback 监听）               │
-│  ├─ 本地实例托管（spawn/健康/reaper）+ 四个 host 包 seed/单一 overlay     │
-│  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）                             │
-├───────────────────────────────────────────────────────────────────────┤
-│ 打包 Node sidecar（desktop host-assembly；Electron 归档）               │
-│  ├─ transport-manager：目标 dsh|gateway × 传输 ssh|http                 │
-│  │    SSH 隧道/systemd 或主进程 HTTP(S)，生命周期按 generation 隔离       │
-│  ├─ 远端 ready-time host 包分发（不经 SSH 执行 Git；open-in 仅本地）    │
-│  ├─ 实例注册表：<userData>/ssh-instances.json                           │
-│  └─ IPC（preload 白名单）：dsh-chamber:info · desktop_ssh_*             │
-└───────────────────────────────────────────────────────────────────────┘
+┌ Swift 窗口（WKWebView，加载控制面 origin；Electron 归档参考）
+│  └─ dsh 官方前端（源码复用）：自研侧边栏 / Git worktree 插件 / 桥接宿主 / N-ctx（每实例一壳，/api/i/<id>/* 同源）
+├ 控制面（127.0.0.1:17500）
+│  ├─ 管理 REST（/health、/api/connections、/api/host/logs）+ 每实例同源反代 /api/i/<id>/*
+│  ├─ 本地实例托管（spawn/健康/reaper）+ host 包 seed/单一 overlay
+│  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）
+└ 打包 Node sidecar（desktop host-assembly；Electron 归档）
+   ├─ transport-manager：目标 dsh|gateway × 传输 ssh|http；远端 ready-time host 包分发
+   └─ 实例注册表 <userData>/ssh-instances.json + IPC（preload 白名单）
 ```
 
 一句话：控制面负责连接管理、每实例同源反代与静态前端服务；渲染层是dsh官方前端源码复用自建（单窗口单frame、N-ctx多实例）；桌面壳以 `dsh|gateway`×`ssh|http` 接入远程实例；显式启动的gateway在默认认证的公网边界后复用同一宿主核心。
@@ -53,8 +39,7 @@ Git worktree由chamber-bundled client插件与每实例内host插件配对（P5b
 
 - Node.js 24+（推荐LTS；TypeScript源码经Node原生类型擦除直接运行，见 `.nvmrc`）
 - macOS + Swift/Xcode：`build:swift-app` / `test:swift` 是现行出货链路，必须可构建（parity 门可用 `DSH_CHAMBER_SWIFT_PARITY_SKIP=1` 显式跳过）
-- pnpm≥11（包管理器；锁文件 `pnpm-lock.yaml`）
-- git
+- pnpm≥11（包管理器；锁文件 `pnpm-lock.yaml`）；git
 - 发布链另需五项 Apple/Developer ID 凭据（缺项 fail-closed，见发布 checklist）
 - dsh宿主可选——仅集成冒烟测试需要，未安装时自动SKIP
 
@@ -117,9 +102,7 @@ pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复�
 
 `build:desktop` 把已构建的host包（client-graph/git-worktree/archive-cleanup/open-in）复制到 `packages/desktop/dist/host-*-package/`；本地控制面由此seed打包态本地实例，桌面ready-time远端seed复用同一产物（open-in为 `localOnly`，只进本地seed，不进远端/gateway）。
 
-> 平台排障（安装/权限）统一见 README「常见问题」；Windows 桌面腿已冻结，不再维护专属排障。
-
-> Windows/Linux 桌面腿已随 Electron 冻结（不发布、不排期）；冻结前支持矩阵与复活基线见 [progress/electron-frozen.md](./progress/electron-frozen.md) §6 与 design 23（ARCHIVED）。
+> 平台排障（安装/权限）见 README「常见问题」；Windows/Linux 桌面腿随 Electron 冻结（不发布、不排期），冻结前支持矩阵与复活基线见 [progress/electron-frozen.md](./progress/electron-frozen.md) §6 与 design 23（ARCHIVED）。
 
 ## 5. CI 与发布
 
@@ -134,37 +117,10 @@ pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复�
 ## 6. 仓库结构
 
 ```
-packages/
-  control-plane/ renderer/ desktop/ cli/ gateway/ dsh-runtime/
-  dsh-client-connection/ dsh-client-web/ dsh-api-gateway/
-  dsh-chamber-client-core/ dsh-chamber-wire/ dsh-stream-state/
-  dsh-chamber-client-ui-*/ dsh-chamber-seed-*/
-                            每个包的职责、边界、主要模块、测试入口与已知限制见包 README；
-                            包清单以 packages/ 目录为准，职责归属见根 AGENTS.md「Runtime Boundaries」
-docs/
-  INDEX.md                  全局文档地图（所有文档的唯一入口）
-  AGENTS.md                 文档标准（类型 / 放置 / 写作 / 流程）
-  design/                   INDEX.md（领域 × 状态 × owner）+ 01-overview.md 总览
-                            + 领域目录（runtime/ control-plane/ gateway/ client/ desktop/ plugins/ archive/）
-                            + decisions/（ADR：背景 / 决定 / 被否方案 / 后果）
-  checklists/               README.md 阶段矩阵（唯一阶段清单）+ release/ upgrade/ acceptance/
-  progress/                 STATUS.md 唯一进度记录；TODO.md；deviations.md；electron-frozen.md；README.md 规则
-  deploy/                   Gateway 部署 / 远程 dsh 实例持久化
-  *.en-US.md                各根文档的英文镜像
-scripts/
-  install-gateway.sh        Gateway 一键安装器（用户/运维面；入口 docs/deploy/deploy-gateway.md）
-  dev/                      开发期工具链（安装引导 / typecheck 垫片 / 测试 loader 桩 / test-support）
-  gates/                    每次 push 的仓库门（run-checks 单入口 + verify-* + CI 判类 + workflow 门）
-  release/                  发布链（release-preflight/semver/artifacts + 工作流策略 + 打包清单锁步）
-  upstream/                 上游 pin 与触点（update-vendor / pin 预检 / registry.json 单一来源与生成视图 /
-                            触点门全量 / 符号锚与遗留锚预算门 / C8 产物门）
-  perf/                     性能实测工具箱（boot/switch/eval/measure-ui/disk-walk + data/）
-  gui-acceptance/           GUI 验收工具箱（probe/walkthrough/mobile-walkthrough/checks）
-                            （分类规则与接线纪律见 scripts/README.md）
-vendor/
-  harness-packages/         @deepseek-ai/* 符号链接树，指向 submodule 内的 dsh 源码
-                            （preinstall 引导，gitlink 固定于 harness.commit）
-  harness-checkout/         dsh 源码 git submodule（固定 commit，gitlink 即 pin）
+packages/   各包（清单与职责归属 = packages/ 目录 + 根 AGENTS.md「Runtime Boundaries」；契约 = 各包 README）
+docs/       INDEX.md 全局地图；AGENTS.md 文档标准；design/ checklists/ progress/ deploy/
+scripts/    dev/ gates/ release/ upstream/ perf/ gui-acceptance/ 与 install-gateway.sh（分类与接线见 scripts/README.md）
+vendor/     harness-packages/（@deepseek-ai/* 符号链接树）→ harness-checkout/（dsh submodule，gitlink = pin）
 ```
 
 ## 7. 脚本
@@ -173,19 +129,4 @@ vendor/
 
 ## 8. 文档导航
 
-|文档|用途|
-|-|-|
-|[README.md](../README.md)|用户使用（功能/安装/部署/FAQ）|
-|本文件 `docs/DEVELOPMENT.md`|开发：架构/构建/打包/CI/发布|
-|[CONTRIBUTING.md](../CONTRIBUTING.md)|贡献流程（测试/Commit/PR契约）|
-|[AGENTS.md](../AGENTS.md)|常驻仓库规则（Purpose/Hard Facts/执行流/包职责）|
-|[docs/AGENTS.md](./AGENTS.md)|文档标准（分层/写作/篇幅预算/文档门/评审检查表）|
-|[.agents/skills/](../.agents/skills)|可复用工作流：chamber-doc / chamber-pre-push / chamber-code-review|
-|[CHANGELOG.md](../CHANGELOG.md)|版本变更记录|
-|[docs/INDEX.md](./INDEX.md)|**全局文档地图**：入口 / 设计 / 清单 / 进度 / 运维的唯一导航|
-|[docs/design/INDEX.md](./design/INDEX.md)|设计索引（领域 × 状态 × owner；总览 [01-overview.md](./design/01-overview.md)）|
-|[docs/design/decisions/README.md](./design/decisions/README.md)|跨域决策记录（ADR）|
-|[docs/progress/README.md](./progress/README.md)|进度体系规则（STATUS / TODO / deviations / electron-frozen 的所有权与写法）|
-|[docs/progress/STATUS.md](./progress/STATUS.md)|进度总览（唯一进度记录；开放项 / 判据 / 指针）|
-|[docs/progress/electron-frozen.md](./progress/electron-frozen.md)|Electron 冻结登记（范围 / 归档清单 / 共享契约 / 禁用面 / 复活清单）|
-|[docs/checklists/README.md](./checklists/README.md)|检查清单阶段矩阵（阶段 → 门禁 → 清单入口的唯一来源）|
+文档清单与用途以 [docs/INDEX.md](./INDEX.md) 为唯一入口（本文件不手抄文档表）。

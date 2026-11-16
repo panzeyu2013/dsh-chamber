@@ -10,8 +10,7 @@
 
 ## 远程 dsh 实例（systemd）
 
-远程服务器只需在loopback运行dsh的API面web profile，无需web前端：UI来自本地复用前端，
-经 `/api/i/dsh-<id>/*` 同源反代访问（SSH transport）。
+远程服务器只需在loopback运行dsh的API面web profile，无需web前端：UI来自本地复用前端， 经 `/api/i/dsh-<id>/*` 同源反代访问（SSH transport）。
 
 1. 环境要求 — systemd Linux、Node.js 22+、chamber桌面机器对该服务器的SSH访问
 （密钥认证；桌面经SSH驱动 `systemctl`）。

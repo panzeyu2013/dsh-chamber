@@ -1,15 +1,9 @@
 # GUI 验收 Checklist（acceptance）
 
-- 阶段：acceptance
-- 触发：改动 renderer / 侧栏 / 设置面 / 布局 / 右栏或任何界面判据、移动入口后；发布前跑打包态/真机腿
-- Owner：改动 author 出证据，评审复核；真机项由验收人执行
-- Timebox：机械 A ≤15 分钟；机械 B / 目检 ≤1 小时；打包态真机另计（按 §4 分组）
-- 退出标准：机械腿无 FAIL（INFO 逐条解释）；目检逐条一句结论（含「未判」）；打包态/真机项有可复核证据
-- 自动化入口：`pnpm run acceptance:gui`、`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`、`pnpm run acceptance:mobile`（ARCHIVED）
-- 证据：PR 附 `gui-live-report.md`（或 `.json`）与 `gui-walkthrough-report.json` + 关键截图；未判项显式登记
+- 阶段：acceptance；触发：改动 renderer / 侧栏 / 设置面 / 布局 / 右栏或任何界面判据、移动入口后；发布前跑打包态/真机腿；Owner：改动 author 出证据，评审复核；真机项由验收人执行；Timebox：机械 A ≤15 分钟；机械 B / 目检 ≤1 小时；打包态真机另计（按 §4 分组）
+- 退出标准：机械腿无 FAIL（INFO 逐条解释）；目检逐条一句结论（含「未判」）；打包态/真机项有可复核证据；自动化入口：`pnpm run acceptance:gui`、`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`、`pnpm run acceptance:mobile`（ARCHIVED）；证据：PR 附 `gui-live-report.md`（或 `.json`）与 `gui-walkthrough-report.json` + 关键截图；未判项显式登记
 
-> 本清单**不是**判据副本：判据权威在 `docs/design/`（契约）与 [`../../progress/STATUS.md`](../../progress/STATUS.md)（开放实机门禁）；本文件只固定流程——跑什么、看什么、留什么证据。判据要改就改 design/STATUS。工具箱 [`scripts/gui-acceptance/`](../../../scripts/gui-acceptance/README.md) 的说明、已登记容忍与边界见其 README；放宽容忍先改那里，不在工具箱里猜。
-> **范围**：现行 = `--flavor native`（默认）与 `--live`、Swift 真机/目检；Electron CDP 腿（`--dev`、`--dev --flavor electron`、`--attach` 的 Electron 档、`acceptance:mobile` 的 CDP 驱动）**冻结归档、不进默认验收**，复活后按原表执行（见 [`../../progress/electron-frozen.md`](../../progress/electron-frozen.md)）。
+> 本清单**不是**判据副本：判据权威在 `docs/design/`（契约）与 [`../../progress/STATUS.md`](../../progress/STATUS.md)（开放实机门禁）；本文件只固定流程——跑什么、看什么、留什么证据；判据要改就改 design/STATUS。工具箱 [`scripts/gui-acceptance/`](../../../scripts/gui-acceptance/README.md) 的说明、已登记容忍与边界见其 README；放宽容忍先改那里，不在工具箱里猜。范围：现行 = `--flavor native`（默认）与 `--live`、Swift 真机/目检；Electron CDP 腿（`--dev`、`--dev --flavor electron`、`--attach` 的 Electron 档、`acceptance:mobile` 的 CDP 驱动）**冻结归档、不进默认验收**，复活后按原表执行（见 [`../../progress/electron-frozen.md`](../../progress/electron-frozen.md)）。
 
 ## 0. 选择腿
 
@@ -25,98 +19,29 @@
 
 ## 1. 机械 A：只读运行态（`--live`）
 
-|项|检查id|判据来源|
-|---|---|---|
-|控制面存活（GET/HEAD `/health`）、本地连接行、写者静默诊断、主机日志|`CP-1`…`CP-5`|design 04 §3；02 §3.4（写者静默）、§3.8（日志）|
-|信任边界：敌意 Origin 403、非 origin-form（`//`、反斜杠）400|`CP-7`…`CP-10`|design 04 §3（CORS/目标形态）；03 §3.3（代理诚实）|
-|静态壳：index + 安全头（CSP/XFO/nosniff/referrer）、声明资源全 200、缺失 404、深路径回落|`SH-1`…`SH-5`|design 04 §3、§4.3（响应头权威）|
-|静态路径穿越围栏|`SH-6`|design 04 §4|
-|每实例反代：前端文档、声明资源、多入口插件包（**含 `rev` 查询**）、未知实例诚实报错、穿越围栏|`IP-1`…`IP-5`|design 03 §3 / 04 §4 / 09 §3.6|
-|升级（`remote.mux`）：敌意 Origin 403、自身 Origin 101|`IP-6`、`IP-7`|design 03 §3、04 §4|
-|多来源：桌面注册表每个来源经同源前缀返回自己的前端与资源；不可用来源如实报告|`MX-1`、`MX-2`|design 05 §2、09|
-|实例端口无凭据直连被拒（401）|`IN-1`|design 02（宿主托管/凭据）|
+- `CP-1`…`CP-10`：控制面存活（GET/HEAD `/health`）、本地连接行、写者静默诊断、主机日志；信任边界（敌意 Origin 403、非 origin-form（`//`、反斜杠）400）——判据来源 design 04 §3、02 §3.4/§3.8、03 §3.3；`SH-1`…`SH-6`：静态壳 index + 安全头（CSP/XFO/nosniff/referrer）、声明资源全 200、缺失 404、深路径回落、静态路径穿越围栏——design 04 §3/§4.3/§4；`IP-1`…`IP-7`：每实例反代前端文档、声明资源、多入口插件包（含 `rev` 查询）、未知实例诚实报错、穿越围栏；升级（`remote.mux`）敌意 Origin 403、自身 Origin 101——design 03 §3 / 04 §4 / 09 §3.6；`MX-1`/`MX-2`/`IN-1`：桌面注册表各来源经同源前缀返回自己的前端与资源、不可用来源如实报告；实例端口无凭据直连被拒（401）——design 05 §2、09、02。
 
-通过判据：无 `FAIL`。`INFO` 是环境事实、不是通过：
+通过判据：无 `FAIL`；`INFO` 是环境事实、不是通过——旧安装态没有该路由时 `CP-4` 记 INFO（判据 `quiescent === true`，`writers` 列 `reclaimed` 孤儿正常、`kept` 才是活写者）；实例未就绪（`dsh.status != ready`）时 `IP-*` / `IN-1` / `CP-5` 转 INFO（design 18 §3.4 隔离期 503 属预期）；`--dev` 干净状态无远程来源（`MX-*` 记 INFO）。
 
-- 旧安装态没有该路由时 `CP-4` 记 INFO；判据 `quiescent === true`（`writers` 列 `reclaimed` 孤儿正常，`kept` 才是活写者）。
-- 实例未就绪（`dsh.status != ready`）时 `IP-*` / `IN-1` / `CP-5` 转 INFO（design 18 §3.4 隔离期 503 属预期）。
-- `--dev` 干净状态无远程来源（`MX-*` 记 INFO）。
+## 2. 机械 B：界面走查（`--attach` / `--dev`）（**ARCHIVED**）
 
-## 2. 机械 B：界面走查（`--attach` / `--dev`）（**ARCHIVED**：Electron CDP 腿；现行界面走查 = Swift 真机/目检）
-
-|项|检查id|判据来源|
-|---|---|---|
-|壳启动并挂载实例视图（`[data-instance]`）|`W-1`|design 09 §3.2|
-|遮罩层叠：遮罩可见期内租客元素不得画在其上（作用域=活动视图；租客命中记 FAIL，body portal 只记，无遮罩帧/无锚点记 INFO）|`W-1b`|design 05 §4（租客层叠边界）、§2.2.1|
-|侧栏多来源结构（`[data-chamber-section]` / `[data-chamber-row]` / `[data-session-id]`）|`W-2`|design 05 §2、06|
-|首启模态可关闭/可走完（非首启记 INFO）|`W-3`|design 05 §5（onboarding 阶段）|
-|侧栏 rail 折叠/展开：控件结构定位（侧栏头部图标钮，按计算可见性只取可见视图；候选为空或并列即 FAIL）+ 效果锚定（官方 frame 属性 `[data-sidebar-collapsed]` 出现/消失；复原用同一元素、按身份寻址）+ 写入边界（本次点击不得写入用户状态：新建实例首次建出的 store 若只有默认形状（无 `sourceFolded`/折叠键/宽度/顺序）不算残留，出现任意用户状态即 FAIL，判据 `viewPrefsDelta`）；点错控件、未复原、定位不到、写入用户状态都 FAIL|`W-4`|design 06 §3.1（ui-layout fork 的折叠与宽度共享）、05 §6|
-|来源级收拢：来源节整列表收拢且几何可见（`aria-expanded` 翻转 + 来源节高度收缩、展开恢复；几何非有限数即 FAIL）+ 往返后不留持久化残留（`sourceFolded`；快照读不到按未检查 FAIL）；只覆盖首个来源节；会写该偏好，**只在 `--dev` 跑**，`--attach` 记 INFO|`W-4a`|design 06 §2.4、§3.1（`sourceFolded`）|
-|行悬停卡片（`[data-chamber-hovercard]` 计数）：悬停升起一张、含该行标题、移开消失；竞态腿先测本机 dwell→React 提交窗口（~5ms 轮询标记，最后未见时刻为严格下界，多次取最大），再由 `raceBandForWindow()` 取确定性偏移、12 次试验 0 搁浅（`dwell+10..60ms` 仅下界不可判别——见 README；窗口测不到或 ≤2ms 记「不具区分力」INFO，绝不记 PASS）；A→B 换行至多一张且收在 B；blur / `visibilitychange`（hidden）清卡（实例确无可悬停行时 INFO；有锚点形状却无 `[data-chamber-hovercard-anchor]` 记 FAIL）。INFO**只**表示「没执行/没区分力」：结束行报 `（N 项 INFO 未执行）`；要真跑真判别用 `--require-hover`，四条腿 INFO 一律改记 FAIL|`W-4b`、`W-4b-race`、`W-4b-swap`、`W-4b-dismiss`|design 06 §7（悬停卡片：锚点/搁浅/互斥/失焦清卡）|
-|设置面从侧栏座席打开、插槽渲染且**无 `[data-slot-error]`**|`W-5`、`W-6`|design 05 §5（完整桥接）|
-|设置导航项存在、每个设置页渲染内容、页面切换真的换内容|`W-7`…`W-9`|design 05 §5|
-|真实 Escape 键关闭设置面|`W-10`|design 05 §5|
-|走查期间无未预期的 ≥400 请求、无未预期的渲染层 error|`W-11`、`W-12`|容忍清单见工具箱 README（诚实性基线）|
-
-`W-4` 控件**不带 `aria-expanded`**（上游只有会翻转的 `aria-label`）：按 `pickRailToggle`（`checks.mjs`）结构定位、用官方 frame 属性判效果；`W-4a` 判来源级整列表收拢（几何须可见），写偏好、只跑一次性实例。归档内嵌腿的写入边界同 `W-4a`（含 W-13 前置的「建一次性工作区/会话」，只在一次性实例）：允许开/关右栏与页签（布局状态），`--attach` 默认不代开、记 INFO；`--attach --attach-create-session` 只用于一次性/打包态 smoke；`W-14b` 只在活动来源是 ssh 且给 `--embed-port` 时驱动（给出端口即授权其持久化页签逻辑目标）。`W-15` 的 witness 会拦截产品触发的系统浏览器打开（`a[target=_blank]` 与 `window.open`），因此验收运行不会真的弹出浏览器。v3 native guest 的 W-13…W-30 判据是**真机/打包态**（见 §4.2 与 [remote-browser-acceptance.md](./remote-browser-acceptance.md) §E2）；本 ARCHIVED 机械 B 不执行也不重标。
-
-**假绿防护与证据分层（CI 绿 ≠ 载体验收；G-01…G-08 / C-3…C-11）**
-
-- 每条 W 标「CI 表达式 / 仅真机」层；CI 假 DOM 只证明 renderer 状态机与判据表达式，不证明 guest/进程/z-order/文件面板；发布门至少一条真机/打包态实跑（G-01）。
-- W-14a/14b：fixture 的 title 必须由页面 JS **运行期计算**（随机串），`browser.state.title` 与请求值一致才算真跑（G-07）。
-- W-15b：进程证据 = registry guestCount 回落 + 释放后无该 tab state 事件 + 内存回落；`pgrep`/`ps` 仅旁证；kill 单进程只影响该 tab（G-04/C-4）。
-- W-20：rect 用 test-only debug hook 读 guest 实际 frame/pageZoom/occluded；≥10s 采样窗、几何差 ≤1px 且无稳定偏移（G-02/C-3）。
-- W-22/W-30：内存按 W-30 曲线采样；kill 单进程后失败条 + reload 重建 + forward record 保留（G-08）。W-19 真遮挡以真机截图 region diff + 浮层负例判定（G-03）。
-
+> 该腿 = 归档 Electron CDP 走查（`--dev`/`--attach`/`--require-embed`/`--embed-port`/`--ssh-fixture`；native driver 拒绝这些参数），判据定义与登记容忍见 [scripts/gui-acceptance/README.md](../../../scripts/gui-acceptance/README.md)（W-1…W-12 的 ARCHIVED 镜像）与 [../../progress/electron-frozen.md](../../progress/electron-frozen.md) §5；现行 Swift 界面走查 = §3 目检 + §4.2 真机。假绿防护（CI 绿 ≠ 载体验收，G-01…G-08 / C-3…C-11）见 [remote-browser-acceptance.md](./remote-browser-acceptance.md) 的「假绿防护」节。
 ## 3. 目检腿（机械腿不能替代的部分）
 
 逐张看 `shots/`，只判「人眼才能判」的事；看不出来就写「未判」，不要写成通过：
 
-- 首帧与切换：骨架→内容无 FOUC/双骨架；侧栏、设置面在浅/深色下都不漏底、不叠字（design 06 §4.6）。
-- 设置面：导航高亮跟随、来源下拉显示当前来源、每页标题与分组层级正确（design 05 §5）；宽栏触发行在更新可用时可见指示器。
-- 窗口尺寸：初始视口 1280×792、最小可拖到 520×572（design 25 §5.6）。
-- 会话头视图 More/折叠（`entry-customization` 面）：先在实例里建/选一个工作区（一次性实例无工作区时会先拉起目录选择器）；打开含 ≥2 个视图的会话，窄列下被折叠的视图出现在 More 菜单；点「浏览」后设置面打开在「插件管理」分节；右栏 guide More 的「浏览」同一落点；侧栏 panel More 在桌面复合体**不出现**、gateway 官方侧栏出现（design 05 §5 / STATUS §4.2）。
-- 移动端 More/标签（触屏档）：会话头 More 命中盒 ≥44×44、长标签按上游 88px 省略、菜单行 44px 底线；判据 = 真机抽检 + 目检（design 17 §18.6 真机项；移动布局由上游前端提供）。
-- 多来源侧栏：分组归属（来源 → 工作区 → 会话）、状态点、待办条带与角标不串行（design 05/06）。
-- 失败呈现：任何降级/不可达是否如实显示（比「没坏」更重要，design 03 §3.3）。
-- 插件刷新收敛（机械腿未覆盖：需真实安装流；判据 design 09 §3.7 / 15 §6）：装/启/卸一个 bundle 后不按 Cmd+R，选中来源的设置分节应即时出现；同 id 新 rev 的重建/重装应出现 header 事实条并在 5s 内自动整页重载一次（或点条上的「重新加载应用」）；跨实例 `instance-version-conflict` 不在设置页出条（只在连接页呈现：卡片诊断行 + 由它打开的插件对话框），不重载。
-
+- 首帧与切换：骨架→内容无 FOUC/双骨架；侧栏、设置面在浅/深色下都不漏底、不叠字（design 06 §4.6）。设置面：导航高亮跟随、来源下拉显示当前来源、每页标题与分组层级正确（design 05 §5）；宽栏触发行在更新可用时可见指示器。窗口尺寸：初始视口 1280×792、最小可拖到 520×572（design 25 §5.6）；会话头视图 More/折叠（`entry-customization` 面）：先在实例里建/选一个工作区（一次性实例无工作区时会先拉起目录选择器）；打开含 ≥2 个视图的会话，窄列下被折叠的视图出现在 More 菜单；点「浏览」后设置面打开在「插件管理」分节；右栏 guide More 的「浏览」同一落点；侧栏 panel More 在桌面复合体**不出现**、gateway 官方侧栏出现（design 05 §5 / STATUS §4.2）。移动端 More/标签（触屏档）：会话头 More 命中盒 ≥44×44、长标签按上游 88px 省略、菜单行 44px 底线；判据 = 真机抽检 + 目检（design 17 §18.6 真机项；移动布局由上游前端提供）；多来源侧栏：分组归属（来源 → 工作区 → 会话）、状态点、待办条带与角标不串行（design 05/06）。失败呈现：任何降级/不可达是否如实显示（比「没坏」更重要，design 03 §3.3）。插件刷新收敛（机械腿未覆盖：需真实安装流；判据 design 09 §3.7 / 15 §6）：装/启/卸一个 bundle 后不按 Cmd+R，选中来源的设置分节应即时出现；同 id 新 rev 的重建/重装应出现 header 事实条并在 5s 内自动整页重载一次（或点条上的「重新加载应用」）；跨实例 `instance-version-conflict` 不在设置页出条（只在连接页呈现：卡片诊断行 + 由它打开的插件对话框），不重载。
 ## 4. 打包态 / 真机腿（本工具箱不覆盖）
 
 只能在打包态或真机上判，逐条门禁见 [`../../progress/STATUS.md`](../../progress/STATUS.md)（不在本文件复述判据）：
 
-|面|权威|
-|---|---|
-|安装/更新事务、quitAndInstall、缓存清理|design 11 §9|
-|桌面更新补充面（nudge / 失败技术详情 / 全屏安装准备）、`dsh-chamber://open` 深链前置、初始/最小视口、快捷键持久化、更新指示器|design 14 §D2、design 16 §3.1、design 25 §5.6/§7/§8.4、design 05 §5；逐项见 §4.2 真机表|
-|dsh 运行时版本事务（激活/回退/恢复）|design 18 §3.5–§3.6、§9|
-|通知与未读徽标、Dock/托盘/任务栏三形态|design 19|
-|子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）|design 19 §3.2/§3.5|
-|多实例页级持久面（两个来源各自的会话选择/折叠等 scope 互不覆盖，重载后各自恢复）|design 09 §3.6（第四类补丁）|
-|open-in 拉起外部应用、图标、深链冷热启动|design 16、20 §6/§10|
-|N-ctx 文件动作 URL 前缀（交付卡文件夹菜单 / 聊天图片）|design 09 §3.6；design 20 §2.2|
-|（已知缺口，**勿记为通过**）右侧栏 Markdown 预览内图片仍取控制面 origin|design 09 §3.6「已知缺口（未收口，设计裁决待定）」；STATUS §4.2「连接/来源」的 N-ctx document-relative 项|
-|Git worktree 全链（真实远程 Linux 仓库）|design 08|
-|孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune）。判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测|design 06 §7、§11；design 08 §3.4、§6.4|
-|归档管理器与 force 清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）|design 24 §5、§6、§13|
-|gateway 形态（生产 TLS、`/chamber/*`、移动端）|design 17、21 §9|
-|移动端 Web 面（真机触控档、安全区、键盘只能真机；CDP 设备模拟半边见 §0 已标 ARCHIVED 的机械 B-mobile 行）|design 17 §18.6；机器侧 = native 真机/目检（§4.2）|
-| native guest 面（Swift .app 一次；Electron 打包态随冻结归档）：远端 dsh+ssh / gateway+ssh 的 loopback guest 加载与关 tab 释放、XFO 站点可见、失败可见性（code+description）、系统浏览器出口（alias 投影）、https 证书错误不绕过、跨源 cookie/登录、新窗/下载/权限/键盘焦点、guest 崩溃恢复、远端页面不能改 chamber 状态 | design 28 §4/§5/§8/§9；Swift 真机矩阵 design 25 §8.5 |
-|**ARCHIVED（随 Electron 冻结）** Linux 桌面 / Windows 首版|design 22 §7、23（ARCHIVED）|
-
+- 安装/更新事务、quitAndInstall、缓存清理 → design 11 §9；桌面更新补充面（nudge / 失败技术详情 / 全屏安装准备）、`dsh-chamber://open` 深链前置、初始/最小视口、快捷键持久化、更新指示器 → design 14 §D2、16 §3.1、25 §5.6/§7/§8.4、05 §5（逐项见 §4.2 真机表）；dsh 运行时版本事务（激活/回退/恢复）→ design 18 §3.5–§3.6、§9；通知与未读徽标、Dock/托盘/任务栏三形态；子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）→ design 19、§3.2/§3.5；多实例页级持久面（两个来源各自的会话选择/折叠等 scope 互不覆盖，重载后各自恢复）→ design 09 §3.6（第四类补丁）；open-in 拉起外部应用、图标、深链冷热启动 → design 16、20 §6/§10；N-ctx 文件动作 URL 前缀（交付卡文件夹菜单 / 聊天图片）→ design 09 §3.6、20 §2.2；（已知缺口，**勿记为通过**）右侧栏 Markdown 预览内图片仍取控制面 origin → design 09 §3.6「已知缺口（未收口，设计裁决待定）」与 STATUS §4.2「连接/来源」的 N-ctx document-relative 项；Git worktree 全链（真实远程 Linux 仓库）→ design 08；孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune；判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测）→ design 06 §7、§11、08 §3.4、§6.4；归档管理器与 force 清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）→ design 24 §5、§6、§13。
+- gateway 形态（生产 TLS、`/chamber/*`、移动端）→ design 17、21 §9；移动端 Web 面（真机触控档、安全区、键盘只能真机；CDP 设备模拟半边见 §0 已标 ARCHIVED 的机械 B-mobile 行）→ design 17 §18.6，机器侧 = native 真机/目检（§4.2）；native guest 面（Swift .app 一次；Electron 打包态随冻结归档）：远端 dsh+ssh / gateway+ssh 的 loopback guest 加载与关 tab 释放、XFO 站点可见、失败可见性（code+description）、系统浏览器出口（alias 投影）、https 证书错误不绕过、跨源 cookie/登录、新窗/下载/权限/键盘焦点、guest 崩溃恢复、远端页面不能改 chamber 状态 → design 28 §4/§5/§8/§9、design 25 §8.5；**ARCHIVED（随 Electron 冻结）** Linux 桌面 / Windows 首版 → design 22 §7、23（ARCHIVED）。
 ### 4.1 I-15 矩阵执行序
 
 既有矩阵 + 两组新增（I-12/I-14）——矩阵清单**以下表为准**（含置顶两面；早期「六组矩阵」口径不含该行）。每行 = 怎么跑 → 看什么 → 留什么证据；判据在指针文档，本表只固定流程。跑完把「一句结论 + 截图/日志路径」记进 PR 证据，不写进 STATUS。
 
-|矩阵|怎么跑|看什么|证据/判据指针|
-|---|---|---|---|
-|完成未读 P6|打包态：A 会话后台跑完（窗口隐藏与聚焦两态各一次），切到 B 再回 A；整页重载一次；任一端归档该会话后再看桌面|蓝点/pending 徽标/侧栏六面同拍；完成点只在 A 行；重载后官方位仍在；**归档行在六面均无完成点、Dock 角标不计入**（design 19 §3.7「归档行排除」）|design 19 §3.2/§3.7|
-|归档两段式 + 恢复|归档一个仍在运行/刚结束的会话；杀进程重开；再从归档恢复|归档即终止；恢复后内容完整、无重复树、保护态提示正确|design 24 §5/§6/§13|
-|置顶两面（pin）|打包态：行悬停钮与 kebab 各 pin/unpin 一次；整页重载；对同一会话快速连点两次（守卫吞第二次）或 pin→unpin→pin|标记出现/消失与宿主一致；两入口文案互反（置顶/取消置顶）；连点期间只发一次（wire 落定后的重复点是宿主幂等的重复调用，不报错）；重载后该来源挂载/激活时标记仍在（未挂载来源按 design 06 §5 ① 不显示标记）；**置顶行领跑所属分组/树节点/flat 列表**（manual 块内 = 宿主最近置顶在前；updated 保持 account 序），unpin 后回自然位（偏差 B2）；块内拖拽未做|design 06 §3.4/§5/§7；STATUS §2.1「U1 pinned」|
-|通知行为四缺口|打包态：目标 active 期间完成、paused、unknown 静默窗、重载/冷启各一次|通知条数与目标相位一致；unknown 窗不通知、不双发|design 19 §3.2|
-|运行位校准 60/190/310s|按 [session-authority-calibration.md](./session-authority-calibration.md) 的步骤跑三档|阶梯决策与写回时刻落在表定阈值|同清单|
-|子代理谱系压制（I-12）|父会话发起后端子代理；父回合先结束、子代理仍在跑；随后断开来源再恢复|父完成点/徽标在子代理存活期不亮；子代理结束即释放；断连窗口不误报|design 19 §3.2/§3.5|
-|多实例持久面（I-14）|两个来源各选不同会话；整页重载；两来源来回切换|两次重载各自恢复自己的选择、互不覆盖；官方单实例布局不回归|design 09 §3.6（第四类补丁）|
+- 完成未读 P6（打包态：A 会话后台跑完，窗口隐藏与聚焦两态各一次，切 B 再回 A；整页重载；任一端归档后再看桌面）→ 蓝点/pending 徽标/侧栏六面同拍、完成点只在 A 行、重载后官方位仍在、归档行在六面均无完成点且 Dock 角标不计入（design 19 §3.7）；归档两段式 + 恢复（归档运行中/刚结束会话、杀进程重开、从归档恢复）→ 归档即终止、恢复后内容完整无重复树、保护态提示正确（design 24 §5/§6/§13）；置顶两面（行悬停钮与 kebab 各 pin/unpin 一次、整页重载、快速连点两次或 pin→unpin→pin）→ 标记出现/消失与宿主一致、两入口文案互反、连点只发一次、重载后仍标记、置顶行领跑所属分组/树节点/flat 列表（manual 块内 = 宿主最近置顶在前，updated 保持 account 序）、unpin 回自然位（偏差 B2）、块内拖拽未做（design 06 §3.4/§5/§7；STATUS §2.1「U1 pinned」）；通知行为四缺口（目标 active 期间完成、paused、unknown 静默窗、重载/冷启各一次）→ 条数与目标相位一致、unknown 窗不通知不双发（design 19 §3.2）；运行位校准 60/190/310s 按 [session-authority-calibration.md](./session-authority-calibration.md) 跑三档 → 阶梯决策与写回时刻落在表定阈值（同清单）；子代理谱系压制 I-12（父会话发起后端子代理、父回合先结束、子代理仍在跑、断开来源再恢复）→ 父完成点/徽标在子代理存活期不亮、子代理结束即释放、断连窗口不误报（design 19 §3.2/§3.5）；多实例持久面 I-14（两来源各选不同会话、整页重载、来回切换）→ 两次重载各自恢复、互不覆盖、官方单实例布局不回归（design 09 §3.6）。
 
 ### 4.2 原生 flavor（Swift）腿
 
@@ -124,31 +49,15 @@
 
 **机械腿（本仓可跑）**
 
-|腿|怎么跑|看什么|留什么|
-|---|---|---|---|
-|装配|先 `node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm` + `node packages/desktop/scripts/prepare-office-assets.mjs`；再 `pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`/发布腿 `--require-*`）|装配目录齐 sidecar.js / dist/control-plane / vendor / pnpm / primary-runtime（payload：node·pnpm·python）/ office-skills（4 文件）；单 Node 在 primary-runtime 内|命令与退出码|
-|本机 .app|`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）|`.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/primary-runtime/dependencies/node/bin/node` 可执行、`sidecar/office-skills/office/SKILL.md`、`Sparkle.framework`|产物路径 + `du`/`hdiutil attach` 结论|
-|Swift 套件|`pnpm run test:swift`|executed>0、failures==0、**skipped==0**（G23 no-skip 纪律）|runner 收尾行|
-|macOS JS 腿|`pnpm run test:macos`|darwin 锁断言 + 打包脚本套件；skipped>0 即红|退出码|
-|headless 装配验收|`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）|N-1…N-5、N-6、N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM）；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO|`.tmp/gui-acceptance/gui-native-report.*`|
-|B 桥载荷 parity|`pnpm run verify:shim-payload`（macOS 腿）|preload ↔ shim 的成员/通道/载荷键一致|脚本收尾行|
+- 装配：先 `node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm` + `node packages/desktop/scripts/prepare-office-assets.mjs`；再 `pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`/发布腿 `--require-*`）→ 装配目录齐 sidecar.js / dist/control-plane / vendor / pnpm / primary-runtime（payload：node·pnpm·python）/ office-skills（4 文件），单 Node 在 primary-runtime 内；留命令与退出码；本机 .app：`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）→ `.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/primary-runtime/dependencies/node/bin/node` 可执行、`sidecar/office-skills/office/SKILL.md`、`Sparkle.framework`；留产物路径 + `du`/`hdiutil attach` 结论；Swift 套件 `pnpm run test:swift` → executed>0、failures==0、**skipped==0**（G23 no-skip 纪律），留 runner 收尾行；macOS JS 腿 `pnpm run test:macos` → darwin 锁断言 + 打包脚本套件，skipped>0 即红，留退出码；headless 装配验收：`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）→ N-1…N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO），留 `.tmp/gui-acceptance/gui-native-report.*`。
+- B 桥载荷 parity：`pnpm run verify:shim-payload`（macOS 腿）→ preload ↔ shim 的成员/通道/载荷键一致，留脚本收尾行。
 
 **只能真机（工具箱不可替代）**：更新通道订阅（design 25 §7：稳定构建开/关订阅后的后台检查与 beta 发现、beta 构建默认只收正式版、打开订阅后继续 beta、final 收口后偏好保留、构建缺两条通道 feed URL 时开关禁用+原因；逐项记录 `[shell] Sparkle 更新通道=…` 日志与设置行状态）、`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在 design 25 §8（§8.1 门定义、§8.5 实机矩阵）与 `scripts/perf/README.md`，本节只固定怎么跑与留什么。**右栏浏览器 v3 载体验收（W-13…W-30）按 [`remote-browser-acceptance.md`](./remote-browser-acceptance.md) §E2 真机执行**：本工具箱不实现（native 壳无 CDP；`--dev`/`--attach`/`--require-embed`/`--embed-port`/`--ssh-fixture` 属归档 Electron CDP 腿，native driver 拒绝这些参数）；主 frame 导航门、app-host 定义、`NSAllowsArbitraryLoadsInWebContent`（只放宽 Web 内容）、下载 cancel、证书/权限/对话框策略由 design 28 §5 规定。
 
 **桌面壳补充真机项（逐项判据在 design，本节只固定怎么跑/看什么/留什么）**：
 
-| 检查 | 怎么跑 | 看什么 | 判据 |
-|---|---|---|---|
-| 系统关机/注销豁免 | 打包态运行本地实例后注销/关机；再正常 Cmd+Q 一次 | 注销/关机无退出确认、`shell.log` 有 willPowerOff 行；正常 Cmd+Q 确认不变 | [design 14 §D2](../../design/runtime/14-sleep-background.md) |
-| 前台/唤醒补充检查 | 隐藏/最小化后回前台、系统唤醒各一次（距上次检查 ≥600s 或启动后首检；否则 nudge 按判据不触发属预期） | `shell.log` 有检查相位、无新弹窗、`downloaded` 不被改回 `available` | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
-| 冷启动首帧（2xx 即开载） | 打包态连跑 5 次：`node scripts/perf/collect-boot.mjs --runs 5 --yes` | 每轮 `firstFrame`（document commit）与 `pageReady`（renderer handshake）两列；窗口出现后本地实例行先 `starting`、宿主 ready 后自动挂载，不出现「无插件」永久态；另做两次故障目检：① 初次启动即让本地宿主失败（坏 profile patch）② 宿主 ready 后再让它进入 `restart-exhausted`，两次都要能回到可操作的恢复入口 | [design 25 §3.3](../../design/desktop/25-macos-swift-native-shell.md) |
-| 隐藏期降载 | 最小化与「另一可见 Space」各 60s；打包态读 Activity Monitor 的 WebContent CPU/内存 与 `pmset -g assertions`，另可带 `DSH_CHAMBER_SHELL_DEBUG=1` 的 dev 构建读 `[shell-fps]`（打包态不注入该探针） | 隐藏期无前台动画/发布推进（design 14 §D1 行为契约）；读数与工况写进 PR 报告（不写 STATUS——验收结果不属于进度记录）；阈值在读数定稿后回填 design/STATE 之外的单源 | [design 14 §D1](../../design/runtime/14-sleep-background.md) |
-| 失败技术详情 | 一次下载/检查失败后看失败行 | 可展开「技术详情」（已脱敏、无弹窗） | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
-| 初始/最小视口 | 打包态首启；拖到最小尺寸 | 初始视口 1280×792、最小 520×572（目检） | [design 25 §5.6](../../design/desktop/25-macos-swift-native-shell.md) |
-| `dsh-chamber://open` 深链 | 已有主窗（含最小化）时打开 `dsh-chamber://open`；再试非法变体 | 窗口前置/还原，不导航、不启 VS Code；非法变体 loud | [design 16 §3.1](../../design/desktop/16-vscode-deeplink.md) |
-| 更新指示器 | 有可用更新时看设置触发行；点击；折叠侧栏 | 指示器可见（icon + tooltip/aria）、点击进 `__general` 更新组、折叠钮徽标仍无 | [design 05 §5](../../design/control-plane/05-connection-manager.md)、[design 15 D1](../../design/client/15-chamber-settings-page.md) |
-| 快捷键持久化 | 改键 → 退出 → 重启；再制造写失败/坏文档 | 键位恢复；写失败可见且不假保存；坏文档不被覆盖 | [design 25 §8.4](../../design/desktop/25-macos-swift-native-shell.md) |
-| 全屏安装准备 | 全屏下点「重启并安装」；另一次人为拖 5s；全屏下点「更新（下载）」 | ≤5s 退全屏进确认；超时状态行显示超时文案并保持可重试；全屏下 Sparkle 标准窗可见/可操作（标准窗路径未前置准备，作为残余观察） | [design 25 §7](../../design/desktop/25-macos-swift-native-shell.md) |
+- 系统关机/注销豁免（打包态运行本地实例后注销/关机；再正常 Cmd+Q 一次）→ 注销/关机无退出确认、`shell.log` 有 willPowerOff 行；正常 Cmd+Q 确认不变（[design 14 §D2](../../design/runtime/14-sleep-background.md)）。前台/唤醒补充检查（隐藏/最小化后回前台、系统唤醒各一次；距上次检查 ≥600s 或启动后首检，否则 nudge 按判据不触发属预期）→ `shell.log` 有检查相位、无新弹窗、`downloaded` 不被改回 `available`（[design 25 §7](../../design/desktop/25-macos-swift-native-shell.md)）；冷启动首帧（打包态连跑 5 次：`node scripts/perf/collect-boot.mjs --runs 5 --yes`）→ 每轮 `firstFrame`（document commit）与 `pageReady`（renderer handshake）两列；窗口出现后本地实例行先 `starting`、宿主 ready 后自动挂载，不出现「无插件」永久态；另做两次故障目检（初次启动即让本地宿主失败——坏 profile patch；宿主 ready 后再进入 `restart-exhausted`）都要能回到可操作的恢复入口（[design 25 §3.3](../../design/desktop/25-macos-swift-native-shell.md)）；隐藏期降载（最小化与「另一可见 Space」各 60s；打包态读 Activity Monitor 的 WebContent CPU/内存 与 `pmset -g assertions`，另可带 `DSH_CHAMBER_SHELL_DEBUG=1` 的 dev 构建读 `[shell-fps]`，打包态不注入该探针）→ 隐藏期无前台动画/发布推进（design 14 §D1 行为契约）；读数与工况写进 PR 报告（不写 STATUS）；阈值在读数定稿后回填 design/STATE 之外的单源（[design 14 §D1](../../design/runtime/14-sleep-background.md)）；失败技术详情（一次下载/检查失败后看失败行）→ 可展开「技术详情」（已脱敏、无弹窗）（[design 25 §7](../../design/desktop/25-macos-swift-native-shell.md)）。初始/最小视口（打包态首启、拖到最小尺寸）→ 初始 1280×792、最小 520×572（目检）（[design 25 §5.6](../../design/desktop/25-macos-swift-native-shell.md)）。
+- `dsh-chamber://open` 深链（已有主窗含最小化时打开；再试非法变体）→ 窗口前置/还原、不导航、不启 VS Code，非法变体 loud（[design 16 §3.1](../../design/desktop/16-vscode-deeplink.md)）。更新指示器（有可用更新时看设置触发行、点击、折叠侧栏）→ 指示器可见（icon + tooltip/aria）、点击进 `__general` 更新组、折叠钮徽标仍无（[design 05 §5](../../design/control-plane/05-connection-manager.md)、[design 15 D1](../../design/client/15-chamber-settings-page.md)）；快捷键持久化（改键→退出→重启；再制造写失败/坏文档）→ 键位恢复、写失败可见且不假保存、坏文档不被覆盖（[design 25 §8.4](../../design/desktop/25-macos-swift-native-shell.md)）。全屏安装准备（全屏下点「重启并安装」；另一次人为拖 5s；全屏下点「更新（下载）」）→ ≤5s 退全屏进确认、超时状态行显示超时文案并保持可重试、全屏下 Sparkle 标准窗可见/可操作（标准窗路径未前置准备，作为残余观察）（[design 25 §7](../../design/desktop/25-macos-swift-native-shell.md)）。
 
 ### 4.3 运行期装载补丁探针（打包态）
 
@@ -162,6 +71,4 @@
 
 ## 5. 证据与记录纪律
 
-- PR 里附 `gui-live-report.md`（或 `.json`）与 `gui-walkthrough-report.json` + 关键截图；目检结论逐条一句（「看了什么、看到什么、哪条未判」）。
-- 不写进 STATUS.md：跑过、通过、轮次、计数；STATUS 只记仍开放的门禁与取舍。验收跑绿不改变它的内容，除非验收暴露新的开放项或让某条开放项失效。
-- 机械腿的 `INFO` 要变成门禁，改 design/checklist 的判据，而不是让工具箱猜。
+- PR 里附 `gui-live-report.md`（或 `.json`）与 `gui-walkthrough-report.json` + 关键截图；目检结论逐条一句（「看了什么、看到什么、哪条未判」）。不写进 STATUS.md：跑过、通过、轮次、计数；STATUS 只记仍开放的门禁与取舍（验收跑绿不改变其内容，除非验收暴露新的开放项或让某条开放项失效）。机械腿的 `INFO` 要变成门禁，改 design/checklist 的判据，而不是让工具箱猜。

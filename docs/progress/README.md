@@ -17,9 +17,7 @@
 
 ## 状态词（STATUS 条目用这些词描述；同一节可混合，不逐条打标签）
 
-- **待做**：未开始或尚未排期；计划细节在 TODO。
-- **待裁**：设计或产品未决。
-- **接受**：有意差异或已知降级，不再作为待办。
+- **待做**：未开始或尚未排期（计划细节在 TODO）；**待裁**：设计或产品未决；**接受**：有意差异或已知降级，不再作为待办。
 
 ## STATUS 记录规则（唯一进度记录）
 
@@ -45,21 +43,11 @@
 
 ### 常见同步点
 
-- 本 README 的索引、TODO 的全局索引与 A 部索引；
-- STATUS 中指向 `TODO.md A§…` / `deviations.md` 的指针；
-- `docs/design/`、`docs/checklists/` 中的 `TODO.md` 引用；
-- `AGENTS.md`、`DEVELOPMENT(.en-US).md` 的目录树与规则；
-- 源码注释里引用的进度条目（如 sidebar 的 A§15.1）。
+- 本 README 的索引与 TODO 的全局索引；STATUS 的 `TODO.md A§…` / `deviations.md` 指针；`docs/design/`、`docs/checklists/` 的 `TODO.md` 引用；`AGENTS.md`、`DEVELOPMENT(.en-US).md` 的目录树与规则；源码注释里引用的进度条目（如 sidebar 的 A§15.1）。
 
 ## 索引
 
-- [STATUS.md](./STATUS.md) — 唯一进度记录；按「会话链 / 通知归档 / 客户端设置 / 平台运行时 / 一致性债务 / 桌面壳上游对齐」分组，
-  另有差异、设计未决、范围决策。
-- [TODO.md](./TODO.md) — **A 上游**（提案、漂移、UI 对齐）、**B 平台**（macOS Swift、Windows v1）、
-  **C 功能**（账户、subagents、open-in）、**D 工程**（重构、产物守卫、页面性能、多实例常驻）。
-- [deviations.md](./deviations.md) — Electron ↔ Swift 偏差登记（**冻结前的历史参考**，含 design 28 v3 载体 Swift-only 残余例外）+ 可达性纪律 + 退役索引。
-- [electron-frozen.md](./electron-frozen.md) — Electron flavor 冻结归档：范围、归档清单、仍共享契约、禁用面、
-  agent 规则与复活清单；Windows/Linux 桌面腿随之冻结、不发布。
+五份文档的职责与唯一家见上方「文件与所有权」表；本 README 只保留规则、回写流程与索引本身。
 
 > 历史：已执行计划、已收敛台账与一次性审计按「不保留历史台账」纪律删除，原文存 git 历史；
 > 仍开放的内容在 STATUS、TODO 与 design 中，完成态不回写本目录。

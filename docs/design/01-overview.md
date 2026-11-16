@@ -84,20 +84,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步；移动适配包已退役，design 17 §10/§18）+ **只读插件投影**（`GET …/installed`；install/remove/materialize/tasks 写面已退役，读契约见 design 21 §6.2/§6.3） |
 | git/GitHub | **插件化** | design 08 的 seed Git Remote 是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；P5b 的官方 `forge-bundle` 是实例内**官方工作树 UI 面**（opt-in；GitHub provider 由 overlay 关闭；仅 worktree UI/本地 diff，不新增 chamber 执行面）；gateway 服务器侧 worktree 记录已随编排面剥离 |
 
-> **有界例外（与 AGENTS.md 同列：designs 08 / 17 / 19 / 20 / 24 / 28）**：design 08 实例内 Git 插件、
-> design 17 独立 gateway、design 19 桌面原生边沿通知投影、design 20 可信 open-in 边缘能力、
-> design 24 实例内归档清理宿主域、design 28 右栏浏览器（v3 原生 guest，每 tab 子 WKWebView）——各自窄边界见对应 design；
-> design 18 §9 是 17/18 的有界扩展（gateway 获得与桌面同源的 dsh 运行时版本管理，不新增执行面）。
-> 这些范围的**当期取舍、偏差与证据**按 owning design 与 [`docs/progress/STATUS.md`](../progress/STATUS.md)/[`deviations.md`](../progress/deviations.md) 记录，本节不重复台账。
-
-宿主已覆盖的“通知中心”UI/历史/管理域属移出面；设计 19 的桌面原生边沿通知只投影
-renderer 已有的每实例运行时事实，不建立控制面通知消费者/历史/中心，不属该移出域。
-
-> **P5b 工作树统一（有界边界）**：design 08 把工作树收成仓库内 checkout（`<repo>/.agents/worktrees/<name>`，
-> 自忽略；会话仍以源主 checkout 为根），侧栏行由 App 派生 `kind:'checkout'` 而非注册 workspace；
-> 官方 `forge-bundle`（opt-in）与 seed 共用同一池，GitHub provider 由 overlay 关闭。
-> 开放取舍（Swift/sidecar 并存、opt-in 默认关、旧池不迁移、filters parity、restore 边界等）与判据的
-> 当期记录见 [`docs/progress/STATUS.md`](../progress/STATUS.md) §4.2，细节归 design 08 §3/§5/§7。
+> **有界例外**（designs 08 / 17 / 19 / 20 / 24 / 28 与 design 18 §9）及 **P5b 工作树统一**（design 08）的窄边界见对应 design；当期取舍/偏差/证据归 [STATUS](../progress/STATUS.md) / [deviations.md](../progress/deviations.md)，本节不重复台账。
 
 ---
 

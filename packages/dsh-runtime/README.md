@@ -14,6 +14,4 @@
 
 `runtime-installer.ts`（下载/安装/发布）、`runtime-startup.ts`（启动期应用链）、`dsh-runtime-store.ts`（布局与版本树）、`snapshot-store.ts`（快照与恢复标记）、`activation-gate.ts` / `apply-phase.ts` / `rollback-facts.ts`（激活与回滚判定）、`runtime-probes.ts`（激活探针集）、`runtime-metadata-recovery.ts`（元数据恢复）、`known-good-monitor.ts`、`allow-builds.mjs`（ALLOW/DENY 单一来源，构建期与运行期共用）。
 
-## 测试
-
-`pnpm run test:runtime`（Windows 语义 `test:win32` 仅本地平台分档；Windows 桌面腿冻结归档、CI 不跑）。剩余实机门禁（打包 `.app`、Linux server、gateway 重启重连窗口等）以 [`docs/progress/STATUS.md`](../../docs/progress/STATUS.md) 为准。
+剩余实机门禁以 [docs/progress/STATUS.md](../../docs/progress/STATUS.md) 为准。

@@ -20,6 +20,4 @@
 - `host-logs.ts` / `catalog.ts` / `json-store.ts` / `private-file.ts` — 滚动日志、连接目录、原子 JSON、私有文件原语。
 - `pnpm-shim.ts` / `local-host-seeding.ts` / `bundle-row-disables.ts` — 托管宿主的 PATH 供给（随包 pnpm + P5b-0 的 `node` wrapper：默认 `nodeCommand: 'node'` 可解析，绝不写机器路径）与 per-spawn `--patch` overlay；overlay 支持给 bundle 层行（含 group 内行）发 id-targeted `disabled`：未启用 bundle = 跳过 + 诊断（幂等），已启用但行 id 不可证 = fail-closed。
 
-## 测试
-
-`pnpm run test:control-plane` → `scripts/test.mjs` 的文件清单（每文件一个 `node` 子进程）；Windows 语义在 `pnpm --filter @dsh-chamber/control-plane run test:win32`。测试清单是权威集合：删/改名会失败；新增测试文件必须登记（`pnpm run verify:test-wiring`）。开放项与剩余验收以 [`docs/progress/STATUS.md`](../../docs/progress/STATUS.md) 为准。
+开放项与剩余验收以 [docs/progress/STATUS.md](../../docs/progress/STATUS.md) 为准。

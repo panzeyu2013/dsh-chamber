@@ -29,12 +29,9 @@ AppImage 的 `process.execPath` 是每次启动的 squashfs 挂载点（`/tmp/.m
 
 ## 4. 发布流水线与平台适配
 
-- **release.yml 的 build-linux 腿**（ubuntu-22.04、x64、`ref: ${{ github.sha }}` 钉 SHA、beta 带 `electron-builder.beta.yml`、dry_run 清 GH_TOKEN）验证：runner=linux-x64、打包 dsh runtime `platform.startsWith('linux-')`、AppImage 存在、非 dry_run 时 feed 互斥（`latest-linux.yml` vs `beta-linux.yml`）且无 `.blockmap`。`finalize-release.needs` 含 build-linux；`scripts/release/preflight/release-workflow-policy.test.mjs` 按 4 腿（build-gateway / build-macos / build-windows / build-linux）切片计数。**取舍**：不做 OpenChamber 式独立 verify-linux-appimage 脚本——覆盖由 workflow 内联 verify 步骤 + 打包期钩子后置断言 + 人工无头冒烟（AppImage 提取/解包目录双形态）承担。
-- ubuntu-22.04 runner 退役窗口需预登记迁移方案（24.04 + 文档修订，或 `docker ubuntu:22.04` 容器构建保 glibc floor）。
-- **spawn-dsh.ts（control-plane）**：node 兜底表平台分表——nvm 布局 darwin/linux 相同（`~/.nvm/current` 需 NVM_SYMLINK_CURRENT 才存在，两平台默认都没有，故以 `~/.nvm/alias/default` 优先 + `~/.nvm/versions/node/*/bin` 数值降序扫描为准，全部 fs 访问 try/catch，兜底永不 throw）；linux 增 `~/.local/bin`、`/snap/bin`（用户态 node 先于发行版 `/usr/bin`）；候选统一 X_OK + isFile 校验（防同名目录/不可执行文件 EACCES 陷阱，跟随符号链接语义正确）。
-- **目录 fsync 容错**：EINVAL/ENOTSUP 是文件系统属性、不是 Windows 属性（NFS/CIFS/FUSE 可能拒绝 O_RDONLY 目录 fsync）。`packages/control-plane` 的 `private-file.ts` syncParent、`host-logs.ts` syncDirectory，以及 `packages/dsh-runtime` 共享核心（desktop 与 gateway 双 owner）的 `runtime-metadata-recovery.ts` fsyncRealDirectory，一律平台无关地只吞这两个错误码，身份复验保留，EIO 等仍 loud。
-- **插件/宿主 pnpm 入口**：`pnpm-launcher.ts` 的候选集按目标平台拼接（`<resourcesPath>/pnpm/bin/pnpm.cjs` 等），Linux 不再有额外的 pnpm home 扫描；托管宿主 PATH 无 pnpm 时由控制面供给随包 wrapper（[02-host-management-deployment.md](../runtime/02-host-management-deployment.md) §3.1）。
-- **远端浏览器 forward（design 28）的 Linux 进程面**：每条 forward 一个 `ssh -N -L` child，`spawn` 用 `detached: true` 建 POSIX 进程组，停止/回收走 `kill(-pgid, SIGTERM)` → 1.5s → `SIGKILL`；启动 reaper 只处理在册 pid，要求 `(pid 存活, start-time 匹配, cmdline 含本方案标记)` 三元成立才杀，证不出即**不杀**（fail-closed，记录留到下次启动）；`kill -9` 父进程后的 listener 存活窗口上界 = 下一次启动。askpass 复用 `ssh-provider` 既有的 `SSH_ASKPASS_REQUIRE=force`，每条 forward 一个 lease。
+- release.yml `build-linux` 腿（ubuntu-22.04、x64、SHA 钉死、beta 用 beta 配置、dry_run 清 `GH_TOKEN`）验证 AppImage 存在、feed 互斥、无 `.blockmap`；不设独立 verify 脚本。
+- 构建机 glibc 下限 = 构建机（ubuntu-22.04）；runner 退役需预登记迁移方案。
+- 平台适配：`spawn-dsh.ts` node 兜底表加 `~/.local/bin`/`/snap/bin`；目录 fsync 仅吞 EINVAL/ENOTSUP（平台无关）；托管宿主 pnpm 走随包 wrapper；远端浏览器 forward 每进程组 + fail-closed reaper（design 28）；已知未动项见 STATUS。
 - **已知未动项**：托盘图标候选两死路径（跨平台既有边界）；pnpm home 的 XDG_DATA_HOME 偏移未覆盖（低优；macOS `~/Library/pnpm` 超出 Linux 范围）；`private-fs.ts` syncPinnedDirectory（private-file 的兄弟站点）保持严格无容错、未并入；gateway 裸 CLI 默认 stateDir 与 control-plane standalone 共享 `~/.dsh-chamber`（文档提示）。
 
 ## 5. 不做 / 边界
@@ -46,11 +43,8 @@ AppImage 的 `process.execPath` 是每次启动的 squashfs 挂载点（`/tmp/.m
 
 ## 6. 复活验收矩阵（归档基线）
 
-真实 Linux 桌面矩阵（Ubuntu 22.04/24.04 GNOME X11+Wayland、KDE 抽验）：XDG_CONFIG_HOME 定制自启（目录解析已单测，DE 生效待验）、深链冷/热启动、CHROME_DESKTOP 路由与升级/迁移后重注册（含 `xdg-mime default` 指向）、托盘可见性（AppIndicator）、通知点击、safeStorage 有无 keyring、SSH 密码全链、本地运行时安装/切换/apply-now/restartLocal 打包态全链、自动更新端到端（已下载→退出→`$APPIMAGE` 原位替换→重启为新版；stable+beta；二次更新）、AppImage 沙箱（userns/--no-sandbox）、Wayland 焦点。userData 目录名在无头机为 `~/.config/@dsh-chamber/desktop`（功能无碍；统一为 dsh-chamber 属可选优化）。执行按 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) 的 Linux 腿。
+复活验收按 [gui-acceptance-checklist](../../checklists/acceptance/gui-acceptance-checklist.md) 的 Linux 腿执行。
 
 ## 相关文档
 
-- [electron-frozen.md](../../progress/electron-frozen.md)（冻结范围与复活清单）
-- [18-dsh-runtime-version.md](../runtime/18-dsh-runtime-version.md)（macOS/Linux mutation 契约）
-- [16-vscode-deeplink.md](../desktop/16-vscode-deeplink.md)（深链契约）、[14-sleep-background.md](../runtime/14-sleep-background.md)（自启/托盘/关窗）、[11-auto-update.md](../archive/11-auto-update.md)（更新通道模型，归档参考）
-- [23-windows-support.md](./23-windows-support.md)（Windows 归档腿）
+- [electron-frozen.md](../../progress/electron-frozen.md)（冻结/复活）、[18](../runtime/18-dsh-runtime-version.md)（runtime mutation）、[16](../desktop/16-vscode-deeplink.md)（深链）、[14](../runtime/14-sleep-background.md)（自启/托盘/关窗）、[11](./11-auto-update.md)（更新通道）、[23](./23-windows-support.md)（Windows 归档腿）。

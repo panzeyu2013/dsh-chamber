@@ -308,5 +308,3 @@ pre-create 位置意图账本（`packages/dsh-chamber-client-core/src/workspace-
   编译这一份源码后漂移在构造上不可能。
 - settings-bridge 的 `remoteRuntimeStatusView` 视图映射与其 SettingsBridgeKey
   耦合留在 settings-bridge；本面不 import settings-bridge。
-
-测试：`node ./scripts/test.mjs`。

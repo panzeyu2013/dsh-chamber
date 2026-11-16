@@ -185,29 +185,15 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
 - **Rejected alternatives（入口呈现）**：① 保留垃圾桶字形——入口打开的是查看/恢复/删除三合一面，垃圾桶为删除代言，误述动作；② 用 `IconArchiveCheckOutlineRegular`/`IconArchiveOffOutlineRegular`——两枚已是视图筛选轴（仅显示/隐藏已归档）的既有字形；③ 保留 `action.purgeArchived` 键只换值——键名与动作相反，且 `SidebarKey` 是编译期键集，别名只会变成死键；④ 簇内再加一枚独立「归档管理器」钮——同一动作两个出口、簇宽 +20px；⑤ wire 域/纯函数一并改名——域仍只做内容清除，牵动 wire 锁步与宿主包，零用户收益。以上均否决。
 
 ## 7. 宿主包接线与分发面
-> 每个枚举 chamber 宿主包的位置都有断言/测试——**先改断言让测试红，再接线**，不会静默漏挂。本清单按类别列全：常量/seed 面、探针契约面、分发/打包面、门禁面、文档面。
-
-**A. 新包本体**：`packages/dsh-chamber-seed-archive-cleanup/`（src/index.ts + src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **构建期生成的 dist（不提交）**）。产物移出 git 后 `.gitignore` **不再**逐包写 dist 否定行（根 `dist/` 规则直接覆盖；历史的「chamber host 包提交态产物」否定块已删除）；clean checkout 由 `pnpm run build:artifacts` 自举（design 05 §6），seed 前产物缺失只跳过对应行，不再有「CI 缺产物 → 激活失败」的入库依赖。
-
-**B. control-plane seed 面**：`host-graph-seed.ts` 新增 `HOST_ARCHIVE_CLEANUP_*` 常量（PACKAGE_NAME / INSERT_ID / INSERT）；`index.ts` `seedEntries()` 第三行 + `probeDomains: ['archiveCleanup/probe']` + 新 `DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR`；`ControlPlaneOptions` 新增 `hostArchiveCleanupPackageSourceDir`（desktop main 传 dist 打包路径，缺省 REPO_ROOT 源码目录；absent 时 ensureSeedPackage 静默跳过——安全）；`host-graph-seed.test.ts` / `cordis-inserts.test.ts` 常量数组。`probeDomains` 是**纯元数据、无代码消费方**（与激活探针集靠人肉同步）——新增行必须同步本清单里的三处。
-
-**C. 探针契约面（design 18 §3.4）**：
-- `dsh-runtime/src/activation-gate.ts`：`REQUIRED_ACTIVATION_PROBES` 含 `'archiveCleanup/probe'`（激活探针打零成本 `probe` 端点：不读会话数据、无 IO、响应与会话量解耦）；`HOST_DOMAIN_PROBE_NAMES` 含第三域（typed subtraction 守卫保留——拼错域名的行在缩减集断言处红）；
-- **期望集按实际 seed 派生**：（`syncedHostDomainProbeNames` 逐包派生 → `activationProbeNamesForDomains`；二元 `hostDomains` 布尔与 `hasSyncedHostSeed` 同删；seed 清单逐条 `probeDomains` 为源；空缓存 = 空域集，兼容 gateway 未同步形状）； local/desktop 与 gateway runtime-manager 共用该派生。等价性：空缓存派生集 ≡ 基础探针集 `PROBE_NAMES_WITHOUT_HOST_DOMAINS`（4 项，不含 chamber 域）；部分缓存派生 = 对已挂载域做强于旧语义的验证（2-of-3 部分同步不会与静态期望集错配而 observe→fail→回退）；
-- **探针 accept 语义**（新域无 gitWorktree 式「确定性业务拒绝」输入可依赖）：accept = generic envelope `ok:true` 且 domain 结果形态良好（value 为对象）；`ok:false` = 在位但异常 → fail-closed；
-- 构建期生成产物：**`packages/dsh-runtime/dist/index.js`（承载探针常量；包 main 指向 dist；不提交，clean checkout 由 `pnpm run build:artifacts` 自举）** ——desktop 经 runtime-probes shim 消费包 main，test/ipc/cross-package-contract.test.ts 钉生成物 dist，dist-sync.test.ts 锁定同步；
-- **rollout 顺序（激活是硬门）**：desktop 启动事务/暴露门控跑全量探针（main.ts startAndProbeWorkspace），fail→observe→fail→回退——探针集改动、 seed 行与 dsh-runtime 源改动 **必须同 commit 落地**（产物由构建重建），否则本地启动事务失败；
-- 测试：runtime-probes.test.ts（精简集/顺序断言 + 第三域与部分派生 fixture）、 desktop/gateway 锁步断言。
-
-**D. desktop 分发/打包面**：`plugin-sync.ts`（CLIENT_GRAPH/GIT_WORKTREE/ ARCHIVE_CLEANUP 常量 + `seedRemoteChamberHostPackages` + main.ts `chamberHostPackageSeeds`/`localChamberHostPackageSources`/打包路径）、 `packages/desktop/scripts/build-host-graph-package.mjs`（packages 数组含第三包 → desktop `dist/` 内嵌包源）、 `test/plugins/plugin-sync.test.ts`（含并入的 seed 模板/回滚锁）/ `test/transport/ssh-provider-endpoint-auth.test.ts`。 **门禁面**：根 `package.json`（`build:host-*` 并入 `build:host-packages`、 `typecheck:host-archive-cleanup`、`test:host-archive-cleanup` 别名）、 `.github/workflows/ci.yml` 与 `release.yml` 的逐包 typecheck/test/host-build 步骤、 `scripts/release/preflight/release-preflight.mjs` 逐包步骤。
-
-**E. gateway 面**：`plugins.ts` `SYNCABLE_HOST_PACKAGES` 第三行 + `index.ts` `extraSeedEntries` 第三行（desktop-synced sourceDir）；`runtime-manager.ts` 探针期望走 C 的派生实现；测试数组（feature-lifecycle / chamber-installed / runtime-routes——真探针 fixture 需答第 7 端点 / plugin-spec-lockstep：新包名是否受保护改由**注册表派生** （design 21 §6.11：`S` = `CHAMBER_HOST_PACKAGES` 名集，C13 三面一致门守住）——新增种子包**必须同时进注册表**才受保护；「`@dsh-chamber/*` 前缀自动覆盖」的旧口径已废止）。 gateway build.mjs 不再打包任何客户端插件（也不再产出 `host-packages/`）。
-
-**F. settings-connections**：PluginDialog 内建组件表**不新增 archive-cleanup 三态行** （v1 取舍）：v1 仅做**常量级归类修正**——`plugin-inventory-text.ts` 的 `classifyInventoryEntry`/`chamberKindOf` 加第三包，否则该包在 gateway 插件清单（Loader inventory 驱动）里会以 **third-party** 误标显示（现只认 client-graph/git-worktree/archive-cleanup/open-in）。域状态诊断 = 侧边栏 404 文案 + 插件清单归类。三态行代价清单（后续可选增强，未排期）：(a) `plugin-sync.ts` `ChamberInjectionState` chamber 块第三键 + `localPluginList`/`probeRemoteChamber` 实时探针 + 主进程 `LOCAL_PLUGIN_LIST`/`SSH_PLUGIN_LIST` live adapter；(b) IPC 类型镜像三处：renderer / settings-connections 两侧 `global.d.ts` + `preload.cts` `ChamberInjectionState` 镜像位（`test/ipc/ipc-surface-mirror.test.ts` 断言三镜像位）；(c) `ChamberSeedDriftState` / `plugin-inventory-text` 两键形状第三键；(d) 测试 fixture（desktop plugin-sync/ gateway-provider、settings chamber-rows/control-plane）。**IPC 面**：v1（仅常量归类） **不新增任何 IPC channel / 管理 REST / 反代改动**；后续采纳三态行时上述清单即为增量。
-
-**G. 零改动面**：control-plane 反代、gateway 默认代理、桥契约（ChamberServerAggregate）、derive/聚合投影、CLI。
-
-**H. 文档面**：枚举宿主包/域的位置都必须含第三包——design 05 §6 （宿主包 2→3）、design 02（loader id 表 / 宿主包附着表）、design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17 中枚举宿主包的表述、design 01 §3 地图行、 STATUS.md。
+> 每个枚举 chamber 宿主包的位置都有断言/测试——**先改断言让测试红，再接线**，不会静默漏挂。落点以源码为单源：seed 面 `packages/control-plane/src/host-graph-seed.ts`/`index.ts`、探针 `packages/dsh-runtime/src/activation-gate.ts`、desktop 分发 `packages/desktop/plugin-sync.ts` + `scripts/build-host-graph-package.mjs`、gateway `packages/gateway/src/plugins.ts`/`index.ts`、UI 归类 `packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-inventory-text.ts`。
+- **A 包本体**：`packages/dsh-chamber-seed-archive-cleanup/`（src/index.ts + core + binding + build 脚本；`dist` 构建期生成不提交，seed 前缺失只跳过对应行，不再有入库依赖）。
+- **B seed 面**：`HOST_ARCHIVE_CLEANUP_*` 常量 + `seedEntries()` 第三行 + `probeDomains: ['archiveCleanup/probe']` + `DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR` + `ControlPlaneOptions.hostArchiveCleanupPackageSourceDir`（absent 时 ensureSeedPackage 静默跳过）；`probeDomains` 是**纯元数据、无代码消费方**（与激活探针集靠人肉同步）。
+- **C 探针契约**：`REQUIRED_ACTIVATION_PROBES` 含 `'archiveCleanup/probe'`、`HOST_DOMAIN_PROBE_NAMES` 含第三域（typed subtraction 守卫保留）；期望集按实际 seed 派生（`syncedHostDomainProbeNames`→`activationProbeNamesForDomains`，二元 `hostDomains` 布尔删除）：空缓存 = 空域集 ≡ 基础探针集（4 项）、部分同步 = 对已挂载域强于旧语义的验证（2-of-3 不会与静态期望集错配）；accept = generic envelope `ok:true` 且 domain 结果形态良好（value 为对象），`ok:false` = 在位但异常 → fail-closed；desktop 启动事务跑全量探针——探针集 / seed 行 / dsh-runtime 源改动**必须同 commit**（clean checkout 由 `build:artifacts` 自举）。
+- **D 分发/门禁**：`plugin-sync.ts` 常量 + `seedRemoteChamberHostPackages` + main 的 seeds/paths；build 脚本 packages 数组含第三包；根 `package.json` 别名、CI/release 逐包 typecheck/test/host-build、preflight 逐包步骤（成员以 `package.json` 与 workflow 单源）。
+- **E gateway**：`SYNCABLE_HOST_PACKAGES` 第三行 + `extraSeedEntries` 第三行；探针期望走 C 派生；受保护名由注册表派生（`S` = `CHAMBER_HOST_PACKAGES` 名集，C13 三面一致门守住）——新增种子包**必须同时进注册表**才受保护（「`@dsh-chamber/*` 前缀自动覆盖」旧口径已废止）。
+- **F settings-connections（v1）**：PluginDialog 不新增三态行，仅 `classifyInventoryEntry`/`chamberKindOf` 加第三包（否则 gateway 清单误标 third-party）；v1 **不新增任何 IPC channel / 管理 REST / 反代改动**（三态行为后续可选增强，未排期）。
+- **G 零改动面**：control-plane 反代、gateway 默认代理、桥契约（ChamberServerAggregate）、derive/聚合投影、CLI。
+- **H 文档面**：枚举宿主包/域的位置（design 02 loader 表、05 §6、09/13/16/17、18 §3.4、01 §3、STATUS）必须含第三包。
 
 ## 8. 兼容与降级
 - 老/未挂域实例：端点 404（含「方法不在该域」）→ 行内诚实文案（§5/§6）， **无 legacy 回退、不静默**；404 开关限定 archiveCleanup 访问器，不与 control-plane 的未知实例 id 404（`instance_not_found`）混淆；
@@ -219,27 +205,17 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
 
 ## 9. 测试与验证
 
-- 纯核心 `core.test.ts`（fixture，不依赖 vendor）：候选集/孤儿/级联枚举/运行子树跳过、children-first 顺序与崩溃乱序收敛、幂等重跑、逐项错误隔离、账目自愈、archived 成员最后移除、每会话复检、子集过滤、树中止与 rerun 收敛；常驻保留（loaded 树 force 删除后成员关系保留与 `residentRetainedRoots` 上报、覆盖的 archived 后代一并保留、plan 时 clear 而删除瞬间 attach 的竞态仍保留、重跑不误报 `forcedLoaded`）；孤儿清扫的 fail-closed 腿（确认读列出即不清、空/塌缩语料门、并发 purge 不重复清、probe 三态、并集枚举保住仅 persistence 可见的记录、预算截断注记）；protect 全套（受保护根/后代整棵跳过、优先分类、未知 id 无操作、受保护孤儿不清扫、畸形/超限在权威读取前拒绝、空集合逐字节等价、二次保护复查不产生前缀删除、binding `protected` 拒绝）；retention 不变量 I1–I5 逐条落于 `test/core.test.ts`。
-- 域门面：方法名与 envelope、零参 `{args:{}}` 形状、`sessionIds`/`force`/`protectSessionIds` payload 形状、domainResult 载体、busy 单飞（并发 purge 第二个调用得 `ok:false busy`）。
-- binding 真单测（真 binding/RunGate，无装饰器直测）：`assertHeaderShape` 三态、`locate` 接收者调用（this 敏感 fake）、`stat` fail-closed、running/loaded/force 三态与 facts 拆分、删除瞬间常驻位三态与真 binding×真 core 端到端保留、live facts 漂移 fail-loud；**集合写字段归属不变量**（fake registry 的 live global 携带本域不拥有字段，断言写入对象除 `archivedSessionIds` 外逐字段等于写前 global——全对象 `deepEqual` 即事故回归闸）；注册表面守卫负向用例（`state` 缺失/null/数组三态在其余面完整的 ctx 下被拒，合法 `state` 作正控制）。
-- 客户端 wire：`instance-api.test.ts`（404/503/超时分类、畸形双层载体 fail-loud、有界 404 判别体、wrapper 错误映射、唯一 wire 形状恒发、旧宿主 args 拒绝原样上抛、`session/cancel` 请求形状、**归档准入门**（首调不带 `stopActivity`、`false` 不发送、`sessionArchiveRefusal` 只认 `workspace/session-active` 且 `details` 畸形即回退原始错误）、`residentRetainedRoots` 解码含重复 id 收敛）；`archive-purge.test.ts`（未知 viewed 仍照删、已知 viewed 进 protect、lineage 读失败只跳过停止、note 键集与顺序、常驻保留文案与旧宿主回退）。
-- 编排纯函数：`stopSessionsForPurge`（闭包全员 cancel、维护相位覆盖、有界并发输入序记账、`requireCompleteExcludeChain` 整趟闸、排除 viewed、`session/not-found` 幂等）；`session-archive-confirm.test.ts`（只有可解码的 `workspace/session-active` 进确认，活动家族逐分支对照官方 `activityLine`，未知家族走 generic 行且不丢行）；UI 侧 `deriveArchivedSessions`/`groupArchivedRows`（成员归属优先于 cwd 的冲突、组序与未分组尾置）、`serversProjectionSignature` 参与 archivedSessions/archiveSetKnown。
-- 配套：design 08 的归档感知 running 守卫与 `blockingRunningSessionIds` 解码；探针期望集部分派生 fixture（2-of-3、空缓存、全量三态）、dist-sync / cross-package-contract 锁步；locale 对称由 `typecheck:sidebar`；门禁 = `test:sidebar`/`test:host-archive-cleanup`/`test:renderer-shell`/`test:control-plane`/`test:desktop`/`test:gateway` 与对应 `typecheck:*`、`build:renderer`/`build:host-archive-cleanup`（成员与落位以 `scripts/gates/registry/gate-surfaces.json` 为准）。
-- 实机 E2E（vendor 树就绪 + 打包态，§13）：local / gateway / 远程 ssh 三形态各跑 purge 链与常驻保留链（内容删除后侧栏不得出现普通行、管理器仍列出该行并带标注；重启该实例后行彻底消失、再跑一次干净）；并发 busy；超时续跑；未执行腿如实报告（vendor 缺失时 build:renderer/打包依赖无法跑）。
+测试与实机门的覆盖清单见 [gate-surfaces.json](../../../scripts/gates/registry/gate-surfaces.json) 与 [release-checklist](../../checklists/release/release-checklist.md)；本文不重复枚举。
 
 ## 10. 宿主面事实（vendor 核对结论）
-vendor/harness-packages（pinned submodule，当前 pin 见 `harness.commit`）核对的宿主面事实，binding 与算法以此为准。§4 step 9 的字段归属铁律即由此得出：**面**（服务方法/属性）在现行 pin 的 vendor 树核对未变，但**全局字段集合**曾随上游新增字段（`pinnedSessionIds`/`defaultWorkspaceId`），故本域不再镜像字段：
-
-1. `workspaceRegistry` ctx 服务：`archivedSessionIds`（public getter）/ `archiveSession` （仅增向）/ 单条 `unarchiveSession`（public，本域未用）可用；本域写集合另需三个 **私有**面——实例字段 `state`（官方 live global 本体，`setState` 换的就是它）、 `setState`（**整体替换**且 `dsh-storage-domain` 的 `global.set` **不跑 `schema.parse`**， 0.2.0-rc.1 发行产物复核；故 zod 默认值不兜底 → 只能 read-modify-write）、`enqueueOperation`（官方串行链，集合写必须在其内）。`list()` 公开可用但**本域不使用**（不再重建 `workspaceIds`）。 **成员 `sessionIds` 是 header 索引派生的 getter**（启动/实时按 `sessionPersistence.list()` 重建）——内容删除后成员账目自动自愈，无需也不可手工改账目；
-2. **归档顶层行可枚举**：官方 `sessionQuery.listSessions()`（live 优先 + 持久化合并，含 `header.origin`/`parentSession`/`cwd`），`archivedSessionIds` 为 registry-global 集合；单侧枚举都会静默收窄，故 binding 取 `sessionQuery.listSessions()` ∪ `sessionPersistence.list()` 的按 id 并集（§4 step 5）；binding 的 `persistence.list` 回退守卫的是「已挂载但方法不全」的表面漂移并服务单测直用，**不是**缺失服务路径（cordis inject 语义下缺失服务根本不会启动）；
-3. **官方进程内无会话内容删除例程**（persistence 抽象只有 create/open/flush/stat/list；公开面为 `stat`（`inspect` 不存在），`locate` 降为后端**私有** 方法但可经服务对象调用）→ **分支 b**（§4 step 6）：`sessionPersistence.locate(header)` 给出官方绝对产物路径，作为**唯一目录锚**；
-4. **事件**：pinned 树无宿主域可用的 archived-set/session-removed 公开事件面 → `emitSessionRemoved`/`emitArchivedSessionsChanged` 为**文档化 no-op**；投影刷新 = 客户端 mutation-pull（App 层对 live 来源无条件拉取）+ 官方启动 header 索引重建 + §12 收敛链；
-5. `agents` 服务覆盖面：`listLiveAgentIds()` → `listLiveSessionFacts(): { running[], loaded[] }` ——`agents.list()` 中 `status === 'running'` → running，agents 任意状态 + `sessions.list()` → loaded；agent status 非 `idle`/`running` → `registry-unreadable`（fail-closed：状态漂移绝不能把 running 误判为 idle）。 `AgentRegistry.resume` 的 owner 是 agents 服务自身 ctx → 会话一旦被打开过就常驻至进程结束（故判据是「本进程已加载」而非「正在运行」，§13）；
-6. generic gateway：零参 Remote 的 envelope 要求（chamber 侧先例：`clientGraph/graph` 客户端 `{args:{}}`、git-api snapshot）；宿主侧参数名约束；`assertExactArguments` 对描述符外键**严格拒绝**（实测 `unexpected "sessionIds"` / `unexpected "force"` / `unexpected "protectSessionIds"`）——新客户端请求到旧宿主绝无「静默全量删除」分支，形状回退与处置见 §8；
-7. cordis patch insert 三行共存无冲突（id/name 全局唯一）；
-8. 会话存储布局（format.ts / sessions-root / header 索引）与原子写/持久化原语：`locate`/ `format` 官方导出即足够，**布局知识零复制**；可删条目白名单见 §13⑩；每次 append 按路径重新 `open(path, "a")`、头行只在创建时原子写入（§13 force 语义依据）；
-9. `refresh()` 存在且 `mergeOrderedBaseline` 丢弃服务端缺失行（§12 收敛原语）；官方客户端 `SessionManager.summaries` 只在连接代数或显式 `refresh()` 时更新——**任何会话列表刷新都必须以方法调用形态发起**（脱绑调用读 `this.manager` 会抛 TypeError 并被吞掉）。
-
+vendor 树（pinned submodule，pin 见 `harness.commit`）核对结论；binding/算法以此为准（实现细节以 `src/binding.ts`/`binding-parts.ts` 为单源）。§4 step 9 字段归属铁律即由此得出：**面**在现行 pin 核对未变，但**全局字段集合**曾随上游新增（`pinnedSessionIds`/`defaultWorkspaceId`），故本域不再镜像字段。
+- `workspaceRegistry`：`archivedSessionIds` getter、`archiveSession`（仅增向）、单条 `unarchiveSession`（未用）；集合写需私有面 `state`（official live global）、`setState`（整体替换且 `global.set` 不跑 `schema.parse` → 只能 read-modify-write）、`enqueueOperation`（串行链，集合写必须在其内）；`list()` 不使用；成员 `sessionIds` 是 header 索引派生 getter（内容删除后自愈，不手工改账目）。
+- 归档顶层行枚举：`sessionQuery.listSessions()`（live 优先 + 持久化合并）；取 `sessionQuery.listSessions()` ∪ `sessionPersistence.list()` 按 id 并集（单侧会静默收窄）；`persistence.list` 回退守卫表面漂移、非缺失服务路径。
+- 官方无会话内容删除例程：`sessionPersistence.locate(header)` 给出**唯一目录锚**（`stat` 公开、`inspect` 不存在、`locate` 私有可经服务对象调用）；公共面只有 create/open/flush/stat/list。
+- 事件面：pinned 树无 archived-set/session-removed 公开事件 → `emitSessionRemoved`/`emitArchivedSessionsChanged` 为**文档化 no-op**；投影刷新 = 客户端 mutation-pull + 官方启动 header 索引重建 + §12 收敛链。
+- `agents`：`status === 'running'` → running，agents 任意状态 + `sessions.list()` → loaded；非 `idle`/`running` → `registry-unreadable`（fail-closed，状态漂移绝不把 running 误判为 idle）；`AgentRegistry.resume` owner 是 agents ctx → 判据 = 「本进程已加载」而非「正在运行」。
+- generic gateway：零参 Remote envelope `{args:{}}`（先例 `clientGraph/graph`）；`assertExactArguments` 对描述符外键**严格拒绝**——新客户端请求到旧宿主绝无「静默全量删除」分支。
+- 会话存储布局/原子写：只用 `locate`/`format` 官方导出，**布局知识零复制**；append 每次按路径 `open(path,"a")`、头行只在创建时原子写；`refresh()` 存在且 `mergeOrderedBaseline` 丢弃缺失行；`SessionManager.summaries` 只在连接代数或显式 `refresh()` 更新（刷新必须以方法调用形态发起）。
 ## 11. 风险与上游收敛
 - **与上游 worktree reclamation 的边界（当前 pin）**：上游 `worktree` 服务在归档时清理**它自己创建且 owned 的** checkout（机制、资格、`retainOnArchive` 与「用户文案不得承诺归档不动工作树」见 [design 08](08-git-worktree-plugin.md) §7.2）。它**不**提供会话内容删除 wire，也只认自己的创建记录：本域的 `archiveCleanup/{purge,probe}`、逐会话级联、保护/运行位守卫与管理器 UI **全部仍是 chamber 独有**——**不因该能力退役**；`sessions.delete` 落地时仍按下一段的收敛路径退役。
 - **上游收敛（unarchive 由上游提供；sessions.delete 仍未提供）**：收敛路径**机制化**——上游 wire 随 vendor bump 出现即登记为独立 STATUS 跟踪项：客户端 wrapper 单点切到官方 wire（批量编排），宿主包按发行周期从 seed 清单退役，双协议不永久并存；§3 命名空间与官方分离保证切换无碰撞；
