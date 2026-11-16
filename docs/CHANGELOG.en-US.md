@@ -13,7 +13,8 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ## [0.4.5-beta.8] - 2026-11-16
 
 ### Changed
-- **The host-path board poll and the render watchdog also stop while the window is occluded or hidden** - page-level polling has been gated by the foreground phase since 0.4.5-beta.6; this release wires the same phase into the two native timers (6.7Hz drag-pasteboard poll, 1Hz render watchdog). Occlusion only stops the timers (the window is still on screen and a drag session may still be in flight); hiding additionally clears the drag snapshot; becoming visible again re-reads the pasteboard count once, so path resolution for cross-Space drags is unchanged (the paperclip snapshot never follows the phase). User-visible face = fewer idle wakeups and less background CPU while occluded or hidden; drag, hang self-healing and path resolution behave the same. Real-machine wakeup re-measurement and build acceptance are release-checklist items (design 25 §5.7, design 14 §D1).
+- **The host-path board poll and the render watchdog also stop while the window is occluded or hidden** - page-level polling has been gated by the foreground phase since 0.4.5-beta.6; this release wires the same phase into the two native timers (6.7Hz drag-pasteboard poll, 1Hz render watchdog). Occlusion only stops the timers (the window is still on screen and a drag session may still be in flight); hiding additionally clears the drag snapshot; becoming visible again re-reads the pasteboard count once, so path resolution for cross-Space drags is unchanged (the paperclip snapshot never follows the phase). User-visible face = fewer idle wakeups and less background CPU while occluded or hidden; drag, hang self-healing and path resolution behave the same (design 25 §5.7, design 14 §D1).
+
 ## [0.4.5-beta.7] - 2026-11-15
 
 ### Changed
