@@ -172,6 +172,26 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
   const random = deps.random ?? Math.random
   const listeners = new Set<(state: UpdateState) => void>()
   let checking = false
+
+  /** 原生安装触发的等待上限：壳不回包时不能把 IPC 与页面单飞门一起挂住。 */
+  const NATIVE_INSTALL_TRIGGER_TIMEOUT_MS = 30_000
+
+  function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(null), timeoutMs)
+      timer.unref?.()
+      promise.then(
+        value => { clearTimeout(timer); resolve(value) },
+        error => { clearTimeout(timer); reject(error) },
+      )
+    })
+  }
+
+  /** 统一拒绝出口：每次拒绝都留一行原因（页面「偶发」时靠它对账）。 */
+  function refuse(reason: string): { ok: false; error: string } {
+    try { deps.logger.warn('[updater-headless] 拒绝更新动作：' + reason) } catch { /* logging boundary */ }
+    return { ok: false, error: reason }
+  }
   let state: UpdateState = {
     phase: 'idle',
     currentVersion: deps.version,
@@ -480,7 +500,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       // 才转发；downloading/downloaded/installing 在飞 → 拒绝；其余相位 → 无更新。
       if (state.installBlockedReason === null && deps.nativeUpdater !== undefined) {
         if (state.phase === 'downloading' || state.phase === 'downloaded' || state.phase === 'installing') {
-          return { ok: false, error: 'download already in progress' }
+          return refuse('download already in progress')
         }
         if (state.latestVersion === null || (state.phase !== 'available' && state.phase !== 'error')) {
           return { ok: false, error: 'no update available' }
@@ -488,9 +508,9 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
         return deps.nativeUpdater.trigger('download')
       }
       if (state.latestVersion === null || (state.phase !== 'available' && state.phase !== 'error')) {
-        return { ok: false, error: 'no update available' }
+        return refuse('no update available')
       }
-      return { ok: false, error: NATIVE_SHELL_DOWNLOAD_REFUSAL }
+      return refuse(NATIVE_SHELL_DOWNLOAD_REFUSAL)
     },
     restartAndInstall(expectedRevision?: number | null) {
       if (isStaleConfirmation(state.revision, expectedRevision)) {
@@ -515,7 +535,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       // willInstallUpdate 先停 sidecar，再替换 bundle 重启）。仅 downloaded 转发，在飞拒绝。
       if (state.installBlockedReason === null && deps.nativeUpdater !== undefined) {
         if (state.phase === 'downloading' || state.phase === 'installing') {
-          return { ok: false as const, error: 'restart already in progress' }
+          return refuse('restart already in progress') as { ok: false; error: string }
         }
         if (state.phase === 'downloaded') {
           // B 桥边应答 ok:false 会以 reject 到达（sidecar-entry 的 pendingEdges 对 error 帧
@@ -523,7 +543,14 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
           // 原因（P20-B 的 fullscreen-timeout 专文案依赖它；否则 IPC 错误帧 + String(error)
           // 会变成 "Error: fullscreen-timeout"）。
           try {
-            return await deps.nativeUpdater.trigger('install')
+            const triggered = await withDeadline(
+              deps.nativeUpdater.trigger('install'),
+              NATIVE_INSTALL_TRIGGER_TIMEOUT_MS,
+            )
+            if (triggered === null) {
+              return refuse('install request timed out: the shell did not answer')
+            }
+            return triggered
           } catch (error) {
             const message = error instanceof Error && error.message !== ''
               ? error.message
@@ -533,7 +560,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
           }
         }
       }
-      return { ok: false as const, error: NATIVE_SHELL_RESTART_REFUSAL }
+      return refuse(NATIVE_SHELL_RESTART_REFUSAL) as { ok: false; error: string }
     },
   }
 }
