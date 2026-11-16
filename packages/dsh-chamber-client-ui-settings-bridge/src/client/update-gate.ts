@@ -111,6 +111,25 @@ const UPDATE_FULLSCREEN_TIMEOUT_ERROR = 'fullscreen-timeout'
 
 export type RestartFailureView = 'none' | 'fullscreen-timeout' | 'refused'
 
+/**
+ * ⟨P20-C⟩ 更新动作拒绝原因映射（design 25 §7）：把模块门/宿主门的拒绝文本归成四类，
+ * 组件只做文案映射。旧实现把**所有**拒绝都渲染成「更新状态已变化」，而最常见的两种其实是
+ * 「上一次操作仍在处理中」（同一次点击的模块门 / 宿主门）与「没有可下载的更新」——用户按
+ * 提示「重试」只会看到同一句，属于误导。
+ */
+export type UpdateActionFailureView = 'stale' | 'busy' | 'no-update' | 'manual' | 'timeout' | 'refused'
+
+export function updateActionFailureView(error: string | null | undefined): UpdateActionFailureView {
+  if (typeof error !== 'string' || error.trim() === '') return 'refused'
+  if (/stale confirmation/iu.test(error)) return 'stale'
+  if (/already in progress/iu.test(error)) return 'busy'
+  if (/no update available/iu.test(error)) return 'no-update'
+  if (/timed out|did not start|arm expired/iu.test(error)) return 'timeout'
+  // 原生壳没有自动安装能力时的拒绝（宿主常量 NATIVE_SHELL_*_REFUSAL，中文原文）。
+  if (/原生壳不支持自动/iu.test(error)) return 'manual'
+  return 'refused'
+}
+
 export function restartFailureView(error: string | null | undefined): RestartFailureView {
   if (error === null || error === undefined) return 'none'
   return error === UPDATE_FULLSCREEN_TIMEOUT_ERROR ? 'fullscreen-timeout' : 'refused'

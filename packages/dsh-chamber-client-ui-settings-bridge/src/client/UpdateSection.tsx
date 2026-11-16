@@ -16,16 +16,28 @@ import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './sett
 import { debugFactsCard, debugFactsCardVisible, debugStatusKind, debugSupported, debugToggleDisabled } from './debug-mode-gate.ts'
 import {
   getUpdateState, subscribeUpdateState, requestUpdateCheck, requestUpdateDownload, requestUpdateRestart, requestOpenReleasePage,
+  subscribeUpdateArmExpiry,
 } from './update-store.ts'
 import {
-  betaUpdatesSwitchState, restartFailureView, updateCheckDisabled, updateCheckPlatformBlocked,
-  updateRestartAvailable, updateTechDetailsVisible,
+  betaUpdatesSwitchState, restartFailureView, updateActionFailureView, updateCheckDisabled,
+  updateCheckPlatformBlocked, updateRestartAvailable, updateTechDetailsVisible,
+  type UpdateActionFailureView,
 } from './update-gate.ts'
 import { classifyBlockedReason } from './blocked-reason.ts'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported: {version} {percent} {reason}). */
 type UpdateTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
+
+/** 拒绝类别 → 文案词条：只有真正「状态已变化」才用通用句，忙/无更新各给可行动的文案。 */
+const UPDATE_FAILURE_COPY: Record<UpdateActionFailureView, SettingsBridgeKey> = {
+  stale: 'updateActionRefused',
+  refused: 'updateActionRefused',
+  busy: 'updateActionBusy',
+  'no-update': 'updateActionNoUpdate',
+  manual: 'updateActionManual',
+  timeout: 'updateActionTimeout',
+}
 
 function blockedCopy(update: UpdateState, t: UpdateTranslate): string {
   switch (classifyBlockedReason(update.installBlockedReason)) {
@@ -413,12 +425,21 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
   // A refused confirmation (stale revision / malformed payload / controller gate) must be
   // VISIBLE: the main process logs loudly, but a silent no-op would read as a broken button.
   // Cleared on the next click (a refusal's resync push must NOT clear it immediately).
-  const [actionRefused, setActionRefused] = useState(false)
+  // 拒绝原因（原文）：渲染时经纯门归成四类文案——「已在处理中」「没有可下载的更新」
+  // 不该伪装成「状态已变化」。清空时机 = 下一次点击（拒绝的 resync push 不得立刻清掉）。
+  const [actionFailure, setActionFailure] = useState<string | null>(null)
   // 「重启并安装」被拒时的原始 error（P20-B）：只保存，呈现走纯门 restartFailureView——
   // fullscreen-timeout（壳在安装前 5s 内未能退出全屏）显示专属文案并保持行内重试按钮；
-  // 其余拒绝仍落 actionRefused 通用面。
+  // 其余拒绝落通用面（busy / 无更新各有可行动文案，见 UPDATE_FAILURE_COPY）。
   const [restartError, setRestartError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
+
+  // 已接受的重启若在武装窗口内没有真正退出（全屏未退 / 退出被取消 / Sparkle 静默失败），
+  // 模块门会到期释放；组件必须同步收掉 busy，否则按钮永久禁用、提示也关不掉。
+  useEffect(() => subscribeUpdateArmExpiry(() => {
+    setBusyKind(null)
+    setActionFailure('restart arm expired: the install did not start')
+  }), [])
 
   // Confirmation actions answer from the RENDERED snapshot (design 11 §4): the revision
   // echoed with the click lets the main process refuse a stale answer instead of acting on
@@ -426,29 +447,34 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
   const revision = update?.revision ?? null
   const onUpdate = useCallback(() => {
     if (revision === null) {
-      setActionRefused(true)
+      setActionFailure('refused')
       return
     }
-    setActionRefused(false)
+    setActionFailure(null)
     setBusyKind('download')
     void requestUpdateDownload(revision)
-      .then((result) => { if (!result.ok) setActionRefused(true) })
+      .then((result) => {
+        if (result.ok) return
+        // 页面 console 会被壳收进 shell.log：保留拒绝原文，下次「偶发」可归因。
+        console.warn('[update] download refused:', result.error)
+        setActionFailure(result.error)
+      })
       .finally(() => setBusyKind(null))
   }, [revision])
 
   const onRestart = useCallback(() => {
     if (revision === null) {
-      setActionRefused(true)
+      setActionFailure('refused')
       return
     }
-    setActionRefused(false)
+    setActionFailure(null)
     setRestartError(null)
     setBusyKind('restart')
     // ok → quitAndInstall armed: the app is on its way out, so keep the button
     // disabled (the main-process single-flight would refuse a second click anyway).
     // Only a refused/failed call re-enables the row for an in-place retry.
     // Failure split (P20-B): fullscreen-timeout keeps the retry row and surfaces the
-    // dedicated copy; every other refusal keeps the generic actionRefused face.
+    // dedicated copy; every other refusal is mapped by updateActionFailureView().
     void requestUpdateRestart(revision).then((result) => {
       if (result.ok) return
       setBusyKind(null)
@@ -456,7 +482,8 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
         setRestartError(result.error)
         return
       }
-      setActionRefused(true)
+      console.warn('[update] restart refused:', result.error)
+      setActionFailure(result.error)
     })
   }, [revision])
 
@@ -508,8 +535,14 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
       {restartFailureView(restartError) === 'fullscreen-timeout' && (
         <p className={css.generalError} aria-live="polite">{t('updateFullscreenTimeout')}</p>
       )}
-      {actionRefused && (
-        <p className={css.generalError} aria-live="polite">{t('updateActionRefused')}</p>
+      {actionFailure !== null && (
+        <p className={css.generalError} aria-live="polite">
+          {t(UPDATE_FAILURE_COPY[updateActionFailureView(actionFailure)])}
+          {/* 显式消除：拒绝提示不能只能靠下一次点击清掉（按钮可能因其它原因不可用）。 */}
+          <Button variant="outline" size="sm" onClick={() => setActionFailure(null)}>
+            {t('updateActionDismiss')}
+          </Button>
+        </p>
       )}
       {/* 接收预览版（beta）更新：订阅开关（design 11 / design 25 §7）。 */}
       <BetaUpdatesRow t={t} />

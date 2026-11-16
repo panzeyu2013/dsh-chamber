@@ -340,3 +340,134 @@ test('a stalled download push releases the module gate so the retry reaches the 
     assert.deepEqual(surface.downloadRevisions, [REVISION, 2])
   } finally { cleanup() }
 })
+
+test('restart arm expiry: an armed restart that never quits releases the gate and notifies the section', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { surface } = fakeUpdateSurface()
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    assert.notEqual(store.getUpdateState(), null, 'the store hydrates on microtasks')
+    let expired = 0
+    const unsubscribe = store.subscribeUpdateArmExpiry(() => { expired += 1 })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: false, error: 'restart already in progress' })
+    t.mock.timers.tick(store.RESTART_ARM_TIMEOUT_MS)
+    assert.equal(expired, 1, 'the arm expiry notifies the section so busy can clear')
+    const retry = await store.requestUpdateRestart(REVISION)
+    assert.equal(retry.ok, true, 'an armed-but-never-quit restart must release the gate for retry')
+    unsubscribe()
+  } finally { cleanup() }
+})
+
+test('a confirmation the shell never answers is bounded (no permanent busy or gate)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { surface } = fakeUpdateSurface()
+  const hanging = surface as unknown as { download: (revision: number) => Promise<never> }
+  hanging.download = (revision: number) => {
+    surface.downloadRevisions.push(revision)
+    return new Promise<never>(() => { /* the shell never answers */ })
+  }
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    assert.notEqual(store.getUpdateState(), null, 'the store hydrates on microtasks')
+    const pending = store.requestUpdateDownload(REVISION)
+    t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
+    const result = await pending
+    assert.equal(result.ok, false)
+    assert.match(String((result as { error: string }).error), /timed out/)
+    const second = store.requestUpdateDownload(REVISION)
+    t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
+    await second
+    assert.equal(surface.downloadRevisions.length, 2, 'the gate must be released after a hung invoke')
+  } finally { cleanup() }
+})
+
+
+test('restart arm expiry: an installing phase keeps the gate armed (no false timeout)', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { surface, push } = fakeUpdateSurface()
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    assert.notEqual(store.getUpdateState(), null, 'the store hydrates on microtasks')
+    let expired = 0
+    const unsubscribe = store.subscribeUpdateArmExpiry(() => { expired += 1 })
+    assert.deepEqual(await store.requestUpdateRestart(REVISION), { ok: true })
+    push(downloadedState({ phase: 'installing' }))
+    t.mock.timers.tick(store.RESTART_ARM_TIMEOUT_MS)
+    assert.equal(expired, 0, 'installing means the quit is in flight: do not declare a timeout')
+    t.mock.timers.tick(store.RESTART_ARM_TIMEOUT_MS)
+    assert.equal(expired, 0, 'the arm keeps waiting while the install runs')
+    assert.deepEqual(await store.requestUpdateRestart(REVISION),
+      { ok: false, error: 'restart already in progress' },
+      'the gate must stay armed during a real install')
+    unsubscribe()
+  } finally { cleanup() }
+})
+
+
+test('a late download answer after the invoke timeout cannot re-lock the gate', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { surface } = fakeUpdateSurface()
+  let settle: (() => void) | null = null
+  const slow = surface as unknown as { download: (revision: number) => Promise<{ ok: true }> }
+  slow.download = (revision: number) => {
+    surface.downloadRevisions.push(revision)
+    return new Promise(resolve => { settle = () => resolve({ ok: true }) })
+  }
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    const first = store.requestUpdateDownload(REVISION)
+    t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
+    const timedOut = await first
+    assert.equal(timedOut.ok, false)
+    assert.match(String((timedOut as { error: string }).error), /timed out/)
+    settle?.()
+    for (let i = 0; i < 4; i += 1) await Promise.resolve()
+    const second = store.requestUpdateDownload(REVISION)
+    t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
+    await second
+    assert.equal(surface.downloadRevisions.length, 2,
+      'the gate stays released: a host answer arriving after the timeout must not re-lock it')
+  } finally { cleanup() }
+})
+
+test('a late restart ok after the invoke timeout neither arms the expiry nor re-locks the gate', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { surface } = fakeUpdateSurface()
+  let settle: (() => void) | null = null
+  const slow = surface as unknown as { restartAndInstall: (revision: number) => Promise<{ ok: true }> }
+  slow.restartAndInstall = (revision: number) => {
+    surface.restartCalls += 1
+    surface.restartRevisions.push(revision)
+    return new Promise(resolve => { settle = () => resolve({ ok: true }) })
+  }
+  const cleanup = installUpdateSurface(surface)
+  const store = await freshStore()
+  try {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve()
+    let expired = 0
+    const unsubscribe = store.subscribeUpdateArmExpiry(() => { expired += 1 })
+    const first = store.requestUpdateRestart(REVISION)
+    t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
+    const timedOut = await first
+    assert.match(String((timedOut as { error: string }).error), /timed out/)
+    settle?.()
+    for (let i = 0; i < 4; i += 1) await Promise.resolve()
+    t.mock.timers.tick(store.RESTART_ARM_TIMEOUT_MS)
+    assert.equal(expired, 0, 'a timed-out invoke never armed the expiry')
+    const retry = store.requestUpdateRestart(REVISION)
+    t.mock.timers.tick(store.UPDATE_INVOKE_TIMEOUT_MS)
+    await retry
+    assert.equal(surface.restartCalls, 2, 'the gate is released so the user can retry')
+    unsubscribe()
+  } finally { cleanup() }
+})
+

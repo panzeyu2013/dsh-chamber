@@ -40,6 +40,56 @@ let checkInFlight = false
  * multiple shells. Failure/refusal paths reset here so the user can retry. */
 let restartInFlight = false
 
+/** 已接受的重启最长「武装」时间：超过它仍未退出 ⇒ 安装没有真正开始（全屏未退、退出被取消、
+ *  Sparkle 静默失败……），必须释放门与 busy，让用户能重试。没有它时 {ok:true} 会把
+ *  restartInFlight 与组件 busy 双双钉死，用户既不能重试也消不掉提示。 */
+export const RESTART_ARM_TIMEOUT_MS = 60_000
+
+/** 单次确认 invoke 的等待上限：宿主不回答时不能把模块门与组件 busy 一起挂住。 */
+export const UPDATE_INVOKE_TIMEOUT_MS = 15_000
+
+const armExpiryListeners = new Set<() => void>()
+
+/** 「重启武装超时」订阅（组件用它清 busy 并把拒绝换成超时文案）。 */
+export function subscribeUpdateArmExpiry(listener: () => void): () => void {
+  armExpiryListeners.add(listener)
+  return () => { armExpiryListeners.delete(listener) }
+}
+
+let restartArmTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearRestartArmTimer(): void {
+  if (restartArmTimer !== null) { clearTimeout(restartArmTimer); restartArmTimer = null }
+}
+
+/** 武装超时：释放模块门并通知组件；只在「仍存活」时触发（真退出就无从执行了）。 */
+function armRestartExpiry(): void {
+  clearRestartArmTimer()
+  restartArmTimer = setTimeout(() => {
+    restartArmTimer = null
+    // Sparkle 已进入 installing（正在替换 bundle）：此时放开会让用户重试并触发第二次安装。
+    // 继续武装，等下一轮；真正的失败仍由推送（restartFailureText / phase 离开）释放。
+    if (hydration.snapshot()?.phase === 'installing') { armRestartExpiry(); return }
+    restartInFlight = false
+    for (const listener of armExpiryListeners) {
+      try { listener() } catch { /* listener boundary */ }
+    }
+  }, RESTART_ARM_TIMEOUT_MS)
+  restartArmTimer.unref?.()
+}
+
+/** 与确认 invoke 的竞速上限：返回 null = 超时。 */
+function withInvokeTimeout<T>(promise: Promise<T>): Promise<T | null> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(null), UPDATE_INVOKE_TIMEOUT_MS)
+    timer.unref?.()
+    promise.then(
+      value => { clearTimeout(timer); resolve(value) },
+      error => { clearTimeout(timer); reject(error) },
+    )
+  })
+}
+
 const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
   surface: () => (typeof window !== 'undefined' ? window.dshChamber?.update ?? null : null),
   onChanged: (api, listener) => api.onChanged(listener),
@@ -55,6 +105,7 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
     if (state.restartFailureText !== undefined
       || state.phase === 'error' || state.phase === 'up-to-date') {
       restartInFlight = false
+      clearRestartArmTimer()
     }
     // Download-stall recovery: main's watchdog releases its own single-flight and accepts a
     // retry at the CURRENT revision, but this module gate otherwise clears only in the pending
@@ -111,7 +162,9 @@ export async function requestUpdateDownload(revision: number): Promise<{ ok: tru
   try {
     const api = hydration.surface()
     if (api === null) return { ok: false, error: 'update bridge unavailable' }
-    return await api.download(revision)
+    const result = await withInvokeTimeout(api.download(revision))
+    if (result === null) return { ok: false, error: 'update request timed out: the shell did not answer' }
+    return result
   } catch (error) {
     return { ok: false, error: String(error) }
   } finally {
@@ -137,8 +190,15 @@ export async function requestUpdateRestart(revision: number): Promise<{ ok: true
       restartInFlight = false
       return { ok: false, error: 'update bridge unavailable' }
     }
-    const result = await api.restartAndInstall(revision)
+    const result = await withInvokeTimeout(api.restartAndInstall(revision))
+    if (result === null) {
+      restartInFlight = false
+      return { ok: false, error: 'restart request timed out: the shell did not answer' }
+    }
     if (!result.ok) restartInFlight = false
+    // {ok:true} = armed. Keep the gate for the quit window, but not forever: an arm whose
+    // app never exits must release the gate and the row so the user can retry.
+    else armRestartExpiry()
     return result
   } catch (error) {
     restartInFlight = false

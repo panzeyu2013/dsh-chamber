@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   betaUpdatesSwitchState, restartFailureView, updateCheckDisabled, updateCheckPlatformBlocked,
-  updateIndicatorView, updateRestartAvailable, updateTechDetailsVisible,
+  updateActionFailureView, updateIndicatorView, updateRestartAvailable, updateTechDetailsVisible,
 } from '../../src/client/update-gate.ts';
 import type { UpdatePhase, UpdateState } from '../../src/ambient/update-bridge.d.ts';
 import { en, zh } from '../../src/locales.ts';
@@ -219,7 +219,9 @@ test('⟨P20-B⟩ UpdateSection: 保存 result.error，超时走专文案并保�
   assert.match(updateSectionSource, /t\('updateFullscreenTimeout'\)/);
   // 失败分支先 setBusyKind(null)（行内「重启并安装」重新启用 = 可重试），再分流。
   assert.match(updateSectionSource, /if \(result\.ok\) return\s*setBusyKind\(null\)/);
-  assert.match(updateSectionSource, /setActionRefused\(true\)/);
+  assert.match(updateSectionSource, /setActionFailure\(result\.error\)/);
+  // 拒绝原因必须经纯门分文案，而不是一律「状态已变化」。
+  assert.match(updateSectionSource, /updateActionFailureView\(actionFailure\)/);
 });
 
 test('⟨P02⟩ updateIndicatorView: 未水合 / 窄栏 / idle / up-to-date 一律不渲染', () => {
@@ -273,3 +275,24 @@ test('S-21：页面更新面零发现——store/section/gate 绝不自跑 GitHu
     assert.doesNotMatch(source, /\bfetch\s*\(/, file + ' 不得自己出网发现更新（S-21）');
   }
 });
+test('updateActionFailureView: busy and no-update refusals are not reported as "state changed"', () => {
+  assert.equal(updateActionFailureView('stale confirmation: the update state changed (reload the update section and retry)'), 'stale')
+  assert.equal(updateActionFailureView('download already in progress'), 'busy')
+  assert.equal(updateActionFailureView('restart already in progress'), 'busy')
+  assert.equal(updateActionFailureView('no update available'), 'no-update')
+  assert.equal(updateActionFailureView('fullscreen-timeout'), 'refused')
+  assert.equal(updateActionFailureView('restart request timed out: the shell did not answer'), 'timeout')
+  assert.equal(updateActionFailureView('restart arm expired: the install did not start'), 'timeout')
+  assert.equal(updateActionFailureView('原生壳不支持自动安装（请手动下载新版本）'), 'manual')
+  assert.equal(updateActionFailureView('原生壳不支持自动更新安装（请手动下载新版本）'), 'manual')
+  assert.equal(typeof zh.updateActionDismiss, 'string')
+  assert.equal(typeof en.updateActionDismiss, 'string')
+  assert.equal(updateActionFailureView(''), 'refused')
+  assert.equal(updateActionFailureView(null), 'refused')
+  // 词条必须成对存在（zh 是单源，en 由 Record<keyof typeof zh, string> 锁步）。
+  assert.equal(typeof zh.updateActionBusy, 'string')
+  assert.equal(typeof en.updateActionBusy, 'string')
+  assert.equal(typeof zh.updateActionNoUpdate, 'string')
+  assert.equal(typeof en.updateActionNoUpdate, 'string')
+})
+

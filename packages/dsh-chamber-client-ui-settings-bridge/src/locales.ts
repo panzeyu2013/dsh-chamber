@@ -147,6 +147,11 @@ export const zh = {
   updateReleaseLink: '前往下载页',
   // 更新动作被主进程拒绝（过期回答 / 载荷非法 / 相位门）：必须可见，绝不静默无反应。
   updateActionRefused: '本次操作未生效（更新状态已变化或该操作被拒绝）；请按当前状态重试',
+  updateActionBusy: '上一次更新操作仍在处理中；请稍候重试',
+  updateActionNoUpdate: '当前没有可下载的更新；请先检查更新',
+  updateActionTimeout: '安装没有在预期时间内开始（应用未退出）；请重试',
+  updateActionManual: '当前构建不能自动安装更新；请前往下载页手动安装',
+  updateActionDismiss: '关闭',
   // 「接收预览版（beta）更新」订阅开关（design 11 §3.2 / design 25 §7）：通道 = 纯用户偏好
   // （v4）——开关值来自壳推送的生效更新通道；版本后缀不参与（beta 构建也是普通开关，
   // 默认关）；本构建没有可用通道时禁用并说明原因。
@@ -483,6 +488,11 @@ export const en: Record<keyof typeof zh, string> = {
   updateReleaseLink: 'Go to download page',
   // A refused update action (stale answer / malformed payload / phase gate) must be visible.
   updateActionRefused: 'The action did not take effect (the update state changed or it was refused); retry from the current state',
+  updateActionBusy: 'The previous update action is still in progress; retry in a moment',
+  updateActionNoUpdate: 'There is no downloadable update right now; check for updates first',
+  updateActionTimeout: 'The install did not start in time (the app did not quit); retry',
+  updateActionManual: 'This build cannot install updates automatically; use the download page',
+  updateActionDismiss: 'Dismiss',
   // 「Receive preview (beta) updates」subscription (design 11 §3.2 / design 25 §7): the channel
   // is pure user preference (v4) — the switch reflects the effective channel pushed by the shell;
   // the version suffix no longer participates (a beta build is an ordinary switch, default off);
