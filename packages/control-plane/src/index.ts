@@ -645,9 +645,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   })
   // Candidate lifecycle is an internal fact until the desktop's full probe verdict
   // opens exposure: ready→degraded/restarting/error and the candidate port never
-  // escape public REST/SSE. One exception: a start that terminally failed before
-  // ever reaching ready projects the honest 'error' status with its concrete reason
-  // (spawn errors already carry per-port causes and stderr digests).
+  // escape public REST/SSE. One exception: a terminal failure before ever reaching
+  // ready (a failed start, or a restart leg that ended on an unproven writer) projects
+  // the honest 'error' with its sanitized reason (spawn cause / RESTART_TERMINAL_FAILURE).
   const publicLocalSnapshot = (snapshot: { status: string; port: number | null; error: string | null }) => {
     if (!localExposureAllowed()) {
       const startFailure = local.getStartFailure()

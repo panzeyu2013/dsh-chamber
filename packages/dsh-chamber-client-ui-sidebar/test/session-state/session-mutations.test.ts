@@ -58,6 +58,19 @@ function reportSnapshot(sourceId: string, sessions: ReturnType<typeof sessionRow
   return () => { producer.clear(); releaseInstanceClient(sourceId) }
 }
 
+/** Same mounted-source producer, kept open so a test can publish an authority update while
+ *  a mutation is in flight (the post-fork re-check window). */
+function openSnapshotProducer(sourceId: string): {
+  publish(sessions: ReturnType<typeof sessionRow>[]): void
+  clear(): void
+} {
+  const producer = chamberBridge.registerInstanceSnapshotProducer(sourceId, 'c'.repeat(64), 1)
+  return {
+    publish: (sessions) => { producer.report(instanceSnapshot([], sessions)) },
+    clear: () => { producer.clear(); releaseInstanceClient(sourceId) },
+  }
+}
+
 interface ForkStubs {
   forks: unknown[]
   renames: unknown[]
@@ -395,6 +408,39 @@ test('fork title skip-taken: two same-tick forks (double click) reserve distinct
     assert.deepEqual(titles, ['排障 (1)', '排障 (2)'], 'the synchronous reservation makes double click distinct')
     assert.deepEqual(facts.created.map(fact => fact.title).sort(), ['排障 (1)', '排障 (2)'])
   } finally { facts.off(); probe() }
+})
+
+test('fork title skip-taken: the authority listing the reserved title inside the fork RTT bumps the rename (post-fork re-check)', async () => {
+  const sourceId = 'fork-title-post-fork-authority'
+  const producer = openSnapshotProducer(sourceId)
+  producer.publish([sessionRow('source-1', 0, { title: '排障' })])
+  const client = getInstanceClient(sourceId)
+  const pendingForks: Array<(value: UnaryResult<unknown>) => void> = []
+  const renames: unknown[] = []
+  client.session.fork = (): Promise<UnaryResult<unknown>> => new Promise(resolve => { pendingForks.push(resolve) })
+  client.session.rename = async (payload: unknown): Promise<UnaryResult<unknown>> => {
+    renames.push(payload)
+    return { ok: true, value: { title: (payload as { title?: string }).title ?? '', seq: 3 } }
+  }
+  const facts = collectFacts(sourceId)
+  try {
+    const inFlight = forkSessionForSource(sourceId, 'source-1', { increaseTitleFrom: '排障' })
+    assert.equal(pendingForks.length, 1, 'the fork is in flight before the authority moves')
+    assert.deepEqual(renames, [], 'nothing renames before the fork resolves')
+    // A mounted push inside the fork RTT lists the title this window reserved at the
+    // synchronous naming step (upstream reads taken AFTER the fork resolves).
+    producer.publish([
+      sessionRow('source-1', 0, { title: '排障' }),
+      sessionRow('sib-authority', 0, { title: '排障 (1)' }),
+    ])
+    pendingForks[0]({ ok: true, value: { sessionId: 'child-1' } })
+    await inFlight
+    assert.deepEqual(renames, [{ sessionId: 'child-1', title: '排障 (2)' }],
+      'the post-fork authority re-check skips the number the authority now lists')
+    assert.deepEqual(facts.created, [{
+      sourceId, sessionId: 'child-1', parentSessionId: 'source-1', blank: false, title: '排障 (2)',
+    }], 'the echo is published after the rename and matches the re-checked target')
+  } finally { facts.off(); producer.clear() }
 })
 
 test('fork title skip-taken: a same-tick early failure leaves an n+1 gap that the next fork fills', async () => {

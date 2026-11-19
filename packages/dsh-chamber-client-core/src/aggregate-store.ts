@@ -53,7 +53,7 @@ export interface ChamberServerAggregate {
   connected: boolean
   /** Status text (ready/connecting/… projection). */
   phase: string
-  /** Transport link facts (design 27 §3.1/§3.3 page consumption; transport-only — the managed-dsh fold stays in `phase`/`managedRuntimeDown`): `linkUp` = new work may be issued on this transport now (ready && link not down; local = serving health, the page-channel selector's same reading); `linkState` = the ready-period sub-state (null = local / no projection / not ready). Absent = old producer (fail open). */
+  /** Transport link facts (design 27 §3.1/§3.3 page consumption; transport-only — the managed-dsh fold stays in `phase`/`managedRuntimeDown`): `linkUp` = new work may be issued on this transport now (ready && link not down; local = serving health, the page-channel selector's same reading); `linkState` = the ready-period sub-state (null = local / no projection / not ready). Absent = old producer (fail open). `linkUp` is SIGNATURE-ONLY today: its only production reader is the chamberBridge publish gate (`serversProjectionSignature`); no render/decision consumer exists — do not build UI on it without one (P3-2). */
   linkUp?: boolean
   linkState?: 'healthy' | 'suspect' | 'down' | null
   /**

@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   SERVING_TERMINAL_GRACE_MS,
+  bootDeferralReasonForSource,
   decideServingGate,
   deferredBootReason,
   isTerminalUnreadyPhase,
@@ -98,21 +99,41 @@ test('a manual disconnect OR a ready-but-link-down transport defers the boot; un
   assert.equal(shouldDeferBootForSource('idle', true), true, 'idle stays deferred whatever the link says')
   assert.equal(shouldDeferBootForSource('ready', true), true, 'ready + down parks the boot')
   assert.equal(shouldDeferBootForSource('ready', false), false)
+  // 值化裁决是 App 实际消费的入口（遮罩来路）；布尔谓词只是它的投影，两处不得漂移。
+  assert.equal(bootDeferralReasonForSource('ready', true), 'link-down')
+  assert.equal(bootDeferralReasonForSource('idle', true), 'manual-disconnect', 'idle wins over the link fact')
+  assert.equal(bootDeferralReasonForSource('ready', false), null)
   for (const phase of ['connecting', 'degraded', 'error', 'stopped', 'restart-exhausted', undefined]) {
     assert.equal(shouldDeferBootForSource(phase, true), false, String(phase) + ' must still boot')
     assert.equal(shouldDeferBootForSource(phase, false), false, String(phase) + ' must still boot')
+    assert.equal(bootDeferralReasonForSource(phase, true), null, String(phase) + ' owes no deferral reason')
   }
 })
 
-test('the deferred veil picks its copy/action from the deferral reason', () => {
+test('the deferred veil consumes the App-computed reason (copy/action), never a phase', () => {
   // Manual disconnect → 「未连接」+「连接」; ready + link down → 「链路不可用」+「重试」.
   // Not deferred is the normal boot path and owes no reason.
-  assert.equal(deferredBootReason(false, 'idle'), null)
-  assert.equal(deferredBootReason(false, 'ready'), null)
-  assert.equal(deferredBootReason(true, 'idle'), 'manual-disconnect')
-  assert.equal(deferredBootReason(true, 'ready'), 'link-down')
-  assert.equal(deferredBootReason(true, 'connecting'), 'manual-disconnect', 'only the ready phase means the link-down deferral')
+  assert.equal(deferredBootReason(false, 'link-down'), null)
+  assert.equal(deferredBootReason(false, 'manual-disconnect'), null)
+  assert.equal(deferredBootReason(true, 'manual-disconnect'), 'manual-disconnect')
+  assert.equal(deferredBootReason(true, 'link-down'), 'link-down')
+  // 契约外的来路缺席按手动断开兜底（App 的推迟集合与来路同源，正常不可达）。
   assert.equal(deferredBootReason(true, undefined), 'manual-disconnect')
+})
+
+test('P2-1: a non-ready DERIVED phase never re-labels a link-down deferral as a manual disconnect', () => {
+  // gateway 托管折叠：原始 transport ready + link down ⇒ 派生 phase='stopped'（host/servers.ts 的
+  // 托管折叠把 runtime 态并进 phase）。推迟来自链路 down，遮罩必须是「链路不可用」+「重试」；
+  // 若从**派生相位**反推（非 ready ⇒ manual-disconnect）会误播「未连接」+「连接」（review P2-1）。
+  const reason = bootDeferralReasonForSource('ready', true)
+  assert.equal(reason, 'link-down')
+  assert.equal(deferredBootReason(true, reason), 'link-down', 'the veil reason survives the derived-phase fold')
+  // 派生相位（stopped/restarting）本身不是推迟事实：拿它当输入只会得到"不推迟"（或误判手动断开）。
+  assert.equal(bootDeferralReasonForSource('stopped', true), null, 'a folded managed phase is not a deferral fact')
+  assert.equal(bootDeferralReasonForSource('restarting', true), null)
+  // 对照：真正的手动断开（原始相位 idle）仍是 manual-disconnect，且 idle 优先于链路事实。
+  assert.equal(bootDeferralReasonForSource('idle', false), 'manual-disconnect')
+  assert.equal(bootDeferralReasonForSource('idle', true), 'manual-disconnect')
 })
 
 test('every channel failure but the 404 "no graph injected" shape reaches the App as a degrade', () => {

@@ -245,4 +245,7 @@ test('the shell dispatches by classification and keeps the script fallback', () 
   assert.match(shell, /function loadScriptElementBundle\(url: string\): Promise<void> \{/)
   assert.match(shell, /loadUnpatched: loadScriptElementBundle/)
   assert.match(shell, /onAnchorMiss: info => \{/)
+  // The degrade verdict word itself is load-bearing: gui-acceptance step 6 identifies the
+  // fallback by this exact diagnostic tail (the dispatch lock above only pins the callback).
+  assert.match(shell, /\(degrade-unpatched\)/u)
 })

@@ -27,6 +27,7 @@ import { runViewTransition } from '../view-transition.ts'
 import { createFrameCoalescer } from '../frame-coalescer.ts'
 import {
   deferredBootReason, isTerminalUnreadyPhase, shouldAnnounceRetryQueue,
+  type BootDeferralReason,
 } from '../source-readiness.ts'
 import { decidePresentation, planVeilTimer, PRESENTATION_THRESHOLDS } from '@dsh-chamber/dsh-stream-state'
 import {
@@ -126,8 +127,10 @@ interface InstanceViewProps {
   openIntentId?: string
   /** 来源当前相位；只做文案与动作的事实输入——本组件绝不从相位推断"是否失败"。 */
   sourcePhase?: string
-  /** boot 被推迟（手动断开 idle，或 ready+链路 down）：不启动 shell；相位离开 idle 或链路恢复后自动正常 boot。 */
-  bootDeferred?: boolean
+  /** boot 推迟来路（undefined = 不推迟）：App 已按**原始 transport 相位**（kind 已校验）+ 派生
+   *  链路事实一次判定；本组件只消费，绝不从派生相位反推"是否/为何推迟"（gateway 托管折叠会让
+   *  派生相位非 ready，但推迟其实来自链路 down）。不推迟/相位或链路恢复后自动正常 boot。 */
+  bootDeferReason?: BootDeferralReason
   /** App 的全局失败覆盖层正在渲染：遮罩（及其按钮/文案）必须**离开 DOM**，否则仍可被
    *  Tab 聚焦、被读屏播报。 */
   failureOverlayVisible?: boolean
@@ -148,10 +151,12 @@ interface InstanceViewProps {
 export default function InstanceView({
   instanceId, basePath, sourceFingerprint, transport, active, label, locale, onSettled, onStateChange,
   retryToken, waitForServing, holdVeil, openIntentId, onRebootInstance,
-  sourcePhase, bootDeferred, failureOverlayVisible, switchTargets, onSwitchSource, onConnectSource, onRequestRetry,
+  sourcePhase, bootDeferReason, failureOverlayVisible, switchTargets, onSwitchSource, onConnectSource, onRequestRetry,
   currentSessionId, currentSessionKnownBlank,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  /** App 算好的推迟事实（undefined = 不推迟）：本组件只消费它，不再从 sourcePhase 反推。 */
+  const bootDeferred = bootDeferReason !== undefined
   const startedRef = useRef(false)
   /** 每次 boot 尝试的令牌：丢弃被重试取代的迟到 settle。 */
   const bootTokenRef = useRef(0)
@@ -574,7 +579,7 @@ export default function InstanceView({
     : sessionOpenPhase
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
   // 推迟的两种来路（source-readiness.ts 纯判定）：手动断开 → 「连接」；ready+链路 down → 「重试」。
-  const deferredReason = deferredBootReason(bootDeferred === true, sourcePhase)
+  const deferredReason = deferredBootReason(bootDeferred, bootDeferReason)
   // 遮罩在已 settle 的壳上仍可见，就是揭示门在持有它；隐藏判定耦合的是**合成后**的
   // veilHeld：帧 actionable/released 时同一 commit 里壳也恢复可见，绝不"遮罩没了壳还藏着"。
   const shellHeld = settled && veilHeld

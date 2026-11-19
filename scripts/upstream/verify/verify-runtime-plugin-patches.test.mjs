@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -15,6 +15,7 @@ import {
   countOccurrences,
   parseArgs,
   payloadPath,
+  runGate,
   toServedComboText,
   validatePatchEntry,
   verifyPatchText,
@@ -23,6 +24,7 @@ import {
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const GATE = fileURLToPath(new URL('./verify-runtime-plugin-patches.mjs', import.meta.url))
 const PATCH_MODULE = pathToFileURL(join(HERE, '../../../packages/renderer/src/client-plugin-patches.ts')).href
+const PATCH_MODULE_PATH = fileURLToPath(PATCH_MODULE)
 const patchModule = await import(PATCH_MODULE)
 const patch = patchModule.CLIENT_PLUGIN_PATCHES.find(entry => entry.packageId === patchModule.CHAT_IMPORT_PACKAGE_ID)
 
@@ -114,6 +116,55 @@ test('entry shape: anchorMiss/probe validation and the core-row degrade allowlis
   assert.match(validatePatchEntry(noProbe, 'no-probe').join('\n'), /no valid probe/u)
   const anchorMismatch = { ...documentPreviewPatch, anchors: 3 }
   assert.match(validatePatchEntry(anchorMismatch, 'mismatch').join('\n'), /!== anchorTexts.length/u)
+})
+
+/**
+ * Materialize one isolated gate root: the real (or mutated) patch module at the path the
+ * gate imports, plus both fixture payloads at the vendor root it reads. This is a full
+ * runGate fixture, not the pure helpers the other cases drive.
+ */
+function gateFixtureRoot(patchSource) {
+  const root = mkdtempSync(join(tmpdir(), 'runtime-patch-gate-table-'))
+  writeFileSync(join(root, 'package.json'), '{ "type": "module" }\n')
+  mkdirSync(join(root, 'packages/renderer/src'), { recursive: true })
+  writeFileSync(join(root, 'packages/renderer/src/client-plugin-patches.ts'), patchSource)
+  for (const [packageId, text] of [[patch.packageId, positiveFixture()],
+    [patchModule.DOCUMENT_PREVIEW_PACKAGE_ID, documentPreviewFixture()]]) {
+    mkdirSync(join(root, 'vendor/node_modules', packageId, 'lib'), { recursive: true })
+    writeFileSync(payloadPath(join(root, 'vendor'), packageId), text)
+  }
+  return root
+}
+
+test('runGate: the degrade allowlist is enforced at the gate call site (a bad table is red end-to-end)', async () => {
+  const source = readFileSync(PATCH_MODULE_PATH, 'utf8')
+  // Control leg: the unmutated table passes through the SAME fixture root (exit 0), so a
+  // red below cannot be an artifact of the fixture layout.
+  const healthyRoot = gateFixtureRoot(source)
+  try {
+    const healthy = await runGate({ root: healthyRoot, vendorRoot: 'vendor' })
+    assert.equal(healthy.code, 0, healthy.lines.join('\n'))
+    assert.match(healthy.lines.join('\n'), /2 patch\(es\) x raw\+served verified/u)
+  } finally {
+    rmSync(healthyRoot, { recursive: true, force: true })
+  }
+  // The same root with the optional chat-import row flipped to the core-row degrade policy
+  // must be red: this is the only test that exercises the gate's validatePatchEntry call
+  // site (the pure-function cases above pass with a bad table, and every CLI case runs the
+  // real table).
+  const badSource = source.replace("anchorMiss: 'refuse',", "anchorMiss: 'degrade-unpatched',")
+  assert.notEqual(badSource, source, 'the fixture mutation must land on the chat-import row')
+  const badRoot = gateFixtureRoot(badSource)
+  try {
+    const outcome = await runGate({ root: badRoot, vendorRoot: 'vendor' })
+    const output = outcome.lines.join('\n')
+    assert.equal(outcome.code, 1, output)
+    assert.match(output, /degrade-unpatched is reserved for the core official row/u)
+    assert.match(output, /got @deepseek-ai\/dsh-deepseek-chat-import/u)
+    assert.equal(output.includes('OK verify-runtime-plugin-patches'), false)
+  } finally {
+    rmSync(badRoot, { recursive: true, force: true })
+  }
 })
 
 test('parseArgs: default vendor root, --vendor-root, --require, usage errors', () => {

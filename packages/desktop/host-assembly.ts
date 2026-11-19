@@ -11,8 +11,9 @@
  */
 import {
   bindActiveRegistrationRegistry, createActiveRegistrationRegistry, createRegistrationLiveFacts,
+  type ActiveRegistrationRegistry,
 } from './active-registration.ts'
-import { authRecoveryStillApplies, createAuthRecoveryController } from './auth-recovery.ts'
+import { authRecoveryStillApplies, createAuthRecoveryController, type AuthRecoveryController } from './auth-recovery.ts'
 import { linkBusyAdapter, linkFailureAdapter } from './transport-identity.ts'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -146,6 +147,47 @@ export interface HostAssembly {
   runHostAttempts(options: HostAttemptOptions): Promise<void>
   /** OS 唤醒/网络恢复 → 对 READY 远端强制一次复验（含 ready-but-half-open）。 */
   reverifyAllTransports(): void
+}
+
+/**
+ * The session-refresh register leg: commits the renewed session through the ONE entry and
+ * settles like the status/verify edges — success ends pending auth recovery, a fail-closed
+ * revoke stops the refresh and arms the bounded recovery (the proxy record is already
+ * withdrawn, so an un-recovered ready instance would be stranded). Extracted as a factory
+ * so the wiring suite drives the PRODUCTION leg; effects are late-bound (the composition
+ * root declares them after this leg is constructed).
+ */
+export function createRefreshRegisterLeg(deps: {
+  registrations: ActiveRegistrationRegistry
+  attemptFactsFor(id: string): { tunnelEpoch: number } | null
+  effects(): {
+    sessionRefresh: Pick<GatewaySessionRefresh, 'disarm'>
+    authRecovery: Pick<AuthRecoveryController, 'notifyFailure' | 'cancel'>
+    authRecoveryContext: Map<string, { url: string; scope: string | undefined }>
+  }
+  logTag: string
+}): (id: string) => void {
+  return (id) => {
+    const attempt = deps.attemptFactsFor(id)
+    if (attempt === null) return
+    const outcome = deps.registrations.commit({ kind: 'register', id, transportGen: attempt.tunnelEpoch })
+    if (!outcome.ok) {
+      console.warn(`${deps.logTag} gateway session refresh commit refused for ${id}: ${outcome.reason}`)
+      return
+    }
+    const effects = deps.effects()
+    if (outcome.action === 'revoked') {
+      effects.sessionRefresh.disarm(id)
+      if (outcome.recovery !== null) effects.authRecoveryContext.set(id, outcome.recovery)
+      effects.authRecovery.notifyFailure(id)
+      return
+    }
+    if (outcome.action !== 'registered') return
+    // A successful (re-)registration ends any pending auth recovery: a deferred
+    // disconnect/connect must never tear down an already-registered transport.
+    effects.authRecovery.cancel(id)
+    effects.authRecoveryContext.delete(id)
+  }
 }
 
 /** 装配两个 flavor 共用的宿主。async：启动前导先回收本地插件写进程账目（stale writer 证明先于任何本地 spawn/写路径）。 */
@@ -395,21 +437,16 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
         : undefined
     },
     // 续签只把"新会话已就绪"交给唯一提交入口：facts 由 commit 从同一 live 事实与凭据缓存
-    // 重新派生（不信任入参）；commit 是非抛边界（其内部 try/catch + 测试钉住），一次续签
+    // 重新派生（不信任入参）；落定与 ready/verify 边缘同语义（success 结束在途认证恢复；
+    // fail-closed 撤销则 disarm + 记录 recovery + notifyFailure）。effects 惰性解析：refresh/
+    // auth-recovery 闭包在本函数后段声明，leg 只在装配完成后执行；commit 非抛，一次续签
     // 失败绝不会逃成 sidecar fatal 的 unhandledRejection。
-    register: (id) => {
-      const attempt = sm.getAttemptFacts(id)
-      if (attempt === null) return
-      const outcome = activeRegistration.commit({ kind: 'register', id, transportGen: attempt.tunnelEpoch })
-      if (!outcome.ok) {
-        console.warn(`${logTag} gateway session refresh commit refused for ${id}: ${outcome.reason}`)
-      } else if (outcome.action === 'registered') {
-        // A successful (re-)registration ends any pending auth recovery: a deferred
-        // disconnect/connect must never tear down an already-registered transport.
-        authRecovery.cancel(id)
-        authRecoveryContext.delete(id)
-      }
-    },
+    register: createRefreshRegisterLeg({
+      registrations: activeRegistration,
+      attemptFactsFor: id => sm.getAttemptFacts(id),
+      effects: () => ({ sessionRefresh, authRecovery, authRecoveryContext }),
+      logTag,
+    }),
     // Bounded dead-cookie recovery：disconnect（idle → 控制面注销 + disarm）→ connect
     //（verifyUp 用存储密码重认证）；每次 refresh 至多一次、仅 transport 仍 ready 且同
     // origin；抛错绝不击穿 refresh 控制器。

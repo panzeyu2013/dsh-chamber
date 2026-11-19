@@ -14,6 +14,12 @@
  * `degrade-unpatched` absorbs a load-time remote/local runtime line skew, it never exempts the
  * pinned artifact from being re-anchored.
  *
+ * TABLE COVERAGE. The gate verifies EVERY entry the table currently registers against the real
+ * payload; it cannot notice an entry that was DELETED (a shrunk table still verifies its
+ * remaining rows and would pass). That opposite direction is compensated by the renderer unit
+ * suite's table lock (packages/renderer/test/lifecycle/client-plugin-patches.test.ts:85 asserts
+ * CLIENT_PLUGIN_PATCHES.length plus both registered package ids).
+ *
  * SKIP SEMANTICS. A source-only checkout has no bundled runtime yet (bundle:dsh not run), so a
  * missing payload is a LOUD skip (exit 0): the upgrade pipeline must stay runnable before the
  * runtime leg exists. --require turns EVERY skip into a hard failure (even when other entries
@@ -94,10 +100,15 @@ export function validatePatchEntry(patch, label) {
 }
 
 /**
- * Upstream serving transform, reproduced from the host's combo-script writer
- * (vendor/harness-checkout/packages/client/modules/src/index.ts: prepareSource strips the
- * per-module sourceURL/sourceMappingURL trailers and the combo writer appends ';\n' plus the
- * combo sourceMappingURL trailer). The patch gate must hold on BOTH raw and served text.
+ * Approximate reproduction of the upstream serving transform (the host's combo-script writer:
+ * vendor/harness-checkout/packages/client/modules/src/index.ts — prepareSource strips the
+ * per-module sourceURL/sourceMappingURL trailers, and the combo writer appends the resource
+ * separator plus the combo sourceMappingURL trailer). NOT byte-faithful: the real writer keeps
+ * the source body's trailing ';' and the separator as two lines ('…}});\n;\n//# sourceMappingURL=…')
+ * while this helper normalizes them to one ('…}};\n//# sourceMappingURL=…'). Every registered
+ * anchor lives mid-body, so the trailer-zone difference cannot move an anchor, and the raw side
+ * of the same check remains the real artifact byte for byte. The patch gate must hold on BOTH
+ * raw and served text.
  * @param raw - raw published bundle text
  * @returns the served combo-script shape for a single-resource bundle
  */

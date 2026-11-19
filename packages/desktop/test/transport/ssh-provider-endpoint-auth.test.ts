@@ -167,6 +167,10 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
     const result = await verifyDshEndpoint({ host: '127.0.0.1', port })
     assert.equal(result.ok, false)
     assert.equal(result.terminal, true)
+    // E3 的唯一生产事实（ssh-provider.ts 的 401 分支）：manager/link-loop 的 instance-auth
+    // 合并只读 failureKind==='auth'；改名/改成 protocol 会让 UI 静默回退成「升级远端 dsh」，
+    // 而正确修复面是「部署 Gateway」——所以 provider 层必须自己钉住这个类。
+    assert.equal(result.failureKind, 'auth', 'a 401 dsh probe classifies as the instance-auth failure kind')
     assert.equal('terminalRetryable' in result, false, 'an unrecoverable browser-auth 401 is never re-probed')
     // The signature probe is gated the same way → the hedged 401 message.
     assert.match(result.detail ?? '', /answered HTTP 401/)

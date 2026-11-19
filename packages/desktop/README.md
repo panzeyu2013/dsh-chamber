@@ -7,7 +7,7 @@
 > 清单见 [`../../docs/progress/electron-frozen.md`](../../docs/progress/electron-frozen.md)；归档目录说明见
 > `electron/ARCHIVED.md`。
 
-dsh-chamber 的 Electron 壳（v4 连接管理器形态，**ARCHIVED 归档参考**；现行出货面是 Swift 原生壳）：单 frame 加载控制面 origin 上的 dsh 官方前端；归档的主进程承担正交目标/传输管理（`dsh|gateway × ssh|http`）、实例注册表、write-only 凭据事务与 IPC。
+dsh-chamber 的 Electron 壳（v4 连接管理器形态，**ARCHIVED 冻结归档参考**——不删除文件、可复活；现行出货面是 Swift 原生壳）：单 frame 加载控制面 origin 上的 dsh 官方前端；归档的主进程承担正交目标/传输管理（`dsh|gateway × ssh|http`，其中 `dsh × http` 禁用 ⇒ 三种可达组合）、实例注册表、write-only 凭据事务与 IPC。
 
 ## 目录
 

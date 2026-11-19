@@ -1250,7 +1250,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         <span className={clsx(
                           css.badge,
                           (phase === 'error' || phase === 'degraded' || status?.requiresUserAction === true || linkDown) && css.badgeBad,
-                          phase === 'ready' && css.badgeOk,
+                          phase === 'ready' && !linkDown && css.badgeOk,
                         )}>
                           {t(phaseKey(phase))}
                         </span>

@@ -295,9 +295,9 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 |2|逐包棘轮收尾：file-budgets.json 只降不升（含新叶、`kind:ceiling` 单列与 FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|目标与缺口一律看 node scripts/gates/checks/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**未决**：新模块仍需人工登记|
 |3|§1.5 的审计开放项|未动|各自条目内|
 |4|App 残余编排的依赖容器化（`retireSources`+`JSX`；`refreshRemotes` 已抽为 `packages/renderer/src/app-hooks/use-roster-commit.ts` 的显式入参）|未决：逐字搬剩余自由标识符会得到大入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
+|5|单次 roster 快照（health+instances+generation 同一响应）|未排期：现行两次读 + seq 世代等价，无功能缺口；触发 = 扩冻结 preload 面 / sidecar 通道白名单裁决（[electron-frozen](electron-frozen.md) §5.2）|裁决后以单次响应替代两次读并补等价锁；未裁决不动宿主面|
 |5b|本地写者强制回收（forced reclaim）评估|未排期：退出证明未知时闩锁粘滞、只由重启应用再证明；触发 = 真机出现「无残留组但闩锁误粘滞」证据；修法 = 仅当 reaper 能证明组不存在时自动解锁|负控：人工注入 residual-group 时仍 fail-closed；verify:file-budgets 恒绿|
 |5c|宿主周期兜底 reconcile|未排期：现依赖事件（bindPlane 后启动 / 权威新增 / 唤醒）与 transport-manager 自身重试；触发 = 出现「意图允许但行长期 idle」的漏事件证据|注入时钟单测下不与 manager 重试重复动作；事件路径用例保持绿|
-|5|单次 roster 快照（health+instances+generation 同一响应）|未排期：现行两次读 + seq 世代等价，无功能缺口；触发 = 扩冻结 preload 面 / sidecar 通道白名单裁决（[electron-frozen](electron-frozen.md) §5.2）|裁决后以单次响应替代两次读并补等价锁；未裁决不动宿主面|
 
 #### 1.2 不做与保留（结论）
 

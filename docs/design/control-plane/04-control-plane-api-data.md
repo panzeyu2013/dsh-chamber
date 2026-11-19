@@ -133,11 +133,16 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | WS 路径不在 `WS_STREAM_PATHS` 白名单（唯一在册路径 `/api/remote.mux`） | 404 `{error, code:'instance_not_found'}`（upgrade 前拒绝，§4.1） |
 | 已声明请求体 > 300MiB、未知长度请求体 > 32MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
 
-- **本地 `degraded` 仍服务**：02 §3.5 把 `degraded` 定义为「失败计数 ≥1 且 < 阈值，仍在服务」，因此本地/网关反代必须把它与 `ready` 同表放行；只有状态不可服务（`starting/restarting/stopped/error/restart-exhausted`）才能 503。activation gate 关闭时 503 **不带** `details`：被隔离候选的生命周期是内部事实，公共错误面不得与 `/health` 的 `starting` 互相矛盾。
+- **本地 `degraded` 仍服务**：02 §3.5 把 `degraded` 定义为「失败计数 ≥1 且 < 阈值，仍在服务」，因此本地/网关反代必须把它与 `ready` 同表放行；只有状态不可服务（`starting/restarting/stopped/error/restart-exhausted`）才能 503。activation gate 关闭时 503 **不带** `details`：被隔离候选的生命周期是内部事实，公共错误面只暴露 `/health`（及同投影的 `/api/connections`）的 `starting`（尚无终态失败）或 `error` + 脱敏 reason（到达 ready 前已终态失败：启动失败，或 restart 循环终止于写者静止未证明）；候选端口与内部原因细节任何情况下都不外泄。
 - **状态而非端口**：`restarting` 期间端口仍可能指向已死的旧子进程（`starting` 的端口已置空），故不得用「端口存活」替代状态判定。503 body 可带 additive `details.state`，旧客户端忽略即兼容；该字段只有 HTTP 503 携带——WS upgrade 的 503 reject 帧没有 details 通道，WS 侧不得依赖它。
 - **同一张表也约束幂等启动与页面自动启动**：`degraded` 的本地连接不得被 `start()` 拆掉重建，页面不得因 `degraded` 触发 `createLocal`，本地 page-channel link 也不得因此停放订阅。
 - **`details.kind`**：`resource_exhausted` 的并发准入拒绝带 `kind`（`http`/`long-rpc`/`ws`/`ws-pending`/`connection`）与 `scope`（`connection`/`global`）；请求体缓冲预算耗尽那条不带 `details`。
 - **after-body 语义**：body 已完整发出后上游超时/失败仍返回 504/502 + `details.phase='after-body'`（mutation 归 unknown，27 §3.3/§3.5）；该错误码/预算改动不改变它。
+
+**Rejected alternatives（隔离期 /health 错误投影）**：
+
+- **隔离期一律报 `starting`、隐藏 error**：到达 ready 前的终态失败（含 restart 循环的写者静止未证明）是已判定事实，伪装成「正在启动」会让客户端无限等待一个永远不会就绪的候选；`/health` 是自检面，必须报诚实状态，只隐藏端口与内部原因细节。
+- **隔离期透传完整错误与候选端口**：候选端口与原始错误文本是内部事实（安装路径、端口分配），公共面只给脱敏摘要；透传会把隔离语义绑死到内部实现。
 
 **Rejected alternatives（degraded 服务化）**：
 

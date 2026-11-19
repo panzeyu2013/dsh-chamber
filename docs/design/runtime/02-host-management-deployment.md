@@ -48,7 +48,7 @@ web profile 的 `--port` 固定（非 0 随机）。起始端口本地默认 175
 参考实现 `managed-process-registry.js` 的安全模型（记录在案 → 重验身份 → 仅 owner 死亡才杀）原样移植；差异：身份 = 命令行含 `--profile web --port N` + `lsof -i :port` 监听者 pid；注册表 `<stateDir>/managed-dsh/<pid>.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写，§3.3）；记录 `{pid, ownerPid, ownerInstanceId, port, binary, profile, source, startedAt}`（profile 固定 `'web'`）。每进程一个 JSON 文件（按 pid 命名，每实例只写/删自己的，零写竞争）。
 
 ### 2.4 健康监控共享失败计数，避免"重连风暴"误触发重启
-沿用 v2（移植 `lifecycle.js`）：周期探活与传输触发走同一 `runHealthCheckCycle`；同一失败窗口（15s）至多计 1 次；探测结果 750ms 缓存与单飞槽归属**探针代**（`healthEpoch`）：start 换代、进入 restart、stop 三处拆代点各自 abort 在途探针、递增代并清缓存/定时器；探针在每个 await 后复检代际，迟到的判词、缓存写入、失败计数与状态迁移一律丢弃，单飞槽带发起代、只由自己的代释放；子进程已退出不计数、直接重启；任何一次成功即清零。**不保留"忙会话宽限"**——控制面不消费会话帧，探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（小体积 boolean，§3.2），健康判定与会话数据量双向解耦；慢响应由请求侧超时面处理。
+沿用 v2（移植 `lifecycle.js`）：周期探活与传输触发走同一 `runHealthCheck`；同一失败窗口（15s）至多计 1 次；探测结果 750ms 缓存与单飞槽归属**探针代**（`healthEpoch`）：start 换代、进入 restart、stop 三处拆代点各自 abort 在途探针、递增代并清缓存/定时器；探针在每个 await 后复检代际，迟到的判词、缓存写入、失败计数与状态迁移一律丢弃，单飞槽带发起代、只由自己的代释放；子进程已退出不计数、直接重启；任何一次成功即清零。**不保留"忙会话宽限"**——控制面不消费会话帧，探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（小体积 boolean，§3.2），健康判定与会话数据量双向解耦；慢响应由请求侧超时面处理。
 
 ### 2.5 instance-id 仲裁（多控制面实例并存）
 控制面首启以 no-follow `O_EXCL` 在状态目录生成 `instance-id`（规范 UUID、0600），完整写入并 fsync 文件与父目录后才返回；读取固定小体积 single-link 普通文件 + UUID 校验（并发首启 loser 对 winner 空/部分 UUID 有界重读，完整长度非法值立即 fail-loud）；构造 local connection 时捕获该身份，pid 记录携带同一 `ownerInstanceId`（不在 spawn 后重读）。各自 spawn 互不干扰：每实例自己的起始端口 + P+1 重试天然错开、记录按 pid 隔离；reaper 不杀活人（owner 存活即永不回收，两实例并发 reaper 安全）；同端口先就绪者占住，后来者按 P+1 或报冲突，不杀进程。
@@ -222,7 +222,9 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 ```
 1. 单飞行守卫（currentRestartPromise 去重，并发触发共享同一重启）；
    停止过程（优雅停止进行中）直接返回
-2. 回收 = 单一回收原语（五入口全走它：start 预清理、restart 循环、restart-exhausted、stop 的第二次回收、取消的 spawn）：
+2. 回收 = 同一退出证明语义（两个 helper 共用 spawned.stop() 组证明与 writerSuspect 记账：
+   retireCurrentChild 覆盖 start 预清理、restart 循环、restart-exhausted、stop 的第二次回收；
+   retireSpawnedChild 覆盖取消的 spawn 的 2 处）：
    进程组 SIGTERM（dsh profile-boot 对 SIGTERM 优雅退出，exit 0）→ 1s 未退 → SIGKILL
    → 轮询整个 detached 进程组退出（判据 = leader 与组内后代都已不在；`exitCode`/`signalCode`
    任一非空只证明 leader 死了，不再作为跳过组证明的理由）；**先证明、再清引用/改状态/发布**，

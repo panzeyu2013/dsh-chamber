@@ -3,7 +3,9 @@
  *  Pins: ready → commit (five-tuple lockstep), health-only zero re-registration,
  *  leave-ready revoke, W5 fail-closed revoke WITH the committed status push, the
  *  tombstone refusing a late register, refresh → commit → snapshotForSync giving
- *  the SAME renewed cookie to the manual sync, and the non-throwing refresh leg. */
+ *  the SAME renewed cookie to the manual sync, the non-throwing refresh leg, the
+ *  refresh leg's fail-closed revoke arming the bounded recovery, and the production
+ *  reconnect sequence (no-record connecting push never fences the ready generation). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,6 +26,7 @@ import {
   createGatewaySessionRefresh, GATEWAY_SESSION_REFRESH_LEAD_MS, gatewayTunnelAuthority,
 } from '../../gateway-session-refresh.ts'
 import { createTransportSubscriptions } from '../../host-transport-subscriptions.ts'
+import { createRefreshRegisterLeg } from '../../host-assembly.ts'
 import { IPC_CHANNELS } from '../../ipc-events.ts'
 import { registerGatewayPluginHandlers } from '../../shell-ipc-plugins-gateway.ts'
 import type { ShellIpcCtx } from '../../shell-ipc-ctx.ts'
@@ -245,7 +248,8 @@ function wiringHarness(spec: TransportInstanceSpec = gatewaySpec()) {
   }
   return {
     spec, manager, plane, sessions, credentials, instance, registry, refreshCalls, recoveryCalls,
-    authRecoveryContext, pushes, syncCalls, audits, goReady, goIdle, currentRecord,
+    authRecoveryContext, sessionRefresh, authRecovery, pushes, syncCalls, audits, goReady, goIdle,
+    currentRecord,
   }
 }
 
@@ -493,4 +497,91 @@ test('a dsh ready edge registers headerless and never arms the gateway refresh',
   assert.deepEqual(h.refreshCalls, [])
   h.goIdle()
   assert.deepEqual(h.plane.calls.unregister, ['dsh:dsh-1'])
+})
+
+test('the production reconnect sequence registers the new generation after a no-record connecting push (P0 second defense)', () => {
+  // Production sequence (transport-manager.ts): connect() bumps the tunnel generation,
+  // then startTransport bumps it AGAIN and emits its own 'connecting' push — by then the
+  // leave-ready revoke has already cleared the committed record. That no-record push must
+  // revoke/fence NOTHING, or the ready edge of the same new generation is refused
+  // (stale-generation) and the instance reads ready with no proxy registration
+  // (the initial-arc P0). The shipped wiring cases only emitted ready/idle pushes in the
+  // SAME generation, so this sequence was never exercised.
+  const h = wiringHarness()
+  h.goReady()
+  assert.equal(h.plane.calls.register.length, 1, 'G1 registers')
+  // Disconnect: bump the generation, then the non-ready push revokes the committed record.
+  h.goIdle()
+  assert.equal(h.registry.snapshot('gw-1'), undefined)
+  assert.deepEqual(h.plane.calls.unregister, ['gateway:gw-1'])
+  // Connect: the next generation's connecting push arrives while NO record exists.
+  h.instance.gen += 1
+  h.manager.emitStatus('gw-1')
+  assert.deepEqual(h.plane.calls.unregister, ['gateway:gw-1'], 'the no-record connecting push withdraws nothing')
+  // ready(Gn) in that same bumped generation MUST commit.
+  h.goReady()
+  assert.equal(h.plane.calls.register.length, 2, 'the reconnected generation registers')
+  const record = present(h.currentRecord(), 'reconnected record')
+  assert.equal(record.transportGen, h.instance.gen)
+})
+
+test('a refresh whose session dies between ensureSession and the commit fails closed and arms the bounded recovery', async () => {
+  const h = wiringHarness()
+  h.goReady()
+  assert.equal(h.plane.calls.register.length, 1)
+  const nowMs = 1_000_000_000
+  let scheduled: (() => void) | null = null
+  const refresh = createGatewaySessionRefresh({
+    sessionManager: {
+      // The re-login itself succeeds; the session is invalidated before the commit
+      // (credential save/delete invalidates it inside the same tick window).
+      ensureSession: () => {
+        h.sessions.cookie = null
+        return Promise.resolve({ ok: true, cookie: COOKIE_2 })
+      },
+      expiresAt: () => nowMs + GATEWAY_SESSION_TTL_MS - GATEWAY_SESSION_EXPIRY_SKEW_MS,
+    },
+    passwordFor: () => PASSWORD,
+    tokenFor: () => null,
+    readyUrlFor: () => h.instance.url,
+    socketPathFor: () => null,
+    tlsPinFor: () => null,
+    authorityFor: () => gatewayTunnelAuthority(h.spec.remotePort),
+    scopeFor: () => gatewaySessionScopeForConnection(h.spec),
+    // THE production leg: host-assembly wires exactly this factory.
+    register: createRefreshRegisterLeg({
+      registrations: h.registry,
+      attemptFactsFor: id => h.manager.sm.getAttemptFacts(id),
+      effects: () => ({ sessionRefresh: h.sessionRefresh, authRecovery: h.authRecovery, authRecoveryContext: h.authRecoveryContext }),
+      logTag: '[wiring-test]',
+    }),
+    reconnect: () => {},
+    warn: () => {},
+    now: () => nowMs,
+    schedule: (fn: () => void) => { scheduled = fn; return 1 },
+    cancel: () => {},
+  })
+  try {
+    refresh.arm('gw-1')
+    const fire = present(scheduled as (() => void) | null, 'scheduled refresh')
+    fire()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    // Fail closed: the unproven session must never publish a replacement registration, and
+    // the old record is withdrawn (the proxy answers 503 until recovery re-registers).
+    assert.equal(h.plane.calls.register.length, 1, 'the refused refresh publishes no replacement')
+    assert.deepEqual(h.plane.calls.unregister, ['gateway:gw-1'])
+    assert.equal(h.registry.snapshot('gw-1'), undefined)
+    assert.equal(h.manager.sm.status('gw-1')?.phase, 'ready',
+      'the transport still reads ready while the proxy record is withdrawn (the stranded-ready hazard)')
+    // The fail-closed edge settles exactly like the ready/verify edges: stop the refresh,
+    // record the recovery context and arm the bounded driver (deferred, never dropped).
+    assert.ok(h.refreshCalls.some(call => call.action === 'disarm'), 'the pre-expiry refresh is disarmed')
+    assert.ok(h.recoveryCalls.includes('notify:gw-1'), 'the bounded recovery driver is armed')
+    assert.deepEqual(h.authRecoveryContext.get('gw-1'), {
+      url: READY_URL,
+      scope: gatewaySessionScopeForConnection(h.spec),
+    })
+  } finally {
+    refresh.dispose()
+  }
 })

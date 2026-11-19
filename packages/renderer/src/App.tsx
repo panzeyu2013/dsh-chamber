@@ -129,7 +129,7 @@ import {
   sourceIdForTransport,
 } from './transport-source.ts'
 import {shouldRunBackgroundPhase} from './background-phase.ts'
-import { decideServingGate, shouldDeferBootForSource } from './source-readiness.ts'
+import { bootDeferralReasonForSource, decideServingGate, type BootDeferralReason } from './source-readiness.ts'
 import { harvestSatisfied } from './baseline-harvest.ts'
 import InstanceView from './components/InstanceView.tsx'
 import { ReloadPageButton } from './components/ReloadPageButton.tsx'
@@ -494,27 +494,27 @@ export default function App() {
   useServingGatePhases({ servers, remoteStatus, serversPhaseRef })
 
   /**
-   * boot 推迟集合：**手动断开**（idle）或 ready+链路 down 的来源不启动 shell——一次注定吃满
-   * 503 预算的 boot 只会白烧。遮罩分别呈现「未连接」+「连接」/「链路不可用」+「重试」；
-   * 未知相位（投影未到）不推迟。本判定是渲染期事实（`servers`），不用 ref 镜像。
-   */
-  const deferredBootIds = useMemo(() => {
-    const ids = new Set<string>()
+   * boot 推迟集合与来路：**手动断开**（idle）或 ready+链路 down 的来源不启动 shell——一次注定
+   * 吃满 503 预算的 boot 只会白烧。来路在这里一次判定：遮罩只消费这里算出的明确原因，绝不从
+   * 派生相位反推（gateway 托管折叠会把原始 ready 折成 stopped/restarting，派生相位非 ready 但
+   * 推迟其实来自链路 down）。相位必须是**原始 transport 投影**且 kind 与来源一致（换代窗口里
+   * 旧 kind 的 READY 不是新来源的事实）；未知相位/折叠值绝不推迟。本判定是渲染期事实（`servers`），
+   * 不用 ref 镜像。 */
+  const deferredBootReasons = useMemo(() => {
+    const reasons = new Map<string, BootDeferralReason>()
     for (const server of servers) {
       if (server.id === LOCAL_INSTANCE_ID) continue
-      // 事实源必须是**原始 transport 投影**（remoteStatus 以 raw id 为键）：折叠值不是手动断开
-      // 事实，拿它当输入会把一次投影延迟/状态拉取失败变成"拒绝 boot"，而纯契约要求 undefined 绝不推迟。
       const rawId = rawInstanceIdFromSourceId(server.id)
       if (rawId === null) continue
-      if (shouldDeferBootForSource(remoteStatus[rawId]?.phase, server.linkState === 'down')) ids.add(server.id)
+      const raw = remoteStatus[rawId]
+      const reason = bootDeferralReasonForSource(raw?.kind === server.kind ? raw.phase : undefined, server.linkState === 'down')
+      if (reason !== null) reasons.set(server.id, reason)
     }
-    return ids
+    return reasons
   }, [servers, remoteStatus])
+  const deferredBootIds = useMemo(() => new Set(deferredBootReasons.keys()), [deferredBootReasons])
   /** 推迟集合的稳定签名：让"起表/豁免"的 effect 只在成员变化时重跑。 */
-  const deferredBootSignature = useMemo(
-    () => [...deferredBootIds].sort().join('\u0000'),
-    [deferredBootIds],
-  )
+  const deferredBootSignature = useMemo(() => [...deferredBootIds].sort().join('\u0000'), [deferredBootIds])
   /** 渲染期镜像（effect 与清理臂读它，避免把它们挂到 servers 的依赖上）。 */
   const deferredBootRef = useRef<ReadonlySet<string>>(new Set<string>())
   deferredBootRef.current = deferredBootIds
@@ -1596,7 +1596,7 @@ export default function App() {
               waitForServing={waitForServing}
               // 遮罩的事实输入与动作（导航/回收顺序仍由 App 拥有）。
               sourcePhase={servers.find(server => server.id === viewId)?.phase}
-              bootDeferred={deferredBootIds.has(viewId)}
+              bootDeferReason={deferredBootReasons.get(viewId)}
               // App 的全局失败覆盖层是模态的：覆盖层在场时遮罩退出 DOM（否则其按钮仍可聚焦/被播报）。
               // 两种模态覆盖层都要算：boot 失败（activeShellError）与控制面不可达（controlUnreachable）。
               failureOverlayVisible={activeShellError !== null || controlUnreachable}

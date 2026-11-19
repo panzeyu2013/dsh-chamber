@@ -197,6 +197,16 @@ export function deriveServers(
   ): void => {
     const statusKey = kind === 'local' ? id : (rawId ?? id)
     liveIds.add(id)
+    // Kind discipline (transport-source.ts instanceConnected's same rule): the registry kind
+    // switch and its IPC pushes are separate messages, so a briefly-stale projection from the
+    // OLD provider is not a fact about the replacement row. The link sub-state below reads the
+    // kind-validated projection ONLY — a stale old-kind READY(+link down) can never decide the
+    // new row's link facts (and thereby the boot-defer gate, whose App input is kind-gated too,
+    // nor the prewarm gate, which ANDs the kind-checked instanceConnected). `phase` keeps the
+    // pre-existing raw read (connected() already carries the kind gate): the absent-projection
+    // seam there is a separate pinned contract (session-facts-mode.test.ts).
+    const remoteProjection = kind === 'local' ? undefined : remoteStatus[statusKey]
+    const matchedProjection = remoteProjection?.kind === statusKind ? remoteProjection : undefined
     const transportPhase = kind === 'local'
       ? (health?.dsh?.status ?? 'unknown')
       : (remoteStatus[statusKey]?.phase ?? SOURCE_PHASE_UNKNOWN)
@@ -226,7 +236,7 @@ export function deriveServers(
     // transport link. `linkState` is the ready-period sub-state (null = local / no projection /
     // not ready). Both are TRANSPORT facts: the managed-dsh fold stays in phase/managedRuntimeDown
     // and must never re-label a healthy tunnel as down (design 27 P1-D).
-    const remoteLink = kind === 'local' ? undefined : remoteStatus[statusKey]
+    const remoteLink = matchedProjection
     const linkUp = kind === 'local' ? isServiceableLocalStatus(health?.dsh?.status) : linkReady(remoteLink)
     const linkState = remoteLink?.phase === 'ready' ? linkHealthOf(remoteLink) : null
     let workspaces: ChamberServerAggregate['workspaces'] = []

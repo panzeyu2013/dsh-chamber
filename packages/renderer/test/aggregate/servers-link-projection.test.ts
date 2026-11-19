@@ -18,7 +18,8 @@ import {
   serversProjectionSignature,
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { createServerProjectionCache, deriveServers, type ServerProjectionCache } from '../../src/host/servers.ts'
-import { sourceIdForInstance } from '../../src/transport-source.ts'
+import { instanceConnected, sourceIdForInstance } from '../../src/transport-source.ts'
+import { shouldDeferBootForSource } from '../../src/source-readiness.ts'
 import type { HealthResponse } from '../../src/api.ts'
 import type { SshInstanceSpec, SshStatusProjection } from '../../src/global.d.ts'
 
@@ -123,6 +124,36 @@ test('derive: the gateway managed fold never relabels the transport link', () =>
   assert.equal(server?.connected, false)
   assert.equal(server?.linkUp, true, 'the transport link itself is still admissible')
   assert.equal(server?.linkState, 'healthy', 'a healthy tunnel is never called down by the managed fold')
+})
+
+test('derive: a stale old-kind projection defines no link facts on the replacement row', () => {
+  // Registry kind switch and its IPC pushes are separate messages: the old provider's READY
+  // (even one that says link down) is not proof about the replacement provider — the same
+  // discipline instanceConnected applies (transport-source.ts:105-108). The kind-validated
+  // projection is the ONLY source of the link sub-state, so the stale row can decide neither
+  // the boot deferral (App kind-gates the raw phase too) nor prewarm (linkReady ∧ instanceConnected).
+  const gateway: SshInstanceSpec = { ...instance, id: 'g1', kind: 'gateway', label: 'G1' }
+  const gatewaySource = sourceIdForInstance(gateway)
+  const staleDown = { ...readyStatus, kind: 'dsh', link: { state: 'down', linkEpoch: 1 } } as SshStatusProjection
+  const stale = derive({ instances: [gateway], remoteStatus: { g1: staleDown } })
+    .find(candidate => candidate.id === gatewaySource)
+  assert.equal(stale?.connected, false, 'a stale old-kind READY is not the replacement provider being connected')
+  assert.equal(stale?.linkUp, false, 'a stale old-kind READY cannot make the new row admissible')
+  assert.equal(stale?.linkState, null, 'the ready-period sub-state must not leak across a kind switch')
+  // boot defer gate: the App reads the raw phase through the same kind gate, so a kind-mismatched
+  // projection reads as absent there too ⇒ no deferral from the old provider's link.
+  const staleRawPhase = staleDown.kind === gateway.kind ? staleDown.phase : undefined
+  assert.equal(shouldDeferBootForSource(staleRawPhase, stale?.linkState === 'down'), false)
+  // prewarm gate: linkReady alone is not enough — the scheduler ANDs the kind-checked instanceConnected.
+  assert.equal(instanceConnected('gateway', READY_HEALTH, { g1: staleDown }, 'g1'), false)
+  // Control: the SAME link-down reading under the MATCHED kind still defers the boot.
+  const matched = derive({
+    instances: [gateway],
+    remoteStatus: { g1: { ...readyStatus, kind: 'gateway', link: { state: 'down', linkEpoch: 1 } } },
+  }).find(candidate => candidate.id === gatewaySource)
+  assert.equal(matched?.phase, 'ready')
+  assert.equal(matched?.linkState, 'down')
+  assert.equal(shouldDeferBootForSource('ready', matched?.linkState === 'down'), true)
 })
 
 test('cache: the link facts are a projection-cache key component', () => {
