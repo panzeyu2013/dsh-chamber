@@ -2,7 +2,7 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { collectExtraRows, fetchHostGraph, findUnsatisfiableExternalDependencies, normalizeBundleUrl, toExtraRows, versionConflictMessage, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
+import { BootLoadError, collectExtraRows, failedIdsFromThrown, fetchHostGraph, findUnsatisfiableExternalDependencies, normalizeBundleUrl, toExtraRows, versionConflictMessage, type ExtraModuleRow, type HostGraphRow } from '../../src/host-graph.ts'
 import {
   BundleLoadTimeoutError, clientPluginRowOwner, dedupeCoveredRows, loadClientPluginRows,
 } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
@@ -1749,4 +1749,59 @@ test('A4: the wire helpers are upstream\'s own and the parse stays entries-only'
   assert.deepEqual((await fetchHostGraph('/api/i/local'))?.rows, [
     { id: '@scope/only', url: '/plugins/only', rev: 'r1' },
   ], 'an entries-only graph is a usable chamber graph')
+})
+
+test('collectExtraRows: one boot\'s rev conflict and load failure share ONE diagnostic and the throw carries failedIds', async (t) => {
+  const conflictId = '@scope/conflict-and-fail'
+  const failedId = '@scope/also-fails'
+  // Another instance owns conflictId at a DIFFERENT rev: the secondary boot gets a
+  // cross-instance version verdict for it (reused factory, never a boot failure).
+  stubFetch(t, 200, envelope([row(conflictId, { rev: 'rev-owner', url: `/plugins/??${conflictId}&rev=rev-owner` })]))
+  await collectExtraRows('owner-boot', '/api/i/local', { loadModuleBundle: async () => {} })
+
+  // The failing boot sees the conflict AND a row whose bundle never loads. Both the
+  // first pass and the bounded recovery refetch answer with the same graph.
+  stubFetchImpl(t, (() => graphResponse(envelope([
+    row(conflictId, { rev: 'rev-other', url: `/plugins/??${conflictId}&rev=rev-other` }),
+    row(failedId, { rev: 'rev-fail', url: `/plugins/??${failedId}&rev=rev-fail` }),
+  ]))) as unknown as typeof fetch)
+  const diagnostics: { state?: string; pluginId?: string; message?: string }[] = []
+  await assert.rejects(
+    collectExtraRows('secondary-boot', '/api/i/ssh-secondary', {
+      loadModuleBundle: async url => {
+        if (String(url).includes(failedId)) throw new Error('bundle exploded')
+      },
+      reportDiagnostic: (_sourceId, diagnostic) => {
+        diagnostics.push(diagnostic as { state?: string; pluginId?: string; message?: string })
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof BootLoadError, 'the boot throws the id-carrying error')
+      assert.deepEqual([...error.failedIds], [failedId], 'only the real load failures travel')
+      assert.match(error.message, /also-fails/, 'the merged message names the failed row')
+      assert.match(error.message, /conflict-and-fail/, 'the merged message names the conflict row')
+      assert.match(error.message, /unverified|release|content/, 'the merged message names the conflict reason')
+      return true
+    },
+  )
+  const failures = diagnostics.filter(diagnostic => diagnostic.state === 'bundle-load-failed')
+  assert.equal(failures.length, 1, 'ONE merged diagnostic: no per-row overwrite')
+  assert.equal(failures[0]!.pluginId, failedId, 'the slot keys on the first failed row')
+  assert.match(failures[0]!.message ?? '', /also-fails/)
+  assert.match(failures[0]!.message ?? '', /conflict-and-fail/)
+})
+
+test('shell failure overlay: BootLoadError failed ids are merged into caughtFailedEntries (tolerated rows excluded)', () => {
+  const error = new BootLoadError(['@scope/a', '@scope/b'], new Error('boom'), 'bundle 装载失败：@scope/a')
+  assert.deepEqual(failedIdsFromThrown(error, new Set()), ['@scope/a', '@scope/b'])
+  assert.deepEqual(failedIdsFromThrown(error, new Set(['@scope/b'])), ['@scope/a'],
+    'tolerated extra rows stay out of the overlay list')
+  assert.deepEqual(failedIdsFromThrown(new Error('plain failure'), new Set()), [],
+    'a non-boot error contributes no ids')
+  // The catch arm runs before AppWebEntry exists, so the live-loader sweep cannot name
+  // these rows: the wiring lock pins that the thrown ids are merged into the SAME list.
+  const shell = normalize(stripComments(
+    readFileSync(new URL('../../src/shell.ts', import.meta.url), 'utf8')))
+  assert.match(shell, /failedIdsFromThrown\(reason, toleratedExtraRows\)/, 'the catch arm reads the thrown ids')
+  assert.match(shell, /caughtFailedEntries\.push\(id\)/, 'the ids land on the overlay list')
 })

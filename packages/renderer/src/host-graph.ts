@@ -307,6 +307,36 @@ function reportDiagnostic(
   listener?.(instanceId, { state, ...extra, updatedAt: Date.now() })
 }
 
+/**
+ * A boot that died because one or more client bundles could not load. The message is the
+ * ONE merged boot-failure diagnostic (failed ids + a co-recorded rev conflict), and
+ * `failedIds` lets the shell's failure overlay list the rows even though the throw lands
+ * BEFORE AppWebEntry exists (so the live-loader sweep inside the shell has nothing to read).
+ */
+export class BootLoadError extends Error {
+  readonly failedIds: readonly string[]
+  readonly cause: unknown
+
+  constructor(failedIds: readonly string[], cause: unknown, message: string) {
+    super(message)
+    this.name = 'BootLoadError'
+    this.failedIds = [...failedIds]
+    this.cause = cause
+  }
+}
+
+/** Failed ids carried by a thrown BootLoadError, minus the boot's tolerated (extra-row) set.
+ *  Never throws: the caller's catch arm must contain ANY hostile thrown value, and both
+ *  `instanceof` and the property read can run foreign traps. */
+export function failedIdsFromThrown(reason: unknown, tolerated: ReadonlySet<string>): string[] {
+  try {
+    if (!(reason instanceof BootLoadError)) return []
+    return reason.failedIds.filter(id => !tolerated.has(id))
+  } catch {
+    return []
+  }
+}
+
 /** Why a foreign row cannot share the page factory: the hosts publish different
  *  releases, one side did not report a release at all (pre-0.2.1 host), the verified
  *  contents differ, or the content could not be verified. */
@@ -902,6 +932,9 @@ export async function collectExtraRows(
   // fails its row. Re-fetch the graph and reload at fresh URLs; only still-failing
   // rows fail the boot.
   let deferredLoadFailure: { row: ExtraModuleRow; error: unknown } | undefined
+  /** Set when the ONE merged boot-failure diagnostic was written (deferred recovery only:
+   *  the throw path never reaches the projection). The projection must never overwrite it. */
+  let mergedBootFailureReported = false
   if (failedRows.length > 0) {
     const secondFetch = await fetchWithRetry()
     const keptFailures: { row: ExtraModuleRow; error: unknown }[] = []
@@ -972,40 +1005,54 @@ export async function collectExtraRows(
       }
     }
     if (keptFailures.length > 0) {
-      // A conflict recorded during this pass must not go silent just because the boot
-      // also carries load failures: the thrown reason owns the single diagnostic slot,
-      // so the other boot fact is logged instead of projected.
-      const alsoConflicted = recordedConflict()
-      if (alsoConflicted !== undefined) {
-        console.error(`[shell] instance ${instanceId} row ${alsoConflicted.id} also carries a rev conflict; `
-          + 'the boot stops on the load failure first (the drift fact is logged)')
-      }
       // A page-budget refusal is "never dispatched", not a load verdict: it is deferred
       // (below) WITHOUT a source diagnostic; only real load failures report.
       const realKeptFailures = keptFailures.filter(failure => !(failure.error instanceof HttpBudgetUnscheduledError))
       for (const failure of keptFailures) {
         if (failure.error instanceof HttpBudgetUnscheduledError) budgetDeferredRows.push(failure)
       }
-      for (const failure of realKeptFailures) {
+      let mergedFailureMessage: string | undefined
+      let failedIdList: string[] = []
+      if (realKeptFailures.length > 0) {
+        // ONE merged boot-failure diagnostic: the conflict recorded by the pre-scan (or by
+        // this recovery pass) and the load failures are the SAME boot fact, and the single
+        // connections-page slot must carry both. The old per-row loop overwrote the earlier
+        // `instance-version-conflict` with the LAST failed row, losing the drift.
+        failedIdList = [...new Set(realKeptFailures.map(failure => failure.row.id))]
+        const failureSummary = realKeptFailures.map(failure => `${failure.row.id}: `
+          + (failure.error instanceof Error ? failure.error.message : String(failure.error))).join('; ')
+        const conflict = recordedConflict()
+        const conflictSummary = conflict === undefined
+          ? ''
+          : versionConflict === conflict
+            ? `；同时 rev 冲突 ${conflict.id}（${versionConflictReason}）—— 该行按复用策略启动，本 boot 因上面的装载失败终止`
+            : `；同时同实例重建 ${conflict.id}（restart-required，本 boot 已丢弃该行）`
+        mergedBootFailureReported = true
+        mergedFailureMessage = `bundle 装载失败：${failureSummary}${conflictSummary}`
         reportDiagnostic(instanceId, 'bundle-load-failed', {
-          pluginId: failure.row.id,
-          message: failure.error instanceof Error ? failure.error.message : String(failure.error),
+          pluginId: failedIdList[0]!,
+          message: mergedFailureMessage,
         }, deps.reportDiagnostic)
+        if (conflict !== undefined) {
+          console.error(`[shell] instance ${instanceId} row ${conflict.id} also carries a rev conflict; `
+            + 'the merged boot-failure diagnostic carries both facts')
+        }
       }
       if (recoveryDeferred) {
-        // Drop the un-recovered rows for THIS boot. The per-failure diagnostics above
-        // already carry the loud fact (one slot per failure, written in this same
-        // loop), so a second write here would only duplicate the first row's entry.
-        // Graph-return can still retry the graph later.
+        // Drop the un-recovered rows for THIS boot. When real load failures exist the merged
+        // diagnostic above already carries the loud fact (a second write would duplicate it);
+        // page-budget-only deferrals keep their neutral log, never a source verdict.
         deferredLoadFailure = keptFailures[0]
-        const failedIds = new Set(keptFailures.map(failure => failure.row.id))
+        const droppedIds = new Set(keptFailures.map(failure => failure.row.id))
         console.error(`[shell] instance ${instanceId} rows dropped (recovery fetch deferred by page budget): `
-          + [...failedIds].join(', '))
+          + [...droppedIds].join(', '))
         for (let index = rows.length - 1; index >= 0; index -= 1) {
-          if (failedIds.has(rows[index]!.id)) rows.splice(index, 1)
+          if (droppedIds.has(rows[index]!.id)) rows.splice(index, 1)
         }
       } else if (realKeptFailures.length > 0) {
-        throw realKeptFailures[0]!.error
+        // The shell's failure overlay cannot read the live loader (AppWebEntry was never
+        // constructed: this throw lands BEFORE it), so the error itself carries the ids.
+        throw new BootLoadError(failedIdList, realKeptFailures[0]!.error, mergedFailureMessage!)
       }
     }
   }
@@ -1034,7 +1081,10 @@ export async function collectExtraRows(
   const unsatisfiable = unsatisfiableBootFact()
   const conflicted = versionConflict
   const dropped = restartDrops.values().next().value
-  if (conflicted !== undefined) {
+  if (mergedBootFailureReported) {
+    // A deferred recovery already wrote the ONE merged boot-failure diagnostic; the slot
+    // must keep it — never an `ok`/restart/conflict overwrite for a boot that dropped rows.
+  } else if (conflicted !== undefined) {
     // Cross-instance drift is NOT a boot failure: the row reused the page's factory,
     // and this diagnostic is the only surface that names the drift (design 09 §3.5).
     // It outranks a same-instance restart fact for the single slot: a rebuild heals on
@@ -1048,8 +1098,8 @@ export async function collectExtraRows(
       message: restartRequiredMessage(dropped.id),
     }, deps.reportDiagnostic)
   } else if (deferredLoadFailure !== undefined) {
-    // A deferred recovery keeps the per-failure diagnostics written above (one slot,
-    // first row): never overwrite them with `ok` for a boot that DROPPED rows, and
+    // A deferred recovery keeps the merged diagnostics written above (one slot, one
+    // entry): never overwrite them with `ok` for a boot that DROPPED rows, and
     // never let the unsatisfiable fact claim the same slot (design 26 §D7).
   } else if (unsatisfiable !== null) {
     // A kept row's create-time require can never be answered (see

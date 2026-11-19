@@ -33,7 +33,7 @@ import {
 // The graph-channel decision (kind) is owned by source-readiness.ts; this module carries it.
 import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
-import { collectExtraRows, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
+import { collectExtraRows, failedIdsFromThrown, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
 import {
   readLiveSyncEnabled, startLiveGraphSync,
   type LiveGraphSync, type LiveLoaderFace,
@@ -921,13 +921,20 @@ export function bootInstanceShell(
       // 才能干净重 boot；读取失败清单与 try 分支同规矩（teardown 前读、try 包裹、
       // 容忍集合来自已解析的 extra rows）。
       let caughtFailedEntries: string[] = []
+      const toleratedExtraRows = new Set(extraRows.map(row => row.id))
       try {
         caughtFailedEntries = collectFailedEntries(
           staleEntry?.runtimeCtx,
-          new Set(extraRows.map(row => row.id)),
+          toleratedExtraRows,
         )
       } catch (error) {
         console.error(`[shell] instance ${instanceId} failed-entry sweep unavailable:`, error)
+      }
+      // A host-graph throw lands BEFORE AppWebEntry exists, so the live-loader sweep above
+      // has nothing to read; the BootLoadError carries the failed ids itself. Tolerated
+      // extra rows stay excluded (their failure degrades instead of failing the boot).
+      for (const id of failedIdsFromThrown(reason, toleratedExtraRows)) {
+        if (!caughtFailedEntries.includes(id)) caughtFailedEntries.push(id)
       }
       if (staleEntry !== undefined) {
         const registered = entries.get(instanceId)
