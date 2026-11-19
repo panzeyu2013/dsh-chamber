@@ -22,7 +22,7 @@ import {
 } from '@dsh-chamber/dsh-stream-state'
 
 /** 容器事件派发（App 的 dispatchLifecycle 签名）；返回值只有调度器内部消费，适配器一律忽略。 */
-export type LedgerLifecycleDispatch = (viewId: string, event: SourceEvent, capturedEpoch?: number) => unknown
+export type LedgerLifecycleDispatch = (viewId: string, event: SourceEvent) => unknown
 
 export interface SourceLedgerViewDeps {
   /** 延迟读容器（前三个适配器声明在容器 ref 之前，只能经闭包读）。 */

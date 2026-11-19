@@ -41,7 +41,7 @@ export interface SshInstanceSpec {
    * whitelisted `^~?/[a-zA-Z0-9._/-]+$` on the main side.
    */
   remoteDshHome: string | null
-  /** Opaque main-process lifecycle proof; never persisted or renderer-minted. */
+  /** Opaque main-process lifecycle proof; renderer-minted/derived is forbidden (design 19 §3.3/§3.6). */
   sourceFingerprint: string
   /** transport='http' only: true = plaintext http origin (default false =
    * https). Non-secret; never part of the transport-identity predicate — an http↔https

@@ -495,6 +495,7 @@ export default function App() {
    * durable 三表被 prune/forget 改动却漏落盘，重启后会用磁盘上的旧表复活已退役来源的判定。
    */
   const schedulePersistNotificationsRef = useRef<() => void>(() => undefined)
+  const persistNotificationsImmediatelyRef = useRef<() => void>(() => undefined)
 
   // 投影输入（归档筛选）→ 派生 servers → chamberBridge 发布：实现在
   // app-hooks/use-projection-publish.ts（输入类型取自 deriveServers 本身）。
@@ -577,6 +578,7 @@ export default function App() {
    */
   useEffect(() => {
     const live = new Set(servers.map(server => server.id))
+    const durableFrozen = registryDegraded === true || rosterIncomplete === true
     // dispose 是副作用，不能放进 setState updater（渲染期可能急切求值，StrictMode 还会双调用）——先从当前 mountedViews 算出被回收的 id 再统一处置。
     const removed = mountedViews.filter(id => !live.has(id))
     if (removed.length > 0) {
@@ -627,7 +629,7 @@ export default function App() {
     // （armed/armedFloor/settleFence/goalKnown）与 pending 必须同拍 scoped withdraw——门关窗口
     // （未结算/degraded/rosterIncomplete）下 durable 剪枝不执行，残留旧 pending 会被重建的新代
     // 首个 outcome 以旧 watermark flush。notified/outcomes 保持 durable；pending 有内容时落盘。
-    for (const sourceId of [...completionObservationRef.current.keys()]) {
+    if (!durableFrozen) for (const sourceId of [...completionObservationRef.current.keys()]) {
       if (live.has(sourceId)) continue
       completionObservationRef.current.delete(sourceId)
       if (withdrawObservationState(completeLedgerRef.current, sourceId)) {
@@ -740,11 +742,9 @@ export default function App() {
       // 退役 = 四表同拍删除；durable 三表（notified/pending/outcomes）有内容时必须落盘
       // （易失轨不入盘）。先查再删，避免给空账本白排一次写。
       const ledger = completeLedgerRef.current
-      const ledgerHadDurable = ledger.notifiedTable()[sourceId] !== undefined
-        || ledger.pendingTable()[sourceId] !== undefined
-        || ledger.outcomesTable()[sourceId] !== undefined
+      const ledgerHadDurable = ledger.hasDurable(sourceId)
       ledger.forget(sourceId)
-      if (ledgerHadDurable) schedulePersistNotificationsRef.current()
+      if (ledgerHadDurable) persistNotificationsImmediatelyRef.current()
       // native 投递 journal 中该来源的未完成条目同拍退役（durable；重加 = 新来源代）。
       notificationOutboxRef.current.forgetSource(sourceId)
       // facts wiring：事实源实例与完成点/通知数据面键随退役同拍收敛（reclaimView 刻意不碰——拆壳不等于来源消失）。
@@ -909,11 +909,8 @@ export default function App() {
         ...acceptedInstances.map(({ sourceId, fingerprint }) => ({ sourceId, fingerprint })),
       ]
       const nextLiveServerIds = new Set(nextSources.map(source => source.sourceId))
-      const retired = authoritativeSourceRetirements(
-        liveServerIdsRef.current,
-        sourceLifecyclesRef.current!,
-        nextSources,
-      )
+      // 缺行 roster 不是退役权威：不退役、不更新 last-known live、不 settle（held intent 继续 hold）。
+      const retired = incomplete ? new Set<string>() : authoritativeSourceRetirements(liveServerIdsRef.current, sourceLifecyclesRef.current!, nextSources)
       retireSources(retired)
       sourceLifecyclesRef.current!.activate(LOCAL_INSTANCE_ID, 'local')
       // The authoritative roster is the one place a fingerprint change is observed: registering it here turns a re-registration into an epoch bump.
@@ -925,10 +922,10 @@ export default function App() {
         sourceLifecyclesRef.current!.activate(sourceId, fingerprint)
         sourceLedgerStoreRef.current = reincarnate(sourceLedgerStoreRef.current, { sourceId, fingerprint })
       }
-      liveServerIdsRef.current = nextLiveServerIds
+      if (!incomplete) liveServerIdsRef.current = nextLiveServerIds
       const acceptedSpecs = acceptedInstances.map(({ instance }) => instance)
       remotesStore.setInstances(acceptedSpecs)
-      rosterGate.settle()
+      if (!incomplete) rosterGate.settle()
       for (const { instance, sourceId } of acceptedInstances) {
         void refreshRemoteStatus(instance.id, sourceId)
       }
@@ -1131,6 +1128,8 @@ export default function App() {
       if (notificationReadyRetryTimer !== null) clearTimeout(notificationReadyRetryTimer)
       notificationReadyRetryTimer = null
       if (unsubscribeNotifications !== undefined) signalNotificationReady()
+      invalidateRemoteRoster()
+      void refreshRemotesRef.current()
     }
     window.addEventListener('dsh-chamber:sidecar-ready', onSidecarReady)
     return () => {
@@ -1273,6 +1272,7 @@ export default function App() {
 
   // 落盘节流的 ref 镜像：来源剪枝/退役的早期 effect 在 hook 返回之前声明，靠它拿到稳定实现。
   schedulePersistNotificationsRef.current = schedulePersistNotifications
+  persistNotificationsImmediatelyRef.current = () => persistCompletionLedger(true)
   const localSettledRef = useRef(false)
   const prewarmQueueRef = useRef<string[]>([])
   const prewarmInflightRef = useRef<string | null>(null)

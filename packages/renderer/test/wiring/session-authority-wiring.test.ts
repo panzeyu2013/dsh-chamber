@@ -233,14 +233,15 @@ test('the badge is fed the merged runtime projection, never the raw channel repo
 
 test('the complete ledger persists when a prune/forget changes the durable tables (M6)', () => {
   // 内存是权威、磁盘是缓存：剪枝/退役删掉的 durable 表项（notified/pending/
-  // outcomes）必须排一次写，否则重启后旧判定从磁盘复活。App 的早期 effect 在
-  // schedulePersistNotifications 定义之前就捕获它，所以走 ref 镜像（与 flushNotificationsRef 同纪律）。
+  // outcomes/notifiedRuns）必须排一次写，否则重启后旧判定从磁盘复活。App 的早期
+  // effect 在 schedulePersistNotifications 定义之前就捕获它，所以走 ref 镜像
+  // （与 flushNotificationsRef 同纪律）；退役用 immediate 出口，不等 1s 节流。
   assert.match(app, /if \(completeLedgerRef\.current\.prune\(live\)\) schedulePersistNotificationsRef\.current\(\)/)
-  assert.match(app, /notifiedTable\(\)\[sourceId\] !== undefined/)
-  assert.match(app, /pendingTable\(\)\[sourceId\] !== undefined/)
-  assert.match(app, /outcomesTable\(\)\[sourceId\] !== undefined/)
+  assert.match(app, /ledger\.hasDurable\(sourceId\)/)
   assert.match(app, /ledger\.forget\(sourceId\)/)
+  assert.match(app, /if \(ledgerHadDurable\) persistNotificationsImmediatelyRef\.current\(\)/)
   assert.match(app, /schedulePersistNotificationsRef\.current = schedulePersistNotifications/)
+  assert.match(app, /persistNotificationsImmediatelyRef\.current = \(\) => persistCompletionLedger\(true\)/)
 })
 
 test('FINAL-C wiring: the observation-state prune withdraws the ledger scope before any rebuild', () => {

@@ -486,6 +486,22 @@ test('V5-A wiring: the incomplete bit comes only from the health probe and clear
   assert.ok(!degraded.includes('setRosterIncomplete('), 'the degraded branch must not touch the incomplete bit')
 })
 
+test('V5-A wiring: an incomplete roster freezes retirement, the live set, and settlement', () => {
+  // 缺行 roster 不是退役权威：不计算退役、不改 last-known live、不结算 rosterGate；
+  // 观测状态/durable pending 的 withdrawal 同样冻结，等完整 roster 收敛。
+  assert.match(APP, /const retired = incomplete \? new Set<string>\(\)/, 'the incomplete answer freezes the retirement differential')
+  assert.match(APP, /retireSources\(retired\)/, 'the complete path still retires')
+  assert.match(APP, /if \(!incomplete\) liveServerIdsRef\.current = nextLiveServerIds/, 'the last-known live set survives an incomplete pull')
+  assert.match(APP, /if \(!incomplete\) rosterGate\.settle\(\)/, 'an incomplete roster must not settle (held intents stay held)')
+  assert.match(APP, /const durableFrozen = registryDegraded === true \|\| rosterIncomplete === true/)
+  const loopStart = APP.indexOf('if (!durableFrozen) for (')
+  assert.notEqual(loopStart, -1, 'the observation prune loop is guarded by the freeze bit')
+  const withdrawMarker = 'withdrawObservationState(completeLedgerRef.current, sourceId)'
+  const loop = APP.slice(loopStart, APP.indexOf(withdrawMarker, loopStart) + withdrawMarker.length)
+  assert.ok(loop.includes('completionObservationRef.current.delete(sourceId)'), 'the observation prune is frozen too')
+  assert.ok(loop.includes(withdrawMarker), 'the scoped ledger withdrawal is frozen too')
+})
+
 test('V5-A storage fake: an incomplete roster keeps every remote durable key across a reload, then converges when complete', () => {
   const storage = createFakeStorage()
   storage.setItem(NOTIFICATIONS_V1_KEY, JSON.stringify(seededPayload()))

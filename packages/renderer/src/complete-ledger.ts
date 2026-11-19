@@ -214,6 +214,8 @@ export interface CompleteLedger {
   setArmed(sourceId: string, sessions: ReadonlySet<string>): void
   /** 来源退役：全部 per-source 表（3 durable + 5 易失）同拍删除（同 id 重加 = 新来源代，不得继承上一代判定）。 */
   forget(sourceId: string): void
+  /** Any durable table carries an entry for this source (retirement must flush the file). */
+  hasDurable(sourceId: string): boolean
   /**
    * 撤回：清 armed + pending + settleFence + goalKnown，保留 durable 的
    * notified/outcomes（R2-D）。通道撤回（壳重连/重 boot）时调用；恢复后首份观测
@@ -625,6 +627,12 @@ export function createCompleteLedger(
     seedSettleFence(sourceId, sessionId, seededWatermark) {
       if (!isWatermark(seededWatermark)) return
       seedFenceSession(sourceId, sessionId, seededWatermark)
+    },
+    hasDurable(sourceId) {
+      return state.notified[sourceId] !== undefined
+        || state.pending[sourceId] !== undefined
+        || state.outcomes[sourceId] !== undefined
+        || notifiedRuns[sourceId] !== undefined
     },
     forget(sourceId) {
       if (state.notified[sourceId] !== undefined) {

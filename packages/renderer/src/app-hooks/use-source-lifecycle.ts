@@ -25,16 +25,32 @@ interface OwnershipRef {
   current: SourceOwnershipRegistry | null
 }
 
+/** Ledger writes whose only meaning is "clear what this generation holds". They must never
+ *  create a generation: the retire path drops the registry entry before the live-view refs are
+ *  cleared, so a delete arriving here is the post-retirement cleanup, not a new incarnation. */
+const DELETE_EVENTS: ReadonlySet<SourceEvent['kind']> = new Set([
+  'prewarmForgotten',
+  'prewarmSuppressionForgotten',
+  'harvestCleared',
+  'retryForgotten',
+  'abandonmentCleared',
+])
+
 export function useSourceLifecycle(sourceLifecyclesRef: OwnershipRef) {  // Views mounted only by background prewarm; user selection removes the id, freeing an idle-prewarm
   // slot while keeping the user-opened N-ctx shell resident. The incarnation fence uses the ownership
   // registry's REAL fingerprint, so a re-registered source gets a fresh record; `undefined` falls back
   // to the id. Declared BEFORE the ledger views below (they read it during render — else TDZ).
-  const dispatchLifecycle = useCallback((viewId: string, event: SourceEvent, capturedEpoch?: number) => {
+  const dispatchLifecycle = useCallback((viewId: string, event: SourceEvent) => {
     let registry = sourceLedgerStoreRef.current
-    let epoch = capturedEpoch ?? epochOf(registry, viewId)
+    let epoch = epochOf(registry, viewId)
     if (epoch === undefined) {
+      // A delete-shaped write for an unregistered source has nothing to clear: retireSources drops
+      // the registry entry and THEN clears the live-view refs, so every such delete lands after the
+      // generation is gone. Lazy-registering here would mint a phantom generation (fingerprint =
+      // sourceId, not the 64-hex proof) that the same-id replacement would only bump to epoch 2.
+      if (DELETE_EVENTS.has(event.kind)) return undefined
       // The authoritative roster refresh pre-registers every source; this lazy path only covers
-      // an event that beats it (or a local view). The ONLY place the ownership fingerprint is read.
+      // an add-shaped event that beats it (or a local view). The ONLY place the ownership fingerprint is read.
       const fingerprint = sourceLifecyclesRef.current?.capture(viewId)?.fingerprint ?? viewId
       registry = reincarnate(registry, { sourceId: viewId, fingerprint })
       epoch = epochOf(registry, viewId)

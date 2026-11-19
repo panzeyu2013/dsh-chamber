@@ -35,6 +35,15 @@ test('the armed track drops a repeated complete until the session runs again', (
   assert.equal(again.notification?.kind, 'complete', '重新 running 清记忆后重新放行')
 })
 
+test('hasDurable includes the notified-run table so retirement flushes the file', () => {
+  const ledger = createCompleteLedger()
+  assert.equal(ledger.hasDurable('src'), false)
+  ledger.setNotifiedRun('src', 's1', 'host:turn%2F9')
+  assert.equal(ledger.hasDurable('src'), true, 'notifiedRuns is durable state too')
+  ledger.forget('src')
+  assert.equal(ledger.hasDurable('src'), false)
+})
+
 test('the identity track is keyed by (source, session) and survives a withdrawal', () => {
   const ledger = createCompleteLedger({ src: { s1: 'host:turn%2F7' } })
   assert.equal(ledger.notifiedRun('src', 's1'), 'host:turn%2F7')
