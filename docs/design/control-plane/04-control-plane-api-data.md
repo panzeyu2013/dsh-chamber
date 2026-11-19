@@ -69,11 +69,12 @@
 | GET | — | `{connection: {id:'local', label, accentColor?, status, dshPort?, error?}}` | 404 `connection_not_found`（无连接行） |
 | POST | `{kind:'local', label?, accentColor?}` | `{connection, spawned: bool}` | 400 `connection_kind_unsupported`（kind ≠ local）；400 `connection_invalid_input`；503 `dsh_not_ready`（spawn 失败） |
 | PATCH `/local` | `{label?, accentColor?}` | `{connection}` | 400 `connection_invalid_input`；404 `not_found` |
-| DELETE `/local` | — | `{stopped: true}` | 409 `connection_busy`（restarting 中）；404 `not_found` |
+| DELETE `/local` | — | `{stopped: true}` | 409 `connection_busy`（restarting 中）；409 `dsh_writer_quiescence_unknown`（退出证明未知，带 `detail:{pid,since,reason}`）；404 `not_found` |
 | GET `/local/writers` | — | `{quiescent, writers:[{name,status,pid,reason,takeOverAvailable}], errors[]}`（写者静默诊断，02 §3.4；只读） | 501 `not_implemented`（该面没有托管本地宿主） |
 | POST `/local/reclaim` | — | `{reclaimed:[pid], connection, spawned}`（清理并接管：清本状态目录自己的陈旧/孤儿写者记录后启动） | 409 `connection_busy`（仍有活写者，带 `detail`）；501 `not_implemented` |
 
-- **POST 幂等启动**：`stopped` → spawn（02 §3.1），同步返回 `starting` 态（`spawned: true`），就绪经 GET 轮询；`starting/ready/degraded/…` → 返回既有状态（`spawned: false`），绝不重复 spawn；`kind: 'local'` 以外的值一律 400（远程实例由桌面注册表管理，03 §2.2）；DELETE = 优雅停止（02 §3.7），行保留（local 不可删）。
+- **POST 幂等启动**：`stopped` → spawn（02 §3.1），同步返回 `starting` 态（`spawned: true`），就绪经 GET 轮询；`starting/ready/degraded/…` → 返回既有状态（`spawned: false`），绝不重复 spawn；`kind: 'local'` 以外的值一律 400（远程实例由桌面注册表管理，03 §2.2）；DELETE = 优雅停止（02 §3.7），行保留（local 不可删）。**DELETE 的成功即静止证明**：退出证明未知（写者可能仍在写 DSH_HOME）时 DELETE 不报告成功——stop 拒绝、闩锁与写租约保留、返回 409 `dsh_writer_quiescence_unknown`（`detail:{pid,since,reason}`）；只有重启应用重走启动扫描才可能再证明。
+- **Rejected alternatives（DELETE 退出证明语义）**：① 回 500 `internal`——丢掉 `code`/`detail`，用户只能看到内部错误；② 回 200 并附「未证明」提示——把未知写者静默成成功，运行时可回退与 DSH_HOME 写入会与旧写者并发；③ 请求内阻塞到重启应用——DELETE 无法返回且仍然证明不了。故取 409 `dsh_writer_quiescence_unknown` + `detail`，并保留闩锁/租约直到应用重启重走扫描。
 - **POST 的 409 `connection_busy` 带结构化 `detail`**（02 §3.4）：`{writers:[{pid,reason,takeOverAvailable}], errors:[…], sticky:bool}`——连接页据此点名阻塞写者并在可接管时给出「清理并接管」；`sticky:true` 表示写入期终止失败（扫描无法再证明），只提示重启应用。
 
 ### 3.3 GET /api/host/logs
@@ -95,6 +96,7 @@
 | `connection_invalid_input` | 400 | label / accentColor 校验失败 |
 | `connection_not_found` | 404 | GET 无连接行 |
 | `connection_busy` | 409 | restarting 等过渡态中拒绝停止；本地实例被未证明静止的写者记录挡住（02 §3.4，带 `detail`） |
+| `dsh_writer_quiescence_unknown` | 409 | stop 无法证明本地写者已静止（suspect/粘滞闩锁，02 §3.4/§3.7）：stop 不报成功、写租约保留；`detail:{pid,since,reason}` |
 | `origin_forbidden` | 403 | HTTP/WS 的浏览器 Origin 不在本机/显式 allowlist |
 | `invalid_argument` | 400 | host-logs 参数非法 |
 | `not_found` | 404 | host-logs 无托管记录/日志文件；未知路径 |

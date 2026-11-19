@@ -48,7 +48,7 @@ web profile 的 `--port` 固定（非 0 随机）。起始端口本地默认 175
 参考实现 `managed-process-registry.js` 的安全模型（记录在案 → 重验身份 → 仅 owner 死亡才杀）原样移植；差异：身份 = 命令行含 `--profile web --port N` + `lsof -i :port` 监听者 pid；注册表 `<stateDir>/managed-dsh/<pid>.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写，§3.3）；记录 `{pid, ownerPid, ownerInstanceId, port, binary, profile, source, startedAt}`（profile 固定 `'web'`）。每进程一个 JSON 文件（按 pid 命名，每实例只写/删自己的，零写竞争）。
 
 ### 2.4 健康监控共享失败计数，避免"重连风暴"误触发重启
-沿用 v2（移植 `lifecycle.js`）：周期探活与传输触发走同一 `runHealthCheckCycle`；同一失败窗口（15s）至多计 1 次；探测结果 750ms 缓存 + 单飞行合并；子进程已退出不计数、直接重启；任何一次成功即清零。**不保留"忙会话宽限"**——控制面不消费会话帧，探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（小体积 boolean，§3.2），健康判定与会话数据量双向解耦；慢响应由请求侧超时面处理。
+沿用 v2（移植 `lifecycle.js`）：周期探活与传输触发走同一 `runHealthCheckCycle`；同一失败窗口（15s）至多计 1 次；探测结果 750ms 缓存与单飞槽归属**探针代**（`healthEpoch`）：start 换代、进入 restart、stop 三处拆代点各自 abort 在途探针、递增代并清缓存/定时器；探针在每个 await 后复检代际，迟到的判词、缓存写入、失败计数与状态迁移一律丢弃，单飞槽带发起代、只由自己的代释放；子进程已退出不计数、直接重启；任何一次成功即清零。**不保留"忙会话宽限"**——控制面不消费会话帧，探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（小体积 boolean，§3.2），健康判定与会话数据量双向解耦；慢响应由请求侧超时面处理。
 
 ### 2.5 instance-id 仲裁（多控制面实例并存）
 控制面首启以 no-follow `O_EXCL` 在状态目录生成 `instance-id`（规范 UUID、0600），完整写入并 fsync 文件与父目录后才返回；读取固定小体积 single-link 普通文件 + UUID 校验（并发首启 loser 对 winner 空/部分 UUID 有界重读，完整长度非法值立即 fail-loud）；构造 local connection 时捕获该身份，pid 记录携带同一 `ownerInstanceId`（不在 spawn 后重读）。各自 spawn 互不干扰：每实例自己的起始端口 + P+1 重试天然错开、记录按 pid 隔离；reaper 不杀活人（owner 存活即永不回收，两实例并发 reaper 安全）；同端口先就绪者占住，后来者按 P+1 或报冲突，不杀进程。
@@ -172,7 +172,7 @@ ready
 **闩锁的两种关闭原因与会话内再证明**：启动扫描只在"零 kept 且零 errors"时打开 `localWritersQuiescent`；关闭原因两类，只一类可再证明：
 
 - **扫描判定**（记录被保留：身份探测不可用、身份不匹配、端口不可核对、残留进程组…）——可被**再一次扫描**推翻，故拒绝启动前做一次有界再证明（单飞行 + 2s 冷却）：孤儿在此期间退出的常见情形**无需用户动作**、也无需重启应用即恢复。取消启动被拒时抛 409，结构化阻塞清单（`writers[]`：pid/原因/`takeOverAvailable`）随 `detail` 上浮。
-- **写入期终止失败**（`onWriterQuiescenceUnknown`：刚杀过的进程组无法证实已退出）——**任何扫描都无法证明它不在**，故该闩锁对本平面生命周期**粘滞**，只有重启应用重走启动扫描才可能恢复；诊断文本明确点名"需重启应用"。
+- **写入期终止失败**（`onWriterQuiescenceUnknown`：刚杀过的进程组无法证实已退出）——本平面把这次失败记录为 `writerSuspect{pid, since, lastError}`（`LocalWriterSuspect`）：**`hasLiveProcess()` 把"存活子进程 或 suspect 非空"一律判为可能仍在写 DSH_HOME**（退出确认、写租约释放与下一次 start 的闸都用这一判据；失败路径丢掉 child 引用不等于写者已静止），`/api/connections/local/writers` 投影结构化 suspect；**任何扫描都无法证明它不在**，故该闩锁对本平面生命周期**粘滞**，只有重启应用重走启动扫描才可能恢复；诊断文本明确点名"需重启应用"。
 
 **显式接管（`takeover` 模式，入口 04 §3.2 `POST /api/connections/local/reclaim`）**：默认扫描 fail-closed 保留的条目里，两类属于**本状态目录自己的**陈旧/孤儿写者，由用户显式点击「清理并接管」时清除（`runReaper({takeover:true})`）：
 
@@ -199,9 +199,9 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 | `starting` | 已 spawn，未就绪 | spawn | 就绪 → `ready`；失败/退出 → 重启或 `stopped` |
 | `ready` | 可服务 | 就绪探测成功 | 探测失败累积计数 |
 | `degraded` | 失败计数 ≥1 且 < 阈值，仍在服务 | 失败 | 任意成功（清零）→ `ready`；阈值 → `restarting` |
-| `restarting` | 单飞行重启中 | fail(N) / 进程死亡 | 重启成功 → `starting`；耗尽 → `restart-exhausted` |
-| `restart-exhausted` | 停止自动重启，等待人工 | 窗口内重启次数超限 | 人工介入（幂等启动 / 停止） |
-| `error` | spawn 启动失败（fail-loud，不静默） | spawn 失败 / 不可恢复 | `start()` 重试 → `starting`；或停止 → `stopped` |
+| `restarting` | 单飞行重启中 | fail(N) / 进程死亡 | 重启成功 → `starting`；耗尽且退出已证明 → `restart-exhausted`；退出证明 unknown → `error` |
+| `restart-exhausted` | 停止自动重启，等待人工（**只在退出证明 proven 后进入**） | 窗口内重启次数超限且本代进程组退出已证明 | 人工介入（幂等启动 / 停止） |
+| `error` | spawn 启动失败或写者静止未证明（fail-loud，不静默） | spawn 失败 / 不可恢复 / 退出证明 unknown | `start()` 重试 → `starting`（证明已恢复时）；或停止 → `stopped` |
 
 探测（两通道共享一个计数，§2.4）：
 
@@ -222,19 +222,24 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 ```
 1. 单飞行守卫（currentRestartPromise 去重，并发触发共享同一重启）；
    停止过程（优雅停止进行中）直接返回
-2. 终止：进程组 SIGTERM（dsh profile-boot 对 SIGTERM 优雅退出，exit 0）
-   → 1s 未退 → SIGKILL；确认退出后才 unregisterManagedProcess
+2. 回收 = 单一回收原语（五入口全走它：start 预清理、restart 循环、restart-exhausted、stop 的第二次回收、取消的 spawn）：
+   进程组 SIGTERM（dsh profile-boot 对 SIGTERM 优雅退出，exit 0）→ 1s 未退 → SIGKILL
+   → 轮询整个 detached 进程组退出（判据 = leader 与组内后代都已不在；`exitCode`/`signalCode`
+   任一非空只证明 leader 死了，不再作为跳过组证明的理由）；**先证明、再清引用/改状态/发布**，
+   确认退出后才注销进程记录
 3. 端口释放等待：固定端口场景下新宿主仍用同端口——旧进程死透才能复用
    （实现：无独立等待轮询——spawn 侧端口预检 + P+1 退让覆盖占用窗口，§2.2）
 4. respawn（§3.1，同端口 P；若端口仍被占走 §2.2 的 P+1 路径）
    → 新 pid.json → 就绪探测（§3.2）
 5. 健康失败计数 N 清零（注意：与 restart 背压窗口 M 不同——design 18
    §9.3(5) 的 M 对每次重启（含成功）计数）；失败 → 指数退避（1s→60s，jitter）
-6. 窗口内（10min）重启次数 ≥ M（5）→ restart-exhausted：停止自动重启，
-   状态由 live surface 暴露（不落 catalog），等待人工介入（POST /api/connections
-   幂等启动或桌面设置页操作）；绝不无限重启循环
-7. **迟到的健康判定（契约）**：stop()/start() abort 在途健康
-   探针（`generationSignal`）并等待其落定；任何在 `stopped`/`error` 态或
+6. 窗口内（10min）重启次数 ≥ M（5）→ **先证明本代进程组退出，再发布 `restart-exhausted`**：
+   停止自动重启，状态由 live surface 暴露（不落 catalog），等待人工介入（POST /api/connections
+   幂等启动或桌面设置页操作）；绝不无限重启循环。退出证明 unknown ⇒ 不发布 `restart-exhausted`
+   （自动运行时回退不得起跑，设计 18 §3.4），落 `error` + suspect 闩锁
+7. **迟到的健康判定（契约）**：start 换代、进入 restart、stop() 三个拆代点都取消在途健康
+   探针（abort + `healthEpoch` 递增 + 清缓存/定时器）并等待其落定；判词、缓存与单飞槽
+   只归发起代（迟到的失败不计、迟到者只释放自己的槽）；任何在 `stopped`/`error` 态或
    start 在途时到达的失败判定一律惰性（不计数、不触发重启——start 在途时
    重启被抑制，防止双 spawn）；spawn 失败落在 stop() 之后（epoch 已变）也不得
    把 `stopped` 改回 `error`。
@@ -249,10 +254,21 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    start→stop→start 会创建全新 spawn，不复用旧 promise，也不被旧代反写。
 ```
 
+**退出证明 unknown 的语义（fail-closed）**：回收原语只在 detached 进程组退出已证实时返回成功；无法证明（终止调用抛错、组存活轮询超预算、取消代的孩子无法确认）⇒ 记录 `writerSuspect`（`LocalWriterSuspect`）、置粘滞闩锁、向调用方抛 typed 错误 `dsh_writer_quiescence_unknown`（`DSH_WRITER_QUIESCENCE_UNKNOWN_CODE`），且**不清 `child`/`dshPort`、不改状态、不发布 `restart-exhausted`/ready/stopped**。调用方语义：start 预清理失败 ⇒ `error` 并让启动请求失败；restart 失败 ⇒ `error`，`restartLocal()`/`stop()` 的等待者看到拒绝；耗尽分支失败 ⇒ `error`（不是 restart-exhausted，故自动运行时回退不触发，见设计 18 §3.4）；stop 失败 ⇒ 拒绝（永不报告 `stopped`），`PlaneHandle` 不释放写租约、闩锁保持关闭。逃生阀维持"重启应用重走启动扫描"，不提供强制回收入口。
+
+**child-exit 监听属于启动代**：只在把 spawn 结果采纳为当前代时挂 exit 监听并记录 owner；回收原语先摘监听再证明（迟到的 exit 既不能另排一次 restart，也不能与本代回收竞态）；回调再按 owner 判代，已被替换的旧代 exit 一律惰性（无 `off` 的结构替身也安全）。
+
+#### Rejected alternatives（本地回收与写者静止）
+
+- **无证明也释放**（先清 child、发布 `restart-exhausted`/stopped，失败只记日志）：会让自动运行时回退与"可能仍在写 DSH_HOME 的进程"并发（快照恢复/指针切换/数据恢复），把证据缺口洗成"已停止"；安全不变量取"未证明静止就不释放"。拒绝。
+- **新增强制 kill / 强制解锁 API**：进程组归属不可证时（PTY/后代逃逸 PGID、pid 复用、探测不可用）再发一次更强的信号也不产生退出证明，只是把风险搬进 IPC 并给"绕过闩锁"一个官方入口；可证明的残留已由 reaper 的 takeover 覆盖，其余维持"重启应用再证明"。拒绝。
+- **leader `exitCode` 非空即视为已退出**：leader 被信号杀死或先死后代仍活时会假阳性；统一用 detached 进程组的退出证明。拒绝。
+- **每次读时重建/轮询组证据代替 suspect 记录**：无法把"某一时刻没看到"变成"不会再有写"；fail-closed 地记录一次 suspect 才是可判定状态。拒绝。
+
 ### 3.7 优雅停止
 
-- `DELETE /api/connections/local`（04 §3.2）/ 桌面退出 / systemd stop：SIGTERM 进程组 → 1s → SIGKILL；确认退出后注销记录，状态回 `stopped`；
-- stop 单飞行：并发或紧邻的停止调用共享同一 promise；已完全静止时为无日志 no-op，故同一代生命周期只落一条 `state=stopped`；
+- `DELETE /api/connections/local`（04 §3.2）/ 桌面退出 / systemd stop：SIGTERM 进程组 → 1s → SIGKILL；确认退出后注销记录，状态回 `stopped`；退出证明 unknown ⇒ DELETE 路由映射 **409**（code `dsh_writer_quiescence_unknown` + detail `{pid, since, reason}`），绝不折成 500/503，stop 拒绝并保持写租约；`GET /api/connections/local/writers` 暴露同一诊断结构；
+- stop 单飞行：并发或紧邻的停止调用共享同一 promise；已完全静止（无 child、无在途 start/restart、无 `writerSuspect`）时为无日志 no-op，故同一代生命周期只落一条 `state=stopped`；
 - 停止同时取消在途手工 spawn，等待其 owner 清理后释放 single-flight 槽；不响应取消的迟到测试seam/适配器仍由 epoch 守卫隔离，不能复活或覆盖随后启动的新代；
 - **崩溃路径**：控制面被 SIGKILL → 宿主成为孤儿 → 下次启动 reaper 回收（§3.4）——`detached: true`保证宿主不连带，孤儿回收保证不泄漏；
 - **会话数据不丢**：dsh 侧 JSONL 持久化在 `$DSH_HOME/sessions`，重启后由前端 runtime 经会话基线完整恢复（控制面不持有任何会话权威——01 §5 原则 4）。

@@ -12,6 +12,8 @@
 
 远程服务器只需在loopback运行dsh的API面web profile，无需web前端：UI来自本地复用前端， 经 `/api/i/dsh-<id>/*` 同源反代访问（SSH transport）。
 
+> **BrowserAuth 兼容性**：官方 dsh web profile 的宿主启用 browser-auth 门——每个 `/api` 请求与 `/api/remote.mux` 升级都必须携带启动期签发的签名 cookie，换取它的 launch token 只出现在宿主进程的启动输出里，桌面只在同机 spawn 时捕获、SSH 附着没有取得面。桌面经 SSH 的身份探测（`POST /api/session/canOpenWorkspacePath`）因此会得到 HTTP 401 并终态失败：裸 dsh 的 SSH 接入只适用于不带该门的远端部署（旧版本或其它不带该门的部署形态）。远端带门时请按 [deploy-gateway.md](./deploy-gateway.md) 部署 Gateway，并以 `gateway` 目标接入。
+
 1. 环境要求 — systemd Linux、Node.js 22+、chamber桌面机器对该服务器的SSH访问
 （密钥认证；桌面经SSH驱动 `systemctl`）。
 2. 安装dsh（官方发行）：
@@ -112,6 +114,6 @@
 
    `--host 127.0.0.1`（loopback绑定）是刻意为之：chamber桌面经自身SSH隧道访问，不额外 暴露攻击面。要从其他机器直连30800（绕过隧道）才改为 `--host 0.0.0.0`——且必须配套真实鉴权 （v1实例匿名）或反向代理前置。
 
-4. 从chamber桌面接入 — 连接设置页选择目标 `dsh|gateway` 与传输 `ssh|http`（四组合均支持） 并填端点；SSH可配user/SSH端口/systemd服务与可选密码，Gateway可独立配置token和/或Unicode登录密码，HTTPS可选SPKI pin。SSH由桌面接管 `ssh -N -L` 与按需systemd；HTTP由 主进程直连，renderer只见同源反代。单元形态遵循设计02 §3.9，契约见03 §2.2 / 17 §9。
+4. 从chamber桌面接入 — 连接设置页支持三种可达组合：`gateway × ssh`、`gateway × http`、`dsh × ssh`；`dsh × http` 被禁用（browser-auth 门，见上），添加表单默认 `gateway × ssh`（端口 30801）。填端点；SSH可配user/SSH端口/systemd服务与可选密码，Gateway可独立配置token和/或Unicode登录密码，HTTPS可选SPKI pin。SSH由桌面接管 `ssh -N -L` 与按需systemd；HTTP由 主进程直连，renderer只见同源反代。`dsh × ssh` 仅适用于不带 browser-auth 门的远端 dsh——带门远端请改用 Gateway 目标。单元形态遵循设计02 §3.9，契约见03 §2.2 / 17 §9。
 
 ---

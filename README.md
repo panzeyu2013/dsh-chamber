@@ -76,24 +76,26 @@ bash install-gateway.sh
 
 - 日常管理：`install-gateway.sh status|logs|restart|update|uninstall`
 - 公网接入：用Nginx/Caddy将HTTPS反代到 `127.0.0.1:30801`，见 [docs/deploy/deploy-gateway.md](./docs/deploy/deploy-gateway.md)
-- 桌面接入：「设置 → 连接」添加Gateway来源（HTTP transport + 反代地址），按需配置共享token / 登录密码
+- 桌面接入：「设置 → 连接」添加Gateway来源（表单默认 `gateway × ssh`；公网/反代入口选 HTTP transport + 反代地址），按需配置共享token / 登录密码
 
 #### 方式二：远程 dsh 实例 + systemd
 
 不装gateway时，可用systemd（系统或user单元，非root用户运行）持久化服务器上的dsh实例，桌面端经SSH隧道接入；完整配置与排障见 [docs/deploy/remote-dsh-instance.md](./docs/deploy/remote-dsh-instance.md)。
 
+> **BrowserAuth 兼容性**：官方 dsh web profile 的宿主启用 browser-auth 门——每个 `/api` 请求都要校验启动期签发的 cookie，而换取它的 launch token 只出现在宿主启动输出里、桌面只在同机 spawn 时捕获——SSH 附着没有取得面。因此桌面经 SSH 对裸 dsh 的身份探测会以 HTTP 401 结束：`dsh × ssh` 只适用于不带该门的远端 dsh（旧版本或其它部署形态）。**认证远端请改用 Gateway**（方式一），再以 `gateway` 目标接入。
+
 已有直连实例、想改用Gateway？旧数据不会自动跟随；安装Gateway后按 [deploy-gateway.md §3「从直连dsh迁移到Gateway」](./docs/deploy/deploy-gateway.md) 迁移一次即可。
 
 ### 4 · 添加远程主机
 
-「设置 → 连接」按目标（`dsh` / `gateway`）× 传输（`ssh` / `http`）四组合接入：SSH由应用自动建隧道并管理远端systemd；HTTP(S) 由主进程直连（默认HTTPS，显式HTTP常驻风险提示）。
+「设置 → 连接」按目标（`dsh` / `gateway`）× 传输（`ssh` / `http`）支持三种可达组合：`gateway × ssh`、`gateway × http`、`dsh × ssh`。SSH由应用自动建隧道并管理远端systemd；HTTP(S) 由主进程直连（默认HTTPS，显式HTTP常驻风险提示）。`dsh × http` 被禁用——带 browser-auth 门的宿主对每个 `/api` 请求校验启动期 cookie，launch token 只能从同机 spawn 的启动输出捕获，SSH 附着没有取得面；`dsh × ssh` 也仅适用于不带该门的远端 dsh，带门时探测返回 HTTP 401。认证远端请部署 Gateway 并以 `gateway` 目标接入（见 [deploy-gateway.md](./docs/deploy/deploy-gateway.md)）。
 
 ## 功能特性
 
 - macOS Swift原生壳 — AppKit窗口+WKWebView；菜单/托盘/通知/角标/深链/文件对话框/隐藏恢复与应用内更新（Sparkle）均为原生实现；壳内不承载业务，页面100%复用官方前端
 - 本地dsh一键托管 — 本地实例自动启动、就绪检测、守护/回收、健康状态与宿主日志；首屏即完整dsh界面
 - 运行时版本管理（热重载） — 设置页按实例切换/升级/回滚运行时即时生效，插件更新无需重启桌面应用（本地与gateway均可）
-- 远程实例SSH接入 — 添加主机后自动建立SSH隧道并管理远端systemd服务；支持密钥或密码认证
+- 远程实例SSH接入 — 添加主机后自动建立SSH隧道并管理远端systemd服务（远端须不带 browser-auth 门；认证远端用 Gateway）；支持密钥或密码认证
 - 认证Gateway接入 — 部署gateway后将其作为 `gateway` 来源接入，共享token / 登录密码按需配置，默认HTTPS
 - 统一侧边栏多来源导航 — 本地 + 远程各实例的session/workspace在同一dsh原生侧边栏按来源分组、平等列出（远程带颜色徽标）；单击打开、双击重命名
 - 侧边栏折叠 / 拖拽 / 强调色 — 来源级折叠开关一键收拢该来源workspace列表；server分组可拖拽排序（跨实例持久化）；来源/workspace带柔和强调色条
@@ -113,7 +115,7 @@ bash install-gateway.sh
 - **怎么单独检查远端浏览器？** — `pnpm run typecheck:browser` 做类型检查，`pnpm run test:browser` 跑该插件测试。
 - **我的凭据会被存到哪里？** — 两处，都在本机：① 实例自身的配置平面（本地 = 本机dsh home，远程 = 远端dsh home，由该实例的dsh管理）；② 桌面壳在 `<userData>` 下保存的连接凭据（Gateway凭据优先系统密钥链加密、不可用时0600明文兜底；SSH密码按用户决策为0600明文兜底），用于免重录重连。凭据只经write-only表单输入，从不回填界面，也不进入渲染层或日志；Gateway安装向导写入的配置文件为0600权限。
 - **它和官方Desktop有什么区别？** — 官方Desktop覆盖「只在本机用」的场景；dsh-chamber的差异集中在远程与多机：SSH接入远端实例、认证Gateway、本地与远程同为窗口内一等来源。本地场景两者都开箱即用，按是否需要远程来选。
-- **远程实例需要什么？** — dsh目标需要可达的API profile；gateway目标需要已部署的 `@dsh-chamber/gateway`。两者均可经SSH隧道或显式HTTP(S) 直连；远端无需单独装web前端，UI复用本地前端并经同源反代。
+- **远程实例需要什么？** — dsh目标需要可达的dsh API面（web profile）且远端不带browser-auth门（带门宿主经SSH探测返回HTTP 401，不可附加）；gateway目标需要已部署的 `@dsh-chamber/gateway`，可经SSH隧道或显式HTTP(S) 直连。认证远端请选Gateway；远端无需单独装web前端，UI复用本地前端并经同源反代。
 - **agent preset / profile在各实例间怎么工作？** — 按实例权威：每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只在该实例一侧（本地 = 本机，远程 = 远端）。编辑远程预设须切到该来源shell的「设置 → Agent presets」页。
 - **前端从哪来？** — dsh官方前端源码复用自建；每个实例保持原生UI。
 - **macOS上弹了录屏权限框、设置里却找不到dsh-chamber（或开关已开仍无法截图）？** — 打开「系统设置 → 隐私与安全性 → 录屏与系统录音」：列表里若有旧条目，先选中并用左下「−」删除，再用「+」把 `/Applications/dsh-chamber.app` 重新加入并打开开关，最后 **⌘Q 完全退出并重开 dsh-chamber**（升级自旧版或换过 bundle id 的机器必须「删除旧条目 → 重新加入」一次；`tccutil reset` 只能清记录，建记录只能靠这一步）。

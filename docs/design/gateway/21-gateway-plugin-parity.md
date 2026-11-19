@@ -102,7 +102,9 @@ ssh 读面与 gateway/local 同形：`readManifest` = `plugin_list` IPC（cat �
 
 ### 6.5 桌面 IPC / 渲染层（读面与供给面）
 
-保留：`gateway_plugin_sync(id)`（手动同步兜底：id 白名单 + ready 复核 + `{ok:true,uploaded,skipped}|{ok:false,error}`）、`desktop_ssh_plugin_list`、`desktop_local_plugin_list`、`desktop_ssh_seed_host_graph`，以及实例代理 `GET /chamber/plugins`、`GET /chamber/plugins/installed`（驱动 chamber 区版本漂移与「立即同步」；gatewaySource 门控，http+dsh 只读）。同步失败必须显式化：非 200 与网络异常返回 `{failed:true,error}` 并映射 `ok:false`（「已是最新」不得吞失败）；`PUT /chamber/plugins` 的校验拒绝回显脱敏原因（`sanitizeRouteError`，≤300B，不落裸 HTTP 400）。`gateway_plugin_apply`/`gateway_plugin_materialize` 与 ssh undo journal/IPC 不存在。新增 IPC 仍按镜像面纪律同批改 preload/ipc-events/global.d.ts 与 ipc-surface-mirror golden（[05](../control-plane/05-connection-manager.md) §7.4）。
+保留：`gateway_plugin_sync(id)`（手动同步兜底：id 白名单 + **按 ID 读取已提交活动注册**（`snapshotForSync`：url/headers/SPKI/authority/socketPath 来自同一注册代，不读参数镜像、不现读 live 字段）+ 执行期代际复验（每个 await 后 `recordGen` 仍相等才继续上传/重启，代际不符即中止；无已提交注册 ⇒ `{ok:false,'no active gateway registration'}`）+ `{ok:true,uploaded,skipped}|{ok:false,error}`）、`desktop_ssh_plugin_list`、`desktop_local_plugin_list`、`desktop_ssh_seed_host_graph`，以及实例代理 `GET /chamber/plugins`、`GET /chamber/plugins/installed`（驱动 chamber 区版本漂移与「立即同步」；gatewaySource 门控，http+dsh 只读）。同步失败必须显式化：非 200 与网络异常返回 `{failed:true,error}` 并映射 `ok:false`（「已是最新」不得吞失败）；`PUT /chamber/plugins` 的校验拒绝回显脱敏原因（`sanitizeRouteError`，≤300B，不落裸 HTTP 400）。`gateway_plugin_apply`/`gateway_plugin_materialize` 与 ssh undo journal/IPC 不存在。新增 IPC 仍按镜像面纪律同批改 preload/ipc-events/global.d.ts 与 ipc-surface-mirror golden（[05](../control-plane/05-connection-manager.md) §7.4）。
+
+**被否方案（手动同步取参）**：保留「参数镜像」/在同步腿现读 live 字段或 `cachedCookie`——只解决 Cookie 一项，URL/authority/SPKI/socketPath 仍可能来自不同代，锁步不成立且执行期无法复验代际；同步直接读 renderer 提交的参数更违反凭据不出主进程纪律。取「读已提交活动注册 + `recordGen` 复验」，IPC 形状不变（renderer/global.d.ts/preload 不动）。
 
 ### 6.6 UI：单一模型视图（只读行/诊断）
 

@@ -7,6 +7,8 @@
 
 The remote server only needs the dsh API-side web profile on loopback — no web frontend: the UI comes from the locally reused frontend through the `/api/i/dsh-<id>/*` same-origin proxy (SSH transport).
 
+> **BrowserAuth compatibility**: the official dsh web profile's Host enforces a browser-auth gate — every `/api` request and `/api/remote.mux` upgrade must carry a signed cookie minted from the spawn-time launch token, and the desktop captures that token only from a same-machine spawn — an SSH attach has no retrieval surface. The desktop's SSH identity probe (`POST /api/session/canOpenWorkspacePath`) therefore ends with HTTP 401 and a terminal failure: bare-dsh SSH attach works only for an ungated remote deployment (an older version or another deployment shape without the gate). For a gated remote, deploy the Gateway per [deploy-gateway.md](./deploy-gateway.md) and attach it as a `gateway` target.
+
 1. Requirements — a systemd Linux host, Node.js 22+, and SSH access from the chamber-desktop
 machine (key auth; the desktop drives `systemctl` over SSH).
 2. Install dsh (official release):
@@ -110,4 +112,4 @@ machine (key auth; the desktop drives `systemctl` over SSH).
 
    `--host 127.0.0.1` (loopback) is deliberate: the chamber desktop reaches the instance through its own SSH tunnel, adding no attack surface. Only change it to `--host 0.0.0.0` to reach port 30800 from other machines directly (bypassing the tunnel) — and pair it with real auth (v1 instances are anonymous) or a reverse proxy.
 
-4. Attach from the chamber desktop — choose a `dsh|gateway` target and `ssh|http` transport (all four combinations ship) and enter the endpoint. SSH may carry user/port/systemd metadata and an optional password; Gateway independently accepts a token and/or Unicode login password, with optional SPKI pinning. Desktop owns SSH tunnels and on-demand systemd; main connects HTTP directly while the renderer sees only same-origin proxying. Designs 03 §2.2, 17 §9.
+4. Attach from the chamber desktop — the connections page ships three reachable combinations: `gateway × ssh`, `gateway × http`, `dsh × ssh`; `dsh × http` is disabled (browser-auth gate, above) and the add form defaults to `gateway × ssh` (port 30801). Enter the endpoint. SSH may carry user/port/systemd metadata and an optional password; Gateway independently accepts a token and/or Unicode login password, with optional SPKI pinning. Desktop owns SSH tunnels and on-demand systemd; main connects HTTP directly while the renderer sees only same-origin proxying. `dsh × ssh` works only for an ungated remote dsh — a gated remote must be attached as a `gateway` target. Designs 03 §2.2, 17 §9.

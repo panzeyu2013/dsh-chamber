@@ -15,7 +15,7 @@
 
 **注册**：客户端包 `dsh-chamber/dsh-chamber-client-ui-browser`（`packages/dsh-chamber-client-ui-browser`）+ **deferred covered row** + 三处锁步（`DEFERRED_ROWS` / `DEFERRED_EXTRA_ROW_IDS` / `CHAMBER_COVERED_IDS`）；它是 renderer workspace client 包，由 composite 加载、**不需要 seed**。carrier 门：页面存在 `chamberBrowser` 桥 → 注册 native guest 行；桥缺失 → 不注册任何行（fail-closed；无 iframe 兜底）。官方 `ui-sidebar-browser` 在 web profile 恒禁用（desktop-only 条件）：`CHAMBER_COVERED_IDS` **不需要** skip 条目。`apply` 第一行判来源，http/畸形事实 → 直接 return；`resolveBrowserEntry` 是包自带纯函数（`local` 字面量 + `dsh-`/`gateway-` 前缀 + transport 交叉校验，legacy `ssh-` 拼写拒绝）；`sidebarRightTabs` 不进导出 inject，apply 交给 `registry-wait.ts` 用 `ctx.inject` 等它出现。右栏是 **per-session**（无 Session 无右栏，页签与 guest 按 `(session, tab id)` 记账）；forward 列表是 **per-source**（同 source 的两个 Session 共享列表）。切换 tab / 切 Session / 收起右栏不销毁 guest（`keepMounted`）；宿主显式释放路径（隐藏源壳回收、来源退役、硬上限、内存压力、手动释放）销毁该源全部 guest 并释放 forward consumer。
 
-**入口门**：除纯 HTTP 来源外全部来源都有入口（`local` / `dsh`+ssh / `gateway`+ssh）；唯一无入口 = `gateway`+http。`mayForward` 从 source id / boot transport 派生（不新增 boot fact）。该来源门相对上游桌面（单一本地 workspace、web profile 禁用该插件）属**有意 delta**（§11）。
+**入口门**：除纯 HTTP 来源外全部来源都有入口（`local` / `dsh`+ssh / `gateway`+ssh）；唯一无入口 = `gateway`+http。`mayForward` 从 source id / boot transport 派生（不新增 boot fact）。该来源门相对上游桌面（单一本地 workspace、web profile 禁用该插件）属**有意 delta**（§11）。**入口能力随壳的启动传输字重算**：每个壳的 `apply` 从该 ctx 的 `chamberInstanceId` + `chamberTransport`（boot 时经 `packages/renderer/src/shell.ts#createChamberContextSetup` 写入的传输字）解析（`packages/dsh-chamber-client-ui-browser/src/shared/source.ts#resolveBrowserEntry`）——传输机制（ssh↔http）变化不是逻辑来源身份变化：来源不退役、proof/durable 账本保留，壳在权威完整快照提交期窄重挂（design 05 §4.2），新壳按新 boot transport 重算入口（`gateway`+http 因此无入口、旧 guest 随旧 ctx teardown 释放）。
 
 ## 2. Forward 面（SSH）
 
@@ -53,7 +53,7 @@ target 恒 `127.0.0.1:<port>`，main 校验 `1..65535`；forward 目标恒远端
 
 ### 2.9 与 transport 状态的关系
 
-`ready` 无记录 → 允许 `request`；`ready` 有记录 → 幂等复用（只更新 path）；`connecting/degraded/error` → 不预门；identity 变化 → 全部关闭 + 轮换 alias。transport 断开时有界 reconnect（成功后重置预算），失败 UI 可重试。
+`ready` 无记录 → 允许 `request`；`ready` 有记录 → 幂等复用（只更新 path）；`connecting/degraded/error` → 不预门；identity 变化 → 全部关闭 + 轮换 alias。transport 断开时有界 reconnect（成功后重置预算），失败 UI 可重试。**传输机制切换（ssh↔http）不退役逻辑来源**：forward 腿按宿主 change set 的 `forwardRevoke` 关闭（旧壳的租约随其 ctx teardown 释放，`forward.release` 幂等），逻辑来源身份、proof 与 durable 通知账本保留；新壳按新 boot transport 重算入口——http 来源不注册 Browser（§1 入口门），ssh 来源重新 acquire + 重新确认。
 
 ### 2.10 guest 集成（forward 的唯一差异承载点）
 
@@ -87,7 +87,7 @@ forward 面 4 个 invoke（wire version 3）：`forward.request({sourceId, sourc
 ### 4.2 生命周期
 
 - 挂载：tab body mount → `browser.acquire`（登记 lease、解析 workspaceKey、创建或复用数据 store、创建 guest）→ 首次 `browser.navigate`；失败保留地址、显示失败条。
-- `keepMounted`：切换 tab / 切 Session / 收起右栏不销毁 guest；宿主显式释放（隐藏源壳回收、来源退役、硬上限、内存压力、手动释放）销毁该源全部 guest 并 release consumer。来源退役由宿主侧消费既有 `desktop_ssh_instances_changed` push（`{removedIds, retiredIds}`，不新增 A 桥通道）调 `retireSource`，与 renderer 的 `retireSources` 幂等。
+- `keepMounted`：切换 tab / 切 Session / 收起右栏不销毁 guest；宿主显式释放（隐藏源壳回收、来源退役、硬上限、内存压力、手动释放）以及 renderer 的**传输机制窄重挂**都销毁该源全部 guest 并 release consumer（窄重挂经 ctx teardown 到达，不是 push 边）。**换壳（传输机制 ssh↔http）的 guest 回收走 ctx teardown 主路径**：壳换代 = `disposeInstanceShell` 排空旧 ctx，browser 插件在该 ctx 上的 effect 清理逐 tab `controller.dispose()` → `NativeGuestImpl.dispose()` → `releaseLease`（`packages/dsh-chamber-client-ui-browser/src/client/browser/NativeGuestImpl.ts#NativeGuestImpl`）；新壳按新 boot transport 重新注册入口、重新 acquire，**不需要**额外 A 桥退役边。来源退役由宿主侧消费既有 `desktop_ssh_instances_changed` push（`{removedIds, retiredIds}`，不新增 A 桥通道）调 `retireSource`，与 renderer 的 `retireSources` 幂等——该 push 的 `retiredIds` 只覆盖**真退役**（逻辑来源身份 retarget/删除），窄换代不在其中，故旧租约的主回收路径就是 ctx dispose。
 - 壳文档 reload / crash：壳文档 `didCommit`（可信控制面 origin；含同 URL 提交）：旧 generation 在跨文档导航开始时捕获（`noteNavigationStarted` → `pendingRetireDocumentId`；pre-commit 新 documentId 不得被退役），`didCommit` 只退役 pending（无 pending 时 `releaseAllDocuments()` 且不退役 current）+ `browserLayer.removeAll()`；文档世代 = `BrowserGuestDocumentGeneration`（`currentDocumentId` + `retiredDocumentIds`；`isAlive` 要求 id 等于当前且未退役）。壳 webView 进程终止 → `closeAll()` guests、清层与 document 跟踪（`resetAfterShellCrash`）。
 - 应用退出：销毁全部 guest；forward 清理由既有 3s 硬顶保证。
 
@@ -176,6 +176,10 @@ L1–L6 判据与执行见 [remote-browser-acceptance.md](../../checklists/accep
 - **pin / retry / subscribe、renderer 内模块 + synthetic id、`sidebarRightTabs` 进导出 inject、一次性 `ctx.get` 探测、`chamberTargetKind` boot fact、把 URL 交给 renderer 构造、https 静默降级、ControlMaster 复用、Windows Job Object、alias 由 sourceId/fingerprint 哈希、加载官方包再打 vendor patch、自研 launcher / 远端转发列表 / 自定义 refusing 面板**：沿用既有否决理由（见 §13 映射与 git 历史）。
 - **把 `::1` 当 forward 目标**：ssh 远端的 IPv6 loopback 转发假设不成立，且本机 `::1` 直连会绕过「远端 loopback 必须经 forward」的语义；`::1` 只做类别门，协商后以失败条结束。
 - **content rule 使用完整正则（含 `|`/`{m,n}`）**：WebKit 的 `WKContentRuleList` 只接受正则子集，超出子集的 filter 会编译失败；用顶层规则数组 + 子集内显式枚举换取可编译、可测试。
+- **为壳换代给 `desktop_ssh_instances_changed` 加 `remountIds` 字段**：被否——载荷有三方镜像（shim 重建对象并丢弃未知字段、冻结 preload、renderer 类型）与三个消费者，且 push 载荷没有门可锁；换代真值改由 renderer 在完整权威快照提交期比较 `bootTransport` 与权威行 `transport` 得出，丢推送由回读兜底。
+- **只更新 `InstanceView` 的 transport prop、不换壳**：被否——boot ctx 把 `chamberTransport`/`sourceFingerprint` 固化为不可变事实，`startedRef` 会挡住重 boot，浏览器入口/forward 判据会长期停留旧值。
+- **换壳走 `retireSources`**：被否——那条路径同时清 durable 通知账本/outbox/facts/owner，而机制切换只应换壳、保留逻辑来源历史。
+- **用 sourceId 变化表达换代**：被否——`sourceId = kind-id` 在 SSH↔HTTP 切换时不变，逻辑来源会随 id 存续；用 id 变化表达会把「换机制」误升级为「换来源」。
 - **main 侧 guest 数量配额（8/source、32 全局）**：与 N-ctx 源壳硬上限 12、WebKit 内存压力重叠，会打断 keepMounted 与多 tab 语义；删除配额，交给既有释放路径。
 
 ## 12. 关联

@@ -86,6 +86,16 @@ dsh web profile 实例（Node）×N ── 远程宿主（ssh/gateway）
 
 **Rejected alternatives（首屏就绪门）**：① 只等 sidecar ready 帧——会把「控制面开始监听」误当成「本地 dsh 已 ready」，因为 `runStartupTail()` 有意异步启动本地实例；② 对所有状态无限等待——会把终态错误的诊断/恢复 UI 一并藏掉（`stopped`/`restart-exhausted` 正是「重试已停止、需手动启动」的终态）；③ **在途相位（`starting`/`restarting`）继续等到 ready 再导航**（曾按 0.5→5s 退避实施）——实测首帧因此多等宿主冷启动的整段（3.7s），而「半初始化 UI」的风险已由渲染端每实例服务门承接（`waitForServing` 在 `starting` 期等待、`error` 期判不可服务），故不再成立；④ 也给等待加第二个时间所有者（壳侧总期限）——会把控制面已经在管的事再管一遍，并让「超时之后显示什么」变成新的兜底。
 
+#### 3.3.1 应用会话身份（AppSessionId）
+
+**生成与注入**：Swift 每次应用进程装配在既有 sidecar `childEnv` 组装处生成一个**非秘密** UUID（小写）并注入 `DSH_CHAMBER_APP_SESSION_ID`（`macos/Sources/DSHChamber/AppDelegate.swift#AppDelegate`；env 名与形状单源 = `packages/desktop/connection-intent.ts#APP_SESSION_ID_ENV`）。它是「本次应用会话」的身份，只用于连接意图（[05](../control-plane/05-connection-manager.md) §7.8）：Supervisor 重启 sidecar（崩溃/退避重启）复用同一进程内环境 ⇒ 同一 id（用户的「本会话手动断开」跨 sidecar 重启仍成立）；应用完全退出重开 ⇒ 新 id（旧会话的断开不抑制新会话的自动连接）。该值不是凭据、不进 A 桥/renderer、不进日志载荷。
+
+**sidecar 侧校验与关闭语义**：解析顺序 = 显式参数 `--app-session-id` > env > 无（测试/诊断注入；`packages/desktop/connection-intent.ts#resolveAppSessionId`）；形状白名单 `^[A-Za-z0-9_-]{8,64}$`，非法/缺失 = 会话身份 null + 一条 loud 告警（绝不 exit——调试参数不得砖掉产品；也绝不让任意 env 内容进持久文件）。身份缺席时**意图功能整体关闭**：不读行内元数据、拒绝一切意图写入、不抑制任何自动尝试，行为与无意图逐字相同（Electron 冻结装配 / headless harness 因此在同一份代码上保持旧行为）。
+
+**边界（宿主内部事实不扩散）**：托管 dsh 子进程的 spawn 环境经 `packages/control-plane/src/spawn-dsh.ts#sanitizeManagedDshEnv` 剥掉全部 `DSH_CHAMBER_*`（与 `DSH_GATEWAY_*` 同规、大小写不敏感）——应用会话身份与 dev/state 覆盖都只属于宿主进程，不能成为子进程/tools/plugins 的环境权威。
+
+**Rejected alternatives**：① **在 sidecar 侧生成**——sidecar 崩溃重启会换 id，「本会话断开」在重启后静默失效（自动连回，正是要修的可见形态）；② **持久化进 `chamber-settings.json`**——与「完全退出换值」直接冲突，且把一个会话作用域事实写成跨会话权威；③ **经 B 桥握手传递**——多一条协议消息与排序依赖（ready 前/后的竞态），而 sidecar spawn 的环境组装点本就存在，一行注入即可；④ **放 A 桥/renderer 生成**——渲染端重载即变，且渲染端没有抑制宿主尝试的权威（05 §7.8 的同一裁决）。
+
 ## 4. 复用与拆分（核心工程）
 
 ### 4.1 main.ts 拆分：core / host-edge 契约

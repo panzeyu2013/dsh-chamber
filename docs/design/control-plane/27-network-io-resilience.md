@@ -17,7 +17,7 @@
 
 - **I1** 单次非确定性探测失败只标 `suspect`；连续两次**网络级**失败才 `down`。
 - **I2** `TransportPhase` 保持 `idle/connecting/ready/degraded/error`；健康是 `ready` 子态，用 `link.state` + `linkEpoch` 表达。
-- **I3** `suspect` 正常转发；只有 `down` 快速失败（新请求与新订阅，沿用 `instance_unavailable`）；**已建立**的页面订阅在 down 边沿不失败，交给确认窗到期后的 teardown（unregister/替换）撤销；health 更新绝不 re-register，也不直接 revoke 在途。
+- **I3** `suspect` 正常转发；只有 `down` 快速失败（新请求与新订阅，沿用 `instance_unavailable`）；**已建立**的页面订阅在 down 边沿不失败，交给确认窗到期后的 teardown（unregister/替换）撤销；health 更新经活动注册单一提交入口的 `health-only` 路径，绝不 re-register，也不直接 revoke 在途；撤销经幂等 `revoke` + 墓碑。
 - **I4** 页面通道在 link epoch 变化时清掉待发 timer 并立即重订阅；**不清重试阶梯**（阶梯跨 epoch 继续爬升，只有稳定运行 30s 才归零，避免 flapping 时每次恢复都把退避打回 3s）。普通 `ready` 保留 30s 稳定窗。epoch 的递增点有两处且只有两处：任何进入 `ready` 的新化身（含重连），以及 ready 期内的 down→healthy 恢复；suspect→healthy 不递增。
 - **I5** 复用现有 `RemoteStream`/mux 重试道；v1 **不**新增 `$events` 软重试。
 - **I6** 链路阈值在 desktop-only 的 `transport-health.ts`（唯一消费者是 transport-manager）；代理侧阈值留在 `proxy-forward.ts`；不建共享策略包、不改 `dsh-stream-state` 的流表。唯一的跨 owner **契约**是上传/头窗/mutation 预算的推导（`dsh-chamber-wire/src/net-budget.ts`）：它不是策略包，而是代理与页面客户端必须共同守住的一条不等式（客户端预算 ≥ 代理最坏情形 + 余量）。
@@ -61,12 +61,12 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 
 ### 3.3 代理 health
 
-- 注册面：`registerInstanceTransport(..., { health })` + `setInstanceTransportHealth`。
+- 注册面：所有注册/健康/撤销写都经 sidecar 活动注册表的**单一同步提交入口**（`commit(request)`，accept→publish；详见 [17](../gateway/17-server-side-gateway.md) §9.3）。记录内嵌 health 与代际（`transportGen`/`recordGen`）；`PlaneHandle.setInstanceTransportHealth` 为 `void`（实现内的 boolean 只在控制面内部单元使用、facade 不暴露），因此健康更新不能被当成「注册仍存在」的证明：撤销/替换由 `commit`/`revoke` 与下一 ready 边重注册处理，绝不把静默 no-op 当成功。
 - `suspect` 不改变转发；`down` 新请求/新升级 503 `instance_unavailable`（与既有错误体同形，无新增字段），**新**的 page-channel 订阅在定址时快速失败；已建立的订阅不随 down 边沿失败——它们由确认窗到期后的 teardown（unregister/替换）以同一错误撤销。理由：down 边沿立刻失败订阅会让 30s 确认窗对页面完全空转，而恢复即热重订阅；把失败落到 teardown 后，「窗内恢复」不再产生任何页面抖动。
 - desktop 在 down 后保留 `ready` 一个 `downGraceMs`（默认 30s）确认窗：期间 health-only 更新不 revoke 在途；窗满仍 down 才进入既有 reconnect，phase 离开 ready 时 unregister 并 revoke。
 - **after-body 标记**：撤销时若请求 body 已完成，代理先写 502 `upstream_failed` + `details.phase='after-body'` 再结束响应，避免客户端拿到裸网络错误而误重试；body 未完成的请求不写该标记（bodyless 的 GET/HEAD 在转发前即视为「未写」，但带 framing body 的 GET/HEAD 与 POST 同规则）。**没有标记的 502/504 对 mutation 仍按「可能已生效」处理**：body 未完成只证明代理没写完，不能证明宿主没收到前半个请求，保守归类宁可让用户多刷新一次，也不把一个可能已执行的操作报成「未转发」。
 - 超过 grace 的在途仍由 reconnect 收尾——这不是无限期保护。
-- **registration key**：只在 url/transport/auth 指纹/pin/authority 变化时触发 re-register（键与指纹用 JSON 编码的二元组，值里的分隔符不可能与另一组 header 碰撞）。
+- **注册提交与健康更新**：同 `targetKey` = `health-only`（**零次** re-register，绝不撤销在途流）；`targetKey` 变化才重注册；撤销写墓碑，同一或更旧代的迟到提交拒绝。键/指纹的比较编码仍由 `transport-registration.ts` 单源提供；手动同步等读面用 `snapshotForSync(id, recordGen)` 取同一注册代并在每个 await 后复验 `recordGen`（[21](../gateway/21-gateway-plugin-parity.md) §6.5）。
 - **上游连接池**：**每连接**的 keep-alive agent（非 pin 路径；pin 仍 `agent:false`），在该连接的 unregister/替换处随在途流量一起销毁：进程级单池会让被替换隧道（每次重连都是新 loopback 端口）的空闲 socket 永久滞留，还可能把半开 socket 交给下一个化身。gateway-proxy 自持一份并在 `closeAllStreams` 销毁。
 
 ### 3.4 上传（buffered / streaming 双形态）
@@ -105,7 +105,8 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 | `packages/desktop/transport-provider` | `link` 投影与 `failureKind` |
 | `packages/desktop/ssh-provider`、`packages/desktop/gateway-provider` | failureKind 分类；SSH `ConnectTimeout`/`ExitOnForwardFailure` |
 | `packages/desktop/host-assembly` | 装配本体（transport 订阅体已抽成下一行的成对模块）；不 re-register |
-| `packages/desktop/host-transport-subscriptions` | registration key（`onStatusChanged`/`onVerified` 成对）；health-only `setInstanceTransportHealth`；不 re-register |
+| `packages/desktop/active-registration` | 活动注册唯一提交入口（`commit`，accept→publish）、撤销墓碑、`snapshotForSync` 读面；不直接调 plane |
+| `packages/desktop/host-transport-subscriptions` | 注册边沿（`onStatusChanged`/`onVerified`/撤销）改调提交入口；不直接写 plane、不 re-register |
 | `packages/desktop/transport-registration` | 纯 registration key/fingerprint/decision 单测，锁住 health-only 边沿 |
 | `packages/control-plane/src/instance-proxy` | health 记录/快速失败；`setInstanceTransportHealth`；每连接 keep-alive 池与生命周期销毁；`isLinkBusy`（≥256KiB 上传窗口 + 2s 下游字节窗口）；上游失败缝（connectionId） |
 | `packages/control-plane/src/http-limits` | Node 31min 死手/5s 检查周期、应用层 10s 头窗、192 软上限 raw 503/256 硬帽 |
@@ -153,7 +154,7 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 20. 官方前端自己的 mutation（message/send、goals/*、approval/*、commands/execute 等）走 vendor 客户端：`dsh-client-connection` 的 `[patch-mod]` 现在识别 502/504 + `details.phase=after-body`，把错误写成「可能已生效、刷新后再重试」。官方 unary 本来没有自动重试，故这只是诚实分类，不改变重试语义；客户端 UI 是否展示该措辞由官方决定。
 21. epoch 变化会立即释放停放/待重试订阅（「恢复即唤醒」），但**不再清零阶梯**：极差链路按 epoch 频率恢复时，失败订阅按自己的阶梯退避，只有稳定运行 30s 才归零。
 22. link 投影的 ready/epoch 判定已收口到 client-core 的 `link-projection.ts`（有单测），渲染器只保留 local/未知 source 两个事实分支（本地实例没有 link 投影，不在 client-core 的输入里）；`becameSuspect` 已删除。
-23. registration key 的**编码**已对象化（`registrationKey({url,transport,headers,spkiPin,authority})`）：位置漂移在类型上不可能，五个字段都是 string（spkiPin/authority 互换仍能编译），由 key 的字段顺序编码、碰撞用例与四调用点的字段映射测试兜住；四个调用点的**字段装配**仍来自不同事实源（状态推送 / refresh facts / onVerified），只共享编码与指纹。onVerified 的指纹门仍只比较 headers 子集，其余字段变化由状态推送的 key 比较兜住。
+23. registration key 的**编码**已对象化（`registrationKey({url,transport,headers,spkiPin,authority})`）：位置漂移在类型上不可能，五个字段都是 string（spkiPin/authority 互换仍能编译），由 key 的字段顺序编码与碰撞用例兜住。**字段装配已收口**：提交入口从同一 live facts 派生五元组并做锁步断言（见 §3.3 与 design 17 §9.3），状态推送/refresh facts/onVerified 三个边沿只提供代际与健康，不再各自拼装；`onVerified` 不再按 headers 指纹门判 health-only，而由 `commit` 的 `targetKey` 比较决定。
 24. connect 期 verifyUp 有与 ready 探针相同的外层期限（provider 声明预算）与可取消 signal（期限到点/disconnect 都会 abort）；两条 provider 腿都已透传（ssh：`verifyDshEndpoint`/`probeDshSignature`/`verifyGatewayEndpointViaTunnel`；gateway：`verifyGatewayRuntimeIdentity`→`boundedGatewayRequest`），provider 若忽略 signal 仍只会跑到自己的超时。该期限（gateway 35s）**可以长于** `READY_TIMEOUT_MS`（10s，只管端口/可达性）：一个慢但成功的复合复验不应被 ready 期限杀掉；若失败，重试路径照常。gateway 的**口令登录腿**（`ensureSession`）不在 signal 覆盖内：会话管理器只在 `invalidate` 时递增 generation，围栏（`generationIsCurrent`/`verifiedCookieIsCurrent`）能挡住的正是「探针失败后又被外部 invalidate」的迟到登录；一个从未 invalidate 的迟到登录可能完成并写缓存，这是登录腿的已知边界（它不写注册态，下一次探针会重新判定）。
 25. 每连接 agent 池有**真实 socket** 用例（同连接复用、两条连接各自成池、替换/注销后新开连接）；veth+netem 真实链路验收（13 项断言 + opt-in 上传 3 项，含「宽限期内恢复不重连」「reverifyAll 在 ready+down 上 <1.5s 恢复」「20MB@2Mbit 上传期间不判 down」）由 `pnpm run acceptance:netem` 跑，真实 WAN/ssh 中继与真机睡眠只能人工。
 26. `dsh-api-gateway` 的 opening 拒绝后「窗口边缘一次替换」由注入时钟覆盖（60s 真时钟用例不存在）；`mux-self-heal` 覆盖替换/防抖/帧增量刷新；lane 腿已移出延迟替换，新增 300s 虚拟时钟回归用例证明「lane 拒绝不排期」。证据腿的真机 soak 仍开放。
@@ -208,3 +209,8 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 - **把初始可达窗口抬到 20s**：既有测试用 `10s + AUTH` 的算术钉住预算，黑洞失败从 50s 拉到 75s；改用一次性延展。拒绝。
 - **为慢探复用半开 jitter（0.5–1.0）**：均值从 60s 压到 45s，反而更频繁。拒绝；改 ±20% 对称抖动。
 - **exec/run 的 ControlMaster 复用**：控制 socket 是同用户认证旁路、绕开 exec 的 known_hosts 复检，且不省 askpass；本版不做。
+
+- **继续维护三份活动注册镜像 / 在续签或同步腿补写镜像**：只治单点、下一次新增路径重犯；同步取参仍跨代混拼。拒绝，改为单一提交入口（[17](../gateway/17-server-side-gateway.md) §9.3）。
+- **手动同步读 `cachedCookie` / 现读 live 参数**：只解决 Cookie，url/authority/socketPath/SPKI 仍非同一代；拒绝，改为读已提交记录 + `recordGen` 复验。
+- **用 `linkEpoch` 当注册代际**：down→healthy 恢复也递增，会误拒仍有效注册；用 `transportGen`（隧道化身）+ `recordGen`（注册表单调号）。
+- **让续签失败冒泡成 sidecar fatal**：一次续签异常不得成为宿主退出；收敛为本次刷新失败，保持旧注册/等待过期路径。

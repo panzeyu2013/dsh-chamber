@@ -76,24 +76,26 @@ After installation:
 
 - Daily management: `install-gateway.sh status|logs|restart|update|uninstall`
 - Public access: reverse-proxy HTTPS to `127.0.0.1:30801` with Nginx/Caddy — see [deploy/deploy-gateway.md](./deploy/deploy-gateway.md)
-- Desktop access: Settings → Connections, add a Gateway source (HTTP transport + proxy address); shared token / login password as needed
+- Desktop access: Settings → Connections, add a Gateway source (the form defaults to `gateway × ssh`; choose HTTP transport + proxy address for a public reverse-proxied entry); shared token / login password as needed
 
 #### Option B: remote dsh instance + systemd
 
 Without a gateway, persist the server's dsh instance with systemd (system or user unit, non-root) and connect over SSH; configuration and troubleshooting: [deploy/remote-dsh-instance.en-US.md](./deploy/remote-dsh-instance.en-US.md).
 
+> **BrowserAuth compatibility**: the official dsh web profile's Host enforces a browser-auth gate — every `/api` request must carry a cookie minted from the spawn-time launch token, and the desktop captures that token only from a same-machine spawn — an SSH attach has no retrieval surface. The desktop's SSH identity probe therefore ends with HTTP 401: `dsh × ssh` works only for an ungated remote dsh (an older version or another deployment shape). **For an authenticated remote, use the Gateway** (Option A) and attach it as a `gateway` target.
+
 Already on a direct instance and switching to the Gateway? Existing data does not follow; after installing the gateway, run the one-time migration in [deploy-gateway.md §3 "Migrating from a direct dsh instance to the Gateway"](./deploy/deploy-gateway.md).
 
 ### 4 · Add a remote host
 
-In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (`ssh` / `http`) — all four combinations: the app sets up SSH tunnels and can manage remote systemd; HTTP(S) connects from the main process (HTTPS by default; plaintext HTTP shows a permanent risk warning).
+In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (`ssh` / `http`) — three reachable combinations ship: `gateway × ssh`, `gateway × http`, `dsh × ssh`. The app sets up SSH tunnels and can manage remote systemd; HTTP(S) connects from the main process (HTTPS by default; plaintext HTTP shows a permanent risk warning). `dsh × http` is disabled — a browser-auth-gated Host checks a spawn-time cookie on every `/api` request, and its launch token is only capturable from a same-machine spawn's startup output (an SSH attach has no retrieval surface). `dsh × ssh` works only for an ungated remote dsh; a gated one answers the probe with HTTP 401. For an authenticated remote, deploy the Gateway and attach it as a `gateway` target (see [deploy-gateway.md](./deploy/deploy-gateway.md)).
 
 ## Features
 
 - macOS Swift native shell — AppKit window + WKWebView; menus/status item/notifications/badge/deep links/file dialogs/hide-restore and Sparkle in-app updates are native; the shell carries no business logic and the page 100% reuses the official frontend
 - Local dsh hosting, one click — the local instance auto-starts with readiness, supervision/reaping, health status and host logs; the first screen is its full dsh UI
 - Runtime version management (hot reload) — switch/upgrade/roll back the dsh runtime per instance in Settings, effective immediately; plugin updates need no desktop-app restart (local and gateway alike)
-- Remote instances over SSH — add a host and the app sets up an SSH tunnel and manages the remote systemd service; key or password auth
+- Remote instances over SSH — add a host and the app sets up an SSH tunnel and manages the remote systemd service (the remote must have no browser-auth gate; authenticated remotes belong behind the Gateway); key or password auth
 - Authenticated Gateway access — attach a deployed gateway as a `gateway` source; shared token / login password as needed, HTTPS by default
 - Unified multi-source sidebar navigation — sessions/workspaces from every source (local + remote) listed equally in the dsh-native sidebar, grouped by source (remote ones carry a badge); single click opens, double click renames
 - Sidebar collapse / drag / accent colors — source-level collapse toggles fold that source's workspace list; server groups drag-sort (persisted across instances); sources/workspaces carry accent bars
@@ -113,7 +115,7 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 - **How do I check the remote browser on its own?** — `pnpm run typecheck:browser` for types and `pnpm run test:browser` for the plugin's tests.
 - **Where do my credentials go?** — two places, both on this machine: (1) the instance's own config plane (local = this machine's dsh home, remote = the far dsh home, managed by that instance's dsh); (2) the connection credentials saved by the desktop shell under `<userData>` (Gateway credentials are encrypted with the OS keychain when available, otherwise a 0600 plaintext fallback; SSH passwords use a 0600 plaintext fallback by explicit user decision), used to reconnect without re-entering. Credentials are write-only form inputs, are never shown back in the UI, and never enter the renderer or logs; the Gateway installer writes its config file with 0600 permissions.
 - **How is this different from the official Desktop?** — the official Desktop covers the local-only case; dsh-chamber differs on remote and multi-machine use: attaching remote instances over SSH, an authenticated Gateway, and local + remote as equal sources in one window. For local-only use both work out of the box; pick by whether you need remote.
-- **What does a remote instance need?** — a reachable API-profile dsh target, or a deployed `@dsh-chamber/gateway`. Either can use an SSH tunnel or explicit HTTP(S); no remote web frontend is needed — the reused local UI reaches it via same-origin proxying.
+- **What does a remote instance need?** — a reachable dsh API surface (web profile) whose Host has no browser-auth gate (a gated Host answers the SSH probe with HTTP 401 and cannot be attached), or a deployed `@dsh-chamber/gateway` reachable over an SSH tunnel or explicit HTTP(S). For an authenticated remote, pick the Gateway. No remote web frontend is needed — the reused local UI reaches it via same-origin proxying.
 - **How do agent presets / profiles work across instances?** — per-instance authoritative: each instance's `settings`/`credentials`/`llm`/`agentPreset` config plane lives only on that side (local = this machine, remote = the far server). To edit a remote preset, switch to that source's shell Settings → Agent presets.
 - **Where does the frontend come from?** — the dsh official frontend, source-reused and self-built; every instance keeps its native UI.
 - **macOS shows the screen-recording prompt but dsh-chamber never appears in Settings (or the switch is on yet capture still fails)?** — In System Settings → Privacy & Security → Screen & System Audio Recording, select any old dsh-chamber entry, remove it with "−", then re-add `/Applications/dsh-chamber.app` with "+", turn it on, and finally quit (⌘Q) and reopen dsh-chamber (machines upgraded from an older build or a different bundle id must do this remove-then-re-add once; `tccutil reset` can only clear records, never create one).

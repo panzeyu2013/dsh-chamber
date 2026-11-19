@@ -71,10 +71,16 @@
   "remoteDshHome": null,         // 远端 dsh home（$DSH_HOME），插件同步/seed 的远端路径基准
                                  // （null = ssh 默认 home；白名单见 13 §7.2）
   "insecureHttp": false,         // transport=http：true = http 明文（缺省 false = https，17 §9.1）
-  "spkiPin": null                // S23 可选 SPKI pin：hex sha256 of SPKI DER（^[0-9a-fA-F]{64}$）；
+  "spkiPin": null,               // S23 可选 SPKI pin：hex sha256 of SPKI DER（^[0-9a-fA-F]{64}$）；
                                  //  仅 gateway+https 有效，http 明文拒绝（17 §9.1）
+  "dshChamber": {                // 宿主内部元数据：spec 之外的命名空间键（页面永不提交、旧读者忽略）
+    "manualDisconnectSessionId": "9f2c…"   // 本应用会话内被手动断开的行；换会话作废
+  }
 }
 ```
+
+- **行内宿主元数据（spec 之外）**：行对象可带 `dshChamber` 命名空间键（当前字段 `manualDisconnectSessionId`），由注册表唯一写者读写在**同一次整文件原子写**里（与行同生共死，删除即随行消失、同 id 重加无意图）；它不进 `TransportInstanceSpec`、不经 provider 白名单、不出现在 `listInstances()` 的 spec 投影。加载对旧行/未知键宽容：缺字段视为无意图、形状坏只丢该字段（不丢行、不计入 `droppedCount`），新版本写、旧版本读者忽略。
+- **连接意图语义**：`manualDisconnectSessionId` 记录「本应用会话内用户显式断开了这一行」；值不等于当前应用会话 ID 即作废（完全退出重开 = 新会话 = 默认连接，同会话 sidecar 重启保留）。意图只由注册表唯一的意图写入口设置/清除，写盘失败时内存保持用户事实并 loud 报告（volatile，跨重启不保证）；名册 degraded/incomplete 时拒绝写盘。它是**用户意图**而非 liveness：不改变隧道/服务的实时判定口径。
 
 - **注册表写入原子性**：renderer 提交完整候选集；任一条目非法、kind 不匹配或 id 重复时，主进程在写盘/断连/内存替换前拒绝**整个**候选集，原文件、运行中隧道与内存注册表均不变。只有启动加载旧文件时容错恢复：非法/kind 不匹配/重复条目响亮告警后丢弃（重复 id 首胜）。写路径不得复用加载路径的「尽量恢复」语义，否则一次非法编辑会静默删掉既有主机；现行 add/edit 只走精确单行 `desktop_ssh_save_connection`，bulk `instances_set` 为 exact no-op-only，该原则仍约束主进程规范化与 metadata-last 提交。
 - **凭据不进注册表**：`sshPasswordSet`/`tokenSet`/`passwordSet` 是主进程凭据存储的实时**非秘密投影**（`instances_get` 读时合并，仅供 UI「已设置」提示；secret 值绝不回填）。凭据 retarget 按域比较而非复用 transport 全字段：gateway auth 绑定 kind+host+remotePort，SSH password 绑定 host+user+sshPort；元数据与三凭据由主进程单次补偿事务保存（17 §9.1）。两类 durable mirror 把 binding 与 secret 同次原子写，读取/注入时复验当前 registry，故 secret→registry 两次 fsync 间崩溃只会隐藏新值，不会把它发给旧目标。同 id 新增/进入/离开/retarget 留空也会强制 clear/rebind，防止半事务 secret 复活；非当前 schema 的凭据文件（旧 v1/v2 或无版本）fail closed、保留为 `*.corrupt` 并要求重录（无就地迁移）。
@@ -83,17 +89,40 @@
 - **生命周期（transport=http）**：无子进程——直接 http(s) 访问目标端点（17 §2.2/§9.2）。
 - **phase 投影**：隧道 / 服务 / 直连状态 → `idle / connecting / ready / degraded / error` 投影给 renderer；**隧道 URL 与直连端点 URL 永不进 renderer**——renderer 只见 localPort / phase 投影（05 §7.4；直连端点仅主进程持有，17 §9.3）。
 - **连接/exec generation**：`serviceName` 与 `remoteDshHome` 的编辑同时属于 transport 与 exec identity 变化（字段集单源 = `packages/desktop/credential-identity.ts`）。主进程先提升 generation/`execEpoch`，撤销旧 live transport、重连/探针与全部 exec child（SIGTERM→SIGKILL），再按旧连接是否非 idle 决定以新参数重启；多步 exec 每次下一次 spawn 前复验 generation，迟到日志、状态投影、`serviceActive` 与结果都不能跨代提交。kind/serviceName 变化还会把旧 `serviceActive` 复位为未知。
+- **逻辑来源身份（proof 与退役的唯一口径）**：`packages/desktop/credential-identity.ts#logicalSourceIdentity` 是「两个 spec 是否同一来源」的唯一分类：gateway = `kind + host + remotePort`（SSH 登录与 SSH 守护端口只是到达机制），dsh = `kind + host + user + sshPort + remotePort`（user/sshPort 就是目标身份）。通知 proof 轮换、renderer 来源退役（`retiredIds`）与 `sourceRetire` 维度只由它派生；传输机制本身（`transport` 字、gateway 的 user/sshPort、scheme/SPKI）不是来源身份——SSH↔HTTP 改绑重建传输与壳但保留来源历史，同 gateway 换 SSH 账号也不轮换 proof。凭据域绑定复用同一身份（gateway 凭据 = kind+host+remotePort，SSH 密码 = host+user+sshPort）。
+- **名册变更集（`RosterChangeSet`）**：一次权威保存/删除先在注册表内算一个纯函数差分（`packages/desktop/roster-change.ts#computeRosterChangeSet(before, after)`），随后每个后果只由自己的维度驱动，消费者不各自重列身份字段：
+
+| 维度 | 触发（同 id 编辑 / 删除） | 消费者（宿主侧后果） |
+|---|---|---|
+| `displayOnly` | 仅 label 变且无其它维度 | 安装新行，不 teardown、不轮换 |
+| `transportRebuild` | live transport identity 变 | 断开旧隧道代并重建 |
+| `execRevoke` | exec identity 变（endpoint/service/home/transport） | 撤销在途/排队 exec 与 provider 投影 |
+| `sourceRetire` | 逻辑来源身份变，或行被删除 | proof 轮换、通知 incarnation 与壳退役（`retiredIds`） |
+| `bootCapability` | `transport` 字变且来源未退役 | 壳按新 carrier 重挂（不退役来源） |
+| `forwardRevoke` | 旧 ssh forward 腿失效：离开 ssh、ssh 端点或转发端口变、kind 变、删除 | 释放该来源的 forward 租约与别名命名空间 |
+| `seedRevoke` | operational fingerprint（endpoint + serviceName + remoteDshHome）变 | 撤销 chamber 宿主包 seed 归属 |
+| `seedReseed` | dsh×ssh 目标 service/home 改且已完成 seed | 就绪后重新 seed 一次 |
+
+- **forward 退役只由 `forwardRevoke` 驱动**：service/home 编辑走 `seedRevoke`/`seedReseed` 并重建传输，**不**撤 forward 租约；HTTP scheme 与 SPKI 也不是 forward 事实。删除、离开 ssh、ssh 端点或转发端口变化才释放 forward 子进程与别名命名空间。
 - **IPC 白名单**（renderer ↔ main，preload 限定）：全集见 05 §7.4（另含插件编排面 `desktop_ssh_plugin_*`、`restart_service`、`seed_host_graph`、`status_changed` 等，不再枚举）。`desktop_ssh_save_connection` 是 add/edit/非空凭据写的唯一入口；删除只走精确 id-addressed `desktop_ssh_delete_connection(id)`（不存在 id 为幂等 no-op）；三个 legacy 单项 setter（`desktop_ssh_set_password` / `desktop_gateway_set_token` / `desktop_gateway_set_password`）均只接受 clear（主进程内存 + 0600 文件兜底，05 §8 例外）；`desktop_ssh_config_list`（`~/.ssh/config` 自动发现，非秘密投影：alias/hostName/user/port；IdentityFile/ProxyCommand/凭据材料绝不投影 renderer；连接表单瞬时 write-only 凭据例外仍按上条事务处理）。
-- **liveness 纪律**（01 §5）：隧道 / 服务事实只取「隧道相位 + systemd is-active」的实时判定，从不持久化「已连接」状态。
+- **liveness 纪律**（01 §5）：隧道 / 服务事实只取「隧道相位 + systemd is-active」的实时判定，从不持久化「已连接」状态；用户显式断开是**意图**而不是 liveness 事实——它按应用会话记在行内元数据（见上），不被隧道/服务实时判定覆盖。
 - **就绪 = 隧道 TCP + dsh 身份握手**：TCP accept 不证明目标是 dsh。置 ready 前经 provider `verifyUp`（统一身份握手 `session/canOpenWorkspacePath`——固定小体积 boolean Remote，老 runtime 树 404 时 signature 路径回退 legacy `session/list` 识别（"check or upgrade"）；与本地实例就绪判据同源，02 §3.2；**按 `spec.kind` 决定是否带认证头**——dsh 目标无认证头、gateway 目标可选认证头，探针认证矩阵见 17 §9.2）验证远端真是目标；目标端口跑非 dsh 服务时显式报错/降级，**绝不呈现已连接**（拒绝假连接）。
 - **确定性失败默认免重试**：目标应答了探测但证明不是（兼容的）目标（HTTP 非 200 / 错误信封 / 版本过老）→ 验证结果带 `terminal` 标记，第一次失败即落 error 终态（重试无法改变应答）。仅 provider 显式声明 `terminalRetryable`（仅「远端 dsh 版本/身份不匹配」的滚动升级窗口）例外：仍落 error + 修复提示，按 5m→15m→45m→60m 上限慢重探自愈；凭据/配置拒绝（gateway 401/403/421、口令拒绝、非 dsh 应答）永不设该位。复探期 `phase=connecting` 但 `requiresUserAction`/`userActionKind` 保持，连接页提示不闪断。
-- **UI 类别区分**：终态投影的 `userActionKind` 区分失败类别——`'auth'`（传输层认证/主机密钥/spawn）提示修复 SSH 凭据；`'endpoint'`（实例层确定性探测失败）展示「请检查或升级远端 dsh」，绝不展示 SSH 认证失败提示。
+- **UI 类别区分**：终态投影的 `userActionKind` 区分失败类别——`'auth'`（传输层认证/主机密钥/spawn）提示修复 SSH 凭据；实例层确定性失败按 provider `failureKind` 细分：`'instance-auth'`（远端 dsh 的 browser-auth 401：SSH 隧道正常，提示改用 Gateway 接入）与 `'endpoint'`（版本过旧/非 dsh 应答：展示「请检查或升级远端 dsh」）；gateway 目标保持 `'endpoint'`（其 401/403 是 gateway 凭据提示，由连接页的 `spec.kind` 分支给文案）。绝不把实例层失败展示成 SSH 认证失败提示。
 - **SPKI pin 的 pre-write 门**：gateway+HTTPS 配置 pin 时，桌面登录/探针与控制面 HTTP/WS 反代都必须在 TLS `secureConnect` 后先匹配 peer SPKI，匹配前不调用请求 `write/end`、不发送 HTTP/WS handshake/header/credential/body 等任何应用层字节；mismatch 显式失败，目标服务看不到请求。无 pin 的标准 CA 路径不改变。
 - **两段式重连**：瞬时失败先走**快速有界突发**（半开 jitter 指数退避，1s→30s，至多 N=5 次），突发耗尽落 error（诚实红态）**但不停摆**——进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限；延迟带 ±20% 对称抖动，避免多实例同步）。瞬时故障是时变的（网络恢复、远端重启、服务拉起）；error 终态只属于终态失败（认证 / spawn / 确定性验证——failTerminal，默认不自动重试；仅 `terminalRetryable` 的升级窗口例外）。
 - **就绪窗口一次性延展**：到 ready 期限时 ssh 子进程仍存活且无认证/主机密钥失败（post-KEX 认证/LDAP/转发建立；ConnectTimeout 只覆盖建连、banner 与初始 KEX）→ 允许再延一个窗口后再判失败；TCP/KEX 黑洞通常由 ConnectTimeout 结束（不延展），DNS/配置求值等不受其约束的挂起可能吃一次延展。
-- **手动与自动的边界**：手动 connect/disconnect 取消在途慢速重探；成功即 ready 并清零计数。UI 侧点击来源（侧边栏激活 / 打开会话）对 error/degraded 来源即时再试一次（renderer `ensureRemoteConnected`），慢速重探是自动兜底。
+- **手动与自动的边界**：手动 connect/disconnect 取消在途慢速重探；成功即 ready 并清零计数。UI 侧点击来源（侧边栏激活 / 打开会话）对 error/degraded 来源即时再试一次（renderer `ensureRemoteConnected`），慢速重探是自动兜底。**手动断开的意图只在当前应用会话内有效**：显式连接（覆盖层/设置页的 Connect → 精确 IPC → 主进程显式组合）清意图并连接；点击来源/打开会话的 `ensureRemoteConnected` 只处理 error/degraded，不得顺手连接 idle 行。名册 degraded/incomplete 时意图写盘被拒绝（内存生效 + loud 告警，跨重启不恢复）——不可信名册不得洗成权威。
 
 **被否方案（终态自愈）**：永久闩锁（升级窗口只能手动恢复）；对全部终态每 5min 复探（会向 gateway 401/403/421、口令拒绝等确定性拒绝重发凭据）；按 `failureKind==='protocol'` 判可重试（403 与 404 同类、口令拒绝也是 protocol+terminal）。取 provider 显式 `terminalRetryable` + 5m→15m→45m→60m 上限；凭据/配置拒绝永不设位。
+
+**被否方案（行内元数据、来源身份与名册变更集）**
+
+- **把意图放进 `TransportInstanceSpec`**：两个 provider 的 `validateSpec` 是白名单闭包，未知字段每次 load/save 被静默剥掉；且 `connection-save.ts` 用 `JSON.stringify(saved) === JSON.stringify(proposed)` 判「registry refused」，宿主回填字段会让每次编辑 100% 失败。拒绝，改用 spec 之外的行内命名空间键。
+- **独立 intents 文件 / 渲染端存储**：独立文件会造第二个写者与跨文件原子性；渲染端存储会被页面重载清空（今天手动断开全部复活的根因）。拒绝，意图与行同一次原子写、由宿主唯一写者持有。
+- **把 `transport` 纳入逻辑来源身份**：SSH↔HTTP 切换会轮换 proof 并退役来源、清 durable 通知历史，与「保留来源历史」直接冲突；gateway 的 SSH 登录也不该算部署身份。拒绝，机制只驱动 boot capability/transport rebuild。
+- **沿用 exec/live 身份并集撤 forward**：service/home 编辑会误撤仍有效的 forward 租约；改为单列 `forwardRevoke` 维度、由它唯一驱动 forward 退役。拒绝并集。
+- **给 `instances_changed` 推送加「壳重挂」字段**：推送载荷无门能锁（shim 重建对象并丢弃未知字段），且真值在完整快照提交期已齐全（旧行 + 权威行）。拒绝，换代只在提交期差分决定。
 
 ### 2.3 两形态对照
 
