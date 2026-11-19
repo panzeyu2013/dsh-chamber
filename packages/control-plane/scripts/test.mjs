@@ -99,8 +99,19 @@ const GROUPS = {
     'test/log-file.test.ts',
     // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): the
     // generated Cordis logger exporter, its seed entry, and the off-path
-    // byte-identity of the `--patch` overlay.
-    'test/host-logs/host-log-bridge.test.ts',
+    // byte-identity of the `--patch` overlay. The optional real-Cordis leg
+    // mounts the pinned LoggerService from source; the vendored Cordis/cosmokit
+    // tree is source-only, so the same shared test loader the renderer's
+    // real-context contract test uses maps the two bare specifiers, and
+    // --experimental-transform-types handles the upstream parameter-property
+    // syntax (without it the leg self-skips even in a materialized vendor tree).
+    {
+      file: 'test/host-logs/host-log-bridge.test.ts',
+      nodeArgs: [
+        '--experimental-transform-types',
+        '--import', '../../scripts/dev/test-loaders/test-cordis-src-register.mjs',
+      ],
+    },
   ],
   // proxy: 实例反向代理（HTTP/WS/SSE）、WS 帧、注入预算与静态前端服务
   'proxy': [

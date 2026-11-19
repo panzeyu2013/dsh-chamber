@@ -106,6 +106,17 @@ async function get(origin, target, init) {
 }
 
 /**
+ * Headers that mark a GET as a document navigation. The control-plane SPA
+ * fallback (design 04 §5) only answers unknown paths with the shell HTML for
+ * document navigations — `Sec-Fetch-Dest` document/iframe/frame/embed/object,
+ * or `Accept` containing text/html when that header is absent. A plain
+ * fetch() sends the Accept wildcard (and no Sec-Fetch-Dest), so the deep-path
+ * probe must opt in explicitly or it reads the 404 JSON meant for
+ * non-navigation callers (SH-5's old failure mode).
+ */
+export const SHELL_DOCUMENT_HEADERS = Object.freeze({ accept: 'text/html' })
+
+/**
  * Run every live probe.
  * @param opts.planeOrigin control-plane origin (default http://127.0.0.1:17500)
  * @param opts.instanceOrigin the managed dsh instance port (optional, for the credential fence)
@@ -200,7 +211,7 @@ export async function runLiveAcceptance({
   const missing = await get(planeOrigin, `/assets/missing-${Date.now()}.js`)
   rec.add('SH-4', '缺失资源 404 JSON', missing.status === 404 && missing.body.includes('not_found'), `status=${missing.status}`)
 
-  const deepPath = await get(planeOrigin, '/settings/connections')
+  const deepPath = await get(planeOrigin, '/settings/connections', { headers: SHELL_DOCUMENT_HEADERS })
   rec.add('SH-5', '深路径回落壳（SPA）', isShellIndex(deepPath.status, deepPath.body), `status=${deepPath.status} bytes=${deepPath.body.length}`)
 
   const traversalEncoded = await rawRequest(planeOrigin, '/assets/%2e%2e%2f%2e%2e%2fetc%2fpasswd')

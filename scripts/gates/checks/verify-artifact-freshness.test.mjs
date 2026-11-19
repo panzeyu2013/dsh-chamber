@@ -1,8 +1,9 @@
 /**
  * verify-artifact-freshness.test.mjs — 陈旧门**规范化函数**的负例测试。
  *
- * 只保留 gateway staged rebuild 仍使用的 canonRungs 与门的 --self-test：
- * mobile 适配包退役后，逐文件 canonComment 的调用方已删除，测试随实现一起退役。
+ * 只保留 gateway staged rebuild 仍使用的 canonRungs、门的 --self-test 与 G3
+ * Electron 冻结归档档位的纯判据（hostPackageFreshnessArm）：mobile 适配包退役后，
+ * 逐文件 canonComment 的调用方已删除，测试随实现一起退役。
  *
  * 跑法：node --test scripts/gates/checks/verify-artifact-freshness.test.mjs。
  */
@@ -12,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { canonRungs, summarizeResults } from './verify-artifact-freshness.mjs'
+import { canonRungs, hostPackageFreshnessArm, summarizeResults } from './verify-artifact-freshness.mjs'
 import {
   ARTIFACT_FRESHNESS_REGISTRY,
   freshnessGuardIds,
@@ -54,11 +55,35 @@ test('main：--help 打印用法（exit 0），未知参数 exit 2 且不跑任�
   assert.equal(help.status, 0, help.stdout + help.stderr)
   assert.match(help.stdout, /用法: node scripts\/gates\/checks\/verify-artifact-freshness\.mjs/)
   assert.match(help.stdout, /--require-compare/, '严格档必须写进用法（否则没人知道它存在）')
+  assert.match(help.stdout, /--include-electron/, 'Electron 复活严格档必须写进用法（否则没人知道冻结归档怎么复核）')
   const typo = spawnSync(process.execPath, [join(HERE, './verify-artifact-freshness.mjs'), '--mobil-rebuild'], { encoding: 'utf8' })
   assert.equal(typo.status, 2, typo.stdout + typo.stderr)
   assert.match(typo.stderr, /未知参数 --mobil-rebuild/)
   assert.match(typo.stderr, /用法: node/)
   assert.equal(typo.stdout.trim(), '', '未知参数不得静默退化成普通检查（一个产物状态字符都不许打）')
+})
+
+test('G3 Electron-frozen host packages: default loud SKIP, --include-electron keeps the line-by-line compare', () => {
+  // The four dist/host-*-package trees are the Electron packaging leg's copies
+  // (design 25 §3.2: the Swift sidecar reads packages/dsh-chamber-seed-* instead).
+  // Default must read as a frozen-archive SKIP that names the revival flag — not a
+  // silent pass and not a gate-blocking red; the strict arm must keep comparing.
+  const frozen = hostPackageFreshnessArm()
+  assert.equal(frozen.compare, false, 'the default arm must not compare the frozen artifacts')
+  assert.match(frozen.detail, /冻结归档/, 'the skip must be loud (named as a frozen archive)')
+  assert.match(frozen.detail, /--include-electron/, 'the skip must name the revival/strict flag')
+  assert.match(frozen.detail, /缺目录\/旧摘要/, 'the strict-arm semantics must stay stated')
+  const strict = hostPackageFreshnessArm({ includeElectron: true })
+  assert.equal(strict.compare, true, '--include-electron must restore the line-by-line compare')
+  // G2 two-way lockstep: the frozen arm still emits the same id and stays a
+  // freshness guard (not an exemption — exempting it would hollow the table).
+  const hostEntry = ARTIFACT_FRESHNESS_REGISTRY.find(entry => entry.id === 'desktop/dist/host-*-package')
+  assert.ok(hostEntry, 'the host-package artifact must stay registered')
+  assert.equal(hostEntry.guard.kind, 'freshness', 'the frozen default is not an exemption; G2 lockstep keeps the id observed')
+  assert.match(hostEntry.guard.detail, /--include-electron/, 'the registry must name the strict/revival arm')
+  const source = readFileSync(new URL('./verify-artifact-freshness.mjs', import.meta.url), 'utf8')
+  assert.match(source, /note\('desktop\/dist\/host-\*-package'/, 'the verifier must emit the registered id in both arms')
+  assert.match(source, /checkHostPackageBuildManifests\(\{ includeElectron \}\)/, 'main must pass the strict flag into the host-package arm')
 })
 
 test('G2/G8: the shipped artifact registry is valid — every artifact has a guard or a signed exemption', () => {

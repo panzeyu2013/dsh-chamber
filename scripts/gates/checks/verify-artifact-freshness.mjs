@@ -3,13 +3,15 @@
  *
  * 非注册门（不在 gate-surfaces.json）：tests/CI 在构建前跑，没有产物可比；
  * 发布 checklist §4 在 `build:renderer` / `build:desktop` 之后用 `--require-compare` 手动跑。
- * **ARCHIVED（Electron 冻结）**：第 1 类 `dist/preload.cjs` 属 Electron 归档流，
- * 默认构建不再产出，恒 SKIP；该分支保留作复活校验。
+ * **ARCHIVED（Electron 冻结）**：第 1 类 `dist/preload.cjs` 与第 5 类
+ * `dist/host-*-package` 属 Electron 冻结腿的归档产物，默认构建不再产出，默认档
+ * 恒 loud SKIP；两分支都保留作复活校验（host 包副本另由 `--include-electron`
+ * 严格档现跑逐行比对）。
  * （design 21 §7 G2–G8）。
  *
- * 为什么需要：以下三类产物不是 C8（seed dist ×4 + dsh-runtime dist）的覆盖
- * 对象——C8 独占 seed/runtime 的新鲜度判定，产物清单的单一来源 =
- * scripts/lib/build-artifacts.mjs；这三类也没有各自的 freshness 测试，因此
+ * 为什么需要：以下产物不是 C8（seed dist ×4 + dsh-runtime dist）的覆盖对象——
+ * C8 独占 seed/runtime 的新鲜度判定，产物清单的单一来源 =
+ * scripts/lib/build-artifacts.mjs；它们也没有各自的 freshness 测试，因此
  * 「改了 src 没重建产物」可以一路绿到用户手里：
  *   1. packages/desktop/dist/preload.cjs —— tsc 编译产物，与 preload.cts 的
  *      编译结果逐字节比对（成员面另有 G4 的锁步检查；本门比内容）；
@@ -26,6 +28,11 @@
  *      （inputsHash + toolVersion + outputs 指纹）；本门用同一份输入集规则重算并
  *      比对——输入源漂移（改了 src 没重建）与产物漂移（多文件/缺文件/被改）都判
  *      陈旧。目录缺失 = 未构建 ⇒ loud SKIP（clean checkout 正常态）。
+ *      第 5 类专属 Electron 冻结腿的打包副本（design 25 §3.2：Swift sidecar 直接读
+ *      packages/dsh-chamber-seed-* 现役目录，不读 dist/host-*-package；
+ *      docs/progress/electron-frozen.md §2）：默认档按冻结归档 loud SKIP（不判
+ *      陈旧），复活/核验时用 --include-electron 严格档逐行比对（缺目录/旧摘要=
+ *      陈旧）——冻结归档的陈旧不得卡住现役 Swift 发布门。
 
  * 语义（与 control-plane-freshness / build-smoke 同款豁免）：
  *   - 输入缺失（clean checkout、未 build 的环境）⇒ **loud SKIP**，不判红；
@@ -37,6 +44,8 @@
  *   --require-compare 严格档：一类产物都比不了（全 SKIP）即红；默认档下
  *                     clean checkout 的 SKIP 只 loud 打印、不判红。发布前用
  *                     严格档证明「确实比过」，不用 SKIP 冒充通过。
+ *   --include-electron 复活/核验 Electron 冻结打包腿：对 dist/host-*-package
+ *                     仍逐行比对构建清单（默认档把它们当冻结归档 loud SKIP）。
  *   --help            打印用法（exit 0）；未知参数 exit 2（拼错的开关绝不
  *                     静默退化成普通检查）。
  */
@@ -294,10 +303,37 @@ function checkWebDistBuildManifest() {
 }
 
 /**
+ * 第 5 类的冻结归档判据（纯函数；--self-test 与单测直接断言两侧）。默认档把
+ * Electron 冻结腿的打包副本当冻结归档 loud SKIP：它们不是 Swift 出货产物
+ * （design 25 §3.2：sidecar 读 packages/dsh-chamber-seed-* 现役目录），陈旧不得
+ * 卡住现役发布门；复活/核验 Electron 打包腿时 --include-electron 恢复逐行比对。
+ * 两个分支都必须发射同一个 note id（G2 双向锁步），这里只决定走哪一支。
+ * @param {{ includeElectron?: boolean }} [options]
+ * @returns {{ compare: boolean, detail: string }}
+ */
+export function hostPackageFreshnessArm({ includeElectron = false } = {}) {
+  if (includeElectron) return { compare: true, detail: '' }
+  return {
+    compare: false,
+    detail: 'Electron 冻结腿的打包副本（docs/progress/electron-frozen.md §2；design 25 §3.2：'
+      + 'Swift sidecar 读 packages/dsh-chamber-seed-* 现役目录、不读本副本）——按冻结归档 SKIP，'
+      + '不判陈旧；复活/核验时用 --include-electron 严格档逐行比对（缺目录/旧摘要=陈旧）',
+  }
+}
+
+/**
  * 5. G3：packages/desktop/dist/host-*-package/** —— 逐行读构建清单比对（行集不得
  * 缩水：只要有一个目录在场，缺目录/旧摘要都判陈旧）。全部缺失 = 未构建 ⇒ SKIP。
+ * 默认档走冻结归档 SKIP（见 hostPackageFreshnessArm）；--include-electron 才是
+ * 原逐行比对。
+ * @param {{ includeElectron?: boolean }} [options]
  */
-function checkHostPackageBuildManifests() {
+function checkHostPackageBuildManifests({ includeElectron = false } = {}) {
+  const arm = hostPackageFreshnessArm({ includeElectron })
+  if (!arm.compare) {
+    note('desktop/dist/host-*-package', 'skip', arm.detail)
+    return
+  }
   const rebuild = HOST_PACKAGE_REBUILD_COMMAND
   const desktopDir = join(ROOT, 'packages', 'desktop')
   const rows = HOST_PACKAGE_BUILD_ROWS.map((row) => ({ row, dir: join(desktopDir, 'dist', basename(row.outDir)) }))
@@ -330,11 +366,14 @@ function checkHostPackageBuildManifests() {
 
 /** 用法（--help 与未知参数都打印它）。 */
 const USAGE = [
-  '用法: node scripts/gates/checks/verify-artifact-freshness.mjs [--require-compare] [--self-test]',
+  '用法: node scripts/gates/checks/verify-artifact-freshness.mjs [--require-compare] [--include-electron] [--self-test]',
   '',
-  '  无参数           比对已构建的 preload / typert / gateway dist / dist-web 与 host 包构建清单。',
+  '  无参数           比对已构建的 preload / typert / gateway dist / dist-web 构建清单；',
+  '                    dist/host-*-package 属 Electron 冻结归档，默认档 loud SKIP。',
   '  --require-compare 严格档：一类产物都比不了（全 SKIP，例如 clean checkout）即红；',
   '                    用于必须证明「比过」的场合；默认档下 SKIP 只 loud 打印、不判红。',
+  '  --include-electron 复活/核验 Electron 冻结打包腿：仍逐行比对 dist/host-*-package',
+  '                    构建清单（缺目录/旧摘要=陈旧），默认档不比对。',
   '  --self-test       负控：证明比对能抓到人为差异，exit 0/1。',
   '  --help            打印本用法，exit 0。',
   '未知参数 = exit 2（拼错的参数绝不能静默退化成普通检查）。',
@@ -361,7 +400,7 @@ function main(argv) {
     console.log(USAGE)
     return
   }
-  const unknown = argv.filter((argument) => !['--require-compare', '--self-test'].includes(argument))
+  const unknown = argv.filter((argument) => !['--require-compare', '--include-electron', '--self-test'].includes(argument))
   if (unknown.length > 0) {
     console.error('artifact-freshness: 未知参数 ' + unknown.join(' '))
     console.error(USAGE)
@@ -369,6 +408,7 @@ function main(argv) {
     return
   }
   const requireCompare = argv.includes('--require-compare')
+  const includeElectron = argv.includes('--include-electron')
   // G2/G8: the registry is validated before anything is compared — an artifact
   // without a guard or a signed exemption fails the gate even on a clean tree.
   const registryProblems = validateArtifactFreshnessRegistry()
@@ -426,9 +466,20 @@ function main(argv) {
     } finally {
       rmSync(manifestWork, { recursive: true, force: true })
     }
-    const selfTestOk = identical && detected && setArm && strictArm && manifestArm
+    // Electron-frozen arm (the --include-electron instrument): the default must
+    // read as a loud frozen-archive SKIP naming the revival flag (same note id),
+    // and --include-electron must still compare — the frozen default may not turn
+    // into a silent pass, nor may the strict arm stop judging staleness.
+    const electronFrozen = hostPackageFreshnessArm()
+    const electronStrict = hostPackageFreshnessArm({ includeElectron: true })
+    const electronArm = electronFrozen.compare === false
+      && /冻结归档/.test(electronFrozen.detail)
+      && /--include-electron/.test(electronFrozen.detail)
+      && /缺目录\/旧摘要/.test(electronFrozen.detail)
+      && electronStrict.compare === true
+    const selfTestOk = identical && detected && setArm && strictArm && manifestArm && electronArm
     console.log('artifact-freshness self-test: ' + (selfTestOk
-      ? 'ok（同内容=一致，追加一字节=陈旧，多余/缺失/错名产物=陈旧，全 SKIP 严格档=红，构建清单输出/输入漂移=陈旧）'
+      ? 'ok（同内容=一致，追加一字节=陈旧，多余/缺失/错名产物=陈旧，全 SKIP 严格档=红，构建清单输出/输入漂移=陈旧，冻结归档默认 SKIP/--include-electron 比对）'
       : 'FAIL'))
     process.exit(selfTestOk ? 0 : 1)
   }
@@ -437,7 +488,7 @@ function main(argv) {
   checkGenerated()
   checkGatewayDist()
   checkWebDistBuildManifest()
-  checkHostPackageBuildManifests()
+  checkHostPackageBuildManifests({ includeElectron })
   // G2 two-way lockstep: every freshness id the registry claims must have been
   // observed by a note() here, and every observed id must be registered — adding a
   // comparison without registering it (or vice versa) fails the gate.

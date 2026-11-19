@@ -11,15 +11,17 @@
  *   1. 按组跑**可跑的**测试文件（默认用装配 payload node，缺件时回退调用者 node；可 --node 覆盖）；
  *   2. 逐文件分类：pass / fail / blocked（ERR_MODULE_NOT_FOUND、vendor 树未物化、
  *      或显式 skip 环境变量），blocked 一律列名并标注「CI 权威」；
- *   3. 打印验收表 + 写 JSON 报告；**只要存在真失败即 exit 1**，blocked 不判绿也
- *      不判红（单独一栏，绝不静默跳过）；
+ *   3. 打印验收表 + 写 JSON 报告；**blocked 不是绿**：真失败与 blocked 都让脚本
+ *      exit 1，只有显式 --allow-blocked（确知本环境跑不了的缺口）才放行 blocked；
+ *      blocked 行仍 loud 打印并保留在 JSON 报告里；
  *   4. 显式清单条目必须存在——文件被删/改名时**不得被 existsSync 静默吞成
  *      「少跑一项」的假绿；发现死引用逐条打印并 exit 2（清单腐化 = 仪表腐化）。
  *
  * 用法：
  *   node scripts/gates/checks/remote-state-acceptance.mjs [--json] [--out <path>]
- *        [--node <path>] [--only <group>] [--list] [--self-test]
- * 退出码：0 = 无真失败（可能含 blocked）/ 1 = 有真失败 / 2 = 用法错误。
+ *        [--node <path>] [--only <group>] [--list] [--self-test] [--allow-blocked]
+ * 退出码：0 = 无真失败且无 blocked（或 --allow-blocked 显式放行 blocked）/
+ *        1 = 有真失败，或存在 blocked 且未放行 / 2 = 用法错误。
  */
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -29,7 +31,6 @@ import { fileURLToPath } from 'node:url'
 import { resolveNodeBinary, resolveSidecarDir } from '../../lib/sidecar-assembly.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-const LOADER = 'packages/gateway/test/session-state/workspace-loader.mjs'
 
 /**
  * Default interpreter: the assembly's payload node when it is a real file, else
@@ -79,7 +80,10 @@ const GROUPS = [
     // protocol/ = 协议与 mux；proxy/sse-resume = Last-Event-ID 续传的行为锁。
     files: [...listFiles('packages/control-plane/test/protocol'), 'test/proxy/sse-resume.test.ts'],
   },
-  { id: 'gateway-session-state', cwd: 'packages/gateway', nodeArgs: ['--import', '../../../' + LOADER], files: listFiles('packages/gateway/test/session-state') },
+  // session-state 组按包自己 test manifest 登记的 loader 缝运行（packages/gateway/scripts/test.mjs
+  // 的 nodeArgs）：cwd=packages/gateway，--import 必须是**包内相对**路径；多一层 ../../../
+  // 会从仓库根再上跳一级（旧缺陷：组内 6 个文件全部 ERR_MODULE_NOT_FOUND）。
+  { id: 'gateway-session-state', cwd: 'packages/gateway', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'], files: listFiles('packages/gateway/test/session-state') },
   { id: 'sidebar-state', cwd: 'packages/dsh-chamber-client-ui-sidebar', env: { DSH_CHAMBER_VENDOR_ABSENT: 'skip' }, files: [...listFiles('packages/dsh-chamber-client-ui-sidebar/test/session-rows'), ...listFiles('packages/dsh-chamber-client-ui-sidebar/test/session-state')] },
   { id: 'layout-theme', cwd: 'packages/dsh-chamber-client-ui-layout', files: listFiles('packages/dsh-chamber-client-ui-layout/test') },
   { id: 'renderer-state', cwd: 'packages/renderer', files: [
@@ -148,25 +152,52 @@ function runOne(node, cwd, file, nodeArgs, env) {
 }
 
 /**
- * `--self-test`：**仪表本身必须能失败**。用两个合成用例跑同一条
- * runOne 判据：故意失败的必须判 fail 且非零退出，故意通过的必须判 pass——
- * 两侧都要成立，才能排除「分类器一律判红」或「一律判绿」这两种假绿。
+ * 退出判据（纯函数；--self-test 负控直接断言两侧）：真失败必非零；blocked
+ * 默认也非零——「本环境跑不了」不得被验收入口当成绿；确知环境缺口时调用方
+ * 显式 --allow-blocked 放行（blocked 行仍 loud 打印、仍写进 JSON 报告）。
+ * @param {{ fail: number, blocked: number }} totals
+ * @param {{ allowBlocked?: boolean }} [options]
+ * @returns {0 | 1}
+ */
+function acceptanceExitCode(totals, { allowBlocked = false } = {}) {
+  if (totals.fail > 0) return 1
+  if (totals.blocked > 0 && !allowBlocked) return 1
+  return 0
+}
+
+/**
+ * `--self-test`：**仪表本身必须能失败**。用三个合成用例跑同一条 runOne 判据：
+ * 故意失败必须判 fail 且非零退出、故意通过必须判 pass、环境阻塞（模块解析失败）
+ * 必须判 blocked（不是 pass）——排除「一律判红」「一律判绿」「blocked 冒充通过」
+ * 三种假绿。退出判据再用合成 totals 正反断言：fail=1、blocked-only 默认=1、
+ * --allow-blocked 才=0、干净=0。
  */
 function selfTest(node) {
   const dir = resolve(ROOT, '.tmp/acceptance/self-test')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'synthetic-fails.test.mjs'), "import { test } from 'node:test'\nimport assert from 'node:assert/strict'\ntest('synthetic failure', () => { assert.equal(1, 2) })\n")
   writeFileSync(join(dir, 'synthetic-passes.test.mjs'), "import { test } from 'node:test'\nimport assert from 'node:assert/strict'\ntest('synthetic pass', () => { assert.equal(1, 1) })\n")
+  // 环境阻塞型的形状：模块解析失败（ERR_MODULE_NOT_FOUND）——判 blocked，不是 pass
+  // （它不得冒充通过），也不是 fail（它不是产品失败）。
+  writeFileSync(join(dir, 'synthetic-blocked.test.mjs'), "import './__missing-for-self-test__.mjs'\n")
   const bad = runOne(node, '.tmp/acceptance/self-test', 'synthetic-fails.test.mjs')
   const good = runOne(node, '.tmp/acceptance/self-test', 'synthetic-passes.test.mjs')
+  const blocked = runOne(node, '.tmp/acceptance/self-test', 'synthetic-blocked.test.mjs')
+  const failExit = acceptanceExitCode({ pass: 0, fail: 1, blocked: 0 })
+  const blockedExit = acceptanceExitCode({ pass: 0, fail: 0, blocked: 1 })
+  const blockedAllowedExit = acceptanceExitCode({ pass: 0, fail: 0, blocked: 1 }, { allowBlocked: true })
+  const cleanExit = acceptanceExitCode({ pass: 1, fail: 0, blocked: 0 })
   // 死引用检测同样必须有负控：合成缺失路径必须被 deadEntries 抓到，
   // 真实存在路径必须放行——否则「loud 校验」可能退化成「一律报死」。
   const deadDetected = deadEntries(['packages/renderer/test/__deleted-for-self-test__.test.ts']).length === 1
   const liveKept = deadEntries(['packages/renderer/test/session-state/session-facts-source.test.ts']).length === 0
-  const ok = bad.verdict === 'fail' && bad.exit !== 0 && good.verdict === 'pass' && deadDetected && liveKept
+  const ok = bad.verdict === 'fail' && bad.exit !== 0 && good.verdict === 'pass'
+    && blocked.verdict === 'blocked'
+    && failExit === 1 && blockedExit === 1 && blockedAllowedExit === 0 && cleanExit === 0
+    && deadDetected && liveKept
   console.log(ok
-    ? `acceptance self-test: ok（合成失败判 fail / exit ${bad.exit}；合成通过判 pass；死引用负控 missing=1/live=0）`
-    : `acceptance self-test: FAIL（失败用例判 ${bad.verdict}/exit ${bad.exit}，通过用例判 ${good.verdict}，死引用负控 ${deadDetected}/${liveKept}）`)
+    ? `acceptance self-test: ok（合成失败判 fail/exit ${bad.exit}；合成通过判 pass；合成阻塞判 blocked；退出判据 fail=1 blocked=1 allow-blocked=0 clean=0；死引用负控 missing=1/live=0）`
+    : `acceptance self-test: FAIL（失败用例判 ${bad.verdict}/exit ${bad.exit}，通过用例判 ${good.verdict}，阻塞用例判 ${blocked.verdict}，退出判据 ${failExit}/${blockedExit}/${blockedAllowedExit}/${cleanExit}，死引用负控 ${deadDetected}/${liveKept}）`)
   process.exit(ok ? 0 : 1)
 }
 
@@ -178,6 +209,7 @@ function main() {
   }
   const only = argValue('--only')
   const wantJson = process.argv.includes('--json')
+  const allowBlocked = process.argv.includes('--allow-blocked')
   const groups = GROUPS.filter(g => only === undefined || g.id === only)
   if (only !== undefined && groups.length === 0) {
     console.error(`未知分组 ${only}；可用：${GROUPS.map(g => g.id).join(', ')}`)
@@ -242,10 +274,10 @@ function main() {
       }
     }
     console.log(`\n合计：pass=${totals.pass} fail=${totals.fail} blocked=${totals.blocked}（断言通过 ${totals.assertions}）`)
-    if (totals.blocked > 0) console.log('blocked = 本环境无法跑（无 node_modules / vendor 未物化），**以 CI 为准**，不得当作通过。')
+    if (totals.blocked > 0) console.log('blocked = 本环境无法跑（无 node_modules / vendor 未物化），**不是通过**：默认判 exit 1；确知环境缺口时用 --allow-blocked 显式放行（blocked 行仍保留在报告里）。')
     if (totals.fail > 0) console.log('存在真失败：见上方 FAIL 行。')
   }
-  process.exit(totals.fail > 0 ? 1 : 0)
+  process.exit(acceptanceExitCode(totals, { allowBlocked }))
 }
 
 if (process.argv.includes('--self-test')) selfTest(argValue('--node') ?? defaultNode())

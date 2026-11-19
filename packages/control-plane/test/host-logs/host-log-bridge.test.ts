@@ -402,6 +402,25 @@ function withStderrCapture(fn: () => void): string {
   return captured
 }
 
+/**
+ * Async twin of `withStderrCapture` for legs whose writes happen across an
+ * `await`. The real-Cordis mount announces itself while the plugin applies
+ * (`ctx.plugin(...)` + `await fiber`), so a capture window that opens only
+ * after the fiber settled misses the startup marker. Node:test runs these
+ * tests sequentially, so the global patch is safe (same as the sync helper).
+ */
+async function withStderrCaptureAsync(fn: () => Promise<void>): Promise<string> {
+  const original = process.stderr.write
+  let captured = ''
+  process.stderr.write = ((chunk: unknown) => { captured += String(chunk); return true }) as unknown as typeof process.stderr.write
+  try {
+    await fn()
+  } finally {
+    process.stderr.write = original
+  }
+  return captured
+}
+
 /** Materialize + dynamically import the generated plugin (a real ESM load). */
 async function loadGeneratedPlugin(levelName: 'error' | 'info' | 'warn' | 'debug', stateDir: string) {
   const sourceDir = ensureHostLogBridgeSource(stateDir, parseHostLogBridgeEnv(levelName))
@@ -646,18 +665,21 @@ test('real cordis (optional leg): the host LoggerService honors the baked level'
   const emittedAt = async (levelName: 'error' | 'warn' | 'debug'): Promise<string> => {
     const dir = tempDir(t)
     const plugin = await loadGeneratedPlugin(levelName, dir)
-    const ctx = new Context()
-    const fiber = ctx.plugin(plugin)
-    await fiber
-    await new Promise(resolve => setTimeout(resolve, 0))
-    const captured = withStderrCapture(() => {
+    // Capture from BEFORE the plugin mount through disposal: the bridge's
+    // startup marker ('host log bridge active (level=…)') is written while the
+    // plugin applies, i.e. inside ctx.plugin() / the awaited fiber — a window
+    // opened after the mount can never see it.
+    return await withStderrCaptureAsync(async () => {
+      const ctx = new Context()
+      const fiber = ctx.plugin(plugin)
+      await fiber
+      await new Promise(resolve => setTimeout(resolve, 0))
       ctx.logger.error('an %s happened', 'error')
       ctx.logger.info('an %s happened', 'info')
       ctx.logger.warn('an %s happened', 'warn')
       ctx.logger.debug('an %s happened', 'debug')
+      await ctx.fiber.dispose()
     })
-    await ctx.fiber.dispose()
-    return captured
   }
 
   const atError = await emittedAt('error')

@@ -12,11 +12,11 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { configuredSourceIds, registryPath, resolveRegistryFile } from './probe.mjs'
+import { SHELL_DOCUMENT_HEADERS, configuredSourceIds, registryPath, resolveRegistryFile } from './probe.mjs'
 
 test('resolveRegistryFile prefers the explicit path and falls back to the desktop convention', () => {
   assert.equal(
@@ -27,6 +27,17 @@ test('resolveRegistryFile prefers the explicit path and falls back to the deskto
   // An empty/falsey override is the same as no override: the convention holds.
   assert.equal(resolveRegistryFile({ registryFile: '', env: {}, home: '/home/x' }), registryPath({}, '/home/x'))
   assert.equal(resolveRegistryFile({ env: {}, home: '/home/x' }), registryPath({}, '/home/x'))
+})
+
+test('SH-5 deep-path probe opts in as a document navigation (SPA fallback, design 04 §5)', () => {
+  // The shell's SPA fallback only answers document navigations; any other unknown
+  // GET is a 404 JSON. fetch() defaults to the Accept wildcard, so a deep-path
+  // probe without this header reads the 404 and SH-5 goes red against a healthy plane.
+  assert.deepEqual(SHELL_DOCUMENT_HEADERS, { accept: 'text/html' })
+  assert.equal(Object.isFrozen(SHELL_DOCUMENT_HEADERS), true)
+  const source = readFileSync(new URL('./probe.mjs', import.meta.url), 'utf8')
+  assert.match(source, /const deepPath = await get\(planeOrigin, '\/settings\/connections', \{ headers: SHELL_DOCUMENT_HEADERS \}\)/,
+    'SH-5 must go through the document-navigation header constant')
 })
 
 test('configuredSourceIds reads only the given file, id/kind only, and never throws', () => {

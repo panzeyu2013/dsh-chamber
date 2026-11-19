@@ -89,7 +89,7 @@ export const ARTIFACT_FRESHNESS_REGISTRY = Object.freeze([
     generator: 'pnpm --filter @dsh-chamber/desktop run build:host-graph-package',
     guard: {
       kind: 'freshness',
-      detail: 'G3 构建清单：build-host-graph-package.mjs 在 .tmp 内写 .build-manifest.json 后原子 rename；verify-artifact-freshness 逐行比对（含行集不得缩水：缺目录或旧摘要=陈旧）',
+      detail: 'G3 构建清单：build-host-graph-package.mjs 在 .tmp 内写 .build-manifest.json 后原子 rename；默认档按 Electron 冻结归档 loud SKIP（docs/progress/electron-frozen.md §2；design 25 §3.2 sidecar 读 seed 现役目录），--include-electron 严格档逐行比对（含行集不得缩水：缺目录或旧摘要=陈旧）',
     },
   },
   {
