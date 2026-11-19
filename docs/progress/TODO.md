@@ -201,7 +201,7 @@
 > 阻塞来源 = 上游；chamber 侧公开契约 v1 见 design 09 §4，本条只记上游化路径。
 
 - **17.1**：上游 `ConnectionInstallOptions` 无 `basePath`（仅 chamber fork 有），且官方 web shell 的插件契约仍假定页面由宿主在 origin root 提供；上游若引入「页面挂载前缀 / 宿主路由基址」通用 seam（client ctx 服务或 boot 配置），chamber 改为消费该键并在至少一个正式发布版本内双读 `chamberBasePath` 后删私有键（CHANGELOG 为发布单源）。触发 = 上游接受 RFC 或 dsh 发布该 seam；退出 = 私有键删除、design 09 §4 改指上游键。
-- **17.2**：旧版 document-relative 插件的运行期 base 补齐（design 09 §4）是上游 seam 缺失期的有界实现：页面装载期对登记 bundle 做两锚点文本补丁（fail-closed，锚点失效即拒绝装载）。**删除条件 = 17.1 的上游 seam 落地**：上游发布「宿主路由基址 / 页面挂载前缀」通用 seam 后，删除补丁条目与补丁表（`packages/renderer/src/client-plugin-patches.ts`）并停用每 pin 锚点 gate（`node scripts/upstream/verify/verify-runtime-plugin-patches.mjs --require`，步骤见 [dsh-upgrade-checklist](../checklists/upgrade/dsh-upgrade-checklist.md) §5/§6）；`chamberBasePath` 按 17.1 的双读期结束后删私有键（CHANGELOG 为发布单源）。
+- **17.2**：旧版 document-relative 插件的运行期 base 补齐（design 09 §4）是上游 seam 缺失期的有界实现：页面装载期对登记 bundle 做锚点文本补丁（每 pin 真实产物门 fail-closed：pin 漂移不豁免）。当前两个条目：chat-import 上传基址（`anchorMiss: 'refuse'`）与 `ui-sidebar-documentpreview` Markdown 图片基址（核心官方行，`anchorMiss: 'degrade-unpatched'`：运行期锚点不匹配时回退原 script-element 装载 + console 判词，只有每 pin 门校验的允许集可携带该策略）。**删除条件 = 17.1 的上游 seam 落地**：上游发布「宿主路由基址 / 页面挂载前缀」通用 seam 后，删除补丁条目与补丁表（`packages/renderer/src/client-plugin-patches.ts`）并停用每 pin 锚点 gate（`node scripts/upstream/verify/verify-runtime-plugin-patches.mjs --require`，步骤见 [dsh-upgrade-checklist](../checklists/upgrade/dsh-upgrade-checklist.md) §5/§6）；`chamberBasePath` 按 17.1 的双读期结束后删私有键（CHANGELOG 为发布单源）。
 
 ## B. 平台、契约索引与冻结基线（B 类）
 

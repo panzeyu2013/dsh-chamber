@@ -2,9 +2,11 @@
  * Behavior tests for the patched-bundle loading half (design 09 §4): the loader
  * contract it must mirror (success / read failure / anchor refusal / 30s timeout with
  * BundleLoadTimeoutError + bundleOutcome / late success executes and settles the
- * outcome / no double settlement), the served-text fetch behavior (HTTP status,
- * content-type, byte cap), and the new Function executor (classic-script
- * self-registration + sourceURL line-terminator hardening).
+ * outcome / no double settlement), the per-entry anchor-miss policy (`refuse` rejects;
+ * `degrade-unpatched` reports through onAnchorMiss and delegates to the untouched
+ * script-element fallback — never `new Function` on the served text), the served-text
+ * fetch behavior (HTTP status, content-type, byte cap), and the new Function executor
+ * (classic-script self-registration + sourceURL line-terminator hardening).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -30,31 +32,46 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(e
   return { promise, resolve: resolveFn, reject: rejectFn }
 }
 
-/** The synthetic patch under test: 'GOOD' patches to 'PATCHED', anything else refuses. */
+/** The synthetic fail-closed patch: 'GOOD' patches to 'PATCHED', anything else refuses. */
 const SYNTHETIC_PATCH = {
   packageId: '@scope/synthetic',
   anchors: 2,
   reason: 'synthetic reason for the loader-contract suite',
   anchorTexts: ['A', 'B'],
+  anchorMiss: 'refuse' as const,
+  probe: Object.freeze({ token: 'PATCHED', count: 1 }),
   apply: (text: string): string | null => (text === 'GOOD' ? 'PATCHED' : null),
 }
 
-/** One loader harness: manual timers, recorded deps, controllable read. */
-function harness(): {
+/** The synthetic CORE-row degrade patch: an anchor miss delegates to the script fallback. */
+const SYNTHETIC_DEGRADE_PATCH = { ...SYNTHETIC_PATCH, anchorMiss: 'degrade-unpatched' as const }
+
+/** One loader harness: manual timers, recorded deps, controllable read and degrade fallback. */
+function harness(options: { withAnchorMiss?: boolean } = {}): {
   deps: PatchedBundleLoadDeps
   setReadText(next: (url: string) => Promise<string>): void
+  setUnpatched(next: (url: string) => Promise<void>): void
   executed: Array<{ text: string; url: string }>
+  unpatched: string[]
+  anchorMisses: Array<{ packageId: string; anchors: number; url: string }>
   timeoutErrors: Array<{ message: string; outcome: Promise<boolean> }>
   timers: { fire(): void; pending(): number; cleared(): number }
 } {
   const executed: Array<{ text: string; url: string }> = []
+  const unpatched: string[] = []
+  const anchorMisses: Array<{ packageId: string; anchors: number; url: string }> = []
   const timeoutErrors: Array<{ message: string; outcome: Promise<boolean> }> = []
   const callbacks: Array<() => void> = []
   let cleared = 0
   let readImpl: (url: string) => Promise<string> = async () => 'GOOD'
+  let unpatchedImpl: (url: string) => Promise<void> = async () => {}
   const deps: PatchedBundleLoadDeps = {
     readText: (url) => readImpl(url),
     execute: (text, url) => { executed.push({ text, url }) },
+    loadUnpatched: (url) => { unpatched.push(url); return unpatchedImpl(url) },
+    ...(options.withAnchorMiss === false
+      ? {}
+      : { onAnchorMiss: (info: { packageId: string; anchors: number; url: string }) => { anchorMisses.push(info) } }),
     createTimeoutError: (message, outcome) => {
       timeoutErrors.push({ message, outcome })
       const error = new Error(message)
@@ -68,7 +85,10 @@ function harness(): {
   return {
     deps,
     setReadText: (next: (url: string) => Promise<string>) => { readImpl = next },
+    setUnpatched: (next: (url: string) => Promise<void>) => { unpatchedImpl = next },
     executed,
+    unpatched,
+    anchorMisses,
     timeoutErrors,
     timers: {
       fire: () => { for (const callback of callbacks.splice(0)) callback() },
@@ -104,6 +124,56 @@ test('loadPatchedBundle: a missing anchor refuses the load (reason + anchors in 
       && error.message.includes('anchors: 2')
       && error.message.includes('refusing to load the unpatched bundle'),
   )
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: a degrade row falls back to the untouched script path (never new Function)', async () => {
+  const h = harness()
+  h.setReadText(async () => 'DRIFTED')
+  const url = 'http://cp/api/i/local/plugins/??x/client.js'
+  await loadPatchedBundle(url, SYNTHETIC_DEGRADE_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url], 'the served bundle loads through the untouched script path')
+  assert.deepEqual(h.anchorMisses, [{ packageId: SYNTHETIC_DEGRADE_PATCH.packageId, anchors: 2, url }])
+  assert.equal(h.executed.length, 0, 'degrade must NOT execute the served text via new Function')
+  assert.equal(h.timers.cleared(), 1, 'the loader budget is cleared when the fallback settles')
+})
+
+test('loadPatchedBundle: degrade works without an onAnchorMiss sink (the callback is optional)', async () => {
+  const h = harness({ withAnchorMiss: false })
+  h.setReadText(async () => 'DRIFTED')
+  await loadPatchedBundle('http://cp/x', SYNTHETIC_DEGRADE_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, ['http://cp/x'])
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: a failing degrade fallback rejects with the script-path error', async () => {
+  const h = harness()
+  h.setReadText(async () => 'DRIFTED')
+  const failure = new Error('script element failed')
+  h.setUnpatched(async () => { throw failure })
+  await assert.rejects(
+    loadPatchedBundle('http://cp/x', SYNTHETIC_DEGRADE_PATCH, h.deps),
+    error => error === failure,
+  )
+  assert.deepEqual(h.unpatched, ['http://cp/x'])
+  assert.equal(h.anchorMisses.length, 1)
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: the loader timeout still owns a hung degrade fallback', async () => {
+  const h = harness()
+  h.setReadText(async () => 'DRIFTED')
+  const fallback = deferred<void>()
+  h.setUnpatched(() => fallback.promise)
+  const promise = loadPatchedBundle('http://cp/x', SYNTHETIC_DEGRADE_PATCH, h.deps)
+  await tick()
+  assert.deepEqual(h.unpatched, ['http://cp/x'])
+  h.timers.fire()
+  await assert.rejects(promise, error => (error as Error).name === 'FakeBundleLoadTimeoutError')
+  const outcome = h.timeoutErrors[0]!.outcome
+  fallback.resolve()
+  await tick()
+  assert.equal(await outcome, true, 'a late degrade success settles the tombstone outcome loaded')
   assert.equal(h.executed.length, 0)
 })
 

@@ -45,6 +45,11 @@ const GROUPS = {
   runtime: [
     'test/instance-api-working-directory.test.ts',
   ],
+  // fork-titles: the fork-child title increment port (upstream session-controller
+  // client parity: two-argument skip-taken) — pure leaf, no bridge/state.
+  'fork-titles': [
+    'test/fork-titles.test.ts',
+  ],
 }
 
 runTestManifest({

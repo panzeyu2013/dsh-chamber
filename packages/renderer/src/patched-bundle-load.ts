@@ -12,19 +12,31 @@
  * every other failure is a plain rejection that host-graph reports as
  * `bundle-load-failed`. Double settlement is guarded.
  *
+ * ANCHOR-MISS POLICY (per entry, design 09 §4). A registered bundle whose anchors no
+ * longer match is handled by the entry's `anchorMiss` policy: `refuse` keeps the
+ * original fail-closed contract above (a plain rejection, so the instance boot fails);
+ * `degrade-unpatched` (CORE official rows only) reports the miss through the optional
+ * `deps.onAnchorMiss` and delegates to `deps.loadUnpatched(url)` — the untouched
+ * script-element path of the shell, carried by the same 30s/BundleLoadTimeoutError
+ * contract. Degrade must NOT run the served text through `new Function`: a version-
+ * skewed bundle may be ESM-only, and the resulting SyntaxError would turn the degrade
+ * back into a boot failure. The per-pin artifact verifier still requires exact anchors
+ * for every entry; degrade only absorbs a load-time remote/local runtime line skew.
+ *
  * PAGE BUDGET. `fetchPluginBundleText` takes `budget:'caller-held'` on the patched
  * load path: the loader kernel already acquired this dispatch's bundle slot BEFORE
  * calling `loadBundle` (bundleMax is 2 page-wide, so a nested acquisition could never
  * be granted while the kernel's own slot is held). `budget:'acquire'` is the identity
  * read path (runs outside any loader dispatch) and keeps the previous semantics.
  *
- * EXECUTION. The registered bundles are classic scripts that self-register through
- * `window.__ModuleLoader__.load`; `executePatchedBundle` runs the text with
- * `new Function(text + '//# sourceURL=…')()` — a function-body scope (top-level
- * declarations stay local) in sloppy mode (the upstream stock loader's classic-script
- * semantics). It depends on the page CSP `script-src 'unsafe-eval'` (the control-plane
- * page sends it) and iterates the URL through `sanitizeSourceUrl` so U+2028/U+2029
- * cannot escape the sourceURL comment.
+ * EXECUTION (patched text only). The registered bundles are classic scripts that
+ * self-register through `window.__ModuleLoader__.load`; `executePatchedBundle` runs the
+ * REWRITTEN text with `new Function(text + '//# sourceURL=…')()` — a function-body
+ * scope (top-level declarations stay local) in sloppy mode (the upstream stock loader's
+ * classic-script semantics). It depends on the page CSP `script-src 'unsafe-eval'` (the
+ * control-plane page sends it) and iterates the URL through `sanitizeSourceUrl` so
+ * U+2028/U+2029 cannot escape the sourceURL comment. A degrade row never reaches this
+ * executor: it loads the served text through the untouched script-element path.
  */
 import { httpBudgetLeaseFor, runWithHttpBudget } from '@dsh-chamber/dsh-chamber-client-core/http-budget'
 import { sanitizeSourceUrl, type ClientPluginPatch } from './client-plugin-patches.ts'
@@ -87,6 +99,18 @@ export interface PatchedBundleLoadDeps {
   readonly readText: (url: string) => Promise<string>
   /** Executes the patched classic script (throws when the text cannot run). */
   readonly execute: (text: string, url: string) => void
+  /**
+   * Loads one served bundle through the untouched script-element path (the degrade
+   * fallback): the shell's own pre-patch loader, with its 30s deadline and
+   * BundleLoadTimeoutError/bundleOutcome contract.
+   */
+  readonly loadUnpatched: (url: string) => Promise<void>
+  /**
+   * Reports an anchor miss on a `degrade-unpatched` row (diagnostic seam only; the load
+   * itself continues through `loadUnpatched`). Optional: a degrade load must not depend
+   * on a reporting sink.
+   */
+  readonly onAnchorMiss?: (info: { readonly packageId: string; readonly anchors: number; readonly url: string }) => void
   /** Builds the loader's timeout error; must carry the still-pending outcome. */
   readonly createTimeoutError: (message: string, bundleOutcome: Promise<boolean>) => Error
   readonly setTimeout: (callback: () => void, ms: number) => unknown
@@ -96,15 +120,16 @@ export interface PatchedBundleLoadDeps {
 }
 
 /**
- * Load one registered bundle through its patch: read the SERVED text, rewrite it
- * (fail-closed on a missing/duplicated anchor), execute it. The rejection/diagnostic
- * contract is the loader's own (see the module header): a kept-row failure makes the
- * instance's whole shell boot fail, with a `bundle-load-failed` diagnostic carrying
- * the patch's reason and anchor count.
+ * Load one registered bundle through its patch: read the SERVED text, rewrite it, and
+ * execute the result; when the anchors no longer match, apply the entry's policy —
+ * `refuse` rejects (a kept-row failure makes the instance's whole shell boot fail, with
+ * a `bundle-load-failed` diagnostic carrying the patch's reason and anchor count),
+ * `degrade-unpatched` reports through `deps.onAnchorMiss` and loads the served text
+ * through the untouched script path (`deps.loadUnpatched`).
  * @param url - the served bundle URL.
  * @param patch - the registered patch for that bundle.
- * @param deps - text reader, executor, timers and the timeout error factory.
- * @returns resolves when the patched bundle executed (factory registration included).
+ * @param deps - text reader, executor(s), reporting sink, timers and the timeout error factory.
+ * @returns resolves when the patched bundle executed, or the degrade fallback settled.
  */
 export function loadPatchedBundle(url: string, patch: ClientPluginPatch, deps: PatchedBundleLoadDeps): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -138,10 +163,18 @@ export function loadPatchedBundle(url: string, patch: ClientPluginPatch, deps: P
     void (async (): Promise<void> => {
       const text = await deps.readText(url)
       const patched = patch.apply(text)
-      // fail-closed: a served bundle whose anchors no longer match must not run unpatched
-      // (it would send the owner-only upload to the control-plane root). The refusal names
-      // the patch's reason and anchor count so the bundle-load-failed diagnostic is usable.
       if (patched === null) {
+        if (patch.anchorMiss === 'degrade-unpatched') {
+          // Core-row degrade: delegate to the untouched script-element path. Running the
+          // served text through `new Function` could turn an ESM-only skewed bundle into a
+          // SyntaxError and thus into the very boot failure degrade exists to avoid.
+          deps.onAnchorMiss?.({ packageId: patch.packageId, anchors: patch.anchors, url })
+          await deps.loadUnpatched(url)
+          return
+        }
+        // fail-closed (optional rows): a served bundle whose anchors no longer match must
+        // not run unpatched (it would send the owner-only upload to the control-plane root).
+        // The refusal names the patch's reason and anchor count for the diagnostic.
         throw new Error(
           'dsh-chamber: runtime patch for ' + patch.packageId + ' matched no unique anchor (anchors: '
           + String(patch.anchors) + ') in ' + url

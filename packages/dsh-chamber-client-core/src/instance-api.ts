@@ -819,7 +819,7 @@ export async function createSession(
 /**
  * session/fork，返回子会话 id（atSeq 省略 = 以源最后完成的回合为 cut）。wire
  * payload 仅收 `{ sessionId, atSeq? }`；chamber 在调用方自行做标题递增
- * （derive.ts 的 increasedForkTitle，逐字移植官方实现）。
+ * （fork-titles.ts 的 increasedForkTitle(title,taken)，逐字移植官方实现）。
  */
 export async function forkSession(client: InstanceApiClient, sessionId: string): Promise<string> {
   const result = await callAndThrow(() => client.session.fork({ sessionId }))

@@ -25,11 +25,14 @@
  *     adopting a base parameter of its own, fails the producer lock below instead of
  *     silently 404ing from the control-plane origin in the shell.
  *
- * One sibling site is NOT patchable and is locked as a recorded gap instead:
- * ui-sidebar-documentpreview's Markdown body resolves images against document.baseURI
- * too, but the package is served from the INSTANCE bundle, so no module of it reaches
- * our build (registering a patch fails the buildEnd applied-coverage gate). Test #4
- * pins that shape and that the package stays out of the composite covered set.
+ * One sibling site is NOT patchable at BUILD time and is closed by the runtime load-time
+ * patch instead: ui-sidebar-documentpreview's Markdown body resolves images against
+ * document.baseURI too, but the package is served from the INSTANCE bundle, so no module
+ * of it reaches our build (registering a build-time patch fails the buildEnd applied-
+ * coverage gate). The chosen closure is the runtime loader patch in
+ * client-plugin-patches.ts (locked by client-plugin-patches.test.ts); test #4 pins the
+ * vendor shape, keeps the package out of the composite covered set, and would go red if
+ * upstream adopted the base parameter itself.
  *
  * The tree is resolved through the vendor symlink layout; a missing tree
  * LOUD-SKIPS the vendor locks (they read nothing and must not read as green).
@@ -163,11 +166,13 @@ test('every document.baseURI producer in ui-chat is one of the two patched resol
   )
 })
 
-test('the uncovered document-preview resolver stays a recorded gap, never a patched site', { skip: VENDOR_SKIP }, () => {
+test('the uncovered document-preview resolver stays a recorded gap, never a build-time patched site', { skip: VENDOR_SKIP }, () => {
   // The right sidebar previews Markdown images through this resolver, and the package is
   // served from the INSTANCE bundle: our build never transforms it, so a producer patch
   // cannot apply (registering one fails the buildEnd applied-coverage gate - measured).
-  // STATUS records the deviation; closing it needs a deliberate coverage decision.
+  // The gap is closed at LOAD time by the runtime patch table (client-plugin-patches.ts);
+  // this lock keeps the vendor shape and the uncovered status, and would go red if the
+  // package joined the composite covered set.
   const body = stripComments(readFileSync(MARKDOWN_BODY, 'utf8'))
   assert.ok(
     body.includes('markdownImageUrl(document.baseURI'),

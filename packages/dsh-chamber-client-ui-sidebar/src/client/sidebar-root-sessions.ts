@@ -5,8 +5,6 @@
 
 import { useRef } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
-import { increasedForkTitle } from '@dsh-chamber/dsh-chamber-client-core/derive'
-import { getInstanceClient, renameSession } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
 import { archiveSessionForSource, createSessionForSource, forkSessionForSource, pinSessionForSource, unarchiveSessionForSource, unpinSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import { classifyArchiveFailure, type SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
@@ -28,27 +26,16 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
   const archiveActionRef = useRef(new Map<string, Promise<void>>())
 
   // 分叉：在最后完成的 turn 处 fork，随后 refresh 并打开子会话。Wire
-  // session.fork 只收 { sessionId, atSeq? }，子会话标题先取源标题；成功后按
-  // 官方 runtime service 移植的 increasedForkTitle 做递增 rename，失败非致命
-  // （fork 已成功、子会话已创建并打开；runAction 只吃 fork 自身的失败）。
+  // session.fork 只收 { sessionId, atSeq? }；子会话标题由唯一出口
+  // session-mutations 按同来源 skip-taken 定名并 rename（失败非致命：确定性
+  // 失败以继承标题发回声并告警、结果未知保留意图，见 design 05 §2.2）。
   const onForkSession = (server: ChamberServerAggregate, session: { id: string; title: string }): void => {
     runAction(`${server.id}/session/${session.id}/fork`, async () => {
-      const client = getInstanceClient(server.id)
-      // 会话回声：意图标题（递增后的父标题）随事实一起发布，权威行到达前
-      // 子行即渲染最终标签；随后的 rename 仍照旧执行（失败只告警，不阻断）。
-      const intendedTitle = session.title === '' ? undefined : increasedForkTitle(session.title)
       const childId = await forkSessionForSource(
         server.id,
         session.id,
-        intendedTitle === undefined ? {} : { title: intendedTitle },
+        session.title === '' ? {} : { increaseTitleFrom: session.title },
       )
-      if (session.title !== '') {
-        try {
-          await renameSession(client, childId, increasedForkTitle(session.title))
-        } catch {
-          // 非致命：fork 已成功，仅子会话标题不递增。
-        }
-      }
       chamberBridge.requestRefresh(server.id)
       chamberBridge.requestOpenSession(server.id, childId)
     })
