@@ -142,7 +142,7 @@
 - trusted-host 自定义 Host 需同步扩集；多 plane `$DSH_HOME` 隔离未决；catalog metadata 无跨进程 CAS。
 - 响应头白名单双处同步；`__DSH_BOOT__` 以 vendor `parseBootManifest` 为准。
 - 未挂载源 `workspace/follow` 只读流未决；facts forward-skew 带载荷是否算权威行集未裁。
-- P1 结构性收口的两处“编排核心”按**风险/收益**保留，而非“需要依赖容器”：`retireSources`（外部绑定约 75 个、线性扇出）与 `refreshRemotes`（99 行、约 23 个自由变量）可继续拆成 3 段 + 按域输入对象，但收益主要是注销不变量（per-source closers 登记表），行数有限。seam 级拆分的边界：wire 契约与 gate 单源在 registry/生成块内受约束；renderer 的 6 个大 hook（28 个 app-hook 的其余部分 <200 行）与 desktop/gateway 的新模块登记在 file-budgets.json（清单与阈值以表为准）；未拆的两处编排核心即上一条。
+- P1 结构性收口的剩余编排核心按**风险/收益**保留，而非“需要依赖容器”：`retireSources`（外部绑定约 75 个、线性扇出）可继续拆成 3 段 + 按域输入对象，但收益主要是注销不变量（per-source closers 登记表），行数有限。roster 刷新已拆为 `host/roster-commit.ts`（纯规划）与 `app-hooks/use-roster-commit.ts`（显式入参对象）——seam 级拆分的边界：wire 契约与 gate 单源在 registry/生成块内受约束；renderer 的 6 个大 hook（28 个 app-hook 的其余部分 <200 行）与 desktop/gateway 的新模块登记在 file-budgets.json（清单与阈值以表为准）；未拆的编排核心只剩 `retireSources`。
 
 ## 四、范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 

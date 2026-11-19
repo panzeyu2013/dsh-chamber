@@ -294,7 +294,8 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 |1|settings 两分支剩余合流：`DshRuntimeSection` 的 gateway/local 数据权威与渲染体|selection/confirm controller 已单源（parity 测试已落：`packages/dsh-chamber-client-ui-settings-bridge/test/runtime/runtime-management.test.ts`、`confirm-machine-guards.test.ts`）；剩余 = 数据权威（local 主进程订阅 vs gateway 3s 轮询投影）与两段渲染体合并——需新文件与 client-core action-runner 边界|runtime-management / 设置桥套件绿；渲染体合并前先按已知差异（recovery 相位）裁决|
 |2|逐包棘轮收尾：file-budgets.json 只降不升（含新叶、`kind:ceiling` 单列与 FROZEN 行；行数与缺口**以表为准**，不在文档里复写）|目标与缺口一律看 node scripts/gates/checks/verify-file-budgets.mjs --report|verify:file-budgets 恒绿；**未决**：新模块仍需人工登记|
 |3|§1.5 的审计开放项|未动|各自条目内|
-|4|App 残余编排的依赖容器化（`retireSources`+`refreshRemotes`+`JSX` 共 ≈75 个自由标识符）|未决：逐字搬会得到 ≈75 字段的入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
+|4|App 残余编排的依赖容器化（`retireSources`+`JSX`；`refreshRemotes` 已抽为 `packages/renderer/src/app-hooks/use-roster-commit.ts` 的显式入参）|未决：逐字搬剩余自由标识符会得到大入参对象，不如现状；需先裁决「单一 AppRuntime 容器」是否值得（会改变模块边界而非减少耦合）|裁决后要么引入容器并继续切，要么把「App 编排核心」登记为有意保留的边界|
+|5|单次 roster 快照（health+instances+generation 同一响应）|未排期：现行两次读 + seq 世代等价，无功能缺口；触发 = 扩冻结 preload 面 / sidecar 通道白名单裁决（[electron-frozen](electron-frozen.md) §5.2）|裁决后以单次响应替代两次读并补等价锁；未裁决不动宿主面|
 
 #### 1.2 不做与保留（结论）
 
@@ -340,7 +341,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 ### 2. 产物新鲜度守卫（G7；未排期）
 
-> 现有守卫：`desktop/dist/web/**` 与 `desktop/dist/host-*-package/**` 的 G3 输入摘要（`.build-manifest.json`，构建末尾写、`verify-artifact-freshness` 比对）、`desktop/dist/control-plane/**`/`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）、G5 打包前兜底（`packages/desktop/scripts/build-sidecar.mjs` CLI 装配成功后跑 `assertPackArtifactsFresh({mode:'sidecar'})`；失败带重建命令）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。G2/G8 的唯一登记 = `scripts/gates/checks/artifact-freshness-registry.mjs`（`verify-artifact-freshness` 默认档校验，并与门自身观测的 freshness id 双向锁步；新增比较或新产物不同批登记即红）。本节只留仍无守卫的产物（§2.1）与剩余最小守卫建议（G7）；开放状态见 design 21 §7 与 STATUS §1.6。
+> 现有守卫：`desktop/dist/web/**` 的 G3 输入摘要（`.build-manifest.json`，构建末尾写、`verify-artifact-freshness` 比对）、`desktop/dist/host-*-package/**` 是 Electron 冻结腿打包副本（默认按冻结归档 loud SKIP、`--include-electron` 严格档才逐行比对，[electron-frozen](electron-frozen.md) §2）、`desktop/dist/control-plane/**`/`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）、G5 打包前兜底（`packages/desktop/scripts/build-sidecar.mjs` CLI 装配成功后跑 `assertPackArtifactsFresh({mode:'sidecar'})`；失败带重建命令）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。G2/G8 的唯一登记 = `scripts/gates/checks/artifact-freshness-registry.mjs`（`verify-artifact-freshness` 默认档校验，并与门自身观测的 freshness id 双向锁步；新增比较或新产物不同批登记即红）。本节只留仍无守卫的产物（§2.1）与剩余最小守卫建议（G7）；开放状态见 design 21 §7 与 STATUS §1.6。
 
 #### 2.1 仍无守卫的产物
 
