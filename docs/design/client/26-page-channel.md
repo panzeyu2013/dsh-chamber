@@ -29,7 +29,7 @@
 
 ### D2 实例在通道内定址
 
-帧里带 `instanceId`（与 `/api/i/<id>` 同一套 id：`local` / `dsh-*` / `gateway-*`）。控制面按 id 解析目标（本地 dsh 端口或已注册的 tunnel/gateway 传输记录），为每个订阅独立打开上游。页面侧不存在“每个实例一条 socket”的概念，因此**新增实例只增加控制面的上游连接**。上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（wire 叶 `packages/dsh-chamber-wire/src/session-state.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 的 `/plugins/events` 与 vendor `@deepseek-ai/dsh-client-hmr` 的 `EVENTS_ENDPOINT` 锁步（registry `mirror.dsh-client-hmr-events-endpoint`，由 flow 用例断言）。上游订阅与实例反代共用同一套传输登记：目标被替换/注销时（tunnel 重注册、gateway 传输失效），控制面按登记连接撤销该连接上的订阅并回 `instance_unavailable`，客户端按自己的阶梯重订阅到新传输——旧 incarnation 的流不会被继续消费。
+帧里带 `instanceId`（与 `/api/i/<id>` 同一套 id：`local` / `dsh-*` / `gateway-*`）。控制面按 id 解析目标（本地 dsh 端口或已注册的 tunnel/gateway 传输记录），为每个订阅独立打开上游。页面侧不存在“每个实例一条 socket”的概念，因此**新增实例只增加控制面的上游连接**。上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（wire 叶 `packages/dsh-chamber-wire/src/session-state.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 的 `/plugins/events` 与 vendor `@deepseek-ai/dsh-client-hmr` 的 `EVENTS_ENDPOINT` 锁步（registry `mirror.dsh-client-hmr-events-endpoint`，由 flow 用例断言）。上游订阅与实例反代共用同一套传输登记：目标被替换/注销时（tunnel 重注册、gateway 传输失效），控制面按登记连接撤销该连接上的订阅并回 `instance_unavailable`，客户端按自己的阶梯重订阅到新传输——旧 incarnation 的流不会被继续消费。`local` 的定址与 `/api/i/local` 同门（exposure + admission）：回收在途的新订阅按 `instance_unavailable` 快速失败，已建立订阅不随该窗口失败（admission 语义与被否方案见 [design 02 §3.6](../runtime/02-host-management-deployment.md)）。
 
 ### D3 每订阅信用窗口
 

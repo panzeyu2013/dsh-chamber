@@ -24,6 +24,7 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态，**ARCHIVED 冻结归�
 - `transport-manager.ts` — 通用传输运行时：实例注册表 + phase 机 + 两段式重连（快速有界 jitter 退避突发 + 慢速周期重探）+ 环形日志 + 子进程监督 + 非秘密投影
 - `ssh-provider.ts` — SSH transport：隧道（ssh -N -o ServerAlive… -L）+ 远端 systemd exec + child-scoped askpass leases + RPC 探测（经 control-plane-module 共享信封）
 - `gateway-provider.ts` — HTTP direct transport + gateway 认证/SPKI/session；同一 provider 的 dsh 目标分支严格无认证
+- `gateway-plugin-sync.ts` — gateway chamber host 包同步的唯一执行腿（自动 ready 边与手动 `desktop_gateway_plugin_sync` 共用）：读已提交注册记录、执行期目标绑定围栏（记录存在 + `transportGen` + 拨号绑定 url/transport/authority/spkiPin/socketPath + InstanceState 身份；不含认证头/`recordGen`）与 per-id 单飞；本地包读完后、GET 后、每个 PUT 后与 restart 前复验，失效即停后续写/重启；任一 failed 且目标确有移动（recordGen/transportGen/拨号绑定）时该 pass 有界重跑一次、首次已上传则强制当前目标重启（design 21 §6.5）
 - `ssh-config.ts` — `~/.ssh/config` 非秘密投影解析
 - `chamber-settings.ts` — chamber 全局设置 holder（`chamber-settings.json`，原子写，`dsh-chamber:settings-*` 数据面）
 - `notifications.ts` — 通知决策纯逻辑（validateNotificationRequest / decideNotification / claimNotificationDetailed，electron-free）

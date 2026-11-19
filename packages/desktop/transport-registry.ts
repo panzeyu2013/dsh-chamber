@@ -36,7 +36,7 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
     instances, states, instancesFile, state, log, warn, writeFileAtomic, resolveProvider,
     connect, disconnect, lastFailureProbeAt, onSourceRetired,
   } = deps
-  /** 行内意图元数据 + 行修订的单实现（connection-intent.ts）：load/save/intent-write 共用同一序列化面。 */
+  /** 行内意图元数据的单实现（connection-intent.ts）：load/save/intent-write 共用同一序列化面。 */
   const intentStore = createIntentStore({
     session: deps.intent?.appSessionId ?? null,
     write: text => writeFileAtomic(instancesFile, text),
@@ -246,7 +246,7 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
     }
     instances.clear()
     for (const entry of kept) instances.set(entry.id, entry)
-    // 提交意图表：authoritative 按新行集清理、compensation 恢复入口快照；+1 行修订；
+    // 提交意图表：authoritative 按新行集清理、compensation 恢复入口快照；
     // authoritative 的新增行经 onInstancesAdded 交给宿主对账（added 波次）。
     intentStore.commitSave(intentSave, provenance, kept)
     // Provider-specific fields cannot cross a kind boundary (an SSH systemd result never appears on a gateway status).

@@ -9,7 +9,7 @@
 import { useCallback } from 'react'
 import api from '../api.ts'
 import { errorMessage } from '../status.ts'
-import { sourceIdForRawInstance, sourceIdForTransport } from '../transport-source.ts'
+import { sourceIdForRawInstance, statusWriteAccepted } from '../transport-source.ts'
 import type { RosterGate } from '../host/roster-gate.ts'
 import type { RemotesStore } from '../host/remotes-store.ts'
 import type { SourceOwnershipRegistry } from '../deep-link-activation.ts'
@@ -60,12 +60,17 @@ export function useRemoteRefresh(inputs: RemoteRefreshInputs) {
     if (sourceOwner === null) return
     try {
       const projection = await ssh.status(id)
-      if (
-        projection !== null
-        && sourceIdForTransport(projection.kind, id) === sourceId
-        && liveServerIdsRef.current.has(sourceId)
-        && sourceLifecyclesRef.current!.owns(sourceOwner)
-      ) {
+      // Write-time rows decide (design 06 §4.8): a projection from a replaced transport
+      // mechanism must never overwrite the installed row; the owner proof captured before
+      // the await still gates the write.
+      if (projection !== null && statusWriteAccepted({
+        id,
+        projection,
+        instances: remotesStore.getSnapshot().instances,
+        expectedSourceId,
+        live: liveServerIdsRef.current,
+        ownerHeld: sourceLifecyclesRef.current!.owns(sourceOwner),
+      })) {
         remotesStore.setStatus(prev => ({ ...prev, [id]: projection }))
       }
     } catch {

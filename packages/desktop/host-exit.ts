@@ -20,7 +20,7 @@ export interface HostExitDeps {
   authRecovery: { dispose: () => void }
   authRecoveryContext: { clear: () => void }
   gatewaySessions: { dispose: () => void }
-  /** Active-registration records/tombstones + the manual-sync read seam. */
+  /** Active-registration records/tombstones (disposed on exit). */
   registrations: Pick<ActiveRegistrationRegistry, 'dispose'>
   markQuitting: () => void
   settings: { current: () => ChamberSettings }

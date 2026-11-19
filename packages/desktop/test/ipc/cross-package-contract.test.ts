@@ -42,7 +42,7 @@ import {
   localPluginList,
   SEED_FILES,
 } from '../../plugin-sync.ts'
-import { syncedPluginUploadFiles } from '../../gateway-provider.ts'
+import { syncedPluginUploadFiles } from '../../gateway-plugin-sync.ts'
 // The gateway's usage points of the same seed set (design 17): the upload/cache
 // file set of the sync surface. Imported as source (the desktop↔gateway
 // cross-package lockstep pattern already used by plugin-tarball.test.ts) —
@@ -197,7 +197,7 @@ test('the seeded file set is single-sourced: control-plane export ≡ desktop wr
   })
   const uploadKeys = Object.keys(upload)
   assert.deepEqual(uploadKeys, plane,
-    'the desktop gateway upload payload keys (gateway-provider.ts) drifted from the control-plane export')
+    'the desktop gateway upload payload keys (gateway-plugin-sync.ts) drifted from the control-plane export')
   // Side 4 — the gateway upload/cache file set.
   const gatewaySeedFiles = [...SYNCED_PLUGIN_FILES]
   assert.deepEqual(gatewaySeedFiles, plane,

@@ -46,7 +46,7 @@ import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import { shouldRunBackgroundPhase } from '../background-phase.ts'
 import { reconnectInstanceConnection } from '../shell.ts'
 import { errorMessage } from '../status.ts'
-import { instanceConnected, sourceIdForInstance } from '../transport-source.ts'
+import { partitionSourceReachability, sourceIdForInstance } from '../transport-source.ts'
 import type { SshInstanceSpec, SshStatusProjection } from '../global.d.ts'
 import { planLadder, type LadderObservation, type LadderRecord } from '@dsh-chamber/dsh-stream-state'
 
@@ -58,25 +58,6 @@ const AGGREGATE_POLL_CONCURRENCY = 4
 /** First-screen retry: a transient snapshot failure is retried quickly (bounded), not after 30s. */
 const AGGREGATE_RETRY_MS = 3_000
 const AGGREGATE_RETRY_LIMIT = 5
-
-/** The ready/not-ready partition of all known sources, driven solely by the
- *  authoritative transport state. */
-function collectReadySourceIds(
-  health: HealthResponse | null,
-  remoteStatus: Record<string, SshStatusProjection>,
-  remoteInstances: SshInstanceSpec[],
-): { ready: string[]; notReady: string[] } {
-  const ready: string[] = []
-  const notReady: string[] = []
-  if (instanceConnected('local', health, remoteStatus, LOCAL_INSTANCE_ID)) ready.push(LOCAL_INSTANCE_ID)
-  else notReady.push(LOCAL_INSTANCE_ID)
-  for (const instance of remoteInstances) {
-    const id = sourceIdForInstance(instance)
-    if (instanceConnected(instance.kind, health, remoteStatus, instance.id)) ready.push(id)
-    else notReady.push(id)
-  }
-  return { ready, notReady }
-}
 
 export interface AggregateRefreshDeps {
   // values
@@ -371,7 +352,9 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
 
 /** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected（已推送挂载来源除外）。 */
   const pollAggregates = useCallback(() => {
-    const { ready, notReady } = collectReadySourceIds(health, remoteStatus, remoteInstances)
+    // The ONE reachability partition (design 06 §4.8 fourth gate): a ready-but-down link is
+    // parked in its own bucket and feeds neither the refresh plan nor the not-connected reset.
+    const { ready, notReady } = partitionSourceReachability(health, remoteStatus, remoteInstances)
     const refreshPlan = planAggregateRefreshes(
       ready,
       readyAggregateSourcesRef.current,
@@ -498,7 +481,7 @@ export function useAggregateRefresh(deps: AggregateRefreshDeps): AggregateRefres
   // tick 主体抽成可即时调用的回调：周期 interval 与 visibilitychange 恢复补偿共用。
   const runStalenessWatchdogNow = useCallback(() => {
     const now = Date.now()
-    const ready = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
+    const ready = partitionSourceReachability(health, remoteStatus, remoteInstances).ready
     const staleIds = ready
       .filter(id => isSnapshotStale(snapshotAtRef.current[id], now, AGGREGATE_FALLBACK_POLL_MS))
     if (staleIds.length > 0) runBoundedAggregateWave(staleIds)

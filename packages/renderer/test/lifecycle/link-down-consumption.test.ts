@@ -114,3 +114,21 @@ test('settings copy: the card hint exists in BOTH dictionaries', () => {
   assert.match(entries[0]!, /链路.*不可用/, 'zh copy names the unavailable link')
   assert.match(entries[1]!, /transport link/, 'en copy names the unavailable transport link')
 })
+
+test('aggregate pull and the staleness watchdog consume the ONE reachability partition (fourth gate)', () => {
+  // design 06 §4.8 ④: a ready-and-down source is PARKED — it must not enter the refresh plan, and it
+  // must not be treated as not-connected (that reset prunes snapshots/runtime facts). The partition
+  // itself is locked in transport-source.test.ts; this test pins the hook wiring (source text).
+  const hookSource = read('../../src/app-hooks/use-aggregate-refresh.ts')
+  assert.match(hookSource,
+    /const \{ ready, notReady \} = partitionSourceReachability\(health, remoteStatus, remoteInstances\)/,
+    'the edge poll reads the partition bucket, not a second kind/phase reading')
+  assert.match(hookSource, /partitionSourceReachability\(health, remoteStatus, remoteInstances\)\.ready/,
+    'the staleness watchdog consumes the SAME ready bucket')
+  assert.equal(hookSource.includes('collectReadySourceIds'), false,
+    'the local two-bucket collector must not come back')
+  assert.equal(hookSource.includes('linkDown'), false,
+    'the parked bucket never feeds the not-connected reset (down is not a disconnect)')
+  assert.equal(hookSource.includes('instanceConnected('), false,
+    'no second reachability reading may shadow the partition')
+})

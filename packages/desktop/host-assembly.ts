@@ -10,12 +10,11 @@
  * renderer 载荷（只传存在性投影与 non-secret 指纹）。
  */
 import {
-  bindActiveRegistrationRegistry, createActiveRegistrationRegistry, createRegistrationLiveFacts,
+  createActiveRegistrationRegistry, createRegistrationLiveFacts,
   type ActiveRegistrationRegistry,
 } from './active-registration.ts'
 import { authRecoveryStillApplies, createAuthRecoveryController, type AuthRecoveryController } from './auth-recovery.ts'
 import { linkBusyAdapter, linkFailureAdapter } from './transport-identity.ts'
-import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
 import type { ChamberSettings } from './chamber-settings.ts'
@@ -34,7 +33,8 @@ import { cleanupStaleAskpassHelpers } from './ssh-askpass.ts'
 import { sweepSshOrphans } from './ssh-orphan.ts'
 import { createHostKeyGuard, defaultUserKnownHostsPath, knownHostsPathFor } from './host-key.ts'
 import { configureSshSocketNamespace } from './ssh-socket.ts'
-import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins, type LocalChamberHostPackage, type SecretCryptoAdapter } from './gateway-provider.ts'
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, type SecretCryptoAdapter } from './gateway-provider.ts'
+import { createGatewaySyncLeg } from './gateway-plugin-sync.ts'
 import { createGatewaySessionManager, gatewaySessionScopeForConnection } from './gateway-session.ts'
 import { createGatewaySessionRefresh, gatewayTunnelAuthority, type GatewaySessionRefresh } from './gateway-session-refresh.ts'
 import { appendAuditEvent, type AuditEvent } from './audit-log.ts'
@@ -143,7 +143,7 @@ export interface HostAssembly {
   }
   /** OS 唤醒 → 重探陈旧 transport（判据在 transport-reconnect 单源）。 */
   reconnectStaleTransports(): void
-  /** 宿主统一尝试调度器（startup/added/wake；ticket 四查 + 错峰；永不 reject）。 */
+  /** 宿主统一尝试调度器（startup/added/wake；ticket 三查 + 错峰；永不 reject）。 */
   runHostAttempts(options: HostAttemptOptions): Promise<void>
   /** OS 唤醒/网络恢复 → 对 READY 远端强制一次复验（含 ready-but-half-open）。 */
   reverifyAllTransports(): void
@@ -404,8 +404,6 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     tokenFor: getGatewayToken, passwordFor: getGatewayPassword, sessions: gatewaySessions,
     warn: message => console.warn(`${logTag} ${message}`),
   })
-  // 手动 sync IPC 的只读 seam 指向同一 registry（不是第二份状态）；退出腿解除。
-  bindActiveRegistrationRegistry(activeRegistration)
   /** Bound the auth-fail -> disconnect/connect TOCTOU retry: a second ready edge
    *  before the first reconnect settles must not hammer the gateway. */
   const AUTH_RECOVERY_MIN_INTERVAL_MS = 5_000
@@ -580,7 +578,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     })()
   }
 
-  // —— 本地 chamber host 包源 + 手动 gateway 同步执行闭包 ——
+  // —— 本地 chamber host 包源 + 唯一 gateway 同步执行腿（leg 在 gateway-plugin-sync.ts）——
   // 只遍历 portableHostSeeds，本地专属行绝不进 gateway 上传；缺目录 = 响亮跳过（绝不静默少上传一个域）。
   const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
     return portableHostSeeds.flatMap(seed => {
@@ -599,48 +597,18 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       }]
     })
   }
-  // Resolves the awaited sync outcome for the caller（手动 gateway_plugin_sync IPC）or null
-  // when missing / not a gateway. The IPC/ctx signature keeps its shape for the frozen
-  // context type; the committed record is the only parameter source.
-  const syncGatewayChamberPluginsFor = async (
-    id: string,
-  ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null> => {
-    const instance = sm.listInstances().find(candidate => candidate.id === id)
-    if (instance === undefined || instance.kind !== 'gateway') return null
-    // The committed record is the ONE dial descriptor (C: I3): origin/headers/SPKI pin/
-    // authority/socketPath all ride the same record generation — no snapshot/live mix.
-    const recordGen = activeRegistration.currentRecordGen(id)
-    const registration = recordGen === undefined ? undefined : activeRegistration.snapshotForSync(id, recordGen)
-    if (registration === undefined) return null
-    const packages: LocalChamberHostPackage[] = []
-    for (const source of localChamberHostPackageSources()) {
-      try {
-        packages.push({
-          name: source.name,
-          packageJson: readFileSync(source.packageJsonPath, 'utf8'),
-          distIndex: readFileSync(source.distIndexPath, 'utf8'),
-        })
-      } catch (error) {
-        // Not built/bundled in this runtime — still loud：静默跳过会表现成「gateway 缺少 chamber host 包」而无诊断。
-        console.warn(
-          `${logTag} chamber host package source skipped (${source.name}): ${sanitizeErrorText(describeError(error))}`,
-        )
-      }
-    }
-    // The target may be re-bound while the local sources are read: no stale upload.
-    if (activeRegistration.currentRecordGen(id) !== recordGen) {
-      return { uploaded: false, skipped: false, failed: true, error: 'registration changed' }
-    }
-    return syncGatewayChamberPlugins({
-      origin: registration.facts.url,
-      ...(registration.facts.authority === undefined ? {} : { authority: registration.facts.authority }),
-      ...(registration.facts.socketPath === undefined ? {} : { socketPath: registration.facts.socketPath }),
-      headers: registration.facts.headers ?? {},
-      spkiPin: registration.facts.spkiPin ?? null,
-      packages,
-      logger: { warn: message => console.warn(message), log: message => console.log(message) },
-    })
-  }
+  // The ONE gateway sync execution leg (design 21 §6.5): the automatic ready edge and the
+  // manual gateway_plugin_sync IPC both call it, so the target-binding fence and the per-id
+  // single-flight cover BOTH entries. The leg reads the committed record (currentRecordGen →
+  // snapshotForSync) and re-verifies the dial binding/incarnation at every checkpoint; null =
+  // missing instance / not a gateway / no committed record (the IPC maps it to a loud refusal).
+  const syncGatewayChamberPluginsFor = createGatewaySyncLeg({
+    listInstances: () => sm.listInstances(),
+    registrations: activeRegistration,
+    attemptFactsFor: id => sm.getAttemptFacts(id),
+    packageSources: localChamberHostPackageSources,
+    logger: { warn: message => console.warn(message), log: message => console.log(message) },
+  })
 
   /**
    * One bounded auth recovery per gateway ready push: an auth-failed ready push
@@ -941,7 +909,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     })
   }
 
-  /** 宿主尝试调度器的事实面：startup/added/wake 三来源共用（ticket 四查在 transport-reconnect 单源）。 */
+  /** 宿主尝试调度器的事实面：startup/added/wake 三来源共用（ticket 三查在 transport-reconnect 单源）。 */
   function hostAttemptDeps(): HostAttemptDeps {
     return {
       listInstances: () => sm.listInstances(),
@@ -989,9 +957,10 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     authRecovery,
     authRecoveryContext,
     gatewaySessions,
-    // Exit leg clears the registry records/tombstones and retires the manual-sync seam.
+    // Exit leg clears the registry records/tombstones (the manual sync has no state of
+    // its own to retire — it rides the injected leg + the ONE registry).
     registrations: {
-      dispose: () => { activeRegistration.dispose(); bindActiveRegistrationRegistry(null) },
+      dispose: () => { activeRegistration.dispose() },
     },
     markQuitting: deps.markQuitting,
     settings: deps.settings,
@@ -1013,7 +982,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     dispose: async () => { cancelHostAttemptTimers(); await dispose() },
     quitFacts,
     // 闭包绑定本装配的传输管理器单例 + 退出在途门（判据在 transport-reconnect 单源：历史唤醒入口
-    // 经同一规划器 + 票据四查，签名/告警面保持不变）。
+    // 经同一规划器 + 票据三查，签名/告警面保持不变）。
     reconnectStaleTransports: () => reconnectStaleTransports(
       transportManager,
       deps.isQuitting,

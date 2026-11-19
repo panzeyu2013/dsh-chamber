@@ -227,7 +227,9 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    retireSpawnedChild 覆盖取消的 spawn 的 2 处）：
    进程组 SIGTERM（dsh profile-boot 对 SIGTERM 优雅退出，exit 0）→ 1s 未退 → SIGKILL
    → 轮询整个 detached 进程组退出（判据 = leader 与组内后代都已不在；`exitCode`/`signalCode`
-   任一非空只证明 leader 死了，不再作为跳过组证明的理由）；**先证明、再清引用/改状态/发布**，
+   任一非空只证明 leader 死了，不再作为跳过组证明的理由）；**先证明、再清引用/改终态/发布**
+   （`restarting` 这类进行中投影先于证明不在此列：它不宣称结果；本代 `child`/`dshPort` 在证明前不清、
+   不发布终态），
    确认退出后才注销进程记录
 3. 端口释放等待：固定端口场景下新宿主仍用同端口——旧进程死透才能复用
    （实现：无独立等待轮询——spawn 侧端口预检 + P+1 退让覆盖占用窗口，§2.2）
@@ -239,8 +241,12 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    停止自动重启，状态由 live surface 暴露（不落 catalog），等待人工介入（POST /api/connections
    幂等启动或桌面设置页操作）；绝不无限重启循环。退出证明 unknown ⇒ 不发布 `restart-exhausted`
    （自动运行时回退不得起跑，设计 18 §3.4），落 `error` + suspect 闩锁
-7. **迟到的健康判定（契约）**：start 换代、进入 restart、stop() 三个拆代点都取消在途健康
-   探针（abort + `healthEpoch` 递增 + 清缓存/定时器）并等待其落定；判词、缓存与单飞槽
+   **回收开始即关闭新请求入口**：admission 由唯一回收原语拥有——`retireCurrentChild` 取到非空 child
+   后、任何 await 前置 `acceptsNewRequests()=false`，证明成功、清 child/suspect 后复位为 true；耗尽与
+   stop 两个「状态仍可服务」的窗口因此自动覆盖。它不发布、不改 `ConnectionState`；证明成功后发布
+   `restart-exhausted` 时 admission 已复位，终态 503 仍带 `details.state`
+7. **迟到的健康判定（契约）**：start 换代、进入 restart、**进入耗尽回收**、stop() 四个拆代点都取消在途健康
+   探针（abort + `healthEpoch` 递增 + 清缓存/定时器；stop() 额外等待其落定，其余拆代点靠代际判词丢弃迟到判词）；判词、缓存与单飞槽
    只归发起代（迟到的失败不计、迟到者只释放自己的槽）；任何在 `stopped`/`error` 态或
    start 在途时到达的失败判定一律惰性（不计数、不触发重启——start 在途时
    重启被抑制，防止双 spawn）；spawn 失败落在 stop() 之后（epoch 已变）也不得
@@ -266,11 +272,14 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 - **新增强制 kill / 强制解锁 API**：进程组归属不可证时（PTY/后代逃逸 PGID、pid 复用、探测不可用）再发一次更强的信号也不产生退出证明，只是把风险搬进 IPC 并给"绕过闩锁"一个官方入口；可证明的残留已由 reaper 的 takeover 覆盖，其余维持"重启应用再证明"。拒绝。
 - **leader `exitCode` 非空即视为已退出**：leader 被信号杀死或先死后代仍活时会假阳性；统一用 detached 进程组的退出证明。拒绝。
 - **每次读时重建/轮询组证据代替 suspect 记录**：无法把"某一时刻没看到"变成"不会再有写"；fail-closed 地记录一次 suspect 才是可判定状态。拒绝。
+- **用新状态（如 `reclaiming`）表达回收中**：状态词表是 REST `dsh.status` 契约，且证明前发布结果违反步骤 2；stop 窗口还要新增 04/03 表行。拒绝。
+- **逐分支写 admission 或给 `InstanceProxyDeps` 加公开门**：写点/公开面增加，终态发布不重开会丢 `details.state`；单点所有权（`retireCurrentChild`）更小且覆盖同样窗口。拒绝。
 
 ### 3.7 优雅停止
 
 - `DELETE /api/connections/local`（04 §3.2）/ 桌面退出 / systemd stop：SIGTERM 进程组 → 1s → SIGKILL；确认退出后注销记录，状态回 `stopped`；退出证明 unknown ⇒ DELETE 路由映射 **409**（code `dsh_writer_quiescence_unknown` + detail `{pid, since, reason}`），绝不折成 500/503，stop 拒绝并保持写租约；`GET /api/connections/local/writers` 暴露同一诊断结构；
 - stop 单飞行：并发或紧邻的停止调用共享同一 promise；已完全静止（无 child、无在途 start/restart、无 `writerSuspect`）时为无日志 no-op，故同一代生命周期只落一条 `state=stopped`；
+- stop 入口进入回收原语的退出证明期间，新请求入口由 admission 关闭：新请求 503（`instance_unavailable`，不带 `details.state`）、已转发请求继续；unknown 仍拒绝 `stopped`，证明成功后 admission 已复位；
 - 停止同时取消在途手工 spawn，等待其 owner 清理后释放 single-flight 槽；不响应取消的迟到测试seam/适配器仍由 epoch 守卫隔离，不能复活或覆盖随后启动的新代；
 - **崩溃路径**：控制面被 SIGKILL → 宿主成为孤儿 → 下次启动 reaper 回收（§3.4）——`detached: true`保证宿主不连带，孤儿回收保证不泄漏；
 - **会话数据不丢**：dsh 侧 JSONL 持久化在 `$DSH_HOME/sessions`，重启后由前端 runtime 经会话基线完整恢复（控制面不持有任何会话权威——01 §5 原则 4）。

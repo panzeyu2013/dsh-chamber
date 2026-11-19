@@ -124,7 +124,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | 情形 | 结果 |
 |---|---|
 | Origin 非当前 Host 精确同源且不在显式 allowlist（包括 `null` 或其他回环端口） | 403 `{error, code:'origin_forbidden'}`（转发前拒绝） |
-| 实例不可服务（无隧道；本地连接状态 ∉ `{ready, degraded}`） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3） |
+| 实例不可服务（无隧道；本地连接状态 ∉ `{ready, degraded}`；或本地回收在途、新请求入口关闭） | 503 `{error, code:'instance_unavailable'}`（fail-loud，03 §3.3；回收在途 body 不带 `details.state`） |
 | 请求体上传超时（buffered：30s 空闲或体总预算到期；streaming：首字节窗/总预算到期；应用层判定，不是 Node 的 `requestTimeout`） | 408 `{error, code:'request_timeout'}` |
 | 请求体预算耗尽 / 并发准入拒绝 | 503 `{error, code:'resource_exhausted'}`；准入拒绝另带 `details:{kind,scope}`（`http` / `long-rpc` / `ws` / `ws-pending` / `connection` × `connection` / `global`；缓冲预算那条不带） |
 | 上游连接拒绝 / 请求失败 | 502 `{error, code:'upstream_failed'}`（脱敏） |
@@ -133,7 +133,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | WS 路径不在 `WS_STREAM_PATHS` 白名单（唯一在册路径 `/api/remote.mux`） | 404 `{error, code:'instance_not_found'}`（upgrade 前拒绝，§4.1） |
 | 已声明请求体 > 300MiB、未知长度请求体 > 32MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
 
-- **本地 `degraded` 仍服务**：02 §3.5 把 `degraded` 定义为「失败计数 ≥1 且 < 阈值，仍在服务」，因此本地/网关反代必须把它与 `ready` 同表放行；只有状态不可服务（`starting/restarting/stopped/error/restart-exhausted`）才能 503。activation gate 关闭时 503 **不带** `details`：被隔离候选的生命周期是内部事实，公共错误面只暴露 `/health`（及同投影的 `/api/connections`）的 `starting`（尚无终态失败）或 `error` + 脱敏 reason（到达 ready 前已终态失败：启动失败，或 restart 循环终止于写者静止未证明）；候选端口与内部原因细节任何情况下都不外泄。
+- **本地 `degraded` 仍服务**：02 §3.5 把 `degraded` 定义为「失败计数 ≥1 且 < 阈值，仍在服务」，因此本地/网关反代必须把它与 `ready` 同表放行；只有状态不可服务（`starting/restarting/stopped/error/restart-exhausted`）才能 503。activation gate 关闭时 503 **不带** `details`：被隔离候选的生命周期是内部事实，公共错误面只暴露 `/health`（及同投影的 `/api/connections`）的 `starting`（尚无终态失败）或 `error` + 脱敏 reason（到达 ready 前已终态失败：启动失败，或 restart 循环终止于写者静止未证明）；候选端口与内部原因细节任何情况下都不外泄。**回收在途（admission 关闭）**：实例代理的 exposure 门随之关闭，503 不带 `details.state`；证明成功后 admission 复位，`restart-exhausted`/`stopped` 照旧带 state（客户端终态文案依赖它）。
 - **状态而非端口**：`restarting` 期间端口仍可能指向已死的旧子进程（`starting` 的端口已置空），故不得用「端口存活」替代状态判定。503 body 可带 additive `details.state`，旧客户端忽略即兼容；该字段只有 HTTP 503 携带——WS upgrade 的 503 reject 帧没有 details 通道，WS 侧不得依赖它。
 - **同一张表也约束幂等启动与页面自动启动**：`degraded` 的本地连接不得被 `start()` 拆掉重建，页面不得因 `degraded` 触发 `createLocal`，本地 page-channel link 也不得因此停放订阅。
 - **`details.kind`**：`resource_exhausted` 的并发准入拒绝带 `kind`（`http`/`long-rpc`/`ws`/`ws-pending`/`connection`）与 `scope`（`connection`/`global`）；请求体缓冲预算耗尽那条不带 `details`。
@@ -150,6 +150,11 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 - **以端口存活替代状态判定**：`restarting` 期间端口仍可能指向已死的旧子进程，端口 gate 会把请求转发进死 socket；所以放行表只认状态。`starting` 反例不成立（端口已置空）——这正是不能把这条理由简化成「端口不可靠」的原因。
 - **只放行反代、不放行幂等启动与页面自动启动**：`start()` 会拆掉仍在服务的子进程，而页面每轮连接行轮询都会调 `createLocal`——修复会被自己的入口抵消。
 - **删掉 `degraded`（探测失败直接重启）**：重启代价远高于继续服务，且丢掉「失败计数 ≥1 但仍在服务」这一诊断事实（连接页如实的降级状态）。
+
+**Rejected alternatives（本地回收在途的 503 面）**：
+
+- **回收在途也带 `details.state`**：该窗口横跨两类——耗尽/stop 的证明窗仍投影 `ready`/`degraded`，普通 restart 的退役子窗已投影 `restarting`；带它会诱导客户端把「正在回收」读成可服务并继续命中旧端口，而 `restarting` 的 details 也不是稳定契约。统一不带 details 与 activation 隔离窗口同形，只留 `instance_unavailable`（终态发布后照旧带 state）。
+- **新增 `reclaiming` 状态表达回收中**：状态词表是 REST `dsh.status` 契约，且证明前发布结果违反 02 §3.6 步骤 2；admission 是进程内的不发布事实，终态发布时已复位（细节见 02 §3.6 被否列表）。
 
 ### 4.3 响应头白名单
 

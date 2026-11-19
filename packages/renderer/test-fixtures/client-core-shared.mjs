@@ -13,6 +13,7 @@
  * packages/renderer/src` 再取可达集）；页面通道的面走包 SUBPATH 直连实现，不经这里。
  */
 export { chamberBridge } from '../../dsh-chamber-client-core/src/aggregate-store.ts'
+export { linkReady } from '../../dsh-chamber-client-core/src/link-projection.ts'
 export { describeThrown } from '../../dsh-chamber-client-core/src/error-text.ts'
 // 会话打开证据读取：open-in 的 stream-health-probe（abstract 侧单源化后新增）。
 export { sessionOpenPromiseInFlight } from '../../dsh-chamber-client-core/src/session-open.ts'

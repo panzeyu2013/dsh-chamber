@@ -17,7 +17,7 @@ import { createServer } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
 import { join } from 'node:path'
 
-import { syncGatewayChamberPlugins } from '../../gateway-provider.ts'
+import { syncGatewayChamberPlugins } from '../../gateway-plugin-sync.ts'
 
 const silentLogger = { log() {}, warn() {} }
 

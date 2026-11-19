@@ -169,6 +169,16 @@ export interface LocalConnection {
    * process group may still be writing DSH_HOME: stop() must not report quiescence.
    */
   getWriterSuspect(): LocalWriterSuspect | null
+  /**
+   * Whether a NEW request may be admitted to the managed local instance. False only while
+   * the SINGLE reclamation primitive is proving the current generation's detached process
+   * group gone — the exhaustion/stop windows in which connectionState is still serviceable
+   * and the old port is still retained. It is an in-process admission fact, never published
+   * on the wire and never folded into ConnectionState: an unproven retire keeps it closed,
+   * and a PROVEN retire reopens it before the terminal state is published, so the terminal
+   * 503 still carries details.state (design 02 §3.6).
+   */
+  acceptsNewRequests(): boolean
   start(): Promise<void>
   stop(): Promise<void>
   /**
@@ -353,6 +363,10 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     // Reclamation owns the teardown: detach the exit hook first so a late exit event can
     // neither schedule another restart nor race this proof.
     detachChildExit(current)
+    // Admission closes for the ENTIRE proof window: the state machine still reads
+    // serviceable (and the old port is still retained) until the group proof returns, so
+    // new requests must not be routed into that generation meanwhile.
+    acceptingNewRequests = false
     try {
       // Unconditional: an observed leader death (exitCode OR signalCode) says nothing about
       // the detached group — terminateChild's group proof is the only quiescence fact.
@@ -368,6 +382,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     }
     child = null
     writerSuspect = null
+    // The proof succeeded: new requests are admitted again BEFORE any terminal state is
+    // published (the terminal 503 keeps details.state; an unproven retire stays closed).
+    acceptingNewRequests = true
     return null
   }
 
@@ -423,6 +440,13 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   let childExitHook: { owner: SpawnedDsh; listener: (code: number | null, sig: string | null) => void } | null = null
   /** Unproven termination evidence: a later retire must re-prove it, never report stopped. */
   let writerSuspect: LocalWriterSuspect | null = null
+  /**
+   * New-request admission (design 02 §3.6): closed by the reclamation primitive for the
+   * whole exit-proof window and reopened only after the proof succeeds. retireCurrentChild
+   * is its ONLY writer — the exhaustion and stop windows are the two cases in which the
+   * state machine is still serviceable while a teardown is in flight.
+   */
+  let acceptingNewRequests = true
   let stopping = false
   let startPromise: Promise<void> | null = null
   let consecutiveFailures = 0
@@ -719,6 +743,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           while (restartTimes.length > 0 && restartTimes[0] <= now - restartWindowMs) restartTimes.shift()
           if (restartTimes.length >= maxRestartsInWindow) {
             stopHealthTimer()
+            // The exhaustion reclaim is a probe-generation break too (design 02 §3.6 step 7):
+            // no in-flight verdict of the dying generation may outlive this teardown.
+            cancelProbe()
             // INV-A2: restart-exhausted triggers the runtime auto-rollback, so it may only be
             // published after this generation's process group is PROVEN gone. An unproven
             // retire lands on 'error' (latch + suspect kept) and never publishes it.
@@ -728,6 +755,10 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
               setState('error', retired.message)
               throw retired
             }
+            // A stop()/start() that invalidated this generation while the proof was pending
+            // owns the outcome: publishing restart-exhausted here would let the desktop
+            // auto-rollback run for a lifecycle that already moved on (design 02 §3.6).
+            if (stopping || epoch !== restartEpoch) return
             const exhaustedPort = dshPort
             dshPort = null
             // The child is proven gone — the browser-auth cookie must not linger (a later start re-mints).
@@ -1021,6 +1052,11 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     /** The unproven writer record (see LocalWriterSuspect); null when quiescence is proven. */
     getWriterSuspect(): LocalWriterSuspect | null {
       return writerSuspect
+    },
+
+    /** Whether a new request may be admitted (see the interface docblock). */
+    acceptsNewRequests(): boolean {
+      return acceptingNewRequests
     },
 
     /** Current error detail; null when healthy. */

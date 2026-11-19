@@ -609,6 +609,6 @@ ARCHIVED 移动端走查与真机抽检随 Electron flavor 冻结；静态门与
 - **宿主日志导出器的卸载归属**（`packages/control-plane/src/host-log-bridge.ts`）：直接注册、靠模块释放或「同 ctx 二次挂载」自证——**否决**：cordis 的 `LoggerService.exporter()` 把 effect 注册在 **服务**上下文（应用根），插件卸载不会移除；重新物化 loader 会叠加第二个导出器并把每行应用日志写两遍。挂到插件自己的 `ctx.effect` 是唯一由插件生命周期管辖的位置。
 
 - **保留三份活动注册镜像 / 只在续签腿补写镜像**（§9.3 活动注册）：只治已复现的一个写点，下一次新增路径重犯；同步拨号描述符仍是跨代混拼。拒绝，改为单一提交入口。
-- **续签/同步自己现读 live 字段或缓存 Cookie**：只解决 Cookie 一项，URL/authority/SPKI 仍可能来自不同代，锁步不成立且执行期无法复验。拒绝，改为读已提交记录 + `recordGen` 复验。
+- **续签/同步自己现读 live 字段或缓存 Cookie**：只解决 Cookie 一项，URL/authority/SPKI 仍可能来自不同代，锁步不成立且执行期无法复验。拒绝，改为读已提交记录 + 目标绑定围栏（轴见 [21](../gateway/21-gateway-plugin-parity.md) §6.5）。
 - **用 `linkEpoch` 当注册代际**：它在 ready 期内 down→healthy 恢复时也递增，会误拒仍有效的注册；代际用隧道化身 `transportGen` + 注册表单调 `recordGen`，墓碑按两者拒绝迟到写。
 - **把续签异常上抛成 sidecar fatal**：一次网络/429/503 续签失败被 `unhandledRejection` 放大成宿主退出，代价与失败本身不成比例。拒绝，异常有界收敛为本次刷新失败。

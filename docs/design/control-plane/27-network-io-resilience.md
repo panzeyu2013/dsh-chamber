@@ -66,7 +66,7 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 - desktop 在 down 后保留 `ready` 一个 `downGraceMs`（默认 30s）确认窗：期间 health-only 更新不 revoke 在途；窗满仍 down 才进入既有 reconnect，phase 离开 ready 时 unregister 并 revoke。
 - **after-body 标记**：撤销时若请求 body 已完成，代理先写 502 `upstream_failed` + `details.phase='after-body'` 再结束响应，避免客户端拿到裸网络错误而误重试；body 未完成的请求不写该标记（bodyless 的 GET/HEAD 在转发前即视为「未写」，但带 framing body 的 GET/HEAD 与 POST 同规则）。**没有标记的 502/504 对 mutation 仍按「可能已生效」处理**：body 未完成只证明代理没写完，不能证明宿主没收到前半个请求，保守归类宁可让用户多刷新一次，也不把一个可能已执行的操作报成「未转发」。
 - 超过 grace 的在途仍由 reconnect 收尾——这不是无限期保护。
-- **注册提交与健康更新**：同 `targetKey` = `health-only`（**零次** re-register，绝不撤销在途流）；`targetKey` 变化才重注册；撤销写墓碑，同一或更旧代的迟到提交拒绝。键/指纹的比较编码仍由 `transport-registration.ts` 单源提供；手动同步等读面用 `snapshotForSync(id, recordGen)` 取同一注册代并在每个 await 后复验 `recordGen`（[21](../gateway/21-gateway-plugin-parity.md) §6.5）。
+- **注册提交与健康更新**：同 `targetKey` = `health-only`（**零次** re-register，绝不撤销在途流）；`targetKey` 变化才重注册；撤销写墓碑，同一或更旧代的迟到提交拒绝。键/指纹的比较编码仍由 `transport-registration.ts` 单源提供；手动同步等读面用 `snapshotForSync(id, recordGen)` 取同一注册代（读面一致性），执行期按目标绑定围栏（`transportGen` + 拨号绑定 + `InstanceState` 身份；进网络前/GET 后/每个 PUT 后/restart 前）复验、不用 `recordGen`（同目标续签不得中止，[21](../gateway/21-gateway-plugin-parity.md) §6.5）。
 - **上游连接池**：**每连接**的 keep-alive agent（非 pin 路径；pin 仍 `agent:false`），在该连接的 unregister/替换处随在途流量一起销毁：进程级单池会让被替换隧道（每次重连都是新 loopback 端口）的空闲 socket 永久滞留，还可能把半开 socket 交给下一个化身。gateway-proxy 自持一份并在 `closeAllStreams` 销毁。
 
 ### 3.4 上传（buffered / streaming 双形态）
@@ -211,6 +211,6 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 - **exec/run 的 ControlMaster 复用**：控制 socket 是同用户认证旁路、绕开 exec 的 known_hosts 复检，且不省 askpass；本版不做。
 
 - **继续维护三份活动注册镜像 / 在续签或同步腿补写镜像**：只治单点、下一次新增路径重犯；同步取参仍跨代混拼。拒绝，改为单一提交入口（[17](../gateway/17-server-side-gateway.md) §9.3）。
-- **手动同步读 `cachedCookie` / 现读 live 参数**：只解决 Cookie，url/authority/socketPath/SPKI 仍非同一代；拒绝，改为读已提交记录 + `recordGen` 复验。
+- **手动同步读 `cachedCookie` / 现读 live 参数**：只解决 Cookie，url/authority/socketPath/SPKI 仍非同一代；拒绝，改为读已提交记录 + 目标绑定围栏（轴见 [21](../gateway/21-gateway-plugin-parity.md) §6.5）。
 - **用 `linkEpoch` 当注册代际**：down→healthy 恢复也递增，会误拒仍有效注册；用 `transportGen`（隧道化身）+ `recordGen`（注册表单调号）。
 - **让续签失败冒泡成 sidecar fatal**：一次续签异常不得成为宿主退出；收敛为本次刷新失败，保持旧注册/等待过期路径。

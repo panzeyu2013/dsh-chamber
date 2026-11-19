@@ -12,7 +12,6 @@ import assert from 'node:assert/strict'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
 import type { AuditEvent } from '../../audit-log.ts'
 import {
-  bindActiveRegistrationRegistry,
   createActiveRegistrationRegistry,
   createRegistrationLiveFacts,
   type ActiveRegistrationRegistry,
@@ -380,10 +379,12 @@ test('a session refresh commits the renewed cookie into the same record the manu
   assert.equal(h.plane.calls.register.length, 2, 'no duplicate re-registration after the renewal')
 })
 
-function manualSyncHarness(registry: ActiveRegistrationRegistry) {
-  bindActiveRegistrationRegistry(registry)
+function manualSyncHarness(
+  leg: (id: string) => Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null>,
+  phase = 'ready',
+) {
   const handlers = new Map<string, (payload: unknown) => Promise<unknown>>()
-  const calls: Array<{ id: string; url: string; headers: Record<string, string>; spkiPin: string | null }> = []
+  const calls: string[] = []
   const ctx = {
     deps: {
       ipc: {
@@ -392,15 +393,10 @@ function manualSyncHarness(registry: ActiveRegistrationRegistry) {
         },
       },
       ctx: {
-        transportManager: { status: () => ({ phase: 'ready' }) },
-        syncGatewayChamberPluginsFor: (
-          id: string,
-          url: string,
-          headers: Record<string, string>,
-          spkiPin: string | null,
-        ) => {
-          calls.push({ id, url, headers, spkiPin })
-          return Promise.resolve({ uploaded: true, skipped: false })
+        transportManager: { status: () => ({ phase }) },
+        syncGatewayChamberPluginsFor: (id: string) => {
+          calls.push(id)
+          return leg(id)
         },
       },
     },
@@ -413,27 +409,35 @@ function manualSyncHarness(registry: ActiveRegistrationRegistry) {
   return { calls, invoke }
 }
 
-test('the manual sync IPC dials the renewed committed record; no record is a loud refusal', async () => {
-  const h = wiringHarness()
-  h.goReady()
-  h.sessions.cookie = COOKIE_2
-  assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: h.instance.gen }).ok, true)
-  const manual = manualSyncHarness(h.registry)
-  try {
-    assert.deepEqual(await manual.invoke('gw-1'), { ok: true, uploaded: true, skipped: false })
-    assert.equal(manual.calls.length, 1)
-    assert.equal(manual.calls[0].url, READY_URL)
-    assert.equal(manual.calls[0].headers.cookie, COOKIE_2, 'the renewed cookie, not the previous session')
-    assert.equal(manual.calls[0].spkiPin, null)
-    // Leaving ready revokes the record: the entry refuses loudly and dials nothing.
-    h.goIdle()
-    assert.deepEqual(await manual.invoke('gw-1'), { ok: false, error: 'no active gateway registration' })
-    assert.equal(manual.calls.length, 1)
-  } finally {
-    bindActiveRegistrationRegistry(null)
-  }
+test('the manual sync IPC passes ONLY the instance id and maps the leg result (record/fence ownership moved into the shared leg)', async () => {
+  // Contract migration (D2-1): the IPC no longer reads the committed record and no longer
+  // forwards url/headers/spkiPin — the ONE execution leg (gateway-plugin-sync.ts
+  // createGatewaySyncLeg) owns currentRecordGen → snapshotForSync plus the target-binding
+  // fence. The old "the IPC dials the renewed committed record" semantics now live in the
+  // leg tests (gateway-plugin-sync-fence.test.ts ③: a same-target renewal does not abort).
+  // Not-ready targets are refused by the handler's live ready re-check BEFORE the leg
+  // ("gateway is not ready"), so a non-ready target never reaches the record/fence layer.
+  let result: { uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null = { uploaded: true, skipped: false }
+  const manual = manualSyncHarness(id => {
+    assert.equal(id, 'gw-1', 'the leg receives the instance id')
+    return Promise.resolve(result)
+  })
+  assert.deepEqual(await manual.invoke('gw-1'), { ok: true, uploaded: true, skipped: false })
+  assert.deepEqual(manual.calls, ['gw-1'], 'the channel supplies only the id — no URL/credential mirror')
+  // No committed record / not a gateway: the leg answers null -> a loud refusal (never a silent ok).
+  result = null
+  assert.deepEqual(await manual.invoke('gw-1'), { ok: false, error: 'no active gateway registration' })
+  assert.deepEqual(manual.calls, ['gw-1', 'gw-1'])
+  // A fenced-off pass (or any wire failure) is failed:true -> ok:false with the leg's detail.
+  result = { uploaded: true, skipped: false, failed: true, error: 'gateway registration changed; sync aborted' }
+  assert.deepEqual(await manual.invoke('gw-1'), { ok: false, error: 'gateway registration changed; sync aborted' })
+  // A non-ready transport is refused BEFORE the leg (the live ready re-check), so the
+  // record/fence layer never sees a stale-ready target.
+  let legCalls = 0
+  const notReady = manualSyncHarness(() => { legCalls += 1; return Promise.resolve(null) }, 'idle')
+  assert.deepEqual(await notReady.invoke('gw-1'), { ok: false, error: 'gateway is not ready' })
+  assert.equal(legCalls, 0, 'a not-ready manual sync never reaches the shared leg')
 })
-
 test('a proxy rejection during a session refresh is a refused commit, never an unhandled rejection', async () => {
   const h = wiringHarness()
   h.goReady()

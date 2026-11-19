@@ -1,7 +1,8 @@
 /**
  * B（v2 §P2-B / O2）：宿主统一尝试调度器（transport-reconnect.ts）。
  * 1) planHostAttempts 纯函数矩阵（startup/added/wake × quitting/plane/suppressed/unknown/phase/terminal）；
- * 2) runHostAttempts 执行器：错峰定时器、票据四查（意图/行修订/传输代/退出）、永不 reject；
+ * 2) runHostAttempts 执行器：错峰定时器、票据三查（退出/行身份/传输代 + 执行时意图抑制）、
+ *    stale-row 按当前 level 重规划一次、永不 reject；
  * 3) reconnectStaleTransports 历史入口经同一规划器（唤醒相位筛/终态跳过/2 参告警面不变）；
  * 4) getAttemptFacts 的 manager 事实面（对象身份 + 传输代）。
  */
@@ -16,9 +17,12 @@ import {
 import type { ConnectionIntentSnapshot } from '../../connection-intent.ts'
 import { createTransportManager } from '../../transport-manager.ts'
 import { sshProvider } from '../../ssh-provider.ts'
-import { silentLogger, tempDir } from '../support/transport-manager-harness.ts'
+import { FakeChild, silentLogger, tempDir } from '../support/transport-manager-harness.ts'
 
 const phaseStatus = (phase: string, requiresUserAction = false) => ({ phase: phase as never, requiresUserAction })
+
+/** Save input accepted by sshProvider.validateSpec (defaults filled by the provider). */
+const saveInput = (id: string, host: string) => ({ id, label: id, kind: 'dsh' as const, transport: 'ssh' as const, host, remotePort: 2222 })
 
 test('planHostAttempts: quitting short-circuits, plane gates startup/added only, suppression before phase', () => {
   const statuses: Record<string, { phase: string; requiresUserAction: boolean }> = {
@@ -52,7 +56,8 @@ interface FakeDeps {
   readonly connected: string[]
   readonly timers: Array<{ run: () => void; ms: number }>
   readonly facts: Map<string, HostAttemptFacts>
-  revision: number
+  ids: string[]
+  phases: Record<string, string>
   suppressed: Set<string>
   quitting: boolean
 }
@@ -62,7 +67,6 @@ function fakeDeps(initial: {
   phases?: Record<string, string>
   requiresUserAction?: Record<string, boolean>
   suppressed?: string[]
-  revision?: number
   quitting?: boolean
   planeBound?: boolean
 }): FakeDeps {
@@ -74,19 +78,19 @@ function fakeDeps(initial: {
     connected,
     timers,
     facts,
-    revision: initial.revision ?? 0,
+    ids: [...initial.ids],
+    phases: { ...initial.phases },
     suppressed: new Set(initial.suppressed ?? []),
     quitting: initial.quitting === true,
   }
   const snapshot = (): ConnectionIntentSnapshot => ({
     session: 'app-session-aaaa0000',
     suppressed: new Set(fake.suppressed),
-    revision: fake.revision,
     rostersWritable: true,
   })
   const deps: HostAttemptDeps = {
-    listInstances: () => initial.ids.map(id => ({ id })),
-    status: id => initial.phases?.[id] === undefined ? null : phaseStatus(initial.phases[id]!, initial.requiresUserAction?.[id] === true),
+    listInstances: () => fake.ids.map(id => ({ id })),
+    status: id => fake.phases[id] === undefined ? null : phaseStatus(fake.phases[id]!, initial.requiresUserAction?.[id] === true),
     connect: id => { connected.push(id) },
     connectionIntents: snapshot,
     getAttemptFacts: id => facts.get(id) ?? null,
@@ -133,18 +137,18 @@ test('runHostAttempts wake: keeps the historical error/degraded + non-terminal f
   assert.deepEqual(fake.connected, ['err', 'degraded'])
 })
 
-test('queued tails re-check the ticket: stale row revision, stale transport generation, new suppression, quit', async () => {
-  // 每波：a 立即连、b 进错峰定时器；窗口内改变事实后 fire 必须丢弃 b。
+test('queued tails re-check the ticket: a stale row identity re-plans once; stale transport, suppression and quit are dropped', async () => {
+  // 每波：a 立即连、b 进错峰定时器；窗口内改变事实后 fire 必须重判。
   const base = () => fakeDeps({ ids: ['a', 'b'], phases: { a: 'idle', b: 'idle' } })
 
   const rowStale = base()
+  rowStale.facts.set('b', { state: { id: 'b' }, tunnelEpoch: 1 })
   await runHostAttempts(rowStale.deps, { kind: 'startup', staggerMs: 30 })
   assert.deepEqual(rowStale.connected, ['a'])
   assert.equal(rowStale.timers.length, 1)
-  rowStale.facts.set('b', { state: { id: 'b' }, tunnelEpoch: 1 })
-  rowStale.revision += 1 // 保存/意图写
+  rowStale.facts.set('b', { state: { id: 'b-next' }, tunnelEpoch: 1 }) // 同 id 重加/改址 = 行身份换代
   rowStale.timers[0]!.run()
-  assert.deepEqual(rowStale.connected, ['a'], 'a stale row revision drops the queued attempt')
+  assert.deepEqual(rowStale.connected, ['a', 'b'], 'a stale row identity re-plans once against the current level')
 
   const transportStale = base()
   const stateB = { id: 'b' }
@@ -154,7 +158,7 @@ test('queued tails re-check the ticket: stale row revision, stale transport gene
   assert.equal(transportStale.timers.length, 1)
   transportStale.facts.set('b', { state: stateB, tunnelEpoch: 2 })
   transportStale.timers[0]!.run()
-  assert.deepEqual(transportStale.connected, ['a'], 'a stale transport generation drops the queued attempt')
+  assert.deepEqual(transportStale.connected, ['a'], 'a stale transport generation drops the queued attempt (never resurrects a disconnect)')
 
   const intentStale = fakeDeps({ ids: ['a', 'b', 'c'], phases: { a: 'idle', b: 'idle', c: 'idle' }, suppressed: ['a'] })
   await runHostAttempts(intentStale.deps, { kind: 'startup', staggerMs: 30 })
@@ -170,6 +174,113 @@ test('queued tails re-check the ticket: stale row revision, stale transport gene
   quitting.quitting = true
   quitting.timers[0]!.run()
   assert.deepEqual(quitting.connected, ['a'], 'quit drops the queued attempt')
+})
+
+test('runHostAttempts: an unrelated row edit inside the stagger window no longer drops the queued row', async () => {
+  const dir = tempDir()
+  const manager = createTransportManager({
+    provider: { ...sshProvider, transportSocketPath: () => null },
+    spawnFn: () => new FakeChild(),
+    instancesFile: join(dir, 'ssh-instances.json'),
+    logger: silentLogger,
+    portProbe: async () => false,
+    allocatePort: async () => 43210,
+    options: { readyTimeoutMs: 50, probeIntervalMs: 5, retryBaseMs: 5, retryMaxMs: 10, maxRetryAttempts: 1 },
+  })
+  try {
+    manager.saveInstances([saveInput('a', 'a.example.com'), saveInput('b', 'b.example.com')])
+    const logs: string[] = []
+    const timers: Array<() => void> = []
+    const deps: HostAttemptDeps = {
+      listInstances: () => manager.listInstances(),
+      status: id => manager.status(id),
+      connect: id => { manager.connect(id) },
+      connectionIntents: () => manager.connectionIntents(),
+      getAttemptFacts: id => manager.getAttemptFacts(id),
+      isQuitting: () => false,
+      planeBound: () => true,
+      log: (_level, message) => { logs.push(message) },
+      setTimer: run => { timers.push(run); return {} },
+    }
+    await runHostAttempts(deps, { kind: 'startup', staggerMs: 30 })
+    assert.equal(timers.length, 1)
+    // 错峰窗口内只改 A 的展示字段（label）：authoritative save 换代，但行身份与传输代不变。
+    const rows = manager.listInstances()
+    manager.saveInstances(rows.map(row => row.id === 'a' ? { ...row, label: 'A-renamed' } : row))
+    timers[0]!()
+    assert.equal(logs.some(line => line.includes('stale-row')), false,
+      'an unrelated row edit must not drop the queued row (no stale-row discard or re-plan)')
+    assert.notEqual(manager.status('b')?.phase, 'idle', 'the queued row still connected')
+  } finally {
+    manager.dispose()
+  }
+})
+
+test('runHostAttempts: a stale-row ticket re-plans once — suppression and removal win, a self-retarget or same-id re-add connects', async () => {
+  const wave = async (): Promise<FakeDeps> => {
+    const fake = fakeDeps({ ids: ['a', 'b'], phases: { a: 'idle', b: 'idle' } })
+    fake.facts.set('b', { state: { id: 'b' }, tunnelEpoch: 1 })
+    await runHostAttempts(fake.deps, { kind: 'startup', staggerMs: 30 })
+    assert.deepEqual(fake.connected, ['a'])
+    return fake
+  }
+
+  // 抑制胜出：窗口内新增本会话抑制 → 重规划读当前 level，见 skip-suppressed。
+  const suppressed = await wave()
+  suppressed.suppressed = new Set(['b'])
+  suppressed.facts.set('b', { state: { id: 'b-2' }, tunnelEpoch: 1 })
+  suppressed.timers[0]!.run()
+  assert.deepEqual(suppressed.connected, ['a'], 'suppression wins the re-plan')
+
+  // 删除胜出：行已不在（status null）→ skip-unknown。
+  const removed = await wave()
+  removed.ids = removed.ids.filter(id => id !== 'b')
+  delete removed.phases['b']
+  removed.facts.set('b', { state: { id: 'b-2' }, tunnelEpoch: 1 })
+  removed.timers[0]!.run()
+  assert.deepEqual(removed.connected, ['a'], 'a removed row is not resurrected by the re-plan')
+
+  // 自改址：新参数已生效、行身份换代但相位仍合格 → 连新行。
+  const retargeted = await wave()
+  retargeted.facts.set('b', { state: { id: 'b-retargeted' }, tunnelEpoch: 2 })
+  retargeted.timers[0]!.run()
+  assert.deepEqual(retargeted.connected, ['a', 'b'], 'a self-retarget connects under the new spec')
+
+  // 同 id 重加：新状态对象 → 连新行（added 波重复触发时 connect 幂等由管理器负责）。
+  const readded = await wave()
+  readded.facts.set('b', { state: { id: 'b-readded' }, tunnelEpoch: 1 })
+  readded.timers[0]!.run()
+  assert.deepEqual(readded.connected, ['a', 'b'], 'a same-id re-add connects under the new spec')
+})
+
+test('runHostAttempts: added and wake stale-row tickets also re-plan once (kind filters still apply)', async () => {
+  // added：第二个 id 在错峰窗口内行身份换代 → 重规划按 added 门连接当前行。
+  const added = fakeDeps({ ids: ['a', 'b'], phases: { a: 'idle', b: 'idle' } })
+  added.facts.set('b', { state: { id: 'b' }, tunnelEpoch: 1 })
+  await runHostAttempts(added.deps, { kind: 'added', ids: ['a', 'b'], staggerMs: 30 })
+  assert.deepEqual(added.connected, ['a'])
+  added.facts.set('b', { state: { id: 'b-2' }, tunnelEpoch: 1 })
+  added.timers[0]!.run()
+  assert.deepEqual(added.connected, ['a', 'b'], 'added re-plan connects the current row')
+
+  // wake：只碰 error/degraded；窗口内换代仍按 wake 相位筛放行 error 行。
+  const wake = fakeDeps({ ids: ['a', 'b'], phases: { a: 'error', b: 'error' } })
+  wake.facts.set('b', { state: { id: 'b' }, tunnelEpoch: 1 })
+  await runHostAttempts(wake.deps, { kind: 'wake', staggerMs: 30 })
+  assert.deepEqual(wake.connected, ['a'])
+  wake.facts.set('b', { state: { id: 'b-2' }, tunnelEpoch: 1 })
+  wake.timers[0]!.run()
+  assert.deepEqual(wake.connected, ['a', 'b'], 'wake re-plan keeps the wake phase filter and reconnects the error row')
+
+  // wake 的相位筛在重规划时仍生效：窗口内行变 idle → 不连接。
+  const idle = fakeDeps({ ids: ['a', 'b'], phases: { a: 'error', b: 'error' } })
+  idle.facts.set('b', { state: { id: 'b' }, tunnelEpoch: 1 })
+  await runHostAttempts(idle.deps, { kind: 'wake', staggerMs: 30 })
+  assert.deepEqual(idle.connected, ['a'])
+  idle.facts.set('b', { state: { id: 'b-2' }, tunnelEpoch: 1 })
+  idle.phases['b'] = 'idle'
+  idle.timers[0]!.run()
+  assert.deepEqual(idle.connected, ['a'], 'the wake phase filter still wins on a stale-row re-plan')
 })
 
 test('runHostAttempts never rejects: a throwing connect is a loud line, not an unhandled rejection', async () => {
@@ -231,9 +342,12 @@ test('reconnectStaleTransports keeps its legacy contract: phase filter, terminal
 test('T8: disconnect inside the wake stagger window => zero late spawn (ticket transport generation)', () => {
   // 用 manager 结构面替身：第一行立即重试、第二行进错峰窗口；窗口内 disconnect 使
   // tunnelEpoch +1 ⇒ 到期票据 stale-transport，绝不复活已断开的行（B 切片 T8）。
+  // disconnect 不换 InstanceState 对象（只 bump tunnelEpoch）：窗口内必须保住对象身份，
+  // 票据才落到 stale-transport（行身份换代是另一条腿，见 stale-row 重规划用例）。
+  const stateErr2 = { row: 'err-2' }
   const facts = new Map<string, HostAttemptFacts>([
     ['err-1', { state: { row: 'err-1' }, tunnelEpoch: 1 }],
-    ['err-2', { state: { row: 'err-2' }, tunnelEpoch: 1 }],
+    ['err-2', { state: stateErr2, tunnelEpoch: 1 }],
   ])
   const connected: string[] = []
   const timers: Array<() => void> = []
@@ -241,7 +355,7 @@ test('T8: disconnect inside the wake stagger window => zero late spawn (ticket t
     listInstances: () => [{ id: 'err-1' }, { id: 'err-2' }],
     status: (id: string) => ({ phase: id === 'err-1' || id === 'err-2' ? 'error' : 'idle', requiresUserAction: false }),
     connect: (id: string) => { connected.push(id); return null },
-    connectionIntents: (): ConnectionIntentSnapshot => ({ session: 'app-session-aaaa0000', suppressed: new Set(), revision: 0, rostersWritable: true }),
+    connectionIntents: (): ConnectionIntentSnapshot => ({ session: 'app-session-aaaa0000', suppressed: new Set(), rostersWritable: true }),
     getAttemptFacts: (id: string) => facts.get(id) ?? null,
   } as unknown as Parameters<typeof reconnectStaleTransports>[0]
   reconnectStaleTransports(sm as never, () => false, () => {}, '[flavor]', {
@@ -249,8 +363,8 @@ test('T8: disconnect inside the wake stagger window => zero late spawn (ticket t
     setTimer: (run): HostAttemptTimer => { timers.push(run); return {} },
   })
   assert.deepEqual(connected, ['err-1'], 'the first wake retry is immediate')
-  // 窗口内用户断开 err-2：传输代 +1（disconnect 语义）。
-  facts.set('err-2', { state: { row: 'err-2' }, tunnelEpoch: 2 })
+  // 窗口内用户断开 err-2：传输代 +1（disconnect 语义），状态对象身份不变。
+  facts.set('err-2', { state: stateErr2, tunnelEpoch: 2 })
   for (const run of timers) run()
   assert.deepEqual(connected, ['err-1'], 'the queued retry is dropped as stale-transport (no resurrect)')
 })

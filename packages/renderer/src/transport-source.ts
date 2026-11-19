@@ -8,8 +8,9 @@
  * instance through `/api/i/ssh-*`.
  */
 
+import { linkReady } from '@dsh-chamber/dsh-chamber-client-core'
 import type { HealthResponse } from './api.ts'
-import type { SshStatusProjection, TransportKind } from './global.d.ts'
+import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
 
 /** Canonical source-id prefixes: `dsh-<id>` / `gateway-<id>`. */
 const SOURCE_PREFIXES = ['dsh-', 'gateway-'] as const
@@ -105,4 +106,67 @@ export function instanceConnected(
   // A registry kind switch and its IPC pushes are separate messages: a briefly-stale READY
   // projection from the old provider is not proof the replacement provider is ready.
   return status?.kind === kind && status.phase === 'ready'
+}
+
+export interface StatusAcceptanceInput {
+  /** Raw registry id (the status store key), never a chamber source id. */
+  id: string
+  projection: SshStatusProjection | null
+  /** The rows installed AT WRITE TIME — never a snapshot captured before the await. */
+  instances: readonly SshInstanceSpec[]
+  /** The source id the writer captured before its await (its live/owner proof). Absent:
+   *  the source id is resolved from the write-time row. */
+  expectedSourceId?: string
+  live: ReadonlySet<string>
+  ownerHeld: boolean
+}
+
+/**
+ * Mechanism acceptance for a transport status write (design 06 §4.8): a late projection may
+ * only land on the row that is installed AT WRITE TIME. A projection from a replaced transport
+ * mechanism (ssh↔http) carries the old mechanism, and comparing it with the current row is the
+ * one discriminator the wire already offers. Same-mechanism reconnect churn has NO wire
+ * discriminator — documented residual (未证实可达), not defended here by a new projection field.
+ *
+ * The owner/live proof stays the caller's (captured before the await): this function only
+ * decides the write, it does not capture anything.
+ */
+export function statusWriteAccepted({
+  id, projection, instances, expectedSourceId, live, ownerHeld,
+}: StatusAcceptanceInput): boolean {
+  if (projection === null || !ownerHeld) return false
+  const row = instances.find(candidate => candidate.id === id)
+  if (row === undefined) return false
+  // Replaced mechanism: an old provider's READY is not proof for the replacement row.
+  if (projection.transport !== row.transport) return false
+  const sourceId = expectedSourceId ?? sourceIdForInstance(row)
+  return sourceIdForTransport(projection.kind, id) === sourceId && live.has(sourceId)
+}
+
+/**
+ * The ready / link-down / not-ready partition every aggregate decision gate consumes
+ * (design 06 §4.8): a remote transport must first pass the kind+phase gate
+ * (`instanceConnected`, which also rejects a stale old-provider READY after a kind switch)
+ * and then `linkReady`. A ready link whose sub-state is down is PARKED — it is neither
+ * refreshable nor "not connected": the not-connected reset prunes snapshots/runtime facts,
+ * which a link blip must never do ("链路不可用 ≠ 断开"). `suspect` still forwards (design
+ * 27 I3). Local has no transport link: the serving health table is its whole reading.
+ */
+export function partitionSourceReachability(
+  health: HealthResponse | null,
+  remoteStatus: Record<string, SshStatusProjection>,
+  remoteInstances: readonly SshInstanceSpec[],
+): { ready: string[]; linkDown: string[]; notReady: string[] } {
+  const ready: string[] = []
+  const linkDown: string[] = []
+  const notReady: string[] = []
+  if (isServiceableLocalStatus(health?.dsh?.status)) ready.push('local')
+  else notReady.push('local')
+  for (const instance of remoteInstances) {
+    const sourceId = sourceIdForInstance(instance)
+    if (!instanceConnected(instance.kind, health, remoteStatus, instance.id)) notReady.push(sourceId)
+    else if (!linkReady(remoteStatus[instance.id])) linkDown.push(sourceId)
+    else ready.push(sourceId)
+  }
+  return { ready, linkDown, notReady }
 }

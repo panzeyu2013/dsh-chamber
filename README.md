@@ -23,7 +23,7 @@ macOS版本采用 **Swift/AppKit原生壳**：窗口、菜单、托盘、通知�
 
 - **远程是一等来源** —— 本地实例只是第一个来源：远程服务器经SSH隧道接入（应用自动建隧道并管理远端systemd），公网/团队场景经认证Gateway接入；两者与本地实例在同一条dsh原生侧边栏里平等列出。
 - **官方前端，不做第二套UI** —— 界面是dsh官方前端源码复用自建，每个实例保持原生外观与完整能力；壳未覆盖的插件行降级为「特性缺席」，绝不整boot崩溃。
-- **连接管理是唯一职责** —— 控制面只做托管、反代与静态服务：桌面loopback-only、公网Gateway默认认证；凭据只经write-only表单输入，不进入渲染层与日志；本机只以0600文件保存连接凭据（Gateway凭据优先系统密钥链加密、不可用时明文兜底），且从不回填界面。
+- **连接管理是唯一职责** —— 控制面只做托管、反代与静态服务：桌面loopback-only、公网Gateway默认认证；凭据只经write-only表单输入，不进入渲染层与日志；本机只以0600文件保存连接凭据（出货的 macOS Swift 形态无 OS 密钥链集成：Gateway 凭据与 SSH 密码均为 0600 明文文件，设置页对此有提示），且从不回填界面。
 
 |能力|dsh-chamber|官方Desktop|SSH/隧道型社区客户端|
 |---|---|---|---|
@@ -113,7 +113,7 @@ bash install-gateway.sh
 
 - **`pnpm run smoke` 为什么打印SKIP？** — 冒烟测试需要dsh安装；找不到时打印SKIP并以0退出，属正常而非失败。
 - **怎么单独检查远端浏览器？** — `pnpm run typecheck:browser` 做类型检查，`pnpm run test:browser` 跑该插件测试。
-- **我的凭据会被存到哪里？** — 两处，都在本机：① 实例自身的配置平面（本地 = 本机dsh home，远程 = 远端dsh home，由该实例的dsh管理）；② 桌面壳在 `<userData>` 下保存的连接凭据（Gateway凭据优先系统密钥链加密、不可用时0600明文兜底；SSH密码按用户决策为0600明文兜底），用于免重录重连。凭据只经write-only表单输入，从不回填界面，也不进入渲染层或日志；Gateway安装向导写入的配置文件为0600权限。
+- **我的凭据会被存到哪里？** — 两处，都在本机：① 实例自身的配置平面（本地 = 本机dsh home，远程 = 远端dsh home，由该实例的dsh管理）；② 桌面壳在 `<userData>` 下保存的连接凭据（出货的 macOS Swift 形态没有 OS 密钥链集成：Gateway 凭据与 SSH 密码均为 0600 明文文件，设置页对此有提示），用于免重录重连。凭据只经write-only表单输入，从不回填界面，也不进入渲染层或日志；Gateway安装向导写入的配置文件为0600权限。
 - **它和官方Desktop有什么区别？** — 官方Desktop覆盖「只在本机用」的场景；dsh-chamber的差异集中在远程与多机：SSH接入远端实例、认证Gateway、本地与远程同为窗口内一等来源。本地场景两者都开箱即用，按是否需要远程来选。
 - **远程实例需要什么？** — dsh目标需要可达的dsh API面（web profile）且远端不带browser-auth门（带门宿主经SSH探测返回HTTP 401，不可附加）；gateway目标需要已部署的 `@dsh-chamber/gateway`，可经SSH隧道或显式HTTP(S) 直连。认证远端请选Gateway；远端无需单独装web前端，UI复用本地前端并经同源反代。
 - **agent preset / profile在各实例间怎么工作？** — 按实例权威：每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只在该实例一侧（本地 = 本机，远程 = 远端）。编辑远程预设须切到该来源shell的「设置 → Agent presets」页。

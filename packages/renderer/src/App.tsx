@@ -125,8 +125,7 @@ import {
   isServiceableLocalStatus,
   rawInstanceIdFromSourceId,
   sourceIdForInstance,
-  sourceIdForRawInstance,
-  sourceIdForTransport,
+  statusWriteAccepted,
 } from './transport-source.ts'
 import {shouldRunBackgroundPhase} from './background-phase.ts'
 import { bootDeferralReasonForSource, decideServingGate, type BootDeferralReason } from './source-readiness.ts'
@@ -920,10 +919,11 @@ export default function App() {
     const unsubscribe = ssh.onStatusChanged((payload) => {
       // A removed transport may emit one final phase while main tears it down; the delta already
       // retired this incarnation, and a real re-add supplies the replacement's first projection.
-      const sourceId = sourceIdForRawInstance(payload.id, remotesStore.getSnapshot().instances)
-      if (sourceId === null
-        || sourceIdForTransport(payload.status.kind, payload.id) !== sourceId
-        || !liveServerIdsRef.current.has(sourceId)) return
+      // Push is synchronous, so the owner proof is trivially held; the write-time row still decides.
+      if (!statusWriteAccepted({
+        id: payload.id, projection: payload.status, instances: remotesStore.getSnapshot().instances,
+        live: liveServerIdsRef.current, ownerHeld: true,
+      })) return
       remotesStore.setStatus(prev => ({ ...prev, [payload.id]: payload.status }))
     })
     // 注册表变更推送：设置页增/删/改实例即时重拉 roster（自动连接新 id、回收已删视图），不等 30s 轮询。

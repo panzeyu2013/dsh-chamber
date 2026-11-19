@@ -111,9 +111,8 @@ export interface RegistrationManagerReader {
 }
 
 /** Production live-facts reader over the manager's documented reads (pure adapter,
- *  no state). `proxyTransport` is the ONE shell-core mapping, injected because this
- *  leaf must not import shell-core (value cycle through the IPC registrars that read
- *  the manual-sync seam). */
+ *  no state). `proxyTransport` is the ONE shell-core mapping, injected so this leaf
+ *  stays independent of the shell assembly (no import edge into shell-core). */
 export function createRegistrationLiveFacts(
   sm: RegistrationManagerReader,
   proxyTransport: (transport: TransportInstanceSpec['transport']) => 'ssh' | 'http',
@@ -418,27 +417,4 @@ export function createActiveRegistrationRegistry(deps: ActiveRegistrationDeps): 
       tombstones.clear()
     },
   }
-}
-
-// —— manual-sync read seam ——
-// The manual gateway_plugin_sync IPC registrar needs the committed record but has no
-// assembly handle of its own (its context type is owned by shell-assembly-ctx.ts).
-// This seam publishes a REFERENCE to the process's ONE registry — it keeps no
-// registration state of its own (unlike the retired gateway-sync-registry mirror),
-// and the composition root retires it on exit.
-let publishedRegistry: ActiveRegistrationRegistry | null = null
-
-export function bindActiveRegistrationRegistry(registry: ActiveRegistrationRegistry | null): void {
-  publishedRegistry = registry
-}
-
-/** The committed generation the manual sync reads first (undefined = no live registration). */
-export function committedRecordGen(id: string): number | undefined {
-  return publishedRegistry?.currentRecordGen(id)
-}
-
-/** The credential-bearing record at the caller's observed generation; undefined when
- *  the registration changed after the caller read currentRecordGen. */
-export function committedRegistrationForSync(id: string, recordGen: number): ActiveRegistration | undefined {
-  return publishedRegistry?.snapshotForSync(id, recordGen)
 }

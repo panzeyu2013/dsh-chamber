@@ -34,8 +34,14 @@
       "note": "plugin dialog controller/render mix（2026-12 P1-6 上游 parity 取件：官方 Plugins 页能力门 +27 行，实现形体与 backup/v016-alpha1-pre-reset 逐字一致；+28（2026-12 §22.4.3）能力门按 source phase 重探 + SSH live 判词（对 dsh-<id> 读 pluginInventory/list 合并展示）；重构目标 700 不变）"
     },
     {
+      "path": "packages/desktop/gateway-plugin-sync.ts",
+      "lines": 466,
+      "target": 466,
+      "note": "gateway chamber host-package sync 的唯一执行腿（目标绑定围栏 + per-id 单飞）；为过 gateway-provider 只降不升棘轮从 provider 迁出；新叶子初始棘轮=当前行数"
+    },
+    {
       "path": "packages/desktop/gateway-provider.ts",
-      "lines": 1261,
+      "lines": 1043,
       "target": 1400,
       "note": "gateway transport provider；+1 = probe failureKind classification（design 27）；+7 = session failure/superseded/no-token failureKind（review 修正）；+3 = 复合 verifyUp 预算声明 verifyUpBudgetMs（design 27 §3.2）；+3 = 复合探针预算注释（登录 10s + 探针 5s 的真实最坏 35s）；+16 = verifyUp/verifyGatewayEndpoint/探测核心的 signal 透传；+27 = 口令会话 proof 在瞬时失败后恢复（一次网络抖动不得拆掉已注册的 gateway）；+1 = 失败的 bearer 回退不覆盖口令分类（注释）；+2（P2-3）= gatewaySessionOriginFor 成为直连 origin 的唯一构造点（shell-ipc-connections 去重）后的注释；+12（P2-1）= UDS 隧道的 socketPath 透传（identity probe core + 插件 sync 的 GET/PUT + sync 选项）。",
       "kind": "ceiling"
@@ -91,7 +97,7 @@
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 1030,
+      "lines": 999,
       "target": 991,
       "note": "Composition root: exit leg and committed registry transition extracted (B4); the sm.onStatusChanged + sm.onVerified pair extracted as ONE factory to host-transport-subscriptions.ts (B4-2b) — registered synchronously at the composition root's original position, sharing registeredTargetKeys/registeredAuthFingerprints; the six shared closure states stay owned here and are injected. Per STATUS §三 the \"must stay inline\" reading did not hold, so the FROZEN boundary is retired: lines lowered with the extraction and target lowered to the new accepted boundary (= the composition root that remains; no further extraction planned). Historical increments (git history): +12（P0-3）= 单一 hostKey guard 装配同时注入 transport manager 与 IPC ctx；+37（P2-1）= 启动 orphan sweep + sshOrphanStateDir/socketPath 的注册/session refresh/seed 探针/插件 sync 透传；+2（R2-A）= configureSshSocketNamespace；+4（2026-11）= HostAssemblyDeps.nativeBetaChannelSwitch（beta 更新通道能力门）。；宿主对账组装与 session 身份注入（注册收口净减 9）；目标 991 不变。合并后收尾 +37 = 续签 register 回调抽成 createRefreshRegisterLeg 工厂并补 fail-closed revoked 落定（与 subscriptions 的 handleAuthFailed 同序；wiring 用例覆盖）"
     },
@@ -199,7 +205,7 @@
     },
     {
       "path": "packages/renderer/src/app-hooks/use-aggregate-refresh.ts",
-      "lines": 658,
+      "lines": 641,
       "target": 658,
       "note": "Aggregate refresh cluster (unary snapshots/bounded waves/edge polling/staleness watchdog). Frozen at its current size (target == lines): these are single-closure hooks with no identified seam; a split needs input-surface reduction first."
     },
@@ -391,7 +397,7 @@
     },
     {
       "path": "packages/desktop/active-registration.ts",
-      "lines": 444,
+      "lines": 420,
       "target": 438,
       "note": "代理注册的唯一提交入口（单一代际提交 + 撤销墓碑）；新叶子初始棘轮=当前行数，收口目标待后续重构评审；+6 = revoke 墓碑只钉被撤销记录的代际（无记录 revoke 不立碑），非 ready 推送只在存在已提交记录时撤销——修复自动重连后代理注册丢失"
     },
@@ -399,7 +405,7 @@
       "path": "packages/desktop/connection-intent.ts",
       "lines": 312,
       "target": 312,
-      "note": "意图与票据的唯一归属（手动断开/自动尝试的抑制事实 + 票据四查）；新叶子初始棘轮=当前行数（312），收口目标待后续重构评审"
+      "note": "意图与票据的唯一归属（手动断开/自动尝试的抑制事实 + 票据三查/stale-row 重规划）；新叶子初始棘轮=当前行数（312），收口目标待后续重构评审"
     },
     {
       "path": "packages/desktop/roster-change.ts",

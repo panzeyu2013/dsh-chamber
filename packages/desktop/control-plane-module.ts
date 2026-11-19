@@ -110,7 +110,7 @@ export const HOST_OPEN_IN_INSERT = controlPlaneModule.HOST_OPEN_IN_INSERT
 // every desktop chamber row/probe derives from it, never a parallel list.
 export const CHAMBER_HOST_PACKAGES = controlPlaneModule.CHAMBER_HOST_PACKAGES
 // The seeded file set + the local `--patch` overlay filename (host-graph-seed.ts single
-// source) — consumed by plugin-sync (remote seed writer/probes/overlay) and gateway-provider.
+// source) — consumed by plugin-sync (remote seed writer/probes/overlay) and gateway-plugin-sync.
 export const HOST_PACKAGE_SEED_FILES = controlPlaneModule.HOST_PACKAGE_SEED_FILES
 export const HOST_GRAPH_PATCH_FILENAME = controlPlaneModule.HOST_GRAPH_PATCH_FILENAME
 

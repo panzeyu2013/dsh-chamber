@@ -627,6 +627,7 @@ test('a restart-window exhaustion with an unproven retire lands on error, never 
     assert.equal(spawns, 2, 'a refused start never spawns behind an unproven writer')
     await assert.rejects(local.stop(), isCodedWriterUnknown)
     assert.equal(local.getState(), 'error')
+    assert.equal(local.acceptsNewRequests(), false, 'an unproven retire keeps admission closed')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
@@ -664,5 +665,268 @@ test('a late exit of a retired child never triggers a restart on the current gen
   } finally {
     await local.stop().catch(() => {})
     rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Admission (design 02 §3.6): the SINGLE reclamation primitive closes new
+// requests for the whole exit-proof window — the two windows whose
+// connectionState is still serviceable (restart-exhausted and stop) — and
+// reopens only after the proof succeeds. It is an in-memory admission fact,
+// never a published state: the terminal 503 still carries details.state.
+// ---------------------------------------------------------------------------
+
+/** The exhaustion window: maxRestartsInWindow=1 makes the SECOND death of the
+ *  current generation land on the exhaustion branch while the machine still reads
+ *  'ready' + the old port, with that generation's stop() (the delayed exit proof)
+ *  gated. A normal restart also runs the reclamation primitive once. */
+function exhaustionWindowFixture(): {
+  local: ReturnType<typeof createLocalConnection>
+  stateDir: string
+  hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }>
+  retireEntered: Promise<void>
+  releaseRetire(): void
+  spawns(): number
+} {
+  const stateDir = tempDir()
+  const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
+  let spawns = 0
+  let announceRetire!: () => void
+  const retireEntered = new Promise<void>(resolve => { announceRetire = resolve })
+  let releaseRetire!: () => void
+  const retireGate = new Promise<void>(resolve => { releaseRetire = resolve })
+  const spawnDsh = async (): Promise<SpawnedDsh> => {
+    spawns += 1
+    const index = spawns
+    const { spawned, hook } = controllableChild(DEFAULT_DSH_START_PORT + index, {
+      pid: 78000 + index,
+      stop: async () => {
+        // Only the SECOND generation's reclamation is delayed (the exhaustion proof).
+        if (index === 2) {
+          announceRetire()
+          await retireGate
+        }
+      },
+    })
+    hooks.push(hook)
+    return spawned
+  }
+  const local = createLocalConnection({
+    stateDir,
+    dshHome: join(stateDir, 'home'),
+    dshWorkspacePath: join(stateDir, 'ws'),
+    logger: silentLogger,
+    options: {
+      healthIntervalMs: 0,
+      restartWindowMs: 60_000,
+      maxRestartsInWindow: 1,
+      restartBackoffFloorMs: 5,
+      restartBackoffCeilMs: 10,
+    },
+    deps: { spawnDsh, probeHostIdentity: healthyProbe },
+  })
+  return {
+    local,
+    stateDir,
+    hooks,
+    retireEntered,
+    releaseRetire: () => releaseRetire(),
+    spawns: () => spawns,
+  }
+}
+
+test('the retirement proof closes new-request admission for the exhaustion window and reopens after the proof', async () => {
+  const fixture = exhaustionWindowFixture()
+  const { local } = fixture
+  try {
+    await local.start()
+    assert.equal(local.getState(), 'ready')
+    assert.equal(local.acceptsNewRequests(), true, 'open before any reclamation begins')
+
+    // A NORMAL restart runs the same primitive: the latch closes and reopens invisibly.
+    fixture.hooks[0]?.fire?.(1, null)
+    await waitUntil(() => fixture.spawns() === 2 && local.getState() === 'ready')
+    assert.equal(local.acceptsNewRequests(), true, 'a normal restart reopens admission after its proven retire')
+    const oldPort = local.getDshPort()
+    assert.ok(oldPort !== null, 'the restarted generation has a port')
+
+    // The second death hits the M=1 window: the exhaustion proof starts in the window.
+    fixture.hooks[1]?.fire?.(1, null)
+    await fixture.retireEntered
+
+    // --- the window: exit proof pending -------------------------------------
+    assert.equal(local.getState(), 'ready', 'the exhaustion window still projects a serviceable state')
+    assert.equal(isServiceableLocalState(local.getState()), true, 'the state gate alone would still forward')
+    assert.equal(local.getDshPort(), oldPort, 'the old port is retained until the proof')
+    assert.equal(local.acceptsNewRequests(), false, 'admission closes before the proof await, not after it')
+
+    // --- the proof returns ---------------------------------------------------
+    fixture.releaseRetire()
+    await waitUntil(() => local.getState() === 'restart-exhausted')
+    assert.equal(local.getDshPort(), null, 'the terminal state clears the port')
+    assert.equal(local.acceptsNewRequests(), true, 'a PROVEN retire reopens admission before the terminal publication')
+
+    // A later start() opens the next generation with admission still open.
+    await local.start()
+    assert.equal(local.getState(), 'ready')
+    assert.equal(local.acceptsNewRequests(), true)
+  } finally {
+    fixture.releaseRetire()
+    await local.stop().catch(() => {})
+    rmSync(fixture.stateDir, { recursive: true, force: true })
+  }
+})
+
+test('the exhaustion reclaim cancels the in-flight health-probe generation (design 02 §3.6 step 7)', async () => {
+  const stateDir = tempDir()
+  const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
+  let spawns = 0
+  let announceRetire!: () => void
+  const retireEntered = new Promise<void>(resolve => { announceRetire = resolve })
+  let releaseRetire!: () => void
+  const retireGate = new Promise<void>(resolve => { releaseRetire = resolve })
+  const probeSignals: Array<AbortSignal | undefined> = []
+  const probeHostIdentity: ProbeIdentityFn = async (_baseUrl, options) => {
+    probeSignals.push(options?.generationSignal)
+    const signal = options?.generationSignal
+    if (signal === undefined) return true
+    await new Promise<void>((_resolve, reject) => {
+      if (signal.aborted) { reject(new Error('probe aborted')); return }
+      signal.addEventListener('abort', () => reject(new Error('probe aborted')), { once: true })
+    })
+    return true
+  }
+  const spawnDsh = async (): Promise<SpawnedDsh> => {
+    spawns += 1
+    const index = spawns
+    const { spawned, hook } = controllableChild(DEFAULT_DSH_START_PORT + index, {
+      pid: 79000 + index,
+      stop: async () => {
+        if (index === 2) {
+          announceRetire()
+          await retireGate
+        }
+      },
+    })
+    hooks.push(hook)
+    return spawned
+  }
+  const local = createLocalConnection({
+    stateDir,
+    dshHome: join(stateDir, 'home'),
+    dshWorkspacePath: join(stateDir, 'ws'),
+    logger: silentLogger,
+    options: {
+      healthIntervalMs: 5,
+      restartWindowMs: 60_000,
+      maxRestartsInWindow: 1,
+      restartBackoffFloorMs: 5,
+      restartBackoffCeilMs: 10,
+    },
+    deps: { spawnDsh, probeHostIdentity },
+  })
+  try {
+    await local.start()
+    // A held probe is in flight when the first death restarts the generation.
+    await waitUntil(() => probeSignals.length >= 1)
+    hooks[0]?.fire?.(1, null)
+    await waitUntil(() => spawns === 2 && local.getState() === 'ready')
+    // Wait for the new generation's held probe (its generation has not been cancelled yet).
+    await waitUntil(() => {
+      const latest = probeSignals[probeSignals.length - 1]
+      return probeSignals.length >= 2 && latest !== undefined && latest.aborted === false
+    })
+    // The second death hits the exhaustion branch: cancelProbe() must abort the held generation.
+    hooks[1]?.fire?.(1, null)
+    await retireEntered
+    const latest = probeSignals[probeSignals.length - 1]
+    assert.equal(latest?.aborted, true, 'the exhaustion reclaim aborts the current probe generation')
+  } finally {
+    releaseRetire()
+    await local.stop().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('stop() closes new-request admission for its exit-proof window and reopens after the proof', async () => {
+  const stateDir = tempDir()
+  let announceStop!: () => void
+  const stopEntered = new Promise<void>(resolve => { announceStop = resolve })
+  let releaseStop!: () => void
+  const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
+  let spawns = 0
+  const spawnDsh = async (): Promise<SpawnedDsh> => {
+    spawns += 1
+    return {
+      child: { on: () => {}, exitCode: null, signalCode: null },
+      port: DEFAULT_DSH_START_PORT + spawns,
+      pid: 76000 + spawns,
+      stop: async () => { announceStop(); await stopGate },
+    }
+  }
+  const local = createLocalConnection({
+    stateDir,
+    dshHome: join(stateDir, 'home'),
+    dshWorkspacePath: join(stateDir, 'ws'),
+    logger: silentLogger,
+    options: { healthIntervalMs: 0 },
+    deps: { spawnDsh, probeHostIdentity: healthyProbe },
+  })
+  try {
+    await local.start()
+    assert.equal(local.getState(), 'ready')
+    assert.equal(local.acceptsNewRequests(), true)
+    const oldPort = local.getDshPort()
+    const stopping = local.stop()
+    await stopEntered
+
+    // --- the stop window: exit proof pending ---------------------------------
+    assert.equal(local.getState(), 'ready', 'the stop window keeps the serviceable projection until the proof')
+    assert.equal(local.getDshPort(), oldPort, 'and the old port')
+    assert.equal(local.acceptsNewRequests(), false, 'admission closes before the exit-proof await')
+
+    releaseStop()
+    await stopping
+    assert.equal(local.getState(), 'stopped')
+    assert.equal(local.acceptsNewRequests(), true, 'the PROVEN stop proof reopens admission')
+
+    await local.start()
+    assert.equal(local.getState(), 'ready')
+    assert.equal(local.acceptsNewRequests(), true)
+  } finally {
+    releaseStop()
+    await local.stop().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('a stop() that invalidates the exhaustion generation never publishes restart-exhausted', async () => {
+  const fixture = exhaustionWindowFixture()
+  const { local } = fixture
+  const transitions: string[] = []
+  local.onStateChange(snapshot => transitions.push(snapshot.status))
+  try {
+    await local.start()
+    fixture.hooks[0]?.fire?.(1, null)
+    await waitUntil(() => fixture.spawns() === 2 && local.getState() === 'ready')
+    transitions.length = 0
+
+    // Enter the exhaustion proof, then invalidate that generation with stop().
+    fixture.hooks[1]?.fire?.(1, null)
+    await fixture.retireEntered
+    const stopping = local.stop()
+    fixture.releaseRetire()
+    await stopping
+
+    assert.equal(local.getState(), 'stopped', 'the stop owns the outcome of the invalidated generation')
+    assert.ok(
+      !transitions.includes('restart-exhausted'),
+      `a stop()-invalidated generation must never publish restart-exhausted (saw ${transitions.join(' → ') || 'none'})`,
+    )
+    assert.equal(local.acceptsNewRequests(), true, 'the stop proof reopens admission; the stopped state gate refuses')
+  } finally {
+    fixture.releaseRetire()
+    await local.stop().catch(() => {})
+    rmSync(fixture.stateDir, { recursive: true, force: true })
   }
 })

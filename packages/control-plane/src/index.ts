@@ -687,7 +687,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     logger,
     getLocalState: () => local.getState(),
     getLocalDshPort: () => local.getDshPort(),
-    canExposeLocal: localExposureAllowed,
+    canExposeLocal: () => localExposureAllowed() && local.acceptsNewRequests(),
     getExternalUpstreams: () => pageChannel.stats().upstreams,
   })
 

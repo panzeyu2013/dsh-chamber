@@ -627,7 +627,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   // ready 帧最小化（D8：port + shellVersion；其余身份字段走 dsh-chamber:info）
   writeProtocolLine({ notify: 'ready', payload: { port: controlPlane.port, shellVersion } })
 
-  // B3 宿主对账：plane 已绑定（注册腿可用）且 ready 帧已发；错峰/票据四查在 transport-reconnect。
+  // B3 宿主对账：plane 已绑定（注册腿可用）且 ready 帧已发；错峰/票据三查在 transport-reconnect。
   // legacyStart（dev 形状）同样覆盖——本调用在分支之前，不依赖启动事务。
   void headless.runHostAttempts({ kind: 'startup' })
 

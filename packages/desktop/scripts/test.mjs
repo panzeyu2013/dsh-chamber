@@ -61,8 +61,11 @@ export const GROUPS = {
     // manager canAttempt 门（connect + 定时器 startTransport）。
     'test/transport/connection-intent.test.ts',
     // B（v2 §P2-B / O2）：宿主统一尝试调度器——planHostAttempts 纯矩阵 + startup/added/wake
-    // 执行、错峰票据四查、旧唤醒入口兼容（不另立 remote-roster-reconcile 模块）。
+    // 执行、错峰票据三查+stale-row 重规划、旧唤醒入口兼容（不另立 remote-roster-reconcile 模块）。
     'test/transport/host-attempts.test.ts',
+    // B（v2 §P2-B / O2）：显式动作的 IPC 组合面——partial roster 下 connect/disconnect 当次生效、
+    // 意图只在本会话内存生效且 0 次写盘（fake ShellIpcCtx 驱动真实 handler）。
+    'test/transport/connection-intent-ipc.test.ts',
     // D1：名册变更集纯函数（逻辑来源身份/传输重建/exec 撤销/种子/forward 维度矩阵）。
     'test/transport/roster-change.test.ts',
     'test/transport/transport-connection-recovery.test.ts',
@@ -140,6 +143,8 @@ export const GROUPS = {
     'test/gateway/active-registration-wiring.test.ts',
     // POSIX UDS 隧道上的 plugin sync：重启腿必须与探针/上传同一拨号面（B0 回归锁）。
     'test/gateway/gateway-plugin-sync-uds.test.ts',
+    // gateway plugin sync 的目标绑定围栏：GET/PUT 后撤销中止、同目标续签不误杀、自动+手动单飞。
+    'test/gateway/gateway-plugin-sync-fence.test.ts',
   ],
   // plugins: the plugin READ face (manifest/rows/redaction) and the main.ts plugin wiring gates
   plugins: [

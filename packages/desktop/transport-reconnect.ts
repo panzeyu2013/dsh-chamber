@@ -11,7 +11,8 @@
  *   requiresUserAction 跳过，并补上错峰窗口内的票据复查。
  *
  * 纪律：错峰（默认 120ms，与唤醒波次同值、上限 32 行 ⇒ 最坏 ~3.7s 收敛）；每个定时
- * 尾都过 attemptStillAuthorized 四查（意图/行代/传输代/退出）；timer unref 且可取消；
+ * 尾都过 attemptStillAuthorized 票据三查（退出/行身份/传输代 + 执行时意图抑制），
+ * stale-row 按当前 level 重规划一次、其余一律丢弃留 info；timer unref 且可取消；
  * 整条链 self-swallow 错误、永不 reject（sidecar 的 unhandledRejection → exit 1）。
  */
 import { attemptStillAuthorized, type AttemptTicket, type ConnectionIntentSnapshot } from './connection-intent.ts'
@@ -150,47 +151,75 @@ const defaultSetTimer = (run: () => void, milliseconds: number): HostAttemptTime
   return { cancel: () => clearTimeout(timer) }
 }
 
-function ticketFor(
-  deps: HostAttemptDeps,
-  id: string,
-  snapshot: ConnectionIntentSnapshot | undefined,
-): AttemptTicket {
+function ticketFor(deps: HostAttemptDeps, id: string): AttemptTicket {
   const facts = deps.getAttemptFacts?.(id) ?? null
-  return {
-    id,
-    state: facts?.state ?? null,
-    tunnelEpoch: facts?.tunnelEpoch ?? null,
-    rowRevision: snapshot?.revision ?? null,
+  return { id, state: facts?.state ?? null, tunnelEpoch: facts?.tunnelEpoch ?? null }
+}
+
+/** 失败的两条既有告警面（warnConnect 优先；绝不外抛，sidecar 的 unhandledRejection 会 exit）。 */
+function warnAttemptFailure(deps: HostAttemptDeps, id: string, error: unknown): void {
+  if (deps.warnConnect !== undefined) {
+    deps.warnConnect(id, error)
+    return
+  }
+  deps.log('warn', `host-attempt ${id} connect failed: ${describeError(error)}`)
+}
+
+/** 执行一次 connect（错误折叠为告警面）。 */
+function connectHostAttempt(deps: HostAttemptDeps, id: string): void {
+  try {
+    deps.connect(id)
+  } catch (error) {
+    warnAttemptFailure(deps, id, error)
   }
 }
 
-/** 执行前的四查（每次 fire 都重读意图/事实；非 authorized 一律丢弃并留痕）。 */
-function fireHostAttempt(deps: HostAttemptDeps, ticket: AttemptTicket): void {
+/**
+ * `stale-row` 的同步重规划（一次，不新增 timer/波次）：行身份换代可能来自删行/重加或
+ * 机制/参数改址，但**当前 level 才是真值**——复用同一纯规划器按当前 plane/suppressed/
+ * 相位再判一次：行仍在、相位合格、未抑制才连接，否则丢弃留 info。
+ * `stale-transport`/quit/`suppressed` 永不重规划：已意图断开的行绝不复活。
+ */
+function replanHostAttempt(deps: HostAttemptDeps, kind: HostAttemptKind, id: string): void {
+  const [row] = planHostAttempts({
+    kind,
+    ids: [id],
+    isQuitting: deps.isQuitting(),
+    planeBound: deps.planeBound?.() ?? true,
+    suppressed: deps.connectionIntents?.().suppressed ?? EMPTY_SUPPRESSED,
+    status: candidate => deps.status(candidate),
+  })
+  if (row === undefined) return
+  deps.log('info', `host-attempt ${id} stale-row; re-planned: ${row.action}`)
+  if (row.action === 'connect') connectHostAttempt(deps, id)
+}
+
+/** 执行前的票据三查（每次 fire 都重读事实/意图）；stale-row 重规划一次，其余非 authorized 丢弃并留痕。 */
+function fireHostAttempt(deps: HostAttemptDeps, kind: HostAttemptKind, ticket: AttemptTicket): void {
   try {
     const outcome = attemptStillAuthorized(ticket, {
       isQuitting: deps.isQuitting,
       stateOf: (id) => deps.getAttemptFacts?.(id)?.state ?? null,
       tunnelEpochOf: (id) => deps.getAttemptFacts?.(id)?.tunnelEpoch ?? null,
-      rowRevision: () => deps.connectionIntents?.().revision ?? null,
       suppressed: deps.connectionIntents?.().suppressed ?? EMPTY_SUPPRESSED,
     })
+    if (outcome === 'stale-row') {
+      replanHostAttempt(deps, kind, ticket.id)
+      return
+    }
     if (outcome !== 'authorized') {
       deps.log('info', `host-attempt ${ticket.id} skipped: ${outcome}`)
       return
     }
-    deps.connect(ticket.id)
+    connectHostAttempt(deps, ticket.id)
   } catch (error) {
-    if (deps.warnConnect !== undefined) {
-      deps.warnConnect(ticket.id, error)
-      return
-    }
-    deps.log('warn', `host-attempt ${ticket.id} connect failed: ${describeError(error)}`)
+    warnAttemptFailure(deps, ticket.id, error)
   }
 }
 
 /**
  * 执行一波宿主尝试（幂等：重复调用只补当前仍需连的行）。永不 reject——任何异常折叠为
- * warn 行；错峰定时器 unref 且登记可取消；每拍重查四件套。
+ * warn 行；错峰定时器 unref 且登记可取消；每拍过票据三查（stale-row 重规划一次）。
  */
 export async function runHostAttempts(deps: HostAttemptDeps, options: HostAttemptOptions): Promise<void> {
   try {
@@ -212,8 +241,8 @@ export async function runHostAttempts(deps: HostAttemptDeps, options: HostAttemp
         deps.log('info', `host-attempt ${row.id} ${row.action}`)
         continue
       }
-      const ticket = ticketFor(deps, row.id, snapshot)
-      const attempt = (): void => { fireHostAttempt(deps, ticket) }
+      const ticket = ticketFor(deps, row.id)
+      const attempt = (): void => { fireHostAttempt(deps, options.kind, ticket) }
       if (staggerMs === 0 || waveIndex === 0) {
         attempt()
       } else {

@@ -47,7 +47,7 @@ type RecoverableMetadataStatus = 'selection-corrupt' | 'recovery-in-progress' | 
  *  hostPackageSeeding / chamberHostPackageSeeds / sshPluginTargets
  *  （F 组读面/seed 注册体的共享现实例/闭包束）+ transportManager Pick 扩 appendLog；
  *  syncGatewayChamberPluginsFor
- *  （G 组手动 sync 的执行闭包——main 装配侧 ready 自动 sync 共用同一执行路径，
+ *  （G 组手动 sync 的执行腿——main 装配侧 ready 自动 sync 共用同一执行路径，
  *  见字段注释）；
  *  runRuntimeStartup / publishBlockedStartup /
  *  setRuntimeGate / authoritativeMetadataRecoveryStatus / runUserMetadataRecovery /
@@ -221,21 +221,15 @@ export interface ShellAssemblyCtx {
     ): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
     liveProbeFor(id: string): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
   }
-  // —— G 组手动 sync 注册体的装配依赖。编排纯模块（gateway-provider）在
-  // core 直接 import；注册参数读取改为 ActiveRegistration 的
-  // currentRecordGen → snapshotForSync（代际复验在注册体侧，不再有参数镜像）。
+  // —— G 组手动 sync 注册体的装配依赖。执行腿是 gateway-plugin-sync.ts 的
+  // createGatewaySyncLeg（装配侧单实例注入，与 ready 自动 sync 共用）；注册体只传
+  // instance id——记录/凭据/目标绑定围栏都在腿内（无参数镜像，renderer 不提供 URL/凭据）。
   // 无存活主窗预检 = edges.mainWindowAlive。
-  /** 手动 gateway_plugin_sync 的上传执行闭包（main 装配侧定义——ready 注册自动
-   *  sync（sm.onStatusChanged ready 边缘）与手动 re-entry 注册体共用同一执行
-   *  路径与注册参数，语义不分叉）：把本地 chamber host 包种子缓存上传到注册
-   *  transport 来源；无实例/非 gateway → null。本地包源解析（app.isPackaged /
-   *  pkgDir/repoRoot）在闭包内，core 不碰 Electron paths。 */
-  syncGatewayChamberPluginsFor(
-    id: string,
-    url: string,
-    headers: Record<string, string>,
-    spkiPin: string | null,
-  ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null>
+  /** 手动 gateway_plugin_sync 的上传执行腿（ready 注册自动 sync 与手动 re-entry 共用
+   *  同一实例与同一执行路径，语义不分叉）：只收 instance id；无实例/非 gateway/无
+   *  已提交记录 → null。本地包源解析（app.isPackaged / pkgDir/repoRoot）与记录读取
+   *  都在腿内，core 不碰 Electron paths。 */
+  syncGatewayChamberPluginsFor(id: string): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null>
   // —— I 组 7 注册体的装配依赖。open-in
   // 面——wiredCtx/openInCtx 的宿主能力全部来自既有面（hostFacts.platform
   // / settingsIO.current()（vscodeOpenInNewWindow 惰性读）/ transportManager

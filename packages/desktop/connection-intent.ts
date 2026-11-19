@@ -11,7 +11,7 @@
  * - 只有 **本应用会话** 的标记抑制自动连接；无会话身份（Electron 冻结装配 / headless
  *   harness）⇒ 意图功能整体关闭：不读、不写、不抑制，行为与今天逐字相同。
  * - 载入宽松：宿主元数据坏形状 = 空对象，绝不计入 dropped、绝不因此丢整行。
- * - 意图写优先于盘（用户事实不能被写失败回滚）：写盘抛错 ⇒ 内存保持、`volatile:true`。
+ * - 意图写优先于盘（用户事实不能被写失败回滚）：先改内存、再判可写、后落盘；健康门关闭 = 0 次写、内存生效、`volatile:true`（只损跨重启事实），写盘抛错同形。
  *
  * 本文件是纯叶子：无 timer、无 fs、无 transport-manager 依赖（类型取自 provider，
  * 保持 import 图无环）；会话身份生成单源在 Swift 侧（AppDelegate），这里是 TS 镜像。
@@ -107,9 +107,7 @@ export interface ConnectionIntentSnapshot {
   readonly session: AppSessionId | null
   /** 本会话被显式断开的 id 集合。 */
   readonly suppressed: ReadonlySet<string>
-  /** 行集合修订：任何 save/意图写 +1（内存态，不落盘；排队票据的代际判据）。 */
-  readonly revision: number
-  /** 名册健康：false 时拒绝一切意图写入（I6）。 */
+  /** 名册健康：false 时意图不落盘（内存照常生效 + `volatile:true`；I6 写盘门，不是意图门）。 */
   readonly rostersWritable: boolean
 }
 
@@ -126,7 +124,6 @@ export interface IntentRosterHealth {
 
 /** 保存事务开始时的快照：authoritative 回填/清理与补偿恢复共用同一入口快照（C3）。 */
 export interface IntentSaveSnapshot {
-  readonly revision: number
   readonly intents: ReadonlyMap<string, RowHostMetadata>
   readonly beforeIds: ReadonlySet<string>
 }
@@ -144,34 +141,35 @@ export interface IntentStoreDeps {
 }
 
 export interface IntentStore {
-  /** 载入前清空内存镜像（重复 load/损坏 load 不继承上一轮的行元数据）。 */
+  /** 载入前清空内存镜像与未落盘簿记（重复 load/损坏 load 不继承上一轮事实；盘是权威）。 */
   beginLoad(): void
   /** 单行载入：仅在 `validateSpec` 通过后调用（dropped 行不入表）；坏元数据 = 空对象。 */
   observeRow(row: unknown, id: string): void
   /** 保存事务入口快照（必须在任何写盘/内存变更之前调用）。 */
   beginSave(before: readonly TransportInstanceSpec[]): IntentSaveSnapshot
-  /** 保存的**唯一**写盘（与 setManual 共用 serializeRoster+write）：编辑回填 previous 意图。 */
+  /** 保存的**唯一**写盘（与 setManual 共用 serializeRoster+write）：编辑回填 previous 意图，成功回填未落盘事实。 */
   writeSave(specs: readonly TransportInstanceSpec[], snapshot: IntentSaveSnapshot): void
-  /** 保存提交：authoritative 按新行集清理、compensation 恢复入口快照；+1 修订；返回新增 id。 */
+  /** 保存提交：authoritative 按新行集清理、compensation 恢复入口快照；返回新增 id。 */
   commitSave(
     snapshot: IntentSaveSnapshot,
     provenance: 'authoritative' | 'compensation',
     kept: readonly TransportInstanceSpec[],
   ): readonly string[]
-  /** 显式断开的唯一写入口：内存先生效、再落盘；失败 loud 且内存保持意图。 */
+  /** 显式断开的唯一写入口：rowExists → 会话身份 → 内存先改 → 可写判定 → 写/重试；健康门关闭 0 次写、内存保持意图。 */
   setManual(id: string, suppressed: boolean, health: IntentRosterHealth, rowExists: boolean): IntentWriteResult
-  /** 只读投影（supressed 仅含本会话行；revision 即行修订）。 */
+  /** 只读投影（suppressed 仅含本会话行；健康门只影响 rostersWritable，不影响抑制集）。 */
   snapshot(health: IntentRosterHealth): ConnectionIntentSnapshot
 }
 
 /**
- * 意图表 + 行修订的单实现（registry 内唯一的意图状态所有者）。写顺序纪律：
- * save 先落盘后改内存（失败全不动，由 registry 保证）；intent 先改内存后落盘
- * （用户事实优先，失败 volatile）。
+ * 意图表的单实现（registry 内唯一的意图状态所有者）。写顺序纪律：save 先落盘后改内存
+ * （失败全不动，由 registry 保证）；intent 先改内存、再判可写、后落盘（用户事实优先；
+ * 健康门关闭或写盘失败 = 内存保持 + volatile）。`pendingWrite` 是唯一未落盘簿记（闭包
+ * 布尔，不进 snapshot/status/wire、无 timer），由下一次显式写或成功 save 回填。
  */
 export function createIntentStore(deps: IntentStoreDeps): IntentStore {
   const intents = new Map<string, RowHostMetadata>()
-  let revision = 0
+  let pendingWrite = false
   const enabled = (): boolean => deps.session !== null
 
   function writeRoster(specs: readonly TransportInstanceSpec[], metadata: ReadonlyMap<string, RowHostMetadata>): void {
@@ -181,6 +179,7 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
   return {
     beginLoad(): void {
       intents.clear()
+      pendingWrite = false
     },
     observeRow(row: unknown, id: string): void {
       if (!enabled()) return
@@ -189,13 +188,14 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
     },
     beginSave(before: readonly TransportInstanceSpec[]): IntentSaveSnapshot {
       return {
-        revision,
         intents: new Map(intents),
         beforeIds: new Set(before.map(instance => instance.id)),
       }
     },
     writeSave(specs: readonly TransportInstanceSpec[], snapshot: IntentSaveSnapshot): void {
       writeRoster(specs, snapshot.intents)
+      // 整文件写已把入口快照（含此前的 pending 意图）回填盘面：盘重新是权威。
+      pendingWrite = false
     },
     commitSave(snapshot, provenance, kept): readonly string[] {
       const keptIds = new Set(kept.map(instance => instance.id))
@@ -205,44 +205,51 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
         for (const [id, metadata] of snapshot.intents) {
           if (snapshot.beforeIds.has(id)) intents.set(id, metadata)
         }
-        revision = snapshot.revision + 1
         return []
       }
-      // 编辑保留 previous 意图、新增无、删除随行消失；补偿/权威都 +1 修订。
+      // 编辑保留 previous 意图、新增无、删除随行消失。
       for (const id of keptIds) {
         const metadata = snapshot.intents.get(id)
         if (metadata !== undefined) intents.set(id, metadata)
       }
-      revision = snapshot.revision + 1
       const added = [...keptIds].filter(id => !snapshot.beforeIds.has(id))
       if (added.length > 0) deps.onInstancesAdded?.(added)
       return added
     },
     setManual(id, suppressed, health, rowExists): IntentWriteResult {
-      if (health.loadFailure !== null) {
-        return { ok: false, error: 'registry load is degraded; intent not persisted', volatile: false }
-      }
-      if (health.incomplete) {
-        return { ok: false, error: 'roster is incomplete; intent not persisted', volatile: false }
-      }
       if (!rowExists) return { ok: false, error: 'unknown instance', volatile: false }
       if (!enabled() || deps.session === null) {
         return { ok: false, error: 'host provides no app session identity; intent persistence disabled', volatile: false }
       }
       const session = deps.session
+      // 先改内存（用户事实优先）：健康门/写盘失败只损跨重启事实，绝不回滚本会话意图。
+      let changed = false
       if (suppressed) {
-        if (intents.get(id)?.manualDisconnectSessionId === session) return { ok: true }
-        intents.set(id, { manualDisconnectSessionId: session })
-      } else if (!intents.delete(id)) {
-        // 无意图可清：显式连接不制造空写（幂等 no-op）。
-        return { ok: true }
+        if (intents.get(id)?.manualDisconnectSessionId !== session) {
+          intents.set(id, { manualDisconnectSessionId: session })
+          changed = true
+        }
+      } else if (intents.delete(id)) {
+        changed = true
       }
-      revision += 1
+      // 健康门 = 写盘门，不是意图门：0 次写、盘面保持不可信原状；有事实待落盘才 volatile。
+      const gateError = health.loadFailure !== null
+        ? 'registry load is degraded; intent not persisted'
+        : health.incomplete ? 'roster is incomplete; intent not persisted' : null
+      if (gateError !== null) {
+        if (!changed && !pendingWrite) return { ok: true }
+        pendingWrite = true
+        return { ok: false, error: gateError, volatile: true }
+      }
+      // 幂等早退只在 dirty=false 成立：pending 时同一次显式动作就是重试点（无 timer）。
+      if (!changed && !pendingWrite) return { ok: true }
       try {
         writeRoster(deps.rows(), intents)
+        pendingWrite = false
         return { ok: true }
       } catch (error) {
         // 内存保持用户事实（断开不能被写失败回滚），但明确告知盘上未生效。
+        pendingWrite = true
         deps.warn?.(`connection intent write failed: ${describeError(error)}`)
         return { ok: false, error: describeError(error), volatile: true }
       }
@@ -257,22 +264,19 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
       return {
         session: deps.session,
         suppressed,
-        revision,
         rostersWritable: health.loadFailure === null && !health.incomplete,
       }
     },
   }
 }
 
-/** 排队/延迟尝试的票据：执行前必须仍「同一行代 + 同一传输代 + 未被意图抑制 + 未退出」。 */
+/** 排队/延迟尝试的票据：执行前必须仍「同一行身份 + 同一传输代 + 未被意图抑制 + 未退出」。 */
 export interface AttemptTicket {
   readonly id: string
   /** InstanceState 对象身份（同 id 删行/重加换对象；null = 调用方无该事实，跳过该查）。 */
   readonly state: object | null
   /** 传输代（每次 start/disconnect +1；null = 无该事实）。 */
   readonly tunnelEpoch: number | null
-  /** 行集合修订（authoritative save/删行/意图写 +1；null = 无该事实）。 */
-  readonly rowRevision: number | null
 }
 
 export type AttemptAuthorization = 'authorized' | 'stale-row' | 'stale-transport' | 'suppressed' | 'quitting'
@@ -281,14 +285,14 @@ export interface AttemptAuthorizationDeps {
   readonly isQuitting: () => boolean
   readonly stateOf: (id: string) => object | null
   readonly tunnelEpochOf: (id: string) => number | null
-  readonly rowRevision: () => number | null
   /** 当前本会话抑制集（执行时重读，不用排队时的快照）。 */
   readonly suppressed: ReadonlySet<string>
 }
 
 /**
  * 队列票据的权威复查（唯一实现；唤醒/启动/新增三条波次共用）。顺序即优先级：
- * quitting → 行身份/行修订 → 传输代 → 意图抑制。
+ * quitting → 行身份（InstanceState 对象身份）→ 传输代 → 意图抑制。跨行编辑
+ * （label 等展示字段）不改变任何判据；行身份换代 = 删行/重加或机制/参数改址。
  */
 export function attemptStillAuthorized(
   ticket: AttemptTicket,
@@ -298,10 +302,6 @@ export function attemptStillAuthorized(
   if (ticket.state !== null) {
     const state = deps.stateOf(ticket.id)
     if (state === null || state !== ticket.state) return 'stale-row'
-  }
-  if (ticket.rowRevision !== null) {
-    const revision = deps.rowRevision()
-    if (revision !== null && revision !== ticket.rowRevision) return 'stale-row'
   }
   if (ticket.tunnelEpoch !== null) {
     const epoch = deps.tunnelEpochOf(ticket.id)

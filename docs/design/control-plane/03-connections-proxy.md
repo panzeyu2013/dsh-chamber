@@ -80,7 +80,7 @@
 ```
 
 - **行内宿主元数据（spec 之外）**：行对象可带 `dshChamber` 命名空间键（当前字段 `manualDisconnectSessionId`），由注册表唯一写者读写在**同一次整文件原子写**里（与行同生共死，删除即随行消失、同 id 重加无意图）；它不进 `TransportInstanceSpec`、不经 provider 白名单、不出现在 `listInstances()` 的 spec 投影。加载对旧行/未知键宽容：缺字段视为无意图、形状坏只丢该字段（不丢行、不计入 `droppedCount`），新版本写、旧版本读者忽略。
-- **连接意图语义**：`manualDisconnectSessionId` 记录「本应用会话内用户显式断开了这一行」；值不等于当前应用会话 ID 即作废（完全退出重开 = 新会话 = 默认连接，同会话 sidecar 重启保留）。意图只由注册表唯一的意图写入口设置/清除，写盘失败时内存保持用户事实并 loud 报告（volatile，跨重启不保证）；名册 degraded/incomplete 时拒绝写盘。它是**用户意图**而非 liveness：不改变隧道/服务的实时判定口径。
+- **连接意图语义**：`manualDisconnectSessionId` 记录「本应用会话内用户显式断开了这一行」；值不等于当前应用会话 ID 即作废（完全退出重开 = 新会话 = 默认连接，同会话 sidecar 重启保留）。意图只由注册表唯一的意图写入口设置/清除，写盘失败时内存保持用户事实并 loud 报告（volatile，跨重启不保证）；名册 degraded/incomplete 时拒绝写盘，但内存意图照常生效（volatile）且显式动作当次生效。它是**用户意图**而非 liveness：不改变隧道/服务的实时判定口径。
 
 - **注册表写入原子性**：renderer 提交完整候选集；任一条目非法、kind 不匹配或 id 重复时，主进程在写盘/断连/内存替换前拒绝**整个**候选集，原文件、运行中隧道与内存注册表均不变。只有启动加载旧文件时容错恢复：非法/kind 不匹配/重复条目响亮告警后丢弃（重复 id 首胜）。写路径不得复用加载路径的「尽量恢复」语义，否则一次非法编辑会静默删掉既有主机；现行 add/edit 只走精确单行 `desktop_ssh_save_connection`，bulk `instances_set` 为 exact no-op-only，该原则仍约束主进程规范化与 metadata-last 提交。
 - **凭据不进注册表**：`sshPasswordSet`/`tokenSet`/`passwordSet` 是主进程凭据存储的实时**非秘密投影**（`instances_get` 读时合并，仅供 UI「已设置」提示；secret 值绝不回填）。凭据 retarget 按域比较而非复用 transport 全字段：gateway auth 绑定 kind+host+remotePort，SSH password 绑定 host+user+sshPort；元数据与三凭据由主进程单次补偿事务保存（17 §9.1）。两类 durable mirror 把 binding 与 secret 同次原子写，读取/注入时复验当前 registry，故 secret→registry 两次 fsync 间崩溃只会隐藏新值，不会把它发给旧目标。同 id 新增/进入/离开/retarget 留空也会强制 clear/rebind，防止半事务 secret 复活；非当前 schema 的凭据文件（旧 v1/v2 或无版本）fail closed、保留为 `*.corrupt` 并要求重录（无就地迁移）。
@@ -157,7 +157,7 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
 
 ### 3.3 失败语义（fail-loud）
 
-- 实例传输失败**绝不伪装成空成功**：无隧道/不可服务（本地状态 ∉ `{ready, degraded}`，见 02 §3.5）→ **503**（code `instance_unavailable`）；上游连接拒绝/超时 → 502 / 504 显式错误（脱敏，不泄上游 host:port）；实例 id 未知 → 404。
+- 实例传输失败**绝不伪装成空成功**：无隧道/不可服务（本地状态 ∉ `{ready, degraded}`，见 02 §3.5）/**本地回收在途（admission 关闭）** → **503**（code `instance_unavailable`）；上游连接拒绝/超时 → 502 / 504 显式错误（脱敏，不泄上游 host:port）；实例 id 未知 → 404。
 - 错误码与响应形状的完整表见 **04 §4.2**（本文不再枚举）。
 
 ### 3.4 响应收敛与体积上限

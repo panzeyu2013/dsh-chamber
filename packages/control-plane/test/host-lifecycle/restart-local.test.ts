@@ -23,11 +23,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
 import { createControlPlane } from '../../src/index.ts'
-import { absentConnection, mockIdentityProbe, quietLogger, waitFor } from '../support/utils.ts'
+import { absentConnection, fetchJson, mockIdentityProbe, quietLogger, waitFor } from '../support/utils.ts'
 
 /** A ready child on a fixed port; the exit listener is captured for death injection. */
 function controllableChild(port: number, exitHook: { fire?: (code: number | null, sig: string | null) => void }): SpawnedDsh {
@@ -699,5 +701,150 @@ test('D2: restart counts do not survive a stop()/start() cycle (stop clears the 
     assert.equal(spawnCalls, 9, 'the exhausted trigger must not respawn')
   } finally {
     await connection.stop()
+  }
+})
+
+test('R4: during the restart-exhausted exit proof the local proxy answers 503 without forwarding; after the proof the terminal state keeps details.state and the port is cleared', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-exhaust-window-'))
+  // A REAL upstream on the port the current generation names: any forwarded request
+  // during the proof window would be visible here (hits) and answer 200. A `/api/hold`
+  // request is held so the test can prove an ALREADY-ESTABLISHED request survives the
+  // admission window (only NEW requests are refused).
+  let normalHits = 0
+  let holdHits = 0
+  let announceHold!: () => void
+  const holdSeen = new Promise<void>(resolve => { announceHold = resolve })
+  let releaseHold!: () => void
+  const holdGate = new Promise<void>(resolve => { releaseHold = resolve })
+  const upstream = createServer((req, res) => {
+    if ((req.url ?? '').includes('/api/hold')) {
+      holdHits += 1
+      announceHold()
+      void holdGate.then(() => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{"served":"held-generation"}')
+      })
+      return
+    }
+    normalHits += 1
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"served":"old-generation"}')
+  })
+  await new Promise<void>((resolve, reject) => {
+    upstream.once('error', reject)
+    upstream.listen(0, '127.0.0.1', () => resolve())
+  })
+  const upstreamPort = (upstream.address() as AddressInfo).port
+  const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
+  let spawns = 0
+  let announceRetire!: () => void
+  const retireEntered = new Promise<void>(resolve => { announceRetire = resolve })
+  let releaseRetire!: () => void
+  const retireGate = new Promise<void>(resolve => { releaseRetire = resolve })
+  const spawnDsh = async (): Promise<SpawnedDsh> => {
+    spawns += 1
+    const index = spawns
+    const hook: { fire?: (code: number | null, sig: string | null) => void } = {}
+    hooks.push(hook)
+    return {
+      child: {
+        on: (event: string, listener: any) => { if (event === 'exit') hook.fire = listener },
+        exitCode: null,
+        signalCode: null,
+      },
+      port: upstreamPort,
+      pid: 89000 + index,
+      stop: async () => {
+        // Only the SECOND generation's reclamation is delayed (the exhaustion proof).
+        if (index === 2) {
+          announceRetire()
+          await retireGate
+        }
+      },
+    }
+  }
+  let capturedProxy: { resolveTargetFor(id: string): unknown } | null = null
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: quietLogger,
+    // The page-channel's target resolver is this SAME instance proxy function (index.ts).
+    middleware: ((_req: unknown, _res: unknown, _url: unknown, ctx: { instanceProxy: { resolveTargetFor(id: string): unknown } }) => {
+      capturedProxy = ctx.instanceProxy
+    }) as never,
+    localConnectionOptions: {
+      healthIntervalMs: 0,
+      restartWindowMs: 60_000,
+      maxRestartsInWindow: 1,
+      restartBackoffFloorMs: 5,
+      restartBackoffCeilMs: 10,
+    },
+    localConnectionDeps: { spawnDsh, probeHostIdentity: mockIdentityProbe().probeHostIdentity },
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    assert.equal(plane.connectionState, 'ready')
+    const base = `http://127.0.0.1:${plane.port}`
+
+    // First death consumes the M=1 window and restarts successfully.
+    hooks[0]?.fire?.(1, null)
+    await waitFor(
+      () => spawns === 2 && plane.connectionState === 'ready',
+      3000,
+      'ready after the window-consuming restart',
+    )
+    assert.equal(plane.localDshPort, upstreamPort, 'the restarted generation names the upstream port')
+
+    // An established request is in flight BEFORE the window opens (held upstream response).
+    const held = fetch(`${base}/api/i/local/api/hold`).then(async response => ({
+      status: response.status,
+      body: await response.text(),
+    }))
+    await holdSeen
+    assert.equal(holdHits, 1, 'the held request was forwarded before the window')
+
+    // Second death hits the exhaustion branch: the exit proof (SpawnedDsh.stop) is gated.
+    hooks[1]?.fire?.(1, null)
+    await retireEntered
+
+    // --- the exit-proof window ----------------------------------------------
+    assert.equal(plane.connectionState, 'ready', 'the exhaustion window still projects a serviceable state')
+    assert.equal(plane.localDshPort, upstreamPort, 'the old port is retained until the proof')
+    const during = await fetchJson(base, '/api/i/local/api/probe')
+    assert.equal(during.status, 503, 'a new request during the proof must be refused')
+    assert.equal(during.body.code, 'instance_unavailable')
+    assert.equal(during.body.details, undefined, 'the reclaim window body carries no details.state')
+    assert.equal(normalHits, 0, 'nothing NEW was forwarded to the old-generation upstream')
+    assert.notEqual(capturedProxy, null, 'the middleware captured the real instance proxy (page-channel deps)')
+    assert.equal(capturedProxy!.resolveTargetFor('local'), null,
+      'the page-channel target resolver is closed by the same admission gate')
+
+    // The already-established request is NOT failed by the window: releasing the upstream
+    // completes it with the old generation's answer (design 02 §3.6: in-flight continues).
+    releaseHold()
+    const heldResult = await held
+    assert.equal(heldResult.status, 200, 'an in-flight request survives the admission window')
+    assert.equal(heldResult.body, '{"served":"held-generation"}')
+    assert.equal(holdHits, 1, 'the held request was never re-resolved/duplicated')
+
+    // --- the proof returns --------------------------------------------------
+    releaseRetire()
+    await waitFor(() => plane.connectionState === 'restart-exhausted', 3000, 'restart-exhausted after the proof')
+    assert.equal(plane.localDshPort, null, 'the terminal state clears the port')
+    const after = await fetchJson(base, '/api/i/local/api/probe')
+    assert.equal(after.status, 503)
+    assert.equal(after.body.code, 'instance_unavailable')
+    assert.equal(after.body.details?.state, 'restart-exhausted', 'the terminal 503 keeps details.state')
+    assert.equal(normalHits, 0, 'still no new upstream dial after exhaustion')
+  } finally {
+    releaseRetire()
+    releaseHold()
+    await plane.stop().catch(() => {})
+    await new Promise<void>(resolve => {
+      upstream.close(() => resolve())
+      upstream.closeAllConnections?.()
+    })
+    rmSync(stateDir, { recursive: true, force: true })
   }
 })
