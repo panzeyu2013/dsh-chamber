@@ -155,18 +155,15 @@ async function readPluginBundleText(sourceId: string, url: string): Promise<stri
 }
 
 /**
- * Same-origin module-script loader (ESM chunks; the stock loader uses classic scripts).
- * A URL registered in the page runtime patch table (client-plugin-patches.ts) loads as
- * PATCHED TEXT through loadPatchedModuleBundle; every other URL keeps the script-element
- * path byte for byte.
+ * Same-origin script-element loader for one served bundle — the untouched pre-patch path.
+ * Every URL that is not a registered single-id combo loads here, and it is also the
+ * degrade fallback for a core row whose anchors no longer match (design 09 §4): the
+ * original row's semantics (module-script parsing, including ESM-only syntax a skewed
+ * bundle may carry) are exactly what a degrade must preserve, so this path cannot turn
+ * a degrade into a boot failure. Registered rows keep the PATCHED-TEXT path
+ * (loadPatchedModuleBundle) instead.
  */
-function loadModuleBundle(url: string): Promise<void> {
-  const match = classifyClientPluginBundle(url)
-  // A registered package in a non-single-id combo shape is refused outright: loading it
-  // unpatched would silently send the owner-only upload to the control-plane root
-  // (fail-closed; the message carries the patch reason and anchor count for diagnostics).
-  if (match.kind === 'refuse') return Promise.reject(new Error(match.message))
-  if (match.kind === 'patch') return loadPatchedModuleBundle(url, match.patch)
+function loadScriptElementBundle(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const el = document.createElement('script')
     el.type = 'module'
@@ -211,6 +208,19 @@ function loadModuleBundle(url: string): Promise<void> {
 }
 
 /**
+ * Page loader dispatch: registered single-id combos load as PATCHED TEXT; a registered
+ * package in a non-single-id combo shape is refused outright (fail-closed — the message
+ * carries the patch reason and anchor count for diagnostics); every other URL keeps the
+ * script-element path byte for byte.
+ */
+function loadModuleBundle(url: string): Promise<void> {
+  const match = classifyClientPluginBundle(url)
+  if (match.kind === 'refuse') return Promise.reject(new Error(match.message))
+  if (match.kind === 'patch') return loadPatchedModuleBundle(url, match.patch)
+  return loadScriptElementBundle(url)
+}
+
+/**
  * Wire the page runtime patch loader (`patched-bundle-load.ts`) with the real
  * dependencies: the caller-held page-budget text read (the loader kernel already owns
  * this dispatch's bundle slot; the read deadline keeps a margin above the loader budget
@@ -227,6 +237,12 @@ function loadPatchedModuleBundle(url: string, patch: ClientPluginPatch): Promise
       timeoutMs: PATCHED_BUNDLE_READ_TIMEOUT_MS,
     }),
     execute: executePatchedBundle,
+    loadUnpatched: loadScriptElementBundle,
+    onAnchorMiss: info => {
+      console.error('[chamber] runtime patch for ' + info.packageId + ' matched no unique anchor (anchors: '
+        + info.anchors + ') in ' + info.url
+        + '; loading the served bundle through the untouched script path (degrade-unpatched) — this instance keeps upstream document-relative behaviour')
+    },
     createTimeoutError: (message, bundleOutcome) => new BundleLoadTimeoutError(message, bundleOutcome),
     setTimeout: (callback, ms) => setTimeout(callback, ms),
     clearTimeout: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>) },

@@ -2,17 +2,22 @@
  * verify-runtime-plugin-patches.mjs - 运行期插件补丁（client-plugin-patches）的**真实锚点门**。
  *
  * WHY. The page-level runtime patch table (packages/renderer/src/client-plugin-patches.ts) is
- * applied at load time to a FAIL-CLOSED contract: each registered anchor must appear exactly
- * once in the SERVED bundle text, or the row is refused (bundle-load-failed). The renderer unit
- * suite can only validate the table against synthetic fixtures; the published artifact ships
- * inside the bundled runtime (packages/desktop/vendor/dsh/node_modules) and never enters the
- * repository. This gate closes that gap: it reads the ACTUAL bundled payload, applies every
- * registered patch, and re-runs the same anchor contract on both the raw artifact text and the
- * upstream serving transform (combo script shape).
+ * applied at load time to a per-entry anchor-miss policy: each registered anchor must appear
+ * exactly once in the SERVED bundle text, or the row applies its `anchorMiss` policy
+ * (`refuse` -> bundle-load-failed; `degrade-unpatched` -> untouched script path + console
+ * diagnostic, CORE official rows only). The renderer unit suite can only validate the table
+ * against synthetic fixtures; the published artifact ships inside the bundled runtime
+ * (packages/desktop/vendor/dsh/node_modules) and never enters the repository. This gate closes
+ * that gap: it reads the ACTUAL bundled payload, applies every registered patch, and re-runs
+ * the same anchor contract on both the raw artifact text and the upstream serving transform
+ * (combo script shape). Pin drift is FAIL-CLOSED for every entry, degrade entries included:
+ * `degrade-unpatched` absorbs a load-time remote/local runtime line skew, it never exempts the
+ * pinned artifact from being re-anchored.
  *
  * SKIP SEMANTICS. A source-only checkout has no bundled runtime yet (bundle:dsh not run), so a
  * missing payload is a LOUD skip (exit 0): the upgrade pipeline must stay runnable before the
- * runtime leg exists. --require turns the skip into a hard failure for packaging/release legs.
+ * runtime leg exists. --require turns EVERY skip into a hard failure (even when other entries
+ * were verified): a partially materialized payload must not pass the packaging/release leg.
  *
  * Usage: node scripts/upstream/verify/verify-runtime-plugin-patches.mjs [--vendor-root <path>] [--require] [--help]
  *   --vendor-root <path>  runtime vendor root (default packages/desktop/vendor/dsh); the payload
@@ -50,6 +55,45 @@ export function countOccurrences(text, needle) {
 }
 
 /**
+ * The only packages allowed to opt into the core-row `degrade-unpatched` anchor-miss policy
+ * (design 09 §4). Independently spelled here so a typo in the patch table's package id cannot
+ * silently widen the degrade surface: the two spellings must agree or this gate is red.
+ */
+export const DEGRADE_ALLOWED_PACKAGE_IDS = Object.freeze(['@deepseek-ai/dsh-client-ui-sidebar-documentpreview'])
+
+/**
+ * Validate one patch-table entry's shape (pure; the gate and the unit suite share it).
+ * @param patch - one entry of CLIENT_PLUGIN_PATCHES
+ * @param label - diagnostic prefix
+ * @returns {string[]} problems; empty means the entry is usable
+ */
+export function validatePatchEntry(patch, label) {
+  const problems = []
+  if (typeof patch?.packageId !== 'string' || patch.packageId === '') {
+    problems.push(label + ': packageId must be a non-empty string')
+  }
+  const anchors = patch?.anchorTexts
+  if (!Array.isArray(anchors) || anchors.length === 0) {
+    problems.push(label + ': patch carries no anchorTexts (registry shape drift)')
+  } else if (patch.anchors !== anchors.length) {
+    problems.push(label + ': patch.anchors ' + String(patch.anchors) + ' !== anchorTexts.length ' + String(anchors.length))
+  }
+  if (patch?.anchorMiss !== 'refuse' && patch?.anchorMiss !== 'degrade-unpatched') {
+    problems.push(label + ': invalid anchorMiss ' + JSON.stringify(patch?.anchorMiss) + ' (expected refuse|degrade-unpatched)')
+  } else if (patch.anchorMiss === 'degrade-unpatched' && !DEGRADE_ALLOWED_PACKAGE_IDS.includes(patch.packageId)) {
+    problems.push(label + ': degrade-unpatched is reserved for the core official row(s) '
+      + DEGRADE_ALLOWED_PACKAGE_IDS.join(', ') + ' (got ' + String(patch.packageId) + ')')
+  }
+  const probe = patch?.probe
+  if (probe === undefined || typeof probe !== 'object' || probe === null
+    || typeof probe.token !== 'string' || probe.token === ''
+    || !Number.isInteger(probe.count) || probe.count < 1) {
+    problems.push(label + ': patch carries no valid probe { token, count } (registry shape drift)')
+  }
+  return problems
+}
+
+/**
  * Upstream serving transform, reproduced from the host's combo-script writer
  * (vendor/harness-checkout/packages/client/modules/src/index.ts: prepareSource strips the
  * per-module sourceURL/sourceMappingURL trailers and the combo writer appends ';\n' plus the
@@ -67,8 +111,10 @@ export function toServedComboText(raw) {
 
 /**
  * Verify one registered patch against one bundle text: explicit anchor counts, fail-closed
- * apply, structural re-check, compile check, and two drift controls (mutated/duplicated anchors
- * must be refused). Pure: no I/O so the unit suite can drive it with fixtures.
+ * apply, structural re-check, per-entry probe count, compile check, and two drift controls
+ * (mutated/duplicated anchors must be refused). Pure: no I/O so the unit suite can drive it
+ * with fixtures; the entry's shape (anchorMiss/probe/allowlist) is validated by
+ * {@link validatePatchEntry} in the gate.
  * @param patch - one entry of CLIENT_PLUGIN_PATCHES
  * @param text - raw or served bundle text
  * @param label - diagnostic prefix
@@ -93,8 +139,15 @@ export function verifyPatchText(patch, text, label) {
   for (const anchor of anchors) {
     if (patched.includes(anchor)) problems.push(label + ': anchor survived the rewrite')
   }
-  const baseCalls = countOccurrences(patched, 'chamberBasePath')
-  if (baseCalls !== 1) problems.push(label + ': patched text carries chamberBasePath ' + baseCalls + ' times (expected 1)')
+  const probe = patch.probe
+  if (probe === undefined || typeof probe.token !== 'string' || !Number.isInteger(probe.count)) {
+    problems.push(label + ': patch carries no valid probe declaration (registry shape drift)')
+  } else {
+    const probeCount = countOccurrences(patched, probe.token)
+    if (probeCount !== probe.count) {
+      problems.push(label + ': patched text carries ' + probe.token + ' ' + probeCount + ' times (expected ' + probe.count + ')')
+    }
+  }
   try {
     new Function(patched)
   } catch (error) {
@@ -144,12 +197,15 @@ export const USAGE = [
   'Usage: node scripts/upstream/verify/verify-runtime-plugin-patches.mjs [--vendor-root <path>] [--require] [--help]',
   '',
   '  --vendor-root <path>  runtime vendor root (default ' + DEFAULT_VENDOR_ROOT + '); payload = <root>/node_modules/<packageId>/lib/client.js',
-  '  --require             missing payload is a failure (exit 1) instead of a loud skip (exit 0)',
+  '  --require             ANY missing payload is a failure (exit 1), not only when none is found',
   '  --help / -h           print this usage',
   '',
   'Verifies every registered runtime client-plugin patch against the real bundled payload:',
   'raw artifact text AND the upstream served combo shape: each anchor exactly once, apply ok,',
-  'patched text compiles, and mutated/duplicated anchors are refused. Read-only.',
+  'per-entry probe token/count, patched text compiles, and mutated/duplicated anchors are',
+  'refused. Entry shape is checked too: invalid anchorMiss/probe, or degrade-unpatched on a',
+  'package outside the core allowlist, is a failure. Pin drift is fail-closed for every entry.',
+  'Read-only.',
 ].join('\n')
 
 /**
@@ -167,6 +223,7 @@ export async function runGate({ root = ROOT, vendorRoot = DEFAULT_VENDOR_ROOT, r
     return { code: 1, lines }
   }
   const problems = []
+  for (const patch of patches) problems.push(...validatePatchEntry(patch, 'entry ' + String(patch?.packageId)))
   let verified = 0
   let skipped = 0
   for (const patch of patches) {
@@ -194,7 +251,14 @@ export async function runGate({ root = ROOT, vendorRoot = DEFAULT_VENDOR_ROOT, r
     const servedProblems = verifyPatchText(patch, served, patch.packageId + ' [served]')
     problems.push(...rawProblems.problems, ...servedProblems.problems)
     verified += 1
-    lines.push('  ' + patch.packageId + ': raw ' + raw.length + ' B, served ' + served.length + ' B, ' + (patch.anchorTexts?.length ?? 0) + ' anchors, apply ok')
+    lines.push('  ' + patch.packageId + ': raw ' + raw.length + ' B, served ' + served.length + ' B, '
+      + (patch.anchorTexts?.length ?? 0) + ' anchors, probe ' + patch.probe.token + ' x' + String(patch.probe.count)
+      + ', policy ' + patch.anchorMiss + ', apply ok')
+  }
+  // --require means EVERY registered payload must be verifiable: one missing entry is as fatal
+  // as none, otherwise a second entry could silently drop out of the pinned-artifact gate.
+  if (requirePayload && skipped > 0) {
+    problems.push('--require: ' + skipped + ' registered patch payload(s) missing (every entry must be verifiable)')
   }
   if (problems.length > 0) {
     lines.push('x verify-runtime-plugin-patches: ' + problems.length + ' problem(s)')
@@ -207,7 +271,8 @@ export async function runGate({ root = ROOT, vendorRoot = DEFAULT_VENDOR_ROOT, r
       : '~ verify-runtime-plugin-patches: skipped (no bundled payload in this checkout; run bundle:dsh then re-run)')
     return { code: requirePayload ? 1 : 0, lines }
   }
-  lines.push('OK verify-runtime-plugin-patches: ' + verified + ' patch(es) x raw+served verified; anchors exact, apply ok, drift/duplicate refused')
+  lines.push('OK verify-runtime-plugin-patches: ' + verified + ' patch(es) x raw+served verified; anchors exact, apply ok,'
+    + ' drift/duplicate refused, per-entry probe/policy shape valid')
   return { code: 0, lines }
 }
 

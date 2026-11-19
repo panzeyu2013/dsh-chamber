@@ -9,9 +9,12 @@
  * that contract cannot be fixed in the shell's own packages without patching the
  * published bundle text. This module is the PURE declaration half of that mechanism
  * (zero imports, so the upgrade-time verifier imports this file directly): the patch
- * table, the URL classification, the two-anchor rewriter, the sourceURL sanitizer and
- * the fail-closed refusal decision. The loading half (page-budget text read, 30s loader
- * contract, execution) lives in `patched-bundle-load.ts`; the shell only dispatches.
+ * table (two entries today — the chat-import upload base and the document-preview
+ * Markdown image base), the URL classification, each entry's anchor rewriter and probe
+ * declaration, the sourceURL sanitizer, and the per-entry anchor-miss policy decision
+ * (`refuse` or `degrade-unpatched`). The loading half (page-budget text read, 30s loader
+ * contract, patched-text execution, the degrade script-path fallback) lives in
+ * `patched-bundle-load.ts`; the shell only dispatches.
  *
  * EXECUTION MODEL (what the loading half does with `apply` output). The registered
  * bundle is a classic script that self-registers through `window.__ModuleLoader__.load`;
@@ -19,23 +22,33 @@
  * scope: top-level `var/let/const/function` declarations stay local to the function
  * body (no page-global pollution), and the body is sloppy-mode (the upstream stock
  * loader's classic-script semantics) rather than the module-script strict mode the
- * script-element path uses. Equivalence for the one registered bundle is checked by the
- * upsteam payload verifier (no `'use strict'`, no top-level `this`, no ESM syntax);
- * module-only syntax would be a SyntaxError here and the load is refused (visible).
+ * script-element path uses. Each entry's patched text is checked by the upgrade verifier
+ * (anchors exact, probe token/count, compiles); a module-only-syntax bundle would be a
+ * SyntaxError here and that row's load is refused (visible) — `degrade-unpatched` rows
+ * never reach this executor: they load through the untouched script-element path.
  * `new Function` depends on the page CSP's `script-src 'unsafe-eval'` (the control-plane
  * page sends it); a CSP tightening that drops it breaks this mechanism loudly.
  *
- * FAIL-CLOSED, BLAST RADIUS. Both anchors must appear exactly once. A registered bundle
- * whose shape no longer matches is REFUSED (never loaded unpatched); the refusal is a
- * plain load failure, so the existing loader semantics apply: the row reports
- * `bundle-load-failed` (pluginId + message with this patch's reason and anchor count),
- * and a kept-row load failure makes that instance's WHOLE shell boot fail (the boot page
- * shows the failure overlay) — NOT merely that one row going missing. This is the
- * intended trade-off: silently uploading to the control-plane root is worse.
+ * ANCHOR-MISS POLICY (per entry, design 09 §4). Both anchors must appear exactly once.
+ *  - `refuse` (optional rows): a bundle whose shape no longer matches is REFUSED (never
+ *    silently loaded unpatched); the refusal is a plain load failure, so the row reports
+ *    `bundle-load-failed` (reason + anchor count) and a kept-row failure makes that
+ *    instance's WHOLE shell boot fail — the intended trade-off where a wrong-origin
+ *    upload is worse than a failed boot;
+ *  - `degrade-unpatched` (CORE official rows only, gated by the per-pin artifact
+ *    verifier): the loader reports the miss through its optional callback and loads the
+ *    served text through the untouched script-element path — the instance still boots
+ *    with upstream's recorded degradation. `new Function` is NOT used here: a version-
+ *    skewed bundle may be ESM-only, which `new Function` cannot parse (its SyntaxError
+ *    would turn the degrade back into a boot failure).
+ * Pin drift stays fail-closed for EVERY entry: the per-pin artifact verifier requires
+ * exact anchors on the real payload; `degrade-unpatched` only absorbs a load-time
+ * remote/local runtime line skew.
  *
  * DELETE CONDITION. Remove an entry once upstream exposes a host-route base seam on the
- * page transport (or the plugin reads the chamber context key itself); the current pin
- * does not need the patch (design 09 §4, runtime base backfill).
+ * page transport (or the plugin reads the chamber context key / the per-entry standard
+ * prop itself); the current pin does not need the patch (design 09 §4, runtime base
+ * backfill).
  */
 
 /** One registered served-bundle patch. */
@@ -49,9 +62,21 @@ export interface ClientPluginPatch {
   /** The exact literal anchors, in served-text order (the upgrade verifier greps these). */
   readonly anchorTexts: readonly string[]
   /**
+   * What a non-matching anchor means for this row (design 09 §4): optional rows keep the
+   * fail-closed `refuse`; a CORE official row degrades to the untouched script-element
+   * load path so a version-skewed instance still boots (the per-pin verifier gates that
+   * only the registered core row may opt in).
+   */
+  readonly anchorMiss: 'refuse' | 'degrade-unpatched'
+  /**
+   * Post-patch token/count the per-pin artifact verifier asserts for this entry (the
+   * verifier no longer hard-codes one package's replacement token).
+   */
+  readonly probe: { readonly token: string; readonly count: number }
+  /**
    * Rewrite one served bundle text.
    * @param text - the served combo script text.
-   * @returns the patched text, or null when the anchors do not match exactly (fail-closed).
+   * @returns the patched text, or null when the anchors do not match exactly.
    */
   apply(text: string): string | null
 }
@@ -114,6 +139,52 @@ export function applyChatImportUploadBasePatch(text: string): string | null {
   return patched
 }
 
+/** The right-sidebar document preview (official web-app row; instance-served bundle). */
+export const DOCUMENT_PREVIEW_PACKAGE_ID = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview'
+
+/**
+ * The pinned published bundle's MarkdownBody signature (classic combo script). The
+ * per-entry API base reaches the component as the slot root standard prop
+ * `chamberFileApiBase`; the package's only document-relative producer is the path-images
+ * resolver below.
+ */
+export const DOCUMENT_PREVIEW_BODY_ANCHOR = 'function MarkdownBody({content,resourceAddress,useResource,t}){'
+
+/** The single document-relative image producer in the package (the path-images resolver). */
+export const DOCUMENT_PREVIEW_RESOLVE_ANCHOR = 'markdownImageUrl(document.baseURI,absolutePath,value)'
+
+/**
+ * The guarded base the patched resolver passes: the slot standard prop wins, and its
+ * absence falls back to the document base (native dsh page) — the same expression shape
+ * PATCHED_UPLOAD_BASE_EXPRESSION uses for the chat-import upload.
+ */
+export const PATCHED_PATH_IMAGES_BASE_EXPRESSION = 'chamberFileApiBase===void 0?document.baseURI:new URL(chamberFileApiBase+`/`,document.baseURI).href'
+
+/**
+ * Fill the per-entry API base into the document preview's Markdown image resolver.
+ * The resolver takes the guarded base as an argument; its one call site is the slot
+ * occupant component, which receives the per-entry root standard prop.
+ * @param text - the served combo script text.
+ * @returns the patched text, or null when either anchor is missing or duplicated.
+ */
+export function applyDocumentPreviewPathImagesBasePatch(text: string): string | null {
+  const anchors = [DOCUMENT_PREVIEW_BODY_ANCHOR, DOCUMENT_PREVIEW_RESOLVE_ANCHOR] as const
+  for (const anchor of anchors) {
+    if (anchorCount(text, anchor) !== 1) return null
+  }
+  const patched = text
+    .replace(DOCUMENT_PREVIEW_BODY_ANCHOR,
+      'function MarkdownBody({content,resourceAddress,useResource,t,chamberFileApiBase}){')
+    .replace(DOCUMENT_PREVIEW_RESOLVE_ANCHOR,
+      'markdownImageUrl(' + PATCHED_PATH_IMAGES_BASE_EXPRESSION + ',absolutePath,value)')
+  // Structural re-check: both anchors are gone and the guarded base appears exactly once.
+  for (const anchor of anchors) {
+    if (patched.includes(anchor)) return null
+  }
+  if (anchorCount(patched, PATCHED_PATH_IMAGES_BASE_EXPRESSION) !== 1) return null
+  return patched
+}
+
 /** The registered served-bundle patches, in bundle-url matching order. */
 export const CLIENT_PLUGIN_PATCHES: readonly ClientPluginPatch[] = Object.freeze([
   {
@@ -121,7 +192,18 @@ export const CLIENT_PLUGIN_PATCHES: readonly ClientPluginPatch[] = Object.freeze
     anchors: 2,
     reason: 'chat-import resolves its owner-only upload route against document.baseURI; the N-ctx page needs the per-entry chamberBasePath (design 09 §4). Delete when upstream reads a page-transport host base or the plugin reads the chamber context key.',
     anchorTexts: Object.freeze([CHAT_IMPORT_UPLOAD_ANCHOR, CHAT_IMPORT_CALL_ANCHOR]) as readonly string[],
+    anchorMiss: 'refuse',
+    probe: Object.freeze({ token: 'chamberBasePath', count: 1 }),
     apply: applyChatImportUploadBasePatch,
+  },
+  {
+    packageId: DOCUMENT_PREVIEW_PACKAGE_ID,
+    anchors: 2,
+    reason: 'ui-sidebar-documentpreview resolves Markdown image destinations against document.baseURI, which is the control-plane origin on the single N-ctx page; the per-entry API base reaches the resolver as the slot root standard prop chamberFileApiBase. CORE official row: an anchor miss loads the served bundle through the untouched script path (degrade-unpatched) instead of failing the instance boot. Delete when upstream reads a per-entry host base / the standard prop itself, or the package enters the composite coverage set.',
+    anchorTexts: Object.freeze([DOCUMENT_PREVIEW_BODY_ANCHOR, DOCUMENT_PREVIEW_RESOLVE_ANCHOR]) as readonly string[],
+    anchorMiss: 'degrade-unpatched',
+    probe: Object.freeze({ token: 'chamberFileApiBase', count: 3 }),
+    apply: applyDocumentPreviewPathImagesBasePatch,
   },
 ])
 

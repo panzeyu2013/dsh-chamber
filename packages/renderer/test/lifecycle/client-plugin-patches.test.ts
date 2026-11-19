@@ -14,8 +14,13 @@ import {
   CHAT_IMPORT_PACKAGE_ID,
   CHAT_IMPORT_UPLOAD_ANCHOR,
   CLIENT_PLUGIN_PATCHES,
+  DOCUMENT_PREVIEW_BODY_ANCHOR,
+  DOCUMENT_PREVIEW_PACKAGE_ID,
+  DOCUMENT_PREVIEW_RESOLVE_ANCHOR,
+  PATCHED_PATH_IMAGES_BASE_EXPRESSION,
   PATCHED_UPLOAD_BASE_EXPRESSION,
   applyChatImportUploadBasePatch,
+  applyDocumentPreviewPathImagesBasePatch,
   bundlePackageIdOf,
   classifyClientPluginBundle,
   findClientPluginPatch,
@@ -54,6 +59,21 @@ const CHAT_IMPORT_FIXTURE = [
   '//# sourceMappingURL=/plugins/??@deepseek-ai/dsh-deepseek-chat-import/client.js.map&rev=abc',
 ].join('')
 
+/**
+ * Independently written pinned-shape fixture for the document preview body: the two anchor
+ * texts are literal here (not imported), so a production anchor typo cannot self-validate.
+ */
+const DOCUMENT_PREVIEW_FIXTURE = [
+  'window.__ModuleLoader__.load({id:`@deepseek-ai/dsh-client-ui-sidebar-documentpreview`,factory:require=>{',
+  'var module={exports:{}};var exports=module.exports;',
+  'function markdownImageUrl(base,documentPath,destination){return new URL(`api/file?path=${encodeURIComponent(destination)}`,base).href}',
+  'function MarkdownBody({content,resourceAddress,useResource,t}){',
+  'const absolutePath=useResource(resourceAddress).value?.absolutePath;',
+  'const pathImages=(0,react.useMemo)(()=>({resolve:value=>markdownImageUrl(document.baseURI,absolutePath,value)}),[absolutePath]);',
+  'return content.kind===`text`?pathImages:null}',
+  'exports.apply=ctx=>{};return module.exports}});',
+].join('')
+
 const UPLOAD_ANCHOR = CHAT_IMPORT_UPLOAD_ANCHOR
 const CALL_ANCHOR = CHAT_IMPORT_CALL_ANCHOR
 
@@ -61,11 +81,20 @@ test('the pure patch module has zero imports (the upgrade verifier imports it di
   const source = readFileSync(new URL('../../src/client-plugin-patches.ts', import.meta.url), 'utf8')
   const importLines = source.split('\n').filter(line => /^\s*import\b/.test(line))
   assert.deepEqual(importLines, [], 'the pure module must stay import-free: ' + String(importLines))
-  // The exported table is the single source: one registered package, two anchors.
-  assert.equal(CLIENT_PLUGIN_PATCHES.length, 1)
-  assert.equal(CLIENT_PLUGIN_PATCHES[0]?.packageId, CHAT_IMPORT_PACKAGE_ID)
-  assert.equal(CLIENT_PLUGIN_PATCHES[0]?.anchors, 2)
-  assert.deepEqual(CLIENT_PLUGIN_PATCHES[0]?.anchorTexts, [CHAT_IMPORT_UPLOAD_ANCHOR, CHAT_IMPORT_CALL_ANCHOR])
+  // The exported table is the single source: both registered packages, two anchors each.
+  assert.equal(CLIENT_PLUGIN_PATCHES.length, 2)
+  const chatImport = findClientPluginPatch('/api/i/local/plugins/??' + CHAT_IMPORT_PACKAGE_ID + '/client.js&rev=abc')
+  assert.equal(chatImport?.packageId, CHAT_IMPORT_PACKAGE_ID)
+  assert.equal(chatImport?.anchors, 2)
+  assert.equal(chatImport?.anchorMiss, 'refuse')
+  assert.deepEqual(chatImport?.probe, { token: 'chamberBasePath', count: 1 })
+  assert.deepEqual(chatImport?.anchorTexts, [CHAT_IMPORT_UPLOAD_ANCHOR, CHAT_IMPORT_CALL_ANCHOR])
+  const documentPreview = findClientPluginPatch('/api/i/local/plugins/??' + DOCUMENT_PREVIEW_PACKAGE_ID + '/client.js&rev=abc')
+  assert.equal(documentPreview?.packageId, DOCUMENT_PREVIEW_PACKAGE_ID)
+  assert.equal(documentPreview?.anchors, 2)
+  assert.equal(documentPreview?.anchorMiss, 'degrade-unpatched')
+  assert.deepEqual(documentPreview?.probe, { token: 'chamberFileApiBase', count: 3 })
+  assert.deepEqual(documentPreview?.anchorTexts, [DOCUMENT_PREVIEW_BODY_ANCHOR, DOCUMENT_PREVIEW_RESOLVE_ANCHOR])
 })
 
 test('a single-id combo names its package for both rev spellings; batches/chunks/assets name none', () => {
@@ -105,6 +134,12 @@ test('classification: patch only for the registered single-id combo; registered-
   }
   const wrongResource = classifyClientPluginBundle('/plugins/??' + id + '/client.other.js&rev=1')
   assert.equal(wrongResource.kind, 'refuse')
+  // The document-preview entry keeps the same defensive shape rule: degrade covers anchor
+  // misses only, never a non-single-id combo (an invariant breach, not runtime skew).
+  const documentSingle = classifyClientPluginBundle('/api/i/local/plugins/??' + DOCUMENT_PREVIEW_PACKAGE_ID + '/client.js&rev=1')
+  assert.equal(documentSingle.kind, 'patch')
+  const documentBatch = classifyClientPluginBundle('/plugins/??' + DOCUMENT_PREVIEW_PACKAGE_ID + '/client.js,@a/b/client.js&rev=1')
+  assert.equal(documentBatch.kind, 'refuse')
   // A batch with no registered package is not our business: keep the untouched path.
   assert.equal(classifyClientPluginBundle('/plugins/??@a/one/client.js,@b/two/client.js&rev=1').kind, 'none')
   assert.equal(findClientPluginPatch('/api/i/local/plugins/??' + id + '/client.js&rev=abc')?.packageId, id)
@@ -157,6 +192,38 @@ test('a duplicated or missing anchor refuses the patch (fail-closed)', () => {
   assert.equal(applyChatImportUploadBasePatch('window.__ModuleLoader__.load({id:`x`,factory:()=>({})})'), null)
 })
 
+test('the document-preview patch adds the standard-prop base to the only image resolver', () => {
+  const patched = applyDocumentPreviewPathImagesBasePatch(DOCUMENT_PREVIEW_FIXTURE)
+  if (patched === null) assert.fail('the pinned-shaped fixture must patch')
+  assert.equal(count(patched, DOCUMENT_PREVIEW_BODY_ANCHOR), 0)
+  assert.equal(count(patched, DOCUMENT_PREVIEW_RESOLVE_ANCHOR), 0)
+  assert.equal(count(patched, 'function MarkdownBody({content,resourceAddress,useResource,t,chamberFileApiBase}){'), 1)
+  assert.equal(count(patched, PATCHED_PATH_IMAGES_BASE_EXPRESSION), 1)
+  // The fallback arm and the URL-resolution base: the guarded expression's two references.
+  assert.equal(count(patched, 'document.baseURI'), 2)
+  // Everything outside the two anchors is byte-identical.
+  const head = DOCUMENT_PREVIEW_FIXTURE.slice(0, DOCUMENT_PREVIEW_FIXTURE.indexOf(DOCUMENT_PREVIEW_BODY_ANCHOR))
+  assert.ok(patched.startsWith(head))
+  assert.ok(patched.endsWith('exports.apply=ctx=>{};return module.exports}});'))
+})
+
+test('a duplicated, missing or drifted document-preview anchor refuses the patch', () => {
+  assert.equal(applyDocumentPreviewPathImagesBasePatch(DOCUMENT_PREVIEW_FIXTURE.replace(DOCUMENT_PREVIEW_RESOLVE_ANCHOR, '')), null)
+  assert.equal(applyDocumentPreviewPathImagesBasePatch(DOCUMENT_PREVIEW_FIXTURE.replace(DOCUMENT_PREVIEW_RESOLVE_ANCHOR, DOCUMENT_PREVIEW_RESOLVE_ANCHOR + DOCUMENT_PREVIEW_RESOLVE_ANCHOR)), null)
+  assert.equal(applyDocumentPreviewPathImagesBasePatch(DOCUMENT_PREVIEW_FIXTURE.replace('markdownImageUrl(document.baseURI', 'markdownImageUrl(location.origin')), null)
+  assert.equal(applyDocumentPreviewPathImagesBasePatch(''), null)
+})
+
+test('the path-images base expression falls back to the document base and keeps the per-entry prefix', () => {
+  const resolve = new Function(
+    'chamberFileApiBase', 'document', `return (${PATCHED_PATH_IMAGES_BASE_EXPRESSION})`,
+  ) as unknown as (basePath: string | undefined, document: { readonly baseURI: string }) => string
+  const page = { baseURI: 'http://127.0.0.1:51234/' }
+  assert.equal(resolve(undefined, page), page.baseURI)
+  assert.equal(resolve('/api/i/local', page), 'http://127.0.0.1:51234/api/i/local/')
+  assert.equal(resolve('/api/i/dsh-remote-7', page), 'http://127.0.0.1:51234/api/i/dsh-remote-7/')
+})
+
 test('sourceURL sanitization strips every ECMAScript line terminator', () => {
   assert.equal(sanitizeSourceUrl('a\r\nb\u2028c\u2029d'), 'abcd')
   assert.equal(sanitizeSourceUrl('/api/i/local/plugins/x.js'), '/api/i/local/plugins/x.js')
@@ -174,4 +241,8 @@ test('the shell dispatches by classification and keeps the script fallback', () 
   assert.match(shell, /return loadPatchedBundle\(url, patch, \{/)
   assert.match(shell, /budget: 'caller-held'/)
   assert.match(shell, /createTimeoutError: \(message, bundleOutcome\) => new BundleLoadTimeoutError\(message, bundleOutcome\)/)
+  // One shared script-element loader: the untouched path AND the degrade fallback.
+  assert.match(shell, /function loadScriptElementBundle\(url: string\): Promise<void> \{/)
+  assert.match(shell, /loadUnpatched: loadScriptElementBundle/)
+  assert.match(shell, /onAnchorMiss: info => \{/)
 })
