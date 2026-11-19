@@ -2,7 +2,7 @@
  * E2 consumption wiring (review C9 ②③, design 27 §3.3): the derived link facts must reach
  * the three NEW-request gates and the two user-facing surfaces without a second reading of
  * the projection:
- *  - the boot-defer gate (App → shouldDeferBootForSource(phase, linkDown));
+ *  - the boot-defer gate (App → bootDeferralReasonForSource(kind-checked phase, linkDown), with shouldDeferBootForSource as its boolean form);
  *  - the prewarm/harvest candidate gate (use-view-scheduler excludes link-down sources);
  *  - the deferred veil (InstanceView: 「链路不可用」+「重试」 instead of 「未连接」+「连接」);
  *  - the connection card (ConnectionsSection: bad tone + shared hint, actions/shell kept);

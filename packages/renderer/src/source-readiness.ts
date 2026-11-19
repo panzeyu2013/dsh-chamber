@@ -51,7 +51,7 @@ export function bootDeferralReasonForSource(
   return null
 }
 
-/** 推迟谓词 = 上面的裁决非 null（App 的推迟集合与起表/豁免门共用同一条判据）。 */
+/** 推迟谓词 = 上面的裁决非 null（纯函数/测试复用；App 的推迟集合改用值化裁决 bootDeferralReasonForSource 并直接把来路传给遮罩）。 */
 export function shouldDeferBootForSource(phase: string | undefined, linkDown: boolean): boolean {
   return bootDeferralReasonForSource(phase, linkDown) !== null
 }
