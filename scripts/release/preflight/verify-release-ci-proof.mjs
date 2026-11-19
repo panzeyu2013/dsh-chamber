@@ -61,10 +61,9 @@ export const REQUIRED_JOBS = [...CI_JOB_IDS]
  */
 const NON_GATE_STEPS = {
   test: [
-    'Type check (chamber host packages + gateway; root/runtime come from run-checks typecheck)',
+    'Type checks — single entry (client plugins / seed host packages / gateway; root+runtime included)',
     'Assert lockfile not rewritten',
     'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)',
-    'Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in)',
   ],
   'test-macos': [
     'Assert lockfile not rewritten',

@@ -591,6 +591,76 @@
       }
     },
     {
+      "id": "typecheck.host-graph",
+      "title": "Type check (seed client graph)",
+      "command": "typecheck:host-graph",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.host-git",
+      "title": "Type check (seed git worktree)",
+      "command": "typecheck:host-git",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.host-archive-cleanup",
+      "title": "Type check (seed archive cleanup)",
+      "command": "typecheck:host-archive-cleanup",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.host-open-in",
+      "title": "Type check (seed open-in)",
+      "command": "typecheck:host-open-in",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
+      "id": "typecheck.gateway",
+      "title": "Type check (gateway)",
+      "command": "typecheck:gateway",
+      "modes": [
+        "typecheck"
+      ],
+      "tier": "typecheck",
+      "surfaces": {
+        "local": true,
+        "ci": true,
+        "release": true
+      }
+    },
+    {
       "id": "tests.runtime",
       "title": "Package tests: dsh-runtime",
       "command": "test:runtime",

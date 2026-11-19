@@ -368,13 +368,6 @@ jobs:
       - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
         run: pnpm run test:scripts
       # GENERATED:gates:release.validation.post:end
-      - name: Type check (chamber host packages + gateway; root/runtime come from run-checks typecheck)
-        run: |
-          pnpm run typecheck:host-graph
-          pnpm run typecheck:host-git
-          pnpm run typecheck:host-archive-cleanup
-          pnpm run typecheck:host-open-in
-          pnpm run typecheck:gateway
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
         run: node scripts/release/preflight/release-preflight.mjs --actions-only
         env:
@@ -391,7 +384,7 @@ jobs:
       # 只有真失败 exit 1，所以这里不会因环境缺件而误红。
       - name: Remote-state acceptance matrix
         run: node scripts/gates/checks/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
-      - name: Client plugin type checks (single entry)
+      - name: Type checks — single entry (client plugins / seed host packages / gateway; root+runtime included)
         run: node scripts/gates/runners/run-checks.mjs typecheck
       # Shared runtime core build: the gateway tarball packs it, so a broken
       # runtime build must fail here rather than inside the packaging leg.

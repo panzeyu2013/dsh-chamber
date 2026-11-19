@@ -136,14 +136,6 @@ jobs:
       - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
         run: pnpm run test:scripts
       # GENERATED:gates:ci.test.post:end
-      - name: Type check (chamber host packages + gateway; root/runtime come from run-checks typecheck)
-        if: steps.classify.outputs.code == 'true'
-        run: |
-          pnpm run typecheck:host-graph
-          pnpm run typecheck:host-git
-          pnpm run typecheck:host-archive-cleanup
-          pnpm run typecheck:host-open-in
-          pnpm run typecheck:gateway
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
         run: node scripts/release/preflight/release-preflight.mjs --actions-only
         env:
@@ -162,8 +154,8 @@ jobs:
       - name: Remote-state acceptance matrix
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/checks/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
-      # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
-      - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in)
+      # Type compiler faces (client plugins + seed host packages + gateway), same single entry as `pnpm run check:typecheck`.
+      - name: Type checks — single entry (client plugins / seed host packages / gateway; root+runtime included)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/runners/run-checks.mjs typecheck
       # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled

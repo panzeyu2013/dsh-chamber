@@ -52,10 +52,10 @@ test('the shipped registry resolves to the documented per-mode counts', () => {
     return [modes.static.length, modes.typecheck.length, modes.tests.length, modes.full.length]
   }
   // static includes payload.bridge-manifest (emit-bridge-manifest --check): keep the counts golden in sync.
-  assert.deepEqual(counts('linux'), [22, 13, 22, 57], 'linux mode counts drifted: a gate was added/removed without updating this golden')
+  assert.deepEqual(counts('linux'), [22, 18, 22, 62], 'linux mode counts drifted: a gate was added/removed without updating this golden')
   // The two darwin-only Electron packaging gates are archived (in the tree, not in
   // the gate registry).
-  assert.deepEqual(counts('darwin'), [22, 13, 28, 63], 'darwin mode counts drifted')
+  assert.deepEqual(counts('darwin'), [22, 18, 28, 68], 'darwin mode counts drifted')
   const linux = deriveModes(registry, { platform: 'linux' })
   assert.deepEqual(linux.full, [...linux.static, ...linux.typecheck, ...linux.tests], 'full must be exactly static+typecheck+tests')
 })
@@ -70,7 +70,7 @@ test('the gate identity surface is a golden (id -> command, and the proof set)',
   const registry = loadGateRegistry()
   const pairs = registry.gates.map(gate => gate.id + ' ' + gate.command)
   const hash = createHash('sha256').update(JSON.stringify(pairs)).digest('hex').slice(0, 16)
-  assert.equal(hash, 'f162293b5b822f91', 'a gate was added, removed, renamed or re-commanded: update this golden in the same change')
+  assert.equal(hash, '7d95d3265c7b216c', 'a gate was added, removed, renamed or re-commanded: update this golden in the same change')
   assert.deepEqual(proofGateIds(registry), ['policy.workflow-pins', 'upstream.registry', 'upstream.anchors'],
     'the proof set is a release contract; changing it must be a deliberate edit of this assertion')
 })
@@ -192,7 +192,8 @@ test('batteryPlan derives the release preflight unit battery from the registry (
     .map(gate => gate.command)
   assert.deepEqual(plan.unitTests, [...new Set(expectedTests)])
   assert.deepEqual(plan.typechecks, [...new Set(expectedTypechecks)])
-  // 平台腿不是 unit battery；审计发现的漏项必须在派生结果里，手写 host typecheck 不得混入。
+  // 平台腿不是 unit battery；审计发现的漏项必须在派生结果里。曾经的 mode 外手写
+  // host/gateway typecheck 已并入 registry，必须出现在派生结果里（含 host-open-in 负控）。
   assert.ok(!plan.unitTests.includes('test:swift') && !plan.unitTests.includes('test:macos'))
   for (const command of ['test:client-core', 'test:browser', 'test:plugin-manager', 'test:host-open-in']) {
     assert.ok(plan.unitTests.includes(command), command + ' 必须进入 battery（曾经手写清单漏掉）')
@@ -200,8 +201,8 @@ test('batteryPlan derives the release preflight unit battery from the registry (
   for (const command of ['typecheck:stream-state', 'typecheck:browser']) {
     assert.ok(plan.typechecks.includes(command), command + ' 必须进入 battery（曾经手写清单漏掉）')
   }
-  for (const command of ['typecheck:host-graph', 'typecheck:host-git', 'typecheck:host-archive-cleanup', 'typecheck:gateway']) {
-    assert.ok(!plan.typechecks.includes(command), command + ' 是 mode 外手写步，不应进入 registry 派生的 battery')
+  for (const command of ['typecheck:host-graph', 'typecheck:host-git', 'typecheck:host-archive-cleanup', 'typecheck:host-open-in', 'typecheck:gateway']) {
+    assert.ok(plan.typechecks.includes(command), command + ' 已并入 registry，必须进入 battery（不再有 mode 外手写例外）')
   }
   assert.equal(new Set(plan.unitTests).size, plan.unitTests.length)
   assert.equal(new Set(plan.typechecks).size, plan.typechecks.length)
