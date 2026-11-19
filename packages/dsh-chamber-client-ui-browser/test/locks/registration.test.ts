@@ -3,10 +3,11 @@
  *
  * The node runner cannot mount React/DOM, so this suite pins the WIRING and the
  * FORK SURFACE as text:
- *   - the files copied byte-for-byte from upstream
- *     `@deepseek-ai/dsh-client-ui-sidebar-browser` 0.2.2-rc.2 are locked by
- *     SHA-256 digests (a re-copy after an upstream pin upgrade must regenerate
- *     the table deliberately — upstream-touchpoints discipline);
+ *   - the files copied byte-for-byte from the pinned upstream
+ *     `@deepseek-ai/dsh-client-ui-sidebar-browser` are locked by SHA-256
+ *     digests against BOTH the local copy and the pinned vendor tree (a re-copy
+ *     after an upstream pin upgrade must regenerate the table deliberately —
+ *     upstream-touchpoints discipline);
  *   - the iframe carrier is GONE: no `IframeImpl`/`IframePresentation`, no
  *     sandbox switch reader, no `unknown` address state in UI code (the frozen
  *     upstream `locales.ts` keeps the retired copy keys byte-for-byte);
@@ -22,9 +23,18 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
+/** The pinned upstream tree the verbatim files are copied from. */
+const VENDOR_ROOT = join(ROOT, '../../vendor/harness-checkout/packages/client/ui-sidebar-browser')
 
 function read(relativePath: string): string {
   return readFileSync(join(ROOT, relativePath), 'utf8')
+}
+
+/** Read one verbatim upstream file; a missing vendor tree is a loud lock failure. */
+function readVendor(relativePath: string): string {
+  const file = join(VENDOR_ROOT, relativePath)
+  assert.ok(existsSync(file), 'pinned vendor file is missing: ' + file + ' (bootstrap the vendor tree; this lock compares upstream bytes, not only the local copy)')
+  return readFileSync(file, 'utf8')
 }
 
 function sha256(text: string): string {
@@ -32,10 +42,11 @@ function sha256(text: string): string {
 }
 
 /**
- * Files copied byte-for-byte from upstream (v3 carrier keeps the upstream UI,
- * address, persistence, history, copy and stylesheet model). BrowserPage.ts is
- * the ONE upstream-derived file that left this table: the v3 page contract adds
- * the tab id + carrier identity fields, so it is a fork-diff file, not a verbatim
+ * Files copied byte-for-byte from the pinned upstream (v3 carrier keeps the
+ * upstream UI, address, persistence, history, copy and stylesheet model), locked
+ * against BOTH the local copy and the pinned vendor tree. BrowserPage.ts is the
+ * ONE upstream-derived file that left this table: the v3 page contract adds the
+ * tab id + carrier identity fields, so it is a fork-diff file, not a verbatim
  * copy. A pin upgrade regenerates this table deliberately.
  */
 const UPSTREAM_VERBATIM: Readonly<Record<string, string>> = {
@@ -49,9 +60,17 @@ const UPSTREAM_VERBATIM: Readonly<Record<string, string>> = {
   'src/index.ts': 'eda8f35390ed2ed274f44e678fa74d7b12e74c2bef0ba4003452810b194d8fc7',
 }
 
-test('every upstream-derived file still matches its frozen digest', () => {
+test('every upstream-derived file matches the pinned vendor bytes and digest', () => {
+  assert.ok(existsSync(VENDOR_ROOT), 'pinned vendor tree is missing: ' + VENDOR_ROOT + ' (bootstrap the vendor tree; this lock compares upstream bytes, not only the local copy)')
   for (const [file, digest] of Object.entries(UPSTREAM_VERBATIM)) {
-    assert.equal(sha256(read(file)), digest, file + ' drifted from its frozen 0.2.2-rc.2/v3 text')
+    const local = read(file)
+    const vendor = readVendor(file)
+    assert.equal(sha256(local), digest, file + ' drifted from its frozen pinned-vendor text')
+    assert.equal(sha256(vendor), digest, file + ' no longer matches the pinned vendor text')
+    assert.ok(
+      readFileSync(join(ROOT, file)).equals(readFileSync(join(VENDOR_ROOT, file))),
+      file + ' is not byte-identical to the pinned vendor copy',
+    )
   }
 })
 
