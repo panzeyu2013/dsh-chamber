@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { INSTANCE_ID_PATTERN as UI_INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS as UI_MAX_INSTANCE_LABEL_CHARS, MAX_REMOTE_DSH_HOME_CHARS as UI_MAX_REMOTE_DSH_HOME_CHARS, MAX_SERVICE_NAME_CHARS as UI_MAX_SERVICE_NAME_CHARS, MAX_SSH_HOST_CHARS as UI_MAX_SSH_HOST_CHARS, MAX_SSH_PASSWORD_CHARS as UI_MAX_SSH_PASSWORD_CHARS, MAX_SSH_USER_CHARS as UI_MAX_SSH_USER_CHARS, REMOTE_DSH_HOME_PATTERN as UI_REMOTE_DSH_HOME_PATTERN, SERVICE_NAME_PATTERN as UI_SERVICE_NAME_PATTERN, SSH_HOST_PATTERN as UI_SSH_HOST_PATTERN, SSH_USER_PATTERN as UI_SSH_USER_PATTERN } from '../../src/client/host-validation.ts';
 import type { SshInstanceSpec, TransportKind, TransportMethod } from '../../src/global.d.ts';
-import { changeDraftEndpointUrl, changeDraftKind, changeDraftTransport, credentialCapabilitiesFor, draftFromSpec, draftToInput, EMPTY_DRAFT, nextDefaultedRemotePort, SERVICE_NAME_PATTERN, spkiPinEligible, spkiPinValidationError, TRANSPORT_FORM_OPTIONS, transportFormSchema, transportSupportsTarget, type HostDraft } from '../../src/client/connection-form.ts';
+import { browserAuthNoticeRequired, changeDraftEndpointUrl, changeDraftKind, changeDraftTransport, credentialCapabilitiesFor, draftFromSpec, draftToInput, EMPTY_DRAFT, nextDefaultedRemotePort, SERVICE_NAME_PATTERN, spkiPinEligible, spkiPinValidationError, TRANSPORT_FORM_OPTIONS, transportFormSchema, transportSupportsTarget, type HostDraft } from '../../src/client/connection-form.ts';
 
 const desktopAuthority = [
   '../../../desktop/transport-provider.ts',
@@ -107,6 +107,33 @@ test('service unit input rejects option-shaped names and accepts normal systemd 
   assert.equal(SERVICE_NAME_PATTERN.test('-x'), false)
   assert.equal(SERVICE_NAME_PATTERN.test('--user'), false)
   assert.equal(SERVICE_NAME_PATTERN.test('my-unit.service'), true)
+})
+
+test('the add-form default draft is a shipped, attachable pair (gateway × ssh)', () => {
+  // The default must not walk the user into the browser-auth trap: a bare dsh over SSH answers
+  // HTTP 401 on a gated remote Host, while a gateway's loopback listener is reached by the same
+  // SSH tunnel and keeps its own authentication. dsh × ssh stays explicitly selectable.
+  assert.equal(EMPTY_DRAFT.kind, 'gateway', 'the default target must be a shipped attachable target')
+  assert.equal(EMPTY_DRAFT.transport, 'ssh', 'the default transport keeps the SSH field group')
+  assert.equal(transportSupportsTarget(EMPTY_DRAFT.transport, EMPTY_DRAFT.kind), true, 'the default pair must be a shipped combination')
+  assert.equal(
+    EMPTY_DRAFT.remotePort,
+    String(transportFormSchema('ssh').defaultRemotePort[EMPTY_DRAFT.kind]),
+    'the defaulted port must follow the ssh schema default for the default target',
+  )
+  assert.equal(transportSupportsTarget('ssh', 'dsh'), true, 'dsh × ssh stays explicitly selectable')
+  assert.equal(transportSupportsTarget('http', 'dsh'), false, 'dsh × http stays schema-disabled')
+})
+
+test('only a bare dsh over SSH carries the inline BrowserAuth caveat', () => {
+  assert.equal(browserAuthNoticeRequired({ kind: 'dsh', transport: 'ssh' }), true)
+  assert.equal(browserAuthNoticeRequired({ kind: 'gateway', transport: 'ssh' }), false)
+  assert.equal(browserAuthNoticeRequired({ kind: 'gateway', transport: 'http' }), false)
+  // Wiring lock: the modal renders the caveat through the pure gate and the shared dictionary key,
+  // so the warning can never be dropped while the pure helper still claims the behavior.
+  const modal = readFileSync(new URL('../../src/client/ConnectionFormModal.tsx', import.meta.url), 'utf8')
+  assert.match(modal, /browserAuthNoticeRequired\(draft\)/u, 'the modal must consult the pure gate')
+  assert.match(modal, /t\('dshSshBrowserAuthHint'\)/u, 'the modal must render the shared dictionary key')
 })
 
 test('credential capability matrix keeps gateway target auth and SSH transport auth independent', () => {

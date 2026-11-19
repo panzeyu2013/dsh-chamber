@@ -23,7 +23,7 @@ import { existsSync, statSync } from 'node:fs'
 import type { ConnectionRowView } from './api.ts'
 import { createCatalog } from './catalog.ts'
 import { createLocalConnection, isServiceableLocalState } from './local-connection.ts'
-import type { LocalConnectionDeps } from './local-connection.ts'
+import type { LocalConnectionDeps, LocalConnectionOptions } from './local-connection.ts'
 import { createApi } from './api.ts'
 import { runReaper, type ReaperEntryOutcome } from './reaper.ts'
 import {
@@ -179,6 +179,9 @@ export interface ControlPlaneOptions {
   corsEvaluator?: ApiCorsEvaluator
   /** Injectable local-connection wire deps (test seams: fake spawn/probe). */
   localConnectionDeps?: LocalConnectionDeps
+  /** Additional local-connection tuning (test seam for deterministic lifecycle windows;
+   *  production callers use the documented defaults). Explicit top-level options below win. */
+  localConnectionOptions?: LocalConnectionOptions
   /**
    * Bundled pnpm entry for the managed host PATH provision (design 02 §3.1): a host
    * whose own PATH resolves no pnpm gets an executable wrapper prepended so
@@ -381,6 +384,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   let writerScan: { quiescent: boolean; writers: ReaperEntryOutcome[]; errors: string[] } = {
     quiescent: false, writers: [], errors: [],
   }
+  /** Whether any writer-quiescence scan has run: a never-started plane never took authority
+   *  over a managed host, so its stop() may release the state root without a scan verdict. */
+  let writerScanRan = false
   /**
    * The latch has TWO closure causes and only one is re-provable: a SCAN verdict is
    * cleared by a fresh scan, while a write-time termination failure means a process
@@ -426,6 +432,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       ...(takeover ? { takeover: true } : {}),
       onEntry: outcome => writers.push(outcome),
     })
+    writerScanRan = true
     localWritersQuiescent = !writerLatchSticky && reaped.kept === 0 && reaped.errors.length === 0
     writerScan = {
       quiescent: localWritersQuiescent,
@@ -595,19 +602,31 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // patchPath is a thunk resolved only behind the per-spawn fence. Re-read it for
     // starts and restarts so a profile-internal prune self-heals without a DSH_HOME write during runtime apply/restore.
     options: {
+      ...(options.localConnectionOptions ?? {}),
       ...(options.dshPortBase === undefined ? {} : { dshPortBase: options.dshPortBase }),
       pnpmEntry: options.pnpmEntry,
       ...(options.hostEnv === undefined ? {} : { hostEnv: options.hostEnv }),
       ownerInstanceId: instanceId,
       canSpawn: localStartGate,
       onWriterQuiescenceUnknown: (writerError) => {
+        // The suspect record (pid/error) is the diagnosis UI names: keep it as a blocker so a
+        // closed latch never degenerates into an anonymous "restart the app".
+        const suspect = local.getWriterSuspect()
         localWritersQuiescent = false
         writerLatchSticky = true
         writerScan = {
           quiescent: false,
-          writers: [],
+          writers: suspect === null || suspect.pid === null
+            ? []
+            : [{
+                name: `${suspect.pid}.json`,
+                status: 'kept',
+                pid: suspect.pid,
+                reason: 'residual-group',
+                takeOverAvailable: false,
+              }],
           errors: [
-            `writer quiescence unknown: ${writerError.message}`,
+            `writer quiescence unknown${suspect === null || suspect.pid === null ? '' : ` (pid ${suspect.pid})`}: ${writerError.message}`,
             'restart the app to re-prove writer quiescence',
           ],
         }
@@ -1126,9 +1145,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
           await closeHttpServer(srv, true)
         }
         if (localStopError !== undefined) throw localStopError
-        // Only a proven-quiescent stop releases writer authority; a failed local stop
-        // retains the lease so no successor can write behind it.
-        if (ownsStateLease) stateLease.release()
+        // Only a proven-quiescent stop releases writer authority; a failed local stop or a
+        // closed writer diagnosis retains the lease so no successor can write behind it.
+        // A plane that never ran a scan never took authority over a managed host.
+        if (!writerScanRan || (localWritersQuiescent && writerScan.quiescent)) {
+          if (ownsStateLease) stateLease.release()
+        } else {
+          logger.error('control plane stop: writer quiescence is not proven; the state-root lease stays held')
+        }
       })()
       stopPromise = pending
       try {

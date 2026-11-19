@@ -6,8 +6,11 @@
  * is read here and reaches the generic RPC carrier as its `/api/i/<id>` prefix;
  * liveness triggers drive native `reconnect()`. `SYSTEM_RESUME_EVENT` is the
  * canonical wake-event value (the renderer spells the literal; both sides
- * drift-check it). The upstream `?fixture` page mode is retired (rc.2 upstream
- * deleted `src/client/fixture.ts`; the fork keeps it dropped).
+ * drift-check it). The per-entry carrier class is a Context fact too: a `local`
+ * carrier does not consume the browser network state, so its loop makes the
+ * first attempt while `navigator.onLine` is false (design 14 §D4). The upstream
+ * `?fixture` page mode is retired (rc.2 upstream deleted `src/client/fixture.ts`;
+ * the fork keeps it dropped).
  */
 import type { Context } from '@deepseek-ai/cordis'
 import {
@@ -168,6 +171,19 @@ export interface ConnectionInstallOptions {
   readonly location?: ConnectionLocation
   /** chamber patch: per-entry api base path from the entry Context (`/api/i/<id>`). */
   readonly basePath?: string
+  /**
+   * chamber patch: which side of the wire this page's carrier serves — `'local'`
+   * when the Host is this machine (the managed local instance), `'remote'` for a
+   * source reached through a network carrier. This is a per-entry CARRIER fact,
+   * never a page-origin fact: the chamber shell serves every entry from the same
+   * control-plane loopback origin, so origin-based locality would classify a
+   * remote source as local.
+   * A local carrier must not gate its loop on the browser network state: loopback
+   * traffic keeps working while `navigator.onLine` is false, so the first attempt
+   * must run offline and the loop must never park on an `offline` event.
+   * Omitted = `'remote'` (stock browser-gated behaviour unchanged).
+   */
+  readonly carrier?: 'local' | 'remote'
 }
 
 /**
@@ -181,6 +197,10 @@ export interface ConnectionHandle {
    * Whether the privileged surface is reachable: the page authority is
    * loopback, the transport declares the page owns the Host
    * ({@link ClientTransportHooks.ownsHost}), or the context is not a browser.
+   * chamber patch: this is a PRIVILEGED-SURFACE verdict, not a carrier-locality
+   * verdict — the chamber shell serves every entry from the control-plane
+   * loopback origin, so it is true for local and remote sources alike. The
+   * carrier class is {@link ConnectionInstallOptions.carrier}.
    */
   readonly isLoopback: boolean
   /** Current Remote event generation and the Host facts carried by its opening frame. */
@@ -254,6 +274,24 @@ function chamberBasePathOf(ctx: Context): string | undefined {
 }
 
 /**
+ * chamber patch: classify this page's carrier from the per-entry Context fact.
+ * The shell provides `chamberTransport` before plugin materialization; a real
+ * Cordis context rejects an uninjected property read, so the provided-service
+ * accessor (`ctx.get`) is the production read face and the property read stays
+ * as the fake-context/legacy fallback only. An absent or unknown fact keeps the
+ * stock network-gated (`'remote'`) behaviour — the entry path is a routing fact,
+ * not a carrier fact, so it is deliberately not used as a second derivation.
+ */
+function chamberCarrierOf(ctx: Context): 'local' | 'remote' | undefined {
+  const transport = typeof ctx.get === 'function'
+    ? ctx.get('chamberTransport')
+    : (ctx as { readonly chamberTransport?: unknown }).chamberTransport
+  if (transport === 'local') return 'local'
+  if (transport === 'ssh' || transport === 'http') return 'remote'
+  return undefined
+}
+
+/**
  * Install one Context-owned Connection service from explicit composition inputs.
  * @param ctx - client Cordis context.
  * @param options - interaction participation, physical carrier, reconnect timing, and page location.
@@ -263,6 +301,9 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
   const transport = options.transport
   const recovery = options.recovery ?? {}
   const interactions = options.interactions ?? (pageLocation === undefined ? 'none' : 'answer')
+  // chamber patch: the carrier class decides whether the browser network gate is
+  // installed at start(); omission keeps upstream's browser-gated loop.
+  const carrier = options.carrier ?? 'remote'
   // chamber patch: the per-entry prefix fans into the generic RPC carrier; an
   // explicit decoded carrier keeps upstream's precedence.
   const rpc = transport?.rpc ?? assembleConnectionCarriers(
@@ -372,7 +413,16 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
           sinks.onStateChange?.(state)
         },
       }, { ...recovery, ...config })
-      const current = { token, source, controller, stopNetworkWatch: watchBrowserNetwork(controller) }
+      // chamber patch: the browser network gate belongs to a network carrier only.
+      // A local loopback carrier makes its first attempt while the browser reports
+      // offline and must never park on `offline`; with no watcher there is no
+      // setNetworkAvailable(false), so the stock parking branch stays unreachable.
+      const current = {
+        token,
+        source,
+        controller,
+        stopNetworkWatch: carrier === 'local' ? () => {} : watchBrowserNetwork(controller),
+      }
       owner = current
       // chamber patch: reconnect immediately on OS wake, network restore or a
       // long-hidden window returning. The native reconnect() aborts the generation
@@ -416,12 +466,15 @@ export function apply(ctx: Context): void {
   const globals = globalThis as ClientTransportGlobal
   const pageLocation = typeof location === 'undefined' ? undefined : location
   const transport = globals.__DSH_TRANSPORT__
-  // chamber patch: the per-entry prefix comes from the Context, never a page global.
+  // chamber patch: the per-entry prefix and carrier class come from the Context,
+  // never a page global.
   const basePath = chamberBasePathOf(ctx)
+  const carrier = chamberCarrierOf(ctx)
   installConnection(ctx, {
     ...(transport === undefined ? {} : { transport }),
     recovery: resolveConnectionConfig(globals.__DSH_CONNECTION_RECOVERY__),
     ...(pageLocation === undefined ? {} : { location: pageLocation }),
     ...(basePath === undefined ? {} : { basePath }),
+    ...(carrier === undefined ? {} : { carrier }),
   })
 }

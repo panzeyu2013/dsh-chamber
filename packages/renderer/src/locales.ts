@@ -67,6 +67,10 @@ export const zh = {
   /** Deferred-boot veil title: boot is held until the user connects the source. */
   'boot.deferred': '未连接 {label}',
   'boot.deferredHint': '该来源尚未连接。连接成功后再打开会话。',
+  /** Deferred-boot veil title while the transport is READY but its link is down: the shell is
+   *  kept, new requests fast-fail, and the honest affordance is retry (not connect). */
+  'boot.linkDown': '链路不可用 {label}',
+  'boot.linkDownHint': '该来源的网络链路暂时不可用，新请求会被快速拒绝；链路恢复后会自动重试。',
   /** Elapsed wait shown once the veil becomes actionable; `{seconds}` is rounded. */
   'boot.elapsed': '已等待 {seconds} 秒',
   /** Actionable veil line while the boot is still running (never a failure claim). */
@@ -166,6 +170,8 @@ export const en: Record<FrameKey, string> = {
   'boot.loadingHint': 'The full interface loads on first open',
   'boot.deferred': '{label} is not connected',
   'boot.deferredHint': 'This source is not connected yet. Connect it, then open the session again.',
+  'boot.linkDown': '{label} link is unavailable',
+  'boot.linkDownHint': 'This source’s network link is temporarily down: new requests are fast-failed and it retries automatically once the link recovers.',
   'boot.elapsed': 'Waiting {seconds}s',
   'boot.stuckHint': 'Still not ready: you can keep waiting, or leave this source for now.',
   'boot.sourceFailedHint': 'This source’s connection dropped: retry, or leave this source for now.',

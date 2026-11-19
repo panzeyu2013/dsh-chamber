@@ -12,7 +12,7 @@ import type { TransportKind, TransportMethod } from '../global.d.ts'
 import { GatewayAuthFields, GatewaySpkiField } from './ConnectionAuthFields.tsx'
 import { credentialReentryEdit } from './connection-helpers.ts'
 import { MAX_REMOTE_DSH_HOME_CHARS, MAX_SERVICE_NAME_CHARS, MAX_SSH_HOST_CHARS, MAX_SSH_PASSWORD_CHARS, MAX_SSH_USER_CHARS } from './host-validation.ts'
-import { changeDraftEndpointUrl, changeDraftKind, changeDraftTransport, spkiPinEligible, TRANSPORT_FORM_OPTIONS, transportFormSchema } from './connection-form.ts'
+import { browserAuthNoticeRequired, changeDraftEndpointUrl, changeDraftKind, changeDraftTransport, spkiPinEligible, TRANSPORT_FORM_OPTIONS, transportFormSchema } from './connection-form.ts'
 import css from './ConnectionsSection.module.css'
 
 /** Everything the form body reads or writes in the section component. */
@@ -124,6 +124,12 @@ export function ConnectionFormModal({
                   <IconChevronDownOutlineRegular className={css.selectChevron} aria-hidden="true" />
                 </span>
               </label>
+              {/* Combination-level caveat, not an error: a bare dsh's only transport is SSH, but a
+                  browser-auth-gated remote Host answers the identity probe with HTTP 401 (its launch
+                  token cannot cross SSH), so an authenticated remote belongs behind the Gateway. */}
+              {browserAuthNoticeRequired(draft)
+                ? <p className={clsx(css.warnHint, css.spanAll)} role="note">{t('dshSshBrowserAuthHint')}</p>
+                : null}
               {editing === 'new' && draft.transport === 'ssh'
                 ? (
                   <div className={clsx(css.configPicker, css.spanAll)}>

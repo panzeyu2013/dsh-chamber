@@ -11,9 +11,11 @@ chamber 连接管理器的应用内管理面——不消费宿主帧，不触碰
 
 - **本地实例卡**：/health 状态徽标、/api/connections 行（端口/label）、
   启动/停止（二次确认）、host 日志只读。
-- **远程连接列表**：覆盖四种已交付组合（`dsh|gateway × ssh|http`），卡片展示
-  label、端点、目标/传输徽标、phase，以及适用时的 systemd/日志投影；支持
-  连接/断开、编辑、删除和 schema 驱动的虚线添加卡。
+- **远程连接列表**：覆盖三种已交付组合（`gateway × ssh`、`gateway × http`、
+  `dsh × ssh`），卡片展示 label、端点、目标/传输徽标、phase，以及适用时的
+  systemd/日志投影；支持连接/断开、编辑、删除和 schema 驱动的虚线添加卡。
+  `dsh × http` 不可用（browser-auth 门覆盖全部 `/api` 请求，直连 dsh 无法附加）；
+  添加表单默认 `gateway × ssh`，选择 `dsh × ssh` 时内联提示远端 BrowserAuth 兼容性。
 
 ## 数据纪律
 

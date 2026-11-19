@@ -341,6 +341,50 @@ test('a DETERMINISTIC verification failure (terminal) lands on error immediately
     'the concrete non-dsh reason lands in the ring buffer')
   assert.ok(manager.status('s1')!.logSummary.includes('HTTP 404'), 'the projection carries the deterministic reason')
 })
+test('the terminal verify class is refined by the provider failureKind: dsh 401 → instance-auth, protocol → endpoint, gateway 401 → endpoint', async t => {
+  // A remote dsh behind its browser-auth gate answers HTTP 401 (failureKind 'auth', terminal):
+  // the tunnel is fine, so the repair surface is a Gateway deployment. That is a DIFFERENT class
+  // from the version/non-dsh endpoint answer (failureKind 'protocol'), whose repair is checking
+  // the port / upgrading the remote dsh.
+  const auth401: TransportVerifyResult = {
+    ok: false, terminal: true, failureKind: 'auth',
+    detail: 'the destination answered HTTP 401 — a 0.1.2 browser-auth-gated dsh (its launch token is unrecoverable over SSH) or a non-dsh server',
+  }
+  const dsh = makeManager(t, { verifyProbe: async () => auth401 })
+  dsh.setProbe(true)
+  dsh.manager.connect('s1')
+  await waitFor(() => dsh.manager.status('s1')!.phase === 'error', 3000, 'terminal 401 error')
+  assert.equal(dsh.manager.status('s1')!.requiresUserAction, true)
+  assert.equal(dsh.manager.status('s1')!.userActionKind, 'instance-auth', 'the 401 is the browser-auth instance class, not the version hint')
+  assert.equal(dsh.manager.status('s1')!.retryAttempt, 0, 'a deterministic 401 starts no reconnect cycle')
+  await sleep(80)
+  assert.equal(dsh.spawnCalls.length, 1, 'an unrecoverable 401 is never retried')
+
+  // A deterministic PROTOCOL answer (old/incompatible or non-dsh) keeps the plain endpoint class.
+  const protocol = makeManager(t, {
+    verifyProbe: async () => ({
+      ok: false, terminal: true, failureKind: 'protocol',
+      detail: 'the destination answered HTTP 404 to the dsh identity probe — it does not appear to be a dsh instance',
+    }),
+  })
+  protocol.setProbe(true)
+  protocol.manager.connect('s1')
+  await waitFor(() => protocol.manager.status('s1')!.phase === 'error', 3000, 'protocol error')
+  assert.equal(protocol.manager.status('s1')!.userActionKind, 'endpoint', 'version/non-dsh stays endpoint (check the port / upgrade)')
+
+  // A gateway target's 401 is a GATEWAY credential problem: the projected class stays 'endpoint'
+  // so the card's spec.kind branch keeps selecting the gateway auth hint (never the attach copy).
+  const gateway = makeManager(t, {
+    includeDefault: false,
+    instances: [{ id: 'g1', label: 'gw', kind: 'gateway', transport: 'ssh', host: 'gw.example.com', remotePort: 443 }],
+    verifyProbe: async () => ({ ok: false, terminal: true, failureKind: 'auth', detail: 'the gateway requires authentication (401) — configure the shared token or password' }),
+  })
+  gateway.setProbe(true)
+  gateway.manager.connect('g1')
+  await waitFor(() => gateway.manager.status('g1')!.phase === 'error', 3000, 'gateway terminal 401')
+  assert.equal(gateway.manager.status('g1')!.userActionKind, 'endpoint', 'a gateway 401 keeps the gateway credential path, not instance-auth')
+  assert.equal(gateway.spawnCalls.length, 1)
+})
 test('a throwing identity verification is contained: warn, never ready, bounded retry', async t => {
   const { manager, setProbe } = makeManager(t, { verifyProbe: async () => { throw new Error('verify boom') } })
   setProbe(true)
@@ -1100,6 +1144,48 @@ test('ready-state heartbeat: terminal failures leave ready with no auto-retry, t
   transientOutcome = { ok: true }
   await waitFor(() => transient.manager.status('s1')!.phase === 'ready', 3000, 'recovered ready')
   assert.equal(transient.manager.status('s1')!.retryAttempt, 0)
+})
+
+test('the ready-state heartbeat refines the terminal class like connect-time: dsh 401 → instance-auth, protocol → endpoint, gateway 401 → endpoint', async t => {
+  // The heartbeat runs the SAME verifyUp seam as connect-time; a remote dsh that restarted
+  // behind its browser-auth gate after being ready must surface the 'instance-auth' repair
+  // surface (deploy/attach a Gateway), not the version/non-dsh endpoint copy.
+  let outcome: TransportVerifyResult = { ok: true }
+  const dsh = await readyOn(t, 's1', {
+    options: { readyVerifyIntervalMs: 20, readyVerifyMinIntervalMs: 5 },
+    verifyProbe: async () => outcome,
+  })
+  outcome = {
+    ok: false, terminal: true, failureKind: 'auth',
+    detail: 'the destination answered HTTP 401 — a browser-auth-gated dsh (its launch token is unrecoverable over SSH)',
+  }
+  await waitFor(() => dsh.manager.status('s1')!.phase === 'error', 3000, 'heartbeat 401 error')
+  assert.equal(dsh.manager.status('s1')!.requiresUserAction, true)
+  assert.equal(dsh.manager.status('s1')!.userActionKind, 'instance-auth', 'the heartbeat keeps the browser-auth class')
+  assert.equal(dsh.spawnCalls.length, 1, 'a terminal heartbeat never auto-retries')
+
+  // The protocol/version answer keeps the plain endpoint class on the heartbeat too.
+  let protocolOutcome: TransportVerifyResult = { ok: true }
+  const protocol = await readyOn(t, 's1', {
+    options: { readyVerifyIntervalMs: 20, readyVerifyMinIntervalMs: 5 },
+    verifyProbe: async () => protocolOutcome,
+  })
+  protocolOutcome = { ok: false, terminal: true, failureKind: 'protocol', detail: 'the destination answered HTTP 404 to the dsh identity probe' }
+  await waitFor(() => protocol.manager.status('s1')!.phase === 'error', 3000, 'heartbeat protocol error')
+  assert.equal(protocol.manager.status('s1')!.userActionKind, 'endpoint', 'version/non-dsh stays endpoint')
+
+  // A gateway target's 401 stays on the gateway credential path (selected by spec.kind in
+  // the UI), so the projected class must remain 'endpoint'.
+  let gatewayOutcome: TransportVerifyResult = { ok: true }
+  const gateway = await readyOn(t, 'g1', {
+    includeDefault: false,
+    instances: [{ id: 'g1', label: 'gw', kind: 'gateway', transport: 'ssh', host: 'gw.example.com', remotePort: 443 }],
+    options: { readyVerifyIntervalMs: 20, readyVerifyMinIntervalMs: 5 },
+    verifyProbe: async () => gatewayOutcome,
+  })
+  gatewayOutcome = { ok: false, terminal: true, failureKind: 'auth', detail: 'the gateway rejected the token (401)' }
+  await waitFor(() => gateway.manager.status('g1')!.phase === 'error', 3000, 'gateway heartbeat 401')
+  assert.equal(gateway.manager.status('g1')!.userActionKind, 'endpoint', 'a gateway 401 keeps the gateway credential class')
 })
 
 test('a provider without failureKind still treats an HTTP status as reachable', async t => {

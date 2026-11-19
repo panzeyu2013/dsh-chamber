@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { linkEpochOf, linkReady } from '../../../dsh-chamber-client-core/src/link-projection.ts'
+import { linkEpochOf, linkHealthOf, linkReady } from '../../../dsh-chamber-client-core/src/link-projection.ts'
 
 test('linkReady: only ready & not down is ready; suspect still forwards', () => {
   assert.equal(linkReady(undefined), false)
@@ -18,6 +18,24 @@ test('linkReady: only ready & not down is ready; suspect still forwards', () => 
   // Hostile projections never throw.
   assert.equal(linkReady(null as never), false)
   assert.equal(linkReady({ phase: 'ready', link: null } as never), true)
+})
+
+test('linkHealthOf: the ONE link sub-state reading (absent/unknown = healthy)', () => {
+  // The fact channel (renderer host/servers.ts → ChamberServerAggregate.linkState) reads
+  // this helper instead of re-spelling `state === 'down'`; the truth table is therefore a
+  // contract for the sidebar dot / deferred-boot overlay too.
+  assert.equal(linkHealthOf(undefined), 'healthy')
+  assert.equal(linkHealthOf({ phase: 'ready' }), 'healthy', 'old shim without a link field is healthy')
+  assert.equal(linkHealthOf({ phase: 'ready', link: null } as never), 'healthy')
+  assert.equal(linkHealthOf({ phase: 'ready', link: { state: 'healthy' } }), 'healthy')
+  assert.equal(linkHealthOf({ phase: 'ready', link: { state: 'suspect' } }), 'suspect')
+  assert.equal(linkHealthOf({ phase: 'ready', link: { state: 'down' } }), 'down')
+  // Unknown/hostile spellings fail open (never invent a down).
+  assert.equal(linkHealthOf({ phase: 'ready', link: { state: 'bogus' } } as never), 'healthy')
+  assert.equal(linkHealthOf({ phase: 'connecting', link: { state: 'down' } }), 'down', 'the helper reads state only; phase gating is linkReady')
+  // linkReady is built on it: same truth table as before (behavior unchanged).
+  assert.equal(linkReady({ phase: 'ready', link: { state: 'suspect' } }), true)
+  assert.equal(linkReady({ phase: 'ready', link: { state: 'down' } }), false)
 })
 
 test('linkEpochOf: absent/non-numeric generations read as 0', () => {

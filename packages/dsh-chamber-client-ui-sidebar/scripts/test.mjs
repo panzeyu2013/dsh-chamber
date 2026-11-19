@@ -141,6 +141,8 @@ export const GROUPS = {
     'test/source-runtime/gateway-runtime.test.ts',
     'test/source-runtime/gateway-runtime-poll.test.ts',
     'test/source-runtime/managed-runtime.test.ts',
+    // E2 链路可用性投影（design 27 §3.3）：ready+link down 状态点/标签，suspect 仍按 ready。
+    'test/source-runtime/link-down-status.test.ts',
     // Cross-host lockstep for the gateway runtime-status identity literal
     // (gateway producer + inline payload, desktop constant, this package's contract).
     'test/source-runtime/gateway-runtime-status-kind-lockstep.test.ts',

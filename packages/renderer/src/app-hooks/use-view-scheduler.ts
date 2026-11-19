@@ -22,7 +22,7 @@ import { frameText, readDocumentLocale } from '../locales.ts'
 import { recordPrewarm } from '../prewarm-ledger.ts'
 import { disposeInstanceShell, isSettledShellState, type ShellState } from '../shell.ts'
 import { instanceBasePath, instanceConnected, sourceIdForInstance } from '../transport-source.ts'
-import { chamberBridge, intentPrewarmSpent, managedRuntimeUnusable, type IntentPrewarmBudget } from '@dsh-chamber/dsh-chamber-client-core'
+import { chamberBridge, intentPrewarmSpent, linkReady, managedRuntimeUnusable, type IntentPrewarmBudget } from '@dsh-chamber/dsh-chamber-client-core'
 import type { HealthResponse } from '../api.ts'
 import type { MapLedgerView, SetLedgerView } from '@dsh-chamber/dsh-stream-state'
 import type { SshInstanceSpec, SshStatusProjection } from '../global.d.ts'
@@ -106,9 +106,9 @@ export function useViewScheduler(deps: ViewSchedulerDeps): ViewScheduler {
       autoPrewarmedRef.current.has(id) && shellStates[id]?.error == null).length
     const warmRemaining = Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - liveAutoPrewarmed)
     const readyUnmountedIds = remoteInstances
-      // `phase === 'ready'` 之外再过一道 instanceConnected：kind 切换后 remoteStatus 可能
-      // 残留旧 READY 投影，否则会给其实未就绪的源白烧一次尝试。
-      .filter(instance => remoteStatus[instance.id]?.phase === 'ready'
+      // `linkReady`（ready 且链路非 down）+ instanceConnected：kind 切换后 remoteStatus 可能
+      // 残留旧 READY 投影；down 链路的新请求被代理快速拒绝，prewarm/harvest 只会白烧 503 预算。
+      .filter(instance => linkReady(remoteStatus[instance.id])
         && instanceConnected(instance.kind, health, remoteStatus, instance.id))
       // 托管 dsh 终态停机的 gateway 源不预热/不收割：boot 必然失败（网关 503），
       // 只会白烧尝试并占唯一后台槽；用户启动托管 dsh 后本门随 15s 探针自动放开。

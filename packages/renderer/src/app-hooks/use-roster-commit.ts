@@ -1,7 +1,10 @@
 /**
  * 远程 roster 提交簇：一次 roster 刷新 = 一个逻辑快照对（先 health，再 instances_get），
  * 决策在纯规划器 host/roster-commit.ts，执行顺序在这里落地——retire → activate/reincarnate →
- * install → settle → live → refreshStatus。App 只保留接线。
+ * install → settle → live → remount → refreshStatus。App 只保留接线。
+ *
+ * 换代真值落"完整快照提交期"（推送只作提示）：规划输入是壳记录的启动传输字（shell.ts 的
+ * bootTransports）与权威行传输字的比较，所以推送丢失也不会漏换代，迟到响应由 refreshSeq 丢弃。
  *
  * 世代纪律：refreshSeq 在两次 await 后各校验一次；instances-changed 推送先 invalidateRemoteRoster
  * （seq+1 + rosterGate.invalidate）再重拉，因此两次读取之间不可能换代表，迟到的旧响应在任一
@@ -15,6 +18,8 @@ import type { RemotesStore } from '../host/remotes-store.ts'
 import { planRosterCommit, type RosterCommitPlan } from '../host/roster-commit.ts'
 import type { RosterGate } from '../host/roster-gate.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
+import { bootTransportOf } from '../shell.ts'
+import { sourceIdForInstance } from '../transport-source.ts'
 import {
   healthProbeUnavailableDiagnostic, rosterIncompleteDiagnostic,
   type HealthProbeUnavailableKind,
@@ -34,6 +39,8 @@ export interface RosterCommitSinks {
   settleRoster: () => void
   /** liveServerIdsRef.current = 权威集合（仅权威快照调用）。 */
   setLive: (sourceIds: Set<string>) => void
+  /** 窄重挂一个 live 来源的壳（换容器冷 boot；不触 durable 账本/owner/facts）。 */
+  remountShell: (sourceId: string) => void
   /** 安装行的隧道状态刷新。 */
   refreshStatus: (instance: SshInstanceSpec, sourceId: string) => void
 }
@@ -41,7 +48,8 @@ export interface RosterCommitSinks {
 /**
  * 执行一次提交计划。顺序即契约：退役先于任何 replacement 激活（退役删 owner，随后 activate 才
  * mint 新化身，同一来源只退役一次）；activate/reincarnate 先于安装，安装行到达 deriveServers 时
- * 身份已就位；只有完整快照允许 settle 与替换 live。degraded 计划不落地（返回 false）。
+ * 身份已就位；只有完整快照允许 settle、替换 live 与窄换代，且换代排在 install/live 之后——新行
+ * 的 transport 必须先到位，重挂的新壳才会按权威行冷 boot。degraded 计划不落地（返回 false）。
  */
 export function commitRosterPlan(plan: RosterCommitPlan, sinks: RosterCommitSinks): boolean {
   if (plan.mode === 'degraded') return false
@@ -55,9 +63,30 @@ export function commitRosterPlan(plan: RosterCommitPlan, sinks: RosterCommitSink
   }
   sinks.installInstances(plan.instances)
   if (plan.settle) sinks.settleRoster()
-  if (plan.mode === 'complete') sinks.setLive(plan.live)
+  if (plan.mode === 'complete') {
+    sinks.setLive(plan.live)
+    // 先 install 后 remount 是硬顺序：重挂 sink 只对 live 来源生效，且新壳读已安装行的
+    // transport。规划器保证 partial/degraded 的 remount 恒空、退役优先，这里再加一次模式门。
+    for (const { sourceId } of plan.remount) sinks.remountShell(sourceId)
+  }
   for (const { instance, sourceId } of plan.refreshStatus) sinks.refreshStatus(instance, sourceId)
   return true
+}
+
+/**
+ * 提交期读数：快照里的每个来源 → 该壳（或在飞 boot）的启动传输字。壳只可能挂在权威行上
+ * （挂载门控在 live），所以按快照行遍历即可；无绑定的行不进表（未挂载来源将来按当前行冷 boot，
+ * 天然正确）。这也是 bootTransportOf 的生产消费点：换代判定是"当前绑定 vs 权威行"的函数，
+ * 推送只触发重拉、不承载换代真值。
+ */
+function readBootTransports(instances: readonly SshInstanceSpec[]): ReadonlyMap<string, string> {
+  const bootTransports = new Map<string, string>()
+  for (const instance of instances) {
+    const sourceId = sourceIdForInstance(instance)
+    const transport = bootTransportOf(sourceId)
+    if (transport !== null) bootTransports.set(sourceId, transport)
+  }
+  return bootTransports
 }
 
 export interface RosterCommitInputs {
@@ -74,6 +103,8 @@ export interface RosterCommitInputs {
   refreshRemoteStatus: (id: string, expectedSourceId?: string) => Promise<void>
   /** 同步退役实体（App 的 retireSources：owner/壳/账本/outbox/facts 观察者同拍收敛）。 */
   retireSources: (sourceIds: ReadonlySet<string>) => void
+  /** 窄重挂执行端（App 的 remountSourceShell：只换壳，绝不触 durable 账本/owner/facts）。 */
+  remountShell: (sourceId: string) => void
   setRegistryDegraded: (value: boolean) => void
   registryDegradedWarnedRef: { current: string | null }
   setRosterIncomplete: (value: boolean) => void
@@ -85,7 +116,7 @@ export interface RosterCommitInputs {
 export function useRosterCommit(inputs: RosterCommitInputs): () => Promise<boolean> {
   const {
     remotesStore, rosterGate, remoteRosterRefreshSeqRef, liveServerIdsRef,
-    sourceLifecyclesRef, sourceLedgerStoreRef, refreshRemoteStatus, retireSources,
+    sourceLifecyclesRef, sourceLedgerStoreRef, refreshRemoteStatus, retireSources, remountShell,
     setRegistryDegraded, registryDegradedWarnedRef, setRosterIncomplete,
     rosterIncompleteWarnedRef, healthUnavailableWarnedRef,
   } = inputs
@@ -163,6 +194,7 @@ export function useRosterCommit(inputs: RosterCommitInputs): () => Promise<boole
         priorInstances: remotesStore.getSnapshot().instances,
         live: liveServerIdsRef.current,
         fingerprints: lifecycle.fingerprints(),
+        bootTransports: readBootTransports(instances),
       })
       return commitRosterPlan(plan, {
         retireSources,
@@ -173,13 +205,14 @@ export function useRosterCommit(inputs: RosterCommitInputs): () => Promise<boole
         installInstances: rows => { remotesStore.setInstances(rows) },
         settleRoster: () => { rosterGate.settle() },
         setLive: sourceIds => { liveServerIdsRef.current = sourceIds },
+        remountShell,
         refreshStatus: (instance, sourceId) => { void refreshRemoteStatus(instance.id, sourceId) },
       })
     } catch {
       // 桌面 SSH 面不可达时保持现状；首次权威结果前 settled 仍为 false，deep-link intent 继续 held，由快速重试/30s 轮询再拉。
       return false
     }
-  }, [refreshRemoteStatus, retireSources, warnHealthProbeUnavailable])
+  }, [refreshRemoteStatus, retireSources, remountShell, warnHealthProbeUnavailable])
 
   return refreshRemotes
 }

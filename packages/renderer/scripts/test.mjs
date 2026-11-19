@@ -75,6 +75,8 @@ export const GROUPS = {
     'test/lifecycle/page-channel.test.ts',
     // 页面 link 投影解读（ready/epoch 的唯一 owner，design 27 §3.1/§6.22）。
     'test/lifecycle/link-projection.test.ts',
+    // E2 link-down 消费面（C9 ②③）：boot 门/预热门/遮罩文案/连接卡提示的接线锁 + 中英文案。
+    'test/lifecycle/link-down-consumption.test.ts',
     // 页面根接管安全网：外部 shell.overlay 置 0 #root 的检测 / 上报 / 释放。
     'test/lifecycle/root-takeover-watch.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',
@@ -97,6 +99,9 @@ export const GROUPS = {
     // dsh-client-web fixture loader (see scripts/dev/test-loaders/test-shell-loader.mjs); the --import
     // specifier resolves from the package root (spawn cwd).
     { file: 'test/lifecycle/shell.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
+    // D2 壳启动绑定（roster 换代的唯一内存事实）：boot 入口写入、两个 dispose 原语删除、
+    // 重挂换代后旧代 settle 仍被 boot 代际栅栏丢弃。
+    { file: 'test/lifecycle/shell-boot-binding.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
     // Public client-plugin context contract v1 (design 09 §4): value shape + rejection cases.
     { file: 'test/lifecycle/chamber-base-path-contract.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
     { file: 'test/lifecycle/shell-tail-wait-teardown.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-shell-register.mjs'] },
@@ -141,6 +146,8 @@ export const GROUPS = {
     // PR2 Git 布局通道（design 08 §3.2-§3.3）：派生 checkout 行/放置/每来源布局签名失效 +
     // 订阅/发布闸接线锁。
     'test/aggregate/servers-checkout-projection.test.ts',
+    // E2 链路可用性投影（design 27 §3.1/§3.3，C9）：linkUp/linkState 派生矩阵、缓存键与发布闸。
+    'test/aggregate/servers-link-projection.test.ts',
   ],
   // session-state: gateway session-state 事实源 + 通知三表落盘（旧 v4/v2 一次性迁移）+ 完成观测装配
   'session-state': [

@@ -57,6 +57,14 @@ export const GROUPS = {
   // transport: instance transport specs, connection save/credential binding and the ssh transport provider
   transport: [
     'test/transport/transport-manager.test.ts',
+    // B（v2 §P2-B）：连接意图——行内 dshChamber 元数据兼容/纯函数矩阵/registry 写与补偿恢复/
+    // manager canAttempt 门（connect + 定时器 startTransport）。
+    'test/transport/connection-intent.test.ts',
+    // B（v2 §P2-B / O2）：宿主统一尝试调度器——planHostAttempts 纯矩阵 + startup/added/wake
+    // 执行、错峰票据四查、旧唤醒入口兼容（不另立 remote-roster-reconcile 模块）。
+    'test/transport/host-attempts.test.ts',
+    // D1：名册变更集纯函数（逻辑来源身份/传输重建/exec 撤销/种子/forward 维度矩阵）。
+    'test/transport/roster-change.test.ts',
     'test/transport/transport-connection-recovery.test.ts',
     'test/transport/transport-health.test.ts',
     'test/transport/transport-registration.test.ts',
@@ -123,9 +131,13 @@ export const GROUPS = {
     'test/gateway/gateway-credential-matrix.test.ts',
     'test/gateway/gateway-provider.test.ts',
     'test/gateway/gateway-session-spki.test.ts',
-    'test/gateway/gateway-sync-registry.test.ts',
     'test/gateway/gateway-session.test.ts',
     'test/gateway/gateway-session-lifecycle.test.ts',
+    // C（v2 §P3-C）：ActiveRegistration 唯一提交入口——两阶段 accept→publish/health-only 零重注册/
+    // 认证 fail-closed+墓碑/五元组锁步/同步代际读面；装配级：真实订阅对+registry+fake plane/sm
+    // （W5 不吞 status push、续签→commit→手动 sync 同一新 Cookie、refresh 拒绝不产生 fatal）。
+    'test/gateway/active-registration.test.ts',
+    'test/gateway/active-registration-wiring.test.ts',
     // POSIX UDS 隧道上的 plugin sync：重启腿必须与探针/上传同一拨号面（B0 回归锁）。
     'test/gateway/gateway-plugin-sync-uds.test.ts',
   ],

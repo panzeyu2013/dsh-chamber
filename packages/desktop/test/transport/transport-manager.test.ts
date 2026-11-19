@@ -63,6 +63,27 @@ test('registry lifecycle retires deletion and transport identity edits, but not 
   assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], remotePort: 4080 }]), ['same'])
   assert.deepEqual(computeRetiredInstanceIds(before, []), ['same'])
 })
+test('renderer retirement follows the LOGICAL source: gateway SSH account edits keep the source, dsh endpoint edits retire it', () => {
+  const gateway: TransportInstanceSpec = {
+    id: 'gw', label: 'gateway', kind: 'gateway', transport: 'ssh', insecureHttp: false,
+    host: 'gw.example.com', user: 'alice', sshPort: 22, remotePort: 443,
+    serviceName: 'dsh', remoteDshHome: '~/.dsh',
+  }
+  assert.deepEqual(computeRetiredInstanceIds([gateway], [{ ...gateway, user: 'bob' }]), [],
+    'a gateway SSH account edit is mechanism, not source identity')
+  assert.deepEqual(computeRetiredInstanceIds([gateway], [{ ...gateway, sshPort: 2222 }]), [])
+  const httpForm: TransportInstanceSpec = {
+    ...gateway, transport: 'http', user: null, sshPort: null, serviceName: null, remoteDshHome: null,
+  }
+  assert.deepEqual(computeRetiredInstanceIds([gateway], [httpForm]), [],
+    'a mechanism switch keeps the same logical gateway source')
+  assert.deepEqual(computeRetiredInstanceIds([gateway], [{ ...gateway, host: 'other.example.com' }]), ['gw'])
+  assert.deepEqual(computeRetiredInstanceIds([gateway], [{ ...gateway, remotePort: 8443 }]), ['gw'])
+  assert.deepEqual(computeRetiredInstanceIds([gateway], [{ ...gateway, kind: 'dsh' }]), ['gw'], 'a kind switch retargets the source id')
+  const dsh: TransportInstanceSpec = { ...gateway, id: 'dev', kind: 'dsh', remotePort: 3080 }
+  assert.deepEqual(computeRetiredInstanceIds([dsh], [{ ...dsh, user: 'bob' }]), ['dev'],
+    'for a dsh source the SSH account IS the target identity')
+})
 test('a renderer send throw after registry commit is a loud delivery miss, never a save failure', () => {
   const hostile = new Proxy({}, {
     get() { throw new Error('formatter trap') },
@@ -476,6 +497,59 @@ test('editing sshPort of a live instance restarts the tunnel with the new -p', a
   assert.equal(manager.status('s6')!.sshPort, 2202)
 })
 
+test('a committed save revokes the old forward leg only for forward-affecting edits', t => {
+  const { manager } = makeManager(t, {
+    includeDefault: false,
+    instances: [{ id: 'gw', label: 'gateway', kind: 'gateway', host: 'gw.example.com', user: 'alice', sshPort: 22, remotePort: 443 }],
+  })
+  const retired: string[] = []
+  manager.setSourceRetiredListener?.(sourceId => retired.push(sourceId))
+  const current = () => manager.listInstances().find(entry => entry.id === 'gw')!
+  manager.saveInstances([{ ...current(), label: 'renamed' }])
+  assert.deepEqual(retired, [], 'a pure rename never touches the forward lease')
+  manager.saveInstances([{ ...current(), serviceName: 'dsh-alt', remoteDshHome: '~/alt' }])
+  assert.deepEqual(retired, [], 'service/home edits rebuild the transport but keep the forward lease (v2 review C8)')
+  manager.saveInstances([{ ...current(), host: 'other.example.com' }])
+  assert.deepEqual(retired, ['gateway-gw'], 'a retarget revokes the old ssh forward leg exactly once')
+  manager.saveInstances([{ ...current(), user: 'bob' }])
+  assert.deepEqual(retired, ['gateway-gw', 'gateway-gw'], 'an SSH account edit invalidates the old ssh leg')
+  manager.saveInstances([])
+  assert.deepEqual(retired, ['gateway-gw', 'gateway-gw', 'gateway-gw'], 'removal revokes the old forward leg')
+})
+test('a mechanism switch revokes the old ssh forward leg; entering ssh has none to revoke', t => {
+  const dir = tempDir(t)
+  const manager = createTransportManager({
+    provider: sshProvider,
+    providers: { http: gatewayProvider },
+    instancesFile: join(dir, 'ssh-instances.json'),
+    logger: silentLogger,
+  })
+  t.after(() => manager.dispose())
+  const sshRow = {
+    id: 'gw', label: 'gateway', kind: 'gateway' as const, transport: 'ssh' as const,
+    host: 'gw.example.com', user: 'alice', sshPort: 22, remotePort: 443,
+  }
+  manager.saveInstances([sshRow])
+  const retired: string[] = []
+  manager.setSourceRetiredListener?.(sourceId => retired.push(sourceId))
+  manager.saveInstances([{ id: 'gw', label: 'gateway', kind: 'gateway', transport: 'http', host: 'gw.example.com', remotePort: 443, insecureHttp: true }])
+  assert.deepEqual(retired, ['gateway-gw'], 'leaving ssh revokes the forward leg')
+  retired.length = 0
+  manager.saveInstances([sshRow])
+  assert.deepEqual(retired, [], 'entering ssh has no old forward leg to revoke')
+})
+test('an idle retarget rewrites the spec and revokes the forward leg without spawning', t => {
+  const { manager, spawnCalls } = makeManager(t, {
+    includeDefault: false,
+    instances: [{ id: 'gw', label: 'gateway', kind: 'gateway', host: 'first.example.com', user: 'alice', remotePort: 443 }],
+  })
+  const retired: string[] = []
+  manager.setSourceRetiredListener?.(sourceId => retired.push(sourceId))
+  manager.saveInstances([{ ...manager.listInstances().find(entry => entry.id === 'gw')!, host: 'second.example.com' }])
+  assert.equal(spawnCalls.length, 0, 'an idle instance has no transport to restart')
+  assert.deepEqual(retired, ['gateway-gw'])
+  assert.equal(manager.listInstances().find(entry => entry.id === 'gw')!.host, 'second.example.com')
+})
 // ---------------------------------------------------------------------------
 // Provider exec channel + legacy registry migration.
 // The gateway credential/token assertions are covered by

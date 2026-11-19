@@ -8,14 +8,14 @@
  * 清单里缺失的行、以及同 id 但指纹改变的行（后者是候选，等完整快照再提交并恰好退役一次）。
  *
  * 规划只读入参、不碰 store；执行顺序由 app-hooks/use-roster-commit.ts 的 commitRosterPlan 落地
- * （retire → activate/reincarnate → install → settle → live → refreshStatus）。
+ * （retire → activate/reincarnate → install → settle → live → remount → refreshStatus）。
  */
 import {
   authoritativeSourceRetirements,
   parseAuthoritativeSourceFingerprint,
   type AuthoritativeSourceFingerprint,
 } from '../deep-link-activation.ts'
-import type { SshInstanceSpec } from '../global.d.ts'
+import type { SshInstanceSpec, TransportMethod } from '../global.d.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
 import { sourceIdForInstance } from '../transport-source.ts'
 
@@ -37,6 +37,19 @@ export interface RosterStatusRefresh {
   sourceId: string
 }
 
+/**
+ * 一次**窄换代**：来源仍在 live（未被退役），但壳的启动传输字与权威行不同。传输机制
+ * （ssh↔http）不是逻辑来源身份，重挂只换壳，durable 账本/owner/facts 原样保留。
+ */
+export interface RosterRemount {
+  /** kind 前缀的 chamber 来源 id（壳与 durable 键的身份分量）。 */
+  sourceId: string
+  /** 原始注册表 id（诊断/refresh 面用，与 RosterStatusRefresh 同义）。 */
+  instanceId: string
+  /** 目标传输字（来自权威行）。 */
+  transport: TransportMethod
+}
+
 interface RosterCommitPlanBase {
   /** 交给 remotesStore.setInstances 的显示行（partial 下已确认行复用 prior 的同一行对象）。 */
   instances: SshInstanceSpec[]
@@ -44,6 +57,8 @@ interface RosterCommitPlanBase {
   activate: RosterActivation[]
   /** 需要同步退役的来源 id（退役删 owner，因此同一来源不会出现两次）。 */
   retire: Set<string>
+  /** 需要换容器重挂的来源（仅 complete 产出；partial/degraded 恒空，退役优先于换代）。 */
+  remount: RosterRemount[]
   /** 是否允许 settle rosterGate。 */
   settle: boolean
   /** 需要 refreshRemoteStatus 的行。 */
@@ -75,6 +90,8 @@ export interface RosterCommitInput {
   live: ReadonlySet<string>
   /** owner registry 已确认的 fingerprint 表（partial 的身份保留依据）。 */
   fingerprints: ReadonlyMap<string, string>
+  /** sourceId → 该壳（或在飞 boot）实际使用的传输字（shell.ts bootTransports 的提交期读数）。 */
+  bootTransports: ReadonlyMap<string, string>
 }
 
 interface AcceptedInstance {
@@ -146,32 +163,59 @@ function planPartialCommit(
     instances: sameRows(display, priorInstances) ? priorInstances : display,
     activate,
     retire: new Set<string>(),
+    // 部分名册不是换代权威（I2）：权威行可能还没到，拿候选/prior 行比较会误换代。
+    remount: [],
     settle: false,
     refreshStatus,
   }
 }
 
 /**
+ * 窄换代（complete only）：对每个权威行比较壳记录的启动传输字与行传输字。只有"壳真的用过
+ * 一个字且与权威行不同"才产出一次重挂——未挂载来源没有启动绑定（将来挂载按当前行冷 boot，
+ * 天然正确），同字提交也不产。**退役优先**（I1）：同一次提交里既退役又换字（同 id 新指纹）
+ * 的行只退役，退役路径自己会拆壳；accepted 行都不是 local（instances_get 只返回远端行）。
+ */
+function planRemounts(
+  accepted: readonly AcceptedInstance[],
+  retire: ReadonlySet<string>,
+  bootTransports: ReadonlyMap<string, string>,
+): RosterRemount[] {
+  const remount: RosterRemount[] = []
+  for (const { instance, sourceId } of accepted) {
+    if (retire.has(sourceId)) continue
+    const booted = bootTransports.get(sourceId)
+    if (booted === undefined || booted === instance.transport) continue
+    remount.push({ sourceId, instanceId: instance.id, transport: instance.transport })
+  }
+  return remount
+}
+
+/**
  * 完整提交（健康且完整 = 权威快照）：按 owner 旧指纹与缺失 id 计算一次退役，全部合法行
  * activate + reincarnate（同指纹幂等；候选的新指纹在退役后 mint 新化身），安装权威行以替换
- * partial 期间被推迟的候选行，结算并替换 live。已确认集合 = 上次权威 live ∪ owner registry：
- * partial 里刚激活的新来源若不再出现，同样在这里一次性退役。
+ * partial 期间被推迟的候选行，结算并替换 live，并对仍存活但传输机制变了的壳产出窄换代。
+ * 已确认集合 = 上次权威 live ∪ owner registry：partial 里刚激活的新来源若不再出现，同样在
+ * 这里一次性退役。
  */
 function planCompleteCommit(
   accepted: readonly AcceptedInstance[],
   live: ReadonlySet<string>,
   fingerprints: ReadonlyMap<string, string>,
+  bootTransports: ReadonlyMap<string, string>,
 ): RosterCommitPlan {
   const nextSources: AuthoritativeSourceFingerprint[] = [
     { sourceId: LOCAL_INSTANCE_ID, fingerprint: 'local' },
     ...accepted.map(({ sourceId, fingerprint }) => ({ sourceId, fingerprint })),
   ]
   const confirmed = new Set<string>([...live, ...fingerprints.keys()])
+  const retire = authoritativeSourceRetirements(confirmed, fingerprints, nextSources)
   return {
     mode: 'complete',
     instances: accepted.map(({ instance }) => instance),
     activate: accepted.map(({ sourceId, fingerprint }) => ({ sourceId, fingerprint })),
-    retire: authoritativeSourceRetirements(confirmed, fingerprints, nextSources),
+    retire,
+    remount: planRemounts(accepted, retire, bootTransports),
     live: new Set(nextSources.map(source => source.sourceId)),
     settle: true,
     refreshStatus: accepted.map(({ instance, sourceId }) => ({ instance, sourceId })),
@@ -180,13 +224,14 @@ function planCompleteCommit(
 
 /** 规划一次 roster 提交。health 的 degraded 位优先于 rosterIncomplete（后者只可能伴随健康答案）。 */
 export function planRosterCommit(input: RosterCommitInput): RosterCommitPlan {
-  const { health, instances, priorInstances, live, fingerprints } = input
+  const { health, instances, priorInstances, live, fingerprints, bootTransports } = input
   if (health.degraded) {
     return {
       mode: 'degraded',
       instances: priorInstances,
       activate: [],
       retire: new Set<string>(),
+      remount: [],
       settle: false,
       refreshStatus: [],
     }
@@ -194,5 +239,5 @@ export function planRosterCommit(input: RosterCommitInput): RosterCommitPlan {
   const accepted = acceptRosterInstances(instances)
   return health.rosterIncomplete
     ? planPartialCommit(accepted, priorInstances, fingerprints)
-    : planCompleteCommit(accepted, live, fingerprints)
+    : planCompleteCommit(accepted, live, fingerprints, bootTransports)
 }

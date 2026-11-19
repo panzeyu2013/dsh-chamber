@@ -53,6 +53,9 @@ export interface ChamberServerAggregate {
   connected: boolean
   /** Status text (ready/connecting/… projection). */
   phase: string
+  /** Transport link facts (design 27 §3.1/§3.3 page consumption; transport-only — the managed-dsh fold stays in `phase`/`managedRuntimeDown`): `linkUp` = new work may be issued on this transport now (ready && link not down; local = serving health, the page-channel selector's same reading); `linkState` = the ready-period sub-state (null = local / no projection / not ready). Absent = old producer (fail open). */
+  linkUp?: boolean
+  linkState?: 'healthy' | 'suspect' | 'down' | null
   /**
    * Gateway only: the managed dsh was probed into a terminal-down state while the
    * TRANSPORT was up (`stopped`/`error`/`restart-exhausted`). A dedicated fact, never
@@ -63,12 +66,9 @@ export interface ChamberServerAggregate {
    */
   managedRuntimeDown?: boolean
   /**
-   * 能力一览：本来源的**会话事实档位**，由桌面侧事实源
-   * 探测/观测得出，只读展示，绝不参与判定（判定只用事实本身）。
-   * - `full`：镜像可用且版本兼容，完成/未读是观测事实；
-   * - `degraded`：镜像可用但受限（尾巴不可读 / 事件静默 / 轮询模式 / 特性缺失）；
-   * - `legacy`：该网关未升级（路由 404，无镜像）；
-   * - `disabled`：该网关的观察面被关闭（503 或 `mode:'off'`）。
+   * 能力一览：本来源的**会话事实档位**，由桌面侧事实源探测/观测得出，只读展示，绝不参与判定（判定只用事实本身）。
+   * - `full`：镜像可用且版本兼容，完成/未读是观测事实；`legacy`：该网关未升级（路由 404，无镜像）。
+   * - `degraded`：镜像可用但受限（尾巴不可读 / 事件静默 / 轮询模式 / 特性缺失）；`disabled`：观察面被关闭（503 或 `mode:'off'`）。
    * 缺席 = 未知（未探测 / 该部署形态无此面）——绝不臆造为 full。
    */
   sessionFacts?: SourceSessionFactsMode

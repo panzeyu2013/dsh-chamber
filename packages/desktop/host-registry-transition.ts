@@ -9,11 +9,9 @@ import {
   projectInstanceSecrets, projectNotificationSourceInstances, syncNotificationSourceRegistry,
   type ProjectedRegistryInstance,
 } from './shell-core.ts'
-import {
-  attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds,
-  type TransportManager,
-} from './transport-manager.ts'
-import { setGatewaySyncRegistration } from './gateway-sync-registry.ts'
+import { attemptCommittedRegistryPush, type TransportManager } from './transport-manager.ts'
+import type { ActiveRegistrationRegistry } from './active-registration.ts'
+import { computeRosterChangeSet } from './roster-change.ts'
 import { persistNotificationSourceProofs } from './notification-source-proof-store.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
 export interface RegistryTransitionDeps {
@@ -24,14 +22,15 @@ export interface RegistryTransitionDeps {
     retireNotificationsForSources(sources: ReadonlySet<string>): void
   }
   logTag: string
-  operationalFingerprint: (instance: TransportInstanceSpec) => string
   readySeedEdges: { forget(id: string): void }
   hostPackageSeeding: { revoke(id: string): void }
   startAutomaticHostSeed: (id: string) => void
+  /** THE commit entry: removed rows revoke their live registration (idempotent). */
+  registrations: Pick<ActiveRegistrationRegistry, 'commit'>
 }
 
 export function createRegistryTransition(deps: RegistryTransitionDeps) {
-  const { sm, edges, logTag, operationalFingerprint, readySeedEdges, hostPackageSeeding, startAutomaticHostSeed } = deps
+  const { sm, edges, logTag, readySeedEdges, hostPackageSeeding, startAutomaticHostSeed, registrations } = deps
   /**
    * Finish every committed registry transition through the source-lifecycle authority：旋转
    * renderer/native-notification 证明、撤销精确 plugin-seed owner、发布 committed roster。
@@ -48,23 +47,25 @@ export function createRegistryTransition(deps: RegistryTransitionDeps) {
     }
     const projectedSaved = projected.map(projectInstanceSecrets)
 
-    const removedIds = computeRemovedInstanceIds(before, after)
-    // Manual gateway-sync re-entry dies with the instance：removed 行绝不保留后续还能同步的注册。
+    // The committed diff is computed HERE (no third argument): this function already holds
+    // the authoritative before/after snapshots, and the same pure change set drives the
+    // registry's save consequences — one field-classification source, no second table.
+    const changeSet = computeRosterChangeSet(before, after)
+    const removedIds = [...changeSet.removedIds]
+    // Manual gateway-sync re-entry dies with the instance：removed 行的活动注册随行撤销
+    // （幂等；墓碑拒绝随后到达的同/更旧代际 register）。
     for (const id of removedIds) {
-      setGatewaySyncRegistration(id, null)
+      registrations.commit({ kind: 'revoke', id, reason: 'removed' })
     }
-    const retiredIds = computeRetiredInstanceIds(before, after)
-    const afterById = new Map(after.map(instance => [instance.id, instance]))
-    const reseedIds: string[] = []
-    for (const previous of before) {
-      const current = afterById.get(previous.id)
-      if (current === undefined || operationalFingerprint(previous) !== operationalFingerprint(current)) {
-        readySeedEdges.forget(previous.id)
-        hostPackageSeeding.revoke(previous.id)
-        // service/home 编辑后仍是 dsh+ssh 目标的同 id 替换 → 若已完成即显式 reseed（普通重连由 ready 边缘拾取）。
-        if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id)
-      }
+    const retiredIds = [...changeSet.retiredIds]
+    // Seed owner revocation/reseed use the change set's operationalFingerprint dimensions
+    // (service/home edit of a dsh×ssh target reseeds under the same owner; removal revokes),
+    // so the old inline fingerprint loop here is gone rather than duplicated.
+    for (const id of changeSet.seedRevokeIds) {
+      readySeedEdges.forget(id)
+      hostPackageSeeding.revoke(id)
     }
+    const reseedIds = changeSet.seedReseedIds
 
     const retiredNotificationSources = new Set(syncNotificationSourceRegistry(projected))
     persistNotificationSourceProofs()

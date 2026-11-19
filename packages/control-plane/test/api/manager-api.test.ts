@@ -213,7 +213,7 @@ test('candidate quarantine hides ready/port until the activation verdict opens e
   }
 })
 
-test('candidate quarantine also hides internal error state, port, and detail before verdict', async () => {
+test('candidate quarantine hides port and internal detail before verdict; a terminal restart failure surfaces a sanitized /health error', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-quarantine-error-'))
   let spawns = 0
   const child = Object.assign(new EventEmitter(), {
@@ -259,17 +259,24 @@ test('candidate quarantine also hides internal error state, port, and detail bef
 
     const base = `http://127.0.0.1:${plane.port}`
     const connections = await fetchJson(base, '/api/connections')
-    assert.equal(connections.body.connection.status, 'starting')
+    // v2 (A slice): a terminal restart failure must never be projected as 'starting' — the
+    // quarantine keeps hiding the port and the internal detail, not the fact of the error.
+    assert.equal(connections.body.connection.status, 'error')
     assert.equal(connections.body.connection.dshPort, undefined)
-    assert.equal(connections.body.connection.error, undefined)
+    assert.match(connections.body.connection.error, /restart the app to re-prove writer quiescence/)
     assert.ok(!JSON.stringify(connections.body).includes('runtime-secret'))
     assert.ok(!JSON.stringify(connections.body).includes('17510'))
 
     const health = await fetchJson(base, '/health')
-    assert.deepEqual(health.body.dsh, { status: 'starting', port: 0 })
+    assert.equal(health.body.dsh.status, 'error')
+    assert.equal(health.body.dsh.port, 0)
+    assert.match(health.body.dsh.error, /restart the app to re-prove writer quiescence/)
     assert.ok(!JSON.stringify(health.body).includes('runtime-secret'))
+    assert.ok(!JSON.stringify(health.body).includes('17510'))
   } finally {
-    await plane.stop()
+    // A writer-quiescence-unknown keeps stop() failing by contract (v2 fail-closed); this
+    // cleanup leg is expected to swallow that failure, the assertions above already ran.
+    await plane.stop().catch(() => {})
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
@@ -547,7 +554,9 @@ test('unknown residual writer permanently closes the plane start latch until res
     assert.equal(rejected.body.code, 'connection_busy')
     assert.equal(spawnCalls, 1)
   } finally {
-    await plane.stop()
+    // The spawn-layer writer-unknown closed the latch; stop() may fail by contract and this
+    // cleanup leg swallows it (the latch/diagnosis assertions above already ran).
+    await plane.stop().catch(() => {})
     rmSync(stateDir, { recursive: true, force: true })
   }
 })

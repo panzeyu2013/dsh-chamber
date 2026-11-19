@@ -494,9 +494,9 @@ export default function App() {
   useServingGatePhases({ servers, remoteStatus, serversPhaseRef })
 
   /**
-   * boot 推迟集合：**手动断开**（idle）的来源不启动 shell——一次注定吃满 503 预算的 boot 只会
-   * 白烧。遮罩此时呈现「未连接」+「连接」，点连接后相位离开 idle，正常 boot 开始；未知相位
-   * （投影未到）不推迟。本判定是渲染期事实（`servers`），不用 ref 镜像。
+   * boot 推迟集合：**手动断开**（idle）或 ready+链路 down 的来源不启动 shell——一次注定吃满
+   * 503 预算的 boot 只会白烧。遮罩分别呈现「未连接」+「连接」/「链路不可用」+「重试」；
+   * 未知相位（投影未到）不推迟。本判定是渲染期事实（`servers`），不用 ref 镜像。
    */
   const deferredBootIds = useMemo(() => {
     const ids = new Set<string>()
@@ -506,7 +506,7 @@ export default function App() {
       // 事实，拿它当输入会把一次投影延迟/状态拉取失败变成"拒绝 boot"，而纯契约要求 undefined 绝不推迟。
       const rawId = rawInstanceIdFromSourceId(server.id)
       if (rawId === null) continue
-      if (shouldDeferBootForSource(remoteStatus[rawId]?.phase)) ids.add(server.id)
+      if (shouldDeferBootForSource(remoteStatus[rawId]?.phase, server.linkState === 'down')) ids.add(server.id)
     }
     return ids
   }, [servers, remoteStatus])
@@ -805,7 +805,6 @@ export default function App() {
     const removedRawIds = new Set([...retired]
       .map(rawInstanceIdFromSourceId)
       .filter((rawId): rawId is string => rawId !== null))
-    for (const rawId of removedRawIds) knownRemoteIdsRef.current.delete(rawId)
     remotesStore.setStatus(prev => withoutRemovedSourceKeys(prev, removedRawIds))
   }, [
     acknowledgeDeepLink,
@@ -815,11 +814,30 @@ export default function App() {
     reportNotificationAckFailure,
   ])
 
+  /**
+   * 窄重挂一个来源的壳：传输**机制**（ssh↔http）变化时只换壳——来源身份未终结，绝不走
+   * retireSources（那会扇出 durable 通知账本/outbox/facts/owner 的删除）。退役/未知优先：
+   * 不在权威 live 集合里就不重挂（退役路径自己会拆壳）。disposeInstanceShell 取消在飞 boot
+   * 并把旧 ctx 的异步 teardown 排进同 id 屏障；retryToken +1 让 InstanceView 复位 startedRef
+   * 并换 div key，新壳按已安装权威行的 transport 冷 boot。浏览器 guest 随旧 ctx teardown
+   * 释放（NativeGuestImpl.dispose → releaseLease），不依赖任何退役边。
+   */
+  const remountSourceShell = useCallback((sourceId: string): void => {
+    if (sourceId === LOCAL_INSTANCE_ID) return
+    if (!liveServerIdsRef.current.has(sourceId)) return
+    disposeInstanceShell(sourceId)
+    // 与 reclaimView 同款收敛：新挂载必须能在同一 ready 世代里继续自愈（诊断同源清除）。
+    forgetDegradedRetry(sourceId)
+    chamberBridge.clearPluginDiagnostic(sourceId)
+    setRetryTokens(prev => ({ ...prev, [sourceId]: (prev[sourceId] ?? 0) + 1 }))
+  }, [forgetDegradedRetry])
+
   /** 远端 roster 刷新（health → instances_get 逻辑快照对 + 提交规划/执行）：实现在
-   * app-hooks/use-roster-commit.ts；这里只注入 App 拥有的状态容器与同步退役实体。 */
+   * app-hooks/use-roster-commit.ts；这里只注入 App 拥有的状态容器与同步退役/重挂实体。 */
   const refreshRemotes = useRosterCommit({
     remotesStore, rosterGate, remoteRosterRefreshSeqRef, liveServerIdsRef,
     sourceLifecyclesRef, sourceLedgerStoreRef, refreshRemoteStatus, retireSources,
+    remountShell: remountSourceShell,
     setRegistryDegraded, registryDegradedWarnedRef, setRosterIncomplete,
     rosterIncompleteWarnedRef, healthUnavailableWarnedRef,
   })
@@ -1089,12 +1107,10 @@ export default function App() {
     localReadyRef, localLinkEpochRef, localNotifiedEpochRef,
   })
 
-  // 首触连接引导持两个 ref：本地幂等启动（可服务 = ready|degraded，失败不置位、下个轮询重试）
-  // 与远程首次 connect 的语义见 app-hooks/use-connection-bootstrap.ts。
+  // 首触连接引导只保本地幂等启动（可服务 = ready|degraded，失败不置位、下个轮询重试）；
+  // 远程连接权威在宿主的启动/新增对账（页面只发显式意图）。语义见 app-hooks/use-connection-bootstrap.ts。
   const localBootedRef = useRef(false)
-  const knownRemoteIdsRef = useRef<Set<string>>(new Set())
-  // 首触连接引导（本地幂等启动 + 远程新实例自动 connect）：实现在 app-hooks/use-connection-bootstrap.ts。
-  useConnectionBootstrap({ connections, remoteInstances, localBootedRef, knownRemoteIdsRef })
+  useConnectionBootstrap({ connections, localBootedRef })
 
   /**
    * 用户意图即时重连：点击/打开一个远程来源 = 「现在就想要这个 server」。侧边栏点击来源头只做视图切换，

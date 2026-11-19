@@ -7,10 +7,10 @@
  * NO skeleton blocks (the real sidebar width is persisted and user-draggable, so
  * a fixed mock geometry would mismatch); settle applies a second View Transition.
  * Background views use `.instance-pending` (visibility-only, layout alive for
- * vendor measurement). The veil's three honest exits: not connected → actionable
- * connect face; past the feedback window → actionable, NOT a failure claim
- * (failure belongs to the App overlay); retry in flight → announce the same-id
- * tail wait cap.
+ * vendor measurement). The veil's honest exits: not connected → actionable connect face;
+ * ready-but-link-down (C9) → link-unavailable face with retry (shell and snapshots are kept);
+ * past the feedback window → actionable, NOT a failure claim (failure belongs to the App
+ * overlay); retry in flight → announce the same-id tail wait cap.
  */
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { clearHostPathScope, publishHostPathScope } from '../host-path-scope.ts'
@@ -26,7 +26,7 @@ import {
 import { runViewTransition } from '../view-transition.ts'
 import { createFrameCoalescer } from '../frame-coalescer.ts'
 import {
-  isTerminalUnreadyPhase, shouldAnnounceRetryQueue,
+  deferredBootReason, isTerminalUnreadyPhase, shouldAnnounceRetryQueue,
 } from '../source-readiness.ts'
 import { decidePresentation, planVeilTimer, PRESENTATION_THRESHOLDS } from '@dsh-chamber/dsh-stream-state'
 import {
@@ -126,7 +126,7 @@ interface InstanceViewProps {
   openIntentId?: string
   /** 来源当前相位；只做文案与动作的事实输入——本组件绝不从相位推断"是否失败"。 */
   sourcePhase?: string
-  /** boot 被推迟（来源未连接）：不启动 shell；相位离开 idle 后自动正常 boot。 */
+  /** boot 被推迟（手动断开 idle，或 ready+链路 down）：不启动 shell；相位离开 idle 或链路恢复后自动正常 boot。 */
   bootDeferred?: boolean
   /** App 的全局失败覆盖层正在渲染：遮罩（及其按钮/文案）必须**离开 DOM**，否则仍可被
    *  Tab 聚焦、被读屏播报。 */
@@ -573,6 +573,8 @@ export default function InstanceView({
     ? 'failed'
     : sessionOpenPhase
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
+  // 推迟的两种来路（source-readiness.ts 纯判定）：手动断开 → 「连接」；ready+链路 down → 「重试」。
+  const deferredReason = deferredBootReason(bootDeferred === true, sourcePhase)
   // 遮罩在已 settle 的壳上仍可见，就是揭示门在持有它；隐藏判定耦合的是**合成后**的
   // veilHeld：帧 actionable/released 时同一 commit 里壳也恢复可见，绝不"遮罩没了壳还藏着"。
   const shellHeld = settled && veilHeld
@@ -628,12 +630,12 @@ export default function InstanceView({
             <div className="instance-loading-spinner" aria-hidden="true" />
             <div className="instance-loading-title">
               {presentation.mode === 'deferred'
-                ? frameText(locale, 'boot.deferred', { label })
+                ? frameText(locale, deferredReason === 'link-down' ? 'boot.linkDown' : 'boot.deferred', { label })
                 : frameText(locale, 'boot.loading', { label })}
             </div>
             <div className="instance-loading-hint">
               {presentation.mode === 'deferred'
-                ? frameText(locale, 'boot.deferredHint')
+                ? frameText(locale, deferredReason === 'link-down' ? 'boot.linkDownHint' : 'boot.deferredHint')
                 : frameText(locale, 'boot.loadingHint')}
             </div>
             {/* 超过反馈窗后遮罩变为可操作——**不是**失败声明（失败由 App 覆盖层专有）。 */}
@@ -651,9 +653,17 @@ export default function InstanceView({
             {veilActions && (
               <div className="instance-loading-actions" role="status">
                 {presentation.mode === 'deferred' ? (
-                  <Button variant="primary" onClick={() => onConnectSource?.()}>
-                    {frameText(locale, 'action.connect')}
-                  </Button>
+                  deferredReason === 'link-down' ? (
+                    // 链路 down 时「连接」是错的（传输相位仍 ready，不存在可连接的断开态）：
+                    // 与失败遮罩同一动作（App 的 retryView：即时再验证 + 复位重 boot）。
+                    <Button variant="primary" onClick={() => onRequestRetry?.()}>
+                      {frameText(locale, 'action.retry')}
+                    </Button>
+                  ) : (
+                    <Button variant="primary" onClick={() => onConnectSource?.()}>
+                      {frameText(locale, 'action.connect')}
+                    </Button>
+                  )
                 ) : (
                   <Button variant="primary" onClick={() => onRequestRetry?.()}>
                     {frameText(locale, 'action.retry')}

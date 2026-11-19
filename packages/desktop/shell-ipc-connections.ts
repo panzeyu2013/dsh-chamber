@@ -29,6 +29,13 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   // V5-A：装配侧注入的是完整 createTransportManager，但共享 ShellAssemblyCtx Pick
   // 只扩到 loadFailure——roster 两个只读诊断经结构面读取，不加宽 Pick。
   const rosterHealth = sm as unknown as Pick<TransportManager, 'registryIncomplete' | 'loadDroppedCount'>
+  // B（v2 §P2-B / O4）：显式连接/断开的「意图 + 传输」组合在本层，manager 只保留 canAttempt 内部门。
+  // 装配侧注入完整 createTransportManager；共享 ShellAssemblyCtx Pick 未加宽——结构面读取同 V5-A 先例。
+  const intentSurface = sm as unknown as Pick<TransportManager, 'connectionIntents' | 'setManualDisconnectIntent'>
+  const auditIntent = (id: string, event: 'connection_intent_set' | 'connection_intent_cleared' | 'connection_intent_persist_failed', detail: string): void => {
+    const spec = sm.listInstances().find(instance => instance.id === id)
+    audit({ ts: new Date().toISOString(), event, sourceId: id, ...(spec === undefined ? {} : { kind: spec.kind, transport: spec.transport }), detail })
+  }
   /** A degraded/incomplete registry must never delete in-memory source proofs (disk stays authoritative until rebuild). */
   const projectForIpc = (instances: TransportInstanceSpec[]) =>
     projectInstances(instances, { retainMissing: sm.loadFailure() !== null || rosterHealth.registryIncomplete() })
@@ -372,11 +379,27 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   deps.ipc.handle(IPC_CHANNELS.SSH_CONFIG_LIST, () => discoverSshConfigHosts());
   deps.ipc.handle(IPC_CHANNELS.SSH_CONNECT, (payload: unknown) => {
     const { id } = payload as { id: string };
+    // 显式连接 = 用户要求连接：先清本会话断开意图（写盘失败 loud 但绝不阻断连接——用户显式意图优先，I5）。
+    if (intentSurface.connectionIntents().session !== null) {
+      const cleared = intentSurface.setManualDisconnectIntent(id, false)
+      if (cleared.ok) {
+        auditIntent(id, 'connection_intent_cleared', 'explicit connect')
+      } else {
+        console.warn(`[dsh-chamber] desktop_ssh_connect: connection intent clear not persisted for ${id}: ${cleared.error}`)
+        auditIntent(id, 'connection_intent_persist_failed', `clear: ${cleared.error}`)
+      }
+    }
     return sm.connect(id);
   });
   deps.ipc.handle(IPC_CHANNELS.SSH_DISCONNECT, (payload: unknown) => {
     const { id } = payload as { id: string };
+    // 显式断开：先停传输（立即可见 idle），再落意图（I5）。落盘失败的三通道反馈：
+    // ring log + logSummary 在 manager.setManualDisconnectIntent，audit 在本层。
     sm.disconnect(id);
+    if (intentSurface.connectionIntents().session !== null) {
+      const written = intentSurface.setManualDisconnectIntent(id, true)
+      auditIntent(id, written.ok ? 'connection_intent_set' : 'connection_intent_persist_failed', written.ok ? 'manual disconnect' : written.error)
+    }
     return sm.status(id);
   });
   deps.ipc.handle(IPC_CHANNELS.SSH_STATUS, (payload: unknown) => {

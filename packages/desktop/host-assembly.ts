@@ -9,9 +9,11 @@
  * 不变式：零 electron import；plane 晚绑定；凭据值/cookie/会话体绝不进日志、registry 与
  * renderer 载荷（只传存在性投影与 non-secret 指纹）。
  */
-import { authHeadersFingerprint, registrationKey, sanitizedRegistrationHeaders } from './transport-registration.ts'
+import {
+  bindActiveRegistrationRegistry, createActiveRegistrationRegistry, createRegistrationLiveFacts,
+} from './active-registration.ts'
 import { authRecoveryStillApplies, createAuthRecoveryController } from './auth-recovery.ts'
-import { connectionIdForRawInstance, linkBusyAdapter, linkFailureAdapter } from './transport-identity.ts'
+import { linkBusyAdapter, linkFailureAdapter } from './transport-identity.ts'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
@@ -22,8 +24,9 @@ import { initializeNotificationSourceRegistry } from './notification-source-proo
 import {createTransportManager, type TransportManager} from './transport-manager.ts'
 import { createHostExit } from './host-exit.ts'
 import { createRegistryTransition } from './host-registry-transition.ts'
+import { operationalFingerprint } from './roster-change.ts'
 import { createTransportSubscriptions } from './host-transport-subscriptions.ts'
-import { reconnectStaleTransports } from './transport-reconnect.ts'
+import { cancelHostAttemptTimers, reconnectStaleTransports, runHostAttempts, type HostAttemptDeps, type HostAttemptOptions } from './transport-reconnect.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
 import { configureSshPasswordStore, probeChamberHostLive, sshProvider } from './ssh-provider.ts'
 import { cleanupStaleAskpassHelpers } from './ssh-askpass.ts'
@@ -100,6 +103,8 @@ export interface HostAssemblyDeps {
   pinnedRuntimeLockfilePath(): string | null
   /** 内建树缺失时启动尾部的静默窗（sidecar 1500ms；Electron 0 = 不延迟）。 */
   missingBuiltinStartupTailDelayMs?: number
+  /** 非秘密应用会话身份（Swift 壳注入；缺省 null = 意图功能关闭，Electron 冻结装配行为不变）。 */
+  appSessionId?: string | null
   /** runtimeInstance 回填（Electron 的 will-quit 模块级 ref 可读性）。 */
   onRuntimeInstance?(instance: DshRuntimeController): void
 }
@@ -137,6 +142,8 @@ export interface HostAssembly {
   }
   /** OS 唤醒 → 重探陈旧 transport（判据在 transport-reconnect 单源）。 */
   reconnectStaleTransports(): void
+  /** 宿主统一尝试调度器（startup/added/wake；ticket 四查 + 错峰；永不 reject）。 */
+  runHostAttempts(options: HostAttemptOptions): Promise<void>
   /** OS 唤醒/网络恢复 → 对 READY 远端强制一次复验（含 ready-but-half-open）。 */
   reverifyAllTransports(): void
 }
@@ -308,6 +315,9 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     hostKey: hostKeyGuard,
     sshOrphanStateDir: stateRoot,
     instancesFile: instancesFilePath(runtimeBaseDir),
+    // B：连接意图（行内 dshChamber 元数据）+ 内部尝试门 + 权威新增行对账钩子（added 波次）。
+    connectionIntent: { appSessionId: deps.appSessionId ?? null, onInstancesAdded: ids => { void runHostAttempts(hostAttemptDeps(), { kind: 'added', ids }) } },
+    canAttempt: id => transportManager === null || !transportManager.connectionIntents().suppressed.has(id),
     logger: {
       log: (...args) => console.log('[transport-manager]', ...args),
       warn: (...args) => console.warn('[transport-manager]', ...args),
@@ -341,38 +351,25 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
   initializeNotificationSourceRegistry(sm, runtimeBaseDir)
   // Transport-manager 执行投影面（plugin-sync 经结构等价收窄别名桥接）。
   const execTransport = sm.exec as unknown as ExecFn
-  // 插件管理面实例级恒等指纹（registry 变更生命周期与 F 组目标闭包共用）。
-  const transportIdentityFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
-    instance.kind,
-    instance.transport,
-    instance.host,
-    instance.user,
-    instance.sshPort,
-    instance.remotePort,
-  ])
-  const operationalFingerprint = (instance: TransportInstanceSpec): string => JSON.stringify([
-    transportIdentityFingerprint(instance),
-    instance.serviceName,
-    instance.remoteDshHome,
-  ])
   // Audit transition dedupe（PHASE TRANSITIONS only）。
   const lastAuditedPhase = new Map<string, string>()
   const auditRegistered = new Set<string>()
 
-  // —— live-proxy 会话自愈：仅存非秘密 sha256 指纹（headers VALUES 绝不进 map）；
-  // register/onVerified 两条路径共用同一事实（否则 refresh 重注册后指纹门失效）。
-  const registeredAuthFingerprints = new Map<string, string>()
-  /** The exact target/credential/transport key of the LIVE registration. A status
-   *  push that only changes link health must NOT call registerInstanceTransport:
-   *  the proxy revokes every in-flight response/stream when a connectionId is
-   *  re-registered. */
-  const registeredTargetKeys = new Map<string, string>()
+  // —— 活动代理注册唯一提交入口（C 切片）：ready/复验/续签/撤销共用 registry.commit，
+  // 记录（五元组 + 认证头）是代理与手动同步的唯一真相；旧的两个 Map 镜像退役。
+  const activeRegistration = createActiveRegistrationRegistry({
+    plane, live: createRegistrationLiveFacts(sm, proxyTransport),
+    tokenFor: getGatewayToken, passwordFor: getGatewayPassword, sessions: gatewaySessions,
+    warn: message => console.warn(`${logTag} ${message}`),
+  })
+  // 手动 sync IPC 的只读 seam 指向同一 registry（不是第二份状态）；退出腿解除。
+  bindActiveRegistrationRegistry(activeRegistration)
   /** Bound the auth-fail -> disconnect/connect TOCTOU retry: a second ready edge
    *  before the first reconnect settles must not hammer the gateway. */
   const AUTH_RECOVERY_MIN_INTERVAL_MS = 5_000
   // Live-proxy 会话自愈控制器（gateway-session-refresh.ts 零 electron——时钟/计时器注入
-  // 为纯 Node 缺省）；ready 注册 arm / 离开 ready disarm / onVerified 指纹重注册接线在下方，
-  // register 腿 = plane → registerInstanceTransport（隧道 Host authority 覆盖 + 指纹锁步）。
+  // 为纯 Node 缺省）；ready 注册 arm / 离开 ready disarm / onVerified 重注册接线在下方，
+  // register 腿 = 唯一提交入口 activeRegistration.commit（隧道 Host authority + 认证头锁步）。
   const sessionRefresh: GatewaySessionRefresh = createGatewaySessionRefresh({
     sessionManager: gatewaySessions,
     passwordFor: id => getGatewayPassword(id),
@@ -397,35 +394,21 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
         ? gatewaySessionScopeForConnection(instance)
         : undefined
     },
-    register: (id, url, headers, tls, authority) => {
-      const livePlane = plane()
-      const registered = sm.listInstances().find(instance => instance.id === id)
-      const liveStatus = sm.status(id)
-      const liveSocketPath = sm.readySocketPath(id)
-      if (livePlane !== null) livePlane.registerInstanceTransport(connectionIdForRawInstance(id, 'gateway'), url, headers, {
-        ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
-        ...(tls === undefined ? {} : tls),
-        ...(authority === undefined ? {} : { authority }),
-        ...(liveSocketPath === null ? {} : { socketPath: liveSocketPath }),
-        ...(liveStatus?.link === undefined ? {} : { health: liveStatus.link.state }),
-      })
-      // A successful (re-)registration ends any pending auth recovery: a deferred
-      // disconnect/connect must never tear down a transport that is already
-      // registered again (the refresh path is the most likely place for this race).
-      authRecovery.cancel(id)
-      authRecoveryContext.delete(id)
-      // Keep the registered-auth fingerprint in lockstep：refresh 重注册 REPLACES 代理
-      // headers——指纹门须认已轮换 cookie，否则下次 ready 探针无条件再注册（撤销在途流量）。
-      const sanitized = headers === undefined ? undefined : sanitizedRegistrationHeaders(headers)
-      registeredAuthFingerprints.set(connectionIdForRawInstance(id, 'gateway'), authHeadersFingerprint(sanitized))
-      registeredTargetKeys.set(connectionIdForRawInstance(id, 'gateway'), registrationKey({
-        url,
-        transport: registered?.transport,
-        headers: sanitized,
-        spkiPin: tls?.tls.spkiPin,
-        authority,
-        socketPath: liveSocketPath ?? undefined,
-      }))
+    // 续签只把"新会话已就绪"交给唯一提交入口：facts 由 commit 从同一 live 事实与凭据缓存
+    // 重新派生（不信任入参）；commit 是非抛边界（其内部 try/catch + 测试钉住），一次续签
+    // 失败绝不会逃成 sidecar fatal 的 unhandledRejection。
+    register: (id) => {
+      const attempt = sm.getAttemptFacts(id)
+      if (attempt === null) return
+      const outcome = activeRegistration.commit({ kind: 'register', id, transportGen: attempt.tunnelEpoch })
+      if (!outcome.ok) {
+        console.warn(`${logTag} gateway session refresh commit refused for ${id}: ${outcome.reason}`)
+      } else if (outcome.action === 'registered') {
+        // A successful (re-)registration ends any pending auth recovery: a deferred
+        // disconnect/connect must never tear down an already-registered transport.
+        authRecovery.cancel(id)
+        authRecoveryContext.delete(id)
+      }
     },
     // Bounded dead-cookie recovery：disconnect（idle → 控制面注销 + disarm）→ connect
     //（verifyUp 用存储密码重认证）；每次 refresh 至多一次、仅 transport 仍 ready 且同
@@ -580,15 +563,18 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     })
   }
   // Resolves the awaited sync outcome for the caller（手动 gateway_plugin_sync IPC）or null
-  // when the instance is missing / no longer a gateway；ready-registration 调用点保留 fire-and-forget。
+  // when missing / not a gateway. The IPC/ctx signature keeps its shape for the frozen
+  // context type; the committed record is the only parameter source.
   const syncGatewayChamberPluginsFor = async (
     id: string,
-    url: string,
-    headers: Record<string, string>,
-    spkiPin: string | null,
   ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null> => {
     const instance = sm.listInstances().find(candidate => candidate.id === id)
     if (instance === undefined || instance.kind !== 'gateway') return null
+    // The committed record is the ONE dial descriptor (C: I3): origin/headers/SPKI pin/
+    // authority/socketPath all ride the same record generation — no snapshot/live mix.
+    const recordGen = activeRegistration.currentRecordGen(id)
+    const registration = recordGen === undefined ? undefined : activeRegistration.snapshotForSync(id, recordGen)
+    if (registration === undefined) return null
     const packages: LocalChamberHostPackage[] = []
     for (const source of localChamberHostPackageSources()) {
       try {
@@ -604,16 +590,16 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
         )
       }
     }
-    const socketPath = sm.readySocketPath(id)
+    // The target may be re-bound while the local sources are read: no stale upload.
+    if (activeRegistration.currentRecordGen(id) !== recordGen) {
+      return { uploaded: false, skipped: false, failed: true, error: 'registration changed' }
+    }
     return syncGatewayChamberPlugins({
-      // Sync through the REGISTERED transport origin (the ready URL)：ssh 隧道 = 用户
-      // 验证过的 loopback 端点，绝非远端 host:port；authority 覆盖呈现远端 gateway。
-      // POSIX UDS 隧道：真正的拨号目标是 socket，URL 只承担 authority/path 语义。
-      origin: url,
-      authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
-      ...(socketPath === null ? {} : { socketPath }),
-      headers,
-      spkiPin,
+      origin: registration.facts.url,
+      ...(registration.facts.authority === undefined ? {} : { authority: registration.facts.authority }),
+      ...(registration.facts.socketPath === undefined ? {} : { socketPath: registration.facts.socketPath }),
+      headers: registration.facts.headers ?? {},
+      spkiPin: registration.facts.spkiPin ?? null,
       packages,
       logger: { warn: message => console.warn(message), log: message => console.log(message) },
     })
@@ -668,25 +654,20 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     },
   })
 
-  // —— 传输状态/复验订阅：同一工厂注册两条订阅（audit transition + ready 注册/gateway sync/
-  // session refresh arm/自动 seed ready 边缘/committed status push ⇄ onVerified 指纹重注册），
-  // 共享 registeredTargetKeys/registeredAuthFingerprints；工厂在组合根原位调用一次、仍同步订阅，
-  // 注册时机不变（先于 publishRegistryTransition 与任何 plane 启动腿）。
+  // —— 传输状态/复验订阅：同一工厂注册两条订阅（audit transition + 唯一提交入口/gateway sync/
+  // session refresh arm/自动 seed ready 边缘/committed status push ⇄ onVerified 同一提交入口）。
+  // 工厂在组合根原位调用一次、仍同步订阅（先于 publishRegistryTransition 与任何 plane 启动腿）。
   createTransportSubscriptions({
     sm,
-    plane,
+    registrations: activeRegistration,
     edges: deps.edges,
-    gatewaySessions,
     sessionRefresh,
     readySeedEdges,
     startAutomaticHostSeed,
     syncGatewayChamberPluginsFor,
     audit,
     logTag,
-    // 6 个共享闭包状态留在组合根：退出腿（sessionRefresh/authRecovery 清理）与
-    // sessionRefresh.register 也读写它们，工厂只捕获不拥有。
-    registeredAuthFingerprints,
-    registeredTargetKeys,
+    // 4 个共享闭包状态留在组合根（退出腿也读写它们），工厂只捕获不拥有。
     lastAuditedPhase,
     auditRegistered,
     authRecovery,
@@ -695,8 +676,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
 
   // 注册表提交转移（证明投影/代际同步/seed owner 撤销/committed push）是命名模块；App 只注入句柄。
   const { publishRegistryTransition } = createRegistryTransition({
-    sm, edges: deps.edges, logTag, operationalFingerprint, readySeedEdges, hostPackageSeeding,
-    startAutomaticHostSeed,
+    sm, edges: deps.edges, logTag, readySeedEdges, hostPackageSeeding,
+    startAutomaticHostSeed, registrations: activeRegistration,
   })
 
   // —— dsh runtime 管理宿主 ——
@@ -923,6 +904,20 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     })
   }
 
+  /** 宿主尝试调度器的事实面：startup/added/wake 三来源共用（ticket 四查在 transport-reconnect 单源）。 */
+  function hostAttemptDeps(): HostAttemptDeps {
+    return {
+      listInstances: () => sm.listInstances(),
+      status: id => sm.status(id),
+      connect: id => { sm.connect(id) },
+      connectionIntents: () => sm.connectionIntents(),
+      getAttemptFacts: id => sm.getAttemptFacts(id),
+      isQuitting: deps.isQuitting,
+      planeBound: () => boundPlane,
+      log: (level, message) => { (level === 'warn' ? console.warn : console.log)(`${logTag} ${message}`) },
+    }
+  }
+
   // 启动尾部：refreshRuntimeEvidence().then(runRuntimeStartup)，catch 折叠为 loud + 启动门
   // 关闭 + failed 投影。无内建树时按 flavor 静默窗延迟（sidecar 避免 ready 后采样竞态；Electron 0）。
   const runStartupTail = async (): Promise<void> => {
@@ -957,6 +952,10 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     authRecovery,
     authRecoveryContext,
     gatewaySessions,
+    // Exit leg clears the registry records/tombstones and retires the manual-sync seam.
+    registrations: {
+      dispose: () => { activeRegistration.dispose(); bindActiveRegistrationRegistry(null) },
+    },
     markQuitting: deps.markQuitting,
     settings: deps.settings,
     updateQuitExempt: deps.updateQuitExempt,
@@ -973,9 +972,11 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     localDshHome,
     bindPlane,
     runStartupTail,
-    dispose,
+    // 退出先撤未触发的错峰定时器（触发中的票据仍自证 isQuitting）。
+    dispose: async () => { cancelHostAttemptTimers(); await dispose() },
     quitFacts,
-    // 闭包绑定本装配的传输管理器单例 + 退出在途门（判据在 transport-reconnect 单源）。
+    // 闭包绑定本装配的传输管理器单例 + 退出在途门（判据在 transport-reconnect 单源：历史唤醒入口
+    // 经同一规划器 + 票据四查，签名/告警面保持不变）。
     reconnectStaleTransports: () => reconnectStaleTransports(
       transportManager,
       deps.isQuitting,
@@ -983,6 +984,7 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
       logTag,
       { staggerMs: 120 },
     ),
+    runHostAttempts: (options: HostAttemptOptions) => runHostAttempts(hostAttemptDeps(), options),
     reverifyAllTransports: () => {
       if (deps.isQuitting()) return
       transportManager?.reverifyAll()

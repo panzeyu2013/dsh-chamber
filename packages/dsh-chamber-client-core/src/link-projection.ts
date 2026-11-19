@@ -20,6 +20,17 @@ export interface LinkProjectionShape {
 }
 
 /**
+ * The transport link health, defaulted for old producers (absent/non-enumerated = healthy).
+ * THE ONE owner of "which link sub-state is this": {@link linkReady} builds on it, and page-side
+ * projections that carry the fact to the UI (renderer host/servers.ts →
+ * ChamberServerAggregate.linkState) read it instead of re-spelling the comparison.
+ */
+export function linkHealthOf(projection: LinkProjectionShape | undefined): 'healthy' | 'suspect' | 'down' {
+  const state = projection?.link?.state
+  return state === 'suspect' || state === 'down' ? state : 'healthy'
+}
+
+/**
  * May page-channel traffic for this source flow right now?
  * - `ready` only: connecting/degraded/idle/error have nothing to subscribe to;
  * - `down` parks (the proxy fast-fails new requests and new subscriptions);
@@ -27,8 +38,7 @@ export interface LinkProjectionShape {
  * - a projection without `link` (old shim/renderer) is healthy by contract.
  */
 export function linkReady(projection: LinkProjectionShape | undefined): boolean {
-  if (projection?.phase !== 'ready') return false
-  return (projection.link?.state ?? 'healthy') !== 'down'
+  return projection?.phase === 'ready' && linkHealthOf(projection) !== 'down'
 }
 
 /** The page reset key. Absent/non-numeric (old shim) reads as generation 0. */

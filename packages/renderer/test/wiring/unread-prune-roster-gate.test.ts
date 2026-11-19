@@ -516,7 +516,8 @@ test('V5-A wiring: an incomplete roster runs the partial commit — no retiremen
   assert.equal(ROSTER_PLANNER.split('settle: false').length - 1, 2, 'partial and degraded never settle')
   assert.ok(ROSTER_PLANNER.includes('settle: true'), 'only the complete plan settles')
   assert.ok(ROSTER_COMMIT.includes('if (plan.settle) sinks.settleRoster()'), 'execution gates settlement on the plan')
-  assert.ok(ROSTER_COMMIT.includes("if (plan.mode === 'complete') sinks.setLive(plan.live)"), 'only a complete plan replaces last-known live')
+  assert.ok(ROSTER_COMMIT.includes("if (plan.mode === 'complete') {"), 'only a complete plan reaches the live/remount arm')
+  assert.ok(ROSTER_COMMIT.includes('sinks.setLive(plan.live)'), 'the same complete arm replaces last-known live')
   assert.ok(ROSTER_COMMIT.includes('sinks.retireSources(plan.retire)'), 'the complete differential is retired once by the executor')
   // partial 的显示清单保留已确认行（含清单里缺失的行）与身份；无变化时复用 prior 数组引用。
   assert.ok(ROSTER_PLANNER.includes('fingerprints.has(sourceId)'), 'confirmed identities are the preservation criterion')

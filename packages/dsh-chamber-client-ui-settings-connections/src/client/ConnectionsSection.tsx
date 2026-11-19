@@ -35,7 +35,7 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Managed restart/start readiness: the poll behind each card's success note.
-import { pollGatewayReady, fetchRemoteRuntimeStatus, remoteRuntimeControl } from '@dsh-chamber/dsh-chamber-client-core'
+import { linkReady, pollGatewayReady, fetchRemoteRuntimeStatus, remoteRuntimeControl } from '@dsh-chamber/dsh-chamber-client-core'
 import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshStatusProjection,
 } from '../global.d.ts'
@@ -1212,12 +1212,13 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           : (
             <ul className={css.cards}>
               {instances.map(spec => {
-                // Registry and status pushes are independent. Suppress a stale old-provider
-                // projection during a kind switch instead of showing the replacement as falsely ready.
+                // Registry and status pushes are independent: suppress a stale old-provider projection during a kind switch instead of showing the replacement as falsely ready.
                 const projectedStatus = statuses[spec.id]
                 const status = projectedStatus?.kind === spec.kind ? projectedStatus : undefined
                 const phase = status?.phase
                 const connected = phase === 'ready' || phase === 'degraded'
+                // 链路子态（design 27 §3.3）：传输 ready 但链路 down = 新请求被快速拒绝；徽标/提示按不可用呈现，动作与壳保留。
+                const linkDown = status !== undefined && phase === 'ready' && !linkReady(status)
                 const specBusy = busy[spec.id] === true
                 // Gateway runtime startability: the tunnel phase proves the gateway HOST answers;
                 // the managed dsh's own state comes from the runtime probe (startBusy keeps the button rendered).
@@ -1233,8 +1234,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 // systemd control rides the ssh transport (dsh or gateway over a tunnel both
                 // exec systemctl over ssh); http direct endpoints have no service channel.
                 const serviceConfigured = spec.transport === 'ssh' && spec.serviceName !== null
-                // 终态失败提示按类别选择（action-hint.ts）：endpoint 类意味着隧道正常、问题在
-                // 远端实例——绝不展示 SSH 认证失败提示。
+                // 终态失败提示按类别选择（action-hint.ts）：endpoint 类意味着隧道正常、问题在远端实例——绝不展示 SSH 认证失败提示。
                 const hintKey = actionHintKey(spec, status, phase)
                 // 本卡重启/启动结果行（null = 无）；tone 分流渲染（见下）。
                 const restartNote = restartNotes[spec.id]
@@ -1249,7 +1249,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       <div className={css.cardHeadBadges}>
                         <span className={clsx(
                           css.badge,
-                          (phase === 'error' || phase === 'degraded' || status?.requiresUserAction === true) && css.badgeBad,
+                          (phase === 'error' || phase === 'degraded' || status?.requiresUserAction === true || linkDown) && css.badgeBad,
                           phase === 'ready' && css.badgeOk,
                         )}>
                           {t(phaseKey(phase))}
@@ -1291,7 +1291,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       )
                       : null}
                     {status?.logSummary !== '' ? <p className={css.hint}>{status?.logSummary}</p> : null}
-                    {hintKey !== null ? <p className={css.hint}>{t(hintKey)}</p> : null}
+                    {hintKey !== null ? <p className={css.hint}>{t(hintKey)}</p> : linkDown ? <p className={css.hint} role="status">{t('linkDownHint')}</p> : null}
                     {/* P0-3 最小入口：hostkey 终态显示指纹 +「信任并连接」（probe → trust → 重连）。 */}
                     <HostKeyTrust
                       spec={spec}

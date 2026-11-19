@@ -1086,16 +1086,12 @@ export function factRecordSignature(record: object, omit: readonly string[] = []
 }
 
 /**
- * Render-relevant projection signature of the merged multi-source projection:
- * everything the sidebar (and the settings bridge) renders or uses as a
- * lifecycle boundary, and nothing else.
- * - sourceFingerprint is not visible UI, but a same-id replacement must
- *   publish so source-owned child contexts retire synchronously;
- * - `updatedAt` is part of the session row (updated = manual order + activity
- *   promotion), so a last-activity tick re-publishes the projection;
- * - the runtime portion is restricted to sessions visible in the projection.
- * The App layer gates chamberBridge.publish on this signature, and the sidebar
- * subscription re-checks it as defense in depth.
+ * Render-relevant projection signature of the merged multi-source projection: everything the
+ * sidebar (and the settings bridge) renders or uses as a lifecycle boundary, and nothing else.
+ * - sourceFingerprint is not visible UI, but a same-id replacement must publish so source-owned child contexts retire synchronously;
+ * - `updatedAt` is part of the session row, so a last-activity tick re-publishes the projection;
+ * - the runtime portion is restricted to sessions visible in the projection; the App gates
+ *   chamberBridge.publish on this signature and the sidebar subscription re-checks it.
  */
 
 export function serversProjectionSignature(servers: readonly ChamberServerAggregate[]): string {
@@ -1121,6 +1117,10 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       label: server.label,
       connected: server.connected,
       phase: server.phase,
+      // Render-relevant: the source dot/label and the deferred-boot overlay branch on the link
+      // facts; a link-only flip must re-publish or a ready-but-down source keeps its green face.
+      linkUp: server.linkUp ?? null,
+      linkState: server.linkState ?? null,
       // Render-relevant: the source header's managed-down note branches on it.
       managedRuntimeDown: server.managedRuntimeDown === true,
       dshVersion: server.dshVersion ?? null,

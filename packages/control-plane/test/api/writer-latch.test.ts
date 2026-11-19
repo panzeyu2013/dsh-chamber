@@ -21,11 +21,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createControlPlane } from '../../src/index.ts'
-import { fakeWire, fetchJson } from '../support/utils.ts'
+import type { SpawnedDsh } from '../../src/local-connection.ts'
+import { DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } from '../../src/spawn-dsh.ts'
+import { fakeWire, fetchJson, waitFor } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -170,5 +173,136 @@ test('writer latch: 清理并接管 refuses while a writer whose owner is alive 
   } finally {
     await holder.plane.stop()
     holder.dispose()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// v2 A slice — the exit-proof contract on the assembled plane. A writer-unknown retire
+// is a fail-closed terminal state: it latches the plane, keeps the suspect named in the
+// diagnosis, never publishes restart-exhausted, and surfaces as typed REST failures.
+// ---------------------------------------------------------------------------
+
+/** A coded writer-quiescence-unknown error shaped like the spawn layer's (pid attached). */
+function codedWriterUnknown(pid: number): Error & { code: string; pid: number } {
+  return Object.assign(new Error('process group termination could not be proven'), {
+    code: DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
+    pid,
+  })
+}
+
+/** A fake managed host whose exit listener can be fired and whose stop is scripted. */
+function planeChild(port: number, pid: number, stop: () => Promise<void>): {
+  spawned: SpawnedDsh
+  fireExit: (code: number | null, sig: string | null) => void
+} {
+  const emitter = new EventEmitter()
+  const child = Object.assign(emitter, { exitCode: null as number | null, signalCode: null as string | null })
+  const spawned: SpawnedDsh = { child, port, pid, stop }
+  return {
+    spawned,
+    fireExit: (code, sig) => {
+      child.exitCode = code
+      emitter.emit('exit', code, sig)
+    },
+  }
+}
+
+test('writer latch: an unproven stop() rejects with its typed error, latches, and answers 409/409+detail', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-stop-proof-'))
+  const coded = codedWriterUnknown(4242)
+  let spawns = 0
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    hostGraphPackageSourceDir: join(stateDir, 'missing-graph-package'),
+    hostGitWorktreePackageSourceDir: join(stateDir, 'missing-git-package'),
+    localConnectionDeps: {
+      spawnDsh: async () => {
+        spawns += 1
+        return planeChild(17510, 4242, async () => { throw coded }).spawned
+      },
+      probeHostIdentity: async () => true,
+    },
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    assert.equal(plane.connectionState, 'ready')
+
+    const failure = await plane.stopLocal().then(() => null, (error: unknown) => error)
+    assert.equal(failure, coded, 'stopLocal surfaces the SAME typed writer-unknown error')
+    assert.equal(plane.connectionState, 'error', 'an unproven writer never reports stopped')
+    assert.equal(plane.localWritersQuiescent, false, 'the writer latch is sticky after an unproven stop')
+    assert.equal(plane.localProcessAlive, true, 'the retained suspect counts as possibly alive')
+
+    const base = `http://127.0.0.1:${plane.port}`
+    const rejected = await fetchJson(base, '/api/connections', postJson({ kind: 'local' }))
+    assert.equal(rejected.status, 409)
+    assert.equal(rejected.body.code, 'connection_busy')
+    assert.equal(spawns, 1, 'a refused start never spawns behind the latch')
+
+    const deleted = await fetchJson(base, '/api/connections/local', { method: 'DELETE' })
+    assert.equal(deleted.status, 409, 'DELETE maps the writer-unknown to a coded 409, never a masked 500')
+    assert.equal(deleted.body.code, DSH_WRITER_QUIESCENCE_UNKNOWN_CODE)
+    assert.equal(deleted.body.detail?.pid, 4242, 'the 409 carries the suspect identity')
+  } finally {
+    // The contract says stop() fails while the writer is unproven; the cleanup swallows it.
+    await plane.stop().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('writer latch: an exhausted restart with an unproven retire stays error and freezes the spawn count', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-exhaust-proof-'))
+  const children: Array<ReturnType<typeof planeChild>> = []
+  let spawns = 0
+  const coded = codedWriterUnknown(77002)
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    hostGraphPackageSourceDir: join(stateDir, 'missing-graph-package'),
+    hostGitWorktreePackageSourceDir: join(stateDir, 'missing-git-package'),
+    localConnectionOptions: { healthIntervalMs: 0, maxRestartsInWindow: 1 },
+    localConnectionDeps: {
+      spawnDsh: async () => {
+        spawns += 1
+        const child = planeChild(17510 + spawns, 77000 + spawns, spawns === 2 ? async () => { throw coded } : async () => {})
+        children.push(child)
+        return child.spawned
+      },
+      probeHostIdentity: async () => true,
+    },
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    children[0]!.fireExit(1, null)
+    await waitFor(() => spawns === 2 && plane.connectionState === 'ready', 3000, 'ready after the first restart')
+    children[1]!.fireExit(1, null)
+    await waitFor(() => plane.connectionState === 'error', 3000, 'error after the unproven exhaustion retire')
+
+    assert.notEqual(plane.connectionState, 'restart-exhausted', 'restart-exhausted follows a PROVEN retire only')
+    assert.equal(spawns, 2, 'the unproven retire never respawns')
+    assert.equal(plane.localWritersQuiescent, false)
+
+    const base = `http://127.0.0.1:${plane.port}`
+    const health = await fetchJson(base, '/health')
+    assert.equal(health.body.dsh.status, 'error', '/health never shows "starting" for a terminal writer failure')
+
+    const rejected = await fetchJson(base, '/api/connections', postJson({ kind: 'local' }))
+    assert.equal(rejected.status, 409)
+    assert.equal(rejected.body.code, 'connection_busy')
+    assert.equal(spawns, 2, 'the refused start never spawns')
+
+    const diagnosis = await fetchJson(base, '/api/connections/local/writers')
+    assert.equal(diagnosis.status, 200)
+    assert.equal(diagnosis.body.quiescent, false)
+    assert.equal(diagnosis.body.writers[0]?.pid, 77002, 'the suspect pid is named in the diagnosis')
+    assert.equal(diagnosis.body.writers[0]?.reason, 'residual-group')
+  } finally {
+    await plane.stop().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
   }
 })

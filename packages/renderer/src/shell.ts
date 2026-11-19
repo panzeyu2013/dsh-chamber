@@ -420,6 +420,22 @@ let bootSerialCounter = 0
 let safeModeAnnounced = false
 const cancelledBoots = new Map<string, number>()
 
+/**
+ * The transport word each instance's CURRENT shell (or queued/in-flight boot) was started
+ * with — the renderer-side fact a roster commit compares with the authoritative row. A
+ * transport MECHANISM change (ssh↔http) is not a source identity change: the source is not
+ * retired, its shell is remounted once with the new word. Memory-only by design (cold
+ * starts boot every shell from its row), written where the boot generation advances and
+ * deleted by the shell dispose primitives.
+ */
+const bootTransports = new Map<string, ChamberTransport>()
+
+/** The transport word the instance's shell (or queued/in-flight boot) was started with; null
+ *  when no boot was ever attempted on this page (an unmounted source needs no remount). */
+export function bootTransportOf(instanceId: string): ChamberTransport | null {
+  return bootTransports.get(instanceId) ?? null
+}
+
 type DispatchCancel = (error: Error) => void
 
 /** One exact live generation. Pollers belong to the holder, so replacement/teardown can
@@ -601,6 +617,9 @@ export function bootInstanceShell(
   // configureContext 之前，因为上下文要携带本次代际事实。
   const gen = (bootGenerations.get(instanceId) ?? 0) + 1
   bootGenerations.set(instanceId, gen)
+  // 换代判定的唯一内存事实：本代（含排队/在飞）启动时用的传输字。roster 提交期拿它与
+  // 权威行比较；重挂后的新 boot 立即覆盖，dispose 删除。
+  bootTransports.set(instanceId, transport)
   // Page-monotonic serial: unlike `gen` it is NEVER reused, so it identifies the post-settle fact path.
   const serial = ++bootSerialCounter
   // Only the current, non-cancelled generation may publish.
@@ -1349,6 +1368,9 @@ export function disposeInstanceShell(instanceId: string): void {
   // The record retires with the source: a same-id re-add is a new generation, and its
   // first open must not be judged as superseded by the previous incarnation's last request.
   lastRequestedSession.delete(instanceId)
+  // The boot binding belongs to the shell lifetime: a disposed id has no boot capability fact,
+  // so a later roster commit cannot plan a remount for it (a re-add boots from its own row).
+  bootTransports.delete(instanceId)
   // The release fact is one boot generation's: the next boot records its own.
   forgetInstanceGraphRelease(instanceId)
   const holder = entries.get(instanceId)
@@ -1384,6 +1406,7 @@ export function disposeAllShells(): void {
     scheduleInstanceLifecycleOwnerCleanup(instanceId)
   }
   lastRequestedSession.clear()
+  bootTransports.clear()
   pendingOpens.rejectAll(new Error('全部实例 shell 已释放，排队的会话未打开'))
 }
 

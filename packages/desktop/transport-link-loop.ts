@@ -25,7 +25,7 @@ export interface LinkLoopDeps {
   bus: { listeners: (event: string) => Function[] }
   isDisposed: () => boolean
   isCurrentState: (id: string, state: InstanceState) => boolean
-  failTerminal: (id: string, state: InstanceState, message: string, requiresUserAction?: boolean, userActionKind?: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null, retryableTerminal?: boolean) => void
+  failTerminal: (id: string, state: InstanceState, message: string, requiresUserAction?: boolean, userActionKind?: 'auth' | 'endpoint' | 'instance-auth' | 'hostkey' | 'environment' | null, retryableTerminal?: boolean) => void
   scheduleReconnect: (id: string, state: InstanceState, reason: string) => void
   appendLogInternal: (state: InstanceState, level: 'info' | 'warn' | 'error', message: string) => void
   resolveProvider: (entry: { kind?: unknown; transport?: unknown }) => any
@@ -152,9 +152,11 @@ export function createLinkLoop(deps: LinkLoopDeps) {
    * One ready-state identity re-verification — shared by the periodic heartbeat
    * and reverify(). Runs the SAME verifyUp seam as the connect-time check, so a
    * gateway 401 re-logs in once with the stored password and a revoked session
-   * self-heals; failures classify exactly like connect-time (terminal →
-   * failTerminal endpoint class, transient → scheduleReconnect). A transition or
-   * registry change while in flight drops the result.
+   * self-heals; failures classify exactly like connect-time (terminal → failTerminal
+   * with the provider-refined class: 'instance-auth' for a remote dsh browser-auth
+   * 401, 'endpoint' for version/non-dsh and for gateway targets; transient →
+   * scheduleReconnect). A transition or registry change while in flight drops the
+   * result.
    */
   async function verifyReadyTransport(
     id: string,
@@ -252,7 +254,12 @@ export function createLinkLoop(deps: LinkLoopDeps) {
     })
     const failureClass: ProbeFailureClass = verification.failureKind ?? fallbackClass
     if (verification.terminal === true || failureClass === 'protocol') {
-      failTerminal(id, state, reason, true, 'endpoint', verification.terminalRetryable === true)
+      // Same refinement as the connect-time path (transport-manager): a remote dsh behind
+      // its browser-auth gate answers HTTP 401 (failureKind 'auth') — 'instance-auth', whose
+      // repair surface is a Gateway deployment. Version/non-dsh stays 'endpoint', and a
+      // gateway target's 401/403 stays 'endpoint' (its UI hint is selected by spec.kind).
+      const userActionKind = spec.kind === 'dsh' && failureClass === 'auth' ? 'instance-auth' : 'endpoint'
+      failTerminal(id, state, reason, true, userActionKind, verification.terminalRetryable === true)
       return
     }
     // Our own bulk upload owns the tunnel's single TCP: a probe timeout inside

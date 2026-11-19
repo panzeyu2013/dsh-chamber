@@ -390,6 +390,11 @@ import { MAIN_SIDE_FILES } from '../../scripts/main-side-files.mjs'
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
   .join('\n')
+/** C（v2 §P3-C）：网关 ready/复验/续签注册的认证准入与 scope 派生已收口到
+ *  active-registration.ts（唯一提交入口）；源文本锚随实现迁移，不扩大
+ *  MAIN_SIDE_FILES 的全局扫描面。 */
+const activeRegistration = readFileSync(join(ROOT, 'packages/desktop/active-registration.ts'), 'utf8')
+const statusSubscriptions = readFileSync(join(ROOT, 'packages/desktop/host-transport-subscriptions.ts'), 'utf8')
 
 test('renderer connection target/input/spec mirrors desktop v2 fields including S23', () => {
   assert.match(renderer, /export type TransportKind = 'dsh' \| 'gateway'/, 'renderer target kind must be the normalized v2 union')
@@ -552,11 +557,15 @@ test('legacy credential setters are clear-only and deletion is exact-id in main'
 })
 
 test('gateway ready registration and session invalidation use exact connection scope and fail-closed auth decisions', () => {
-  assert.match(desktopMain, /gatewaySessionScopeForConnection\(registered\)/)
-  assert.match(desktopMain, /gatewayRegistrationAuthHeaders\(token, password !== null, cookie, authProof\)/)
+  // 逻辑已收口到 active-registration.ts：ready/复验/续签共用同一提交入口，scope 与
+  // fail-closed 认证准入只在该叶派生一次（源文本锚随单源迁移）。
+  assert.match(activeRegistration, /gatewaySessionScopeForConnection\(live\.spec\)/)
+  assert.match(activeRegistration, /gatewayRegistrationAuthHeaders\(token, password !== null, cookie, proof\)/)
+  assert.match(activeRegistration, /if \(!authorized\.ok\)[\s\S]*revokedOutcome\(request\.id, 'auth-failed'/)
   // The auth-fail branch must route through the recovery DRIVER (bounded, deferred
   // not dropped) and keep both operator messages.
-  assert.match(desktopMain, /if \(!auth\.ok\)[\s\S]*authRecovery\.notifyFailure\(id\)/)
+  assert.match(statusSubscriptions, /const handleAuthFailed[\s\S]*authRecovery\.notifyFailure\(id\)/)
+  assert.match(desktopMain, /handleAuthFailed\(id, outcome\)/)
   assert.match(desktopMain, /gateway session changed before proxy registration; re-authenticating/)
   assert.match(desktopMain, /gateway session changed again before recovery settled; one deferred re-authentication is armed/)
   assert.match(desktopMain, /invalidateScope\(gatewaySessionScopeForConnection\(spec\)\)/)

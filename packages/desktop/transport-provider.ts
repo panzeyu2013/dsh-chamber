@@ -148,16 +148,21 @@ export interface TransportStatusProjection {
   retryAttempt: number
   requiresUserAction: boolean
   /**
-   * Class of the terminal failure behind `requiresUserAction`, so the UI never conflates the two
+   * Class of the terminal failure behind `requiresUserAction`, so the UI never conflates the
    * repair surfaces:
    * - 'auth' — transport/credential-level failure (SSH auth, host key, spawn): the TRANSPORT is
    *   broken and the user must fix credentials/host key.
    * - 'endpoint' — the transport reached the destination and it ANSWERED at protocol level but
    *   rejected (wrong version / breaking change / non-dsh service, or gateway 401/403); an SSH
    *   auth hint would be a lie.
+   * - 'instance-auth' — the 'endpoint' class REFINED by the provider's `failureKind`: an
+   *   instance-level auth answer (a remote dsh behind its browser-auth gate answers HTTP 401,
+   *   failureKind 'auth') whose repair surface is deploying/attaching a Gateway. 'endpoint'
+   *   stays the version/non-dsh answer (failureKind 'protocol'); gateway targets keep 'endpoint'
+   *   (their 401/403 is the gateway credential hint, chosen by spec.kind in the UI).
    * null whenever requiresUserAction is false.
    */
-  userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null
+  userActionKind: 'auth' | 'endpoint' | 'instance-auth' | 'hostkey' | 'environment' | null
   /**
    * Last non-secret host-key probe projection (P0-3): what the ssh self-proof saw for this
    * target versus the app-owned known_hosts. Present only after a host-key probe; absent for

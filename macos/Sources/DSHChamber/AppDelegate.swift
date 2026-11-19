@@ -367,6 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ③ 子进程环境：node 路径 basename 含 "dsh-chamber"（即 Electron 二进制）
         //    时注入 ELECTRON_RUN_AS_NODE=1（写进传给子进程的 process environment）
         var childEnv = env
+        childEnv["DSH_CHAMBER_APP_SESSION_ID"] = UUID().uuidString.lowercased()  // 非秘密应用会话身份：每进程一次，崩溃重启复用（同 overlay），完全退出重开新 ID
         if compiledSidecar {
             childEnv["DSH_CHAMBER_SIDECAR_COMPILED"] = "1"
             shellLog("[shell] 注入 DSH_CHAMBER_SIDECAR_COMPILED=1（装配态 control-plane 相对入口）")

@@ -158,9 +158,13 @@ export interface SshStatusProjection {
    * answer rejected the connection (not a compatible dsh — wrong version /
    * breaking change / non-dsh service on the port — or an instance-level
    * auth rejection such as gateway 401/403). The SSH tunnel itself is fine
-   * and the UI must never show an SSH auth hint for it.
+   * and the UI must never show an SSH auth hint for it. 'instance-auth' is the
+   * instance-level class refined by the provider's failureKind: a remote dsh
+   * behind its browser-auth gate answers HTTP 401, and its launch token has no
+   * SSH retrieval surface — the repair surface is deploying/attaching a
+   * Gateway. 'endpoint' stays the version/non-dsh answer.
    */
-  userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null
+  userActionKind: 'auth' | 'endpoint' | 'instance-auth' | 'hostkey' | 'environment' | null
   /**
    * P0-3 host-key trust projection (present only after a host-key probe): the ssh self-proof's
    * view of the target versus the app-owned known_hosts. Public key material only.

@@ -6,6 +6,7 @@
  * module owns no lifecycle of its own.
  */
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
+import type { ActiveRegistrationRegistry } from './active-registration.ts'
 import type { ChamberSettings } from './chamber-settings.ts'
 import { LOCAL_RUNNING_STATES, RUNTIME_ABORT_REASON } from './shell-core.ts'
 import type { RuntimeStartupHostState } from './runtime-startup-host.ts'
@@ -19,6 +20,8 @@ export interface HostExitDeps {
   authRecovery: { dispose: () => void }
   authRecoveryContext: { clear: () => void }
   gatewaySessions: { dispose: () => void }
+  /** Active-registration records/tombstones + the manual-sync read seam. */
+  registrations: Pick<ActiveRegistrationRegistry, 'dispose'>
   markQuitting: () => void
   settings: { current: () => ChamberSettings }
   updateQuitExempt: () => boolean
@@ -29,7 +32,7 @@ export interface HostExitDeps {
 export function createHostExit(deps: HostExitDeps) {
   const {
     runtimeState, transportManager, disposeRuntimeInstaller, sessionRefresh, authRecovery,
-    authRecoveryContext, gatewaySessions, plane, logTag,
+    authRecoveryContext, gatewaySessions, registrations, plane, logTag,
   } = deps
   const dispose = async (): Promise<void> => {
     deps.markQuitting()
@@ -48,6 +51,7 @@ export function createHostExit(deps: HostExitDeps) {
       authRecovery.dispose()
       authRecoveryContext.clear()
       gatewaySessions.dispose()
+      registrations.dispose()
     }
   }
   // 关窗/退出事实投影：settings 实时 holder + localProcessAlive 判据（state 显示 running 不够，

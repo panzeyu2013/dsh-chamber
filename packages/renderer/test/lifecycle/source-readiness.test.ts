@@ -12,6 +12,7 @@ import { stripComments } from '../../../../scripts/dev/test-support/source-text.
 import {
   SERVING_TERMINAL_GRACE_MS,
   decideServingGate,
+  deferredBootReason,
   isTerminalUnreadyPhase,
   servingGatePhase,
   shouldAnnounceRetryQueue,
@@ -89,11 +90,29 @@ test('serving gate: 投影缺席 → undefined（预算内等）；投影在场 
     '终态仍走 1.5s 宽限（不是立即判死）')
 })
 
-test('only a manual disconnect defers the boot; an unknown projection never does', () => {
-  assert.equal(shouldDeferBootForSource('idle'), true)
-  for (const phase of ['connecting', 'ready', 'degraded', 'error', undefined]) {
-    assert.equal(shouldDeferBootForSource(phase), false, String(phase) + ' must still boot')
+test('a manual disconnect OR a ready-but-link-down transport defers the boot; unknown never does', () => {
+  // C9 ①: two deferral facts, one pure decision. idle = user-intent terminal state; ready+link
+  // down = the transport's grace window still says ready while the proxy fast-fails NEW
+  // requests — a boot would only burn the whole 503 budget.
+  assert.equal(shouldDeferBootForSource('idle', false), true)
+  assert.equal(shouldDeferBootForSource('idle', true), true, 'idle stays deferred whatever the link says')
+  assert.equal(shouldDeferBootForSource('ready', true), true, 'ready + down parks the boot')
+  assert.equal(shouldDeferBootForSource('ready', false), false)
+  for (const phase of ['connecting', 'degraded', 'error', 'stopped', 'restart-exhausted', undefined]) {
+    assert.equal(shouldDeferBootForSource(phase, true), false, String(phase) + ' must still boot')
+    assert.equal(shouldDeferBootForSource(phase, false), false, String(phase) + ' must still boot')
   }
+})
+
+test('the deferred veil picks its copy/action from the deferral reason', () => {
+  // Manual disconnect → 「未连接」+「连接」; ready + link down → 「链路不可用」+「重试」.
+  // Not deferred is the normal boot path and owes no reason.
+  assert.equal(deferredBootReason(false, 'idle'), null)
+  assert.equal(deferredBootReason(false, 'ready'), null)
+  assert.equal(deferredBootReason(true, 'idle'), 'manual-disconnect')
+  assert.equal(deferredBootReason(true, 'ready'), 'link-down')
+  assert.equal(deferredBootReason(true, 'connecting'), 'manual-disconnect', 'only the ready phase means the link-down deferral')
+  assert.equal(deferredBootReason(true, undefined), 'manual-disconnect')
 })
 
 test('every channel failure but the 404 "no graph injected" shape reaches the App as a degrade', () => {

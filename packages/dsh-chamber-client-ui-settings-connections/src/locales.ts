@@ -2,7 +2,7 @@
 
 export const zh = {
   nav: '连接',
-  sectionIntro: '管理本地实例与远程连接：通过 SSH 隧道或 HTTP(S) 直连 dsh 实例，或连接 Gateway 部署。',
+  sectionIntro: '管理本地实例与远程连接：经 SSH 隧道接入裸 dsh 实例，或经 SSH / HTTP(S) 接入 Gateway 部署。',
   desktopOnly: '连接管理需要桌面端支持。',
   localTitle: '本地实例',
   localPort: '端口',
@@ -53,6 +53,8 @@ export const zh = {
   phaseDegraded: '降级',
   phaseError: '连接错误',
   phaseUnknown: '未知',
+  /** ready 但传输链路 down（design 27 §3.3）：新请求会被代理快速拒绝，恢复自动重试；动作/壳保留。 */
+  linkDownHint: '该连接的传输链路暂时不可用：新请求会被快速拒绝，链路恢复后自动重试；已挂载的页面保留。',
   badgeHttpPlaintext: 'HTTP 明文',
   badgeNoAuth: '无认证',
   badgeSpkiPinned: 'SPKI 已固定',
@@ -108,6 +110,8 @@ export const zh = {
   transportLabel: '传输方式',
   transportSsh: 'SSH 隧道',
   transportHttp: 'HTTP(S) 直连',
+  // 组合级前置说明（不是错误）：裸 dsh 只有 ssh 传输，但带 browser-auth 门的远端宿主把探测挡在 HTTP 401。
+  dshSshBrowserAuthHint: '裸 dsh 的 SSH 接入仅在远端不带 browser-auth 门时可用：带门宿主对每个 /api 请求校验启动期 cookie，而换取它的 launch token 只出现在宿主启动输出里、桌面只在同机 spawn 时捕获（SSH 附着没有取得面），身份探测会以 HTTP 401 结束。认证远端请部署 Gateway，并以 gateway 目标接入。',
   configTitle: '从 ~/.ssh/config 选择',
   configLoading: '正在读取 ~/.ssh/config…',
   configEmpty: '~/.ssh/config 中没有可用的主机条目（跳过通配符与无别名条目）。',
@@ -147,7 +151,8 @@ export const zh = {
   passwordClear: '清除密码',
   environmentActionHint: 'SSH 可执行文件不可用或不可执行：请检查 PATH / 安装位置 / 权限（不是主机密钥或密码问题）。',
   authActionHint: '认证失败：请在该主机的编辑表单中设置 SSH 密码（或改用密钥 / ssh-agent）；主机密钥问题请用下方指纹面板处理。',
-  endpointActionHint: 'SSH 隧道正常，但远端 dsh 实例未通过身份探测（可能是破坏性变更、版本不兼容，或该端口并非 dsh 服务）——请检查端口/版本，或升级远端 dsh。',
+  endpointActionHint: 'SSH 隧道正常，但远端 dsh 实例未通过身份探测：远端 dsh 版本过旧（破坏性变更）或该端口并非 dsh 服务——请检查端口并升级远端 dsh。',
+  browserAuthAttachHint: '远端 dsh 启用了 browser-auth 门：身份探测返回 HTTP 401，它的 launch token 只出现在远端宿主启动输出里，SSH 附着没有取得面，因此本组合无法接入。SSH 隧道本身正常，无需修改 SSH 凭据——请在该远端部署 Gateway，并以 gateway 目标接入。',
   hostKeyActionHint: 'SSH 主机密钥未受信任：确认下方指纹后点「信任并连接」。应用只信任本机 known_hosts 中的密钥，绝不自动接受未知主机。',
   hostKeyTrustTitle: '主机密钥需要确认',
   hostKeyTrustChanged: '注意：该主机的密钥与已信任的不一致（可能是指纹变更，也可能是中间人）——只有确认服务器确实更换过密钥时才应信任。',
@@ -304,7 +309,7 @@ export type SettingsConnectionsKey = keyof typeof zh
 /** English dictionary, checked complete against the zh key set. */
 export const en: Record<SettingsConnectionsKey, string> = {
   nav: 'Connections',
-  sectionIntro: 'Manage the local instance and remote connections: attach a dsh instance over an SSH tunnel or direct HTTP(S), or connect to a gateway deployment.',
+  sectionIntro: 'Manage the local instance and remote connections: attach a bare dsh instance over an SSH tunnel, or a Gateway deployment over SSH or HTTP(S).',
   desktopOnly: 'Connection management requires the desktop shell.',
   localTitle: 'Local instance',
   localPort: 'Port',
@@ -355,6 +360,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   phaseDegraded: 'Degraded',
   phaseError: 'Connection error',
   phaseUnknown: 'Unknown',
+  linkDownHint: 'This connection’s transport link is temporarily down: new requests are fast-failed and it retries automatically once the link recovers. Mounted pages stay.',
   badgeHttpPlaintext: 'HTTP plaintext',
   badgeNoAuth: 'No auth',
   badgeSpkiPinned: 'SPKI pinned',
@@ -411,6 +417,8 @@ export const en: Record<SettingsConnectionsKey, string> = {
   transportLabel: 'Transport',
   transportSsh: 'SSH tunnel',
   transportHttp: 'HTTP(S) direct',
+  // Combination-level caveat (not an error): a bare dsh's only transport is SSH, but a browser-auth-gated remote Host blocks the probe with HTTP 401.
+  dshSshBrowserAuthHint: 'Attaching a bare dsh over SSH works only while the remote Host has no browser-auth gate: a gated Host checks a spawn-time cookie on every /api request, while the launch token that mints it appears only in the Host\u2019s startup output and the desktop captures it only from a same-machine spawn (an SSH attach has no retrieval surface) \u2014 the identity probe ends with HTTP 401. For an authenticated remote, deploy the Gateway and attach it as a gateway target.',
   configTitle: 'Choose from ~/.ssh/config',
   configLoading: 'Reading ~/.ssh/config…',
   configEmpty: 'No usable host entries in ~/.ssh/config (wildcard and alias-less entries are skipped).',
@@ -450,7 +458,8 @@ export const en: Record<SettingsConnectionsKey, string> = {
   passwordClear: 'Clear password',
   environmentActionHint: 'The ssh executable is missing or not executable: check PATH / installation / permissions (not a host key or password problem).',
   authActionHint: 'Authentication failed: set an SSH password in this host\u2019s edit form (or use a key/ssh-agent); host-key problems use the fingerprint panel below.',
-  endpointActionHint: 'The SSH tunnel is up, but the remote dsh instance did not pass the identity probe (a breaking change, a version mismatch, or a non-dsh service on the port may be the cause) \u2014 check the port/version, or upgrade the remote dsh.',
+  endpointActionHint: 'The SSH tunnel is up, but the remote dsh instance did not pass the identity probe: the remote dsh is too old (a breaking change) or the port is not a dsh service \u2014 check the port and upgrade the remote dsh.',
+  browserAuthAttachHint: 'The remote dsh runs the browser-auth gate: the identity probe answered HTTP 401, and its launch token appears only in the remote Host\u2019s startup output — an SSH attach has no retrieval surface, so this combination cannot attach. The SSH tunnel itself is fine and no SSH credential change is needed — deploy the Gateway on that remote and attach it as a gateway target.',
   hostKeyActionHint: 'The SSH host key is not trusted yet: review the fingerprint below and choose Trust and connect. Only keys in this app\u2019s own known_hosts are trusted; an unknown host is never auto-accepted.',
   hostKeyTrustTitle: 'Host key confirmation required',
   hostKeyTrustChanged: 'Warning: this host now presents a different key than the trusted one (a genuine rotation or a man-in-the-middle). Trust it only if the server was intentionally re-keyed.',

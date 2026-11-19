@@ -117,7 +117,8 @@ export function findProjectedRow(server: ChamberServerAggregate, sessionId: stri
  * the text is never rendered (hover carries it). */
 export function sourceStatusKind(server: ChamberServerAggregate): SourceStatusKind {
   const phase = server.phase
-  if (phase === 'ready') return 'ok'
+  // ready 但链路 down（design 27 §3.3）：壳与快照保留，状态点必须显示不可用而不是绿点。
+  if (phase === 'ready') return server.linkState === 'down' ? 'err' : 'ok'
   if (phase === 'connecting' || phase === 'starting' || phase === 'restarting' || phase === 'degraded') return 'busy'
   if (phase === 'error' || phase === 'stopped' || phase === 'restart-exhausted') return 'err'
   return 'idle'
@@ -157,7 +158,7 @@ export function sourceHeaderActivatable(server: ChamberServerAggregate, chamberI
 /** Localized status-label key for a projected phase (tooltip/aria only). */
 export function sourceStatusLabelKey(server: ChamberServerAggregate): SidebarKey {
   const phase = server.phase
-  if (phase === 'ready') return 'status.ready'
+  if (phase === 'ready') return server.linkState === 'down' ? 'status.linkDown' : 'status.ready'
   if (phase === 'connecting') return 'status.connecting'
   if (phase === 'starting') return 'status.starting'
   if (phase === 'restarting') return 'status.restarting'

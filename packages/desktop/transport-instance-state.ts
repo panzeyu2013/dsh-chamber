@@ -21,10 +21,11 @@ export interface InstanceState {
   /** Class of the terminal failure behind requiresUserAction ('auth' = transport/
    *  credential-level, 'endpoint' = instance-level terminal probe failure — the
    *  transport reached the destination and the answer rejected the connection,
+   *  'instance-auth' = that class refined by the remote dsh browser-auth 401,
    *  'hostkey' = the SSH host key is untrusted/new/changed and the user must review
    *  and trust its fingerprint); null otherwise. Projected so an endpoint failure
    *  never masquerades as SSH auth failure. */
-  userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null
+  userActionKind: 'auth' | 'endpoint' | 'instance-auth' | 'hostkey' | 'environment' | null
   /** Stderr-classified host-key failure of the current attempt (terminal; the settle
    *  path runs the self-proof probe before failTerminal so the UI gets fingerprints). */
   hostKeyFailed: boolean

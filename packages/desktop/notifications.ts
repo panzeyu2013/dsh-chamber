@@ -11,6 +11,7 @@
 
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts';
 import { describeUnknownError } from './deep-link.ts';
+import { logicalSourceIdentity } from './credential-identity.ts';
 import { createHash, randomBytes } from 'node:crypto';
 
 /** 通知事件种类（design 19 §3.2）：complete / ask / request + test（设置页测试按钮）。 */
@@ -86,12 +87,28 @@ export interface SourceProofStoreSeam {
   save(text: string): void
 }
 
+/** File format version stays 1: entries only gained an OPTIONAL identityScheme field
+ *  (absent = scheme 1 = the legacy five-field digest). */
 const SOURCE_PROOF_FILE_VERSION = 1
+/** Current identity scheme: digests hash the LOGICAL source identity. */
+const SOURCE_PROOF_IDENTITY_SCHEME = 2
+type SourceProofIdentityScheme = 1 | 2
 
-/** Opaque identity digest: a proof survives presentation/service/home edits **and
- * host process restarts**, rotating only when the transport identity or the id
- * changes. Only this digest is persisted, never the plaintext transport fields. */
+/** Opaque identity digest over the LOGICAL source identity (single-sourced in
+ * credential-identity.ts): a proof survives presentation/service/home edits, host
+ * restarts and a gateway SSH-account/mechanism edit, rotating only when the logical
+ * deployment or the id changes. Only this digest is persisted, never plaintext fields. */
 function notificationSourceIdentityDigest(instance: NotificationSourceProofInstance): string {
+  return createHash('sha256')
+    .update(logicalSourceIdentity(instance))
+    .digest('hex')
+}
+
+/** The identity-scheme-1 digest (legacy five-field tuple). Kept ONLY for the tolerant
+ *  roster migration: a persisted scheme-1 entry that still matches HERE has not been
+ *  retargeted — its proof is preserved and the entry upgraded in place (C4), instead of
+ *  rotating every gateway proof once on upgrade. */
+function legacyNotificationSourceIdentityDigest(instance: NotificationSourceProofInstance): string {
   return createHash('sha256')
     .update(JSON.stringify([
       instance.kind,
@@ -103,17 +120,30 @@ function notificationSourceIdentityDigest(instance: NotificationSourceProofInsta
     .digest('hex')
 }
 
+/** One persisted/in-memory roster entry. `scheme` is the identity field set its digest
+ *  was computed under (1 = legacy five-field, 2 = logical source identity). */
+interface SourceProofEntry {
+  identityDigest: string
+  proof: string
+  scheme: SourceProofIdentityScheme
+}
+
 /**
  * Source proof sidecar. A proof survives presentation/service/home edits and host
  * process restarts (the roster is persisted through a seam) but rotates when the
- * transport identity changes or the source is removed, so a same-id rebind never
+ * LOGICAL source identity changes or the source is removed, so a same-id rebind never
  * inherits durable notification state. Persisting is explicit: a mutation only
  * marks the roster dirty, and the host flushes it at healthy commit points
  * (`persist()`), never on every registry projection (a degraded/incomplete load
  * must not overwrite the durable roster with an empty/partial one).
+ *
+ * Identity schemes: entries written before the logical-identity change carry the legacy
+ * five-field digest and no `identityScheme` (scheme 1). A scheme-1 entry that still
+ * matches the legacy tuple is upgraded in place on the first projection (new digest,
+ * scheme 2, proof untouched); anything else rotates. New entries are always scheme 2.
  */
 export class NotificationSourceProofs {
-  readonly #current = new Map<string, { identityDigest: string; proof: string }>()
+  readonly #current = new Map<string, SourceProofEntry>()
   readonly #mint: () => string
   #seam: SourceProofStoreSeam | undefined
   #dirty = false
@@ -141,10 +171,17 @@ export class NotificationSourceProofs {
     this.#restore(seam.load())
   }
 
-  /** Flush only when the roster changed; a failing seam never fails a host commit. */
+  /** Flush only when the roster changed; a failing seam never fails a host commit.
+   *  The file version stays 1; each entry carries its identityScheme so a future reader
+   *  can tell which field set the digest was computed under. */
   persist(): void {
     if (!this.#dirty || this.#seam === undefined) return
-    const proofs = [...this.#current].map(([sourceId, entry]) => ({ sourceId, ...entry }))
+    const proofs = [...this.#current].map(([sourceId, entry]) => ({
+      sourceId,
+      identityDigest: entry.identityDigest,
+      proof: entry.proof,
+      identityScheme: entry.scheme,
+    }))
     try {
       this.#seam.save(JSON.stringify({ v: SOURCE_PROOF_FILE_VERSION, proofs }))
     } catch {
@@ -172,12 +209,34 @@ export class NotificationSourceProofs {
       const sourceId = `${instance.kind}-${instance.id}`
       const identityDigest = notificationSourceIdentityDigest(instance)
       let current = this.#current.get(sourceId)
-      if (current === undefined || current.identityDigest !== identityDigest) {
+      if (current !== undefined && current.identityDigest === identityDigest) {
+        // Same identity under the current scheme: keep the proof. A scheme-1 entry whose
+        // legacy digest already equals the logical digest (dsh rows / an HTTP gateway with
+        // null SSH fields) is upgraded in place so the next startup starts on scheme 2.
+        if (current.scheme === 1) {
+          current = { identityDigest, proof: current.proof, scheme: SOURCE_PROOF_IDENTITY_SCHEME }
+          this.#current.set(sourceId, current)
+          this.#dirty = true
+        }
+      } else if (current !== undefined
+        && current.scheme === 1
+        && current.identityDigest === legacyNotificationSourceIdentityDigest(instance)) {
+        // Tolerant roster migration (C4): the entry was written under the legacy five-field
+        // scheme and the row's LOGICAL identity has not changed (gateway SSH user/sshPort, or
+        // a dsh row whose fields are the same). Preserve proof and durable history, adopt the
+        // logical digest, and let the next commit point persist the upgraded scheme.
+        current = { identityDigest, proof: current.proof, scheme: SOURCE_PROOF_IDENTITY_SCHEME }
+        this.#current.set(sourceId, current)
+        this.#dirty = true
+      } else {
+        current = undefined
+      }
+      if (current === undefined) {
         const proof = this.#mint()
         if (!REMOTE_SOURCE_FINGERPRINT_PATTERN.test(proof)) {
           throw new Error('source proof mint returned an invalid value')
         }
-        current = { identityDigest, proof }
+        current = { identityDigest, proof, scheme: SOURCE_PROOF_IDENTITY_SCHEME }
         this.#current.set(sourceId, current)
         this.#dirty = true
       }
@@ -199,12 +258,21 @@ export class NotificationSourceProofs {
       }
       for (const candidate of root.proofs) {
         if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) continue
-        const entry = candidate as { sourceId?: unknown; identityDigest?: unknown; proof?: unknown }
+        const entry = candidate as {
+          sourceId?: unknown; identityDigest?: unknown; proof?: unknown; identityScheme?: unknown
+        }
         if (typeof entry.sourceId !== 'string' || entry.sourceId.length === 0 || entry.sourceId.length > 128) continue
         if (typeof entry.identityDigest !== 'string' || !REMOTE_SOURCE_FINGERPRINT_PATTERN.test(entry.identityDigest)) continue
         if (typeof entry.proof !== 'string' || !REMOTE_SOURCE_FINGERPRINT_PATTERN.test(entry.proof)) continue
+        // Missing scheme = the pre-logical five-field digest (the v1 file format).
+        const scheme = entry.identityScheme === undefined ? 1 : entry.identityScheme
+        if (scheme !== 1 && scheme !== 2) continue
         this.#current.delete(entry.sourceId)
-        this.#current.set(entry.sourceId, { identityDigest: entry.identityDigest, proof: entry.proof })
+        this.#current.set(entry.sourceId, {
+          identityDigest: entry.identityDigest,
+          proof: entry.proof,
+          scheme,
+        })
       }
     } catch {
       console.warn('[dsh-chamber] 来源证明名册损坏，按空名册启动（远端 proof 将轮换一次）')

@@ -8,6 +8,8 @@
 import {
   deriveArchivedSessions,
   deriveServerWorkspaces,
+  linkHealthOf,
+  linkReady,
   managedRuntimeDown,
   mergeRuntimeFacts,
   projectableCurrent,
@@ -41,7 +43,7 @@ import type { ShellState } from '../shell.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
 import { toServerBootGap } from '../boot-gap.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from '../global.d.ts'
-import { instanceConnected, sourceIdForInstance } from '../transport-source.ts'
+import { instanceConnected, isServiceableLocalStatus, sourceIdForInstance } from '../transport-source.ts'
 
 /**
  * 按来源投影缓存（性能 A1）：键 = 影响该来源条目的全部输入（对象按身份、标量按值）。
@@ -219,6 +221,14 @@ export function deriveServers(
     const managedTransient = kind === 'gateway' && transportUsable
       && (runtimeState === 'starting' || runtimeState === 'restarting')
     const phase = managedDown || managedTransient ? runtimeState! : transportPhase
+    // Link facts (design 27 §3.1/§3.3 page consumption): the SAME readings the page-channel
+    // selector uses — the local serviceable table / client-core linkReady for the remote
+    // transport link. `linkState` is the ready-period sub-state (null = local / no projection /
+    // not ready). Both are TRANSPORT facts: the managed-dsh fold stays in phase/managedRuntimeDown
+    // and must never re-label a healthy tunnel as down (design 27 P1-D).
+    const remoteLink = kind === 'local' ? undefined : remoteStatus[statusKey]
+    const linkUp = kind === 'local' ? isServiceableLocalStatus(health?.dsh?.status) : linkReady(remoteLink)
+    const linkState = remoteLink?.phase === 'ready' ? linkHealthOf(remoteLink) : null
     let workspaces: ChamberServerAggregate['workspaces'] = []
     const aggregate = aggregates[id]
     // 该来源的归档筛选三态（缺省 default = 现状）。**降级出处门**：归档集未知
@@ -257,7 +267,7 @@ export function deriveServers(
     const cacheKey: readonly unknown[] = [
       kind, transport, id, label, sourceFingerprint, rawId ?? null, statusKind ?? null,
       repoLayoutSignature,
-      transportPhase, managedDown, managedTransient, connected,
+      transportPhase, managedDown, managedTransient, connected, linkUp, linkState,
       aggregate ?? null,
       archivedFilter,
       runtimeFacts[id] ?? null, correctionArms[id] ?? null, sessionFacts[id] ?? null,
@@ -362,6 +372,8 @@ export function deriveServers(
       label,
       connected,
       phase,
+      linkUp,
+      linkState,
       ...(managedDown ? { managedRuntimeDown: true } : {}),
       workspaces,
       // 置顶集（最新在前）与出处门：pin 渲染分区读它；快照缺席/降级时两个字段都缺席

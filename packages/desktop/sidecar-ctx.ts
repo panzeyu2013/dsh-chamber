@@ -127,6 +127,8 @@ export interface HeadlessCtxInputs {
   /** beta 通道开关（壳传 --native-updater-beta = **两条通道 URL 都已注入且形状可用**）；
    *  缺省 false。只对原生腿有意义：无原生腿（dev GitHub releases 发现）时通道切换能力恒可用。 */
   nativeBetaChannelSwitch?: boolean
+  /** 非秘密应用会话身份（sidecar-entry 从 env/flag 解析；缺省 null = 意图功能关闭）。 */
+  appSessionId?: string | null
 }
 
 /**
@@ -375,6 +377,7 @@ export async function buildHeadlessCtx(
     },
     isQuitting: () => quittingRequested,
     markQuitting: () => { quittingRequested = true },
+    appSessionId: inputs.appSessionId ?? null,
     hostFacts: { flavor: 'swift', trayPresent: () => true },
     // 无 safeStorage 适配器 → 0600 plaintext 回退 + loud 注册（Swift 非 win32，
     // windowsRefusePlaintext 判据不触发）。

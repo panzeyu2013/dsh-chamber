@@ -8,5 +8,5 @@
 # recomputed: same section list (Content / Data discipline / Styling / i18n),
 # same 7 bullets, same claims in the same order, the zh side spelling out
 # what "the exact unchanged normalized current roster" means.
-README.md: ef629220f849d078fda06fbaf3889e1e833a8f78d50009f975d04e2ef737f6a6
-README.zh.md: ab9b163359fd6f67242eb923c7acf41232fcbc59633e2562b0cdc62003a89952
+README.md: a34d4dcc2399bf38acdc58ebcd851217f0eb840947723c941c813133b4004d41
+README.zh.md: 1b77069a2193a3d805aebc1bd5124e6e890c36d86663f83085148f677615f2ae

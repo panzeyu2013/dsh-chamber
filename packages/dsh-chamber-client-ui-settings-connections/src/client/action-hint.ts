@@ -13,8 +13,10 @@
  * - kind 'gateway'   → gatewayAuthActionHint (URL/credentials are the repair surface — covers
  *   instance-level 401/403 too);
  * - transport 'http' → directActionHint (URL / reachability / dsh web profile);
- * - transport 'ssh'  → `userActionKind === 'endpoint'` ? endpointActionHint (SSH is fine —
- *   check/upgrade the remote dsh) : authActionHint (auth class or unknown).
+ * - transport 'ssh'  → `userActionKind === 'instance-auth'` ? browserAuthAttachHint (the remote
+ *   dsh is behind its browser-auth gate — HTTP 401 — so the SSH attach cannot fetch the launch
+ *   token; deploy/attach a Gateway) : `userActionKind === 'endpoint'` ? endpointActionHint (SSH is
+ *   fine — an old/incompatible dsh or a non-dsh port) : authActionHint (auth class or unknown).
  * Returns null when no hint applies (requiresUserAction false, or a non-terminal phase).
  */
 
@@ -46,7 +48,9 @@ export function actionHintKey(
   if (status.userActionKind === 'environment') return 'environmentActionHint'
   if (spec.kind === 'gateway') return 'gatewayAuthActionHint'
   if (spec.transport === 'http') return 'directActionHint'
-  // dsh over SSH: the class discriminator decides the repair surface. An endpoint-class failure
-  // means the tunnel worked — never an SSH auth hint.
+  // dsh over SSH: the class discriminator decides the repair surface. An instance-auth failure
+  // is the remote dsh browser-auth gate (401) — the fix is to deploy/attach a Gateway; an
+  // endpoint-class failure means the tunnel worked (version/non-dsh). Never an SSH auth hint.
+  if (status.userActionKind === 'instance-auth') return 'browserAuthAttachHint'
   return status.userActionKind === 'endpoint' ? 'endpointActionHint' : 'authActionHint'
 }

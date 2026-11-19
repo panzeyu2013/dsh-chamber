@@ -40,18 +40,22 @@ test('plugin-write spawn checkpoint: rejects while the profile lease is held, re
   await checkpoint()
 })
 
-test('managed dsh child environment strips every gateway credential/config variable', () => {
+test('managed dsh child environment strips every gateway credential/config and chamber-internal variable', () => {
   const source = {
     PATH: '/bin',
+    HOME: '/home/user',
     DSH_GATEWAY_PASSWORD: 'password-secret',
     DSH_GATEWAY_TOKEN: 'token-secret',
     DSH_GATEWAY_PUBLIC_ORIGIN: 'https://gateway.example',
     dsh_gateway_mixed_case_secret: 'windows-secret',
     DSH_CHAMBER_STATE: '/state',
+    DSH_CHAMBER_APP_SESSION_ID: 'app-session-0000',
+    dsh_chamber_mixed_case_internal: 'windows-chamber',
   }
+  // v2 C10：宿主内部事实（DSH_CHAMBER_*，含应用会话身份）不得扩散进托管 dsh 子进程。
   assert.deepEqual(sanitizeManagedDshEnv(source), {
     PATH: '/bin',
-    DSH_CHAMBER_STATE: '/state',
+    HOME: '/home/user',
   })
   // Pure copy: sanitizing a child environment never mutates the gateway's own
   // process environment object.

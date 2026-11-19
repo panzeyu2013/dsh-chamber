@@ -52,6 +52,7 @@ import {
   QUIT_INBOUND_ERROR,
 } from './node-edges.ts'
 import { buildHeadlessCtx, settleShutdownLegs, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
+import { APP_SESSION_ID_ENV, APP_SESSION_ID_FLAG, APP_SESSION_ID_PATTERN, resolveAppSessionId } from './connection-intent.ts'
 import { disposeForwardService } from './shell-ipc-open-in.ts'
 import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts'
 import {
@@ -102,6 +103,11 @@ function parseArgs(argv: readonly string[]): {
   }
 }
 const args = parseArgs(process.argv.slice(2))
+// 应用会话身份（非秘密；flag > env）：非法/缺失 = 意图功能关闭（行为与今天逐字相同），绝不 exit。
+const appSession = resolveAppSessionId(process.argv.slice(2), process.env)
+if (appSession.rejected !== null) {
+  console.error(`[sidecar] 忽略非法的应用会话身份 ${appSession.rejected === 'flag' ? APP_SESSION_ID_FLAG : APP_SESSION_ID_ENV}（形状 ${APP_SESSION_ID_PATTERN.source}；连接意图功能关闭）`)
+}
 mkdirSync(args.userDataDir, { recursive: true })
 
 // 目录锁复验：不二次 flock（Swift 侧持锁），只读锁记录校验父 pid 防双 flavor 并发。
@@ -517,6 +523,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
     },
     nativeUpdater,
     nativeBetaChannelSwitch: args.nativeUpdaterBeta,
+    appSessionId: appSession.session,
   })
   ctx = headless.ctx
   perfMark('headlessCtx')
@@ -619,6 +626,10 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
 
   // ready 帧最小化（D8：port + shellVersion；其余身份字段走 dsh-chamber:info）
   writeProtocolLine({ notify: 'ready', payload: { port: controlPlane.port, shellVersion } })
+
+  // B3 宿主对账：plane 已绑定（注册腿可用）且 ready 帧已发；错峰/票据四查在 transport-reconnect。
+  // legacyStart（dev 形状）同样覆盖——本调用在分支之前，不依赖启动事务。
+  void headless.runHostAttempts({ kind: 'startup' })
 
   // I 组更新控制器 start（订阅已在 installIpcHandlers 内注册，start 只排定 15s 静默首检与
   // 周期由 update-schedule.ts 单源（默认 10 min，含退避上限），绝不阻塞）；产品/装配态一律走真实节奏，只有测试注入门可改。

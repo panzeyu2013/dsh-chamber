@@ -57,6 +57,21 @@ test('App and the extracted hooks gate all three local-source seams through the 
   }
 })
 
+test('remote first-contact auto-connect is host-owned: the page keeps no connect arm (v2 §P2-B)', () => {
+  // design 05 §3（v2 P2-B）：远程连接权威移到宿主（sidecar 启动对账 + 权威新增对账 + 唤醒票据
+  // 复查）；页面只呈现事实、只发显式意图（desktop_ssh_connect / desktop_ssh_disconnect）。本条是
+  // 删除后不可复活的文本锁：本地 effect（上面既有的 isServiceableLocalStatus 文本锁）保留，
+  // 页面侧远程首连 / knownRemoteIdsRef 第二权威一律不得回来。
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+  const bootstrap = read('../../src/app-hooks/use-connection-bootstrap.ts')
+  assert.ok(!/\.connect\s*\(/.test(bootstrap), 'use-connection-bootstrap.ts must not call desktopSsh.connect (remote arm removed)')
+  assert.ok(!bootstrap.includes('remoteInstances'), 'the bootstrap hook takes no remote roster (the host owns remote reconciliation)')
+  assert.ok(bootstrap.includes('isServiceableLocalStatus(local.status)'), 'the local auto-start arm must stay')
+  const app = read('../../src/App.tsx')
+  assert.ok(!app.includes('knownRemoteIdsRef'), 'App.tsx must not track first-seen remote ids (no second connection authority)')
+  assert.ok(!app.includes('useConnectionBootstrap({ connections, remoteInstances'), 'the hook is called without a remote roster')
+})
+
 test('the control-plane and renderer serviceability tables name the same states (lockstep)', () => {
   // The renderer cannot import control-plane (different runtime), so its table is a
   // documented copy. A cross-package lockstep is the only guard against drift — a

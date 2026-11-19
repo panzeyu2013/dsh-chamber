@@ -10,6 +10,9 @@
  */
 
 import { createTransportRegistry, type SaveInstancesProvenance } from './transport-registry.ts'
+import type { AppSessionId, ConnectionIntentSnapshot, IntentWriteResult } from './connection-intent.ts'
+import { execIdentityChanged } from './roster-change.ts'
+import { logicalSourceIdentityChanged } from './credential-identity.ts'
 import { createLinkHealth } from './transport-link-health.ts'
 import { createLinkLoop } from './transport-link-loop.ts'
 import type { InstanceState } from './transport-instance-state.ts'
@@ -260,6 +263,10 @@ export interface TransportManagerDeps {
   sshOrphanStateDir?: string
   logger?: { log?(message: string): void; warn?(message: string): void; error?(message: string): void }
   options?: TransportManagerOptions
+  /** 连接意图接线（本应用会话手动断开 + 新增行对账）；缺省 = 功能关闭（行为与今天逐字相同）。 */
+  connectionIntent?: { appSessionId: AppSessionId | null; onInstancesAdded?: (ids: readonly string[]) => void }
+  /** 内部尝试门（connect/startTransport 入口各一次）：false = 本会话手动断开，拒而不 transition。 */
+  canAttempt?: (id: string) => boolean
 }
 
 /** Status-change listener: listener(instanceId, statusProjection). */
@@ -284,10 +291,12 @@ export function computeRemovedInstanceIds(
   return removed
 }
 
-/** Renderer lifecycle retirement is broader than deletion: changing the
- *  transport identity behind a stable id must tear down the old N-ctx shell so
- *  it cannot attach to a different host; presentation and service/home edits do
- *  not retire it. */
+/** Renderer lifecycle retirement is broader than deletion: re-targeting the
+ *  LOGICAL source identity behind a stable id must tear down the old N-ctx shell so
+ *  it cannot attach to a different deployment; presentation, service/home and
+ *  mechanism-only (gateway SSH account) edits do not retire it. The field sets are
+ *  delegated to logicalSourceIdentityChanged (credential-identity.ts): gateway =
+ *  kind+host+remotePort, dsh = kind+host+user+sshPort+remotePort. */
 export function computeRetiredInstanceIds(
   before: readonly Pick<TransportInstanceSpec, 'id' | 'kind' | 'host' | 'user' | 'sshPort' | 'remotePort'>[],
   after: readonly Pick<TransportInstanceSpec, 'id' | 'kind' | 'host' | 'user' | 'sshPort' | 'remotePort'>[],
@@ -299,12 +308,7 @@ export function computeRetiredInstanceIds(
     if (seen.has(previous.id)) continue
     seen.add(previous.id)
     const current = afterById.get(previous.id)
-    if (current === undefined
-      || previous.kind !== current.kind
-      || previous.host !== current.host
-      || previous.user !== current.user
-      || previous.sshPort !== current.sshPort
-      || previous.remotePort !== current.remotePort) {
+    if (current === undefined || logicalSourceIdentityChanged(previous, current)) {
       retired.push(previous.id)
     }
   }
@@ -414,6 +418,12 @@ export interface TransportManager {
   dispose(): void
   /** dispose() + wait for every SIGKILL escalation to resolve (app quit). */
   disposeAsync(): Promise<void>
+  /** 本会话意图只读投影（宿主对账/显式动作读面；绝不进 renderer 载荷）。 */
+  connectionIntents(): ConnectionIntentSnapshot
+  /** 显式断开的唯一写入口：内存先生效、再整文件落盘；失败 loud + volatile（三通道在 IPC/管理器）。 */
+  setManualDisconnectIntent(id: string, suppressed: boolean): IntentWriteResult
+  /** 排队票据的只读事实：InstanceState 对象身份 + tunnelEpoch（缺失 = null）。 */
+  getAttemptFacts(id: string): { state: object; tunnelEpoch: number } | null
 }
 
 /**
@@ -447,20 +457,6 @@ export function commitTransportCredentialUpdate(
     throw error
   }
   if (shouldReconnect) transport.connect(id)
-}
-
-/** Fields that bind provider exec work to one connection generation: label, HTTP
- *  scheme and SPKI do not change an SSH exec target; service and dsh home do.
- *  saveInstances disconnects/bump-epochs on the same set. */
-function execIdentityChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
-  return a.kind !== b.kind
-    || a.transport !== b.transport
-    || a.host !== b.host
-    || a.user !== b.user
-    || a.sshPort !== b.sshPort
-    || a.remotePort !== b.remotePort
-    || a.serviceName !== b.serviceName
-    || a.remoteDshHome !== b.remoteDshHome
 }
 
 /** Internal per-instance runtime state (phase machine + logs; never persisted). */
@@ -511,7 +507,7 @@ function defaultPortProbe(port: number, { timeoutMs = PROBE_ATTEMPT_TIMEOUT_MS, 
 
 /** Create the transport runtime for one provider: the provider owns source-
  *  specific validation/argv/classification/exec, everything else is generic. */
-export function createTransportManager({ provider, providers, spawnFn, portProbe, verifyProbe, allocatePort, random, instancesFile, logger, options = {}, hostKey, sshOrphanStateDir }: TransportManagerDeps): TransportManager {
+export function createTransportManager({ provider, providers, spawnFn, portProbe, verifyProbe, allocatePort, random, instancesFile, logger, options = {}, hostKey, sshOrphanStateDir, connectionIntent, canAttempt }: TransportManagerDeps): TransportManager {
   const linkPolicy: LinkPolicy = { ...LINK_POLICY, ...(options.linkPolicy ?? {}) }
   const readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS
   const authReadyTimeoutMs = options.authReadyTimeoutMs ?? AUTH_READY_TIMEOUT_MS
@@ -790,14 +786,16 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * credential-level (SSH auth, spawn), 'hostkey' = the SSH host key needs a
    * fingerprint review/trust (never a password hint), 'endpoint' = instance-level
    * terminal probe failure — the tunnel itself is fine, so the UI must never
-   * suggest fixing SSH credentials. Defaults to 'auth'.
+   * suggest fixing SSH credentials; 'instance-auth' refines that instance class for a
+   * provider 401 (a remote dsh behind its browser-auth gate) whose repair surface is a
+   * Gateway deployment. Defaults to 'auth'.
    */
   function failTerminal(
     id: string,
     state: InstanceState,
     message: string,
     requiresUserAction = true,
-    userActionKind: 'auth' | 'endpoint' | 'hostkey' | 'environment' | null = 'auth',
+    userActionKind: 'auth' | 'endpoint' | 'instance-auth' | 'hostkey' | 'environment' | null = 'auth',
     retryableTerminal = false,
   ) {
     if (!isCurrentState(id, state)) return
@@ -1094,6 +1092,11 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     if (disposed) return
     const spec = instances.get(id)
     if (spec === undefined) return
+    // I7 第二道门：定时器/退避/终态复探绕过 connect() 的路径同样服从意图（拒时零副作用）。
+    if (canAttempt !== undefined && !canAttempt(id)) {
+      warn(`transport-manager: startTransport refused for ${id}: manually disconnected in this app session`)
+      return
+    }
     // The provider for THIS instance's kind: a gateway target → gatewayProvider,
     // an ssh instance → sshProvider.
     const providerForSpec = resolveProvider(spec)
@@ -1482,7 +1485,16 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
               // burning the bounded reconnect cycle. Only transient failures enter the
               // reconnect path; the failure is INSTANCE-level — the transport worked —
               // so the UI shows an endpoint hint, never an SSH auth failure.
-              if (verification.terminal === true) return failTerminal(id, state, reason, true, 'endpoint', verification.terminalRetryable === true)
+              if (verification.terminal === true) {
+                // The provider's failureKind refines the instance class: a remote dsh behind
+                // its browser-auth gate answers HTTP 401 (failureKind 'auth') — the repair
+                // surface is deploying/attaching a Gateway ('instance-auth'), NOT upgrading a
+                // supposed old dsh. 'protocol' stays 'endpoint' (version / non-dsh), and a
+                // gateway target's 401/403 stays 'endpoint' (its credential hint is selected by
+                // spec.kind in the UI) — no retry/terminal semantics change either way.
+                const userActionKind = spec.kind === 'dsh' && verification.failureKind === 'auth' ? 'instance-auth' : 'endpoint'
+                return failTerminal(id, state, reason, true, userActionKind, verification.terminalRetryable === true)
+              }
               return scheduleReconnect(id, state, reason)
             }
           }
@@ -1637,11 +1649,13 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     resolveProvider,
     connect: (id) => { connect(id) },
     disconnect: (id) => { disconnect(id) },
-    execIdentityChanged,
     lastFailureProbeAt,
     onSourceRetired: sourceId => { sourceRetiredListener?.(sourceId) },
+    ...(connectionIntent === undefined ? {} : { intent: connectionIntent }),
   })
-  const { loadInstances, saveInstances, listInstances } = registry
+  const {
+    loadInstances, saveInstances, listInstances, connectionIntents, setManualDisconnectIntent: persistManualDisconnectIntent,
+  } = registry
 
   /** Start (or restart) the transport for one instance: idempotent while
    *  connecting/ready; a manual connect resets retry and clears the pending reconnect. */
@@ -1651,6 +1665,11 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       const error: CodedError = new Error('ssh instance not found')
       error.code = 'ssh_instance_not_found'
       throw error
+    }
+    // 内部连接（保存/凭据/恢复/对账）统一过意图门：本会话手动断开的行只 warn，不 transition。
+    if (canAttempt !== undefined && !canAttempt(id)) {
+      warn(`transport-manager: connect refused for ${id}: manually disconnected in this app session`)
+      return status(id)
     }
     const state = ensureState(id)
     if (state.phase === 'connecting' || state.phase === 'ready') return status(id)
@@ -1800,6 +1819,26 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     return true
   }
 
+  /** 显式断开意图写：registry 的写结果 + 失败反馈（ring + logSummary；audit 在 IPC 层）。 */
+  function setManualDisconnectIntent(id: string, suppressed: boolean): IntentWriteResult {
+    const result = persistManualDisconnectIntent(id, suppressed)
+    const state = states.get(id)
+    if (!result.ok && state !== undefined) {
+      // 三通道中的两通道：ring log 供排障，logSummary 进 status 投影（下一次 connect/disconnect 的
+      // transition 自然清掉该行）。内存意图已保持（volatile），绝不回滚成「会连」。
+      const reason = `${suppressed ? 'manual disconnect' : 'manual connect'} NOT persisted: ${result.error}`
+      appendLogInternal(state, 'error', reason)
+      transition(id, state.phase, state.logSummary === '' ? reason : `${state.logSummary} ${reason}`, state)
+    }
+    return result
+  }
+
+  /** 排队票据的只读事实：状态对象身份（同 id 重加换对象）+ 传输代。 */
+  const getAttemptFacts = (id: string): { state: object; tunnelEpoch: number } | null => {
+    const state = states.get(id)
+    return state === undefined ? null : { state, tunnelEpoch: state.tunnelEpoch }
+  }
+
   /** Subscribe to status changes: listener(instanceId, statusProjection). */
   function onStatusChanged(listener: StatusChangedListener): () => void {
     bus.on('status-changed', listener)
@@ -1875,5 +1914,8 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     onVerified,
     dispose,
     disposeAsync,
+    connectionIntents,
+    setManualDisconnectIntent,
+    getAttemptFacts,
   }
 }

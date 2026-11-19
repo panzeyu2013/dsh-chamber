@@ -33,9 +33,9 @@ const FP_NEW = 'b'.repeat(64)
 const RUN_ID = 'host:turn%2F8'
 const PENDING_AT = 1_000
 
-function fixture(id: string, fingerprint: string): SshInstanceSpec {
+function fixture(id: string, fingerprint: string, transport: 'ssh' | 'http' = 'http'): SshInstanceSpec {
   return {
-    id, label: id, kind: 'gateway', transport: 'http', host: '127.0.0.1', user: null,
+    id, label: id, kind: 'gateway', transport, host: '127.0.0.1', user: null,
     sshPort: null, remotePort: 8787, serviceName: null, remoteDshHome: null,
     sourceFingerprint: fingerprint, insecureHttp: true,
   }
@@ -82,6 +82,11 @@ function createHarness() {
   let registry: SourceRegistry = {}
   const order: string[] = []
   const retired: string[] = []
+  // shell.ts bootTransports 的替身：sourceId → 该壳（或在飞 boot）启动时的传输字。窄重挂
+  // sink 在真实 App 里只拆壳 + 换 token，新 boot 才写绑定；这里 sink 直接模拟那次新 boot
+  // （模型与生产同形状：绑定 = 当前尝试的传输字）。
+  const bootTransports = new Map<string, string>()
+  const remounts: string[] = []
   const persist = (): void => {
     saveNotifications(storage, {
       v: 1,
@@ -115,24 +120,43 @@ function createHarness() {
     reincarnateSource: (sourceId, fingerprint) => {
       registry = reincarnate(registry, { sourceId, fingerprint });
     },
-    installInstances: rows => { remotesStore.setInstances(rows) },
+    installInstances: rows => { order.push('install'); remotesStore.setInstances(rows) },
     settleRoster: () => { order.push('settle'); gate.settle() },
     setLive: sourceIds => { order.push('live'); liveRef.current = sourceIds },
+    // The narrow remount sink: dispose the old shell + bump the retry token. The replacement
+    // boot records its own word; model that successor boot here (same table shape as shell.ts).
+    remountShell: sourceId => {
+      order.push('remount:' + sourceId);
+      remounts.push(sourceId);
+      bootTransports.delete(sourceId);
+      const row = remotesStore.getSnapshot().instances
+        .find(instance => sourceIdForInstance(instance) === sourceId);
+      if (row !== undefined) bootTransports.set(sourceId, row.transport);
+    },
     refreshStatus: (_instance, sourceId) => { order.push('refresh:' + sourceId) },
   };
-  const refresh = (health: { degraded: boolean; rosterIncomplete: boolean }, instances: SshInstanceSpec[]) => {
+  /** Record a booted/in-flight shell (shell.ts bootTransports.set at the boot generation). */
+  const boot = (sourceId: string, transport: 'ssh' | 'http'): void => {
+    bootTransports.set(sourceId, transport);
+  };
+  const refresh = (
+    health: { degraded: boolean; rosterIncomplete: boolean },
+    instances: SshInstanceSpec[],
+    bindings: ReadonlyMap<string, string> = bootTransports,
+  ) => {
     const plan = planRosterCommit({
       health, instances,
       priorInstances: remotesStore.getSnapshot().instances,
       live: liveRef.current,
       fingerprints: owners.fingerprints(),
+      bootTransports: bindings,
     });
     const committed = commitRosterPlan(plan, sinks);
     return { plan, committed };
   };
   return {
     alpha, sourceId, storage, ledger, outbox, owners, remotesStore, gate, liveRef,
-    registry: () => registry, order, retired, refresh, persist,
+    registry: () => registry, order, retired, remounts, bootTransports, boot, refresh, persist,
   };
 }
 
@@ -311,11 +335,12 @@ test('a degraded registry answer commits nothing', () => {
     installInstances: () => { calls.push('install') },
     settleRoster: () => { calls.push('settle') },
     setLive: () => { calls.push('live') },
+    remountShell: () => { calls.push('remount') },
     refreshStatus: () => { calls.push('refresh') },
   };
   const plan = planRosterCommit({
     health: DEGRADED, instances: [], priorInstances: displayed,
-    live: h.liveRef.current, fingerprints: h.owners.fingerprints(),
+    live: h.liveRef.current, fingerprints: h.owners.fingerprints(), bootTransports: new Map(),
   });
   assert.equal(plan.mode, 'degraded')
   assert.equal(plan.instances, displayed, 'a degraded answer installs nothing')
@@ -357,7 +382,7 @@ test('invalid lifecycle proofs are omitted in every mode with the single loud di
     // complete: the malformed row is omitted from the installed authoritative set.
     const complete = planRosterCommit({
       health: HEALTHY, instances: [fixture('beta', 'not-a-proof')], priorInstances: prior,
-      live: h.liveRef.current, fingerprints: h.owners.fingerprints(),
+      live: h.liveRef.current, fingerprints: h.owners.fingerprints(), bootTransports: new Map(),
     });
     assert.equal(complete.mode, 'complete')
     assert.deepEqual(complete.instances, [], 'no row without a valid proof is installed')
@@ -367,7 +392,7 @@ test('invalid lifecycle proofs are omitted in every mode with the single loud di
     // partial: a malformed replacement row for a confirmed source keeps the current row.
     const partial = planRosterCommit({
       health: PARTIAL, instances: [fixture('alpha', 'still-not-a-proof')], priorInstances: prior,
-      live: h.liveRef.current, fingerprints: h.owners.fingerprints(),
+      live: h.liveRef.current, fingerprints: h.owners.fingerprints(), bootTransports: new Map(),
     });
     assert.equal(partial.mode, 'partial')
     assert.equal(partial.instances, prior)
@@ -376,6 +401,104 @@ test('invalid lifecycle proofs are omitted in every mode with the single loud di
   } finally {
     console.error = original;
   }
+})
+
+test('a complete snapshot with a changed transport plans one narrow remount (no retirement)', () => {
+  const h = createHarness()
+  h.refresh(HEALTHY, [h.alpha])
+  assert.deepEqual(h.remounts, [], 'no booted shell = no remount')
+  const owner = h.owners.capture(h.sourceId)
+  const queued = h.outbox.entries()[0]
+
+  // The shell was booted under the OLD word (ssh) while the authoritative row now says http.
+  // This is a transport MECHANISM switch, not a source identity change.
+  h.boot(h.sourceId, 'ssh')
+  h.gate.invalidate()
+  const { plan } = h.refresh(HEALTHY, [fixture('alpha', FP_OLD, 'http')])
+  assert.equal(plan.mode, 'complete')
+  assert.equal(plan.retire.size, 0, 'a mechanism switch retires nothing')
+  assert.deepEqual(plan.remount, [{ sourceId: h.sourceId, instanceId: 'alpha', transport: 'http' }])
+  assert.deepEqual(h.remounts, [h.sourceId], 'the narrow sink ran once for the live source')
+  assert.deepEqual(h.retired, [], 'the narrow sink never crosses the retirement edge')
+  // Hard order: the authoritative row is installed and live before the shell remount; the
+  // per-row status refresh follows it.
+  // Later occurrences matter: the first commit already recorded install/live/refresh.
+  const at = (entry: string): number => h.order.lastIndexOf(entry)
+  assert.ok(at('install') !== -1)
+  assert.ok(at('remount:' + h.sourceId) > at('install'), 'install precedes remount')
+  assert.ok(at('remount:' + h.sourceId) > at('live'), 'live precedes remount')
+  assert.ok(at('refresh:' + h.sourceId) > at('remount:' + h.sourceId), 'remount precedes refreshStatus')
+  // Durable notification surfaces and the incarnation are untouched by the narrow path.
+  assert.equal(h.owners.capture(h.sourceId), owner, 'the same incarnation object survives')
+  assert.equal(h.owners.capture(h.sourceId)?.fingerprint, FP_OLD)
+  assert.equal(h.ledger.notifiedRun(h.sourceId, 'session'), RUN_ID)
+  assert.notEqual(h.ledger.pendingEntry(h.sourceId, 'session'), undefined)
+  assert.equal(h.outbox.entries()[0], queued, 'the pending delivery object survives the remount')
+  assert.notEqual(durable(h.storage).notifiedRuns?.[h.sourceId], undefined, 'the disk ledger survives')
+  // Idempotence: the replacement boot recorded the authoritative word, so the SAME snapshot
+  // plans no second remount (the request is a function of the current binding vs the row).
+  h.gate.invalidate()
+  const again = h.refresh(HEALTHY, [fixture('alpha', FP_OLD, 'http')])
+  assert.deepEqual(again.plan.remount, [])
+  assert.deepEqual(h.remounts, [h.sourceId], 'one remount per mechanism change')
+})
+
+test('a lost push cannot lose the remount: the next complete commit reads the boot binding', () => {
+  const h = createHarness()
+  h.refresh(HEALTHY, [fixture('alpha', FP_OLD, 'http')])
+  h.boot(h.sourceId, 'http')
+  // The instances-changed push was LOST (no listener ran, no invalidate). The 30s poll / any
+  // other refresh reaches the same COMPLETE snapshot; the truth is the binding vs the row, so
+  // the reverse direction (http → ssh) remounts exactly like the push path would.
+  h.gate.invalidate()
+  const { plan } = h.refresh(HEALTHY, [fixture('alpha', FP_OLD, 'ssh')])
+  assert.deepEqual(plan.remount, [{ sourceId: h.sourceId, instanceId: 'alpha', transport: 'ssh' }])
+  assert.deepEqual(h.remounts, [h.sourceId])
+  assert.deepEqual(h.retired, [])
+})
+
+test('the retirement edge outranks a remount in the same commit', () => {
+  const h = createHarness()
+  h.refresh(HEALTHY, [h.alpha])
+  h.boot(h.sourceId, 'http')
+  h.gate.invalidate()
+  // Same id, NEW fingerprint (sourceRetire) AND a new transport word: only the retirement runs —
+  // the retirement path tears the shell down itself (I1: retire wins).
+  const { plan } = h.refresh(HEALTHY, [fixture('alpha', FP_NEW, 'ssh')])
+  assert.deepEqual([...plan.retire], [h.sourceId])
+  assert.deepEqual(plan.remount, [], 'a retired source is never remounted')
+  assert.deepEqual(h.remounts, [])
+  assert.deepEqual(h.retired, [h.sourceId], 'the retirement edge ran exactly once')
+})
+
+test('partial and degraded answers never plan a remount', () => {
+  const h = createHarness()
+  h.refresh(HEALTHY, [h.alpha])
+  const confirmed = h.remotesStore.getSnapshot().instances
+  h.boot(h.sourceId, 'ssh') // the shell is bound to a different word than the displayed row
+  h.gate.invalidate()
+  const partial = h.refresh(PARTIAL, [fixture('alpha', FP_OLD, 'http')])
+  assert.equal(partial.plan.mode, 'partial')
+  assert.deepEqual(partial.plan.remount, [], 'a partial snapshot is not a boot-capability authority')
+  assert.deepEqual(h.remounts, [])
+  assert.equal(h.remotesStore.getSnapshot().instances[0], confirmed[0], 'the prior row is kept')
+  h.gate.invalidate()
+  const degraded = h.refresh(DEGRADED, [])
+  assert.equal(degraded.plan.mode, 'degraded')
+  assert.deepEqual(degraded.plan.remount, [])
+  assert.equal(degraded.committed, false, 'a degraded plan commits nothing')
+  assert.deepEqual(h.remounts, [])
+})
+
+test('a complete snapshot whose rows still match the boot binding plans nothing', () => {
+  const h = createHarness()
+  h.refresh(HEALTHY, [h.alpha])
+  h.boot(h.sourceId, 'http')
+  h.gate.invalidate()
+  const { plan } = h.refresh(HEALTHY, [fixture('alpha', FP_OLD, 'http')])
+  assert.equal(plan.mode, 'complete')
+  assert.deepEqual(plan.remount, [])
+  assert.deepEqual(h.remounts, [])
 })
 
 test('the App delegates the roster refresh to the one hook (no second commit path)', async () => {
@@ -397,7 +520,22 @@ test('the App delegates the roster refresh to the one hook (no second commit pat
   assert.equal(hook.split('remoteRosterRefreshSeqRef.current !== seq').length - 1, 2,
     'both awaits are guarded by the refresh generation');
   assert.equal(hook.split('rosterGate.settle()').length - 1, 1, 'one settle call site');
+  assert.equal(hook.split('bootTransportOf(').length - 1, 1,
+    'the roster commit hook is the boot-binding consumer (production consumer of shell.ts)');
   assert.equal(planner.split('authoritativeSourceRetirements(').length - 1, 1, 'one retirement differential');
+  assert.equal(planner.split('planRemounts(').length - 1, 2, 'one remount planner + its call site');
   assert.equal(planner.split("mode: 'partial'").length - 1, 2, 'plan type arm + the partial plan builder');
   assert.equal(planner.split("mode: 'complete'").length - 1, 2, 'plan type arm + the complete plan builder');
+  // The narrow remount sink is App-owned and must never fan out a retirement (that path deletes
+  // the durable notification ledger/outbox/facts/owner). Lock the sink body's shape.
+  const remountStart = app.indexOf('const remountSourceShell = useCallback')
+  assert.ok(remountStart !== -1, 'App owns the narrow remount sink');
+  const remountBody = app.slice(remountStart, app.indexOf('}, [forgetDegradedRetry])', remountStart))
+  assert.equal(remountBody.includes('retireSources'), false,
+    'the remount sink must not call retireSources (durable state survives a mechanism switch)');
+  assert.ok(remountBody.includes('disposeInstanceShell(sourceId)'), 'the old shell is disposed first')
+  assert.ok(remountBody.includes('setRetryTokens'), 'the retry token swaps the container and re-boots')
+  assert.ok(remountBody.includes('liveServerIdsRef.current.has(sourceId)'),
+    'a retired/unknown source is never remounted (retirement wins)')
+  assert.ok(app.includes('remountShell: remountSourceShell'), 'the hook receives the narrow sink')
 })

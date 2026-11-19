@@ -187,7 +187,7 @@ export interface ShellAssemblyCtx {
    *  authority：来源证明/代际同步 + 插件 seed 撤销 + 活跃通知退役驱逐
    *  + SSH_INSTANCES_CHANGED committed push 编排）——main 装配侧经本叶
    *  注入（其宿主对象 readySeedEdges/hostPackageSeeding/
-   *  setGatewaySyncRegistration/startAutomaticHostSeed 归装配侧，push 文本被
+   *  ActiveRegistration registry/startAutomaticHostSeed 归装配侧，push 文本被
    *  renderer-trust 锚定），C 组 save/delete 注册体经它发布 committed 结果。 */
   publishRegistryTransition(
     before: readonly TransportInstanceSpec[],
@@ -221,10 +221,10 @@ export interface ShellAssemblyCtx {
     ): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
     liveProbeFor(id: string): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
   }
-  // —— G 组手动 sync 注册体的装配依赖。编排纯模块
-  // （gateway-sync-registry / gateway-provider）在
-  // core 直接 import；注册参数读取（getGatewaySyncRegistration）与 ready 位复验
-  // 在注册体侧。无存活主窗预检 = edges.mainWindowAlive。
+  // —— G 组手动 sync 注册体的装配依赖。编排纯模块（gateway-provider）在
+  // core 直接 import；注册参数读取改为 ActiveRegistration 的
+  // currentRecordGen → snapshotForSync（代际复验在注册体侧，不再有参数镜像）。
+  // 无存活主窗预检 = edges.mainWindowAlive。
   /** 手动 gateway_plugin_sync 的上传执行闭包（main 装配侧定义——ready 注册自动
    *  sync（sm.onStatusChanged ready 边缘）与手动 re-entry 注册体共用同一执行
    *  路径与注册参数，语义不分叉）：把本地 chamber host 包种子缓存上传到注册

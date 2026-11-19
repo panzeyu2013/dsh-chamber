@@ -13,10 +13,14 @@ frames, no dsh runtime objects.
 
 - **Local instance card**: /health status badge, the /api/connections row
   (port/label), start/stop (with confirmation), and read-only host logs.
-- **Remote connection roster**: all four shipped target/transport combinations
-  (`dsh|gateway × ssh|http`), with label, endpoint, target/transport badges,
-  phase, systemd/log projections where applicable, connect/disconnect, edit,
-  delete, and a dashed add card opening the schema-driven modal form.
+- **Remote connection roster**: the three shipped target/transport combinations
+  (`gateway × ssh`, `gateway × http`, `dsh × ssh`), with label, endpoint,
+  target/transport badges, phase, systemd/log projections where applicable,
+  connect/disconnect, edit, delete, and a dashed add card opening the
+  schema-driven modal form. `dsh × http` is disabled (the browser-auth gate
+  covers every `/api` request, so a directly attached dsh is unreachable); the
+  add form defaults to `gateway × ssh`, and a `dsh × ssh` selection shows the
+  remote BrowserAuth compatibility caveat inline.
 
 ## Data discipline
 

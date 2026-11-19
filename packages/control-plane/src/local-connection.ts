@@ -12,7 +12,7 @@
  * is always managed; there is no external/claim takeover mode.
  */
 
-import { isWriterQuiescenceUnknown, spawnDsh } from './spawn-dsh.ts'
+import { DSH_WRITER_QUIESCENCE_UNKNOWN_CODE, isWriterQuiescenceUnknown, SpawnLifecycleError, spawnDsh } from './spawn-dsh.ts'
 import { clearAuthCookie } from './browser-auth-cookie.ts'
 import { probeHostIdentity as probeHostIdentityFn } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
@@ -40,11 +40,28 @@ export function isServiceableLocalState(state: string): boolean {
 export interface SpawnedDsh {
   child: {
     on(event: string, listener: (...args: any[]) => void): unknown
+    /** Optional listener removal (a real ChildProcess has it): reclamation detaches the
+     *  exit hook so a late exit of a superseded generation can never schedule a restart. */
+    off?(event: string, listener: (...args: any[]) => void): unknown
     exitCode: number | null
     signalCode?: string | null
   }
   port: number
+  /** The managed host pid (the durable ledger identity), when the spawn layer knows it. */
+  readonly pid?: number
   stop(): Promise<void>
+}
+
+/**
+ * Evidence of a managed writer whose process-group termination could NOT be proven. Kept
+ * (with the child handle that produced it) so a later stop()/start() retries the same proof
+ * instead of reporting quiescence; liveness and diagnosis treat it as possibly alive.
+ */
+export interface LocalWriterSuspect {
+  /** The process identity the unproven termination was about; null when none was known. */
+  readonly pid: number | null
+  readonly since: number
+  readonly lastError: string
 }
 
 /** Unified host-identity probe seam. Resolution = the host answered the identity
@@ -147,6 +164,11 @@ export interface LocalConnection {
    * liveness fact for quit-risk decisions).
    */
   hasLiveProcess(): boolean
+  /**
+   * The unproven writer record, if any (see LocalWriterSuspect). Non-null ⇒ a managed
+   * process group may still be writing DSH_HOME: stop() must not report quiescence.
+   */
+  getWriterSuspect(): LocalWriterSuspect | null
   start(): Promise<void>
   stop(): Promise<void>
   /**
@@ -196,6 +218,13 @@ export const RESTART_WINDOW_MS = 600_000
 /** Restarts allowed within one restart window before restart-exhausted. */
 export const MAX_RESTARTS_IN_WINDOW = 5
 
+/**
+ * /health-safe reason (no path/port/internal detail) recorded when a restart leg ends on
+ * an unproven writer or another terminal loop failure. The quarantine projection may show
+ * it while the writer latch is closed; the raw cause stays in the host log.
+ */
+const RESTART_TERMINAL_FAILURE = 'local dsh restart failed: the host did not reach ready; restart the app to re-prove writer quiescence'
+
 /** Create the local connection adapter (options + injectable deps). */
 export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, logger, options = {}, deps = {} }: {
   stateDir: string
@@ -236,19 +265,126 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     return value instanceof Error && (value as Error & { code?: string }).code === 'connection_busy'
   }
 
+  /** The process identity a spawned child carries (the durable ledger pid). */
+  function childPid(value: SpawnedDsh): number | null {
+    if (typeof value.pid === 'number' && Number.isInteger(value.pid) && value.pid > 0) return value.pid
+    const raw = (value.child as { pid?: unknown }).pid
+    return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null
+  }
+
+  /** The process identity a coded writer-unknown error carries (spawn-dsh attaches child.pid). */
+  function errorPid(value: unknown): number | null {
+    if (!(value instanceof Error)) return null
+    const raw = (value as Error & { pid?: unknown }).pid
+    return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null
+  }
+
+  /** A managed child is alive only when NEITHER an exit code nor a signal was observed. */
+  function isChildAlive(value: SpawnedDsh | null): boolean {
+    return value !== null && value.child.exitCode === null && value.child.signalCode == null
+  }
+
+  /** Coded writer-unknown error built from the recorded suspect (pid/details for the API). */
+  function writerUnknownError(suspect: LocalWriterSuspect, cause?: unknown): Error & { code: string } {
+    const failure = new SpawnLifecycleError(
+      DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
+      `dsh writer quiescence is unknown${suspect.pid === null ? '' : ` (pid ${suspect.pid})`}: ${suspect.lastError}`,
+      cause,
+      suspect.pid,
+    ) as Error & { code: string; details?: unknown }
+    failure.details = { pid: suspect.pid, since: suspect.since, reason: suspect.lastError }
+    return failure
+  }
+
+  /** Attach the fail-closed suspect details a REST error mapping may expose (409 detail). */
+  function annotateWriterUnknown(error: Error, pid: number | null): Error {
+    const coded = error as Error & { code?: string; details?: unknown }
+    if (coded.details === undefined) {
+      coded.details = { pid, since: Date.now(), reason: errorMessage(error) }
+    }
+    return error
+  }
+
+  /** Errors already recorded as an unproven writer (a retry rethrows the same object). */
+  const recordedWriterUnknowns = new WeakSet<Error>()
+
   /**
-   * A failed process-group termination proof is qualitatively different from a
-   * port/readiness failure: another start could overlap an unknown writer. Notify
-   * the owning plane exactly on that coded path; callback failure is isolated.
+   * Record an unproven process-group termination, latch the owning plane and report whether
+   * the value was that coded failure. Evidence rules: a captured child handle is evidence
+   * even when no pid is known; a childless failure is evidence only when the spawn layer
+   * attached the pid of the group it could not prove gone — an unknown identity still
+   * latches/errors, it just cannot claim a named live process.
    */
-  function noteWriterQuiescenceUnknown(value: unknown): value is Error {
+  function noteWriterQuiescenceUnknown(value: unknown, childRef: SpawnedDsh | null = null): boolean {
     if (!isWriterQuiescenceUnknown(value)) return false
+    if (recordedWriterUnknowns.has(value)) return true
+    recordedWriterUnknowns.add(value)
+    const pid = (childRef === null ? null : childPid(childRef)) ?? errorPid(value)
+    const lastError = errorMessage(value)
+    const previous = writerSuspect
+    if (childRef !== null || pid !== null) {
+      writerSuspect = {
+        pid,
+        since: previous !== null && previous.pid === pid ? previous.since : Date.now(),
+        lastError,
+      }
+    }
     try {
-      options.onWriterQuiescenceUnknown?.(value)
+      options.onWriterQuiescenceUnknown?.(writerUnknownError(writerSuspect ?? { pid, since: Date.now(), lastError }, value))
     } catch (callbackError) {
       logger.error(`writer-quiescence latch callback failed: ${String(callbackError)}`)
     }
     return true
+  }
+
+  /**
+   * The SINGLE reclamation primitive every lifecycle leg uses (start pre-clean, restart
+   * loop, exhaustion, stop's second look, cancelled spawns): prove the current
+   * generation's detached process group is gone. Resolves null only with that proof;
+   * otherwise keeps the child handle + suspect evidence and returns the coded error the
+   * caller must propagate. Nothing may clear the reference/state before this returns.
+   */
+  async function retireCurrentChild(context: string): Promise<Error | null> {
+    const current = child
+    if (current === null) {
+      if (writerSuspect === null) return null
+      return writerUnknownError(writerSuspect)
+    }
+    // Reclamation owns the teardown: detach the exit hook first so a late exit event can
+    // neither schedule another restart nor race this proof.
+    detachChildExit(current)
+    try {
+      // Unconditional: an observed leader death (exitCode OR signalCode) says nothing about
+      // the detached group — terminateChild's group proof is the only quiescence fact.
+      await current.stop()
+    } catch (retireError) {
+      const pid = childPid(current) ?? errorPid(retireError)
+      const typed = annotateWriterUnknown(isWriterQuiescenceUnknown(retireError)
+        ? retireError as Error
+        : writerUnknownError({ pid, since: Date.now(), lastError: errorMessage(retireError) }, retireError), pid)
+      noteWriterQuiescenceUnknown(typed, current)
+      logger.error(`local connection: ${context} could not prove the dsh process group is gone: ${errorMessage(typed)}`)
+      return typed
+    }
+    child = null
+    writerSuspect = null
+    return null
+  }
+
+  /** Prove a child this generation spawned but will not adopt (a cancelled start/restart). */
+  async function retireSpawnedChild(spawned: SpawnedDsh, context: string): Promise<Error | null> {
+    try {
+      await spawned.stop()
+    } catch (retireError) {
+      const pid = childPid(spawned) ?? errorPid(retireError)
+      const typed = annotateWriterUnknown(isWriterQuiescenceUnknown(retireError)
+        ? retireError as Error
+        : writerUnknownError({ pid, since: Date.now(), lastError: errorMessage(retireError) }, retireError), pid)
+      noteWriterQuiescenceUnknown(typed, spawned)
+      logger.error(`local connection: ${context} could not prove the dsh process group is gone: ${errorMessage(typed)}`)
+      return typed
+    }
+    return null
   }
 
   /**
@@ -283,19 +419,25 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   const stateListeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
   let dshPort: number | null = null
   let child: SpawnedDsh | null = null
+  /** Exit hook of the ADOPTED generation (detached before reclamation; owner-checked). */
+  let childExitHook: { owner: SpawnedDsh; listener: (code: number | null, sig: string | null) => void } | null = null
+  /** Unproven termination evidence: a later retire must re-prove it, never report stopped. */
+  let writerSuspect: LocalWriterSuspect | null = null
   let stopping = false
   let startPromise: Promise<void> | null = null
   let consecutiveFailures = 0
   let lastFailureAt = 0
   /** Bumped on start()/stop() so stale restart loops abort (see triggerRestart). */
   let epoch = 0
-  /** Generation abort for the in-flight health probe: stop()/start() abort it so a
-   *  late verdict can never land on a machine that already moved on. */
+  /** Probe generation: every start / restart-entering / stop cancels and bumps it, so a
+   *  late verdict can never write the cache/counter/state of a machine that moved on. */
+  let healthEpoch = 0
+  /** Generation abort for the in-flight health probe (cancelled by cancelProbe). */
   let healthGeneration = new AbortController()
   /** Periodic health probe timer (unref'd); cleared on stop/exhaust. */
   let healthTimer: NodeJS.Timeout | null = null
-  /** Single-flight guard for the health probe. */
-  let healthInFlight: Promise<void> | null = null
+  /** Single-flight guard for the health probe; only the OWNING probe generation clears it. */
+  let healthInFlight: { epoch: number; promise: Promise<void> } | null = null
   /** Last health verdict within the result cache window ({at, ok, reason}). */
   let healthResultCache: { at: number; ok: boolean; reason?: string } | null = null
   /** Single-flight restart sequence. */
@@ -431,9 +573,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     if (restartPromise !== null) return
     // State-guarded: a verdict landing after stop()/error must be inert.
     if (stopping || state === 'stopped' || state === 'error') return
-    if (child === null || child.child.exitCode !== null || child.child.signalCode != null) {
-      // signalCode set = signal-killed child (exitCode stays null) — equally dead,
-      // so it goes straight to the restart sequence instead of the failure counter.
+    if (!isChildAlive(child)) {
+      // One liveness predicate everywhere: exitCode OR signalCode observed = the leader is
+      // dead; the detached group still has to be proven gone by the restart's retire.
       void triggerRestart(`dsh process died: ${reason}`)
       return
     }
@@ -454,9 +596,12 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
 
   /**
    * One real health probe (or the cached verdict when within
-   * healthResultCacheMs — a burst of triggers shares one probe). Single-flight.
+   * healthResultCacheMs — a burst of triggers shares one probe) for ONE probe generation.
+   * The epoch is re-checked after every await: a verdict, cache write, failure count or
+   * state transition of a superseded generation is dropped, never applied (INV-A5).
    */
-  async function performHealthCheck(source: string): Promise<void> {
+  async function performHealthCheck(source: string, probeEpoch: number): Promise<void> {
+    if (probeEpoch !== healthEpoch) return
     if (healthResultCache !== null && Date.now() - healthResultCache.at < healthResultCacheMs) {
       if (healthResultCache.ok) onHealthSuccess()
       else noteHealthFailure(`health probe (${source}): cached ${healthResultCache.reason}`)
@@ -472,9 +617,11 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
         generationSignal: healthGeneration.signal,
         logger,
       })
+      if (probeEpoch !== healthEpoch) return
       healthResultCache = { at: Date.now(), ok: true }
       onHealthSuccess()
     } catch (probeError) {
+      if (probeEpoch !== healthEpoch) return
       const reason = String(probeError)
       healthResultCache = { at: Date.now(), ok: false, reason }
       noteHealthFailure(`health probe (${source}): ${reason}`)
@@ -483,20 +630,24 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
 
   /**
    * The health check entry point shared by the periodic timer and transport
-   * triggers: single-flight and suppressed while stopping, restarting, or outside
-   * ready/degraded.
+   * triggers: single-flight per probe generation and suppressed while stopping,
+   * restarting, or outside ready/degraded. A stale generation's still-pending probe
+   * does not block the current generation's probe, and its late settlement can only
+   * release its OWN single-flight slot.
    */
   async function runHealthCheck(source: string): Promise<void> {
     if (stopping || restartPromise !== null) return
     if (state !== 'ready' && state !== 'degraded') return
-    if (healthInFlight !== null) return healthInFlight
-    healthInFlight = performHealthCheck(source)
+    const probeEpoch = healthEpoch
+    if (healthInFlight !== null && healthInFlight.epoch === probeEpoch) return healthInFlight.promise
+    const slot = { epoch: probeEpoch, promise: performHealthCheck(source, probeEpoch) }
+    healthInFlight = slot
     try {
-      await healthInFlight
+      await slot.promise
     } catch (healthError) {
       logger.warn(`health check threw: ${String(healthError)}`)
     } finally {
-      healthInFlight = null
+      if (healthInFlight === slot) healthInFlight = null
     }
   }
 
@@ -516,6 +667,19 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     }
   }
 
+  /**
+   * Cancel the current probe generation: bump the epoch, abort the in-flight signal,
+   * drop the timer and the result cache. The in-flight probe's promise is left to settle
+   * on its own (its epoch check drops the verdict); stop() is the one caller that awaits it.
+   */
+  function cancelProbe() {
+    healthEpoch += 1
+    healthGeneration.abort()
+    healthGeneration = new AbortController()
+    stopHealthTimer()
+    healthResultCache = null
+  }
+
   /** Backoff wait that aborts early when stop() bumps the epoch. */
   function waitForRestartBackoff(ms: number, restartEpoch: number): Promise<void> {
     return new Promise(resolve => {
@@ -532,11 +696,13 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   }
 
   /**
-   * The restart sequence, single-flight: terminate the residual child, respawn
-   * through deps.spawnDsh, back to ready. Failed restarts loop with exponential
+   * The restart sequence, single-flight: prove the residual child's process group gone,
+   * respawn through deps.spawnDsh, back to ready. Failed restarts loop with exponential
    * backoff (1s → 60s); the restart count inside the sliding window bounds it — at
-   * maxRestartsInWindow the machine lands on restart-exhausted until a manual
-   * start(). The loop aborts when stop() or start() bumps the epoch.
+   * maxRestartsInWindow the machine lands on restart-exhausted ONLY after the retire proof,
+   * until a manual start(). The loop aborts when stop() or start() bumps the epoch.
+   * CONTRACT: a writer-quiescence-unknown rejection is never folded into resolve — stop()
+   * and restartLocal() callers must see the coded failure.
    */
   function triggerRestart(reason: string): Promise<void> {
     if (stopping) return Promise.resolve()
@@ -544,95 +710,140 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     if (startPromise !== null) return Promise.resolve()
     if (state === 'restart-exhausted' || state === 'stopped' || state === 'error') return Promise.resolve()
     if (restartPromise !== null) return restartPromise
-    restartPromise = (async () => {
+    const run = (async () => {
       const restartEpoch = epoch
-      for (;;) {
-        if (stopping || epoch !== restartEpoch) return
-        const now = Date.now()
-        while (restartTimes.length > 0 && restartTimes[0] <= now - restartWindowMs) restartTimes.shift()
-        if (restartTimes.length >= maxRestartsInWindow) {
-          stopHealthTimer()
-          // Stop the residual child before landing on restart-exhausted: a hung-but-alive
-          // dsh must not keep its port, and a dead reference must not keep liveness/dshPort stale.
-          if (child !== null) {
-            try {
-              if (child.child.exitCode === null && child.child.signalCode == null) await child.stop()
-            } catch (stopError) {
-              logger.log(`restart-exhausted: residual child stop failed: ${String(stopError)}`)
+      try {
+        for (;;) {
+          if (stopping || epoch !== restartEpoch) return
+          const now = Date.now()
+          while (restartTimes.length > 0 && restartTimes[0] <= now - restartWindowMs) restartTimes.shift()
+          if (restartTimes.length >= maxRestartsInWindow) {
+            stopHealthTimer()
+            // INV-A2: restart-exhausted triggers the runtime auto-rollback, so it may only be
+            // published after this generation's process group is PROVEN gone. An unproven
+            // retire lands on 'error' (latch + suspect kept) and never publishes it.
+            const retired = await retireCurrentChild('restart-exhausted')
+            if (retired !== null) {
+              startFailure = RESTART_TERMINAL_FAILURE
+              setState('error', retired.message)
+              throw retired
             }
-            child = null
-          }
-          const exhaustedPort = dshPort
-          dshPort = null
-          // The child is gone — the browser-auth cookie must not linger (a later start re-mints).
-          if (exhaustedPort !== null) clearAuthCookie(`http://127.0.0.1:${exhaustedPort}`)
-          setState('restart-exhausted', `restarted ${restartTimes.length} times within ${restartWindowMs}ms; automatic restarting stopped, manual start() required`)
-          return
-        }
-        restartTimes.push(now)
-        const attempt = restartTimes.length
-        if (attempt > 1) {
-          const delay = Math.min(restartBackoffFloorMs * 2 ** (attempt - 2), restartBackoffCeilMs)
-          logger.log(`restart attempt ${attempt} backoff ${delay}ms: ${reason}`)
-          await waitForRestartBackoff(delay, restartEpoch)
-          if (stopping || epoch !== restartEpoch) return
-        }
-        setState('restarting', null)
-        try {
-          if (child !== null && child.child.exitCode === null) await child.stop()
-          child = null
-          await deps.beforeSpawnCheckpoint?.('restart')
-          // First fence: resolvePatchPath() may seed packages into DSH_HOME, so runtime apply/restore must still be open.
-          assertSpawnAllowed(restartEpoch)
-          const resolvedWorkspacePath = resolveDshWorkspacePath()
-          const resolvedPatchPath = resolvePatchPath()
-          // Second fence: a gate closed after the seed checkpoint must never reach the actual spawn.
-          assertSpawnAllowed(restartEpoch)
-          const spawned = await spawnWithOwnership({
-            stateDir,
-            dshHome,
-            dshWorkspacePath: resolvedWorkspacePath,
-            logger,
-            patchPath: resolvedPatchPath,
-            pnpmEntry,
-          })
-          if (stopping || epoch !== restartEpoch) {
-            await spawned.stop()
+            const exhaustedPort = dshPort
+            dshPort = null
+            // The child is proven gone — the browser-auth cookie must not linger (a later start re-mints).
+            if (exhaustedPort !== null) clearAuthCookie(`http://127.0.0.1:${exhaustedPort}`)
+            setState('restart-exhausted', `restarted ${restartTimes.length} times within ${restartWindowMs}ms; automatic restarting stopped, manual start() required`)
             return
           }
-          child = spawned
-          dshPort = spawned.port
-          consecutiveFailures = 0
-          healthResultCache = null
-          spawned.child.on('exit', onChildExit)
-          setState('ready')
-          startHealthTimer()
-          return
-        } catch (restartError) {
-          child = null
-          dshPort = null
-          logger.log(`restart failed: ${String(restartError)}`)
-          if (noteWriterQuiescenceUnknown(restartError)) {
-            stopHealthTimer()
-            setState('error', restartError.message)
-            return
+          restartTimes.push(now)
+          const attempt = restartTimes.length
+          if (attempt > 1) {
+            const delay = Math.min(restartBackoffFloorMs * 2 ** (attempt - 2), restartBackoffCeilMs)
+            logger.log(`restart attempt ${attempt} backoff ${delay}ms: ${reason}`)
+            await waitForRestartBackoff(delay, restartEpoch)
+            if (stopping || epoch !== restartEpoch) return
           }
-          if (stopping || epoch !== restartEpoch) return
-          if (isConnectionBusy(restartError)) {
-            stopHealthTimer()
-            setState('stopped', restartError.message)
+          // Entering a restart generation invalidates the previous probe generation: its late
+          // verdict/cache/counter must not land on the generation about to be spawned.
+          cancelProbe()
+          setState('restarting', null)
+          try {
+            const retired = await retireCurrentChild('restart')
+            if (retired !== null) {
+              startFailure = RESTART_TERMINAL_FAILURE
+              setState('error', retired.message)
+              throw retired
+            }
+            await deps.beforeSpawnCheckpoint?.('restart')
+            // First fence: resolvePatchPath() may seed packages into DSH_HOME, so runtime apply/restore must still be open.
+            assertSpawnAllowed(restartEpoch)
+            const resolvedWorkspacePath = resolveDshWorkspacePath()
+            const resolvedPatchPath = resolvePatchPath()
+            // Second fence: a gate closed after the seed checkpoint must never reach the actual spawn.
+            assertSpawnAllowed(restartEpoch)
+            const spawned = await spawnWithOwnership({
+              stateDir,
+              dshHome,
+              dshWorkspacePath: resolvedWorkspacePath,
+              logger,
+              patchPath: resolvedPatchPath,
+              pnpmEntry,
+            })
+            if (stopping || epoch !== restartEpoch) {
+              // A cancelled generation must still PROVE the child it just spawned is gone.
+              const cancelled = await retireSpawnedChild(spawned, 'restart-cancel')
+              if (cancelled !== null) {
+                startFailure = RESTART_TERMINAL_FAILURE
+                setState('error', cancelled.message)
+                throw cancelled
+              }
+              return
+            }
+            child = spawned
+            dshPort = spawned.port
+            consecutiveFailures = 0
+            healthResultCache = null
+            writerSuspect = null
+            attachChildExit(spawned)
+            setState('ready')
+            startHealthTimer()
             return
+          } catch (restartError) {
+            dshPort = null
+            if (isWriterQuiescenceUnknown(restartError)) {
+              // Retire/cancel failures were recorded by the reclamation primitive; a spawn
+              // layer writer-unknown arrives unrecorded and is recorded here (its coded pid
+              // rides the error). A restart leg never folds this into resolve.
+              noteWriterQuiescenceUnknown(restartError)
+              startFailure = RESTART_TERMINAL_FAILURE
+              stopHealthTimer()
+              setState('error', restartError.message)
+              throw restartError
+            }
+            logger.log(`restart failed: ${String(restartError)}`)
+            if (stopping || epoch !== restartEpoch) return
+            if (isConnectionBusy(restartError)) {
+              stopHealthTimer()
+              setState('stopped', restartError.message)
+              return
+            }
           }
         }
+      } catch (loopError) {
+        // Writer-quiescence unknown must reach stop()/restartLocal() callers; every other
+        // loop failure keeps the historical projection (error state, resolved promise).
+        if (isWriterQuiescenceUnknown(loopError)) throw loopError
+        startFailure = RESTART_TERMINAL_FAILURE
+        try { setState('error', errorMessage(loopError)) } catch { /* nothing left to write */ }
       }
-    })().finally(() => {
-      restartPromise = null
-    }).catch((error: unknown) => {
-      // Never let a restart-loop failure reach an unhandled rejection (the desktop treats
-      // those as fatal); project the honest process-local error state instead.
-      try { setState('error', errorMessage(error)) } catch { /* nothing left to write */ }
+    })()
+    const tracked = run.finally(() => {
+      if (restartPromise === tracked) restartPromise = null
     })
-    return restartPromise
+    // Automatic triggers are fire-and-forget; restartLocal()/stop() await the same promise
+    // and still observe a writer-unknown rejection (never folded into resolve).
+    void tracked.catch(() => {})
+    restartPromise = tracked
+    return tracked
+  }
+
+  /** Generation-scoped exit listener: reclamation detaches it, and the owner check keeps a
+   *  late exit of a superseded child inert even on a structural fake without `off` (G10). */
+  function attachChildExit(owner: SpawnedDsh): void {
+    const listener = (code: number | null, sig: string | null) => onChildExit(owner, code, sig)
+    childExitHook = { owner, listener }
+    owner.child.on('exit', listener)
+  }
+
+  function detachChildExit(owner: SpawnedDsh): void {
+    const hook = childExitHook
+    if (hook === null || hook.owner !== owner) return
+    childExitHook = null
+    try {
+      owner.child.off?.('exit', hook.listener)
+    } catch {
+      /* a structural fake without off keeps the inert listener (see the owner check) */
+    }
   }
 
   /**
@@ -642,8 +853,14 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
    * in flight also suppresses it: startImpl tears down the previous child while
    * startPromise is set, and that exit must not schedule a second spawn alongside the
    * one startImpl is about to perform (it would race the spawn and leak a detached dsh).
+   * The generation check makes a late exit of an already-retired child inert.
    */
-  function onChildExit(code: number | null, sig: string | null): void {
+  function onChildExit(owner: SpawnedDsh, code: number | null, sig: string | null): void {
+    if (child !== owner) {
+      logger.log(`dsh process exited (${code ?? sig}) from a superseded generation; inert`)
+      return
+    }
+    if (childExitHook !== null && childExitHook.owner === owner) childExitHook = null
     logger.log(`dsh process exited (${code ?? sig})`)
     if (stopping) return
     if (restartPromise !== null) return
@@ -667,22 +884,31 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
       // not tear down a live child. A real restart goes through restartLocal().
       if (isServiceableLocalState(state)) return
       epoch += 1
-      // Abort any in-flight health probe from the previous generation: its verdict must not land here.
-      healthGeneration.abort()
-      healthGeneration = new AbortController()
+      // Invalidate the current probe generation: a late verdict/cache/counter must not land
+      // on the generation this start is about to create.
+      cancelProbe()
       // Capture the epoch, not just the mutable `stopping` flag: stop() bumps it before
       // aborting/awaiting this owner, so the start cannot seed after a queued stop or adopt
       // a child from a stale readiness attempt. The guard survives stop() resetting
       // `stopping`, so a late-resolving spawn is torn down instead of adopted.
       const startEpoch = epoch
-      if (restartPromise !== null) await restartPromise
+      if (restartPromise !== null) {
+        // A prior restart may have ended on an unproven writer; its coded failure must not
+        // escape this start leg as an anonymous rejection — the retire below re-proves it and
+        // the start reports the same typed failure.
+        try { await restartPromise } catch (restartError) { noteWriterQuiescenceUnknown(restartError) }
+      }
       if (stopping || epoch !== startEpoch) {
         throw connectionBusy('local start was invalidated by stop')
       }
-      if (child !== null && child.child.exitCode === null) {
-        await child.stop()
+      // INV-A1: no next generation before this generation's process-group proof. An
+      // unproven retire keeps the suspect and surfaces as a coded failure (never silence).
+      const retired = await retireCurrentChild('start')
+      if (retired !== null) {
+        startFailure = errorMessage(retired)
+        setState('error', errorMessage(retired))
+        throw retired
       }
-      child = null
       stopHealthTimer()
       consecutiveFailures = 0
       lastFailureAt = 0
@@ -712,13 +938,21 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           pnpmEntry,
         })
         if (stopping || epoch !== startEpoch) {
-          await spawned.stop()
+          // A cancelled generation must still PROVE the child it just spawned is gone.
+          const cancelled = await retireSpawnedChild(spawned, 'start-cancel')
+          if (cancelled !== null) {
+            startFailure = errorMessage(cancelled)
+            setState('error', errorMessage(cancelled))
+            throw cancelled
+          }
           return
         }
         child = spawned
         dshPort = spawned.port
         startFailure = null
-        spawned.child.on('exit', onChildExit)
+        writerSuspect = null
+        healthResultCache = null
+        attachChildExit(spawned)
         setState('ready')
         startHealthTimer()
         return
@@ -778,9 +1012,15 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
      * 'ready'/'degraded' until the next probe. Quit-risk decisions must key on this.
      */
     hasLiveProcess(): boolean {
-      // exitCode===null alone is NOT enough: a signal-killed child reports it with
-      // signalCode set. Alive means neither exit code nor signal was observed.
-      return child !== null && child.child.exitCode === null && child.child.signalCode == null
+      // Fail-safe: alive means neither exit code nor signal was observed on a live child —
+      // and an unproven writer termination (suspect) counts as possibly alive, because its
+      // detached group may still be writing DSH_HOME.
+      return isChildAlive(child) || writerSuspect !== null
+    },
+
+    /** The unproven writer record (see LocalWriterSuspect); null when quiescence is proven. */
+    getWriterSuspect(): LocalWriterSuspect | null {
+      return writerSuspect
     },
 
     /** Current error detail; null when healthy. */
@@ -788,7 +1028,8 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
       return error
     },
 
-    /** Why the last start attempt terminally failed before ever reaching ready. */
+    /** Why the last start/restart attempt terminally failed before reaching ready (null when
+     *  none, in flight, or stopped). /health may surface this through a closed latch. */
     getStartFailure(): string | null {
       return startFailure
     },
@@ -809,31 +1050,35 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     start: startImpl,
 
     /**
-     * Stop the connection: terminate the child (SIGTERM → 1s → SIGKILL), stop the
-     * health probe, land on 'stopped'. Any in-flight start/restart is invalidated,
-     * aborted and awaited; resolving stop() proves no managed local writer remains.
+     * Stop the connection: prove the child's whole detached process group gone (the spawn
+     * layer's SIGTERM → grace → SIGKILL proof), stop the health probe, land on 'stopped'.
+     * Any in-flight start/restart is invalidated, aborted and awaited; RESOLVING stop()
+     * proves no managed local writer remains — an unproven retire (or a retained suspect,
+     * even with no in-memory child) rejects with the coded writer-quiescence error and
+     * never reports 'stopped'.
      */
     stop(): Promise<void> {
       if (stopPromise !== null) return stopPromise
-      if (state === 'stopped' && child === null && startPromise === null && restartPromise === null) {
+      if (state === 'stopped' && child === null && startPromise === null && restartPromise === null && writerSuspect === null) {
         return Promise.resolve()
       }
       stopping = true
       epoch += 1
-      // Abort the in-flight health probe and WAIT for its (promptly rejecting) verdict:
-      // a late failure must never land after stop() returned and resurrect the connection.
-      healthGeneration.abort()
-      healthGeneration = new AbortController()
+      // Cancel the probe generation before anything is awaited: its late verdict must never
+      // land after stop() returned and resurrect the connection.
+      cancelProbe()
       // Capture the owners after bumping the epoch; neither can publish a child for this lifecycle now.
       const pendingStart = startPromise
       const pendingRestart = restartPromise
       spawnAbortController?.abort()
       const work = (async () => {
         try {
-          stopHealthTimer()
-          if (healthInFlight !== null) {
+          // Wait for the cancelled probe to settle (a non-cooperative seam is still awaited;
+          // a real probe settles promptly on the aborted generation signal).
+          const pendingProbe = healthInFlight
+          if (pendingProbe !== null) {
             try {
-              await healthInFlight
+              await pendingProbe.promise
             } catch { /* defensive — runHealthCheck swallows */ }
           }
           // start/restart own cleanup for any process launched before the abort. Await both
@@ -844,12 +1089,18 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           ])
           const unknownOwner = ownerResults.find((result): result is PromiseRejectedResult =>
             result.status === 'rejected' && isWriterQuiescenceUnknown(result.reason))
-          if (unknownOwner !== undefined) {
-            throw unknownOwner.reason
+          // Second (and final) reclamation through the single primitive: unconditional group
+          // proof — a leader already observed dead (exitCode/signalCode) still leaves a group.
+          const retired = await retireCurrentChild('stop')
+          if (retired !== null) {
+            setState('error', retired.message)
+            throw retired
           }
-          // Defensive second look: a promise might have adopted before this stop bumped epoch but after the snapshot.
-          if (child !== null && child.child.exitCode === null) {
-            await child.stop()
+          if (unknownOwner !== undefined) {
+            // An owner failed to prove its writer gone; even without retained evidence the
+            // caller must see the typed failure instead of a 'stopped' row.
+            setState('error', errorMessage(unknownOwner.reason))
+            throw unknownOwner.reason
           }
           const stoppedPort = dshPort
           child = null
@@ -870,7 +1121,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           hostLogWriterPort = null
         } catch (stopError) {
           if (noteWriterQuiescenceUnknown(stopError)) {
-            setState('error', stopError.message)
+            setState('error', errorMessage(stopError))
           }
           throw stopError
         } finally {
@@ -895,6 +1146,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
      * stop→respawn→ready transaction. CONTRACT: resolving does NOT promise success — a
      * restart that exhausts the shared window settles into 'restart-exhausted' and
      * resolves, so callers must read connectionState (or subscribe) to report honestly.
+     * A writer-quiescence-unknown rejection is propagated (never folded into resolve).
      */
     restartLocal(): Promise<void> {
       if (stopping) return Promise.reject(connectionBusy('local restart was invalidated by stop'))

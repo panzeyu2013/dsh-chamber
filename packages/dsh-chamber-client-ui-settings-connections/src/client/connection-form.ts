@@ -22,7 +22,9 @@ export interface TransportFormSchema {
 /** Shipped transport schemas. The dsh×http combination is DISABLED: direct-attaching a dsh web
  *  profile over http is hard-blocked — its host answers 401 without the spawn-time browser-auth
  *  launch token, which is unrecoverable remotely. ssh remains the only dsh transport; gateway keeps both.
- *  The main-process provider refuses the combination at validateSpec. */
+ *  The ssh arm of a bare dsh is itself conditional (the same gate covers every /api request), so the
+ *  form states that caveat inline — see browserAuthNoticeRequired. The main-process provider refuses
+ *  the dsh×http combination at validateSpec. */
 export const TRANSPORT_FORM_SCHEMAS: Readonly<Record<TransportMethod, TransportFormSchema>> = {
   ssh: {
     method: 'ssh',
@@ -108,8 +110,12 @@ export interface HostDraft {
   password: string
 }
 
+/** The add form's starting draft: a SHIPPED pair that attaches without extra server-side work —
+ *  `gateway × ssh` (a gateway listens on 127.0.0.1:30801 by default, so the desktop's SSH tunnel
+ *  reaches it; direct HTTP(S) would need a reverse proxy or public exposure). `dsh × ssh` stays
+ *  explicitly selectable, carrying the inline BrowserAuth caveat; `dsh × http` is schema-disabled. */
 export const EMPTY_DRAFT: HostDraft = {
-  kind: 'dsh',
+  kind: 'gateway',
   transport: 'ssh',
   id: '',
   label: '',
@@ -120,10 +126,19 @@ export const EMPTY_DRAFT: HostDraft = {
   host: '',
   user: '',
   sshPort: '',
-  remotePort: '30800',
+  remotePort: '30801',
   serviceName: '',
   remoteDshHome: '',
   password: '',
+}
+
+/** Does the draft's target/transport pair need the inline browser-auth caution? A bare dsh's only
+ *  transport is SSH, but a Host with the browser-auth gate signs a cookie for every `/api` request
+ *  and its launch token appears only in the remote process output — unreachable over SSH, so the
+ *  identity probe ends with HTTP 401. The form states this instead of pre-blocking: a gated Host is
+ *  indistinguishable before the probe exists, and ungated/older deployments stay attachable. */
+export function browserAuthNoticeRequired(draft: Pick<HostDraft, 'kind' | 'transport'>): boolean {
+  return draft.kind === 'dsh' && draft.transport === 'ssh'
 }
 
 /** Pin eligibility is deliberately narrow: only a gateway target reached by the direct HTTP provider with an explicitly valid HTTPS origin. */

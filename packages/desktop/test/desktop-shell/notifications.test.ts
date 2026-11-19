@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { BoundedAckDeliveryQueue } from '../../deep-link.ts';
 import { notificationReceiptsFilePath } from '../../shell-core.ts';
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts';
@@ -201,6 +202,97 @@ test('a failed proof flush keeps the roster dirty and retries at the next commit
   assert.equal(restarted.replaceRemoteInstances([proofInstance()])[0]!.sourceFingerprint, original)
 })
 
+/** The identity-scheme-1 digest the pre-logical roster persisted (five-field tuple). */
+function legacyProofDigest(instance: ReturnType<typeof proofInstance>): string {
+  return createHash('sha256')
+    .update(JSON.stringify([
+      instance.kind, instance.host, instance.user, instance.sshPort, instance.remotePort,
+    ]))
+    .digest('hex')
+}
+
+test('proofs follow the LOGICAL source identity: gateway SSH account edits never rotate', () => {
+  let minted = 0
+  const proofs = new NotificationSourceProofs(() => (++minted).toString(16).padStart(64, '0'))
+  const gateway = proofInstance({
+    kind: 'gateway', host: 'gw.example.com', user: 'alice', sshPort: 22, remotePort: 443,
+    serviceName: 'dsh', remoteDshHome: '~/.dsh',
+  })
+  const original = proofs.replaceRemoteInstances([gateway])[0].sourceFingerprint
+  assert.equal(
+    proofs.replaceRemoteInstances([{ ...gateway, user: 'bob', sshPort: 2222 }])[0].sourceFingerprint,
+    original,
+    'the gateway SSH login is the mechanism, not the deployment identity',
+  )
+  assert.equal(
+    proofs.replaceRemoteInstances([{ ...gateway, user: null, sshPort: null }])[0].sourceFingerprint,
+    original,
+    'the HTTP-normalized form of the same gateway keeps its proof',
+  )
+  assert.notEqual(
+    proofs.replaceRemoteInstances([{ ...gateway, host: 'other.example.com' }])[0].sourceFingerprint,
+    original,
+    'a gateway host retarget rotates the proof',
+  )
+  const dsh = proofInstance({ kind: 'dsh', host: 'dev.example.com', user: 'alice', sshPort: 22, remotePort: 3080 })
+  const dshProof = proofs.replaceRemoteInstances([dsh])[0].sourceFingerprint
+  assert.notEqual(
+    proofs.replaceRemoteInstances([{ ...dsh, user: 'bob' }])[0].sourceFingerprint,
+    dshProof,
+    'for a dsh source the SSH account IS the target identity',
+  )
+})
+
+test('a v1 proof roster upgrades its identity scheme in place instead of rotating durable history', () => {
+  const gateway = proofInstance({
+    kind: 'gateway', host: 'gw.example.com', user: 'alice', sshPort: 22, remotePort: 443,
+  })
+  const proof = 'b'.repeat(64)
+  const disk = memoryProofSeam(JSON.stringify({
+    v: 1,
+    proofs: [{ sourceId: 'gateway-same', identityDigest: legacyProofDigest(gateway), proof }],
+  }))
+  const proofs = new NotificationSourceProofs(undefined, disk.seam)
+  assert.equal(proofs.replaceRemoteInstances([gateway])[0].sourceFingerprint, proof,
+    'the logical-identity upgrade must keep the existing proof')
+  proofs.persist()
+  const parsed = JSON.parse(disk.read()!) as {
+    v: number
+    proofs: Array<{ identityDigest: string; proof: string; identityScheme: number }>
+  }
+  assert.equal(parsed.v, 1, 'the file format version stays 1 (the scheme field is optional)')
+  assert.equal(parsed.proofs[0]!.identityScheme, 2)
+  assert.equal(parsed.proofs[0]!.proof, proof)
+  assert.notEqual(parsed.proofs[0]!.identityDigest, legacyProofDigest(gateway),
+    'the upgraded digest hashes the logical identity (gateway SSH fields dropped)')
+  const restarted = new NotificationSourceProofs(() => 'f'.repeat(64), disk.seam)
+  assert.equal(restarted.replaceRemoteInstances([gateway])[0].sourceFingerprint, proof,
+    'the upgraded entry is stable across a host restart')
+  assert.equal(restarted.replaceRemoteInstances([{ ...gateway, user: 'bob' }])[0].sourceFingerprint, proof,
+    'and an account edit no longer rotates it')
+})
+
+test('a v1 entry whose logical identity changed rotates instead of being adopted', () => {
+  const original = proofInstance({
+    kind: 'gateway', host: 'gw.example.com', user: 'alice', sshPort: 22, remotePort: 443,
+  })
+  const disk = memoryProofSeam(JSON.stringify({
+    v: 1,
+    proofs: [{ sourceId: 'gateway-same', identityDigest: legacyProofDigest(original), proof: 'c'.repeat(64) }],
+  }))
+  const proofs = new NotificationSourceProofs(() => 'd'.repeat(64), disk.seam)
+  const retargeted = proofs.replaceRemoteInstances([{ ...original, host: 'other.example.com' }])[0]
+  assert.equal(retargeted.sourceFingerprint, 'd'.repeat(64), 'a real retarget still rotates the proof')
+})
+
+test('fresh proof entries are always written under the current identity scheme', () => {
+  const disk = memoryProofSeam()
+  const proofs = new NotificationSourceProofs(undefined, disk.seam)
+  proofs.replaceRemoteInstances([proofInstance({ kind: 'gateway', host: 'gw.example.com', user: 'alice', sshPort: 22, remotePort: 443 })])
+  proofs.persist()
+  const parsed = JSON.parse(disk.read()!) as { proofs: Array<{ identityScheme?: number }> }
+  assert.equal(parsed.proofs[0]!.identityScheme, 2)
+})
 test('the proof store attaches before the first sync and flushes before the renderer push', () => {
   const store = stripComments(readFileSync(new URL('../../notification-source-proof-store.ts', import.meta.url), 'utf8'))
   assert.ok(store.indexOf('notificationSourceProofs.attach(') < store.indexOf('syncNotificationSourceRegistry('), 'attach must precede the first sync')

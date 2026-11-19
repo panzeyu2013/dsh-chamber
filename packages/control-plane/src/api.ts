@@ -21,6 +21,7 @@
 
 import type { InstanceProxy } from './instance-proxy.ts'
 import { isLoopbackHostname } from './loopback.ts'
+import { DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } from './spawn-dsh.ts'
 import type { Logger } from './types.ts'
 
 /** Body read cap for POST payloads (10 MiB; the instance proxy has its own 300MiB cap). */
@@ -374,6 +375,15 @@ export function createApi(deps: ApiDeps) {
               const err = error as ApiError
               if (err.code === 'connection_busy') return jsonError(res, 409, { code: err.code, message: err.message })
               if (err.code === 'not_found') return jsonError(res, 404, 'not_found')
+              // An unproven writer termination is a fail-closed 409 with its coded identity/
+              // details, never a masked 500: the caller must be able to name and diagnose it.
+              if (err.code === DSH_WRITER_QUIESCENCE_UNKNOWN_CODE) {
+                return jsonError(res, 409, {
+                  code: err.code,
+                  message: err.message,
+                  ...(err.details === undefined ? {} : { detail: err.details }),
+                })
+              }
               return jsonError(res, 500, 'internal')
             }
           }

@@ -42,14 +42,17 @@ import { cimPidLiveness, hasWindowsResidualTree, treeKillWindows } from './win-p
 export const DEFAULT_DSH_START_PORT = 17510
 
 /** Gateway credentials belong to the outer authenticated boundary and must never
- *  become ambient authority inside the managed dsh or its tools/plugins. */
+ *  become ambient authority inside the managed dsh or its tools/plugins. Chamber
+ *  host-internal facts (DSH_CHAMBER_*) are the same kind of ambient leakage: the
+ *  app-session identity and dev/state overrides belong to the host process only. */
 export function sanitizeManagedDshEnv(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const output = { ...input }
   for (const name of Object.keys(output)) {
     // Windows environment names are case-insensitive even though enumeration
     // preserves spelling. Strip case-insensitively so a lower/mixed-case
     // credential that configured the parent cannot survive into the child.
-    if (name.toUpperCase().startsWith('DSH_GATEWAY_')) delete output[name]
+    const upper = name.toUpperCase()
+    if (upper.startsWith('DSH_GATEWAY_') || upper.startsWith('DSH_CHAMBER_')) delete output[name]
   }
   return output
 }
@@ -260,12 +263,16 @@ export type SpawnLifecycleErrorCode =
 export class SpawnLifecycleError extends Error {
   readonly code: SpawnLifecycleErrorCode
   readonly cause: unknown
+  /** The managed host pid the failed lifecycle proof was about (null when never known).
+   *  The connection layer records this as its writer-suspect evidence without parsing text. */
+  readonly pid: number | null
 
-  constructor(code: SpawnLifecycleErrorCode, message: string, cause?: unknown) {
+  constructor(code: SpawnLifecycleErrorCode, message: string, cause?: unknown, pid: number | null = null) {
     super(message)
     this.name = 'SpawnLifecycleError'
     this.code = code
     this.cause = cause
+    this.pid = pid
   }
 }
 
@@ -299,6 +306,7 @@ function writerQuiescenceUnknown(child: ChildProcess, context: string, cause: un
     DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
     `${context}; dsh process group ${pid} quiescence is unknown: ${describeThrownValue(cause)}`,
     cause,
+    child.pid ?? null,
   )
 }
 
@@ -1142,6 +1150,8 @@ export async function terminateChild(child: ChildProcess, graceMs = TERMINATE_GR
     throw new SpawnLifecycleError(
       DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
       `dsh process group ${pid} did not exit after SIGKILL`,
+      undefined,
+      pid,
     )
   } catch (error) {
     throw writerQuiescenceUnknown(child, 'managed child termination failed', error)
@@ -1185,6 +1195,8 @@ export interface SpawnedHost {
   child: ChildProcess
   port: number
   baseUrl: string
+  /** The detached leader pid (the durable ledger identity); null when the spawn layer has none. */
+  pid: number | null
   stop(): Promise<void>
 }
 
@@ -1262,6 +1274,7 @@ export async function spawnDsh({
       })
       return {
         ...spawned,
+        pid: spawned.child.pid ?? null,
         stop: async () => {
           // The browser-auth cookie dies with the child.
           clearAuthCookie(spawned.baseUrl)

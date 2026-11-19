@@ -1,7 +1,7 @@
 /**
  * 来源就绪判定与遮罩动作决策（纯逻辑；App/InstanceView 只做接线）。
  *
- *  1. `shouldDeferBootForSource`：手动断开（idle）的来源不启动 boot（否则白烧一次 503 预算）。
+ *  1. `shouldDeferBootForSource`：手动断开（idle）或 ready+链路 down 的来源不启动 boot（否则白烧一次 503 预算）。
  *  2. `decideServingGate`：相位感知就绪门——`error` 等终态在短宽限后立即判不可服务，
  *     `connecting`/`degraded`（恢复中）在预算内继续等。
  *  3. `graphGapKindFor`：图通道失败的上浮边界（非本地 `not-injected` 豁免，本地收敛为 `local-graph-not-injected`）。
@@ -27,12 +27,29 @@ export function isTerminalUnreadyPhase(phase: string | undefined): boolean {
 }
 
 /**
- * 手动断开（idle）的来源不启动 boot：idle 是**用户手动断开**的终态，自动 boot 只会拿满
- * 503 预算后降级，所以推迟到用户显式连接（遮罩呈现「未连接」+「连接」）。
+ * 不启动 boot 的两类来源（纯函数）：
+ * 1. 手动断开（idle）：idle 是**用户手动断开**的终态，自动 boot 只会拿满 503 预算后降级，
+ *    所以推迟到用户显式连接（遮罩呈现「未连接」+「连接」）。
+ * 2. ready 但链路 down（servers 投影的 `linkState === 'down'`，transport 子态）：传输相位还停在
+ *    ready 的 grace 里，但代理会快速拒绝**新**请求 —— boot 同样只会白烧 503 预算。壳/快照保留，
+ *    遮罩呈现「链路不可用」+「重试」，链路恢复（或用户重试）后自动 boot。
  * 未知相位（undefined，投影未到）不推迟——不能因为投影没到就拒绝启动。
  */
-export function shouldDeferBootForSource(phase: string | undefined): boolean {
-  return phase === 'idle'
+export function shouldDeferBootForSource(phase: string | undefined, linkDown: boolean): boolean {
+  if (phase === 'idle') return true
+  return phase === 'ready' && linkDown
+}
+
+/**
+ * 推迟中遮罩的文案/动作选择（纯函数）：ready + 推迟只可能来自链路 down；其余推迟 = 手动断开。
+ * 调用方（InstanceView）据此在「连接」与「重试」、两套文案之间二选一。
+ */
+export function deferredBootReason(
+  bootDeferred: boolean,
+  sourcePhase: string | undefined,
+): 'manual-disconnect' | 'link-down' | null {
+  if (bootDeferred !== true) return null
+  return sourcePhase === 'ready' ? 'link-down' : 'manual-disconnect'
 }
 
 /**

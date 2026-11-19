@@ -165,8 +165,10 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
   assert.ok(frameSources['InstanceView.tsx'].includes("frameText(locale, 'boot.loadingHint')"))
   // 可操作遮罩的每一句都在字典里（键集审计见上）。
   for (const call of [
-    "frameText(locale, 'boot.deferred', { label })",
-    "frameText(locale, 'boot.deferredHint')",
+    // The deferred veil has TWO reasons (manual disconnect / ready-but-link-down): C9's
+    // link copy rides the same audited seat instead of a second inline sentence.
+    "frameText(locale, deferredReason === 'link-down' ? 'boot.linkDown' : 'boot.deferred', { label })",
+    "frameText(locale, deferredReason === 'link-down' ? 'boot.linkDownHint' : 'boot.deferredHint')",
     "frameText(locale, 'boot.elapsed', { seconds: waitedSeconds })",
     "frameText(locale, 'boot.stuckHint')",
     "frameText(locale, 'boot.sourceFailedHint')",

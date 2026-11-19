@@ -259,7 +259,6 @@ export const ENTRYLESS_SEAMS = [
   { package: 'renderer', name: '__testLastRequestedSession', reason: 'shell suite reads the last requested session id; the suite owns the seam' },
   { package: 'renderer', name: '__resetSessionFactsGoalWarningForTests', reason: 'session-facts-source suite re-arms the one-shot goal-shape warning; the suite owns the seam' },
   { package: 'renderer', name: 'resetRendererStallEvidence', reason: 'renderer-stall-evidence suite resets the module singleton between cases; the suite owns the seam' },
-  { package: 'desktop', name: 'clearGatewaySyncRegistrations', reason: 'gateway-sync-registry suite resets module state between cases' },
   // Remote Browser v4 (design 28) W0/S1 slice. forward-service.ts (the S1
   // assembly) now imports ForwardNamespaces, ForwardChildLedger and
   // reapForwardChildren, so those three seams were retired in that change (the
@@ -270,6 +269,8 @@ export const ENTRYLESS_SEAMS = [
   { package: 'desktop', name: 'canForwardTransition', reason: 'design 28 transition table reader for review/suite; the manager drives states through its own patches, so no production reader exists' },
   { package: 'desktop', name: 'FORWARD_REAP_SEMANTICS', reason: 'design 28 crash-window documentation constant; the lifecycle suite asserts it (documentation, not a code path)' },
   { package: 'desktop', name: 'forwardSpawnSupervision', reason: 'design 28 POSIX detached/win32 policy; asserted by the lifecycle suite, the launcher states the same policy inline with its spawn call' },
+  { package: 'desktop', name: 'computeRemovedInstanceIds', reason: 'pure committed-diff helper; the roster-change change set is the production truth, the transport-registry/transport-manager suites pin this legacy differential as the removal contract' },
+  { package: 'desktop', name: 'computeRetiredInstanceIds', reason: 'logical-source retirement predicate kept as the published helper (signature stability); production retirement derives from roster-change; the transport-manager suite pins the delegation' },
   { package: 'desktop', name: 'localFrameErrors', reason: 'frozen-Electron-only local-frame store snapshot (design 28 v3 §3 retired forward.list.frameErrors); the forward-service suite asserts the writer/bounding behavior' },
 ]
 
