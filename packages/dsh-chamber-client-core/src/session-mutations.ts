@@ -12,11 +12,19 @@
  * 负责清掉本地归档墓碑。
  */
 import { chamberBridge } from './aggregate-store.ts'
+import { increasedForkTitle, sessionDurableTitles } from './fork-titles.ts'
 import type { SessionCreationOrigin } from './session-create-ledger.ts'
 import {
-  archiveSession, callAndThrow, createSession, forkSession, getInstanceClient, pinSession, unpinSession,
+  archiveSession, callAndThrow, createSession, forkSession, getInstanceClient, MutationOutcomeUnknownError,
+  pinSession, renameSession, ResponseLostError, unpinSession,
 } from './instance-api.ts'
 import { reportSessionRestored } from './session-restore.ts'
+import { assertSingletonModule } from './singleton.ts'
+
+// The title-reservation ledger below is page-wide cross-boundary state (the sidebar
+// bundle and the App reach this module through the vite shared chunk); bundling
+// drift would silently split it and re-open the same-tick duplicate-title hole.
+assertSingletonModule('session-mutations')
 
 interface SessionCreationOptions {
   /** 调用方预分配的会话 id（多步 saga 重试复用；缺省 = 宿主自铸）。 */
@@ -24,6 +32,11 @@ interface SessionCreationOptions {
   /** 该次创建**意图**写入的显示标题（fork 的递增标题）：回声行生来就是最终标签，
    *  不必先渲染会话 id 再等 rename 翻转。缺省 = 官方 id 阶梯；权威行始终压过它。 */
   title?: string
+  /** 该次 fork 的**源 durable 标题**（非空时启用 skip-taken 标题策略）：候选名由唯一
+   *  出口按同来源已用 durable 标题跳过编号后定名并 rename，回声在 rename 完成后发布
+   *  （见 `forkSessionForSource`）。与 `title` 同时给时本字段优先；缺省 = 旧行为
+   *  （fork 成功后立即发回声、不 rename）。 */
+  increaseTitleFrom?: string
   /** 归因：这次创建的**触发路径**；每个调用点都必须表态（'unknown' 是仪表覆盖缺口的信号）。 */
   origin?: SessionCreationOrigin
   /**
@@ -54,22 +67,208 @@ export async function createSessionForSource(
   return sessionId
 }
 
+/** How long one title assigned by an in-flight fork may be skipped before the
+ *  authority is expected to list it (mounted push / unmounted fallback pull).
+ *  MUST outlive BOTH mutation legs of one fork: the title is decided before the
+ *  fork RPC, but the authority only lists the child after the fork AND the
+ *  rename resolve, and each leg may legally stay in flight for one
+ *  `mutationCallBudgetMs` (proxy worst case: 60s inbound + 60s flush + 45s
+ *  header + 5s cushion = 170s at the floor; see
+ *  `@dsh-chamber/dsh-chamber-wire` net-budget) — so the naming→authority window
+ *  is up to two budgets (~340s). 400_000 covers both with margin; a shorter TTL
+ *  lets a second same-window fork reuse the number while the first is still
+ *  pending. */
+const FORK_TITLE_RESERVATION_TTL_MS = 400_000
+
+/** Defensive ceiling per source; expiry/observed pruning keeps the normal size tiny. */
+const FORK_TITLE_RESERVATION_MAX_PER_SOURCE = 64
+
+/**
+ * Page-level reservations of fork titles this window already assigned while the
+ * authoritative title set has not listed them yet. Without them two forks fired
+ * in the same tick (double click / two quick menu picks) read the same stale set
+ * and pick the same number. TITLE-keyed on purpose: skip-taken is a title
+ * predicate, not a session-identity one. The singleton guard above covers
+ * bundling drift (a duplicated ledger would silently re-open the hole).
+ */
+const forkTitleReservations = new Map<string, Map<string, number>>()
+
+/**
+ * The authoritative same-source title set (never includes our own reservations):
+ * the mounted shell's raw session snapshot (full membership incl. archived rows;
+ * subagent-origin rows are filtered by its projection) plus the page aggregate's
+ * nav rows and archived metadata (the unmounted-source complement). Purely local
+ * reads — no RPC.
+ */
+function authoritativeForkTitles(sourceId: string): Set<string> {
+  const titles = new Set<string>()
+  const snapshot = chamberBridge.getInstanceSnapshots()[sourceId]
+  if (snapshot !== undefined) {
+    for (const title of sessionDurableTitles(snapshot.sessions)) titles.add(title)
+  }
+  const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
+  if (server !== undefined) {
+    for (const workspace of server.workspaces) {
+      for (const title of sessionDurableTitles(workspace.sessions)) titles.add(title)
+    }
+    for (const title of sessionDurableTitles(server.archivedSessions ?? [])) titles.add(title)
+  }
+  return titles
+}
+
+/**
+ * Live reservations for one source: expired entries and titles the authority now
+ * lists retire in place (the authority owns them from then on).
+ */
+function liveReservedForkTitles(sourceId: string, now: number, authoritative: ReadonlySet<string>): Set<string> {
+  const live = new Set<string>()
+  const reserved = forkTitleReservations.get(sourceId)
+  if (reserved === undefined) return live
+  for (const [title, expiresAt] of reserved) {
+    if (expiresAt <= now || authoritative.has(title)) {
+      reserved.delete(title)
+      continue
+    }
+    live.add(title)
+  }
+  if (reserved.size === 0) forkTitleReservations.delete(sourceId)
+  return live
+}
+
+/** Candidate set = authority ∪ this page's live reservations (in-flight titles).
+ *  @param authoritative - the already-read authority (freshness owned by the caller);
+ *    omission reads it now. */
+function takenForkTitles(
+  sourceId: string,
+  authoritative: ReadonlySet<string> = authoritativeForkTitles(sourceId),
+): ReadonlySet<string> {
+  const taken = new Set(authoritative)
+  for (const title of liveReservedForkTitles(sourceId, Date.now(), authoritative)) taken.add(title)
+  return taken
+}
+
+function reserveForkTitle(sourceId: string, title: string, now: number): void {
+  let reserved = forkTitleReservations.get(sourceId)
+  if (reserved === undefined) {
+    reserved = new Map<string, number>()
+    forkTitleReservations.set(sourceId, reserved)
+  }
+  reserved.set(title, now + FORK_TITLE_RESERVATION_TTL_MS)
+  if (reserved.size <= FORK_TITLE_RESERVATION_MAX_PER_SOURCE) return
+  // Drop the assignment closest to expiry (the oldest one) — bounded memory only.
+  let oldestTitle: string | undefined
+  let oldestExpiry = Number.POSITIVE_INFINITY
+  for (const [candidate, expiresAt] of reserved) {
+    if (expiresAt >= oldestExpiry) continue
+    oldestExpiry = expiresAt
+    oldestTitle = candidate
+  }
+  if (oldestTitle !== undefined && oldestTitle !== title) reserved.delete(oldestTitle)
+}
+
+function releaseForkTitle(sourceId: string, title: string): void {
+  const reserved = forkTitleReservations.get(sourceId)
+  if (reserved === undefined) return
+  reserved.delete(title)
+  if (reserved.size === 0) forkTitleReservations.delete(sourceId)
+}
+
+/**
+ * A rename failure that may already have applied: the mutation reached the host
+ * and only the answer was lost. Only these two classes are ambiguous; every
+ * other throw is a pre-dispatch/business refusal (`callAndThrow` promotes an
+ * unclassified mutation failure to the first one).
+ */
+function renameOutcomeUnknown(error: unknown): boolean {
+  return error instanceof MutationOutcomeUnknownError || error instanceof ResponseLostError
+}
+
+/**
+ * Publish one fork-child creation echo. `title` is the funnel-decided final label
+ * (sparse: omitted on the plain path / when the source has no durable title).
+ */
+function reportForkChildCreated(
+  sourceId: string,
+  childId: string,
+  parentSessionId: string,
+  options: SessionCreationOptions,
+  title: string | undefined,
+): void {
+  chamberBridge.reportSessionCreated({
+    sourceId,
+    sessionId: childId,
+    parentSessionId,
+    blank: false,
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
+    ...(title === undefined ? {} : { title }),
+  })
+}
+
 /** 对 `sourceId` 执行 session.fork，并发布子会话的创建回声事实。子会话继承父内容，
- *  不是 blank 行；工作区成员位由 App 从 `parentSessionId` 解析。 */
+ *  不是 blank 行；工作区成员位由 App 从 `parentSessionId` 解析。
+ *
+ *  `increaseTitleFrom` 非空时启用 skip-taken 标题策略（design 05 §2.2）：候选名 =
+ *  源 durable 标题递增并跳过**同一来源**已用 durable 标题（authority ∪ 本窗口
+ *  在飞预留），点击处理的同步段定名并预留；fork 返回后按权威集合复核一次（上游
+ *  在 fork 后读 taken 的时序；未挂载来源没有 push 在 fork RTT 内落地，此步基本
+ *  no-op）；随后 rename，**成功后才发布回声**（title = 意图标题），确定性失败
+ *  释放预留并以继承标题发回声 + console.warn，结果未知保留预留并以意图标题发回声
+ *  （可能已生效）。失败非致命：fork 已成功、子会话照常打开。不采用 host 返回的
+ *  accepted title（instance-api 预算棘轮；残余登记见 design 05 §2.2）。plain 调用
+ *  （无 increaseTitleFrom）保持旧行为：fork 成功后立即发回声、不 rename。 */
 export async function forkSessionForSource(
   sourceId: string,
   sessionId: string,
   options: SessionCreationOptions = {},
 ): Promise<string> {
-  const childId = await forkSession(getInstanceClient(sourceId), sessionId)
-  chamberBridge.reportSessionCreated({
-    sourceId,
-    sessionId: childId,
-    parentSessionId: sessionId,
-    blank: false,
-    ...(options.origin === undefined ? {} : { origin: options.origin }),
-    ...(options.title === undefined ? {} : { title: options.title }),
-  })
+  const client = getInstanceClient(sourceId)
+  const sourceTitle = options.increaseTitleFrom
+  if (sourceTitle === undefined || sourceTitle === '') {
+    const childId = await forkSession(client, sessionId)
+    reportForkChildCreated(sourceId, childId, sessionId, options, options.title)
+    return childId
+  }
+
+  let intendedTitle = increasedForkTitle(sourceTitle, takenForkTitles(sourceId))
+  reserveForkTitle(sourceId, intendedTitle, Date.now())
+  let childId: string
+  try {
+    childId = await forkSession(client, sessionId)
+  } catch (error) {
+    releaseForkTitle(sourceId, intendedTitle)
+    throw error
+  }
+  // Upstream reads `taken` AFTER the fork resolves; re-check the AUTHORITY only
+  // (our own reservation must never bump us). For an unmounted source no push
+  // lands inside the fork RTT, so this is normally a no-op there.
+  const authoritativeAfter = authoritativeForkTitles(sourceId)
+  if (authoritativeAfter.has(intendedTitle)) {
+    releaseForkTitle(sourceId, intendedTitle)
+    intendedTitle = increasedForkTitle(sourceTitle, takenForkTitles(sourceId, authoritativeAfter))
+    reserveForkTitle(sourceId, intendedTitle, Date.now())
+  }
+  try {
+    await renameSession(client, childId, intendedTitle)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    if (renameOutcomeUnknown(error)) {
+      // May already have applied: keep the reservation; the authority settles it.
+      reportForkChildCreated(sourceId, childId, sessionId, options, intendedTitle)
+      console.warn('[chamber] fork child rename outcome unknown for ' + sourceId + '/' + childId
+        + ': ' + reason + '; keeping the intended title')
+      return childId
+    }
+    // Provably not applied (business refusal / pre-dispatch): the host keeps the
+    // child's inherited durable title, so the echo must not claim the increment.
+    releaseForkTitle(sourceId, intendedTitle)
+    reportForkChildCreated(sourceId, childId, sessionId, options, sourceTitle)
+    console.warn('[chamber] fork child rename failed for ' + sourceId + '/' + childId
+      + ': ' + reason + '; the child keeps its inherited title')
+    return childId
+  }
+  // Success: keep the reservation until the authority lists the title (observed
+  // on the next fork) or the TTL retires it; the echoed title is the intent.
+  reportForkChildCreated(sourceId, childId, sessionId, options, intendedTitle)
   return childId
 }
 

@@ -1520,25 +1520,6 @@ export function mergeSearchResults(
 }
 
 /**
- * Fork-child title increment — VERBATIM port of the official
- * `increasedForkTitle`: a trailing half-width or full-width parenthesized
- * number increments (BigInt, no precision loss), any other title starts at
- * ` (1)`. The wire `session/fork` accepts only `{ sessionId, atSeq? }`, so the
- * client renames the child itself.
- */
-export function increasedForkTitle(title: string): string {
-  const ascii = /^(.*?)\((\d+)\)$/u.exec(title)
-  if (ascii?.[1] !== undefined && ascii[2] !== undefined) {
-    return `${ascii[1]}(${BigInt(ascii[2]) + 1n})`
-  }
-  const fullWidth = /^(.*?)（(\d+)）$/u.exec(title)
-  if (fullWidth?.[1] !== undefined && fullWidth[2] !== undefined) {
-    return `${fullWidth[1]}（${BigInt(fullWidth[2]) + 1n}）`
-  }
-  return `${title} (1)`
-}
-
-/**
  * Archived-session metadata for the archive manager. The archived SET is the
  * authoritative membership gate: a row classifies as archived only when its id
  * is in snapshot.archivedSessionIds. Subagent rows never enter the snapshot,
