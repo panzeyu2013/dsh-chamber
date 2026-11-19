@@ -180,7 +180,7 @@
 - `requireHidden = (viewStore.getSnapshot().painted === entry.sourceId && factsStore.getSnapshot().runtime[entry.sourceId]?.current === entry.sessionId && document.hasFocus() && document.visibilityState === 'visible' && isShellVisible())`——用户正看着这个会话（无论主开关/模式都豁免）；后两项 = 统一前台相位门的同源事实（页面可见 ∧ 壳窗口可见且未遮挡，[14 §D1](../runtime/14-sleep-background.md)），遮挡/另一 Space 下不得宣称「正在看」。单窗口下 `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 只在 focused 事实上等价；该事实在「另一 Space 且窗口仍 key」时可能仍为 true（主进程 hidden-only 档的残余门缺口见 [STATUS](../../progress/STATUS.md) §1.7），主进程再查一次作权威。
 - **文案（v1 固定，renderer 组装）**：取 App 框架的 typed 字典 `packages/renderer/src/locales.ts`（该 effect 依赖为 `[]`、拿不到 render 作用域的 `t`，故按文档语言 `<html lang>` 用 `readDocumentLocale()` 解析）：complete「会话已完成」/ `{来源 label} · {会话标题}`（`notification.sessionComplete`）；ask「代理正在等待你的回答」/ label · 标题（`notification.awaitingAnswer`）；request「代理请求你的批准」/ label · 标题（`notification.awaitingApproval`）；会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」，即 `session.untitled`）。
 - 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪记为可重试失败，待投递账本保留事件并退避重试（§6）。
-- `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定 `local`，远程是主进程随 roster 投影的 64 位小写十六进制 opaque proof；App 只接受 proof 与当前权威来源代相等的 report，renderer 不从 registry 字段推导 proof。
+- `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定 `local`，远程是主进程随 roster 投影的 64 位小写十六进制 opaque proof；App 只接受 proof 与当前权威来源代相等的 report，renderer 不从 registry 字段推导 proof。proof 名册持久化在 `<userData>/notification-source-proofs.json`（只存 identity 摘要 + proof，0600），同一传输身份的 proof 跨宿主进程重启稳定；传输身份编辑/删除时轮换。
 
 **主进程**（`packages/desktop/notifications.ts` 纯逻辑模块，electron-free 便于单测；宿主调用经 `HostEdges`，Swift 现行 / Electron 冻结）：
 
@@ -252,8 +252,12 @@
 ### 3.6 安全与纪律
 
 - IPC 沿用 `trustedIpc` 全部门禁（sender = 主窗口 mainFrame + 控制面 origin）；payload 白名单 + 长度上限（防异常 title/body 刷屏）。
-- 载荷全为非秘密投影（会话 id/标题/来源 label + 主进程签发的 opaque 生命周期 proof——侧边栏同源数据，无隧道 URL、无 SSH 材料）；proof 不持久化，也不含可逆 host/user/port 信息。
+- 载荷全为非秘密投影（会话 id/标题/来源 label + 主进程签发的 opaque 生命周期 proof——侧边栏同源数据，无隧道 URL、无 SSH 材料）；proof 名册持久化在 `<userData>/notification-source-proofs.json`（0600、临时文件 + rename 原子替换），文件只存 `sha256(kind/host/user/sshPort/remotePort)` 摘要 + proof，不含明文 host/user/port（摘要不是可逆承诺——低熵主机名可被猜测；同目录 `<userData>/ssh-instances.json` 已含明文传输字段且权限相同，故不新增暴露面）；写失败 loud 并保留 dirty，下一个提交点重试（内存继续服务）。该持久化是“宿主重启不换身份”的最小实现：Registry 损坏/缺行（degraded/V5-A）时禁止落盘，避免把空/子集名册写成权威。
 - 纪律见 §3.1。
+
+**已知边界（proof 名册）**：首启（文件缺失）或名册损坏/格式不可识别 → 空名册启动、全部远端 proof 轮换一次，旧 durable 键（ledger/outbox/receipts）随之失效；这是升级的一次性代价，写入 release note。名册条目数 = 当前 active roster（不按固定条数截断）；损坏/格式不可识别 warn 一次。
+
+**Rejected alternatives（来源 proof 持久化）**：① 连接记录持久 durable id——要动 spec/两 provider 白名单/renderer 镜像/迁移，而 proof 已是全部 durable 键（outbox `eventKey`、chamber run 身份、宿主 receipts）的共同身份分量，收益重复；② 用传输身份元组哈希做 durable 键——要改全部 key/identity 调用点 + outbox v3/receipts v2，且不区分“删后同 id 同目标重加”；③ proof 每进程轮换、只把请求/订阅改代际——重启仍会退役并清空 durable 账本（本设计要修的正是这条）；④ 把 proof 写进 registry 文件——违反 registry 的凭据/证明分离与 `transport-manager.test.ts` 的“proofs 不进 registry 数据”断言。
 
 ### 3.7 未读徽标：Dock/任务栏应用图标红气泡
 
@@ -308,7 +312,7 @@
 
 ## 6. 投递账本与回执
 
-完成边沿先写入 renderer 的有界待投递账本，键包含来源化身、会话、类别与 host 水位；无水位的运行时边沿保留独立事件键，后到的可信 host 水位可补充该条记录。账本在重载后恢复；原生回执明确区分 `shown`、策略性 `suppressed`、`retryable` 与 `permanent`；只有前两类结算通知水位。暂时读不到 `turn/end` 的事实保持待分类，后续基线继续读尾；观察者时间只用于未读，不能伪装成 host 完成水位。主进程用稳定 `eventKey` 识别回执丢失后的重试；设置页 `test` 每次点击都是新请求，不进入已显示回执表。账本另为每次 renderer→原生尝试签发单调回执票据；`eventKey` 在重试间保持稳定供原生防重，回执票据只准结算当前在途尝试。记录被撤销后即使同键重新入队，旧回执也不能删除或封锁新记录。过期回执不计入投递诊断与通知水位。
+完成边沿先写入 renderer 的有界待投递账本，键包含来源化身、会话、类别与 host 水位；无水位的运行时边沿保留独立事件键，后到的可信 host 水位可补充该条记录。账本在重载后恢复；宿主进程重启（页面保留）时 durable 账本不因 proof 轮换而删除（proof 名册持久化）；应用新启动（fresh boot）仍按 §3.5 丢弃 complete 账本的 pending 结算位。native 投递 journal 是独立的 durable 投递记录：跨 reload 与跨应用重启继续投递（同一完成由身份门防重），不随 fresh boot 丢弃。原生回执明确区分 `shown`、策略性 `suppressed`、`retryable` 与 `permanent`；只有前两类结算通知水位。暂时读不到 `turn/end` 的事实保持待分类，后续基线继续读尾；观察者时间只用于未读，不能伪装成 host 完成水位。主进程用稳定 `eventKey` 识别回执丢失后的重试；设置页 `test` 每次点击都是新请求，不进入已显示回执表。账本另为每次 renderer→原生尝试签发单调回执票据；`eventKey` 在重试间保持稳定供原生防重，回执票据只准结算当前在途尝试。记录被撤销后即使同键重新入队，旧回执也不能删除或封锁新记录。过期回执不计入投递诊断与通知水位。
 
 - **gateway 镜像与无壳观察者**在已观察到停止边沿但读不到 `turn/end` 时只能报告 `reconstructed` 未读；只有后续读到可归属的新 `completed` 尾巴才升级到 `observed`，进入通知账本。若只知道最近用户提示水位前进，连运行和停止都没有观察到，就保留待分类且不凭该提示武装未读（它也可能只是排队的用户消息）；提示水位前进时仍要撤销旧完成，避免 `max(updatedAt, completedAt)` 把旧完成伪装成新通知水位。
 - **无壳观察者**在已经知道本轮最近用户提示的 host 时间时，也不得把 `session/follow` 返回的上一轮尾巴归给本轮：`turn/end.time` 必须严格晚于该提示水位。等于水位、缺少 host 时间或读尾失败均保留待分类并由独立基线再次读尾；观察者的 `pendingClassifications` 仪表显示待分类数量。`session/list` 的 `running=false`、authority 的 `episodeEnded` 只能证明停止，不能在缺少可归属 `turn/end.reason` 时生成完成通知。

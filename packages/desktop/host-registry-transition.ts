@@ -14,8 +14,8 @@ import {
   type TransportManager,
 } from './transport-manager.ts'
 import { setGatewaySyncRegistration } from './gateway-sync-registry.ts'
+import { persistNotificationSourceProofs } from './notification-source-proof-store.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
-
 export interface RegistryTransitionDeps {
   sm: Pick<TransportManager, 'status'>
   edges: {
@@ -67,10 +67,10 @@ export function createRegistryTransition(deps: RegistryTransitionDeps) {
     }
 
     const retiredNotificationSources = new Set(syncNotificationSourceRegistry(projected))
+    persistNotificationSourceProofs()
     if (retiredNotificationSources.size > 0) {
       edges.retireNotificationsForSources(retiredNotificationSources)
     }
-
     // A service/home edit may complete while the transport is already ready：显式 seed 替换
     // owner（仅 ready 实例可达：startAutomaticHostSeed 经 findRemoteTarget + 单飞注册表）。
     for (const id of reseedIds) {

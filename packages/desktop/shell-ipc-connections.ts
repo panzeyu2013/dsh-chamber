@@ -29,6 +29,9 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
   // V5-A：装配侧注入的是完整 createTransportManager，但共享 ShellAssemblyCtx Pick
   // 只扩到 loadFailure——roster 两个只读诊断经结构面读取，不加宽 Pick。
   const rosterHealth = sm as unknown as Pick<TransportManager, 'registryIncomplete' | 'loadDroppedCount'>
+  /** A degraded/incomplete registry must never delete in-memory source proofs (disk stays authoritative until rebuild). */
+  const projectForIpc = (instances: TransportInstanceSpec[]) =>
+    projectInstances(instances, { retainMissing: sm.loadFailure() !== null || rosterHealth.registryIncomplete() })
   // The direct-endpoint session origin is NOT re-derived here: it is the same
   // construction verifyUp uses (gateway-provider.gatewaySessionOriginFor), and the
   // session manager keys it by scheme + scope, so an invalidation can never miss
@@ -41,9 +44,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     return null;
   };
 
-  deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_GET, () =>
-    projectInstances(sm.listInstances())
-  );
+  deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_GET, () => projectForIpc(sm.listInstances()));
   // Registry load health (degraded gate + roster-incomplete gate, narrow
   // read-only channel): separate from instances_get so its array payload and
   // every existing consumer stay untouched — a degraded registry answers an
@@ -71,7 +72,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
    */
   deps.ipc.handle(IPC_CHANNELS.SSH_SAVE_CONNECTION, (payload: unknown) => {
     const before = sm.listInstances();
-    const currentProjected = () => projectInstances(sm.listInstances());
+    const currentProjected = () => projectForIpc(sm.listInstances());
     const refuse = (error: string) => ({
       ok: false as const,
       instances: currentProjected(),
@@ -181,7 +182,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     if (!result.ok) {
       const instances = result.metadataCommitted
         ? publishRegistryTransition(before, result.instances)
-        : projectInstances(result.instances);
+        : projectForIpc(result.instances);
       return { ...result, instances };
     }
 
@@ -209,7 +210,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
     const before = sm.listInstances();
     if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
       console.warn('[dsh-chamber] desktop_ssh_delete_connection: invalid id refused');
-      return projectInstances(before);
+      return projectForIpc(before);
     }
     const result = deleteConnectionTransaction({
       listInstances: () => sm.listInstances(),
@@ -246,7 +247,7 @@ export function registerConnectionHandlers(ctx: ShellIpcCtx): void {
       console.error(`[dsh-chamber] desktop_ssh_delete_connection transaction failed: ${result.error}`);
       return result.metadataCommitted
         ? publishRegistryTransition(before, result.instances)
-        : projectInstances(result.instances);
+        : projectForIpc(result.instances);
     }
     return publishRegistryTransition(before, result.instances);
   });

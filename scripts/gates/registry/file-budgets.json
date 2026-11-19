@@ -16,7 +16,7 @@
     },
     {
       "path": "packages/desktop/shell-core.ts",
-      "lines": 1342,
+      "lines": 1339,
       "target": 1450,
       "note": "shell assembly + IPC ctx (blocks the shell-ipc type cycle)；+2（2026-11，design 28 §16 revoke 漏斗）= onRendererLifecycle 顶部的注释 1 行 + revokeForwardRenderer(event) 调用 1 行（单漏斗：Electron main 与 Swift node-edges 都汇到该入口；替代方案是两处 entry glue 各 +1 行，但那会失去单漏斗语义）；+3（2026-11，beta 更新通道）= chamberSettingsStatus 的 supported 增加 betaUpdatesSupported 能力门（Swift 壳 + 构建期注入 beta feed 才允许订阅 beta；组合门在 core，纯函数 computeSupported 第 4 参只回填事实，Electron 恒 false）——raise 由本次 review 记录；+19（2026-11，design 16 §3.1）= dsh-chamber://open intent 接入（deep-link parse + focusMainWindowLeaf 模块叶 + enqueueDeepLink open 分支；不新增 A/B 通道）。",
       "kind": "ceiling"

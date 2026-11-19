@@ -9,7 +9,7 @@ import { adjudicateBadgeCount, validateBadgeRequest } from './badge.ts'
 import { MAX_SHOWN_NOTIFICATION_RECEIPTS, ShownNotificationReceipts, claimNotificationDetailed, decideNotification, releaseNotificationClaim, validateNotificationRequest } from './notifications.ts'
 
 export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
-  // Durable receipts (design 19 §6 D2): a host restart keeps the shown set, so a
+  // Durable receipts (design 19 §6): a host restart keeps the shown set, so a
   // retried renderer edge cannot double-show a banner whose IPC reply was lost.
   const shownReceipts = new ShownNotificationReceipts(MAX_SHOWN_NOTIFICATION_RECEIPTS, ctx.notificationReceiptsSeam)
   const { deps, state, version, applySettingsPatch, chamberSettingsStatus, pushSettingsChanged, applyBadgePresentation, reconcileBadgeCount, notificationSourceIncarnations, pendingNotificationOpens, pendingRendererIntents, nativeNotificationRateLimiter, enqueueNotificationOpen, drainPendingNotificationOpens, drainPendingRendererDeepLinkIntents } = ctx

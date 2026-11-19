@@ -118,6 +118,98 @@ test('the receipt file is userData-scoped', () => {
   assert.equal(notificationReceiptsFilePath('/tmp/ud'), '/tmp/ud/notification-receipts.json')
 })
 
+/** In-memory stand-in for the <userData> source-proof file. */
+function memoryProofSeam(initial: string | null = null) {
+  let text = initial
+  return {
+    seam: { load: () => text, save: (next: string) => { text = next } },
+    read: () => text,
+  }
+}
+
+test('durable source proofs survive a host restart and rotate only on transport identity edits', () => {
+  const disk = memoryProofSeam()
+  const first = new NotificationSourceProofs(undefined, disk.seam)
+  const original = first.replaceRemoteInstances([proofInstance()])[0]
+  assert.equal(disk.read(), null, 'a registry projection alone never writes the roster')
+  first.persist()
+  const persisted = disk.read()!
+  const parsed = JSON.parse(persisted) as { v: number; proofs: Array<{ sourceId: string; identityDigest: string; proof: string }> }
+  assert.equal(parsed.v, 1)
+  assert.equal(parsed.proofs.length, 1)
+  assert.equal(parsed.proofs[0]!.proof, original.sourceFingerprint)
+  assert.match(parsed.proofs[0]!.identityDigest, REMOTE_SOURCE_FINGERPRINT_PATTERN)
+  assert.equal(persisted.includes('a.example.com'), false, 'the file never carries plaintext transport fields')
+
+  const restarted = new NotificationSourceProofs(undefined, disk.seam)
+  assert.equal(restarted.replaceRemoteInstances([proofInstance()])[0].sourceFingerprint, original.sourceFingerprint, 'a host restart keeps the same proof')
+
+  const edited = restarted.replaceRemoteInstances([proofInstance({ host: 'b.example.com' })])[0]
+  assert.notEqual(edited.sourceFingerprint, original.sourceFingerprint, 'a transport identity edit rotates the proof')
+  restarted.persist()
+  const third = new NotificationSourceProofs(undefined, disk.seam)
+  assert.equal(third.replaceRemoteInstances([proofInstance({ host: 'b.example.com' })])[0].sourceFingerprint, edited.sourceFingerprint)
+})
+
+test('a degraded roster retains missing proofs; corrupt rosters start empty; a failing save never throws', () => {
+  let minted = 0
+  const proofs = new NotificationSourceProofs(() => (++minted).toString(16).padStart(64, '0'))
+  proofs.replaceRemoteInstances([proofInstance({ id: 'one' }), proofInstance({ id: 'two' })])
+  assert.equal(proofs.activeCount, 2)
+  proofs.replaceRemoteInstances([], { retainMissing: true })
+  assert.equal(proofs.activeCount, 2, 'an incomplete/degraded roster cannot delete proofs')
+  proofs.replaceRemoteInstances([])
+  assert.equal(proofs.activeCount, 0, 'an authoritative empty roster retires them')
+
+  const corrupt = new NotificationSourceProofs(undefined, memoryProofSeam('{not json').seam)
+  assert.equal(corrupt.replaceRemoteInstances([proofInstance()])[0].sourceFingerprint.length, 64)
+
+  const foreign = new NotificationSourceProofs(undefined, memoryProofSeam(JSON.stringify({ v: 9, proofs: 'x' })).seam)
+  assert.equal(foreign.replaceRemoteInstances([proofInstance()])[0].sourceFingerprint.length, 64)
+
+  const failing = new NotificationSourceProofs(undefined, { load: () => null, save: () => { throw new Error('quota') } })
+  failing.replaceRemoteInstances([proofInstance()])
+  assert.doesNotThrow(() => failing.persist())
+  assert.equal(failing.activeCount, 1, 'a failed flush keeps the in-memory roster')
+})
+
+test('the persisted roster keeps every source beyond the old 64-entry truncation', () => {
+  const disk = memoryProofSeam()
+  let minted = 0
+  const first = new NotificationSourceProofs(() => (++minted).toString(16).padStart(64, '0'), disk.seam)
+  const instances = Array.from({ length: 70 }, (_, index) => proofInstance({ id: 'same-' + index }))
+  const original = first.replaceRemoteInstances(instances)
+  first.persist()
+  const restarted = new NotificationSourceProofs(() => 'f'.repeat(64), disk.seam)
+  const reloaded = restarted.replaceRemoteInstances(instances)
+  assert.deepEqual(reloaded.map(projection => projection.sourceFingerprint), original.map(projection => projection.sourceFingerprint), 'a restart must not rotate proofs above the old cap')
+})
+
+test('a failed proof flush keeps the roster dirty and retries at the next commit point', () => {
+  let fail = true
+  let writes = 0
+  let text: string | null = null
+  const seam = { load: () => text, save: (next: string) => { writes += 1; if (fail) throw new Error('quota'); text = next } }
+  const proofs = new NotificationSourceProofs(undefined, seam)
+  const original = proofs.replaceRemoteInstances([proofInstance()])[0]!.sourceFingerprint
+  assert.doesNotThrow(() => proofs.persist())
+  assert.equal(writes, 1, 'the first flush attempted and failed')
+  fail = false
+  proofs.persist()
+  assert.equal(writes, 2, 'the retained dirty bit retries the flush')
+  const restarted = new NotificationSourceProofs(undefined, { load: () => text, save: () => {} })
+  assert.equal(restarted.replaceRemoteInstances([proofInstance()])[0]!.sourceFingerprint, original)
+})
+
+test('the proof store attaches before the first sync and flushes before the renderer push', () => {
+  const store = stripComments(readFileSync(new URL('../../notification-source-proof-store.ts', import.meta.url), 'utf8'))
+  assert.ok(store.indexOf('notificationSourceProofs.attach(') < store.indexOf('syncNotificationSourceRegistry('), 'attach must precede the first sync')
+  assert.match(store, /retainMissing: unhealthy/)
+  assert.match(store, /if \(!unhealthy\) notificationSourceProofs\.persist\(\)/)
+  const transition = stripComments(readFileSync(new URL('../../host-registry-transition.ts', import.meta.url), 'utf8'))
+  assert.ok(transition.indexOf('persistNotificationSourceProofs()') < transition.indexOf('attemptCommittedRegistryPush('), 'the roster is flushed before the renderer push')
+})
+
 test('a renderer navigation drops claims the previous document can never settle', () => {
   const claims = new NotificationClaimWindow()
   const first = claims.claim(makeRequest({ eventKey: 'run-1' }), 1_000)
@@ -308,6 +400,16 @@ test('source incarnation retires old native clicks and pending/in-flight opens o
   assert.notEqual(sources.capture('ssh-same')!.generation, replacement.generation, 'same-fingerprint re-add is still fresh')
   assert.equal(sources.owns(sources.capture('local')!), true, 'local source is never retired by remote roster changes')
 });
+test('a degraded/incomplete roster retains incarnations and their eligible opens', () => {
+  const sources = new NotificationSourceIncarnations()
+  sources.replaceRemoteSources([{ sourceId: 'ssh-same', fingerprint: 'a'.repeat(64) }])
+  const token = sources.capture('ssh-same')!
+  assert.deepEqual(sources.replaceRemoteSources([], { retainMissing: true }), [], 'an incomplete roster retires nothing')
+  assert.equal(sources.owns(token), true, 'the old token still owns its click/open work')
+  assert.deepEqual(sources.replaceRemoteSources([]), ['ssh-same'], 'a healthy empty roster retires it')
+  assert.equal(sources.capture('ssh-same'), null)
+});
+
 test('source-incarnation unique-id churn leaves no generation tombstones', () => {
   const sources = new NotificationSourceIncarnations()
   for (let index = 0; index < 10_000; index += 1) {

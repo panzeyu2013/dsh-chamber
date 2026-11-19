@@ -364,7 +364,7 @@ export function instancesFilePath(userData: string): string {
   return path.join(userData, 'ssh-instances.json');
 }
 
-/** <userData>/notification-receipts.json（design 19 §6 D2：已显示回执的持久去重表）。 */
+/** <userData>/notification-receipts.json（design 19 §6：已显示回执的持久去重表）。 */
 export function notificationReceiptsFilePath(userData: string): string {
   return path.join(userData, 'notification-receipts.json');
 }
@@ -412,8 +412,8 @@ let quittingLeaf: () => boolean = () => false;
 
 // 来源生命周期权威：移除或传输身份编辑推进代际，原生 click 闭包与 held opens 无法跨同 id 替换。
 const notificationSourceIncarnations = new NotificationSourceIncarnations();
-// 来源证明 sidecar（非秘密投影；presentation/service/home 编辑后存活，退役轮换）。
-const notificationSourceProofs = new NotificationSourceProofs();
+// 来源证明 sidecar（非秘密投影；编辑/重启存活，传输身份编辑/删除轮换；名册落盘点在 notification-source-proof-store.ts）。
+export const notificationSourceProofs = new NotificationSourceProofs();
 
 // 通知打开队列照搬 pendingIntents 的队列+drain 模式：点击时窗口可能正在重建/加载，事件不能丢。
 const pendingNotificationOpens = new BoundedAckDeliveryQueue<NotificationOpenIntent>(MAX_PENDING_NOTIFICATION_OPENS);
@@ -702,10 +702,8 @@ export function matchesNotificationSource(sourceId: string, fingerprint: string)
 export type ProjectedTransportInstanceSpec = TransportInstanceSpec & { sourceFingerprint: string }
 
 /** 来源证明投影：证明在 presentation/service/home 编辑后存活，退役（删除/传输身份编辑）时轮换。 */
-export function projectNotificationSourceInstances(
-  instances: readonly TransportInstanceSpec[],
-): ProjectedTransportInstanceSpec[] {
-  return notificationSourceProofs.replaceRemoteInstances(instances);
+export function projectNotificationSourceInstances(instances: readonly TransportInstanceSpec[], options?: { retainMissing?: boolean }): ProjectedTransportInstanceSpec[] {
+  return notificationSourceProofs.replaceRemoteInstances(instances, options);
 }
 
 /** 单行凭据存在性投影：标记只在行当前使用的凭据维度上为 true（sshPasswordSet 仅 SSH 行）。 */
@@ -721,20 +719,19 @@ export function projectInstanceSecrets(instance: TransportInstanceSpec): Project
 }
 
 /** 注册表整表读时投影（instances_get / save / delete 返回路径）。 */
-export function projectInstances(instances: readonly TransportInstanceSpec[]): ProjectedRegistryInstance[] {
-  return projectNotificationSourceInstances(instances).map(projectInstanceSecrets);
+export function projectInstances(instances: readonly TransportInstanceSpec[], options?: { retainMissing?: boolean }): ProjectedRegistryInstance[] {
+  return projectNotificationSourceInstances(instances, options).map(projectInstanceSecrets);
 }
 
 /** 来源 registry 同步：replaceRemoteSources 后把退役 sourceId 的在途/待发事件从两条
  *  队列全部丢弃（同 id 替换绝不继承旧代际的 held 工作），返回退役 id 集合。 */
-export function syncNotificationSourceRegistry(
-  projected: readonly ProjectedTransportInstanceSpec[],
-): string[] {
+export function syncNotificationSourceRegistry(projected: readonly ProjectedTransportInstanceSpec[], options?: { retainMissing?: boolean }): string[] {
   const retired = notificationSourceIncarnations.replaceRemoteSources(
     projected.map(instance => ({
       sourceId: `${instance.kind}-${instance.id}`,
       fingerprint: instance.sourceFingerprint,
     })),
+    options,
   );
   if (retired.length > 0) {
     const retiredIds = new Set(retired);

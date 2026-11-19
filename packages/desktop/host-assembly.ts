@@ -17,7 +17,8 @@ import path from 'node:path'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
 import type { ChamberSettings } from './chamber-settings.ts'
 import { writeSettingsFile } from './chamber-settings.ts'
-import {auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, localDshHomeDir, ownsNotificationSource, projectNotificationSourceInstances, proxyTransport, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, stateRootDir, syncNotificationSourceRegistry, type HostMessageOptions, type NotificationSourceToken, type ShellAssemblyCtx} from './shell-core.ts'
+import {auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, localDshHomeDir, ownsNotificationSource, proxyTransport, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, stateRootDir, type HostMessageOptions, type NotificationSourceToken, type ShellAssemblyCtx} from './shell-core.ts'
+import { initializeNotificationSourceRegistry } from './notification-source-proof-store.ts'
 import {createTransportManager, type TransportManager} from './transport-manager.ts'
 import { createHostExit } from './host-exit.ts'
 import { createRegistryTransition } from './host-registry-transition.ts'
@@ -336,9 +337,8 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     if (aside.ok) console.warn(`${logTag} 已保留损坏的实例文件为 ${aside.path}`)
     else console.error(`${logTag} 保留损坏实例文件失败：`, aside.error)
   }
-  // 初始来源代际同步（installIpcHandlers 之前建立首代证明——先 sync 后 handler 注册）。
-  syncNotificationSourceRegistry(projectNotificationSourceInstances(sm.listInstances()))
-
+  // 初始来源代际同步 + proof 名册健康门/落盘（store 模块单一所有者）。
+  initializeNotificationSourceRegistry(sm, runtimeBaseDir)
   // Transport-manager 执行投影面（plugin-sync 经结构等价收窄别名桥接）。
   const execTransport = sm.exec as unknown as ExecFn
   // 插件管理面实例级恒等指纹（registry 变更生命周期与 F 组目标闭包共用）。

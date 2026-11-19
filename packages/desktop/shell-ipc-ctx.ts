@@ -84,7 +84,7 @@ export interface ShellIpcCtx {
   localProtectionFacts: () => PluginProtectionFacts
   matchesNotificationSource: (sourceId: string, fingerprint: string) => boolean
   nativeNotificationRateLimiter: BoundedRateLimiter
-  /** 已显示回执的持久去重面（design 19 §6 D2；缺省 = 纯内存，settings-only harness 用）。 */
+  /** 已显示回执的持久去重面（design 19 §6；缺省 = 纯内存，settings-only harness 用）。 */
   notificationReceiptsSeam?: ShownReceiptsSeam
   notificationOpenDrainReady: boolean
   notificationSourceIncarnations: NotificationSourceIncarnations
@@ -93,7 +93,7 @@ export interface ShellIpcCtx {
   badgeTarget: number | null
   pendingNotificationOpens: BoundedAckDeliveryQueue<NotificationOpenIntent>
   pendingRendererIntents: BoundedAckDeliveryQueue<RendererVscodeIntent>
-  projectInstances: (instances: readonly TransportInstanceSpec[]) => ProjectedRegistryInstance[]
+  projectInstances: (instances: readonly TransportInstanceSpec[], options?: { retainMissing?: boolean }) => ProjectedRegistryInstance[]
   pushSettingsChanged: () => void
   quittingLeaf: () => boolean
   reconcileBadgeCount: () => void

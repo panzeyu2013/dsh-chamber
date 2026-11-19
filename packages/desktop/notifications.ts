@@ -11,7 +11,7 @@
 
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts';
 import { describeUnknownError } from './deep-link.ts';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 /** 通知事件种类（design 19 §3.2）：complete / ask / request + test（设置页测试按钮）。 */
 export type NotificationKind = 'complete' | 'ask' | 'request' | 'test';
@@ -79,18 +79,49 @@ export type NotificationSourceProofProjection<T extends NotificationSourceProofI
   sourceFingerprint: string
 }
 
+/** Persistence seam for the durable source-proof roster: the host supplies the
+ * file, this module stays fs-free. */
+export interface SourceProofStoreSeam {
+  load(): string | null
+  save(text: string): void
+}
+
+const SOURCE_PROOF_FILE_VERSION = 1
+
+/** Opaque identity digest: a proof survives presentation/service/home edits **and
+ * host process restarts**, rotating only when the transport identity or the id
+ * changes. Only this digest is persisted, never the plaintext transport fields. */
+function notificationSourceIdentityDigest(instance: NotificationSourceProofInstance): string {
+  return createHash('sha256')
+    .update(JSON.stringify([
+      instance.kind,
+      instance.host,
+      instance.user,
+      instance.sshPort,
+      instance.remotePort,
+    ]))
+    .digest('hex')
+}
+
 /**
- * Main-memory source proof sidecar (never serialized): a proof survives
- * presentation/service/home edits but rotates when the renderer lifecycle
- * retires; removing an id deletes its entry, so a same-id re-add re-mints.
+ * Source proof sidecar. A proof survives presentation/service/home edits and host
+ * process restarts (the roster is persisted through a seam) but rotates when the
+ * transport identity changes or the source is removed, so a same-id rebind never
+ * inherits durable notification state. Persisting is explicit: a mutation only
+ * marks the roster dirty, and the host flushes it at healthy commit points
+ * (`persist()`), never on every registry projection (a degraded/incomplete load
+ * must not overwrite the durable roster with an empty/partial one).
  */
 export class NotificationSourceProofs {
-  readonly #current = new Map<string, { identity: string; proof: string }>()
+  readonly #current = new Map<string, { identityDigest: string; proof: string }>()
   readonly #mint: () => string
+  #seam: SourceProofStoreSeam | undefined
+  #dirty = false
 
-  constructor(mint?: () => string) {
+  constructor(mint?: () => string, seam?: SourceProofStoreSeam) {
     if (mint !== undefined) {
       this.#mint = mint
+      if (seam !== undefined) this.attach(seam)
       return
     }
     // Acquire entropy once before any registry commit: per-proof minting thereafter cannot fail at a host RNG boundary.
@@ -100,35 +131,84 @@ export class NotificationSourceProofs {
       generation += 1n
       return `${namespace}${generation.toString(16).padStart(16, '0')}`
     }
+    if (seam !== undefined) this.attach(seam)
+  }
+
+  /** Attach the host seam once and restore the persisted roster; corrupt payloads start empty. */
+  attach(seam: SourceProofStoreSeam): void {
+    if (this.#seam !== undefined) return
+    this.#seam = seam
+    this.#restore(seam.load())
+  }
+
+  /** Flush only when the roster changed; a failing seam never fails a host commit. */
+  persist(): void {
+    if (!this.#dirty || this.#seam === undefined) return
+    const proofs = [...this.#current].map(([sourceId, entry]) => ({ sourceId, ...entry }))
+    try {
+      this.#seam.save(JSON.stringify({ v: SOURCE_PROOF_FILE_VERSION, proofs }))
+    } catch {
+      return
+    }
+    this.#dirty = false
   }
 
   replaceRemoteInstances<T extends NotificationSourceProofInstance>(
     next: readonly T[],
+    options?: { retainMissing?: boolean },
   ): Array<NotificationSourceProofProjection<T>> {
     const nextSourceIds = new Set(next.map(instance => `${instance.kind}-${instance.id}`))
-    for (const sourceId of this.#current.keys()) {
-      if (!nextSourceIds.has(sourceId)) this.#current.delete(sourceId)
+    // A degraded/incomplete roster is not authority for deletion: keep the missing
+    // proofs so a healthy reload does not silently rotate every remote incarnation.
+    if (options?.retainMissing !== true) {
+      for (const sourceId of [...this.#current.keys()]) {
+        if (!nextSourceIds.has(sourceId)) {
+          this.#current.delete(sourceId)
+          this.#dirty = true
+        }
+      }
     }
     return next.map(instance => {
       const sourceId = `${instance.kind}-${instance.id}`
-      const identity = JSON.stringify([
-        instance.kind,
-        instance.host,
-        instance.user,
-        instance.sshPort,
-        instance.remotePort,
-      ])
+      const identityDigest = notificationSourceIdentityDigest(instance)
       let current = this.#current.get(sourceId)
-      if (current === undefined || current.identity !== identity) {
+      if (current === undefined || current.identityDigest !== identityDigest) {
         const proof = this.#mint()
         if (!REMOTE_SOURCE_FINGERPRINT_PATTERN.test(proof)) {
           throw new Error('source proof mint returned an invalid value')
         }
-        current = { identity, proof }
+        current = { identityDigest, proof }
         this.#current.set(sourceId, current)
+        this.#dirty = true
       }
       return { ...instance, sourceFingerprint: current.proof }
     })
+  }
+
+  /** Corrupt/foreign payloads start empty: a lost roster rotates proofs once (the
+   * pre-fix behavior), never suppresses a real notification. Newest entry is last. */
+  #restore(raw: string | null): void {
+    if (raw === null || raw === '') return
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return
+      const root = parsed as { v?: unknown; proofs?: unknown }
+      if (root.v !== SOURCE_PROOF_FILE_VERSION || !Array.isArray(root.proofs)) {
+        console.warn('[dsh-chamber] 来源证明名册格式不可识别，按空名册启动（远端 proof 将轮换一次）')
+        return
+      }
+      for (const candidate of root.proofs) {
+        if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+        const entry = candidate as { sourceId?: unknown; identityDigest?: unknown; proof?: unknown }
+        if (typeof entry.sourceId !== 'string' || entry.sourceId.length === 0 || entry.sourceId.length > 128) continue
+        if (typeof entry.identityDigest !== 'string' || !REMOTE_SOURCE_FINGERPRINT_PATTERN.test(entry.identityDigest)) continue
+        if (typeof entry.proof !== 'string' || !REMOTE_SOURCE_FINGERPRINT_PATTERN.test(entry.proof)) continue
+        this.#current.delete(entry.sourceId)
+        this.#current.set(entry.sourceId, { identityDigest: entry.identityDigest, proof: entry.proof })
+      }
+    } catch {
+      console.warn('[dsh-chamber] 来源证明名册损坏，按空名册启动（远端 proof 将轮换一次）')
+    }
   }
 
   get activeCount(): number {
@@ -152,13 +232,24 @@ export class NotificationSourceIncarnations {
     this.#current.set(sourceId, { fingerprint, token })
   }
 
-  replaceRemoteSources(next: readonly NotificationSourceDescriptor[]): string[] {
+  replaceRemoteSources(
+    next: readonly NotificationSourceDescriptor[],
+    options?: { retainMissing?: boolean },
+  ): string[] {
     const nextById = new Map(next.map(source => [source.sourceId, source.fingerprint]))
     const retired: string[] = []
     for (const [sourceId, current] of this.#current) {
       if (sourceId === 'local') continue
       const nextFingerprint = nextById.get(sourceId)
-      if (nextFingerprint === undefined || nextFingerprint !== current.fingerprint) {
+      if (nextFingerprint === undefined) {
+        // A degraded/incomplete roster is not authority for retirement: keep the
+        // incarnation and its pending/in-flight opens until a healthy roster lands.
+        if (options?.retainMissing === true) continue
+        this.#current.delete(sourceId)
+        retired.push(sourceId)
+        continue
+      }
+      if (nextFingerprint !== current.fingerprint) {
         this.#current.delete(sourceId)
         retired.push(sourceId)
       }
@@ -281,7 +372,7 @@ export interface ShownReceiptsSeam {
 }
 
 /** Host-side shown receipts make a lost renderer IPC reply idempotent. With a
- * seam they also survive a host restart (design 19 §6 D2); without one they are
+ * seam they also survive a host restart (design 19 §6); without one they are
  * per-process only. */
 export class ShownNotificationReceipts {
   readonly #shown = new Map<string, number>()
