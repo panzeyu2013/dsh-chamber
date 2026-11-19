@@ -9,12 +9,14 @@
  * (incarnationKey/retainSources) has no call site left. W3 adds one more wiring rule:
  * a delete-shaped ledger write for an unregistered source is DROPPED (never lazily
  * reincarnated into a phantom generation), and W5 removes the captured-epoch third
- * parameter from the dispatch surface.
+ * parameter from the dispatch surface. The retirement lock also pins the container's
+ * epoch rule: a retired source id keeps its epoch sequence (retirement never resets it),
+ * so a late event carrying the retired generation's epoch is rejected by the replacement.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  epochOf, reincarnate, retainSourceIds,
+  dispatchSource, epochOf, reincarnate, retainSourceIds,
   type SourceIncarnation,
 } from '../../../../packages/dsh-stream-state/src/index.ts'
 import { appWiringFrame } from '../support/wiring-sources.ts'
@@ -30,8 +32,14 @@ test('the ledger store is a SourceRegistry, not a keyed state map', () => {
 
 test('a fingerprint change is observed once, at the roster refresh', () => {
   assert.match(APP, /sourceLedgerStoreRef\.current = reincarnate\(/, 'the roster refresh must reincarnate the generation')
+  // The roster commit reincarnates local + every accepted source through ONE call site (the sink
+  // invoked for LOCAL_INSTANCE_ID and for each activation in the plan); the lazy unregistered-add
+  // guard in use-source-lifecycle is the second. Two call sites total, not one per source: a
+  // missing site would drop below two.
+  assert.ok(APP.includes("reincarnateSource(LOCAL_INSTANCE_ID, 'local')"),
+    'the roster commit must register the local source')
   const reincarnations = APP.split('reincarnate(').length - 1
-  assert.ok(reincarnations >= 3, 'local + each accepted source (and the lazy guard) must register: ' + String(reincarnations))
+  assert.ok(reincarnations >= 2, 'the roster commit and the lazy guard must both register: ' + String(reincarnations))
 })
 
 test('a dispatch reads the stored epoch and never carries a captured one', () => {
@@ -97,13 +105,24 @@ test('retirement drops the generation so the registry keys are a subset of the l
   for (const sourceId of Object.keys(kept)) assert.ok(new Set(['local']).has(sourceId))
 })
 
-test('a same-id replacement after retirement starts a fresh generation with its real proof', () => {
-  const dropped = retainSourceIds(reincarnate({}, AGED), new Set(['local']))
+test('a same-id replacement after retirement keeps the epoch monotone and fences the old generation', () => {
+  const born = reincarnate({}, AGED)
+  const oldEpoch = epochOf(born, AGED.sourceId)
+  assert.ok(oldEpoch !== undefined)
+  const dropped = retainSourceIds(born, new Set(['local']))
+  assert.deepEqual(Object.keys(dropped), [], 'a retired source must leave the registry')
   const replacement = reincarnate(dropped, { sourceId: AGED.sourceId, fingerprint: 'b'.repeat(64) })
-  assert.equal(epochOf(replacement, AGED.sourceId), 1,
-    'retirement drops the entry, so the replacement generation starts at 1 (no ghost epoch to reuse)')
+  const replacementEpoch = epochOf(replacement, AGED.sourceId)
+  assert.ok(replacementEpoch !== undefined && replacementEpoch > oldEpoch,
+    'retirement must NOT reset the epoch: the replacement continues the same-id sequence')
   assert.equal(replacement[AGED.sourceId]?.incarnation.fingerprint, 'b'.repeat(64),
     'the replacement carries its real 64-hex proof, never the lazy sourceId fallback')
+  const stale = dispatchSource(replacement, AGED.sourceId,
+    { kind: 'prewarmSuppressed', epoch: oldEpoch }, { retryableGap: () => false })
+  assert.equal(stale.accepted, false, 'a late event from the retired generation must never hit the replacement')
+  assert.equal(stale.registry, replacement, 'a rejected late event must not rewrite the registry')
   const rebased = reincarnate(replacement, { sourceId: AGED.sourceId, fingerprint: 'c'.repeat(64) })
-  assert.equal(epochOf(rebased, AGED.sourceId), 2, 'a fingerprint change inside one live generation bumps the epoch')
+  const rebasedEpoch = epochOf(rebased, AGED.sourceId)
+  assert.ok(rebasedEpoch !== undefined && rebasedEpoch > replacementEpoch,
+    'a fingerprint change inside one live generation still bumps the epoch')
 })

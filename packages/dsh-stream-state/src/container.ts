@@ -9,6 +9,15 @@
  * source id, the entry stores its epoch, and {@link reincarnate} is the only way a new
  * incarnation appears. Callers capture the epoch and pass it with every event.
  *
+ * EPOCH HIGH-WATER: an epoch is monotone per source id for the LIFETIME OF THE REGISTRY
+ * VALUE, not the lifetime of the entry. Retiring an id removes its entry
+ * ({@link retainSourceIds}) but not its high-water mark, so a same-id re-registration
+ * continues the sequence instead of restarting at 1. Without it a numeric coincidence
+ * would let a retired generation's late event pass the fence into a DIFFERENT generation.
+ * The mark travels as hidden (non-enumerable symbol) metadata ON THE REGISTRY VALUE, never
+ * as module-level state: the result stays a pure function of the value, and the public
+ * shape (keys, spread, deepEqual, JSON) is exactly the live-source record.
+ *
  * PURITY: no imports beyond the sibling reducer; no clock, no DOM.
  */
 
@@ -22,7 +31,7 @@ import type {
   SourceLifecycleState,
 } from './source.ts'
 
-/** One source id's live generation. The epoch is monotone per source id. */
+/** One source id's live generation. The epoch is monotone per source id across retirements. */
 export interface SourceRegistryEntry {
   readonly epoch: number
   readonly incarnation: SourceIncarnation
@@ -30,6 +39,49 @@ export interface SourceRegistryEntry {
 }
 
 export type SourceRegistry = Readonly<Record<string, SourceRegistryEntry>>
+
+/**
+ * Hidden registry metadata: the highest epoch EVER issued per source id. Live entries are
+ * covered by construction; retired ids keep their mark so a re-entry cannot reuse it.
+ */
+const EPOCH_HIGH_WATER: unique symbol = Symbol('dsh-stream-state.epochHighWater')
+
+type EpochHighWater = Readonly<Record<string, number>>
+type RegistryWithHighWater = SourceRegistry & { readonly [EPOCH_HIGH_WATER]?: EpochHighWater }
+
+/** The carried mark; a registry built outside this module reads as empty (the next returned value folds its live entries back in). */
+function highWaterOf(registry: SourceRegistry): EpochHighWater {
+  return (registry as RegistryWithHighWater)[EPOCH_HIGH_WATER] ?? {}
+}
+
+/** The mark with every issued epoch folded in by MAX; the SAME object when nothing rises. */
+function highWaterAfter(registry: SourceRegistry, issued: readonly (readonly [string, number])[]): EpochHighWater {
+  const carried = highWaterOf(registry)
+  let raised: Record<string, number> | undefined
+  for (const [sourceId, epoch] of issued) {
+    if (epoch <= (carried[sourceId] ?? 0)) continue
+    raised ??= { ...carried }
+    raised[sourceId] = epoch
+  }
+  return raised ?? carried
+}
+
+/**
+ * Define the carried mark on a registry value this module is about to return. The property
+ * is NON-enumerable, so Object.keys, spread, JSON and assert.deepStrictEqual see the
+ * live-source record and nothing else. The guarantee holds for values that keep flowing
+ * through this module's functions: a foreign spread/assign drops the mark (and would
+ * restart the sequence if that copy were then mutated directly).
+ */
+function withHighWater<T extends SourceRegistry>(registry: T, highWater: EpochHighWater): T {
+  Object.defineProperty(registry, EPOCH_HIGH_WATER, {
+    value: highWater,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  })
+  return registry
+}
 
 export interface SourceRegistryReduction {
   readonly registry: SourceRegistry
@@ -47,18 +99,25 @@ export function epochOf(registry: SourceRegistry, sourceId: string): number | un
 /**
  * Register (or re-register) a source incarnation. Same fingerprint = the SAME generation
  * and the same registry reference; a different fingerprint = a new epoch, clean record.
+ * A retired-then-returned id (same OR different fingerprint) continues its epoch sequence:
+ * the carried high-water mark, not the entry's presence, is what the next epoch is based on.
  */
 export function reincarnate(registry: SourceRegistry, incarnation: SourceIncarnation): SourceRegistry {
   const previous = registry[incarnation.sourceId]
   if (previous !== undefined && previous.incarnation.fingerprint === incarnation.fingerprint) return registry
-  return {
-    ...registry,
-    [incarnation.sourceId]: {
-      epoch: (previous?.epoch ?? 0) + 1,
-      incarnation,
-      state: initialSourceLifecycle(incarnation),
+  const highWater = highWaterOf(registry)
+  const epoch = Math.max(highWater[incarnation.sourceId] ?? 0, previous?.epoch ?? 0) + 1
+  return withHighWater(
+    {
+      ...registry,
+      [incarnation.sourceId]: {
+        epoch,
+        incarnation,
+        state: initialSourceLifecycle(incarnation),
+      },
     },
-  }
+    { ...highWater, [incarnation.sourceId]: epoch },
+  )
 }
 
 /**
@@ -78,13 +137,20 @@ export function dispatchSource(
   const { epoch: _epoch, ...sourceEvent } = event
   const reduction = reduceSource(entry.state, sourceEvent, env)
   return {
-    registry: { ...registry, [sourceId]: { ...entry, state: reduction.state } },
+    registry: withHighWater(
+      { ...registry, [sourceId]: { ...entry, state: reduction.state } },
+      highWaterAfter(registry, [[sourceId, entry.epoch]]),
+    ),
     effects: reduction.effects.map((effect) => ({ sourceId, effect })),
     accepted: true,
   }
 }
 
-/** Drop unregistered sources; same reference when nothing changed, so callers can skip a re-render. */
+/**
+ * Drop unregistered sources; same reference when nothing changed, so callers can skip a
+ * re-render. Dropping an entry must NOT drop its epoch high-water mark: a same-id re-entry
+ * continues the sequence (see {@link reincarnate}).
+ */
 export function retainSourceIds(
   registry: SourceRegistry,
   liveSourceIds: ReadonlySet<string>,
@@ -95,7 +161,11 @@ export function retainSourceIds(
     if (liveSourceIds.has(sourceId)) next[sourceId] = entry
     else changed = true
   }
-  return changed ? next : registry
+  if (!changed) return registry
+  return withHighWater(
+    next,
+    highWaterAfter(registry, Object.entries(next).map(([sourceId, entry]) => [sourceId, entry.epoch] as const)),
+  )
 }
 
 // Projections: each mirrors exactly one of the App's refs, reading the CURRENT
