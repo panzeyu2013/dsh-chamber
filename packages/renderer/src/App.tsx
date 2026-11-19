@@ -13,7 +13,6 @@
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  reincarnate,
   retainSourceIds,
   waitForCondition,
   LADDER_TABLES,
@@ -64,9 +63,10 @@ import type { SessionFactsSource } from './session-facts-source.ts'
 // probe 判定 → 侧栏档位：无快照即缺席 = 未知。
 import { pruneSourceList, pruneSourceRecord } from './source-registry.ts'
 import { LOCAL_INSTANCE_ID } from './local-instance.ts'
-import {authoritativeSourceRetirements, classifyRosterGatedSource, deliveryMatchesCurrentSource, enqueueBoundedRosterIntent, parseAuthoritativeSourceFingerprint, SerialIntentRunner, SourceOwnershipRegistry, subscribeRosterBeforeRefresh, type SourceOwnershipToken} from './deep-link-activation.ts'
+import {classifyRosterGatedSource, deliveryMatchesCurrentSource, enqueueBoundedRosterIntent, SerialIntentRunner, SourceOwnershipRegistry, subscribeRosterBeforeRefresh, type SourceOwnershipToken} from './deep-link-activation.ts'
 import { useAppRegistry } from './app-hooks/use-app-registry.ts'
 import { useRemoteRefresh } from './app-hooks/use-remote-refresh.ts'
+import { useRosterCommit } from './app-hooks/use-roster-commit.ts'
 import { useViewSelection } from './app-hooks/use-view-selection.ts'
 import { useDeepLinkDelivery, type PendingDeepLinkDelivery } from './app-hooks/use-deep-link-delivery.ts'
 import { useNotificationOpenReplay, type NotificationOpenDelivery as ReplayNotificationOpenDelivery } from './app-hooks/use-notification-open-replay.ts'
@@ -120,7 +120,6 @@ import {
   withoutRemovedSourceKeys,
 } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
-import type { SshInstancesHealth } from './global.d.ts'
 import {
   instanceBasePath,
   isServiceableLocalStatus,
@@ -138,11 +137,7 @@ import { useAggregateRefresh } from './app-hooks/use-aggregate-refresh.ts'
 import { useShellRetry } from './app-hooks/use-shell-retry.ts'
 import { useBadgeCount } from './app-hooks/use-badge-count.ts'
 import { projectArchivedSessionIds } from './badge-count.ts'
-import {
-  durableUnreadPruneAllowed, healthProbeUnavailableDiagnostic, rosterIncompleteDiagnostic,
-  useBridgeSubscriptions,
-  type HealthProbeUnavailableKind,
-} from './app-hooks/use-bridge-subscriptions.ts'
+import { durableUnreadPruneAllowed, useBridgeSubscriptions } from './app-hooks/use-bridge-subscriptions.ts'
 import { useSshBridgeProbe } from './app-hooks/use-ssh-bridge-probe.ts'
 
 import { useNotifications } from './app-hooks/use-notifications.ts'
@@ -154,16 +149,6 @@ import { PERF_MARKS, perfMark } from './perf-marks.ts'
 /** 会话事实权威升级 ladder 的引擎实例；tick 与 reconnect/notice 执行端在
  *  app-hooks/use-aggregate-refresh.ts，两者都要求 stuck 证据。 */
 const SESSION_AUTHORITY_ESCALATION_LADDER = sessionAuthorityEscalationLadder(LADDER_TABLES.authority)
-
-/**
- * Health probe payload as consumed by refreshRemotes. preload.cts is the authoritative wire
- * contract and carries the V5-A roster-incomplete fields; read them structurally (an absent flag
- * from an older producer means "complete", the pre-V5-A semantics).
- */
-type SshInstancesHealthProbe = SshInstancesHealth & {
-  rosterIncomplete?: boolean
-  droppedCount?: number
-}
 
 // 桥面探测常量与 effect：app-hooks/use-ssh-bridge-probe.ts（App.tsx 行数棘轮，逻辑已抽出）。
 
@@ -830,111 +815,14 @@ export default function App() {
     reportNotificationAckFailure,
   ])
 
-  /** F16/A4 健康探针不可用的 warn-once（按诊断文案去重）：缺失/抛错都不是「健康」，
-   *  refreshRemotes 保持 fail-closed（不安装 roster、不置结算位）。 */
-  const warnHealthProbeUnavailable = useCallback((kind: HealthProbeUnavailableKind): void => {
-    const diagnostic = healthProbeUnavailableDiagnostic(kind)
-    if (healthUnavailableWarnedRef.current === diagnostic) return
-    healthUnavailableWarnedRef.current = diagnostic
-    console.warn(`[renderer] ${diagnostic}; the remote roster is NOT installed or settled (fail-closed)`)
-  }, [])
-
-  const refreshRemotes = useCallback(async (): Promise<boolean> => {
-    const ssh = window.dshChamber?.desktopSsh
-    if (ssh === undefined) {
-      // 无桥形态的收敛不在这里放行：本分支可能被可见性补偿在**桥迟到窗口**内提前调用
-      // （desktopSsh 尚未 expose ≠ 无桥），置结算位会把远端 durable 键当退役来源剪掉。
-      // 无桥收敛由 500ms 探测预算得出的 bridgeVerdict='absent' 在 durable 剪枝门完成；
-      // 本函数保持「有桥才拉取」语义。
-      return false
-    }
-    const seq = remoteRosterRefreshSeqRef.current + 1
-    remoteRosterRefreshSeqRef.current = seq
-    // F16/A4：健康探针不可用 ≠ 健康。旧桥/旧 shim 没有 desktopSsh.instances_health，探针
-    // invoke 也可能抛错（IPC/sidecar 不可达）。两种形态都保持 fail-closed（不安装 roster、
-    // 不置结算位），warn-once 明确 'health unavailable'，绝不静默折叠成健康。
-    if (typeof ssh.instances_health !== 'function') {
-      warnHealthProbeUnavailable('missing-method')
-      return false
-    }
-    let health: SshInstancesHealthProbe
-    try {
-      health = await ssh.instances_health() as SshInstancesHealthProbe
-    } catch {
-      warnHealthProbeUnavailable('invoke-failed')
-      return false
-    }
-    if (remoteRosterRefreshSeqRef.current !== seq) return false
-    try {
-      // 注册表健康位先于 roster 读取（F13）：加载降级时空 roster 不是权威——不安装、不结算
-      // （保持「有桥但未结算」，剪枝门恒关），warn 一次；健康恢复后走原有结算路径。
-      if (health.degraded === true) {
-        const reason = health.reason ?? 'registry load failed'
-        if (registryDegradedWarnedRef.current !== reason) {
-          registryDegradedWarnedRef.current = reason
-          console.warn(
-            `[renderer] SSH instance registry is degraded (${reason}); the empty roster is NOT authoritative — durable notification state is retained until the registry is rebuilt`,
-          )
-        }
-        setRegistryDegraded(true)
-        return false
-      }
-      setRegistryDegraded(false)
-      // V5-A 行级丢弃：load 成功但 drop 了行时磁盘有内容而 roster 只是子集。合法行**照常安装
-      // 并结算**（连接不能不可见），但 durable 剪枝门由 rosterIncomplete 关死（与 degraded 同档）。
-      const incomplete = health.rosterIncomplete === true
-      if (incomplete) {
-        const diagnostic = rosterIncompleteDiagnostic(health.droppedCount ?? 0)
-        if (rosterIncompleteWarnedRef.current !== diagnostic) {
-          rosterIncompleteWarnedRef.current = diagnostic
-          console.warn(
-            `[renderer] SSH instance registry roster is incomplete (${diagnostic}); valid rows are installed but durable notification state is retained until the roster is complete`,
-          )
-        }
-      }
-      setRosterIncomplete(incomplete)
-      const instances = await ssh.instances_get()
-      if (remoteRosterRefreshSeqRef.current !== seq) return false
-      const acceptedInstances = instances.flatMap((instance) => {
-        const sourceId = sourceIdForInstance(instance)
-        const fingerprint = parseAuthoritativeSourceFingerprint(sourceId, instance.sourceFingerprint)
-        if (fingerprint === null) {
-          console.error(`[renderer] remote source ${sourceId} omitted: invalid authoritative lifecycle proof`)
-          return []
-        }
-        return [{ instance, sourceId, fingerprint }]
-      })
-      const nextSources = [
-        { sourceId: LOCAL_INSTANCE_ID, fingerprint: 'local' },
-        ...acceptedInstances.map(({ sourceId, fingerprint }) => ({ sourceId, fingerprint })),
-      ]
-      const nextLiveServerIds = new Set(nextSources.map(source => source.sourceId))
-      // 缺行 roster 不是退役权威：不退役、不更新 last-known live、不 settle（held intent 继续 hold）。
-      const retired = incomplete ? new Set<string>() : authoritativeSourceRetirements(liveServerIdsRef.current, sourceLifecyclesRef.current!, nextSources)
-      retireSources(retired)
-      sourceLifecyclesRef.current!.activate(LOCAL_INSTANCE_ID, 'local')
-      // The authoritative roster is the one place a fingerprint change is observed: registering it here turns a re-registration into an epoch bump.
-      sourceLedgerStoreRef.current = reincarnate(
-        sourceLedgerStoreRef.current,
-        { sourceId: LOCAL_INSTANCE_ID, fingerprint: 'local' },
-      )
-      for (const { sourceId, fingerprint } of acceptedInstances) {
-        sourceLifecyclesRef.current!.activate(sourceId, fingerprint)
-        sourceLedgerStoreRef.current = reincarnate(sourceLedgerStoreRef.current, { sourceId, fingerprint })
-      }
-      if (!incomplete) liveServerIdsRef.current = nextLiveServerIds
-      const acceptedSpecs = acceptedInstances.map(({ instance }) => instance)
-      remotesStore.setInstances(acceptedSpecs)
-      if (!incomplete) rosterGate.settle()
-      for (const { instance, sourceId } of acceptedInstances) {
-        void refreshRemoteStatus(instance.id, sourceId)
-      }
-      return true
-    } catch {
-      // 桌面 SSH 面不可达时保持现状；首次权威结果前 settled 仍为 false，deep-link intent 继续 held，由快速重试/30s 轮询再拉。
-      return false
-    }
-  }, [refreshRemoteStatus, retireSources, warnHealthProbeUnavailable])
+  /** 远端 roster 刷新（health → instances_get 逻辑快照对 + 提交规划/执行）：实现在
+   * app-hooks/use-roster-commit.ts；这里只注入 App 拥有的状态容器与同步退役实体。 */
+  const refreshRemotes = useRosterCommit({
+    remotesStore, rosterGate, remoteRosterRefreshSeqRef, liveServerIdsRef,
+    sourceLifecyclesRef, sourceLedgerStoreRef, refreshRemoteStatus, retireSources,
+    setRegistryDegraded, registryDegradedWarnedRef, setRosterIncomplete,
+    rosterIncompleteWarnedRef, healthUnavailableWarnedRef,
+  })
 
   /**
    * 聚合刷新簇（unary 快照拉取 / 有界刷新波 / 边沿轮询 / 陈旧 watchdog + 会话权威升级

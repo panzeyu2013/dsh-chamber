@@ -208,6 +208,11 @@ export const GROUPS = {
     // 触达 @deepseek-ai/dsh-client-web：只需 web-only 夹具负载器，不能用替换 client-core
     // 的 shell shim（本测试已加载真实 barrel）。
     { file: 'test/wiring/unread-prune-roster-gate.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-dsh-web-register.mjs'] },
+    // roster 提交（health+instances 快照对 → partial/complete 计划 → 一次提交）：partial 不得动
+    // 已确认显示行/身份/durable pending，完整快照对同 id 换代恰好退役一次。行为测试走真实
+    // complete-ledger + notification-outbox + ownership registry；模块图经 roster hook 触达
+    // shell.ts（use-bridge-subscriptions），故与上一条同用 web-only 夹具负载器。
+    { file: 'test/wiring/source-roster-commit.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-dsh-web-register.mjs'] },
   ],
   // warm: 常驻壳策略（N-ctx 壳常驻 v1.1）——硬上限/输入保护/压力分档的纯判定、快照纯构建器
   // （含已释放行与隐藏事实门控），以及输入席位/常驻阀接线的源码锁（无 DOM 可跑的部分）。

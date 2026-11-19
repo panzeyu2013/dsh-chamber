@@ -179,10 +179,10 @@ export function durableUnreadPruneAllowed(
 }
 
 /**
- * V5-A（行级丢弃）：loadInstances() 解析出合法数组但丢弃了条目/重复 id 时，
- * roster 是磁盘内容的子集——refreshRemotes 仍安装合法行并结算（连接不能不可
- * 见），但 durable 剪枝门由 `rosterIncomplete` 维度关死。诊断单源，供 App 的
- * warn-once 使用，与 `registryDegraded`、health-unavailable 三角可区分。
+ * V5-A（行级丢弃）：loadInstances() 解析出合法数组但丢弃了条目/重复 id 时，roster 是磁盘内容的子集——
+ * refreshRemotes 只走 partial 提交：合法行照常可见（新来源 id 安装并激活，已确认行与身份保留），
+ * 但不结算、不退役、不缩 live；durable 剪枝门由 `rosterIncomplete` 维度关死。诊断单源，供 roster
+ * 提交 hook 的 warn-once 使用，与 `registryDegraded`、health-unavailable 三角可区分。
  * @param droppedCount 本次 load 丢弃（含重复 id）的条目数。
  */
 export function rosterIncompleteDiagnostic(droppedCount: number): string {

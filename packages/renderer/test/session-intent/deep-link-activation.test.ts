@@ -315,7 +315,7 @@ test('authoritative snapshot retires a same-id fingerprint mismatch before repla
   owners.activate('ssh-stable', stableFingerprint)
   const retired = authoritativeSourceRetirements(
     new Set(['local', 'ssh-edit', 'ssh-stable', 'ssh-removed']),
-    owners,
+    owners.fingerprints(),
     [
       { sourceId: 'local', fingerprint: 'local' },
       { sourceId: 'ssh-edit', fingerprint: newFingerprint },
@@ -387,16 +387,27 @@ test('App wires bounded listener-before-ready retry for deep-link and notificati
       < deepLinkListener.indexOf('const previous = pendingDeepLinkDeliveryRef.current'),
     'a stale delivery must be ACKed before it can supersede the valid held slot',
   )
-  const refreshRemotes = app.slice(
-    app.indexOf('const refreshRemotes = useCallback'),
-    app.indexOf('const aggregatePollRunningRef'),
+  // refreshRemotes 已抽到 app-hooks/use-roster-commit.ts（App 只接线）：health/roster 两次读取、
+  // 提交序列在该 hook，指纹差分在 host/roster-commit.ts。钉的仍是同一条契约——退役先于换代激活。
+  const rosterCommit = readFileSync(
+    new URL('../../src/app-hooks/use-roster-commit.ts', import.meta.url),
+    'utf8',
   )
-  assert.match(refreshRemotes, /authoritativeSourceRetirements\(/)
-  assert.match(refreshRemotes, /parseAuthoritativeSourceFingerprint\(sourceId, instance\.sourceFingerprint\)/)
-  assert.match(refreshRemotes, /if \(fingerprint === null\)/)
+  const planner = readFileSync(
+    new URL('../../src/host/roster-commit.ts', import.meta.url),
+    'utf8',
+  )
+  assert.ok(app.includes('const refreshRemotes = useRosterCommit('), 'App only wires the roster commit hook')
+  assert.match(planner, /authoritativeSourceRetirements\(/)
+  assert.match(planner, /parseAuthoritativeSourceFingerprint\(sourceId, instance\.sourceFingerprint\)/)
+  assert.match(planner, /if \(fingerprint === null\)/)
+  const commit = rosterCommit.slice(
+    rosterCommit.indexOf('export function commitRosterPlan('),
+    rosterCommit.indexOf('export interface RosterCommitInputs'),
+  )
   assert.ok(
-    refreshRemotes.indexOf('retireSources(retired)')
-      < refreshRemotes.indexOf("sourceLifecyclesRef.current!.activate(LOCAL_INSTANCE_ID, 'local')"),
+    commit.indexOf('sinks.retireSources(plan.retire)')
+      < commit.indexOf("sinks.activateSource(LOCAL_INSTANCE_ID, 'local')"),
     'snapshot fingerprint retirement must happen before replacement activation',
   )
 })

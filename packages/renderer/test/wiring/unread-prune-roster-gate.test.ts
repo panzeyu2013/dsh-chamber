@@ -6,8 +6,9 @@
  * pending / 已 expose present / 预算耗尽无桥 absent）作为门的第二维：**有桥但未
  * 结算仍严格关门**，只有确认无桥才视同结算放行。
  * F13/V5-A 两档否决：`registryDegraded`（整文件加载失败）与 `rosterIncomplete`
- * （解析成功但丢弃条目/重复 id）都是「roster ≠ 磁盘真相」——合法行仍安装，但
- * durable 剪枝门在任一为 true 时都不得放行（V5-A 禁止用部分 roster 结算退役）。
+ * （解析成功但丢弃条目/重复 id）都是「roster ≠ 磁盘真相」——合法行仍可见，但只走
+ * **partial 提交**（只安装/激活新来源 id，已确认行与身份保留；不退役、不结算、不动 live），
+ * 且 durable 剪枝门在任一为 true 时都不得放行。
  *
  * 背景（写盘丢失）：App 首帧**同步**从 localStorage 载入通知三表
  * （notifications.v1：notifiedRuns/pending/outcomes），而权威远端 roster 是异步
@@ -26,8 +27,9 @@
  *      `if (durableUnreadPruneAllowed(rosterGate.isSettled(), bridgeVerdict,
  *      registryDegraded, rosterIncomplete))` 块内、各有唯一调用点，effect 依赖含
  *      roster + bridgeVerdict + 两个否决位（放行判定翻转那一拍重跑），
- *      且 rosterGate 只在 refreshRemotes 成功 pull 后 settle；无桥判定只在有界探测
- *      预算耗尽后产生，'present'/'pending' 不置 absent。
+ *      且 rosterGate 只在 app-hooks/use-roster-commit.ts 的**完整权威快照**提交时
+ *      settle（partial 不结算）；无桥判定只在有界探测预算耗尽后产生，'present'/'pending'
+ *      不置 absent。
  *   ② 纯谓词 + 存储假实现：durableUnreadPruneAllowed 的门语义直测；用真实
  *      notification-store / complete-ledger / notification-outbox / source-registry
  *      内核复现「未门控首帧」的写盘丢失，并证明门关时（含一次落盘 + 重载）远端键仍在、
@@ -59,6 +61,9 @@ const PROBE = readFileSync(fileURLToPath(new URL('../../src/app-hooks/use-ssh-br
 // A6b：registry 簇（三个否决/形态位 + warn-once ref）已逐字抽到 app-hook；位声明与类型
 // 在 hook 源码上，App 只保留接线与唯一调用点。
 const REGISTRY = readFileSync(fileURLToPath(new URL('../../src/app-hooks/use-app-registry.ts', import.meta.url)), 'utf8')
+// refreshRemotes 已抽到 app-hook：health/roster 快照对、partial/complete 提交与 settle 都在这里。
+const ROSTER_COMMIT = readFileSync(fileURLToPath(new URL('../../src/app-hooks/use-roster-commit.ts', import.meta.url)), 'utf8')
+const ROSTER_PLANNER = readFileSync(fileURLToPath(new URL('../../src/host/roster-commit.ts', import.meta.url)), 'utf8')
 
 /** 从 marker 起的第一个花括号块（含嵌套）。先 stripComments：注释文本里的花括号
  *  不得参与深度计数（按既有惯例共享实现仍保留字符串/模板字面量；S6 收尾修正）。 */
@@ -137,7 +142,9 @@ test('F11 wiring: the no-bridge verdict comes only from the bounded probe budget
   assert.ok(PROBE.includes('const BRIDGE_ABSENT_PROBE_LIMIT = '))
   assert.ok(PROBE.includes('const BRIDGE_SLOW_PROBE_MS = '))
   // 无桥判定不得顺手改权威结算位：preload 迟到的窗口仍走标准 roster 水合。
-  assert.equal(APP.split('rosterGate.settle()').length - 1, 1, 'only the authoritative pull settles the roster')
+  // 结算点已随 refreshRemotes 搬到 app-hook：App 不再持有 settle 调用。
+  assert.equal(APP.split('rosterGate.settle()').length - 1, 0, 'the App keeps no settle call site')
+  assert.equal(ROSTER_COMMIT.split('rosterGate.settle()').length - 1, 1, 'only the roster commit hook settles')
   assert.equal(APP.split('setBridgeVerdict').length - 1, 2, 'pending init + the single probe-hook wiring only')
 })
 
@@ -174,15 +181,19 @@ test('A6: the probe budget exhausts into the 30s tail and a late bridge still ta
 })
 
 test('F6 wiring: the roster gate settles only on a successful authoritative roster pull', () => {
-  assert.equal(APP.split('rosterGate.settle()').length - 1, 1)
-  const pull = APP.indexOf('const instances = await ssh.instances_get()')
-  const settle = APP.indexOf('rosterGate.settle()')
-  const install = APP.indexOf('remotesStore.setInstances(acceptedSpecs)')
+  assert.equal(APP.split('rosterGate.settle()').length - 1, 0, 'App delegates the refresh (no settle call)')
+  const pull = ROSTER_COMMIT.indexOf('const instances = await ssh.instances_get()')
+  const settle = ROSTER_COMMIT.indexOf('rosterGate.settle()')
+  const install = ROSTER_COMMIT.indexOf('remotesStore.setInstances(rows)')
   assert.notEqual(pull, -1, 'the authoritative pull must exist')
   assert.notEqual(settle, -1, 'the settle call must exist')
   assert.notEqual(install, -1, 'the roster install must exist')
   assert.ok(settle > pull, 'the gate settles only AFTER the authoritative pull resolves (a rejection leaves it unsettled)')
   assert.ok(install > pull, 'the roster install happens in the same successful path')
+  // partial 提交不结算：settle 只在计划显式要求时调（planner 仅 complete 置 true）。
+  assert.ok(ROSTER_COMMIT.includes('if (plan.settle) sinks.settleRoster()'), 'settlement is the plan verdict, not the pull shape')
+  assert.ok(ROSTER_PLANNER.includes('settle: true'), 'only the complete plan asks for settlement')
+  assert.equal(ROSTER_PLANNER.split('settle: false').length - 1, 2, 'partial and degraded never settle')
   // 失效路径同步开新代：结算前的每一次渲染都必须看到门关。
   assert.ok(APP.includes('invalidateRemoteRoster'), 'the instances-changed invalidation path must exist')
 })
@@ -355,13 +366,17 @@ test('F13 wiring: the registry-degraded probe gates the settle, recovers, and wa
     REGISTRY.includes('const [registryDegraded, setRegistryDegraded] = useState(false)'),
     'the degraded bit must be React state (effect re-runs when it flips)',
   )
-  assert.equal(APP.split('registryDegradedWarnedRef').length - 1, 3, 'one warn-once ref: declaration + guard + write')
+  // warn-once ref：声明+导出在 registry hook，守卫+写入在 roster commit hook；App 只做转发。
+  assert.equal(REGISTRY.split('registryDegradedWarnedRef').length - 1, 2, 'declaration + returned contract')
+  assert.equal(ROSTER_COMMIT.split('registryDegradedWarnedRef').length - 1, 4, 'input slot + destructure + guard + write')
+  assert.equal(APP.split('registryDegradedWarnedRef').length - 1, 2, 'App forwards the ref only')
   // 健康探针必须存在且先于权威 roster 读取（空 roster 在被信任之前先看健康位）。
-  assert.equal(APP.split('await ssh.instances_health()').length - 1, 1, 'one health probe in refreshRemotes')
-  const health = APP.indexOf('await ssh.instances_health()')
-  const pull = APP.indexOf('const instances = await ssh.instances_get()')
+  assert.equal(ROSTER_COMMIT.split('await ssh.instances_health()').length - 1, 1, 'one health probe')
+  assert.equal(APP.split('await ssh.instances_health()').length - 1, 0, 'the probe lives in the extracted hook')
+  const health = ROSTER_COMMIT.indexOf('await ssh.instances_health()')
+  const pull = ROSTER_COMMIT.indexOf('const instances = await ssh.instances_get()')
   assert.ok(health !== -1 && pull !== -1 && health < pull, 'the health probe must precede the roster pull')
-  const healthToPull = APP.slice(health, pull)
+  const healthToPull = ROSTER_COMMIT.slice(health, pull)
   // degraded：不安装 roster、不结算、置 state + warn（按 reason 去重 = 只喊一次）。
   assert.ok(healthToPull.includes('if (health.degraded === true)'), 'the degraded branch must exist')
   assert.ok(healthToPull.includes('setRegistryDegraded(true)'), 'degraded must raise the gate bit')
@@ -371,9 +386,9 @@ test('F13 wiring: the registry-degraded probe gates the settle, recovers, and wa
   assert.ok(!healthToPull.includes('rosterGate.settle()'), 'degraded must never settle the roster')
   assert.ok(!healthToPull.includes('remotesStore.setInstances('), 'degraded must never install the empty roster')
   // 健康：清位后走原有结算路径（settle 仍在成功 pull 之后，见 F6 测试）。
-  assert.ok(APP.includes('setRegistryDegraded(false)'), 'a healthy probe clears the gate bit')
-  assert.equal(APP.split('setRegistryDegraded(false)').length - 1, 1)
-  assert.equal(APP.split('setRegistryDegraded(true)').length - 1, 1)
+  assert.ok(ROSTER_COMMIT.includes('setRegistryDegraded(false)'), 'a healthy probe clears the gate bit')
+  assert.equal(ROSTER_COMMIT.split('setRegistryDegraded(false)').length - 1, 1)
+  assert.equal(ROSTER_COMMIT.split('setRegistryDegraded(true)').length - 1, 1)
 })
 
 test('F13 pure: the gate never opens while the registry is degraded', () => {
@@ -417,12 +432,12 @@ test('F13 storage fake: a degraded registry keeps every remote durable key acros
 test('V5-A wiring: an incomplete health answer still installs the legal rows and warns once (diagnostic single-source)', () => {
   // 行级丢弃（rosterIncomplete）不是「不结算」：合法行照常安装（连接不能不可
   // 见），剪枝门由第四维否决。源码锁保证 warn 分支既不 return 也不碰结算位。
-  const probe = APP.indexOf('await ssh.instances_health()')
-  const decide = APP.indexOf('const incomplete = health.rosterIncomplete === true')
-  const branch = bracedBlockFrom(APP, 'if (incomplete) {')
-  const setFlag = APP.indexOf('setRosterIncomplete(incomplete)')
-  const pull = APP.indexOf('const instances = await ssh.instances_get()')
-  const install = APP.indexOf('remotesStore.setInstances(acceptedSpecs)')
+  const probe = ROSTER_COMMIT.indexOf('await ssh.instances_health()')
+  const decide = ROSTER_COMMIT.indexOf('const incomplete = health.rosterIncomplete === true')
+  const branch = bracedBlockFrom(ROSTER_COMMIT, 'if (incomplete) {')
+  const setFlag = ROSTER_COMMIT.indexOf('setRosterIncomplete(incomplete)')
+  const pull = ROSTER_COMMIT.indexOf('const instances = await ssh.instances_get()')
+  const install = ROSTER_COMMIT.indexOf('remotesStore.setInstances(rows)')
   assert.ok(probe !== -1 && decide !== -1 && pull !== -1 && install !== -1, 'the incomplete branch and install path must exist')
   assert.ok(decide > probe, 'the incomplete bit is decided from the health probe, before the roster pull')
   assert.ok(setFlag > decide, 'the React state records the health answer')
@@ -430,16 +445,23 @@ test('V5-A wiring: an incomplete health answer still installs the legal rows and
   assert.ok(branch.includes('rosterIncompleteDiagnostic(health.droppedCount ?? 0)'), 'the warning reads the single-source diagnostic')
   assert.ok(branch.includes('console.warn('), 'incomplete must warn a diagnosable reason')
   assert.ok(branch.includes('rosterIncompleteWarnedRef.current !== diagnostic'), 'the warning must be once per diagnostic (30s poll must not spam)')
-  assert.ok(!branch.includes('return'), 'incomplete must NOT short-circuit — legal rows must still install')
+  assert.ok(!branch.includes('return'), 'incomplete must NOT short-circuit — the partial commit still installs new rows')
   assert.ok(!branch.includes('rosterGate.settle'), 'settlement is not decided in the warn branch')
-  assert.ok(!branch.includes('remotesStore.setInstances('), 'roster installation belongs to the shared path, not the warn branch')
-  // state 是剪枝 effect 的重跑依赖；warn-once ref 一个，声明 + 守卫 + 写入。
+  assert.ok(!branch.includes('remotesStore.setInstances('), 'roster installation belongs to the commit path, not the warn branch')
+  // 计划输入携带 incomplete 位；partial 计划保留已确认行、只激活新来源 id、不退役不结算。
+  assert.ok(ROSTER_COMMIT.includes('health: { degraded: false, rosterIncomplete: incomplete }'))
+  assert.ok(ROSTER_PLANNER.includes("mode: 'partial'"))
+  assert.ok(ROSTER_PLANNER.includes('settle: false'), 'the partial plan never settles')
+  assert.ok(ROSTER_PLANNER.includes('retire: new Set<string>()'), 'the partial plan never retires')
+  // state 是剪枝 effect 的重跑依赖；warn-once ref 声明在 registry hook，守卫+写入在 roster hook。
   assert.ok(
     REGISTRY.includes('const [rosterIncomplete, setRosterIncomplete] = useState(false)'),
     'the incomplete bit must be React state (effect re-runs when it flips)',
   )
-  assert.equal(APP.split('rosterIncompleteWarnedRef').length - 1, 3, 'one warn-once ref: declaration + guard + write')
-  assert.equal(APP.split('await ssh.instances_health()').length - 1, 1, 'still one health probe per pull')
+  assert.equal(REGISTRY.split('rosterIncompleteWarnedRef').length - 1, 2, 'declaration + returned contract')
+  assert.equal(ROSTER_COMMIT.split('rosterIncompleteWarnedRef').length - 1, 4, 'input slot + destructure + guard + write')
+  assert.equal(APP.split('rosterIncompleteWarnedRef').length - 1, 2, 'App forwards the ref only')
+  assert.equal(ROSTER_COMMIT.split('await ssh.instances_health()').length - 1, 1, 'still one health probe per pull')
 })
 
 test('V5-A pure: an incomplete roster vetoes pruning at the degraded rank', () => {
@@ -469,30 +491,36 @@ test('V5-A pure: the roster-incomplete diagnostic is single-source and distinct 
 })
 
 test('V5-A wiring: the incomplete bit comes only from the health probe and clears on a complete answer', () => {
-  // 唯一写点：探针分支里的 setRosterIncomplete(incomplete)（state 初值 false）。
-  assert.equal(APP.split('setRosterIncomplete(').length - 1, 1, 'one writer for the incomplete bit')
-  // 健康（缺省/完整）应答把位清零：refreshRemotes 的同一分支无条件写入。
-  const branch = APP.slice(
-    APP.indexOf('const incomplete = health.rosterIncomplete === true'),
-    APP.indexOf('const instances = await ssh.instances_get()'),
+  // 唯一写点：roster commit hook 探针分支里的 setRosterIncomplete(incomplete)（state 初值 false）。
+  assert.equal(ROSTER_COMMIT.split('setRosterIncomplete(').length - 1, 1, 'one writer for the incomplete bit')
+  // 健康（缺省/完整）应答把位清零：同一分支无条件写入。
+  const branch = ROSTER_COMMIT.slice(
+    ROSTER_COMMIT.indexOf('const incomplete = health.rosterIncomplete === true'),
+    ROSTER_COMMIT.indexOf('const instances = await ssh.instances_get()'),
   )
   assert.ok(branch.includes('health.rosterIncomplete === true'), 'only an explicit true flips the bit on')
   assert.ok(branch.includes('setRosterIncomplete(incomplete)'), 'the same expression clears it when complete again')
   // 降级分支不安装 roster，也不得借道 incomplete 位（两个否决位保持独立来源）。
-  const degraded = APP.slice(
-    APP.indexOf('if (health.degraded === true)'),
-    APP.indexOf('setRegistryDegraded(false)'),
+  const degraded = ROSTER_COMMIT.slice(
+    ROSTER_COMMIT.indexOf('if (health.degraded === true)'),
+    ROSTER_COMMIT.indexOf('setRegistryDegraded(false)'),
   )
   assert.ok(!degraded.includes('setRosterIncomplete('), 'the degraded branch must not touch the incomplete bit')
 })
 
-test('V5-A wiring: an incomplete roster freezes retirement, the live set, and settlement', () => {
-  // 缺行 roster 不是退役权威：不计算退役、不改 last-known live、不结算 rosterGate；
-  // 观测状态/durable pending 的 withdrawal 同样冻结，等完整 roster 收敛。
-  assert.match(APP, /const retired = incomplete \? new Set<string>\(\)/, 'the incomplete answer freezes the retirement differential')
-  assert.match(APP, /retireSources\(retired\)/, 'the complete path still retires')
-  assert.match(APP, /if \(!incomplete\) liveServerIdsRef\.current = nextLiveServerIds/, 'the last-known live set survives an incomplete pull')
-  assert.match(APP, /if \(!incomplete\) rosterGate\.settle\(\)/, 'an incomplete roster must not settle (held intents stay held)')
+test('V5-A wiring: an incomplete roster runs the partial commit — no retirement, live bump, or settlement', () => {
+  // 缺行 roster 不是退役权威：规划器返回空的 retire / settle=false / 只激活新来源 id；
+  // 执行端只在 complete 计划上替换 live、只在 plan.settle 时结算。
+  assert.ok(ROSTER_PLANNER.includes("mode: 'partial'"))
+  assert.equal(ROSTER_PLANNER.split('retire: new Set<string>()').length - 1, 2, 'partial and degraded retire nothing')
+  assert.equal(ROSTER_PLANNER.split('settle: false').length - 1, 2, 'partial and degraded never settle')
+  assert.ok(ROSTER_PLANNER.includes('settle: true'), 'only the complete plan settles')
+  assert.ok(ROSTER_COMMIT.includes('if (plan.settle) sinks.settleRoster()'), 'execution gates settlement on the plan')
+  assert.ok(ROSTER_COMMIT.includes("if (plan.mode === 'complete') sinks.setLive(plan.live)"), 'only a complete plan replaces last-known live')
+  assert.ok(ROSTER_COMMIT.includes('sinks.retireSources(plan.retire)'), 'the complete differential is retired once by the executor')
+  // partial 的显示清单保留已确认行（含清单里缺失的行）与身份；无变化时复用 prior 数组引用。
+  assert.ok(ROSTER_PLANNER.includes('fingerprints.has(sourceId)'), 'confirmed identities are the preservation criterion')
+  assert.ok(ROSTER_PLANNER.includes('? priorInstances : display'), 'identity-preserving install when nothing changed')
   assert.match(APP, /const durableFrozen = registryDegraded === true \|\| rosterIncomplete === true/)
   const loopStart = APP.indexOf('if (!durableFrozen) for (')
   assert.notEqual(loopStart, -1, 'the observation prune loop is guarded by the freeze bit')
@@ -530,24 +558,26 @@ test('V5-A storage fake: an incomplete roster keeps every remote durable key acr
 test('F16 wiring: an unavailable health probe is diagnosed and never settles the roster', () => {
   // 缺失方法 / invoke 抛错都不得折叠成「健康」：两分支都在探针前/探针处
   // fail-closed（不安装 roster、不置结算位、不动 degraded 位）。
-  const guard = APP.indexOf("if (typeof ssh.instances_health !== 'function')")
-  const probe = APP.indexOf('await ssh.instances_health()')
-  const seqAfterProbe = APP.indexOf('if (remoteRosterRefreshSeqRef.current !== seq) return false', probe)
+  const guard = ROSTER_COMMIT.indexOf("if (typeof ssh.instances_health !== 'function')")
+  const probe = ROSTER_COMMIT.indexOf('await ssh.instances_health()')
+  const seqAfterProbe = ROSTER_COMMIT.indexOf('if (remoteRosterRefreshSeqRef.current !== seq) return false', probe)
   assert.notEqual(guard, -1, 'the missing-method guard must exist')
   assert.notEqual(probe, -1, 'the health probe must exist')
   assert.notEqual(seqAfterProbe, -1, 'the post-probe sequence check must exist')
   assert.ok(guard < probe, 'the missing-method guard must precede the probe')
-  const unavailable = APP.slice(guard, seqAfterProbe)
+  const unavailable = ROSTER_COMMIT.slice(guard, seqAfterProbe)
   assert.ok(unavailable.includes("warnHealthProbeUnavailable('missing-method')"), 'a missing method warns specifically')
   assert.ok(unavailable.includes("warnHealthProbeUnavailable('invoke-failed')"), 'a rejected invoke warns specifically')
   assert.ok(unavailable.includes('try {') && unavailable.includes('catch {'), 'the probe has its own catch')
   assert.ok(!unavailable.includes('rosterGate.settle()'), 'unavailable must never settle the roster')
   assert.ok(!unavailable.includes('remotesStore.setInstances('), 'unavailable must never install a roster')
   assert.ok(!unavailable.includes('setRegistryDegraded('), 'unavailable is not "registry degraded" — it must not flip that bit either')
-  // warn-once：一个 ref，声明 + 守卫 + 写入。
-  assert.equal(APP.split('healthUnavailableWarnedRef').length - 1, 3, 'one warn-once ref: declaration + guard + write')
+  // warn-once：一个 ref，声明在 registry hook，守卫+写入在 roster hook；App 只做转发。
+  assert.equal(REGISTRY.split('healthUnavailableWarnedRef').length - 1, 2, 'declaration + returned contract')
+  assert.equal(ROSTER_COMMIT.split('healthUnavailableWarnedRef').length - 1, 5, 'input slot + destructure + guard + write + useCallback dep')
+  assert.equal(APP.split('healthUnavailableWarnedRef').length - 1, 2, 'App forwards the ref only')
   // 诊断文案单源（实现读取纯函数，不复制字面量）。
-  assert.ok(APP.includes('healthProbeUnavailableDiagnostic(kind)'), 'the warn callback must use the single-source diagnostic')
+  assert.ok(ROSTER_COMMIT.includes('healthProbeUnavailableDiagnostic(kind)'), 'the warn callback must use the single-source diagnostic')
 })
 
 test('F16 pure: unavailable health diagnostics distinguish a missing method from a rejected invoke', () => {

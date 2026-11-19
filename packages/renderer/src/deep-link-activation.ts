@@ -114,6 +114,14 @@ export class SourceOwnershipRegistry {
     return this.#current.get(sourceId) ?? null
   }
 
+  /** Read-only snapshot of the confirmed identities (`sourceId -> fingerprint`): the roster
+   *  commit planner compares one snapshot against it without touching the registry. */
+  fingerprints(): ReadonlyMap<string, string> {
+    const table = new Map<string, string>()
+    for (const [sourceId, token] of this.#current) table.set(sourceId, token.fingerprint)
+    return table
+  }
+
   owns(token: SourceOwnershipToken | null): boolean {
     return token !== null && this.#current.get(token.sourceId) === token
   }
@@ -146,10 +154,12 @@ export interface AuthoritativeSourceFingerprint {
 /** Derive lifecycle retirements from an authoritative roster snapshot itself: if the desktop push
  *  is lost, a later snapshot whose same id carries a different transport fingerprint must still
  *  synchronously retire the old shell before the replacement owner activates. Sources without a
- *  current owner are initial/re-added rows and need only activation. */
+ *  current owner are initial/re-added rows and need only activation. The confirmed identities are
+ *  passed as a read-only fingerprint map, so a caller holding them outside the registry (the
+ *  roster commit planner) reuses the exact same differential. */
 export function authoritativeSourceRetirements(
   previousLiveSourceIds: ReadonlySet<string>,
-  owners: SourceOwnershipRegistry,
+  currentFingerprints: ReadonlyMap<string, string>,
   nextSources: readonly AuthoritativeSourceFingerprint[],
 ): Set<string> {
   const nextSourceIds = new Set(nextSources.map(source => source.sourceId))
@@ -157,8 +167,8 @@ export function authoritativeSourceRetirements(
     [...previousLiveSourceIds].filter(sourceId => !nextSourceIds.has(sourceId)),
   )
   for (const source of nextSources) {
-    const current = owners.capture(source.sourceId)
-    if (current !== null && current.fingerprint !== source.fingerprint) retired.add(source.sourceId)
+    const current = currentFingerprints.get(source.sourceId)
+    if (current !== undefined && current !== source.fingerprint) retired.add(source.sourceId)
   }
   return retired
 }
