@@ -192,7 +192,7 @@ test('createIntentStore: single write, compensation restore (C3), volatile failu
   // 回填后内存=盘，同会话重复 set 是幂等 no-op（不产生第二次写）。
   assert.deepEqual(failing.setManual('s1', true, health, true), { ok: true })
   assert.equal(backfillWrites.length, 1, 'the idempotent re-set after backfill writes nothing')
-  // C3：补偿回滚恢复入口快照——断开→失败删除→回滚，意图仍在内存（不落盘也保持）。
+  // C3：补偿回滚恢复入口快照——回滚只恢复入口前已存在 id 的意图，内存意图保持（不落盘也保持）。
   const beforeDelete = store.beginSave([rowA, rowB])
   store.observeRow({ ...rowA, dshChamber: { manualDisconnectSessionId: SESSION_A } }, 's1')
   store.commitSave(beforeDelete, 'compensation', [rowA, rowB])

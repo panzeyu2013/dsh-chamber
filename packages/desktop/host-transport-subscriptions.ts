@@ -48,8 +48,8 @@ export interface TransportSubscriptionsDeps extends TransportSubscriptionState {
   readySeedEdges: Pick<ReadyPhaseEdges, 'observe'>
   startAutomaticHostSeed: (id: string) => void
   /** Best-effort chamber host-package sync over the committed record (null = no
-   *  live registration / not a gateway; id rides; the execution closure re-reads
-   *  the record and the generation). */
+   *  live registration / not a gateway; id rides; the shared execution leg re-reads
+   *  the record and fences the dial binding + incarnation). */
   syncGatewayChamberPluginsFor: (id: string) => Promise<
     { uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null
   >

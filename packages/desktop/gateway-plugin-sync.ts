@@ -28,9 +28,11 @@
  *
  * SINGLE-FLIGHT. Both entries share ONE leg instance; a per-id `Map` joins a
  * concurrent request onto the in-flight pass and returns its real result instead
- * of duplicating GET/PUT/restart. The fence makes the join honest: if the target
- * really changed, the old pass aborts at its next checkpoint and the joiner sees
- * the failure rather than a success dialed at the previous target.
+ * of duplicating GET/PUT/restart. The fence plus ONE bounded re-run make the join
+ * honest: a moved target aborts the old pass at its next checkpoint (or is noticed
+ * after a pass that crossed its last checkpoint), and the leg then re-dials the
+ * CURRENT record once, so a joiner never receives a success dialed at the previous
+ * target unless the target did not actually move.
  *
  * NOT CANCELLED: an in-flight GET/PUT is not aborted (an already-sent PUT cannot be
  * withdrawn; the gateway cache self-heals on the next natural spawn). No wire/IPC
@@ -177,6 +179,10 @@ export async function syncGatewayChamberPlugins(options: {
     return { uploaded, skipped: false, failed: true, error: GATEWAY_SYNC_ABORTED_ERROR }
   }
 
+  // The uploaded fact OUTLIVES a later network failure: the bounded re-run reads it to
+  // force the CURRENT target's restart (design 21 §6.5「首次已上传则强制当前目标重启」),
+  // so it must not be scoped to the happy path.
+  let uploaded = false
   try {
     const status = await gatewayJsonRequest(`${origin}/chamber/plugins`, {
       method: 'GET',
@@ -199,7 +205,6 @@ export async function syncGatewayChamberPlugins(options: {
       .filter(row => typeof row?.name === 'string' && typeof row?.version === 'string')
       .map(row => [row.name as string, row.version as string]))
 
-    let uploaded = false
     for (const pkg of options.packages) {
       let localVersion: string | null = null
       try {
@@ -274,7 +279,9 @@ export async function syncGatewayChamberPlugins(options: {
   } catch (error) {
     options.logger.warn(`[dsh-chamber] gateway plugin sync failed: ${describeError(error)}`)
     return {
-      uploaded: false,
+      // A partially uploaded pass keeps its marker: the fence re-run (and the honest manual
+      // failure surface) must know the cache already changed.
+      uploaded,
       skipped: false,
       failed: true,
       error: `gateway plugin sync failed: ${sanitizeErrorText(describeError(error))}`,
@@ -373,6 +380,9 @@ export function createGatewaySyncLeg(deps: GatewaySyncLegDeps): GatewaySyncLeg {
     onCapture?: (captured: SyncTargetCapture) => void,
     forceRestart = false,
   ): Promise<GatewayPluginSyncResult | null> => {
+    // null = no committed target for this id at capture time (missing row / not a gateway /
+    // the record moved between the read-face generations). It is NOT a failed dial: the
+    // manual IPC maps it to a loud refusal and the auto path treats it as nothing to sync.
     const instance = deps.listInstances().find(candidate => candidate.id === id)
     if (instance === undefined || instance.kind !== 'gateway') return null
     // The committed record is the ONE dial descriptor: origin/headers/SPKI pin/authority/
@@ -419,10 +429,12 @@ export function createGatewaySyncLeg(deps: GatewaySyncLegDeps): GatewaySyncLeg {
     })
   }
 
-  /** One pass, plus a single bounded re-run when the fence aborted it: an abort means the
-   *  target moved while the pass was in flight, and a new ready edge may have joined THIS
-   *  pass (returning its abort would swallow the new target's auto sync). The re-run reads
-   *  the CURRENT record; it is not a retry of a wire failure and cannot loop. */
+  /** One pass, plus a single bounded re-run when the committed target MOVED: either the
+   *  fence aborted the old pass mid-way, or the pass completed after its last checkpoint
+   *  while a re-registration landed (a warm cache would otherwise leave the new target
+   *  unsynced). A new ready edge may have joined THIS pass, so returning the old answer
+   *  would swallow the new target's sync. The re-run reads the CURRENT record and cannot
+   *  loop (one re-run max, and a revoked target keeps the first answer). */
   const runPassWithFenceRetry = async (id: string): Promise<GatewayPluginSyncResult | null> => {
     const capturedBox: SyncTargetCapture[] = []
     const first = await runPass(id, value => { capturedBox.push(value) })
@@ -430,14 +442,17 @@ export function createGatewaySyncLeg(deps: GatewaySyncLegDeps): GatewaySyncLeg {
     const captured = capturedBox[0]
     const current = deps.registrations.snapshot(id)
     if (captured === undefined || current === undefined) return first
-    // Re-dial when the committed target actually moved (a new ready edge may have joined a
-    // pass that failed/aborted on the old target). `recordGen` is a RETRY CRITERION only: it
-    // catches a re-registration that keeps the same URL/generation; the fence still ignores it
-    // (a same-target credential renewal must not abort an in-flight pass).
-    const moved = current.transportGen !== captured.transportGen
+    // Re-dial when the committed target actually moved. A FAILED pass (fence abort or wire
+    // failure) re-runs on any movement, `recordGen` included (a re-registration that keeps
+    // the same dial binding may still recover the wire failure). A SUCCESSFUL pass re-runs
+    // only on a DIAL movement: the new target must not be left with a warm cache but no sync
+    // of its own, while a bare `recordGen` bump is a same-target session renewal and must
+    // not trigger a second controlled restart. A revoked target (no current view) keeps
+    // `first`; the fence still ignores `recordGen` for aborts.
+    const dialMoved = current.transportGen !== captured.transportGen
       || dialBindingKeyOf(current.facts) !== captured.bindingKey
-      || current.recordGen !== captured.recordGen
-    if (first.failed === true && moved) {
+    const moved = dialMoved || current.recordGen !== captured.recordGen
+    if (first.failed === true ? moved : dialMoved) {
       const retried = await runPass(id, undefined, first.uploaded === true)
       if (retried === null) return first
       // The old pass already uploaded: the current target must still pick the cache up.

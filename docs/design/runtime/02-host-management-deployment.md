@@ -200,7 +200,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 | `ready` | 可服务 | 就绪探测成功 | 探测失败累积计数 |
 | `degraded` | 失败计数 ≥1 且 < 阈值，仍在服务 | 失败 | 任意成功（清零）→ `ready`；阈值 → `restarting` |
 | `restarting` | 单飞行重启中 | fail(N) / 进程死亡 | 重启成功 → `starting`；耗尽且退出已证明 → `restart-exhausted`；退出证明 unknown → `error` |
-| `restart-exhausted` | 停止自动重启，等待人工（**只在退出证明 proven 后进入**） | 窗口内重启次数超限且本代进程组退出已证明 | 人工介入（幂等启动 / 停止） |
+| `restart-exhausted` | 停止自动重启，等待人工（**只在退出证明 proven 后进入**；被 stop()/start() 取消的耗尽代不发布，终态归取消者，§3.6 第三判据） | 窗口内重启次数超限且本代进程组退出已证明 | 人工介入（幂等启动 / 停止） |
 | `error` | spawn 启动失败或写者静止未证明（fail-loud，不静默） | spawn 失败 / 不可恢复 / 退出证明 unknown | `start()` 重试 → `starting`（证明已恢复时）；或停止 → `stopped` |
 
 探测（两通道共享一个计数，§2.4）：
@@ -244,7 +244,10 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    **回收开始即关闭新请求入口**：admission 由唯一回收原语拥有——`retireCurrentChild` 取到非空 child
    后、任何 await 前置 `acceptsNewRequests()=false`，证明成功、清 child/suspect 后复位为 true；耗尽与
    stop 两个「状态仍可服务」的窗口因此自动覆盖。它不发布、不改 `ConnectionState`；证明成功后发布
-   `restart-exhausted` 时 admission 已复位，终态 503 仍带 `details.state`
+   `restart-exhausted` 时 admission 已复位，终态 503 仍带 `details.state`。**第三判据：取消代不发布**——
+   证明在途期间被 stop()（stopping）或 start()（epoch 换代）取消的耗尽代，即使证明成功也不发布
+   `restart-exhausted`：终态与端口清理由取消者发布，否则桌面自动运行时回退会为一个已经让位的生命周期
+   起跑（18 §3.4 的前提）；未证明的取消代照旧落 `error` + 写者闩锁。
 7. **迟到的健康判定（契约）**：start 换代、进入 restart、**进入耗尽回收**、stop() 四个拆代点都取消在途健康
    探针（abort + `healthEpoch` 递增 + 清缓存/定时器；stop() 额外等待其落定，其余拆代点靠代际判词丢弃迟到判词）；判词、缓存与单飞槽
    只归发起代（迟到的失败不计、迟到者只释放自己的槽）；任何在 `stopped`/`error` 态或

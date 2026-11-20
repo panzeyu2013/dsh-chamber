@@ -413,12 +413,15 @@ test('manager getAttemptFacts exposes state-object identity and tunnelEpoch (tic
     const epoch = first!.tunnelEpoch
     manager.disconnect('s1')
     assert.ok(manager.getAttemptFacts('s1')!.tunnelEpoch > epoch, 'disconnect bumps the transport generation')
-        // 同 id 重加换状态对象（旧票据 stale-row 的既有判据）。
+    // 同 id 重加换状态对象（旧票据 stale-row 的既有判据）：新 InstanceState 由 status() 等读面
+    // 惰性建立，故重加后必须先建 state 再比较身份（否则断言会因 readded===null 静默跳过）。
     const stateBefore = manager.getAttemptFacts('s1')!.state
     manager.saveInstances([])
     manager.saveInstances([{ id: 's1', label: 'a', kind: 'dsh', transport: 'ssh', host: 'h2.example.com', remotePort: 2222 }])
+    manager.status('s1')
     const readded = manager.getAttemptFacts('s1')
-    if (readded !== null) assert.notEqual(readded.state, stateBefore, 'delete+re-add gets a fresh state object')
+    assert.notEqual(readded, null, 'the re-added row gets a fresh runtime state')
+    assert.notEqual(readded!.state, stateBefore, 'delete+re-add gets a fresh state object')
   } finally {
     manager.dispose()
   }

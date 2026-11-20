@@ -174,9 +174,10 @@ export interface LocalConnection {
    * the SINGLE reclamation primitive is proving the current generation's detached process
    * group gone — the exhaustion/stop windows in which connectionState is still serviceable
    * and the old port is still retained. It is an in-process admission fact, never published
-   * on the wire and never folded into ConnectionState: an unproven retire keeps it closed,
-   * and a PROVEN retire reopens it before the terminal state is published, so the terminal
-   * 503 still carries details.state (design 02 §3.6).
+   * on the wire and never folded into ConnectionState: an unproven retire keeps it closed
+   * and the failure lands on 'error' (503 without details.state), while a PROVEN retire
+   * reopens it before the terminal state is published, so a published restart-exhausted
+   * still carries details.state (design 02 §3.6).
    */
   acceptsNewRequests(): boolean
   start(): Promise<void>
@@ -742,7 +743,6 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           const now = Date.now()
           while (restartTimes.length > 0 && restartTimes[0] <= now - restartWindowMs) restartTimes.shift()
           if (restartTimes.length >= maxRestartsInWindow) {
-            stopHealthTimer()
             // The exhaustion reclaim is a probe-generation break too (design 02 §3.6 step 7):
             // no in-flight verdict of the dying generation may outlive this teardown.
             cancelProbe()
@@ -757,7 +757,10 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
             }
             // A stop()/start() that invalidated this generation while the proof was pending
             // owns the outcome: publishing restart-exhausted here would let the desktop
-            // auto-rollback run for a lifecycle that already moved on (design 02 §3.6).
+            // auto-rollback run for a lifecycle that already moved on (design 02 §3.6 third
+            // criterion). The canceler's continuation publishes the terminal state and clears
+            // the port without any I/O await before it, so the transient serviceable-state +
+            // retained-port projection cannot admit a request to the proven-gone generation.
             if (stopping || epoch !== restartEpoch) return
             const exhaustedPort = dshPort
             dshPort = null

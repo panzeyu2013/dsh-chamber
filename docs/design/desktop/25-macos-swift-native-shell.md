@@ -343,7 +343,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 
 ### 6.4 凭据与安全文件
 
-- SSH 密码镜像（ssh-passwords.json v2）：endpoint-bound 0600 明文，Swift flavor 语义不变。
+- SSH 密码镜像（ssh-passwords.json v2 明文 / v3 带 `storage` 判别符）：endpoint-bound 0600；Swift flavor 写明文，冻结 Electron flavor 写出的 safeStorage 密文凭判别符逐字节保留、本进程不可解密时要求重录。
 - gateway-secrets（v3，safeStorage|plaintext 判别）：Swift flavor 无 safeStorage → 新写一律 plaintext 判别 + 0600 原子写（既有诚实回退）；读旧 safeStorage 判别条目 → 解密不可用 → **保留文件与绑定、标记禁用待重录**（复用「legacy 保留禁用」语义；判别路径补单测 S1）。
 - 静态加密按决策 7（Keychain 持随机文件密钥 + HostEdges encrypt/decrypt edge）设计，不在当前范围。
 - **宿主鉴权 cookie 不落 WKWebView jar**：host browser-auth cookie 由控制面**只放内存**（`packages/control-plane/src/browser-auth-cookie.ts`；never persisted/logged/returned to renderer），代理响应剥离 `set-cookie`（`instance-proxy.ts` 的响应头白名单），主窗口 WKWebView 因此不持有 `dsh-auth-*`；上游当前 pin 的 Electron「按 hostname 清旧 cookie」修法在本壳没有对应宿主面。残余（**未证实**）= 远端实例页面或第三方插件对 `WKWebsiteDataStore.httpCookieStore` 的写入累积；验证 = 连续启动 N 次后读该 store 的 cookie 数是否随启动次数增长。

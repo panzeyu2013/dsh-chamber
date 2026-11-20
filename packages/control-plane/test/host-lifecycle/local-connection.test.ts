@@ -633,6 +633,55 @@ test('a restart-window exhaustion with an unproven retire lands on error, never 
   }
 })
 
+test('a later successful retire REOPENS admission after an unproven one (no permanent 503 on a healthy instance)', async () => {
+  const stateDir = tempDir()
+  const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
+  let spawns = 0
+  const coded = codedWriterUnknown(77502)
+  let failNextRetire = false
+  const spawnDsh = async (): Promise<SpawnedDsh> => {
+    spawns += 1
+    const index = spawns
+    const { spawned, hook } = controllableChild(DEFAULT_DSH_START_PORT + index, {
+      pid: 77500 + index,
+      stop: async () => {
+        if (index === 2 && failNextRetire) {
+          failNextRetire = false // the SECOND time the same generation is proven, it succeeds
+          throw coded
+        }
+      },
+    })
+    hooks.push(hook)
+    return spawned
+  }
+  const local = createLocalConnection({
+    stateDir,
+    dshHome: join(stateDir, 'home'),
+    dshWorkspacePath: join(stateDir, 'ws'),
+    logger: silentLogger,
+    options: { healthIntervalMs: 0, maxRestartsInWindow: 1 },
+    deps: { spawnDsh, probeHostIdentity: healthyProbe },
+  })
+  try {
+    await local.start()
+    hooks[0]?.fire?.(1, null)
+    await waitUntil(() => spawns === 2 && local.getState() === 'ready')
+    failNextRetire = true
+    hooks[1]?.fire?.(1, null)
+    await waitUntil(() => local.getState() === 'error')
+    assert.equal(local.acceptsNewRequests(), false, 'the unproven retire keeps admission closed')
+    // The next explicit start re-proves the SAME generation through the one primitive: the
+    // proven retire must reopen admission before the new generation is published.
+    await local.start()
+    assert.equal(local.getState(), 'ready')
+    assert.equal(local.acceptsNewRequests(), true, 'a proven retire reopens admission (no permanent 503)')
+    assert.equal(spawns, 3, 'the re-proven generation is replaced by exactly one new spawn')
+  } finally {
+    await local.stop().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('a late exit of a retired child never triggers a restart on the current generation', async () => {
   const stateDir = tempDir()
   const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []

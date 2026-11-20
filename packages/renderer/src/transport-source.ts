@@ -9,6 +9,7 @@
  */
 
 import { linkReady } from '@dsh-chamber/dsh-chamber-client-core'
+import { LOCAL_INSTANCE_ID } from './local-instance.ts'
 import type { HealthResponse } from './api.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
 
@@ -65,14 +66,14 @@ export function rawInstanceIdFromSourceId(sourceId: string): string | null {
 
 /** Resolve a raw deep-link/IPC id through the live registry kind. */
 export function sourceIdForRawInstance(rawId: string, instances: readonly KindedInstance[]): string | null {
-  if (rawId === 'local') return 'local'
+  if (rawId === LOCAL_INSTANCE_ID) return LOCAL_INSTANCE_ID
   const instance = instances.find(candidate => candidate.id === rawId)
   return instance === undefined ? null : sourceIdForInstance(instance)
 }
 
 export function isChamberSourceId(sourceId: string | undefined): boolean {
   return sourceId === undefined
-    || sourceId === 'local'
+    || sourceId === LOCAL_INSTANCE_ID
     || rawInstanceIdFromSourceId(sourceId) !== null
 }
 
@@ -160,8 +161,8 @@ export function partitionSourceReachability(
   const ready: string[] = []
   const linkDown: string[] = []
   const notReady: string[] = []
-  if (isServiceableLocalStatus(health?.dsh?.status)) ready.push('local')
-  else notReady.push('local')
+  if (isServiceableLocalStatus(health?.dsh?.status)) ready.push(LOCAL_INSTANCE_ID)
+  else notReady.push(LOCAL_INSTANCE_ID)
   for (const instance of remoteInstances) {
     const sourceId = sourceIdForInstance(instance)
     if (!instanceConnected(instance.kind, health, remoteStatus, instance.id)) notReady.push(sourceId)

@@ -188,6 +188,10 @@ test('the two status receivers write through ONE acceptance reading (contract lo
   assert.match(pull, /ownerHeld: sourceLifecyclesRef\.current!\.owns\(sourceOwner\)/,
     'the pull writer keeps its pre-await owner proof')
   assert.match(pull, /expectedSourceId,/, 'the pull writer forwards the caller expectedSourceId; the write-time row decides when absent')
+  assert.match(pull, /instances: remotesStore\.getSnapshot\(\)\.instances/,
+    'the pull writer passes the rows installed AT WRITE TIME (not a pre-await snapshot)')
+  assert.match(app, /instances: remotesStore\.getSnapshot\(\)\.instances/,
+    'the push writer passes the rows installed AT WRITE TIME')
   assert.equal(pull.includes('sourceIdForTransport(projection.kind'), false,
     'no residual inline source-id condition may survive next to the shared reading')
   assert.match(app, /statusWriteAccepted\(\{/, 'the push receiver calls the same acceptance reading')

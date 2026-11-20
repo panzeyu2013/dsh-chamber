@@ -35,9 +35,9 @@
     },
     {
       "path": "packages/desktop/gateway-plugin-sync.ts",
-      "lines": 466,
-      "target": 466,
-      "note": "gateway chamber host-package sync 的唯一执行腿（目标绑定围栏 + per-id 单飞）；为过 gateway-provider 只降不升棘轮从 provider 迁出；新叶子初始棘轮=当前行数"
+      "lines": 481,
+      "target": 481,
+      "note": "gateway chamber host-package sync 的唯一执行腿（目标绑定围栏 + per-id 单飞）；为过 gateway-provider 只降不升棘轮从 provider 迁出；+15（pre-merge 收尾）= uploaded 跨失败路径保留 + 成功 pass 越过最后检查点的拨号目标移动也走一次有界重跑（failed pass 另按 recordGen 作重跑判据，design 21 §6.5）+ 目标缺失语义注释；棘轮随此次收尾重录为 481"
     },
     {
       "path": "packages/desktop/gateway-provider.ts",

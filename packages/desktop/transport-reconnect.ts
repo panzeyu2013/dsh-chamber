@@ -304,7 +304,10 @@ export function reconnectStaleTransports(
     isQuitting,
     planeBound: () => true,
     log: (level, message) => {
+      // The legacy entry keeps its 2-arg warn surface AND surfaces info lines (the stale-row
+      // re-plan diagnostic is informational; dropping it here would hide the re-plan).
       if (level === 'warn') console.warn(`${label} ${message}`)
+      else console.log(`${label} ${message}`)
     },
     warnConnect: (id, error) => { warn(label + ' 唤醒重探 ' + id + ' 失败：', error) },
     ...(options.setTimer === undefined ? {} : { setTimer: options.setTimer }),

@@ -52,9 +52,16 @@ interface GatewaySeenGates {
  *  `cacheAfterPut` makes GET answer the uploaded version (the post-upload retry scenario). */
 async function fakeGateway(
   hold: 'none' | 'get' | 'put',
-  options: { getStatus?: number; putStatus?: number; cacheAfterPut?: boolean } = {},
+  options: {
+    getStatus?: number
+    putStatus?: number
+    cacheAfterPut?: boolean
+    onRestart?: () => void
+    /** Pre-warm the gateway cache (a real gateway that already has the package). */
+    seedCache?: ReadonlyArray<{ name: string; version: string }>
+  } = {},
 ) {
-  const cache = new Map<string, string>()
+  const cache = new Map<string, string>((options.seedCache ?? []).map(row => [row.name, row.version] as const))
   const seen: string[] = []
   const headers: Array<Record<string, string | string[] | undefined>> = []
   const gates: GatewaySeenGates = {
@@ -105,6 +112,9 @@ async function fakeGateway(
       }
       if (method === 'POST' && url === '/chamber/runtime/restart') {
         gates.restartSeen.resolve()
+        // A real gateway may complete the restart after the target has already moved:
+        // let a test flip the committed target from inside this handler.
+        options.onRestart?.()
         res.writeHead(202, { 'content-type': 'application/json' })
         res.end('{}')
         return
@@ -432,13 +442,16 @@ async function directLegFixture(
   let origin = gateway.origin
   let incarnation: object = {}
   let transportGen = 1
+  // A rotatable credential is the ONLY same-target input that advances recordGen while the
+  // dial binding stays identical (a same-token re-commit is a health-only no-op).
+  let token = 'probe-token'
   const registry = createActiveRegistrationRegistry({
     plane: () => ({ registerInstanceTransport() {}, setInstanceTransportHealth() {}, unregisterInstanceTransport() {} }) as never,
     live: () => ({
       spec, incarnation, transportGen, transport: spec.transport,
       ready: { url: origin, socketPath: null, health: 'healthy' as const },
     }),
-    tokenFor: () => 'probe-token',
+    tokenFor: () => token,
     passwordFor: () => null,
     sessions: { cachedCookie: () => null, registrationAuthProof: () => null },
   })
@@ -461,6 +474,7 @@ async function directLegFixture(
       transportGen = nextGen
     },
     setTransportGen: (next: number) => { transportGen = next },
+    setToken: (next: string) => { token = next },
   }
 }
 
@@ -675,3 +689,196 @@ test('⑦ a fence-aborted single-flight pass re-runs once against the current ta
     rmSync(packageDir, { recursive: true, force: true })
   }
 })
+
+test('⑮ an upload that succeeded before a later network failure keeps the uploaded marker (forceRestart input)', async () => {
+  // Two changed packages: the first PUT commits on the gateway, the SECOND one loses the
+  // response. The pass fails honestly, but it must still report uploaded=true — that marker
+  // is what makes a fence re-run force the CURRENT target's restart (design 21 §6.5).
+  const seen: string[] = []
+  let puts = 0
+  const server = createServer((req, res) => {
+    const method = req.method ?? ''
+    seen.push(method + ' ' + (req.url ?? '/'))
+    req.resume()
+    req.on('end', () => {
+      if (method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ items: [] }))
+        return
+      }
+      if (method === 'PUT') {
+        puts += 1
+        if (puts === 1) {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ changed: true }))
+          return
+        }
+        req.socket.destroy() // the second upload loses its response: a network-level failure
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+  })
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()) })
+  const address = server.address()
+  const origin = 'http://127.0.0.1:' + String(typeof address === 'object' && address !== null ? address.port : 0)
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin,
+      headers: {},
+      spkiPin: null,
+      packages: [
+        { name: '@dsh-chamber/probe-a', packageJson: JSON.stringify({ version: '1.0.0' }), distIndex: 'a' },
+        { name: '@dsh-chamber/probe-b', packageJson: JSON.stringify({ version: '1.0.0' }), distIndex: 'b' },
+      ],
+      logger: silentLogger,
+    })
+    assert.equal(result.failed, true, 'a lost PUT response is a failed pass, never "up to date"')
+    assert.equal(result.uploaded, true, 'the first committed upload survives the later network failure')
+    assert.equal(seen.filter(entry => entry === 'PUT /chamber/plugins').length, 2, 'both uploads were attempted')
+    assert.equal(seen.includes('POST /chamber/runtime/restart'), false, 'no restart on a failed pass')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('⑯ a PUT refusal is reported with the gateway reason and never projects as up to date', async () => {
+  const gateway = await fakeGateway('none', { putStatus: 500 })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: gateway.origin,
+      headers: {},
+      spkiPin: null,
+      packages: [{ name: PROBE_PKG, packageJson: JSON.stringify({ version: '9.9.9' }), distIndex: 'x' }],
+      logger: silentLogger,
+    })
+    assert.equal(result.failed, true)
+    assert.equal(result.uploaded, false)
+    assert.match(String(result.error), /uploading @dsh-chamber\/probe-host failed \(HTTP 500: upload failed\)/,
+      'the refusal carries the sanitized gateway reason')
+    assert.equal(gateway.seen.includes('POST /chamber/runtime/restart'), false, 'no restart after a refused upload')
+  } finally {
+    await gateway.close()
+  }
+})
+
+test('⑰ a successful pass whose target moves during the controlled restart re-runs once against the current target', async () => {
+  // gw2 already has the package version: the re-run skips every PUT, so the restart can ONLY
+  // come from the "first uploaded => forceRestart" rule (design 21 §6.5).
+  const gw2 = await fakeGateway('none', { seedCache: [{ name: PROBE_PKG, version: '9.9.9' }] })
+  const packageDir = tempPackageDir()
+  // The target moves while the FIRST gateway is already completing its restart: the old
+  // pass crossed its last checkpoint, so the fence cannot see it — the bounded re-run must.
+  let move: (() => void) | null = null
+  const gw1 = await fakeGateway('none', { onRestart: () => { move?.() } })
+  try {
+    const h = await directLegFixture(gw1, packageDir)
+    move = () => {
+      h.setOrigin(gw2.origin, { round: 2 }, 2)
+      assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 2 }).ok, true)
+    }
+    assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 }).ok, true)
+    const result = await h.leg('gw-1')
+    assert.deepEqual(result, { uploaded: true, skipped: false }, 'the joined result reports the current target as synced')
+    assert.ok(gw2.seen.includes('GET /chamber/plugins'), 'the bounded re-run dialled the CURRENT target')
+    assert.equal(gw2.seen.filter(entry => entry === 'PUT /chamber/plugins').length, 0,
+      'the current target\'s cache is warm: no upload')
+    assert.ok(gw2.seen.includes('POST /chamber/runtime/restart'),
+      'a warm cache still restarts the current target (the FIRST pass uploaded => forceRestart)')
+    assert.equal(gw1.seen.filter(entry => entry === 'POST /chamber/runtime/restart').length, 1,
+      'the old target saw its own (already-sent) restart')
+    assert.equal(gw1.seen.filter(entry => entry === 'PUT /chamber/plugins').length, 1, 'no duplicate upload to the old target')
+  } finally {
+    await gw1.close()
+    await gw2.close()
+    rmSync(packageDir, { recursive: true, force: true })
+  }
+})
+
+test('⑱ a successful pass does not re-run for a same-target session renewal (no second restart)', async () => {
+  const packageDir = tempPackageDir()
+  let renew: (() => void) | null = null
+  const gateway = await fakeGateway('none', { onRestart: () => { renew?.() } })
+  try {
+    const h = await directLegFixture(gateway, packageDir)
+    const genBefore = h.registry.currentRecordGen('gw-1')
+    renew = () => {
+      // A real session renewal: the credential rotates, so the commit is a REGISTRATION and
+      // recordGen advances — while the dial binding and the live tunnel generation stay equal.
+      h.setToken('probe-token-rotated')
+      const renewed = h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 })
+      assert.equal(renewed.ok, true)
+      if (renewed.ok) assert.equal(renewed.action, 'registered', 'a token rotation is a real re-registration')
+    }
+    assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 }).ok, true)
+    const result = await h.leg('gw-1')
+    assert.notEqual(h.registry.currentRecordGen('gw-1'), genBefore,
+      'the renewal advanced the read-face recordGen while the dial binding did not move')
+    assert.deepEqual(result, { uploaded: true, skipped: false })
+    assert.equal(gateway.seen.filter(entry => entry === 'GET /chamber/plugins').length, 1,
+      'a recordGen-only renewal is not a moved DIAL target: no re-run')
+    assert.equal(gateway.seen.filter(entry => entry === 'POST /chamber/runtime/restart').length, 1,
+      'the successful pass asks for exactly ONE restart')
+  } finally {
+    await gateway.close()
+    rmSync(packageDir, { recursive: true, force: true })
+  }
+})
+
+test('㉑ a FAILED pass re-runs once when only recordGen moved (a same-target re-registration can recover a wire failure)', async () => {
+  // The GET is held while the credential renews (recordGen advances, the dial does not), then
+  // the held response fails. The failed pass must re-dial the SAME target once (recordGen is a
+  // retry criterion for failures only).
+  const gateway = await fakeGateway('get', { getStatus: 500 })
+  const packageDir = tempPackageDir()
+  try {
+    const h = await directLegFixture(gateway, packageDir)
+    assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 }).ok, true)
+    const first = h.leg('gw-1')
+    await gateway.gates.getSeen.promise
+    h.setToken('probe-token-rotated')
+    const renewed = h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 })
+    assert.equal(renewed.ok, true)
+    if (renewed.ok) assert.equal(renewed.action, 'registered')
+    gateway.gates.releaseGet.resolve()
+    const result = await first
+    assert.equal(result?.failed, true, 'the wire failure is reported honestly')
+    assert.equal(gateway.seen.filter(entry => entry === 'GET /chamber/plugins').length, 2,
+      'a failed pass with a recordGen-only movement re-dials the current target exactly once')
+    assert.equal(gateway.seen.includes('PUT /chamber/plugins'), false, 'no upload rides a failed status projection')
+  } finally {
+    gateway.gates.releaseGet.resolve()
+    await gateway.close()
+    rmSync(packageDir, { recursive: true, force: true })
+  }
+})
+
+test('⑳ a disposed registration registry makes the manual sync refuse loudly (no silent ok)', async () => {
+  const h = await harness({ subscribe: false })
+  try {
+    assert.equal(h.register().ok, true)
+    h.registry.dispose()
+    assert.deepEqual(await h.invokeManual(), { ok: false, error: 'no active gateway registration' })
+    assert.deepEqual(h.gateway.seen, [], 'a disposed registry dials nothing')
+  } finally { await h.close() }
+})
+
+test('⑲ the single-flight slot is released on settle: a later call starts a NEW pass', async () => {
+  const gateway = await fakeGateway('none')
+  const packageDir = tempPackageDir()
+  try {
+    const h = await directLegFixture(gateway, packageDir)
+    assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 }).ok, true)
+    const first = await h.leg('gw-1')
+    assert.deepEqual(first, { uploaded: true, skipped: false })
+    const second = await h.leg('gw-1')
+    assert.deepEqual(second, first)
+    assert.equal(gateway.seen.filter(entry => entry === 'GET /chamber/plugins').length, 2,
+      'the settled entry was removed from the in-flight map (a new call starts a fresh pass)')
+  } finally {
+    await gateway.close()
+    rmSync(packageDir, { recursive: true, force: true })
+  }
+})
+
