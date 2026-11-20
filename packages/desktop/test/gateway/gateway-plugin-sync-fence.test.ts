@@ -15,6 +15,14 @@
  *   ⑥ wiring lock: the composition root wires the ONE leg into both entries and the
  *      sync execution carries the four fence checkpoints; the moved code has no
  *      second implementation left in gateway-provider.ts.
+ *
+ *  Execution-leg axes (⑦-㉒): ordered checkpoints and the bounded re-run (failed pass = any
+ *  movement incl. recordGen; success pass = dial target movement incl. InstanceState
+ *  identity), single-flight join + settle release, the uploaded marker across a failed pass,
+ *  PUT-refusal reporting, forceRestart on a warm cache, the disposed-registry refusal and
+ *  the manual IPC result mappings. The pre-network/restart fence checks are SENTINELS — no
+ *  await sits between the checkpoint and the next network call, so ⑥ locks them structurally
+ *  rather than behaviorally (deliberate defense-in-depth, not dead code).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -820,6 +828,33 @@ test('⑱ a successful pass does not re-run for a same-target session renewal (n
       'a recordGen-only renewal is not a moved DIAL target: no re-run')
     assert.equal(gateway.seen.filter(entry => entry === 'POST /chamber/runtime/restart').length, 1,
       'the successful pass asks for exactly ONE restart')
+  } finally {
+    await gateway.close()
+    rmSync(packageDir, { recursive: true, force: true })
+  }
+})
+
+test('㉒ a successful pass re-runs when a re-add replaces the InstanceState but reuses the numeric generation', async () => {
+  // The dial-target identity includes the InstanceState OBJECT (the fence checks it); a
+  // delete/re-add can reuse a numeric transport generation, so a completed pass must not
+  // report the new incarnation as synced just because transportGen/binding compare equal.
+  const packageDir = tempPackageDir()
+  let move: (() => void) | null = null
+  const gateway = await fakeGateway('none', { onRestart: () => { move?.() } })
+  try {
+    const h = await directLegFixture(gateway, packageDir)
+    move = () => {
+      assert.equal(h.registry.commit({ kind: 'revoke', id: 'gw-1', reason: 'removed' }).ok, true)
+      h.setOrigin(gateway.origin, { round: 2 }, 1) // new incarnation, SAME numeric generation
+      assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 }).ok, true)
+    }
+    assert.equal(h.registry.commit({ kind: 'register', id: 'gw-1', transportGen: 1 }).ok, true)
+    const result = await h.leg('gw-1')
+    assert.deepEqual(result, { uploaded: true, skipped: false })
+    const count = (entry: string): number => gateway.seen.filter(value => value === entry).length
+    assert.equal(count('GET /chamber/plugins'), 2, 'the incarnation movement re-dials the CURRENT target once')
+    assert.equal(count('PUT /chamber/plugins'), 2, 'the current target receives its own upload')
+    assert.equal(count('POST /chamber/runtime/restart'), 2, 'the current target is asked to apply the sync')
   } finally {
     await gateway.close()
     rmSync(packageDir, { recursive: true, force: true })

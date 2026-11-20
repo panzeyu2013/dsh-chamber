@@ -232,17 +232,22 @@ export function createIntentStore(deps: IntentStoreDeps): IntentStore {
       } else if (intents.delete(id)) {
         changed = true
       }
-      // 健康门 = 写盘门，不是意图门：0 次写、盘面保持不可信原状；有事实待落盘才 volatile。
+      // 幂等动作（本次未改内存事实）恒按自身事实回答 ok；若另有 pending 顺手重试一次整文件
+      // 写（无 timer），其失败只 warn——不把他行的未落盘记成本次 persist_failed。
+      if (!changed) {
+        if (pendingWrite && health.loadFailure === null && !health.incomplete) {
+          try { writeRoster(deps.rows(), intents); pendingWrite = false } catch (error) { deps.warn?.(`connection intent write failed: ${describeError(error)}`) }
+        }
+        return { ok: true }
+      }
+      // 健康门 = 写盘门，不是意图门：0 次写、盘面保持不可信原状；本行动作有事实待落盘才 volatile。
       const gateError = health.loadFailure !== null
         ? 'registry load is degraded; intent not persisted'
         : health.incomplete ? 'roster is incomplete; intent not persisted' : null
       if (gateError !== null) {
-        if (!changed && !pendingWrite) return { ok: true }
         pendingWrite = true
         return { ok: false, error: gateError, volatile: true }
       }
-      // 幂等早退只在 dirty=false 成立：pending 时同一次显式动作就是重试点（无 timer）。
-      if (!changed && !pendingWrite) return { ok: true }
       try {
         writeRoster(deps.rows(), intents)
         pendingWrite = false

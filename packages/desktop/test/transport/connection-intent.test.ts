@@ -342,6 +342,28 @@ test('createIntentStore: a failed write stays pending and the next explicit acti
   assert.deepEqual(JSON.parse(attempts[1]!)[0].dshChamber, { manualDisconnectSessionId: SESSION_A })
 })
 
+test('createIntentStore: a no-op action answers ok and never reports another row\'s pending write as its failure', () => {
+  const attempts: string[] = []
+  const health: IntentRosterHealth = { loadFailure: null, incomplete: false }
+  const rowA = sshProvider.validateSpec(OLD_ROW)!
+  const store = createIntentStore({
+    session: SESSION_A,
+    write: text => { attempts.push(text); throw new Error('disk full') },
+    rows: () => [rowA],
+    warn: () => {},
+  })
+  store.beginLoad()
+  // s1 fails to persist: the intent is live in memory and the store now carries a pending write.
+  assert.equal(store.setManual('s1', true, health, true).ok, false)
+  assert.equal(attempts.length, 1)
+  // A later action on a row that HAS NO intent changes nothing: its own result is ok even though
+  // the store still holds s1's pending write (the retry rides along; its failure is not this action's).
+  assert.deepEqual(store.setManual('s2', false, health, true), { ok: true },
+    'a no-op action never reports the other row\'s pending as its own persist failure')
+  assert.equal(attempts.length, 2, 'the no-op still acts as the opportunistic retry point (no timer)')
+  assert.deepEqual([...store.snapshot(health).suppressed], ['s1'], 'the pending intent stays live in memory')
+})
+
 test('manager reports added ids only for an authoritative save; compensation and empty adds never fire', () => {
   const dir = tempDir()
   const added: string[] = []

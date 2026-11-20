@@ -109,7 +109,7 @@ export function instanceConnected(
   return status?.kind === kind && status.phase === 'ready'
 }
 
-export interface StatusAcceptanceInput {
+interface StatusAcceptanceInput {
   /** Raw registry id (the status store key), never a chamber source id. */
   id: string
   projection: SshStatusProjection | null

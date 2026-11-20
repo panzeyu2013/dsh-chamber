@@ -35,9 +35,9 @@
     },
     {
       "path": "packages/desktop/gateway-plugin-sync.ts",
-      "lines": 481,
-      "target": 481,
-      "note": "gateway chamber host-package sync 的唯一执行腿（目标绑定围栏 + per-id 单飞）；为过 gateway-provider 只降不升棘轮从 provider 迁出；+15（pre-merge 收尾）= uploaded 跨失败路径保留 + 成功 pass 越过最后检查点的拨号目标移动也走一次有界重跑（failed pass 另按 recordGen 作重跑判据，design 21 §6.5）+ 目标缺失语义注释；棘轮随此次收尾重录为 481"
+      "lines": 492,
+      "target": 492,
+      "note": "gateway chamber host-package sync 的唯一执行腿（目标绑定围栏 + per-id 单飞）；为过 gateway-provider 只降不升棘轮从 provider 迁出；+15（pre-merge 收尾）= uploaded 跨失败路径保留 + 成功 pass 越过最后检查点的拨号目标移动也走一次有界重跑（failed pass 另按 recordGen 作重跑判据，design 21 §6.5）+ 目标缺失语义注释；+11（终验正确性 P2-1）= 成功 pass 的重跑轴补 InstanceState 对象身份（与围栏同轴；删除/重加可复用数值代）+ 该判据的注释与 failed/completed 轴命名；棘轮随两次收尾重录为 492"
     },
     {
       "path": "packages/desktop/gateway-provider.ts",
@@ -403,9 +403,9 @@
     },
     {
       "path": "packages/desktop/connection-intent.ts",
-      "lines": 312,
-      "target": 312,
-      "note": "意图与票据的唯一归属（手动断开/自动尝试的抑制事实 + 票据三查/stale-row 重规划）；新叶子初始棘轮=当前行数（312），收口目标待后续重构评审"
+      "lines": 317,
+      "target": 317,
+      "note": "意图与票据的唯一归属（手动断开/自动尝试的抑制事实 + 票据三查/stale-row 重规划）；新叶子初始棘轮=当前行数（312），收口目标待后续重构评审；+5（终验正确性 P2-2）= 幂等动作的结果语义（恒 ok、只顺手重试 pending、不把他行未落盘记成本次 persist_failed），无 timer/无公开面增量"
     },
     {
       "path": "packages/desktop/roster-change.ts",

@@ -49,7 +49,7 @@ import { registrationKey } from './transport-registration.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
 
 /** One local chamber host package ready to sync (main-process files). */
-export interface LocalChamberHostPackage {
+interface LocalChamberHostPackage {
   name: string
   packageJson: string
   distIndex: string
@@ -81,7 +81,7 @@ export function syncedPluginUploadFiles(pkg: LocalChamberHostPackage): Record<st
   return files
 }
 
-export interface GatewayPluginSyncResult {
+interface GatewayPluginSyncResult {
   /** True when at least one package was uploaded (a dsh restart was asked). */
   uploaded: boolean
   /** True when the sync was skipped (no local packages to sync). */
@@ -290,14 +290,14 @@ export async function syncGatewayChamberPlugins(options: {
 }
 
 /** One local package source (main-process resolved paths; reading happens in the leg). */
-export interface GatewaySyncSource {
+interface GatewaySyncSource {
   name: string
   packageJsonPath: string
   distIndexPath: string
 }
 
 /** The read faces the leg needs — the registry is THE commit entry, never a mirror. */
-export interface GatewaySyncLegDeps {
+interface GatewaySyncLegDeps {
   listInstances(): readonly TransportInstanceSpec[]
   registrations: Pick<ActiveRegistrationRegistry, 'currentRecordGen' | 'snapshotForSync' | 'snapshot'>
   /** Manager-side incarnation identity + tunnel generation (delete/re-add fence). */
@@ -308,7 +308,7 @@ export interface GatewaySyncLegDeps {
 }
 
 /** The shared execution leg: resolves the committed target + local packages, fences, syncs. */
-export type GatewaySyncLeg = (id: string) => Promise<GatewayPluginSyncResult | null>
+type GatewaySyncLeg = (id: string) => Promise<GatewayPluginSyncResult | null>
 
 /** The captured start-of-pass target: a record view recomputed at every checkpoint must
  *  yield these SAME dial-binding facts (never the credential headers or the read-face
@@ -449,10 +449,21 @@ export function createGatewaySyncLeg(deps: GatewaySyncLegDeps): GatewaySyncLeg {
     // of its own, while a bare `recordGen` bump is a same-target session renewal and must
     // not trigger a second controlled restart. A revoked target (no current view) keeps
     // `first`; the fence still ignores `recordGen` for aborts.
+    // The InstanceState object is part of the dial-target identity (the fence checks it): a
+    // delete/re-add can reuse the numeric transport generation, so a COMPLETED pass must
+    // re-run when the incarnation object changed even if every numeric axis compares equal.
+    // A failed pass keeps the design's retry axes (recordGen/transportGen/binding): an
+    // incarnation-only change it already aborted on is left to the next ready edge.
+    const attemptNow = deps.attemptFactsFor(id)
+    const incarnationMoved = attemptNow !== null && attemptNow.state !== captured.incarnation
     const dialMoved = current.transportGen !== captured.transportGen
       || dialBindingKeyOf(current.facts) !== captured.bindingKey
-    const moved = dialMoved || current.recordGen !== captured.recordGen
-    if (first.failed === true ? moved : dialMoved) {
+    const completedMoved = dialMoved || incarnationMoved
+    // A failed pass re-runs on any committed movement (a re-registration that keeps the dial
+    // binding may still recover a wire failure); a completed pass never re-runs for a bare
+    // recordGen bump.
+    const failedMoved = dialMoved || current.recordGen !== captured.recordGen
+    if (first.failed === true ? failedMoved : completedMoved) {
       const retried = await runPass(id, undefined, first.uploaded === true)
       if (retried === null) return first
       // The old pass already uploaded: the current target must still pick the cache up.
