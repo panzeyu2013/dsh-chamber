@@ -14,15 +14,17 @@
  *
  * This pure step fills ONLY that hole, plus the case the vendor never covers at all:
  * each fresh running→idle edge can arm the ctx's mainView-retained `current` row of a
- * source that is not painted, and — when a source has NO official ctx report
- * (`factsOnly`, the facts-only provenance; never inferred from `current === undefined`)
- * — every row with a fresh host running→idle edge. It is ROW-keyed and never sweeps —
- * reading one row clears only that row — so a source whose `current` moved on can hold
- * one arm per distinct completed row (exactly the upstream "N unread sessions"
- * semantics). Disarmed by re-running, by reading it (the painted source with that row as
- * its current, or the App's open intent for a no-ctx source), or by leaving an
- * authoritative list. Source retirement is the App dropping the whole per-source table,
- * so this step never sees it.
+ * source the user is NOT ATTENDING — `attended = painted && foreground`, where `painted`
+ * is this App's on-screen fact and `foreground` is the page attention fact (window in
+ * front: app active AND shell visible/unoccluded; one fact-level source, never the bridge
+ * selection) — and, when a source has NO official ctx report (`factsOnly`, the facts-only
+ * provenance; never inferred from `current === undefined`), every row with a fresh host
+ * running→idle edge. It is ROW-keyed and never sweeps — reading one row clears only that
+ * row — so a source whose `current` moved on can hold one arm per distinct completed row
+ * (exactly the upstream "N unread sessions" semantics). Disarmed by re-running, by reading
+ * it (the ATTENDED source with that row as its current, or the App's open intent for a
+ * no-ctx source), or by leaving an authoritative list. Source retirement is the App
+ * dropping the whole per-source table, so this step never sees it.
  *
  * Deliberately NOT a second ledger: no persistence, no watermark, no clock, no
  * facts track. When the official bit is true the arm is irrelevant —
@@ -40,6 +42,12 @@ export interface CompletionArmStepInput {
   rows: CompletionArmRows | undefined
   /** The source is the PAINTED (on-screen) view — the App fact, never the bridge selection. */
   painted: boolean
+  /**
+   * 页面注意力事实：窗口在**前台**（应用激活 ∧ 文档可见 ∧ 壳窗口可见且未遮挡）。App 的
+   * `pageForeground` 派生布尔，不是桥选择、也不是 DOM 焦点本身。**必需**（不给缺省值）：
+   * 漏传会让 attended 恒假，把「正在阅读」静默误判成后台完成。
+   */
+  foreground: boolean
   /** The official list is authoritative (an absent row means deleted). */
   listComplete: boolean
   /**
@@ -102,8 +110,11 @@ export function stepCompletionArm(
   for (const id of Object.keys(nextRunning)) {
     if (nextRunning[id] === true && arms[id] === true) delete arms[id]
   }
-  // Reading disarms: the painted source is showing its current row.
-  if (input.painted && input.current !== undefined && arms[input.current] === true) delete arms[input.current]
+  // 2 元注意力谓词：事实级单一出处是页面的 pageForeground，本步只消费它 + painted。
+  // 屏上但应用在后台（foreground=false）不算在读——恰是本修正臂要覆盖的那一类完成。
+  const attended = input.painted && input.foreground
+  // Reading disarms: the ATTENDED source (painted AND in the foreground) is showing its current row.
+  if (attended && input.current !== undefined && arms[input.current] === true) delete arms[input.current]
   // provenance = virtual：没有官方 current，App 的打开意图是唯一的已读事实；即便该来源
   // 的壳 boot 失败、永不出现 current，点击也一定能消点（否则复现"点击消不掉"）。
   if (input.factsOnly === true && input.readIntent !== undefined && arms[input.readIntent] === true) {
@@ -115,7 +126,7 @@ export function stepCompletionArm(
   if (input.listComplete) {
     for (const id of Object.keys(arms)) if (input.rows[id] === undefined) delete arms[id]
   }
-  if (!input.painted && !input.stale) {
+  if (!attended && !input.stale) {
     if (input.factsOnly === true) {
       // provenance = virtual：无官方 mainView/isMain，逐行的 host running 边沿武装
       // （每个不同行一格，与上游"N 个未读会话"同语义）。
@@ -136,8 +147,9 @@ export function stepCompletionArm(
       }
     } else if (input.current !== undefined && prevRunning[input.current] === true
       && input.rows[input.current]?.running === false) {
-      // The hole: the vendor suppressed this completion as main-retained, while the
-      // user is on another source. Exactly one candidate per source (the current row).
+      // The hole: the vendor suppressed this completion as main-retained, while the user
+      // is not attending this source (another painted source, or the app is in the
+      // background). Exactly one candidate per source (the current row).
       arms[input.current] = true
     }
   }

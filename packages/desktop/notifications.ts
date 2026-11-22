@@ -28,7 +28,9 @@ export interface NotificationRequest {
   kind: NotificationKind
   title: string
   body: string
-  /** 正在屏幕上查看的会话（渲染端 document.hasFocus 判定，主进程再查一次作为权威）。 */
+  /** 正在**前台注意力**里查看的会话（渲染端 painted ∧ current ∧ pageForeground 判定；主进程
+   *  再用 focused 注意力事实复核一次作为权威）。不是 document.hasFocus 裸值：右栏 Browser/
+   *  原生模态抢焦点时主文档无焦点，但用户仍在看主窗。 */
   requireHidden: boolean
   /**
    * 内容水位（来源 host 域毫秒——远端取该来源 host 时钟、本地取本地 dsh host
@@ -366,15 +368,31 @@ export interface NotificationSettingsLike {
 }
 
 /**
+ * 主进程侧的通知注意力事实（design 19 §3.3）：窗口此刻是否被用户在**前台**使用。
+ * 这是缺少会话级信息的粗粒度门，两个宿主腿语义对齐：
+ *   - Swift 壳：focused = `isKeyWindow && foregroundAllowed`（前台相位 = 可见且未遮挡），
+ *     隐藏/最小化/完全遮挡/应用失活全部 false（STATUS 104 代码面；遮挡仍 key 的
+ *     macOS 前提未证实，见设计登记）；
+ *   - Electron 冻结腿：deps.edges.isFocused() 已是 `visible && focused`。
+ * 渲染端的会话级 requireHidden（painted ∧ current ∧ pageForeground）比它更细，主进程
+ * 再用本事实复核（信任切分见 decideNotification 头注）。纯委托：宿主 edge 负责异常
+ * 安全恒 boolean（探测异常 ≡ 未聚焦）；本 helper 不吞错、不重复探测。
+ */
+export function notificationWindowAttended(edges: { isFocused(): boolean }): boolean {
+  return edges.isFocused()
+}
+
+/**
  * 裁决链（主进程门禁，design 19 §3.3 顺序）：'test' 全部放行 → enabled=false
- * → 'disabled' → kind 开关关闭 → 'kind-off' → requireHidden 且窗口聚焦
- * → 'on-screen' → mode='hidden-only' 且窗口聚焦 → 'focused-hidden-only'
+ * → 'disabled' → kind 开关关闭 → 'kind-off' → requireHidden 且窗口被注意
+ * → 'on-screen' → mode='hidden-only' 且窗口被注意 → 'focused-hidden-only'
  * → 否则 'show'。'test' 不受 requireHidden 影响。
  *
- * 信任切分：主进程 anyWindowFocused 只回答「是否有窗口聚焦」，不知道用户正在
- * 查看哪个会话——会话级焦点只有渲染端可见，因此 'always' 模式下「正在查看的
- * 会话不打扰」完全依赖渲染端上报的 requireHidden；'hidden-only' 模式下两者
- * 叠加。
+ * 信任切分：主进程 anyWindowFocused（= notificationWindowAttended）只回答「窗口是否
+ * 被注意力覆盖（前台且可见）」，不知道用户正在查看哪个会话——会话级注意力只有渲染端
+ * 可见，因此 'always' 模式下「正在查看的会话不打扰」完全依赖渲染端上报的
+ * requireHidden；'hidden-only' 模式下两者叠加。注意语义已从旧「窗口任意聚焦」收窄：
+ * 应用失活/隐藏/最小化/遮挡都不再算「窗口被注意」。
  */
 export function decideNotification(input: {
   request: NotificationRequest
@@ -392,8 +410,8 @@ export function decideNotification(input: {
   if (!kindSwitch[request.kind]) return { action: 'skip', reason: 'kind-off' };
   if (request.requireHidden && anyWindowFocused) return { action: 'skip', reason: 'on-screen' };
   if (settings.mode === 'hidden-only' && anyWindowFocused) {
-    // 'always' 放行聚焦状态：聚焦豁免（被查看会话不打扰）完全依赖渲染端
-    // requireHidden，主进程 isAnyWindowFocused 不参与（信任切分见上）。
+    // 'always' 放行前台状态：注意力豁免（正在查看的会话不打扰）完全依赖渲染端
+    // requireHidden，主进程注意力事实不参与（信任切分见上）。
     return { action: 'skip', reason: 'focused-hidden-only' };
   }
   return { action: 'show' };

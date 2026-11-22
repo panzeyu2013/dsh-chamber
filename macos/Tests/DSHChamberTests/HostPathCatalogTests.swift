@@ -4,6 +4,7 @@
 //  指针门（窗外不读拖拽板、离开清拖拽快照、回形针快照不受影响）、载荷形状与代际、
 //  前台相位开关（遮挡停表/隐藏清表，含在途采纳失效）与相位漏斗的源码锁。
 //
+import AppKit
 import XCTest
 @testable import DSHChamber
 
@@ -645,6 +646,99 @@ final class HostPathCatalogTests: XCTestCase {
                        ShellPhasePlan(observeHostPaths: false, runHangWatchdog: false, clearDragSnapshot: true))
     }
 
+    /// 应用激活（active）**不参与前台相位**：Cmd+Tab 离开应用不得停表/停看门狗
+    /// （相位门 = visible && !occluded；注意力门才叠加 active——两条门不混用）。
+    func testApplicationActivationDoesNotChangeThePhasePlan() {
+        let foreground = ShellVisibilityFacts(visible: true, occluded: false, active: false)
+        let foregroundActive = ShellVisibilityFacts(visible: true, occluded: false, active: true)
+        XCTAssertEqual(ShellPhasePlan.plan(for: foregroundActive), ShellPhasePlan.plan(for: foreground),
+                       "active-only 变化不得切换原生定时器计划")
+        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: true, active: true)),
+                       ShellPhasePlan(observeHostPaths: false, runHangWatchdog: false, clearDragSnapshot: false),
+                       "遮挡仍是相位暂停（active 不参与）")
+        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: false, occluded: false, active: true)),
+                       ShellPhasePlan(observeHostPaths: false, runHangWatchdog: false, clearDragSnapshot: true),
+                       "隐藏只看 visible；应用激活不改变清快照决策")
+    }
+
+    /// 壳可见性事实的纯变换真值表：visible 三项任一不在屏即 false；occluded 只在
+    /// 在屏时才有意义；active 原样携带（由调用方读 NSApp.isActive，不是派生值）。
+    func testShellVisibilityFactsTruthTable() {
+        let onScreen = MainWindowController.shellVisibilityFacts(
+            isVisible: true, isMiniaturized: false, appIsHidden: false,
+            appIsActive: true, occlusionState: .visible)
+        XCTAssertEqual(onScreen, ShellVisibilityFacts(visible: true, occluded: false, active: true))
+
+        let occluded = MainWindowController.shellVisibilityFacts(
+            isVisible: true, isMiniaturized: false, appIsHidden: false,
+            appIsActive: false, occlusionState: [])
+        XCTAssertEqual(occluded, ShellVisibilityFacts(visible: true, occluded: true, active: false))
+
+        // 三项「不在屏」各自胜出：visible=false 且 occluded=false（AppKit 对离屏窗口
+        // 可能仍保留 .visible 位），active 原样携带。
+        let offScreen = [
+            MainWindowController.shellVisibilityFacts(
+                isVisible: false, isMiniaturized: false, appIsHidden: false,
+                appIsActive: true, occlusionState: .visible),
+            MainWindowController.shellVisibilityFacts(
+                isVisible: true, isMiniaturized: true, appIsHidden: false,
+                appIsActive: true, occlusionState: .visible),
+            MainWindowController.shellVisibilityFacts(
+                isVisible: true, isMiniaturized: false, appIsHidden: true,
+                appIsActive: true, occlusionState: .visible),
+        ]
+        for facts in offScreen {
+            XCTAssertEqual(facts, ShellVisibilityFacts(visible: false, occluded: false, active: true))
+            XCTAssertFalse(facts.foregroundAllowed)
+        }
+        // 无窗口/显式隐藏的 .hidden 不得谎报应用激活（orderOut 前读实时事实即 bug）。
+        XCTAssertEqual(ShellVisibilityFacts.hidden,
+                       ShellVisibilityFacts(visible: false, occluded: false, active: false))
+    }
+
+    /// 页面派发脚本：detail 三键（visible/occluded/active）与 renderer
+    /// ShellVisibilityDetail 同形状（active 是 additive 字段——旧页忽略未知键）。
+    func testShellVisibilityScriptCarriesTheActiveFact() {
+        let eventPrefix = "window.dispatchEvent(new CustomEvent('"
+            + MainWindowController.shellVisibilityEventName + "', "
+        let onScreen = ShellVisibilityFacts(visible: true, occluded: false, active: true)
+        XCTAssertEqual(MainWindowController.shellVisibilityScript(onScreen),
+                       eventPrefix + "{detail: {visible: true, occluded: false, active: true}}))")
+        XCTAssertEqual(MainWindowController.shellVisibilityScript(.hidden),
+                       eventPrefix + "{detail: {visible: false, occluded: false, active: false}}))")
+    }
+
+    /// 分域纯计划真值：first / 同值 / active-only / visible 或 occluded 变化 / force 同值。
+    func testShellVisibilityDispatchPlanSplitsPhaseFromAttention() {
+        let foreground = ShellVisibilityFacts(visible: true, occluded: false, active: true)
+        let attentionOnly = ShellVisibilityFacts(visible: true, occluded: false, active: false)
+        let occluded = ShellVisibilityFacts(visible: true, occluded: true, active: true)
+        let hidden = ShellVisibilityFacts(visible: false, occluded: false, active: true)
+
+        XCTAssertEqual(ShellVisibilityDispatchPlan.plan(previous: nil, next: foreground),
+                       ShellVisibilityDispatchPlan(changed: true, phaseChanged: true),
+                       "首次派发：事实与相位都算变化")
+        XCTAssertEqual(ShellVisibilityDispatchPlan.plan(previous: foreground, next: foreground),
+                       ShellVisibilityDispatchPlan(changed: false, phaseChanged: false),
+                       "同值：不派发")
+        XCTAssertEqual(ShellVisibilityDispatchPlan.plan(previous: foreground, next: attentionOnly),
+                       ShellVisibilityDispatchPlan(changed: true, phaseChanged: false),
+                       "active-only（Cmd+Tab）：派发页面事件，但不重跑相位钩子")
+        XCTAssertEqual(ShellVisibilityDispatchPlan.plan(previous: foreground, next: hidden),
+                       ShellVisibilityDispatchPlan(changed: true, phaseChanged: true),
+                       "visible 变化：相位变化")
+        XCTAssertEqual(ShellVisibilityDispatchPlan.plan(previous: foreground, next: occluded),
+                       ShellVisibilityDispatchPlan(changed: true, phaseChanged: true),
+                       "occluded 变化：相位变化")
+        XCTAssertEqual(ShellVisibilityDispatchPlan.plan(previous: foreground, next: foreground,
+                                                        force: true),
+                       ShellVisibilityDispatchPlan(changed: true, phaseChanged: false),
+                       "force 同值：只穿透事实去重、重放 JS，同相位不重跑钩子")
+        XCTAssertEqual(ShellVisibilityDispatchPlan.plan(previous: nil, next: foreground, force: true),
+                       ShellVisibilityDispatchPlan(changed: true, phaseChanged: true),
+                       "首次 force 仍算相位变化")
+    }
+
     /// 回形针快照是跨相位语义：停表只清 drag 快照，picked 不受影响。
     func testPhaseStopKeepsThePickedSnapshot() throws {
         let picked = try makeFile("picked.txt", bytes: 6)
@@ -691,5 +785,42 @@ final class HostPathCatalogTests: XCTestCase {
                       "the stopped phase must keep a low-frequency recheck")
         XCTAssertTrue(funnelBody.contains("startHangWatchdog()"),
                       "a foreground edge must rebuild the watchdog when the funnel stopped it")
+    }
+
+    /// 相位/注意力分域 + 落盘事实行（v3 A7/A8）：dispatch 只消费纯计划；
+    /// phaseChanged 才跑相位钩子；任何变化都推 focused 派生并落盘四项
+    /// （visible/occluded/active/focused）。后两项是 gui-acceptance-checklist P6
+    /// 在真机取证「遮挡仍 key / 应用仍 active 前提」的唯一事实级判据。
+    func testTheVisibilityDispatchSplitsPhaseAndAttentionAndLogsFourFacts() throws {
+        let macosRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: macosRoot.appendingPathComponent("Sources/DSHChamber/MainWindowController.swift"),
+            encoding: .utf8)
+        guard let dispatchBody = functionBody(of: "private func dispatchShellVisibility(", in: source) else {
+            return XCTFail("dispatchShellVisibility not found")
+        }
+        XCTAssertTrue(dispatchBody.contains("ShellVisibilityDispatchPlan.plan(previous: lastShellVisibilityFacts"),
+                      "the split must be the pure plan, not ad-hoc boolean logic")
+        XCTAssertTrue(dispatchBody.contains("guard plan.changed else { return }"),
+                      "the fact-level dedupe guard stays")
+        XCTAssertTrue(dispatchBody.contains("if plan.phaseChanged {"),
+                      "keep-awake / timers must be gated on the phase half only")
+        XCTAssertTrue(dispatchBody.contains("pushHostFacts([\"focused\": focused])"),
+                      "every fact change must push the derived focused fact")
+        XCTAssertTrue(dispatchBody.contains("visible=\\(facts.visible) occluded=\\(facts.occluded)"),
+                      "the log line must carry visible/occluded")
+        XCTAssertTrue(dispatchBody.contains("active=\\(facts.active) focused=\\(focused)"),
+                      "the log line must carry active/focused (P6 fact-level evidence)")
+        XCTAssertTrue(dispatchBody.contains("evaluateJS(Self.shellVisibilityScript(facts))"),
+                      "the page event must fire for attention-only changes too")
+        XCTAssertTrue(source.contains("selector: #selector(appDidResignActive(_:))"),
+                      "application deactivation must push an explicit focused:false")
+        XCTAssertTrue(source.contains("static func focusedFact(isKeyWindow: Bool, foregroundAllowed: Bool) -> Bool"),
+                      "focused derivation must stay a pure, directly testable helper")
+        XCTAssertTrue(dispatchBody.contains("focusedHostFact(facts.foregroundAllowed)"),
+                      "the dispatch must derive focused from the dispatched facts, never read live state")
+        XCTAssertTrue(source.contains("foregroundAllowed: currentShellVisibilityFacts().foregroundAllowed"),
+                      "the sidecar-restart snapshot must pass the live foreground phase explicitly")
     }
 }

@@ -35,7 +35,7 @@ import type { DeliveryOutcome, NotificationOutbox, PendingNotification } from '.
 import type { NotificationTitleId } from '../notification-projection.ts'
 import { completionWatermark } from '../watermark.ts'
 import { isFactsDecisionUsable, type SessionFactsSnapshot } from '../session-facts-source.ts'
-import { isShellVisible } from '../shell-visibility.ts'
+import { currentPageForeground, subscribePageForeground } from '../page-attention.ts'
 import { virtualRuntimeReport } from '../virtual-runtime-report.ts'
 import {
   createNotificationSaveCoalescer,
@@ -75,7 +75,7 @@ export interface NotificationsDeps {
   /** 通知组装镜像：onRuntimeReport effect（依赖 []）经 ref 读取最新值。 */
   aggregates: Record<string, InstanceAggregate>
   serverLabels: Record<string, string>
-  /** 唯一「正在阅读」谓词的屏上来源（paintedView 的渲染期镜像）。 */
+  /** 完成门/补臂共用的屏上事实（paintedView 的渲染期镜像；与页面注意力合成 attended）。 */
   viewStore: ViewStore
   /** 已挂载来源的运行时事实（渲染期镜像）。 */
   liveServerIdsRef: { current: ReadonlySet<string> }
@@ -217,12 +217,13 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
 
   /**
    * 一个来源的完成点步进（唯一出口的实体）：官方位经通道行呈现，本步只补 N-ctx 修正臂。
-   * 武装面 = 有壳隐藏来源 mainView 持有的 current 行，**并集** 无 ctx（facts-only provenance）
-   * 来源的逐行 host running→idle 边沿 + 上游 beforeBaseline 支（首见 idle）；后者带
-   * `factsOnly` 显式来源，绝不靠 current === undefined 推断。规则本体在 client-core
-   * completion-arm.ts；"谁在阅读" 是 paintedView（屏上）∪ 无壳来源的打开意图，不是桥发布的
-   * activeView（选择）。无 ctx 上报时行源是该 facts 快照的判定侧投影（virtual-runtime-report.ts，
-   * 只读、不物化）。
+   * 武装面 = **不在注意力中**（!attended）的有壳来源 mainView 持有的 current 行，**并集**
+   * 无 ctx（facts-only provenance）来源的逐行 host running→idle 边沿 + 上游 beforeBaseline
+   * 支（首见 idle）；后者带 `factsOnly` 显式来源，绝不靠 current === undefined 推断。规则
+   * 本体在 client-core completion-arm.ts；"谁在阅读" = attended（paintedView 屏上 ∧ 页面
+   * 注意力 currentPageForeground()）∪ 无壳来源的打开意图，不是桥发布的 activeView（选择）。
+   * 页面注意力缺 active（旧壳 / web 直开）时在 page-attention 层回退 document.hasFocus()。
+   * 无 ctx 上报时行源是该 facts 快照的判定侧投影（virtual-runtime-report.ts，只读、不物化）。
    */
   const stepArmNow = useCallback((sourceId: string): void => {
     if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
@@ -239,6 +240,7 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
         current: runtime?.current,
         rows: report?.sessions,
         painted: viewStore.getSnapshot().painted === sourceId,
+        foreground: currentPageForeground(),
         listComplete: report?.listComplete === true,
         // 基数已知位只属于虚拟投影（有壳路径无消费者，inert）。
         listKnown: virtual?.listKnown === true,
@@ -303,15 +305,13 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     }
     const attempt = notificationOutboxRef.current.begin(entry.key)
     if (attempt === null) return true
-    // 遮挡/隐藏证据门：hasFocus 在窗口被遮挡/最小化的平台上仍可能为 true，
-    // 而页面级 visible 在「另一 Space / 完全遮挡 / orderOut」时同样恒真（WKWebView 事实）。
-    // 只有「前台相位可运行」——文档可见 **且** 壳窗口可见/未遮挡——才能诚实地宣称用户
-    // 正在看这个会话；否则不抑制横幅（宁可多一条通知，不漏）。
+    // 注意力门（3 元，design 19 §3.3 / design 06 §4.2）：屏上来源交付中 **且** 该来源的
+    // current 行就是本会话 **且** 页面此刻在前台（文档可见 ∧ 壳窗口在屏未遮挡 ∧ 应用激活 /
+    // 页面聚焦；单点 = page-attention.ts，本文件不再自拼 hasFocus/visibilityState/壳事实）。
+    // 只有三者同时成立才能诚实宣称用户正在看这个会话；否则不抑制横幅（宁可多一条通知，不漏）。
     const requireHidden = viewStore.getSnapshot().painted === entry.sourceId
       && factsStore.getSnapshot().runtime[entry.sourceId]?.current === entry.sessionId
-      && document.hasFocus()
-      && document.visibilityState === 'visible'
-      && isShellVisible()
+      && currentPageForeground()
     const ledgerBase = {
       at: Date.now(), sourceId: entry.sourceId, sessionId: entry.sessionId, kind: entry.kind,
       ...(entry.watermark === undefined ? {} : { watermark: entry.watermark }), requireHidden,
@@ -659,6 +659,22 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
     if (painted !== undefined) touched.add(painted)
     for (const sourceId of touched) stepCompletionArmFor(sourceId)
   }, [openIntents, stepCompletionArmFor, viewStore])
+
+  /**
+   * 页面注意力边沿 = 完成点重步（「返回前台即清」的读取边沿，design 06 §4.2）：
+   * 只在派生注意力 false→true（返回前台）时经补臂重入闸步进屏上来源——attended 命中
+   * current ⇒ 读清；true→false（离开前台）不步进，不把「离开」当读取事件。
+   * 初始不通知（订阅基准 = 派生值）；不建 React state / ref 镜像（步进内同步读
+   * viewStore 快照）；退订由 effect 返回的 unsubscribe 完成。node 无 window 时
+   * subscribePageForeground 为 no-op；web/dev 无壳事件时走 focus/blur 回退边沿。
+   */
+  useEffect(() => {
+    return subscribePageForeground((foreground) => {
+      if (!foreground) return
+      const painted = viewStore.getSnapshot().painted
+      if (painted !== undefined) stepCompletionArmFor(painted)
+    })
+  }, [stepCompletionArmFor, viewStore])
 
   return {
     schedulePersistNotifications, stepCompletionArmFor, emitSessionNotification, applySessionFacts,

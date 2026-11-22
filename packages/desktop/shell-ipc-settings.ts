@@ -6,7 +6,7 @@ import { IPC_CHANNELS } from './ipc-events.ts'
 import { cpus, release as osRelease, totalmem } from 'node:os'
 import { readSystemMemory } from './system-memory.ts'
 import { adjudicateBadgeCount, validateBadgeRequest } from './badge.ts'
-import { MAX_SHOWN_NOTIFICATION_RECEIPTS, ShownNotificationReceipts, claimNotificationDetailed, decideNotification, releaseNotificationClaim, validateNotificationRequest } from './notifications.ts'
+import { MAX_SHOWN_NOTIFICATION_RECEIPTS, ShownNotificationReceipts, claimNotificationDetailed, decideNotification, notificationWindowAttended, releaseNotificationClaim, validateNotificationRequest } from './notifications.ts'
 
 export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
   // Durable receipts (design 19 §6): a host restart keeps the shown set, so a
@@ -28,15 +28,19 @@ export function registerSettingsHandlers(ctx: ShellIpcCtx): void {
       ...DEFAULT_CHAMBER_SETTINGS.notifications,
       ...(settingsIO.current().notifications ?? {}),
     };
-    // isFocused 由实现侧保证异常安全恒 boolean：探测异常与未聚焦两态同值（有意收敛）。
-    const anyWindowFocused = deps.edges.isFocused();
+    // 注意力事实（design 19 §3.3）：notificationWindowAttended 是唯一取数点——Swift 派生
+    // focused = isKeyWindow && foregroundAllowed（隐藏/最小化/遮挡/应用失活皆 false），
+    // Electron 冻结腿 isFocused = visible && focused；实现侧保证异常安全恒 boolean。
+    const windowAttended = notificationWindowAttended(deps.edges);
     const decision = decideNotification({
       request,
       settings,
-      anyWindowFocused,
+      anyWindowFocused: windowAttended,
     });
     if (decision.action === 'skip') {
-      return { shown: false, outcome: 'suppressed', error: 'notification suppressed by settings or window focus' };
+      // 裁决侧抑制原因随应答返回（design 19 §4.1）；回执形状不变，reason 只并入既有
+      // error 文本（不新增字段 ⇒ preload/global.d.ts/mirror golden 零变化）。
+      return { shown: false, outcome: 'suppressed', error: `notification suppressed: ${decision.reason}` };
     }
     if (!notificationSourceIncarnations.matches(request.sourceId, request.sourceFingerprint)) {
       console.warn(`[dsh-chamber] 通知来源 fingerprint 已过期：${request.sourceId}`);

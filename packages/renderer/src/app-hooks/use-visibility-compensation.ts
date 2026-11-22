@@ -7,9 +7,13 @@
  * probes during hidden time would otherwise let the drain act on a stale projection.
  * Split out of App.tsx (B1-3g); all dependencies arrive as refs.
  *
- * Both edges (page visibilitychange and the shell's visible edge) share ONE round: the
- * predicate runs before the 250ms dedupe so an edge that arrives while the shell is still
- * hidden never consumes the dedupe slot of the real shell resume edge (P2-2).
+ * Both edges (page visibilitychange and the shell's visible edge) are PHASE edges: only a
+ * false -> true transition of the unified phase predicate (document visible and the shell
+ * window visible/not occluded) starts one round, so an application-activation-only change
+ * (Cmd+Tab; the shell event now also carries `active`) never reruns the compensation round.
+ * The predicate still runs inside `compensate` before the 250ms dedupe so an edge that
+ * arrives while the shell is still hidden never consumes the dedupe slot of the real shell
+ * resume edge (P2-2).
  */
 import { useEffect } from 'react'
 import { shouldRunBackgroundPhase } from '../background-phase.ts'
@@ -36,6 +40,9 @@ export function useVisibilityCompensation(inputs: VisibilityCompensationInputs):
     let compensationTimer: number | undefined
     let disposed = false
     let lastCompensationAt = Number.NEGATIVE_INFINITY
+    // 相位边沿记忆：mount 时的相位即基准；只有相位 false→true 才开启新一轮补偿
+    // （壳事件同时承载 active，应用激活变化不得重跑补偿轮）。
+    let lastPhase = shouldRunBackgroundPhase(document.visibilityState)
     const compensate = (): void => {
       // 统一前台相位门（页面可见 ∧ 壳窗口可见未遮挡，D2；不在这里另读第二份事实）：
       // 必须在记去重时间戳**之前**判——页面可见边沿可能先到而壳事实仍 hidden（此时
@@ -62,18 +69,21 @@ export function useVisibilityCompensation(inputs: VisibilityCompensationInputs):
         }, 0)
       }).catch(() => undefined)
     }
-    const onVisibilityChange = (): void => compensate()
-    // 宿主壳可见性（orderOut / 最小化 / Cmd+H / 遮挡 / 另一 Space）不产生页面
-    // visibilitychange；恢复可见边沿同样必须补偿一轮（design 14 §D1）。
-    const unsubscribeShell = subscribeShellVisibility((detail) => {
-      if (detail.visible && !detail.occluded) compensate()
-    })
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    // 两源共用同一段相位边沿判定（谓词统一在 background-phase；不在这里读 detail 或
+    // 另开第二前台门）：只有相位 false→true 才补偿一轮。壳可见性（orderOut / 最小化 /
+    // Cmd+H / 遮挡 / 另一 Space）不产生页面 visibilitychange，两源必须走同一函数。
+    const notePhaseEdge = (): void => {
+      const phase = shouldRunBackgroundPhase(document.visibilityState)
+      if (phase && !lastPhase) compensate()
+      lastPhase = phase
+    }
+    const unsubscribeShell = subscribeShellVisibility(notePhaseEdge)
+    document.addEventListener('visibilitychange', notePhaseEdge)
     return () => {
       disposed = true
       unsubscribeShell()
       if (compensationTimer !== undefined) window.clearTimeout(compensationTimer)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+      document.removeEventListener('visibilitychange', notePhaseEdge)
     }
   }, [])
 }

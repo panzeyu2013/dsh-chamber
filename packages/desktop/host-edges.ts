@@ -128,7 +128,11 @@ export interface HostEdges {
   onSystemResume(cb: (timestamp: number) => void): void
   /** 主窗口 'show' 事件订阅（B9：held-resume/通知补发点）。 */
   onMainWindowShown(cb: () => void): void
-  /** 任一窗口是否聚焦（通知裁决的窗口焦点事实）。 */
+  /** 任一窗口是否聚焦（通知裁决的窗口注意力事实）：true = 窗口可见且未遮挡、
+   *  key window、应用处于前台。设计语义单源 = design 19 §3.3（Swift 侧由
+   *  `isKeyWindow && foregroundAllowed` 派生；隐藏/最小化/遮挡/应用失活均为
+   *  false）。Electron 冻结实现 = `win.isVisible() && win.isFocused()`（不含遮挡/
+   *  应用激活收窄，归档面不回填本语义）。 */
   isFocused(): boolean
   /** 窗口激活腿（D3）：restore+focus，无窗则重建，完成后 resolve。两个消费者 =
    *  通知 click 的宿主实现与 core 的 `dsh-chamber://open` 深链（只抬升已有主窗）。 */

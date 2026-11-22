@@ -20,7 +20,7 @@ export type WindowCloseBehavior = 'hide-to-tray' | 'quit';
 export interface ChamberNotificationSettings {
   /** 主开关；默认 false（低打扰，用户显式开启）。 */
   enabled: boolean
-  /** 聚焦模式：hidden-only 仅在窗口不可见时打扰；always 始终（正在查看的会话除外）。 */
+  /** 通知时机：hidden-only 仅在窗口不在前台、不可见或被遮挡时打扰；always 始终（正在查看的会话除外）。 */
   mode: 'hidden-only' | 'always'
   /** 会话完成（running→idle 边沿）。 */
   onComplete: boolean

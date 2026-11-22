@@ -354,7 +354,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       </div>
 
       {/* 通知（no new nav entry）：主开关 + 启用后才展开的子设置（通知时机
-          hidden-only/always + 事件开关 complete/ask/request + 发送测试通知）；
+          hidden-only（窗口不在前台/不可见或被遮挡时）/always + 事件开关 complete/ask/request + 发送测试通知）；
           主开关关闭时子设置收起，配置项仍在。主开关是无边框披露行，子设置是唯一
           一张卡片——通知组只有一层边框。 */}
       <div className={css.generalGroup}>

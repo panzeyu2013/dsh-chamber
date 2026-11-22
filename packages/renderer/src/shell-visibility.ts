@@ -3,27 +3,40 @@
  *
  * 事实唯一来源 = macOS Swift 壳经 evaluateJavaScript 派发的页面事件
  * `dsh-chamber:shell-visibility`（design 25 §5 E21；宿主事件契约与 macOS 验收项见
- * design 14 §D1）。detail = {visible, occluded}：
+ * design 14 §D1）。detail = {visible, occluded, active?}：
  *  - visible：窗口在屏且未最小化 / 未隐藏（orderOut / 最小化 / Cmd+H → false）；
- *  - occluded：窗口被完全遮挡或不在当前可见 Space（只有 visible 为 true 时才载）。
+ *  - occluded：窗口被完全遮挡或不在当前可见 Space（只有 visible 为 true 时才载）；
+ *  - active：应用是否激活（NSApp.isActive，additive 可选字段；design 14 §D1 注意力门）。
+ *    旧壳 / 首帧 / 测试可能缺席——缺席不得伪造，页面注意力回退 document.hasFocus()
+ *    （page-attention.ts）。
  *
  * 为什么需要它：WKWebView 在「另一 Space / 完全遮挡 / orderOut 隐藏」时
  * `document.visibilityState` 仍是 visible（宿主只有窗口级观察面），只读页面状态
  * 的前台相位门因此从不生效。无事件（浏览器直开 / SSR / 首帧竞态 / 无壳测试）默认
- * 按可见处理——绝不因缺事实停掉前台相位。相位判定只在 background-phase.ts；
- * 恢复补偿另订阅本事件的可见边沿（不新增第二前台门）。
+ * 按可见处理——绝不因缺事实停掉前台相位。相位判定只在 background-phase.ts（相位门
+ * 只看 visible && !occluded，active 不进该门）；页面注意力门（相位 ∧ active/focus）
+ * 只在 page-attention.ts，完成未读与完成横幅共用。恢复补偿另订阅本事件的相位边沿
+ * （不新增第二前台门）。
  */
 export interface ShellVisibilityDetail {
   /** 窗口在屏（未 orderOut、未最小化、应用未隐藏）。 */
   visible: boolean
   /** 窗口被完全遮挡或不在当前可见 Space。 */
   occluded: boolean
+  /**
+   * 应用是否激活（NSApp.isActive）。可选：旧壳 / 首帧 / 无壳测试可能缺席，缺席不得
+   * 伪造——页面注意力回退 document.hasFocus()（page-attention.ts）。
+   */
+  active?: boolean
 }
 
 /** 宿主 → 页面事件名（跨语言契约：Swift 侧同一字面量）。 */
 export const SHELL_VISIBILITY_EVENT = 'dsh-chamber:shell-visibility'
 
-/** 缺事实时的默认值：可见（保持门控旧行为）。 */
+/**
+ * 缺事实时的默认值：可见（保持门控旧行为）。active 刻意缺席（不是 active: false）：
+ * 无壳 / 旧壳 / 首帧的注意力回退必须由页面事实（document.hasFocus）表达。
+ */
 export const SHELL_VISIBILITY_DEFAULT: ShellVisibilityDetail = Object.freeze({
   visible: true,
   occluded: false,
@@ -32,11 +45,14 @@ export const SHELL_VISIBILITY_DEFAULT: ShellVisibilityDetail = Object.freeze({
 /** 事件 detail 归一（纯函数；异形 / 缺字段一律回落默认可见，不抛错）。 */
 export function normalizeShellVisibilityDetail(detail: unknown): ShellVisibilityDetail {
   if (typeof detail !== 'object' || detail === null) return SHELL_VISIBILITY_DEFAULT
-  const raw = detail as { visible?: unknown; occluded?: unknown }
+  const raw = detail as { visible?: unknown; occluded?: unknown; active?: unknown }
   if (typeof raw.visible !== 'boolean') return SHELL_VISIBILITY_DEFAULT
   return {
     visible: raw.visible,
     occluded: typeof raw.occluded === 'boolean' ? raw.occluded : false,
+    // active 只认 boolean；缺省 / 非法 = **键缺席**（不是 active: undefined）——无壳 /
+    // 旧壳的回退由 page-attention 的 hasFocus 分支表达，默认事实保持两键形状。
+    ...(typeof raw.active === 'boolean' ? { active: raw.active } : {}),
   }
 }
 

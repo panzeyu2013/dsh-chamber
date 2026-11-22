@@ -185,4 +185,30 @@ final class HostFactsDiffTests: XCTestCase {
         XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false, mainWindowAlive: false),
                        ["mainWindowAlive": false, "webViewContentAlive": true, "focused": false])
     }
+
+    /// focused 派生真值表（v3 A7）：语义对齐 Electron isFocused 文档「可见且聚焦」——
+    /// 窗口 key **且**前台相位允许（visible && !occluded）；隐藏/最小化/遮挡/失活都 false。
+    func testFocusedFactCombinesWindowKeyWithTheForegroundPhase() {
+        XCTAssertTrue(MainWindowController.focusedFact(isKeyWindow: true, foregroundAllowed: true))
+        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: true, foregroundAllowed: false),
+                       "an occluded/hidden window must not count as focused even while key")
+        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: false, foregroundAllowed: true),
+                       "a visible window without key is not focused")
+        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: false, foregroundAllowed: false))
+    }
+
+    /// resetFacts 的 foregroundAllowed 参数（v3 A7）：默认 true 只为既有精确字典断言兼容；
+    /// 显式 false 时窗口仍 key 也必须推 focused=false（重启快照不得谎报「可打扰」）。
+    func testResetFactsDeriveFocusedFromTheForegroundPhase() {
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true)["focused"], true,
+                       "the default keeps the pre-existing snapshot compatible")
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true, foregroundAllowed: false),
+                       ["mainWindowAlive": true, "webViewContentAlive": true, "focused": false])
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false, mainWindowAlive: false,
+                                                       foregroundAllowed: true),
+                       ["mainWindowAlive": false, "webViewContentAlive": true, "focused": false])
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true, mainWindowAlive: false,
+                                                       foregroundAllowed: false),
+                       ["mainWindowAlive": false, "webViewContentAlive": true, "focused": false])
+    }
 }

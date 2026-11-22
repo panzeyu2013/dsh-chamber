@@ -30,6 +30,7 @@ import {
   describeNativeNotificationFailure,
   interpretNativeNotificationReply,
   notificationDeliveryKey,
+  notificationWindowAttended,
   shouldFocusApplicationBeforeShowing,
   showNativeNotificationHonestly,
   validateNotificationRequest,
@@ -435,6 +436,30 @@ test('decideNotification: happy path shows', () => {
     assert.deepEqual(show(makeRequest({ kind }), settings, false), { action: 'show' });
   }
 });
+test('notificationWindowAttended: the focused edge is the one notification attention fact (single probe, no swallow)', () => {
+  let calls = 0
+  assert.equal(notificationWindowAttended({ isFocused: () => { calls += 1; return true } }), true,
+    'an attended (focused, foreground-visible) window passes through')
+  assert.equal(calls, 1, 'the helper reads the host edge exactly once')
+  assert.equal(notificationWindowAttended({ isFocused: () => false }), false,
+    'an unattended (hidden/minimized/occluded/inactive) window passes through')
+  // 宿主 edge 负责异常安全（探测异常 ≡ 未聚焦）；本 helper 是纯委托：不吞错、不伪造 false。
+  assert.throws(() => notificationWindowAttended({ isFocused: () => { throw new Error('probe boom') } }), /probe boom/)
+})
+test('shell-ipc-settings: the skip receipt keeps the frozen shape and names the decision reason', () => {
+  const source = stripComments(readFileSync(new URL('../../shell-ipc-settings.ts', import.meta.url), 'utf8'))
+  // 唯一注意力取数点：focused 事实经 helper 进入（Swift key&&foregroundAllowed / Electron visible&&focused），
+  // 不得在裁决侧裸读 edge。
+  assert.ok(source.includes('notificationWindowAttended(deps.edges)'),
+    'the focused fact enters through the one attention helper')
+  assert.ok(!source.includes('edges.isFocused()'), 'no bare focus probe outside the helper')
+  // 回执形状 {shown,outcome,error?} 不变；decision.reason 只并入既有 error 文本（design 19 §4.1），
+  // 不新增字段（冻结 preload.cts / global.d.ts 镜像与 ipc-surface-mirror golden 零变化）。
+  assert.ok(source.includes("return { shown: false, outcome: 'suppressed', error: `notification suppressed: ${decision.reason}` };"),
+    'the skip reply names decision.reason inside the existing error string')
+  assert.ok(!source.includes('notification suppressed by settings or window focus'),
+    'the old generic suppression string must be gone')
+})
 test('notification-open delivery retains send-return work, replays FIFO after reload, and frees capacity only on ACK', () => {
   const queue = new BoundedAckDeliveryQueue<NotificationOpenIntent>(2)
   const a = { sourceId: 'local', sourceFingerprint: 'local', sessionId: 's1', sourceGeneration: 1 }

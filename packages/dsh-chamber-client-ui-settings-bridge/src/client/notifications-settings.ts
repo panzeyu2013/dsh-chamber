@@ -10,7 +10,9 @@ import type { ChamberSettings } from '../ambient/settings-bridge.d.ts'
 export interface NotificationsSettings {
   /** Master switch; default false (low disturbance — opt-in). */
   enabled: boolean
-  /** 'hidden-only' (default) | 'always' (still exempts the session on screen). */
+  /** 'hidden-only' (default: notify only while the window is not attended — in the
+   *  background, hidden, or occluded) | 'always' (still exempts the session on
+   *  screen). */
   mode: 'hidden-only' | 'always'
   /** Notify when a session completes; default true. */
   onComplete: boolean

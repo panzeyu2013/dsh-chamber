@@ -534,7 +534,8 @@ export interface ChamberDebugSettings {
 export interface ChamberNotificationSettings {
   /** 主开关（默认 false：低打扰，用户显式开启）。 */
   enabled: boolean
-  /** 通知时机（默认 'hidden-only'：窗口聚焦时不打扰）。 */
+  /** 通知时机（默认 'hidden-only'：仅窗口不在前台、不可见或被遮挡时不打扰；
+   *  'always' 除正在查看的会话外都发）。 */
   mode: 'hidden-only' | 'always'
   /** 会话完成时（默认 true）。 */
   onComplete: boolean
@@ -637,7 +638,9 @@ export interface NotificationRequest {
   kind: 'complete' | 'ask' | 'request' | 'test'
   title: string
   body: string
-  /** 正在屏幕上查看的会话（主进程再查一次窗口焦点作权威豁免）。 */
+  /** 页面注意力命中（painted ∧ 当前会话 ∧ pageForeground：窗口可见未遮挡且应用前台；
+   *  壳 active 缺失时回退 document.hasFocus）——主进程再查一次窗口注意力作权威豁免
+   *  （design 19 §3.3）。 */
   requireHidden: boolean
   /** 内容水位（host 域）：complete = completedAt ?? updatedAt；ask/request = updatedAt；
    *  缺省即旧调用方（主进程 claim 键退化为四元组，不做推测）。 */

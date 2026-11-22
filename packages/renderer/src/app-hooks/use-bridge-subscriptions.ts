@@ -1038,7 +1038,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
         },
       })
       // 完成点步进：官方位在通道行上，这里只推进 N-ctx 修正臂（completion-arm.ts）；
-      // 「谁在阅读」= paintedView ∩ 该来源 current（focus 只属于通知门）。
+      // 「谁在阅读」= attended（paintedView ∧ 页面注意力 page-attention；focus 只作缺壳回退）。
       stepCompletionArmFor(sourceId)
     }
     return chamberBridge.onRuntimeReport((sourceId, report, sourceFingerprint) => {

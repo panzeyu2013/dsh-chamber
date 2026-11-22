@@ -92,7 +92,7 @@ test('S4/T2 composition: a poll-mode snapshot with baselines>=1 gives listComple
   const seedReport = virtualRuntimeReport(seeded)!
   assert.equal(seedReport.listComplete, true, 'poll 档 baselines≥1 必须给出 listComplete')
   const seed = stepCompletionArm({}, {}, {
-    current: undefined, rows: seedReport.sessions, painted: false,
+    current: undefined, rows: seedReport.sessions, painted: false, foreground: true,
     listComplete: seedReport.listComplete, listKnown: seedReport.listKnown, stale: seedReport.stale, factsOnly: true,
   })
   assert.deepEqual(seed.arms, {}, 'a running row arms nothing')
@@ -100,7 +100,7 @@ test('S4/T2 composition: a poll-mode snapshot with baselines>=1 gives listComple
   const stopped = applySessionFactsDelta(seeded, { cursor: 11, sessions: [{ sessionId: 's1', running: false, updatedAt: 5 }] })
   const stoppedReport = virtualRuntimeReport(stopped.next!)!
   const armed = stepCompletionArm(seed.arms, seed.running, {
-    current: undefined, rows: stoppedReport.sessions, painted: false,
+    current: undefined, rows: stoppedReport.sessions, painted: false, foreground: true,
     listComplete: stoppedReport.listComplete, listKnown: stoppedReport.listKnown, stale: stoppedReport.stale, factsOnly: true,
   })
   assert.deepEqual(armed.arms, { s1: true })
@@ -108,7 +108,7 @@ test('S4/T2 composition: a poll-mode snapshot with baselines>=1 gives listComple
   const gone = applySessionFactsDelta(stopped.next!, { cursor: 12, sessions: [], removedSessionIds: ['s1'] })
   const goneReport = virtualRuntimeReport(gone.next!)!
   const cleared = stepCompletionArm(armed.arms, armed.running, {
-    current: undefined, rows: goneReport.sessions, painted: false,
+    current: undefined, rows: goneReport.sessions, painted: false, foreground: true,
     listComplete: goneReport.listComplete, listKnown: goneReport.listKnown, stale: goneReport.stale, factsOnly: true,
   })
   assert.deepEqual(cleared.arms, {}, 'poll 档离表清臂生效（T2 的验收点）')
@@ -130,6 +130,7 @@ test('projection → arm: a facts-only completion arms its row (G3 composition)'
     current: undefined,
     rows: report.sessions,
     painted: false,
+    foreground: true,
     listComplete: report.listComplete,
     listKnown: report.listKnown,
     stale: report.stale,
@@ -144,6 +145,7 @@ test('projection → arm: an unlatched baselines counter never clears an arm (ab
     current: undefined,
     rows: report.sessions,
     painted: false,
+    foreground: true,
     listComplete: report.listComplete,
     listKnown: report.listKnown,
     stale: report.stale,
@@ -209,6 +211,7 @@ test('R1: a gateway removal clears the client row, its arm and its edge memory, 
     current: undefined,
     rows: virtualRuntimeReport(seeded)!.sessions,
     painted: false,
+    foreground: true,
     listComplete: true,
     listKnown: true,
     stale: false,
@@ -230,6 +233,7 @@ test('R1: a gateway removal clears the client row, its arm and its edge memory, 
     current: undefined,
     rows: removedReport.sessions,
     painted: false,
+    foreground: true,
     listComplete: removedReport.listComplete,
     listKnown: removedReport.listKnown,
     stale: removedReport.stale,
@@ -250,6 +254,7 @@ test('R1: a gateway removal clears the client row, its arm and its edge memory, 
     current: undefined,
     rows: relistedReport.sessions,
     painted: false,
+    foreground: true,
     listComplete: relistedReport.listComplete,
     listKnown: relistedReport.listKnown,
     stale: relistedReport.stale,
@@ -276,6 +281,7 @@ test('R1 counterfactual: a fabricated running:false row (no stop edge in the cli
     current: undefined,
     rows: report.sessions,
     painted: false,
+    foreground: true,
     listComplete: report.listComplete,
     listKnown: report.listKnown,
     stale: report.stale,
@@ -295,6 +301,7 @@ test('projection → arm: an UNKNOWN baselines counter closes the first-seen-idl
     current: undefined,
     rows: report.sessions,
     painted: false,
+    foreground: true,
     listComplete: report.listComplete,
     listKnown: report.listKnown,
     stale: report.stale,

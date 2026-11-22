@@ -11,10 +11,15 @@
  *      source (`factsOnly`, never inferred from `current === undefined`) arms every
  *      row with a fresh host running→idle edge, still one arm per distinct row;
  *   3. memory-only signature (no storage, no clock, no watermarks, no facts);
- *   4. no second clearing rule: re-running, reading (the painted ctx source with that
- *      row as current, or the App's open intent for a facts-only source), or leaving
- *      an authoritative list (source retirement drops the whole table upstream);
+ *   4. no second clearing rule: re-running, reading (the ATTENDED ctx source — painted ∧
+ *      pageForeground — with that row as current, or the App's open intent for a
+ *      facts-only source), or leaving an authoritative list (source retirement drops the
+ *      whole table upstream);
  *   5. fail-closed: a stale report never arms, an absent report freezes both tables.
+ *
+ * 注意力 2 元（v3 注意力模型）：attended = painted && foreground。屏上但应用在后台不算
+ * 「在读」——那类完成必须留点（返回前台即清）；foreground 是页面注意力事实（应用激活 ∧
+ * 文档可见 ∧ 壳窗口可见未遮挡），不是桥选择。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,6 +29,9 @@ const BASE: CompletionArmStepInput = {
   current: 's1',
   rows: { s1: { running: false } },
   painted: false,
+  // helper 默认「窗口在前台」：既有用例只表达 painted 维度；注意力维度的负例显式传
+  // foreground: false（v3 A2：旧用例体不变、标题不动）。
+  foreground: true,
   listComplete: true,
   stale: false,
 }
@@ -53,11 +61,78 @@ test('a steady idle row never arms (arming needs the edge, not the state)', () =
   assert.equal(again.changed, false, 'a second identical idle step is silent')
 })
 
+// 标题逐字保留：scripts/gates/checks/remote-state-injection-matrix.mjs:90 把它当
+// four-surface-consistency 的 live 证据（匹配 = 标题原文）；注意力维度由 helper 默认
+// foreground: true 保持旧语义，新维度用下方独立新用例。
 test('the painted source is reading: no arm, and an armed current clears', () => {
   assert.deepEqual(step({}, { s1: true }, { painted: true }).arms, {})
   const cleared = step({ s1: true }, { s1: true }, { painted: true })
   assert.deepEqual(cleared.arms, {})
   assert.equal(cleared.changed, true)
+})
+
+// ---------------------------------------------------------------------------
+// 注意力维度（v3 注意力模型）：attended = painted && foreground
+// 用户裁决：返回前台即清、ack 不做；屏上但应用在后台的完成必须留点。
+// ---------------------------------------------------------------------------
+
+test('a painted source in the app background arms its current row (foreground is attention, not painted)', () => {
+  // 屏上仍是该来源，但应用不在前台 ⇒ 用户没在看：新鲜 running→idle 边沿必须武装。
+  const next = step({}, { s1: true }, { painted: true, foreground: false })
+  assert.deepEqual(next.arms, { s1: true })
+  assert.equal(next.changed, true)
+  // 同拍也不得当作「已读」清除：background 不是 reading。
+  const kept = step({ s1: true }, { s1: true }, { painted: true, foreground: false })
+  assert.deepEqual(kept.arms, { s1: true }, 'background foreground never clears an armed row')
+})
+
+test('the reading predicate is attended (painted ∧ foreground), never painted alone', () => {
+  const paintedOnly = step({ s1: true }, { s1: true }, { painted: true, foreground: false })
+  assert.deepEqual(paintedOnly.arms, { s1: true }, 'painted but the app is in the background: not reading')
+  const attended = step({ s1: true }, { s1: true }, { painted: true, foreground: true })
+  assert.deepEqual(attended.arms, {}, 'attended: the armed current clears')
+  assert.equal(attended.changed, true)
+})
+
+test('returning to the foreground clears the arm a background completion made', () => {
+  const armed = step({}, { s1: true }, { painted: true, foreground: false })
+  assert.deepEqual(armed.arms, { s1: true })
+  // 回前台且同一 current 仍被 paint：attended 命中 ⇒ 返回即清（不引入第二清除规则）。
+  const cleared = step(armed.arms, armed.running, { painted: true, foreground: true })
+  assert.deepEqual(cleared.arms, {})
+  assert.equal(cleared.changed, true)
+})
+
+test('only the attended current row clears: other rows and a background source keep their arms', () => {
+  const rows = { s1: { running: false }, s2: { running: false } }
+  const attended = step({ s1: true, s2: true }, { s1: true, s2: true }, {
+    painted: true, foreground: true, current: 's1', rows,
+  })
+  assert.deepEqual(attended.arms, { s2: true }, 'attended clears only its current row (no sweep)')
+  const background = step({ s1: true, s2: true }, { s1: true, s2: true }, {
+    painted: true, foreground: false, current: 's1', rows,
+  })
+  assert.deepEqual(background.arms, { s1: true, s2: true }, 'the app in the background is not reading: nothing clears')
+})
+
+test('stale / freeze / list-departure / re-running invariants hold unchanged under the attention model', () => {
+  // stale：后台也不武装（stale 报告不是完成证据），running 记忆仍推进。
+  const stale = step({}, { s1: true }, { painted: true, foreground: false, stale: true })
+  assert.deepEqual(stale.arms, {})
+  assert.deepEqual(stale.running, { s1: false })
+  // freeze：无报告两表冻结（前台/后台同）。
+  const frozen = step({ s1: true }, { s1: true }, { painted: true, foreground: false, rows: undefined })
+  assert.deepEqual(frozen.arms, { s1: true })
+  assert.deepEqual(frozen.running, { s1: true })
+  assert.equal(frozen.changed, false)
+  // 离表：权威列表删行（后台亦然）。
+  const dropped = step({ s1: true }, { s1: true }, { painted: true, foreground: false, rows: {}, listComplete: true })
+  assert.deepEqual(dropped.arms, {})
+  // re-running：重跑清臂（后台亦然）。
+  const rerunning = step({ s1: true }, { s1: true }, {
+    painted: true, foreground: false, rows: { s1: { running: true } },
+  })
+  assert.deepEqual(rerunning.arms, {})
 })
 
 test('reading does not sweep arms of OTHER rows (no second clearing rule)', () => {

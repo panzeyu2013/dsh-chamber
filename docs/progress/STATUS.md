@@ -33,6 +33,7 @@
 
 ### 1.2 通知、未读与归档
 
+- **待裁：pending（ask/request）是否计入被动信号**：未读/完成 = 注意力模型（返回前台即清；ack 不做，design 06 §9）；现行被动面（蓝点 + Dock 角标）只由完成位（官方 `completionUnread` ∪ 修正臂）驱动，pending 仅作窗口内徽标与待办呈现——是否把等待态计入离开前台后的被动信号、如何定义其清除语义未决；判据/落点 = 产品裁决后同步 design 06 §4.3 与 19 §3.7。
 - **目标活跃期通知/未读压制（design 19 §3.2）**：`activation unknown` 需上游只读面；围栏双发（F30）待裁。
 - **事实健康环**：仅无壳 mux 快照、无 in-app 读面；收口 = gateway 采样 + 只读环。
 - **归档清理/管理器（design 24）**：残余 = 上游 wire no-op、维护期 force、保护边界；缺陷 = `errors` 通道混用；清理残留 = projcache 4KB、迁移代际窗口；tombstone 由孤儿清扫收敛。
@@ -101,7 +102,6 @@
 - **dshDesktop.updates.open 语义**：`macos/Sources/DSHChamber/Resources/bridge-shim.js` 把官方的「打开壳自有更新对话流」（上游 `apps/desktop/src/main.ts` 的 `openUpdatePrompt`，含下载/安装确认）映射为一次 `update.check()` ⇒ 契约面错配；`dshDesktop.updates.open` 仍零消费者，设置触发行指示器不消费该通道（chamber 自有入口直接打开设置更新组）。未来页面侧入口（如折叠钮徽标恢复）启用前须先修，否则点开更新变成「什么都没发生」。判据 = 页面调用 `updates.open` 打开可操作的更新确认面而非仅触发一次检查。登记处 = 触点表 §4.5 的 `update-dialog.ts` 行（无对话框为已登记取舍）。
 - **隐藏窗口渲染活性**：遮挡窗采样 WebContent CPU ≤0.96%（多数窗 0.00%）、GPU ≤0.58%，可见窗 WebContent 0.08–3.88%，app（壳）进程 idle wakeups：全遮挡 15s 窗 9.33/s，含可见期的混相窗 15.40/5.22/s，4s 净窗 0–5.75/s（中位 2.0），各进程 footprint 合计 ≈1.74 GB；原始读数（2026-11 用户实机取证）WebContent 24–25% CPU、页面 footprint 3.86–4.0 GB、整机电池约 34 W 的取证条件未区分最小化与另一可见 Space，复现条件待真机 A/B（候选 = 遮挡/隐藏 + 流式活跃，或页面/壳相位门尚未生效的旧构建）。D2/D3 契约见 [design 14 §D1](../design/runtime/14-sleep-background.md) 与 [design 25 §5.7 / §5 E7/E21](../design/desktop/25-macos-swift-native-shell.md)；`build:swift-app` 与真机行为 NOT RUN（测试套件已跑，证据入 PR Validation）。剩余 = 帧/合成与 facts→React 提交仍跑（页面级定时器已按 design 14 §D1 接统一门；vendor 流与 mounted 行权威的降载裁决见 §4.2）；D4 隐藏/电池降 60fps 不采纳（建页后改偏好不生效，design 25 §5.1）；整页释放（D3）按 design 05 §4.1 的 keep-all 裁决为不做（理由见 design 14 §D1 被否方案⑤）。验证 = 遮挡/隐藏 60s CPU 与 idle wakeups A/B + shell.log 事实线 + `pmset -g assertions`。
 - **证据限制（内存归因）**：页面 footprint/峰值 7.4 GB/12.9 M 分配无 durable 归因面（`powermetrics` 需 sudo、`lldb` attach 被 hardened app 拒、无 JS 归因客户端；F1–F3 缺口）——内存只能按页面级 DOM 计数 + 整机 `vm_stat` 判读。
-- **主进程通知 hidden-only 门仍只认 focused 事实**：默认档跳过条件 = `requireHidden` + `anyWindowFocused`（[notifications.ts](../../packages/desktop/notifications.ts) :234-235；`focused` 只由 `didBecomeKey/resignKey` 更新），而 D2 已证明「另一 Space / 完全遮挡」时窗口可能仍 key ⇒ 该状态可能误抑制完成横幅（renderer 的 `requireHidden` 已叠壳可见性事实，主进程门未接；macOS 未证实）。判据 = 遮挡态触发一次完成事件应出现横幅；修法 = Swift 在 `foregroundAllowed=false` 时同步 focused 事实，或该门接收壳可见性事实；需 macOS 验证。
 
 ## 二、差异（功能面 / 外部约束）
 
@@ -173,7 +173,7 @@
 - **通知边界**：P1 只覆盖有壳源；facts-only `beforeBaseline` 不可达；facts-only `subagentCount` 仅谱系已认证（watcher 无谱系保持 presence）；paused drop、complete 复用、schedule/job 不覆盖、侧栏无 goal 视觉。
 - **降级边界**：覆盖四座；不覆盖未激活源/已释放壳（manual/cap/valve 后）/单槽后报/侧栏无动作；租客 body portal 不受 stacking；连接页 tooltip 无 ARIA。
 - **插件**：管理页钉上游结构（`data-plugin-panel`/drag/slot）；重打包无活切换（`restart-required`）；模块表按 id 唯一、跨实例一律复用原 factory（`reuseForeignBuilds`；release/内容证明只决定连接页是否提示，≤8 次校验）；刷新控制面 string-key；pluginGraph 无静默看门狗；两条重载无仲裁；chunk-owner 撤销边界；`/plugins/events` 属上游 HMR。
-- **连接/来源**：open-in 官方页级 localStorage 槽（`dsh.open-in-app.choice`）待按 `chamberBasePath` 分键；N-ctx Markdown 预览的装载期补丁残余见 §1.3「旧版 document-relative 插件的运行期 base 补齐」；`chamberFileApiBase` 仅唯一来源断言；远程会话状态/切源白屏实现闭合、远端空白会话、ui-chat 老代整面失败、未挂载工作区集合仅回声+挂载 push 均按已知降级；`document.hasFocus()` 假设只驱动 `requireHidden`。v1 不做 = 单 store 真融合、控制面会话实时同步、远程实例管理 UI 外壳、跨来源平铺列表。
+- **连接/来源**：open-in 官方页级 localStorage 槽（`dsh.open-in-app.choice`）待按 `chamberBasePath` 分键；N-ctx Markdown 预览的装载期补丁残余见 §1.3「旧版 document-relative 插件的运行期 base 补齐」；`chamberFileApiBase` 仅唯一来源断言；远程会话状态/切源白屏实现闭合、远端空白会话、ui-chat 老代整面失败、未挂载工作区集合仅回声+挂载 push 均按已知降级；`document.hasFocus()` 只在壳 `active` 事实缺失时作页面注意力回退（[design 06 §4.2](../design/client/06-sidebar-enhancements.md) ⑤）。v1 不做 = 单 store 真融合、控制面会话实时同步、远程实例管理 UI 外壳、跨来源平铺列表。
 - **页面级 localStorage 键跨实例串扰（当前 pin 新增）**：`ui-sidebar-files` 的 `dsh.sidebar-files.workspace-search.v1`（`search-preferences.ts`）是页面级键——N-ctx 下两个来源打开**同一路径**时共享同一份工作区搜索偏好（排除规则/隐藏文件）。先例 = 同一文档级键 `dsh.sessions.current` 的 `chamberSelectionScope` 补丁（`packages/renderer/scripts/vendor-patches.mjs`，读 `chamberBasePath`）；但 `ui-sidebar-files` 经宿主图 extra row（非复合内联）加载，本仓构建期补丁**不作用于它**。**默认接受**（偏好级、非事实级）；未来分键需上游自身按 entry 分键或把该行纳入覆盖集。最便宜验证 = 两来源打开同一路径，改排除规则后切源看是否互相可见。
 - **UI 偏差**：B1–B10（默认 manual、unpin 回自然位、家族优先、树展开/拖拽约束、拖拽不切 orderBy、账号成员=可见行、搜索链、归档无 toast、行窗口配额、fork 落尾）；`sidebar.workspaces` 声明不渲染；菜单 `compact`；窗口标题冻结；轨道点裁切；hover 几何无指针腿；导轨无锚点/aria；Git 错误码重叠；折叠 folder 字形不补源码锁。
 - **归档**：成功不就地提示 + 筛选降级（未知集禁用整轴）；两段式旧宿主降级（第二调上抛，不做版本探测）；已知代价 = 墓碑撤下后筛选禁用至挂载。

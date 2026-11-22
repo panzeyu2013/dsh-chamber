@@ -641,7 +641,8 @@ test('facts-health: one breadcrumb per signature change, never-throw on hostile 
 test('completion-arm wiring: the arm step is the one gate-protected, never-throw, memory-only entry', () => {
   const hook = readFileSync(
     fileURLToPath(new URL('../../src/app-hooks/use-notifications.ts', import.meta.url)), 'utf8')
-  // 唯一实体：读 facts 通道行 + painted，步进 client-core 的纯规则，写唯一 store。
+  // 唯一实体：读 facts 通道行 + painted + 页面注意力 foreground，步进 client-core 的纯规则
+  // （attended = painted ∧ foreground 只在规则本体里计算），写唯一 store。
   const step = bracedBlockFrom(hook, 'const stepArmNow = useCallback(')
   assert.ok(step.includes('factsStore.getSnapshot().runtime[sourceId]'), 'the step reads the facts channel row')
   assert.ok(step.includes('virtualRuntimeReport('), 'a no-ctx source falls back to the facts-only projection')
@@ -650,6 +651,10 @@ test('completion-arm wiring: the arm step is the one gate-protected, never-throw
   assert.doesNotMatch(step, /factsOnly:[^,\n]*current === undefined/,
     'provenance must never be inferred from current === undefined')
   assert.ok(step.includes('viewStore.getSnapshot().painted === sourceId'), 'reading is the PAINTED fact, not the bridge selection')
+  assert.ok(step.includes('foreground: currentPageForeground()'),
+    'attention foreground is its own required input (page attention fact), never folded into painted')
+  assert.ok(!step.includes('attended'),
+    'attended = painted && foreground stays the client-core rule; the call site never re-derives it')
   assert.ok(step.includes('stepCompletionArm('), 'the rule body is the client-core pure step (no second ledger)')
   assert.ok(step.includes('if (!next.changed) return'), 'an equal step is silent')
   assert.ok(step.includes('completedStore.setSource(sourceId, next.arms)'), 'the step writes the one completed store')
@@ -677,6 +682,21 @@ test('completion-arm wiring: the arm step is the one gate-protected, never-throw
     'the painted source keeps its step')
   assert.ok(hook.includes('for (const sourceId of touched) stepCompletionArmFor(sourceId)'),
     'the open-intent edge steps every intent source, not only the painted one')
+  // 注意力边沿（v2 §2.6 / design 06 §4.2）：「返回前台即清」的唯一读取边沿 = 页面注意力
+  // false→true 时**只步进屏上来源**（经补臂重入闸）——不建 React state/ref 镜像、不扫全来源、
+  // 不直调实体；attended 命中 current 的清除仍由 client-core 规则完成。
+  assert.ok(hook.includes("import { currentPageForeground, subscribePageForeground } from '../page-attention.ts'"),
+    'the page attention fact and its edge have one owner module')
+  const attentionEdge = bracedBlockFrom(hook, 'subscribePageForeground((foreground) => {')
+  assert.ok(attentionEdge.includes('if (!foreground) return'),
+    'the return edge steps on false→true only; leaving the foreground is not a read')
+  assert.ok(attentionEdge.includes('const painted = viewStore.getSnapshot().painted'),
+    'the return edge reads the painted fact synchronously from the one view store')
+  assert.ok(attentionEdge.includes('if (painted !== undefined) stepCompletionArmFor(painted)'),
+    'the return edge steps exactly the painted source through the re-entrancy gate')
+  assert.ok(!attentionEdge.includes('stepArmNow('), 'the return edge never calls the raw entity (gate bypass)')
+  assert.ok(!attentionEdge.includes('Object.keys'),
+    'the return edge steps the painted view only, never a source sweep')
   // reconcile 侧：只有 virtual 批是新壳报（shellReport: true），有壳路径复用当前壳行。
   const reconcile = bracedBlockFrom(hook, 'const reconcileCompletionsNow = useCallback(')
   assert.ok(reconcile.includes('virtualRuntimeReport(snapshot.session[sourceId])'),
