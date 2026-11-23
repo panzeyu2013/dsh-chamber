@@ -6,6 +6,7 @@
     "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo",
     "erasableSyntaxOnly": false,
     "paths": {
+      "@deepseek-ai/dsh-client-config/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-config/src/types.ts"],
       "@deepseek-ai/dsh-client-connection/client": ["../dsh-client-connection/src/client/index.ts"],
       "@deepseek-ai/dsh-llm/assistant-stream": ["../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/assistant-stream.ts"],
       "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"]

@@ -41,6 +41,9 @@
       "@deepseek-ai/dsh-tools/presentation": [
         "../../vendor/harness-packages/@deepseek-ai/dsh-tools/src/presentation.ts"
       ],
+      "@deepseek-ai/dsh-client-config/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-client-config/src/types.ts"
+      ],
       "@deepseek-ai/dsh-client-connection/client": [
         "../dsh-client-connection/src/client/index.ts"
       ],

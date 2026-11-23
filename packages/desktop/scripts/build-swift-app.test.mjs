@@ -752,8 +752,8 @@ test('⑥ sidecar 拷贝：payload Node / office 资产进 .app；旧布局 node
     assert.ok((statSync(payloadNode).mode & 0o111) !== 0, 'payload node 必须可执行')
     assert.ok(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office', 'SKILL.md')),
       'office 技能资产必须随装配进 .app')
-    assert.ok(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office-xlsx', 'SKILL.md')),
-      'rc.2 资产面：四个 SKILL.md 都在场（sidecar.md 已随旧技能一起删除）')
+    assert.equal(existsSync(path.join(layout.sidecarDir, 'office-skills', 'office-xlsx', 'SKILL.md')), false,
+      'alpha.2 资产面：旧 office-xlsx 技能目录不得进 .app（上游收窄到单 office skill）')
     assert.ok(result.layout)
 
     // 反例：顶层 node*/dsh-chamber-helper（旧布局残留）→ loud。

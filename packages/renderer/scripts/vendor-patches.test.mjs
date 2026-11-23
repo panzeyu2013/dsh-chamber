@@ -71,7 +71,8 @@ const FILES = {
   reading: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-reading.ts',
   workspaceNavigation: VENDOR + 'dsh-client-ui-workspace/src/client/navigation.ts',
   workspaceIndex: VENDOR + 'dsh-client-ui-workspace/src/client/index.ts',
-  themeStyles: VENDOR + 'dsh-client-ui-theme/src/client/styles.ts',
+  // ui-theme styles.ts is RETIRED at alpha.1 (upstream replaced the inline-import
+  // style-tag installer with bundle CSS imports; see RETIRED_PATCHES).
   iconSprite: VENDOR + 'dsh-client-ui-theme/src/client/icon-sprite.ts',
   chatViewport: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
 }
@@ -99,7 +100,6 @@ const IDS = {
   workspaceNavigation: '/x/vendor/harness-checkout/packages/client/ui-workspace/src/client/navigation.ts',
   workspaceIndex: '/x/vendor/harness-checkout/packages/client/ui-workspace/src/client/index.ts',
   readingReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
-  themeStylesReal: '/x/vendor/harness-checkout/packages/client/ui-theme/src/client/styles.ts',
   iconSpriteReal: '/x/vendor/harness-checkout/packages/client/ui-theme/src/client/icon-sprite.ts',
   chatViewportReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-viewport.ts',
 }
@@ -264,7 +264,8 @@ test('the chat view file images resolve from the per-entry base path (executed m
   assert.notEqual(patched, undefined)
   assert.deepEqual(patched.applied, ['dsh-client-ui-chat/src/client/chat/ChatView.tsx'])
   assert.ok(patched.code.includes('useInteractionIds, dispatchInteraction, t, fileDrag, chamberFileApiBase,'), 'the prop is destructured out of the composed props')
-  assert.ok(patched.code.includes('}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])'), 'the memo depends on the base path')
+  assert.ok(patched.code.includes('}), [chamberFileApiBase, directory, t, fileDrag, sessionId])'),
+    'the memo depends on the base path (and keeps upstream\'s selectSessionDirectory dependency)')
 
   // Behaviour: evaluate the patched memo with a recording resolver; the base it
   // hands the resolver must be this entry's own file-API directory, and the
@@ -275,7 +276,7 @@ test('the chat view file images resolve from the per-entry base path (executed m
     assert.notEqual(start, -1)
     assert.notEqual(end, -1)
     const js = esbuild.transformSync(code.slice(start, end) + NL + '  ' + deps + NL + 'return fileImages', { loader: 'tsx' }).code
-    const makeFileImages = new Function('useMemo', 'fileMediaUrl', 'resolveWorkspacePath', 'sessionFileAddress', 'document', 'cwd', 't', 'chamberFileApiBase', 'fileDrag', 'sessionId', js)
+    const makeFileImages = new Function('useMemo', 'fileMediaUrl', 'resolveWorkspacePath', 'sessionFileAddress', 'document', 'directory', 't', 'chamberFileApiBase', 'fileDrag', 'sessionId', js)
     let seen
     const images = makeFileImages(
       (factory) => factory(),
@@ -293,13 +294,13 @@ test('the chat view file images resolve from the per-entry base path (executed m
     return seen
   }
   // Upstream fallback: absent OR empty base keeps the document itself.
-  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])', undefined), 'http://127.0.0.1:30800/|/tmp/a.png')
-  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])', ''), 'http://127.0.0.1:30800/|/tmp/a.png',
+  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, directory, t, fileDrag, sessionId])', undefined), 'http://127.0.0.1:30800/|/tmp/a.png')
+  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, directory, t, fileDrag, sessionId])', ''), 'http://127.0.0.1:30800/|/tmp/a.png',
     'an empty chamber fact stays document-relative, not origin-root')
   // Chamber: the per-entry prefix becomes the resolver's directory.
-  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, cwd, t, fileDrag, sessionId])', '/api/i/local'), 'http://127.0.0.1:30800/api/i/local/|/tmp/a.png')
+  assert.equal(baseFor(patched.code, '}), [chamberFileApiBase, directory, t, fileDrag, sessionId])', '/api/i/local'), 'http://127.0.0.1:30800/api/i/local/|/tmp/a.png')
   // Negative control: the unpatched memo ignores the prop entirely.
-  assert.equal(baseFor(source, '}), [cwd, t, fileDrag, sessionId])', '/api/i/local'), 'http://127.0.0.1:30800/|/tmp/a.png')
+  assert.equal(baseFor(source, '}), [directory, t, fileDrag, sessionId])', '/api/i/local'), 'http://127.0.0.1:30800/|/tmp/a.png')
 })
 
 
@@ -562,7 +563,18 @@ function schedulerHarness(code, { appendPublication = 'animation-frame' } = {}) 
     getSnapshot: () => eventWindow,
     subscribe: (callback) => { listener = callback; return () => { listener = undefined } },
   }
-  new BoundConversation(feed, assembler)
+  // 0.2.3-alpha.1: the binding follows the window only while a reference retains the
+  // `conversation` facet; the constructor takes the retention snapshot and `start()`
+  // installs the feed subscription (previously the constructor did both).
+  const retained = {
+    getSnapshot: () => true,
+    subscribe: () => () => {},
+  }
+  new BoundConversation(feed, assembler, retained).start()
+  // alpha.1's start() folds the retained window once (an initial flush); the scheduler
+  // assertions below measure PUBLICATION-driven flushes only, so the baseline is cleared.
+  flushes.length = 0
+  frames.length = 0
   const emit = () => {
     revision += 1
     eventWindow = { revision, change: { kind: 'append', entries: [{}] }, hasMore: false }
@@ -1026,6 +1038,10 @@ test('the live registry declares a retirement form per patch and no orphan artif
   assert.deepEqual(RETIRED_PATCHES.map((entry) => entry.vendorFile), [
     'dsh-client-ui-primitives/src/TextShimmer.module.css',
     'dsh-util-values/src/index.ts',
+    // 0.2.3-alpha.1: upstream compiles theme CSS into bundle resources (plain CSS
+    // imports) instead of appending per-shell <style data-plugin-css> tags, so the
+    // page-global stylesheet singleton patch has nothing left to patch.
+    'dsh-client-ui-theme/src/client/styles.ts',
   ])
   for (const entry of RETIRED_PATCHES) {
     assert.equal(typeof entry.reason, 'string')
@@ -1111,6 +1127,8 @@ test('the delivery-card file actions carry the per-entry base path (executed pat
         IconChevronUpOutlineRegular: function IconChevronUpOutlineRegular() {},
         presentedFileUrl: (sessionId, seq, index) => 'api/present.open?sessionId=' + sessionId + '&seq=' + seq + '&index=' + index,
         changesSummaryUrl: (sessionId, seq) => 'api/changes.summary?sessionId=' + sessionId + '&seq=' + seq,
+        // 0.2.3-alpha.1: relative paths resolve from the Session's CURRENT directory.
+        selectSessionDirectory: (state, id) => state.byId[id]?.cwd,
       },
       binding: 'Deliverables',
     })
@@ -1173,6 +1191,9 @@ test('the review file actions carry the per-entry base path (executed patched co
         changesDiffUrl: diffUrl,
         changedFileUrl: changedUrl,
         fileAddressFor: () => '/w/a.txt',
+        // 0.2.3-alpha.1: current-directory selection + workspace-relative resolution.
+        selectSessionDirectory: (state, id) => state.byId[id]?.cwd,
+        resolveWorkspacePath: (_cwd, path) => path,
         GROUPED: { format: (value) => String(value) },
         Counts: function Counts() {}, FileDiff: function FileDiff() {}, Menu: function Menu() {},
         PathLabel: function PathLabel() {}, Tooltip: function Tooltip() {},
@@ -1405,7 +1426,6 @@ test('each patch artifact marker matches its own bundled source, and no other (f
     { vendorFile: 'dsh-client-ui-attachment/src/client/ComposerAttachments.tsx', key: 'attachmentComponent', real: IDS.attachmentComponentReal, loader: 'tsx', route: '' },
     { vendorFile: 'dsh-client-ui-workspace/src/client/navigation.ts', key: 'workspaceNavigation', real: IDS.workspaceNavigation, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-workspace/src/client/index.ts', key: 'workspaceIndex', real: IDS.workspaceIndex, loader: 'ts', route: '' },
-    { vendorFile: 'dsh-client-ui-theme/src/client/styles.ts', key: 'themeStyles', real: IDS.themeStylesReal, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-theme/src/client/icon-sprite.ts', key: 'iconSprite', real: IDS.iconSpriteReal, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts', key: 'chatViewport', real: IDS.chatViewportReal, loader: 'ts', route: '' },
   ]
@@ -1703,59 +1723,11 @@ test('the upstream viewport-left reset and dragend still clear the overlay (esca
 })
 
 /* ------------------------------------------------------------------------- *
- * ui-theme page-global singletons: eight stylesheets + the icon sprite
+ * ui-theme icon-sprite page-global singleton. The stylesheet half of this
+ * section RETIRED at 0.2.3-alpha.1: upstream now compiles theme CSS into bundle
+ * resources (plain CSS imports), so there is no per-shell <style> installer to
+ * dedupe (RETIRED_PATCHES owns the fence).
  * ------------------------------------------------------------------------- */
-
-/** Upstream sheet order and the fixture CSS bodies the patched module emits. */
-const THEME_STYLE_NAMES = [
-  'base.css', 'corner-shape.css', 'design-platform.css', 'focus.css',
-  'onboarding.css', 'scrollbar.css', 'gradient-shadow-text.css', 'shiki.css',
-]
-const THEME_STYLE_CSS = THEME_STYLE_NAMES.map((name) => '/* ' + name + ' */')
-
-/** One fake page (head shared by N module instances) for the stylesheet tests. */
-function createThemePage() {
-  const head = []
-  const documentStub = {
-    defaultView: null,
-    head: {
-      // Real DOM appendChild moves an existing child instead of duplicating it.
-      appendChild: (element) => {
-        const existing = head.indexOf(element)
-        if (existing !== -1) head.splice(existing, 1)
-        head.push(element)
-      },
-    },
-    createElement: (tag) => {
-      assert.equal(tag, 'style', 'the patched theme installer still creates <style> elements')
-      return {
-        dataset: {},
-        textContent: '',
-        removed: false,
-        get isConnected() {
-          return head.includes(this)
-        },
-        remove() {
-          this.removed = true
-          const index = head.indexOf(this)
-          if (index !== -1) head.splice(index, 1)
-        },
-      }
-    },
-  }
-  return { document: documentStub, head }
-}
-
-/** Evaluate the patched (or upstream) styles module against one fake page. */
-function loadThemeStyles(code, documentStub) {
-  const start = code.indexOf('const PLUGIN_ID =')
-  assert.notEqual(start, -1, 'theme styles slice start marker not found')
-  const js = esbuild.transformSync(unexport(code.slice(start)), { loader: 'ts' }).code
-  return new Function(
-    'document', 'base', 'cornerShape', 'designPlatform', 'focus', 'onboarding', 'scrollbar', 'gradientShadowText', 'shiki',
-    js + NL + 'return installThemeStyles',
-  )(documentStub, ...THEME_STYLE_CSS)
-}
 
 /** Cordis ctx surface these modules use: inline effects + captured event listeners. */
 function createThemeCtx() {
@@ -1780,81 +1752,6 @@ function createThemeCtx() {
     },
   }
 }
-
-test('the theme stylesheets are page-global singletons with refcounting (executed patched installer)', () => {
-  const source = readFileSync(FILES.themeStyles, 'utf8')
-  const patched = applyVendorPatches(IDS.themeStylesReal, source)
-  assert.notEqual(patched, undefined)
-  assert.deepEqual(patched.applied, ['dsh-client-ui-theme/src/client/styles.ts'])
-  assert.ok(patched.code.includes("Symbol.for('dsh-chamber:page-theme-styles')"),
-    'the page registry is keyed on a page-global symbol')
-  assert.ok(patched.code.includes('acquirePageStyle(name, css)'),
-    'the install loop routes through the page-global acquire')
-
-  const page = createThemePage()
-  const ctxA = createThemeCtx()
-  const ctxB = createThemeCtx()
-  // Two INDEPENDENT module evaluations = the N-ctx case (each shell may run its own bundle instance).
-  const installA = loadThemeStyles(patched.code, page.document)
-  const installB = loadThemeStyles(patched.code, page.document)
-  installA(ctxA)
-  assert.equal(page.head.length, 8, 'one shell publishes the eight theme sheets')
-  installB(ctxB)
-  assert.equal(page.head.length, 8, 'a second bundle instance reuses the same eight nodes')
-  for (const [index, element] of page.head.entries()) {
-    assert.equal(element.dataset.plugin, '@deepseek-ai/dsh-client-ui-theme')
-    assert.equal(element.dataset.pluginCss, '@deepseek-ai/dsh-client-ui-theme/' + THEME_STYLE_NAMES[index])
-    assert.equal(element.textContent, THEME_STYLE_CSS[index])
-  }
-  ctxB.dispose()
-  assert.equal(page.head.length, 8, 'a surviving owner keeps the sheets alive')
-  ctxA.dispose()
-  assert.equal(page.head.length, 0, 'the last owner removes every sheet')
-  // The registry entry is released too: the next mount publishes a fresh set.
-  const ctxC = createThemeCtx()
-  installA(ctxC)
-  assert.equal(page.head.length, 8, 'the page registry entry is gone after the last owner disposed')
-  ctxC.dispose()
-
-  // An official-layout / single-instance page must keep the upstream DOM exactly.
-  const patchedPage = createThemePage()
-  loadThemeStyles(patched.code, patchedPage.document)(createThemeCtx())
-  const upstreamPage = createThemePage()
-  loadThemeStyles(source, upstreamPage.document)(createThemeCtx())
-  const describe = (head) => head.map((element) => [element.dataset.plugin, element.dataset.pluginCss, element.textContent])
-  assert.equal(upstreamPage.head.length, 8)
-  assert.deepEqual(describe(patchedPage.head), describe(upstreamPage.head),
-    'a single-instance page keeps the upstream stylesheet DOM')
-
-  // Negative control: upstream appends eight sheets per bundle instance (the measured 575 <style> page).
-  const rawPage = createThemePage()
-  loadThemeStyles(source, rawPage.document)(createThemeCtx())
-  loadThemeStyles(source, rawPage.document)(createThemeCtx())
-  assert.equal(rawPage.head.length, 16, 'negative control: upstream appends eight sheets per bundle instance')
-})
-
-test('a detached shared sheet is re-attached by the next acquire (external all-document sweep)', () => {
-  const source = readFileSync(FILES.themeStyles, 'utf8')
-  const patched = applyVendorPatches(IDS.themeStylesReal, source)
-  assert.notEqual(patched, undefined)
-  const page = createThemePage()
-  const ctxA = createThemeCtx()
-  const install = loadThemeStyles(patched.code, page.document)
-  install(ctxA)
-  assert.equal(page.head.length, 8)
-  const first = page.head[0]
-  // Simulate an external removeOwnedStyles-style sweep: the nodes are gone, the owner still lives.
-  page.head.length = 0
-  assert.equal(first.isConnected, false, 'the fixture models real DOM membership')
-  const ctxB = createThemeCtx()
-  install(ctxB)
-  assert.equal(page.head.length, 8, 'a newly mounted shell re-attaches the shared sheets')
-  assert.ok(page.head.every((element) => element.isConnected === true))
-  ctxB.dispose()
-  assert.equal(page.head.length, 8, 'the original owner still holds its refcount')
-  ctxA.dispose()
-  assert.equal(page.head.length, 0, 'last owner removes the re-attached sheets')
-})
 
 /** One fake SVG page (body shared by N module instances) for the sprite tests. */
 function createSpritePage() {

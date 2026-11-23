@@ -4,7 +4,7 @@
  *
  *   - `@deepseek-ai/dsh-tool-workspace-dependencies` (the primary-runtime payload behind
  *     the `load_workspace_dependencies` tool), and
- *   - `@deepseek-ai/dsh-skill-office` (the four Office skill directories, mounted with
+ *   - `@deepseek-ai/dsh-skill-office` (the Office skill directory, mounted with
  *     an explicit `assetRoot` pointing at the prune-surviving sibling copy).
  *
  * rc.2 moved Office into the web-app bundle: the bundle's own `skill-office` row mounts
@@ -105,12 +105,9 @@ const STARTUP_PLUGIN_REQUIRED_KEYS: Readonly<Record<string, readonly string[]>> 
   [STARTUP_PLUGIN_ROWS.officeSkills.id]: ['assetRoot'],
 }
 
-/** The four Office skill directories dsh-skill-office loads (rc.2 SKILL_NAMES). */
+/** The Office skill directory dsh-skill-office loads (alpha.2 SKILL_NAMES = ['office']). */
 const OFFICE_SKILL_NAMES = [
   'office',
-  'office-docx',
-  'office-pptx',
-  'office-xlsx',
 ] as const
 
 /** The upstream packages the active workspace must install. */
@@ -260,8 +257,7 @@ function hasPythonSitePackages(libDir: string): boolean {
     /^python\d+\.\d+$/u.test(entry) && isDirectory(join(libDir, entry, 'site-packages')))
 }
 
-/** The Office assets gate: the four skill directories each with SKILL.md (the shared
- *  office/references/sidecar.md is not shipped). */
+/** The Office assets gate: the single `office` skill directory with its SKILL.md. */
 function missingOfficeAssets(officeSkillsDir: string): string[] {
   const missing: string[] = []
   for (const skillName of OFFICE_SKILL_NAMES) {

@@ -12,8 +12,9 @@
  *    provider's `remoteCapable` entries (the VS Code Remote-SSH carrier).
  *
  * The slot is session-scoped, so the component receives the per-header
- * `sessionId` and the framework's global `useWorkspaces` hook — no direct ctx
- * store access. Per-entry facts ride this ctx (`chamberInstanceId`,
+ * `sessionId`, the framework's global `useWorkspaces` hook and the global
+ * `useSessions` hook (the session's current-directory projection) — no direct
+ * ctx store access. Per-entry facts ride this ctx (`chamberInstanceId`,
  * `chamberTransport`, `chamberSourceFingerprint`): the source id and transport
  * decide the matrix, and the fingerprint is the exact-boot proof the trusted
  * main process verifies before a launch. This entry owns no connection carrier.

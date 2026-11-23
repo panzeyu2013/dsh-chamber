@@ -541,12 +541,18 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/client'
 declare module '@deepseek-ai/dsh-client-ui-settings/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-general/client'
 declare module '@deepseek-ai/dsh-client-ui-settings-models/client'
-declare module '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
-declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 declare module '@deepseek-ai/dsh-client-ui-session/client'
+// alpha.1: the Session status table split out of ui-session (the composite registers it
+// first-screen; `uiSession.sessionStatus` is its nested service).
+declare module '@deepseek-ai/dsh-client-ui-session-status/client'
 declare module '@deepseek-ai/dsh-client-ui-skill/client'
 declare module '@deepseek-ai/dsh-client-ui-subagent/client'
 declare module '@deepseek-ai/dsh-client-ui-theme/client'
+// alpha.1: browser-synced plugin Config types (per-field volatile references) and the
+// HMR client's self-mounted `pluginEvents` Remote face.
+declare module '@deepseek-ai/dsh-client-config'
+declare module '@deepseek-ai/dsh-client-config/types'
+declare module '@deepseek-ai/dsh-client-hmr/remote'
 declare module '@deepseek-ai/dsh-client-ui-tool/client'
 declare module '@deepseek-ai/dsh-client-ui-trajectory/client'
 declare module '@deepseek-ai/dsh-client-ui-user-questions/client'

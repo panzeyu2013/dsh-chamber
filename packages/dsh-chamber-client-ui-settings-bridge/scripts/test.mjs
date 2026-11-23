@@ -20,6 +20,8 @@ const GROUPS = {
   runtime: [
     'test/runtime/gateway-runtime-api.test.ts',
     'test/runtime/runtime-management.test.ts',
+    // N1（design 18 §3.4 兼容下限）：belowBaseline 选择的提示真值表 + 选择器提示行/标签源锁。
+    'test/runtime/below-baseline.test.ts',
     'test/runtime/confirm-machine-guards.test.ts',
     // The bridge's dictionary/wording half of the shared refusal projection.
     'test/runtime/restart-refusal.test.ts',

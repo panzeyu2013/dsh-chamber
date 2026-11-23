@@ -152,11 +152,13 @@ test('every remote-stream path reaches the one client reporter (source lock)', (
   const opener = index.slice(index.indexOf('private openRemoteStream('))
   const body = opener.slice(0, opener.indexOf('\n  }\n'))
   assert.match(body, /reportStreamCarrierFailures\(/u, 'the non-$stream opener must publish the fact')
-  assert.match(body, /error instanceof RemoteStreamCarrierError/u, 'it reports only already-classified carrier failures')
+  // alpha.1 retries by the `gateway/carrier-lost` code, not by class identity; the
+  // reporter predicate follows the same judgement (G43 carrier-code replay).
+  assert.match(body, /error => isRemoteStreamCarrierFailure\(error\)/u, 'it reports only already-classified carrier failures')
   assert.match(body, /this\.reportCarrierFailure/u, 'it uses the client one reporter')
   assert.match(body, /this\.streams\.open\(endpoint, payload, signal, uplink\)/u, 'the mux logical-stream path is covered, uplink included')
   assert.match(body, /normalizeConnectionStream\(local\)/u, 'the worker-local path is covered')
-  assert.match(index, /carrierFailed: \(error: RemoteStreamCarrierError\): void => \{[\s\S]*?this\.reportCarrierFailure\(error\)/u,
+  assert.match(index, /carrierFailed: \(error: RemoteStreamCarrierFailure\): void => \{[\s\S]*?this\.reportCarrierFailure\(error\)/u,
     '$stream composition still reports through the same instance')
 })
 

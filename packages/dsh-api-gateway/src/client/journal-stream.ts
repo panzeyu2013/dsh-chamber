@@ -1,7 +1,7 @@
 /** Cursor, page, and live-tail coordination over a reconnecting Remote stream. */
 
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
-import { RemoteStreamCarrierError, UNREF_SCHEDULER } from './stream-client.ts'
+import { RemoteStreamCarrierError, UNREF_SCHEDULER, type RemoteStreamCarrierFailure } from './stream-client.ts'
 import {
   decideStreamStallAction,
   DEFAULT_STREAM_STALL_TIMING,
@@ -91,7 +91,7 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
   /** Apply one complete journal-window change or cursorless notification. */
   readonly publish: (change: RemoteJournalChange<Page, Entry, Notification>) => void
   /** Observe a retryable carrier loss before reconnection. */
-  readonly carrierFailed?: (error: RemoteStreamCarrierError) => void
+  readonly carrierFailed?: (error: RemoteStreamCarrierFailure) => void
   /** chamber patch: silence-watchdog timing override. */
   readonly stall?: Partial<StreamStallTiming>
   /**
@@ -280,6 +280,14 @@ export abstract class RemoteJournalStream<
       entries: accepted,
       hasMore: this.options.hasMore(page),
     })
+  }
+
+  /**
+   * Record that the domain no longer publishes entries before `cursor`, so a later page may return them again.
+   * @param cursor - first cursor of an entry the open, published window still holds.
+   */
+  protected releaseBefore(cursor: Cursor): void {
+    this.firstCursor = cursor
   }
 
   /** Replace the active physical generation while retaining the published window. */

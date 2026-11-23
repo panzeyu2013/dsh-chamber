@@ -89,6 +89,12 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-deliverables',
   // conversation families (first-screen static imports, chamber-entry.ts):
   '@deepseek-ai/dsh-client-ui-session',
+  // alpha.1: the Session status table (running / pendingInteraction / completionUnread /
+  // completionFailed) moved OUT of ui-session into its own package/service
+  // (`uiSession.sessionStatus`); the covered conversation/workspace families + the chamber
+  // sidebar inject it, so the composite must register the row first-screen (a host-graph
+  // load would double-register the service, and a missing row leaves those fibers PENDING).
+  '@deepseek-ai/dsh-client-ui-session-status',
   '@deepseek-ai/dsh-client-ui-chat',
   '@deepseek-ai/dsh-client-ui-approval',
   // The background-upload client is composite-covered for two reasons: two
@@ -128,8 +134,6 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // it lands the panel shows the "starting that instance's frontend" state.
   '@deepseek-ai/dsh-client-ui-settings-general',
   '@deepseek-ai/dsh-client-ui-settings-models',
-  '@deepseek-ai/dsh-client-ui-settings-plugins',
-  '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
   // The upstream plugin-manager entry registers a permanent sidebar panel; the
   // chamber replacement mounts the same page as its own Settings section.
   '@deepseek-ai/dsh-client-ui-plugin-manager',
@@ -151,13 +155,13 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // ctx.uiRenderer), so a second entry would install a second slot renderer.
   // Page-own only, no factory: chamber-entry never imports it.
   '@deepseek-ai/dsh-client-ui-renderer',
-  // The official HMR entry (its host half is always mounted; only the rebuild watcher
-  // is dev-only): its client fiber opens a DOCUMENT-relative
-  // `new EventSource('plugins/events')`, which in this one-page-N-ctx shell would
-  // hit the control-plane origin (SPA fallback: text/html). The HOST route itself
-  // is a per-instance service, consumed by the chamber's own subscriber through the
-  // page channel's `pluginGraph` topic (live-graph.ts / design 26); this client row
-  // stays skipped forever (page-own, no factory).
+  // The official HMR entry (0.2.3-alpha.1: an authenticated `pluginEvents/follow` Remote
+  // stream; rc.3 and earlier: a document-relative `new EventSource('plugins/events')`).
+  // Its client half drives the PAGE-LEVEL `modules.entries` reconciler, which cannot run
+  // per instance under N-ctx (one page, one module system, one entries controller). The
+  // chamber shell therefore mounts the same generated `pluginEvents` contribution and
+  // follows the stream from EACH instance's ctx (hmr-events.ts + live-graph.ts), and this
+  // client row stays skipped forever (page-own, no factory).
   '@deepseek-ai/dsh-client-hmr',
   // The official open-in client row is NOT skipped any more (D2): it loads from
   // the host graph so its file-level surfaces register — the right-sidebar
@@ -249,6 +253,10 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   // conversation families (first-screen: factories must be registered before any
   // loader entry materializes).
   '@deepseek-ai/dsh-client-ui-session',
+  // alpha.1: the extracted Session status table, covered first-screen with its factory
+  // (the chamber sidebar's status producer and the covered conversation families consume
+  // `uiSession.sessionStatus`; see CHAMBER_COVERED_IDS).
+  '@deepseek-ai/dsh-client-ui-session-status',
   '@deepseek-ai/dsh-client-ui-chat',
   '@deepseek-ai/dsh-client-ui-approval',
   '@deepseek-ai/dsh-client-file-upload',

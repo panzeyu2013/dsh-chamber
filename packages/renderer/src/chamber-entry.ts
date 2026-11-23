@@ -26,6 +26,7 @@ import {
   REQUIRED_SERVICE_PROBE_INTERVAL_MS,
   type RegisteredPluginInject,
 } from './required-extra-rows.ts'
+import { syncedConfigActivationFor } from './synced-config.ts'
 import { withLocaleOwnership } from './locale-ownership.ts'
 import { isChamberSourceId } from './transport-source.ts'
 import { installChamberBrowser, installChamberForward } from './chamber-forward-adapter.ts'
@@ -106,6 +107,10 @@ import * as UiConversation from '@deepseek-ai/dsh-client-ui-conversation/client'
 // carry the per-entry base path; its host half stays an instance host row.
 import * as FileUpload from '@deepseek-ai/dsh-client-file-upload/client'
 import * as UiSession from '@deepseek-ai/dsh-client-ui-session/client'
+// alpha.1: the Session status table moved OUT of ui-session into ui-session-status
+// (`uiSession.sessionStatus`); the covered conversation/workspace families and the chamber
+// sidebar inject it, so it is FIRST-SCREEN here (a deferred provider would leave them PENDING).
+import * as UiSessionStatus from '@deepseek-ai/dsh-client-ui-session-status/client'
 import * as UiChat from '@deepseek-ai/dsh-client-ui-chat/client'
 import * as UiApproval from '@deepseek-ai/dsh-client-ui-approval/client'
 // commands + input-trigger are FIRST-SCREEN: ui-model-selection's root inject carries
@@ -169,8 +174,6 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
   // "starting this instance's frontend" state — the panel loads no content of its own.
   ['@deepseek-ai/dsh-client-ui-settings-general', () => import('@deepseek-ai/dsh-client-ui-settings-general/client')],
   ['@deepseek-ai/dsh-client-ui-settings-models', () => import('@deepseek-ai/dsh-client-ui-settings-models/client')],
-  ['@deepseek-ai/dsh-client-ui-settings-plugins', () => import('@deepseek-ai/dsh-client-ui-settings-plugins/client')],
-  ['@deepseek-ai/dsh-client-ui-settings-plugin-inventory', () => import('@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client')],
   ['@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager/client')],
   ['@dsh-chamber/dsh-chamber-client-ui-settings-connections', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-connections/client')],
   ['@dsh-chamber/dsh-chamber-client-ui-settings-bridge', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client')],
@@ -241,7 +244,12 @@ async function registerDeferred(
     // roster is the contract), so the object-plugin shape is asserted here.
     const loaded = outcome.plugin as { apply: (ctx: Context, config?: never) => void; inject?: string[] }
     // Mount decorators apply here too: a decorated id must not lose its hook here.
-    ctx.plugin(decorateMount(outcome.id, { ...loaded, name: outcome.id }))
+    // Synced Config travels the same way as the first-screen `register` path (alpha.1
+    // W4-0; ui-settings-models is a deferred roster member and dereferences it in apply).
+    const syncedConfig = syncedConfigActivationFor(ctx, outcome.id)
+    const deferredPlugin = decorateMount(outcome.id, { ...loaded, name: outcome.id })
+    if (syncedConfig === undefined) ctx.plugin(deferredPlugin)
+    else ctx.plugin(deferredPlugin, syncedConfig)
     // The row's OWN exported inject face enters the probe roster, recorded exactly as the
     // first-screen `register` helper records one. Two disciplines differ here:
     //  - normalization is EAGER, so a rejected face fails HERE rather than inside the
@@ -437,7 +445,15 @@ export function apply(ctx: Context): void {
     // exporting `inject` yields an empty roster AND an empty witness (no throw), so that
     // drift is only visible to the audited table test. A missing inject map yields no
     // witness and no false alarm.
-    const fiber = ctx.plugin(decorateMount(id, plugin)) as unknown as { inject?: unknown } | undefined
+    // 0.2.3-alpha.1: a covered row whose client face dereferences its browser-synced Config
+    // (`apply(ctx, config)` / a Service constructor) MUST receive its per-field reference
+    // object — without it the caller never throws, the plugin fiber FAILS and the root stays
+    // ACTIVE (the measured silent-empty-shell chain). Non-roster rows stay config-less: a
+    // plugin that declares its own Config schema must not get a reference object.
+    const syncedConfig = syncedConfigActivationFor(ctx, id)
+    const fiber = (syncedConfig === undefined
+      ? ctx.plugin(decorateMount(id, plugin))
+      : ctx.plugin(decorateMount(id, plugin), syncedConfig)) as unknown as { inject?: unknown } | undefined
     const witness = fiber?.inject
     const witnessKeys = witness !== null && typeof witness === 'object' && !Array.isArray(witness)
       ? Object.keys(witness as Record<string, unknown>)
@@ -487,6 +503,8 @@ export function apply(ctx: Context): void {
   register('@deepseek-ai/dsh-client-ui-model-selection', UiModelSelection)
   // Conversation families — first-screen (see the import comments).
   register('@deepseek-ai/dsh-client-ui-session', UiSession)
+  // After ui-session (it injects `uiSession` + injects the ui-renderer slots root hook).
+  register('@deepseek-ai/dsh-client-ui-session-status', UiSessionStatus)
   register('@deepseek-ai/dsh-client-ui-chat', UiChat)
   register('@deepseek-ai/dsh-client-ui-approval', UiApproval)
   // Directory-picker `browse` face for every instance; the host pins the same capability.
@@ -675,6 +693,9 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-workspace', coveredFactory(UiWorkspace)],
   ['@deepseek-ai/dsh-client-ui-model-selection', coveredFactory(UiModelSelection)],
   ['@deepseek-ai/dsh-client-ui-session', coveredFactory(UiSession)],
+  // alpha.1: the extracted Session status table keeps a factory so a host-graph require of
+  // `@deepseek-ai/dsh-client-ui-session-status/client` resolves before any loader entry materializes.
+  ['@deepseek-ai/dsh-client-ui-session-status', coveredFactory(UiSessionStatus)],
   ['@deepseek-ai/dsh-client-ui-chat', coveredFactory(UiChat)],
   ['@deepseek-ai/dsh-client-ui-approval', coveredFactory(UiApproval)],
   ['@deepseek-ai/dsh-client-file-upload', coveredFactory(FileUpload)],

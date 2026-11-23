@@ -31,7 +31,7 @@ import type { PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core
 const PLUGIN_REFRESH_WINDOW_MS = 5_000
 
 export interface PluginRefreshConvergenceDeps {
-  /** Re-subscribe the page-channel `pluginGraph` topic (the shell's live-graph resync). */
+  /** Re-subscribe this instance's `pluginEvents` stream (the shell's live-graph resync). */
   resync(): boolean
   subscribeDiagnostic(listener: (diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
   /** Fire the reload; false when it was denied (budget/single-flight/no window) — the

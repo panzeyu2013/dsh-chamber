@@ -173,45 +173,56 @@ vendorTest('上游：官方运行位解析 = status?.running ?? s.running（cham
     + '改成单读 list 行会让子代理运行环与官方计数分歧')
 })
 
-vendorTest('上游：status 投影行形状（running 可为 undefined ⇒ 回落的 ?? 是承重的）', () => {
-  // 定位符用**复合表达式**而非裸标识符：裸标识符在真实多文件 src 树里可能多处命中
-  // （恰一命中的断言会因上游拆文件而假红），且它不能与下面的断言同义。
-  const status = readVendorSourceProviding('dsh-client-ui-session', 'this.completionUnread.has')
+vendorTest('上游：status 投影行形状（alpha.1 迁包：running 可为 undefined ⇒ 回落的 ?? 是承重的）', () => {
+  // alpha.1：会话状态投影从 ui-session 迁到 dsh-client-ui-session-status（release-note :76；
+  // 旧包 rc3 的 `completionUnread` Set 面在 alpha.1 全包 0 命中）。本锁按符号找源文件，
+  // 上游再挪文件不会假红；符号消失/改名才红（此时按 design 06 §4.3 重推运行位解析）。
+  const status = readVendorSourceProviding('dsh-client-ui-session-status', 'completionFailed')
   assert.match(status, /running: this\.running\.get\(id\)/,
     'status 行的 running 直取观测表 ⇒ 可能是 undefined（不是布尔默认）')
-  assert.match(status, /completionUnread: this\.completionUnread\.has\(id\)/,
-    '完成未读与运行位同源同拍发布')
-  assert.match(status, /\.\.\.this\.pendingSnapshot\.keys\(\)/,
-    'id 并集含「只因 pending 交互而存在」的行 ⇒ 那些行的 running 必然 undefined，回落分支是必需的')
-  assert.match(status, /\$on\('api-session\/status', \(sessionId, running\) => \{[\s\S]{0,120}observeRunning/,
+  assert.match(status, /completionUnread: unread/,
+    'alpha.1 的完成未读是投影计算位（Host 读记录），不再是本地 Set.has')
+  assert.match(status, /record\.manualUnread \|\| \(id !== viewing && record\.completedTurn > record\.readTurn\)/,
+    '未读语义 = 手工未读 ∨ 完成turn 超出已读水位（当前可见的 main 视图暂不点亮）')
+  assert.match(status, /completionFailed: unread && record\.failed/,
+    '失败完成位 = 未读 ∧ Host 观测到的 error 结束（chamber failed 红点的唯一来源）')
+  assert.match(status, /\.\.\.(Object\.keys\(list\.byId\)|this\.running\.keys\(\))/,
+    'id 并集含「只因 pending/reading 而存在」的行 ⇒ 那些行的 running 必然 undefined，回落分支是必需的')
+  assert.match(status, /\$on\('api-session\/status', \(sessionId, running\) => \{[\s\S]{0,160}observeRunning/,
     'status 由 frame 直驱——这正是它可能领先于 list 行、从而必须优先的根据')
   assert.doesNotMatch(status, /running: this\.running\.get\(id\) \?\?/,
     'status 行的 running 必须仍原样透出观测（可为 undefined）；上游若给它兜底成布尔，'
     + 'chamber 侧「?? 承重」的回落语义就消失了')
   assert.match(status, /sessions\.list\.subscribe\(\(\) => \{ this\.reconcileStatus\(\) \}\)/,
     'list→status 回灌（reconcileStatus）仍在：这是 status 行通常有定义的根据，也是两链可分歧的根据')
-  assert.match(status, /if \(running\) this\.completionUnread\.delete\(sessionId\)/,
-    'true→false 的完成未读语义仍在（tier-3 写回的爆炸半径：写回会点亮官方完成位）')
-  assert.match(status, /else if \(\(previous === true \|\| \(previous === undefined && beforeBaseline\)\)/,
-    '未读只在「真观测过 running」之后武装——诊断性写回不得被误当作运行观测')
+  assert.match(status, /readonly readingReady/,
+    'readingReady 公开面仍在：chamber 的页面级 reading 座席用它做 mark 门')
+  assert.match(status, /async mark\(sessionId: SessionId, unread: boolean\): Promise<void> \{/,
+    '客户端 mark(sessionId, unread) 仍是壳内动作面（上游菜单/快捷键消费）')
+  assert.match(status, /function viewVisible\(\): boolean \{[\s\S]{0,200}visibilityState === 'visible'/,
+    '可见性判据仍是 document 级（N-ctx 隐藏壳 ack 偏差的根据；chamber 只登记不改上游）')
 })
 
-vendorTest('对齐锁：chamber 生产者消费官方 completionUnread（读投影 → 第 6 参 → 稀疏行字段）', () => {
+vendorTest('对齐锁：chamber 生产者消费官方 completionUnread/completionFailed（读投影 → 第 6/7 参 → 稀疏行字段）', () => {
   // vendor 只给事实（内存 Set）；chamber 侧必须真的把它读出来、写进通道行——
-  // 生产者的唯一入口是 projectRuntimeFacts 的第 6 参，行字段稀疏（true 才写）。
+  // 生产者的唯一入口是 projectRuntimeFacts 的第 6/7 参，行字段稀疏（true 才写）。
   const producer = stripComments(readFileSync(fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
   assert.match(producer, /const readStatusCompleted = \(\): ReadonlySet<string> => \{/,
     '生产者必须定义官方完成位的读（与 readStatusRunning 同一份 sessionStatus 投影）')
   assert.match(producer, /if \(status\.completionUnread === true\) ids\.add\(sessionId\)/,
     '只有官方为真才进集合（稀疏）：缺席 = 未武装，chamber 不得自行补位')
   assert.match(producer,
-    /projectRuntimeFacts\(snapshot, subagentRunning, pendingBySession, runIds, statusRunning, readStatusCompleted\(\)\)/,
-    '该读必须作为第 6 参喂给 projectRuntimeFacts（完成位唯一的生产者入口）')
+    /projectRuntimeFacts\(\s*snapshot, subagentRunning, pendingBySession, runIds, statusRunning,\s*readStatusCompleted\(\), readStatusFailed\(\),\s*\)/,
+    '两个读必须作为第 6/7 参喂给 projectRuntimeFacts（完成/失败位唯一的生产者入口）')
   const derive = stripComments(readFileSync(fileURLToPath(new URL('../../../dsh-chamber-client-core/src/derive.ts', import.meta.url)), 'utf8'))
   assert.match(derive, /statusCompleted\?: ReadonlySet<string>/, 'projectRuntimeFacts 声明第 6 余参 statusCompleted')
+  assert.match(derive, /statusFailed\?: ReadonlySet<string>/, 'projectRuntimeFacts 声明第 7 余参 statusFailed')
   assert.match(derive, /if \(statusCompleted\?\.has\(id\) === true\) row\.completed = true/,
     '行字段必须只在官方位为真时稀疏写入（true 才写字段）')
+  assert.match(derive, /if \(statusFailed\?\.has\(id\) === true\) row\.failed = true/,
+    '失败行字段同样只在官方位为真时稀疏写入')
   assert.doesNotMatch(derive, /row\.completed = false/, '清位只由官方集合缺席表达，绝不写 false 字段')
+  assert.doesNotMatch(derive, /row\.failed = false/, '失败位同样绝不写 false 字段')
 })
 
 vendorTest('对齐锁：客户端 store 行没有 completed —— 官方 completionUnread 才是唯一来源', () => {

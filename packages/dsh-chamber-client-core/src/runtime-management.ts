@@ -545,6 +545,21 @@ export function preferredRuntimeVersion(
   return versions[0]?.version ?? null
 }
 
+/**
+ * The selected version's entry when it sits BELOW the compatibility baseline
+ * (design 18 §3.4 hidden floor): the selector must warn that it may fail to
+ * boot. Pure over the projected list — a null selection or a version absent from
+ * the list is not a below-baseline claim.
+ */
+export function selectedBelowBaselineVersion(
+  versions: readonly Pick<RuntimeVersionEntry, 'version' | 'belowBaseline'>[],
+  selected: string | null,
+): string | null {
+  if (selected === null) return null
+  const entry = versions.find((candidate) => candidate.version === selected)
+  return entry !== undefined && entry.belowBaseline ? entry.version : null
+}
+
 export type RuntimeSelectionDirection = 'none' | 'current' | 'upgrade' | 'rollback'
 
 /** UI label direction; no active version is an install/forward action, never a rollback. */

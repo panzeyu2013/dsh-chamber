@@ -17,6 +17,9 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "paths": {
+      "@deepseek-ai/dsh-client-config/types": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-client-config/src/types.ts"
+      ],
       "@deepseek-ai/dsh-commands/brand": [
         "../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/brand.ts"
       ],

@@ -74,12 +74,16 @@ test('C11 正例：闭包健康（含登记 opt-in）+ 树只差平台分包 →
   const names = healthyNames([
     '@deepseek-ai/node-addon-system-linux-x64',
     '@deepseek-ai/libreoffice-kit-win32-x64',
-    // darwin-only optional dep: present in the closure, absent on a Linux runtime tree.
-    '@deepseek-ai/dsh-experimental-cua-macos',
+    // Platform-split optional deps (alpha.1 promoted the Computer-Use packages out of the
+    // experimental- prefix): dsh-cua-macos is os:darwin, dsh-cua-windows os:win32|linux —
+    // the closure carries both, any single platform tree carries only its own.
+    '@deepseek-ai/dsh-cua-macos',
+    '@deepseek-ai/dsh-cua-windows',
   ])
   const treeNames = names.filter((name) => name !== '@deepseek-ai/node-addon-system-linux-x64'
     && name !== '@deepseek-ai/libreoffice-kit-win32-x64'
-    && name !== '@deepseek-ai/dsh-experimental-cua-macos')
+    && name !== '@deepseek-ai/dsh-cua-macos'
+    && name !== '@deepseek-ai/dsh-cua-windows')
   const { violations, notes } = familyFindings({ names, treeNames })
   assert.deepEqual(violations, [])
   assert.ok(notes.some((note) => note.includes('等价性校验')), notes.join('; '))

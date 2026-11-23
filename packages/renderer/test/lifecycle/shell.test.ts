@@ -151,7 +151,10 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     assert.equal(state.error, null)
     assert.equal(__testDisposedCount(), 0)
     const [facts] = __testConfiguredContexts() as [Record<string, unknown>]
-    const { chamberReportBootDegraded, chamberMachineCatalog, chamberPluginRefresh, ...immutableFacts } = facts
+    const {
+      chamberReportBootDegraded, chamberMachineCatalog, chamberPluginRefresh, chamberSyncedConfig,
+      ...immutableFacts
+    } = facts
     assert.deepEqual(immutableFacts, {
       chamberInstanceId: 'ssh-test-clean-2',
       chamberBasePath: '/api/i/ssh-test-clean-2',
@@ -160,6 +163,15 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
       // 代际事实（producer 注册表的栅栏输入）。
       chamberBootGeneration: 1,
     })
+    // W4-0 synced-Config 供给（alpha.1）：每次 boot 在 plugin materialization 前注入本实例
+    // 的 covered/extra 行值；无图 boot 也必须是空供给（不是 undefined），否则 composite
+    // 的 register 会走「无值」分支而丢掉空 ref 兜底。
+    const syncedConfig = chamberSyncedConfig as {
+      values?: unknown, extraRowIds?: unknown,
+    }
+    assert.ok(syncedConfig.values instanceof Map, 'every boot hands the entry its synced-config supply')
+    assert.ok(syncedConfig.extraRowIds instanceof Set)
+    assert.equal((syncedConfig.values as Map<unknown, unknown>).size, 0, 'a graph-less boot supplies no values')
     // 降级上报缝：条目里的必需服务探针经它把「挂载已知不完整」
     // 交给 App（App 据此在该来源 ready 后自动重挂），必须随每个 boot 一起提供。
     assert.equal(typeof chamberReportBootDegraded, 'function')

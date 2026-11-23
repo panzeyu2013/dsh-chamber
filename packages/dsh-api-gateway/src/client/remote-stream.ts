@@ -13,7 +13,10 @@ import {
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
 } from './remote-retry-policy.ts'
-import { RemoteStreamAuthError, RemoteStreamCarrierError, RemoteStreamGenerationRestart } from './stream-client.ts'
+import {
+  isRemoteStreamCarrierFailure, RemoteStreamAuthError, RemoteStreamCarrierError, RemoteStreamGenerationRestart,
+  type RemoteStreamCarrierFailure,
+} from './stream-client.ts'
 import { withDeadline } from '@dsh-chamber/dsh-stream-state'
 
 /** Real clock, injected: the bound's SCHEDULING lives in the primitive; its VALUE stays local. */
@@ -44,10 +47,13 @@ export interface RemoteStreamItem<Item> {
 export interface RemoteStreamOptions<Item> {
   readonly name: string
   readonly open: (signal: AbortSignal) => AsyncIterable<Item>
-  /** Classify a normal generation end after or before its opening item was accepted. */
+  /**
+   * Classify a normal generation end after or before its opening item was accepted; a returned error whose `code` is
+   * `gateway/carrier-lost` reconnects, and any other error is terminal.
+   */
   readonly ended: (accepted: boolean) => Error
   /** Observe a retryable carrier loss before the supervisor waits or reopens. */
-  readonly carrierFailed?: (error: RemoteStreamCarrierError) => void
+  readonly carrierFailed?: (error: RemoteStreamCarrierFailure) => void
 }
 
 /**
@@ -163,7 +169,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
           if (error instanceof RemoteStreamAuthError) {
             throw new RemoteError('gateway/auth', error.message, { closeCode: error.closeCode }, { cause: error })
           }
-          if (!(error instanceof RemoteStreamCarrierError)) throw terminalStreamFailure(error)
+          if (!isRemoteStreamCarrierFailure(error)) throw terminalStreamFailure(error)
           this.options.carrierFailed?.(error)
           if (revision !== this.revision) continue
           attempt++

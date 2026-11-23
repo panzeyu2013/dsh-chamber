@@ -129,8 +129,10 @@ test('the pin surfaces are the upstream forms: menu order 100 first, hover butto
   assert.ok(menu.indexOf("id: 'pin'") !== -1 && menu.indexOf("id: 'pin'") < menu.indexOf("id: 'rename'"),
     'the pin menu item leads the list (upstream menu order 100)')
   assert.ok(menu.includes("label: t(session.pinned === true ? 'menu.unpinSession' : 'menu.pinSession')"))
-  assert.ok(ROWS.includes('], [t, session.pinned, session.archived, renameShortcut, forkShortcut, archiveShortcut])'),
-    'the memo must depend on session.pinned and session.archived or the toggle labels freeze')
+  // alpha.1 起菜单 memo 还依赖 reading-mark 的两个输入（行未读位 = 标签方向、来源 reading
+  // 座席就绪 = 禁用门）：漏掉任一都会让 mark 项显示过期方向/可用性。pin/archived 仍在依赖里。
+  assert.ok(ROWS.includes('], [t, session.pinned, session.archived, unread, readingReady, renameShortcut, forkShortcut, archiveShortcut])'),
+    'the memo must depend on session.pinned/session.archived (toggle labels) and unread/readingReady (mark item)')
   // 断言到分支体本身：只查字符串的话，悬停钮那处调用就能满足它，清空菜单分支也全绿。
   assert.match(ROWS, /else if \(id === 'pin'\) \{\n\s*onPinSession\(server, session\.id, session\.pinned === true\)/u,
     'the kebab item reaches the same funnel (branch body, not just the string)')

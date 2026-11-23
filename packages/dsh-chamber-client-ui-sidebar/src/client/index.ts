@@ -68,13 +68,16 @@ import {
   classifyObservation, isAdmissible, type AuthorityOfficialRow, type AuthorityRead,
 } from '@dsh-chamber/dsh-stream-state'
 import { fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-chamber-client-core/instance-api'
+import { publishReadingSeat } from './reading-seat.ts'
+import type { SessionStatusFace } from './session-status-face.ts'
 import {
   classifySettingsSeatOccupant, settingsSeatTakeoverMessage,
 } from '@dsh-chamber/dsh-chamber-client-core/settings-shell'
 
 export type {
   SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
-  SidebarPanelIconOwnerProps, SidebarPanelMetadata, SidebarRootComponentProps, SidebarRootInjected,
+  SidebarPanelIconOwnerProps, SidebarPanelMetadata,
+  SidebarRootComponentProps, SidebarRootInjected,
   SidebarSessionActionOwnerProps, SidebarSettingsOwnerProps, SidebarWorkspaceGitContext, SidebarWorkspaceGitOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
@@ -108,8 +111,20 @@ let producerGenerationCounter = 0
  */
 const RUNNING_DIVERGENCE_FLOOR_MS = 30_000
 
-/** Services required by the sidebar plugin. */
-export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale', 'shortcuts']
+/**
+ * Services required by the sidebar plugin.
+ *
+ * alpha.1: the status projection moved out of `ui-session` into the separate
+ * `dsh-client-ui-session-status` service, registered under the NESTED name
+ * `uiSession.sessionStatus`. Cordis resolves a nested member only when that exact
+ * name is injected (otherwise the get throws "cannot get property … without
+ * inject"), so the nested entry is declared next to its parent; this shell reads
+ * nothing else from that package (`session-status-face.ts`).
+ */
+export const inject = [
+  'slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiSession.sessionStatus',
+  'uiWorkspace', 'locale', 'shortcuts',
+]
 
 /**
  * Registers the sidebar shell and its service callbacks. `sidebar.workspaces` stays
@@ -171,7 +186,8 @@ export function apply(ctx: ClientContext): void {
   // 本包用自身 key 并集声明同一 map 项，两个并集按设计不同（chamber 多来源文案上游没有），
   // 同程序内二次声明即类型冲突。分歧恰是 chamber 列表自己的洞（`sidebar.workspace.git`）。
   ctx.effect(
-    () => ctx.slots.inject('sidebar', () => ctx.slots.register({
+    () => ctx.slots.inject('sidebar', function* () {
+      yield ctx.slots.register({
       name: 'sidebar',
       locale: NS,
       children: {
@@ -208,7 +224,8 @@ export function apply(ctx: ClientContext): void {
         'sidebar.session.action': { kind: 'hoc', scope: 'root' },
       },
       inject: injectProps,
-    }, SidebarRoot)),
+      }, SidebarRoot)
+    }),
     'dsh-chamber: sidebar slot registration',
   )
   // 顺序：在注册存在后发布（可能已填充的）面板列表，首帧即可见。
@@ -540,23 +557,15 @@ export function apply(ctx: ClientContext): void {
       if (fact.sourceId !== chamberInstanceId) return
       purgedRows.release([fact.sessionId])
     })
-    // pending（审批/提问/plan-review）的权威源是官方 ui-session 暴露的 sessionStatus
-    // 投影；内部 pending registry 是私有状态，不能从服务面直接读取。订阅公开投影并把
+    // pending（审批/提问/plan-review）的权威源是官方 `uiSession.sessionStatus` 投影
+    // （alpha.1 由 dsh-client-ui-session-status 提供；rc.3 时挂在 ui-session 上）；内部
+    // pending registry 是私有状态，不能从服务面直接读取。订阅公开投影并把
     // pendingInteraction 并入运行时事实通道，驱动琥珀点/等待分类与 ask/request 通知边沿。
-    // 真实不变量：ui-session 是 chamber 复合 boot 的 first-screen 服务，每个 boot 必然存在；
-    // 指纹守卫前置只是防御纵深，非 chamber boot 在访问服务前已返回。
-    const sessionStatus = (ctx.uiSession as unknown as {
-      sessionStatus: {
-        getSnapshot(): ReadonlyMap<string, {
-          /** 官方实时运行观测；缺席 = 该行尚无观测（见 resolveSessionRunning）。 */
-          running?: boolean
-          pendingInteraction?: { kind?: string }
-          /** 官方自己的「完成未读」位（内存 Set，上游就绪）；运行时事实通道唯一的 completed 来源。 */
-          completionUnread?: boolean
-        }>
-        subscribe(listener: () => void): () => void
-      }
-    }).sessionStatus
+    // 真实不变量：该服务是 chamber 复合 boot 的 first-screen 行（covered + register 在
+    // ui-workspace 之前），每个 boot 必然存在；inject 声明是该服务可解析的前提。
+    // 类型来自本包唯一的面文件（alpha.1 前的 `as unknown as { sessionStatus: … }` 内联 cast 已删）：
+    // 本包程序里 `ctx.uiSession` 是 loose vendor face 的 any，赋值标注给这一处契约一个家。
+    const sessionStatus: SessionStatusFace = ctx.uiSession.sessionStatus
 
     /**
      * 官方运行位投影的读——chamber 全部运行位消费点的**同一个**输入（侧栏环、搜索行、
@@ -577,6 +586,22 @@ export function apply(ctx: ClientContext): void {
       const ids = new Set<string>()
       for (const [sessionId, status] of sessionStatus.getSnapshot()) {
         if (status.completionUnread === true) ids.add(sessionId)
+      }
+      return ids
+    }
+
+    /**
+     * 官方失败完成位的读（alpha.1 `completionFailed` = unread ∧ Host 观测到该次
+     * 回合以执行错误结束；见 `ui-session-status/src/client/status.ts`）。与完成位同一
+     * 订阅、同一份投影；位为真才进集合（稀疏）。它只作**呈现档**（失败红点/文案），
+     * 绝不进入通知边沿：通知只看 turn/end 的 kind（design 14 §D4 红线）。
+     * 作为 {@link projectRuntimeFacts} 的第 7 参喂入（client-core 正式契约字段），facts-only
+     * 来源没有该事实（保持稀疏）。
+     */
+    const readStatusFailed = (): ReadonlySet<string> => {
+      const ids = new Set<string>()
+      for (const [sessionId, status] of sessionStatus.getSnapshot()) {
+        if (status.completionFailed === true) ids.add(sessionId)
       }
       return ids
     }
@@ -750,7 +775,10 @@ export function apply(ctx: ClientContext): void {
       for (const [sessionId, status] of sessionStatus.getSnapshot()) {
         if (status.pendingInteraction !== undefined) pendingBySession.set(sessionId, status.pendingInteraction)
       }
-      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingBySession, runIds, statusRunning, readStatusCompleted())
+      const baseReport = projectRuntimeFacts(
+        snapshot, subagentRunning, pendingBySession, runIds, statusRunning,
+        readStatusCompleted(), readStatusFailed(),
+      )
       // listComplete：官方列表的 arrival phase（'pending' → 首次成功 'ready'，此后出错不回退）
       // 就是「列表是否完整」的权威事实；只有 ready 才允许 App 把缺席当删除剪掉未读（pending
       // 恒 false ⇒ 不剪枝，否则一次未完成的列表会假清未读）。它是判定输入，不进侧边栏渲染。
@@ -972,8 +1000,26 @@ export function apply(ctx: ClientContext): void {
     const unsubscribeWorkspaces = workspacesList.subscribe(queueSnapshot)
     // sessionStatus 的 pendingInteraction / completionUnread 变化只影响运行时事实（琥珀点/通知边沿/完成点）；sync() 内 queueSnapshot 有签名去重兜底，重复触发无副作用。
     const unsubscribePending = sessionStatus.subscribe(sync)
+    // Page-level reading seat (alpha.1; design 06 §4.1): rows of EVERY source render in
+    // every shell, but a mark is per-instance — so each mounted shell publishes whether ITS
+    // source's Host reading baseline arrived (`readingReady`). The row menu consults the
+    // seat of the row's own source and stays disabled (no seat) for an unmounted source.
+    // Publication is idempotent per source id; retirement keeps a later remount from
+    // inheriting a stale readiness.
+    let readingSeatRetire = publishReadingSeat(chamberInstanceId, {
+      ready: sessionStatus.readingReady.getSnapshot(),
+    })
+    const publishSeat = (): void => {
+      // Replacing the seat object notifies the page-level subscribers; retire the previous
+      // publication first so teardown always disposes the seat that is actually published.
+      readingSeatRetire()
+      readingSeatRetire = publishReadingSeat(chamberInstanceId, { ready: sessionStatus.readingReady.getSnapshot() })
+    }
+    const unsubscribeReadingReady = sessionStatus.readingReady.subscribe(publishSeat)
     return () => {
       disposed = true
+      unsubscribeReadingReady()
+      readingSeatRetire()
       goalActivation.dispose()
       sessionFacts?.dispose()
       purgedRows.dispose()

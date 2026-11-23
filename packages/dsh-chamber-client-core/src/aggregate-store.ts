@@ -440,20 +440,21 @@ export interface SessionPlacementFailedFact {
 export interface InstanceRuntimeReport {
   current?: string
   /**
-   * Every listed session (edge memory for the App's N-ctx completion arm): the live running
-   * bit, a sparse `pending`, the official `completed` (`sessionStatus.completionUnread`),
-   * and a non-zero `runningSubagents`.
+   * Every listed session (edge memory for the App's N-ctx completion arm): live running,
+   * sparse `pending`/`failed`, official `completed`, non-zero `runningSubagents`.
    */
   sessions: Record<string, {
     running?: boolean
     completed?: boolean
+    /** Host-observed completion-failure fact (`sessionStatus.completionFailed`), sparse: `true`
+     *  only; presentation-only — the notification edge never reads it (design 14 §D4). */
+    failed?: boolean
     pending?: 'approval' | 'plan-review' | 'question'
     /**
-     * Run identity of this row's current/last episode (I1): the producer mints
-     * ONE chamber-family SessionRunId per observed run episode, so the App keys
-     * runtime-edge notifications by identity instead of a watermark guess. A row
-     * keeps its last run id after the run ends (the completion still belongs to
-     * it); a fresh run mints a new one.
+     * Run identity of this row's current/last episode (I1): the producer mints ONE
+     * chamber-family SessionRunId per observed run episode, so the App keys runtime-edge
+     * notifications by identity instead of a watermark guess. A row keeps its last run id
+     * after the run ends (the completion still belongs to it); a fresh run mints a new one.
      */
     runId?: string
     /** I3 修正 provenance：running=false 来自侧栏 tier-3 写回而非宿主完成边沿（无 host 域 observed `completedAt` 时不产通知候选；蓝点仍由修正臂武装；缺席 = 未修正，fail-open）。 */
@@ -465,10 +466,9 @@ export interface InstanceRuntimeReport {
     /** 子代理活动三值：none（索引在场且为零）| running | unknown（索引缺席或来源 stale）。 */
     subagentActivity?: SubagentActivity
     /**
-     * Goal 三值事实（design 19 §3.2.1）：**字段缺席 = unknown**
-     * （投影还没给出 goal 键 / 形状不符），`null` = 明确无 goal，对象 = 有 goal。
-     * 生产者按来源代回填最后已知值并合并 §2.2 的 activation 事件缓存；
-     * 呈现门 `goalSuppressesPresentation` 只读相位（active 即压制，含 unknown）。
+     * Goal 三值事实（design 19 §3.2.1）：**字段缺席 = unknown**（还没给出 goal 键 / 形状不符），
+     * `null` = 明确无 goal，对象 = 有 goal。生产者按来源代回填最后已知值并合并 §2.2 的
+     * activation 事件缓存；呈现门 `goalSuppressesPresentation` 只读相位（active 即压制，含 unknown）。
      */
     goal?: GoalFact | null
     /** 观察者刷新这一行事实的 host 域毫秒（0/缺席 = 无观察者事实）。 */

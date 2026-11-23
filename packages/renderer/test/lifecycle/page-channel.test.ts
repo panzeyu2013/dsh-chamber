@@ -407,10 +407,10 @@ test('onItem 抛错仍然确认信用，且不影响同一条 socket 上的其�
     const mod = await loadPageChannel()
     const received: string[] = []
     const subA = mod.subscribePageChannel({
-      family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => { throw new Error('consumer bug') },
+      family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => { throw new Error('consumer bug') },
     })
     const subB = mod.subscribePageChannel({
-      family: 'pluginGraph', instanceId: 'dsh-b', onItem: (event, data) => received.push(event + ':' + data),
+      family: 'sessionFacts', instanceId: 'dsh-b', onItem: (event, data) => received.push(event + ':' + data),
     })
     const socket = FakeWebSocket.latest()
     socket.open()
@@ -430,15 +430,15 @@ test('重连只重新订阅仍然存活的订阅', async () => {
   installFakeWebSocket()
   try {
     const mod = await loadPageChannel()
-    const subA = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
-    const subB = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-b', onItem: () => undefined })
+    const subA = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => undefined })
+    const subB = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-b', onItem: () => undefined })
     FakeWebSocket.latest().open()
     subB.close()
     FakeWebSocket.latest().drop(1006)
     await waitFor(() => FakeWebSocket.instances.length === 2, '重连', 2_500)
     const socket = FakeWebSocket.latest()
     socket.open()
-    assert.deepEqual(socket.frames(), [{ type: 'subscribe', id: '1', family: 'pluginGraph', instanceId: 'dsh-a' }],
+    assert.deepEqual(socket.frames(), [{ type: 'subscribe', id: '1', family: 'sessionFacts', instanceId: 'dsh-a' }],
       '已关闭的订阅不得复活')
     subA.close()
   } finally {
@@ -469,7 +469,7 @@ test('永久码（capability_not_found / upstream_rejected）不重试；瞬时�
   try {
     const mod = await loadPageChannel()
     const capability = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-x', onItem: () => undefined })
-    const rejected = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-y', onItem: () => undefined })
+    const rejected = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-y', onItem: () => undefined })
     const socket = FakeWebSocket.latest()
     socket.open()
     socket.message(JSON.stringify({ type: 'error', id: '1', code: 'capability_not_found', message: 'non-gateway' }))
@@ -509,7 +509,7 @@ test('instance_unavailable parks the subscription and the ready edge releases it
     })
     let diagnostics = 0
     const sub = mod.subscribePageChannel({
-      family: 'pluginGraph',
+      family: 'sessionFacts',
       instanceId: 'dsh-a',
       onItem: () => undefined,
       onDiagnostic: () => { diagnostics += 1 },
@@ -547,7 +547,7 @@ test('a link epoch also wakes a failed-but-unparked subscription before its ladd
         return () => { listeners.delete(listener) }
       },
     })
-    const sub = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const sub = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => undefined })
     const socket = FakeWebSocket.latest()
     socket.open()
     const subscribeFrames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
@@ -579,8 +579,8 @@ test('link recovery staggers a wave of parked subscriptions', async () => {
         return () => { listeners.delete(listener) }
       },
     })
-    const first = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
-    const second = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const first = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => undefined })
+    const second = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => undefined })
     const socket = FakeWebSocket.latest()
     socket.open()
     const subscribeFrames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
@@ -614,7 +614,7 @@ test('a parked subscription force-probes after the 30s fallback', async (t) => {
       epoch: () => 0,
       subscribe: () => () => {},
     })
-    const sub = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const sub = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => undefined })
     const socket = FakeWebSocket.latest()
     socket.open()
     const subscribeFrames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length
@@ -743,9 +743,10 @@ test('keepalive 判据是「名字 + 空 data」：带数据的同名事件不�
   assert.equal(mod.isPageChannelKeepaliveItem('keepalive', '{"kind":"graph"}'), false,
     '只有协议生成的空 data keepalive 才是传输活性，真实事件不能被误吞')
   assert.equal(mod.isPageChannelKeepaliveItem('graph', ''), false)
-  // 三个消费方必须用同一判据，不得各自只比名字。
+  // 消费方必须用同一判据，不得各自只比名字。shell 不再消费 page-channel 的
+  // 插件图族（0.2.3-alpha.1: per-instance pluginEvents Remote stream 自带类型，
+  // 没有 keepalive item），剩下的两个消费方共用同一条判据。
   for (const file of [
-    'packages/renderer/src/shell.ts',
     'packages/renderer/src/session-facts-source.ts',
     'packages/dsh-chamber-client-core/src/control-plane-client.ts',
   ]) {
@@ -760,9 +761,9 @@ test('消费方在 onItem 里关闭订阅：unsubscribe 之后不得再回执该
     const mod = await loadPageChannel()
     const big = 'x'.repeat(70 * 1024)
     const subA = mod.subscribePageChannel({
-      family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => { subA.close() },
+      family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => { subA.close() },
     })
-    const subB = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-b', onItem: () => undefined })
+    const subB = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-b', onItem: () => undefined })
     const socket = FakeWebSocket.latest()
     socket.open()
     socket.message(JSON.stringify({ type: 'item', id: '1', event: 'graph', data: big }))
@@ -1133,7 +1134,7 @@ test('a wave larger than the slot table releases exactly one subscription immedi
       },
     })
     const subs = Array.from({ length: 18 }, () => mod.subscribePageChannel({
-      family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined,
+      family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => undefined,
     }))
     const socket = FakeWebSocket.latest()
     socket.open()
@@ -1172,7 +1173,7 @@ test('a link epoch does not reset the retry ladder (no hot retry under a flappin
         return () => { listeners.delete(listener) }
       },
     })
-    const sub = mod.subscribePageChannel({ family: 'pluginGraph', instanceId: 'dsh-a', onItem: () => undefined })
+    const sub = mod.subscribePageChannel({ family: 'sessionFacts', instanceId: 'dsh-a', onItem: () => undefined })
     const socket = FakeWebSocket.latest()
     socket.open()
     const frames = (): number => socket.frames().filter(frame => frame.type === 'subscribe').length

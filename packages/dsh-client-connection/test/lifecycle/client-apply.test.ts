@@ -1,8 +1,11 @@
 /**
  * node:test for the chamber apply seam (`src/client/index.ts`, design 05 §6/§4):
  * the per-entry `chamberBasePath` bound on the entry Context reaches the generic
- * RPC carrier as its URL prefix — no plugin config and no page-global knob
- * participate. The carrier class is pinned here too (design 14 §D4): a `local`
+ * RPC carrier as its URL prefix, and the recovery timing is read from the alpha.1
+ * Host-synced Config (the retired `__DSH_CONNECTION_RECOVERY__` page global is
+ * gone; the config supply itself belongs to W4-0, so the no-config case is pinned
+ * as the boot-critical failure shape - never a silent default). The carrier class
+ * is pinned here too (design 14 §D4): a `local`
  * carrier is exempt from the browser network gate — it makes its first attempt
  * while `navigator.onLine` is false and never parks on `offline` — while a
  * remote carrier keeps the stock parking loop. The wake-event
@@ -13,7 +16,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 import {
   apply,
@@ -27,6 +30,15 @@ import {
 interface FakeHandle {
   readonly rpc: { call(...args: unknown[]): Promise<unknown> }
   reconnect(): void
+}
+
+/**
+ * Minimal `SyncedConfig<ConnectionConfig>` face (alpha.1 apply signature): the
+ * only volatile field is `recovery`, so a ref whose `get()` returns the recovery
+ * object is the whole shape the client half reads. W4-0 supplies the production one.
+ */
+function syncedConfig(recovery: Record<string, unknown> = {}): never {
+  return { recovery: { get: () => recovery } } as never
 }
 
 function fakeContext(
@@ -75,7 +87,7 @@ async function recordedCallPath(handle: FakeHandle): Promise<string> {
 
 test('apply reads ctx.chamberBasePath into the generic RPC carrier prefix', async () => {
   const { ctx, handle } = fakeContext('/api/i/ssh-right')
-  apply(ctx)
+  apply(ctx, syncedConfig())
   assert.equal(await recordedCallPath(handle()), '/api/i/ssh-right/api/session/follow')
   assert.equal(typeof handle().rpc.call, 'function')
   assert.equal(typeof handle().reconnect, 'function')
@@ -83,7 +95,7 @@ test('apply reads ctx.chamberBasePath into the generic RPC carrier prefix', asyn
 
 test('apply without a ctx base path keeps the stock no-prefix surface', async () => {
   const { ctx, handle } = fakeContext(undefined)
-  apply(ctx)
+  apply(ctx, syncedConfig())
   assert.equal(await recordedCallPath(handle()), '/api/session/follow')
 })
 
@@ -96,7 +108,7 @@ test('an explicit transport rpc keeps upstream precedence over the base-path car
   globals.__DSH_TRANSPORT__ = { rpc: explicit }
   try {
     const { ctx, handle } = fakeContext('/api/i/ssh-right')
-    apply(ctx)
+    apply(ctx, syncedConfig())
     assert.equal(handle().rpc, explicit)
   } finally {
     if (previous === undefined) delete globals.__DSH_TRANSPORT__
@@ -118,7 +130,7 @@ test('a ?fixture page URL no longer selects a fixture transport (retired with sr
   globals.location = { search: '?fixture', origin: 'http://dsh.internal', hostname: '127.0.0.1' }
   try {
     const { ctx, handle } = fakeContext('/api/i/local')
-    apply(ctx)
+    apply(ctx, syncedConfig())
     assert.equal(await recordedCallPath(handle()), '/api/i/local/api/session/follow')
   } finally {
     if (previousLocation === undefined) delete globals.location
@@ -224,7 +236,7 @@ function probedConnection(options: {
   }
   if (options.providedRead === false) ctx.chamberTransport = options.chamberTransport
   else ctx.get = (name: string): unknown => (name === 'chamberTransport' ? options.chamberTransport : undefined)
-  apply(ctx as never)
+  apply(ctx as never, syncedConfig())
   if (handle === undefined) throw new Error('apply did not provide the connection service')
   const connection = handle
   const attempts = { count: 0 }
@@ -333,4 +345,27 @@ test('a legacy shell without ctx.get still resolves the local carrier from the C
     assert.equal(win.listenerTypes().includes('offline'), false)
     loop.stop()
   })
+})
+
+// ── alpha.1 synced Config replay: the recovery timing arrives through apply's
+// second argument (the boot-critical W4-0 supply), never through a page global ──
+
+test('apply dereferences the synced Config face — a missing config is the loud W4-0 failure, never a silent default', () => {
+  const { ctx } = fakeContext('/api/i/local')
+  // No config argument at all: a config-less activation must throw (the measured
+  // alpha.1 shape, plugin fiber FAILED / root ACTIVE) rather than fall back to a
+  // page global or a fabricated default. W4-0 supplies the real object.
+  assert.throws(() => (apply as unknown as (ctx: never) => void)(ctx), TypeError)
+})
+
+test('the retired page global is gone and the synced Config is the one recovery source', () => {
+  const source = readFileSync(new URL('../../src/client/index.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(source, /globals\.__DSH_CONNECTION_RECOVERY__/u,
+    'alpha.1 removed the injected recovery global; the client half must not read it')
+  assert.doesNotMatch(source, /__DSH_CONNECTION_RECOVERY__\?:/u,
+    'the page-global declaration is retired with the injection')
+  assert.match(source, /export function apply\(ctx: Context, config: SyncedConfig<ConnectionConfig>\): void/u,
+    'the upstream apply signature reaches the chamber fork unchanged')
+  assert.match(source, /resolveConnectionConfig\(config\.recovery\.get\(\)\)/u,
+    'recovery timing is read from the synced config ref')
 })

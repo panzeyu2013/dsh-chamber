@@ -519,6 +519,10 @@ function writeBuiltSeedSource(dir: string, built: boolean): string {
 test('resolveLocalHostGraphOverlay: a built artifact + an empty profile patch writes the overlay', t => {
   const dir = tempDir(t)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  // A resolvable web-app layer: the unconditional remote-connection target is then an
+  // idempotent skip (this synthetic patch carries no such row), so the overlay bytes below
+  // stay the pure insert composition.
+  enableWebAppBundle(dshHome)
   const sourceDir = writeBuiltSeedSource(dir, true)
   const overlay = resolveLocalHostGraphOverlay({
     stateDir: dir,
@@ -559,6 +563,7 @@ const EXPECTED_GRAPH_OPEN_IN_OVERLAY = `- insert:
 test('resolveLocalHostGraphOverlay: a seeded chamber open-in appends the official host disable (exact row)', t => {
   const dir = tempDir(t)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  enableWebAppBundle(dshHome)
   const graphSource = writeBuiltSeedSource(dir, true)
   const openInSource = writeBuiltHostSource(dir, HOST_OPEN_IN_PACKAGE_NAME, 'open-in', 'export const openIn = 1\n')
   const overlay = resolveLocalHostGraphOverlay({
@@ -593,6 +598,7 @@ test('resolveLocalHostGraphOverlay: a user-owned open-in row still gets the offi
       name: '${HOST_OPEN_IN_PACKAGE_NAME}'
 `
   const dshHome = writeLocalProfileFixture(dir, userPatch)
+  enableWebAppBundle(dshHome)
   const graphSource = writeBuiltSeedSource(dir, true)
   const openInSource = writeBuiltHostSource(dir, HOST_OPEN_IN_PACKAGE_NAME, 'open-in', 'export const openIn = 1\n')
   const overlay = resolveLocalHostGraphOverlay({
@@ -663,6 +669,7 @@ test('resolveLocalHostGraphOverlay: an ENABLED forge bundle gets the verified fo
   const dir = tempDir(t)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
   const sourceDir = writeBuiltSeedSource(dir, true)
+  enableWebAppBundle(dshHome)
   enableForgeBundle(dshHome)
   const overlay = resolveLocalHostGraphOverlay({
     stateDir: dir,
@@ -683,6 +690,7 @@ test('resolveLocalHostGraphOverlay: a NOT-enabled forge bundle skips the disable
   const dir = tempDir(t)
   // The default fixture (base + web-app) has forge off: the opt-in state must boot normally.
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  enableWebAppBundle(dshHome)
   const sourceDir = writeBuiltSeedSource(dir, true)
   const logs: string[] = []
   const overlay = resolveLocalHostGraphOverlay({
@@ -751,6 +759,7 @@ test('resolveLocalHostGraphOverlay: an enabled bundle disable rides a disable-on
   // bundle-row disable is not an insert identity and must still ride a --patch file.
   const dshHome = writeLocalProfileFixture(dir, EXPECTED_OVERLAY)
   const sourceDir = writeBuiltSeedSource(dir, true)
+  enableWebAppBundle(dshHome)
   enableForgeBundle(dshHome)
   const overlay = resolveLocalHostGraphOverlay({
     stateDir: dir,
@@ -771,6 +780,7 @@ test('resolveLocalHostGraphOverlay: a row already owned by the profile patch yie
   const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
   writeFileSync(stale, EXPECTED_OVERLAY)
   const dshHome = writeLocalProfileFixture(dir, EXPECTED_OVERLAY)
+  enableWebAppBundle(dshHome)
   const sourceDir = writeBuiltSeedSource(dir, true)
   const overlay = resolveLocalHostGraphOverlay({
     stateDir: dir,
@@ -791,6 +801,7 @@ test('resolveLocalHostGraphOverlay: no built artifact yields no overlay, clears 
   const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
   writeFileSync(stale, EXPECTED_OVERLAY)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  enableWebAppBundle(dshHome)
   const sourceDir = writeBuiltSeedSource(dir, false)
   const warns: string[] = []
   const errors: string[] = []
@@ -1293,6 +1304,7 @@ test('resolveLocalHostGraphOverlay: 安全模式跳过全部 seeding、清遗留
 test('resolveLocalHostGraphOverlay: 安全模式只认字面量 1（=0/缺省照常 seed，下次普通启动自动恢复）', t => {
   const dir = tempDir(t)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  enableWebAppBundle(dshHome)
   const sourceDir = writeBuiltSeedSource(dir, true)
   const overlay = resolveLocalHostGraphOverlay({
     stateDir: dir,
@@ -1348,11 +1360,9 @@ function writeStartupPluginFixture(dir: string): StartupPluginFixture {
   writeFileSync(join(primaryRuntimeDir, 'runtime.json'), JSON.stringify({ platform: process.platform, arch: process.arch, python: '3.12.14' }))
   writeFileSync(join(primaryRuntimeDir, 'dependencies', 'python', 'bin', 'python3'), '#!/usr/bin/env python3\n')
   writeFileSync(join(primaryRuntimeDir, 'dependencies', 'node', 'bin', 'node'), '#!/usr/bin/env node\n')
-  // rc.2: four skill directories (no render/recalculate/export-pdf, no sidecar.md).
-  for (const skill of ['office', 'office-docx', 'office-pptx', 'office-xlsx']) {
-    mkdirSync(join(officeSkillsDir, skill), { recursive: true })
-    writeFileSync(join(officeSkillsDir, skill, 'SKILL.md'), '---\ndescription: ' + skill + '\n---\n')
-  }
+  // alpha.2: a single office skill directory (alpha.1 already folded office-docx/office-pptx/office-xlsx in).
+  mkdirSync(join(officeSkillsDir, 'office'), { recursive: true })
+  writeFileSync(join(officeSkillsDir, 'office', 'SKILL.md'), '---\ndescription: office\n---\n')
   for (const name of ['dsh-tool-workspace-dependencies', 'dsh-skill-office']) {
     const packageDir = join(workspace, 'node_modules', '@deepseek-ai', name)
     mkdirSync(packageDir, { recursive: true })
@@ -1472,6 +1482,7 @@ test('resolveLocalHostGraphOverlay: startup rows append after the chamber insert
 test('resolveLocalHostGraphOverlay: startup rows disappearing clear the previous overlay', t => {
   const dir = tempDir(t)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  enableWebAppBundle(dshHome)
   const fixture = writeStartupPluginFixture(dir)
   const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
   const first = resolveLocalHostGraphOverlay({
@@ -1516,6 +1527,30 @@ test('resolveLocalHostGraphOverlay: the rc.2 web-app office row is disabled besi
     readFileSync(overlay as string, 'utf8'),
     WEB_APP_SKILL_OFFICE_DISABLE_ROW + expectedStartupBlock(fixture, dshHome),
     'the bundle duplicate is force-disabled ahead of the startup insert object (two live skill-office mounts would throw)',
+  )
+})
+
+test('resolveLocalHostGraphOverlay: the unconditional remote-connection disable rides every local overlay (H)', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  enableWebAppBundle(dshHome,
+    "- insert:\n    - id: remote-connection\n      name: '@deepseek-ai/dsh-client-remote-connection'\n")
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(
+    readFileSync(overlay as string, 'utf8'),
+    EXPECTED_OVERLAY + `- id: remote-connection
+  name: '@deepseek-ai/dsh-client-remote-connection'
+  disabled: true
+`,
+    'alpha.2 web-app mounts the row in every profile; the local overlay must always force it off (anonymous host half + dead pairing card)',
   )
 })
 

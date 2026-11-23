@@ -105,6 +105,10 @@ export const zh = {
   'viewOptions.showArchived': '全部对话（显示已归档）',
   'viewOptions.onlyArchived': '仅显示已归档',
   'menu.fork': '分叉会话',
+  // alpha.1 行菜单 mark 已读/未读（上游 ui-workspace 字典 menu.markRead/menu.markUnread 逐字）：
+  // 标签按该行当前未读位翻转；归档行不出现（上游 read-state 菜单项对 archived 早退）。
+  'menu.markRead': '标为已读',
+  'menu.markUnread': '标为未读',
   // 置顶动词逐字取上游 ui-workspace 字典（menu.pinSession/menu.unpinSession、actions.pin/
   // unpin、row.pinned）。zh 的「置顶」承诺了排序（上游 pin 会写 pinSessionOrder）；本仓的
   // 渲染分区见 design 06 §5/§7；置顶不写本地账号。
@@ -213,6 +217,8 @@ export const zh = {
   'status.planReview': '计划待审',
   'status.waitingAnswer': '等待回答',
   'status.completed': '已完成',
+  // 失败完成（alpha.1 completionFailed）：上游 ui-workspace status.failed 的 zh 文案「失败」。
+  'status.failed': '失败',
   'status.subagentsRunning.one': '{n} 个子代理运行中',
   'status.subagentsRunning.other': '{n} 个子代理运行中',
   'todo.title': '会话待办',
@@ -334,6 +340,8 @@ export const en = {
   'viewOptions.showArchived': 'All conversations (show archived)',
   'viewOptions.onlyArchived': 'Archived only',
   'menu.fork': 'Fork session',
+  'menu.markRead': 'Mark as read',
+  'menu.markUnread': 'Mark as unread',
   'menu.pinSession': 'Pin session',
   'menu.unpinSession': 'Unpin session',
   'menu.archiveSession': 'Archive session',
@@ -418,6 +426,7 @@ export const en = {
   'status.planReview': 'Plan awaiting review',
   'status.waitingAnswer': 'Waiting for answer',
   'status.completed': 'Completed',
+  'status.failed': 'Failed',
   'status.subagentsRunning.one': '{n} subagent running',
   'status.subagentsRunning.other': '{n} subagents running',
   'todo.title': 'Session todo',

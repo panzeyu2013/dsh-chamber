@@ -2,8 +2,9 @@
 /**
  * prepare-office-assets.mjs —— 上游 Office 技能资产的落位 / 校验（只读源 → 构建产物目录）。
  *
- * 上游口径（rc.2）：`@deepseek-ai/dsh-skill-office` 只随包发布 4 个技能资产
- * （`office`/`office-docx`/`office-pptx`/`office-xlsx` 的 SKILL.md）；上游
+ * 上游口径（alpha.2）：`@deepseek-ai/dsh-skill-office` 只随包发布 1 个技能资产
+ * （`office/SKILL.md`；alpha.1 起把 office-docx/office-pptx/office-xlsx 三技能折进
+ * `office`，上游 SKILL_NAMES 收窄为 ['office']）；上游
  * primary-runtime prepare 不产出 `office-skills/` sibling（桌面由
  * web-app bundle 的 skill-office 行读包内 assets）。本仓仍落位这份 sibling：载荷
  * 内的运行时树会被 prune 删掉非 `docs/` 下的 Markdown（包括包内 SKILL.md），
@@ -52,18 +53,16 @@ export const DEFAULT_SOURCE_CANDIDATES = [
 /** 仓库提交的目录说明文件名（唯一允许在落点里长期存在的非资产文件）。 */
 export const COMMITTED_README = 'README.md'
 /**
- * 资产清单（唯一单源）：上游 skill-office 的 assets 树恰好是这 4 个文件
- * （rc.2 删除了 office-render/office-recalculate/office-export-pdf 与共享的
- * office/references/sidecar.md）。上游新增/改名技能时改这一处 + 重新 prepare，
- * 并同批同步 control-plane 启动行的 OFFICE_SKILL_NAMES 门控。
+ * 资产清单（唯一单源）：上游 skill-office 的 assets 树恰好是这 1 个文件
+ * （alpha.1 起把 office-docx/office-pptx/office-xlsx 折进 office：SKILL_NAMES 收窄为
+ * ['office']，旧形状里剩余的 office-render/recalculate/export-pdf 与共享的
+ * office/references/sidecar.md 更早已删除）。上游新增/改名技能时改这一处 +
+ * 重新 prepare，并同批同步 control-plane 启动行的 OFFICE_SKILL_NAMES 门控。
  */
 export const OFFICE_SKILL_FILES = Object.freeze([
   'office/SKILL.md',
-  'office-docx/SKILL.md',
-  'office-pptx/SKILL.md',
-  'office-xlsx/SKILL.md',
 ])
-/** 落点顶层允许出现的期望项（4 个技能目录 + committed README）。 */
+/** 落点顶层允许出现的期望项（1 个技能目录 + committed README）。 */
 export const OFFICE_SKILL_TOP_LEVEL = Object.freeze(
   [...new Set(OFFICE_SKILL_FILES.map((relative) => relative.split('/')[0]))],
 )
@@ -205,8 +204,9 @@ function removeStaleTempFiles(rootDir) {
 }
 
 /**
- * 清掉落点里不在资产清单内的文件/目录（递归）：陈旧技能目录、期望目录内的陈旧文件
- * （如 8→4 之后的 office/references/sidecar.md）、顶层杂文件；committed README 保留。
+ * 清掉落点里不在资产清单内的文件/目录（递归）：陈旧技能目录（如 alpha.1 前的
+ * office-docx/office-pptx/office-xlsx）、期望目录内的陈旧文件、顶层杂文件；
+ * committed README 保留。
  * 只删清单之外的路径，清单内文件由落位步骤覆盖。
  * @param {string} outDir - 落点目录（已存在）。
  * @returns {string[]} 被清掉的相对路径（/ 分隔）。

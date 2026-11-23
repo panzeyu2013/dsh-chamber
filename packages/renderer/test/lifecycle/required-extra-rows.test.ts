@@ -215,19 +215,25 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@deepseek-ai/dsh-client-shortcuts', ['locale']],
   ['@deepseek-ai/dsh-client-ui-theme', ['slots', 'locale', 'remote', 'configForms']],
   ['@dsh-chamber/dsh-chamber-client-ui-layout', ['slots', 'theme', 'locale', 'shortcuts']],
+  // 0.2.3-alpha.1: the sidebar producer reads the extracted Session status service
+  // (`uiSession.sessionStatus`) directly instead of the old nested cast.
   ['@dsh-chamber/dsh-chamber-client-ui-sidebar',
-    ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale', 'shortcuts']],
+    ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiSession.sessionStatus', 'uiWorkspace', 'locale', 'shortcuts']],
   ['@dsh-chamber/dsh-chamber-client-ui-git', ['slots', 'locale']],
   ['@dsh-chamber/dsh-chamber-client-ui-open-in', ['slots', 'locale']],
   ['@deepseek-ai/dsh-client-ui-settings', ['remote', 'remote.settings']],
   ['@deepseek-ai/dsh-client-ui-conversation',
-    ['slots', 'sessions', 'fileUpload', 'uiSession', 'uiWorkspace', 'locale', 'configForms']],
+    ['slots', 'sessions', 'fileUpload', 'uiSession', 'uiSession.sessionStatus', 'uiWorkspace', 'locale', 'configForms']],
   ['@deepseek-ai/dsh-client-ui-commands', ['inputTriggers', 'sessions', 'remote', 'remote.commands', 'locale']],
   ['@deepseek-ai/dsh-client-ui-input-trigger', ['sessions', 'locale']],
   ['@deepseek-ai/dsh-client-ui-workspace',
-    ['contextMenus', 'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts', 'remoteAccess']],
+    ['contextMenus', 'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts', 'remoteAccess', 'uiSession', 'uiSession.sessionStatus']],
   ['@deepseek-ai/dsh-client-ui-model-selection', ['commandUi', 'locale', 'sessions', 'slots', 'remote', 'remote.session']],
-  ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots', 'remote', 'remoteAccess']],
+  ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots', 'remoteAccess']],
+  // alpha.1: the Session status table extracted from ui-session; the covered conversation/
+  // workspace families and the chamber sidebar inject `uiSession.sessionStatus`.
+  ['@deepseek-ai/dsh-client-ui-session-status',
+    ['remote', 'remote.sessionStatus', 'remoteAccess', 'sessions', 'slots', 'uiSession']],
   ['@deepseek-ai/dsh-client-ui-chat',
     ['slots', 'sessions', 'uiWorkspace', 'uiSession', 'uiConversation', 'locale', 'configForms', 'connection', 'remote', 'remote.session', 'sidebarRight', 'fileDrag']],
   ['@deepseek-ai/dsh-client-ui-approval', ['sessions', 'remote', 'uiSession', 'slots', 'locale']],
@@ -245,6 +251,9 @@ const AUDITED_REQUIRED_SERVICES: readonly string[] = [
   'slots', 'locale', 'sessions', 'workspaces', 'connection', 'remote', 'typert', 'fileUpload',
   'uiSession', 'uiConversation', 'uiWorkspace', 'layout', 'theme', 'configForms',
   'commandUi', 'inputTriggers', 'remote.session', 'shortcuts', 'sidebarRight',
+  // alpha.1: the extracted Session status service + the access-control service it and every
+  // conversation/workspace family inject; the probe must keep covering both.
+  'uiSession.sessionStatus', 'remoteAccess',
 ]
 
 /**
@@ -270,6 +279,8 @@ const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
   'remote.userQuestions',
   // 0.2.2: the deferred rows gained the tool-results namespace (same first-screen provider).
   'remote.toolResults',
+  // 0.2.3-alpha.1: the deferred workspace-files family injects its own mounted namespace.
+  'remote.workspaceFiles',
   'resources', 'sidebarRightTabs', 'settingsSchema',
 ]
 
@@ -518,8 +529,12 @@ test('deferred rows mount with their row id as the fiber name', () => {
   // deferred mount is `decorateMount(outcome.id, { ...loaded, name: outcome.id })`,
   // which only spreads the namespace and replaces \`apply\` — the row id still
   // names the fiber, and a decorated id never loses its hook by living here.
-  assert.match(entry, /ctx\.plugin\(decorateMount\(outcome\.id, \{ \.\.\.loaded, name: outcome\.id \}\)\)/,
+  // alpha.1 W4-0: the decorated object is bound once (a synced-Config provider row gets
+  // the per-field reference object as the second ctx.plugin argument).
+  assert.match(entry, /const deferredPlugin = decorateMount\(outcome\.id, \{ \.\.\.loaded, name: outcome\.id \}\)/,
     'a deferred row must be mounted with its row id as the fiber name')
+  assert.match(entry, /ctx\.plugin\(deferredPlugin, syncedConfig\)/,
+    'the deferred mount must pass the synced-Config activation (alpha.1 W4-0)')
   assert.doesNotMatch(entry, /ctx\.plugin\((?:outcome\.plugin|loaded)\)/,
     'a bare mount loses the row identity in every fiber-name diagnostic')
 })
@@ -538,8 +553,11 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
   // locale mount gains the page-language ownership hook), so the mount still
   // happens inside the helper and cannot bypass the roster. A bare
   // `ctx.plugin(plugin)` would leave every mount-time decorator unapplied.
-  assert.match(entry, /const fiber = ctx\.plugin\(decorateMount\(id, plugin\)\) as unknown as \{ inject\?: unknown \} \| undefined/,
-    'the mount happens inside the helper, so no bare ctx.plugin can bypass the roster')
+  assert.match(
+    entry,
+    /const fiber = \(syncedConfig === undefined\s*\? ctx\.plugin\(decorateMount\(id, plugin\)\)\s*: ctx\.plugin\(decorateMount\(id, plugin\), syncedConfig\)\) as unknown as \{ inject\?: unknown \} \| undefined/,
+    'the mount happens inside the helper (with the synced-Config activation when on the roster), so no bare ctx.plugin can bypass the roster',
+  )
   assert.match(entry, /const declared = registeredInjectMembers\(id, \(plugin as \{ inject\?: unknown \}\)\.inject\)/,
     'the roster source is the namespace export, normalized by the shared helper')
   assert.match(entry, /registered\.push\(\{ id, inject: declared \}\)/,
@@ -558,7 +576,11 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
   const args = [...entry.matchAll(/ctx\.plugin\(([^)]*)/g)].map(match => match[1]!.trim())
   assert.ok(args.length > 0, 'the composite must still register plugins')
   for (const arg of args) {
-    assert.ok(arg.startsWith('decorateMount(') || arg.startsWith('{'),
+    // The first-screen helper passes the DECORATED namespace (optionally with the synced
+    // Config second argument); the deferred cluster binds its decorated object to
+    // `deferredPlugin` first. Anything else is a bare mount.
+    assert.ok(arg.startsWith('decorateMount(') || arg === 'deferredPlugin'
+      || arg.startsWith('deferredPlugin,') || arg.startsWith('{'),
       `a bare ctx.plugin(${arg}…) bypasses the derived roster — mount it through register()`)
   }
   // The probe consumes exactly that roster (no hardcoded service list).

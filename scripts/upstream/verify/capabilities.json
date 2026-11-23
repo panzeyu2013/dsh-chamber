@@ -57,23 +57,25 @@
     },
     {
       "id": "sessionStatus.completionUnread",
-      "note": "官方内存完成未读位：chamber 通知/角标的完成事实唯一权威（durable 账本已随上游对齐移除，重载即忘是接受行为）。探针根 = 官方 ui-session 客户端经理（该位是客户端投影态，不在 api 包）。",
+      "note": "官方完成未读投影位：current pin 起从 ui-session 迁到新包 dsh-client-ui-session-status（Host 内存读记录投影：跨 Client / 跨 reload 共享，Host 重启清零；note 与 retireWhen 三分见下）。探针根 = 新包的客户端状态表（客户端投影态，不在 api 包）。",
       "probe": {
         "anchors": [
-          "packages/client/ui-session/src/client/index.ts#=literal:readonly completionUnread: boolean"
+          "packages/client/ui-session-status/src/client/status.ts#=literal:readonly completionUnread: boolean"
         ],
         "expect": "present"
       },
       "requires": [
         "packages/dsh-chamber-client-ui-sidebar/src/client/index.ts",
-        "packages/renderer/src/completion-observation.ts"
+        "packages/renderer/src/completion-observation.ts",
+        "packages/renderer/src/badge-count.ts"
       ],
       "localWorkaround": {
         "by": [
           "packages/renderer/src/completion-observation.ts",
-          "packages/dsh-chamber-client-ui-sidebar/src/client/index.ts"
+          "packages/dsh-chamber-client-ui-sidebar/src/client/index.ts",
+          "packages/renderer/src/badge-count.ts"
         ],
-        "retireWhen": "上游提供持久化完成未读/跨端读回执面后，N-ctx 修正臂（corrected provenance）与本地收敛投影整体退役"
+        "retireWhen": "三分退役（互不等待）：① 跨 Client/跨 reload 共享已完成（alpha.1 Host 读记录）——该条不再作为退役条件，chamber 只保留 N-ctx 修正臂部分；② 持久化（Host 重启不清）未达成（上游明写内存记录）——上游若持久化，chamber 无需自持 durable 未读，本地收敛投影随之退役；③ N-ctx 隐藏壳 ack 偏差（上游 acknowledge 的可见性判据是 document 级、N-ctx 保活让它对隐藏源永真）是 chamber 自有偏差，不随上游退役（design 06/19 登记 + 2 壳负向测试），禁止被本条 retireWhen 吞掉。"
       }
     },
     {

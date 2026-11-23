@@ -17,6 +17,7 @@ import { once } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { WebSocket } from 'ws'
 import { PAGE_CHANNEL_PATH } from '@dsh-chamber/dsh-chamber-wire/page-channel'
+import { SESSION_STATE_STREAM_PATH } from '@dsh-chamber/dsh-chamber-wire/session-state'
 import { createControlPlane } from '../../src/index.ts'
 import { fakeWire, tempDir, waitFor } from '../support/utils.ts'
 
@@ -167,7 +168,7 @@ test('wiring: 同一拍内 stop(); start(); stop() —— 最后一次是 stop �
   assert.equal(harness.plane.port, null, '排队中的 start 不得在 stop 结算后复活控制面')
 })
 
-test('wiring: pluginGraph resolves through the registered instance transport and streams its SSE', async (t) => {
+test('wiring: sessionFacts resolves through the registered instance transport and streams its SSE', async (t) => {
   const requests: Array<{ url: string | undefined; headers: Record<string, any> }> = []
   const upstream = createServer((req, res) => {
     requests.push({ url: req.url, headers: req.headers })
@@ -183,17 +184,17 @@ test('wiring: pluginGraph resolves through the registered instance transport and
   })
 
   const harness = await startPlane(t)
-  harness.plane.registerInstanceTransport('dsh:e2e', `http://127.0.0.1:${upstreamPort}`)
+  harness.plane.registerInstanceTransport('gateway:e2e', `http://127.0.0.1:${upstreamPort}`, undefined, { transport: 'http' })
   const client = await connectClient(`ws://127.0.0.1:${harness.plane.port}${PAGE_CHANNEL_PATH}`)
   t.after(() => client.ws.terminate())
 
-  client.send({ type: 'subscribe', id: 'pg-e2e', family: 'pluginGraph', instanceId: 'dsh-e2e' })
+  client.send({ type: 'subscribe', id: 'pg-e2e', family: 'sessionFacts', instanceId: 'gateway-e2e' })
   await client.waitForType('ready', 'pg-e2e')
   const item = await client.waitForType('item', 'pg-e2e')
   assert.equal(item.event, 'graph')
   assert.equal(item.data, '{"rev":7}')
   assert.equal(requests.length, 1)
-  assert.equal(requests[0].url, '/plugins/events', 'the page channel addresses the instance route, not /api/i/*')
+  assert.equal(requests[0].url, SESSION_STATE_STREAM_PATH, 'the page channel addresses the instance route, not /api/i/*')
   assert.equal(requests[0].headers['accept-encoding'], undefined)
 
   await harness.stop()
@@ -228,19 +229,19 @@ test('wiring: a down link fast-fails NEW subscriptions but keeps established one
   t.after(() => downed.close())
   t.after(() => kept.close())
   const harness = await startPlane(t)
-  harness.plane.registerInstanceTransport('dsh:down', downed.baseUrl)
-  harness.plane.registerInstanceTransport('dsh:keep', kept.baseUrl)
+  harness.plane.registerInstanceTransport('gateway:down', downed.baseUrl, undefined, { transport: 'http' })
+  harness.plane.registerInstanceTransport('gateway:keep', kept.baseUrl, undefined, { transport: 'http' })
   const client = await connectClient(`ws://127.0.0.1:${String(harness.plane.port)}${PAGE_CHANNEL_PATH}`)
   t.after(() => client.ws.terminate())
 
-  client.send({ type: 'subscribe', id: 'pg-down', family: 'pluginGraph', instanceId: 'dsh-down' })
-  client.send({ type: 'subscribe', id: 'pg-keep', family: 'pluginGraph', instanceId: 'dsh-keep' })
+  client.send({ type: 'subscribe', id: 'pg-down', family: 'sessionFacts', instanceId: 'gateway-down' })
+  client.send({ type: 'subscribe', id: 'pg-keep', family: 'sessionFacts', instanceId: 'gateway-keep' })
   await client.waitForType('item', 'pg-down')
   await client.waitForType('item', 'pg-keep')
 
   // DOWN keeps the established subscription: a link that recovers inside the grace
   // must not churn the page (the reconnect that follows the grace is what revokes).
-  harness.plane.setInstanceTransportHealth('dsh:down', 'down')
+  harness.plane.setInstanceTransportHealth('gateway:down', 'down')
   await new Promise<void>(resolve => setTimeout(resolve, 150))
   assert.equal(
     client.messages.filter(message => message.type === 'error' && message.id === 'pg-down').length,
@@ -251,12 +252,12 @@ test('wiring: a down link fast-fails NEW subscriptions but keeps established one
 
   // A NEW subscription while down fails fast at the page channel, not by opening an
   // upstream that would sit half-open.
-  client.send({ type: 'subscribe', id: 'pg-down-2', family: 'pluginGraph', instanceId: 'dsh-down' })
+  client.send({ type: 'subscribe', id: 'pg-down-2', family: 'sessionFacts', instanceId: 'gateway-down' })
   const refused = await client.waitForType('error', 'pg-down-2')
   assert.equal(refused.code, 'instance_unavailable')
 
   // Teardown (what the grace expiry leads to) fails the established subscription.
-  harness.plane.unregisterInstanceTransport('dsh:down')
+  harness.plane.unregisterInstanceTransport('gateway:down')
   const failure = await client.waitForType('error', 'pg-down')
   assert.equal(failure.code, 'instance_unavailable')
   assert.match(failure.message, /replaced or removed/)
@@ -268,8 +269,8 @@ test('wiring: a down link fast-fails NEW subscriptions but keeps established one
   )
 
   // Re-registering the link (a recovered incarnation) lets a fresh subscribe resolve.
-  harness.plane.registerInstanceTransport('dsh:down', downed.baseUrl)
-  client.send({ type: 'subscribe', id: 'pg-down-3', family: 'pluginGraph', instanceId: 'dsh-down' })
+  harness.plane.registerInstanceTransport('gateway:down', downed.baseUrl, undefined, { transport: 'http' })
+  client.send({ type: 'subscribe', id: 'pg-down-3', family: 'sessionFacts', instanceId: 'gateway-down' })
   await client.waitForType('ready', 'pg-down-3')
   assert.ok(downed.requests.length >= 2, 'a recovered link opens a fresh upstream')
   await harness.stop()
@@ -281,18 +282,18 @@ test('wiring: a revoked/replaced transport fails only its own subscriptions and 
   t.after(() => revoked.close())
   t.after(() => kept.close())
   const harness = await startPlane(t)
-  harness.plane.registerInstanceTransport('dsh:rev', revoked.baseUrl)
-  harness.plane.registerInstanceTransport('dsh:keep', kept.baseUrl)
+  harness.plane.registerInstanceTransport('gateway:rev', revoked.baseUrl, undefined, { transport: 'http' })
+  harness.plane.registerInstanceTransport('gateway:keep', kept.baseUrl, undefined, { transport: 'http' })
   const client = await connectClient(`ws://127.0.0.1:${String(harness.plane.port)}${PAGE_CHANNEL_PATH}`)
   t.after(() => client.ws.terminate())
 
-  client.send({ type: 'subscribe', id: 'pg-rev', family: 'pluginGraph', instanceId: 'dsh-rev' })
-  client.send({ type: 'subscribe', id: 'pg-keep', family: 'pluginGraph', instanceId: 'dsh-keep' })
+  client.send({ type: 'subscribe', id: 'pg-rev', family: 'sessionFacts', instanceId: 'gateway-rev' })
+  client.send({ type: 'subscribe', id: 'pg-keep', family: 'sessionFacts', instanceId: 'gateway-keep' })
   await client.waitForType('item', 'pg-rev')
   await client.waitForType('item', 'pg-keep')
 
   // 注销 = 隧道消失：实例代理必须把通道自己开的上游（不在它的 traffic 表里）一起收掉。
-  harness.plane.unregisterInstanceTransport('dsh:rev')
+  harness.plane.unregisterInstanceTransport('gateway:rev')
   const failure = await client.waitForType('error', 'pg-rev')
   assert.equal(failure.code, 'instance_unavailable')
   assert.match(failure.message, /replaced or removed/)
@@ -304,14 +305,14 @@ test('wiring: a revoked/replaced transport fails only its own subscriptions and 
   )
 
   // 同一 id 重新注册（传输被替换）后，新订阅必须解析到新传输并打开一条新上游。
-  harness.plane.registerInstanceTransport('dsh:rev', revoked.baseUrl)
-  client.send({ type: 'subscribe', id: 'pg-rev-2', family: 'pluginGraph', instanceId: 'dsh-rev' })
+  harness.plane.registerInstanceTransport('gateway:rev', revoked.baseUrl, undefined, { transport: 'http' })
+  client.send({ type: 'subscribe', id: 'pg-rev-2', family: 'sessionFacts', instanceId: 'gateway-rev' })
   await client.waitForType('ready', 'pg-rev-2')
   await client.waitForType('item', 'pg-rev-2')
   assert.ok(revoked.requests.length >= 2, 'the fresh subscription opened a new upstream')
 
   // 替换（registerTransport 覆盖同一 connectionId）走同一条 revoke 路径：旧订阅必须失败。
-  harness.plane.registerInstanceTransport('dsh:rev', kept.baseUrl)
+  harness.plane.registerInstanceTransport('gateway:rev', kept.baseUrl, undefined, { transport: 'http' })
   const replaced = await client.waitForType('error', 'pg-rev-2')
   assert.equal(replaced.code, 'instance_unavailable')
   assert.match(replaced.message, /replaced or removed/)
@@ -323,10 +324,10 @@ test('wiring: a suspect link still opens a new page subscription', async (t) => 
   const upstream = await startFactsUpstream()
   t.after(() => upstream.close())
   const harness = await startPlane(t)
-  harness.plane.registerInstanceTransport('dsh:susp', upstream.baseUrl, undefined, { health: 'suspect' })
+  harness.plane.registerInstanceTransport('gateway:susp', upstream.baseUrl, undefined, { transport: 'http', health: 'suspect' })
   const client = await connectClient(`ws://127.0.0.1:${String(harness.plane.port)}${PAGE_CHANNEL_PATH}`)
   t.after(() => client.ws.terminate())
-  client.send({ type: 'subscribe', id: 'pg-susp', family: 'pluginGraph', instanceId: 'dsh-susp' })
+  client.send({ type: 'subscribe', id: 'pg-susp', family: 'sessionFacts', instanceId: 'gateway-susp' })
   await client.waitForType('ready', 'pg-susp')
   assert.equal(
     client.messages.filter(message => message.type === 'error' && message.id === 'pg-susp').length,

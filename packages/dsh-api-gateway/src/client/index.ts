@@ -3,9 +3,12 @@
  * traced `remote.<namespace>` services; no JavaScript Proxy participates in method
  * lookup, invocation, or type exposure.
  *
- * chamber fork: per-entry base-path patch only — `apply(ctx)` reads the entry
+ * chamber fork: per-entry base-path patch — `apply(ctx)` reads the entry
  * Context's `chamberBasePath` (never a page global) and threads it into
- * `RemoteStreamMuxClient` so the stream socket lands under the proxy prefix.
+ * `RemoteStreamMuxClient` so the stream socket lands under the proxy prefix —
+ * plus the G43 carrier-code judgement: a retryable carrier loss is an error whose
+ * `code` is `gateway/carrier-lost` (never a Host RemoteError), so a domain
+ * `ended()` may request a reconnect without importing the carrier class.
  */
 
 import { Service } from '@deepseek-ai/cordis'
@@ -30,8 +33,10 @@ import type {
 } from '@deepseek-ai/dsh-typert-protocol'
 import {
   ClientUplinkQueue,
+  isRemoteStreamCarrierFailure,
   RemoteStreamCarrierError,
   RemoteStreamMuxClient,
+  type RemoteStreamCarrierFailure,
 } from './stream-client.ts'
 import { ClientRemoteEvents } from './remote-events.ts'
 import {
@@ -42,7 +47,8 @@ import { readInjectionHarness, wrapOpenWithInjection } from '@dsh-chamber/dsh-st
 import { createCarrierFailureReporter, reportStreamCarrierFailures } from './stream-carrier-fact.ts'
 import { createStreamForensicsReporter, installStreamForensicsSnapshotBridge } from './stream-forensics.ts'
 
-export { RemoteStreamCarrierError } from './stream-client.ts'
+export { isRemoteStreamCarrierFailure, RemoteStreamCarrierError } from './stream-client.ts'
+export type { RemoteStreamCarrierFailure } from './stream-client.ts'
 export { RemoteJournalStream } from './journal-stream.ts'
 export type {
   RemoteJournalChange,
@@ -248,7 +254,7 @@ class ClientRemoteService extends Service implements ClientRemote {
         harness: () => readInjectionHarness(globalThis),
         makeBreakError: reason => new RemoteStreamCarrierError(reason),
       }),
-      carrierFailed: (error: RemoteStreamCarrierError): void => {
+      carrierFailed: (error: RemoteStreamCarrierFailure): void => {
         carrierFailed?.(error)
         this.reportCarrierFailure(error)
       },
@@ -310,9 +316,13 @@ class ClientRemoteService extends Service implements ClientRemote {
     const source = local === undefined
       ? this.streams.open(endpoint, payload, signal, uplink)
       : normalizeConnectionStream(local)
+    // chamber patch (G43 carrier code): the retry lane classifies a carrier loss by its
+    // `gateway/carrier-lost` code, not by class identity — a domain `ended()` may return a
+    // plain Error with that code. A Host RemoteError never counts, and the auth close code is
+    // still judged FIRST in remote-stream.ts (a stale credential is terminal, not retryable).
     return reportStreamCarrierFailures(
       source,
-      error => error instanceof RemoteStreamCarrierError,
+      error => isRemoteStreamCarrierFailure(error),
       this.reportCarrierFailure,
     )
   }

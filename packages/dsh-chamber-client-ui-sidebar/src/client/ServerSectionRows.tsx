@@ -18,7 +18,9 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 // alpha.3 的 copy 字形不在本包 tsc 解析到的 primitives barrel 面里（运行时/bundler 正常），
 // 走包已导出的 ./src/* 子路径；上游 SessionId 菜单项正是这一个字形。
-import { IconCopyOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives/src/icons/index.tsx'
+import {
+  IconCopyOutlineRegular, IconMailReadOutlineRegular, IconMailUnreadOutlineRegular,
+} from '@deepseek-ai/dsh-client-ui-primitives/src/icons/index.tsx'
 import type { ChamberServerAggregate, ChamberServerWorkspace } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { relativeTimeBucket } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { openErrorKey } from '@dsh-chamber/dsh-chamber-client-core/open-outcome'
@@ -30,6 +32,7 @@ import { ROW_CARD_OPEN_DELAY_MS, dragOverState, rowHalf } from './server-section
 import { useTitleMarquee } from './session-title-marquee.ts'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
 import { useSidebarSection } from './sidebar-context.ts'
+import { useReadingReady } from './use-reading-seat.ts'
 import cc from './sidebar-chamber.module.css'
 
 export interface ServerSectionSessionRowsProps {
@@ -113,7 +116,16 @@ const SessionRow = memo(function SessionRow({
     useShortcuts,
     renderSessionSeat,
     chamberInstanceId,
+    onMarkSessionRead,
   } = useSidebarSection()
+  // alpha.1 reading marks: the row menu offers "mark read/unread" only through the row's OWN
+  // source seat (a mounted shell whose status service received the Host reading baseline).
+  // No seat (source not mounted) reads as not ready, so the item stays visible-but-disabled —
+  // the same shape upstream gives a not-yet-ready reading service (no silent disappearing verb).
+  const readingReady = useReadingReady(server.id)
+  // The channel's own completion-unread bit decides the DIRECTION (mark read vs unread);
+  // facts/derived reminders never enter it (the Host reading record is the only authority).
+  const unread = server.runtime?.sessions[session.id]?.completed === true
   // 上游 SessionId 菜单项的动作：复制完整会话 id，成功/失败各一条瞬态提示（design 06 §3.4）。
   const copySessionId = async (sourceId: string, sessionId: string): Promise<void> => {
     const copied = await writeClipboard(sessionId)
@@ -124,7 +136,9 @@ const SessionRow = memo(function SessionRow({
   const renameShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.rename'))
   const forkShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.fork'))
   const archiveShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.archive'))
-  const { sessionStateLabel, sessionStatePending, sessionStateMarker, sessionStateDot } = useServerSectionSessionState()
+  const {
+    sessionStateLabel, sessionStatePending, sessionStateMarker, sessionStateFailed, sessionStateDot,
+  } = useServerSectionSessionState()
   /** 悬停卡片的本地化相对时间（"刚刚"/"5分钟前"），在卡片打开时采样。 */
   const hoverTimeLabel = (updatedAt: number, now: number): string => {
     const { unit, n } = relativeTimeBucket(updatedAt, now)
@@ -151,6 +165,15 @@ const SessionRow = memo(function SessionRow({
       shortcut: renameShortcut,
       icon: <IconEditOutlineRegular size={14} />,
     },
+    // 上游 ui-workspace 的 read-state 菜单项（order 250，位于 rename 之后）：标签按该行当前
+    // 未读位翻转，reading 未就绪时禁用；归档行不出现（上游 archived 早退——归档行自身不
+    // 呈现提醒，mark 会制造用户无法通过阅读清除的幻影）。动作走页面级 unary（跨源）。
+    ...(session.archived === true ? [] : [{
+      id: 'mark',
+      label: t(unread ? 'menu.markRead' : 'menu.markUnread'),
+      disabled: !readingReady,
+      icon: unread ? <IconMailReadOutlineRegular size={14} /> : <IconMailUnreadOutlineRegular size={14} />,
+    }]),
     {
       id: 'fork',
       label: t('menu.fork'),
@@ -176,7 +199,7 @@ const SessionRow = memo(function SessionRow({
       label: t('menu.sessionId'),
       icon: <IconCopyOutlineRegular size={14} />,
     },
-  ], [t, session.pinned, session.archived, renameShortcut, forkShortcut, archiveShortcut])
+  ], [t, session.pinned, session.archived, unread, readingReady, renameShortcut, forkShortcut, archiveShortcut])
   const sessionKey = `${server.id}/session/${session.id}`
   // 会话行（上提以便 HoverCard 包裹）。单击立即打开、零延迟；
   // 模块级 pending（按 sessionId 记）只判定同一会话在
@@ -218,8 +241,14 @@ const SessionRow = memo(function SessionRow({
       onDragStart={ghost || synthetic || session.archived === true || session.blank === true
         ? undefined
         : (event) => {
-          event.dataTransfer.effectAllowed = 'move'
+          // Upstream Rows.tsx drag contract (alpha.1): the row id also rides the shared
+          // `application/x-dsh-session` type that covered drop targets read (ui-subagent's
+          // `SessionDropZone` overlay opens the Session's chat in the right Sidebar). Chamber's
+          // own reorder keeps text/plain and is reorderable, so effectAllowed matches upstream's
+          // reorder arm ('copyMove'); a claimed copy drop is what the local commit respects.
+          event.dataTransfer.effectAllowed = 'copyMove'
           event.dataTransfer.setData('text/plain', session.id)
+          event.dataTransfer.setData('application/x-dsh-session', session.id)
           suppressClickRef.current = true
           sessionDropCommitted.current = false
           setSessionDrag({
@@ -361,6 +390,10 @@ const SessionRow = memo(function SessionRow({
               }
             } else if (id === 'pin') {
               onPinSession(server, session.id, session.pinned === true)
+            } else if (id === 'mark') {
+              // Desired state = NOT the current unread bit (upstream: markSession(id, !unread));
+              // a read is clamped to the Host's completedTurn (see session-status-marks.ts).
+              onMarkSessionRead(server, session.id, !unread)
             } else if (id === 'sessionId') {
               void copySessionId(server.id, session.id)
             }
@@ -442,6 +475,9 @@ const SessionRow = memo(function SessionRow({
         className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
         // 状态与出处的机器可读镜像（不参与渲染）。
         data-chamber-session-state={sessionStateMarker(server, session).state}
+        // alpha.1 失败完成：与红点/文案同一判定（呈现档，不新增 state 取值——state 联合由
+        // client-core 拥有；失败成功替换 completed 的呈现，故 attributes 上是 completed + failed）。
+        data-chamber-session-failed={sessionStateFailed(server, session) ? '' : undefined}
         // 该行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
         data-chamber-fact-at={server.runtime?.sessions[session.id]?.factAt}
         data-chamber-state-source={sessionStateMarker(server, session).source}

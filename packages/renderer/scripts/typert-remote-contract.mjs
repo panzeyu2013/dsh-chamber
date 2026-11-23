@@ -13,7 +13,7 @@ import { stripComments } from '../../../scripts/dev/test-support/source-text.ts'
 
 /**
  * The pinned assembly contract: the package list `dsh-api-remotes`' client
- * half mounts into `ctx.remote()`, in apply() mount order (30 rows). Mount
+ * half mounts into `ctx.remote()`, in apply() mount order (34 rows). Mount
  * order is runtime-significant, so it is the ONE ordered table. The `/remote`
  * import selection has no runtime order semantics: callers compare its SET
  * against this same table (single source — the lockstep test
@@ -39,6 +39,8 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-mcp-manager',
   '@deepseek-ai/dsh-plugin-market',
   '@deepseek-ai/dsh-client-ui-plugin-manager',
+  // 0.2.3-alpha.1: connector accounts (Plugins page) — mounted at position 16.
+  '@deepseek-ai/dsh-client-ui-connector-account',
   '@deepseek-ai/dsh-client-ui-trajectory',
   '@deepseek-ai/dsh-message-feedback',
   '@deepseek-ai/dsh-command-feedback',
@@ -47,6 +49,9 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-permission-presets',
   '@deepseek-ai/dsh-subagent',
   '@deepseek-ai/dsh-api-session-controller',
+  // 0.2.3-alpha.1: the Host Session reading records — mounted at position 25 (the
+  // ui-session-status row injects `remote.sessionStatus`).
+  '@deepseek-ai/dsh-client-ui-session-status',
   '@deepseek-ai/dsh-api-job-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-api-workspace-files',
@@ -54,16 +59,25 @@ export const EXPECTED_MOUNT_PACKAGES = Object.freeze([
   '@deepseek-ai/dsh-office-kit',
   '@deepseek-ai/dsh-user-questions',
   '@deepseek-ai/dsh-web',
+  // 0.2.3-alpha.1: recommendation cards — mounted at positions 33 and 34.
+  '@deepseek-ai/dsh-action-cards',
+  '@deepseek-ai/dsh-plugin-recommendations',
 ])
 
 /**
  * Remote faces generated for self-mounted chamber-covered rows the dsh-api-remotes
  * assembly does NOT mount: the alpha.3 access-control client value-imports its own
  * `./remote` face and the composite covers it first-screen (ui-session/ui-workspace
- * inject `remoteAccess`). The generated artifact roster is the assembly mount table
- * PLUS this list; the C4 assembly assertion stays on EXPECTED_MOUNT_PACKAGES alone.
+ * inject `remoteAccess`); 0.2.3-alpha.1's HMR client value-imports its own
+ * `pluginEvents` face (`client/hmr/src/client/index.ts`) and the chamber renderer
+ * mounts it per instance (the official row is a covered skip, so its bundle never
+ * runs). The generated artifact roster is the assembly mount table PLUS this list;
+ * the C4 assembly assertion stays on EXPECTED_MOUNT_PACKAGES alone.
  */
-export const EXPECTED_SELF_MOUNTED_REMOTES = Object.freeze(['@deepseek-ai/dsh-api-remote-access'])
+export const EXPECTED_SELF_MOUNTED_REMOTES = Object.freeze([
+  '@deepseek-ai/dsh-api-remote-access',
+  '@deepseek-ai/dsh-client-hmr',
+])
 
 /** Every artifact gen-typert-remotes must emit (assembly mounts + self-mounted faces). */
 export const EXPECTED_GENERATED_REMOTES = Object.freeze([

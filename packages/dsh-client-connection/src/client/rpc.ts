@@ -4,11 +4,8 @@
  * (`/api/i/<id>`, never a page global) that leads the route; the stock base keeps
  * upstream's document-relative `api/<endpoint>` form. */
 
-import {
-  RpcId,
-  type ClientRequest,
-  type RpcId as RpcIdType,
-} from '../rpc.ts'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { ClientRequest, RpcId as RpcIdType } from '../rpc.ts'
 import type { ClientConnectionRpc, ConnectionRpcResult } from '../rpc.ts'
 import { resolveInstanceBasePath } from '../api-path.ts'
 import { randomUuid } from './random-uuid.ts'
@@ -82,7 +79,7 @@ export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): C
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)
-      const rpcId = RpcId(randomUuid())
+      const rpcId = brandString<RpcIdType>(randomUuid())
       const message: ClientRequest = {
         type: 'client-request',
         rpcId,
@@ -217,7 +214,7 @@ function parseConnectionResponse(value: unknown): {
   if (!isRecord(result)) throw new TypeError('connection: invalid server-response result')
   if (result.ok === true) {
     return {
-      rpcId: RpcId(value.rpcId),
+      rpcId: brandString<RpcIdType>(value.rpcId),
       result: { ok: true, value: result.value },
     }
   }
@@ -229,7 +226,7 @@ function parseConnectionResponse(value: unknown): {
     throw new TypeError('connection: invalid server-response failure')
   }
   return {
-    rpcId: RpcId(value.rpcId),
+    rpcId: brandString<RpcIdType>(value.rpcId),
     result: {
       ok: false,
       error: { code: error.code, message: error.message, details: error.details },

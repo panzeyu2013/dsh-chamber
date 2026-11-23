@@ -7,6 +7,7 @@ import { useRef } from 'react'
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
 import { archiveSessionForSource, createSessionForSource, forkSessionForSource, pinSessionForSource, unarchiveSessionForSource, unpinSessionForSource } from '@dsh-chamber/dsh-chamber-client-core/session-mutations'
 import { classifyArchiveFailure, type SessionArchiveConfirmRequest } from './session-archive-confirm.ts'
+import { markSessionForSource } from './session-status-marks.ts'
 import type { RunAction } from './sidebar-root-actions.ts'
 
 export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
@@ -142,5 +143,22 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
     })
   }
 
-  return { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession }
+  /** alpha.1 reading mark (行菜单已读/未读；页面级 unary 出口，跨源安全)：与 pin 同一条
+   *  keyed 漏斗——同一行的并发点击 join 第一次，失败落行级 rowErrors 键
+   *  `<source>/session/<id>/mark`。方向由调用方给「目标态」（unread=true/false），
+   *  Host 端把 read 的 throughTurn 夹到自己的 completedTurn。 */
+  const markActionRef = useRef(new Map<string, Promise<void>>())
+
+  const onMarkSessionRead = (server: ChamberServerAggregate, sessionId: string, unread: boolean): void => {
+    const key = `${server.id}/session/${sessionId}/mark`
+    if (markActionRef.current.has(key)) return
+    const task = runAction(key, async () => {
+      await markSessionForSource(server.id, sessionId, unread)
+    })
+    markActionRef.current.set(key, task)
+    void task.finally(() => {
+      if (markActionRef.current.get(key) === task) markActionRef.current.delete(key)
+    })
+  }
+  return { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession, onMarkSessionRead }
 }

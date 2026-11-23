@@ -167,6 +167,14 @@ function deepseekSource() {
         return hit === undefined ? undefined : real(hit)
       }
       if (sub === '') return pickReal(`${srcdir}index.ts`)
+      // 0.2.3-alpha.1 export-map subpath whose SOURCE lives one directory deeper than
+      // the convention infers: upstream publishes `./client/directories` from
+      // src/client/sessions/directories.ts (the export map points at the built lib path,
+      // which the source-only vendor does not have).
+      if (name === 'dsh-api-session-controller' && sub === 'client/directories') {
+        const hit = pick(`${srcdir}client/sessions/directories.ts`)
+        if (hit !== undefined) return real(hit)
+      }
       // Vendor `./src/*` deep subpaths (the canonical export-map form the
       // chamber ui-layout fork imports, e.g.
       // `@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx`): the

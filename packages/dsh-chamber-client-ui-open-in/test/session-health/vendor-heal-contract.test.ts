@@ -11,10 +11,11 @@
  * SEMANTIC change fails HERE — the recovery arm must be re-derived, never
  * silently disabled, on the next dsh pin upgrade.
  *
- *  1. `service.retain()` presents a session by opening it
- *     (`reference.attachOpening(this.manager.get(id).open(), signal)`): that is
- *     why the official view owner's `openSession` is the presentation entry
- *     point — retaining the target (again) re-enters `Session.open()` — while a
+ *  1. `service.retain()` presents a CONNECTED session by opening it
+ *     (`reference.attachOpening(connected ? this.manager.get(id).open() :
+ *     Promise.resolve(), signal)`; alpha.2 added the connected gate): that is why
+ *     the official view owner's `openSession` is the presentation entry point —
+ *     retaining the target (again) re-enters `Session.open()` — while a
  *     connection-generation reconnect (which keeps every ctx object mounted, so
  *     nothing is re-presented) is not;
  *  2. `Session.open()` short-circuits on `openState === 'open'` and otherwise
@@ -56,8 +57,8 @@ const sessionsContract = vendorSource('contract/sessions.ts')
 test('vendor heal contract: retaining a session carries its open() (the view-owner lever)', () => {
   assert.match(
     service,
-    /reference\.attachOpening\(this\.manager\.get\(id\)\.open\(\), signal\)/,
-    'retain() no longer opens the presented session — the official openSession path may no longer re-open it',
+    /reference\.attachOpening\(connected \? this\.manager\.get\(id\)\.open\(\) : Promise\.resolve\(\), signal\)/,
+    'retain() no longer opens a connected presented session — the official openSession path may no longer re-open it',
   )
 })
 

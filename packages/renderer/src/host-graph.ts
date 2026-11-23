@@ -14,6 +14,7 @@
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
+import type { SyncedConfigValues } from './synced-config.ts'
 // Boot-graph wire validators are UPSTREAM's own — never hand-rolled — imported
 // by real-source relative path because the renderer has no install-tree copy
 // and plain-node tests must resolve the real module without a bundler.
@@ -73,6 +74,11 @@ export interface HostGraphRow {
   external?: string[]
   /** Stage-one prefetch mark (the chamber merge preloads everything it keeps). */
   immediately?: boolean
+  /** Browser-synced values of the row's top-level volatile Config fields, secrets removed
+   *  (alpha.1 wire field; omitted when the Host ships none). Carried for BOTH the covered and
+   *  the kept rows: covered rows are filtered out of the merge but their values are the only
+   *  source for the composite's synced-config supply (`synced-config.ts`). */
+  config?: SyncedConfigValues
 }
 
 /** One extra module row handed to the boot kernel (mirror of the vendor
@@ -88,6 +94,9 @@ export interface ExtraModuleRow {
   rev: string
   inject: string[]
   external: string[]
+  /** The row's raw synced-config values (wire shape); the MOUNT path wraps them into a
+   *  per-field reference object (`synced-config.ts` createSyncedConfigActivation). */
+  config?: SyncedConfigValues
 }
 
 // Envelope shape is AUTHORITATIVE in packages/control-plane/src/rpc-envelope.ts:
@@ -218,9 +227,33 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
       // The wire's non-inject requests travel UNCHANGED; this merge decides
       // which are unsatisfiable (findUnsatisfiableExternalDependencies).
       external: [...(row.external ?? [])],
+      // Synced Config values travel with the row so the mount path can activate the
+      // plugin with its per-field references (alpha.1 `apply(ctx, config)`).
+      ...(row.config === undefined ? {} : { config: row.config }),
     })
   }
   return out
+}
+
+/**
+ * The COVERED rows' synced-config values of one answered graph, captured BEFORE
+ * {@link dedupeCoveredRows} removes those rows. The composite mounts the covered plugins and
+ * passes each activation its own reference object, so the per-row `config` values must survive
+ * the dedupe; rows without `config` are absent from the map (their activation reads undefined,
+ * the plugins' own defaults).
+ * @param rows - a validated graph (covered rows included).
+ * @returns id → frozen-ish shallow values copy, in wire order.
+ */
+export function coveredSyncedConfigValues(
+  rows: readonly HostGraphRow[],
+): ReadonlyMap<string, SyncedConfigValues> {
+  const covered = new Set(CHAMBER_COVERED_IDS)
+  const values = new Map<string, SyncedConfigValues>()
+  for (const row of rows) {
+    if (row.config === undefined || !covered.has(row.id)) continue
+    values.set(row.id, row.config)
+  }
+  return values
 }
 
 /** One kept row's unsatisfiable create-time requires (see the predicate below). */
@@ -422,6 +455,16 @@ export function parseGraphRows(entries: readonly PluginGraphBaseEntry[]): HostGr
     if (row.immediately !== undefined && typeof row.immediately !== 'boolean') {
       throw new Error(graphEntryImmediatelyMessage(row))
     }
+    // Synced Config (alpha.1 wire field): a present value must be a JSON object, exactly
+    // as upstream's parseBootManifest requires (`manifest.ts`); the values are copied so a
+    // caller cannot mutate the parsed graph.
+    if (row.config !== undefined
+      && (typeof row.config !== 'object' || row.config === null || Array.isArray(row.config))) {
+      throw new Error(`${subject} config must be an object`)
+    }
+    const config = row.config === undefined
+      ? undefined
+      : { ...(row.config as Record<string, unknown>) }
     rows.push({
       id: row.id,
       url: row.url,
@@ -431,6 +474,7 @@ export function parseGraphRows(entries: readonly PluginGraphBaseEntry[]): HostGr
       ...(inject === undefined ? {} : { inject: [...inject] }),
       ...(external === undefined ? {} : { external: [...external] }),
       ...(typeof row.immediately === 'boolean' ? { immediately: row.immediately } : {}),
+      ...(config === undefined ? {} : { config }),
     })
   }
   return rows
@@ -476,6 +520,13 @@ export interface CollectExtraRowsDeps {
    * readiness self-heal to re-boot the shell instead).
    */
   onGraphAnswered?(): void
+  /**
+   * The COVERED rows' synced-config values, captured from the answered graph BEFORE
+   * `dedupeCoveredRows` drops those rows (alpha.1 projects `config` per row; the composite
+   * mounts the covered plugins, so the values must survive the dedupe). Called once per boot,
+   * after the first non-null fetch; the recovery fetch does not re-fire it.
+   */
+  onCoveredConfig?(values: ReadonlyMap<string, SyncedConfigValues>): void
   /**
    * Awaited once the rows are known, BEFORE the first extra-bundle load pass:
    * the composite entry must have evaluated so its covered factories answer the
@@ -716,6 +767,9 @@ export async function collectExtraRows(
   recordInstanceGraphRelease(instanceId, bootRelease)
   // The channel answered: the live subscriber may arm for this source (once per boot).
   deps.onGraphAnswered?.()
+  // The covered rows' synced Config must be captured BEFORE the dedupe filters them out:
+  // the composite mounts those plugins and needs their per-instance values (alpha.1 W4-0).
+  deps.onCoveredConfig?.(coveredSyncedConfigValues(firstRows))
   const rows = toExtraRows(dedupeCoveredRows(firstRows, CHAMBER_COVERED_IDS), basePath)
   // The chamber entry must have evaluated before any extra bundle executes (it
   // answers the ui-primitives require edges the seed does not serve); the shell

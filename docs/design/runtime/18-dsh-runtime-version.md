@@ -127,13 +127,13 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 
 **前端显示规格（per-server 段）**：
 - A. 版本概览：主行「dsh 运行时 vX（激活）」不带来源 tag；副行（激活≠内建）「随应用内建 vX」、gateway「部署锚 vX」；env 来源显 `(env)` 并禁用版本/registry/restore mutation（`[重启 dsh]` 仍可用，两 owner 一致）。
-- A. 版本选择器：置顶当前版本（内建行加「内建」后缀）→ 其余 registry 版本 semver 降序 → 离线追加缓存「已缓存」；默认选中当前激活版本；`latest`/`belowBaseline` 只投影不展示。
+- A. 版本选择器：置顶当前版本（内建行加「内建」后缀）→ 其余 registry 版本 semver 降序 → 离线追加缓存「已缓存」；默认选中当前激活版本；`latest` 只投影不展示；`belowBaseline` 投影且**选择低于基线的 runtime 时给提示**：选择器选项标「低于兼容基线」（本地与 gateway 两支共用），本地受管 runtime 另在动作行给可见提示行（可能无法 boot、chamber 支持面以外）；启动门仍是首屏 fatal 覆盖层。
 - A. 动作：`[更新到 vY]`/`[切换到 vZ]`（仅所选≠当前激活时显示；相位门控期保留但禁用）/`[恢复内建]`（仅激活≠内建；pending/applying/snapshot-failed 逃生口随主进程 allowedActions）/`[重启 dsh]`（8）；落位与按钮集见组件树；任何 locale 下单行成立。
 - A. 版本源行：只读当前源 + `[检查更新]` + `[编辑]`⇄ 编辑态（`npmjs（默认）`/`npmmirror`/`自定义…`；桌面走原生确认；自定义走 §6 URL 白名单）；检查由宿主进程执行一次并对失败回显原因。
 - A. 状态/进度行：无块标题与 claim 类文案；机器状态用彩色徽标（正常/检查中/下载中/安装中/待应用/应用中/回退中/重启中/切换失败/快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，绿/蓝/黄/红四色）；详情行只承载真实状态/操作/终态（失败文案脱敏）。
 - A. 失败记录行：仅失败时「vY 安装失败：<原因> — 建议升级 dsh-chamber / 重试」；失败现场清除仅本地（`dsh-chamber:runtime-clear-failure` → `clearRuntimeFailure`；gateway 无清除按钮，登记偏差）。
 - A. 快照+占用事实块（`.runtimeDiskFacts`）：快照行 + 失败态「快照失败：<原因> [重试应用] [恢复建]」；磁盘行真实字节 = 整棵 runtime 根 + `dsh-home.old*` 一次 walk、按 `(dev,ino)` 去重，`totalBytes=Σ分类（含 unclassified）`；**诚实边界** = APFS reflink/clone 共享块经 stat 不可识别（与 `du` 一致的已知近似）。
-- A. 重启 dsh（刷新插件挂载）：二次确认后受控重启（SIGTERM 进程组 → 1s → SIGKILL → 重新 spawn（同端口/P+1）→ 就绪探测）；语义 = host 包 seed thunk 每次 spawn 前重求值、boot 重读 DSH_HOME profiles + `--patch` overlay、前端页面不重 boot；页面 client 行刷新走 design 09 §3.7 的 `/plugins/events`（重连撞 503/502 窗口时控制面发 error 帧、页面级通道按 3s→30s 阶梯重发 subscribe，成帧即下发整图并热同步）；通道持续不可用退回 boot 现状（须手动重载页面/重启应用）。
+- A. 重启 dsh（刷新插件挂载）：二次确认后受控重启（SIGTERM 进程组 → 1s → SIGKILL → 重新 spawn（同端口/P+1）→ 就绪探测）；语义 = host 包 seed thunk 每次 spawn 前重求值、boot 重读 DSH_HOME profiles + `--patch` overlay、前端页面不重 boot；页面 client 行刷新走 design 09 §3.7 的 per-instance `pluginEvents` Remote 流（投递层重连归 api-gateway fork 的 `$stream` 策略；设置面 resync 以 close+re-open 换取新 baseline，成帧即整图热同步）；通道持续不可用退回 boot 现状（须手动重载页面/重启应用）。
 - A. 互斥：与健康状态机 `restarting` 单飞互斥、applying 期间禁用；失败不回滚、不改指针（同一激活树，仅进程级刷新）；per-server：local = `restartLocal()` 事务（§9.3），gateway = `POST /chamber/runtime/restart`（202+轮询）。**完成确认不重载窗口**：`restart-window-reload.ts` 的 page-owned completion 不存在。
 - 组件/样式落点（实现细节以源码为单源）：`packages/desktop/.../DshRuntimeSection.tsx`（约 36 处官方 `ui-primitives` Button 调用）、`*.module.css`（`--dsw-alias-*` token、官方 settings-section 词汇）；下拉箭头统一 `IconChevronDownOutlineRegular`；空/占位纪律：桥未水合时控件 disabled + 占位，绝不假 off/假「已是最新」。
 
@@ -190,10 +190,10 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - **布局/生成器**：`primary-runtime/` = `runtime.json` + `dependencies/{python,node,pnpm}`（python-only 只有 python）；`office-skills/` 为 sibling；生成器默认 python-only，`--with-node`/`--with-pnpm`（隐含 node）；Swift 腿 `--with-node --with-pnpm`、Electron 腿 python-only。
 - **单源/校验**：Node 版本+sha256、CPython/wheel 坐标来自 `primary-runtime-lock.json`；pnpm 版本读 desktop `dependencies.pnpm`（`pnpm-pin` 门禁锁步）；`--verify`（发布门）校验格式/解释器/发行版精确命中/无未登记发行版/Node+pnpm 在场且版本一致/无外平台原生包；`payloadDigest` = sha256 over 锁输入 + pnpm 版本（不含时间戳），改任一构件即新身份。
 - **安装语义**：本地启动行以 `config{source:<primary-runtime 目录>, root:<DSH_HOME>/dsh-runtimes/dsh-primary-runtime}` 挂载（design 09 §3.5）；首次 `load_workspace_dependencies` 由上游 `installPrimaryRuntime` 复制到 root（保留 python 相对别名、其余链接实体化），返回安装后绝对路径与发行版版本；不改 PATH、不注入 env。
-- **office-skills sibling**：上游资产面 = 4 个 `SKILL.md`（office/office-docx/office-pptx/office-xlsx），按 vendor pin 两条候选源顺序落位；逐文件 temp+rename、递归清非期望文件；`--verify` 校验 4 文件 + 源可用时逐文件 sha256；与 payload 独立门控；skill-office 启动 config 只剩 `assetRoot`（+ `pythonEnvironment`），Kit 由 `@deepseek-ai/dsh-office-kit` 自解析。
+- **office-skills sibling**：上游资产面 = 唯一 `office/SKILL.md`，按 vendor pin 两条候选源顺序落位；逐文件 temp+rename、递归清非期望文件；`--verify` 校验该文件 + 源可用时逐文件 sha256；与 payload 独立门控；skill-office 启动 config 只剩 `assetRoot`（+ `pythonEnvironment`），Kit 由 `@deepseek-ai/dsh-office-kit` 自解析。
 - **载荷闭包（量化，现行 pin）**：闭包内 334 个包随包 `src` ≈24.63 MiB/2834 文件，`@deepseek-ai/dsh` 的 `docs/` ≈491 文件/5.80 MiB；上一运行时线旧量化按当前载荷作废；`validateVendorDshDocs` 构建期 fail-closed（docs 目录 + `user/index.md` + `upgrade-guide/README.md` 在场可读）。
 - **启动行挂载面**：`chamber-workspace-dependencies`（`{source, root}`）+ `chamber-office-skills`（`{assetRoot}`）；`workspace-dependencies` 行被 `profileContext.name !== 'desktop' || !DSH_PRIMARY_RUNTIME` 双向门挡在 web profile 之外（chamber 不注入 `DSH_PRIMARY_RUNTIME`）；`skill-office` 行无 profile 门却读被 prune 的包内 assets → 本地 overlay id-targeted disable（三态：缺失=跳过+诊断 / 在=disable / 改名=loud throw）；`office-kit` 行由 web-app 挂载、不重复注入。
-- **Swift 装配/发布腿**：`build-sidecar` 拷 primary-runtime 与 office-skills 到 sidecar 同级；`--require-python` 走 `--verify`，`--require-node`/`--require-pnpm` 只核对 payload 内对应文件；`build-swift-app` 断 payload Node 存在/可执行、office 四 `SKILL.md` 齐全、Node 与 .app 架构有交集（`lipo`）、嵌套 Mach-O 用 Node entitlements、LibreOffice helper 按 `prebuilds.json engine.executable` 形状匹配并核 `allow-jit`；发布腿顺序 = prepare-python-payload → prepare-office-assets → build:sidecar（`--require-*`）→ build:swift-app → 再 `--verify`。
+- **Swift 装配/发布腿**：`build-sidecar` 拷 primary-runtime 与 office-skills 到 sidecar 同级；`--require-python` 走 `--verify`，`--require-node`/`--require-pnpm` 只核对 payload 内对应文件；`build-swift-app` 断 payload Node 存在/可执行、唯一 `office/SKILL.md` 齐全、Node 与 .app 架构有交集（`lipo`）、嵌套 Mach-O 用 Node entitlements、LibreOffice helper 按 `prebuilds.json engine.executable` 形状匹配并核 `allow-jit`；发布腿顺序 = prepare-python-payload → prepare-office-assets → build:sidecar（`--require-*`）→ build:swift-app → 再 `--verify`。
 - **拒绝方案**：① 两 flavor 共用 full payload；② `--with-pnpm` 不隐含 node（上游 `parsePrimaryRuntime` 要求 pnpm 必须有 node）；③ pnpm 另下 tarball（第二版本源与校验轴）；④ 运行时解压到 app 内（不可写、破坏签名）；⑤ 远程也 provisioning（远程不随包）。
 
 ## 5. 数据流与 UX

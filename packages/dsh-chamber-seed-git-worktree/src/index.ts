@@ -16,7 +16,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import type { Session } from '@deepseek-ai/dsh-session'
 import { pickEffectiveCwd, readProjectedWorkingDirectory, type ProjectionSource } from './core-validation.ts'
+import { enteredWorktreeRecord, rememberEnteredPath } from './enter-record.ts'
+import { appendEnteredRecord } from './enter-record-write.ts'
 import {
   GitWorktreeCore,
   GitWorktreeError,
@@ -53,21 +56,12 @@ interface GitWorktreeHostContext extends Context {
     list(): ReadonlyArray<{
       readonly id: unknown
       readonly status: 'idle' | 'running'
-      readonly session: {
-        readonly header: {
-          readonly cwd?: string
-          /** Recorded parent: FORK lineage when `origin` is absent, delegation when `'subagent'`. */
-          readonly parentSession?: unknown
-          /** Coarse durable child origin. `'subagent'` = delegation child; absent = fork
-           *  edge. The core's source intake re-validates any other value loudly. */
-          readonly origin?: 'subagent'
-        }
-      }
+      /** The live Session (its header is read here; the enter path also APPENDS the
+       *  official `plugin:worktree/entered` record to its log — alpha.1 interop). */
+      readonly session: Session
     }>
     /** The live agent registry lookup enter needs; absent before the session is loaded. */
-    get(sessionId: string): {
-      readonly session: { readonly header: { readonly cwd?: string } }
-    } | undefined
+    get(sessionId: string): { readonly session: Session } | undefined
   }
 }
 
@@ -92,6 +86,9 @@ export class GitWorktreeGateway extends TypertRemoteService {
   static inject = ['workspaceRegistry', 'agents']
 
   private readonly core: GitWorktreeCore
+  /** Per-session last path this gateway appended an entered record for (duplicate-enter guard). */
+  private readonly lastEnteredPath = new Map<string, string>()
+
   private readonly hostContext: Context
   private readonly host: GitWorktreeHostContext
 
@@ -190,7 +187,7 @@ export class GitWorktreeGateway extends TypertRemoteService {
         { retryable: false },
       )
     }
-    const path = await this.core.enterTarget(headerCwd, typeof input.path === 'string' ? input.path : '')
+    const entered = await this.core.enterTarget(headerCwd, typeof input.path === 'string' ? input.path : '')
     // Lazy read on every call: the working-directory service is a sibling plugin, so a
     // capture at construction time could freeze undefined for the whole instance.
     const workingDirectory = this.hostContext.get('workingDirectory') as WorkingDirectoryHost | undefined
@@ -202,10 +199,22 @@ export class GitWorktreeGateway extends TypertRemoteService {
       )
     }
     // Idempotent: entering the directory the session already has commits no new change.
-    if (workingDirectory.get(agent.session) !== path) {
-      await workingDirectory.set(agent, path)
+    if (workingDirectory.get(agent.session) !== entered.path) {
+      await workingDirectory.set(agent, entered.path)
     }
-    return { sessionId, path }
+    // alpha.1 interop (design 08 §4.2): the official `exit_worktree` only returns a
+    // Session to the checkout it entered from when the log carries the entry record.
+    // alpha.1 also removed the model's `working_directory` tool, so without this
+    // record a chamber-created Session in a checkout has NO way back (WORKTREE_NOT_ENTERED).
+    // Only the ENTERED record is written — never `created`, which marks a checkout the
+    // upstream service may reclaim on archive; chamber's seed owns pool deletions (design 08 §1.5).
+    // Remember only AFTER the append succeeds: appendPluginRecord can throw, and the
+    // retry must still write the record (remember-first would silently skip it forever).
+    if (this.lastEnteredPath.get(sessionId) !== entered.path) {
+      appendEnteredRecord(agent.session, enteredWorktreeRecord(entered.path, entered.repositoryRoot, entered.branch))
+      rememberEnteredPath(this.lastEnteredPath, sessionId, entered.path)
+    }
+    return { sessionId, path: entered.path }
   }
 
   @Remote('remove')

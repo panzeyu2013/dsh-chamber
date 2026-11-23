@@ -141,7 +141,7 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 7. 大 session list 仍受 page-channel 4MiB 单帧/256KiB 信用窗约束；需另案分片。
 8. 入站死线不靠 Node 的 `requestTimeout`：Node 的有效死线是 `max(headersTimeout, requestTimeout)`，扫描周期取**构造期** `connectionsCheckingInterval`；两个字段都设为 31min 只作死手（5s 扫描粒度），真实窗口在用户态——连接级 10s 头计时器（upgrade 清除、keep-alive 响应 `finish` 后重臂）与 `readBody` 的体总预算（含 30s 空闲）。慢上传的真风险因此只在应用层头窗/体预算。
 9. down grace 默认 30s；超过该窗的在途仍会被 reconnect revoke（不是无限期保护）。确认窗到期时若有在途探针，最多顺延一个 provider 预算。
-10. 「尚未判 down 的半开」仍无服务端 idle watchdog（pluginGraph 无 keepalive 契约），只能靠探针/重订阅收敛；down 边沿不再失败已建立订阅，半开 SSE 在确认窗内保持安静。
+10. 「尚未判 down 的半开」仍无服务端 idle watchdog（sessionFacts SSE 无 keepalive 契约），只能靠探针/重订阅收敛；down 边沿不再失败已建立订阅，半开 SSE 在确认窗内保持安静。
 11. mutation 客户端预算 = 代理总最坏（buffered：inbound + flush + 45s 头窗；streaming：`max(inbound, flush)` + 45s 头窗）+ 5s 余量（buffered 下限 170s、上限 60min50s；streaming 下限 110s、上限 30min50s），由 wire 契约唯一推导；上传 flush 慢于 128KiB/s 假设时客户端仍可能先 abort（客户端侧已把该传输丢失归为 unknown）。
 12. `reverifyAll` 已按 120ms/实例错峰、心跳两档（30s/10s 观察窗）都加 ±10% jitter；仍未对连接尝试本身做全局配额。
 13. `linkEpoch` 有两处递增点（进入 ready 的新化身、ready 期内的 down→healthy）；suspect→healthy 不 bump。down 恢复仍会让页面通道立即重置，这是「恢复即唤醒」与「30s 稳定窗防抖」的取舍。

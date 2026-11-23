@@ -13,7 +13,10 @@
  * bubble draws differently across WebKit/Chromium), the official `Menu` at
  * chamber `compact` density, and upstream’s rounded-square fallback for an id
  * the catalog cannot answer. TWO GATES, any failure renders null (never a dead
- * button): ≥1 usable entry, and a workspace path for THIS header’s session.
+ * button): ≥1 usable entry, and a directory for THIS header’s session — the
+ * session's CURRENT directory projection (`workingDirectory`: the checkout when
+ * the session works in one; upstream `selectSessionDirectory`), NOT the
+ * workspace root. The Files seat keeps its owner `absolutePath`.
  */
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -25,7 +28,7 @@ import { describeOpenInError } from '../shared/capabilities.ts'
 import type { OpenInResult, OpenInSource } from '../shared/capabilities.ts'
 import type { OpenInViewEntry, OpenInViewModel } from '../shared/open-in-view-model.ts'
 import { OPEN_IN_APP_LABEL_KEY } from '../locales.ts'
-import { resolveOpenInPath } from './open-in-gates.ts'
+import { resolveOpenInPath, selectSessionDirectory, type OpenInSessionsState } from './open-in-gates.ts'
 import styles from './OpenInButton.module.css'
 
 /** Injected face the plugin supplies: per-boot source id + bound translator. */
@@ -57,15 +60,19 @@ export interface OpenInInjected {
 
 /**
  * Slot props: the injected face plus the framework standard kit the header
- * utilities slot delivers (per-header `sessionId`, global `useWorkspaces`
- * selector). Structural subset on purpose — the vendor runtime publishes no
- * d.ts tree in the workspace symlink.
+ * utilities slot delivers (per-header `sessionId`, the global `useWorkspaces`
+ * and `useSessions` selectors — upstream ui-session/global standard props).
+ * Structural subset on purpose — the vendor runtime publishes no d.ts tree in
+ * the workspace symlink.
  */
 export interface OpenInProps extends OpenInInjected {
   /** The session this header belongs to (framework-supplied by the session-scoped slot). */
   sessionId: string
   /** Framework selector hook over the workspace list (delivered to every slot component). */
   useWorkspaces: <S>(sel: (ws: { items: ReadonlyArray<OpenInWorkspaceRow> }) => S) => S
+  /** Framework selector hook over the sessions list (global standard kit, delivered to
+   *  every slot component — upstream ui-session's `useSessions`). */
+  useSessions: <S>(sel: (state: OpenInSessionsState) => S) => S
   /**
    * Owner-supplied directory for the Files-tab seat (rc.2 hole
    * `sidebar.right.tab.files.actions`): the file tree's displayed root IS the
@@ -165,6 +172,7 @@ export function OpenInButton({
   t,
   sessionId,
   useWorkspaces,
+  useSessions,
   absolutePath,
   getViewModel,
   subscribe,
@@ -200,17 +208,21 @@ export function OpenInButton({
   useInstanceViewDismissal(open, groupRef, () => { setOpen(false) })
 
   // Hooks run unconditionally (before any gate's early return); the framework
-  // delivers the workspace selector to every slot component in every scope.
+  // delivers the workspace AND sessions selectors to every slot component in every scope.
   const workspaces = useWorkspaces(ws => ws.items)
+  // The session's CURRENT directory projection (upstream `selectSessionDirectory`):
+  // a session moved into a worktree opens the worktree, not the workspace root.
+  const sessionDirectory = useSessions(state => selectSessionDirectory(state, sessionId))
 
   // Gate 1: the merged view-model decides what this source may use (fail-closed); an empty set renders null.
   const entries = model.entries
   if (entries.length === 0) return null
 
-  // Gate 2: the Files seat's owner path wins; a header seat resolves its own
-  // session's workspace. Either way the launch channel decides ssh-remote vs
-  // local/instance semantics.
-  const path = resolveOpenInPath(absolutePath, workspaces, sessionId)
+  // Gate 2: the Files seat's owner path wins; a header seat opens its own
+  // session's CURRENT directory (checkout-aware projection), falling back to the
+  // session's workspace only when no directory is projected yet. Either way the
+  // launch channel decides ssh-remote vs local/instance semantics.
+  const path = resolveOpenInPath(absolutePath, workspaces, sessionId, sessionDirectory)
   if (path === undefined || path === '') return null
 
   // Remembered selection when still usable, else the view-model default (first VS Code entry, else first).

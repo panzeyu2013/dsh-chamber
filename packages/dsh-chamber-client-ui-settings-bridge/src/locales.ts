@@ -181,6 +181,9 @@ export const zh = {
   dshRuntimeSelectVersion: '选择版本',
   dshRuntimeNoVersions: '暂无可用版本（检查更新或更换版本源）',
   dshRuntimeCachedTag: '已缓存',
+  dshRuntimeBelowBaselineTag: '低于兼容基线',
+  // 设计 18 §3.4 隐式兼容下限：提示（不禁止）——启动门仍是首屏 fatal 覆盖层。
+  dshRuntimeBelowBaselineHint: '所选版本 v{version} 低于兼容基线：探针兼容性不保证，启动后可能无法 boot（chamber 支持面以外）。',
   dshRuntimeActionUpdate: '更新到',
   dshRuntimeActionSwitch: '切换到',
   dshRuntimeInstalling: '正在安装…',
@@ -524,6 +527,8 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeSelectVersion: 'Select version',
   dshRuntimeNoVersions: 'No versions available (check for updates or switch the registry source)',
   dshRuntimeCachedTag: 'cached',
+  dshRuntimeBelowBaselineTag: 'below baseline',
+  dshRuntimeBelowBaselineHint: 'The selected version v{version} is below the compatibility baseline: probe compatibility is not guaranteed and it may fail to boot (outside the chamber support surface).',
   dshRuntimeActionUpdate: 'Update to',
   dshRuntimeActionSwitch: 'Switch to',
   dshRuntimeInstalling: 'Installing…',

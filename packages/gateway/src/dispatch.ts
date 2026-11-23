@@ -909,9 +909,9 @@ export function createGatewayDispatch(
     }
     // 3.5 The page-level multiplex channel is deliberately NOT mounted on the
     // gateway shape (design 26 §2): the page here is the control-plane origin, and
-    // the official dsh frontend does not consume health/pluginGraph/sessionFacts. Falling
+    // the official dsh frontend does not consume health/sessionFacts. Falling
     // through would let the control-plane shell's defaultUpgrade serve the whole
-    // channel (health + pluginGraph upstreams) behind this boundary, so the WS
+    // channel (health + sessionFacts upstreams) behind this boundary, so the WS
     // upgrade is claimed and answered with an explicit "not here" 404.
     // The HTTP surface deliberately differs: it has no carrier of its own for this
     // path, so GET /api/page-channel falls through to the local-dsh proxy (step 5)

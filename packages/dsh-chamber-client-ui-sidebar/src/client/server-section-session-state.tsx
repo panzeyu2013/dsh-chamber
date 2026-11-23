@@ -13,6 +13,7 @@ import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-cor
 import { runningRingVisible } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import { sessionRowState, type SessionRowStateResult } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 import { createSessionRowStateCache } from './session-row-state-cache.ts'
+import { failedFactOf } from './session-fact-failed.ts'
 import { useSidebarSection } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -50,6 +51,15 @@ export function useServerSectionSessionState() {
     slot.result = result
     return result
   }
+  /**
+   * The failure PRESENTATION overlay (alpha.1 `completionFailed`): the row state machine
+   * still decides whether a completion is presented at all (pending > subagents > completed,
+   * plus the goal gate), so the red dot/label only replace the COMPLETED presentation — a
+   * live ask or a running subagent outranks it, exactly like upstream's `failed ? error :
+   * done` fold on the row that renders. The bit itself is sparse (`session-fact-failed.ts`).
+   */
+  const failedPresented = (server: ChamberServerAggregate, session: { id: string }, row: SessionRowStateResult): boolean =>
+    row.state === 'completed' && failedFactOf(server.runtime?.sessions[session.id])
   const sessionStateLabel = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): string | undefined => {
     const row = sessionRowStateOf(server, session)
     switch (row.state) {
@@ -60,7 +70,9 @@ export function useServerSectionSessionState() {
       case 'pending:question':
         return t('status.waitingAnswer')
       case 'completed':
-        return t('status.completed')
+        // alpha.1: a failed completion presents as "Failed", never as "Completed"
+        // (upstream ui-workspace rows: status.failed label on the error state).
+        return t(failedPresented(server, session, row) ? 'status.failed' : 'status.completed')
       case 'running':
         return t('status.running')
       default: {
@@ -77,6 +89,9 @@ export function useServerSectionSessionState() {
   /** 行状态读数的机器可读标记——与圆点同一优先级输入（同一个派生结果）。 */
   const sessionStateMarker = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): SessionRowStateResult =>
     sessionRowStateOf(server, session)
+  /** 失败完成呈现（alpha.1 completionFailed）：与圆点/文案同一判定，供行的机器可读属性。 */
+  const sessionStateFailed = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): boolean =>
+    failedPresented(server, session, sessionRowStateOf(server, session))
   const sessionStateDot = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): ReactNode => {
     const row = sessionRowStateOf(server, session)
     switch (row.state) {
@@ -91,7 +106,9 @@ export function useServerSectionSessionState() {
         // 后者取色 `--dsw-alias-state-success-primary` 与来源头连接绿点（`.statusOk`）完全相同，
         // 会让“会话完成未读”与“服务器已连接”同色。蓝点与运行环同属品牌蓝（`--dsw-static-deepseek-450`），形状/动效不同。
         // 被 goal 门压制时 state 永不落 completed（sessionRowState 已保证），所以蓝点不会在目标活跃期间亮起。
-        return <span className={cc.stateCompleted} />
+        // alpha.1 失败完成：同一 6px 槽位换错误色（.stateFailed）——需要处理的未读与普通完成
+        // 在行尾即可区分，且不新增一档优先级（pending/subagents 仍压过它）。
+        return <span className={failedPresented(server, session, row) ? cc.stateFailed : cc.stateCompleted} />
       case 'running':
         return <StateDot state="ongoing" size={10} />
       default:
@@ -99,5 +116,5 @@ export function useServerSectionSessionState() {
         return row.state.startsWith('subagents:') ? <StateDot state="ongoing" size={10} /> : null
     }
   }
-  return { sessionStateLabel, sessionStatePending, sessionStateMarker, sessionStateDot }
+  return { sessionStateLabel, sessionStatePending, sessionStateMarker, sessionStateFailed, sessionStateDot }
 }

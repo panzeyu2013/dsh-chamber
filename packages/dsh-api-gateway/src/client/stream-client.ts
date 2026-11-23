@@ -6,7 +6,7 @@
  * `${basePath}/api/remote.mux` (an explicit constructor argument, never a page global).
  */
 
-import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConnectionWebSocket } from '@deepseek-ai/dsh-client-connection/client'
 
 import {
@@ -74,8 +74,22 @@ import { isRemoteStreamAuthCloseCode } from './stream-auth.ts'
 
 export { isRemoteStreamAuthCloseCode, REMOTE_STREAM_AUTH_CLOSE_CODES } from './stream-auth.ts'
 
+/**
+ * Retryable physical Remote stream carrier failure. {@link RemoteStream} reconnects on any error whose `code` is
+ * `gateway/carrier-lost`, so a domain `ended` callback may return a plain `Error` carrying that code. The code is
+ * produced only inside this Client process; a `RemoteError` returned by the Host never counts as a carrier loss.
+ */
+export interface RemoteStreamCarrierFailure extends Error {
+  /** Stable carrier-loss code; class identity is not part of the retry decision. */
+  readonly code: 'gateway/carrier-lost'
+}
+
+const REMOTE_STREAM_CARRIER_CODE: RemoteStreamCarrierFailure['code'] = 'gateway/carrier-lost'
+
 /** Physical Remote stream socket failure that may be retried by a domain transport. */
-export class RemoteStreamCarrierError extends Error {
+export class RemoteStreamCarrierError extends Error implements RemoteStreamCarrierFailure {
+  readonly code: RemoteStreamCarrierFailure['code'] = REMOTE_STREAM_CARRIER_CODE
+
   /**
    * per-stream spread (0–250 ms) the mux attaches when ONE carrier failure fans
    * out to every logical stream. RemoteStream waits this long before its FIRST reopen
@@ -88,6 +102,18 @@ export class RemoteStreamCarrierError extends Error {
     super(message, options)
     this.name = 'RemoteStreamCarrierError'
   }
+}
+
+/**
+ * Whether a failure is a retryable carrier loss, judged by its `code` rather than its class. {@link RemoteStream} uses
+ * this test, and domains that classify their own failures, such as a disconnected view, reuse it.
+ * @param error - thrown or returned failure.
+ * @returns true for a locally produced `Error` whose `code` is `gateway/carrier-lost`; false for any `RemoteError`,
+ * which reached this Client from the Host and terminates the stream even when it carries that code.
+ */
+export function isRemoteStreamCarrierFailure(error: unknown): error is RemoteStreamCarrierFailure {
+  return error instanceof Error && remoteErrorOf(error) === undefined
+    && 'code' in error && error.code === REMOTE_STREAM_CARRIER_CODE
 }
 
 /**
@@ -197,7 +223,7 @@ export class RemoteStreamMuxClient {
   private lastForcedRebuildAt = Number.NEGATIVE_INFINITY
   private running = false
   private disposed = false
-  private failure: RemoteStreamCarrierError | undefined
+  private failure: RemoteStreamCarrierFailure | undefined
 
   /**
    * chamber patch: an options object carries the per-entry base path together with the
@@ -1091,7 +1117,7 @@ export class RemoteStreamMuxClient {
           this.forensics?.('socket-attempt-failed', 'auth rejection; recovery stopped')
           return
         }
-        const failure = error instanceof RemoteStreamCarrierError ? error
+        const failure = isRemoteStreamCarrierFailure(error) ? error
           : new RemoteStreamCarrierError('api gateway: Remote stream WebSocket failed to open', { cause: error })
         if (this.revision === revision) this.failure = failure
         for (const waiter of [...this.waiters]) {
@@ -1142,7 +1168,7 @@ export class RemoteStreamMuxClient {
     // with gateway/auth, and would reintroduce a reopen loop for a stale
     // credential. Auth never reopens, so it needs no fan-out spread.
     if (error instanceof RemoteStreamAuthError) return error
-    if (!(error instanceof RemoteStreamCarrierError)) return error
+    if (!isRemoteStreamCarrierFailure(error)) return error
     const spread = remoteStreamReopenJitterMs(this.random)
     if (spread <= 0) return error
     const jittered = new RemoteStreamCarrierError(error.message, { cause: error })

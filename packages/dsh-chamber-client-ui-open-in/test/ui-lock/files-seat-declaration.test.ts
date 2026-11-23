@@ -80,7 +80,41 @@ test('the header seat keeps its own registration (id/order/component/label)', ()
 test('the component takes the owner path before any session lookup', () => {
   assert.match(button, /absolutePath\?: string/, 'the seat owner prop must be part of the props')
   assert.match(button, /useWorkspaces: <S>\(sel:/, 'the framework selector stays a required prop (every slot component receives it)')
-  assert.match(button, /resolveOpenInPath\(absolutePath, workspaces, sessionId\)/, 'Gate 2 must consult the owner path')
+  assert.match(button, /resolveOpenInPath\(absolutePath, workspaces, sessionId, sessionDirectory\)/, 'Gate 2 must consult the owner path and the session directory')
   assert.match(gates, /export function resolveOpenInPath\(/, 'the precedence lives in the pure gate module')
   assert.match(gates, /const owner = absolutePath\.trim\(\)/, 'the owner path is normalized before use')
+})
+
+test('the framework delivers useSessions to session-scope slots (global standard kit)', () => {
+  const sessionIndex = source('../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-session/src/client/index.ts')
+  assert.match(sessionIndex, /interface GlobalStandardProps \{[\s\S]{0,180}useSessions: UseSessions/u,
+    'upstream ui-session declares useSessions as a GLOBAL standard prop (every slot scope)')
+  const renderer = source('../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-renderer/src/client/scoped-slots.tsx')
+  assert.match(renderer, /function standardKit\(/u, 'the slot renderer synthesizes one standard kit per entry')
+  assert.match(renderer, /materializeStandardBinding\(rootBinding, false, scopeBinding\.key\)/u,
+    'the per-scope kit merges the ROOT standard binding (global hooks) with the scope binding')
+  assert.match(renderer, /const kit: InjectedProps = \{ \.\.\.standard,/u,
+    'the kit handed to every component spreads the standard props (useSessions included)')
+})
+
+test('the upstream header entry opens the session current directory (semantic anchor)', () => {
+  const openWith = source('../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-open-in-app/src/client/session-open-with.ts')
+  assert.match(openWith, /selectSessionDirectory\(ctx\.sessions\.list\.getSnapshot\(\), sessionId\)/u,
+    'upstream still resolves the Session header open at its CURRENT directory (checkout-aware)')
+  const rawOpenWith = readFileSync(new URL(
+    '../../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-open-in-app/src/client/session-open-with.ts',
+    import.meta.url), 'utf8')
+  assert.match(rawOpenWith, /the checkout the Session works in, not the directory it was created in/u,
+    'the upstream rationale the chamber header seat adopts')
+})
+
+test('the header seat resolves the session CURRENT directory, not the workspace root', () => {
+  assert.match(button, /useSessions: <S>\(sel: \(state: OpenInSessionsState\) => S\) => S/,
+    'useSessions is a required standard-kit prop (upstream ui-session global props)')
+  assert.match(button, /const sessionDirectory = useSessions\(state => selectSessionDirectory\(state, sessionId\)\)/,
+    'the session directory is projected through the one upstream selector port')
+  assert.match(gates, /export function selectSessionDirectory\(/, 'the upstream selector port lives in the pure gate module')
+  assert.match(gates, /function projectedString\(/, 'the projection read is shared by both bags (no duplicated string mining)')
+  assert.ok(gates.includes("state.projectionsBySession?.[sessionId]?.values, 'workingDirectory'"),
+    'the shared projection bag is the first source (live workingDirectory)')
 })

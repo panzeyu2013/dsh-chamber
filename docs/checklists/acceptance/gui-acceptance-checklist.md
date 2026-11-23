@@ -49,7 +49,7 @@
 
 **机械腿（本仓可跑）**
 
-- 装配：先 `node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm` + `node packages/desktop/scripts/prepare-office-assets.mjs`；再 `pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`/发布腿 `--require-*`）→ 装配目录齐 sidecar.js / dist/control-plane / vendor / pnpm / primary-runtime（payload：node·pnpm·python）/ office-skills（4 文件），单 Node 在 primary-runtime 内；留命令与退出码；本机 .app：`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）→ `.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/primary-runtime/dependencies/node/bin/node` 可执行、`sidecar/office-skills/office/SKILL.md`、`Sparkle.framework`；留产物路径 + `du`/`hdiutil attach` 结论；Swift 套件 `pnpm run test:swift` → executed>0、failures==0、**skipped==0**（G23 no-skip 纪律），留 runner 收尾行；macOS JS 腿 `pnpm run test:macos` → darwin 锁断言 + 打包脚本套件，skipped>0 即红，留退出码；headless 装配验收：`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）→ N-1…N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO），留 `.tmp/gui-acceptance/gui-native-report.*`。
+- 装配：先 `node packages/desktop/scripts/prepare-python-payload.mjs --target mac-arm64 --with-node --with-pnpm` + `node packages/desktop/scripts/prepare-office-assets.mjs`；再 `pnpm run build:sidecar`（可选 `--dry-run`/显式 `--skip-*`/发布腿 `--require-*`）→ 装配目录齐 sidecar.js / dist/control-plane / vendor / pnpm / primary-runtime（payload：node·pnpm·python）/ office-skills（1 文件：office/SKILL.md），单 Node 在 primary-runtime 内；留命令与退出码；本机 .app：`pnpm run build:swift-app --no-sign`（本地不签；正式签名腿按 release 流程）→ `.app` + `.dmg` 产出；`.app` 内含 `Contents/Resources/dist/web/index.html`、`sidecar/primary-runtime/dependencies/node/bin/node` 可执行、`sidecar/office-skills/office/SKILL.md`、`Sparkle.framework`；留产物路径 + `du`/`hdiutil attach` 结论；Swift 套件 `pnpm run test:swift` → executed>0、failures==0、**skipped==0**（G23 no-skip 纪律），留 runner 收尾行；macOS JS 腿 `pnpm run test:macos` → darwin 锁断言 + 打包脚本套件，skipped>0 即红，留退出码；headless 装配验收：`node scripts/gui-acceptance/drivers/run.mjs --flavor native --require-assembly --web-dist packages/desktop/dist/web`（先 `pnpm run build:renderer`；指向装配目录用 `--sidecar-dir <绝对路径>`）→ N-1…N-7（ready/B 桥/health/Origin 围栏/壳 index 与声明资源/SIGTERM；机器门档下 N-6 缺 web dist 即 FAIL，默认档才 INFO），留 `.tmp/gui-acceptance/gui-native-report.*`。
 - B 桥载荷 parity：`pnpm run verify:shim-payload`（macOS 腿）→ preload ↔ shim 的成员/通道/载荷键一致，留脚本收尾行。
 
 **只能真机（工具箱不可替代）**：更新通道订阅（design 25 §7：稳定构建开/关订阅后的后台检查与 beta 发现、beta 构建默认只收正式版、打开订阅后继续 beta、final 收口后偏好保留、构建缺两条通道 feed URL 时开关禁用+原因；逐项记录 `[shell] Sparkle 更新通道=…` 日志与设置行状态）、`.app` 双击/首启、WKWebView 页面装载与 §5.2 视口、W1–W7 矩阵、C1/C2（含 S-10 隐藏态/App Nap 与心跳）、刷新率三工况（S-48）、通知音效回落、键盘桥（S-54）、macOS 14.4 首启（S-50）、Developer ID/公证/stapler/spctl 与首个 build-swift 发布腿（凭据）。逐条判据在 design 25 §8（§8.1 门定义、§8.5 实机矩阵）与 `scripts/perf/README.md`，本节只固定怎么跑与留什么。**右栏浏览器 v3 载体验收（W-13…W-30）按 [`remote-browser-acceptance.md`](./remote-browser-acceptance.md) §E2 真机执行**：本工具箱不实现（native 壳无 CDP；`--dev`/`--attach`/`--require-embed`/`--embed-port`/`--ssh-fixture` 属归档 Electron CDP 腿，native driver 拒绝这些参数）；主 frame 导航门、app-host 定义、`NSAllowsArbitraryLoadsInWebContent`（只放宽 Web 内容）、下载 cancel、证书/权限/对话框策略由 design 28 §5 规定。
@@ -72,6 +72,21 @@
 6. **degrade 启动**：受控单实例——只打开该来源、确保它第一个装载 documentpreview（其它已 pinned 来源暂不 boot；否则会经 first-load-wins 复用已补丁 factory 而假红）。把本地实例切到与 pin 不同的运行时线（或接一台**已含该包**但 bundle 文本与 pin 漂移的 dsh 远端并让其先装载）→ 期望壳正常启动（无失败覆盖层）、右栏图片保持坏（alt 文本）、Console 有 `degrade-unpatched` 判词；出现 `bundle-load-failed` 覆盖层 = 红灯。**旧远端臂（未证实，登记待远端实证）**：远端 dsh 旧于该包引入的版本时该行**整行缺席**（无右栏文档 tab、无 degrade 判词，壳正常）——该臂不得按 degrade 期望判红。
 7. **回归**：外链 https 图片仍正常；禁用 documentpreview 行后无文档 tab、无 `/api/file` 请求；PDF/Excel/HTML 懒块仍可打开（包内 chunk 未被拦截）。
 8. **gateway 形态 smoke**：gateway 页面（官方前端、单实例）启用该 bundle 后按步骤 2 上传一次；URL 无 `/api/i/` 前缀（root 直达），期望同样 200 NDJSON（验证「gateway 不需要该机制」的契约）。
+
+### 4.4 适配增量用户可见面验收
+
+打包态真机（或 2 实例浏览器）逐项记录「操作 → 观察 → 证据」，本机无法执行项标 NOT RUN：
+
+- **未读/已读标记**（design 06 §4.9）：侧栏会话行菜单出现「标为已读/未读」；未挂载源禁用；点击后行完成点/待办按预期收敛；跨源切源不被隐藏壳 ack 误清（同 Host 第二客户端观察）。
+- **完成失败红点**（design 06 §4.9）：制造一次完成失败（源侧中断/错误）→ 行 `.stateFailed` 红点 + `status.failed`；恢复后消失。
+- **拖会话到右栏**：从侧栏拖会话行到右栏 → 右栏打开该会话（payload `application/x-dsh-session`，非 text/plain）；跨源目标按 rightbar 语义。
+- **主题色**：切主题/系统外观 → 页面级单例 theme-color 同步（`ThemePresenter.start()` 创建一次；多壳无重复）。
+- **插件管理页（C1）**：设置 → 插件管理可打开、不崩；同步行/提示不出现（静态空实现，登记限制）；插件页内可见 connector-account（若 runtime 提供）。
+- **HMR 热同步**：安装/启停/卸载插件后页面侧行热更新（per-instance `pluginEvents` 流；Host 重载期应重连而非终断；重启型变更仍提示 restart-required）。
+- **remote-connection 关闭**：本地/网关实例不出现连接配对卡；gateway `/` 恢复认证（匿名 landing 不出现）。
+- **Office 4→1 + pypdf**：/office 与技能可用（1 文件 assets）；Python 载荷含 pypdf 6.21.4（`predev`/dry-run 清单核对）。
+- **worktree 进退**：enter checkout 的会话可正常 exit 回源根（不再 `WORKTREE_NOT_ENTERED`）；重复 enter 不产生重复记录。
+- **免费继承（covered/extra 行）冒烟**：① `ui-session-panel` 会话头折叠/浮层、环境区与 cwd；② `action-cards` 推荐卡默认开、General 开关可达；③ `connector-account` 落设置 → 插件管理页（若 runtime 提供）；④ 压缩摘要右栏预览。逐项只验出现与基本交互，不预实现。
 
 ## 5. 证据与记录纪律
 

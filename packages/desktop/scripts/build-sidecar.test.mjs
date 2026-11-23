@@ -411,18 +411,18 @@ function writeOfficeAssetsFixture(root, { omit = [] } = {}) {
 test('④ office 技能资产：替换式落位 / 缺源跳过 = 缺位 / --require-office-assets fail-closed', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-office-'))
   try {
-    assert.equal(OFFICE_SKILL_FILES.length, 4, 'office 资产清单必须恰好 4 个文件（rc.2 资产面）')
+    assert.equal(OFFICE_SKILL_FILES.length, 1, 'office 资产清单必须恰好 1 个文件（alpha.2 资产面）')
     const source = writeOfficeAssetsFixture(path.join(dir, 'assets'))
     const sourceStatus = verifyOfficeAssets(source)
     assert.equal(sourceStatus.ok, true)
-    assert.equal(sourceStatus.checked, 4, '4 个资产文件都必须被核对')
+    assert.equal(sourceStatus.checked, 1, '清单资产文件必须被核对')
     const absentStatus = verifyOfficeAssets(path.join(dir, 'nope'))
     assert.equal(absentStatus.ok, false)
     assert.match(absentStatus.problems.join('\n'), /缺文件：office\/SKILL\.md/)
     const partialStatus = verifyOfficeAssets(
-      writeOfficeAssetsFixture(path.join(dir, 'partial'), { omit: ['office-xlsx/SKILL.md'] }))
+      writeOfficeAssetsFixture(path.join(dir, 'partial'), { omit: ['office/SKILL.md'] }))
     assert.equal(partialStatus.ok, false)
-    assert.match(partialStatus.problems.join('\n'), /office-xlsx\/SKILL\.md/)
+    assert.match(partialStatus.problems.join('\n'), /office\/SKILL\.md/)
 
     const dest = path.join(dir, 'out', 'office-skills')
     // 上一轮残留不得留下：替换式落位。

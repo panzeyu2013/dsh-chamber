@@ -61,13 +61,14 @@ electron-userland/electron-builder；双 rep 540×380@72dpi + 1080×760@144dpi�
 |---|---|---|
 | `CPython`（python-build-standalone） | 3.12.14 | PSF-2.0 |
 | `pip`（解释器基线，随 CPython 分发） | 随 CPython | MIT |
-| `Node.js` | 24.21.0 | MIT |
+| `Node.js` | 24.22.3 | MIT |
 | `et_xmlfile`（python 发行版） | 2.0.0 | 见随包 wheel 的 dist-info METADATA |
 | `lxml`（python 发行版） | 6.1.3 | 见随包 wheel 的 dist-info METADATA |
 | `numpy`（python 发行版） | 2.3.5 | 见随包 wheel 的 dist-info METADATA |
 | `openpyxl`（python 发行版） | 3.1.5 | 见随包 wheel 的 dist-info METADATA |
 | `pandas`（python 发行版） | 3.0.1 | 见随包 wheel 的 dist-info METADATA |
 | `Pillow`（python 发行版） | 12.3.0 | 见随包 wheel 的 dist-info METADATA |
+| `pypdf`（python 发行版） | 6.21.4 | 见随包 wheel 的 dist-info METADATA |
 | `python-dateutil`（python 发行版） | 2.9.0.post0 | 见随包 wheel 的 dist-info METADATA |
 | `python-docx`（python 发行版） | 1.2.0 | 见随包 wheel 的 dist-info METADATA |
 | `python-pptx`（python 发行版） | 1.0.2 | 见随包 wheel 的 dist-info METADATA |

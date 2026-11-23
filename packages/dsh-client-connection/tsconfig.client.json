@@ -6,6 +6,7 @@
     "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo",
     "erasableSyntaxOnly": false,
     "paths": {
+      "@deepseek-ai/dsh-client-config/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-client-config/src/types.ts"],
       "@deepseek-ai/dsh-commands/brand": ["../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/brand.ts"],
       "@deepseek-ai/dsh-commands/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-commands/src/types.ts"],
       "@deepseek-ai/dsh-credentials/types": ["../../vendor/harness-packages/@deepseek-ai/dsh-credentials/src/types.ts"],
@@ -36,6 +37,7 @@
     "src/client/rpc.ts",
     "src/loopback-hostname.ts",
     "src/recovery-config.ts",
-    "src/rpc.ts"
+    "src/rpc.ts",
+    "src/types.ts"
   ]
 }

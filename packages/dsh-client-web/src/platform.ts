@@ -11,6 +11,13 @@
  * change must be mirrored here and in seed.ts.
  */
 
+/**
+ * Named export carrying the module manifest of a `staticLinked` library. The library keeps its ordinary
+ * exports; the manifest's factory returns those exports, without this one, and its `meta` describes the
+ * library's compiled stylesheets.
+ */
+export const STATIC_MODULE_MANIFEST_EXPORT = '__$dsh_client_module_manifest'
+
 /** The module specifiers the shell shares into the frozen module table. */
 export const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
