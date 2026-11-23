@@ -244,7 +244,7 @@
 
 ### 4.9 会话已读/未读标记（`uiSession.sessionStatus`）
 
-侧栏会话行菜单提供「标为已读/未读」：页面级单例持有 `sourceId → { mark }` 的 reading 座席（`reading-seat.ts` / `useReadingReady`），每 mounted 壳按自己的 ctx 发布（`uiSession.sessionStatus.mark` 经页面级 unary `sessionStatus/mark`，`throughTurn=Number.MAX_SAFE_INTEGER` 由 Host clamp）；未挂载源的行禁用该项。`completionUnread`/`completionFailed` 的读取来自本代 pin 的 covered `ui-session-status` 行，失败事实的呈现档（`.stateFailed` 红点 + `data-chamber-session-failed`）复用同一行状态链；`failed` 字段已是 client-core 正式行字段（`derive.ts` 第 7 参 `statusFailed` / 行 `failed?: boolean`），呈现档直接消费，无窄 cast。N-ctx ack 偏差（隐藏壳 document 级读确认）由 design 19 §3.x 登记，不 patch 上游。
+侧栏会话行菜单提供「标为已读/未读」：页面级单例持有 `sourceId → { mark }` 的 reading 座席（`reading-seat.ts` / `useReadingReady`），每 mounted 壳按自己的 ctx 发布（`uiSession.sessionStatus.mark` 经页面级 unary `sessionStatus/mark`，`throughTurn=Number.MAX_SAFE_INTEGER` 由 Host clamp）；未挂载源的行禁用该项。`completionUnread`/`completionFailed` 的读取来自本代 pin 的 covered `ui-session-status` 行，失败事实的呈现档（`.stateFailed` 红点 + `data-chamber-session-failed`）复用同一行状态链；`failed` 字段已是 client-core 正式行字段（`derive.ts` 第 7 参 `statusFailed` / 行 `failed?: boolean`），呈现档直接消费，无窄 cast。N-ctx ack 偏差（隐藏壳 document 级读确认）由 design 19 §3.x 登记，不 patch 上游。**被否方案**：① 用 vendor `acknowledge`/document 级读确认承担标记——N-ctx 一文档多壳下会把隐藏壳的 `current` 误认作已读（§4.1 的偏差），且动作词表只有 acknowledge；② 每壳本地维护 reading 座席、不发布页面级——跨壳行菜单与待办无法同拍，隐藏壳写回会成为第二权威；③ 改上游 `sessionStatus` 契约加公共 mark wire——私有缝合面（`handleSessionStatus`）已存在，加公共 wire 会扩大上游面并需逐 pin 追踪。
 
 ## 5. 已知取舍与开放项
 

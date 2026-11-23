@@ -8,7 +8,7 @@
 
 ## 0. 结构速查（只登记结构与判据，不记录版本值）
 
-- vendor 链接数由 `ensure-harness-vendor` 断言 == 锁文件 importer 集合——源码线，不是 F；运行时线族集合（F）= `packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包里的 `@deepseek-ai/*` 名字集合（C11 硬门）：含核心 `dsh`/`dsh-base`/`dsh-web-app`，不含 dev/test 与源码线 harness 段；官方 opt-in（`dsh-experimental-*`）只放行**登记白名单**内的名字（运行时根包自己声明的 opt-in 依赖属于 F；未登记名字出现/已登记名字不再出现都红）。本行与上一行是两条线，数量相近但集合不同，不可互推；其余计数（typert remote 装配契约 30 的挂载表定序、covered/factory 两集合、种子域 `clientGraph/graph`、`gitWorkTree/previewCreate`、`archiveCleanup/probe`、`openInApp/probe`）以 §3 与 §6 的门/源码为准（C4、C7 双门）。
+- vendor 链接数由 `ensure-harness-vendor` 断言 == 锁文件 importer 集合——源码线，不是 F；运行时线族集合（F）= `packages/desktop/vendor/dsh/pnpm-lock.yaml` 闭包里的 `@deepseek-ai/*` 名字集合（C11 硬门）：含核心 `dsh`/`dsh-base`/`dsh-web-app`，不含 dev/test 与源码线 harness 段；官方 opt-in（`dsh-experimental-*`）只放行**登记白名单**内的名字（运行时根包自己声明的 opt-in 依赖属于 F；未登记名字出现/已登记名字不再出现都红）。本行与上一行是两条线，数量相近但集合不同，不可互推；其余计数（typert remote 装配契约 34（+2 自挂载 = 生成物 36）的挂载表定序、covered/factory 两集合、种子域 `clientGraph/graph`、`gitWorkTree/previewCreate`、`archiveCleanup/probe`、`openInApp/probe`）以 §3 与 §6 的门/源码为准（C4、C7 双门）。
 
 ### 0.1 改动层索引（owner map；只做链接，不复述判据）
 

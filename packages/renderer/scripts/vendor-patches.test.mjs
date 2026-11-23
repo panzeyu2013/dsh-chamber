@@ -2228,3 +2228,149 @@ test('the ui-renderer DocumentStyles patch installs each module sheet once per p
   assert.equal(naive.afterFirstDispose, 2)
   assert.equal(naive.afterBothDispose, 0)
 })
+
+/** Module table seam whose record set can change, mirroring one module publish. */
+function createUpdatableModules(records) {
+  let current = records
+  const listeners = new Set()
+  return {
+    activeRecords: () => current,
+    subscribeModules: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    resolveAsset: (reference) => reference,
+    update(next) {
+      current = next
+      for (const listener of [...listeners]) listener()
+    },
+  }
+}
+
+/** Sorted "plugin/path" view of the installed page sheets (order-neutral assertions). */
+function installedSheetKeys(document) {
+  return document.head.childNodes
+    .map((node) => node.attributes['data-plugin'] + '/' + node.attributes['data-path'])
+    .sort()
+}
+
+/** Load the patched module under test from the registered patch + the pinned source. */
+async function loadPatchedDocumentStyles() {
+  const source = readFileSync(VENDOR + 'dsh-client-ui-renderer/src/client/styles/document-styles.ts', 'utf8')
+  const patched = applyVendorPatches(IDS.documentStylesReal, source)
+  assert.notEqual(patched, undefined, 'the document-styles module must be patched')
+  assert.deepEqual(patched.applied, ['dsh-client-ui-renderer/src/client/styles/document-styles.ts'])
+  const { DocumentStyles } = await importTransformedDocumentStyles(patched.code)
+  return { DocumentStyles }
+}
+
+test('DocumentStyles refresh releases one owner share and re-acquiring a live key reuses the node', async () => {
+  const { DocumentStyles } = await loadPatchedDocumentStyles()
+  const document = createFakeDocument()
+  // Two shells over ONE page with independent module-table views: the page-global
+  // registry is keyed by (container, plugin, path), never by the module system.
+  const firstModules = createUpdatableModules([styleRecord('@scope/x', 'x.css', '.x{}')])
+  const secondModules = createUpdatableModules([styleRecord('@scope/x', 'x.css', '.x{}')])
+  const first = new DocumentStyles(document.head, firstModules)
+  const second = new DocumentStyles(document.head, secondModules)
+  first.mount()
+  second.mount()
+  assert.equal(document.head.childNodes.length, 1, 'both shells share one sheet')
+  const shared = document.head.childNodes[0]
+
+  // The FIRST owner refresh drops the key: it releases only its own ref; the sheet stays.
+  firstModules.update([])
+  assert.equal(document.head.childNodes.length, 1, 'the surviving shell keeps the sheet (refcount 2 -> 1)')
+  assert.equal(document.head.childNodes[0], shared, 'the shared node is kept, never re-created')
+  assert.equal(shared.isConnected, true)
+
+  // Same key re-acquire while another owner still holds it returns THAT node (no second copy).
+  firstModules.update([styleRecord('@scope/x', 'x.css', '.x{}')])
+  assert.equal(document.head.childNodes.length, 1, 're-acquiring a live key must not install a second copy')
+  assert.equal(document.head.childNodes[0], shared, 'the re-acquire reuses the live shared node')
+
+  // The other owner releases (refcount 2 -> 1): the first owner's re-acquire keeps it.
+  secondModules.update([])
+  assert.equal(document.head.childNodes.length, 1, 'one owner still holds the sheet')
+  // The last owner's refresh removes the sheet.
+  firstModules.update([])
+  assert.equal(document.head.childNodes.length, 0, 'the last release removes the shared sheet')
+  first.dispose()
+  second.dispose()
+})
+
+test('a new owner re-attaches shared sheets detached by an external sweep (acquire path)', async () => {
+  const { DocumentStyles } = await loadPatchedDocumentStyles()
+  const document = createFakeDocument()
+  const modules = createFakeModules([
+    styleRecord('@scope/one', 'one.css', '.one{}'),
+    styleRecord('@scope/two', 'two.css', '.two{}'),
+  ])
+  const first = new DocumentStyles(document.head, modules)
+  const second = new DocumentStyles(document.head, modules)
+  first.mount()
+  second.mount()
+  const shared = [...document.head.childNodes]
+  assert.deepEqual(installedSheetKeys(document), ['@scope/one/one.css', '@scope/two/two.css'])
+
+  // An external all-document sweep (removeOwnedStyles-style) detaches every sheet.
+  for (const node of [...document.head.childNodes]) node.remove()
+  assert.equal(document.head.childNodes.length, 0, 'the sweep detaches every sheet')
+
+  // A third shell mounts: acquire must re-publish the SAME shared nodes, exactly one copy per key.
+  const third = new DocumentStyles(document.head, modules)
+  third.mount()
+  assert.deepEqual(installedSheetKeys(document), ['@scope/one/one.css', '@scope/two/two.css'])
+  assert.equal(document.head.childNodes.length, 2, 'the mount re-attaches, never duplicates')
+  for (const node of document.head.childNodes) assert.equal(node.isConnected, true, 'a new owner claims connected sheets')
+  for (const node of shared) assert.ok(document.head.childNodes.includes(node), 'the re-attached node is the shared one')
+
+  // refcount: the new owner's dispose keeps both sheets for the still-mounted shells.
+  third.dispose()
+  assert.equal(document.head.childNodes.length, 2, 'two owners still hold the shared sheets')
+  first.dispose()
+  assert.equal(document.head.childNodes.length, 2, 'one owner still holds the shared sheets')
+  second.dispose()
+  assert.equal(document.head.childNodes.length, 0, 'the last owner removes the shared sheets')
+})
+
+test('an owner refresh re-attaches detached sheets and a full withdraw/re-add reinstalls one copy', async () => {
+  const { DocumentStyles } = await loadPatchedDocumentStyles()
+  const document = createFakeDocument()
+  const modules = createUpdatableModules([
+    styleRecord('@scope/one', 'one.css', '.one{}'),
+    styleRecord('@scope/two', 'two.css', '.two{}'),
+  ])
+  const first = new DocumentStyles(document.head, modules)
+  const second = new DocumentStyles(document.head, modules)
+  first.mount()
+  second.mount()
+  const shared = [...document.head.childNodes]
+
+  // External sweep detaches the shared sheets; a module publish runs BOTH owners'
+  // refresh, whose ordering pass must re-attach the SAME shared nodes.
+  for (const node of [...document.head.childNodes]) node.remove()
+  modules.update([
+    styleRecord('@scope/one', 'one.css', '.one{}'),
+    styleRecord('@scope/two', 'two.css', '.two{}'),
+  ])
+  assert.deepEqual(installedSheetKeys(document), ['@scope/one/one.css', '@scope/two/two.css'])
+  for (const node of shared) assert.ok(document.head.childNodes.includes(node), 'refresh re-attaches the shared node')
+
+  // Withdraw every key: both owners release through refresh; the last release removes the sheets.
+  modules.update([])
+  assert.equal(document.head.childNodes.length, 0, 'refresh release removes the sheets after the last owner')
+
+  // Re-add the same keys: a fresh single copy per key (the registry entry died with its node).
+  modules.update([
+    styleRecord('@scope/one', 'one.css', '.one{}'),
+    styleRecord('@scope/two', 'two.css', '.two{}'),
+  ])
+  assert.deepEqual(installedSheetKeys(document), ['@scope/one/one.css', '@scope/two/two.css'])
+  assert.equal(document.head.childNodes.length, 2, 'a re-added key installs exactly one copy')
+
+  first.dispose()
+  assert.equal(document.head.childNodes.length, 2, 'the surviving shell keeps the re-added sheets')
+  second.dispose()
+  assert.equal(document.head.childNodes.length, 0)
+})
