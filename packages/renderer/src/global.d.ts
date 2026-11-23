@@ -433,7 +433,7 @@ export type GatewayPluginSyncIpcResult =
  */
 export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error'
 
-/** Non-secret update state projection (design 11 §3.2). */
+/** Non-secret update state projection (design 11 §6). */
 export interface UpdateState {
   phase: UpdatePhase
   currentVersion: string
@@ -605,7 +605,7 @@ export interface ChamberSettingsSupported {
    *  同样可选：缺字段 = 早于本门的主进程 → 消费端按「不支持」读（禁用 + 原因），
    *  绝不呈现一个可能无效的开关（与 badgeSupported 的非对称读法有意不同）。 */
   debugInspectable?: boolean
-  /** 「接收预览版更新」能力门（design 11 §3.2）：只有 Swift 原生壳且构建期注入了
+  /** 「接收预览版更新」能力门（design 11 §6）：只有 Swift 原生壳且构建期注入了
    *  两条通道 feed URL 才为 true；Electron 冻结装配恒 false。可选：缺字段按「不支持」读
    *  （与 debugInspectable 同款非对称纪律）。 */
   betaUpdatesSupported?: boolean

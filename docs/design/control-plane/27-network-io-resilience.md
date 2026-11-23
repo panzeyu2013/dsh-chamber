@@ -132,6 +132,8 @@ interface TransportStatusProjection { /* existing fields */ link?: TransportLink
 
 ## 6. 已知限制
 
+本节条目编号以正文为准；既有注释中的 `design 27 §6.N` 指本节第 N 条，不是小节号。
+
 1. `$events` 结束仍会导致连接代际重连 + 全量重放；根治需宿主 boot id/首帧期限。
 2. 单 SSH TCP HOL 未解决；第二隧道只在仿真证明 HOL 为主因后另案。
 3. 浏览器 6 槽池仍全局；快速失败只缩短占槽，不增加并发。

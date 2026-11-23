@@ -436,7 +436,7 @@ export async function createSessionHere(sourceId: string, path: string): Promise
     }
     // A page-dispatch-budget refusal RESOLVES with the previous state (the polling
     // path's deliberate behaviour, coordinator beginRefresh) instead of rejecting.
-    // An action must not accept that old state as fresh facts (design 08/26 §D7).
+    // An action must not accept that old state as fresh facts (design 26 §D7).
     if (!refreshedSince(fresh, refreshStartedAt)) {
       throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable')
     }

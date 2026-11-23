@@ -353,7 +353,7 @@ function DebugModeRow({ t }: { t: UpdateTranslate }) {
 }
 
 /**
- * 「接收预览版（beta）更新」行（放在「更新」section 内；design 11 §3.2 / design 25 §7）：
+ * 「接收预览版（beta）更新」行（放在「更新」section 内；design 11 §6 / design 25 §7）：
  * 主 switch + 行内说明。通道 = 纯用户偏好（v4）——开关值来自壳推送的**生效更新
  * 通道**（`update.channel`），不是 settings 期望值的回声；版本后缀不参与，beta
  * 构建也只是普通开关。呈现决策全部在 update-gate.ts 的纯门里（能力不可用的构建

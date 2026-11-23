@@ -80,7 +80,7 @@ export interface ChamberSettings {
   sessionTodo: ChamberSessionTodoSettings
   /** 调试模式（见 ChamberDebugSettings）：宿主口（Swift isInspectable）副作用叶。 */
   debug: ChamberDebugSettings
-  /** 接收预览版（beta）更新（design 11 §3.2 / design 25 §7）：**可选**——缺省 = 未设置
+  /** 接收预览版（beta）更新（design 11 §6 / design 25 §7）：**可选**——缺省 = 未设置
    *  （读作未订阅）；false = 明确关闭；true = 订阅。只在两条通道 feed URL 成对注入的
    *  Swift 原生壳构建生效；v4 起版本后缀不参与通道判定（纯用户偏好）。 */
   betaUpdates?: boolean
@@ -136,7 +136,7 @@ export interface ChamberSettingsSupported {
   closeToTray: boolean
   badgeSupported?: boolean
   debugInspectable?: boolean
-  /** 「接收预览版更新」开关的能力门（design 11 §3.2）：只有 Swift 原生壳且构建期注入
+  /** 「接收预览版更新」开关的能力门（design 11 §6）：只有 Swift 原生壳且构建期注入
    * 了成对的通道 feed URL（sidecar 收到 --native-updater-beta）才为 true；Electron 冻结装配恒
    *  false。可选：缺字段 = 早于本门的主进程 → 消费端按「不支持」读。 */
   betaUpdatesSupported?: boolean
@@ -678,7 +678,7 @@ export function closeToTrayRecoveryAvailable(
  *  WKWebView.isInspectable (Safari Web Inspector), which only the Swift native
  *  shell has — the Electron leg wires no debug surface in this version, so its
  *  switch is disabled with a reason rather than offering a switch that can never
- *  take effect. `betaUpdatesSupported` is the beta-channel gate (design 11 §3.2): it is
+ *  take effect. `betaUpdatesSupported` is the beta-channel gate (design 11 §6): it is
  *  the caller's fact (Swift native shell AND a build-time channel feed URL pair), NOT
  *  derivable from the flavor alone — an Electron build and a beta-feed-less Swift
  *  build both must disable the switch. Default false = the safe asymmetry. */

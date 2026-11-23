@@ -868,7 +868,7 @@ test('⑲ 无原生腿：过期确认先于相位拒绝，当前代际保持既�
   assert.deepEqual(await controller.restartAndInstallAsync!(current), { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL })
 })
 
-// --- beta 通道表（design 11 §3.2 / design 25 §7）：与 Swift / UI gate 同一张表 ---
+// --- beta 通道表（design 11 §6 / design 25 §7）：与 Swift / UI gate 同一张表 ---
 
 test('②′ resolveEffectiveUpdateChannel：beta 当且仅当 env 或（通道 URL 对可用 AND 偏好 true）', () => {
   // v4 纯偏好表：版本不再是输入（签名里没有 version），beta 构建默认也是 stable 通道。

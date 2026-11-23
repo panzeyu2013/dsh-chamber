@@ -175,7 +175,7 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
   }
   if (lines.length === 0) {
     // Another shell may have purged meanwhile, or only content-less resident
-    // tombstones were selected (design 24 §13-20a) — never silent, and the
+    // tombstones were selected (design 24 §13) — never silent, and the
     // LIST-empty line would misreport "nothing archived" while rows are listed.
     lines.push({ key: 'archive.purge.note.empty' })
   }

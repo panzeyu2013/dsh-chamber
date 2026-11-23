@@ -53,7 +53,7 @@ export function updateCheckPlatformBlocked(installBlockedReason: string | null |
 }
 
 /**
- * 「接收预览版（beta）更新」开关的呈现真值表（design 11 §3.2 / design 25 §7）——
+ * 「接收预览版（beta）更新」开关的呈现真值表（design 11 §6 / design 25 §7）——
  * 纯函数，组件只做文案与描边映射。
  *
  * 通道 = **纯用户偏好**（v4）：壳推送的 `update.channel` 只由「env 封签 OR 偏好

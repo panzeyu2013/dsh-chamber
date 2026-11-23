@@ -12,7 +12,7 @@
  *     the address bar/history keep the LOGICAL URL;
  *   - ssh source + an IPv6 loopback spelling (`[::1]`, the mapped
  *     127.0.0.1 form) → `undefined`: the forward target set above does not cover
- *     it and a DIRECT load would read THIS machine's loopback (design 28 §2.4/D6);
+ *     it and a DIRECT load would read THIS machine's loopback (design 28 §2.4);
  *   - a refused attach → `undefined`, rendered as the upstream failure bar.
  *
  * `externalUrl` is display-only: the forwarded page's system-browser exit goes

@@ -1159,7 +1159,7 @@ test('S-08 decideMainWindowClose: a close that would quit is deferred until the 
 });
 
 // ---------------------------------------------------------------------------
-// betaUpdates（design 11 §3.2 / design 25 §7）：可选偏好 / 持久化 / 能力门
+// betaUpdates（design 11 §6 / design 25 §7）：可选偏好 / 持久化 / 能力门
 // ---------------------------------------------------------------------------
 
 test('betaUpdates: 可选布尔偏好——validatePatch 严格、normalize 只认布尔、缺省保持「未设置」', () => {

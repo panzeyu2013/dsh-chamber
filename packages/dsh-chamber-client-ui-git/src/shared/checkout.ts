@@ -87,7 +87,7 @@ export type CheckoutRemoveBlockReason =
  *   (`runningSessionIds` carries every running session whose effective cwd is this
  *   checkout; the current one is the session on screen). An IDLE viewed session
  *   therefore never blocks removal: the checkout can go and `ensure()` falls back
- *   to the source project on the next message (design 08 §5.8). A running viewed
+ *   to the source project on the next message (design 08 §5.2). A running viewed
  *   session is blocked here AND by the host's own `running-agent` refusal.
  * There is deliberately no `runtime-unknown` leg: checkout rows carry no workspace
  * membership (`sessionIds` is empty for them), so the absence of the runtime

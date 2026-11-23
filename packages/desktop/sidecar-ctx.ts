@@ -236,7 +236,7 @@ export async function buildHeadlessCtx(
   } catch (error) {
     console.error('[sidecar] chamber settings 读取异常（回退默认值）：' + sanitizeErrorText(describeError(error)))
   }
-  // beta 通道事实（design 11 §3.2 / design 25 §7，v4 纯偏好表）：原生腿在场时，通道切换
+  // beta 通道事实（design 11 §6 / design 25 §7，v4 纯偏好表）：原生腿在场时，通道切换
   // 能力由壳的 `--native-updater-beta` 声明（= Info.plist DSHChamberStableFeedURL 与
   // DSHChamberBetaFeedURL 两条 URL 都已注入且形状可用；沿用 beta 名字避免连锁改名）；
   // 无原生腿（dev GitHub releases 发现）时能力恒可用（偏好直接决定发现通道）。

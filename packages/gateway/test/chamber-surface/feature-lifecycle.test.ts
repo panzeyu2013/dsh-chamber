@@ -577,7 +577,7 @@ test('gateway surfaces keep 16px form text and 44px touch targets', async t => {
 test('orchestration, retired surfaces and the PWA trio stay unclaimed', async t => {
   const host = surface(t)
   // Orchestration routes stay unclaimed; the retired mobile/channels surfaces and
-  // the PWA trio are deliberately not served (design 17 §18.3/§18.4).
+  // the PWA trio are deliberately not served (design 17 §18).
   for (const path of [
     '/chamber/approvals', '/chamber/notifications', '/chamber/schedule',
     '/chamber/sessions', '/chamber/settings', '/chamber/git/worktrees',

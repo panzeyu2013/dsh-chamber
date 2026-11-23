@@ -193,7 +193,7 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
 - **E gateway**：`SYNCABLE_HOST_PACKAGES` 第三行 + `extraSeedEntries` 第三行；探针期望走 C 派生；受保护名由注册表派生（`S` = `CHAMBER_HOST_PACKAGES` 名集，C13 三面一致门守住）——新增种子包**必须同时进注册表**才受保护（「`@dsh-chamber/*` 前缀自动覆盖」旧口径已废止）。
 - **F settings-connections（v1）**：PluginDialog 不新增三态行，仅 `classifyInventoryEntry`/`chamberKindOf` 加第三包（否则 gateway 清单误标 third-party）；v1 **不新增任何 IPC channel / 管理 REST / 反代改动**（三态行为后续可选增强，未排期）。
 - **G 零改动面**：control-plane 反代、gateway 默认代理、桥契约（ChamberServerAggregate）、derive/聚合投影、CLI。
-- **H 文档面**：枚举宿主包/域的位置（design 02 loader 表、05 §6、09/13/16/17、18 §3.4、01 §3、TODO）必须含第三包。
+- **H 文档面**：枚举宿主包/域的位置（design 02 的 loader 表、design 05 §6、design 09/13/16/17、design 18 §3.4、design 01 §3、TODO）必须含第三包。
 
 ## 8. 兼容与降级
 - 老/未挂域实例：端点 404（含「方法不在该域」）→ 行内诚实文案（§5/§6）， **无 legacy 回退、不静默**；404 开关限定 archiveCleanup 访问器，不与 control-plane 的未知实例 id 404（`instance_not_found`）混淆；

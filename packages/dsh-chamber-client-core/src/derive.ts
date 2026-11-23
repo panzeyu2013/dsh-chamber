@@ -873,7 +873,7 @@ export function retainGoalFacts(
 }
 
 /**
- * Merge the event-cached activation (design 19 §2.2) into known OBJECT goal
+ * Merge the event-cached activation (design 19 §3.2) into known OBJECT goal
  * facts only, and only when the value changes (an unchanged pass keeps the goal
  * object identity — no churn). The cache belongs to client/goal-activation.ts;
  * this is the pure merge seam.

@@ -80,7 +80,7 @@ export function selectLatestReleaseVersion(
 }
 
 /**
- * 生效更新通道（design 11 §3.2 / design 25 §7，v4 **纯偏好**表）——Swift 壳、sidecar 与
+ * 生效更新通道（design 11 §6 / design 25 §7，v4 **纯偏好**表）——Swift 壳、sidecar 与
  * UI 同一张表：beta 当且仅当 env `DSH_CHAMBER_UPDATE_CHANNEL === 'beta'`，或（本构建的
  * 通道 URL 对可用 AND 偏好 `betaUpdates === true`）；否则 stable。
  *

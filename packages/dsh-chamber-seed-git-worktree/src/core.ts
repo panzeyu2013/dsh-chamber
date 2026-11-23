@@ -487,7 +487,7 @@ export class GitWorktreeCore {
 
         const boundedRaw = raw.slice(0, allowedWorktrees)
         remainingWorktrees -= boundedRaw.length
-        // POOL CONTAINMENT (design 08/11 §6.6): only checkouts under the in-repo pool are
+        // POOL CONTAINMENT (design 08 §2.2): only checkouts under the in-repo pool are
         // reported. The main checkout is always reported, REGISTERED workspaces keep their
         // row wherever they live (missing/registered semantics unchanged), and an
         // UNREGISTERED row outside the pool - the legacy `$DSH_HOME/worktrees` root, its

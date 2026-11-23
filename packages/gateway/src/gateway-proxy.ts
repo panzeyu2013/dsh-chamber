@@ -179,7 +179,7 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
   function resolveTarget(res: ProxyResponse | null): URL | null {
     const port = getLocalDshPort()
     const state = getLocalState()
-    // `degraded` still serves (design 02 §3.5; design 27 §I3 forwards suspect
+    // `degraded` still serves (design 02 §3.5; design 27 §2 的不变量 I3 forwards suspect
     // links): one failed health probe must not turn the whole gateway into a 503.
     // `starting`/`restarting` remain refused — `restarting` keeps the old port,
     // which may name the dead child, so a port-only gate would forward into a

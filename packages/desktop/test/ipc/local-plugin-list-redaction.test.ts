@@ -1,5 +1,5 @@
 /**
- * LOCAL_PLUGIN_LIST handler projection (design 13 §7.0): the renderer-bound
+ * LOCAL_PLUGIN_LIST handler projection (design 13 §7.1): the renderer-bound
  * IPC response is the REDACTED manifest. Materialize-class dependency values
  * (file:/link:/relative/absolute/`~/`) and the rows[].spec channel are masked
  * with MATERIALIZED_VALUE_MASK before the response leaves the main process;
@@ -37,7 +37,7 @@ function writeProfile(root: string): void {
   }, undefined, 2))
 }
 
-test('desktop_local_plugin_list: the IPC response masks local-path dependency values (design 13 §7.0)', () => {
+test('desktop_local_plugin_list: the IPC response masks local-path dependency values (design 13 §7.1)', () => {
   const root = tempDir('dsh-local-list-redact-')
   writeProfile(root)
   const handlers = new Map<string, (payload: unknown) => unknown>()

@@ -316,7 +316,7 @@ export function overflowVerdict(facts, device = MOBILE_DEVICE) {
  */
 function headerShapeBrokenEvidence() {
   return '会话头锚点形状失效（硬失败）：outlet [data-slot="conversation.session.header"] 存在，但 outlet.closest("header") 为空——'
-    + '上游把 header 从 outlet 祖先链上移走/换容器了，按 design 17 §18.4.3 重锚后才能继续几何判定（首版直接子选择器正是这样静默 INFO 的）'
+    + '上游把 header 从 outlet 祖先链上移走/换容器了，按 design 17 §18.4 重锚后才能继续几何判定（首版直接子选择器正是这样静默 INFO 的）'
 }
 
 /**

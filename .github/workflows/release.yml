@@ -37,7 +37,7 @@ name: Release
 # systems; a default Gatekeeper still requires right-click/open or "allow
 # anywhere"). The Windows exe goes out unsigned — its auto-install proceeds
 # with a SmartScreen warning (documented tradeoff, design 11 §7); the macOS
-# INSTALL step is blocked without a Developer ID signature (design 11 §3.1).
+# INSTALL step is blocked without a Developer ID signature (design 11 §8).
 #
 # ---------------------------------------------------------------- ARCHIVED SCOPE
 # Electron flavor frozen (2026-11 user ruling; scope + revival checklist in

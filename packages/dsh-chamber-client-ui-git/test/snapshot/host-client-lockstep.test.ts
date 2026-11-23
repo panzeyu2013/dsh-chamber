@@ -47,7 +47,7 @@ import { normalizeGitSnapshot } from '../../src/shared/snapshot.ts'
 const MAIN = '/repos/project'
 const COMMON = '/repos/project/.git'
 const LINKED = '/repos/feature'
-/** The in-repo pool (design 08/11 §6.6): the host snapshot reports ONLY
+/** The in-repo pool (design 08 §2.2): the host snapshot reports ONLY
  *  unregistered checkouts under it, plus the main checkout and REGISTERED
  *  workspaces (wherever they live). An out-of-pool unregistered row — the legacy
  *  `$DSH_HOME/worktrees` root included — is dropped silently: no row, no diagnostic. */
@@ -286,7 +286,7 @@ test('every host snapshot diagnostic decodes verbatim (the per-row drift codes i
   assert.ok(codes.includes('path-unavailable'), `the vanished row is a loud per-row diagnostic: ${codes.join(', ')}`)
   assert.ok(codes.includes('agent-status-unknown'), `the status drift is reported: ${codes.join(', ')}`)
   assert.ok(codes.includes('agent-cwd-unknown'), `the cwd drift is reported: ${codes.join(', ')}`)
-  // POOL CONTAINMENT (design 08/11 §6.6): the legacy root is neither a row nor a
+  // POOL CONTAINMENT (design 08 §2.2): the legacy root is neither a row nor a
   // diagnostic — the fixture no longer depends on any out-of-pool unregistered path.
   assert.equal(
     snapshot.repos[0]!.worktrees.some(row => row.path === OUTSIDE_POOL),

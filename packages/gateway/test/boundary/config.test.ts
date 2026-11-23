@@ -269,7 +269,7 @@ test('gateway serve accepts --no-session-state (flags parse end-to-end)', () => 
 })
 
 test('gateway serve rejects the retired mobile flags', () => {
-  // The mobile UA shim and its entry path were removed (design 17 §18.3): the
+  // The mobile UA shim and its entry path were removed (design 17 §18): the
   // CLI must not silently accept the old deployment flags.
   for (const flag of ['--mobile-ua-redirect', '--mobile-entry']) {
     const result = spawnSync(process.execPath, [CLI, 'serve', flag, '--help'],

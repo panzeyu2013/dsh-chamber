@@ -15,7 +15,7 @@ import type { NotificationOpenIntent, NotificationSourceToken } from './notifica
 // Promises/local structural types — never electron types,
 // and no IPC registration or bare channel literals live here. Member-level
 // deviations from the design 25 §4.1 draft are annotated per member (v2
-// field set per design 25 §0.1 rows A10/B1/B3/B4/B9/B11/D3).
+// field set per design 25 §4.1).
 
 /** 原生通知 open intent / 来源代际 token（design 19 §3.3）——re-export 自纯逻辑
  *  模块 notifications.ts（electron-free，结构类型可直接跨 core/edges 使用）。 */

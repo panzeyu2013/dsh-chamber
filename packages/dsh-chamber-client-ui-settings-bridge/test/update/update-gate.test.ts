@@ -77,7 +77,7 @@ test('updateRestartAvailable: linux never offers the restart action (AppImage si
   assert.equal(updateRestartAvailable('downloaded', null, 'linux'), false);
 });
 
-// --- 「接收预览版（beta）更新」开关门（design 11 §3.2 / design 25 §7；v4 = 纯偏好通道） ---
+// --- 「接收预览版（beta）更新」开关门（design 11 §6 / design 25 §7；v4 = 纯偏好通道） ---
 
 test('betaUpdatesSwitchState: 能力门优先——宿主说不支持时禁用并报 unsupported', () => {
   // 缺字段/宿主事实为假 = 该构建没有可切换的两条通道 feed URL（非原生壳，或构建期未成对注入）。
