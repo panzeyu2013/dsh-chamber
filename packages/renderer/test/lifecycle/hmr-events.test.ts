@@ -220,6 +220,30 @@ test('subscribeHmrPluginEvents: close before/during arming tears down without le
   release()
 })
 
+test('subscribeHmrPluginEvents: close inside the consumer-import window disposes the late consumer', async () => {
+  const h = harness()
+  let releaseFactory: (() => void) | undefined
+  const baseSeams = h.seams
+  const seams = {
+    loadContribution: baseSeams.loadContribution,
+    // Simulate the production dynamic-import window: the consumer is handed back only after
+    // the test decides (the real path awaits import('@deepseek-ai/dsh-api-gateway/client')).
+    async createSnapshotStream(stream: unknown, options: SnapshotStreamOptions) {
+      await new Promise<void>(resolve => { releaseFactory = resolve })
+      return baseSeams.createSnapshotStream(stream, options)
+    },
+  }
+  const subscription = subscribeHmrPluginEvents(h.ctx, handlers(h), seams)
+  h.install()
+  await h.tick()
+  subscription.close()
+  releaseFactory!()
+  await h.tick()
+  assert.equal(h.controlDisposed, 1, 'the consumer created after close is disposed, not started')
+  assert.equal(h.calls.includes('start'), false, 'a closed subscription never starts the late consumer')
+  assert.equal(h.unmounted, 1, 'the mounted namespace is still torn down exactly once')
+})
+
 test('wiring: the shell arms the bridge per instance and the official HMR row stays skipped', () => {
   const shell = readSource('../../src/shell.ts')
   assert.match(shell, /import \{ subscribeHmrPluginEvents, type HmrEventsSeams \} from '\.\/hmr-events\.ts'/)

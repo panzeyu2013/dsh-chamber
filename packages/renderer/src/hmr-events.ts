@@ -87,8 +87,10 @@ export interface HmrEventsSeams {
   /** Load the HMR client's generated `./remote` contribution; defaults to the real import. */
   loadContribution?(): Promise<PluginEventsContribution>
   /** Build the baseline-and-delta consumer over the physical stream (defaults to the
-   *  api-gateway fork's `RemoteSnapshotStream`, loaded lazily so node tests can stub it). */
-  createSnapshotStream?(stream: unknown, options: SnapshotStreamOptions): SnapshotStreamFace
+   *  api-gateway fork's `RemoteSnapshotStream`, loaded lazily so node tests can stub it).
+   *  May be async: the production path awaits a dynamic import, and a close landing inside
+   *  that window must dispose the local consumer instead of leaking it. */
+  createSnapshotStream?(stream: unknown, options: SnapshotStreamOptions): SnapshotStreamFace | Promise<SnapshotStreamFace>
 }
 
 /** The snapshot-stream callbacks `RemoteSnapshotStream` consumes. */
@@ -199,10 +201,17 @@ export function subscribeHmrPluginEvents(
     }
     let consumer: SnapshotStreamFace
     if (seams.createSnapshotStream !== undefined) {
-      consumer = seams.createSnapshotStream(stream, options)
+      consumer = await seams.createSnapshotStream(stream, options)
     } else {
       const { RemoteSnapshotStream } = await import('@deepseek-ai/dsh-api-gateway/client')
       consumer = new RemoteSnapshotStream(stream as never, options as never) as unknown as SnapshotStreamFace
+    }
+    // A close (or a revoked grant) during the consumer factory's await -- in production the
+    // dynamic import -- must dispose the local consumer: disposeArm() already ran with
+    // `control` unset, so assigning afterwards would leak an arm the page believes closed.
+    if (closed || stopping || epoch !== accessEpoch) {
+      try { consumer.dispose() } catch { /* best effort */ }
+      return
     }
     control = consumer
     consumer.start()
