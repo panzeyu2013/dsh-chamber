@@ -255,6 +255,7 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动 chrom
 - 叶子纪律：目录 0700 / 文件 0600、no-follow、`open→fstat` 常规文件判据（与 ShellLog 共用）；信号上下文不做 rename 轮转，改安装期按上限清零。
 - 覆盖 `NSSetUncaughtExceptionHandler` + SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE/SIGTRAP；不做 Crashpad/上报/设置页展示；SIGKILL/断电不写标记，诊断写失败静默降级。
 - 细节与可测性 seam 单源 = `macos/Sources/DSHChamber/CrashDiagnostics.swift`（注入打开器/处理器安装器，固定 epoch 直调）。
+- **release 反汇编可验**：`emitSignal`/`handleSignal` 只调 `renderTimestampPrefix`（纯整数 civil-date 换算）/`write`/`open`/`fstat`/`close`/`time`/`signal`/`raise`，无任何分配/retain/ObjC 调用（B3/B5 的锁步判据，见 `CrashDiagnosticsTests`）。
 
 **Rejected alternatives**：Crashpad / 任一第三方崩溃 SDK——新增运行时依赖 + 自带上报面，与「不新增依赖」红线冲突；最小诊断已满足「闪退后日志能给出原因」的判据。在处理器里用 Swift String/Array/Formatter 格式化记录——崩溃时分配器与锁状态未知，可能死锁或二次崩溃；改为安装期预格式化 + 定长栈缓冲手写时间戳。处理器内做 `shell.log` 式 rename 轮转——会把记录搬去 `.1`，启动期读「最近一条」就落空，且徒增信号上下文里的文件系统操作；改为安装期清零。处理器写完就 `_exit`（或吞掉信号）——会丢掉系统 DiagnosticReports 的原生崩溃报告；改为恢复 `SIG_DFL` + `raise`。设置页展示「上次异常退出」——需要新桥面/页面契约，本期不做。在处理器里继续用 `gmtime_r`（或任何不在 `man 2 sigaction` 名单里的 libc 调用）——与「只做 async-signal-safe」声明矛盾，改为纯整数 civil-date 换算。启动期清除标记失败保持静默——标记清不掉时每次启动都会重复报告同一条旧崩溃，改为 loud 一行失败。
 
