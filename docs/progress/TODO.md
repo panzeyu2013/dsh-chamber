@@ -136,7 +136,7 @@
 
 #### 14.3 工程环境债
 
-- 下一 pin 落地「真 `WorkspaceRegistry` + 真 binding」lockstep（当前 ad-hoc 形态；CI 走 node_modules 解析）；复核 vendor 补丁 retire 与 `RETIRED_PATCHES`（2 条退役：ReasoningRow sweep、util-values 比较）。
+- 下一 pin 落地「真 `WorkspaceRegistry` + 真 binding」lockstep（当前 ad-hoc 形态；CI 走 node_modules 解析）；复核 vendor 补丁 retire 与 `RETIRED_PATCHES`（3 条退役：ReasoningRow sweep、util-values 比较、ui-theme styles 页面单例）。
 - `node-addon-require-builtin` 指纹表未收录当前 Electron pin ⇒ Electron flavor 托管宿主起不来（Electron 已冻结归档，复活按 `electron-frozen.md` §6.3）。
 
 #### 14.4 升级期检查两条闭口（待 vendor 物化）
@@ -387,7 +387,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 #### 3.2 E2 首屏 markdown 家族按需化（mainGraph 唯一大池）
 
-**证据（结构实测 + 可推算）**：mainGraph ≈1.91 MB（1,910,110 B）中静态 `langs/vendor` chunk 747,385 B（39.1%），来源是 vendor `ui-primitives` 的 markdown 家族静态 import（shiki core/JS engine + 3 个 boot grammar、katex + katex.min.css、micromark）；katex + shiki 家族（`@shikijs/*` + oniguruma-to-es）在当前精确树 map 的 sourcesContent 中合计约 1,125,114/1,655,299 = 68%，估算可移出 ≈508 KB（主图 −26.6%；纯 `katex|shiki` 包名口径为 62.76%）。次大 = zod ≈238 KB（page-language chunk 38.1%）。
+**证据（结构实测，数值随构建漂移）**：mainGraph 当前实测值以 `packages/desktop/dist/web/perf-sizes.json` 为准（当前构建已越 warn；具体值以该文件为准，不在此写死）；结构面 = vendor `ui-primitives` 的 markdown 家族静态 import（shiki core/JS engine + boot grammar、katex + katex.min.css、micromark）占静态 `langs/vendor` chunk 的主体，katex + shiki 家族在 map sourcesContent 中占比最高；可移出面比例与 KB 数按本节方法在改动前用同一构建重算，不在此写死（docs/AGENTS 派生数字纪律）。次大 = zod。
 
 **设计**：markdown 高亮/公式渲染改动态 import（首块先纯文本、空闲后升级，或按会话是否已出现代码块/公式预取）；zod 侧改 `zod/mini` 或把非 boot 路径（sidebar-right persistence 等）改惰性 import。shiki/katex 在 vendor 源内，需 vendor patch（第二类准入 = macOS 同机 A/B：首个代码块/公式 TTI + 帧成本）或上游接受；chamber 自有副本（connection/web）的 zod 可先改。
 
@@ -403,7 +403,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 #### 3.4 N-ctx style 归属测量（B2 收口前置）
 
-**证据（代码纠正）**：插件 `.module.css` 已是页级一份（构建期 tagId 去重 + 页级 module table），「每壳一份」按代码不成立；每壳重复只剩 ctx.effect 内联样式（theme 8 个按页面单例设计，见 design 09 §3.6）。实机 575 `<style>` 的归属未证实。
+**证据（代码纠正）**：插件 `.module.css` 已是页级一份（构建期 tagId 去重 + 页级 module table），「每壳一份」按代码不成立；theme 样式表的 per-shell 重复随上游 `plain CSS imports` 消失（chamber 补丁已移入 `RETIRED_PATCHES`，design 09 §3.6），每壳重复只剩 ctx.effect 内联样式。实机 575 `<style>` 的归属未证实。
 
 **测量协议（macOS）**：Web Inspector 里按 `style[data-plugin]`/`data-plugin-css` 分组计数并记录每壳归属（同一时刻壳数 N、隐藏壳数），对照 `[data-dsh-icon-sprite]` 数；若仍有按壳重复的包 ⇒ 按方案 B（chamber 侧包补丁，0.5–2 人日/条 + 每 pin 0–0.5）逐包页面单例化；若总量来自非模块注入（shiki/katex/内联），转 §3.2 或其他条目。**不得**用总 style 数当判据。
 

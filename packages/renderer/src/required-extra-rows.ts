@@ -193,8 +193,6 @@ export const DEFERRED_EXTRA_ROW_IDS: readonly string[] = [
   // settings cluster (ui-settings itself stays first-screen).
   '@deepseek-ai/dsh-client-ui-settings-general',
   '@deepseek-ai/dsh-client-ui-settings-models',
-  '@deepseek-ai/dsh-client-ui-settings-plugins',
-  '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
   '@dsh-chamber/dsh-chamber-client-ui-settings-plugin-manager',
   '@dsh-chamber/dsh-chamber-client-ui-settings-connections',
   '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
@@ -256,6 +254,11 @@ export const KNOWN_SERVICE_PROVIDERS: Readonly<Record<string, string>> = {
   // 0.2.2-alpha.3: ui-workspace injects `contextMenus`; the provider is the context-menu hub, another
   // covered first-screen factory — a probe hit means the composite factory never ran, not a missing row.
   contextMenus: '@deepseek-ai/dsh-client-ui-context-menu',
+  // alpha.1: the nested Session-status service (ui-session-status) the covered conversation/workspace
+  // families and the chamber sidebar inject. Provider = a covered first-screen factory (same rule as
+  // fileDrag/contextMenus): a probe hit means the composite factory never ran; a host graph without the
+  // (now its own) row still activates it.
+  'uiSession.sessionStatus': '@deepseek-ai/dsh-client-ui-session-status',
 }
 
 /**

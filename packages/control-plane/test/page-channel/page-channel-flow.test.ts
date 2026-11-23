@@ -269,16 +269,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-test('上游路由锁步：插件图字面量与 vendor EVENTS_ENDPOINT 一致，会话事实只认协议常量', () => {
+test('上游路由锁步：会话事实上游路径只认协议常量，插件图转发已退役', () => {
   const root = fileURLToPath(new URL('../../../../', import.meta.url))
-  const vendor = readFileSync(join(root, 'vendor/harness-packages/@deepseek-ai/dsh-client-hmr/src/events.ts'), 'utf8')
   const source = readFileSync(join(root, 'packages/control-plane/src/page-channel.ts'), 'utf8')
-  // registry mirror.dsh-client-hmr-events-endpoint 的机器化：pin 升级挪走宿主路由，这里必须红。
-  assert.ok(vendor.includes("export const EVENTS_ENDPOINT = '/plugins/events'"),
-    'vendor dsh-client-hmr 的 EVENTS_ENDPOINT 变了：通道的 PLUGIN_GRAPH_SSE_PATH 必须跟着改')
-  assert.ok(source.includes("const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'"),
-    '通道的插件图上游路径必须与 vendor EVENTS_ENDPOINT 逐字节一致')
-  // 会话事实路径不得再写一份字面量：前缀的唯一来源是同包的协议常量。
+  // 0.2.3-alpha.1 decision C: the client-plugin graph moved to the authenticated per-instance
+  // `pluginEvents` Remote stream; the page channel no longer relays /plugins/events.
+  assert.equal(source.includes('PLUGIN_GRAPH_SSE_PATH'), false, 'the dedicated /plugins/events relay is retired')
+  assert.equal(source.includes("'/plugins/events'"), false, 'no route literal for the retired relay')
   assert.ok(source.includes('const SESSION_FACTS_SSE_PATH = SESSION_STATE_STREAM_PATH'),
     '会话事实上游路径只许引用 @dsh-chamber/dsh-chamber-wire 的协议常量')
   assert.equal(SESSION_STATE_STREAM_PATH, '/chamber/session-state/stream')
@@ -295,7 +292,7 @@ test('credit: unacked bytes over the window pause the upstream reader; an ack re
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-credit', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-credit', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-credit')
   const response = upstream.calls[0].res
   assert.equal(response.paused, false, 'a fresh subscription reads its upstream')
@@ -328,7 +325,7 @@ test('credit: an item frame over PAGE_CHANNEL_MAX_FRAME_CHARS fails that subscri
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-large', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-large', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-large')
   // 输入必须走**转义溢出**这条路：data 载荷本身在帧上限之内（parser 上限也是同一
   // 常量，直接塞 4MiB 只会先撞 parser），但 JSON 帧把每个 `"` 转义成 `\"`，整帧翻倍
@@ -364,7 +361,7 @@ test('upstream_timeout: no response headers within the per-subscription deadline
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-slow', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-slow', family: 'sessionFacts', instanceId: 'gateway-x' })
   const failure = await client.waitForType('error', 'pg-slow', 5000)
   assert.equal(failure.code, 'upstream_timeout')
   assert.equal(requests.length, 1)
@@ -378,7 +375,7 @@ test('upstream headers: host/rewritten origin/accept, no accept-encoding, transp
     httpRequest: upstream.fn,
     resolveTargetFor: (instanceId) => ({
       baseUrl,
-      ...(instanceId === 'local' ? {} : { connectionId: instanceId }),
+      ...(instanceId === 'gateway-local' ? {} : { connectionId: instanceId }),
       headers: { authorization: 'Bearer transport-token', cookie: 'gw=1' },
     }),
   })
@@ -389,10 +386,10 @@ test('upstream headers: host/rewritten origin/accept, no accept-encoding, transp
   registerAuthCookie(baseUrl, 'auth=1')
   t.after(() => clearAuthCookie(baseUrl))
 
-  client.send({ type: 'subscribe', id: 'pg-headers', family: 'pluginGraph', instanceId: 'local' })
+  client.send({ type: 'subscribe', id: 'pg-headers', family: 'sessionFacts', instanceId: 'gateway-local' })
   await client.waitForType('ready', 'pg-headers')
   const headers = upstream.calls[0].options.headers
-  assert.equal(upstream.calls[0].url.href, `${baseUrl}/plugins/events`)
+  assert.equal(upstream.calls[0].url.href, `${baseUrl}${SESSION_STATE_STREAM_PATH}`)
   assert.equal(headers.host, '127.0.0.1:41000')
   assert.equal(headers.origin, baseUrl, 'Origin is rewritten to the target origin')
   assert.equal(headers.accept, 'text/event-stream')
@@ -403,7 +400,7 @@ test('upstream headers: host/rewritten origin/accept, no accept-encoding, transp
   client.send({ type: 'unsubscribe', id: 'pg-headers' })
   // A remote gateway with the SAME baseUrl (UDS synthetic origin) must never see
   // the local launch-token cookie; its own transport cookie is all that rides.
-  client.send({ type: 'subscribe', id: 'pg-headers-2', family: 'pluginGraph', instanceId: 'gateway-x' })
+  client.send({ type: 'subscribe', id: 'pg-headers-2', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-headers-2')
   assert.equal(upstream.calls[1].options.headers.cookie, 'gw=1', 'a remote target never inherits the local auth cookie')
   clearAuthCookie(baseUrl)
@@ -432,7 +429,7 @@ test('transport headers cannot override the SSE identity/host discipline (only a
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-hostile', family: 'pluginGraph', instanceId: 'gateway-x' })
+  client.send({ type: 'subscribe', id: 'pg-hostile', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-hostile')
   const headers = upstream.calls[0].options.headers
   assert.equal(headers.host, '127.0.0.1:41000', 'the target authority wins over a transport host')
@@ -453,7 +450,7 @@ test('an unterminated data line over the frame cap fails the subscription and de
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-unterminated', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-unterminated', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-unterminated')
   const response = upstream.calls[0].res
   // 一条没有换行的巨行只在 parser 的 buffer 里增长：成帧检查（JSON.stringify 之后）
@@ -477,7 +474,7 @@ test('a multi-line event whose data lines accumulate over the frame cap fails th
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-multiline', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-multiline', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-multiline')
   const response = upstream.calls[0].res
   // 每条 data 行都是完整行（buffer 被立即消费），累积只发生在 pending data 行里：
@@ -501,7 +498,7 @@ test('a gateway authority override becomes the Host header', async (t) => {
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-authority', family: 'pluginGraph', instanceId: 'gateway-tunnel' })
+  client.send({ type: 'subscribe', id: 'pg-authority', family: 'sessionFacts', instanceId: 'gateway-tunnel' })
   await client.waitForType('ready', 'pg-authority')
   assert.equal(upstream.calls[0].options.headers.host, '127.0.0.1:4444')
   assert.equal(upstream.calls[0].options.headers.origin, 'http://127.0.0.1:4444')
@@ -517,7 +514,7 @@ test('SSE 行终止符与分块：CRLF、裸 CR、跨块多字节字符都按 WH
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-frames', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-frames', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-frames')
   const response = upstream.calls[0].res
   // 多字节字符与 CRLF 一起被 TCP 分块切开：第一块停在「中」的 UTF-8 中间。
@@ -602,7 +599,7 @@ test('logger 抛错不得打断流：attach/subscribe/ready/item/closeAll 照常
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-log', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-log', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-log')
   upstream.calls[0].res.emit('data', Buffer.from('data: survived\n\n'))
   await client.waitFor(message => message.type === 'item' && message.data === 'survived', 'item with a throwing logger')
@@ -620,7 +617,7 @@ test('SSE 保活注释夹在 data 行之间：不切碎事件、不复制事件�
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-keepalive', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-keepalive', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-keepalive')
   upstream.calls[0].res.emit('data', Buffer.from('data: a\n: keepalive\ndata: b\n\n'))
   await client.waitFor(message => message.type === 'item' && message.event === 'keepalive', 'keepalive item')
@@ -642,7 +639,7 @@ test('信用窗口的真实边界：一个读取块里的多条事件全部按�
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-burst', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-burst', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-burst')
   const count = 40
   const burst = Array.from({ length: count }, (_value, index) => `data: item-${String(index)}\n\n`).join('')
@@ -672,7 +669,7 @@ test('every upstream chunk is reported to onDownlink with its connectionId (busy
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-down', family: 'pluginGraph', instanceId: 'dsh-busy' })
+  client.send({ type: 'subscribe', id: 'pg-down', family: 'sessionFacts', instanceId: 'gateway-busy' })
   await client.waitForType('ready', 'pg-down')
   const first = Buffer.from('data: first\n\n')
   upstream.calls[0].res.emit('data', first)
@@ -697,7 +694,7 @@ test('the page-channel downlink observer is isolated: a throw never fails the su
   t.after(() => harness.close())
   const client = await harness.connect()
   t.after(() => client.ws.close())
-  client.send({ type: 'subscribe', id: 'pg-boom', family: 'pluginGraph', instanceId: 'dsh-boom' })
+  client.send({ type: 'subscribe', id: 'pg-boom', family: 'sessionFacts', instanceId: 'gateway-boom' })
   await client.waitForType('ready', 'pg-boom')
   upstream.calls[0].res.emit('data', Buffer.from('data: still-alive\n\n'))
   const item = await client.waitForType('item', 'pg-boom')
@@ -714,7 +711,7 @@ test('an SSE event split across chunks (payload + split CRLF) crosses verbatim e
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-split', family: 'pluginGraph', instanceId: 'dsh-split' })
+  client.send({ type: 'subscribe', id: 'pg-split', family: 'sessionFacts', instanceId: 'gateway-split' })
   await client.waitForType('ready', 'pg-split')
 
   // The scan cursor must resume from where the previous chunk stopped: chunks 1–3 carry no
@@ -750,8 +747,8 @@ test('a POSIX ssh tunnel target hands its socketPath to the upstream http.reques
   const upstream = fakeSseUpstream()
   const socketPath = '/tmp/dsh-page-channel-socket-path.sock'
   const targets: Record<string, { baseUrl: string; socketPath?: string; authority?: string }> = {
-    'dsh-uds': { baseUrl: 'http://127.0.0.1:41000', socketPath, authority: '127.0.0.1:4444' },
-    'dsh-tcp': { baseUrl: 'http://127.0.0.1:41001' },
+    'gateway-uds': { baseUrl: 'http://127.0.0.1:41000', socketPath, authority: '127.0.0.1:4444' },
+    'gateway-tcp': { baseUrl: 'http://127.0.0.1:41001' },
   }
   const harness = await startChannel({
     httpRequest: upstream.fn,
@@ -761,13 +758,13 @@ test('a POSIX ssh tunnel target hands its socketPath to the upstream http.reques
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-uds', family: 'pluginGraph', instanceId: 'dsh-uds' })
+  client.send({ type: 'subscribe', id: 'pg-uds', family: 'sessionFacts', instanceId: 'gateway-uds' })
   await client.waitForType('ready', 'pg-uds')
   assert.equal(upstream.calls[0].options.socketPath, socketPath, 'the UDS listener rides the subscription request')
   assert.equal((upstream.calls[0].options.headers as Record<string, string>).host, '127.0.0.1:4444',
     'the Host/authority override is unchanged by the socket transport')
 
-  client.send({ type: 'subscribe', id: 'pg-tcp', family: 'pluginGraph', instanceId: 'dsh-tcp' })
+  client.send({ type: 'subscribe', id: 'pg-tcp', family: 'sessionFacts', instanceId: 'gateway-tcp' })
   await client.waitForType('ready', 'pg-tcp')
   assert.equal(upstream.calls[1].options.socketPath, undefined, 'a TCP target never gains a socket option')
 })

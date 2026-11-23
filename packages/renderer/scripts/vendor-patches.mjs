@@ -671,23 +671,28 @@ export const VENDOR_PATCHES = Object.freeze([
           + '}) {',
       }),
       Object.freeze({
-        expect: '    resolve: (path: string) => fileMediaUrl(document.baseURI, resolveWorkspacePath(cwd, path)),',
-        replace: '    resolve: (path: string) => fileMediaUrl(chamberFileApiBase === undefined || chamberFileApiBase === \'\' ? document.baseURI : new URL(`${chamberFileApiBase}/`, document.baseURI).href, resolveWorkspacePath(cwd, path)),',
+        // current pin re-anchor: upstream now resolves relative targets from the Session's
+        // CURRENT directory (selectSessionDirectory) instead of the workspace root `cwd`.
+        expect: '    resolve: (path: string) => fileMediaUrl(document.baseURI, resolveWorkspacePath(directory, path)),',
+        replace: '    resolve: (path: string) => fileMediaUrl(chamberFileApiBase === undefined || chamberFileApiBase === \'\' ? document.baseURI : new URL(`${chamberFileApiBase}/`, document.baseURI).href, resolveWorkspacePath(directory, path)),',
       }),
       Object.freeze({
         // The labels block is upstream text the resolver edit leaves alone: binding it
         // keeps this deps anchor from moving onto a sibling memo that shares the same
         // `cwd` / `t` dependencies.
+        // current pin re-anchor: the memo's directory dependency follows upstream's
+        // selectSessionDirectory rename (the labels block itself is unchanged and keeps this
+        // anchor off the sibling memo that shares the same deps).
         expect: '    labels: {\n'
           + "      open: t('image.open'), loading: t('image.loading'), failed: t('image.failed'),\n"
           + "      dialog: t('image.dialog'), close: t('image.close'),\n"
           + '    },\n'
-          + '  }), [cwd, t, fileDrag, sessionId])',
+          + '  }), [directory, t, fileDrag, sessionId])',
         replace: '    labels: {\n'
           + "      open: t('image.open'), loading: t('image.loading'), failed: t('image.failed'),\n"
           + "      dialog: t('image.dialog'), close: t('image.close'),\n"
           + '    },\n'
-          + '  }), [chamberFileApiBase, cwd, t, fileDrag, sessionId])',
+          + '  }), [chamberFileApiBase, directory, t, fileDrag, sessionId])',
       }),
     ]),
   }),
@@ -774,92 +779,6 @@ export const VENDOR_PATCHES = Object.freeze([
         // rc.2 AccountNoticeStack component itself no longer exists).
         expect: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop,',
         replace: '    view: undefined, details: undefined, avatar: undefined, failed: false, loginVisible: false, desktopOnboardingVisible: desktop && (globalThis as { __dshChamberAccountOverlay?: boolean }).__dshChamberAccountOverlay === true,',
-      }),
-    ]),
-  }),
-  Object.freeze({
-    idSuffixes: Object.freeze([
-      'dsh-client-ui-theme/src/client/styles.ts',
-      'packages/client/ui-theme/src/client/styles.ts',
-    ]),
-    noRetireForm: 'no stable upstream text shape: the fix is a page-level singleton/refcount contract for the theme DOM resources, which upstream has no N-shell notion to assert against. C9 drift failure + maintainer ruling, not an automated retire check.',
-    vendorFile: 'dsh-client-ui-theme/src/client/styles.ts',
-    reason: 'N-ctx multi-instance correctness (FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) - ADMITTED 2026-11-16 (maintainer ruling; design 09 §3.6)): the single page mounts one shell per instance; ui-theme itself is a page-level module singleton, but installThemeStyles runs once per mounted shell ctx and appends its own eight <style data-plugin-css> sheets per shell - the measured multi-shell page carried 575 <style> / 736 CSSStyleSheet nodes and a hidden shell keeps its eight alive. The sheets are module constants, identical across shells, and no chamber package can dedupe a DOM node another plugin owns; module-private state may differ per bundle instance, so the dedupe registry must sit on the document behind Symbol.for. This edit publishes each sheet once per document behind a document-level registry keyed on Symbol.for and refcounts it; the last owner removes it. Accepted trade-off: on a multi-shell page every shell shares the same eight sheets (identical content, so nothing changes visually) and a hidden shell no longer holds its own copy; the sheets stay until the last shell disposes, not until the first. A single-instance page gets the upstream DOM exactly (one sheet per name, removed on dispose) and no chamber knob is involved. ADMITTED 2026-11-16: the maintainer ruling that admits this fourth form was recorded in design 09 §3.6, so this entry may ride release builds; the deletion conditions above stay.',
-    edits: Object.freeze([
-      Object.freeze({
-        expect: '/**\n'
-          + ' * Mount global theme sheets; window-backed documents also publish the DPR-aware stroke width.\n'
-          + ' * @param ctx - Owning plugin context.\n'
-          + ' */\n'
-          + 'export function installThemeStyles(ctx: Context): void {',
-        replace: '/**\n'
-          + ' * chamber patch - FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton).\n'
-          + ' * ADMITTED 2026-11-16 (maintainer ruling): one page hosts N mounted shell ctxs;\n'
-          + ' * ui-theme is a page-level module singleton, but installThemeStyles runs once\n'
-          + ' * per shell ctx and appends the same eight <style data-plugin-css> sheets per\n'
-          + ' * shell (measured multi-shell page: 575 <style> / 736 CSSStyleSheet nodes, and\n'
-          + ' * a hidden shell keeps its eight alive). The sheets are module constants,\n'
-          + ' * identical across shells. Publish each sheet ONCE per document and refcount\n'
-          + ' * it; the registry lives on the document behind `Symbol.for` so it also\n'
-          + ' * survives bundle/rev drift (module-private state may differ per instance).\n'
-          + ' * The last owner removes the node - the upstream single-instance DOM.\n'
-          + ' */\n'
-          + 'const CHAMBER_PAGE_STYLES = Symbol.for(\'dsh-chamber:page-theme-styles\')\n'
-          + '\n'
-          + 'type ChamberPageStyleEntry = { el: HTMLStyleElement; refs: number }\n'
-          + '\n'
-          + '/** Acquire one page-global theme sheet for this owner; returns its release. */\n'
-          + 'function acquirePageStyle(name: string, css: string): () => void {\n'
-          + '  const host = document as unknown as { [key: symbol]: Map<string, ChamberPageStyleEntry> | undefined }\n'
-          + '  let registry = host[CHAMBER_PAGE_STYLES]\n'
-          + '  if (registry === undefined) {\n'
-          + '    registry = new Map()\n'
-          + '    host[CHAMBER_PAGE_STYLES] = registry\n'
-          + '  }\n'
-          + '  let entry = registry.get(name)\n'
-          + '  if (entry === undefined) {\n'
-          + '    const tag = document.createElement(\'style\')\n'
-          + '    tag.dataset.plugin = PLUGIN_ID\n'
-          + '    tag.dataset.pluginCss = `${PLUGIN_ID}/${name}`\n'
-          + '    tag.textContent = css\n'
-          + '    document.head.appendChild(tag)\n'
-          + '    entry = { el: tag, refs: 0 }\n'
-          + '    registry.set(name, entry)\n'
-          + '  }\n'
-          + '  // chamber patch: an external all-document sweep (removeOwnedStyles-style) can detach\n'
-          + '  // the shared sheet; a newly mounted shell must never reuse a detached node.\n'
-          + '  if (entry.el.isConnected === false) document.head.appendChild(entry.el)\n'
-          + '  const shared = entry\n'
-          + '  shared.refs += 1\n'
-          + '  return () => {\n'
-          + '    shared.refs -= 1\n'
-          + '    if (shared.refs > 0) return\n'
-          + '    shared.el.remove()\n'
-          + '    if (registry.get(name) === shared) registry.delete(name)\n'
-          + '  }\n'
-          + '}\n'
-          + '\n'
-          + '/**\n'
-          + ' * Mount global theme sheets; window-backed documents also publish the DPR-aware stroke width.\n'
-          + ' * @param ctx - Owning plugin context.\n'
-          + ' */\n'
-          + 'export function installThemeStyles(ctx: Context): void {',
-      }),
-      Object.freeze({
-        expect: '  for (const [name, css] of STYLES) {\n'
-          + '    ctx.effect(() => {\n'
-          + '      const tag = document.createElement(\'style\')\n'
-          + '      tag.dataset.plugin = PLUGIN_ID\n'
-          + '      tag.dataset.pluginCss = `${PLUGIN_ID}/${name}`\n'
-          + '      tag.textContent = css\n'
-          + '      document.head.appendChild(tag)\n'
-          + '      return () => { tag.remove() }\n'
-          + '    }, `ui-theme: ${name} stylesheet`)\n'
-          + '  }',
-        replace: '  for (const [name, css] of STYLES) {\n'
-          + '    // chamber patch: the sheet is page-global and refcounted; see acquirePageStyle.\n'
-          + '    ctx.effect(() => acquirePageStyle(name, css), `ui-theme: ${name} stylesheet`)\n'
-          + '  }',
       }),
     ]),
   }),
@@ -1704,6 +1623,11 @@ export const RETIRED_PATCHES = Object.freeze([
     vendorFile: 'dsh-util-values/src/index.ts',
     reason: 'upstream compares native constructors engine-independently (against the realm own Function.prototype.toString of Array/Object) instead of the one-line native-code template this patch whitespace-normalized, so the JavaScriptCore multi-line failure cannot occur.',
     ensure: "Function.prototype.toString.call(constructor) === Function.prototype.toString.call(name === 'Array' ? Array : Object)",
+  }),
+  Object.freeze({
+    vendorFile: 'dsh-client-ui-theme/src/client/styles.ts',
+    reason: 'upstream current pin compiles theme CSS into bundle resources (plain CSS imports compiled once by the page build) instead of the per-shell inline-import + <style data-plugin-css> installer this page-global singleton patch deduped; the N-ctx symptom (eight identical sheets per mounted shell, a hidden shell keeping its eight alive) no longer exists because there is no per-shell style-tag installer left, so the patch has nothing to re-anchor on and is deleted rather than ported.',
+    ensure: "/** Theme CSS is compiled into module resources; DPR presentation follows the plugin lifetime. */\nimport type { Context } from '@deepseek-ai/cordis'\nimport '../styles/base.css'",
   }),
 ])
 

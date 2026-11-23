@@ -418,18 +418,18 @@ export interface TurnEndFact {
  * Project one ctx's sessions snapshot into the chamber runtime-facts report:
  * every listed session carries its live `running` bit (via
  * {@link resolveSessionRunning}), `pending` rides the official sessionStatus
- * projection, and `completed` is the OFFICIAL completion-unread bit
- * (`sessionStatus.completionUnread`, passed as `statusCompleted`) — the vendor's
- * own fact, memory-only in the ctx that owns the session. The App adds only the
+ * projection, and `completed`/`failed` are the OFFICIAL completion-unread and
+ * completion-failed bits (`sessionStatus.completionUnread`/
+ * `completionFailed`, passed as `statusCompleted`/`statusFailed`) — the
+ * vendor's own facts, memory-only in the ctx that owns the session. The App adds only the
  * N-ctx correction arm at merge time ({@link mergeRuntimeFacts},
- * `completion-arm.ts`).
- * `subagentRunning` (running descendant count per parent) and
- * `pendingInteractions` are INJECTED by the plugin (the pending vocabulary
+ * `completion-arm.ts`). `subagentRunning` (running descendant count per parent)
+ * and `pendingInteractions` are INJECTED by the plugin (the pending vocabulary
  * mirrors the official `visiblePendingKind`, unknown kinds stay undefined) so
  * this module imports no unbuilt vendor packages. The goal fact (design 19
  * §3.2.1) is parsed HERE from the row's projection bag and rides SPARSELY
- * (absent key = UNKNOWN); the PRODUCER (client/index.ts) restores the last known
- * value per generation and merges the event-cached activation there.
+ * (absent key = UNKNOWN); the PRODUCER restores the last known value per
+ * generation and merges the event-cached activation there.
  */
 export function projectRuntimeFacts(
   snapshot: {
@@ -453,15 +453,18 @@ export function projectRuntimeFacts(
    *  Sparse: only `true` writes the row field; absent = no such fact (unmounted
    *  source) or the vendor bit is clear. */
   statusCompleted?: ReadonlySet<string>,
+  /** The official completion-failed projection (`sessionStatus.completionFailed`);
+   *  sparse like the unread bit: only `true` writes the row field. */
+  statusFailed?: ReadonlySet<string>,
 ): InstanceRuntimeReport {
   const sessions: InstanceRuntimeReport['sessions'] = {}
   for (const [id, facts] of Object.entries(snapshot.byId ?? {})) {
-    // subagent 行不进入运行时事实（与 projectInstanceSnapshot 的 origin 过滤同规）：
-    // 导航不呈现子会话，通知边沿也不得对子代理完成/提问发通知。
-    // 子代理完成是高频事件，漏入会刷屏。
+    // subagent 行不进入运行时事实（与 projectInstanceSnapshot 的 origin 过滤同规）：导航不呈现
+    // 子会话，通知边沿也不得对子代理完成/提问发通知（高频事件漏入会刷屏）。
     if (facts?.origin === 'subagent') continue
     const row: {
       completed?: boolean
+      failed?: boolean
       running?: boolean
       pending?: 'approval' | 'plan-review' | 'question'
       runningSubagents?: number
@@ -472,23 +475,20 @@ export function projectRuntimeFacts(
     } = {
       running: resolveSessionRunning(statusRunning, id, facts?.running),
     }
-    // Official bit: the ctx that owns the session armed it in its own memory
-    // (running→idle while NOT mainView-retained). The channel carries it
-    // verbatim; the App correction arm only ADDS the N-ctx hole at merge time.
+    // Official bits: the ctx that owns the session armed them in its own memory
+    // (running→idle while NOT mainView-retained); the App correction arm only ADDS the N-ctx hole at merge.
     if (statusCompleted?.has(id) === true) row.completed = true
+    if (statusFailed?.has(id) === true) row.failed = true
     if (typeof facts?.updatedAt === 'number' && Number.isSafeInteger(facts.updatedAt) && facts.updatedAt >= 0) {
       row.updatedAt = facts.updatedAt
     }
-    // v5 §2.1 三值事实：解析成功（对象/null）才写字段；键缺席/形状不符 = unknown，
-    // 保持稀疏（生产者按来源代回填最后已知值）。
+    // v5 §2.1 三值事实：解析成功（对象/null）才写字段；键缺席/形状不符 = unknown，保持稀疏（回填最后已知值）。
     const goal = parseGoalFact(facts?.projectionValues)
     if (goal !== undefined) row.goal = goal
-    // pending rides the official ui-session registry; unknown kinds stay
-    // undefined so a future upstream kind cannot leak into the UI.
+    // pending rides the official ui-session registry; unknown kinds stay undefined (no future-kind leak).
     const pending = pendingKindOf(pendingInteractions?.get(id)?.kind)
     if (pending !== undefined) row.pending = pending
-    // 索引缺席 = unknown（不是「没有运行中的子代理」）；索引在场且计数为零 = none。
-    // 计数保持稀疏（>0 才写字段）。
+    // 索引缺席 = unknown（不是「没有运行中的子代理」）；索引在场且计数为零 = none；计数稀疏（>0 才写字段）。
     const runningSubagents = subagentRunning === undefined ? undefined : (subagentRunning.get(id) ?? 0)
     if (runningSubagents !== undefined && runningSubagents > 0) row.runningSubagents = runningSubagents
     row.subagentActivity = subagentRunning === undefined

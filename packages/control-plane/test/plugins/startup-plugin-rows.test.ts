@@ -35,9 +35,6 @@ const OFFICE_SKILLS = STARTUP_PLUGIN_ROWS.officeSkills
 
 const OFFICE_SKILL_NAMES = [
   'office',
-  'office-docx',
-  'office-pptx',
-  'office-xlsx',
 ] as const
 
 type WorkspaceLayout = 'installed' | 'source'
@@ -78,7 +75,7 @@ interface FixtureOptions {
   runtimeJson?: string | null
   /** Default true: dependencies/python/bin/python3 file + lib/python3.12/site-packages dir. */
   pythonPayload?: boolean
-  /** Default true: create the four skill dirs. */
+  /** Default true: create the office skill dir. */
   officeSkills?: boolean
   /** Skip one skill's SKILL.md (the assets tree is then incomplete). */
   missingSkill?: string
@@ -119,6 +116,7 @@ function buildFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
   }
 
   if (options.officeSkills !== false) {
+    mkdirSync(officeSkillsDir, { recursive: true })
     for (const skillName of OFFICE_SKILL_NAMES) {
       if (skillName === options.missingSkill) continue
       write(join(officeSkillsDir, skillName, 'SKILL.md'), `---\ndescription: ${skillName}\n---\n`)
@@ -223,12 +221,12 @@ test('planner: a payload without python3 or site-packages drops the workspace-de
 })
 
 test('planner: one missing office SKILL.md drops only the office row (no half assets)', t => {
-  const fixture = buildFixture(t, { missingSkill: 'office-pptx' })
+  const fixture = buildFixture(t, { missingSkill: 'office' })
   const warns: string[] = []
   const rows = plan(fixture, { warn: message => warns.push(message) })
   assert.deepEqual(rows.map(row => row.id), [WORKSPACE_DEPS.id], 'the workspace-dependencies row is independently gated')
   assert.equal(warns.length, 1)
-  assert.ok(warns[0]!.includes('office-pptx'), warns[0])
+  assert.ok(warns[0]!.includes('office/SKILL.md'), warns[0])
   assert.ok(warns[0]!.includes('SKILL.md is missing'), warns[0])
 })
 

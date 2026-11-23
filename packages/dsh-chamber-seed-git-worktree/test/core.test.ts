@@ -744,8 +744,12 @@ test('enterTarget accepts listed checkouts and the main checkout, and refuses ev
   const { core, repo } = setup()
   const checkout = `${WORKTREES_ROOT}/entered`
   repo.addLinked({ path: checkout, branch: 'entered', head: FEATURE_HEAD })
-  assert.equal(await core.enterTarget(MAIN, checkout), checkout)
-  assert.equal(await core.enterTarget(MAIN, MAIN), MAIN, 'returning to the main checkout is a legitimate enter')
+  assert.deepEqual(await core.enterTarget(MAIN, checkout),
+    { path: checkout, repositoryRoot: MAIN, branch: 'entered' },
+    'a listed checkout enter reports the entered path, the root it entered from and its branch')
+  assert.deepEqual(await core.enterTarget(MAIN, MAIN),
+    { path: MAIN, repositoryRoot: MAIN, branch: 'main' },
+    'returning to the main checkout is a legitimate enter, recorded against its own root')
 
   // Existing but not a worktree root (the authoritative Git facts are the gate).
   repo.existing.add(`${MAIN}/not-a-checkout`)
@@ -776,7 +780,18 @@ test('enterTarget refuses a listed checkout outside the session root and never c
       && error.retryable === false,
   )
   // The listed main checkout, whose common dir is <main>/.git, is enterable from the root.
-  assert.equal(await core.enterTarget(MAIN, MAIN), MAIN)
+  assert.deepEqual(await core.enterTarget(MAIN, MAIN), { path: MAIN, repositoryRoot: MAIN, branch: 'main' })
+  // The enter facts carry the CANONICAL session root as the exit root (the main checkout here);
+  // a linked-checkout source root stays that checkout instead of being rewritten to the repo main.
+  const facts = await core.enterTarget(MAIN, MAIN)
+  assert.equal(facts.repositoryRoot, MAIN)
+})
+
+test('enterTarget reports a detached entered checkout without a branch (upstream entered schema)', async () => {
+  const { core, repo } = setup()
+  const checkout = WORKTREES_ROOT + '/detached'
+  repo.addLinked({ path: checkout, branch: null, head: FEATURE_HEAD })
+  assert.deepEqual(await core.enterTarget(MAIN, checkout), { path: checkout, repositoryRoot: MAIN })
 })
 
 test('agent-not-ready is an explicit retryable refusal from the host error table', async () => {

@@ -180,6 +180,30 @@ export interface EnterResult {
   readonly path: string
 }
 
+/**
+ * Validated enter facts handed from the pure core to the host gateway (design 08
+ * §4.2 + the alpha.1 worktree-record interop). NOT a wire type: the gateway
+ * commits the working directory and then writes the official
+ * `plugin:worktree/entered` record with these fields, so the upstream
+ * `exit_worktree` can return the Session to the checkout it came from.
+ */
+export interface EnterTargetFacts {
+  /** Host-canonical entered checkout path. */
+  readonly path: string
+  /**
+   * The checkout the Session entered FROM: its IMMUTABLE header root, canonicalized.
+   * This is the value upstream calls `repositoryRoot` (the directory a later
+   * `exit_worktree` returns to), and it is deliberately the header root rather than
+   * the repository's main checkout: a pool checkout registered as a dsh workspace is
+   * itself a legitimate session root, and a session started there must exit back to
+   * that workspace, not to a checkout it never worked in.
+   */
+  readonly repositoryRoot: string
+  /** The entered checkout's branch from the authoritative Git topology; absent for a
+   *  detached HEAD (the upstream record schema makes it optional). */
+  readonly branch?: string
+}
+
 export interface RemoveInput {
   readonly operationId: string
   /** Optional: an UNREGISTERED worktree (no dsh workspace) is removed with this

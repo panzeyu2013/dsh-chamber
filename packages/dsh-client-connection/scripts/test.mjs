@@ -18,20 +18,32 @@ const GROUPS = {
   'base-path': [
     'test/base-path/api-path.test.ts',
     'test/base-path/carrier-assembly.test.ts',
-    'test/base-path/rpc-after-body.test.ts',
+    {
+      // alpha.1's client half imports the real @deepseek-ai/dsh-brand at runtime;
+      // the source-only vendor tree has no lib/ build, so the shim maps that one
+      // specifier to its vendor source.
+      file: 'test/base-path/rpc-after-body.test.ts',
+      nodeArgs: ['--import', './test/support/vendor-runtime-register.mjs'],
+    },
   ],
   // lifecycle: the apply/start seam it installs.
   lifecycle: [
     {
       file: 'test/lifecycle/client-apply.test.ts',
-      nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-connection-register.mjs'],
+      nodeArgs: [
+        '--import', '../../scripts/dev/test-loaders/test-connection-register.mjs',
+        '--import', './test/support/vendor-runtime-register.mjs',
+      ],
     },
   ],
   // recovery: the sleep/wake recovery triggers and the per-source recovery policy.
   recovery: [
     {
       file: 'test/recovery/liveness-triggers.test.ts',
-      nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-connection-register.mjs'],
+      nodeArgs: [
+        '--import', '../../scripts/dev/test-loaders/test-connection-register.mjs',
+        '--import', './test/support/vendor-runtime-register.mjs',
+      ],
     },
     'test/recovery/recovery-policy.test.ts',
   ],

@@ -88,6 +88,12 @@ export const GROUPS = {
     'test/session-state/goal-activation.test.ts',
     // 运行位对账链（官方 refresh + 权威判定 seam + 有界重试/单次尝试超时）。
     'test/session-state/session-fact-reconcile.test.ts',
+    // alpha.1 session-status consumer（unread/failed UI 线）：inject/face、reading 座席、页面级
+    // unary mark、失败呈现与通知红线、drag MIME、E 已裁（不采纳，声明/组件已删；上游 client 源 alpha.1→alpha.2 未变）。
+    'test/session-state/session-status-alpha1.test.ts',
+    // N-ctx 2 壳读确认负向永久锁：隐藏壳 document 级 ack 不清修正臂、读 A 壳不扫 B 壳行、
+    // 仅显式 mark unary 是 chamber 的读写入面；并带 E 已裁（不采纳：无声明/工厂/组件）锁。
+    'test/session-state/n-ctx-ack.test.ts',
     // 端到端语料：真实执行端快照驱动 App 升级 ladder（table 值下的 190s/310s 行为）。
     'test/session-state/session-authority-escalation.test.ts',
     // 取证面：机内持久 authority 动作环（有界、fail-soft）。

@@ -81,6 +81,7 @@ import type {
   BranchesResult,
   CreateInput,
   CreateResult,
+  EnterTargetFacts,
   GitAttentionReason,
   GitCommandResult,
   GitRunner,
@@ -126,6 +127,7 @@ export type {
   CreateResult,
   EnterInput,
   EnterResult,
+  EnterTargetFacts,
   GitAttentionReason,
   GitChildProcess,
   GitCommandRequest,
@@ -759,8 +761,18 @@ export class GitWorktreeCore {
    *
    * The working-directory SERVICE is not touched here (the host gateway owns it), so the
    * validation stays testable without a Cordis context.
+   *
+   * Returns the validated checkout PLUS the two facts the gateway needs to write the
+   * official `plugin:worktree/entered` record (alpha.1 worktree projection): the
+   * canonical entered path and the canonical session root it entered from
+   * (`repositoryRoot` — the directory `exit_worktree` returns to). The branch comes
+   * from the same authoritative topology listing, so a detached checkout records no
+   * branch (the upstream schema makes it optional).
+   * @param headerCwd - the Session's IMMUTABLE header root (its source checkout).
+   * @param requestedPath - the claimed checkout path (untrusted).
+   * @returns the entered checkout, the root it entered from, and its branch when known.
    */
-  async enterTarget(headerCwd: string, requestedPath: string): Promise<string> {
+  async enterTarget(headerCwd: string, requestedPath: string): Promise<EnterTargetFacts> {
     let root: string
     try {
       root = await this.existingPath(headerCwd)
@@ -814,7 +826,14 @@ export class GitWorktreeCore {
         { retryable: false },
       )
     }
-    return target
+    return {
+      path: target,
+      // The checkout the Session entered FROM is its immutable header root (see the
+      // EnterTargetFacts docstring): exit_worktree must return there, not to the
+      // repository's main checkout, when the source workspace is itself a linked checkout.
+      repositoryRoot: root,
+      ...(listed.branch === null ? {} : { branch: listed.branch }),
+    }
   }
 
   async remove(untrusted: RemoveInput): Promise<RemoveResult> {

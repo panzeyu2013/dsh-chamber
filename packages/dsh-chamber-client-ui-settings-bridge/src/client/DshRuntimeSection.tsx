@@ -69,6 +69,7 @@ import {
 import { createListenerSet, errorMessage } from '@dsh-chamber/dsh-chamber-client-core'
 import { bridgeRestartRefusalText } from './restart-refusal.ts'
 import { RUNTIME_BADGE_KEYS, RUNTIME_BADGE_TONE_CLASS, formatTimestamp, localizeRegistryError, metadataComponentText, type RuntimeTranslate } from './runtime-display.ts'
+import { selectedBelowBaselineNotice } from './below-baseline.ts'
 import css from './SettingsShell.module.css'
 
 const NPMJS = 'https://registry.npmjs.org'
@@ -1003,7 +1004,7 @@ function GatewayRuntimeSection({
                     v{entry.version}
                     {entry.version === remoteActive ? ` · ${t('current')}` : ''}
                     {entry.version === remoteStatus?.builtinVersion ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
-                    {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
+                    {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}{entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
                   </option>
                 ))}
             </select>
@@ -1385,6 +1386,8 @@ export function DshRuntimeSection({
   )
   const isActive = chosen !== null && chosen === active
   const selectionDirection = runtimeSelectionDirection(chosen, active)
+  // 设计 18 §3.4 隐式兼容下限：选中 belowBaseline 版本时给提示（启动门仍是 fatal 覆盖层）。
+  const belowBaselineNotice = selectedBelowBaselineNotice(versions, chosen, t)
   // 常驻「清理已安装版本」候选：台账中非当前激活、非待应用的版本；受保护项
   // （known-good/失败现场/回退目标等）由主进程在删除点权威裁决并如实报错。
   const cleanupCandidates = useMemo(() => {
@@ -1875,10 +1878,9 @@ export function DshRuntimeSection({
 
       <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupActions')}</h4>
 
-      {/* 「选择版本」字段无 label（select 以 aria-label 保持可访问名称）；外层是
-          div——select 与按钮不可同处一个 label（labeled control 之外不得含其他
-          labelable 元素，按钮点击会触发 label 隐式激活转发）。重启 dsh 按钮在
-          本行（与 select 同一 28px 行高基线）。 */}
+      {/* 「选择版本」字段无 label（select 以 aria-label 保持可访问名称）；外层是 div——select
+          与按钮不可同处一个 label（labeled control 之外不得含其他 labelable 元素，按钮点击会
+          触发 label 隐式激活转发）。重启 dsh 按钮在本行（与 select 同一 28px 行高基线）。 */}
       <div className={css.generalRow}>
         <div className={css.runtimeSelectRow}>
           <span className={css.runtimeSelectWrap}>
@@ -1897,15 +1899,14 @@ export function DshRuntimeSection({
                     v{entry.version}
                     {entry.version === active ? ` · ${t('current')}` : ''}
                     {entry.version === bundled ? ` · ${t('dshRuntimeBuiltinTag')}` : ''}
-                    {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}
+                    {entry.cached ? ` · ${t('dshRuntimeCachedTag')}` : ''}{entry.belowBaseline ? ` · ${t('dshRuntimeBelowBaselineTag')}` : ''}
                   </option>
                 ))}
             </select>
             <IconChevronDownOutlineRegular className={css.runtimeSelectChevron} aria-hidden="true" />
           </span>
-          {/* 更新/切换到 vX 仅在选择版本 ≠ 当前版本时显示；相位门控期间
-              canInstall 从动作集消失——按钮保留但禁用（忙碌副本「正在安装…」+
-              进度条），与 gateway 分支对齐。 */}
+          {/* 更新/切换到 vX 仅在选择版本 ≠ 当前版本时显示；相位门控期间 canInstall 从动作集
+              消失——按钮保留但禁用（忙碌副本「正在安装…」+ 进度条），与 gateway 分支对齐。 */}
           {!isActive && chosen !== null && (
             <Button variant="primary" size="sm"
               onClick={builtinGuide ? onReset : onInstall}
@@ -1930,8 +1931,7 @@ export function DshRuntimeSection({
             {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
           </Button>
         </div>
-        {/* 引导行：说明随应用副本已存在（恢复内建零下载），「仍下载并安装为受管
-            版本」保留为显式次要动作（受管树 = 回滚/快照/清理台账的一部分）。 */}
+        {/* 引导行：说明随应用副本已存在（恢复内建零下载），「仍下载并安装为受管版本」保留为显式次要动作（受管树 = 回滚/快照/清理台账的一部分）。 */}
         {builtinGuide && (
           <div className={css.updateStatusLine}>
             <span className={css.generalHint} role="status">
@@ -1947,6 +1947,7 @@ export function DshRuntimeSection({
         {restartNote !== null && (
           <p className={css.generalHint} role="status">{restartNote}</p>
         )}
+        {belowBaselineNotice !== null && <p className={css.generalHint} role="status">{belowBaselineNotice}</p>}
         {actionError !== null && <p className={css.generalError} role="alert">{actionError}</p>}
       </div>
 
@@ -2000,9 +2001,8 @@ export function DshRuntimeSection({
         </div>
       )}
 
-      {/* 常驻「清理已安装版本」入口：无需先在下拉选中；每颗胶囊对应一个可清理
-          版本，确认由主进程原生对话框把关，受保护项的拒绝以错误行如实呈现。
-          忙碌相位动作集不含 cleanup-version，整行随之隐藏。 */}
+      {/* 常驻「清理已安装版本」入口：无需先在下拉选中；每颗胶囊对应一个可清理版本，确认由主进程
+          原生对话框把关，受保护项的拒绝以错误行如实呈现。忙碌相位动作集不含 cleanup-version，整行随之隐藏。 */}
       {cleanupCandidates.length > 0 && actions.has('cleanup-version') && (
         <div className={css.updateStatusLine}>
           <span className={css.generalHint}>{t('dshRuntimeCleanupCandidatesLabel')}</span>

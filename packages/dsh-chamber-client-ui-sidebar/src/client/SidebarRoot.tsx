@@ -148,7 +148,7 @@ export function SidebarRoot({
   // 那里执行一次），行级归档入口只在宿主拒绝后代 dialogs.openArchiveConfirm 武装它。
   const dialogs = useSidebarDialogs({ servers, runActionWithOutcome, setRowErrors })
   const { onOpenArchiveManager, openWorkspaceBrowser, onDeleteWorkspace, openArchiveConfirm } = dialogs
-  const { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession } = useSidebarSessionActions({ runAction, openArchiveConfirm })
+  const { onForkSession, onNewSession, onArchiveSession, onUnarchiveSession, onPinSession, onMarkSessionRead } = useSidebarSessionActions({ runAction, openArchiveConfirm })
 
   const openSession = useCallback((serverId: string, sessionId: string): void => {
     // 新点击立即清掉该行陈旧失败文案（若再次失败，dispatch 结果会重报）。
@@ -196,6 +196,7 @@ export function SidebarRoot({
     onPinSession,
     onForkSession,
     onUnarchiveSession,
+    onMarkSessionRead,
   })
   const ctxValue: SidebarSectionContextValue = useMemo(() => ({
     wide,

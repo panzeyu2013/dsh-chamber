@@ -97,6 +97,19 @@ export function writeLocalProfileFixture(dir: string, patchContent: string | nul
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
   }))
   if (patchContent !== null) writeFileSync(join(profileDir, 'cordis.patch.yml'), patchContent)
+  // The manifest lists @deepseek-ai/dsh-web-app, so the profile must also carry a RESOLVABLE
+  // web-app bundle: alpha.1 added the unconditional remote-connection disable target, whose
+  // fail-closed proof reads the enabled bundle's declared patch. An empty patch keeps every
+  // overlay-byte assertion below the plain insert composition (the row is not mounted here,
+  // which is the idempotent older-runtime shape), while a test that needs the real row
+  // installs its own patch via enableWebAppBundle().
+  const webAppDir = join(profileDir, 'node_modules', '@deepseek-ai', 'dsh-web-app')
+  mkdirSync(webAppDir, { recursive: true })
+  writeFileSync(join(webAppDir, 'package.json'), JSON.stringify({
+    name: '@deepseek-ai/dsh-web-app',
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  }))
+  writeFileSync(join(webAppDir, 'cordis.patch.yml'), '[]\n')
   return dshHome
 }
 

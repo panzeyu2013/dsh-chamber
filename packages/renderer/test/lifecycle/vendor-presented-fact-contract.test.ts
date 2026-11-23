@@ -74,14 +74,16 @@ test('vendor presented fact: openSession retains the target as mainView, then re
     /openSession\(target: SessionTarget\): void \{ this\.replaceMain\(target, this\.lifetime\.signal, 'reveal'\) \}/,
     'the ui-workspace view owner no longer delegates openSession to replaceMain - the shell presentation entry point must be re-derived',
   )
+  // 0.2.3-alpha.1: the main-view reference also declares the `conversation` facet it keeps
+  // computing over (the conversation binding follows the window only while it is retained).
   assert.match(
     navigation,
-    /const reference = this\.sessions\.retain\(target, \{ source: 'mainView' \}\)/,
-    "replaceMain no longer retains the presented target with source 'mainView' - retainedBy.mainView is no longer the presented fact",
+    /const reference = this\.sessions\.retain\(target, \{ source: 'mainView', facets: \{ conversation: true \} \}\)/,
+    "replaceMain no longer retains the presented target with source 'mainView' + facets.conversation - retainedBy.mainView is no longer the presented fact",
   )
   assert.match(
     navigation,
-    /const previous = this\.mainReference this\.mainReference = reference previous\?\.release\(\)/,
+    /const previous = this\.mainReference this\.mainReference = reference .*?previous\?\.release\(\)/,
     'replaceMain no longer releases the replaced reference AFTER adopting the new one - presentation may hold zero main-view references',
   )
 })
@@ -89,9 +91,11 @@ test('vendor presented fact: openSession retains the target as mainView, then re
 test('vendor presented fact: retain() starts the presented session open (retaining IS presenting)', { skip: VENDOR_SKIP }, () => {
   assertVendorTree()
   const service = repoSource(SESSION_CONTROLLER + '/sessions/service.ts')
+  // alpha.1: `connection: false` references keep only the Session object (composer draft
+  // case), so the shared open() attaches only for a connected reference.
   assert.match(
     service,
-    /reference\.attachOpening\(this\.manager\.get\(id\)\.open\(\), signal\)/,
+    /reference\.attachOpening\(connected \? this\.manager\.get\(id\)\.open\(\) : Promise\.resolve\(\), signal\)/,
     'ClientSessions.retain() no longer attaches the shared initial open() - retaining would stop presenting/opening the target',
   )
 })
@@ -110,10 +114,12 @@ test('vendor presented fact: source counts ride the list row as retainedBy', { s
     /retain\(target: SessionTarget, options: SessionRetainOptions\): SessionReference/,
     'ISessions.retain signature changed - the presentation entry point must be re-derived',
   )
+  // alpha.1 moved the count into the shared retention reducer: one reference = one
+  // source/facet/connection shift (facets.ts shiftRetention), still published as retainedBy.
   assert.match(
     service,
-    /retainedBy: freezeRetainedBy\(\{ \.\.\.previous\.retainedBy, \[source\]: \(previous\.retainedBy\[source\] \?\? 0\) \+ 1 \}\)/,
-    'retainScope no longer increments the caller source count - a positive mainView count would no longer mean presented',
+    /record\.retention = shiftRetention\(record\.retention, use, 1\)/,
+    'retainScope no longer counts the caller source - a positive mainView count would no longer mean presented',
   )
   assert.match(
     service,

@@ -34,6 +34,7 @@
 
 | Check | Result |
 |---|---|
+| `node scripts/gates/runners/run-checks.mjs <static\|tests\|typecheck>`（跨面改动跑 `full`；升级类必须显式跑 `typecheck`） |  |
 |  |  |
 
 ## Upstream touchpoint self-check

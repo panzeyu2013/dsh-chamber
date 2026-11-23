@@ -26,6 +26,9 @@ const GROUPS = {
     'test/create.test.ts',
     'test/removal.test.ts',
     'test/mutation-safety.test.ts',
+    // alpha.1 official entered-record interop (the exit_worktree return path):
+    // payload shape + record literal + gateway wiring, pinned to the vendored projection.
+    'test/enter-record.test.ts',
   ],
 }
 

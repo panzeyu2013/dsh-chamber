@@ -9,7 +9,7 @@
  *                                  control-plane-module 的相对动态 import
  *                                  加载——包外裸说明符在打包态不可解析）
  *   <out>/primary-runtime/         全量 payload（python/node/pnpm）的拷贝；
- *   <out>/office-skills/           office 技能资产的拷贝（4 个 SKILL.md；rc.2 资产面）。
+ *   <out>/office-skills/           office 技能资产的拷贝（`office/SKILL.md`；alpha.2 资产面）。
  *                                  **单 Node 裁决（swift-impl-contract）**：不
  *                                  下载/固定/重命名独立 Node，也没有
  *                                  `dsh-chamber-helper`——装配内唯一的 Node 就是
@@ -134,7 +134,7 @@ export function sidecarLayout(outDir) {
     primaryRuntime: path.join(outDir, 'primary-runtime'),
     payloadNode: payloadNodePath(outDir),
     payloadPnpmEntry: path.join(outDir, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'),
-    // office 技能资产（4 个 SKILL.md，rc.2 资产面）：与 Electron extraResources 同布局，
+    // office 技能资产（`office/SKILL.md`，alpha.2 资产面）：与 Electron extraResources 同布局，
     // 随 build-swift-app 进 Contents/Resources/sidecar/office-skills。
     officeSkills: path.join(outDir, 'office-skills'),
   }

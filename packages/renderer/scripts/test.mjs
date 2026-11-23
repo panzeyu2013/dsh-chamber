@@ -53,6 +53,12 @@ export const GROUPS = {
     'test/lifecycle/safe-mode.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
     'test/lifecycle/host-graph.test.ts',
+    // W4-0: browser-synced plugin Config supply (covered register + extra-row activation),
+    // the wire-row config parse/capture, and the mount-path wiring locks.
+    'test/lifecycle/synced-config.test.ts',
+    // Decision C / M1 retirement: per-instance pluginEvents over the authenticated Remote
+    // stream (bridge translation, access gate, mount/teardown, shell wiring locks).
+    'test/lifecycle/hmr-events.test.ts',
     // 页面级运行期插件补丁（design 09 §4 base backfill）：URL 断言 / 正反锚点 / probe-policy / degrade 与 refuse 分派 / 壳分派与 fail-closed 锁。
     'test/lifecycle/client-plugin-patches.test.ts',
     // 装载半行为测试（loader 契约/超时 outcome/fetch 文本守卫/new Function 注入面）。

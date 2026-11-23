@@ -31,12 +31,29 @@ import { resolveSourceThemeCache } from './theme-cache.ts'
  * Page-wide document theme writer: ONE vendor ThemePresenter for the whole
  * document; instance teardown never disposes it (that would strip the ACTIVE
  * view's palette). See `document-theme.ts`.
+ *
+ * alpha.1: the vendor presenter gained a lifecycle — `start()` installs a
+ * MutationObserver on `document.head` (`theme-presenter.ts:61-70`) so the
+ * `meta[name="theme-color"]` is refreshed when a stylesheet is installed or
+ * replaced AFTER the theme initialization (the framework installs client-plugin
+ * styles at materialize time now; N-ctx shells arrive one by one). The observer
+ * belongs to the page-wide singleton exactly like the presenter itself: started
+ * once on creation, never disposed (a per-shell start would mean N observers and
+ * N `getComputedStyle` calls per head mutation). See design 06 §4.6.
  */
 let documentThemePresenter: ThemePresenter | undefined
 
 /** Project one resolved snapshot onto the shared document. */
 function applyDocumentTheme(snapshot: DocumentThemeSnapshot): void {
-  ;(documentThemePresenter ??= new ThemePresenter()).apply(snapshot)
+  if (documentThemePresenter === undefined) {
+    const presenter = new ThemePresenter()
+    // alpha.1 lifecycle: absent from the repo-level loose vendor face (which W4
+    // owns and will add `start` to); optional-call so this stays correct on an
+    // older pin whose presenter has no observer lifecycle.
+    ;(presenter as ThemePresenter & { start?(): void }).start?.()
+    documentThemePresenter = presenter
+  }
+  documentThemePresenter.apply(snapshot)
 }
 
 // Contract exports only: cross-package consumers keep a symbol exported;

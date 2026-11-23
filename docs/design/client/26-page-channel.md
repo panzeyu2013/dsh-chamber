@@ -18,7 +18,7 @@
 - 不把 Remote mux（`/api/remote.mux`）搬到通道上（见 §5）。
 - 不改官方客户端协议、不改 gateway 的会话事实协议；控制面只做**上游消费者/转发者**。
 - 不为页面引入 HTTP/2（见 §5）。
-- 不在 gateway 形态挂载页面通道（当前页面（控制面 origin）是唯一消费方；`packages/gateway` 的升级面仍只认 `/api/remote.mux`。移动端当前不使用 health/pluginGraph/sessionFacts 三族；将来要用，必须在 gateway 的升级分发注册同一端点，而不是另起一条长活 HTTP 流）。
+- 不在 gateway 形态挂载页面通道（当前页面（控制面 origin）是唯一消费方；`packages/gateway` 的升级面仍只认 `/api/remote.mux`。移动端当前不使用 health/sessionFacts 两族（pluginGraph 族已退役，HMR 改 per-instance Remote 流）；将来要用，必须在 gateway 的升级分发注册同一端点，而不是另起一条长活 HTTP 流）。
 - 不设“最多几个实例”的容量旋钮（见 §2 D5）。
 
 ## 2. 设计决策
@@ -29,7 +29,7 @@
 
 ### D2 实例在通道内定址
 
-帧里带 `instanceId`（与 `/api/i/<id>` 同一套 id：`local` / `dsh-*` / `gateway-*`）。控制面按 id 解析目标（本地 dsh 端口或已注册的 tunnel/gateway 传输记录），为每个订阅独立打开上游。页面侧不存在“每个实例一条 socket”的概念，因此**新增实例只增加控制面的上游连接**。上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（wire 叶 `packages/dsh-chamber-wire/src/session-state.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 的 `/plugins/events` 与 vendor `@deepseek-ai/dsh-client-hmr` 的 `EVENTS_ENDPOINT` 锁步（registry `mirror.dsh-client-hmr-events-endpoint`，由 flow 用例断言）。上游订阅与实例反代共用同一套传输登记：目标被替换/注销时（tunnel 重注册、gateway 传输失效），控制面按登记连接撤销该连接上的订阅并回 `instance_unavailable`，客户端按自己的阶梯重订阅到新传输——旧 incarnation 的流不会被继续消费。`local` 的定址与 `/api/i/local` 同门（exposure + admission）：回收在途的新订阅按 `instance_unavailable` 快速失败，已建立订阅不随该窗口失败（admission 语义与被否方案见 [design 02 §3.6](../runtime/02-host-management-deployment.md)）。
+帧里带 `instanceId`（与 `/api/i/<id>` 同一套 id：`local` / `dsh-*` / `gateway-*`）。控制面按 id 解析目标（本地 dsh 端口或已注册的 tunnel/gateway 传输记录），为每个订阅独立打开上游。页面侧不存在“每个实例一条 socket”的概念，因此**新增实例只增加控制面的上游连接**。上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（wire 叶 `packages/dsh-chamber-wire/src/session-state.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 族已退役：alpha.1 上游 HMR 改由认证 Remote 流承载（renderer 按实例 `$mount`/`$stream`，design 09 §3.7），控制面不再抓取 `/plugins/events`；flow 用例的负向断言钉住该族与转发不再存在。上游订阅与实例反代共用同一套传输登记：目标被替换/注销时（tunnel 重注册、gateway 传输失效），控制面按登记连接撤销该连接上的订阅并回 `instance_unavailable`，客户端按自己的阶梯重订阅到新传输——旧 incarnation 的流不会被继续消费。`local` 的定址与 `/api/i/local` 同门（exposure + admission）：回收在途的新订阅按 `instance_unavailable` 快速失败，已建立订阅不随该窗口失败（admission 语义与被否方案见 [design 02 §3.6](../runtime/02-host-management-deployment.md)）。
 
 ### D3 每订阅信用窗口
 
@@ -78,7 +78,7 @@ kill switch 开启即回到无预算语义（派发超时会重新按 `deadline`
 
 - wire：`packages/dsh-chamber-wire/src/page-channel.ts`——路径、族、帧、信用窗口、出/入站帧上限、解析器与构造器（两侧唯一来源）。
 - 客户端内核：`packages/dsh-chamber-client-core/src/page-channel.ts`——`subscribePageChannel(options)` 返回只影响本订阅的句柄；模块独占 socket、重连阶梯、重订阅与信用确认；`installPageChannelEventSourceAudit()` 是 I-1 的运行期报警器。
-- 控制面：`packages/control-plane/src/page-channel.ts`——WS 服务端 + 三类上游适配（health 原生 / pluginGraph 与 sessionFacts 走上游 SSE）+ 信用窗口暂停恢复 + 关停清理。
+- 控制面：`packages/control-plane/src/page-channel.ts`——WS 服务端 + 两类上游适配（health 原生 / sessionFacts 走上游 SSE；pluginGraph 族已退役）+ 信用窗口暂停恢复 + 关停清理。
 
 **现行形态（负面契约）**：页面不存在每实例 EventSource 工厂与重订阅阶梯（`live-graph` 的 `LiveEventSourceFace`/`LIVE_RESUBSCRIBE_DELAYS_MS`/`scheduleResubscribe`/readyState 分支）、`api.ts` 与设置页的 `new EventSource`、事实镜像的 fetch+reader 流循环与客户端连接期限时器、`/api/host/health-events` HTTP 路由及其测试。Remote mux（每实例 WS，官方协议）、unary HTTP（本地/远端会话列表、官方客户端 RPC）、事实镜像的 unary 快照对账（权威仍在 unary）保留。
 
@@ -94,7 +94,7 @@ kill switch 开启即回到无预算语义（派发超时会重新按 `deadline`
 4. **运行时配额（例如“最多 3 条长连接”）**：见 D5——配额是错的表述，正确表述是不变量 + 静态/运行期断言。
 5. **把 SSE 的 5s 期限改成更长/去掉期限**：只把失败推迟，不改变请求排不到 socket 的事实。
 6. **把逐实例反代的转发核心（`proxy-forward.ts`）与通道的上游适配合并成一份实现**：两者的下游形状根本不同——反代把上游流原样写给浏览器的 HTTP 响应（体上限、HTML 注入、计数器、pending upgrade 租约），通道是**服务端消费者**（逐订阅信用窗口、按帧重封、订阅级拆除）。合并要在 ws 下游重建整套反代语义，收益只是十几行头构造；真正需要共享的是**传输登记**（撤销与计数），那按 F2 由 `onTransportRevoked` 承载，而不是靠复制转发核心。
-7. **一条多路复用 SSE 承载全部三族**：它只占 6 个槽里的 1 个，却仍然占着池——一旦这条流写阻塞/半开，unary 与它自己一起被拖住（正是要消灭的耦合）；订阅/退订/信用确认需要第二条控制通路（POST），服务端也无法发 ping，只能靠注释保活。池内长连接 = 0 是比“少占几个槽”更强的性质，所以选 WS。
+7. **一条多路复用 SSE 承载全部订阅族**：它只占 6 个槽里的 1 个，却仍然占着池——一旦这条流写阻塞/半开，unary 与它自己一起被拖住（正是要消灭的耦合）；订阅/退订/信用确认需要第二条控制通路（POST），服务端也无法发 ping，只能靠注释保活。池内长连接 = 0 是比“少占几个槽”更强的性质，所以选 WS。
 8. **给 unary 单开第二条 origin / 本地专用端口**：dsh 前端硬编码同源 `/api`，拆域要重建整套代理与信任面，且不解决“同一池内没有优先级”的问题；保留同源、在客户端队列里做严格保留槽是更小且可测的边界。
 9. **只把观测期限调长**：见 §D7；能证明“未派发”的只有自有队列，期限不是归因。
 10. **channel 级 keepalive**：与 socket 级 ping/pong（30s/1miss）重叠；`PAGE_CHANNEL_KEEPALIVE_EVENT` 是把上游 SSE 注释行投影成 item 的活性语义，不是通道帧。新增通道帧要 `protocolVersion`/新帧型；同节奏只是重复，更快则等于把 socket ping 调快，成本与误杀面另算。

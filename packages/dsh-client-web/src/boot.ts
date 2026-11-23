@@ -174,6 +174,11 @@ export class AppWebEntry {
         console.error('[web-shell] ctx teardown failed:', error)
       }
     }
+    // chamber deviation (design 09 N-ctx): alpha.1's boot.ts disposes the module system
+    // here (`await this.modules?.dispose()`), but chamber's module system is PAGE-level
+    // and shared across every shell's AppWebEntry (ensureWebModuleSystem caches it on
+    // window.__DSH_MODULES__ until page teardown). Disposing it from ONE shell would
+    // break every other live shell; the page teardown owns it instead.
     this.page.dispose()
   }
 

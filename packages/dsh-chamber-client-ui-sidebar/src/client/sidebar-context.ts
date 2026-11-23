@@ -275,6 +275,13 @@ export interface SidebarSectionContextValue {
   onArchiveSession: (server: ChamberServerAggregate, sessionId: string, displayTitle: string) => void
   /** `currentlyPinned` 是点击那一刻行的置顶事实（true = 该退出 unpin），不是目标方向。 */
   onPinSession: (server: ChamberServerAggregate, sessionId: string, currentlyPinned: boolean) => void
+  /**
+   * alpha.1 reading mark (row menu mark read/unread): `unread` is the DESIRED state
+   * (`true` = mark unread). Transport = page-level unary `sessionStatus/mark` for the
+   * row's own source (a row rendered by a foreign shell still writes its own source);
+   * gated by that source's reading seat (`use-reading-seat.ts`).
+   */
+  onMarkSessionRead: (server: ChamberServerAggregate, sessionId: string, unread: boolean) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
   /** 归档行的「恢复」出口（design 06 §3.4）。 */
   onUnarchiveSession: (server: ChamberServerAggregate, sessionId: string) => void

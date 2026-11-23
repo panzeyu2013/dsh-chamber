@@ -61,6 +61,18 @@ export const FORGE_GITHUB_ROW: BundleRowDisableTarget = {
 }
 
 /**
+ * The forge bundle's GitLab provider row (alpha.1 新增第 7 行). Same posture as GitHub:
+ * with the provider disabled the worktree UI/tool stay complete; the GitLab host half
+ * (change-request surface) is not shipped. The row is mounted by the bundle patch, so the
+ * only channel is this id-targeted disable.
+ */
+export const FORGE_GITLAB_ROW: BundleRowDisableTarget = {
+  bundle: FORGE_BUNDLE_PACKAGE_NAME,
+  id: 'forge-gitlab',
+  name: '@deepseek-ai/dsh-forge-gitlab',
+}
+
+/**
  * rc.2 web-app mounts its own `skill-office` row in EVERY profile (from the package's
  * packaged assets). The Swift sidecar payload's runtime tree is pruned — every non-`docs/`
  * Markdown is deleted, including the packaged `SKILL.md` files — so that row cannot serve
@@ -79,8 +91,30 @@ export const WEB_APP_SKILL_OFFICE_ROW: BundleRowDisableTarget = {
   name: '@deepseek-ai/dsh-skill-office',
 }
 
+/**
+ * alpha.2 web-app mounts the Remote Connection row (host and client halves in one package)
+ * in EVERY profile. The client half already short-circuits under the desktop shell
+ * (`'dshDesktop' in globalThis`), but the host half registers an ANONYMOUS `/` route
+ * (the login/pairing landing page) on the loopback managed host; force-disabling the row
+ * restores the rc.3 posture where `/` requires authentication and removes the dead
+ * pairing card from the gateway shape. Unlike the office row this disable is
+ * UNCONDITIONAL — no local mount competes for the row, so every spawn carries it.
+ * Idempotent by construction: a profile without the web-app layer (first boot before the
+ * web template materializes; `local-host-seeding.ts` profileBundleLayer returns []) or an
+ * older runtime whose bundle lacks the row skips with a diagnostic.
+ */
+export const WEB_APP_REMOTE_CONNECTION_ROW: BundleRowDisableTarget = {
+  bundle: WEB_APP_BUNDLE_PACKAGE_NAME,
+  id: 'remote-connection',
+  name: '@deepseek-ai/dsh-client-remote-connection',
+}
+
 /** The canonical bundle-row disable registry (the local overlay applies it every spawn). */
-export const BUNDLE_ROW_DISABLES: readonly BundleRowDisableTarget[] = [FORGE_GITHUB_ROW]
+export const BUNDLE_ROW_DISABLES: readonly BundleRowDisableTarget[] = [
+  FORGE_GITHUB_ROW,
+  FORGE_GITLAB_ROW,
+  WEB_APP_REMOTE_CONNECTION_ROW,
+]
 
 /**
  * The disable targets one LOCAL spawn must carry. `mountsLocalOfficeSkills` is the

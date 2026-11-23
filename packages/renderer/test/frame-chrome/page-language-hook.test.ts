@@ -440,12 +440,14 @@ test('the composite decorates the vendor locale mount with the ownership hook', 
     /const MOUNT_DECORATORS: Readonly<Record<string, \(plugin: object\) => object>> = \{ '@deepseek-ai\/dsh-client-locale': withLocaleOwnership, \}/,
     'the locale mount must carry the ownership hook',
   )
-  assert.match(entry, /ctx\.plugin\(decorateMount\(id, plugin\)\)/, 'register() must mount the decorated namespace')
+  // W4-0 (alpha.1): the mount is the decorated namespace, optionally with the
+  // synced-Config activation as cordis's second argument.
+  assert.match(entry, /ctx\.plugin\(decorateMount\(id, plugin\)/, 'register() must mount the decorated namespace')
   // BOTH mount paths carry decorators: moving a decorated id into the deferred
   // cluster must not silently drop its hook.
   assert.match(
     entry,
-    /ctx\.plugin\(decorateMount\(outcome\.id, \{ \.\.\.loaded, name: outcome\.id \}\)\)/,
+    /const deferredPlugin = decorateMount\(outcome\.id, \{ \.\.\.loaded, name: outcome\.id \}\)/,
     'the deferred mount must go through the decorators too',
   )
   // The roster audit resolves each id through its namespace import — the call

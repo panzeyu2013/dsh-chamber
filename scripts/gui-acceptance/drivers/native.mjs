@@ -199,12 +199,15 @@ async function get(origin, target, headers = {}) {
  * @returns {Promise<{ child: object, port: number, stop: Function, logPath: string, ready: object }>} handle.
  */
 export async function launchNativeSidecar({ sidecarDir, outDir, timeoutMs = 30_000, webDistDir = null }) {
+  // Spawn from an ABSOLUTE path: node resolves the entry relative to process.cwd() (the
+  // driver's cwd), so a relative --sidecar-dir + relative entry used to MODULE_NOT_FOUND.
+  const absSidecarDir = path.resolve(sidecarDir)
   mkdirSync(outDir, { recursive: true })
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-acceptance-'))
   const port = await freeLoopbackPort()
   const logPath = path.join(outDir, 'native-sidecar.log')
-  const child = spawn(resolveNodeBinary(sidecarDir), [path.join(sidecarDir, 'sidecar.js'), ...nativeSidecarArgs({ userDataDir, port, webDistDir })], {
-    cwd: sidecarDir,
+  const child = spawn(resolveNodeBinary(absSidecarDir), [path.join(absSidecarDir, 'sidecar.js'), ...nativeSidecarArgs({ userDataDir, port, webDistDir })], {
+    cwd: absSidecarDir,
     env: nativeSidecarEnv(),
     stdio: ['pipe', 'pipe', 'pipe'],
   })

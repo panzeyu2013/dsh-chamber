@@ -77,12 +77,6 @@ import { attachSpkiPinVerifier } from './spki-pin.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest } from './api.ts'
 
-/**
- * 上游插件图 SSE：dsh 宿主的 HMR 事件流（design 09 的 live-graph 同一条路由）。
- * 字面量与 vendor `@deepseek-ai/dsh-client-hmr` 的 `EVENTS_ENDPOINT` 锁步
- *（registry `mirror.dsh-client-hmr-events-endpoint`），由本目录的 flow 用例断言。
- */
-const PLUGIN_GRAPH_SSE_PATH = '/plugins/events'
 
 /**
  * 上游会话事实 SSE：gateway 能力面。**不写字面量**——路由前缀的单一来源是
@@ -188,7 +182,7 @@ export interface PageChannelStats {
   sockets: number
   /** 全部 socket 上的活动订阅数。 */
   subscriptions: number
-  /** 活动上游连接数 = 非 health 的订阅数（pluginGraph/sessionFacts 每订阅恰好一条，
+  /** 活动上游连接数 = 非 health 的订阅数（sessionFacts 每订阅恰好一条，
    *  health 是控制面原生生产者、没有上游）。 */
   upstreams: number
 }
@@ -700,7 +694,7 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     return headers
   }
 
-  /** 打开一条 SSE 上游订阅（pluginGraph / sessionFacts）。 */
+  /** 打开一条 SSE 上游订阅（sessionFacts：gateway 能力面）。 */
   function openSseUpstream(sub: SubscriptionState, instanceId: string): void {
     // sessionFacts 是 gateway 能力面：非 gateway 实例根本没有 /chamber 命名空间，
     // 与实例代理 targetsChamberNamespace 的判定同一语义（capability_not_found）。
@@ -723,7 +717,7 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
     // 记下解析出的**同一个** connectionId（InstanceProxy 的注册映射给出）：传输被
     // 替换/注销时，代理用这个字符串通知本通道，本订阅据此失败。
     sub.connectionId = target.connectionId ?? null
-    const path = sub.family === 'pluginGraph' ? PLUGIN_GRAPH_SSE_PATH : SESSION_FACTS_SSE_PATH
+    const path = SESSION_FACTS_SSE_PATH
     let url: URL
     try {
       url = new URL(`${target.baseUrl}${path}`)
@@ -785,8 +779,8 @@ export function createPageChannel(deps: PageChannelDeps): PageChannel {
         return
       }
       // 200 不等于 SSE：SPA fallback / 网关错误页也会回答 200 text/html。只认状态码的
-      // 话这会变成一条黑洞订阅（发出 ready 后永远安静），pluginGraph 又没有消费者
-      // 看门狗，页面只能停在过期图上。缺 content-type 时容忍，有就必须是
+      // 话这会变成一条黑洞订阅（发出 ready 后永远安静），页面只能停在过期数据上。
+      // 缺 content-type 时容忍，有就必须是
       // text/event-stream（大小写不敏感、忽略参数）。
       const rawContentType = response.headers['content-type']
       const contentType = Array.isArray(rawContentType) ? rawContentType[0] : rawContentType

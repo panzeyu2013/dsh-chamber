@@ -75,7 +75,7 @@ import { isCliEntry, runCliTool } from '../../scripts/lib/cli.mjs'
 // sidecar 装配同源，绝不允许两份实现漂移。
 import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/build-sidecar.mjs'
 import { payloadNodePath } from '../../scripts/lib/sidecar-assembly.mjs'
-// office 资产清单单源（4 个 SKILL.md，rc.2 资产面；生成器 = prepare:office-assets）。
+// office 资产清单单源（`office/SKILL.md`，alpha.2 资产面；生成器 = prepare:office-assets）。
 import { OFFICE_SKILL_FILES } from '../../packages/desktop/scripts/prepare-office-assets.mjs'
 // beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
 // 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
@@ -1166,7 +1166,7 @@ export async function runBuildSwiftApp(
     if ((nodeStat.mode & 0o111) === 0) {
       throw new Error(`payload node 没有可执行位：${payloadNode}（mode ${(nodeStat.mode & 0o777).toString(8)}）`)
     }
-    // office 技能资产与 payload 平级：装配面必须带齐（4 文件清单的完整核对由
+    // office 技能资产与 payload 平级：装配面必须带齐清单文件（完整核对由
     // prepare-office-assets --verify / build:sidecar --require-office-assets 负责；
     // 这里断结构锚点，防手工装配目录漏拷整棵 office-skills）。
     const officeSkills = path.join(layout.sidecarDir, 'office-skills')

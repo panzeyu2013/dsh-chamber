@@ -35,7 +35,7 @@ let listenerCount = 0
 
 /**
  * Ask the App layer for one client-plugin graph resync of `sourceId`: the mounted
- * shell re-subscribes its page-channel `pluginGraph` topic so the host re-delivers the
+ * shell re-subscribes its per-instance `pluginEvents` stream so the host re-delivers the
  * whole graph through the existing frame pipeline (a missed frame must not leave the
  * settings surface stale). No-op for an unknown or disarmed source.
  * @param sourceId - proxy source id ('local' | '<kind>-<id>').

@@ -74,6 +74,42 @@ interface ChamberPluginRefreshControl {
   actionStarted(): void
 }
 
+/**
+ * Upstream `ClientSyncFace` (alpha.1 `PluginManagerPage.tsx`: `InjectFace<ClientSyncFace>`):
+ * the page reads `props.useClientSync(...)` and `props.retryClient` UNCONDITIONALLY on every
+ * render (its `ClientSyncNotice` line/notice), so a face without them is a first-render
+ * TypeError. The upstream registration binds them to `ctx.modules.entries.state`/`.retry()`.
+ *
+ * CHAMBER (plan §12.3.4, C1 minimal fix): the chamber boot never calls
+ * `modules.entries.start` — the composite mounts covered plugins directly and drives the
+ * runtime graph per instance — so `entries.state` is VACUOUS here; this batch ships the
+ * explicit STATIC fallback instead of pretending a sync surface exists:
+ * `{ syncing: false, failures: [] }` + a no-op retry. Consequence (registered, design 05
+ * §5/09): the page opens and works, but its client-sync line/notice never appears. If a
+ * later batch proves `ctx.modules` inside the per-instance ctx (plan U1), bind the real
+ * `ctx.modules.entries.state`/`retry` and delete this fallback.
+ */
+interface ClientSyncSnapshot {
+  readonly syncing: boolean
+  readonly failures: readonly { readonly id: string; readonly message: string }[]
+}
+
+interface ClientSyncFace {
+  readonly hooks: {
+    readonly clientSync: { getSnapshot(): ClientSyncSnapshot; subscribe(listener: () => void): () => void }
+  }
+  readonly retryClient: () => void
+}
+
+/** The vacuous client-sync snapshot (no module-system sync exists in the chamber boot). */
+const CLIENT_SYNC_IDLE: ClientSyncSnapshot = { syncing: false, failures: [] }
+
+/** The vacuous observable: stable snapshot, no notifications (nothing can change it). */
+const CLIENT_SYNC_OBSERVABLE = {
+  getSnapshot: (): ClientSyncSnapshot => CLIENT_SYNC_IDLE,
+  subscribe: (_listener: () => void): (() => void) => () => {},
+}
+
 const MANAGER_CHILDREN = {
   // The upstream page renders this seat in the add-plugin menu
   // (PluginManagerPage AddPluginMenu); we embed the page without its apply(),
@@ -213,7 +249,15 @@ export function apply(ctx: ClientContext): void {
       // The page drives its sticky/compact header through a face that is not part of
       // `PluginManagerFace`; the intersection keeps that member typed so an upstream
       // rename turns this line red instead of being erased by a cast.
-      inject: () => ({ ...face, createHeaderRef: createPluginHeaderRef }) as PluginManagerFace & PluginHeaderLayoutFace,
+      // alpha.1 page contract: the controller face + the header-layout face + the client-sync
+      // face (static fallback, see ClientSyncFace above). The intersection is the type lock —
+      // an upstream rename turns this line red instead of being erased by a cast.
+      inject: () => ({
+        ...face,
+        createHeaderRef: createPluginHeaderRef,
+        hooks: { ...face.hooks, clientSync: CLIENT_SYNC_OBSERVABLE },
+        retryClient: () => {},
+      }) as PluginManagerFace & PluginHeaderLayoutFace & ClientSyncFace,
       children: MANAGER_CHILDREN,
     }, EmbeddedPluginManagerPage as never)
   })

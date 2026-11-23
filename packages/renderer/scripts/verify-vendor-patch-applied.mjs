@@ -206,13 +206,6 @@ export const VENDOR_PATCH_MARKERS = [
     present: /closest\((["'])\[data-instance\]\1\)[\s\S]{0,700}?=>\s*\{?\s*(?:return\s+)?[A-Za-z_$][\w$]*\(\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*\)/u,
   },
   {
-    vendorFile: 'dsh-client-ui-theme/src/client/styles.ts',
-    what: 'ui-theme stylesheets are page-global singletons (one sheet per document, refcounted)',
-    // Patched: the page registry is keyed on a chamber-only Symbol.for token; upstream
-    // has no such string, so its presence proves the singleton edit reached the chunk.
-    present: /Symbol\.for\(["']dsh-chamber:page-theme-styles["']\)/,
-  },
-  {
     vendorFile: 'dsh-client-ui-theme/src/client/icon-sprite.ts',
     what: 'ui-theme icon sprite is page-global singleton (one sprite per document, refcounted)',
     // Patched: same page-registry contract for the sprite; the token is chamber-only.

@@ -287,8 +287,17 @@ test('① 锁：结构、登记目标与来源字段', () => {
   assert.deepEqual(Object.keys(LOCK.targets).sort(), ['mac-arm64'])
   assert.deepEqual(Object.keys(REGISTERED_TARGETS).sort(), ['mac-arm64'])
   assert.match(LOCK.pythonVersion, /^\d+\.\d+\.\d+$/u)
-  assert.ok(Object.keys(LOCK.pythonPackages).length >= 13)
+  assert.ok(Object.keys(LOCK.pythonPackages).length >= 14, 'alpha.2 载荷至少 14 个 python 发行版（含 pypdf）')
   assert.ok(typeof LOCK.provenance === 'object' && typeof LOCK.provenance.structure === 'string')
+})
+
+test('① 锁：alpha.2 载荷契约 —— office 技能正文承诺的 pypdf 必须随 primary-runtime 分发', () => {
+  assert.equal(LOCK.pythonPackages.pypdf, '6.21.4',
+    'office/SKILL.md 正文承诺内置 Python 带 pypdf：锁必须登记 pypdf 6.21.4（alpha.1 起，alpha.2 沿用）')
+  assert.ok(
+    LOCK.wheels.some(wheel => /\/pypdf-6\.21\.4-py3-none-any\.whl$/u.test(wheel.url)),
+    'pypdf 纯 py wheel 必须在跨平台 wheels 清单里（否则载荷装不出 pypdf）',
+  )
 })
 
 test('① 锁：未出货目标 / 坏摘要 / 空清单一律拒绝', () => {

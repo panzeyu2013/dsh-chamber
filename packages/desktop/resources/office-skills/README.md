@@ -1,15 +1,13 @@
 # office-skills（Office 技能资产目录）
 
-本目录是上游 `@deepseek-ai/dsh-skill-office` 的 **4 个技能资产**（现行 pin 的资产面）在构建机上的落点，
+本目录是上游 `@deepseek-ai/dsh-skill-office` 的 **1 个技能资产**（alpha.2 资产面；旧 pin
+的 office-docx/office-pptx/office-xlsx 已折进 office）在构建机上的落点，
 与 `resources/primary-runtime` 平级；**只提交本说明文件**，资产由显式构建腿生成、不随仓库提交。
 
 ## 文件清单（整树缺一不可）
 
 ```
 office/SKILL.md
-office-docx/SKILL.md
-office-pptx/SKILL.md
-office-xlsx/SKILL.md
 ```
 
 清单单源 = `packages/desktop/scripts/prepare-office-assets.mjs` 的 `OFFICE_SKILL_FILES`；上游改资产面时同批改清单、`startup-plugin-rows.ts` 的 `OFFICE_SKILL_NAMES` 门控与测试。
@@ -24,7 +22,7 @@ office-xlsx/SKILL.md
 ```sh
 # 演练（不写盘）：
 node packages/desktop/scripts/prepare-office-assets.mjs --dry-run
-# 真实落位（逐文件 temp+rename 覆盖；保留本 README；递归清非期望文件/目录（含期望目录内陈旧文件）；写完自检）：
+# 真实落位（逐文件 temp+rename 覆盖；保留本 README；递归清非期望文件/目录（含旧技能目录与期望目录内陈旧文件）；写完自检）：
 node packages/desktop/scripts/prepare-office-assets.mjs
 # 完整性判定（清单文件全部在场；源可用时逐文件 sha256；打包后对 bundle 内路径复核同一命令）：
 node packages/desktop/scripts/prepare-office-assets.mjs --verify packages/desktop/resources/office-skills
@@ -40,4 +38,7 @@ node packages/desktop/scripts/prepare-office-assets.mjs --verify packages/deskto
   `primary-runtime/` 平级），随 `build:swift-app` 进
   `Contents/Resources/sidecar/office-skills`；
 - 控制面本地 spawn 的 `chamber-office-skills` 启动行以 `assetRoot` 指向同一目录
-  （design 09/25；Swift 本地 flavor only）。
+  （design 09/25；本地 Swift flavor only）。
+
+> 回滚纪律：回退到旧 pin（rc.3）时必须同批回退 `OFFICE_SKILL_FILES` 与
+> `OFFICE_SKILL_NAMES` 并重建本目录，否则旧 runtime 对单文件 assetRoot 会 ENOENT（office 静默缺失）。

@@ -18,6 +18,7 @@ export const GROUPS = {
   // lockstep: the seeded package must resolve the same vendor paths as the host.
   lockstep: [
     'test/vendor-paths-lockstep.test.ts',
+    'test/pure-copies-lockstep.test.ts',
   ],
   // core: the in-instance open-in catalog/icons/launch seed. The vendor stubs
   // keep the upstream imports resolvable without the built install tree.

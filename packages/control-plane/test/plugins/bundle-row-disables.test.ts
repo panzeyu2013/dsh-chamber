@@ -19,7 +19,9 @@ import {
   BUNDLE_ROW_DISABLES,
   FORGE_BUNDLE_PACKAGE_NAME,
   FORGE_GITHUB_ROW,
+  FORGE_GITLAB_ROW,
   WEB_APP_BUNDLE_PACKAGE_NAME,
+  WEB_APP_REMOTE_CONNECTION_ROW,
   WEB_APP_SKILL_OFFICE_ROW,
   assertBundleRowDisableTargets,
   bundleRowDisableTargetsForSpawn,
@@ -38,6 +40,8 @@ const FORGE_PATCH = `- insert:
       name: '@deepseek-ai/dsh-experimental-forge'
     - id: forge-github
       name: '@deepseek-ai/dsh-experimental-forge-github'
+    - id: forge-gitlab
+      name: '@deepseek-ai/dsh-forge-gitlab'
     - id: forge-session
       name: '@deepseek-ai/dsh-experimental-forge-session'
     - id: forge-panel
@@ -63,8 +67,14 @@ const readable = (patches: readonly string[]) => () => ({ ok: true as const, pat
 // The canonical registry (the local overlay applies it every spawn)
 // ---------------------------------------------------------------------------
 
-test('the canonical registry disables the forge bundle GitHub provider and is validation-pinned', () => {
-  assert.deepEqual(BUNDLE_ROW_DISABLES, [FORGE_GITHUB_ROW])
+test('the canonical registry disables the forge GitHub provider + the web-app remote-connection row', () => {
+  assert.deepEqual(BUNDLE_ROW_DISABLES, [FORGE_GITHUB_ROW, FORGE_GITLAB_ROW, WEB_APP_REMOTE_CONNECTION_ROW])
+  assert.equal(FORGE_GITLAB_ROW.bundle, '@deepseek-ai/dsh-experimental-forge-bundle')
+  assert.equal(FORGE_GITLAB_ROW.id, 'forge-gitlab')
+  assert.equal(FORGE_GITLAB_ROW.name, '@deepseek-ai/dsh-forge-gitlab')
+  assert.equal(WEB_APP_REMOTE_CONNECTION_ROW.bundle, '@deepseek-ai/dsh-web-app')
+  assert.equal(WEB_APP_REMOTE_CONNECTION_ROW.id, 'remote-connection')
+  assert.equal(WEB_APP_REMOTE_CONNECTION_ROW.name, '@deepseek-ai/dsh-client-remote-connection')
   assert.equal(FORGE_GITHUB_ROW.id, 'forge-github')
   assert.equal(FORGE_GITHUB_ROW.bundle, '@deepseek-ai/dsh-experimental-forge-bundle')
   assert.equal(FORGE_GITHUB_ROW.name, '@deepseek-ai/dsh-experimental-forge-github')
@@ -82,22 +92,29 @@ test('the pinned forge bundle still mounts the row the overlay must disable', t 
   }
   const patch = readFileSync(patchPath, 'utf8')
   const rows = parsePatchRows(patch)
-  const target = rows.find(row => row.id === FORGE_GITHUB_ROW.id)
-  assert.ok(target, 'the pinned bundle must still mount ' + FORGE_GITHUB_ROW.id)
-  assert.deepEqual(target.names, [FORGE_GITHUB_ROW.name])
+  for (const target of [FORGE_GITHUB_ROW, FORGE_GITLAB_ROW]) {
+    const row = rows.find(candidate => candidate.id === target.id)
+    assert.ok(row, 'the pinned bundle must still mount ' + target.id)
+    assert.deepEqual(row.names, [target.name])
+  }
   assert.deepEqual(
     resolveBundleRowDisables({ enabledBundles: [FORGE_BUNDLE_PACKAGE_NAME], readBundlePatches: readable([patch]) }),
-    [{ id: FORGE_GITHUB_ROW.id, name: FORGE_GITHUB_ROW.name }],
+    [
+      { id: FORGE_GITHUB_ROW.id, name: FORGE_GITHUB_ROW.name },
+      { id: FORGE_GITLAB_ROW.id, name: FORGE_GITLAB_ROW.name },
+    ],
   )
 })
 
 test('the web-app office-row disable is conditional on the local office mount', () => {
-  // The canonical registry stays forge-only: a caller that mounts no local office row
-  // (Electron/CLI/tests) must leave the bundle row enabled, since it is the only mount.
-  assert.deepEqual(bundleRowDisableTargetsForSpawn({ mountsLocalOfficeSkills: false }), [FORGE_GITHUB_ROW])
+  // The canonical registry carries the unconditional remote-connection disable; the office
+  // row stays conditional (a caller that mounts no local office row must leave the bundle
+  // row enabled, since it is the only mount).
+  assert.deepEqual(bundleRowDisableTargetsForSpawn({ mountsLocalOfficeSkills: false }),
+    [FORGE_GITHUB_ROW, FORGE_GITLAB_ROW, WEB_APP_REMOTE_CONNECTION_ROW])
   assert.deepEqual(
     bundleRowDisableTargetsForSpawn({ mountsLocalOfficeSkills: true }),
-    [FORGE_GITHUB_ROW, WEB_APP_SKILL_OFFICE_ROW],
+    [FORGE_GITHUB_ROW, FORGE_GITLAB_ROW, WEB_APP_REMOTE_CONNECTION_ROW, WEB_APP_SKILL_OFFICE_ROW],
     'the Swift sidecar mounts the local skill-office row, so the bundle duplicate must be disabled',
   )
   assert.equal(WEB_APP_SKILL_OFFICE_ROW.bundle, '@deepseek-ai/dsh-web-app')
@@ -138,27 +155,87 @@ test('the pinned rc.2 web-app bundle mounts the office row our local row replace
   )
 })
 
+test('the pinned alpha.2 web-app bundle mounts the remote-connection row the overlay disables', t => {
+  const bundleDir = fileURLToPath(new URL('../../../../vendor/harness-checkout/packages/bundle/web-app/', import.meta.url))
+  const manifestPath = join(bundleDir, 'package.json')
+  if (!existsSync(manifestPath)) {
+    t.skip('vendor/harness-checkout is not materialized')
+    return
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const declared = manifest.dsh?.bundle?.patch
+  const files = Array.isArray(declared) ? declared : [declared]
+  const patches = files.map(file => readFileSync(join(bundleDir, file), 'utf8'))
+  const rows = parsePatchRows(patches.join('\n'))
+  const remoteRows = rows.filter(row => row.id === WEB_APP_REMOTE_CONNECTION_ROW.id)
+  assert.equal(remoteRows.length, 1, 'exactly one remote-connection row across the declared patch set')
+  assert.deepEqual(remoteRows[0]!.names, [WEB_APP_REMOTE_CONNECTION_ROW.name],
+    'the pinned web-app bundle binds the row to @deepseek-ai/dsh-client-remote-connection')
+  assert.deepEqual(
+    resolveBundleRowDisables({
+      enabledBundles: [WEB_APP_BUNDLE_PACKAGE_NAME],
+      readBundlePatches: readable(patches),
+      log() {},
+    }),
+    [{ id: WEB_APP_REMOTE_CONNECTION_ROW.id, name: WEB_APP_REMOTE_CONNECTION_ROW.name }],
+    'an enabled web-app layer gets the verified remote-connection disable',
+  )
+})
+
+test('H first boot: a profile without the web-app layer skips the remote-connection disable (idempotent)', () => {
+  // local-host-seeding's profileBundleLayer returns [] before the web template materializes;
+  // the first spawn must not fail and must not read a bundle that is not enabled.
+  const logs: string[] = []
+  const disables = resolveBundleRowDisables({
+    enabledBundles: [],
+    readBundlePatches: () => { throw new Error('must not read a bundle that is not enabled') },
+    log: message => { logs.push(message) },
+  })
+  assert.deepEqual(disables, [], 'no profile layer yet: nothing to disable, the first spawn must not fail')
+  assert.equal(logs.length, 3, 'all canonical targets are skipped with a diagnostic')
+  assert.ok(logs.every(message => /skipped/.test(message)), logs.join(' | '))
+})
+
+test('H older runtime: an enabled web-app without the remote-connection row skips it (rollback must spawn)', () => {
+  const rc3WebApp = `- insert:
+    - id: skill-office
+      name: '@deepseek-ai/dsh-skill-office'
+`
+  const logs: string[] = []
+  assert.deepEqual(
+    resolveBundleRowDisables({
+      enabledBundles: [WEB_APP_BUNDLE_PACKAGE_NAME],
+      readBundlePatches: readable([rc3WebApp]),
+      log: message => { logs.push(message) },
+    }),
+    [],
+    'a runtime whose web-app bundle predates the row has nothing to disable',
+  )
+  assert.ok(logs.some(message => message.includes('remote-connection') && /nothing to disable — skipped/.test(message)), logs.join(' | '))
+})
+
 // ---------------------------------------------------------------------------
 // resolveBundleRowDisables — idempotent skip vs fail-closed
 // ---------------------------------------------------------------------------
 
-test('an unenabled bundle is an idempotent skip: no disable, no patch read, one diagnostic', () => {
+test('unenabled bundles are an idempotent skip: no disable, no patch read, one diagnostic each', () => {
   const logs: string[] = []
   let reads = 0
   const disables = resolveBundleRowDisables({
-    enabledBundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
+    enabledBundles: ['@deepseek-ai/dsh-base'],
     readBundlePatches: bundleName => {
       reads += 1
       throw new Error(`must not read ${bundleName}`)
     },
     log: message => { logs.push(message) },
   })
-  assert.deepEqual(disables, [], 'the opt-in bundle is off, so the overlay carries no disable row')
+  assert.deepEqual(disables, [], 'neither target bundle is enabled, so the overlay carries no disable row')
   assert.equal(reads, 0, 'a disabled bundle is never resolved or verified')
-  assert.equal(logs.length, 1)
-  assert.ok(logs[0]!.includes(FORGE_BUNDLE_PACKAGE_NAME), logs[0])
-  assert.ok(logs[0]!.includes('forge-github'), logs[0])
-  assert.match(logs[0]!, /skipped/)
+  assert.equal(logs.length, 3)
+  assert.ok(logs.some(message => message.includes(FORGE_BUNDLE_PACKAGE_NAME) && message.includes('forge-github')), logs.join(' | '))
+  assert.ok(logs.some(message => message.includes(FORGE_BUNDLE_PACKAGE_NAME) && message.includes('forge-gitlab')), logs.join(' | '))
+  assert.ok(logs.some(message => message.includes(WEB_APP_BUNDLE_PACKAGE_NAME) && message.includes('remote-connection')), logs.join(' | '))
+  assert.ok(logs.every(message => /skipped/.test(message)), logs.join(' | '))
 })
 
 test('an enabled bundle with its row present yields the exact id-targeted disable row', () => {
@@ -167,10 +244,13 @@ test('an enabled bundle with its row present yields the exact id-targeted disabl
     readBundlePatches: readable([FORGE_PATCH]),
     log() {},
   })
-  assert.deepEqual(disables, [{ id: 'forge-github', name: '@deepseek-ai/dsh-experimental-forge-github' }])
+  assert.deepEqual(disables, [
+    { id: 'forge-github', name: '@deepseek-ai/dsh-experimental-forge-github' },
+    { id: 'forge-gitlab', name: '@deepseek-ai/dsh-forge-gitlab' },
+  ])
   assert.equal(
     renderCordisDisablePatches(disables),
-    `- id: forge-github\n  name: '@deepseek-ai/dsh-experimental-forge-github'\n  disabled: true\n`,
+    `- id: forge-github\n  name: '@deepseek-ai/dsh-experimental-forge-github'\n  disabled: true\n- id: forge-gitlab\n  name: '@deepseek-ai/dsh-forge-gitlab'\n  disabled: true\n`,
     'the same canonical renderer the overlay uses produces the row bytes',
   )
 })
@@ -337,7 +417,10 @@ test('the production reader resolves a profile-installed bundle and verifies its
     readBundlePatches: read,
     log() {},
   })
-  assert.deepEqual(disables, [{ id: 'forge-github', name: '@deepseek-ai/dsh-experimental-forge-github' }])
+  assert.deepEqual(disables, [
+    { id: 'forge-github', name: '@deepseek-ai/dsh-experimental-forge-github' },
+    { id: 'forge-gitlab', name: '@deepseek-ai/dsh-forge-gitlab' },
+  ])
 })
 
 test('the production reader falls back to the dsh installation anchor (hoisted layout)', t => {

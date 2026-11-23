@@ -45,6 +45,12 @@ const GROUPS = {
   runtime: [
     'test/instance-api-working-directory.test.ts',
   ],
+  // runtime-facts: the completion-failure bit's formal contract — the official
+  // `sessionStatus.completionFailed` set as projectRuntimeFacts' 7th argument
+  // writes a SPARSE row field (presentation-only; never the notification edge).
+  'runtime-facts': [
+    'test/derive-runtime-facts-failed.test.ts',
+  ],
   // fork-titles: the fork-child title increment port (upstream session-controller
   // client parity: two-argument skip-taken) — pure leaf, no bridge/state.
   'fork-titles': [

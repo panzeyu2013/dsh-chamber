@@ -55,6 +55,11 @@ const GROUPS = {
     'test/behavior/retry-jitter.test.ts',
     // P1-3 auth-close vocabulary: dependency-free leaf predicate (4401/4403).
     'test/behavior/stream-auth-close.test.ts',
+    // alpha.1 carrier-code judgement (G43 replay): the code test the retry lane uses.
+    {
+      file: 'test/behavior/carrier-code.test.ts',
+      nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
+    },
   ],
   // retry-policy: chamber carrier-retry pacing (design 14 §D4).
   'retry-policy': [

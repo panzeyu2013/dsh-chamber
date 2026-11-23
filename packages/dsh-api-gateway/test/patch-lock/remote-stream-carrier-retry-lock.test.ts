@@ -113,7 +113,25 @@ test('the no-generation wait keeps the upstream probe AND is bounded', () => {
 
 test('non-carrier escapes are still marked terminal for consumers', () => {
   assert.match(carrier, /remoteErrorOf\(error\) \?\? new RemoteError\(\s*'gateway\/internal'/u)
-  assert.match(carrier, /if \(!\(error instanceof RemoteStreamCarrierError\)\) throw terminalStreamFailure\(error\)/u)
+  // alpha.1 classifies a retryable carrier loss by its `gateway/carrier-lost` code
+  // (a domain `ended()` may return a plain Error with it), never by class identity.
+  assert.match(carrier, /if \(!isRemoteStreamCarrierFailure\(error\)\) throw terminalStreamFailure\(error\)/u)
+  assert.match(
+    carrier,
+    /import \{[\s\S]*?isRemoteStreamCarrierFailure[\s\S]*?\} from '\.\/stream-client\.ts'/u,
+    'the code judgement is imported from the stream client that produces the code',
+  )
+})
+
+test('G43 order: the auth close is judged BEFORE the retryable carrier code', () => {
+  // RemoteStreamAuthError extends the carrier class and therefore carries the
+  // `gateway/carrier-lost` code; if the code test ran first, a stale credential would
+  // enter the retry ladder forever. The terminal gateway/auth branch must stay first.
+  const auth = carrier.indexOf('if (error instanceof RemoteStreamAuthError) {')
+  const carrierCode = carrier.indexOf('if (!isRemoteStreamCarrierFailure(error))')
+  assert.ok(auth >= 0, 'the terminal auth branch must exist')
+  assert.ok(carrierCode > auth, 'the carrier-code branch must run after the auth close branch')
+  assert.match(carrier, /throw new RemoteError\('gateway\/auth', error\.message, \{ closeCode: error\.closeCode \}/u)
 })
 
 test('the pacing policy stays import-free so it is unit-testable without the vendor graph', () => {

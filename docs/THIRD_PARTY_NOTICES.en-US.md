@@ -63,13 +63,14 @@ Electron leg (2026-09).
 |---|---|---|
 | `CPython` (python-build-standalone) | 3.12.14 | PSF-2.0 |
 | `pip` (interpreter baseline, ships with CPython) | with CPython | MIT |
-| `Node.js` | 24.21.0 | MIT |
+| `Node.js` | 24.22.3 | MIT |
 | `et_xmlfile` (python distribution) | 2.0.0 | see the wheel dist-info METADATA |
 | `lxml` (python distribution) | 6.1.3 | see the wheel dist-info METADATA |
 | `numpy` (python distribution) | 2.3.5 | see the wheel dist-info METADATA |
 | `openpyxl` (python distribution) | 3.1.5 | see the wheel dist-info METADATA |
 | `pandas` (python distribution) | 3.0.1 | see the wheel dist-info METADATA |
 | `Pillow` (python distribution) | 12.3.0 | see the wheel dist-info METADATA |
+| `pypdf` (python distribution) | 6.21.4 | see the wheel dist-info METADATA |
 | `python-dateutil` (python distribution) | 2.9.0.post0 | see the wheel dist-info METADATA |
 | `python-docx` (python distribution) | 1.2.0 | see the wheel dist-info METADATA |
 | `python-pptx` (python distribution) | 1.0.2 | see the wheel dist-info METADATA |

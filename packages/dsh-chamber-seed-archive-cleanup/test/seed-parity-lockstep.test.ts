@@ -198,8 +198,8 @@ test('the four seed tsconfigs extend ONE shared vendor-resolution base', () => {
   const reference = vendorPathMappings(SHARED_SEED_TSCONFIG)
   assert.deepEqual(
     reference.map(entry => entry.split(' -> ')[0]),
-    ['@deepseek-ai/*', '@standard-schema/spec', 'compression', 'ipaddr.js', 'negotiator', 'undici', 'zod'],
-    'the shared base must keep the wildcard plus the six documented store mappings',
+    ['@deepseek-ai/*', '@deepseek-ai/dsh-client-config/types', '@deepseek-ai/dsh-client-script-realm/client', '@standard-schema/spec', 'compression', 'ipaddr.js', 'negotiator', 'undici', 'zod'],
+    'the shared base must keep the wildcard plus the six documented store mappings and the two alpha.1 vendor subpaths',
   )
   for (const pkg of SEED_PACKAGES) {
     const config = join(ROOT, 'packages', pkg, 'tsconfig.json')

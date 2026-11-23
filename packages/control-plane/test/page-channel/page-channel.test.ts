@@ -5,7 +5,9 @@
  * must hold, or the page silently loses its only long-lived connection:
  *  - health is control-plane-native (fake producer): ready right after wiring,
  *    each snapshot an item frame, unsubscribe releases the producer;
- *  - pluginGraph / sessionFacts are one upstream SSE per subscription, with the
+ *  - sessionFacts is one upstream SSE per subscription, with the (the retired page-level
+ *    pluginGraph/plugins-events topic no longer exists; design 09 §3.7 uses a per-instance
+ *    Remote stream instead), with the
  *    SSE block shape preserved (event name verbatim, default 'message',
  *    multi-line data joined with \n, comments forwarded as empty-data keepalive items);
  *  - sessionFacts is a gateway capability: a dsh-kind id must fail
@@ -29,6 +31,7 @@ import {
   PAGE_CHANNEL_PATH,
   pageChannelSubscribeFrame,
 } from '@dsh-chamber/dsh-chamber-wire/page-channel'
+import { SESSION_STATE_STREAM_PATH } from '@dsh-chamber/dsh-chamber-wire/session-state'
 import { createPageChannel, startPageChannelHeartbeat, type PageChannelDeps } from '../../src/page-channel.ts'
 import { waitFor } from '../support/utils.ts'
 
@@ -192,7 +195,7 @@ test('health: subscribe emits exactly [ready, current snapshot] with no producer
 // pluginGraph / sessionFacts: upstream SSE
 // ---------------------------------------------------------------------------
 
-test('pluginGraph: one upstream GET /plugins/events; SSE blocks become item frames verbatim', async (t) => {
+test('sessionFacts: one upstream GET /chamber/session-state/stream; SSE blocks become item frames verbatim', async (t) => {
   const upstream = await startSseUpstream((_req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
     res.write('event: graph\ndata: {"rev":1}\n\n')
@@ -202,13 +205,13 @@ test('pluginGraph: one upstream GET /plugins/events; SSE blocks become item fram
   })
   t.after(() => upstream.close())
   const harness = await startChannel({
-    resolveTargetFor: id => (id === 'dsh-live' ? { baseUrl: upstream.baseUrl } : null),
+    resolveTargetFor: id => (id === 'gateway-live' ? { baseUrl: upstream.baseUrl } : null),
   })
   t.after(() => harness.close())
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-1', family: 'pluginGraph', instanceId: 'dsh-live' })
+  client.send({ type: 'subscribe', id: 'pg-1', family: 'sessionFacts', instanceId: 'gateway-live' })
   await client.waitForType('ready', 'pg-1')
   await client.waitFor(() => client.items('pg-1').length >= 4, 'four plugin-graph items')
 
@@ -221,7 +224,7 @@ test('pluginGraph: one upstream GET /plugins/events; SSE blocks become item fram
   ], 'event names are verbatim, multi-line data joins with \\n, comments become empty-data keepalive items')
 
   assert.equal(upstream.requests.length, 1, 'exactly one upstream per live subscription')
-  assert.equal(upstream.requests[0].url, '/plugins/events')
+  assert.equal(upstream.requests[0].url, SESSION_STATE_STREAM_PATH)
   // 头纪律（accept-encoding/host/origin 与 auth/cookie 优先级）由 flow 用例统一锁，
   // 这里只留 SSE 形状本身，避免同一断言在三处漂移。
   assert.equal(upstream.requests[0].headers.accept, 'text/event-stream')
@@ -270,13 +273,13 @@ test('sessionFacts: a non-gateway instance fails capability_not_found without op
   await client.waitForType('ready', 'health-after')
 })
 
-test('pluginGraph: an unresolvable instance answers instance_unavailable and the channel keeps working', async (t) => {
+test('sessionFacts: an unresolvable instance answers instance_unavailable and the channel keeps working', async (t) => {
   const harness = await startChannel({ resolveTargetFor: () => null })
   t.after(() => harness.close())
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-missing', family: 'pluginGraph', instanceId: 'dsh-missing' })
+  client.send({ type: 'subscribe', id: 'pg-missing', family: 'sessionFacts', instanceId: 'gateway-missing' })
   const failure = await client.waitForType('error', 'pg-missing')
   assert.equal(failure.code, 'instance_unavailable')
 
@@ -295,7 +298,7 @@ test('an upstream answering non-200 fails that subscription with upstream_failed
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-503', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-503', family: 'sessionFacts', instanceId: 'gateway-x' })
   const failure = await client.waitForType('error', 'pg-503')
   assert.equal(failure.code, 'upstream_failed')
   assert.match(failure.message, /503/)
@@ -342,7 +345,7 @@ test('upstream status classification: 4xx refusals are permanent except auth/tim
   for (const [expectedCode, value] of cases) {
     status = value
     const id = 'pg-status-' + String(value)
-    client.send({ type: 'subscribe', id, family: 'pluginGraph', instanceId: 'dsh-x' })
+    client.send({ type: 'subscribe', id, family: 'sessionFacts', instanceId: 'gateway-x' })
     const failure = await client.waitForType('error', id)
     assert.equal(failure.code, expectedCode, 'HTTP ' + String(value) + ' 必须判成 ' + expectedCode)
     assert.match(String(failure.message), new RegExp(String(value)), '失败原因必须点名状态码')
@@ -364,7 +367,7 @@ test('a 200 with a non-SSE content-type fails the subscription before ready inst
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-html', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-html', family: 'sessionFacts', instanceId: 'gateway-x' })
   const failure = await client.waitForType('error', 'pg-html')
   assert.equal(failure.code, 'upstream_failed')
   assert.match(failure.message, /text\/html/)
@@ -383,7 +386,7 @@ test('a 200 without a content-type stays tolerated (SSE is assumed)', async (t) 
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-no-ct', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-no-ct', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-no-ct')
   const item = await client.waitForType('item', 'pg-no-ct')
   assert.equal(item.event, 'graph')
@@ -401,7 +404,7 @@ test('an upstream that ends sends end (not error) and releases the subscription'
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-end', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-end', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('item', 'pg-end')
   await client.waitForType('end', 'pg-end')
   assert.equal(client.messages.filter(message => message.type === 'error').length, 0)
@@ -426,7 +429,7 @@ test('unsubscribe destroys the upstream response and stops forwarding', async (t
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-unsub', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-unsub', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('item', 'pg-unsub')
   client.send({ type: 'unsubscribe', id: 'pg-unsub' })
   await waitFor(() => closed > 0, 5000, 'upstream response destroy')
@@ -455,7 +458,7 @@ test('a socket close destroys every upstream and every producer subscription', a
   const client = await harness.connect()
 
   client.send({ type: 'subscribe', id: 'health-close', family: 'health' })
-  client.send({ type: 'subscribe', id: 'pg-close', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-close', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'health-close')
   await client.waitForType('ready', 'pg-close')
   assert.equal(producers.size, 1)
@@ -485,7 +488,7 @@ test('closeAll closes every live socket with 1012 and destroys its upstreams', a
   const graphClient = await harness.connect()
 
   healthClient.send({ type: 'subscribe', id: 'health-shutdown', family: 'health' })
-  graphClient.send({ type: 'subscribe', id: 'pg-shutdown', family: 'pluginGraph', instanceId: 'dsh-x' })
+  graphClient.send({ type: 'subscribe', id: 'pg-shutdown', family: 'sessionFacts', instanceId: 'gateway-x' })
   await healthClient.waitForType('ready', 'health-shutdown')
   await graphClient.waitForType('ready', 'pg-shutdown')
 
@@ -516,7 +519,7 @@ test('malformed client frames are ignored, logged, and the socket stays usable',
   client.ws.send('{}')
   client.ws.send(JSON.stringify({ type: 'subscribe', id: '', family: 'health' }))
   client.ws.send(JSON.stringify({ type: 'subscribe', id: 'x', family: 'nope' }))
-  client.ws.send(JSON.stringify({ type: 'subscribe', id: 'x', family: 'pluginGraph' }))
+  client.ws.send(JSON.stringify({ type: 'subscribe', id: 'x', family: 'sessionFacts' }))
   // 类型混淆：`String(['pluginGraph'])` 会通过集合检查，但族比较是 ===，数组会让订阅滑进
   // SSE 分支并绕过 sessionFacts 的 gateway /chamber 围栏（capability_not_found）。
   client.ws.send(JSON.stringify({ type: 'subscribe', id: 'crafted', family: ['pluginGraph'], instanceId: 'dsh-x' }))
@@ -602,14 +605,14 @@ test('one subscription failing never disturbs another on the same socket', async
   t.after(() => bad.close())
   t.after(() => good.close())
   const harness = await startChannel({
-    resolveTargetFor: id => ({ baseUrl: id === 'dsh-bad' ? bad.baseUrl : good.baseUrl }),
+    resolveTargetFor: id => ({ baseUrl: id === 'gateway-bad' ? bad.baseUrl : good.baseUrl }),
   })
   t.after(() => harness.close())
   const client = await harness.connect()
   t.after(() => client.ws.close())
 
-  client.send({ type: 'subscribe', id: 'pg-bad', family: 'pluginGraph', instanceId: 'dsh-bad' })
-  client.send({ type: 'subscribe', id: 'pg-good', family: 'pluginGraph', instanceId: 'dsh-good' })
+  client.send({ type: 'subscribe', id: 'pg-bad', family: 'sessionFacts', instanceId: 'gateway-bad' })
+  client.send({ type: 'subscribe', id: 'pg-good', family: 'sessionFacts', instanceId: 'gateway-good' })
   await client.waitForType('ready', 'pg-good')
   await client.waitForType('item', 'pg-good')
   assert.equal(client.messages.filter(message => message.type === 'item' && message.id === 'pg-bad').length, 0)
@@ -630,7 +633,7 @@ test('stats reports live accounting only: one upstream per non-health subscripti
 
   assert.deepEqual(harness.channel.stats(), { sockets: 1, subscriptions: 0, upstreams: 0 })
   client.send({ type: 'subscribe', id: 'health-stats', family: 'health' })
-  client.send({ type: 'subscribe', id: 'pg-stats', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-stats', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-stats')
   assert.deepEqual(harness.channel.stats(), { sockets: 1, subscriptions: 2, upstreams: 1 })
 
@@ -664,7 +667,7 @@ test('stats: a periodic diagnostics line reports live accounting, and closeAll l
   const client = await harness.connect()
   t.after(() => client.ws.close())
   client.send({ type: 'subscribe', id: 'health-stats-log', family: 'health' })
-  client.send({ type: 'subscribe', id: 'pg-stats-log', family: 'pluginGraph', instanceId: 'dsh-x' })
+  client.send({ type: 'subscribe', id: 'pg-stats-log', family: 'sessionFacts', instanceId: 'gateway-x' })
   await client.waitForType('ready', 'pg-stats-log')
 
   const periodic = 'page-channel: stats sockets=1 subscriptions=2 upstreams=1'

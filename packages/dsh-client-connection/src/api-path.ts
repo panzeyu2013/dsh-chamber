@@ -1,9 +1,11 @@
 /**
- * The `/api` URL prefix — single source for both halves of the web transport; the
- * node half registers it. Chamber owns the browser-side per-instance base path:
- * every path lands under the control-plane proxy prefix (`/api/i/<id>`), which
- * strips it and forwards to the instance's own `/api` tree. The value is an
- * explicit option threaded from the entry's own Context; no page global is read.
+ * The /api URL prefix — single source for both halves of the web transport.
+ * The node half registers this prefix on the web server.
+ *
+ * chamber patch: chamber owns the browser-side per-instance base path — every path
+ * lands under the control-plane proxy prefix (`/api/i/<id>`), which strips it and
+ * forwards to the instance's own `/api` tree. The value is an explicit option
+ * threaded from the entry's own Context; no page global is read.
  */
 
 /** Route prefix owning every api request (`/api` and `/api/<anything>`). */

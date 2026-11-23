@@ -9,7 +9,7 @@
 1. **管理 REST**：`/health`、`/api/connections`（仅 local）、`/api/host/logs`——桌面 chamber 插件（侧栏 / 管理视图）与 CLI 的消费面。
 2. **每实例反代**：`/api/i/<id>/*` 的 HTTP 形状（错误码 / 收敛），契约定义在 03 §3。
 3. **前端服务**：静态 dist + `__DSH_BOOT__` 启动图清单。
-4. **页面级长活流**：`/api/page-channel`（WS，[26-page-channel.md](../client/26-page-channel.md)）——页面唯一属于 HTTP 池的长连接，health/pluginGraph/sessionFacts 三族逻辑订阅按 `instanceId` 定址（§4.4）。
+4. **页面级长活流**：`/api/page-channel`（WS，[26-page-channel.md](../client/26-page-channel.md)）——页面唯一属于 HTTP 池的长连接，health/sessionFacts 两族逻辑订阅按 `instanceId` 定址（§4.4；pluginGraph 族已退役，HMR 改 per-instance Remote 流）。
 
 **不在本文档范围**：宿主进程托管（02）、连接模型细节（03）、会话业务（dsh 前端 runtime，本仓不承载）、远程隧道与 systemd（desktop transport-manager / ssh provider，03 §2.2）。gateway 的认证（password/token/JWT cookie）、凭据存储（safeStorage）与审计见 17 §7/§12/§13.4。
 
@@ -168,7 +168,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 upgrade：/api/page-channel      精确路径匹配，不属于 /api/i/* 面
 顺序：Origin 门禁（§4.2 第一行）→ 精确路径命中 → 每实例反代（/api/i/* 与其它 upgrade 路径）
 帧：客户端 subscribe / unsubscribe / ack；控制面 ready / item / error / end（wire 契约 26 §4）
-订阅：family ∈ {health, pluginGraph, sessionFacts}；pluginGraph / sessionFacts 必须带 instanceId
+订阅：family ∈ {health, sessionFacts}；sessionFacts 必须带 instanceId（pluginGraph 族已退役，HMR 改 per-instance Remote 流）
 ```
 
 - **I-1**：页面侧长活 HTTP 流 = 0、属于 HTTP 池的长连接 = 0，这条 WS 是页面唯一的长活连接；升级后的 WS 不占池、不计入（每实例 Remote mux 仍在 §4.1 白名单内，随来源数增长）。
@@ -183,7 +183,7 @@ upgrade：/api/page-channel      精确路径匹配，不属于 /api/i/* 面
 | `upstream_timeout` | 瞬态 | 响应头期限内未收到头 |
 
 - 宿主 404 的客户端行为：按永久 `upstream_rejected` 不重试（旧客户端的瞬态重试是兼容差异，非本设计行为）。
-- **gateway 形态不挂载该端点**（26 §2）：gateway 的 upgrade 面只认 `/api/remote.mux` 与 `/api/i/*`，该路径被明确拒绝；将来若移动端要用这三族，须在 gateway 升级分发注册同一端点（17 §9）。
+- **gateway 形态不挂载该端点**（26 §2）：gateway 的 upgrade 面只认 `/api/remote.mux` 与 `/api/i/*`，该路径被明确拒绝；将来若移动端要用这两族，须在 gateway 升级分发注册同一端点（17 §9）。
 
 ## 5. 前端服务契约
 

@@ -38,10 +38,11 @@ export const PAGE_CHANNEL_PATH = '/api/page-channel'
 
 /**
  * Stream families the page may subscribe to. `health` is control-plane-native;
- * `pluginGraph` reads the target's `plugins/events` SSE; `sessionFacts` reads
- * the target's `/chamber/session-state/stream` SSE.
+ * (0.2.3-alpha.1 retired the `pluginGraph` family: the renderer follows the
+ * authenticated per-instance `pluginEvents` Remote stream directly, so no relay.)
+ * `sessionFacts` reads the target's `/chamber/session-state/stream` SSE.
  */
-const PAGE_CHANNEL_FAMILIES = ['health', 'pluginGraph', 'sessionFacts'] as const
+const PAGE_CHANNEL_FAMILIES = ['health', 'sessionFacts'] as const
 
 /** One addressed stream family. */
 export type PageChannelFamily = (typeof PAGE_CHANNEL_FAMILIES)[number]
@@ -269,7 +270,7 @@ export function parsePageChannelClientMessage(text: string): PageChannelClientMe
   if (text.length > PAGE_CHANNEL_MAX_CLIENT_FRAME_CHARS) throw new Error('page channel: client frame too large')
   const value = parseJson(text)
   if (value.type === 'subscribe') {
-    // family 必须是**字符串**本身：`String(value.family)` 会让 ['pluginGraph'] 这类单元素
+    // family 必须是**字符串**本身：`String(value.family)` 会让 ['sessionFacts'] 这类单元素
     // 数组通过集合检查，而返回值仍是数组——服务端用 === 比较族，于是它既不匹配 health 也
     // 不匹配 sessionFacts，直接滑进 SSE 分支并绕过 gateway 的 /chamber 能力围栏。
     if (!validId(value.id) || typeof value.family !== 'string' || !FAMILY_SET.has(value.family)) {

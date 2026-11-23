@@ -443,6 +443,22 @@
   background: var(--dsw-static-deepseek-450);
 }
 
+/* Failed completion (alpha.1 `completionFailed` = unread ∧ the Host observed the
+   turn end with an execution error): the SAME 6px slot/dot geometry as
+   .stateCompleted, painted with the error tone instead of the brand blue — the
+   "needs attention" read must survive the hover swap and match the row's
+   `status.failed` label/aria. Red here is not a server-identity read: the source
+   header's connection dot uses its own status classes; this dot only ever means
+   "this unread completion failed". Priority stays the row state machine's
+   (pending > subagents > completed), so a failed dot never outranks a live ask. */
+.stateFailed {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  corner-shape: round;
+  background: var(--dsw-alias-state-error-primary);
+}
+
 /* .stateCompleted (see its own rule below): the
    completed-but-unread brand-blue dot at both render sites — the session rows
    (ServerSection) and the pinned todo strip (SessionTodoArea). The official

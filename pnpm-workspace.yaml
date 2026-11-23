@@ -51,6 +51,10 @@ allowBuilds:
   # 不含它（packages/desktop/vendor/dsh/pnpm-lock.yaml 对 msgpackr* 零命中），
   # 故这里是惰性的防御性 false；显式否认避免 pnpm 报 ignored builds。
   "msgpackr-extract": false
+  # alpha.1 连接器引入的新依赖（chamber 不构建/不使用其建置脚本；运行时闭包不含它们）。
+  # 显式否认，避免 pnpm 报 ignored builds。
+  "@larksuite/cli": false
+  "@tencentcloud/tmeet": false
 
 # app-builder-lib 26.15.3 声明 @electron/get@^3.0.0，但 3.0.0 缺少其代码引用的
 # ElectronDownloadCacheMode 导出（3.1.0 才有）；锁文件在 3.1.0 发布前生成，

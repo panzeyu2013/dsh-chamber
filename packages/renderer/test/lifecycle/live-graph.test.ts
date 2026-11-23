@@ -1,7 +1,7 @@
 /**
  * Live client-plugin graph sync (live-graph.ts): frame parsing, the pure id-set
  * diff, the reconciler's add/remove/rev/diagnostic behavior, and the
- * disarm/fence contract. The transport is a fake page-channel `pluginGraph`
+ * disarm/fence contract. The transport is a fake per-instance plugin-events
  * subscription — the real client-core module owns the socket and its retry ladder,
  * so no case here may expect the reconciler to rebuild anything. The kernel IS the
  * shipped one (page-level state), so every case resets it — mutation of the shared
@@ -72,10 +72,10 @@ function fakeLoader(seed: { name: string; active?: boolean; fiberAwait?: () => P
 }
 
 /**
- * Fake page-channel `pluginGraph` subscription: captures the reconciler's handlers and
+ * Fake per-instance plugin-events subscription: captures the reconciler's handlers and
  * counts subscribe/unsubscribe calls. There is deliberately NO rebuild here — the real
- * client-core module owns the socket and every retry (design 26 §D4), so a failure must
- * be observable as "no timer, handle still live", never as a second subscription.
+ * Remote stream owns its reconnect ladder, so a failure must be observable as "no timer,
+ * handle still live", never as a second subscription.
  */
 function fakeSubscription() {
   let onItem: ((data: string) => void) | undefined
@@ -433,7 +433,7 @@ test('a channel onError logs once, schedules NO timer and leaves the subscriptio
   await Promise.resolve()
   assert.equal(timers, 0, 'a channel failure must not schedule any timer of its own')
   assert.equal(h.channel.closed, false, 'the handle stays live: the channel retries by itself')
-  assert.equal(h.warns.filter(message => message.includes('page channel retries')).length, 1)
+  assert.equal(h.warns.filter(message => message.includes('the stream retries on its own')).length, 1)
   // Positive control: the subscription is still wired — a later item still reconciles.
   h.channel.emit(graphFrame([row('@scope/after-error')]))
   await tick()
@@ -445,7 +445,7 @@ test('a fresh onOpen ends the outage: the next failure logs again', async (t) =>
   h.channel.fail('upstream_end', '第一次中断')
   h.channel.ready()
   h.channel.fail('channel_closed', '第二次中断')
-  assert.equal(h.warns.filter(message => message.includes('page channel retries')).length, 2)
+  assert.equal(h.warns.filter(message => message.includes('the stream retries on its own')).length, 2)
 })
 
 test('disarm() unsubscribes exactly once (only the live channel handle is closed)', async (t) => {
@@ -457,7 +457,7 @@ test('disarm() unsubscribes exactly once (only the live channel handle is closed
   assert.equal(h.channel.closeCalls, 1, 'a second disarm must not re-close')
 })
 
-test('a host without the page-channel dep stays a silent no-op (the opportunistic contract)', async (t) => {
+test('a host without the plugin-events dep stays a silent no-op (the opportunistic contract)', async (t) => {
   const h = harness(t, { subscribePluginGraph: undefined })
   assert.equal(h.channel.subscribeCalls, 0, 'no channel on this host: nothing is subscribed')
   assert.deepEqual(h.warns, [])
@@ -857,13 +857,14 @@ test('shell wiring lockstep: boot-entry disarm, settle-time arm gate, dispose di
   // id-local teardown barrier (design 09 §3.7 lifecycle).
   assert.match(source,
     /if \(predecessorHolder\?\.liveSync !== undefined\) \{\s*registerTeardownBarrier\(instanceId, predecessorHolder\.liveSync\.disarm\(\)\)/)
-  // Arm only for an answered graph, in normal mode, on a host whose page-channel
-  // subscribe dependency is present and the switch on, inside the settle path.
+  // Arm only for an answered graph, in normal mode, with an HMR transport present and the
+  // switch on, inside the settle path.
   assert.match(source,
-    /graphAnswered && !safeMode && installedModulesSystem !== null\s*&& readLiveSyncEnabled\(\) && pageChannelSubscribe !== null/)
-  // The SHELL binds its own instance identity to the page channel's pluginGraph topic.
+    /graphAnswered && !safeMode && installedModulesSystem !== null\s*&& readLiveSyncEnabled\(\) && pluginEventsSubscribe !== null/)
+  // The SHELL binds THIS instance's runtime ctx to its own pluginEvents stream
+  // (0.2.3-alpha.1 decision C: per-instance authenticated Remote stream, hmr-events.ts).
   assert.match(source,
-    /subscribePluginGraph: handlers => pageChannelSubscribe\(\{\s*family: 'pluginGraph',\s*instanceId,/)
+    /subscribePluginGraph: handlers => pluginEventsSubscribe\(liveCtx, handlers, options\.pluginEventsSeams\)/)
   // Disposal disarms through the same barrier.
   assert.match(source,
     /if \(holder\.liveSync !== undefined\) \{\s*registerTeardownBarrier\(instanceId, holder\.liveSync\.disarm\(\)\)/)
@@ -919,7 +920,7 @@ test('resync: a failed re-open warns and reports false; a later resync retries',
     },
   })
   assert.equal(h.sync.resync(), false, 'a throwing re-open must not claim success')
-  assert.ok(h.warns.some(message => message.includes('page-channel subscription failed')))
+  assert.ok(h.warns.some(message => message.includes('plugin-events subscription failed')))
   assert.equal(h.sync.resync(), true, 'the next resync retries the re-open')
   assert.equal(calls, 3)
 })

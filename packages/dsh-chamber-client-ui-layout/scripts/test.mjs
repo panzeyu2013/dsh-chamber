@@ -22,6 +22,7 @@ export const GROUPS = {
   // theme: the only document-level theme projection.
   theme: [
     'test/document-theme.test.ts',
+    'test/theme-presenter-lifecycle.test.ts',
   ],
   // frame: the frame's declared child seats (the chamber sidebar's window-chrome
   // occupant depends on 'shell.leading' being declared here).

@@ -13,6 +13,7 @@
     "src/client/rpc.ts",
     "src/loopback-hostname.ts",
     "src/recovery-config.ts",
-    "src/rpc.ts"
+    "src/rpc.ts",
+    "src/types.ts"
   ]
 }

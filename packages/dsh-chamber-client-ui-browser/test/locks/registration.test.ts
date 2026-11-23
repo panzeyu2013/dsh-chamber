@@ -52,7 +52,7 @@ function sha256(text: string): string {
 const UPSTREAM_VERBATIM: Readonly<Record<string, string>> = {
   'src/client/browser/BrowserNavigation.ts': '5f832a734641dce4d4442c58988f260a7cc5416c8ca2210e7fc6c26521d22ebc',
   'src/client/browser/BrowserPersistence.ts': '8eb0c5db55901a101df62a432ec377cd47dc14946407cc317396b5c8363ad245',
-  'src/client/browser/url.ts': 'd182addd84c9a8b080622012ded2176ce6b438f998f4d6b1de220e8bd93ca0f6',
+  'src/client/browser/url.ts': '2786182f1c3ace14f7fe2b27cf161951f830348563c45c45474548f1223e9bc2',
   'src/client/view/BrowserPresentation.ts': '49f421cab07c3e59c056263959af9420c51e5f2e8d753d1f2a0aea8ef0c33f17',
   'src/client/view/BrowserTitle.tsx': '52f0ca11ed86f31b488e165ebd4a5285fe8d45bda1916deb5bae1703491fb728',
   'src/client/view/Browser.module.css': 'b4acf8f453c9692ea66904c75237dc73153c4f15d2db228d751ea0c1ead54880',

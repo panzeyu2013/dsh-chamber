@@ -20,6 +20,9 @@ export const GROUPS = {
     'test/boot-tolerance.test.ts',
     'test/boot-rows.test.ts',
     'test/extra-chunk-owners.test.ts',
+    // alpha.1 staticModules manifest protocol: real seed against the boot runtime fixture.
+    { file: 'test/seed-manifest.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-loaders/test-client-web-register.mjs'] },
+    'test/boot-nctx-dispose.test.ts',
   ],
   // configureContext resolves the upstream module surface through the vendor register.
   context: [

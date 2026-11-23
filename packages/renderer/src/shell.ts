@@ -34,6 +34,7 @@ import {
 import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { collectExtraRows, failedIdsFromThrown, type CollectExtraRowsDeps, type ExtraModuleRow } from './host-graph.ts'
+import { installSyncedConfigSupply, type SyncedConfigValues } from './synced-config.ts'
 import {
   readLiveSyncEnabled, startLiveGraphSync,
   type LiveGraphSync, type LiveLoaderFace,
@@ -54,10 +55,11 @@ import {
   createPluginRefreshReloadGate,
   type PluginRefreshControl,
 } from './plugin-refresh-control.ts'
-// The page's ONE long connection (design 26). The shell binds its own instance identity
-// here; live-graph holds no stream URL and no reconnect ladder of its own.
-import { subscribePageChannel } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
-import { isPageChannelKeepaliveItem } from '@dsh-chamber/dsh-chamber-client-core/page-channel'
+// Per-instance client-plugin events over the authenticated Remote stream (0.2.3-alpha.1
+// decision C): the official HMR row is a covered skip, so the shell mounts its generated
+// `pluginEvents` contribution and follows it from THIS instance's ctx. The reconciler
+// (live-graph.ts) keeps consuming the same JSON frame texts.
+import { subscribeHmrPluginEvents, type HmrEventsSeams } from './hmr-events.ts'
 // Page-level machine catalog + the page-level instance client it reads through: pure
 // modules with no vendor/runtime links.
 import {
@@ -411,7 +413,7 @@ export function createChamberContextSetup(
 
 /**
  * One client-plugin graph resync for a mounted source: re-subscribe that shell's
- * page-channel `pluginGraph` topic so the host re-delivers the whole graph through the
+ * per-instance `pluginEvents` stream so the host re-delivers the whole graph through the
  * existing frame pipeline. The settings surface's retry action calls this for the
  * SELECTED source (which the caller may not own); no-op for an unknown/disarmed holder.
  * @returns true when a live subscription was reopened.
@@ -472,7 +474,7 @@ interface ShellHolder {
   lastState?: ShellState
   /** Live client-plugin graph sync (armed after settle, disarmed before any
    *  successor preload and inside disposeHolder). Absent = never armed (safe
-   *  mode, channel did not answer, kill switch, no page-channel dependency on this host). */
+   *  mode, graph did not answer, kill switch, no HMR transport on this host). */
   liveSync?: LiveGraphSync
 }
 
@@ -617,10 +619,12 @@ export function bootInstanceShell(
     /** Test seam: host-graph retry budget (attempts/delayMs/sleep). Production keeps
      *  the shipped 10×500ms window. */
     retry?: CollectExtraRowsDeps['retry']
-    /** Test seam: the page-channel subscribe face this shell binds to its own instance
-     *  id. Production uses the client-core module; an explicit `null` models a host with
-     *  no page channel (live sync stays off). */
-    pageChannelSubscribe?: typeof subscribePageChannel | null
+    /** Test seam: the per-instance `pluginEvents` subscriber this shell arms after a
+     *  settled boot. Production mounts the HMR client's generated Remote contribution;
+     *  an explicit `null` models a host with no HMR transport (live sync stays off). */
+    pluginEventsSubscribe?: typeof subscribeHmrPluginEvents | null
+    /** Test seam: the HMR contribution/snapshot-stream seams the bridge consumes. */
+    pluginEventsSeams?: HmrEventsSeams
   } = {},
 ): Promise<ShellState> {
   // perf 埋点：boot 入口（含全局队列排队；注册表见 perf-marks.ts）。
@@ -646,6 +650,9 @@ export function bootInstanceShell(
   let graphUnavailable: { kind: GraphGapKind; message: string } | null = null
   /** This boot's host graph ANSWERED (the only arm condition for live sync). */
   let graphAnswered = false
+  /** The covered rows' synced Config values captured before the merge drops those rows
+   *  (alpha.1 W4-0): the composite passes each covered plugin its per-field references. */
+  let coveredSyncedConfig: ReadonlyMap<string, SyncedConfigValues> = new Map()
   /** This boot ATTEMPTED the graph fetch (safe mode / module-system failure never do) — the
    *  settled `graphAnswered` fact is published only for an attempt, so a non-graph boot is not
    *  mistaken for a graph-less host. */
@@ -740,6 +747,9 @@ export function bootInstanceShell(
         ...(options.retry === undefined ? {} : { retry: options.retry }),
         onGraphUnavailable: (message, kind) => { if (mayPublish()) graphUnavailable = { kind, message } },
         onGraphAnswered: () => { graphAnswered = true },
+        // Covered rows' values must be captured before `dedupeCoveredRows` filters the rows
+        // out; this boot's composite mounts those plugins and needs THEIR values.
+        onCoveredConfig: (values) => { coveredSyncedConfig = values },
       })
       : Promise.resolve<ExtraModuleRow[]>([])
     // An eager different-id prefetch may reject while waiting for its global slot; run awaits it.
@@ -812,10 +822,28 @@ export function bootInstanceShell(
       // Bind instance facts to THIS entry instead of page globals: configureContext runs
       // synchronously before loader/plugin materialization. perf 埋点：boot 内核即将接管。
       perfMark(PERF_MARKS.shellEntryReady)
+      // Synced Config supply (alpha.1 W4-0): the covered rows' captured values plus the
+      // extra rows' wire values, published on THIS instance's ctx before any plugin
+      // materializes. The composite reads it for its covered `register` calls; the
+      // per-instance `internal/config` listener activates the extra rows.
+      const syncedConfigValues = new Map<string, SyncedConfigValues>(coveredSyncedConfig)
+      for (const row of extraRows) {
+        if (row.config !== undefined) syncedConfigValues.set(row.id, row.config)
+      }
+      const supply = {
+        values: syncedConfigValues,
+        extraRowIds: new Set(extraRows.map(row => row.id)),
+      }
+      const configureContextWithSyncedConfig = (
+        targetContext: Parameters<typeof configureContext>[0],
+      ): void => {
+        configureContext(targetContext)
+        installSyncedConfigSupply(targetContext, supply)
+      }
       const entry = new AppWebEntry(el, {
         loadBundle: loadModuleBundle,
         extraRows,
-        configureContext,
+        configureContext: configureContextWithSyncedConfig,
       })
       staleEntry = entry
       await entry.run()
@@ -898,18 +926,19 @@ export function bootInstanceShell(
       cancelledBoots.delete(instanceId)
       flushPendingOpens(instanceId)
       // Live client-plugin graph sync: armed only for a boot whose host graph ANSWERED,
-      // in normal mode, on a host whose page-channel subscribe dependency is present. The
-      // holder owns the subscription; a successor boot or disposal disarms it (see the
-      // boot-entry fence above and disposeHolder).
-      const pageChannelSubscribe = options.pageChannelSubscribe === undefined
-        ? subscribePageChannel
-        : options.pageChannelSubscribe
+      // in normal mode, with an HMR transport available. The holder owns the subscription;
+      // a successor boot or disposal disarms it (see the boot-entry fence above and
+      // disposeHolder).
+      const pluginEventsSubscribe = options.pluginEventsSubscribe === undefined
+        ? subscribeHmrPluginEvents
+        : options.pluginEventsSubscribe
       if (graphAnswered && !safeMode && installedModulesSystem !== null
-        && readLiveSyncEnabled() && pageChannelSubscribe !== null) {
+        && readLiveSyncEnabled() && pluginEventsSubscribe !== null) {
         // 机会性通道：arm 自身的失败绝不把已 settle 的 boot 变成失败。
         try {
-        const liveLoader = readLiveLoaderFace(entry.runtimeCtx)
-        if (liveLoader !== undefined) {
+        const liveCtx = entry.runtimeCtx
+        const liveLoader = readLiveLoaderFace(liveCtx)
+        if (liveLoader !== undefined && liveCtx !== undefined) {
           const modules = installedModulesSystem
           holder.liveSync = startLiveGraphSync({
             sourceId: instanceId,
@@ -930,16 +959,11 @@ export function bootInstanceShell(
             // instead of "mount but inactive" forever (boot-tolerance.ts owns the verdict).
             fiberIsTerminal: fiber => fiber?.state === FIBER_STATE.FAILED
               || fiber?.state === FIBER_STATE.DISPOSED || fiber?.state === FIBER_STATE.UNLOADING,
-            // The SHELL binds the instance identity: one page-channel pluginGraph topic for
-            // THIS instance. The channel owns the socket and every retry (design 26 §D4).
-            subscribePluginGraph: handlers => pageChannelSubscribe({
-              family: 'pluginGraph',
-              instanceId,
-              // keepalive（data 为空）只是传输活着的证据，不是插件图状态帧：不喂给对账器。
-              onItem: (event, data) => { if (!isPageChannelKeepaliveItem(event, data)) handlers.onItem(data) },
-              onOpen: () => { handlers.onOpen?.() },
-              onError: (code, message) => { handlers.onError?.(code, message) },
-            }),
+            // The SHELL binds THIS instance's runtime ctx: one authenticated
+            // `pluginEvents/follow` stream per shell, mounted from the HMR client's own
+            // generated Remote contribution and gated by remoteAccess (upstream's gate).
+            // The stream owns reconnection; this holder owns arm/disarm only.
+            subscribePluginGraph: handlers => pluginEventsSubscribe(liveCtx, handlers, options.pluginEventsSeams),
           })
         }
         } catch (error) {
