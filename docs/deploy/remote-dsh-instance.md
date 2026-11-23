@@ -14,7 +14,7 @@
 
 > **BrowserAuth 兼容性**：官方 dsh web profile 的宿主启用 browser-auth 门——每个 `/api` 请求与 `/api/remote.mux` 升级都必须携带启动期签发的签名 cookie，换取它的 launch token 只出现在宿主进程的启动输出里，桌面只在同机 spawn 时捕获、SSH 附着没有取得面。桌面经 SSH 的身份探测（`POST /api/session/canOpenWorkspacePath`）因此会得到 HTTP 401 并终态失败：裸 dsh 的 SSH 接入只适用于不带该门的远端部署（旧版本或其它不带该门的部署形态）。远端带门时请按 [deploy-gateway.md](./deploy-gateway.md) 部署 Gateway，并以 `gateway` 目标接入。
 
-1. 环境要求 — systemd Linux、Node.js 24.22.3+（或 26.13.1+；随 pin 的 dsh 运行期 engines）、chamber桌面机器对该服务器的SSH访问
+1. 环境要求 — systemd Linux、Node.js 满足 pin 的 dsh 运行期 `engines`（单源 = 仓库 `package.json` / `.nvmrc`；安装器与 CI 同判）、chamber桌面机器对该服务器的SSH访问
 （密钥认证；桌面经SSH驱动 `systemctl`）。
 2. 安装dsh（官方发行）：
 

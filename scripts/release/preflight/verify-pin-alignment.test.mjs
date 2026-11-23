@@ -1,5 +1,5 @@
 /**
- * verify-pin-alignment.mjs 的 CLI 级单测：正例 + 两个负向对照（payload 漂移 / vendor 缺失）。
+ * verify-pin-alignment.mjs 的 CLI 级单测：正例 + 五个负向对照（root engines 漂移 / .nvmrc 不满足 pin engines / workflow node-version 不一致 / payload 漂移 / vendor 缺失）。
  * fixture 是 /tmp 里的最小仓库树；脚本按自身位置解析 ROOT，因此整棵 fixture 自包含、不读本仓。
  */
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
