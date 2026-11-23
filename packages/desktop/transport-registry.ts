@@ -46,7 +46,9 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
   })
   /** Load the persisted instance set; a missing file is an empty set. */
   function loadInstances(): TransportInstanceSpec[] {
-    intentStore.beginLoad()
+    // NOTE: the intent mirror is cleared only by a SUCCESSFUL load (see below): a corrupt
+    // load throws with the previous registry rows kept, so clearing the per-session
+    // suppression first would leave those rows without their manual-disconnect memory.
     let parsed: unknown
     try {
       parsed = JSON.parse(readFileSync(instancesFile, 'utf8'))
@@ -63,6 +65,9 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
           // Drop-free successful load: the roster-incomplete bit clears too.
           state.incomplete = false
           state.droppedCount = 0
+          // An empty healthy set is still a successful load: the old generation's intent
+          // mirror no longer has rows to describe.
+          intentStore.beginLoad()
         }
         return listInstances()
       }
@@ -85,6 +90,9 @@ export function createTransportRegistry(deps: TransportRegistryDeps) {
       state.loadFailure = wrapped.message
       throw wrapped
     }
+    // The file parsed and passed the hard gates: this generation's intent mirror replaces
+    // the previous one before rows are observed into it.
+    intentStore.beginLoad()
     const dropped: unknown[] = []
     const seenIds = new Set<string>()
     let duplicates = 0

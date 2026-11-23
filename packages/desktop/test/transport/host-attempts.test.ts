@@ -395,8 +395,9 @@ test('wiring lock: sidecar reconciles after ready, host owns added rows, Swift i
   assert.ok(order.every(index => index >= 0), 'sidecar-entry must keep start/ready/reconcile/startup-tail anchors')
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'reconcile runs after the ready frame and before the startup tail (legacy branch covered)')
   const assembly = read('../../host-assembly.ts')
-  assert.ok(assembly.includes("onInstancesAdded: ids => { void runHostAttempts(hostAttemptDeps(), { kind: 'added', ids }) }"),
-    'authoritative additions route through the host attempt scheduler (registry stays timer-free)')
+  assert.ok(assembly.includes('onInstancesAdded: ids => {')
+    && assembly.includes("queueMicrotask(() => { void runHostAttempts(hostAttemptDeps(), { kind: 'added', ids }) })"),
+    'authoritative additions route through the host attempt scheduler, deferred past the save/publish transaction (registry stays timer-free)')
   assert.ok(assembly.includes('canAttempt: id => transportManager === null || !transportManager.connectionIntents().suppressed.has(id)'),
     'the internal attempt gate reads the single intent authority')
   // 会话身份单源：Swift 生成/注入 ↔ TS 常量/形状（跨语言锁步的源文本半）。

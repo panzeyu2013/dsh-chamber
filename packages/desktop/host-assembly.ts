@@ -358,7 +358,17 @@ export async function createHostAssembly(deps: HostAssemblyDeps): Promise<HostAs
     sshOrphanStateDir: stateRoot,
     instancesFile: instancesFilePath(runtimeBaseDir),
     // B：连接意图（行内 dshChamber 元数据）+ 内部尝试门 + 权威新增行对账钩子（added 波次）。
-    connectionIntent: { appSessionId: deps.appSessionId ?? null, onInstancesAdded: ids => { void runHostAttempts(hostAttemptDeps(), { kind: 'added', ids }) } },
+    connectionIntent: {
+      appSessionId: deps.appSessionId ?? null,
+      // Defer past the save transaction: the registry save runs the added hook synchronously
+      // inside commitSave, while the same transaction still has to invalidate old sessions and
+      // publish the committed roster. Starting an added row's verifyUp in that window races
+      // the session invalidation; one microtask lands after the synchronous transaction and
+      // its publish.
+      onInstancesAdded: ids => {
+        queueMicrotask(() => { void runHostAttempts(hostAttemptDeps(), { kind: 'added', ids }) })
+      },
+    },
     canAttempt: id => transportManager === null || !transportManager.connectionIntents().suppressed.has(id),
     logger: {
       log: (...args) => console.log('[transport-manager]', ...args),

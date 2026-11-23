@@ -97,9 +97,9 @@
     },
     {
       "path": "packages/desktop/host-assembly.ts",
-      "lines": 999,
+      "lines": 1009,
       "target": 991,
-      "note": "Composition root: exit leg and committed registry transition extracted (B4); the sm.onStatusChanged + sm.onVerified pair extracted as ONE factory to host-transport-subscriptions.ts (B4-2b) — registered synchronously at the composition root's original position, sharing registeredTargetKeys/registeredAuthFingerprints; the six shared closure states stay owned here and are injected. Per the historical budget review the \"must stay inline\" reading did not hold, so the FROZEN boundary is retired: lines lowered with the extraction and target lowered to the new accepted boundary (= the composition root that remains; no further extraction planned). Historical increments (git history): +12（P0-3）= 单一 hostKey guard 装配同时注入 transport manager 与 IPC ctx；+37（P2-1）= 启动 orphan sweep + sshOrphanStateDir/socketPath 的注册/session refresh/seed 探针/插件 sync 透传；+2（R2-A）= configureSshSocketNamespace；+4（2026-11）= HostAssemblyDeps.nativeBetaChannelSwitch（beta 更新通道能力门）。；宿主对账组装与 session 身份注入（注册收口净减 9）；目标 991 不变。合并后收尾 +37 = 续签 register 回调抽成 createRefreshRegisterLeg 工厂并补 fail-closed revoked 落定（与 subscriptions 的 handleAuthFailed 同序；wiring 用例覆盖）"
+      "note": "Composition root: exit leg and committed registry transition extracted (B4); the sm.onStatusChanged + sm.onVerified pair extracted as ONE factory to host-transport-subscriptions.ts (B4-2b) — registered synchronously at the composition root's original position, sharing registeredTargetKeys/registeredAuthFingerprints; the six shared closure states stay owned here and are injected. Per the historical budget review the \"must stay inline\" reading did not hold, so the FROZEN boundary is retired: lines lowered with the extraction and target lowered to the new accepted boundary (= the composition root that remains; no further extraction planned). Historical increments (git history): +12（P0-3）= 单一 hostKey guard 装配同时注入 transport manager 与 IPC ctx；+37（P2-1）= 启动 orphan sweep + sshOrphanStateDir/socketPath 的注册/session refresh/seed 探针/插件 sync 透传；+2（R2-A）= configureSshSocketNamespace；+4（2026-11）= HostAssemblyDeps.nativeBetaChannelSwitch（beta 更新通道能力门）。；宿主对账组装与 session 身份注入（注册收口净减 9）；目标 991 不变。合并后收尾 +37 = 续签 register 回调抽成 createRefreshRegisterLeg 工厂并补 fail-closed revoked 落定（与 subscriptions 的 handleAuthFailed 同序；wiring 用例覆盖）；+10 = 2026-11 residual cleanup: the authoritative added-row wave is deferred past the save/publish transaction (queueMicrotask wrapper + comment) so its verifyUp cannot race the same transaction session invalidation/roster push; review-justified raise."
     },
     {
       "path": "packages/desktop/host-transport-subscriptions.ts",
@@ -139,9 +139,9 @@
     },
     {
       "path": "packages/desktop/transport-registry.ts",
-      "lines": 281,
+      "lines": 289,
       "target": 200,
-      "note": "Persisted transport registry split out of transport-manager.ts (B2-1): load/save/list, corrupt-aside recovery, load-health state and the two write gates (degraded/incomplete compensation skip). Target 200 leaves room to lift the doc-shape validators into their own leaf. −3 = the connect doc comment that the split stranded above a return is gone (it moved back to connect).；意图单写/回填/补偿恢复/行修订（变更集抽取净减 9）；目标 200 不变"
+      "note": "Persisted transport registry split out of transport-manager.ts (B2-1): load/save/list, corrupt-aside recovery, load-health state and the two write gates (degraded/incomplete compensation skip). Target 200 leaves room to lift the doc-shape validators into their own leaf. −3 = the connect doc comment that the split stranded above a return is gone (it moved back to connect).；意图单写/回填/补偿恢复/行修订（变更集抽取净减 9）；目标 200 不变；+8 = 2026-11 residual cleanup: the intent mirror is cleared only after a successful parse (corrupt load throws with previous rows kept, so clearing first would strand their manual-disconnect memory); missing-file healthy path clears too; review-justified raise."
     },
     {
       "path": "packages/desktop/transport-link-loop.ts",
