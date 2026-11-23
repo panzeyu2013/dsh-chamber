@@ -2,7 +2,7 @@
  * verify-pin-alignment.mjs 的 CLI 级单测：正例 + 两个负向对照（payload 漂移 / vendor 缺失）。
  * fixture 是 /tmp 里的最小仓库树；脚本按自身位置解析 ROOT，因此整棵 fixture 自包含、不读本仓。
  */
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -98,6 +98,44 @@ test('verify-pin-alignment：fixture 正例 exit 0', () => {
     const result = run(root)
     assert.equal(result.status, 0, result.stderr + result.stdout)
     assert.match(result.stdout, /pin 对齐检查通过/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('verify-pin-alignment：node engines 单源漂移（根 package.json）→ exit 1', () => {
+  const root = fixture()
+  try {
+    write(root, 'package.json', JSON.stringify({ packageManager: 'pnpm@' + PNPM, engines: { node: '^9.0.0' } }))
+    const result = run(root)
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /node engines（根 package\.json）/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('verify-pin-alignment：.nvmrc 不满足 pin engines → exit 1', () => {
+  const root = fixture()
+  try {
+    write(root, '.nvmrc', '1.2.2\n')
+    const result = run(root)
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /\.nvmrc 不满足/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('verify-pin-alignment：workflow node-version 与 .nvmrc 不一致 → exit 1', () => {
+  const root = fixture()
+  try {
+    const ci = readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8')
+      .replace('node-version: 1.2.3', 'node-version: 1.2.2')
+    write(root, '.github/workflows/ci.yml', ci)
+    const result = run(root)
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /node-version ↔ \.nvmrc/u)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

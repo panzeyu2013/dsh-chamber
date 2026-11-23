@@ -391,9 +391,9 @@
     },
     {
       "path": "scripts/install-gateway.sh",
-      "lines": 3862,
+      "lines": 3872,
       "target": 3839,
-      "note": "FROZEN, no adjudicated target: one installer runbook (guided wizard + install/update/restart/status/uninstall + systemd/user unit emission + dsh anchor handling). A target needs an ops-surface decision (sourced phase modules vs one script); the row locks growth only so every new flag/phase is reviewed.；+23（2026-11，node 版本要求）= require_node_floor 从固定 ≥24.9 改为按 pin 住 dsh 运行期 engines 的区间（^24.22.3 || >=26.13.1）做 major.minor.patch 判定，外加 NODE_ENGINES_REQUIRED 常量与两种区间的诊断文案（release-justified raise；verify-pin-alignment 交叉校验该常量）"
+      "note": "FROZEN, no adjudicated target: one installer runbook (guided wizard + install/update/restart/status/uninstall + systemd/user unit emission + dsh anchor handling). A target needs an ops-surface decision (sourced phase modules vs one script); the row locks growth only so every new flag/phase is reviewed.；+23（2026-11，node 版本要求）= require_node_floor 从固定 ≥24.9 改为按 pin 住 dsh 运行期 engines 的区间（^24.22.3 || >=26.13.1）做 major.minor.patch 判定，外加 NODE_ENGINES_REQUIRED 常量与两种区间的诊断文案（release-justified raise；verify-pin-alignment 交叉校验该常量）；+10（同批 review 收口）= node 区间改为**逐子句解析自 NODE_ENGINES_REQUIRED**（不再硬编码 24/22/3/26/13/1），换 pin 只改常量；区间行为由安装器边界测试矩阵锁定"
     },
     {
       "path": "packages/desktop/active-registration.ts",

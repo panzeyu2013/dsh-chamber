@@ -535,7 +535,7 @@ Gateway state 与 dsh `$DSH_HOME` 分离；store 只拥有凭据与 state 根租
 | 网络策略 | 目标网段限制槽位 | host/端口/loopback 白名单 | 每连接网段限制字段 |
 | 审计 | 本地审计日志（集成轻量版） | 连接/认证事件 | 设置页只读入口（可选） |
 ## 15. 包、CI 与发布
-`@dsh-chamber/gateway` 构建为 `dist/index.js` 与带 shebang 的 `dist/cli.js`；package export 不指向源码 TypeScript。根脚本包含 `build:gateway`、`typecheck:gateway`、`test:gateway`。 **Node 下限跟随 pin 的 dsh 运行期 `engines`**（下限跟随 pin 的 dsh 运行期 `engines`；单一来源是运行期锁里那句 `engines`，本包 `engines` 与安装器 `preflight` 同批对齐并判到 minor）：产物语法目标（esbuild `node22`）只约束编译产物，是另一条轴，不设运行下限。
+`@dsh-chamber/gateway` 构建为 `dist/index.js` 与带 shebang 的 `dist/cli.js`；package export 不指向源码 TypeScript。根脚本包含 `build:gateway`、`typecheck:gateway`、`test:gateway`。 **Node 下限跟随 pin 的 dsh 运行期 `engines`**（单一来源 = 上游 pin 树根 `package.json` 的 `engines.node`；本包 `engines`、安装器 `NODE_ENGINES_REQUIRED` 与 `.nvmrc`/CI 同批对齐，安装器按 major.minor.patch 精确判定两个区间；`scripts/release/preflight/verify-pin-alignment.mjs` 交叉校验该单源）：产物语法目标（esbuild `node22`）只约束编译产物，是另一条轴，不设运行下限。
 
 运行时版本管理（design 18 §9）：`@dsh-chamber/dsh-runtime` 以 workspace devDependency 经 `packages/gateway/scripts/build.mjs` 与 control-plane 一起打入 `dist/`；gateway 另新增钉版本运行时依赖 `pnpm`（版本单源 = 根 `package.json` 的 `packageManager`；与 desktop 同源，design 18 §9.2 D1）。pack/install smoke 必须覆盖 pnpm 依赖安装成功与 `gateway --help`。gateway 不再打包任何客户端插件； gateway 不再产出 `host-packages/`，也没有任何 packaged client plugin（seed 只来自桌面同步）。
 

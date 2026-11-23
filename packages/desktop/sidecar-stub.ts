@@ -15,8 +15,8 @@
  *   - spawned by the Swift BridgeClient as `node sidecar-stub.ts
  *     --instances <path>`; desktop package.json "type":"module" → this file
  *     is ESM; type annotations are erasable-only, so it runs directly under
- *     Node ≥22 type stripping (repo engines ≥24; on Node 22.6–22.17 pass
- *     --experimental-strip-types).
+ *     Node type stripping (runtime floor = the repo package.json engines, the
+ *     single source; older Node 22.6–22.17 needed --experimental-strip-types).
  *   - stdout is the NDJSON protocol stream and NOTHING else. console.log and
  *     console.info write to stdout in Node and are therefore forbidden here;
  *     every log line goes through console.error (stderr), which the Swift

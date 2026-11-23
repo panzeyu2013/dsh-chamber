@@ -3,6 +3,8 @@
 > 一键安装脚本 `scripts/install-gateway.sh`（交互向导/非交互）；子命令install / update / restart / status / logs / uninstall。
 >
 > 文档地图：[docs/INDEX.md](../INDEX.md)；阶段矩阵与门禁入口：[docs/checklists/README.md](../checklists/README.md)。
+>
+> **前置**：Node.js 满足 pin 住 dsh 运行期的 engines 区间（单源 = 仓库 `package.json` 的 `engines.node`；安装器 `require_node_floor` 按同一常量逐子句判定，区间外拒绝并报真数），以及 systemd Linux 主机（或安装器支持的 `--user` 形态）。
 
 ## 1. 快速开始
 

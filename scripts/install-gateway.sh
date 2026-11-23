@@ -152,21 +152,31 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # node 下限是 install 与 update 的共用前置：由 pin 住的 dsh 运行期 package 自己的
 # engines 决定（design 17 §15 / design 18 §9），不是本脚本或 CI 的工具链版本。
 # 在低于下限的 node 上 pnpm 仍会把运行期装好，然后在 dsh 启动处才失败——所以按
-# major.minor.patch 精确判定，与 NODE_ENGINES_REQUIRED 的两种区间逐一比较并报真数。
+# major.minor.patch 精确判定。区间**逐子句解析自 NODE_ENGINES_REQUIRED**（单一来源；
+# 支持本 pin 用到的 `^x.y.z` 与 `>=x.y.z` 两种子句），换 pin 只改该常量。
 # 产物语法目标（esbuild node22）是另一条轴：只约束编译产物，不设运行下限。
 node_matches_required_engines() {
-  local major="$1" minor="$2" patch="$3"
-  # ^24.22.3 ⇒ 24.x >= 24.22.3（24.0–24.22.2 拒绝）
-  if (( major == 24 )); then
-    (( minor > 22 || (minor == 22 && patch >= 3) ))
-    return
-  fi
-  # >=26.13.1 ⇒ 26.x >= 26.13.1 或 major > 26（25.x、26.0–26.12 拒绝）
-  if (( major > 26 )); then return 0; fi
-  if (( major == 26 )); then
-    (( minor > 13 || (minor == 13 && patch >= 1) ))
-    return
-  fi
+  local major="$1" minor="$2" patch="$3" clause
+  local cmajor cminor cpatch
+  local IFS=$'\n'
+  for clause in ${NODE_ENGINES_REQUIRED//'||'/$'\n'}; do
+    clause="${clause#${clause%%[![:space:]]*}}"
+    clause="${clause%${clause##*[![:space:]]}}"
+    if [[ "$clause" =~ ^\^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+      cmajor="${BASH_REMATCH[1]}"; cminor="${BASH_REMATCH[2]}"; cpatch="${BASH_REMATCH[3]}"
+      # ^x.y.z ⇒ 同 major 且 >= x.y.z
+      if (( major == cmajor )) && (( minor > cminor || (minor == cminor && patch >= cpatch) )); then
+        return 0
+      fi
+    elif [[ "$clause" =~ ^\>=([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+      cmajor="${BASH_REMATCH[1]}"; cminor="${BASH_REMATCH[2]}"; cpatch="${BASH_REMATCH[3]}"
+      # >=x.y.z ⇒ 任一 major > x，或同 major 且 >= x.y.z
+      if (( major > cmajor )) || (( major == cmajor && minor > cminor )) \
+        || (( major == cmajor && minor == cminor && patch >= cpatch )); then
+        return 0
+      fi
+    fi
+  done
   return 1
 }
 
