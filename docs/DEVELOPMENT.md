@@ -37,7 +37,7 @@ Git worktree由chamber-bundled client插件与每实例内host插件配对（P5b
 
 ### 2.1 要求
 
-- Node.js 24+（推荐LTS；TypeScript源码经Node原生类型擦除直接运行，见 `.nvmrc`）
+- Node.js `^24.22.3 || >=26.13.1`（engines 单源 = `package.json`；`.nvmrc` 与 CI 镜像同一版本；TypeScript 源码经 Node 原生类型擦除直接运行）
 - macOS + Swift/Xcode：`build:swift-app` / `test:swift` 是现行出货链路，必须可构建（parity 门可用 `DSH_CHAMBER_SWIFT_PARITY_SKIP=1` 显式跳过）
 - pnpm≥11（包管理器；锁文件 `pnpm-lock.yaml`）；git
 - 发布链另需五项 Apple/Developer ID 凭据（缺项 fail-closed，见发布 checklist）

@@ -38,7 +38,7 @@ Package responsibilities, boundaries and constraints have one home: root [`AGENT
 
 ### 2.1 Requirements
 
-- Node.js 24+ (LTS recommended; TypeScript sources run natively via Node type stripping, see `.nvmrc`)
+- Node.js `^24.22.3 || >=26.13.1` (single source = `package.json` engines; `.nvmrc` and CI mirror the same version; TypeScript sources run natively via Node type stripping)
 - macOS + Swift/Xcode: `build:swift-app` / `test:swift` are the shipped build chain and must work (the parity gate can be skipped explicitly with `DSH_CHAMBER_SWIFT_PARITY_SKIP=1`)
 - pnpm≥11 (package manager; lockfile `pnpm-lock.yaml`); git
 - Release chain additionally needs five Apple/Developer ID credentials (fail-closed when missing; see the release checklist)

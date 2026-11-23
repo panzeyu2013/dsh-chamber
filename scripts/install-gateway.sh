@@ -73,6 +73,11 @@ umask 077
 # 可经 /chamber/runtime 切换，此常量仅决定本脚本安装的锚版本。
 # ---------------------------------------------------------------------------
 DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.2.3-alpha.2}"
+# node 下限 = pin 住的 dsh 运行期 package 的 engines（design 17 §15 / design 18 §9），
+# 不是本脚本/CI 的工具链版本。本常量必须与 pin 同批移动；verify-pin-alignment 校验它与
+# 上游 pin 树 engines 一致。install 与 update 共用同一判定（含 major/minor/patch，
+# ^24.22.3 拒绝 24.0–24.22.2、>=26.13.1 拒绝 25.x 与 26.0–26.12）。
+NODE_ENGINES_REQUIRED="^24.22.3 || >=26.13.1"
 GITHUB_REPO="${DSH_CHAMBER_GITHUB_REPO:-panzeyu2013/dsh-chamber}"
 BASE_DIR="${DSH_CHAMBER_BASE_DIR:-${HOME:?HOME 环境变量未设置（可用 DSH_CHAMBER_BASE_DIR 指定安装位置）}/.dsh-chamber}"
 # 从自复制位置反推 BASE_DIR：install_self 把本脚本复制到
@@ -144,20 +149,38 @@ die()  { spinner_stop; if [[ -t 2 ]]; then printf '\033[1;31m[gateway]\033[0m %s
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# node 下限是 install 与 update 的共用前置（下限由 pin 住的 dsh 运行期包自己的 `engines`
-# 决定：design 17 §15 / design 18 §9，不是本脚本或 CI 的工具链版本）。node 22/23 与
-# 24.0–24.8 上 pnpm 仍会把运行期装好，然后在 dsh 启动处才失败——所以判到 minor 并报真数。
+# node 下限是 install 与 update 的共用前置：由 pin 住的 dsh 运行期 package 自己的
+# engines 决定（design 17 §15 / design 18 §9），不是本脚本或 CI 的工具链版本。
+# 在低于下限的 node 上 pnpm 仍会把运行期装好，然后在 dsh 启动处才失败——所以按
+# major.minor.patch 精确判定，与 NODE_ENGINES_REQUIRED 的两种区间逐一比较并报真数。
 # 产物语法目标（esbuild node22）是另一条轴：只约束编译产物，不设运行下限。
+node_matches_required_engines() {
+  local major="$1" minor="$2" patch="$3"
+  # ^24.22.3 ⇒ 24.x >= 24.22.3（24.0–24.22.2 拒绝）
+  if (( major == 24 )); then
+    (( minor > 22 || (minor == 22 && patch >= 3) ))
+    return
+  fi
+  # >=26.13.1 ⇒ 26.x >= 26.13.1 或 major > 26（25.x、26.0–26.12 拒绝）
+  if (( major > 26 )); then return 0; fi
+  if (( major == 26 )); then
+    (( minor > 13 || (minor == 13 && patch >= 1) ))
+    return
+  fi
+  return 1
+}
+
 require_node_floor() {
-  have node || die "缺少 node(≥24.9):gateway 运行依赖 node,请先安装(https://nodejs.org)"
-  local node_ver node_major node_minor
+  have node || die "缺少 node（需要 ${NODE_ENGINES_REQUIRED}）：gateway 运行依赖 node，请先安装（https://nodejs.org）"
+  local node_ver node_major node_minor node_patch
   node_ver=$(node --version 2>/dev/null || true)
   node_major=$(printf '%s' "$node_ver" | sed 's/^v\([0-9][0-9]*\).*/\1/' || true)
   node_minor=$(printf '%s' "$node_ver" | sed 's/^v[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/' || true)
-  [[ "$node_major" =~ ^[0-9]+$ && "$node_minor" =~ ^[0-9]+$ ]] \
-    || die "无法解析 node 版本：${node_ver:-未知}（需要 ≥24.9，https://nodejs.org）"
-  (( node_major > 24 || (node_major == 24 && node_minor >= 9) )) \
-    || die "node 版本过低：${node_ver}，需要 ≥24.9（pin 住的 dsh 运行期要求；https://nodejs.org）"
+  node_patch=$(printf '%s' "$node_ver" | sed 's/^v[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/' || true)
+  [[ "$node_major" =~ ^[0-9]+$ && "$node_minor" =~ ^[0-9]+$ && "$node_patch" =~ ^[0-9]+$ ]] \
+    || die "无法解析 node 版本：${node_ver:-未知}（需要 ${NODE_ENGINES_REQUIRED}，https://nodejs.org）"
+  node_matches_required_engines "$node_major" "$node_minor" "$node_patch" \
+    || die "node 版本不满足 pin 住的 dsh 运行期要求：${node_ver}（需要 ${NODE_ENGINES_REQUIRED}；https://nodejs.org）"
 }
 
 # Indirect assignment without eval. Interactive values include passwords,
@@ -944,7 +967,7 @@ verify_offline_tgz() {
 
 # 拉取 GitHub Releases 全部可用版本（最新在前，最多 100 个）写入 RELEASE_LIST：
 #   每行 <版本>|<预发布:0/1>|<有gateway资产:0/1>|<发布日期>，仅收录 canonical SemVer。
-# 用 node 解析（preflight 已保证 node ≥24.9），
+# 用 node 解析（preflight 已保证 node 满足 NODE_ENGINES_REQUIRED），
 # 对 GitHub 的美化（多行缩进）与压缩 JSON 都健壮（release 之间是 '},  {' 带缩进
 # 格式）。成功且非空返回 0；网络失败或
 # 无合法版本返回 1（调用方决定报错或回退手动输入）。

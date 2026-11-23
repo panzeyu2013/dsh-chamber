@@ -8,6 +8,9 @@
  *     scripts/primary-runtime/lock.json（上游 pin 锁；targets 允许收窄到本仓出货平台）
  *   - 根 package.json packageManager（pnpm 声明单源）↔ desktop/gateway dependencies.pnpm、
  *     bundle-dsh BUNDLE_PNPM_VERSION、.github/workflows/*.yml 的 pnpm/action-setup version
+ *   - node engines（根 package.json / gateway package.json / scripts/install-gateway.sh 的
+ *     NODE_ENGINES_REQUIRED）↔ 上游 pin 树根 package.json 的 engines.node（单一源）；
+ *     .nvmrc、CI workflow 的 node-version 与 payload nodeVersion 必须落在该区间内
  *   - packages/desktop/vendor/dsh/pnpm-lock.yaml（dsh 运行时线单源）↔ bundle-dsh 兜底常量、
  *     release.yml env、install-gateway.sh 默认值、gateway dshAnchorVersion（vendor/dsh/
  *     package.json 存在时再交叉校验）
@@ -107,6 +110,53 @@ for (const file of readdirSync(join(ROOT, '.github/workflows')).filter((name) =>
 rows.push({ item: 'pnpm（workflow action-setup 镜像数）', repo: String(workflowSites.length), upstream: '>0', ok: workflowSites.length > 0 })
 if (workflowSites.length === 0) problems.push('未找到任何 pnpm/action-setup version 镜像——workflow 解析失配')
 for (const site of workflowSites) check('pnpm ↔ ' + site.file, pnpmVersion, site.version)
+
+// --- node engines：pin 的 node 下限（单一源 = 上游 pin 树根 engines） --------
+/** 解析 semver（忽略 v 前缀与预发布以外的后缀）。 */
+function parseVersion(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/u.exec(String(value ?? ''))
+  return match === null ? null : [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+/** 三元素版本比较。 */
+function compareVersion(a, b) {
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] < b[index] ? -1 : 1
+  }
+  return 0
+}
+/** 只接受本仓 pin 用到的区间形状：`^x.y.z || >=a.b.c`（未知子句即不满足）。 */
+function satisfiesEngines(version, range) {
+  const parsed = parseVersion(version)
+  if (parsed === null || typeof range !== 'string') return false
+  return range.split('||').map((clause) => clause.trim()).some((clause) => {
+    const caret = /^\^(\d+)\.(\d+)\.(\d+)$/u.exec(clause)
+    if (caret !== null) {
+      return parsed[0] === Number(caret[1]) && compareVersion(parsed, [Number(caret[1]), Number(caret[2]), Number(caret[3])]) >= 0
+    }
+    const gte = /^>=(\d+)\.(\d+)\.(\d+)$/u.exec(clause)
+    if (gte !== null) return compareVersion(parsed, [Number(gte[1]), Number(gte[2]), Number(gte[3])]) >= 0
+    return false
+  })
+}
+const upstreamEngines = jsonOf('vendor/harness-checkout/package.json')?.engines?.node
+check('node engines（根 package.json）↔ 上游 pin 树', rootPkg?.engines?.node, upstreamEngines)
+check('node engines（gateway package.json）↔ 上游 pin 树', jsonOf('packages/gateway/package.json')?.engines?.node, upstreamEngines)
+const installerFloor = /^NODE_ENGINES_REQUIRED="([^"]+)"/mu.exec((linesOf('scripts/install-gateway.sh') ?? []).join('\n'))?.[1]
+check('node engines（install-gateway NODE_ENGINES_REQUIRED）↔ 上游 pin 树', installerFloor, upstreamEngines)
+const nvmrcVersion = (linesOf('.nvmrc') ?? []).map((line) => line.trim()).find((line) => line !== '') ?? ''
+rows.push({ item: '.nvmrc 满足 engines', repo: nvmrcVersion || '(missing)', upstream: String(upstreamEngines), ok: satisfiesEngines(nvmrcVersion, upstreamEngines) })
+if (!satisfiesEngines(nvmrcVersion, upstreamEngines)) problems.push('.nvmrc 不满足 pin 的 node engines: ' + nvmrcVersion + ' ∉ ' + upstreamEngines)
+const payloadNode = lock?.nodeVersion
+rows.push({ item: 'payload nodeVersion 满足 engines', repo: String(payloadNode), upstream: String(upstreamEngines), ok: satisfiesEngines(payloadNode, upstreamEngines) })
+if (!satisfiesEngines(payloadNode, upstreamEngines)) problems.push('primary-runtime-lock nodeVersion 不满足 pin 的 node engines: ' + String(payloadNode))
+const nodeVersionSites = []
+for (const file of readdirSync(join(ROOT, '.github/workflows')).filter((name) => /\.ya?ml$/u.test(name)).sort()) {
+  const text = (linesOf('.github/workflows/' + file) ?? []).join('\n')
+  for (const match of text.matchAll(/node-version:\s*([^\s#]+)/gu)) nodeVersionSites.push({ file, version: match[1] })
+}
+rows.push({ item: 'node-version（workflow 镜像数）', repo: String(nodeVersionSites.length), upstream: '>0', ok: nodeVersionSites.length > 0 })
+if (nodeVersionSites.length === 0) problems.push('未找到任何 workflow node-version 镜像')
+for (const site of nodeVersionSites) check('node-version ↔ .nvmrc（' + site.file + '）', site.version, nvmrcVersion)
 
 // --- dsh 运行时线：锁单源 + 六锚 -------------------------------------------
 const vendorLockText = (linesOf('packages/desktop/vendor/dsh/pnpm-lock.yaml') ?? []).join('\n')

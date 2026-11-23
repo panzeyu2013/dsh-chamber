@@ -1,7 +1,7 @@
 # dsh-chamber
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
-[![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-brightgreen)]()
+[![Node.js 24.22.3+](https://img.shields.io/badge/Node.js-24.22.3%2B-brightgreen)]()
 [![Release](https://img.shields.io/github/v/release/panzeyu2013/dsh-chamber?include_prereleases&label=release)](https://github.com/panzeyu2013/dsh-chamber/releases)
 [![Downloads](https://img.shields.io/github/downloads/panzeyu2013/dsh-chamber/total)](https://github.com/panzeyu2013/dsh-chamber/releases)
 

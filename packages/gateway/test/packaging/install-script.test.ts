@@ -755,7 +755,7 @@ test('update re-bakes the local launcher with the node it runs under', () => {
   mkdirSync(bin, { recursive: true })
   const realNode = process.execPath
   writeFileSync(join(bin, 'node'), `#!/usr/bin/env bash
-if [[ "\${1:-}" == "--version" ]]; then printf '%s\\n' 'v24.9.0'; exit 0; fi
+if [[ "\${1:-}" == "--version" ]]; then printf '%s\\n' 'v24.22.3'; exit 0; fi
 exec '${realNode}' "$@"
 `, { mode: 0o755 })
   const oldTree = join(base, 'gateway', 'versions', '1.0.0')
@@ -808,7 +808,7 @@ test('update refuses to start below the pinned node floor without touching the t
   const base = mkdtempSync(join(tmpdir(), 'gateway-installer-update-floor-'))
   const bin = join(base, 'node-bin')
   mkdirSync(bin, { recursive: true })
-  writeFileSync(join(bin, 'node'), '#!/usr/bin/env bash\nprintf \'%s\\n\' \'v24.8.0\'\n', { mode: 0o755 })
+  writeFileSync(join(bin, 'node'), '#!/usr/bin/env bash\nprintf \'%s\\n\' \'v24.22.2\'\n', { mode: 0o755 })
   const oldTree = join(base, 'gateway', 'versions', '1.0.0')
   try {
     writeGatewayTree(oldTree, '1.0.0')
@@ -835,7 +835,7 @@ resolve_version() { printf 'resolved\\n' > "$BASE_DIR/resolved-input"; VERSION="
 cmd_update
 `, { DSH_CHAMBER_BASE_DIR: base, PATH: `${bin}:${process.env.PATH ?? ''}` })
     assert.notEqual(result.status, 0, 'a node below the pinned floor must stop the update')
-    assert.match(`${result.stdout}${result.stderr}`, /需要 ≥24\.9/u)
+    assert.match(`${result.stdout}${result.stderr}`, /24\.22\.3/u)
     assert.equal(existsSync(join(base, 'resolved-input')), false, 'the floor must bite before the version resolves')
     assert.equal(readlinkSync(join(base, 'gateway', 'current')), oldTree, 'a refused update must not move the pointer')
   } finally {
@@ -1063,9 +1063,10 @@ test('the host-safe stub really intercepts a bare systemctl from a harness body'
     'the injected stub must intercept the installer\'s bare systemctl call')
 })
 
-test('require_node_floor gates on the pinned dsh engine floor (major.minor)', () => {
-  // The floor follows the pinned dsh runtime engines (design 17 §15), so the check must bite
-  // BELOW 24.9 even when the major is current — a major-only test would pass Node 24.0.
+test('require_node_floor gates on the exact pinned dsh engine range (major.minor.patch)', () => {
+  // The floor follows the pinned dsh runtime engines (design 17 §15): the pinned engine range is
+  // ^24.22.3 || >=26.13.1, so 24.x below 24.22.3, 25.x and 26.0-26.12 must be refused while
+  // 24.22.3 / 26.13.1 / 27+ pass. A major-only check would let Node 24.0 and 26.0 through.
   const dir = mkdtempSync(join(tmpdir(), 'gateway-node-floor-'))
   const bin = join(dir, 'bin')
   mkdirSync(bin, { recursive: true })
@@ -1074,20 +1075,37 @@ test('require_node_floor gates on the pinned dsh engine floor (major.minor)', ()
   }
   const path = `${bin}:${process.env.PATH ?? ''}`
   const runFloor = () => runLibraryResult('require_node_floor', { PATH: path })
+  const refused = ['v24.8.9', 'v24.22.2', 'v22.22.3', 'v25.1.0', 'v26.12.9']
+  const accepted = ['v24.22.3', 'v26.13.1', 'v27.0.0']
   try {
-    fakeNode('v24.8.9')
-    const below = runFloor()
-    assert.notEqual(below.status, 0, 'Node 24.8 must be refused: the floor is 24.9, not 24')
-    assert.match(below.stderr, /需要 ≥24\.9/u)
-    fakeNode('v22.22.3')
-    assert.notEqual(runFloor().status, 0, 'Node 22 must be refused')
-    fakeNode('v24.9.0')
-    const floor = runFloor()
-    assert.equal(floor.status, 0, floor.stderr)
-    fakeNode('v25.1.0')
-    assert.equal(runFloor().status, 0, 'a newer major is accepted')
+    for (const version of refused) {
+      fakeNode(version)
+      const result = runFloor()
+      assert.notEqual(result.status, 0, `${version} must be refused by the pinned node engine range`)
+      assert.match(result.stderr, /\^24\.22\.3 \|\| >=26\.13\.1/u, `${version}: the diagnostic must state the pinned range`)
+    }
+    for (const version of accepted) {
+      fakeNode(version)
+      const result = runFloor()
+      assert.equal(result.status, 0, `${version} must be accepted: ${result.stderr}`)
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the installer node floor constant matches the gateway engines and the upstream pin engines', () => {
+  // Single source = the pinned dsh runtime engines (upstream vendor tree); the gateway package and
+  // the standalone installer must both mirror it. verify-pin-alignment checks the same tuple at
+  // release time; this contract test keeps the installer from drifting silently in PRs.
+  const constant = /^NODE_ENGINES_REQUIRED="([^"]+)"/mu.exec(source)?.[1]
+  assert.equal(constant, '^24.22.3 || >=26.13.1', 'installer node floor constant is missing or drifted')
+  const gatewayPkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8'))
+  assert.equal(gatewayPkg.engines?.node, constant, 'gateway package engines must equal the installer floor')
+  const upstreamPath = fileURLToPath(new URL('../../../../vendor/harness-checkout/package.json', import.meta.url))
+  if (existsSync(upstreamPath)) {
+    const upstreamPkg = JSON.parse(readFileSync(upstreamPath, 'utf8'))
+    assert.equal(upstreamPkg.engines?.node, constant, 'installer floor must equal the pinned dsh runtime engines')
   }
 })
 

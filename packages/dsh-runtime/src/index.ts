@@ -1,6 +1,6 @@
 /**
  * @dsh-chamber/dsh-runtime — the shared, host-agnostic dsh runtime version management core.
- * Pure Node 22+, no Electron/IPC/control-plane dependency; desktop and gateway adapt it
+ * Pure Node (no Electron/IPC/control-plane dependency; the runtime floor is the root package engines); desktop and gateway adapt it
  * through the real DI seams `StartupDeps`/`ApplyDeps`/`InstallerDeps` (+ `ControllerDeps`).
  *
  * The entry is an EXPLICIT named surface, never a wholesale barrel:

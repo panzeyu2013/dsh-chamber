@@ -17,7 +17,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
-    "node": ">=24.9.0"
+    "node": "^24.22.3 || >=26.13.1"
   },
   "publishConfig": {
     "access": "public"

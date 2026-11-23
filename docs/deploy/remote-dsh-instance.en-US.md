@@ -9,7 +9,7 @@ The remote server only needs the dsh API-side web profile on loopback — no web
 
 > **BrowserAuth compatibility**: the official dsh web profile's Host enforces a browser-auth gate — every `/api` request and `/api/remote.mux` upgrade must carry a signed cookie minted from a launch token that appears only in the Host process's startup output, and the desktop captures that token only from a same-machine spawn — an SSH attach has no retrieval surface. The desktop's SSH identity probe (`POST /api/session/canOpenWorkspacePath`) therefore ends with HTTP 401 and a terminal failure: bare-dsh SSH attach works only for an ungated remote deployment (an older version or another deployment shape without the gate). For a gated remote, deploy the Gateway per [deploy-gateway.md](./deploy-gateway.md) and attach it as a `gateway` target.
 
-1. Requirements — a systemd Linux host, Node.js 22+, and SSH access from the chamber-desktop
+1. Requirements — a systemd Linux host, Node.js 24.22.3+ (or 26.13.1+; follows the pinned dsh runtime engines), and SSH access from the chamber-desktop
 machine (key auth; the desktop drives `systemctl` over SSH).
 2. Install dsh (official release):
 

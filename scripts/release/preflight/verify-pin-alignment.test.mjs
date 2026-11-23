@@ -16,6 +16,9 @@ const PIN = 'a'.repeat(40)
 const DSH = '7.7.7'
 const PNPM = '9.9.9'
 const KIT = '0.1.5'
+// The fixture's payload node（1.2.3）must satisfy the node engines single source; the
+// production range shape is ^x.y.z || >=a.b.c（see package.json / install-gateway.sh）。
+const ENGINES = '^1.2.3 || >=3.0.0'
 
 const macTarget = {
   nodeArchive: 'darwin-arm64.tar.gz',
@@ -59,18 +62,22 @@ function fixture() {
   write(root, 'harness.commit', '# pinned upstream\n' + PIN + '\n')
   write(root, 'packages/desktop/primary-runtime-lock.json', JSON.stringify(lock, null, 2))
   write(root, 'vendor/harness-checkout/scripts/primary-runtime/lock.json', JSON.stringify(upstreamLock, null, 2))
-  write(root, 'package.json', JSON.stringify({ packageManager: 'pnpm@' + PNPM }))
+  write(root, 'package.json', JSON.stringify({ packageManager: 'pnpm@' + PNPM, engines: { node: ENGINES } }))
+  write(root, '.nvmrc', '1.2.3\n')
   write(root, 'packages/desktop/package.json', JSON.stringify({ dependencies: { pnpm: PNPM } }))
-  write(root, 'packages/gateway/package.json', JSON.stringify({ dependencies: { pnpm: PNPM }, dshAnchorVersion: DSH }))
+  write(root, 'packages/gateway/package.json', JSON.stringify({ dependencies: { pnpm: PNPM }, dshAnchorVersion: DSH, engines: { node: ENGINES } }))
+  write(root, 'vendor/harness-checkout/package.json', JSON.stringify({ engines: { node: ENGINES } }))
   write(root, 'packages/desktop/scripts/bundle-dsh.mjs',
     "const BUNDLE_PNPM_VERSION = '" + PNPM + "';\nfunction lockfileDshVersion() {\n  return '" + DSH + "';\n}\n")
   write(root, 'packages/desktop/vendor/dsh/pnpm-lock.yaml',
     "'@deepseek-ai/dsh':\n        specifier: " + DSH + "\n" + kitLines + "\n")
   write(root, '.github/workflows/ci.yml',
-    '- uses: pnpm/action-setup@' + 'f'.repeat(40) + '\n        with:\n          version: ' + PNPM + '\n')
+    'jobs:\n  test:\n    steps:\n      - uses: actions/setup-node@' + 'a'.repeat(40) + '\n        with:\n          node-version: 1.2.3\n'
+    + '      - uses: pnpm/action-setup@' + 'f'.repeat(40) + '\n        with:\n          version: ' + PNPM + '\n')
   write(root, '.github/workflows/release.yml', 'env:\n  DSH_CHAMBER_DSH_VERSION: ' + DSH + '\n')
   write(root, 'scripts/install-gateway.sh',
-    'DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-' + DSH + '}"\n')
+    'DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-' + DSH + '}"\n'
+    + 'NODE_ENGINES_REQUIRED="' + ENGINES + '"\n')
   write(root, 'vendor/harness-checkout/apps/cli/package.json', JSON.stringify({ name: '@deepseek-ai/dsh', version: DSH }))
   write(root, 'vendor/harness-checkout/pnpm-lock.yaml', kitLines + '\n')
   mkdirSync(path.join(root, 'scripts', 'release', 'preflight'), { recursive: true })
