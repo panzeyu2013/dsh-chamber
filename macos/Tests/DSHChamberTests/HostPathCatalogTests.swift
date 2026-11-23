@@ -824,10 +824,15 @@ final class HostPathCatalogTests: XCTestCase {
                       "the dispatch must feed the dispatched activation fact into the derivation")
         XCTAssertTrue(dispatchBody.contains("key=\\(windowKey) focused=\\(focused)"),
                       "the log line must carry the raw window key next to the derived focused")
-        XCTAssertTrue(source.contains("foregroundAllowed: facts.foregroundAllowed"),
+        guard let resetBody = functionBody(of: "func resetHostFactsBookkeeping(", in: source) else {
+            return XCTFail("resetHostFactsBookkeeping not found")
+        }
+        XCTAssertTrue(resetBody.contains("foregroundAllowed: facts.foregroundAllowed"),
                       "the sidecar-restart snapshot must pass the live foreground phase explicitly")
-        XCTAssertTrue(source.contains("appIsActive: facts.active"),
+        XCTAssertTrue(resetBody.contains("appIsActive: facts.active"),
                       "the sidecar-restart snapshot must pass the live activation fact explicitly")
+        XCTAssertTrue(resetBody.contains("let facts = currentShellVisibilityFacts()"),
+                      "the snapshot must read the live facts first, never a stale cache")
         guard let resignBody = functionBody(of: "private func appDidResignActive(", in: source) else {
             return XCTFail("appDidResignActive not found")
         }

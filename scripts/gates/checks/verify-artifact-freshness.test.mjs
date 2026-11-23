@@ -82,7 +82,12 @@ test('G3 Electron-frozen host packages: default loud SKIP, --include-electron ke
   assert.equal(hostEntry.guard.kind, 'freshness', 'the frozen default is not an exemption; G2 lockstep keeps the id observed')
   assert.match(hostEntry.guard.detail, /--include-electron/, 'the registry must name the strict/revival arm')
   const source = readFileSync(new URL('./verify-artifact-freshness.mjs', import.meta.url), 'utf8')
-  assert.match(source, /note\('desktop\/dist\/host-\*-package'/, 'the verifier must emit the registered id in both arms')
+  const bodyStart = source.indexOf('function checkHostPackageBuildManifests(')
+  assert.ok(bodyStart > 0, 'the host-package arm must stay a named function')
+  const armBody = source.slice(bodyStart, source.indexOf('\nfunction ', bodyStart + 1))
+  assert.match(armBody, /if \(!arm\.compare\) \{\s*note\('desktop\/dist\/host-\*-package', 'skip', arm\.detail\)/,
+    'the frozen arm must emit the registered id itself (removing it must not stay green on another arm)')
+  assert.match(armBody, /note\('desktop\/dist\/host-\*-package', 'stale'/, 'the strict arm keeps the stale verdict')
   assert.match(source, /checkHostPackageBuildManifests\(\{ includeElectron \}\)/, 'main must pass the strict flag into the host-package arm')
 })
 

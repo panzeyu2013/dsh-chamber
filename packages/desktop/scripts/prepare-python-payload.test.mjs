@@ -292,11 +292,16 @@ test('① 锁：结构、登记目标与来源字段', () => {
 })
 
 test('① 锁：alpha.2 载荷契约 —— office 技能正文承诺的 pypdf 必须随 primary-runtime 分发', () => {
-  assert.equal(LOCK.pythonPackages.pypdf, '6.21.4',
-    'office/SKILL.md 正文承诺内置 Python 带 pypdf：锁必须登记 pypdf 6.21.4（alpha.1 起，alpha.2 沿用）')
+  // The exact version is pinned by the upstream primary-runtime lock (⑦b compares the whole
+  // package map against it); this row only owns the semantic contract: pypdf is present and
+  // its wheel(s) ride the cross-platform list, whatever the pinned patch version is.
+  const pypdfVersion = LOCK.pythonPackages.pypdf
+  assert.match(pypdfVersion ?? '', /^\d+\.\d+\.\d+(?:[.-][0-9A-Za-z.-]+)?$/u,
+    'office/SKILL.md 正文承诺内置 Python 带 pypdf：锁必须登记一个具体 pypdf 版本')
+  const wheelPattern = new RegExp('/pypdf-' + pypdfVersion.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&') + '[^/]*\.whl$', 'u')
   assert.ok(
-    LOCK.wheels.some(wheel => /\/pypdf-6\.21\.4-py3-none-any\.whl$/u.test(wheel.url)),
-    'pypdf 纯 py wheel 必须在跨平台 wheels 清单里（否则载荷装不出 pypdf）',
+    LOCK.wheels.some(wheel => wheelPattern.test(wheel.url)),
+    'pypdf wheel(s) must ride the cross-platform wheels list (otherwise the payload cannot install pypdf)',
   )
 })
 

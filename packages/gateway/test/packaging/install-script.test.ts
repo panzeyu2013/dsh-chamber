@@ -1064,9 +1064,12 @@ test('the host-safe stub really intercepts a bare systemctl from a harness body'
 })
 
 test('require_node_floor gates on the exact pinned dsh engine range (major.minor.patch)', () => {
-  // The floor follows the pinned dsh runtime engines (design 17 §15): the pinned engine range is
-  // ^24.22.3 || >=26.13.1, so 24.x below 24.22.3, 25.x and 26.0-26.12 must be refused while
-  // 24.22.3 / 26.13.1 / 27+ pass. A major-only check would let Node 24.0 and 26.0 through.
+  // The floor follows the pinned dsh runtime engines (design 17 §15). Boundaries are DERIVED
+  // from the constant so a pin bump only changes the single source (the installer/gateway
+  // engines), never this test: every clause contributes its floor (accepted) and the
+  // immediately-below versions (refused); the diagnostic must state the full range verbatim.
+  const constant = /^NODE_ENGINES_REQUIRED="([^"]+)"/mu.exec(source)?.[1]
+  assert.ok(constant, 'the installer must declare NODE_ENGINES_REQUIRED')
   const dir = mkdtempSync(join(tmpdir(), 'gateway-node-floor-'))
   const bin = join(dir, 'bin')
   mkdirSync(bin, { recursive: true })
@@ -1075,16 +1078,32 @@ test('require_node_floor gates on the exact pinned dsh engine range (major.minor
   }
   const path = `${bin}:${process.env.PATH ?? ''}`
   const runFloor = () => runLibraryResult('require_node_floor', { PATH: path })
-  const refused = ['v24.8.9', 'v24.22.2', 'v22.22.3', 'v25.1.0', 'v26.12.9']
-  const accepted = ['v24.22.3', 'v26.13.1', 'v27.0.0']
+  const refused: string[] = []
+  const accepted: string[] = []
+  for (const clause of constant.split('||').map(part => part.trim())) {
+    const match = /^\^(\d+)\.(\d+)\.(\d+)$|^>=(\d+)\.(\d+)\.(\d+)$/u.exec(clause)
+    assert.ok(match, 'engine clause must be a pinned caret/range: ' + clause)
+    const [, cMaj, cMin, cPat, rMaj, rMin, rPat] = match
+    if (cMaj !== undefined) {
+      accepted.push(`v${cMaj}.${cMin}.${cPat}`)
+      refused.push(`v${cMaj}.${cMin}.${Number(cPat) - 1}`)
+      refused.push(`v${cMaj}.${Number(cMin) - 1}.99`)
+      accepted.push(`v${cMaj}.${Number(cMin) + 1}.0`)
+    } else {
+      accepted.push(`v${rMaj}.${rMin}.${rPat}`)
+      if (Number(rPat) > 0) refused.push(`v${rMaj}.${rMin}.${Number(rPat) - 1}`)
+    }
+  }
+  const diagnostic = new RegExp(constant.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u')
+  const unique = (values: string[]): string[] => [...new Set(values)]
   try {
-    for (const version of refused) {
+    for (const version of unique(refused)) {
       fakeNode(version)
       const result = runFloor()
       assert.notEqual(result.status, 0, `${version} must be refused by the pinned node engine range`)
-      assert.match(result.stderr, /\^24\.22\.3 \|\| >=26\.13\.1/u, `${version}: the diagnostic must state the pinned range`)
+      assert.match(result.stderr, diagnostic, `${version}: the diagnostic must state the pinned range`)
     }
-    for (const version of accepted) {
+    for (const version of unique(accepted)) {
       fakeNode(version)
       const result = runFloor()
       assert.equal(result.status, 0, `${version} must be accepted: ${result.stderr}`)

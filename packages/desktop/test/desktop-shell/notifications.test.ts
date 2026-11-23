@@ -298,7 +298,8 @@ test('fresh proof entries are always written under the current identity scheme',
 test('the proof store attaches before the first sync and flushes before the renderer push', () => {
   const store = stripComments(readFileSync(new URL('../../notification-source-proof-store.ts', import.meta.url), 'utf8'))
   assert.ok(store.indexOf('notificationSourceProofs.attach(') < store.indexOf('syncNotificationSourceRegistry('), 'attach must precede the first sync')
-  assert.match(store, /retainMissing: unhealthy/)
+  assert.equal((store.match(/retainMissing: unhealthy/gu) ?? []).length, 2,
+    'BOTH the projection and the sync must retain missing rows (dropping either deletes proofs on a degraded roster)')
   assert.match(store, /if \(!unhealthy\) notificationSourceProofs\.persist\(\)/)
   const transition = stripComments(readFileSync(new URL('../../host-registry-transition.ts', import.meta.url), 'utf8'))
   assert.ok(transition.indexOf('persistNotificationSourceProofs()') < transition.indexOf('attemptCommittedRegistryPush('), 'the roster is flushed before the renderer push')
