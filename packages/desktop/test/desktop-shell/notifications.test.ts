@@ -30,6 +30,7 @@ import {
   describeNativeNotificationFailure,
   interpretNativeNotificationReply,
   notificationDeliveryKey,
+  notificationSuppressionError,
   notificationWindowAttended,
   shouldFocusApplicationBeforeShowing,
   showNativeNotificationHonestly,
@@ -455,11 +456,18 @@ test('shell-ipc-settings: the skip receipt keeps the frozen shape and names the 
   assert.ok(!source.includes('edges.isFocused()'), 'no bare focus probe outside the helper')
   // 回执形状 {shown,outcome,error?} 不变；decision.reason 只并入既有 error 文本（design 19 §4.1），
   // 不新增字段（冻结 preload.cts / global.d.ts 镜像与 ipc-surface-mirror golden 零变化）。
-  assert.ok(source.includes("return { shown: false, outcome: 'suppressed', error: `notification suppressed: ${decision.reason}` };"),
-    'the skip reply names decision.reason inside the existing error string')
+  assert.ok(source.includes('error: notificationSuppressionError(decision.reason)'),
+    'the skip reply formats decision.reason through the one suppression helper')
   assert.ok(!source.includes('notification suppressed by settings or window focus'),
     'the old generic suppression string must be gone')
 })
+test('notificationSuppressionError: one formatter for every decision reason (behaviour, not source lock)', () => {
+  assert.equal(notificationSuppressionError('disabled'), 'notification suppressed: disabled')
+  assert.equal(notificationSuppressionError('kind-off'), 'notification suppressed: kind-off')
+  assert.equal(notificationSuppressionError('on-screen'), 'notification suppressed: on-screen')
+  assert.equal(notificationSuppressionError('focused-hidden-only'), 'notification suppressed: focused-hidden-only')
+})
+
 test('notification-open delivery retains send-return work, replays FIFO after reload, and frees capacity only on ACK', () => {
   const queue = new BoundedAckDeliveryQueue<NotificationOpenIntent>(2)
   const a = { sourceId: 'local', sourceFingerprint: 'local', sessionId: 's1', sourceGeneration: 1 }

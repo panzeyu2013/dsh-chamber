@@ -534,8 +534,8 @@ export interface ChamberDebugSettings {
 export interface ChamberNotificationSettings {
   /** 主开关（默认 false：低打扰，用户显式开启）。 */
   enabled: boolean
-  /** 通知时机（默认 'hidden-only'：仅窗口不在前台、不可见或被遮挡时不打扰；
-   *  'always' 除正在查看的会话外都发）。 */
+  /** 通知时机（默认 'hidden-only'：仅在窗口不在前台、不可见或被遮挡时才打扰，
+   *  其余时间不发通知；'always' 除正在查看的会话外都发）。 */
   mode: 'hidden-only' | 'always'
   /** 会话完成时（默认 true）。 */
   onComplete: boolean

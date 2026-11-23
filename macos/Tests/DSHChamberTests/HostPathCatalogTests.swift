@@ -788,10 +788,10 @@ final class HostPathCatalogTests: XCTestCase {
     }
 
     /// 相位/注意力分域 + 落盘事实行（v3 A7/A8）：dispatch 只消费纯计划；
-    /// phaseChanged 才跑相位钩子；任何变化都推 focused 派生并落盘四项
-    /// （visible/occluded/active/focused）。后两项是 gui-acceptance-checklist P6
-    /// 在真机取证「遮挡仍 key / 应用仍 active 前提」的唯一事实级判据。
-    func testTheVisibilityDispatchSplitsPhaseAndAttentionAndLogsFourFacts() throws {
+    /// phaseChanged 才跑相位钩子；任何变化都推 focused 派生并落盘五项
+    /// （visible/occluded/active/key/focused）。key= 是 gui-acceptance-checklist P6
+    /// 在真机取证「遮挡仍 key」前提的唯一事实级判据（focused 被相位掩蔽）。
+    func testTheVisibilityDispatchSplitsPhaseAndAttentionAndLogsFiveFacts() throws {
         let macosRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(
@@ -810,17 +810,30 @@ final class HostPathCatalogTests: XCTestCase {
                       "every fact change must push the derived focused fact")
         XCTAssertTrue(dispatchBody.contains("visible=\\(facts.visible) occluded=\\(facts.occluded)"),
                       "the log line must carry visible/occluded")
-        XCTAssertTrue(dispatchBody.contains("active=\\(facts.active) focused=\\(focused)"),
-                      "the log line must carry active/focused (P6 fact-level evidence)")
+        XCTAssertTrue(dispatchBody.contains("active=\\(facts.active) key=\\(windowKey) focused=\\(focused)"),
+                      "the log line must carry active/key/focused (P6 fact-level evidence)")
         XCTAssertTrue(dispatchBody.contains("evaluateJS(Self.shellVisibilityScript(facts))"),
                       "the page event must fire for attention-only changes too")
         XCTAssertTrue(source.contains("selector: #selector(appDidResignActive(_:))"),
-                      "application deactivation must push an explicit focused:false")
-        XCTAssertTrue(source.contains("static func focusedFact(isKeyWindow: Bool, foregroundAllowed: Bool) -> Bool"),
+                      "application deactivation must still push an explicit focused:false")
+        XCTAssertTrue(source.contains("static func focusedFact(isKeyWindow: Bool, foregroundAllowed: Bool,"),
                       "focused derivation must stay a pure, directly testable helper")
-        XCTAssertTrue(dispatchBody.contains("focusedHostFact(facts.foregroundAllowed)"),
-                      "the dispatch must derive focused from the dispatched facts, never read live state")
-        XCTAssertTrue(source.contains("foregroundAllowed: currentShellVisibilityFacts().foregroundAllowed"),
+        XCTAssertTrue(source.contains("appIsActive: Bool) -> Bool"),
+                      "focused derivation must include the app-activation dimension")
+        XCTAssertTrue(dispatchBody.contains("appIsActive: facts.active"),
+                      "the dispatch must feed the dispatched activation fact into the derivation")
+        XCTAssertTrue(dispatchBody.contains("key=\\(windowKey) focused=\\(focused)"),
+                      "the log line must carry the raw window key next to the derived focused")
+        XCTAssertTrue(source.contains("foregroundAllowed: facts.foregroundAllowed"),
                       "the sidecar-restart snapshot must pass the live foreground phase explicitly")
+        XCTAssertTrue(source.contains("appIsActive: facts.active"),
+                      "the sidecar-restart snapshot must pass the live activation fact explicitly")
+        guard let resignBody = functionBody(of: "private func appDidResignActive(", in: source) else {
+            return XCTFail("appDidResignActive not found")
+        }
+        XCTAssertTrue(resignBody.contains("pushShellVisibility()"),
+                      "deactivation must re-dispatch the live visibility facts")
+        XCTAssertTrue(resignBody.contains("pushHostFacts([\"focused\": false])"),
+                      "deactivation must keep the explicit focused:false fallback")
     }
 }

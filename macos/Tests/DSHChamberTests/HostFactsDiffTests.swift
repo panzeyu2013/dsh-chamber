@@ -175,40 +175,60 @@ final class HostFactsDiffTests: XCTestCase {
     }
 
     func testResetFactsCarryLiveFocusState() {
-        // 重启快照必须取 window.isKeyWindow 实时值（漏 focused 时，
-        // 缓存 focused=false 会粘滞到下一次 key 事件）。
-        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true),
+        // 重启快照必须取实时事实（漏 focused 时，缓存 focused=false 会粘滞到下一次
+        // key 事件；相位/激活也不得吃默认值）。
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true,
+                                                       foregroundAllowed: true,
+                                                       appIsActive: true),
                        ["mainWindowAlive": true, "webViewContentAlive": true, "focused": true])
-        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false)["focused"], false)
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false,
+                                                       foregroundAllowed: true,
+                                                       appIsActive: true)["focused"], false)
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true,
+                                                       foregroundAllowed: true,
+                                                       appIsActive: false)["focused"], false,
+                       "an inactive app must not report focused even while the window stays key")
         // 关窗期间的重启快照不得谎报 alive=true：那会让新 sidecar 在窗口关着的整个时段
         // 「可投递」（willClose 的语义是同步门一律不过；重开由 didBecomeKey 恢复）。
-        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false, mainWindowAlive: false),
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false, mainWindowAlive: false,
+                                                       foregroundAllowed: true, appIsActive: true),
                        ["mainWindowAlive": false, "webViewContentAlive": true, "focused": false])
     }
 
     /// focused 派生真值表（v3 A7）：语义对齐 Electron isFocused 文档「可见且聚焦」——
-    /// 窗口 key **且**前台相位允许（visible && !occluded）；隐藏/最小化/遮挡/失活都 false。
-    func testFocusedFactCombinesWindowKeyWithTheForegroundPhase() {
-        XCTAssertTrue(MainWindowController.focusedFact(isKeyWindow: true, foregroundAllowed: true))
-        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: true, foregroundAllowed: false),
+    /// 窗口 key **且**前台相位允许（visible && !occluded）**且**应用激活；任一为 false
+    /// 都不可算 focused（隐藏/最小化/遮挡/应用失活都 false）。
+    func testFocusedFactCombinesWindowKeyForegroundPhaseAndAppActivation() {
+        XCTAssertTrue(MainWindowController.focusedFact(isKeyWindow: true, foregroundAllowed: true,
+                                                       appIsActive: true))
+        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: true, foregroundAllowed: false,
+                                                        appIsActive: true),
                        "an occluded/hidden window must not count as focused even while key")
-        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: false, foregroundAllowed: true),
+        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: true, foregroundAllowed: true,
+                                                        appIsActive: false),
+                       "an inactive app must not count as focused even while the window stays key")
+        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: false, foregroundAllowed: true,
+                                                        appIsActive: true),
                        "a visible window without key is not focused")
-        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: false, foregroundAllowed: false))
+        XCTAssertFalse(MainWindowController.focusedFact(isKeyWindow: false, foregroundAllowed: false,
+                                                        appIsActive: false))
     }
 
-    /// resetFacts 的 foregroundAllowed 参数（v3 A7）：默认 true 只为既有精确字典断言兼容；
-    /// 显式 false 时窗口仍 key 也必须推 focused=false（重启快照不得谎报「可打扰」）。
-    func testResetFactsDeriveFocusedFromTheForegroundPhase() {
-        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true)["focused"], true,
-                       "the default keeps the pre-existing snapshot compatible")
-        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true, foregroundAllowed: false),
+    /// resetFacts 的派生输入（v3 A7）：focused = key ∧ 前台相位 ∧ 应用激活；任一为 false
+    /// 都必须推 focused=false（重启快照不得谎报「可打扰」）。
+    func testResetFactsDeriveFocusedFromAllInputs() {
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true, foregroundAllowed: true,
+                                                       appIsActive: false),
+                       ["mainWindowAlive": true, "webViewContentAlive": true, "focused": false],
+                       "an inactive app must report focused=false in the restart snapshot")
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true, foregroundAllowed: false,
+                                                       appIsActive: true),
                        ["mainWindowAlive": true, "webViewContentAlive": true, "focused": false])
         XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false, mainWindowAlive: false,
-                                                       foregroundAllowed: true),
+                                                       foregroundAllowed: true, appIsActive: true),
                        ["mainWindowAlive": false, "webViewContentAlive": true, "focused": false])
         XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true, mainWindowAlive: false,
-                                                       foregroundAllowed: false),
+                                                       foregroundAllowed: false, appIsActive: true),
                        ["mainWindowAlive": false, "webViewContentAlive": true, "focused": false])
     }
 }

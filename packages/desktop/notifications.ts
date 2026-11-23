@@ -370,9 +370,10 @@ export interface NotificationSettingsLike {
 /**
  * 主进程侧的通知注意力事实（design 19 §3.3）：窗口此刻是否被用户在**前台**使用。
  * 这是缺少会话级信息的粗粒度门，两个宿主腿语义对齐：
- *   - Swift 壳：focused = `isKeyWindow && foregroundAllowed`（前台相位 = 可见且未遮挡），
- *     隐藏/最小化/完全遮挡/应用失活全部 false（STATUS 104 代码面；遮挡仍 key 的
- *     macOS 前提未证实，见设计登记）；
+ *   - Swift 壳：focused = `isKeyWindow && foregroundAllowed && NSApp.isActive`（前台相位 =
+ *     可见且未遮挡），隐藏/最小化/完全遮挡/应用失活全部 false（design 19 §3.3 注意力事实：Swift 由
+ *     key ∧ 相位 ∧ active 派生，失活另有 didResignActive 显式推 false 兜底；遮挡里
+ *     window 是否仍 key 由 gui P6 的 shell.log `key=` 值判定）；
  *   - Electron 冻结腿：deps.edges.isFocused() 已是 `visible && focused`。
  * 渲染端的会话级 requireHidden（painted ∧ current ∧ pageForeground）比它更细，主进程
  * 再用本事实复核（信任切分见 decideNotification 头注）。纯委托：宿主 edge 负责异常
@@ -380,6 +381,14 @@ export interface NotificationSettingsLike {
  */
 export function notificationWindowAttended(edges: { isFocused(): boolean }): boolean {
   return edges.isFocused()
+}
+
+/** 裁决侧抑制原因（design 19 §4.1：只并入既有 error 文本，不新增回执字段）。 */
+export type NotificationSkipReason = 'disabled' | 'kind-off' | 'on-screen' | 'focused-hidden-only';
+
+/** 抑制原因 → 回执 error 文本（单一格式化点；行为级单测直测）。 */
+export function notificationSuppressionError(reason: NotificationSkipReason): string {
+  return `notification suppressed: ${reason}`;
 }
 
 /**
@@ -398,7 +407,7 @@ export function decideNotification(input: {
   request: NotificationRequest
   settings: NotificationSettingsLike
   anyWindowFocused: boolean
-}): { action: 'show' } | { action: 'skip'; reason: string } {
+}): { action: 'show' } | { action: 'skip'; reason: NotificationSkipReason } {
   const { request, settings, anyWindowFocused } = input;
   if (request.kind === 'test') return { action: 'show' };
   if (!settings.enabled) return { action: 'skip', reason: 'disabled' };

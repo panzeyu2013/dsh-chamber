@@ -19,8 +19,9 @@
 //  缓存 focused/mainWindowAlive/webViewLoading/webViewContentAlive 刷新，
 //  见本文件 hostFacts 段注释），使通知裁决等同步门与 Electron 侧行为一致。
 //  focused 不再等价于「窗口 key」：按 Electron isFocused 文档口径派生为
-//  key && 前台相位允许（visible && !occluded，见 focusedFact）；应用失活由
-//  didResignActive 显式推 false——隐藏/最小化/遮挡/离开应用四类都不可打扰。
+//  key && 前台相位允许（visible && !occluded）&& 应用激活（NSApp.isActive，见
+//  focusedFact）；应用失活另有 didResignActive 显式推 false 兜底——隐藏/最小化/
+//  遮挡/离开应用四类都不可打扰。
 //  notify 消费路由：sidecar 出站 notify 帧（node-edges sendNotify 族
 //  ——rendererPush/setBadge/showItemInFolder/retireNotifications）经
 //  BridgeClient.onNotify 到本控制器的 notify 路由：rendererPush 解包进页面
@@ -83,10 +84,9 @@ struct MainWindowShownGate {
 struct ShellVisibilityFacts: Equatable {
     var visible: Bool
     var occluded: Bool
-    /// 应用激活（NSApp.isActive）。默认 false 只为既有 memberwise 构造兼容；
-    /// 真实事实源都必须显式给出：currentShellVisibilityFacts 读 NSApp.isActive，
-    /// .hidden 显式 false（orderOut 前不得用「实时事实」谎报 active/focused）。
-    var active: Bool = false
+    /// 应用激活（NSApp.isActive）。无默认值：事实源必须显式给出（currentShellVisibilityFacts
+    /// 读 NSApp.isActive，.hidden 显式 false——orderOut 前不得用「实时事实」谎报 active）。
+    var active: Bool
 
     /// 不在屏（orderOut / 最小化 / 应用隐藏 / 窗口关闭）：前台相位必须停。
     static let hidden = ShellVisibilityFacts(visible: false, occluded: false, active: false)
@@ -1501,11 +1501,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 否则重启前缓存的值会粘滞到下一次事件，窗口明明 key 却推 false（或反之）。
     func resetHostFactsBookkeeping() {
         lastHostFacts = [:]
-        // foregroundAllowed 必须显式传当前事实：默认参数 true 只为既有单测断言兼容，
-        // 隐藏/遮挡中的重启快照若吃默认值，会向新 sidecar 谎报「可打扰」。
+        // 相位与 active 都必须显式传当前事实：重启快照不得用默认值向新 sidecar
+        // 谎报「可打扰」。
+        let facts = currentShellVisibilityFacts()
         pushHostFacts(Self.resetFacts(isKeyWindow: window?.isKeyWindow ?? false,
                                       mainWindowAlive: mainWindowDeliverable,
-                                      foregroundAllowed: currentShellVisibilityFacts().foregroundAllowed))
+                                      foregroundAllowed: facts.foregroundAllowed,
+                                      appIsActive: facts.active))
     }
 
     /// sidecar 重启后的全量事实快照（纯逻辑，单测直测）。
@@ -1513,32 +1515,35 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// `mainWindowAlive` 取**投递门语义的真实状态**（`willClose` → false / `didBecomeKey` + 建窗 → true），
     /// 不硬编码：关窗期间（窗口对象不销毁但同步门一律不过）若在重启快照里谎报 true，
     /// 新 sidecar 会以为可投递 ⇒ 开通知/深链在窗口关着的整个时段被静默丢。
-    /// `focused` 由 focusedFact 派生（key && 前台相位）——语义对齐 Electron 文档
-    /// 「可见且聚焦」：隐藏/最小化/遮挡/应用失活都 false。`foregroundAllowed`
-    /// 默认值**仅为既有 HostFactsDiffTests 精确字典断言兼容**；唯一调用点
-    /// resetHostFactsBookkeeping 显式传实时值，新增调用点必须传。
+    /// `focused` 由 focusedFact 派生（key && 前台相位 && 应用激活）——语义对齐
+    /// Electron 文档「可见且聚焦」：隐藏/最小化/遮挡/应用失活都 false。
+    /// `foregroundAllowed`/`appIsActive` 无默认值：重启快照必须显式传实时事实，
+    /// 否则会向新 sidecar 谎报「可打扰」。
     static func resetFacts(isKeyWindow: Bool, mainWindowAlive: Bool = true,
-                           foregroundAllowed: Bool = true) -> [String: Bool] {
+                           foregroundAllowed: Bool, appIsActive: Bool) -> [String: Bool] {
         ["mainWindowAlive": mainWindowAlive, "webViewContentAlive": true,
-         "focused": focusedFact(isKeyWindow: isKeyWindow, foregroundAllowed: foregroundAllowed)]
+         "focused": focusedFact(isKeyWindow: isKeyWindow,
+                                foregroundAllowed: foregroundAllowed,
+                                appIsActive: appIsActive)]
     }
 
     /// focused 事实的纯派生（单测直测）：既有 focused 键的唯一消费者
     /// （sidecar 通知裁决同步门 shell-ipc-settings.ts 的 isFocused）语义 =
-    /// Electron 文档口径「可见且聚焦」——窗口在 key 且前台相位允许。
-    /// 应用失活由 appDidResignActive 显式推 false；隐藏/最小化/遮挡经
-    /// foregroundAllowed 归零。故意不读 NSApp.isActive：事实由调用方给，纯函数可测。
-    static func focusedFact(isKeyWindow: Bool, foregroundAllowed: Bool) -> Bool {
-        isKeyWindow && foregroundAllowed
+    /// Electron 文档口径「可见且聚焦」——窗口在 key ∧ 前台相位允许 ∧ 应用激活。
+    /// 三项都由调用方给（纯函数可测）；应用失活另有 appDidResignActive 显式推
+    /// false 兜底。active 并入派生式后，任一事实重算都不会把失活态写回 true。
+    static func focusedFact(isKeyWindow: Bool, foregroundAllowed: Bool,
+                            appIsActive: Bool) -> Bool {
+        isKeyWindow && foregroundAllowed && appIsActive
     }
 
-    /// focused 的实时读数组合（窗口是否 key × 调用方给的相位事实）：
-    /// key 事件传 currentShellVisibilityFacts().foregroundAllowed；可见性漏斗传
-    /// facts.foregroundAllowed；resetFacts 传参。显式 .hidden 派发不得读实时事实
-    /// （orderOut 前窗口仍 key，会误推 focused=true）。
-    private func focusedHostFact(_ foregroundAllowed: Bool) -> Bool {
+    /// focused 的实时读数组合（窗口是否 key × 调用方给的相位与激活事实）：
+    /// key 事件 / 可见性漏斗 / resetFacts 都传对应快照。显式 .hidden 派发不得读
+    /// 实时事实（orderOut 前窗口仍 key，会误推 focused=true）。
+    private func focusedHostFact(_ facts: ShellVisibilityFacts) -> Bool {
         Self.focusedFact(isKeyWindow: window?.isKeyWindow ?? false,
-                         foregroundAllowed: foregroundAllowed)
+                         foregroundAllowed: facts.foregroundAllowed,
+                         appIsActive: facts.active)
     }
 
     private func pushHostFacts(_ changes: [String: Bool]) {
@@ -1577,7 +1582,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     @objc private func hostFactsWindowDidBecomeKey(_ notification: Notification) {
         mainWindowDeliverable = true
         pushHostFacts(["mainWindowAlive": true,
-                       "focused": focusedHostFact(currentShellVisibilityFacts().foregroundAllowed)])
+                       "focused": focusedHostFact(currentShellVisibilityFacts())])
         // 窗口在屏 / 获得 key（启动首显、orderOut 恢复、Dock 重开）→ 可见性事实补发。
         pushShellVisibility()
         // 上屏兜底一拍——若首次记录时窗口还不在屏上（screen == nil），
@@ -1656,7 +1661,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 派发一条可见性事实：相位/注意力分域（纯计划 = ShellVisibilityDispatchPlan）。
     ///   - phaseChanged（visible/occluded 变化或首次）才跑 D3 相位回调与原生定时器漏斗；
-    ///   - 任何变化都推 focused 派生 + 落盘四项事实行 + 派发页面 JS 事件（注意力门）。
+    ///   - 任何变化都推 focused 派生 + 落盘五项事实行（visible/occluded/active/key/focused）
+    ///     + 派发页面 JS 事件（注意力门）。
     /// 失败 loud 一行、不阻断：页面未就绪 / 文档已换时，下一次导航的 didFinish
     /// 会 force 补发（页面侧监听器随模块重装）。
     private func dispatchShellVisibility(_ facts: ShellVisibilityFacts, force: Bool = false) {
@@ -1668,10 +1674,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             onShellVisibilityDidChange?(facts.foregroundAllowed)
             applyPhaseTimers(facts)
         }
-        let focused = focusedHostFact(facts.foregroundAllowed)
+        let windowKey = window?.isKeyWindow ?? false
+        let focused = Self.focusedFact(isKeyWindow: windowKey,
+                                       foregroundAllowed: facts.foregroundAllowed,
+                                       appIsActive: facts.active)
         pushHostFacts(["focused": focused])
         shellLog("[shell] 页面可见性事实 visible=\(facts.visible) occluded=\(facts.occluded)"
-            + " active=\(facts.active) focused=\(focused)（前台相位\(facts.foregroundAllowed ? "允许" : "暂停")）")
+            + " active=\(facts.active) key=\(windowKey) focused=\(focused)"
+            + "（前台相位\(facts.foregroundAllowed ? "允许" : "暂停")）")
         evaluateJS(Self.shellVisibilityScript(facts)) { error in
             if let error {
                 shellLog("[shell] 页面可见性事实派发失败：\(error.localizedDescription)")
