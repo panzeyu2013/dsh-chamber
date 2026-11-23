@@ -307,9 +307,22 @@ test('cancelHostAttemptTimers cancels pending tails (dispose path) without touch
   await runHostAttempts(fake.deps, { kind: 'startup', staggerMs: 30 })
   assert.deepEqual(fake.connected, ['a'])
   assert.equal(fake.timers.length, 2)
-  cancelHostAttemptTimers()
+  assert.equal(cancelHostAttemptTimers(), 2, 'both pending stagger tails are reported and cleared')
   for (const timer of fake.timers) timer.run()
   assert.deepEqual(fake.connected, ['a'], 'cancelled timers never fire')
+})
+
+test('a fired stagger timer leaves no dead entry behind (self-cleanup lock)', async () => {
+  // The fired callback deletes itself from the pending set before the ticket-guarded
+  // attempt; without that line a long-lived sidecar accumulates one dead entry per
+  // wake/reconcile wave and the dispose path keeps "cancelling" them forever.
+  const fake = fakeDeps({ ids: ['a', 'b', 'c'], phases: { a: 'idle', b: 'idle', c: 'idle' } })
+  await runHostAttempts(fake.deps, { kind: 'startup', staggerMs: 30 })
+  assert.deepEqual(fake.connected, ['a'])
+  assert.equal(fake.timers.length, 2)
+  for (const timer of fake.timers) timer.run()
+  assert.deepEqual(fake.connected, ['a', 'b', 'c'], 'the tails fire their attempts')
+  assert.equal(cancelHostAttemptTimers(), 0, 'a fired timer removes itself: nothing dead stays pending')
 })
 
 test('reconnectStaleTransports keeps its legacy contract: phase filter, terminal skip, 2-arg warning, null/quit no-op', () => {

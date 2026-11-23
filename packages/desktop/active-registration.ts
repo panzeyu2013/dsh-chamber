@@ -135,7 +135,7 @@ export function createRegistrationLiveFacts(
   }
 }
 
-export type RevokeReason = 'leave-ready' | 'auth-failed' | 'removed' | 'rebind' | 'quit'
+export type RevokeReason = 'leave-ready' | 'auth-failed' | 'removed'
 
 /** THE commit entry's requests: register (also degrades to health-only), the pure
  *  health path, and an idempotent revoke. */
@@ -219,6 +219,12 @@ function viewOf(record: ActiveRegistration): ActiveRegistrationView {
 export function createActiveRegistrationRegistry(deps: ActiveRegistrationDeps): ActiveRegistrationRegistry {
   const records = new Map<string, ActiveRegistration>()
   const tombstones = new Map<string, { incarnation: object; transportGen: number }>()
+  /** The incarnation each PUBLISHED record was committed for. The tombstone must fence
+   *  the revoked RECORD's incarnation, not the manager's live one: an auto-recovery may
+   *  already have replaced the state object (new incarnation, numeric generation back at
+   *  1) before the old shell's leave-ready revoke lands, and fencing the live incarnation
+   *  would then refuse the new incarnation's legitimate low-generation register. */
+  const recordIncarnations = new Map<string, object>()
   let nextRecordGen = 0
 
   const warn = (message: string): void => deps.warn?.(message)
@@ -280,17 +286,21 @@ export function createActiveRegistrationRegistry(deps: ActiveRegistrationDeps): 
     }
     // Fence the generation of the record that was ACTUALLY revoked, not the live one:
     // a late refresh/register for that old tunnel incarnation must not resurrect it, while
-    // the same-id auto-recovery that already advanced the tunnel may register its new generation.
+    // the same-id auto-recovery that already advanced the tunnel may register its new
+    // generation (and legitimately restarts the numeric generation at 1).
     const live = deps.live(id)
+    const recordIncarnation = recordIncarnations.get(id)
+    recordIncarnations.delete(id)
     if (live !== null) {
+      const fenceIncarnation = recordIncarnation ?? live.incarnation
       const existing = tombstones.get(id)
       // One tombstone per id: keep the FIRST fence of an incarnation, widen it only
       // for a later generation of the SAME incarnation; a re-created incarnation
       // starts a new resource and must not inherit the old numeric fence.
-      if (existing === undefined || existing.incarnation !== live.incarnation) {
-        tombstones.set(id, { incarnation: live.incarnation, transportGen: previous.transportGen })
+      if (existing === undefined || existing.incarnation !== fenceIncarnation) {
+        tombstones.set(id, { incarnation: fenceIncarnation, transportGen: previous.transportGen })
       } else if (previous.transportGen > existing.transportGen) {
-        tombstones.set(id, { incarnation: live.incarnation, transportGen: previous.transportGen })
+        tombstones.set(id, { incarnation: fenceIncarnation, transportGen: previous.transportGen })
       }
     }
     return { ok: true, action: 'revoked', reason, recovery }
@@ -367,6 +377,7 @@ export function createActiveRegistrationRegistry(deps: ActiveRegistrationDeps): 
       transportGen: live.transportGen,
     }
     records.set(record.id, record)
+    recordIncarnations.set(record.id, live.incarnation)
     tombstones.delete(record.id)
     return { ok: true, action: 'registered', registration: viewOf(record) }
   }
@@ -415,6 +426,7 @@ export function createActiveRegistrationRegistry(deps: ActiveRegistrationDeps): 
     dispose() {
       records.clear()
       tombstones.clear()
+      recordIncarnations.clear()
     },
   }
 }

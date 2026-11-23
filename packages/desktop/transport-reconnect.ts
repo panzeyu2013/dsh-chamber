@@ -136,13 +136,21 @@ const EMPTY_SUPPRESSED: ReadonlySet<string> = new Set<string>()
 const pendingAttemptTimers = new Set<HostAttemptTimer>()
 
 /** 取消所有未触发的尝试定时器（退出/测试清理；触发中的票据仍会自证）。 */
-export function cancelHostAttemptTimers(): void {
+/**
+ * Cancel every pending stagger timer (dispose / quit path).
+ * @returns how many timers were still pending. A fired timer removes itself from the
+ *  set before running, so after a wave settles this is 0 — the value lets the suite
+ *  pin that self-cleanup (dropping it would leak one dead entry per wake/reconcile).
+ */
+export function cancelHostAttemptTimers(): number {
+  const pending = pendingAttemptTimers.size
   for (const timer of pendingAttemptTimers) {
     try {
       timer.cancel?.()
     } catch { /* 已触发的 timer 不可取消：忽略 */ }
   }
   pendingAttemptTimers.clear()
+  return pending
 }
 
 const defaultSetTimer = (run: () => void, milliseconds: number): HostAttemptTimer => {

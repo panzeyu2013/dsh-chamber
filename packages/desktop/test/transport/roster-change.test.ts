@@ -142,7 +142,6 @@ test('removals and additions carry their own dimensions, never a remount', () =>
   assert.deepEqual(added.removedIds, [])
   assert.deepEqual(added.retiredIds, [])
   assert.deepEqual([...added.rows[0]!.dimensions], [], 'a genuinely new source has no diff consequence')
-  assert.deepEqual(added.bootCapabilityIds, [])
 })
 
 test('id lists are deduped and order-stable (removed first, then BEFORE-order retargets)', () => {
@@ -157,14 +156,18 @@ test('id lists are deduped and order-stable (removed first, then BEFORE-order re
   assert.deepEqual(change.forwardRevokeSourceIds, ['dsh-gone', 'dsh-edited'])
   assert.deepEqual(change.seedRevokeIds, ['gone', 'edited'])
   assert.deepEqual(change.seedReseedIds, ['edited'])
-  assert.deepEqual(change.bootCapabilityIds, [])
+  assert.equal(change.rows.some(row => row.dimensions.has('bootCapability')), false,
+    'a retargeted/edited row here changes no transport word')
 })
 
-test('bootCapabilityIds lists only surviving rows whose transport word changed', () => {
+test('the bootCapability dimension marks only surviving rows whose transport word changed', () => {
+  // The dimension is the per-row conclusion; the renderer derives its own remount plan
+  // from the facts (design 05 §7.8), so the change set carries no derived id list for it.
   const gatewaySsh = gateway()
   const change = computeRosterChangeSet([gatewaySsh, dsh({ id: 'other' })], [gatewayHttp(), dsh({ id: 'other' })])
-  assert.deepEqual(change.bootCapabilityIds, ['same'])
+  assert.deepEqual(change.rows.filter(row => row.dimensions.has('bootCapability')).map(row => row.id), ['same'])
   const retireAndSwitch = computeRosterChangeSet([gatewaySsh], [gatewayHttp({ host: 'other.example.com' })])
-  assert.deepEqual(retireAndSwitch.bootCapabilityIds, [], 'a retired source is never remounted (retirement disposes the shell)')
+  assert.equal(retireAndSwitch.rows.some(row => row.dimensions.has('bootCapability')), false,
+    'a retired source is never remounted (retirement disposes the shell)')
   assert.ok(retireAndSwitch.rows[0]!.dimensions.has('sourceRetire'))
 })

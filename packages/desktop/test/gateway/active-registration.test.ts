@@ -292,6 +292,26 @@ test('a same-id re-add (new incarnation) is not blocked by the old tombstone', (
   assert.equal(h.plane.calls.register.length, 2)
 })
 
+test('a revoke that lands after the manager advanced to a NEW incarnation fences only the revoked record', () => {
+  const h = harness()
+  assert.equal(h.commitRegister().ok, true)
+  // A same-id delete/re-add replaced the manager state BEFORE the old shell's
+  // leave-ready revoke landed: the live incarnation is now O2 (numeric generation
+  // restarted at 1) while the published record still belongs to O1.
+  h.live.state.incarnation = {}
+  h.live.state.transportGen = 1
+  h.live.state.readyOn = true
+  assert.equal(h.registry.commit({ kind: 'revoke', id: h.spec.id, reason: 'leave-ready' }).ok, true)
+  // O2's first registration uses the restarted generation (1); a tombstone keyed to the
+  // LIVE incarnation would refuse it as stale and leave a ready instance unproxied.
+  const outcome = h.commitRegister()
+  assert.equal(outcome.ok, true)
+  if (!outcome.ok) return
+  assert.equal(outcome.action, 'registered')
+  assert.equal(h.plane.calls.register.length, 2)
+  assert.equal(h.registry.snapshot(h.spec.id)?.transportGen, 1, 'the new incarnation record is what is published')
+})
+
 test('snapshotForSync hands out the record only at the caller generation', () => {
   const h = harness()
   assert.equal(h.commitRegister().ok, true)

@@ -102,23 +102,22 @@ export interface RosterChangeRow {
   readonly dimensions: ReadonlySet<RosterChangeDimension>
 }
 
-/** The host-side diff of one committed registry replacement. Arrays are deduped and
- *  order-stable (BEFORE row order for everything derived from the previous roster;
- *  AFTER row order for bootCapabilityIds). */
+/** The host-side diff of one committed registry replacement. The per-row conclusions
+ *  (`rows` / `removedRows`) are the diagnostic/test surface; every id list is the
+ *  consumer view, deduped and order-stable (BEFORE row order for everything derived
+ *  from the previous roster, AFTER row order for `rows`). */
 export interface RosterChangeSet {
-  /** One row per AFTER instance. */
+  /** One row per AFTER instance (dimension carrier; the id lists below are the
+   *  production consumers — this row surface is informational). */
   readonly rows: readonly RosterChangeRow[]
-  /** BEFORE rows that no longer exist in AFTER. */
+  /** BEFORE rows that no longer exist in AFTER (dimension carrier, informational). */
   readonly removedRows: readonly RosterChangeRow[]
   /** Physical deletions, deduped in BEFORE order. */
   readonly removedIds: readonly string[]
   /** Renderer retirement set: removedIds then logical-source retargets (BEFORE order). */
   readonly retiredIds: readonly string[]
-  /** Rows whose boot capability word changed (AFTER order; a retired source is excluded). */
-  readonly bootCapabilityIds: readonly string[]
   readonly transportRebuildIds: readonly string[]
   readonly execRevokeIds: readonly string[]
-  readonly forwardRevokeIds: readonly string[]
   /** The OLD sourceIds whose forward namespaces/children must be released (kind-prefixed). */
   readonly forwardRevokeSourceIds: readonly string[]
   readonly seedRevokeIds: readonly string[]
@@ -173,7 +172,6 @@ export function computeRosterChangeSet(
   const editSourceRetireIds: string[] = []
   const transportRebuildIds: string[] = []
   const execRevokeIds: string[] = []
-  const forwardRevokeIds: string[] = []
   const forwardRevokeSourceIds: string[] = []
   const seedRevokeIds: string[] = []
   const seedReseedIds: string[] = []
@@ -181,7 +179,6 @@ export function computeRosterChangeSet(
   const changeById = new Map<string, Set<RosterChangeDimension>>()
   const seenForwardSourceId = new Set<string>()
   const reportForward = (previous: TransportInstanceSpec): void => {
-    forwardRevokeIds.push(previous.id)
     const sourceId = previous.kind + '-' + previous.id
     if (!seenForwardSourceId.has(sourceId)) {
       seenForwardSourceId.add(sourceId)
@@ -225,9 +222,10 @@ export function computeRosterChangeSet(
     }
   }
 
-  // AFTER order: rows + boot capability (the renderer's remount planning unit).
+  // AFTER order: one conclusion row per surviving instance (dimension carrier only —
+  // the production consumers read the id lists; the renderer derives its own remount
+  // plan from the facts, see design 05 §7.8 and use-roster-commit.ts).
   const rows: RosterChangeRow[] = []
-  const bootCapabilityIds: string[] = []
   for (const current of after) {
     const dimensions = changeById.get(current.id) ?? EMPTY_DIMENSIONS
     rows.push({
@@ -238,7 +236,6 @@ export function computeRosterChangeSet(
       removed: false,
       dimensions,
     })
-    if (dimensions.has('bootCapability')) bootCapabilityIds.push(current.id)
   }
 
   // retiredIds: the physical deletions first, then same-id logical retargets, stable in
@@ -257,10 +254,8 @@ export function computeRosterChangeSet(
     removedRows,
     removedIds,
     retiredIds,
-    bootCapabilityIds,
     transportRebuildIds,
     execRevokeIds,
-    forwardRevokeIds,
     forwardRevokeSourceIds,
     seedRevokeIds,
     seedReseedIds,
