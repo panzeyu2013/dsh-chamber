@@ -638,9 +638,9 @@ final class HostPathCatalogTests: XCTestCase {
 
     /// 相位到定时器的映射（纯值）：可见=跑两表；遮挡=停两表但保留快照；隐藏=停两表并清快照。
     func testShellPhasePlanMapsOcclusionAndHiddenDifferently() {
-        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: false)),
+        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: false, active: true)),
                        ShellPhasePlan(observeHostPaths: true, runHangWatchdog: true, clearDragSnapshot: false))
-        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: true)),
+        XCTAssertEqual(ShellPhasePlan.plan(for: .init(visible: true, occluded: true, active: true)),
                        ShellPhasePlan(observeHostPaths: false, runHangWatchdog: false, clearDragSnapshot: false))
         XCTAssertEqual(ShellPhasePlan.plan(for: .hidden),
                        ShellPhasePlan(observeHostPaths: false, runHangWatchdog: false, clearDragSnapshot: true))
