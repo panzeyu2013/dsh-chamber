@@ -61,9 +61,9 @@ test('a steady idle row never arms (arming needs the edge, not the state)', () =
   assert.equal(again.changed, false, 'a second identical idle step is silent')
 })
 
-// 标题逐字保留：scripts/gates/checks/remote-state-injection-matrix.mjs:90 把它当
-// four-surface-consistency 的 live 证据（匹配 = 标题原文）；注意力维度由 helper 默认
-// foreground: true 保持旧语义，新维度用下方独立新用例。
+// 标题逐字保留：remote-state-injection-matrix 的 four-surface-consistency live 证据按
+// 标题原文匹配；注意力维度由 helper 默认 foreground: true 保持旧语义，新维度用下方
+// 独立新用例。
 test('the painted source is reading: no arm, and an armed current clears', () => {
   assert.deepEqual(step({}, { s1: true }, { painted: true }).arms, {})
   const cleared = step({ s1: true }, { s1: true }, { painted: true })
@@ -101,6 +101,21 @@ test('returning to the foreground clears the arm a background completion made', 
   const cleared = step(armed.arms, armed.running, { painted: true, foreground: true })
   assert.deepEqual(cleared.arms, {})
   assert.equal(cleared.changed, true)
+})
+
+test('a painted facts-only source in the app background arms every row edge', () => {
+  // factsOnly = 无官方 ctx 上报的 provenance；painted 但应用在后台 ⇒ attended=false，
+  // 逐行 host running→idle 边沿必须武装（首见 running 只播种，不算边沿）。
+  const seeded = step({}, { s1: true }, {
+    painted: true, foreground: false, factsOnly: true, current: undefined,
+    rows: { s1: { running: true } },
+  })
+  assert.deepEqual(seeded.arms, {}, 'the first observation is not an edge')
+  const armed = step(seeded.arms, seeded.running, {
+    painted: true, foreground: false, factsOnly: true, current: undefined,
+  })
+  assert.deepEqual(armed.arms, { s1: true })
+  assert.equal(armed.changed, true)
 })
 
 test('only the attended current row clears: other rows and a background source keep their arms', () => {

@@ -285,6 +285,10 @@ test('接线锁：页面注意力单点（按参数纯函数 / 复用壳订阅 /
   assert.match(attention, /pageForegroundOf\(currentShellVisibility\(\), defaultDocFacts\(\)\)/,
     'currentPageForeground 必须自用纯函数（renderer ENTRYLESS 死导出门：selfUsed）')
   assert.match(attention, /subscribeShellVisibility\(/, '订阅复用壳事实订阅（不装第二份壳事件监听）')
+  assert.match(attention, /window as unknown as PageAttentionEventTarget/,
+    '生产 focus/blur 目标 = window（默认监听目标写反时现测必须变红）')
+  assert.match(attention, /document as unknown as PageAttentionEventTarget/,
+    '生产 visibilitychange 目标 = document（默认监听目标写反时现测必须变红）')
   assert.doesNotMatch(attention, /installShellVisibilityListener/, '不得再装第二份壳事件监听')
   assert.doesNotMatch(attention, /background-phase|shouldRunBackgroundPhase/,
     '注意力门不得复用相位门（其内部 isShellVisible() 读全局，纯函数会失真）')
