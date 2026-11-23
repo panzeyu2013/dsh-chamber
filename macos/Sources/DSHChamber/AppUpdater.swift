@@ -629,8 +629,8 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     var stallWatchdogMs: Int = 60_000
 
     /// 下载相位的独立 deadline（B4）：30min 只兜住「永远不落地」的悬挂下载，不参与
-    /// E 式 idle 判定——「S 看不到下载进度」是登记在案的语义差异（design 25 §7、
-    /// STATUS「更新链的节奏/取证/注意力」）。
+    /// E 式 idle 判定——「S 看不到下载进度」是登记在案的语义差异（design 25 §7 与 design 11 的更新链
+    /// 节奏/取证/注意力已知限制）。
     var downloadStallWatchdogMs: Int = 30 * 60_000
 
     private var stallWatchdog: DispatchWorkItem?

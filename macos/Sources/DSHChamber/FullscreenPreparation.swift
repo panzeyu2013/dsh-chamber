@@ -14,7 +14,7 @@
 //     字面量，两端不得加前缀或改大小写）；
 //   - 等待期窗口销毁（willClose）→ nil（没有可退的全屏面，安装照常继续）。
 //
-//  残余（登记 design 25 §7 / STATUS）：App 菜单「检查更新…」与 scheduled
+//  残余（登记 design 25 §7）：App 菜单「检查更新…」与 scheduled
 //  reminder 的 Sparkle 标准窗路径不经过本准备（方案 B 只覆盖设置行/页面
 //  restartAndInstall 路径）；「全屏点重启并安装」的时序与 ≤5s 退全屏属真机
 //  验收（本机无 swiftc/display → NOT RUN）。

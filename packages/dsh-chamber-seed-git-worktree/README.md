@@ -13,4 +13,4 @@
 - `src/core.ts` / `core-ops-create.ts` / `core-git-runner.ts` — 操作编排与 git 调用。
 - `src/core-validation.ts` / `core-parse.ts` / `core-errors.ts` — 校验、解析与错误分类。
 
-开放项见 [STATUS](../../docs/progress/STATUS.md)。
+开放项/已知限制见 owning design 的「已知限制」段与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。

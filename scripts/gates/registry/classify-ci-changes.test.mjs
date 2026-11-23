@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { PROSE_ONLY_FILES, PROSE_ONLY_PREFIXES, changedPathsForEvent, classifyChangedPaths } from './classify-ci-changes.mjs'
 
 test('prose-only change skips the expensive chain', () => {
-  const result = classifyChangedPaths(['docs/progress/STATUS.md', 'docs/design/09-frontend.md', 'CHANGELOG.md', 'docs/CHANGELOG.en-US.md'])
+  const result = classifyChangedPaths(['docs/progress/TODO.md', 'docs/design/09-frontend.md', 'CHANGELOG.md', 'docs/CHANGELOG.en-US.md'])
   assert.equal(result.code, false, result.reason)
   assert.equal(result.prose.length, 4)
   assert.deepEqual(result.codePaths, [])
@@ -35,9 +35,9 @@ test('anything outside the prose allowlist is code', () => {
   }
 })
 test('a mixed change is code — the prose part never dilutes it', () => {
-  const result = classifyChangedPaths(['docs/progress/STATUS.md', 'packages/cli/package.json'])
+  const result = classifyChangedPaths(['docs/progress/TODO.md', 'packages/cli/package.json'])
   assert.equal(result.code, true)
-  assert.deepEqual(result.prose, ['docs/progress/STATUS.md'])
+  assert.deepEqual(result.prose, ['docs/progress/TODO.md'])
   assert.deepEqual(result.codePaths, ['packages/cli/package.json'])
   assert.match(result.reason, /packages\/cli\/package\.json/)
 })

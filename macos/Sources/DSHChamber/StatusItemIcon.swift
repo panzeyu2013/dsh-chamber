@@ -19,7 +19,7 @@ import AppKit
 enum StatusItemIcon {
 
     /// 状态栏图标目标尺寸（沿用旧实现的 18pt；菜单栏额外项常规 16–19pt。
-    /// Electron 侧未做同尺寸化，见 STATUS 开放项）。
+    /// Electron 侧未做同尺寸化，见 design 25 §7 的已知限制）。
     static let size = NSSize(width: 18, height: 18)
 
     /// 从任意源图（通常是 NSApp.applicationIconImage）烘一张自持状态栏图：

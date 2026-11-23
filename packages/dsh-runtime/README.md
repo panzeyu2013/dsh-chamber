@@ -14,4 +14,4 @@
 
 `runtime-installer.ts`（下载/安装/发布）、`runtime-startup.ts`（启动期应用链）、`dsh-runtime-store.ts`（布局与版本树）、`snapshot-store.ts`（快照与恢复标记）、`activation-gate.ts` / `apply-phase.ts` / `rollback-facts.ts`（激活与回滚判定）、`runtime-probes.ts`（激活探针集）、`runtime-metadata-recovery.ts`（元数据恢复）、`known-good-monitor.ts`、`allow-builds.mjs`（ALLOW/DENY 单一来源，构建期与运行期共用）。
 
-剩余实机门禁以 [docs/progress/STATUS.md](../../docs/progress/STATUS.md) 为准。
+剩余实机门禁见 owning design 的「已知限制」段与 [acceptance checklists](../../docs/checklists/acceptance/)（STATUS 已停用，2026-11-23）。

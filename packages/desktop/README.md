@@ -103,7 +103,7 @@ pnpm run dist:desktop
 
 > Electron 打包冻结；本节保留为复活参考。`build.files` **已含** `electron/**/*.ts` / `electron/**/*.cts`
 > （与 `packages/desktop/package.json` 一致），复活时只需核对、不再补 glob；根 `tsconfig.json` 默认不含
-> `electron/**`（有意不让冻结类型检查反向绑定共享契约改动），复活按需加回（见 electron-frozen.md §6.4）。
+> `electron/**`（有意不让冻结类型检查反向绑定共享契约改动），复活按需加回（见 electron-frozen.md §6 第 4 步）。
 
 - `files` 只收主进程/预加载/transport/settings/plugin-sync 源文件、package.json 与 dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经两个精确的 `extraResources` FileSet 拷入产物：根 manifest/lock/workspace 文件一组，`vendor/dsh/node_modules` 作为独立复制根一组（electron-builder 会无条件忽略任一 FileSet 根下名为 `node_modules` 的直接子目录，不能只复制 `vendor/dsh`）。`afterPack` 在生成 DMG/ZIP/NSIS 前校验 dsh package manifest、版本与目标平台，缺失/漂移直接使打包失败；暂存树和交换备份不会进入产物。
 - `electronLanguages: ["en-US", "zh-CN"]` 裁剪 locales；mac 腿另有 `build.mac.electronLanguages: ["en","zh_CN"]`——`zh-CN` 匹配不到实际目录 `zh_CN.lproj`，app-builder-lib 会静默删除中文 `locale.pak`（S-47）。

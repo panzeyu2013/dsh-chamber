@@ -5,7 +5,7 @@ Remote Browser（[design 28 v3](../../docs/design/client/28-remote-browser.md)�
 > 上游 Electron webview 载体（`electron/` + `dshDesktop.browser`）刻意不 fork：Electron 腿冻结归档（[electron-frozen.md](../../docs/progress/electron-frozen.md)）；carrier 由 Swift 壳提供，本包经 `browser` 桥驱动 guest（keepMounted / per-session 记账在 renderer，guest 生命周期在 main）。
 > `pnpm install` 后 `typecheck:browser` 的类型豁免见 `tsconfig.json` 的 `erasableSyntaxOnly: false` 注释（上游同源源码逐字复用，随包由 vite/esbuild 打包）。
 
-> 契约 = [design 28 v3](../../docs/design/client/28-remote-browser.md) / [ADR-0004](../../docs/design/decisions/0004-swift-guest-per-tab.md)；开放验收项见 [STATUS 的「右栏浏览器 v3」条目](../../docs/progress/STATUS.md)。
+> 契约 = [design 28 v3](../../docs/design/client/28-remote-browser.md) / [ADR-0004](../../docs/design/decisions/0004-swift-guest-per-tab.md)；开放验收项见 [remote-browser acceptance §E2](../../docs/checklists/acceptance/remote-browser-acceptance.md#e2)（W-13…W-30），未排期项见 [TODO](../../docs/progress/TODO.md)。
 
 ## 来源与同步
 

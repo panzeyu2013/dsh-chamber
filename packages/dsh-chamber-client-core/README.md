@@ -15,4 +15,4 @@
 - `src/page-channel.ts` / `instance-api.ts` / `control-plane-client.ts` — 页面通道、每实例 unary 与 HTTP 预算。
 - `src/panel-axis.ts` / `view-prefs.ts` / `resident-store.ts` — 面板轴、视图偏好与常驻壳记账。
 
-开放项见 [STATUS](../../docs/progress/STATUS.md)。
+开放项/已知限制见 owning design 的「已知限制」段与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。

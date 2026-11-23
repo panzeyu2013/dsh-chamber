@@ -3,7 +3,7 @@
 - 阶段：acceptance（design 14 §D4 的真机校准；发布前按 §5 抽验）；触发：改会话权威阶梯 / probe / 写回 / 通知边沿，或发布前需要真机证据时；Owner：design 14 §D4 owner（执行 = 验收人）；Timebox：2–4 小时（每来源各一轮 A–E；ssh 写回时延另计）
 - 退出标准：§5 判据全满足（A/B/D 位掉落 + 通知恰好一条；C 零误写回；配额内无 reconnect 风暴）；自动化入口：`node scripts/gates/checks/verify-ladder-table-parity.mjs`（阈值表锁步）、`packages/dsh-stream-state/tables.json` 的 `ladders.authority`；证据：t0/t1/t2 时间线 + `recent` ring + 控制面日志（不落进度台账：完成叙事归 PR/发布记录，未闭合项归 owning design 的「已知限制」段）
 
-> 本文件是**程序**，不是记录：不写版本号、提交、基线快照或轮次台账。校准数值单一来源 = `packages/dsh-stream-state/tables.json` 的 `ladders.authority`（probeAfterMs / probeCoalesceMs / probeWindowMs / maxProbesPerWindow / reconnectAfterMs / reconnectCooldownMs / maxReconnects / noticeAfterMs）；改值 = design 14 §D4 的 BEHAVIOR_CHANGES 条目，必须同步 TS 字面量（`src/tables.ts`）与该 JSON，并跑 `node scripts/gates/checks/verify-ladder-table-parity.mjs`。
+> 本文件是**程序**，不是记录：不写版本号、提交、基线快照或轮次台账。校准数值单一来源 = `packages/dsh-stream-state/tables.json` 的 `ladders.authority`（probeAfterMs / probeCoalesceMs / probeWindowMs / maxProbesPerWindow / reconnectAfterMs / reconnectCooldownMs / maxReconnects / noticeAfterMs）；改值 = `packages/dsh-stream-state/DIVERGENCE.md` 的 BEHAVIOR_CHANGES 条目（§A），必须同步 TS 字面量（`src/tables.ts`）与该 JSON，并跑 `node scripts/gates/checks/verify-ladder-table-parity.mjs`。
 
 ## 1. 目的
 
@@ -27,7 +27,7 @@
 
 ## 6. 失败处置
 
-- **假阴性**（位未掉）：记录 t0/t1、`recent`、控制面日志；确认 probe 是否发出、权威读返回什么；按 design 14 §D4 的残余窗口排查（宿主返回不完整列表 / 写面缺失 / `refresh()` 缺失）。**假阳性**（宿主在跑却写回或重连）：记录该会话与 `recent`；把相应表值改动按 BEHAVIOR_CHANGES 回退，并把证据写回 design 14 §D4 的「已知限制」段与 TODO 的对应触发条件；阈值改动必须配对更新 `tables.ts` ↔ `tables.json` 并通过锁步门。
+- **假阴性**（位未掉）：记录 t0/t1、`recent`、控制面日志；确认 probe 是否发出、权威读返回什么；按 design 14 §D4 的残余窗口排查（宿主返回不完整列表 / 写面缺失 / `refresh()` 缺失）。**假阳性**（宿主在跑却写回或重连）：记录该会话与 `recent`；把相应表值改动按 `packages/dsh-stream-state/DIVERGENCE.md` 的 BEHAVIOR_CHANGES 回退，并把证据写回 design 14 §D4 的「已知限制」段与 TODO 的对应触发条件；阈值改动必须配对更新 `tables.ts` ↔ `tables.json` 并通过锁步门。
 
 ## 7. 关联
 

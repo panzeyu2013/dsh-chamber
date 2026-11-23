@@ -754,7 +754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    /// macOS 深链入口（design 25 §4.5/E13）：Info.plist CFBundleURLTypes 注册后
+    /// macOS 深链入口（design 25 §4.5）：Info.plist CFBundleURLTypes 注册后
     /// 由 LaunchServices 投递（冷启动先于 sidecar ready 到达 → 缓冲，ready 后
     /// 按序转交 B 桥 `__host.deepLink`）。归一化/去重/队列语义在 core
     /// enqueueDeepLink，本层只做「不丢」。

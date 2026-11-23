@@ -48,8 +48,7 @@
  *
  * 注意：entitlements plist **不能带 XML 注释**——codesign 的
  * AMFIUnserializeXML 解析器对注释/非 ASCII 文本直接报
- * "Failed to parse entitlements"；权限集理由写在 design 25 §4.3/§8.4 与
- * STATUS，不写在 plist 里。
+ * "Failed to parse entitlements"；权限集理由写在 design 25 §4.3/§8.4，不写在 plist 里。
  */
 import { spawnSync } from 'node:child_process'
 import {

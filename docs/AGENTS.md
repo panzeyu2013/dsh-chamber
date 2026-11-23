@@ -31,7 +31,7 @@
 - **一段一行**：段落不物理折行；表格、列表、代码块保持自身格式。
 - **链接代替复述**：引用设计、脚本、单源、索引时给相对链接；锚点用 GitHub slug 或显式 `<a id>`（`verify:md-links` 校验）。
 - **禁止手抄目录**：包 / 门 / 脚本 / 阶段 / 触点清单一律指向单源（[`gate-surfaces.json`](../scripts/gates/registry/gate-surfaces.json)、[`registry.json`](../scripts/upstream/registry/registry.json)、[`package.json`](../package.json)、[`checklists/README.md`](./checklists/README.md)），正文只写「去哪看」。
-- **不写进度状态词**：STATUS 已停用（2026-11-23 用户裁决），其他文档同样不写条目的进度状态词（待做 / 待验收 / 待裁 / 接受；流程动作词如「上报待裁」不在此限）；未排期计划写 [`TODO.md`](./progress/TODO.md)，契约与取舍写明 owning design。
+- **不写进度状态词**：STATUS 已停用（2026-11-23 用户裁决），其他文档同样不写条目的进度状态词（待做 / 待验收 / 待裁 / 接受；流程动作词如「上报待裁」不在此限；design 的已裁取舍/已知限制可用裁决词，本规则针对条目/台账状态标签）；未排期计划写 [`TODO.md`](./progress/TODO.md)，契约与取舍写明 owning design。
 - **当前版本值只留单源**：tag / commit / 锁文件版本作为现行值不进 design/checklists；引用时指向 `harness.commit`、`packages/desktop/vendor/dsh/pnpm-lock.yaml` 或对应 `package.json`。历史证据例外：为论证契约引用不可变的上游 commit/tag 时标注「历史证据，不随本仓 pin 移动」。
 - **不写规格语**：已实现的东西不写「应 / 计划 / 迁移步骤」；未实现的想法放 TODO，设计取舍放 design/ADR。
 - **双语规则**：中文主档与 `docs/*.en-US.md` 镜像结构一致（标题层级、围栏数、表格数、注释数，`verify:i18n` 校验）；改一侧同批改另一侧，并由协调者统一 `--write` 重录 [`docs/i18n-record.json`](./i18n-record.json)。

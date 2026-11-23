@@ -13,4 +13,4 @@
 - `src/index.ts` / `src/binding.ts` — 服务绑定与端点。
 - `src/core.ts` — 探测/清理核心。
 
-开放项见 [STATUS](../../docs/progress/STATUS.md)。
+开放项/已知限制见 owning design 的「已知限制」段与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。

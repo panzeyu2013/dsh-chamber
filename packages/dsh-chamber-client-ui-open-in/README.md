@@ -14,4 +14,4 @@
 - `src/client/machine-catalog.ts` / `source-adapter.ts` — 目录与来源适配。
 - `src/client/session-stream-health*.ts` / `*.tsx` — 健康探针、芯片与座席。
 
-开放项见 [STATUS](../../docs/progress/STATUS.md)。
+开放项/已知限制见 owning design 的「已知限制」段与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。

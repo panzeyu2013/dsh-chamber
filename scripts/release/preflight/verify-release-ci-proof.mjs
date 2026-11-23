@@ -40,12 +40,12 @@ import { fileURLToPath } from 'node:url'
 /** Jobs that must have concluded `success` on the proven run: the linux chain
  *  (release.yml's mechanical superset is validated against it) and the two macOS
  *  legs — the native `.app`/dmg/zip ship from the SAME tag (release.yml's
- *  build-swift), and `test-macos` is the only job that exercises the darwin lock
- *  and the two packaging-script suites those artifacts are produced by, so a
- *  release that skipped it would ship native artifacts no push-path gate ever
- *  validated; `test-macos-pack` carries the executed-assembly gates and the native
- *  dry runs split out of it (the split moved the STEPS to a parallel job, it did
- *  not drop any coverage). The Windows/Linux desktop legs are ARCHIVED with the
+ *  build-swift), and `test-macos-pack` is the job that exercises the darwin lock
+ *  and the two packaging-script suites those artifacts are produced by; `test-macos`
+ *  carries the Swift build/test core (plus the executed-assembly gates and native dry
+ *  runs split out of the packaging job — the split moved STEPS to a parallel job, it
+ *  did not drop any coverage), so a release that skipped either would ship native
+ *  artifacts no push-path gate ever validated. The Windows/Linux desktop legs are ARCHIVED with the
  *  Electron flavor (frozen-surface registry), so they are not
  *  part of the proof set. */
 export const REQUIRED_JOBS = [...CI_JOB_IDS]

@@ -137,7 +137,7 @@
 #### 14.3 工程环境债
 
 - 下一 pin 落地「真 `WorkspaceRegistry` + 真 binding」lockstep（当前 ad-hoc 形态；CI 走 node_modules 解析）；复核 vendor 补丁 retire 与 `RETIRED_PATCHES`（3 条退役：ReasoningRow sweep、util-values 比较、ui-theme styles 页面单例）。
-- `node-addon-require-builtin` 指纹表未收录当前 Electron pin ⇒ Electron flavor 托管宿主起不来（Electron 已冻结归档，复活按 `electron-frozen.md` §6.3）。
+- `node-addon-require-builtin` 指纹表未收录当前 Electron pin ⇒ Electron flavor 托管宿主起不来（Electron 已冻结归档，复活按 `electron-frozen.md` §6 第 3 步）。
 
 #### 14.4 升级期检查两条闭口（待 vendor 物化）
 
@@ -234,7 +234,7 @@ W-01…W-32 的判定与契约落点以 design 25 §8.5 与 §3.2–§8.4 为准
 
 #### 2.1 外部门禁（冻结原表）
 
-M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 design 23 §7/§8 与 [electron-frozen.md](./electron-frozen.md) §6 执行。
+M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 design 23 §6/§7 与 [electron-frozen.md](./electron-frozen.md) §6 执行。
 
 #### 2.2 基线登记口径（冻结基线）
 
@@ -277,7 +277,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 ### 3. open-in：超集分批（S1/S2/S3）
 
-> fork & supersede 的契约见 `docs/design/desktop/20-open-in-registry.md`（§4 契约、§6 host 包与八处接线、§8 文件清单、§9 验证门）；实机验收与实施后开放项见 design 20 §1 与 `docs/checklists/acceptance/`。本节只留未排期超集分批与不做的边界。
+> fork & supersede 的契约见 `docs/design/desktop/20-open-in-registry.md`（§4 契约、§6 host 包与八处接线、§8 文件清单、§9 验证门）；实机验收与实施后开放项见 design 20 §10 与 `docs/checklists/acceptance/`。本节只留未排期超集分批与不做的边界。
 
 #### 3.1 超集分批（S1/S2 未排期；S3 残余；S4 不做）
 

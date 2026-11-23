@@ -20,7 +20,7 @@
 ### D1 关闭到托盘（v1 核心，跨平台一致）
 
 - 新设置 `windowCloseBehavior`（**用户可设**，settings 壳固定入口「通用」`__general`，设计 15 平铺形态）：`hide-to-tray`（默认，关窗 → 托盘，dsh 继续运行）/ `quit`（关窗 = 退出应用，与现状行为一致）。
-- 关窗裁决（行为契约）：设置 = hide-to-tray 且非显式退出 ⇒ **隐藏不销毁**；控制面/传输层/dsh 子进程继续运行（**Swift**：`windowShouldClose` 委托 core 决策后 `orderOut`，`MainWindowController.swift` / `AppDelegate.swift`；Electron 归档面：`close` + `preventDefault`/`hide`）。显式退出（托盘「退出」/ Cmd+Q / 应用菜单）走退出清理 single-flight：先阻止新的 runtime 启动并中止在途 runtime operation，再并行等待 plugin-sync/本地插件子进程、transport、control-plane、runtime installer 与在途 runtime transaction；有界超时 fail-loud，不留下孤儿进程（**Swift**：`QuitCoordinator.swift` → sidecar 退出链；Electron 归档面 `will-quit`）。**更新退出腿例外（design 11 §3.1）**：`quitAndInstall` 在 macOS 上**先关闭全部窗口、再退出**（`before-quit` 晚于关窗），因此关窗裁决还接收`updateRestartArmed`——更新重启已武装时 `shouldHideToTray` 恒 false，关窗必须真正关闭；被 hide 吞掉会截断安装/重启链，留下「无窗口仍在运行」的进程（Swift 更新安装链同样武装该门，design 25 §7）。
+- 关窗裁决（行为契约）：设置 = hide-to-tray 且非显式退出 ⇒ **隐藏不销毁**；控制面/传输层/dsh 子进程继续运行（**Swift**：`windowShouldClose` 委托 core 决策后 `orderOut`，`MainWindowController.swift` / `AppDelegate.swift`；Electron 归档面：`close` + `preventDefault`/`hide`）。显式退出（托盘「退出」/ Cmd+Q / 应用菜单）走退出清理 single-flight：先阻止新的 runtime 启动并中止在途 runtime operation，再并行等待 plugin-sync/本地插件子进程、transport、control-plane、runtime installer 与在途 runtime transaction；有界超时 fail-loud，不留下孤儿进程（**Swift**：`QuitCoordinator.swift` → sidecar 退出链；Electron 归档面 `will-quit`）。**更新退出腿例外（[design 11](../archive/11-auto-update.md) §3）**：`quitAndInstall` 在 macOS 上**先关闭全部窗口、再退出**（`before-quit` 晚于关窗），因此关窗裁决还接收`updateRestartArmed`——更新重启已武装时 `shouldHideToTray` 恒 false，关窗必须真正关闭；被 hide 吞掉会截断安装/重启链，留下「无窗口仍在运行」的进程（Swift 更新安装链同样武装该门，design 25 §7）。
 - 设置 = `quit` 时关窗仍受 D2 退出确认保护（本地实例运行中先确认再退出；远程隧道/连接不影响关闭——D2），非 darwin 行为与现状一致（关窗即退出）。
 - 三平台一致：macOS/win/linux 同走 `windowCloseBehavior`；macOS 系统惯例（红点/Cmd+W = hide、Cmd+Q = 退出）在 hide-to-tray 语义下天然一致。
 - **前置门控：hide-to-tray 仅在恢复入口可用时生效**：托盘/状态项缺失（图标资源缺失 → Electron 归档面 `maybeCreateTray` 跳过 / Swift `statusItem` 构造跳过）时，非 darwin 回退现状（关窗即退出，仍受 D2 确认保护）——**绝不允许窗口被隐藏后无任何恢复入口**。macOS 无托盘也安全（Dock 图标常驻可恢复，`recoveryAvailable` 恒 true，hide 是系统惯例）。
@@ -224,7 +224,7 @@
 
 ### D5 keep-awake（v1 设置项，默认关）
 
-- 行为契约：设置项 `keepAwake`（默认关，settings 壳「通用」入口，设计 15）在**开启且窗口可见**（visible 且未遮挡 = 相位门，**不含** `active` 注意力门，见 §D1）时防应用挂起；orderOut/最小化/Cmd+H/切 Space 遮挡期间释放，恢复可见重新持有；退出/停用即释放。仅防应用挂起，不阻止显示器关闭，不引入后台任务。隐藏期长任务可睡 = 当前取舍（是否新增「无条件保持」显式选项待产品裁决，登记见 design 25 §5.7 的「隐藏窗口渲染活性」行）。**Swift 落点**：`ProcessInfo.processInfo.beginActivity`（`SwiftEdgeHostLegs.swift` 的 `desired = keepAwakeRequested && windowVisible`；design 25 §5 E7）；**Electron 归档面**：`powerSaveBlocker.start('prevent-app-suspension')`。
+- 行为契约：设置项 `keepAwake`（默认关，settings 壳「通用」入口，设计 15）在**开启且窗口可见**（visible 且未遮挡 = 相位门，**不含** `active` 注意力门，见 §D1）时防应用挂起；orderOut/最小化/Cmd+H/切 Space 遮挡期间释放，恢复可见重新持有；退出/停用即释放。仅防应用挂起，不阻止显示器关闭，不引入后台任务。隐藏期长任务可睡 = 当前取舍（是否新增「无条件保持」显式选项待产品裁决，登记见本文件 §D5 的 Rejected alternatives ③ 与 §5 的 v1 范围边界）。**Swift 落点**：`ProcessInfo.processInfo.beginActivity`（`SwiftEdgeHostLegs.swift` 的 `desired = keepAwakeRequested && windowVisible`；design 25 §5 E7）；**Electron 归档面**：`powerSaveBlocker.start('prevent-app-suspension')`。
 
 **Rejected alternatives（keep-awake 可见性门）**：① 维持「设置开启即无条件持有」的旧行为——隐藏/遮挡期仍阻止应用挂起（实机取证：keep-awake 断言已持约 89 h、整机放电约 34 W），与「隐藏窗口不消耗前台算力」的相位目标相反，且隐藏期会话本可随系统睡眠由宿主重连恢复；② 只改默认值或在设置面加说明而不动持有判据——默认值已是关，用户开启后的持有范围问题原样存在，等于用文档偏移代替行为修正；③ 按需可见（现行）——`desired = keepAwakeRequested && windowVisible`，orderOut/最小化/Cmd+H/遮挡即释放、恢复可见重持；接受代价 = 隐藏期长任务可能随系统睡眠暂停，是否新增「无条件保持」显式选项待产品裁决（见上）。
 

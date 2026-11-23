@@ -138,7 +138,7 @@ public struct DeepLinkBuffer {
     }
 }
 
-/// 深链转发状态机（design 25 §4.5/E13）：sidecar 未就绪 → 缓冲（有界）；
+/// 深链转发状态机（design 25 §4.5）：sidecar 未就绪 → 缓冲（有界）；
 /// 就绪后按入队序补发，其后直通。`send` 由应用层注入（B 桥 invoke），
 /// 缓冲/顺序/就绪语义纯逻辑可单测。
 public final class DeepLinkRelay {

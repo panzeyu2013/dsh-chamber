@@ -4,7 +4,7 @@
 标 `[机械]` 的项目跑一遍，产出固定 schema 的报告 + 截图，供 PR / issue 附证据。
 
 **它不是新的阻断门**：判据的权威仍在 `docs/design/`（契约）与
-`docs/progress/STATUS.md`（开放实机门禁），本目录只负责**跑**与**留痕**——所以正文不复制
+`docs/checklists/acceptance/gui-acceptance-checklist.md`（验收流程与指针），本目录只负责**跑**与**留痕**——所以正文不复制
 判据，避免出现第二份会漂移的台账。
 
 > **Electron/CDP 腿冻结归档（2026-11）**：`--dev`、`--flavor electron`、`walkthrough.mjs` / `launch.mjs` /
@@ -47,7 +47,7 @@
 | `ssh-fixture.mjs` | **ARCHIVED（Electron CDP 腿）** 打包态 smoke 的本地 SSH fixture（一次性 userData/ssh-agent） |
 
 移动档的两层与桌面档同构：`mobile-walkthrough.mjs` 只采集事实（CDP + DOM 表达式），
-判定与脱敏都在 `mobile-checks.mjs`。真机抽检不可省（见 `docs/progress/STATUS.md`
+判定与脱敏都在 `mobile-checks.mjs`。真机抽检不可省（见 `docs/checklists/acceptance/gui-acceptance-checklist.md`
 的移动验收项）：模拟层有三条实测边界（`Emulation.setEmulatedMedia` 的
 `pointer`/`hover` 被 Chromium 忽略、`mobile:true` 的收缩适配让
 `scrollWidth <= innerWidth` 恒真、iOS/WebKit 语义造不出来）。

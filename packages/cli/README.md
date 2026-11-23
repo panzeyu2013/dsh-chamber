@@ -16,4 +16,4 @@
 - **入口只有参数与环境变量**：`DSH_CHAMBER_URL`（控制面 URL）、`DSH_CHAMBER_STATE`（状态目录）、`DSH_CHAMBER_DSH_PATH`（dsh 工作区路径）；CLI 不猜端口。
 - **失败出口单一**：错误经 `fail()` 写 stderr 并非零退出，脚本可依赖退出码。
 
-开放项与剩余验收以 [`docs/progress/STATUS.md`](../../docs/progress/STATUS.md) 为准。
+开放项与剩余验收见 owning design 的「已知限制」段、[acceptance checklists](../../docs/checklists/acceptance/) 与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。

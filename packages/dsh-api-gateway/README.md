@@ -14,4 +14,4 @@
 - `src/client/remote-retry-policy.ts` / `stream-stall-policy.ts` / `stream-carrier-fact.ts` — 重试、停滞与载体事实。
 - `src/stream-protocol.ts` / `src/remote-error-codes.ts` — 线协议与错误码。
 
-开放项见 [STATUS](../../docs/progress/STATUS.md)。
+开放项/已知限制见 owning design 的「已知限制」段与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。

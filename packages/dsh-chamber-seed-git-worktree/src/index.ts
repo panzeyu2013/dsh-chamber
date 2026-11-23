@@ -207,7 +207,7 @@ export class GitWorktreeGateway extends TypertRemoteService {
     // alpha.1 also removed the model's `working_directory` tool, so without this
     // record a chamber-created Session in a checkout has NO way back (WORKTREE_NOT_ENTERED).
     // Only the ENTERED record is written — never `created`, which marks a checkout the
-    // upstream service may reclaim on archive; chamber's seed owns pool deletions (design 08 §1.5).
+    // upstream service may reclaim on archive; chamber's seed owns pool deletions (design 08 §1 第 5 条).
     // Remember only AFTER the append succeeds: appendPluginRecord can throw, and the
     // retry must still write the record (remember-first would silently skip it forever).
     if (this.lastEnteredPath.get(sessionId) !== entered.path) {

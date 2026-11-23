@@ -14,4 +14,4 @@
 
 `pnpm run build:gateway` 构建；CLI 入口 `node packages/gateway/src/cli.ts serve|auth status|reset-password|clear`。分发走 GitHub Release 的 `.tgz`（**不发布到 npm**）。
 
-未完成门禁（重连窗口、运维页缺 `recover-metadata` / `cleanup-version` / `restore-pre-rollback` 等）以 [`docs/progress/STATUS.md`](../../docs/progress/STATUS.md) 为准。
+未完成门禁（重连窗口、运维页缺 `recover-metadata` / `cleanup-version` / `restore-pre-rollback` 等）见 owning design（design 17/21）的「已知限制」段与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。

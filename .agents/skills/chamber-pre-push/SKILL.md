@@ -10,7 +10,7 @@ description: Use before pushing, opening or updating a pull request, or claiming
 - 门清单单一来源：`scripts/gates/registry/gate-surfaces.json`（门 id、所属 `modes`、`surfaces.local/ci/release`、门所在 workflow 步）。根 `package.json` 只是命令入口，不是清单。
 - 查看计划（不执行）：`node scripts/gates/runners/run-checks.mjs <mode> --list`。
 - 平台门：gate registry 过滤 `platform: darwin`；linux 的模式里没有 macOS / Swift 腿，那不等于它们通过。
-- 模式之外的门见 `docs/progress/STATUS.md` §1.6（清单以该条为准，本文件不复述）。
+- 模式之外的门见 `scripts/gates/registry/gate-surfaces.json`（门清单单源；STATUS 已停用，不再承载门名单）。
 
 ## 按改动面选证据
 

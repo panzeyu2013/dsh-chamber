@@ -36,7 +36,7 @@
 只能在打包态或真机上判，逐条判据见 design 与本清单 §4.2 真机项（开放工程项以 owning design 的「已知限制」段为准；本节不复述判据）：
 
 - 安装/更新事务、quitAndInstall、缓存清理 → design 11 §9；桌面更新补充面（nudge / 失败技术详情 / 全屏安装准备）、`dsh-chamber://open` 深链前置、初始/最小视口、快捷键持久化、更新指示器 → design 14 §D2、16 §3.1、25 §5.6/§7/§8.4、05 §5（逐项见 §4.2 真机表）；dsh 运行时版本事务（激活/回退/恢复）→ design 18 §3.5–§3.6、§9；通知与未读徽标、Dock/托盘/任务栏三形态；子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）→ design 19、§3.2/§3.5；多实例页级持久面（两个来源各自的会话选择/折叠等 scope 互不覆盖，重载后各自恢复）→ design 09 §3.6（第四类补丁）；open-in 拉起外部应用、图标、深链冷热启动 → design 16、20 §6/§10；N-ctx 文件动作 URL 前缀（交付卡文件夹菜单 / 聊天图片）→ design 09 §3.6、20 §2.2；N-ctx 文档预览图片前缀与 degrade（§4.3 第 5–7 步）→ design 09 §4；Git worktree 全链（真实远程 Linux 仓库）→ design 08；孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune；判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测）→ design 06 §7、§11、08 §3.4、§6.4；归档管理器与 force 清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）→ design 24 §5、§6、§13。
-- gateway 形态（生产 TLS、`/chamber/*`、移动端）→ design 17、21 §9；移动端 Web 面（真机触控档、安全区、键盘只能真机；CDP 设备模拟半边见 §0 已标 ARCHIVED 的机械 B-mobile 行）→ design 17 §18.6，机器侧 = native 真机/目检（§4.2）；native guest 面（Swift .app 一次；Electron 打包态随冻结归档）：远端 dsh+ssh / gateway+ssh 的 loopback guest 加载与关 tab 释放、XFO 站点可见、失败可见性（code+description）、系统浏览器出口（alias 投影）、https 证书错误不绕过、跨源 cookie/登录、新窗/下载/权限/键盘焦点、guest 崩溃恢复、远端页面不能改 chamber 状态 → design 28 §4/§5/§8/§9、design 25 §8.5；**ARCHIVED（随 Electron 冻结）** Linux 桌面 / Windows 首版 → design 22 §7、23（ARCHIVED）。
+- gateway 形态（生产 TLS、`/chamber/*`、移动端）→ design 17、21 §9；移动端 Web 面（真机触控档、安全区、键盘只能真机；CDP 设备模拟半边见 §0 已标 ARCHIVED 的机械 B-mobile 行）→ design 17 §18.6，机器侧 = native 真机/目检（§4.2）；native guest 面（Swift .app 一次；Electron 打包态随冻结归档）：远端 dsh+ssh / gateway+ssh 的 loopback guest 加载与关 tab 释放、XFO 站点可见、失败可见性（code+description）、系统浏览器出口（alias 投影）、https 证书错误不绕过、跨源 cookie/登录、新窗/下载/权限/键盘焦点、guest 崩溃恢复、远端页面不能改 chamber 状态 → design 28 §4/§5/§8/§9、design 25 §8.5；**ARCHIVED（随 Electron 冻结）** Linux 桌面 / Windows 首版 → design 22 §6、23（ARCHIVED）。
 ### 4.1 I-15 矩阵执行序
 
 既有矩阵 + 两组新增（I-12/I-14）——矩阵清单**以下表为准**（含置顶两面；早期「六组矩阵」口径不含该行）。每行 = 怎么跑 → 看什么 → 留什么证据；判据在指针文档，本表只固定流程。跑完把「一句结论 + 截图/日志路径」记进 PR 证据（不另设进度登记）。
@@ -84,7 +84,7 @@
 - **插件管理页（C1）**：设置 → 插件管理可打开、不崩；同步行/提示不出现（静态空实现，登记限制）；插件页内可见 connector-account（若 runtime 提供）。
 - **HMR 热同步**：安装/启停/卸载插件后页面侧行热更新（per-instance `pluginEvents` 流；Host 重载期应重连而非终断；重启型变更仍提示 restart-required）。
 - **remote-connection 关闭**：本地/网关实例不出现连接配对卡；gateway `/` 恢复认证（匿名 landing 不出现）。
-- **Office 技能与 pypdf**：/office 与技能可用（资产面 = 唯一 `office/SKILL.md`，清单单源 = `prepare-office-assets.mjs` 的 `OFFICE_SKILL_FILES`）；Python 载荷含 pypdf 6.21.4（`predev`/dry-run 清单核对）。
+- **Office 技能与 pypdf**：/office 与技能可用（资产面 = 唯一 `office/SKILL.md`，清单单源 = `prepare-office-assets.mjs` 的 `OFFICE_SKILL_FILES`）；Python 载荷含 pypdf（版本单源 = `packages/desktop/primary-runtime-lock.json` 的 `pythonPackages`；`predev`/dry-run 清单核对）。
 - **worktree 进退**：enter checkout 的会话可正常 exit 回源根（不再 `WORKTREE_NOT_ENTERED`）；重复 enter 不产生重复记录。
 - **免费继承（covered/extra 行）冒烟**：① `ui-session-panel` 会话头折叠/浮层、环境区与 cwd；② `action-cards` 推荐卡默认开、General 开关可达；③ `connector-account` 落设置 → 插件管理页（若 runtime 提供）；④ 压缩摘要右栏预览。逐项只验出现与基本交互，不预实现。
 

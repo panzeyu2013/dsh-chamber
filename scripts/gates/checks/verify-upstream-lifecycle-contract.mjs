@@ -139,7 +139,7 @@ export function evaluate(read = (path) => readFileSync(path, 'utf8')) {
     failures.push('the host session/follow no longer yields an opening snapshot first')
   }
   if (host.hasBound) {
-    failures.push('UPSTREAM LANDED A FIRST-FRAME BOUND: re-evaluate retiring the client opening deadline (design 14 §D4, STATUS) and update this gate')
+    failures.push('UPSTREAM LANDED A FIRST-FRAME BOUND: re-evaluate retiring the client opening deadline (design 14 §D4) and update this gate')
   }
   const client = clientOpenContract(read(FILES.clientSession))
   if (!client.hasDoOpen || !client.awaitsOpen) {

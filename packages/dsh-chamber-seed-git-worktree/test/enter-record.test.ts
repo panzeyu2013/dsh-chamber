@@ -92,7 +92,7 @@ test('enterSession appends the entered record after the directory commit', () =>
   assert.match(source, /enteredWorktreeRecord\(entered\.path, entered\.repositoryRoot, entered\.branch\)/u,
     'the payload carries the validated entered path, the entered-from root and the branch')
   assert.doesNotMatch(source, /plugin:worktree\/created/u,
-    'the seed must never write created: upstream archive cleanup may reclaim created checkouts (design 08 §1.5)')
+    'the seed must never write created: upstream archive cleanup may reclaim created checkouts (design 08 §1 第 5 条)')
 })
 
 test('rememberEnteredPath: repeated same-path enters are idempotent and the memory is bounded', () => {

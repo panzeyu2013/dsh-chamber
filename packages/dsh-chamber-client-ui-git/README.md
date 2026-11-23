@@ -14,4 +14,4 @@
 - `src/client/SidebarWorkspaceGitLine.tsx` / `CreateWorktreeDialog.tsx` / `CheckoutRemoveDialog.tsx` — 行与对话框。
 - `src/shared/*` — 快照、saga、轮询、可见性门与错误分类。
 
-开放项见 [STATUS](../../docs/progress/STATUS.md)。
+开放项/已知限制见 owning design 的「已知限制」段与 [TODO](../../docs/progress/TODO.md)（STATUS 已停用，2026-11-23）。
