@@ -60,6 +60,8 @@ export const GROUPS = {
     'test/session-rows/workspace-orphan-cleanup.test.ts',
     // 搜索行的三处投影查询收敛：findProjectedRow 的「首行命中」顺序契约。
     'test/session-rows/projected-row-lookup.test.ts',
+    // page-level reading seats: publish/refresh/retire + per-source gating (design 06 §4.1).
+    'test/session-rows/reading-seat.test.ts',
     // PR2 派生 checkout 行（design 08 §3.2-§3.3）：derive 行形状/放置/家族锚点/折叠/树/
     // 子序排序 + 行渲染/座席/拖动/扁平的源码与行为锁。
     'test/session-rows/checkout-row.test.ts',
