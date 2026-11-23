@@ -1,6 +1,6 @@
 # 27 · 网络 IO 韧性（WAN 健康分级与恢复）
 
-> 弱网链路的收敛契约：不新增包、不改 `TransportPhase` 五值、不新增 503 错误码；只加 link health 子态、注册边沿、down 快速失败、上传总预算、页面通道 link epoch、载波 closed 逃生与 mutation unknown 分类。验收与开放项归 `docs/progress/STATUS.md`。
+> 弱网链路的收敛契约：不新增包、不改 `TransportPhase` 五值、不新增 503 错误码；只加 link health 子态、注册边沿、down 快速失败、上传总预算、页面通道 link epoch、载波 closed 逃生与 mutation unknown 分类。验收程序归 `docs/checklists/`，开放项见本设计 §6 的已知限制段。
 
 ## 1. 问题
 

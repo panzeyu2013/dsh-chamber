@@ -189,7 +189,7 @@ L1–L6 判据与执行见 [remote-browser-acceptance.md](../../checklists/accep
 - [25](../desktop/25-macos-swift-native-shell.md)：Swift 壳窗口层级、child WKWebView、键盘与 ATS。
 - [ADR-0004](../decisions/0004-swift-guest-per-tab.md)：载体决策；[ADR-0003](../decisions/0003-remote-browser-v2-iframe.md)：被取代的 v2 记录。
 - [`../../progress/electron-frozen.md`](../../progress/electron-frozen.md) §3：Electron 冻结面，含其保留的 v2 `frameSources` CSP 扩展例外。
-- 验收清单：[`docs/checklists/acceptance/remote-browser-acceptance.md`](../../checklists/acceptance/remote-browser-acceptance.md)；进度：[`docs/progress/STATUS.md`](../../progress/STATUS.md)。
+- 验收清单：[`docs/checklists/acceptance/remote-browser-acceptance.md`](../../checklists/acceptance/remote-browser-acceptance.md)；验收与残余：[`docs/checklists/acceptance/remote-browser-acceptance.md`](../../checklists/acceptance/remote-browser-acceptance.md)（进度记录已停用）。
 
 ## 13. 旧节号对照（既有代码/清单引用）
 

@@ -26,7 +26,7 @@ import type { SourceSessionFactsMode } from '../session-facts-mode.ts'
  * older than this bound means the producer stopped reporting WITHOUT a teardown (a
  * hung shell whose runtime row was never cleared), so its row is last-known state and
  * must not suppress the observer forever. Calibration item: the real restoration
- * delay is measured long-run (STATUS §1.1); the bound is deliberately loose (5 × the
+ * delay is measured long-run (TODO A§4, session-facts silent-loss self-healing); the bound is deliberately loose (5 × the
  * 60s boot budget order) so a quiet-but-alive producer keeps authority.
  */
 const PRODUCER_AUTHORITY_MAX_AGE_MS = 5 * 60_000

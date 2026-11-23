@@ -238,7 +238,7 @@ function canStart(lane: HttpBudgetLane, kind: HttpBudgetKind): boolean {
 
 /** Remember a POSITIVE queue wait, whatever ended the wait. Zero waittimes are
  *  NOT samples here: mixing them in made queueMsP50/P95 read 0 in any healthy
- *  window, which silently voided the calibration criterion STATUS takes them from. */
+ *  window, which silently voided the calibration criterion these samples feed. */
 function rememberQueueWait(value: number): void {
   if (value <= 0) return
   recentQueueMs.push(value)
@@ -293,7 +293,7 @@ function settleUnscheduled(entry: QueueEntry, reason: HttpBudgetUnscheduledReaso
   detachEntryAbort(entry)
   const queuedMs = now() - entry.enqueuedAt
   counters.unscheduled[reason] += 1
-  // Queue-deadline is exactly the wait the STATUS calibration reads; record it so
+  // Queue-deadline is exactly the wait the calibration reads; record it so
   // queueMsP50/P95/maxQueueWaitMs are not blind to the dominant refusal path.
   if (reason === 'queue-deadline') {
     rememberQueueWait(queuedMs)

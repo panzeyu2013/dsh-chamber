@@ -92,9 +92,9 @@ export const PATCHED_UPLOAD_BASE_EXPRESSION = 'basePath===void 0?document.baseUR
 export const CHAT_IMPORT_PACKAGE_ID = '@deepseek-ai/dsh-deepseek-chat-import'
 
 /**
- * The uploaded URL construction in the published bundle (0.2.2-rc.3, tsdown classic
- * script): one occurrence, asserted by the unit suite and by the upgrade-time verifier
- * on the real published artifact.
+ * The uploaded URL construction in the published bundle (the upstream classic-script
+ * bundle shape; this anchor is maintained with the pin): one occurrence, asserted by
+ * the unit suite and by the upgrade-time verifier on the real published artifact.
  */
 export const CHAT_IMPORT_UPLOAD_ANCHOR =
   'function uploadArchive(file,workspaceId,onProgress,signal){const url=new URL(`${UPLOAD_ROUTE}?${new URLSearchParams({workspaceId}).toString()}`,document.baseURI)'

@@ -42,7 +42,8 @@
  * held to the same C9 anchor gate as a correctness patch, so a pin bump
  * re-derives it loudly instead of silently dropping it. An entry whose reason
  * says ADMISSION PENDING is a worktree candidate only: it must not ride a
- * release build until the A/B is recorded (gate = release checklist + STATUS).
+ * release build until the A/B is recorded (gate = release checklist; the admission
+ * is recorded in design 09 §3.6).
  * Never widen this class for a perf change that a chamber package or a
  * visibility gate can already express.
  *
@@ -101,9 +102,10 @@
  * (upstream has no N-shell notion to anchor on).
  *
  * FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton) — admitted form
- * (design 09 §3.6); see the two ui-theme entries. The
+ * (design 09 §3.6); see the icon-sprite entry (ui-theme) and the module-stylesheet
+ * entry (ui-renderer). The
  * page-global fact is a DOM resource every mounted instance shell installs for
- * itself - identical theme stylesheets and one icon sprite - so N shells multiply
+ * itself - identical module stylesheets and one icon sprite - so N shells multiply
  * a single page-wide artifact N times and a hidden shell keeps its copy alive.
  * Unlike the per-mount form above, the fix is DEDUPE, not re-scoping: publish the
  * resource ONCE per document behind a page-level registry keyed on a global symbol
@@ -928,7 +930,7 @@ export const VENDOR_PATCHES = Object.freeze([
       note: 'Upstream batches scroll delivery to one geometry read per frame (the onScroll handler itself coalesces via rAF/flush/microtask). Delete this entry + its artifact marker, move the coalesced-delivery shape into RETIRED_PATCHES, and keep the A/B evidence with the release note.',
     }),
     vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
-    reason: 'SECOND ADMITTED CLASS (measured shell frame cost) - ADMITTED 2026-11-16 by maintainer ruling with the same-machine A/B waived: the class policy (design 09 §3.6) requires a same-machine macOS A/B (patched vs unpatched build, same machine/session, 10 s of scrolling, renderer+GPU process CPU cumulative delta, layout counts from the Web Inspector timeline) recorded in the entry before the release that carries it; the 2026-11-16 maintainer ruling admitted this entry without that measurement (basis = the shipped 0.4.5 acceptance; the waiver is logged in STATUS §1.1) and the deletion condition below is unchanged; instrument = the shipping Swift leg (Activity Monitor / ps cpu + Web Inspector Layout counts), since the Electron leg that named app.getAppMetrics is frozen and not shipped. Measured symptom from the shipped WKWebView shell: the scroll listener synchronously reads geometry (use-chat-viewport.ts onScroll: scroller.scrollTop for the landing-echo check, then readScroll -> scrollMetrics: clientHeight/scrollTop/scrollHeight), and the shell trace shows that read forcing Document::updateLayout -> full re-layout of the 160-level Flex transcript, once per scroll event while streaming content keeps the layout dirty. This edit coalesces scroll deliveries to ONE geometry read per animation frame (the read then happens on the frame the paint already needs, not per event) and keeps delivery ahead of scrollend by flushing the pending frame synchronously in onScrollEnd. Follow semantics are unchanged: the coalesced delivery is the same readScroll result (FOLLOW_THRESHOLD 24 px, animating/scrollend settle, movedByReader attribution, jump/toBottom all stay in use-scroll-follow.ts); accepted trade-offs are a delivery that can arrive one frame later than the event and geometry read at that frame rather than at event time; the landing-echo suppression still skips the flush. Fallback: when requestAnimationFrame is unavailable the handler flushes synchronously (upstream behaviour). Delete this entry once upstream batches scroll delivery itself (see retireCheck).',
+    reason: 'SECOND ADMITTED CLASS (measured shell frame cost) - ADMITTED 2026-11-16 by maintainer ruling with the same-machine A/B waived: the class policy (design 09 §3.6) requires a same-machine macOS A/B (patched vs unpatched build, same machine/session, 10 s of scrolling, renderer+GPU process CPU cumulative delta, layout counts from the Web Inspector timeline) recorded in the entry before the release that carries it; the 2026-11-16 maintainer ruling admitted this entry without that measurement (basis = the shipped 0.4.5 acceptance; the waiver is recorded with the design 09 §3.6 admission) and the deletion condition below is unchanged; instrument = the shipping Swift leg (Activity Monitor / ps cpu + Web Inspector Layout counts), since the Electron leg that named app.getAppMetrics is frozen and not shipped. Measured symptom from the shipped WKWebView shell: the scroll listener synchronously reads geometry (use-chat-viewport.ts onScroll: scroller.scrollTop for the landing-echo check, then readScroll -> scrollMetrics: clientHeight/scrollTop/scrollHeight), and the shell trace shows that read forcing Document::updateLayout -> full re-layout of the 160-level Flex transcript, once per scroll event while streaming content keeps the layout dirty. This edit coalesces scroll deliveries to ONE geometry read per animation frame (the read then happens on the frame the paint already needs, not per event) and keeps delivery ahead of scrollend by flushing the pending frame synchronously in onScrollEnd. Follow semantics are unchanged: the coalesced delivery is the same readScroll result (FOLLOW_THRESHOLD 24 px, animating/scrollend settle, movedByReader attribution, jump/toBottom all stay in use-scroll-follow.ts); accepted trade-offs are a delivery that can arrive one frame later than the event and geometry read at that frame rather than at event time; the landing-echo suppression still skips the flush. Fallback: when requestAnimationFrame is unavailable the handler flushes synchronously (upstream behaviour). Delete this entry once upstream batches scroll delivery itself (see retireCheck).',
     edits: Object.freeze([
       Object.freeze({
         expect: '  /** Discards a closing measurement that no size observation consumed by the end of its frame. */\n'
@@ -1005,6 +1007,159 @@ export const VENDOR_PATCHES = Object.freeze([
           + '        this.flushScroll()\n'
           + '      }\n'
           + '      this.events?.scrollEnd(true)',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-renderer/src/client/styles/document-styles.ts',
+      'packages/client/ui-renderer/src/client/styles/document-styles.ts',
+    ]),
+    noRetireForm: 'no stable upstream text shape: the fix is a page-level singleton/refcount contract for installed module stylesheets, and upstream has no N-shell notion to assert against (a single-page renderer owns one DocumentStyles instance). C9 drift failure + the design 09 §3.6 admission, not an automated retire check.',
+    vendorFile: 'dsh-client-ui-renderer/src/client/styles/document-styles.ts',
+    reason: 'N-ctx multi-instance correctness (FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton), admitted form recorded in design 09 §3.6): the single page mounts one shell per instance and every shell renderer builds its own DocumentStyles against the SAME page-level module table, so each mounted shell installs a complete, identical set of module stylesheets into document.head - one style[data-plugin][data-path] node per module stylesheet per shell - and a hidden shell keeps its copies alive (the DOM/CSSOM multiplication the retired ui-theme page-style entry was admitted for returns through this new per-renderer installer; alpha.1 moved theme CSS from the per-shell inline style tag to module resources and this class installs them). No chamber package owns the renderer component and module-private DocumentStyles state is per bundle instance, so the page-wide registry must live on the document behind Symbol.for. This edit publishes each (container, plugin, path) sheet once per document with a refcount; the last owner removes it. Accepted trade-off: all shells share one copy of each stylesheet (identical text, so nothing changes visually) and a hidden shell no longer holds its own copy; a single-instance page gets the upstream DOM exactly (one sheet per path, removed on dispose) and no chamber knob is involved. The per-instance conflict diagnostic still runs per renderer over the same module records. Delete this entry once upstream makes the module-style registry page-scoped itself.',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: 'const NO_STYLES: ModuleStyles = new Map()\n'
+          + '\n'
+          + '/**\n'
+          + ' * Materialized module styles installed synchronously in the main document. Each style element carries',
+        replace: 'const NO_STYLES: ModuleStyles = new Map()\n'
+          + '\n'
+          + '/**\n'
+          + ' * chamber patch - FOURTH CLASS, FOURTH ADMITTED FORM (page-global singleton),\n'
+          + ' * admitted form recorded in design 09 §3.6: one page mounts N instance shells and every\n'
+          + ' * shell renderer builds its own DocumentStyles against the SAME page-level module table,\n'
+          + ' * so each shell installs a complete, identical set of module stylesheets into\n'
+          + ' * document.head - N copies of every style[data-plugin][data-path] node, and a hidden\n'
+          + ' * shell keeps its copies alive. The installed sheets are page-global DOM resources, so\n'
+          + ' * publish each (container, plugin, path) once per document behind Symbol.for\n'
+          + ' * (module-private state may differ per bundle instance) and refcount it; the last owner\n'
+          + ' * removes the sheet. A single-instance page gets the upstream DOM exactly (one sheet per\n'
+          + ' * path, removed on dispose) and no chamber knob is involved.\n'
+          + ' */\n'
+          + 'const CHAMBER_PAGE_MODULE_STYLES = Symbol.for(\'dsh-chamber:page-module-styles\')\n'
+          + '\n'
+          + '/** One page-global sheet: the shared installed record plus one ref per mounted owner. */\n'
+          + 'interface ChamberPageStyleEntry {\n'
+          + '  readonly record: StyleRecord\n'
+          + '  refs: number\n'
+          + '}\n'
+          + '\n'
+          + '/** Document-level style registries keyed by a document-global symbol. */\n'
+          + 'type ChamberPageStyleHost = {\n'
+          + '  [key: symbol]: WeakMap<HTMLElement, Map<string, ChamberPageStyleEntry>> | undefined\n'
+          + '}\n'
+          + '\n'
+          + '/** The page-global registry of one destination container (the document head in the shell). */\n'
+          + 'function pageStyleRegistry(container: HTMLElement): Map<string, ChamberPageStyleEntry> {\n'
+          + '  const host = container.ownerDocument as unknown as ChamberPageStyleHost\n'
+          + '  let byContainer = host[CHAMBER_PAGE_MODULE_STYLES]\n'
+          + '  if (byContainer === undefined) {\n'
+          + '    byContainer = new WeakMap()\n'
+          + '    host[CHAMBER_PAGE_MODULE_STYLES] = byContainer\n'
+          + '  }\n'
+          + '  let registry = byContainer.get(container)\n'
+          + '  if (registry === undefined) {\n'
+          + '    registry = new Map()\n'
+          + '    byContainer.set(container, registry)\n'
+          + '  }\n'
+          + '  return registry\n'
+          + '}\n'
+          + '\n'
+          + '/**\n'
+          + ' * Acquire the page-global sheet of one (plugin, path); the first owner creates it and\n'
+          + ' * later owners share the node.\n'
+          + ' * @param container - style destination (the document head).\n'
+          + ' * @param key - owning package + stylesheet path identity.\n'
+          + ' * @param owner - owning package for the element data-plugin attribute.\n'
+          + ' * @param path - stylesheet path within the package for data-path.\n'
+          + ' * @param css - stylesheet text for a newly created sheet.\n'
+          + ' * @returns the shared installed record; its refcount now includes this owner.\n'
+          + ' */\n'
+          + 'function acquirePageStyle(\n'
+          + '  container: HTMLElement,\n'
+          + '  key: string,\n'
+          + '  owner: string,\n'
+          + '  path: string,\n'
+          + '  css: string,\n'
+          + '): StyleRecord {\n'
+          + '  const registry = pageStyleRegistry(container)\n'
+          + '  let entry = registry.get(key)\n'
+          + '  if (entry === undefined) {\n'
+          + '    const element = container.ownerDocument.createElement(\'style\')\n'
+          + '    element.setAttribute(\'data-plugin\', owner)\n'
+          + '    element.setAttribute(\'data-path\', path)\n'
+          + '    element.textContent = css\n'
+          + '    entry = { record: { element, css }, refs: 0 }\n'
+          + '    registry.set(key, entry)\n'
+          + '  }\n'
+          + '  // chamber patch: an external all-document sweep can detach the shared sheet; a new\n'
+          + '  // owner must never claim a detached node (the refresh ordering loop keeps its slot).\n'
+          + '  if (entry.record.element.isConnected === false) container.append(entry.record.element)\n'
+          + '  entry.refs += 1\n'
+          + '  return entry.record\n'
+          + '}\n'
+          + '\n'
+          + '/**\n'
+          + ' * Release one owner share of a page-global sheet; the last owner removes it.\n'
+          + ' * @param container - style destination the record was acquired for.\n'
+          + ' * @param key - owning package + stylesheet path identity.\n'
+          + ' * @param record - this owner shared record.\n'
+          + ' */\n'
+          + 'function releasePageStyle(container: HTMLElement, key: string, record: StyleRecord): void {\n'
+          + '  const registry = pageStyleRegistry(container)\n'
+          + '  const entry = registry.get(key)\n'
+          + '  if (entry === undefined || entry.record !== record) return\n'
+          + '  entry.refs -= 1\n'
+          + '  if (entry.refs > 0) return\n'
+          + '  entry.record.element.remove()\n'
+          + '  registry.delete(key)\n'
+          + '}\n'
+          + '\n'
+          + '/**\n'
+          + ' * Materialized module styles installed synchronously in the main document. Each style element carries',
+      }),
+      Object.freeze({
+        expect: '    for (const [key, record] of this.records) {\n'
+          + '      if (requested.has(key)) continue\n'
+          + '      record.element.remove()\n'
+          + '      this.records.delete(key)\n'
+          + '    }',
+        replace: '    for (const [key, record] of this.records) {\n'
+          + '      if (requested.has(key)) continue\n'
+          + '      // chamber patch: drop this owner share; a sheet another shell still wants stays.\n'
+          + '      releasePageStyle(this.container, key, record)\n'
+          + '      this.records.delete(key)\n'
+          + '    }',
+      }),
+      Object.freeze({
+        expect: '      let record = this.records.get(key)\n'
+          + '      if (record === undefined) {\n'
+          + '        const element = this.container.ownerDocument.createElement(\'style\')\n'
+          + '        element.setAttribute(\'data-plugin\', owner)\n'
+          + '        element.setAttribute(\'data-path\', path)\n'
+          + '        element.textContent = css\n'
+          + '        record = { element, css }\n'
+          + '        this.records.set(key, record)\n'
+          + '      } else if (record.css !== css) {',
+        replace: '      let record = this.records.get(key)\n'
+          + '      if (record === undefined) {\n'
+          + '        // chamber patch: the sheet is page-global; a second shell renderer shares the node.\n'
+          + '        record = acquirePageStyle(this.container, key, owner, path, css)\n'
+          + '        this.records.set(key, record)\n'
+          + '      } else if (record.css !== css) {',
+      }),
+      Object.freeze({
+        expect: '    } finally {\n'
+          + '      for (const record of this.records.values()) record.element.remove()\n'
+          + '      this.records.clear()\n'
+          + '    }',
+        replace: '    } finally {\n'
+          + '      // chamber patch: release this owner page-global shares; the last owner removes them.\n'
+          + '      for (const [key, record] of this.records) releasePageStyle(this.container, key, record)\n'
+          + '      this.records.clear()\n'
+          + '    }',
       }),
     ]),
   }),
@@ -1626,7 +1781,7 @@ export const RETIRED_PATCHES = Object.freeze([
   }),
   Object.freeze({
     vendorFile: 'dsh-client-ui-theme/src/client/styles.ts',
-    reason: 'upstream current pin compiles theme CSS into bundle resources (plain CSS imports compiled once by the page build) instead of the per-shell inline-import + <style data-plugin-css> installer this page-global singleton patch deduped; the N-ctx symptom (eight identical sheets per mounted shell, a hidden shell keeping its eight alive) no longer exists because there is no per-shell style-tag installer left, so the patch has nothing to re-anchor on and is deleted rather than ported.',
+    reason: 'upstream current pin compiles theme CSS into bundle resources (plain CSS imports compiled once by the page build) instead of the per-shell inline-import + <style data-plugin-css> installer this page-global singleton patch deduped, so this patch has nothing to re-anchor on and is deleted rather than ported. The N-ctx multiplication it was admitted for did NOT disappear: the module resources are installed by a per-renderer DocumentStyles (one instance per mounted shell), which the document-styles page-global entry in VENDOR_PATCHES publishes once per document and refcounts; a hidden shell no longer keeps its own copy. Theme CSS itself is page-build CSS now, so the old per-shell theme sheets are gone.',
     ensure: "/** Theme CSS is compiled into module resources; DPR presentation follows the plugin lifetime. */\nimport type { Context } from '@deepseek-ai/cordis'\nimport '../styles/base.css'",
   }),
 ])

@@ -29,7 +29,7 @@
 
 ### D2 实例在通道内定址
 
-帧里带 `instanceId`（与 `/api/i/<id>` 同一套 id：`local` / `dsh-*` / `gateway-*`）。控制面按 id 解析目标（本地 dsh 端口或已注册的 tunnel/gateway 传输记录），为每个订阅独立打开上游。页面侧不存在“每个实例一条 socket”的概念，因此**新增实例只增加控制面的上游连接**。上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（wire 叶 `packages/dsh-chamber-wire/src/session-state.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 族已退役：alpha.1 上游 HMR 改由认证 Remote 流承载（renderer 按实例 `$mount`/`$stream`，design 09 §3.7），控制面不再抓取 `/plugins/events`；flow 用例的负向断言钉住该族与转发不再存在。上游订阅与实例反代共用同一套传输登记：目标被替换/注销时（tunnel 重注册、gateway 传输失效），控制面按登记连接撤销该连接上的订阅并回 `instance_unavailable`，客户端按自己的阶梯重订阅到新传输——旧 incarnation 的流不会被继续消费。`local` 的定址与 `/api/i/local` 同门（exposure + admission）：回收在途的新订阅按 `instance_unavailable` 快速失败，已建立订阅不随该窗口失败（admission 语义与被否方案见 [design 02 §3.6](../runtime/02-host-management-deployment.md)）。
+帧里带 `instanceId`（与 `/api/i/<id>` 同一套 id：`local` / `dsh-*` / `gateway-*`）。控制面按 id 解析目标（本地 dsh 端口或已注册的 tunnel/gateway 传输记录），为每个订阅独立打开上游。页面侧不存在“每个实例一条 socket”的概念，因此**新增实例只增加控制面的上游连接**。上游路由的单一来源：`sessionFacts` 走 `SESSION_STATE_STREAM_PATH`（wire 叶 `packages/dsh-chamber-wire/src/session-state.ts` 的常量，模块内不再写第二份字面量）；`pluginGraph` 族已退役：本代 pin 上游 HMR 改由认证 Remote 流承载（renderer 按实例 `$mount`/`$stream`，design 09 §3.7），控制面不再抓取 `/plugins/events`；flow 用例的负向断言钉住该族与转发不再存在。上游订阅与实例反代共用同一套传输登记：目标被替换/注销时（tunnel 重注册、gateway 传输失效），控制面按登记连接撤销该连接上的订阅并回 `instance_unavailable`，客户端按自己的阶梯重订阅到新传输——旧 incarnation 的流不会被继续消费。`local` 的定址与 `/api/i/local` 同门（exposure + admission）：回收在途的新订阅按 `instance_unavailable` 快速失败，已建立订阅不随该窗口失败（admission 语义与被否方案见 [design 02 §3.6](../runtime/02-host-management-deployment.md)）。
 
 ### D3 每订阅信用窗口
 
@@ -54,7 +54,7 @@
 
 > **I-1**：页面对自身 origin 的长活 HTTP 流数 = 0，**属于 HTTP 连接池的长连接** = 0，页面级 WS 恰好 1 条（升级后的 WS 不占池、不计入；与实例数无关）。
 
-守它的三件东西：**静态断言**（`packages/*/src` 里任何 `EventSource` 引用——限定名/别名/字符串键都算——与流式 `getReader` 都算违例；白名单只有审计器实现文件与三处有界的一次性响应体读取，且判据自带正控语料与扫描文件数下限，避免“扫描空转也算绿”；剥离器按表达式位置识别正则字面量，正则里的 `/` 不再截断该行——那是“反向源锁假绿”的入口，正控语料钉着它）、**运行期报警器** `installPageChannelEventSourceAudit()`（页面里任何 `EventSource` 构造都记一条 `page-channel` 证据并告警；入口以锚定赋值 `__chamberPageChannelAuditInstalled` 安装，压缩产物可判定）、**socket 级 ping/pong 活性回收**（半个死连接不长期占着上游）。另外两件是**检测器**而非守卫，如实登记：`assertSingletonModule('page-channel')`（同一 bundle 里出现第二份模块实例时 `console.error`；它不会阻止第二条 socket，共享状态需要 `Symbol.for` 键控——暂列 STATUS 的观测缺口）与 `stats()`（订阅/上游计数的现场读数；模块每 60s 在有活动 socket 时自打一行 `page-channel: stats …`，`closeAll()` 在拆除前留一行 `shutdown stats` 现场，周期可注入、不新增 HTTP 读面）。页面侧没有任何“最多 N 个实例”的容量配额（上游连接数 = O(活跃订阅数)，归控制面）；页面池的**同源请求并发**常量只允许出现在 §D7 的 `http-budget.ts`（参数表单源），两者不是同一类旋钮。
+守它的三件东西：**静态断言**（`packages/*/src` 里任何 `EventSource` 引用——限定名/别名/字符串键都算——与流式 `getReader` 都算违例；白名单只有审计器实现文件与三处有界的一次性响应体读取，且判据自带正控语料与扫描文件数下限，避免“扫描空转也算绿”；剥离器按表达式位置识别正则字面量，正则里的 `/` 不再截断该行——那是“反向源锁假绿”的入口，正控语料钉着它）、**运行期报警器** `installPageChannelEventSourceAudit()`（页面里任何 `EventSource` 构造都记一条 `page-channel` 证据并告警；入口以锚定赋值 `__chamberPageChannelAuditInstalled` 安装，压缩产物可判定）、**socket 级 ping/pong 活性回收**（半个死连接不长期占着上游）。另外两件是**检测器**而非守卫，如实登记：`assertSingletonModule('page-channel')`（同一 bundle 里出现第二份模块实例时 `console.error`；它不会阻止第二条 socket，共享状态需要 `Symbol.for` 键控——属本节已知观测缺口）与 `stats()`（订阅/上游计数的现场读数；模块每 60s 在有活动 socket 时自打一行 `page-channel: stats …`，`closeAll()` 在拆除前留一行 `shutdown stats` 现场，周期可注入、不新增 HTTP 读面）。页面侧没有任何“最多 N 个实例”的容量配额（上游连接数 = O(活跃订阅数)，归控制面）；页面池的**同源请求并发**常量只允许出现在 §D7 的 `http-budget.ts`（参数表单源），两者不是同一类旋钮。
 
 ### D6 健康 SSE 端点不存在
 

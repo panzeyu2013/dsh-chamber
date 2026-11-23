@@ -29,11 +29,11 @@ node scripts/gates/runners/run-checks.mjs typecheck --list  # 类型检查模式
 node scripts/gates/runners/run-checks.mjs full --list       # full = static + typecheck + tests
 ```
 
-按改动面选模式；模式之外的门（macOS / Swift 腿、手写 host typecheck、远端态验收等）见 `docs/progress/STATUS.md` §1.6。`pnpm run smoke` 未安装dsh时打印SKIP并退出0，属正常而非失败。
+按改动面选模式；模式之外的门（macOS / Swift 腿、手写 host typecheck、远端态验收等）见 `scripts/gates/registry/gate-surfaces.json`。`pnpm run smoke` 未安装dsh时打印SKIP并退出0，属正常而非失败。
 
 ## 提交前验证
 
-不要求为每次提交跑全量；按改动面选最小证据，选择依据是 `scripts/gates/registry/gate-surfaces.json` 与 `docs/progress/STATUS.md` §1.6：
+不要求为每次提交跑全量；按改动面选最小证据，选择依据是 `scripts/gates/registry/gate-surfaces.json`：
 
 ```bash
 pnpm run check:static        # 静态 / 政策门（含 i18n、md-links、test-wiring、styles 等；local-only = md-links / test-wiring / styles / no-dead-exports，其余随 CI / pre-install 生成块）

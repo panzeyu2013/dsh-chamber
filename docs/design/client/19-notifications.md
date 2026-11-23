@@ -149,15 +149,15 @@
 
 #### 3.2.7 开放项与已知边界
 
-- **只读 activation 读**：上游提案或 chamber seed 插件（替换 §3.2.2 的 unknown-hold 静默窗口）——见 [`STATUS.md`](../../progress/STATUS.md)。
+- **只读 activation 读**：上游提案或 chamber seed 插件（替换 §3.2.2 的 unknown-hold 静默窗口）（未实现的上游提案，登记在 TODO A 类；生效面见 design 19 §3.2.2）。
 - **实机验收**：打包态实机判据见 §4 与 [`gui-acceptance-checklist.md`](../../checklists/acceptance/gui-acceptance-checklist.md)。
-- **侧边栏 goal 指示与 schedule/job 续跑扩展**：收敛器只做压制/标题/六面一致；续跑类来源（schedule/job）不在输入内（范围决策见 STATUS）。
+- **侧边栏 goal 指示与 schedule/job 续跑扩展**：收敛器只做压制/标题/六面一致；续跑类来源（schedule/job）不在输入内（范围决策见 design 19 §3.7 与 design 06 §8）。
 
 **已知边界/取舍（契约）**：① 无桥形态剪枝门视为已结算（§3.2.4）。② ssh-instances 注册表损坏不剪远端 durable 键（degraded 期间不剪不落盘、补偿写不落空表、重启仍 degraded；契约见 05 §7.4 与 §3.2.4）。③ reload 时两通道皆缺席的会话无 forget 事件：`forgotten` 只对本代观测过的会话产生；历史缺席留到下次 boot 的 7 天年龄卫生或来源级 `prune`（重现则按播种消费）。④ silent-settle 无水位 pending 仍置栏（保守）：基线/首见 outcome 静默结清在 `pending.watermark` 缺席时同样置栏（boundary = 当时已吸收水位）；只吞同一次完成的下一条 facts 候选，不改「离线不补发」。⑤ P1/P2a/P2b 保留边纪律统一：三路一律「绑定 id 与投影/基线不符时保留待匹配」；P1 边每会话至多一条、新事件覆盖，只在会话/行离开、显式 no-goal、`reset()`/`dispose()` 清除；P2a（17 §10.7）/P2b（§3.5）同规；
 
 第三 goalId drop 出口与 `awaitingBaselineOf` 不存在。⑥ **跨批围栏重复**：facts 不可用期壳边沿通知并置栏（boundary=0）→ 新回合 running 观测在另一批先到、该批无 `fenceSeed`，围栏按 #1 清掉 → facts 恢复批的 C4-X2 播种登记无栏可依（no-op）→ facts 侧迟到的被守卫完成水位按 rule ③ 判成新完成再通知一次。用例 `completion-observation.test.ts` 的 `KNOWN-BOUNDARY(C4-X2 cross-batch)` / `(I1 fence cross-batch)` 各钉 2 个物理完成 / 3 条通知；主进程 5s 去重 claim 键为五元组（§3.3），两条投递身份 eventKey 不同故不被吞。本项只在完成无锚时成立（facts 行缺席或只有已见旧行）；一旦原始行带新鲜 host 域 observed 完成，壳边沿继承同一 `turn/end.seq`，两轨身份相等、不再重复。⑦ **facts 输入缺席（纯壳批）不触发复位补偿**：来源已有可用 facts 批 → 某批 facts 输入缺席（与显式不可用不同）→ 壳轨 emit 无水位 complete 置栏（`shellCompleteSinceFacts=true`，但无「不可用窗口」可复位）→ 恢复的首个可用批因 `factsSeeded` 仍真而是非播种批、不登记 `fenceSeed`/`seededSince` → facts 侧同一完成水位高于栏 boundary，rule ③ 放行 ⇒ 同一物理完成双发（claim 键各带 eventKey，5s 去重不吞）。
 
-与 ⑥ 差别：⑥ 的栏被跨批 running 清掉，本项栏还在、只是恢复批无从补种。修法与影响面见 STATUS。有锚完成两轨身份相等；无锚完成改发页内 nonce——失败方向固定为「最多一次重复」，不再有共享常量身份造成的静默漏发。⑧ **运行身份的生产者**：facts 完成候选携带宿主 `turn/end.seq`（`factsRow.lastTurnEnd.seq`，非负安全整数才带），运行身份因此可产出 `host:turn/<seq>`（`notificationIdentityOf` 的 `host-turn` 分支）。seq 随候选进 durable `pending`（`PendingCompletion.completionSeq`，`sanitizeNotificationPayload` 逐字段保留）并在释放时进入通知 ⇒ 延迟/被压制的完成也不会丢身份；缺席时回退水位族。**残留边界**：壳边沿完成没有 host 事件 id（只有 facts 候选带 seq），因此 ⑥/⑦ 的跨批重复不受本项影响；壳边沿在原始 facts 行带新鲜 host 域 observed 完成时继承同一个 seq，有锚完成的两轨身份相等、⑥/⑦ 对其闭合；
+与 ⑥ 差别：⑥ 的栏被跨批 running 清掉，本项栏还在、只是恢复批无从补种。修法与影响面属本节已知限制。有锚完成两轨身份相等；无锚完成改发页内 nonce——失败方向固定为「最多一次重复」，不再有共享常量身份造成的静默漏发。⑧ **运行身份的生产者**：facts 完成候选携带宿主 `turn/end.seq`（`factsRow.lastTurnEnd.seq`，非负安全整数才带），运行身份因此可产出 `host:turn/<seq>`（`notificationIdentityOf` 的 `host-turn` 分支）。seq 随候选进 durable `pending`（`PendingCompletion.completionSeq`，`sanitizeNotificationPayload` 逐字段保留）并在释放时进入通知 ⇒ 延迟/被压制的完成也不会丢身份；缺席时回退水位族。**残留边界**：壳边沿完成没有 host 事件 id（只有 facts 候选带 seq），因此 ⑥/⑦ 的跨批重复不受本项影响；壳边沿在原始 facts 行带新鲜 host 域 observed 完成时继承同一个 seq，有锚完成的两轨身份相等、⑥/⑦ 对其闭合；
 
 仍无锚的完成改发页内 nonce（唯一），只保留有界重复。⑨ **页内非事件的页代判别符（ask/request）**：`PAGE_GENERATION` 取自 CSPRNG 的 53 位安全整数（跨页必不同、页内稳定），页内事件由 `localEventSequence` 区分。墙钟两条性质都不满足（同毫秒两次加载会撞、NTP 会回拨），故身份模块的 `Date.now()` 预算为 0——行为面由 `notification-identity.test.ts` 的 CSPRNG 页代/跨页唯一性用例覆盖。
 
@@ -226,7 +226,7 @@
 
 ### 3.5 覆盖边界与诚实性
 
-- **ask/request 的来源分档**：有壳来源用 ctx 内实时 mux 事实；无壳来源按 facts 通道分档——P2a 镜像行带 `pending`，P2b 观察者从 `$events` 的 waterfall/cancel 帧只观察出 `pendingKind`（设计上永不回 `$events/result`，不替任何客户端结算审批/提问）。两者都经判定侧虚拟投影进入同一条边沿（§3.2）。**开放**：P2b 的 `$events` 降级窗口（宿主重负载/插件管理器长 RPC 期间没有瀑布帧证据——投递能力已实测，成因与出口见 STATUS「P2b 事实通道降级」）；上游 `observeRunning` 的第二支（首见 idle 武装）只在「列表基数已知且未就绪（`listKnown && baselines === 0`）」时启用，且要求行带 `beforeBaseline`——今天两个平面实际上都到不了该窗口：P2b 可判即 ≥1 基线；P2a 网关平面的行永不带 `firstSeenByDelta`，第二支永不触发。有载体但未收到任何帧的来源不产生通知。
+- **ask/request 的来源分档**：有壳来源用 ctx 内实时 mux 事实；无壳来源按 facts 通道分档——P2a 镜像行带 `pending`，P2b 观察者从 `$events` 的 waterfall/cancel 帧只观察出 `pendingKind`（设计上永不回 `$events/result`，不替任何客户端结算审批/提问）。两者都经判定侧虚拟投影进入同一条边沿（§3.2）。**开放**：P2b 的 `$events` 降级窗口（宿主重负载/插件管理器长 RPC 期间没有瀑布帧证据——投递能力已实测，成因与出口见 TODO A§4（P2b 事实通道降级））；上游 `observeRunning` 的第二支（首见 idle 武装）只在「列表基数已知且未就绪（`listKnown && baselines === 0`）」时启用，且要求行带 `beforeBaseline`——今天两个平面实际上都到不了该窗口：P2b 可判即 ≥1 基线；P2a 网关平面的行永不带 `firstSeenByDelta`，第二支永不触发。有载体但未收到任何帧的来源不产生通知。
 - **goal 活性事实的覆盖边界**：压制与目标标题需要 goal 事实，通路按来源形态分三档——**P1（有挂载壳）**：插件从会话投影 `projectionValues.goal` 读三值，零新增 wire；被释放/收割释放的源在 P1 下没有 goal 事实（无壳即无投影）⇒ P2a/P2b。**P2a（gateway）**：只读 `/chamber/session-state` 镜像——`session/list` 投影的 `projections.values.goal` 白名单（goalId/revision/phase/updatedAt；加上进程内 activation）+ `$events` 的 `goal/activation-changed`；能力 `session-state.goal` 可选（旧端缺它 = 现状，不降级）；隐私白名单在 gateway 解析处丢弃 objective/blockedReason（17 §10.7）。**P2b（SSH/dsh）**：`source-mux-facts.ts` 讲实例自己的远程协议（`session/list` 投影 + `$events` + 每边沿一次 `session/follow`），不消费 gateway 镜像；
 
   两条事实源在 renderer 侧汇成同一份 `SessionFactsSnapshot`。行集 = 列表事实确认过的顶层会话：status/activity/waterfall 首建的 id 先扣在观察者内部（`SessionFactsRow.identityConfirmed === false`，边沿照常分类、读尾照常发生），基线/added 确认顶层后同拍发布；揭示为子代理即退役且全程不可见——S1 门在 P2b 的等价形态（17 §10.7 的 `originKnown` 同语义）；`virtualRuntimeReport` 再挡一道。其 `goalActivations` 保留边与 P1/P2a 同纪律：绑定 id 与基线不符保留待匹配、不直接 drop（由后续 baseline/added 携带匹配 identity 时消费），no-goal 事件只把已知对象 goal 即时清成 null——不缓存、不落到 unknown 行、不新建行。其 `$events` 订阅为长连接（已去 45s 静默换代）：订阅静默既不是内容证据、也不是载波证据，事实刷新由 30s `reconcile()` 的 `session/list` 基线承担；
@@ -273,7 +273,7 @@
 - **无壳来源的角标**：修正臂在 `factsOnly` 下对逐行 host `running true → false` 边沿武装（06 §4.2），徽标投影仍走同一析取 `armed = correctionArms[source][session] || row.completed`；facts 降级窗口保留行 + `stale` 只冻结武装、保留记忆，不触发遗忘（丢点方向 fail-closed）。子代理行已在源侧排除（镜像不投递、观察者跳过），永不主体、永不武装、不计徽标。
 - **计数语义**：一个未读会话 = 1（同 OpenChamber「chats with unseen activity」，非通知条数）；pending（ask/request）不计数（窗口内提醒仍由侧边栏 pending 徽标承担）。投影输入只有合并后的完成析取（`projectBadgeCount` 的 `row.completed`）、goal/subagent 压制位与归档行排除集——`pending` 字段不进 `projectBadgeCount`。
 - **离开前台的完成照常计入**：角标与通知门解耦——应用失活（窗口仍可见未遮挡）、最小化、隐藏、完全遮挡/另一 Space 期间的完成都照常武装并计入（修正臂按 attended 武装，返回前台且该行仍 current 时清除）；pending 不计数（窗口内提醒仍由侧边栏 pending 徽标承担）。
-- **归档行排除**：归档会话不计数。归档行在任何视觉呈现面上都不呈现「完成未读」——列表/搜索/悬停卡的状态槽留空（06 §3.4；诊断属性/a11y 名的同源缺口已登记在 06 §3.4/STATUS），待办区显式排除（06 §8.1），且归档行不可打开（点击只提示），用户无法通过查看把它清掉；计入 Dock 会留下一个没有可见对应物、也清不掉的数字。排除集与渲染投影同源：来源连接且聚合就绪时取权威归档集（`deriveArchivedSessions`，含降级来源仍携带的记住集合）∪ 本页归档回声（`withPendingArchives` 隐藏的行）。**断连残余**：来源当前无投影时排除集不可得，冻结臂里若有归档会话，角标在断连期间仍可能显示该未读——重连后归档集恢复即归零（与「呈现边界」同一断连边界）。`badge-count.ts` 保持零 import，只消费 App 传入的 sourceId → sessionId 集合（`projectBadgeCount` 第 3 参）；省略/空集时语义与引入前逐字一致。
+- **归档行排除**：归档会话不计数。归档行在任何视觉呈现面上都不呈现「完成未读」——列表/搜索/悬停卡的状态槽留空（06 §3.4；诊断属性/a11y 名的同源缺口见 06 §3.4），待办区显式排除（06 §8.1），且归档行不可打开（点击只提示），用户无法通过查看把它清掉；计入 Dock 会留下一个没有可见对应物、也清不掉的数字。排除集与渲染投影同源：来源连接且聚合就绪时取权威归档集（`deriveArchivedSessions`，含降级来源仍携带的记住集合）∪ 本页归档回声（`withPendingArchives` 隐藏的行）。**断连残余**：来源当前无投影时排除集不可得，冻结臂里若有归档会话，角标在断连期间仍可能显示该未读——重连后归档集恢复即归零（与「呈现边界」同一断连边界）。`badge-count.ts` 保持零 import，只消费 App 传入的 sourceId → sessionId 集合（`projectBadgeCount` 第 3 参）；省略/空集时语义与引入前逐字一致。
 - **呈现边界（与窗口内蓝点同一析取）**：窗口内完成点 = `mergeRuntimeFacts` 合并后的行 `completed`（官方位 ∪ 修正臂），徽标投影同一读取形态——唯一例外是归档行（行本身不渲染状态槽，呈现面不呈现的完成不计数）。断连（来源 not-ready）清空该来源的通道运行时事实（窗口内无行可显示；App 合并层仍会以冻结臂补出 stale 行供徽标计数）；修正臂在无上报时冻结（06 §4.2），重连后按新上报重新对账。**首拉/投影滞后窗口同规**：来源已连接但聚合未就绪（`workspaces` 为空）、或事实行先于侧栏行落地时，徽标以事实为准、可能短暂领先于行/待办，聚合或行落地即对齐；行长期缺席只可能来自降级/失灵的事实载体，不改写冻结事实。
 - **子代理压制（同窗口内蓝点语义）**：父会话回合结束但后台子代理仍存活（归一后 `subagentActivity === 'running'`）时，该会话已武装的完成点不计入徽标——否则「主分支闲置等子代理」期间 Dock 误亮红气泡。badge effect 同时依赖 `correctionArms` 与 `runtimeFacts`，压制取来源最新事实行，子代理计数归零即重推；父会话重新运行自然归零。断连窗口：来源 not-ready 即清运行时事实而修正臂冻结，重连后按新上报重新对账，自愈窗口接受。
 - **goal 压制（同窗口内蓝点语义）**：会话 goal 相位为 `active`（含 activation unknown）时，该会话已武装的完成蓝点不在窗口内呈现，徽标同样不计入。`use-badge-count` 用 sidebar 零依赖叶谓词 `goalSuppressesPresentation(row.goal)` 预计算 `goalActive` 布尔（`badge-count.ts` 保持零 import），输入是合并后 runtime（通道 ∪ 修正臂 ∪ facts overlay ∪ stale），与 `sessionRowState` 同拍（INV7）；断连来源上残留的 `subagentActivity` 照旧降 unknown 不压制。
@@ -298,7 +298,7 @@
 
 ## 4. 验证门与实机验收
 
-- 判据与执行见 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) 与 [STATUS.md](../../progress/STATUS.md)；门清单单源 = `scripts/gates/registry/gate-surfaces.json`。
+- 判据与执行见 [gui-acceptance-checklist.md](../../checklists/acceptance/gui-acceptance-checklist.md) ；门清单单源 = `scripts/gates/registry/gate-surfaces.json`。
 
 
 ### 4.1 拒绝态的可见性与恢复入口

@@ -1,6 +1,6 @@
 # 02 · 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态
 
-> **范围横幅（2026-11 用户裁决；窄横幅，不整篇归档）**：Electron flavor 已冻结归档（见 [`../progress/electron-frozen.md`](../../progress/electron-frozen.md)）。本文中 **Electron/Chromium 专属段**（spawn-dsh 的 Electron 分支、运行期指纹、safeStorage、electron-updater 等）随 flavor 归档；**control-plane 宿主生命周期契约（spawn / 就绪 / 健康 / reaper / 日志 / host 包 seed）仍现行**，Swift sidecar 继续按本文执行。**本地实例托管与部署形态**——控制面以 dsh 内置 web profile拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →孤儿回收）；开放状态见 `docs/progress/STATUS.md`。
+> **范围横幅（2026-11 用户裁决；窄横幅，不整篇归档）**：Electron flavor 已冻结归档（见 [`../progress/electron-frozen.md`](../../progress/electron-frozen.md)）。本文中 **Electron/Chromium 专属段**（spawn-dsh 的 Electron 分支、运行期指纹、safeStorage、electron-updater 等）随 flavor 归档；**control-plane 宿主生命周期契约（spawn / 就绪 / 健康 / reaper / 日志 / host 包 seed）仍现行**，Swift sidecar 继续按本文执行。**本地实例托管与部署形态**——控制面以 dsh 内置 web profile拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →孤儿回收）；开放状态见 design 02 §3.5–§3.7 与 TODO。
 > - **profile 形态**：`dsh --profile web --host 127.0.0.1
 >   --port <port> --trusted-host 127.0.0.1:<port>`——不生成/维护自建 profile 目录、业务 patch  stack 或 glue 插件；端口固定（非随机），占用时按 port+1 有界退让。唯一例外是设计 08/09/20/24  的**宿主包 loader overlay**（见 §2.6），不接管宿主组装权威。
 > - **契约范围**：spawn 生命周期、端口占用重试、pid 记录、instance-id 仲裁、readiness、健康七态状态机、
@@ -114,7 +114,7 @@ ready
 
 - 就绪成功：`dshPort = P` 写入进程记录，仅从当前 PlaneHandle 投影到 REST/SSE（status `ready`，03 §2.1）；不把运行态写回共享 catalog。
 - 就绪失败（超时 / 进程退出 / 重试耗尽）：显式启动失败，附完整启动输出与 `--dump-config`建议（`dsh --profile web --dump-config` 检查组合树）。
-- **探针 = 统一身份契约（rpc-envelope.ts 单源；`probeHostIdentity`）**：POST `/api/session/canOpenWorkspacePath`（SessionController `session` namespace 零参 boolean Remote，钉住上游 dsh ≥ 0.1.2-rc.1；纯同步平台检测，不读会话数据、不激活 Agent、无 IO），200 + rpcId 回显 + `result.ok === true` + boolean value（**true/false 均健康**）即通过；响应上限 64 KiB（探针专用 per-call cap）。HTTP 404 = 部分 0.1.2-alpha.x 早期树 / dsh < 0.1.2-rc.1（无此方法）→ 自动回退 legacy `session/list`（默认 1 MiB 上限，与旧版语义逐位一致，老树不劣化）；**回退成功后**写 warning（双 404/transient 安静；每连续 legacy 期至多一条——STATUS 挂账⑦），使上游未来方法漂移可见、不静默；404 之外（401 认证门、5xx、超时、畸形）一律如实失败、不回退。
+- **探针 = 统一身份契约（rpc-envelope.ts 单源；`probeHostIdentity`）**：POST `/api/session/canOpenWorkspacePath`（SessionController `session` namespace 零参 boolean Remote，钉住上游 dsh ≥ 0.1.2-rc.1；纯同步平台检测，不读会话数据、不激活 Agent、无 IO），200 + rpcId 回显 + `result.ok === true` + boolean value（**true/false 均健康**）即通过；响应上限 64 KiB（探针专用 per-call cap）。HTTP 404 = 部分 0.1.2-alpha.x 早期树 / dsh < 0.1.2-rc.1（无此方法）→ 自动回退 legacy `session/list`（默认 1 MiB 上限，与旧版语义逐位一致，老树不劣化）；**回退成功后**写 warning（双 404/transient 安静；每连续 legacy 期至多一条——§3.2 挂账⑦），使上游未来方法漂移可见、不静默；404 之外（401 认证门、5xx、超时、畸形）一律如实失败、不回退。
 - 身份探针响应为固定小体积 boolean，只用于就绪与健康探活，不作任何会话级消费（协议细节以 dsh wire /vendor 源码为权威）——探针体积与宿主会话数量彻底解耦；控制面 unary fetch carrier 对单个 JSON 响应实施流式字节上限（身份探针 64 KiB / legacy 回退 1 MiB），声明长度与实际流均受约束，异常宿主不能借探活把响应无界缓冲进控制面。
 
 **Rejected alternatives（重试节奏）**：① 统一去掉 500ms 退避——未就绪或端口被无关服务占用时会把有界重试变成热自旋，故只免「cookie 刚 mint」这一次；② 把退避降到 100ms——对 401 之外的真实失败（5xx/畸形）没有收益，只是把重试次数抬高一个量级。
@@ -207,7 +207,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 
 | 通道 | 触发 | 实现 |
 |---|---|---|
-| 周期 | 定时器（缺省 30s，可配） | 统一身份探针 `session/canOpenWorkspacePath`（`probeHostIdentity`，§3.2），5s 超时；老树 404 → legacy `session/list` 回退，回退成功才 warn（每连续 legacy 期至多一条，§3.2/STATUS ⑦） |
+| 周期 | 定时器（缺省 30s，可配） | 统一身份探针 `session/canOpenWorkspacePath`（`probeHostIdentity`，§3.2），5s 超时；老树 404 → legacy `session/list` 回退，回退成功才 warn（每连续 legacy 期至多一条，§3.2 ⑦） |
 | 传输触发 | （设计预留；反代侧连接异常触发健康检查**未实现**——`InstanceProxyDeps` 无健康回调，当前仅周期通道驱动） | — |
 
 - 单飞行探测：并发触发共享一个 in-flight promise，结果带 750ms 缓存；

@@ -1,6 +1,6 @@
 # 17 · 服务端接入层（Gateway）与远程连接模型
 
-> **定位**：`packages/gateway` 是显式启动、可认证的服务端形态：托管一份 loopback dsh，在认证、Host/Origin 与资源边界之后反代官方 Web 前端与 `/api`，并以独立的 `/chamber/*` 面提供受限运维面；桌面按四维正交模型接入，客户端对弱模式（http 明文、无认证）不前置拦截，服务器是唯一授权方。开放门禁见 [STATUS](../../progress/STATUS.md)。
+> **定位**：`packages/gateway` 是显式启动、可认证的服务端形态：托管一份 loopback dsh，在认证、Host/Origin 与资源边界之后反代官方 Web 前端与 `/api`，并以独立的 `/chamber/*` 面提供受限运维面；桌面按四维正交模型接入，客户端对弱模式（http 明文、无认证）不前置拦截，服务器是唯一授权方。开放门禁见 `docs/checklists/` 与各 owning design 的已知限制段。
 
 > **插件写面 = 不存在（设计契约）**：gateway **不提供**插件模型的写路由——`/chamber/plugins/install|remove|undo|tasks|materialize` 不存在，桌面也没有 `gateway_plugin_apply` / `gateway_plugin_materialize` IPC。保留 `/chamber/plugins`（seed-cache GET/PUT，桌面供给面）、`/chamber/plugins/installed`（只读行投影）与 `/chamber/runtime/*` 控制器。
 
@@ -14,9 +14,9 @@
 
 它不是普通 control-plane 的公网开关：普通 Desktop control-plane 仍 loopback-only、匿名、只负责连接管理与同源反代，网络能力只在 `packages/gateway` 显式运行时存在。
 
-**本地专属能力边界（Office / 受管 Python）**：`@deepseek-ai/dsh-skill-office` 与 `@deepseek-ai/dsh-tool-workspace-dependencies` 的启动行只由**本地宿主**提供——本地 Swift sidecar entry 把随 app 分发的 `primary-runtime`（python+node+pnpm 全量载荷）与 `office-skills` 资产作为 capabilities 交给控制面，本地 spawn 的 `--patch` overlay 追加第二段 `- insert:` 行；payload 只读，工具首次调用才安装到 `<DSH_HOME>/dsh-runtimes/dsh-primary-runtime`，app 内文件不改。**Gateway 与经 SSH 接入的远程实例不提供这些能力**：不传 capabilities、不随包、不做 payload provisioning，agent 侧没有 Office 技能与 `load_workspace_dependencies`（技能正文按兜底语义回退用户环境并如实报缺依赖）。该取舍同时明确：不加版本闸门、不绑定 dsh 版本（本地仍允许切换，启动行只按资源存在 + active workspace 装有这两个包门控）；上游桌面（`apps/desktop-host`）的 native 鉴权 / 发布脚本漂移不适用于 gateway 边界：gateway 只做认证、反代与 host duties，不接管桌面壳 native edges；alpha.2 的该漂移只登记于 [electron-frozen](../../progress/electron-frozen.md) §3，不在本设计范围。
+**本地专属能力边界（Office / 受管 Python）**：`@deepseek-ai/dsh-skill-office` 与 `@deepseek-ai/dsh-tool-workspace-dependencies` 的启动行只由**本地宿主**提供——本地 Swift sidecar entry 把随 app 分发的 `primary-runtime`（python+node+pnpm 全量载荷）与 `office-skills` 资产作为 capabilities 交给控制面，本地 spawn 的 `--patch` overlay 追加第二段 `- insert:` 行；payload 只读，工具首次调用才安装到 `<DSH_HOME>/dsh-runtimes/dsh-primary-runtime`，app 内文件不改。**Gateway 与经 SSH 接入的远程实例不提供这些能力**：不传 capabilities、不随包、不做 payload provisioning，agent 侧没有 Office 技能与 `load_workspace_dependencies`（技能正文按兜底语义回退用户环境并如实报缺依赖）。该取舍同时明确：不加版本闸门、不绑定 dsh 版本（本地仍允许切换，启动行只按资源存在 + active workspace 装有这两个包门控）；上游桌面（`apps/desktop-host`）的 native 鉴权 / 发布脚本漂移不适用于 gateway 边界：gateway 只做认证、反代与 host duties，不接管桌面壳 native edges；上游本代的该漂移只登记于 [electron-frozen](../../progress/electron-frozen.md) §3，不在本设计范围。
 
-**回退代价**：运行时线回退到旧代时的 Office 资产清单缺口，唯一权威 = design 09 §3.5（当前 pin 唯一 `office/SKILL.md`；旧代按 7 资产清单读会在 `assetRoot` 抛 ENOENT，宿主继续、office 能力缺失）。本地/远程能力边界见 design 09 §3.5 与 design 18 §4.2；本设计不引入服务器侧对应能力。
+**回退代价**：运行时线回退到旧代时的 Office 资产清单缺口，唯一权威 = design 09 §3.5（现行资产面唯一 `office/SKILL.md`；旧代按 7 资产清单读会在 `assetRoot` 抛 ENOENT，宿主继续、office 能力缺失）。本地/远程能力边界见 design 09 §3.5 与 design 18 §4.2；本设计不引入服务器侧对应能力。
 
 ### 1.1 传输安全责任划分（本设计的总原则）
 - **Gateway 与桌面端都只提供 HTTP 语义**；HTTPS、穿透、隧道全部由**用户自建**（TLS 反代 / tailscale / SSH 隧道 / frp / zerotier，任选或组合）；
@@ -380,7 +380,7 @@ gateway 自己的控制面复用 control-plane 管理面（dispatch 在 dsh 代�
 ### 10.5 浏览器直连的能力边界
 浏览器直接访问 gateway 根路径 `/`（经认证入口的同源页面）得到**托管 dsh 实例自身的官方前端**： `/`、`/plugins/*`、`/api/*` 经 gateway-proxy 反代到托管 dsh（§8），浏览器侧不加载任何 chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等）只随桌面复合 bundle 分发，不注入 gateway 托管前端，故浏览器直连没有「连接管理 / 设置壳 / 侧边栏」等扩展面。
 
-- **官方设置页的 loopback 门控由 gateway 出口信任声明解除**（S0）：官方 `dsh-client-ui-settings` 曾以 `ctx.remote.$host.isLoopback` 决定持久化模式——`isLoopback=false`（非 loopback 主机名访问）→ `persistence='memory'` → 设置 scope 终态 `unavailable`。gateway 代理出口对托管 dsh 的 `text/html` 文档（≤64KiB、identity 编码、幂等、fail-soft）注入 `window.__DSH_TRANSPORT__={ownsHost:true}`（上游文档化钩子契约， `packages/gateway/src/html-inject.ts`），使官方前端 `connection.isLoopback=true`。注入本身仍按 fail-soft 出口执行：`isLoopback` 仍被 `ui-settings-general` 的 documentController 与 `api-request-trust` 的请求信任判定消费；这两处语义的最终结论与注入存废登记在 [STATUS](../../progress/STATUS.md)（设计侧不据此扩大注入）。**信任决策**不变：auth 门在先、能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过（服务端 RPC 不区分来源，该门是纯客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft）。 **Rejected alternatives**：为保留 `persistence='memory'` 而 fork `ui-settings`、或继续以该门为注入的存在理由——上游删分支后两者都失去对象。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
+- **官方设置页的 loopback 门控由 gateway 出口信任声明解除**（S0）：官方 `dsh-client-ui-settings` 曾以 `ctx.remote.$host.isLoopback` 决定持久化模式——`isLoopback=false`（非 loopback 主机名访问）→ `persistence='memory'` → 设置 scope 终态 `unavailable`。gateway 代理出口对托管 dsh 的 `text/html` 文档（≤64KiB、identity 编码、幂等、fail-soft）注入 `window.__DSH_TRANSPORT__={ownsHost:true}`（上游文档化钩子契约， `packages/gateway/src/html-inject.ts`），使官方前端 `connection.isLoopback=true`。注入本身仍按 fail-soft 出口执行：`isLoopback` 仍被 `ui-settings-general` 的 documentController 与 `api-request-trust` 的请求信任判定消费；这两处语义的最终结论与注入存废登记在 TODO A 类（设计侧不据此扩大注入）。**信任决策**不变：auth 门在先、能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过（服务端 RPC 不区分来源，该门是纯客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft）。 **Rejected alternatives**：为保留 `persistence='memory'` 而 fork `ui-settings`、或继续以该门为注入的存在理由——上游删分支后两者都失去对象。实现与验收见 design 17 §9 与 `docs/checklists/`。
 - **S0 头补丁只注入信任声明**（`html-inject.ts`，design 14 §D4）。引擎原生源码归一已随最低支持 runtime 抬升删除且不得重新引入：JavaScriptCore 对**内建函数**打印多行 `{ [native code] }`，会让 `@deepseek-ai/dsh-util-values` 的 `hasIntrinsicConstructor` 与单行模板严格比较恒假、`snapshotJsonValue` 对普通对象/数组返回 `undefined`（官方前端会话 raw-chunk 校验抛普通 TypeError、`doOpen` 只对远程失败写 error、页面永停 `loading`）；当时兜底的 `Function.prototype.toString` 空白归一脚本与 renderer 构建期第三类 vendor 补丁都已删除，出口只做信任声明。
 - **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、Credentials 面板与 dsh 运行时管理（版本 / 选择 / apply / rollback / restore / retry / restart / registry）；它是 gateway 自有的运维入口，与托管前端并列，不依赖桌面插件，且**不随 ready detach**（dsh 停机窗口可轮询恢复）。编排投影与功能开关已随编排面整体剥离（§10），仪表盘只剩凭据与 runtime 两块。
 - **token-only 部署浏览器无法登录 `/chamber/`**：仪表盘只用同源 cookie（`/auth/login` 密码会话），不消费 bearer token（token 只作桌面客户端的 `Authorization` 头，§7.2）——仪表盘面向配置了密码的浏览器管理员；桌面客户端仅经 settings-bridge 的 dsh-runtime 代理分节触达 `/chamber/runtime` （§10.3/design 18 §9.3）。**后果**：调度、worktree、settings 等编排域已整体删除，相关路由（`PUT /chamber/settings`、`POST/DELETE /chamber/schedule`、`DELETE /chamber/git/worktrees/…`）一律 404；存活的 `/chamber/*` 面只有插件同步缓存（`GET/PUT /chamber/plugins`）、托管 profile 的只读插件投影（`GET /chamber/plugins/installed`）、runtime 控制器（`/chamber/runtime/*`）、只读会话状态镜像（`/chamber/session-state*`）与仪表盘静态资源。
@@ -405,7 +405,7 @@ gateway 自己的控制面复用 control-plane 管理面（dispatch 在 dsh 代�
 - **`degraded` 继续 503（已否决，反代/预取同用）**：一次 5s 健康探针失败会把仍在服务的宿主变成整窗不可用——直到下一次探活成功（周期 30s），最坏到 20 次失败后的重启（02 §3.5 的 ≈10min 检出预算），实测一次窗口 25–175s；02 §3.5 明确定义 `degraded` 仍在服务，27 §I3 也要求 `suspect` 转发。改为放行 `degraded`，只对 `starting/restarting/stopped/error/restart-exhausted` 503；代价是真正卡死的宿主以 45s 超时/504 显式失败而非快速 503，20 次失败后的自动重启仍是兜底。**不以端口存活替代状态判定**： `restarting` 期间端口可能仍指向已死的旧子进程（`starting` 的端口已置空）。**请求失败不加速恢复**：降级只有 30s 周期探测一条通道（02 §3.5 的传输触发仍是设计预留），所以「活着但不再服务」的宿主最长约 20×30s≈10min 才触发重启；activation gate 关闭时 503 不带 `details`（被隔离候选的内部生命周期不逃逸）。
 
 ### 10.7 只读会话状态镜像（裁决：carve-out）
-> §10 开头的「不得回流」针对的是**编排**（审批/提问代理、跨会话调度、会话索引、功能开关、feature host）。本节只开一条**只读事实镜像**：gateway 观察它托管的本地 dsh 的会话状态并向外提供只读投影，供桌面在「未挂载该来源」时仍能正确显示运行 / 等待 / goal 事实。它不写、不发命令、不代替用户响应，也不是 dsh 事实的权威（权威永远是 dsh 宿主与其前端）。**完成未读不在镜像职责内**：镜像不投递该位，官方权威仍是官方内存 Set `uiSession.sessionStatus.completionUnread`，只在已挂载 ctx 里存在（design 06 §4.1/§4.2）。无壳来源的完成点/通知改由**桌面判定侧读回退**从镜像的 `running` 行边沿补出（`virtual-runtime-report` 虚拟投影 + 完成修正臂的 `factsOnly` 路径，design 06 §4.1/§4.2、 design 19 §3.2/§3.5）：镜像不造完成权威，也不见「正在阅读」的清除语义。实现面见 `packages/gateway/src/session-state.ts` 与 `packages/dsh-chamber-wire/src/session-state.ts`（wire 叶；原 control-plane 的 protocol 模块已并入）；仍开放的实机/CI 权威验收见 [STATUS](../../progress/STATUS.md)「只读会话状态镜像」条。
+> §10 开头的「不得回流」针对的是**编排**（审批/提问代理、跨会话调度、会话索引、功能开关、feature host）。本节只开一条**只读事实镜像**：gateway 观察它托管的本地 dsh 的会话状态并向外提供只读投影，供桌面在「未挂载该来源」时仍能正确显示运行 / 等待 / goal 事实。它不写、不发命令、不代替用户响应，也不是 dsh 事实的权威（权威永远是 dsh 宿主与其前端）。**完成未读不在镜像职责内**：镜像不投递该位，官方权威仍是官方内存 Set `uiSession.sessionStatus.completionUnread`，只在已挂载 ctx 里存在（design 06 §4.1/§4.2）。无壳来源的完成点/通知改由**桌面判定侧读回退**从镜像的 `running` 行边沿补出（`virtual-runtime-report` 虚拟投影 + 完成修正臂的 `factsOnly` 路径，design 06 §4.1/§4.2、 design 19 §3.2/§3.5）：镜像不造完成权威，也不见「正在阅读」的清除语义。实现面见 `packages/gateway/src/session-state.ts` 与 `packages/dsh-chamber-wire/src/session-state.ts`（wire 叶；原 control-plane 的 protocol 模块已并入）；实机/CI 权威验收程序见 `docs/checklists/`（只读会话状态镜面）。
 
 **被否方案（协议实现的归属）**：
 
@@ -443,14 +443,14 @@ gateway 自己的控制面复用 control-plane 管理面（dispatch 在 dsh 代�
 - **能力协商**：`session-state.goal` 是**可选** feature（`SESSION_STATE_FEATURES` 新增， **绝不进** `SESSION_STATE_BASE_FEATURES`/required）：旧桌面或旧 gateway 缺它不降级，只是该来源没有 goal 事实（现状）。它在 `sse` 与 `poll` 两种 mode 都宣告（只读 `session/list` 在两种 mode 都存在，不是 event-only）。会话行携带的 `goal`（含进程内 `activation`）是加法字段，其经 wire row 的往返由 `session-state-routes.test.ts` 与 `session-state-observer.test.ts` 的 goal 用例覆盖。桌面侧 `session-facts-source.ts` 防御性解析该加法字段（字段缺席 = unknown），**不按 capability 门控**（capability 只宣告能力，不改变解析）。
 - **只读边界不变**：仍是只读事实镜像，不写、不发命令；activation 的唯一来源是转发事件， `goals/get` **永不调用**（其 lookup 覆写为 resolveAgent→resume，冷会话会被拉起 = 写面，见 design 19 §3.2.2）；观察者纪律与隐私条（不存标题/cwd/消息/载荷）原样。
 - **P2b 不消费本镜像**：SSH/dsh 来源走 `packages/renderer/src/source-mux-facts.ts` 讲实例 **自己的**远程协议（`session/list` 投影 + `$events` + 每边沿一次 `session/follow`），与 gateway 的 `/chamber/session-state` 无关；两条事实源只在 renderer 侧汇成同一份 `SessionFactsSnapshot` 形状（design 19 §3.5）。其 `goalActivations` 保留边同本节纪律：绑定 id 与基线不符保留待匹配、no-goal 只清已知对象 goal（design 19 §3.2.2/§3.5）。
-- **验证与开放**：goal 白名单投影/activation 身份绑定路由/能力可选/持久化剥 activation 的定向用例由 `test:control-plane` / `test:gateway` 覆盖；实机/CI 权威验收仍见 [STATUS](../../progress/STATUS.md) 的「只读会话状态镜像」条（本地环境伪象与轮次叙事不属设计契约）。
+- **验证与开放**：goal 白名单投影/activation 身份绑定路由/能力可选/持久化剥 activation 的定向用例由 `test:control-plane` / `test:gateway` 覆盖；实机/CI 权威验收程序见 `docs/checklists/`（只读会话状态镜面；本地环境伪象与轮次叙事不属设计契约）。
 
 完成分类由每次 true→false 边沿持有的读尾身份结算：新一轮 running、新提示水位或移除会撤销旧身份，迟到的 `session/follow` 不得写回。`session/list.updatedAt` 在当前宿主是最近用户提示时间；`false→false` 且水位前进时，旧完成事实必须撤销，但没有可信运行轮次证据便保持未知。读尾失败只给出 `reconstructed` 时刻（observer 域，不作完成证据），不可触发原生完成通知；同一边沿在后续可信基线继续读尾，直到分类或被新活动取代。
 
 **Rejected alternatives**：用 `updatedAt` 的前进直接补出完成会混淆用户停止与完成；让读尾失败保留 `observed` 会把未知结果当完成通知；迟到读尾只检查当前 `running=false` 会把上一轮结果写进另一轮已停的会话。
 
 ## 11. Git worktree：服务器侧范围外
-服务器侧 Git worktree saga（server 侧 `workspace.list`/`workspace.create`/ `session.create` 补偿与删除 lease、两次 live check 的 TOCTOU 压缩等）已随编排面剥离整体删除，**不得回流**。Git worktree 由 **design 08 的实例内插件**承担——侧边栏经同一通道触达本地/托管 dsh（托管 dsh 的宿主包由种子机制注入），其安全契约、删除竞态与实机验收见 design 08 与 STATUS.md。
+服务器侧 Git worktree saga（server 侧 `workspace.list`/`workspace.create`/ `session.create` 补偿与删除 lease、两次 live check 的 TOCTOU 压缩等）已随编排面剥离整体删除，**不得回流**。Git worktree 由 **design 08 的实例内插件**承担——侧边栏经同一通道触达本地/托管 dsh（托管 dsh 的宿主包由种子机制注入），其安全契约、删除竞态与实机验收见 design 08 与 `docs/checklists/`。
 
 ## 12. 持久化与恢复
 Gateway state 与 dsh `$DSH_HOME` 分离；store 只拥有凭据与 state 根租约：`<stateDir>/tokens.json`、`password-credential`、`auth/token-key`、`jwt-secret`、`owner.json`、`dsh-runtime/`（逐字段信封/权限以源码为单源：`packages/control-plane/src/private-file.ts`、`state-root-lease.ts`；设计 18 §9.3 管版本树）。编排面剥离后 `gateway/settings.json`/`worktrees.json`/`schedule.json` 三文档已删除，旧文件仅忽略、不做破坏性清理（未来能力必须按真实领域 validator 重引入）。
@@ -591,7 +591,7 @@ ARCHIVED 移动端走查与真机抽检随 Electron flavor 冻结；静态门与
 
 ## 19. 相关文档
 
-- 关联设计：03 / 04 / 05 / 08 / 09 / 18 / 19（各自契约段）与 [STATUS](../../progress/STATUS.md)；见 [design/INDEX.md](../INDEX.md)。
+- 关联设计：03 / 04 / 05 / 08 / 09 / 18 / 19（各自契约段）；见 [design/INDEX.md](../INDEX.md)。
 
 ## 20. 已否决的替代方案
 改动触及既有契约或已交付行为时，按 [AGENTS.md](../../../AGENTS.md) 的 PR 纪律记下「还考虑过什么、为什么落选」：

@@ -75,7 +75,7 @@
           "packages/dsh-chamber-client-ui-sidebar/src/client/index.ts",
           "packages/renderer/src/badge-count.ts"
         ],
-        "retireWhen": "三分退役（互不等待）：① 跨 Client/跨 reload 共享已完成（alpha.1 Host 读记录）——该条不再作为退役条件，chamber 只保留 N-ctx 修正臂部分；② 持久化（Host 重启不清）未达成（上游明写内存记录）——上游若持久化，chamber 无需自持 durable 未读，本地收敛投影随之退役；③ N-ctx 隐藏壳 ack 偏差（上游 acknowledge 的可见性判据是 document 级、N-ctx 保活让它对隐藏源永真）是 chamber 自有偏差，不随上游退役（design 06/19 登记 + 2 壳负向测试），禁止被本条 retireWhen 吞掉。"
+        "retireWhen": "三分退役（互不等待）：① 跨 Client/跨 reload 共享已完成（上游本代 Host 读记录）——该条不再作为退役条件，chamber 只保留 N-ctx 修正臂部分；② 持久化（Host 重启不清）未达成（上游明写内存记录）——上游若持久化，chamber 无需自持 durable 未读，本地收敛投影随之退役；③ N-ctx 隐藏壳 ack 偏差（上游 acknowledge 的可见性判据是 document 级、N-ctx 保活让它对隐藏源永真）是 chamber 自有偏差，不随上游退役（design 06/19 登记 + 2 壳负向测试），禁止被本条 retireWhen 吞掉。"
       }
     },
     {
@@ -150,7 +150,7 @@
     },
     {
       "id": "archived-browse-filter",
-      "note": "上游「全部对话（显示已归档）」过滤面在 pin 上**已存在**：官方 ui-workspace 的 ArchivedFilter 类型（tree.ts）+ archivedFilter 状态 + onArchivedFilterPick / setArchivedFilter 动作；chamber v1 刻意不镜像（自有多源列表拥有浏览区，STATUS 范围决策节）。本条目只登记上游仍有该面——消失即需重排期已归档浏览的缺口。",
+      "note": "上游「全部对话（显示已归档）」过滤面在 pin 上**已存在**：官方 ui-workspace 的 ArchivedFilter 类型（tree.ts）+ archivedFilter 状态 + onArchivedFilterPick / setArchivedFilter 动作；chamber v1 刻意不镜像（自有多源列表拥有浏览区；范围决策见 design 01 §4/§5）。本条目只登记上游仍有该面——消失即需重排期已归档浏览的缺口。",
       "probe": {
         "anchors": [
           "packages/client/ui-workspace/src/client/tree.ts#ArchivedFilter",

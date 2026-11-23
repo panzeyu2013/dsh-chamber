@@ -758,8 +758,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     return () => { healthListeners.delete(listener) }
   }
 
-  // 页面级多路复用通道（design 26）：页面唯一的长连接，承载 health /
-  // sessionFacts 三类逻辑订阅；上游每个活动订阅至多一条，页面侧容量与实例数无关。
+  // 页面级多路复用通道（design 26）：页面唯一的长连接，承载 health / sessionFacts 两族
+  // 逻辑订阅（pluginGraph 退役，插件图走实例 `pluginEvents` Remote；每订阅至多一条上游）。
   const pageChannel = createPageChannel({
     logger,
     subscribeHealthEvents,

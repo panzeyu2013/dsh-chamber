@@ -1008,7 +1008,7 @@ export function useBridgeSubscriptions(deps: BridgeSubscriptionsDeps): void {
             const row = report.sessions[notification.sessionId]
             // 壳 sink 锚点：壳通道自身的 settled 锚点挡住「producer 重置后的同一次完成重放」——
             // 与 facts sink 共用 completionAlreadySettled；无标记/无锚点 = fail-open，
-            // 只影响抑制，不影响投递（open 面见 STATUS「通知壳 sink runtimeSettled 锚点」）。
+            // 只影响抑制，不影响投递（open 面见 design 19 通知壳 sink 的 runtimeSettled 锚点）。
             if (notification.kind === 'complete'
                 && completionAlreadySettled(completeLedgerRef.current.runtimeSettled(sourceId), notification.sessionId, row?.updatedAt)) {
               return

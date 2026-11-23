@@ -33,7 +33,7 @@
 
 ## 进度、证据与冻结面
 
-- [`progress/STATUS.md`](./progress/STATUS.md)：唯一 open 进度记录；规则见 [`progress/README.md`](./progress/README.md)。
+- [`progress/STATUS.md`](./progress/STATUS.md)：已停用（2026-11-23 用户裁决：不记录开放项/进度状态）；规则见 [`progress/README.md`](./progress/README.md)。
 - [`progress/TODO.md`](./progress/TODO.md)：未排期计划。
 - [`progress/deviations.md`](./progress/deviations.md)：冻结前双 flavor 差异结论（只读历史参考）。
 - [`progress/electron-frozen.md`](./progress/electron-frozen.md)：Electron 冻结登记面（范围 / 共享契约 / 禁令 / 复活清单）。

@@ -64,7 +64,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       # Bootstrap the vendor symlink tree BEFORE pnpm install: pnpm captures the
       # workspace snapshot before preinstall runs, so the links must already
@@ -273,7 +273,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         if: steps.classify.outputs.code == 'true'
@@ -374,7 +374,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         if: steps.classify.outputs.code == 'true'

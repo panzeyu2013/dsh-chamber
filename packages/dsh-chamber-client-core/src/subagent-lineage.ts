@@ -7,7 +7,7 @@
  * (live status projection first, list row as fallback), so the count goes through
  * {@link resolveSessionRunning}; an omitted map (unmounted source) keeps the row's own bit.
  *
- * NOT mirrored (deliberate, see design 06 §4.5 + STATUS ⑮): the official `runningChildCount` sums
+ * NOT mirrored (deliberate, see design 06 §4.5): the official `runningChildCount` sums
  * `list.projectionsBySession[parentId].values.subagentCatalog` — the parent's DIRECT children —
  * while this index walks the `parentId` chain and attributes every descendant to ALL ancestors.
  * For nested delegation the ancestor count is therefore a superset of the official one.

@@ -152,8 +152,9 @@ const GROUPS = {
     // 且关闭后槽位可释放（取代 Node maxConnections 的静默丢弃）。
     'test/proxy/max-connections.test.ts',
   ],
-  // page-channel: 页面级多路复用通道（design 26）——WS 服务端、三类上游适配、
-  // 每订阅信用窗口、订阅/断线/关停清理，以及 index.ts 的接线（升级路由、
+  // page-channel: 页面级多路复用通道（design 26）——WS 服务端、health 原生
+  // 生产者 + sessionFacts 上游订阅两族适配、每订阅信用窗口、订阅/断线/关停清理，
+  // 以及 index.ts 的接线（升级路由、
   // InstanceProxy.resolveTargetFor、stop() 清理）。纯模块 + 假上游/假 socket，
   // 平台中性。
   'page-channel': [

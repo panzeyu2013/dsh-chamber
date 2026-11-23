@@ -1,7 +1,7 @@
 # 07 · 模型额外参数与默认推理等级（deferral）
 
 > **性质：推迟（deferral）**——不实现，只保留上游阻塞点与每次 pin 升级的复查触发条件。
-> 上游依赖跟踪位 = [`docs/progress/TODO.md`](../../progress/TODO.md) A 类（上游依赖）与 [`docs/progress/STATUS.md`](../../progress/STATUS.md) §1；官方 Models 页 = vendor `dsh-client-ui-settings-models`（只读，不 fork）。
+> 上游依赖跟踪位 = [`docs/progress/TODO.md`](../../progress/TODO.md) A 类（上游依赖）与 TODO 与 owning design 的已知限制段；官方 Models 页 = vendor `dsh-client-ui-settings-models`（只读，不 fork）。
 
 ## 1. 需求
 

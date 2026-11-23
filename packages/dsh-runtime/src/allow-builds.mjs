@@ -40,7 +40,7 @@ export const ALLOW_BUILDS = [
  * 与上游的**有意差异**（登记，不擅自改行为）：`protobufjs`（postinstall）与
  * `@google/genai` 在本清单里是 `true`，而上游 pnpm-workspace 记 `false` 并注明其脚本
  * 是 no-op。运行时闭包的安装脚本集只能由真机首装验证，因此在对齐前保留放行；对齐需
- * 一次全新安装的门禁证据（见 STATUS 的 open 项）。
+ * 一次全新安装的门禁证据（属已知取舍，见 design 18 §4）。
  */
 export const DENY_BUILDS = ['msgpackr-extract', 'node-addon-require-builtin'];
 

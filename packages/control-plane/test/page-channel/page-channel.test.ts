@@ -5,11 +5,11 @@
  * must hold, or the page silently loses its only long-lived connection:
  *  - health is control-plane-native (fake producer): ready right after wiring,
  *    each snapshot an item frame, unsubscribe releases the producer;
- *  - sessionFacts is one upstream SSE per subscription, with the (the retired page-level
- *    pluginGraph/plugins-events topic no longer exists; design 09 §3.7 uses a per-instance
- *    Remote stream instead), with the
- *    SSE block shape preserved (event name verbatim, default 'message',
- *    multi-line data joined with \n, comments forwarded as empty-data keepalive items);
+ *  - sessionFacts is one upstream SSE per subscription, with the SSE block shape
+ *    preserved (event name verbatim, default 'message', multi-line data joined
+ *    with \n, comments forwarded as empty-data keepalive items); the retired
+ *    page-level pluginGraph/plugins-events topic no longer exists (design 09 §3.7
+ *    uses a per-instance Remote stream instead);
  *  - sessionFacts is a gateway capability: a dsh-kind id must fail
  *    capability_not_found WITHOUT opening an upstream;
  *  - unsubscribe / socket close / closeAll destroy the upstream response,
@@ -192,7 +192,7 @@ test('health: subscribe emits exactly [ready, current snapshot] with no producer
 })
 
 // ---------------------------------------------------------------------------
-// pluginGraph / sessionFacts: upstream SSE
+// sessionFacts: upstream SSE (the retired pluginGraph topic is not relayed)
 // ---------------------------------------------------------------------------
 
 test('sessionFacts: one upstream GET /chamber/session-state/stream; SSE blocks become item frames verbatim', async (t) => {

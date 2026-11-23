@@ -96,7 +96,7 @@
 
 - 设计 14（睡眠/后台常驻，`__general` 内容来源）、设计 11（自动更新，更新块并入 `__general`）、设计 05 §4.1（N-ctx 壳常驻：D5 的来源与释放动作）；
 - 设计 06 §8（会话待办区交互/派生契约）、设计 19 §3.4（通知组并入通用的先例：事件类别 vocabulary 复用 complete/ask/request）；
-- `docs/progress/STATUS.md`（进度唯一记录）。
+- `docs/progress/TODO.md` 与 owning design 的「已知限制」段（STATUS 已停用）。
 
 ---
 

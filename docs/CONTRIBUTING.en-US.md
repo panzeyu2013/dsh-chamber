@@ -29,11 +29,11 @@ node scripts/gates/runners/run-checks.mjs typecheck --list  # type-check mode
 node scripts/gates/runners/run-checks.mjs full --list       # full = static + typecheck + tests
 ```
 
-Pick the mode for the change surface; gates outside the modes (macOS / Swift legs, hand-written host typechecks, remote-state acceptance, …) are enumerated in `docs/progress/STATUS.md` §1.6. `pnpm run smoke` prints SKIP and exits 0 without a dsh install; expected, not a failure.
+Pick the mode for the change surface; gates outside the modes (macOS / Swift legs, hand-written host typechecks, remote-state acceptance, …) are enumerated in `scripts/gates/registry/gate-surfaces.json`. `pnpm run smoke` prints SKIP and exits 0 without a dsh install; expected, not a failure.
 
 ## Before Submitting
 
-Do not run the full suite for every commit; select the minimum evidence for the change surface from `scripts/gates/registry/gate-surfaces.json` and `docs/progress/STATUS.md` §1.6:
+Do not run the full suite for every commit; select the minimum evidence for the change surface from `scripts/gates/registry/gate-surfaces.json`:
 
 ```bash
 pnpm run check:static        # static / policy gates (includes i18n, md-links, test-wiring, styles, etc.; local-only = md-links / test-wiring / styles / no-dead-exports, the rest run via CI / pre-install generated blocks)

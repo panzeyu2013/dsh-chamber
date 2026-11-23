@@ -128,8 +128,8 @@ export interface ChamberServerAggregate {
    * conversation) or make the recheck/self-heal classification ambiguous.
    *
    * Structured facts only (never the producer's diagnostic sentence): each
-   * rendering package writes its own copy from `kind` + the ids (STATUS
-   * 「跨边界诊断文案」). Absent = no gap reported for the current mount.
+   * rendering package writes its own copy from `kind` + the ids (cross-boundary
+   * diagnostic copy ruling). Absent = no gap reported for the current mount.
    */
   bootGap?: ServerBootGap
   updatedAt: number

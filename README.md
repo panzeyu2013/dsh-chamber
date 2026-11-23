@@ -17,7 +17,7 @@ macOS版本采用 **Swift/AppKit原生壳**：窗口、菜单、托盘、通知�
 
 *用户主界面——单窗口，dsh原生侧边栏按来源列出（本地 + 远程）session/workspace，主区为活动实例的dsh shell。*
 
-> English: [README.en-US.md](./docs/README.en-US.md) · 文档地图 [docs/INDEX.md](./docs/INDEX.md) · 开发文档 [DEVELOPMENT.md](./docs/DEVELOPMENT.md) · 设计索引 [design/INDEX.md](./docs/design/INDEX.md) · 进度 [STATUS.md](./docs/progress/STATUS.md)
+> English: [README.en-US.md](./docs/README.en-US.md) · 文档地图 [docs/INDEX.md](./docs/INDEX.md) · 开发文档 [DEVELOPMENT.md](./docs/DEVELOPMENT.md) · 设计索引 [design/INDEX.md](./docs/design/INDEX.md) · 未排期计划 [TODO.md](./docs/progress/TODO.md)
 
 ## 为什么是 dsh-chamber
 
@@ -129,7 +129,7 @@ bash install-gateway.sh
 |[docs/design/INDEX.md](./docs/design/INDEX.md)|设计索引：27 篇设计按领域 × 状态 × owner（总览 [01-overview.md](./docs/design/01-overview.md)）|
 |[docs/design/decisions/README.md](./docs/design/decisions/README.md)|跨域决策记录（ADR：背景 / 决定 / 被否方案 / 后果）|
 |[docs/checklists/README.md](./docs/checklists/README.md)|检查清单阶段矩阵：commit / push / release / upgrade / acceptance / ops 的门与入口|
-|[docs/progress/STATUS.md](./docs/progress/STATUS.md)|唯一进度记录：开放项 / 判据 / 指针|
+|[docs/progress/STATUS.md](./docs/progress/STATUS.md)|**已停用**（2026-11-23 用户裁决：不记录开放项/进度状态；开放工作见 owning design 与 TODO）|
 |[docs/progress/electron-frozen.md](./docs/progress/electron-frozen.md)|Electron 冻结登记：范围 / 共享契约 / 禁用面 / 复活清单|
 |[docs/deploy/deploy-gateway.md](./docs/deploy/deploy-gateway.md)|Gateway服务器端部署指南|
 |[docs/deploy/remote-dsh-instance.md](./docs/deploy/remote-dsh-instance.md)|远程dsh实例的systemd持久化说明|

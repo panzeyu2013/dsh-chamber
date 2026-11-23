@@ -17,7 +17,7 @@ The macOS build uses a **Swift/AppKit native shell**: window, menus, status item
 
 *Main user interface — one window with the dsh-native sidebar listing each source's sessions/workspaces and the active instance's dsh shell.*
 
-> 中文版: [README.md](../README.md) · Docs map: [docs/INDEX.md](./INDEX.md) · Development: [DEVELOPMENT.en-US.md](./DEVELOPMENT.en-US.md) · Design index: [design/INDEX.md](./design/INDEX.md) · Progress: [STATUS.md](./progress/STATUS.md)
+> 中文版: [README.md](../README.md) · Docs map: [docs/INDEX.md](./INDEX.md) · Development: [DEVELOPMENT.en-US.md](./DEVELOPMENT.en-US.md) · Design index: [design/INDEX.md](./design/INDEX.md) · Unscheduled plans: [TODO.md](./progress/TODO.md)
 
 ## Why dsh-chamber
 
@@ -129,7 +129,7 @@ In Settings → Connections, pick a target (`dsh` / `gateway`) and a transport (
 |[design/INDEX.md](./design/INDEX.md)|Design index: 27 designs by domain × status × owner (overview [01-overview.md](./design/01-overview.md))|
 |[design/decisions/README.md](./design/decisions/README.md)|Cross-domain decision records (ADR: context / decision / rejected alternatives / consequences)|
 |[checklists/README.md](./checklists/README.md)|Checklist stage matrix: commit / push / release / upgrade / acceptance / ops gates and entries|
-|[progress/STATUS.md](./progress/STATUS.md)|The single progress record: open items / criteria / pointers|
+|[progress/STATUS.md](./progress/STATUS.md)|**Retired** (2026-11-23 user ruling: it records no open items or progress states; open work lives in the owning design and TODO)|
 |[progress/electron-frozen.md](./progress/electron-frozen.md)|Electron freeze registry: scope / shared contracts / forbidden surfaces / revival checklist|
 |[deploy/deploy-gateway.md](./deploy/deploy-gateway.md)|Server-side Gateway deployment guide|
 |[deploy/remote-dsh-instance.en-US.md](./deploy/remote-dsh-instance.en-US.md)|Remote dsh instance persistence with systemd|

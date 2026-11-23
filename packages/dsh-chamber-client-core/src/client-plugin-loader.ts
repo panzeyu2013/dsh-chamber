@@ -285,7 +285,7 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
       // Promise.resolve().then also normalizes a synchronously throwing transport into
       // the same shared rejected promise.
       // Bundle concurrency cap (design 26 §D7; the ceil(N/bundleMax) boot-wave cost
-      // is a STATUS calibration item): the shared
+      // is a calibration item): the shared
       // budget admits at most `bundleMax` concurrent script loads, so one slow
       // instance's boot wave cannot occupy the whole same-origin pool and starve
       // local unary reads. The slot lives until the script really settles: on a

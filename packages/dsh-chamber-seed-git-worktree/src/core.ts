@@ -831,6 +831,8 @@ export class GitWorktreeCore {
       // The checkout the Session entered FROM is its immutable header root (see the
       // EnterTargetFacts docstring): exit_worktree must return there, not to the
       // repository's main checkout, when the source workspace is itself a linked checkout.
+      // DELIBERATE DEVIATION from upstream's git-toplevel value — only the exit destination
+      // differs (exit matches by the record's `path`), see the EnterTargetFacts docstring.
       repositoryRoot: root,
       ...(listed.branch === null ? {} : { branch: listed.branch }),
     }

@@ -1062,7 +1062,7 @@ test('I-1：shipped 源码中不存在 EventSource 引用与流式 getReader（�
 
 /** Page-scope fetch ownership (design 26 §D7): every ambient fetch reference in page
  *  code belongs to a budgeted carrier. A new file or count turns this red — the
- *  static gate STATUS used to list as missing. */
+ *  static gate used to list it as missing. */
 const PAGE_PACKAGE_PREFIXES = [
   'packages/renderer/',
   'packages/dsh-chamber-client-core/',
@@ -1113,7 +1113,7 @@ test('同源 fetch 的唯一所有权：页面代码的每个调用点都经预�
   }
   assert.deepEqual(found, PAGE_FETCH_ALLOWLIST,
     '一个未声明的同源 fetch 出现了：页面预算（http-budget.ts）必须拥有这次派发，'
-    + '或把它登记为已声明残余（STATUS 的绑定范围）并同笔更新本表')
+    + '或把它登记为 design 26 §D7 的已声明残余并同笔更新本表')
 })
 
 test('a wave larger than the slot table releases exactly one subscription immediately', async (t) => {

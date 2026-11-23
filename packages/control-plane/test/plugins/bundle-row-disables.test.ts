@@ -155,7 +155,7 @@ test('the pinned rc.2 web-app bundle mounts the office row our local row replace
   )
 })
 
-test('the pinned alpha.2 web-app bundle mounts the remote-connection row the overlay disables', t => {
+test('the pinned web-app bundle (alpha.1, unchanged through alpha.2) mounts the remote-connection row the overlay disables', t => {
   const bundleDir = fileURLToPath(new URL('../../../../vendor/harness-checkout/packages/bundle/web-app/', import.meta.url))
   const manifestPath = join(bundleDir, 'package.json')
   if (!existsSync(manifestPath)) {

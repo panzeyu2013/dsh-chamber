@@ -36,7 +36,7 @@ grep -rnE --include='*.md' "(${PIN:0:12}|${DSH}|${NODE}|${PNPM})" docs/ AGENTS.m
   | grep -vE 'CHANGELOG|THIRD_PARTY_NOTICES'
 ```
 
-- [ ] 命中逐条判断：`CHANGELOG.md` / `docs/CHANGELOG.en-US.md`、生成投影（`THIRD_PARTY_NOTICES*`）、`docs/progress/STATUS.md` 的 open 记录、以及 design 里明确标注「历史证据（不随本仓 pin 移动）」的不可变上游坐标属允许；其余「当前值」改成指向单源。`node scripts/gates/checks/verify-md-links.mjs` 退出 0（相对链接与锚点）；`pnpm run verify:i18n` 全 `consistent`（改过双语对时先 `pnpm run verify:i18n -- --write` 重录）。
+- [ ] 命中逐条判断：`CHANGELOG.md` / `docs/CHANGELOG.en-US.md`、生成投影（`THIRD_PARTY_NOTICES*`）、owning design 的「已知限制」段（STATUS 已停用）、以及 design 里明确标注「历史证据（不随本仓 pin 移动）」的不可变上游坐标属允许；其余「当前值」改成指向单源。`node scripts/gates/checks/verify-md-links.mjs` 退出 0（相对链接与锚点）；`pnpm run verify:i18n` 全 `consistent`（改过双语对时先 `pnpm run verify:i18n -- --write` 重录）。
 
 ## 5. 失败处置
 

@@ -1,19 +1,19 @@
 # TODO · 未排期计划与想法
 
-> 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；进度、验收门与取舍在 [STATUS.md](./STATUS.md)，
-> [deviations.md](./deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护），契约在 `docs/design/`；验收 / 发布 / 实机 / 门禁程序归 `docs/checklists/`，本文件不登记。
+> 本文件只记「未排期 / 未定稿」的计划与想法，**不记进度状态**；契约、取舍与已知限制在 `docs/design/`（STATUS 已停用：2026-11-23 用户裁决，不记录开放项/进度状态），
+> [deviations.md](./deviations.md) = 冻结前的双 flavor 历史登记（Electron 已冻结，不再维护）；验收 / 发布 / 实机 / 门禁程序归 `docs/checklists/`，本文件不登记。
 >
 > **版本范围与冻结清单**：唯一出货 flavor = macOS Swift 原生壳；Electron/Windows/Linux 桌面腿冻结、不发布（本文件相关计划一律标「冻结，不排期」，只在复活时执行）。范围、共享契约、禁用面与复活清单见 [electron-frozen.md](./electron-frozen.md) §1/§6 与根 [`AGENTS.md`](../../AGENTS.md)。
 > 四部分：A 上游（A 类）、B 平台（B 类）、C 功能（C 类）、D 工程（D 类）。文中 `§N` 指本部分内编号；
 > 跨部分引用写 `A§N` / `B§N` / `C§N` / `D§N`。
-> 条目内的「剩余 / 未做 / 待…」是**计划范围**，不是进度状态；状态以 [STATUS.md](./STATUS.md) 为准。
-> 新增：先判断阻塞来源；设计定稿移入 `docs/design/0X-*.md`，落地或明确不做则移出并在 STATUS 留结论。
+> 条目内的「剩余 / 未做 / 待…」是**计划范围**，不是进度状态；本文件不记状态，契约见 owning design。
+> 新增：先判断阻塞来源；设计定稿移入 `docs/design/0X-*.md`，落地或明确不做则移出（历史归 git / `CHANGELOG.md`）。
 
 ## 索引
 
 |部|内容|入口|
 |---|---|---|
-|A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐、§17 客户端插件页面 base path 上游化|A§1–A§15、A§17|
+|A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐、§16 完成/未读被动信号待裁、§17 客户端插件页面 base path 上游化|A§1–A§17|
 |B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
 |D 工程|结构性重构、产物新鲜度、页面性能残项、多实例常驻后续研究、右栏浏览器 v3 落地债|D§1–D§5|
@@ -48,7 +48,7 @@
   `workspace.json` 的 `global.archivedSessionIds`，投影按 `!archived.has(id)` 排除。
 - 需补：`sessions.delete({ sessionId })`（删目录 + 级联子会话 + workspace 账目自愈 + 清 archived，复用
   `host/session-removed`）；可选 `sessions.list` 行带 `archived` 标志/查询参数。
-- 退出：上游 delete 落地后 design 24 的清理域退役；浏览区 A/控制面直删 B 见 STATUS。
+- 退出：上游 delete 落地后 design 24 的清理域退役；浏览区 A/控制面直删 B 见 design 24 §11 的边界段。
 
 ### 4. 会话事实通道的「静默丢帧」自愈
 
@@ -172,7 +172,7 @@
 
 **U6 侧栏 More**：上游 entry-customization 向 `sidebar.panellist.actions` 注册面板 More（只有 Browse/Create 两项；折叠视图行只属上游 conversation region 分支）；本壳未声明该洞、不渲染，registry 对上游 `panel-pins.ts` 登记 `dropped`。候选 A 采纳（声明洞 + 渲染 More + 消费面板 pin；侧栏新增内容须先交用户裁决）；B 维持不采纳（当前；gateway 官方侧栏仍显示）。证据：`packages/dsh-chamber-client-ui-sidebar/src/client/index.ts` 子洞表、registry `dropped`。
 
-**U9 New Session 的 access 门**：上游侧栏以 `useRemoteAccess('session/create')` 作为 New Session 的渲染门（`SidebarRoot` 与 `HeaderLeadingControls` 各一处），本仓三处入口（`SidebarRoot` 行、字标快捷按钮、`shell.leading` 单席）均无该门 ⇒ 无权限 Peer 仍看到入口。候选 A 与上游同门（三处共用一条 access 快照，需接入 `remoteAccess` 注入面）；B 维持现状（当前）。证据：STATUS §2.1 U9。
+**U9 New Session 的 access 门**：上游侧栏以 `useRemoteAccess('session/create')` 作为 New Session 的渲染门（`SidebarRoot` 与 `HeaderLeadingControls` 各一处），本仓三处入口（`SidebarRoot` 行、字标快捷按钮、`shell.leading` 单席）均无该门 ⇒ 无权限 Peer 仍看到入口。候选 A 与上游同门（三处共用一条 access 快照，需接入 `remoteAccess` 注入面）；B 维持现状（当前）。证据：上游 `useRemoteAccess('session/create')` 两处 vs 本仓 `packages/dsh-chamber-client-ui-sidebar/src/client/` 三入口。
 
 #### 15.2 维持的差异与裁决
 
@@ -196,6 +196,14 @@
 
 - **`sidebar.session.action`（New Session 行 HOC 装饰座）**：采用上游形态——owner props `{ wide }`、占用者收 `children` 并返回「包裹后的内容 + 自有控件」、只装饰 `SidebarRoot` 的 New Session 行（字标快捷按钮 / `shell.leading` 单席 / workspace 行 `+` 不装饰）；契约见 design 05 §2、几何见 design 06 §7。本项不再是差异候选。残留 = 旧版 document-relative 插件的运行期 base 补齐与上游 seam（A§17）。
 
+### 16. 完成/未读被动信号的 pending 口径（待裁）
+
+> 阻塞来源 = 产品裁决（语义未定）；owner 指针 = design 06 §4.3（行尾状态 / 待办条带呈现）与 design 19 §3.7（完成未读 / 角标）。
+
+- **开放问题**：`pending`（ask / request，等批准 / 等回答）**是否计入离开前台后的被动信号**（侧栏品牌蓝点 / Dock 角标），以及其清除语义如何定义（是否与完成未读一样「返回前台即清、不设 ack」，还是必须交互处理后才消失）。
+- **现状（代码事实）**：现行被动面只由完成位（官方 `completionUnread` ∪ 修正臂）驱动；pending 只作窗口内徽标与待办区呈现，不进入蓝点 / 角标。
+- **候选**：A 不计入（维持现行；等待态只在窗口内提示）；B 计入并沿用注意力模型清除（返回前台即清）；C 计入但要求显式处理后才清。裁决后同批更新 design 06 §4.3 与 design 19 §3.7。
+
 ### 17. 客户端插件页面 base path 上游化
 
 > 阻塞来源 = 上游；chamber 侧公开契约 v1 见 design 09 §4，本条只记上游化路径。
@@ -212,13 +220,13 @@
 ### 1. macOS Swift 原生壳 v1
 
 > 路线 A：Swift 写壳 + Node sidecar；契约见 `docs/design/desktop/25-macos-swift-native-shell.md`。本节只留 W-xx 索引与契约落点；决策 D1–D7、双线防漂移门禁、A1–A8 中止点、性能/产物体积 A/B 协议与 dev 约定的明细按收口删除（原文存 git 历史），W1–W7 判定已迁入 design 25 §8.5。
-> 契约落点 = design 25 §3–§9；开放状态归 STATUS。
+> 契约落点 = design 25 §3–§9；本文件不记开放状态（STATUS 已停用）。
 
 #### 1.1 决策结果索引（D1–D7）
 D1–D7 取向（路线 A、双壳共存 `com.dshchamber.native`、更新 v1 blocked-available→Sparkle、`macos/` SwiftPM、原生 UI 渐进不做、Node 版本与架构、静态凭据 0600 明文）见 design 25 §5 与 §8（正式签核仍开放）。
 
 #### 1.3 WBS 任务号索引（W-01…W-32 → 契约落点）
-W-01…W-32 的判定与契约落点以 design 25 §8.5 与 §3.2–§8.4 为准（本文件不手抄映射表）；开放状态见 [STATUS.md](./STATUS.md)。
+W-01…W-32 的判定与契约落点以 design 25 §8.5 与 §3.2–§8.4 为准（本文件不手抄映射表，也不记开放状态）。
 
 ### 2. Windows v1（**冻结，不排期**）
 
@@ -234,7 +242,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 #### 2.3 仍生效的取舍
 
-取舍唯一权威是 `docs/design/archive/23-windows-support.md` §5「妥协点（发布附注，唯一权威）」与 `docs/progress/STATUS.md`「范围决策与必要取舍」：F1 无进程组等价、能力先于开关（M2a 前只读/禁用）、Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记在彼，本文不复述（避免第三份副本漂移）。
+取舍唯一权威是 `docs/design/archive/23-windows-support.md` §5「妥协点（发布附注，唯一权威）」与根 `AGENTS.md`「当前版本范围」：F1 无进程组等价、能力先于开关（M2a 前只读/禁用）、Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记在彼，本文不复述（避免第三份副本漂移）。
 
 ## C. 未实现功能想法（C 类）
 
@@ -242,13 +250,13 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 ### 1. 账户 / 登录面（DeepSeek 账号 + 余额）
 
-> 优先级：**低优先，未排期**。触发条件 = 出现「要用官方 DeepSeek 账号的凭据/额度给 dsh 用」的真实需求（API key / 自定义 provider 路径不受影响）。状态权威：STATUS §4.2「设置/账户」的桌面账户登录项。
+> 优先级：**低优先，未排期**。触发条件 = 出现「要用官方 DeepSeek 账号的凭据/额度给 dsh 用」的真实需求（API key / 自定义 provider 路径不受影响）。契约权威：design 09 §3.5③ 与 design 05 §5（设置分节注册形状）。
 
 **目标**：在具备账户能力的来源的设置面板内提供完整回路：未登录 → 登录（浏览器 PKCE）→ 等待浏览器 → 已登录（资料 + 普通/赠金钱包 + 充值·用量外链）→ 退出。凭据只落在**该来源宿主**的凭据库（`dsh-credentials-local`），渲染端只见 profile / 余额，不碰 token。
 
 **非目标**（三条路都不做）：官方桌面首启浮层（`desktop-onboarding`）、`WelcomePage` 欢迎页、Electron 账户后端、应用内平台视图、`dshDesktop` 载体扩展、把账号 token 带进渲染端。
 
-**剩余工作**：控制面根路径 `/oauth/callback` → 活动实例反代 + 可达 origin（多实例归属需裁决；`settings.launcher` 座被设置壳阴影后无渲染点）。UI 面（DEFERRED 载入 + vendor 补丁门控）、桌面 flavor 现状与残余见 design 09 §3.5③ 与 STATUS §4.2「设置/账户」，本节不复述。关联：design 05 §5（分节注册形状）、§7.4（传输 URL 不进 renderer）；上游最小改法见 A§9。
+**剩余工作**：控制面根路径 `/oauth/callback` → 活动实例反代 + 可达 origin（多实例归属需裁决；`settings.launcher` 座被设置壳阴影后无渲染点）。UI 面（DEFERRED 载入 + vendor 补丁门控）与桌面 flavor 残余见 design 09 §3.5③，本节不复述。关联：design 05 §5（分节注册形状）、§7.4（传输 URL 不进 renderer）；上游最小改法见 A§9。
 
 ### 2. session 的 subagents 在侧边栏中的显示
 
@@ -265,11 +273,11 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 - 层级深度（subagent 的 subagent）与大量 subagent 时的折叠/截断。
 - 跨来源投影（远程实例的 subagent 在本地侧边栏的呈现）与断连清理。
 
-**关联**：`docs/design/client/06-sidebar-enhancements.md`（侧边栏形态、运行时事实通道）；STATUS §4.2「连接/来源」的 v1 不做清单。
+**关联**：`docs/design/client/06-sidebar-enhancements.md`（侧边栏形态、运行时事实通道）；v1 不做清单见 design 06 §2.2。
 
 ### 3. open-in：超集分批（S1/S2/S3）
 
-> fork & supersede 的契约见 `docs/design/desktop/20-open-in-registry.md`（§4 契约、§6 host 包与八处接线、§8 文件清单、§9 验证门）；实机验收与实施后开放项在 STATUS（design 20 §1 指向）。本节只留未排期超集分批与不做的边界。
+> fork & supersede 的契约见 `docs/design/desktop/20-open-in-registry.md`（§4 契约、§6 host 包与八处接线、§8 文件清单、§9 验证门）；实机验收与实施后开放项见 design 20 §1 与 `docs/checklists/acceptance/`。本节只留未排期超集分批与不做的边界。
 
 #### 3.1 超集分批（S1/S2 未排期；S3 残余；S4 不做）
 
@@ -278,7 +286,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 - **S1 远程 provider 家族**：主进程 open-in 注册表（`packages/desktop/open-in.ts`）当前只有 vscode；待加 Insiders/Cursor/Windsurf/JetBrains Gateway/`ssh://` 终端——只构造 URL 交 OS、不启动进程；每项需实机 scheme 语义验证。实例侧本地目录（`packages/dsh-chamber-seed-open-in` 的 catalog）已覆盖这些应用，但与主进程远程注册表不是同一面。
 - **S2 远程文件级打开**：远程来源允许文件路径（纯 URL 构造，不经 host 包）；本地仍目录限定。
 - **S3 复制路径（残余）**：工作区悬停卡复制 `workspace.path`（`ServerSection.tsx` 的 `copyText`）；会话行仍只复制标题（`ServerSectionRows.tsx`），待补 `cwd` 复制或裁决只保留工作区。零新 IPC/依赖；「复制 `ssh user@host`/复制 VS Code 深链」不做（结论见 design 20 §7.3）。
-- **S4 多入口**：不做（理由登记 STATUS）：header 按钮与目标会话同排相邻，侧栏入口边际价值有限；会话行动作在行菜单（置顶/重命名/分叉/归档）+ 行内悬停归档钮与置顶钮（`packages/dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx`），新增入口要么重复要么推翻它——不要把「会话行刻意没有 kebab」当理由（会话行有 kebab；刻意无 kebab 的是 worktree 派生的 workspace 行）。快捷键缺基建（vendor 无 keybinding 注册表，只有聊天输入框 keymap），自建 document 级监听还要处理「哪个 entry 是活跃视图」与 chord 冲突。边界（不做，design 20 §7.3 唯一权威）：远端宿主侧打开、扩本地执行面、主进程自行枚举本机应用。
+- **S4 多入口**：不做（理由见 design 20 §7.3）：header 按钮与目标会话同排相邻，侧栏入口边际价值有限；会话行动作在行菜单（置顶/重命名/分叉/归档）+ 行内悬停归档钮与置顶钮（`packages/dsh-chamber-client-ui-sidebar/src/client/ServerSectionRows.tsx`），新增入口要么重复要么推翻它——不要把「会话行刻意没有 kebab」当理由（会话行有 kebab；刻意无 kebab 的是 worktree 派生的 workspace 行）。快捷键缺基建（vendor 无 keybinding 注册表，只有聊天输入框 keymap），自建 document 级监听还要处理「哪个 entry 是活跃视图」与 chord 冲突。边界（不做，design 20 §7.3 唯一权威）：远端宿主侧打开、扩本地执行面、主进程自行枚举本机应用。
 
 ## D. 工程债（D 类）
 
@@ -306,9 +314,9 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 #### 1.3 门禁与用法
 
-- 证据选择：`node scripts/gates/runners/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看计划）；模式名与 ci.yml/release 一致；模式之外的门及其归属以 `docs/progress/STATUS.md` §1.6 为准（本文件不复述清单）。
+- 证据选择：`node scripts/gates/runners/run-checks.mjs <static|tests|typecheck|full>`（`--list` 看计划）；模式名与 ci.yml/release 一致；模式之外的门及其归属以 `scripts/gates/registry/gate-surfaces.json` 为准（本文件不复述清单）。
 - 门成员资格单源 = `scripts/gates/registry/gate-surfaces.json`（loader `gate-registry.mjs`，`run-checks` 只派生模式）；`ci.yml`/`release.yml` 的 static 步骤由 `gate-workflow-views.mjs` 从 registry 生成（四个标记块 + `--check` 保鲜）；不变量与生成视图细节归该单源；文档写作规则见 `docs/AGENTS.md`。
-- 本重构三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`（只降不升，清单与阈值以 `scripts/gates/registry/file-budgets.json` 为准）、`verify:no-dead-exports`（零消费者导出即红）；执行面见 STATUS §1.6。
+- 本重构三门：`verify:import-cycles`（值环 0 + 类型环 allowance——现为空）、`verify:file-budgets`（只降不升，清单与阈值以 `scripts/gates/registry/file-budgets.json` 为准）、`verify:no-dead-exports`（零消费者导出即红）；执行面见 `scripts/gates/registry/gate-surfaces.json` 与 `scripts/gates/runners/run-checks.mjs`。
 
 #### 1.4 边界与不做
 
@@ -343,7 +351,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 ### 2. 产物新鲜度守卫（G7；未排期）
 
-> 现有守卫：`desktop/dist/web/**` 的 G3 输入摘要（`.build-manifest.json`，构建末尾写、`verify-artifact-freshness` 比对）、`desktop/dist/host-*-package/**` 是 Electron 冻结腿打包副本（默认按冻结归档 loud SKIP、`--include-electron` 严格档才逐行比对，[electron-frozen](electron-frozen.md) §2）、`desktop/dist/control-plane/**`/`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）、G5 打包前兜底（`packages/desktop/scripts/build-sidecar.mjs` CLI 装配成功后跑 `assertPackArtifactsFresh({mode:'sidecar'})`；失败带重建命令）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。G2/G8 的唯一登记 = `scripts/gates/checks/artifact-freshness-registry.mjs`（`verify-artifact-freshness` 默认档校验，并与门自身观测的 freshness id 双向锁步；新增比较或新产物不同批登记即红）。本节只留仍无守卫的产物（§2.1）与剩余最小守卫建议（G7）；开放状态见 design 21 §7 与 STATUS §1.6。
+> 现有守卫：`desktop/dist/web/**` 的 G3 输入摘要（`.build-manifest.json`，构建末尾写、`verify-artifact-freshness` 比对）、`desktop/dist/host-*-package/**` 是 Electron 冻结腿打包副本（默认按冻结归档 loud SKIP、`--include-electron` 严格档才逐行比对，[electron-frozen](electron-frozen.md) §2）、`desktop/dist/control-plane/**`/`gateway/dist/**`（标记守卫）、`preload.cjs`、`renderer/src/generated/**`、`gateway/dist/index.js`（重建-比对，`scripts/gates/checks/verify-artifact-freshness.mjs`；**非注册门**，发布 checklist §4 构建后手动 `--require-compare`）、G5 打包前兜底（`packages/desktop/scripts/build-sidecar.mjs` CLI 装配成功后跑 `assertPackArtifactsFresh({mode:'sidecar'})`；失败带重建命令）；seed `dist/index.js` ×4 + `dsh-runtime/dist/index.js` 归 C8（`scripts/lib/build-artifacts.mjs` 单源）；G1/G4/G6 = `verify:test-wiring`。G2/G8 的唯一登记 = `scripts/gates/checks/artifact-freshness-registry.mjs`（`verify-artifact-freshness` 默认档校验，并与门自身观测的 freshness id 双向锁步；新增比较或新产物不同批登记即红）。本节只留仍无守卫的产物（§2.1）与剩余最小守卫建议（G7）；开放状态见 design 21 §7 与 `scripts/gates/registry/gate-surfaces.json`。
 
 #### 2.1 仍无守卫的产物
 
@@ -368,7 +376,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 > 本节只承载页面侧性能修订中**未实现**的残项（侧栏 T2、E2 首屏 markdown 按需化、A5 重订阅修正、B2 style 归属测量、B5 虚拟化 spike、A7 剩余）；
 > 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §7（观察者对账与页面恢复：隐藏期不采样）、19 §3.5（覆盖边界与诚实性：`factAt` 1s 签名桶、facts/mux 空帧去重）、
-> 24 F5（purged 孤儿键收敛）。各项都保留证据与设计以便下次决策，落地前不进入任何提交面。本节条目 ID（E2/A5/B2/B5/A7 与 STATUS 里的 E1/W2/D4/B1/B6 等）是渲染 P0 批的工作名，只在本节与 STATUS 渲染性能条目内有效；与各 design 文档的既有编号（design 25 §5 的 E2/E7/E21、[design 14](../design/runtime/14-sleep-background.md) §D4 唤醒恢复、design 25 §8 的 W2 菜单快捷键、design 06 §3.4 的 B6「本地账号成员集」、[remote-browser-acceptance.md](../checklists/acceptance/remote-browser-acceptance.md) §E2 等）无关。
+> 24 F5（purged 孤儿键收敛）。各项都保留证据与设计以便下次决策，落地前不进入任何提交面。本节条目 ID（E2/A5/B2/B5/A7 与 E1/W2/D4/B1/B6 等）是渲染 P0 批的工作名，只在本节内有效；与各 design 文档的既有编号（design 25 §5 的 E2/E7/E21、[design 14](../design/runtime/14-sleep-background.md) §D4 唤醒恢复、design 25 §8 的 W2 菜单快捷键、design 06 §3.4 的 B6「本地账号成员集」、[remote-browser-acceptance.md](../checklists/acceptance/remote-browser-acceptance.md) §E2 等）无关。
 
 #### 3.1 侧栏 T2：更细的上下文拆分与按来源缓存
 
@@ -430,7 +438,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 ### 4. 多实例常驻的后续研究（未排期）
 
 > 本条目的触发条件独立于 v1.1 落地；v1.1 只落 keep-all + 硬上限 + 压力阀（design 05 §4.1），
-> 下列工作不提前做。进度状态见 [STATUS.md](./STATUS.md) §1.1/§1.3/§1.6。
+> 下列工作不提前做；触发条件见下表（本仓不另设进度记录）。
 
 | # | 工作 | 触发条件 | 说明 / 验收方向 |
 |---|---|---|---|

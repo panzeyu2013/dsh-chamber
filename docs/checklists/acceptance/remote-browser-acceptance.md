@@ -86,4 +86,4 @@ pnpm run check:full
 
 ## 验收记录
 
-- 在 [`../../progress/STATUS.md`](../../progress/STATUS.md) 只保留仍开放的项；完成项移入设计/发布记录。每条失败给出：命令、平台、源类型、错误码、是否 fail-closed、是否阻塞发布。
+- 未闭合项写回 owning design（design 28 §8 的验收段）或 TODO；完成项移入设计/发布记录（本仓不另设进度记录）。每条失败给出：命令、平台、源类型、错误码、是否 fail-closed、是否阻塞发布。

@@ -1,7 +1,10 @@
 /**
  * The page-channel wire contract (design 26) — ONE page-level WebSocket that
- * carries every long-lived chamber stream the page consumes: host health, the
- * per-instance client-plugin graph, and the per-instance session-facts mirror.
+ * carries every long-lived chamber stream the page consumes: control-plane-native
+ * host health and the per-instance session-facts mirror. (The per-instance
+ * client-plugin graph used to ride this channel as the `pluginGraph` family;
+ * 0.2.3-alpha.1 retired it — see {@link PageChannelFamily} — and the renderer now
+ * follows the authenticated per-instance `pluginEvents` Remote stream directly.)
  *
  * WHY ONE CHANNEL. A browser caps HTTP/1.1 connections per origin at six, and a
  * long-lived EventSource/stream keeps one of those slots for its whole life.
@@ -38,9 +41,9 @@ export const PAGE_CHANNEL_PATH = '/api/page-channel'
 
 /**
  * Stream families the page may subscribe to. `health` is control-plane-native;
- * (0.2.3-alpha.1 retired the `pluginGraph` family: the renderer follows the
- * authenticated per-instance `pluginEvents` Remote stream directly, so no relay.)
- * `sessionFacts` reads the target's `/chamber/session-state/stream` SSE.
+ * `sessionFacts` reads the target's `/chamber/session-state/stream` SSE. The
+ * `pluginGraph` family is retired (0.2.3-alpha.1): the renderer follows the
+ * authenticated per-instance `pluginEvents` Remote stream directly, so no relay.
  */
 const PAGE_CHANNEL_FAMILIES = ['health', 'sessionFacts'] as const
 

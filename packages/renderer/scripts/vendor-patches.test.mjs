@@ -72,8 +72,11 @@ const FILES = {
   workspaceNavigation: VENDOR + 'dsh-client-ui-workspace/src/client/navigation.ts',
   workspaceIndex: VENDOR + 'dsh-client-ui-workspace/src/client/index.ts',
   // ui-theme styles.ts is RETIRED at alpha.1 (upstream replaced the inline-import
-  // style-tag installer with bundle CSS imports; see RETIRED_PATCHES).
+  // style-tag installer with bundle CSS imports; see RETIRED_PATCHES). Those module
+  // resources are installed by the per-renderer DocumentStyles, which the
+  // document-styles page-global entry dedupes for N-ctx.
   iconSprite: VENDOR + 'dsh-client-ui-theme/src/client/icon-sprite.ts',
+  documentStyles: VENDOR + 'dsh-client-ui-renderer/src/client/styles/document-styles.ts',
   chatViewport: VENDOR + 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
 }
 
@@ -101,6 +104,7 @@ const IDS = {
   workspaceIndex: '/x/vendor/harness-checkout/packages/client/ui-workspace/src/client/index.ts',
   readingReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-reading.ts',
   iconSpriteReal: '/x/vendor/harness-checkout/packages/client/ui-theme/src/client/icon-sprite.ts',
+  documentStylesReal: '/x/vendor/harness-checkout/packages/client/ui-renderer/src/client/styles/document-styles.ts',
   chatViewportReal: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/use-chat-viewport.ts',
 }
 
@@ -1040,7 +1044,9 @@ test('the live registry declares a retirement form per patch and no orphan artif
     'dsh-util-values/src/index.ts',
     // 0.2.3-alpha.1: upstream compiles theme CSS into bundle resources (plain CSS
     // imports) instead of appending per-shell <style data-plugin-css> tags, so the
-    // page-global stylesheet singleton patch has nothing left to patch.
+    // page-global stylesheet singleton patch has nothing left to patch; the module
+    // resources are installed by the per-renderer DocumentStyles, deduped by the
+    // document-styles page-global entry.
     'dsh-client-ui-theme/src/client/styles.ts',
   ])
   for (const entry of RETIRED_PATCHES) {
@@ -1294,7 +1300,11 @@ test('every registered vendor patch targets a composite-covered package or depen
   // Bind every patched package to the ids chamber-entry.ts actually loads (plus the listed
   // bundled dependency), and prove the never-loaded list stays disjoint from that set.
   const entrySource = readFileSync(new URL('../src/chamber-entry.ts', import.meta.url), 'utf8')
-  const loaded = entryLoadedIds(entrySource)
+  // The boot kernel (dsh-client-web) owns the kernel-adopted rows the composite does not
+  // import itself: modules and ui-renderer are value-imported there, so a patch on them is
+  // transformed by this build just like a composite row.
+  const kernelSource = readFileSync(new URL('../../dsh-client-web/src/boot.ts', import.meta.url), 'utf8')
+  const loaded = [...new Set([...entryLoadedIds(entrySource), ...entryLoadedIds(kernelSource)])]
   const notLoaded = [...new Set(packages)].filter((id) => !loaded.includes(id) && !PATCHED_BUNDLED_DEPENDENCY_IDS.includes(id))
   assert.deepEqual(notLoaded, [], 'a patched package is not loaded by chamber-entry.ts: its patch can never apply')
   const loadedSkips = COVERED_BUT_NEVER_LOADED_IDS.filter((id) => loaded.includes(id))
@@ -1427,6 +1437,7 @@ test('each patch artifact marker matches its own bundled source, and no other (f
     { vendorFile: 'dsh-client-ui-workspace/src/client/navigation.ts', key: 'workspaceNavigation', real: IDS.workspaceNavigation, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-workspace/src/client/index.ts', key: 'workspaceIndex', real: IDS.workspaceIndex, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-theme/src/client/icon-sprite.ts', key: 'iconSprite', real: IDS.iconSpriteReal, loader: 'ts', route: '' },
+    { vendorFile: 'dsh-client-ui-renderer/src/client/styles/document-styles.ts', key: 'documentStyles', real: IDS.documentStylesReal, loader: 'ts', route: '' },
     { vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts', key: 'chatViewport', real: IDS.chatViewportReal, loader: 'ts', route: '' },
   ]
   assert.deepEqual(
@@ -1725,8 +1736,10 @@ test('the upstream viewport-left reset and dragend still clear the overlay (esca
 /* ------------------------------------------------------------------------- *
  * ui-theme icon-sprite page-global singleton. The stylesheet half of this
  * section RETIRED at 0.2.3-alpha.1: upstream now compiles theme CSS into bundle
- * resources (plain CSS imports), so there is no per-shell <style> installer to
- * dedupe (RETIRED_PATCHES owns the fence).
+ * resources (plain CSS imports), so there is no per-shell ui-theme <style>
+ * installer to dedupe (RETIRED_PATCHES owns the fence); the module resources are
+ * installed by the per-renderer DocumentStyles, deduped by the document-styles
+ * page-global entry below.
  * ------------------------------------------------------------------------- */
 
 /** Cordis ctx surface these modules use: inline effects + captured event listeners. */
@@ -2080,4 +2093,138 @@ test('the coalesced viewport keeps landing suppression, scrollend ordering and d
   synchronous.viewport.onScroll({ target: synchronous.scroller })
   assert.equal(synchronous.dispatches.length, 1, 'the fallback stays synchronous')
   assert.equal(synchronous.dispatches[0].scroll.metrics.top, 64)
+})
+
+/* ------------------------------------------------------------------------- *
+ * ui-renderer DocumentStyles page-global singleton (N-ctx). Upstream alpha.1
+ * installs module styles from a PER-RENDERER DocumentStyles instance; the
+ * chamber page mounts one renderer per instance shell against ONE shared module
+ * table, so N shells install N copies of every style[data-plugin][data-path]
+ * node into document.head. The registered patch publishes each
+ * (container, plugin, path) sheet once per document behind Symbol.for and
+ * refcounts it. This test EXECUTES the patched vendor module against a fake
+ * DOM/module table, and runs the same scenario against the UNPATCHED source as
+ * the negative control (duplicate nodes = the defect the patch removes).
+ * ------------------------------------------------------------------------- */
+
+/** Minimal document/element model for DocumentStyles install, ordering and removal. */
+function createFakeDocument() {
+  const makeElement = (tagName) => ({
+    tagName,
+    attributes: {},
+    textContent: '',
+    parent: undefined,
+    isConnected: false,
+    setAttribute(name, value) { this.attributes[name] = value },
+    remove() {
+      const list = this.parent?.childNodes
+      if (list === undefined) return
+      const index = list.indexOf(this)
+      if (index !== -1) list.splice(index, 1)
+      this.parent = undefined
+      this.isConnected = false
+    },
+    get nextSibling() {
+      const list = this.parent?.childNodes
+      if (list === undefined) return null
+      const index = list.indexOf(this)
+      return index === -1 ? null : (list[index + 1] ?? null)
+    },
+  })
+  const document = { createElement: makeElement }
+  const container = {
+    ownerDocument: document,
+    childNodes: [],
+    append(node) { this.insertBefore(node, null) },
+    insertBefore(node, anchor) {
+      if (node.isConnected) node.remove()
+      const list = this.childNodes
+      const index = anchor === null ? list.length : list.indexOf(anchor)
+      list.splice(index === -1 ? list.length : index, 0, node)
+      node.parent = this
+      node.isConnected = true
+      return node
+    },
+  }
+  document.head = container
+  return document
+}
+
+/** Module table seam DocumentStyles consumes, over fixed client-module records. */
+function createFakeModules(records) {
+  return {
+    activeRecords: () => records,
+    subscribeModules: () => () => {},
+    resolveAsset: (reference) => reference,
+  }
+}
+
+/** One client-module record whose metadata produces module stylesheets. */
+function styleRecord(ownerId, path, css) {
+  return {
+    id: ownerId,
+    ownerId,
+    exports: {},
+    edges: new Set(),
+    meta: () => ({ stylesheets: { [path]: { text: () => css } } }),
+  }
+}
+
+/** Load transformed module source as a fresh ESM module. */
+async function importTransformedDocumentStyles(code) {
+  const dir = mkdtempSync(join(tmpdir(), 'document-styles-dedupe-'))
+  const file = join(dir, 'document-styles.mjs')
+  writeFileSync(file, esbuild.transformSync(code, { loader: 'ts', format: 'esm' }).code)
+  return import(pathToFileURL(file).href + '?' + Date.now())
+}
+
+/**
+ * Mount two renderers over one page and report the installed sheet nodes.
+ * @param {new (container: unknown, modules: unknown) => { mount(): void, dispose(): void }} DocumentStyles
+ */
+async function mountTwoRenderers(DocumentStyles) {
+  const document = createFakeDocument()
+  const modules = createFakeModules([
+    styleRecord('@scope/one', 'one.css', '.one{}'),
+    styleRecord('@scope/two', 'two.css', '.two{}'),
+  ])
+  const first = new DocumentStyles(document.head, modules)
+  const second = new DocumentStyles(document.head, modules)
+  first.mount()
+  second.mount()
+  const installed = document.head.childNodes.map((node) => node.attributes['data-plugin'] + '/' + node.attributes['data-path'])
+  first.dispose()
+  const afterFirstDispose = document.head.childNodes.length
+  second.dispose()
+  const afterBothDispose = document.head.childNodes.length
+  return { installed, afterFirstDispose, afterBothDispose }
+}
+
+test('the ui-renderer DocumentStyles patch installs each module sheet once per page (N shells, one copy)', async () => {
+  const source = readFileSync(VENDOR + 'dsh-client-ui-renderer/src/client/styles/document-styles.ts', 'utf8')
+  const patched = applyVendorPatches(
+    '/x/vendor/harness-checkout/packages/client/ui-renderer/src/client/styles/document-styles.ts',
+    source,
+  )
+  assert.notEqual(patched, undefined, 'the document-styles module must be patched')
+  assert.deepEqual(patched.applied, ['dsh-client-ui-renderer/src/client/styles/document-styles.ts'])
+  assert.ok(patched.code.includes("Symbol.for('dsh-chamber:page-module-styles')"),
+    'the page-level registry is keyed on the document behind Symbol.for')
+
+  const { DocumentStyles } = await importTransformedDocumentStyles(patched.code)
+  const deduped = await mountTwoRenderers(DocumentStyles)
+  assert.deepEqual(deduped.installed.slice().sort(), ['@scope/one/one.css', '@scope/two/two.css'],
+    'two renderers over one page install ONE sheet per (plugin, path)')
+  assert.equal(deduped.afterFirstDispose, 2,
+    'the surviving shell keeps the shared sheets after the first owner disposes')
+  assert.equal(deduped.afterBothDispose, 0,
+    'the last owner removes the shared sheets: the upstream single-page DOM on a single-shell page')
+
+  // Negative control: the same scenario on the UNPATCHED pinned source duplicates every sheet.
+  const { DocumentStyles: UpstreamDocumentStyles } = await importTransformedDocumentStyles(source)
+  const naive = await mountTwoRenderers(UpstreamDocumentStyles)
+  assert.equal(naive.installed.length, 4,
+    'unpatched per-renderer installers duplicate every sheet (2 shells x 2 paths) - the defect')
+  assert.equal(naive.afterFirstDispose, 2)
+  assert.equal(naive.afterBothDispose, 0)
 })

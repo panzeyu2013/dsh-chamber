@@ -31,7 +31,7 @@ AppImage 的 `process.execPath` 是每次启动的 squashfs 挂载点（`/tmp/.m
 
 - release.yml `build-linux` 腿（ubuntu-22.04、x64、SHA 钉死、beta 用 beta 配置、dry_run 清 `GH_TOKEN`）验证 AppImage 存在、feed 互斥、无 `.blockmap`；不设独立 verify 脚本。
 - 构建机 glibc 下限 = 构建机（ubuntu-22.04）；runner 退役需预登记迁移方案。
-- 平台适配：`spawn-dsh.ts` node 兜底表加 `~/.local/bin`/`/snap/bin`；目录 fsync 仅吞 EINVAL/ENOTSUP（平台无关）；托管宿主 pnpm 走随包 wrapper；远端浏览器 forward 每进程组 + fail-closed reaper（design 28）；已知未动项见 STATUS。
+- 平台适配：`spawn-dsh.ts` node 兜底表加 `~/.local/bin`/`/snap/bin`；目录 fsync 仅吞 EINVAL/ENOTSUP（平台无关）；托管宿主 pnpm 走随包 wrapper；远端浏览器 forward 每进程组 + fail-closed reaper（design 28）；已知未动项见 design 28 §8。
 - **已知未动项**：托盘图标候选两死路径（跨平台既有边界）；pnpm home 的 XDG_DATA_HOME 偏移未覆盖（低优；macOS `~/Library/pnpm` 超出 Linux 范围）；`private-fs.ts` syncPinnedDirectory（private-file 的兄弟站点）保持严格无容错、未并入；gateway 裸 CLI 默认 stateDir 与 control-plane standalone 共享 `~/.dsh-chamber`（文档提示）。
 
 ## 5. 不做 / 边界

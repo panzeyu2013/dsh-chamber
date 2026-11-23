@@ -22,7 +22,7 @@ name: Release
 # to full downloads. macOS v1 ships arm64 ONLY:
 # macos-13, the last public Intel x64 runner, is retired; macos-14 is
 # deprecated and unsupported, so the mac leg runs on macos-latest (= macOS 26,
-# arm64; Intel Macs are unsupported in v1, see STATUS.md). Windows builds on
+# arm64; Intel Macs are unsupported in the current release scope). Windows builds on
 # windows-2022 (windows-latest's VS 18 toolchain is not detected correctly by
 # the node-gyp stack — same finding as OpenChamber). Formal macOS releases
 # require signing
@@ -309,7 +309,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
@@ -447,7 +447,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
@@ -492,7 +492,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - name: Bootstrap vendor tree (verify pin + ensure links)
@@ -570,7 +570,7 @@ jobs:
     # and unsupported, so the mac leg builds on macos-latest (= macOS 26,
     # arm64)。bundle:dsh bakes the host platform's dsh runtime, so x64 cannot
     # be cross-built on an arm64 runner without Rosetta toolchain work
-    # (deferred, see STATUS.md).
+    # (deferred: cross-build is out of scope for the Swift leg).
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -587,7 +587,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
@@ -857,7 +857,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
@@ -950,7 +950,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs
@@ -1007,8 +1007,8 @@ jobs:
   # 由 release-artifacts.mjs 单源定义）。dry-run 走 ad-hoc 且不发布（与 build-macos 同纪律：
   # 剥离一切签名/公证/上传凭据）；正式腿 fail-closed——CSC_LINK 已在
   # create-release 前置门校验，本腿导入同一 p12 并解析 Developer ID 身份，
-  # 缺失即失败（finalize 的 needs 因此挡住发布）。Apple 凭据类外部阻断登记在
-  # STATUS。
+  # 缺失即失败（finalize 的 needs 因此挡住发布）。Apple 凭据类外部阻断是已知
+  # 外部约束（见 release-checklist）。
   build-swift:
     needs: [create-release]
     permissions:
@@ -1030,7 +1030,7 @@ jobs:
           version: 11.28.5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/bootstrap/ensure-harness-vendor.mjs

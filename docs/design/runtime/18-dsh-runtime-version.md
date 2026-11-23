@@ -1,6 +1,6 @@
 # 18 · dsh 运行时版本管理（运行期从 npm 拉取安装）
 
-> **dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；开放状态见 `docs/progress/STATUS.md`（design 18 条目）。
+> **dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读**——本文是该管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；开放状态见 design 18 的已知限制段与 TODO。
 
 ## 1. 需求与动机
 
@@ -67,7 +67,7 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 
 进 CommandRuntime；**身份探针 `session/canOpenWorkspacePath`**（SessionController `session` namespace 零参 boolean Remote——纯同步平台检测，不读会话数据、不激活 Agent、无 IO，true/false 均健康；老 runtime 树（dsh <0.1.2-rc.1）对其答 HTTP 404 → 探针层自动回退 legacy `session/list`（1 MiB上限，行为与旧版逐位一致，老树激活/回退照常通过），回退经可选 `warn` sink 发warning（两生产 owner 未注入即静默，可见性由并行 control-plane `probeHostIdentity`的 logger 兜底，见
 
-STATUS）；graph 通道 `clientGraph/graph`；host settings 只读 RPC `settings/describe`（**per-call 响应上限 = 16 MiB**，与 `SETTINGS_FILE_MAX_BYTES`对齐——合法大配置永不误伤；cap 经 seam `RuntimeProbeRpcOptions.maxResponseBytes`透传——desktop 直传 control-plane `call` 自动生效，gateway runtime-manager 两处call seam 同样转发，两
+design 02 §3.5）；graph 通道 `clientGraph/graph`；host settings 只读 RPC `settings/describe`（**per-call 响应上限 = 16 MiB**，与 `SETTINGS_FILE_MAX_BYTES`对齐——合法大配置永不误伤；cap 经 seam `RuntimeProbeRpcOptions.maxResponseBytes`透传——desktop 直传 control-plane `call` 自动生效，gateway runtime-manager 两处call seam 同样转发，两
 
 端行为一致）；`gitWorktree/previewCreate` 以空输入期待`invalid-input`，在 Git 进程/仓库扫描前停止；`archiveCleanup/probe`（design 24 第三chamber 域）零参执行，accept = 形态良好的 domain carrier（`ok:true` + 对象 value健康；形态良好的 `ok:false` = 在位但异常 → fail-closed；无
 
@@ -139,7 +139,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 
 -- 接线范围：本段「重启 dsh」两形态、gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启与全部 restart-to-apply、ssh 卡「重启实例」（仅 dsh 目标）都**没有任何页面级收尾**（gateway 两态仍按 `pollGatewayReady` 确认）；本地卡「启动」/写者接管、本地「立即应用」/「重试应用」/「重试恢复」只执行事务本身；「重启网关服务」（systemd）不改变实例插件集，**不接**。
 
-**被拒替代**：①只重挂该来源的页内壳——换不掉已加载 id 的实现，也覆盖不了 rev 变化（宿主行 rev 是文件 metadata hash `sha1(mtimeMs,ctimeMs,size)`；真正的 `restart-required` 来自文件改写，只有窗口重载才能换掉旧实现）；②单插件热替换（vendor `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()`）——要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③恢复整份 `restart-window-reload.ts`——把「重启实例」与「插件换血」重新耦合，且对不改插件集的 systemd 重启路径也 arm；④「结算后 250ms 去抖再请求」——一次安装流最多两次结算，代价有界；⑤「事实条倒计时 + 取消」——需新增 per-source pending-reload 事实通道（STATUS 开放项）；⑥「仅手动重载」——不自动刷新正是主诉求；⑦「仅插件分节激活时自动重载」——需新增「当前分节」事实通道，且同 document 其它分节仍看陈旧插件集。
+**被拒替代**：①只重挂该来源的页内壳——换不掉已加载 id 的实现，也覆盖不了 rev 变化（宿主行 rev 是文件 metadata hash `sha1(mtimeMs,ctimeMs,size)`；真正的 `restart-required` 来自文件改写，只有窗口重载才能换掉旧实现）；②单插件热替换（vendor `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()`）——要在 chamber 侧重实现 HMR 换血纪律（样式重复注入、依赖闭包、跨来源同 id 共享），成本风险远超收益，只登记为将来可选；③恢复整份 `restart-window-reload.ts`——把「重启实例」与「插件换血」重新耦合，且对不改插件集的 systemd 重启路径也 arm；④「结算后 250ms 去抖再请求」——一次安装流最多两次结算，代价有界；⑤「事实条倒计时 + 取消」——需新增 per-source pending-reload 事实通道（TODO 未排期项）；⑥「仅手动重载」——不自动刷新正是主诉求；⑦「仅插件分节激活时自动重载」——需新增「当前分节」事实通道，且同 document 其它分节仍看陈旧插件集。
 **重订阅判据（负面契约）**：`lastFrameAt >= startedAt` 不得作为跳过重订阅的捷径——「到过一帧」≠「最终图已到」（`rebuilt` 按条目逐帧、主题可能随后冻结），跳过会在丢帧场景留下静默 stale（design 09 §3.7①）；每次插件图结算都重订阅，不看帧新鲜度。
 **两类 restart 的区分**：`installBundle` 对已安装包返回的 `restart-required` 是宿主级 notice（不落页面 `pluginDiagnostic`、面板不误导），与页面级 restart 事实是两类；后者才进本收口。
 
@@ -221,7 +221,7 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 
 ## 8. 验收与证据边界
 
-验收装置（`acceptance:runtime:*` 夹具）、平台证据口径与实机判据见 [release-checklist](../../checklists/release/release-checklist.md)、[gui-acceptance](../../checklists/acceptance/gui-acceptance-checklist.md) 与 [STATUS](../../progress/STATUS.md)；实机项未跑不得写成已通过。
+验收装置（`acceptance:runtime:*` 夹具）、平台证据口径与实机判据见 [release-checklist](../../checklists/release/release-checklist.md)、[gui-acceptance](../../checklists/acceptance/gui-acceptance-checklist.md) 与 `docs/checklists/`；实机项未跑不得写成已通过。
 
 ## 9. 服务端化与共享核心（gateway 宿主）
 
@@ -307,11 +307,11 @@ Gateway 在 `DSH_GATEWAY_DSH_PATH` env 来源下，startup core 的 `env-overrid
 
 ## 10. 关联文档
 
-- 关联设计：`../../design/01-overview.md` §3 文档地图与 [STATUS](../../progress/STATUS.md)；design 17（gateway 宿主）、11（应用本体更新）、15（设置段）、14（退出/子进程回收）、02 §3.5/§3.6、09 §3.5/§4、13、05 §5、25 §3.2/§4.3；正交事项（更新带宽差分）见 design 11 §6。
+- 关联设计：`../../design/01-overview.md` §3 文档地图；design 17（gateway 宿主）、11（应用本体更新）、15（设置段）、14（退出/子进程回收）、02 §3.5/§3.6、09 §3.5/§4、13、05 §5、25 §3.2/§4.3；正交事项（更新带宽差分）见 design 11 §6。
 
 ### Rejected alternatives（架构调整）
 
 - **继续要求所有版本的 `settings.yaml` 存在**：0.1.7 正常启动会把它改名为 `.imported`，因此该规则必然误判并停掉健康的本地实例；也不把 `.imported` 当活配置读取。
 - **保持 wholesale `export *` 入口**：否决——入口面看不出谁真正消费，死导出无从判定（审计实测该包曾有一批零消费者导出）；改为显式具名面（137 个 runtime 值 = 有生产消费者的名字），内部实现留在各模块供包内相对 import。
 - **为过死导出门而砍掉导出函数的签名类型**（`PnpmEntrySearch`/`DshCliEntryResolution` 等）：否决——导出函数的参数/返回类型是其 API 的一部分，宿主需可命名/标注；类型导出不参与 runtime 死面判定，故入口规则写明唯一例外：导出函数/类签名引用的具名类型随签名出口（共 112 个类型契约）。
-- **桌面/网关各自维护 pnpm 入口、内建版本、dsh CLI entry 解析**：否决——同一判定多份手抄，布局或上游变化需改多处；共享原语落本包（`pnpm-entry`/`anchor-version`/`dsh-cli-entry`/`registry-url`），gateway 已接入；desktop 接入受 Swift 文本锚点约束，见 STATUS 开放项。
+- **桌面/网关各自维护 pnpm 入口、内建版本、dsh CLI entry 解析**：否决——同一判定多份手抄，布局或上游变化需改多处；共享原语落本包（`pnpm-entry`/`anchor-version`/`dsh-cli-entry`/`registry-url`），gateway 已接入；desktop 接入受 Swift 文本锚点约束，见 TODO 与 design 25 的已知限制。

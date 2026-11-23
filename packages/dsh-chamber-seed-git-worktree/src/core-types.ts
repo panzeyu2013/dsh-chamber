@@ -197,6 +197,16 @@ export interface EnterTargetFacts {
    * the repository's main checkout: a pool checkout registered as a dsh workspace is
    * itself a legitimate session root, and a session started there must exit back to
    * that workspace, not to a checkout it never worked in.
+   *
+   * DELIBERATE DEVIATION from upstream's own enter record: alpha.2's `enterCheckout`
+   * records `git rev-parse --show-toplevel` of the directory it entered from, while
+   * chamber records this immutable header root. The two differ when the header root is
+   * a subdirectory of a checkout, or on a nested enter (A→B records the header root, not
+   * A). Accepted because the field is only `exit_worktree`'s destination directory —
+   * matching uses the record's `path` (the longest entered path containing the cwd), so
+   * exit availability and the session-log fold are unaffected; returning to the session's
+   * own root is also the chamber-consistent "entered from". Recorded as an accepted
+   * deviation for the design 08 §4.2 registration.
    */
   readonly repositoryRoot: string
   /** The entered checkout's branch from the authoritative Git topology; absent for a

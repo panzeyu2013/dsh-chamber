@@ -8,7 +8,7 @@
  * kernel answers both halves of the identity: the boot id (changes every boot)
  * and the process start ticks from `/proc/<pid>/stat` (field 22, changes on pid
  * reuse). Elsewhere the evidence stays the legacy bare number and the liveness
- * check — the residual is registered in STATUS.
+ * check — the residual is a known limit of the non-Linux evidence (design 17 §12).
  *
  * Not a second lease authority: control-plane's process-identity.ts owns the
  * design 17 §12 lease semantics; this module only answers the two facts the

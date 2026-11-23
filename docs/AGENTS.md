@@ -12,7 +12,7 @@
 | Decision records | [`design/decisions/`](./design/decisions/README.md) | 单个架构/跨域决策：背景、决定、被否方案、后果；状态不可变 | 契约正文、进度、实现细节 |
 | How-to / runbook | [`checklists/`](./checklists/README.md) | 按阶段执行、可勾选、可复跑的验证步骤 | 版本值、发布叙述、门禁计数 |
 | How-to / ops | [`deploy/`](./deploy/deploy-gateway.md) | 部署、回滚、远端实例运维步骤 | 设计理由、发布叙述 |
-| Status / records | [`progress/`](./progress/STATUS.md) | 唯一进度记录（STATUS 只记 open 项）、TODO、冻结/归档登记 | 设计契约、可执行步骤 |
+| Status / records | [`progress/`](./progress/README.md) | TODO（未排期计划）、冻结/归档登记、历史偏差（STATUS 已停用，2026-11-23 用户裁决：不记录开放项/进度状态） | 设计契约、可执行步骤 |
 | Reference | [`packages/*/README.md`](../packages/control-plane/README.md) | 包契约：职责、边界、模块、已知限制 | 设计全文、其他包事项 |
 | Entry / mirrors | 根 [`AGENTS.md`](../AGENTS.md)、[`README.md`](../README.md)、[`CONTRIBUTING.md`](../CONTRIBUTING.md)、[`DEVELOPMENT.md`](./DEVELOPMENT.md)、`docs/*.en-US.md` | 用户面与双语镜像 | 内部进度 / 决策叙述 |
 
@@ -31,7 +31,7 @@
 - **一段一行**：段落不物理折行；表格、列表、代码块保持自身格式。
 - **链接代替复述**：引用设计、脚本、单源、索引时给相对链接；锚点用 GitHub slug 或显式 `<a id>`（`verify:md-links` 校验）。
 - **禁止手抄目录**：包 / 门 / 脚本 / 阶段 / 触点清单一律指向单源（[`gate-surfaces.json`](../scripts/gates/registry/gate-surfaces.json)、[`registry.json`](../scripts/upstream/registry/registry.json)、[`package.json`](../package.json)、[`checklists/README.md`](./checklists/README.md)），正文只写「去哪看」。
-- **进度状态词只属 STATUS**：其他文档不写条目的进度状态词（待做 / 待验收 / 待裁 / 接受；流程动作词如「上报待裁」不在此限）；需要时链接 STATUS 条目。
+- **不写进度状态词**：STATUS 已停用（2026-11-23 用户裁决），其他文档同样不写条目的进度状态词（待做 / 待验收 / 待裁 / 接受；流程动作词如「上报待裁」不在此限）；未排期计划写 [`TODO.md`](./progress/TODO.md)，契约与取舍写明 owning design。
 - **当前版本值只留单源**：tag / commit / 锁文件版本作为现行值不进 design/checklists；引用时指向 `harness.commit`、`packages/desktop/vendor/dsh/pnpm-lock.yaml` 或对应 `package.json`。历史证据例外：为论证契约引用不可变的上游 commit/tag 时标注「历史证据，不随本仓 pin 移动」。
 - **不写规格语**：已实现的东西不写「应 / 计划 / 迁移步骤」；未实现的想法放 TODO，设计取舍放 design/ADR。
 - **双语规则**：中文主档与 `docs/*.en-US.md` 镜像结构一致（标题层级、围栏数、表格数、注释数，`verify:i18n` 校验）；改一侧同批改另一侧，并由协调者统一 `--write` 重录 [`docs/i18n-record.json`](./i18n-record.json)。

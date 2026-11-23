@@ -2,7 +2,7 @@
 
 > **状态：冻结归档（2026-11 用户裁决）**。本文件是 Electron flavor 冻结的唯一登记面：范围、归档清单、
 > 仍共享的契约、被禁用的面、agent 规则与复活清单。相关：`AGENTS.md`「当前版本范围」、
-> `docs/design/01-overview.md` §3/§4、`docs/progress/STATUS.md` 顶部范围行、`docs/progress/TODO.md` 顶部范围行。
+> `docs/design/01-overview.md` §3/§4、根 `AGENTS.md`「当前版本范围」、`docs/progress/TODO.md` 顶部范围行。
 >
 > 纪律：**不删除文件、不删除历史文档**；Electron 归档面默认只读；恢复其能力 = 用户重开范围的裁决，
 > 按 §6 执行。默认开发 / 门禁 / 发布只以 **macOS Swift + 共享契约**为范围。
@@ -54,7 +54,7 @@
 | `packages/desktop/bridge-manifest.json` + `macos/Sources/DSHChamber/Generated/BridgeManifest.swift` + `macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js` | A 桥 manifest 三生成物（`packages/desktop/scripts/emit-bridge-manifest.mjs` 产出） | Swift 白名单 / shim 的通道单源；生成器仍读 `ipc-events.ts` 与 `MAIN_SIDE_FILES`（含归档的 `electron/main.ts` / `electron-edges.ts`，见 §5 白名单政策） |
 | `scripts/gates/checks/verify-electron-artifacts.mjs`、`packages/desktop/scripts/electron-shared.mjs` | 归档件，但被**共享测试/工具只读引用** | 登记为只读依赖：`verify-electron-artifacts.mjs` 的纯判定函数仍被 `run-checks.test.mjs` 与 `after-pack-adhoc-sign.test.mjs` 引用（执行面 `--check-dir` 默认不跑）；`electron-shared.mjs` 仍被 renderer 构建路径契约 / `test:macos` 打包套件与 FROZEN `electron-shared.test.mjs` 引用。改这两个文件先确认引用方仍按只读语义使用 |
 | `packages/desktop/bridge-manifest.test.ts`、`bridge-shim.test.ts` 生成物锁步；`electron-free-gate.test.ts` 的 core 零 electron import；`bridge-shim-surface.test.ts` / `ipc-surface-mirror.test.ts` 等镜像测试 | 契约锁步 | 冻结不等于放弃锁步：**生成物 == 提交物、Swift 白名单 == manifest、core 家族零 electron import** 必须继续绿；白名单项按 §5 豁免「两侧相等 / 每通道恰用一次」。镜像类测试以 `test.mjs` 的 FROZEN 清单为准：被冻结的镜像测试其契约结论由生成物 + Swift 侧测试承接，不得静默失去校验 |
-| 上游 `apps/desktop-host` 的 native 鉴权/发布脚本漂移（alpha.2 `authentication.ts`、`desktop-publisher`） | 只登记，不并入冻结面 | 冻结只覆盖本仓 Electron 入口/边沿；上游 desktop-host 的 native 面不在本仓复刻范围。alpha.2 漂移登记于本表（状态不写入 STATUS；Swift 腿按自身 A 桥面维护）；不因登记而“顺手同步”冻结文件 |
+| 上游 `apps/desktop-host` 的 native 鉴权/发布脚本漂移（alpha.2 `authentication.ts`、`desktop-publisher`） | 只登记，不并入冻结面 | 冻结只覆盖本仓 Electron 入口/边沿；上游 desktop-host 的 native 面不在本仓复刻范围。上游本代漂移登记于本表（不另设进度登记；Swift 腿按自身 A 桥面维护）；不因登记而“顺手同步”冻结文件 |
 | `packages/control-plane` / `packages/renderer` / `packages/dsh-chamber-*` / `packages/dsh-runtime` / `packages/gateway` / `packages/cli` / `macos/` | 现行包 | 与 Electron 无关的出货面 |
 
 **冻结面例外（CSP）**：归档 `packages/desktop/electron/main.ts` 仍向控制面传 v2 `frameSources` 扩展源集（`blob:` + loopback/alias host + 裸 `http:`/`https:`），保留 Electron 界面的 iframe 期行为；`ControlPlaneOptions.frameSources` 的校验面为它保留。Swift sidecar、gateway、cli 均不传（`frame-src blob:`，SH-7 判据见 design 28 §5）。该扩展只存在于归档文件，不随出货、不构成 Swift 腿的回退面。
@@ -99,7 +99,7 @@
 
 ## 6. 复活清单（按序）
 
-1. **用户裁决重开范围**：记录到 STATUS 范围决策（并同步 AGENTS.md 顶部范围段）；本文件状态改为 active
+1. **用户裁决重开范围**：记录到根 `AGENTS.md`「当前版本范围」段（并同步本文件 §1）；本文件状态改为 active
    （或按裁决删除）。
 2. **取回归档文件**：从 git 历史取回（冻结前 tag/commit 保留旧路径与内容，冻结后历史保留
    `packages/desktop/electron/` 路径）；git 操作需用户明确要求。**不删除历史文档**。 冻结落地后应打一个 tag（如 `electron-frozen-<日期>`）指向冻结前的最后一个提交；若尚未打， 取本批变更的父提交。
@@ -115,13 +115,13 @@
    与 Swift 白名单锁步；评估 `bridge-swift-only-additions.json`：清空，或把「两侧都注册」的项迁为常规通道 （白名单只留真正的 Swift-only 项）。
 8. **打包 / 签名 / 发布验证**：按 `docs/checklists/release/release-checklist.md` 与
    `docs/checklists/release/packaging-closure-checklist.md` 全量走查（Electron mac 签名/公证、Windows 未签名让步、 Linux AppImage 形态门等既有条目恢复引用）；Electron 宿主包副本（`dist/host-*-package`，见 §2）用 `node scripts/gates/checks/verify-artifact-freshness.mjs --include-electron` 逐行复核新鲜度。
-9. **文档回滚**：AGENTS.md 顶部范围段、STATUS/TODO 顶部横幅与冻结标注、design 11/22/23 的 ARCHIVED 横幅、
+9. **文档回滚**：AGENTS.md 顶部范围段、TODO 顶部横幅与冻结标注、design 11/22/23 的 ARCHIVED 横幅、
    design 02 的窄横幅、design 25 的「Electron 已冻结」句、**design 01 的文档状态表（11/19/22/23/25 行）**、 README / docs README / DEVELOPMENT / **CONTRIBUTING（dev 命令与 build:preload）** 的范围说明、 **docs/checklists/upgrade/upstream-touchpoints.md 的生成视图**（`registry-views.mjs --write` 重生成）、 根 `tsconfig.json` 的 include（把 `packages/desktop/electron/**/*.ts` 加回，见 §6.4 ⑦）， 以及本文件自身（改 active 或删除）。
-10. **验证**：`node scripts/gates/runners/run-checks.mjs full`（Linux 上 Windows 腿不在模式内，见 STATUS §1.6）、
+10. **验证**：`node scripts/gates/runners/run-checks.mjs full`（Linux 上 Windows 腿不在模式内，见 `scripts/gates/registry/gate-surfaces.json`）、
     `pnpm run test:macos`、Electron dev 手跑、release dry-run；跑不了或跳过项如实登记。
 
 ## 7. 政策指针
 
-- 范围/索引/进度：`AGENTS.md`「当前版本范围」、`docs/INDEX.md`、`docs/design/INDEX.md`、design 01 §3/§4、STATUS/TODO 顶部范围行（B 平台条目已标冻结）。
+- 范围/索引/进度：`AGENTS.md`「当前版本范围」、`docs/INDEX.md`、`docs/design/INDEX.md`、design 01 §3/§4、TODO 顶部范围行（B 平台条目已标冻结）。
 - 设计：Swift 腿 = `docs/design/desktop/25-macos-swift-native-shell.md`（§4.1/§4.4.3 共享装配与 A 桥；§5 E 表历史映射；§7 更新链/Sparkle）；共享宿主生命周期 = `docs/design/runtime/02-host-management-deployment.md`（现行；Electron/Chromium 专属段归档）。
 - 归档面：`packages/desktop/electron/ARCHIVED.md`、Swift-only A 桥白名单 `packages/desktop/bridge-swift-only-additions.json`（政策见 §5.2）、发布 checklist 的 ARCHIVED 条目与 `.github/workflows/{ci,release}.yml` 的 ARCHIVED 文案、发布证明脚本 `scripts/release/preflight/verify-release-ci-proof.mjs`。

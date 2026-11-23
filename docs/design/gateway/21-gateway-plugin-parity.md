@@ -211,7 +211,7 @@ P(instance) = B₀ ∪ S ∪ F
 
 ## 7. 决策遗留 / 开放项
 
-开放项的权威清单与状态在 [`STATUS.md`](../../progress/STATUS.md)；本节只留契约性决策遗留。
+开放项的当前结论在 owning design 的「已知限制」段与 [`TODO.md`](../../progress/TODO.md)；本节只留契约性决策遗留。
 
 - **受保护集合与代耦合**（§6.11）：ssh 装面放开需先给 ssh 加远端 family 读（扩 exec 面，[13](./13-remote-plugin-management.md) §7.2 纪律，单独评审）；跨代 override 入口 v1 默认阻断且不提供；snapshot restore 路由仍二期。
 - **本地面载的已知边角**：scripts 默认允许下 `dsh plugin add` 的 pnpm 是否读取 profile/.npmrc、是否向子进程暴露 npm 令牌环境——据实收紧（不允许扩大暴露）。

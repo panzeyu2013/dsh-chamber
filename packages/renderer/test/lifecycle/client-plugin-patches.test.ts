@@ -39,7 +39,7 @@ function count(text: string, needle: string): number {
 }
 
 /**
- * Synthetic served-bundle fixture: the upstream 0.2.2-rc.3 bundle shape (classic script,
+ * Synthetic served-bundle fixture: the upstream classic-script bundle shape (self-registration,
  * self-registration, the upload URL against document.baseURI, the carrier fallback) —
  * independently written here so a production anchor typo cannot self-validate.
  */

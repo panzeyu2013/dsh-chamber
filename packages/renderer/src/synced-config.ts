@@ -30,7 +30,7 @@
  * plugin with no volatile fields) still receives a reference object whose fields read
  * `undefined` — the plugins' own fallbacks use their defaults, the fiber activates, and no
  * empty-shell failure occurs. Live volatile updates are NOT applied by this batch (the boot
- * value is the activation's value); see the report/STATUS entry.
+ * value is the activation's value); design 09 §3.8 registers that intentional difference.
  */
 
 /** One plugin's synced Config values, keyed by field name (the upstream wire shape). */

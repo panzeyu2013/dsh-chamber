@@ -7,9 +7,11 @@
  * 0 个完成，连 30ms 的 POST 都发不出去；而 16 条 WebSocket + 3 条 SSE 时 16 条
  * socket 全部打开、同样的 unary 探针 35–69ms 完成。升级后的 socket 不占池，SSE 占。
  *
- * 于是页面只有这一条长连接（PAGE_CHANNEL_PATH），host 健康、每实例客户端插件图、
- * 每 gateway 实例的会话事实镜像都是它的**逻辑订阅**（`id`），实例用 `instanceId`
- * 在通道内部定址。容量属于本模块的上游管理器：一个活动订阅至多一条上游，页面侧
+ * 于是页面只有这一条长连接（PAGE_CHANNEL_PATH），host 健康与每 gateway 实例的
+ * 会话事实镜像都是它的**逻辑订阅**（`id`），实例用 `instanceId` 在通道内部定址。
+ * （每实例客户端插件图曾作为 pluginGraph 族在此中继；0.2.3-alpha.1 起 renderer 直接
+ * 跟随各实例认证的 `pluginEvents` Remote 流，该族退役。）
+ * 容量属于本模块的上游管理器：一个活动订阅至多一条上游，页面侧
  * 的容量与实例数无关（O(1)）。**页面侧的长连接 HTTP 流数量必须保持 0（不变量 I-1，
  * design 26）**：任何绕过本通道的 EventSource / SSE 都会重新吃掉那 6 个槽位，把
  * unary 饿死；页面侧的运行时报警器在

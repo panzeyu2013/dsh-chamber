@@ -5,7 +5,7 @@
 > 见 [../progress/electron-frozen.md](../progress/electron-frozen.md)），本地实例与远程服务器**同等接入**；
 > 界面 = **dsh 官方前端源码复用自建**，首屏即 dsh 主界面，**多来源 session/workspace
 > 在 dsh 原生侧边栏平等呈现**（仅按来源分类、远程以颜色标注——
-> codex 式"导航统一、执行按来源路由"）；未完成门禁见 `docs/progress/STATUS.md`。
+> codex 式"导航统一、执行按来源路由"）；未完成门禁见 `scripts/gates/registry/gate-surfaces.json` 与各 owning design 的已知限制段。
 >
 > 桌面 v1 认证/审计面**整体移除**；控制面 = 托管 + 反代 + 静态服务，loopback-only、
 > 无认证边界。设计 17 另定义需显式启动、带强制认证边界（默认；`--no-auth` 为有界
@@ -84,7 +84,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 | 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步；移动适配包已退役，design 17 §10/§18）+ **只读插件投影**（`GET …/installed`；install/remove/materialize/tasks 写面已退役，读契约见 design 21 §6.2/§6.3） |
 | git/GitHub | **插件化** | design 08 的 seed Git Remote 是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；P5b 的官方 `forge-bundle` 是实例内**官方工作树 UI 面**（opt-in；GitHub provider 由 overlay 关闭；仅 worktree UI/本地 diff，不新增 chamber 执行面）；gateway 服务器侧 worktree 记录已随编排面剥离 |
 
-> **有界例外**（designs 08 / 17 / 19 / 20 / 24 / 28 与 design 18 §9）及 **P5b 工作树统一**（design 08）的窄边界见对应 design；当期取舍/偏差/证据归 [STATUS](../progress/STATUS.md) / [deviations.md](../progress/deviations.md)，本节不重复台账。
+> **有界例外**（designs 08 / 17 / 19 / 20 / 24 / 28 与 design 18 §9）及 **P5b 工作树统一**（design 08）的窄边界见对应 design；当期取舍/偏差/证据归 owning design 与 [deviations.md](../progress/deviations.md)（历史），本节不重复台账。
 
 ---
 
@@ -97,7 +97,7 @@ roster 来自该 session 所属实例，选择结果写回该实例。因此"本
 5. **信任最小化**：桌面前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort）；隧道 URL、私钥与代理配置永不进 renderer/日志/持久层；密码/token 仅表单瞬时 write-only 输入，绝不返回/回填。普通 control-plane 仅 loopback；design 17 的 gateway 可非 loopback，但必须同时启用认证（默认；`--no-auth` 为有界偏差）、Host/Origin/peer evaluator 与 HTTP/WS 一致门禁。
 6. **P3 硬纪律**：移出项不回流。
 
-> 上述原则的**当期取舍、偏差与证据**记录在 owning design 与 [`docs/progress/STATUS.md`](../progress/STATUS.md)/[`deviations.md`](../progress/deviations.md)；本节只保留设计口径，不重复台账。
+> 上述原则的**当期取舍、偏差与证据**记录在 owning design 与 [`deviations.md`](../progress/deviations.md)（历史）；本节只保留设计口径，不重复台账。
 
 ### Rejected alternatives（架构调整）
 

@@ -941,7 +941,7 @@ function unreadable(source, path) {
 /** The shared adjudication tail of every shape-drift failure. */
 const RETIREMENT_TAIL = '上游可能已修掉「leave 落在 dwell→commit 窗口就残留」的竞态，移植的退役条件被触碰。'
   + '请裁决：退役移植（RowHoverCard/hover-intent 回到 vendor HoverCard，并同步 '
-  + 'docs/design/client/06-sidebar-enhancements.md §7 与 docs/progress/STATUS.md 的偏差条），'
+  + 'docs/design/client/06-sidebar-enhancements.md §7 的偏差条），'
   + '或说明为何仍保留并更新本门与 docs/checklists/upgrade/upstream-touchpoints.md §4 的登记行'
 
 /**

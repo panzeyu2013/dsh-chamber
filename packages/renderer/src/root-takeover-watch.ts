@@ -7,7 +7,7 @@
  * `desktop-onboarding` overlay parked on「正在加载设置…」— design 09 §3.5 ③).
  * alpha.3 loads that row with its overlay gated off by the build-time vendor patch,
  * so the auto-release only meets the explicit recovery mode and any future family
- * that re-arms the same way; the recovery-mode interaction is registered in STATUS.
+ * that re-arms the same way; the recovery-mode interaction is documented in design 09 §3.5.
  *
  * SIGNATURE — deliberately narrow: the trigger is an INLINE `style.opacity` on the
  * page root that parses to exactly 0. `calc()`/`var()` spellings, a stylesheet or
@@ -20,7 +20,7 @@
  * family's own loading state) is indistinguishable from a hostile hold under this
  * signature; the family is loaded with its overlay gated off by the build-time
  * vendor patch, so the net's auto-release only applies to the explicit recovery mode
- * (design 09 §3.5, STATUS registers the interaction).
+ * (design 09 §3.5 registers the recovery-mode interaction).
  *
  * WHAT A RELEASE DOES AND DOES NOT DO: it clears the inline opacity AND sets
  * `inert = false` (without the second write a released root stays input-dead,

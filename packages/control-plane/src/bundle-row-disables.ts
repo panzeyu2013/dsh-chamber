@@ -92,8 +92,10 @@ export const WEB_APP_SKILL_OFFICE_ROW: BundleRowDisableTarget = {
 }
 
 /**
- * alpha.2 web-app mounts the Remote Connection row (host and client halves in one package)
- * in EVERY profile. The client half already short-circuits under the desktop shell
+ * alpha.1 web-app mounts the Remote Connection row (host and client halves in one package)
+ * in EVERY profile; the web-app bundle patch is unchanged between alpha.1 and alpha.2, so
+ * this row exists for every runtime this pin can serve. The client half already
+ * short-circuits under the desktop shell
  * (`'dshDesktop' in globalThis`), but the host half registers an ANONYMOUS `/` route
  * (the login/pairing landing page) on the loopback managed host; force-disabling the row
  * restores the rc.3 posture where `/` requires authentication and removes the dead

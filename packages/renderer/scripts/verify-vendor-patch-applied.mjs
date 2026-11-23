@@ -212,6 +212,13 @@ export const VENDOR_PATCH_MARKERS = [
     present: /Symbol\.for\(["']dsh-chamber:page-icon-sprite["']\)/,
   },
   {
+    vendorFile: 'dsh-client-ui-renderer/src/client/styles/document-styles.ts',
+    what: 'module stylesheets are page-global singletons (one node per plugin/path per document, refcounted)',
+    // Patched: the page registry symbol is chamber-only; the minifier keeps the
+    // Symbol.for string literal, so its presence proves the patched installer reached the chunk.
+    present: /Symbol\.for\(["']dsh-chamber:page-module-styles["']\)/,
+  },
+  {
     vendorFile: 'dsh-client-ui-chat/src/client/chat/use-chat-viewport.ts',
     what: 'chat scroll deliveries are coalesced to one geometry read per frame',
     // Patched: the scroll handler schedules one frame; the frame calls flushScroll, and

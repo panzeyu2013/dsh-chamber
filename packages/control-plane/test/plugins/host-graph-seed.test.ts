@@ -1550,7 +1550,7 @@ test('resolveLocalHostGraphOverlay: the unconditional remote-connection disable 
   name: '@deepseek-ai/dsh-client-remote-connection'
   disabled: true
 `,
-    'alpha.2 web-app mounts the row in every profile; the local overlay must always force it off (anonymous host half + dead pairing card)',
+    'alpha.1 web-app mounts the row in every profile (unchanged through alpha.2); the local overlay must always force it off (anonymous host half + dead pairing card)',
   )
 })
 
