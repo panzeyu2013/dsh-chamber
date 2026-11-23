@@ -19,8 +19,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  createSyncedConfigActivation, installSyncedConfigSupply, SYNCED_CONFIG_COVERED_IDS,
-  syncedConfigActivationFor, type SyncedConfigSupply,
+  createSyncedConfigActivation, installSyncedConfigSupply,
+  SYNCED_CONFIG_COVERED_IDS, syncedConfigActivationFor, type SyncedConfigSupply,
 } from '../../src/synced-config.ts'
 import {
   coveredSyncedConfigValues, parseGraphRows, toExtraRows,
@@ -163,6 +163,48 @@ test('installSyncedConfigSupply: publishes the supply and activates EXTRA entry 
   assert.equal(listeners[0]!(null, next), nextValue)
 })
 
+test('installSyncedConfigSupply: a row ADDED LIVE after boot activates once registered', () => {
+  const listeners: ((fiber: unknown, next: () => unknown) => unknown)[] = []
+  const ctx = {
+    provide(): () => void { return () => {} },
+    on(_name: string, listener: (fiber: unknown, next: () => unknown) => unknown): () => void { listeners.push(listener); return () => {} },
+  }
+  // Boot seeds only the initial extra rows; the live graph adds '@scope/live' later.
+  const supply: SyncedConfigSupply = {
+    values: new Map([['@scope/boot', { limit: 1 }]]),
+    extraRowIds: new Set(['@scope/boot']),
+  }
+  const handle = installSyncedConfigSupply(ctx, supply)
+  const entryRoot = (name: string) => ({ entry: { options: { name } }, parent: { fiber: { entry: undefined } } })
+  const nextValue = { raw: 'config' }
+  const next = () => nextValue
+  // Before registration the listener has no activation for the live id (the pre-fix hole:
+  // the loader then materializes the plugin without its reference object).
+  assert.equal(listeners[0]!(entryRoot('@scope/live'), next), nextValue)
+  // The live add path registers the id + values BEFORE loader.create.
+  handle.register('@scope/live', { limit: 5 })
+  const activation = listeners[0]!(entryRoot('@scope/live'), next) as Record<string, any>
+  assert.notEqual(activation, next)
+  assert.equal(activation.limit.get(), 5)
+  assert.equal(listeners[0]!(entryRoot('@scope/live'), next), activation, 'one activation per id (identity stable)')
+  // A row without wire values registers the id only and still gets the empty activation.
+  handle.register('@scope/live-empty')
+  const empty = listeners[0]!(entryRoot('@scope/live-empty'), next) as Record<string, any>
+  assert.notEqual(empty, next)
+  assert.equal(empty.anything.get(), undefined)
+  // Live remove → re-add must rebuild from the NEW values, never serve the first refs:
+  // forget drops the row's registration/cache, register refreshes the values.
+  handle.forget('@scope/live')
+  assert.equal(listeners[0]!(entryRoot('@scope/live'), next), nextValue, 'forgotten id is no longer activated')
+  assert.equal(supply.extraRowIds.has('@scope/live'), false)
+  handle.register('@scope/live', { limit: 9 })
+  const readded = listeners[0]!(entryRoot('@scope/live'), next) as Record<string, any>
+  assert.notEqual(readded, nextValue)
+  assert.equal(readded.limit.get(), 9, "re-add reads the row's current values, not the first activation")
+  assert.notEqual(readded, activation, 'a new activation object is built for the re-added row')
+  assert.equal(supply.extraRowIds.size, 3, 'forget drops the id; the re-register adds it back exactly once (boot + empty + live)')
+})
+
 test('installSyncedConfigSupply: an own-Config-schema face keeps ordinary config or throws (upstream parity)', () => {
   const listeners: ((fiber: unknown, next: () => unknown) => unknown)[] = []
   const ctx = {
@@ -256,6 +298,16 @@ test('wiring: the live reconciler lets the per-instance listener activate a newl
   const live = readSource('../../src/live-graph.ts')
   assert.match(live, /loader\.create\(\{ name: row\.id \}\)/,
     'the live path must NOT pass the activation through create({ config }): loader interpolation flattens it')
+  assert.match(live, /deps\.registerSyncedConfigRow\?\.\(row\.id, row\.config\)/,
+    'the live path MUST register the row into the supply before create: the listener only activates known ids')
+  assert.match(live, /registerSyncedConfigRow\?\.\(row\.id, row\.config\)[\s\S]*?loader\.create/,
+    'registration must happen BEFORE loader.create')
+  assert.match(live, /deps\.forgetSyncedConfigRow\?\.\(/,
+    'a live remove/rollback MUST forget the row: the supply has no live writer and would serve the first refs')
+  assert.match(readSource('../../src/shell.ts'), /registerSyncedConfigRow: \(id, config\) => \{[\s\S]*?\.register\(id/,
+    'the shell must wire the live registration to the per-instance supply handle')
+  assert.match(readSource('../../src/shell.ts'), /forgetSyncedConfigRow: id => \{[\s\S]*?\.forget\(id\)/,
+    'the shell must wire the live forget to the per-instance supply handle')
   assert.doesNotMatch(live, /config: createSyncedConfigActivation/)
   const supply = readSource('../../src/synced-config.ts')
   assert.match(supply, /prepend: true/, 'the listener must run before loader interpolation')

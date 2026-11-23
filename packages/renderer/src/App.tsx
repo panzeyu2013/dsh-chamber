@@ -26,6 +26,7 @@ import {
 
   configurePageChannelLink,
   emptyIntentPrewarmBudget,
+  forgetForkTitleReservations,
   forgetPendingArchives,
   forgetPendingPlacements,
   forgetPendingRemovals,
@@ -710,6 +711,8 @@ export default function App() {
     // this path even though the registry id remains present; label/service/home-only edits do not.
     for (const sourceId of retired) {
       clearAggregateRetry(sourceId)
+      // 分叉标题预留账本随来源代退役：权威已消失，同 id 重加在 400s TTL 内不得继续跳号。
+      forgetForkTitleReservations(sourceId)
       aggregateRefreshQueueRef.current.delete([sourceId])
       autoPrewarmedRef.current.delete(sourceId)
       // 保留策略：注册表删除的源不占用"回收后不自动预热"键（ref 键空间随生命周期收敛）。
@@ -742,6 +745,16 @@ export default function App() {
       delete refreshHintAtRef.current[sourceId]
       delete factsPullInFlightRef.current[sourceId]
     }
+    // 上一代 host facts（dshVersion 等）随来源代退役：否则同 id 重加后、新聚合到达前会显示上一代的版本事实。
+    setHostFacts(prev => {
+      let next: typeof prev | null = null
+      for (const sourceId of retired) {
+        if (prev[sourceId] === undefined) continue
+        next ??= { ...prev }
+        delete next[sourceId]
+      }
+      return next ?? prev
+    })
     // 工作区创建回声账本随来源生命周期收敛：同 id 重新注册 = 新来源代，上一代的回声不得残留成幽灵行。
     updateWorkspaceEcho(forgetPendingWorkspaces(echoStore.getSnapshot().workspace, retired))
     // 位置意图同纪律：上一代的意图不得在新来源代的列表里搬动行。

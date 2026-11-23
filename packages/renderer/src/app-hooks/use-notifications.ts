@@ -13,8 +13,8 @@
  * 绝不二次发横幅。
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { stepCompletionArm, type InstanceAggregate } from '@dsh-chamber/dsh-chamber-client-core'
-import type { CompletedStore } from '../host/completed-store.ts'
+import { chamberBridge, stepCompletionArm, type InstanceAggregate } from '@dsh-chamber/dsh-chamber-client-core'
+import { clearSessionArm, type CompletedStore } from '../host/completed-store.ts'
 import type { ViewStore } from '../host/view-store.ts'
 import type { FactsStore } from '../host/facts-store.ts'
 import { completionAlreadySettled, type CompleteLedger } from '../complete-ledger.ts'
@@ -265,6 +265,21 @@ export function useNotifications(deps: NotificationsDeps): NotificationsProjecti
   const stepCompletionArmFor = useCallback((sourceId: string): void => {
     stepArmGateRef.current?.request(sourceId)
   }, [])
+  /**
+   * 显式用户已读事实（design 06 §4.9）：行菜单「标为已读」成功写回后，侧栏经
+   * chamberBridge 上报。修正臂是 App 的**推断**，用户显式决定必须清掉该行——否则
+   * 只由臂点亮的行（隐藏壳 mainView-retained current / 无壳逐行边沿）点「标为已读」
+   * 无任何可见变化。行键控（绝不扫描）；仅读方向上报，mark-unread 由官方
+   * `completionUnread` 位接手。清表后走同一出口重步进，保持 running 边沿记忆一致。
+   */
+  useEffect(() => chamberBridge.onSessionMarkedRead((sourceId, sessionId, sourceFingerprint) => {
+    // 来源代栅栏：只清「当前发布代」的行——旧代迟到的 mark 回执不得清新代同 id 的臂。
+    const current = chamberBridge.getServers().find(server => server.id === sourceId)
+    if (current === undefined) return
+    if (sourceFingerprint !== undefined && current.sourceFingerprint !== sourceFingerprint) return
+    if (!clearSessionArm(completedStore, sourceId, sessionId)) return
+    stepCompletionArmFor(sourceId)
+  }), [completedStore, stepCompletionArmFor])
   /**
    * facts 应用的**每来源重入闸**（React #185 环的唯一收口，新点）。
    *

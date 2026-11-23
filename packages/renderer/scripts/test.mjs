@@ -72,6 +72,8 @@ export const GROUPS = {
     'test/lifecycle/http-budget.test.ts',
     // 活实例 ctx 的客户端插件热同步：帧解析 / id 集 diff / 装-卸-rev 诊断 / 撤臂栅栏。
     'test/lifecycle/live-graph.test.ts',
+    // 显式用户已读事实（design 06 §4.9）：bridge 通道扇出 + 行键控清臂 + 通知钩子接线锁。
+    'test/lifecycle/marked-read-arm.test.ts',
     // 插件刷新收敛策略：结算→重订阅 + 有界 restart 窗口；订阅重放不得触发重载。
     'test/lifecycle/plugin-refresh-convergence.test.ts',
     // 收敛的壳侧接线：reload 单飞/预算/忽略导航复位 + per-boot 栅栏与 dispose。

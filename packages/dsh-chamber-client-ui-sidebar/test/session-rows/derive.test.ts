@@ -994,6 +994,10 @@ test('archiveSetKnown and archivedSessions participate in the publish signatures
   assert.notEqual(serversProjectionSignature([withRow] as never), serversProjectionSignature([withMarker] as never))
   assert.notEqual(serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: false }] as never),
     serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: true }] as never))
+  // aggregateReady is DECIDED by the sidebar (search merge / capture gate) and can flip on
+  // its own when a cached aggregate goes ok→undefined while disconnected: it must republish.
+  assert.notEqual(serversProjectionSignature([{ ...plain, aggregateReady: false }] as never),
+    serversProjectionSignature([{ ...plain, aggregateReady: true }] as never))
 })
 
 // ---- report signatures (the separator-forgery negative is retained verbatim
@@ -1004,6 +1008,13 @@ test('runtimeReportSignature: the L1 receipt, onlyIds and listComplete identity 
   assert.notEqual(runtimeReportSignature({ sessions: { p: { running: true } } }), runtimeReportSignature(receipt),
     'a receipt-only settlement must re-sign, or the liveness guard never sees the verdict')
   assert.equal(runtimeReportSignature(receipt), runtimeReportSignature({ ...receipt, sessionAuthority: { requestedAt: 1_000, settledAt: 2_000, ok: true, progressStamp: 1, probes: 0, corrections: 0, recent: [] } }))
+  // runningSince is the escalation ladder's symptom age (symptomSinceMs); a report whose
+  // only move is that age must not be deduplicated away.
+  assert.notEqual(
+    runtimeReportSignature(receipt),
+    runtimeReportSignature({ ...receipt, sessionAuthority: { ...receipt.sessionAuthority!, runningSince: 500 } }),
+    'the receipt signs runningSince: the ladder reads it as the symptom age',
+  )
   const hidden = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
   assert.equal(runtimeReportSignature(hidden, new Set(['s1'])),
     runtimeReportSignature({ ...hidden, sessions: { s1: { running: true }, s2: { completed: true, running: true } } }, new Set(['s1'])),

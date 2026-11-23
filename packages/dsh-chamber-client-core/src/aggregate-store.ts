@@ -574,6 +574,13 @@ type SnapshotReportListener = (
   sourceFingerprint: string | undefined,
 ) => void
 type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void
+/** Explicit user read fact: the sidebar marked one session read through its own source's
+ *  unary `sessionStatus/mark`; the App correction arm is an App-side inference, so the
+ *  explicit decision must clear that arm (design 06 §4.9). `sourceFingerprint` is the
+ *  aggregate generation the row menu rendered from — the App clears only when the
+ *  CURRENT published generation still matches (a late ack from a replaced generation
+ *  must not clear the new generation's arm). */
+type SessionMarkedReadListener = (sourceId: string, sessionId: string, sourceFingerprint?: string) => void
 
 /**
  * One fan-out channel: the chamberBridge subscriber plumbing, extracted so the
@@ -629,6 +636,8 @@ const activeSourceChannel = createChannel<Parameters<ActiveSourceListener>>(() =
 const runtimeReportChannel = createChannel<Parameters<RuntimeReportListener>>(() => '[dsh-chamber] runtime-report listener threw')
 const snapshotReportChannel = createChannel<Parameters<SnapshotReportListener>>(() => '[dsh-chamber] snapshot-report listener threw')
 const pluginDiagnosticChannel = createChannel<Parameters<PluginDiagnosticListener>>(() => '[dsh-chamber] plugin-diagnostic listener threw')
+const sessionMarkedReadChannel = createChannel<Parameters<SessionMarkedReadListener>>(
+  ([sourceId, sessionId]) => `[chamber] session-marked-read listener failed for ${sourceId}/${sessionId}`)
 let servers: ChamberServerAggregate[] = []
 let activeSourceId: string | undefined
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
@@ -687,6 +696,20 @@ export const chamberBridge = {
   /** App-layer subscription to open-session requests; returns the unsubscribe. */
   onOpenSession(listener: OpenListener): () => void {
     return openChannel.subscribe(listener)
+  },
+
+  /** Sidebar report: the user explicitly marked one session READ through the source's own
+   *  unary `sessionStatus/mark`. The App correction arm is a display inference, so the
+   *  explicit user decision must clear that row's arm (design 06 §4.9) — otherwise a row
+   *  whose dot comes only from the arm ignores "mark read" entirely. Only the READ direction
+   *  is reported; mark-unread is covered by the official `completionUnread` bit. */
+  reportSessionMarkedRead(sourceId: string, sessionId: string, sourceFingerprint?: string): void {
+    sessionMarkedReadChannel.emit(sourceId, sessionId, sourceFingerprint)
+  },
+
+  /** App-layer subscription to explicit mark-read facts; returns the unsubscribe. */
+  onSessionMarkedRead(listener: SessionMarkedReadListener): () => void {
+    return sessionMarkedReadChannel.subscribe(listener)
   },
 
   /** App-layer report that one requested open settled (failure carries the loud

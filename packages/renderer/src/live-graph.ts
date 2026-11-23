@@ -211,6 +211,16 @@ export interface LiveGraphSyncDeps {
   loader: LiveLoaderFace
   registerChunkOwners(rows: readonly ExtraModuleRow[]): void
   removeChunkOwners(ids: readonly string[]): void
+  /** Register a row that appears AFTER boot into the per-instance synced-config supply
+   *  BEFORE `loader.create` (the `internal/config` listener builds the activation on
+   *  materialization; passing config through create would be flattened by interpolation).
+   *  Absent = a shell without the supply seam: the row still mounts, its Config fields read
+   *  undefined (the documented empty-config fallback). */
+  registerSyncedConfigRow?(id: string, config: unknown): void
+  /** Drop one row's cached synced-config registration + activation on live remove /
+   *  add rollback, so a remove→re-add rebuilds the refs from the row's current values
+   *  (the supply has no live writer; a kept activation would freeze the first values). */
+  forgetSyncedConfigRow?(id: string): void
   loadBundle(url: string): Promise<void>
   diagnostics: LiveDiagnosticSink
   /** Holder identity + generation fence: re-checked after EVERY await. */
@@ -441,6 +451,9 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
         if (fiber.inertia === drain) break
       }
     }
+    // The per-instance synced-config supply is this holder's own table: dropping the
+    // registration here is what lets a later re-add pick up the row's new values.
+    try { deps.forgetSyncedConfigRow?.(item.id) } catch { /* best effort */ }
     // Deliberately NOT fenced: the chunk-owner index is a PAGE-LEVEL table, so a
     // disarmed holder must still drop its row or the removed plugin's chunks stay
     // resolvable for every later consumer on the page — but only the id's factory
@@ -457,6 +470,7 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
   /** Undo one add's page-level side effects (entry + chunk-owner row), best effort. */
   const rollbackAdd = (id: string, entryId: string): void => {
     try { deps.loader.remove(entryId) } catch (error) { warn(`[live-graph] stale entry rollback for ${id} failed`, error) }
+    try { deps.forgetSyncedConfigRow?.(id) } catch { /* best effort */ }
     if (!ownsChunkDescriptor(id)) return
     try { deps.removeChunkOwners([id]) } catch { /* best effort */ }
   }
@@ -508,9 +522,11 @@ export function startLiveGraphSync(deps: LiveGraphSyncDeps): LiveGraphSync {
     let entryId: string
     try {
       // Extras added live carry their synced Config the same way the boot path does: the
-      // per-instance `internal/config` listener supplies the per-field reference object;
-      // passing it via `create({ config })` would let the loader's interpolation flatten
-      // it into a plain object (alpha.1 W4-0).
+      // per-instance `internal/config` listener supplies the per-field reference object.
+      // The listener only activates ids the supply already knows, so the row must be
+      // registered BEFORE create (passing it via `create({ config })` would let the
+      // loader's interpolation flatten the reference object; alpha.1 W4-0).
+      deps.registerSyncedConfigRow?.(row.id, row.config)
       entryId = await deps.loader.create({ name: row.id })
     } catch (error) {
       if (ownsChunkDescriptor(row.id)) { try { deps.removeChunkOwners([row.id]) } catch { /* best effort */ } }

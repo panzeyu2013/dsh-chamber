@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { projectRuntimeFacts } from '../src/derive.ts'
+import { projectRuntimeFacts, runtimeReportSignature } from '../src/derive.ts'
 
 const EMPTY_ROW = { running: false, subagentActivity: 'unknown' } as const
 
@@ -36,6 +36,30 @@ test('subagent rows take no failure fact (navigation/notification parity)', () =
     undefined, undefined, undefined, undefined, undefined, new Set(['child']),
   )
   assert.deepEqual(report.sessions, {})
+})
+
+test('a failed-only flip moves both signature paths (rendered red dot must re-publish)', () => {
+  // Same completed bit; only the official completionFailed fact differs. The sidebar
+  // renders it (label / .stateFailed / data-chamber-session-failed), so BOTH the App
+  // identity signature and the projection publish gate have to see the move.
+  const succeeded = projectRuntimeFacts(
+    { byId: { a: { running: false } } },
+    undefined, undefined, undefined, undefined, new Set(['a']),
+  )
+  const failed = projectRuntimeFacts(
+    { byId: { a: { running: false } } },
+    undefined, undefined, undefined, undefined, new Set(['a']), new Set(['a']),
+  )
+  assert.notEqual(
+    runtimeReportSignature(succeeded, undefined, true),
+    runtimeReportSignature(failed, undefined, true),
+    'identity signature must encode completionFailed',
+  )
+  assert.notEqual(
+    runtimeReportSignature(succeeded, undefined, false),
+    runtimeReportSignature(failed, undefined, false),
+    'projection signature must encode completionFailed: the row presentation is rendered',
+  )
 })
 
 test('both official bits land on one row without clearing each other', () => {

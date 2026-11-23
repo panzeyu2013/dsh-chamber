@@ -132,15 +132,34 @@ test('chamber performs no synthesized ack: the single reading write is the expli
   assert.match(SESSIONS, /const onMarkSessionRead = /u)
   assert.equal(/hasFocus|visibilitychange|addEventListener/iu.test(SESSIONS), false,
     'no focus/visibility listener drives the mark: the ack path is vendor-owned, not chamber-owned')
-  // (4) The arm's single writer is the pure step's exit; its input has no ack/official bit.
+  // (4) The arm table's writers: the pure step's exit in the hook, plus the explicit
+  // user-mark-read clear routed through the completed-store helper (design 06 §4.9). The
+  // step input itself has no ack/official bit; the explicit user decision is not an
+  // inference rule.
   assert.equal((HOOK.match(/completedStore\.setSource\(/gu) ?? []).length, 1,
-    'the App writes the arm table only through the step exit (one writer)')
+    'the hook still writes the arm table only at the step exit (the clear lives in the store helper)')
+  const clearStart = HOOK.indexOf('onSessionMarkedRead(')
+  assert.ok(clearStart >= 0, 'the hook subscribes the explicit mark-read fact')
+  assert.match(HOOK.slice(clearStart, clearStart + 500),
+    /clearSessionArm\(completedStore, sourceId, sessionId\)/u,
+    'the explicit mark-read clear is the row-keyed helper, not a sweep')
+  const STORE = stripComments(read('../../../../packages/renderer/src/host/completed-store.ts'))
+  const helperStart = STORE.indexOf('export function clearSessionArm(')
+  assert.ok(helperStart >= 0, 'the clear helper stays exported from the arm store module')
+  assert.match(STORE.slice(helperStart, STORE.indexOf('export function createCompletedStore', helperStart)),
+    /store\.setSource\(sourceId, next\)/u, 'the helper is the single row-keyed write')
+  assert.equal(/for \(|Object\.keys|\.prune\(/u.test(STORE.slice(helperStart, STORE.indexOf('export function createCompletedStore', helperStart))), false,
+    'the clear never sweeps: no loop/prune in the helper')
+  assert.match(SESSIONS, /if \(!unread\) chamberBridge\.reportSessionMarkedRead\(server\.id, sessionId, server\.sourceFingerprint\)/u,
+    'only the READ direction reports the explicit read fact, carrying the rendered source generation (mark-unread is the official bit)')
   const start = HOOK.indexOf('stepCompletionArm(')
   assert.ok(start >= 0, 'the step is the single arm entry')
   const armCall = HOOK.slice(start, HOOK.indexOf('\n      },', start))
-  for (const field of ['current:', 'rows:', 'painted:', 'listComplete:', 'listKnown:', 'stale:', 'factsOnly:', 'readIntent:']) {
+  for (const field of ['current:', 'rows:', 'painted:', 'foreground:', 'listComplete:', 'listKnown:', 'stale:', 'factsOnly:', 'readIntent:']) {
     assert.ok(armCall.includes(field), `the step receives ${field} — and nothing else`)
   }
+  assert.match(armCall, /foreground: currentPageForeground\(\)/u,
+    'the attention predicate input must be the page-level fact, never a constant')
   for (const forbidden of ['completedUnread', 'completed:', 'acknowledge', 'hasFocus', 'visibilitychange']) {
     assert.equal(armCall.includes(forbidden), false, `the arm step receives no ${forbidden} input`)
   }

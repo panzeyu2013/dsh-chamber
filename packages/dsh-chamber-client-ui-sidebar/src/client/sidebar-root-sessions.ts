@@ -154,6 +154,9 @@ export function useSidebarSessionActions({ runAction, openArchiveConfirm }: {
     if (markActionRef.current.has(key)) return
     const task = runAction(key, async () => {
       await markSessionForSource(server.id, sessionId, unread)
+      // 显式用户已读事实（design 06 §4.9）：成功写回后上报 App，清掉该行的 N-ctx 修正臂
+      // （臂是推断，用户显式决定必须生效；只上报读方向，未读由官方 completionUnread 位接手）。
+      if (!unread) chamberBridge.reportSessionMarkedRead(server.id, sessionId, server.sourceFingerprint)
     })
     markActionRef.current.set(key, task)
     void task.finally(() => {

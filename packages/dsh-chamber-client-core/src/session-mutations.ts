@@ -94,6 +94,17 @@ const FORK_TITLE_RESERVATION_MAX_PER_SOURCE = 64
 const forkTitleReservations = new Map<string, Map<string, number>>()
 
 /**
+ * Drop one source's in-flight fork-title reservations. Called from the renderer's
+ * authoritative retirement path: a retired source's titles must not keep skipping
+ * numbers after a same-id re-add (the authority is gone, so nothing would prune them
+ * before the 400s TTL).
+ * @param sourceId - the retired aggregate source id.
+ */
+export function forgetForkTitleReservations(sourceId: string): void {
+  forkTitleReservations.delete(sourceId)
+}
+
+/**
  * The authoritative same-source title set (never includes our own reservations):
  * the mounted shell's raw session snapshot (full membership incl. archived rows;
  * subagent-origin rows are filtered by its projection) plus the page aggregate's

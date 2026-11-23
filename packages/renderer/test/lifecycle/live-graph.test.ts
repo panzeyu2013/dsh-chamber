@@ -925,4 +925,66 @@ test('resync: a failed re-open warns and reports false; a later resync retries',
   assert.equal(calls, 3)
 })
 
+test('a live-added row registers its synced Config BEFORE loader.create and forgets it on remove', async (t) => {
+  // The per-instance internal/config listener only activates ids the supply already knows,
+  // so a row added live must be registered before its entry materializes; otherwise a
+  // config-consuming plugin mounts without its reference object (the W4-0 empty shell).
+  // The supply has no live writer, so a remove must forget the row: a remove→re-add
+  // rebuilds the per-field refs from the row's CURRENT values instead of serving the
+  // first activation forever.
+  const registered: string[] = []
+  const forgotten: string[] = []
+  const h = harness(t, {
+    registerSyncedConfigRow: (id, config) => { registered.push(id + ':' + JSON.stringify(config)) },
+    forgetSyncedConfigRow: id => { forgotten.push(id) },
+  })
+  const order: string[] = []
+  const originalCreate = h.loader.loader.create
+  h.loader.loader.create = async options => {
+    order.push('create:' + options.name)
+    return originalCreate.call(h.loader.loader, options)
+  }
+  t.after(() => { h.loader.loader.create = originalCreate })
+  const live = (id: string, over: Record<string, unknown> = {}): unknown => ({
+    id,
+    url: '/plugins/??' + id + '&rev=r1',
+    rev: 'r1',
+    ...over,
+  })
+  h.channel.emit(graphFrame([live('@scope/live', { config: { limit: 3 } })]))
+  await tick()
+  assert.deepEqual(order, ['create:@scope/live'])
+  assert.deepEqual(registered, ['@scope/live:{"limit":3}'])
+  // A live row without config still registers its id (the empty-activation path), and the
+  // registration happens before its create too.
+  h.channel.emit(graphFrame([
+    live('@scope/live', { config: { limit: 3 } }),
+    live('@scope/live-empty'),
+  ]))
+  await tick()
+  assert.deepEqual(registered, ['@scope/live:{"limit":3}', '@scope/live-empty:undefined'])
+  assert.deepEqual(order, ['create:@scope/live', 'create:@scope/live-empty'])
+  // Remove the config-carrying row: the holder must drop its supply registration.
+  h.channel.emit(graphFrame([live('@scope/live-empty')]))
+  await tick()
+  assert.deepEqual(forgotten, ['@scope/live'])
+  // Re-add it with NEW values: registration runs again (with the new config) before create,
+  // so the listener rebuilds the activation from the new row instead of the cached one.
+  h.channel.emit(graphFrame([
+    live('@scope/live', { config: { limit: 9 } }),
+    live('@scope/live-empty'),
+  ]))
+  await tick()
+  assert.deepEqual(registered, [
+    '@scope/live:{"limit":3}',
+    '@scope/live-empty:undefined',
+    '@scope/live:{"limit":9}',
+  ])
+  assert.deepEqual(order, [
+    'create:@scope/live',
+    'create:@scope/live-empty',
+    'create:@scope/live',
+  ])
+})
+
 

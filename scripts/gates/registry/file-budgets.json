@@ -3,9 +3,9 @@
   "files": [
     {
       "path": "packages/renderer/src/App.tsx",
-      "lines": 1743,
+      "lines": 1756,
       "target": 1600,
-      "note": "App is the composition root: state containers + 28 named app-hooks + the view shell. Raised by 4 lines in the 2026-10-27 re-review to restore the missing withdrawSourceRef backfill (a text-locked INV-7 seam). Net 0 at the rebase onto the 0.4.3 line: +3 = the degraded-serviceability port (the isServiceableLocalStatus import and the note at the local link.ready arm, design 02 §3.5) −3 = the boot-effect docblock that no longer describes anything here became a two-line pointer (it moved with its hook). Target 1600 = after retireSources/refreshRemotes move; the JSX shell stays as the recorded boundary. +5 = retireSources 事件侧立即 pruneSourceLedger（同 id 换代不继承上一代 sessionListRefresh*/authoritativeArchiveSet；接线锁在 source-registry-wiring.test.ts）。refreshRemotes 已抽到 app-hooks/use-roster-commit.ts（净 -112 行）。；壳换届窄重挂的 sink 收窄与 boot 推迟集合（deferredBootIds）门（页面首连 effect 删除后净减）；目标 1600 保持不变，待 retireSources/refreshRemotes 后续搬迁"
+      "note": "App is the composition root: state containers + 28 named app-hooks + the view shell. Raised by 4 lines in the 2026-10-27 re-review to restore the missing withdrawSourceRef backfill (a text-locked INV-7 seam). Net 0 at the rebase onto the 0.4.3 line: +3 = the degraded-serviceability port (the isServiceableLocalStatus import and the note at the local link.ready arm, design 02 §3.5) −3 = the boot-effect docblock that no longer describes anything here became a two-line pointer (it moved with its hook). Target 1600 = after retireSources/refreshRemotes move; the JSX shell stays as the recorded boundary. +5 = retireSources 事件侧立即 pruneSourceLedger（同 id 换代不继承上一代 sessionListRefresh*/authoritativeArchiveSet；接线锁在 source-registry-wiring.test.ts）。refreshRemotes 已抽到 app-hooks/use-roster-commit.ts（净 -112 行）。；壳换届窄重挂的 sink 收窄与 boot 推迟集合（deferredBootIds）门（页面首连 effect 删除后净减）；目标 1600 保持不变，待 retireSources/refreshRemotes 后续搬迁；+13 = 2026-11 修复批：retireSources 同拍清 host facts（同 id 换代不显示上一代 dshVersion）与分叉标题预留账本退役；review-justified raise。"
     },
     {
       "path": "packages/desktop/plugin-sync.ts",
@@ -61,9 +61,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/derive.ts",
-      "lines": 1839,
+      "lines": 1850,
       "target": 1200,
-      "note": "−17（2026-11 死链清理：hasActiveSchedule 会话投影回落链随 pin 移除 schedule projection 删除，见 design 06 §4.3）= derive 投影/签名稀疏位/跨代际保留。; aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。; +53 = the pin per-source view options threaded through derive (publish-gate inputs, sessionVisible three-state rewrite, search/derive filter plumbing, type aliases; the three derivation modules live in pin-partition.ts / flat-account.ts / workspace-tree.ts) plus the 4-line sessionFacts publish-gate fix; +76 = PR2 derived checkout rows (design 08 §5.2): ONE sessionProjectionRow builder replaces the two duplicated row literals (−net), deriveServerWorkspaces gains layouts/layoutVersion and emits family main→checkout rows with allSessionIds, the only-filter keeps a family anchored on placed members, the producer signature carries workingDirectory, the App publish gate carries kind/repoKey/familyMainId/allSessionIds, and findReusableBlankSession compares the EFFECTIVE directory so a checkout's blank row is never reused by the source '+' (dirty/locked deliberately excluded — the Git occupant reads them from its own layout facts)；+20（2026-11 渲染 P0）= factAt 发布签名量化（A2a）：runtimeReportSignature 只签 1000ms 桶（FACT_AT_SIGNATURE_BUCKET_MS 常量 + 契约注释改写 + map 块体），原始 factAt 仍原样进 report 供 data-chamber-fact-at 渲染；净变化全在注释/常量，逻辑面只有量化表达式一句；−19 = increasedForkTitle 移出到 fork-titles.ts（fork 标题 skip-taken parity：两参 taken + 同源并集 + 在飞预留；design 05 §2.2；含删除的 1 行分隔空行）"
+      "note": "−17（2026-11 死链清理：hasActiveSchedule 会话投影回落链随 pin 移除 schedule projection 删除，见 design 06 §4.3）= derive 投影/签名稀疏位/跨代际保留。; aggregate/session derive；2026-09-28 review-justified: RuntimeFactsOverlayRow 增加 facts 侧子代理活动三值（busy/idle/unknown，与判定侧同映射）并只在通道未声明时填补——呈现面不再由原始计数反推 running（+4，含同批删除的重复注释 −1）；棘轮随之抬到 1742；pin 落地把投影输入类型移入叶子（instance-projection-input.ts；快照行类型的叶子化记在 instance-api 条）后下调到 1727；review 又删掉一行多余的导入空行 → 1726。; +53 = the pin per-source view options threaded through derive (publish-gate inputs, sessionVisible three-state rewrite, search/derive filter plumbing, type aliases; the three derivation modules live in pin-partition.ts / flat-account.ts / workspace-tree.ts) plus the 4-line sessionFacts publish-gate fix; +76 = PR2 derived checkout rows (design 08 §5.2): ONE sessionProjectionRow builder replaces the two duplicated row literals (−net), deriveServerWorkspaces gains layouts/layoutVersion and emits family main→checkout rows with allSessionIds, the only-filter keeps a family anchored on placed members, the producer signature carries workingDirectory, the App publish gate carries kind/repoKey/familyMainId/allSessionIds, and findReusableBlankSession compares the EFFECTIVE directory so a checkout's blank row is never reused by the source '+' (dirty/locked deliberately excluded — the Git occupant reads them from its own layout facts)；+20（2026-11 渲染 P0）= factAt 发布签名量化（A2a）：runtimeReportSignature 只签 1000ms 桶（FACT_AT_SIGNATURE_BUCKET_MS 常量 + 契约注释改写 + map 块体），原始 factAt 仍原样进 report 供 data-chamber-fact-at 渲染；净变化全在注释/常量，逻辑面只有量化表达式一句；−19 = increasedForkTitle 移出到 fork-titles.ts（fork 标题 skip-taken parity：两参 taken + 同源并集 + 在飞预留；design 05 §2.2；含删除的 1 行分隔空行）；+11 = 2026-11 修复批：failed 进两条 report 签名（身份+投影）、receipt 补签 runningSince（升级阶梯症状年龄）、投影签名补 aggregateReady（侧栏搜索合并消费）；review-justified raise。"
     },
     {
       "path": "packages/desktop/transport-manager.ts",
@@ -109,9 +109,9 @@
     },
     {
       "path": "packages/dsh-chamber-client-core/src/aggregate-store.ts",
-      "lines": 1137,
+      "lines": 1160,
       "target": 600,
-      "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; recorded with the budget history (git))；ChamberServerWorkspace 移入 aggregate-types.ts（并把它自己的说明带上）后下调到 1017；+7 = pinnedSessionIds/pinSetKnown on the aggregate (pin partition source)；+74 net = the workspace REMOVAL intent facts/channels (reportWorkspaceRemoving / reportWorkspaceRemovingFailed + listeners + bridge methods, including the failure-side known-boundary note and net of the path-secondary-key cleanup; the pinned client store's delete-order tail-sink compensation, feature, review-justified raise; recorded with the budget history (git)); +9 = PR2 echo workingDirectory (design 08 §5.3): SessionCreatedFact carries the intended checkout path so the creation echo places immediately; the host projection still wins；+30 = 会话放置失败事实/通道（checkout 'enter' 失败作废回声的放置意图，design 08 §4.2；feature，review-justified raise，登记于预算历史（git））"
+      "note": "aggregate store types/channels/registry; +85 = the worktree placement facts/channels (feature, review-justified raise; recorded with the budget history (git))；ChamberServerWorkspace 移入 aggregate-types.ts（并把它自己的说明带上）后下调到 1017；+7 = pinnedSessionIds/pinSetKnown on the aggregate (pin partition source)；+74 net = the workspace REMOVAL intent facts/channels (reportWorkspaceRemoving / reportWorkspaceRemovingFailed + listeners + bridge methods, including the failure-side known-boundary note and net of the path-secondary-key cleanup; the pinned client store's delete-order tail-sink compensation, feature, review-justified raise; recorded with the budget history (git)); +9 = PR2 echo workingDirectory (design 08 §5.3): SessionCreatedFact carries the intended checkout path so the creation echo places immediately; the host projection still wins；+30 = 会话放置失败事实/通道（checkout 'enter' 失败作废回声的放置意图，design 08 §4.2；feature，review-justified raise，登记于预算历史（git））；+23 = 2026-11 修复批：显式用户已读事实通道 reportSessionMarkedRead/onSessionMarkedRead（携带聚合来源代，App 清 N-ctx 修正臂）；review-justified raise。"
     },
     {
       "path": "packages/dsh-chamber-client-ui-sidebar/src/client/ServerSection.tsx",
@@ -199,9 +199,9 @@
     },
     {
       "path": "packages/renderer/src/app-hooks/use-notifications.ts",
-      "lines": 683,
+      "lines": 698,
       "target": 663,
-      "note": "Notification projection cluster (completion observation/ledger/native outbox). Unregistered until the completeness review; guard it so the next addition is reviewed. Frozen at its ratified size (target records the refactor debt): these are single-closure hooks with no identified seam; a split needs input-surface reduction first.；+4（pre-merge P2-1 / D2 事实接入，review-justified raise）= `requireHidden` 的「用户正在看」证据叠加壳可见性事实 isShellVisible()（另一 Space / 完全遮挡 / orderOut 下 document.visibilityState 仍 visible，会误抑制完成横幅 ⇒ 漏通知）+ 注释同步；target 保留 663 作为重构债；+14（2026-11 注意力模型）= requireHidden 改为页面注意力门（page-attention/currentPageForeground）+ stepArmNow foreground + 返回前台订阅 effect/注释；review-justified raise（v3 A12；target 保留 663 作为重构债）；+2（final review fix：返回边沿只在 false→true 步进 + 注释；review-justified raise）"
+      "note": "Notification projection cluster (completion observation/ledger/native outbox). Unregistered until the completeness review; guard it so the next addition is reviewed. Frozen at its ratified size (target records the refactor debt): these are single-closure hooks with no identified seam; a split needs input-surface reduction first.；+4（pre-merge P2-1 / D2 事实接入，review-justified raise）= `requireHidden` 的「用户正在看」证据叠加壳可见性事实 isShellVisible()（另一 Space / 完全遮挡 / orderOut 下 document.visibilityState 仍 visible，会误抑制完成横幅 ⇒ 漏通知）+ 注释同步；target 保留 663 作为重构债；+14（2026-11 注意力模型）= requireHidden 改为页面注意力门（page-attention/currentPageForeground）+ stepArmNow foreground + 返回前台订阅 effect/注释；review-justified raise（v3 A12；target 保留 663 作为重构债）；+2（final review fix：返回边沿只在 false→true 步进 + 注释；review-justified raise）；+15 = 2026-11 修复批：显式 mark-read 清修正臂（行键控 + 来源代栅栏 + 注释），否则臂行点「标为已读」无效果；review-justified raise。"
     },
     {
       "path": "packages/renderer/src/app-hooks/use-aggregate-refresh.ts",
@@ -397,9 +397,9 @@
     },
     {
       "path": "packages/desktop/active-registration.ts",
-      "lines": 420,
+      "lines": 432,
       "target": 438,
-      "note": "代理注册的唯一提交入口（单一代际提交 + 撤销墓碑）；新叶子初始棘轮=当前行数，收口目标待后续重构评审；+6 = revoke 墓碑只钉被撤销记录的代际（无记录 revoke 不立碑），非 ready 推送只在存在已提交记录时撤销——修复自动重连后代理注册丢失"
+      "note": "代理注册的唯一提交入口（单一代际提交 + 撤销墓碑）；新叶子初始棘轮=当前行数，收口目标待后续重构评审；+6 = revoke 墓碑只钉被撤销记录的代际（无记录 revoke 不立碑），非 ready 推送只在存在已提交记录时撤销——修复自动重连后代理注册丢失；+12 = 2026-11 修复批：墓碑按**被撤销记录**的化身登记（recordIncarnations），auto-recovery 换化身后的低代 register 不再被误拒；review-justified raise。"
     },
     {
       "path": "packages/desktop/connection-intent.ts",
@@ -409,7 +409,7 @@
     },
     {
       "path": "packages/desktop/roster-change.ts",
-      "lines": 268,
+      "lines": 263,
       "target": 268,
       "note": "名册变更集纯函数（来源身份/退役/传输重建的单一规划面）；新叶子初始棘轮=当前行数，收口目标待后续重构评审"
     },

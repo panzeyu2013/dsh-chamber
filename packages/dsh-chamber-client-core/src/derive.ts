@@ -962,7 +962,11 @@ export function runningRingVisible(_channelRunning: boolean | undefined, polledR
 const FACT_AT_SIGNATURE_BUCKET_MS = 1_000
 
 /** Content signature of one runtime-facts report (current + per-session facts;
- *  `running` always, `completed`/`pending`/`runningSubagents` as sparse extras).
+ *  `running` always, `completed`/`failed`/`pending`/`runningSubagents` as sparse extras).
+ *  `failed` is a RENDERED fact (the sidebar's `Failed` label / `.stateFailed` red dot /
+ *  `data-chamber-session-failed`), so both signatures must encode it: leaving it out
+ *  froze the first-seen failure presentation whenever only the official
+ *  `completionFailed` bit moved (alpha.1 `sessionStatus.completionFailed`).
  *
  * `onlyIds` restricts the signature to the sessions actually rendered: a
  * hidden session flipping its bits must NOT re-render the list, while the
@@ -1006,16 +1010,18 @@ export function runtimeReportSignature(
       // invents no churn for them. `corrected`（I-3 修正 provenance）像 `running` 一样只签身份路径：它必须重发（否则 App 的去重会吞掉修正标记），而投影从不渲染它、不得为它单独重发布。
       const factAt = facts.factAt ?? 0
       const factAtBucket = factAt > 0 ? Math.floor(factAt / FACT_AT_SIGNATURE_BUCKET_MS) : ''
-      return `${id}:${includeRunning && facts.running === true ? 'r' : ''}${includeRunning && facts.corrected === true ? 'x' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}:${factAtBucket}${goalFactSignature(facts.goal)}`
+      return `${id}:${includeRunning && facts.running === true ? 'r' : ''}${includeRunning && facts.corrected === true ? 'x' : ''}${facts.completed === true ? 'c' : ''}${facts.failed === true ? 'f' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}:${facts.subagentActivity ?? ''}:${factAtBucket}${goalFactSignature(facts.goal)}`
     })
   // L1 对账回执也是事实内容的一部分，必须进签名——App 的运行时事实提交按本签名
   // 去重：回执若不入签名，一次「事实没变、只有回执结算」的上报会被整个丢弃，守卫
-  // 随后误判「对账通道无回执」并升级 reconnect/L3。只签在 `includeRunning` 路径；
-  // **投影**签名不得因回执变化而重发布（侧边栏不渲染回执，回执变化对它是 churn）。
+  // 随后误判「对账通道无回执」并升级 reconnect/L3。`runningSince` 被升级阶梯当
+  // `symptomSinceMs` 消费（症状年龄），只随它变化的上报同样不能被去重吞掉。
+  // 只签在 `includeRunning` 路径；**投影**签名不得因回执变化而重发布（侧边栏不渲染
+  // 回执，回执变化对它是 churn）。
   const authority = report.sessionAuthority
   const receipt = !includeRunning || authority === undefined
     ? ''
-    : `#a:${authority.settledAt === undefined ? 'p' : String(authority.settledAt)}:${authority.ok ? '1' : '0'}:${String(authority.progressStamp)}:${authority.stuckSince === undefined ? '-' : String(authority.stuckSince)}`
+    : `#a:${authority.settledAt === undefined ? 'p' : String(authority.settledAt)}:${authority.ok ? '1' : '0'}:${String(authority.progressStamp)}:${authority.stuckSince === undefined ? '-' : String(authority.stuckSince)}:${authority.runningSince === undefined ? '-' : String(authority.runningSince)}`
   // listComplete：官方 session list 的 arrival phase（pending → ready 后不回退）
   // 是「缺席即删除」的权威门，属判定输入；只签在 includeRunning（App 身份校验）
   // 路径，投影签名不得因它单独翻转而重发布，否则一次「事实未变、只有 listComplete
@@ -1117,6 +1123,11 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       label: server.label,
       connected: server.connected,
       phase: server.phase,
+      // RENDERED/DECIDED: the sidebar's search merge and the source capture gate read
+      // `aggregateReady`; an ok→undefined cache transient can flip it alone, so it must
+      // move the publish gate (only reachable while connected=false, but that is exactly
+      // the disconnected-pull race the field exists for).
+      aggregateReady: server.aggregateReady === true,
       // Render-relevant: the source dot/label and the deferred-boot overlay branch on the link
       // facts; a link-only flip must re-publish or a ready-but-down source keeps its green face.
       linkUp: server.linkUp ?? null,

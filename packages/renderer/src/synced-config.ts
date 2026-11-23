@@ -29,8 +29,11 @@
  * Degradation contract: a row with no `config` (an older host that does not project it, or a
  * plugin with no volatile fields) still receives a reference object whose fields read
  * `undefined` — the plugins' own fallbacks use their defaults, the fiber activates, and no
- * empty-shell failure occurs. Live volatile updates are NOT applied by this batch (the boot
- * value is the activation's value); design 09 §3.8 registers that intentional difference.
+ * empty-shell failure occurs. A row added LIVE (the HMR plugin-graph add path) is registered
+ * into the supply before `loader.create` via the install handle (`register`/`forget`), so it
+ * takes the same activation as a boot row and a remove→re-add rebuilds from the row's then
+ * current values; live volatile UPDATES remain unapplied (the boot/add value is the
+ * activation's value); design 09 §3.8 registers that intentional difference.
  */
 
 /** One plugin's synced Config values, keyed by field name (the upstream wire shape). */
@@ -154,9 +157,28 @@ export const SYNCED_CONFIG_COVERED_IDS: readonly string[] = [
 /** One instance's synced-config supply: raw row values plus the extra-row ids they belong to. */
 export interface SyncedConfigSupply {
   /** Host-graph row id → the row's projected volatile values (covered and extra rows alike). */
-  readonly values: ReadonlyMap<string, SyncedConfigValues>
-  /** The ids of this boot's EXTRA (host-graph) rows: the only entries the listener activates. */
-  readonly extraRowIds: ReadonlySet<string>
+  readonly values: Map<string, SyncedConfigValues>
+  /** The ids the `internal/config` listener activates: this boot's EXTRA (host-graph) rows
+   *  plus every row registered later by the live add path. */
+  readonly extraRowIds: Set<string>
+}
+
+/** Live lifecycle of the per-instance supply: the shell hands these two verbs to the live
+ *  plugin-graph reconciler. */
+export interface SyncedConfigSupplyHandle {
+  /**
+   * Register one EXTRA row that appears AFTER boot before its `loader.create`: the
+   * activation is built from the supply when the entry root materializes, so the id (and
+   * its wire values, when the row carries any) must be present first. Re-registering an
+   * id DROPS its cached activation, so a remove→re-add (or a first mount without values
+   * followed by one with values) rebuilds the per-field refs from the new values instead
+   * of serving the first activation forever. `undefined` values register the id alone
+   * (the empty activation an extra row without Config receives, upstream parity).
+   */
+  register(id: string, values?: SyncedConfigValues): void
+  /** Drop one row's registration + cached activation (live remove / add rollback). The
+   *  next materialization of that id rebuilds from the wire values then registered. */
+  forget(id: string): void
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -194,10 +216,26 @@ export interface SyncedConfigSupplyTarget {
  * the composite itself are left untouched (they take no config).
  * @param ctx - the per-instance root Context, before the Loader exists.
  * @param supply - this boot's row values + extra-row ids.
+ * @returns the live registration handle (register before `loader.create`, forget on remove).
  */
-export function installSyncedConfigSupply(ctx: SyncedConfigSupplyTarget, supply: SyncedConfigSupply): void {
+export function installSyncedConfigSupply(
+  ctx: SyncedConfigSupplyTarget,
+  supply: SyncedConfigSupply,
+): SyncedConfigSupplyHandle {
   ctx.provide?.('chamberSyncedConfig', supply)
-  if (typeof ctx.on !== 'function') return
+  const forgetRow = (id: string): void => {
+    supply.extraRowIds.delete(id)
+    supply.values.delete(id)
+  }
+  if (typeof ctx.on !== 'function') {
+    return {
+      register(id: string, values?: SyncedConfigValues): void {
+        supply.extraRowIds.add(id)
+        if (values !== undefined) supply.values.set(id, values)
+      },
+      forget: forgetRow,
+    }
+  }
   /** One activation per extra-row entry, built on first materialization. */
   const activations = new Map<string, object>()
   const activationFor = (id: string): object => {
@@ -240,4 +278,19 @@ export function installSyncedConfigSupply(ctx: SyncedConfigSupplyTarget, supply:
     // entries.ts applyConfig treats an absent row config as {}); fields read undefined.
     return activationFor(name)
   }, { global: true, prepend: true })
+  const forget = (id: string): void => {
+    supply.extraRowIds.delete(id)
+    supply.values.delete(id)
+    activations.delete(id)
+  }
+  return {
+    register(id: string, values?: SyncedConfigValues): void {
+      supply.extraRowIds.add(id)
+      if (values !== undefined) supply.values.set(id, values)
+      // A cached activation carries refs frozen to the FIRST values it saw (the supply has
+      // no live writer); dropping it is what makes remove→re-add pick up the new row.
+      activations.delete(id)
+    },
+    forget,
+  }
 }

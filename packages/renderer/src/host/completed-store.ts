@@ -31,6 +31,24 @@ export interface CompletedStore {
   retire(sourceIds: Iterable<string>): void
 }
 
+/**
+ * Drop one session's correction arm: the explicit user read fact path (design 06 §4.9).
+ * Row-keyed — never sweeps the source or its siblings. Idempotent: a missing arm is a
+ * no-op and reports `false`, so a duplicate mark never churns the store.
+ * @param store - the App's arm store.
+ * @param sourceId - the session's aggregate source id.
+ * @param sessionId - the session whose arm the user marked read.
+ * @returns true when an arm existed and the table changed.
+ */
+export function clearSessionArm(store: CompletedStore, sourceId: string, sessionId: string): boolean {
+  const arms = store.getSnapshot()[sourceId]
+  if (arms?.[sessionId] !== true) return false
+  const next = { ...arms }
+  delete next[sessionId]
+  store.setSource(sourceId, next)
+  return true
+}
+
 export function createCompletedStore(): CompletedStore {
   let snapshot: CompletedTable = {}
   const listeners = createListenerSet()

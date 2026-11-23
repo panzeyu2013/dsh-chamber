@@ -834,11 +834,14 @@ export function bootInstanceShell(
         values: syncedConfigValues,
         extraRowIds: new Set(extraRows.map(row => row.id)),
       }
+      const syncedConfigSupply = {
+        handle: undefined as ReturnType<typeof installSyncedConfigSupply> | undefined,
+      }
       const configureContextWithSyncedConfig = (
         targetContext: Parameters<typeof configureContext>[0],
       ): void => {
         configureContext(targetContext)
-        installSyncedConfigSupply(targetContext, supply)
+        syncedConfigSupply.handle = installSyncedConfigSupply(targetContext, supply)
       }
       const entry = new AppWebEntry(el, {
         loadBundle: loadModuleBundle,
@@ -948,6 +951,16 @@ export function bootInstanceShell(
             registerChunkOwners: rows => { registerExtraChunkOwners(modules, rows) },
             removeChunkOwners: ids => { removeExtraChunkOwners(modules, ids) },
             loadBundle: loadModuleBundle,
+            // A row the live graph adds later must be known to the per-instance supply
+            // BEFORE its entry materializes, or the internal/config listener (which only
+            // activates boot-known extra ids) lets a config-consuming plugin mount without
+            // its reference object — the silent-empty-shell failure W4-0 removed.
+            registerSyncedConfigRow: (id, config) => {
+              syncedConfigSupply.handle?.register(id, config as SyncedConfigValues | undefined)
+            },
+            forgetSyncedConfigRow: id => {
+              syncedConfigSupply.handle?.forget(id)
+            },
             diagnostics: {
               read: () => chamberBridge.getPluginDiagnostics()[instanceId],
               write: record => { reportPluginDiagnostic(instanceId, record) },
