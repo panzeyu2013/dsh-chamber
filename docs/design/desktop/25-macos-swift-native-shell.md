@@ -24,6 +24,7 @@
 - 不做 Swift 原生 UI 渐进替换（路线 B/C，按 [ADR-0002](../decisions/0002-swift-only-flavor.md) 单独评估）。
 - 不做第二个 gateway、不进匿名控制面的执行域（根 AGENTS.md 硬纪律）。
 - 不做 Sparkle 全自动安装之外的更新路径（§7 为现形）。
+- 不做 dsh CLI 的安装/接管（上游 Manage dsh Command 产品面）：用户自行安装 dsh，本仓不提供命令注册/回滚面（§9.2）。
 
 ## 2. 关键设计前提（复用可行性）
 
@@ -80,7 +81,7 @@ dsh web profile 实例（Node）×N ── 远程宿主（ssh/gateway）
 3. Swift 收到 ready → 以 `/health` 做首载门：**HTTP 2xx 即导航**（`ready` 与在途的 `starting`/`restarting` 一律开载，status 原样进日志而非伪装成 ready），由页面画骨架；本地实例的取图交给渲染端的每实例服务门（`waitForServing` 等到 `ready`，预算 `SERVING_WAIT_MS = BOOT_TIMEOUT_MS`；`host-graph` 另有 70s 自愈预算兜底），不再把窗口压在宿主冷启动上。**事实缺失**（2xx 但 `dsh.status` 缺失/不可解析/为空）按「还没到」等待、绝不读成终态，按有界退避节拍持续探测（0.5→5s、×2 递增、单步封顶 5s，独立计数、**不消耗 `navRetries`**）；**静止相位中的 `ready` 已随上句开载**；`stopped`/`error`/`degraded`/`restart-exhausted` 与词表外的未知词同样立即载入控制面，以开放诊断与恢复入口。壳不设等待总期限：在途相位在开载之后由控制面状态机与页面健康流呈现，壳只消费 `/health` 的即时相位，时间只有一个所有者。**已知代价（首次安装/极慢冷启）**：本地实例的 boot 图取数受 `waitForServing` 预算约束（该门只认 `ready`；宿主处于 `degraded` 时按 [design 02 §3.5](../runtime/02-host-management-deployment.md) 仍是可服务态，但服务门会继续等到预算耗尽）；宿主冷启超过约 65s（5s REST 预算 + `SERVING_WAIT_MS` 服务门）时该次 boot 以无图形态收尾并上报 `graph-unreachable`，宿主转 `ready` 后由 degraded self-heal 重挂一次。事实缺失分支只在 2xx 来自非控制面时才可达：控制面 `/health` 恒带 `dsh.status`（`getHealth`），端口由 sidecar 独占、EADDRINUSE 即 loud fatal，故它是对陌生 2xx 的防御性等待，正常路径不经过。A 桥注入时机见 §4.4.1 D1。
 4. 运行时故障分级：
    - sidecar 崩溃/非零退出 → Supervisor 按重启退避重启（**无 Electron 先例，退避语义另立**：cp.start 失败 = fatal 退出；运行中崩溃 = 退避重启，上限与 renderer 恢复参数化同族）；fatal 边界 = stderr 记录 + 非零退出码分级（启动失败 vs 崩溃），Supervisor 据码分流 NSAlert 文案。
-   - WebView 进程终止 → `webViewWebContentProcessDidTerminate` 恢复循环 + ready 位复位 + in-flight requeue（§5 E19 三事件映射，对照 `installRendererRecovery`：500ms 延迟重载、**60s 滚动窗口内至多 3 次**、15s unresponsive 探测——Swift v1 无 unresponsive 事件，该腿不可移植或换心跳探测）；重复崩溃 → NSAlert 停止自动恢复。**5×500ms 是 renderer-ready 握手（deep-link-ready/notifications-ready）重试语义（05 §7.4），不是崩溃恢复——勿混用**。
+   - WebView 进程终止 → `webViewWebContentProcessDidTerminate` 恢复循环 + ready 位复位 + in-flight requeue（§5 E19 三事件映射；自动重载 = 本壳 EXTRA+（上游当前 pin 已无 `installRendererRecovery` 符号），语义 = 500ms 延迟重载、**60s 滚动窗口内至多 3 次**、15s unresponsive 探测——Swift v1 无 unresponsive 事件，改用心跳探针）；重复崩溃 → NSAlert 停止自动恢复。**5×500ms 是 renderer-ready 握手（deep-link-ready/notifications-ready）重试语义（05 §7.4），不是崩溃恢复——勿混用**。
    - 退出链复刻 before-quit/will-quit（§5 E9/E12/E20）：确认-取消-重建三分支（mac close-behavior='quit' 时窗口已关 → 取消后重建）、keep-awake 停 → badge 清 → 并行回收（传输层 → 控制面 → 本地 dsh 实例 → runtime 资源）→ **5s 硬顶强退**（Swift terminate 超时 = exit(_:)）；「本地实例在跑」判据 = cp.localProcessAlive + LOCAL_RUNNING_STATES 同款，勿只看 connectionState。`applicationShouldTerminate` 在关窗决策在飞时把该次 terminate 并入在飞决策（记标志 + 保持 `.terminateLater`，决策结算时转退出清理并补回该轮 `terminateLater`），`QuitGate.isDecisionInFlight` 保证确认框永不吸收该合并、重复退出仍按重复请求忽略——Sparkle 的 quit 无超时等待，吞掉即更新永不安装。
 5. SIGTERM/SIGINT：Swift 捕获后转 `terminate` 优雅路径；sidecar 自身也处理信号——纯 Node 下 `process.on('SIGTERM')` 真实可达（Electron 43 下是死代码）。
 
@@ -104,7 +105,7 @@ dsh web profile 实例（Node）×N ── 远程宿主（ssh/gateway）
 
 - `shell-core.ts`（Electron-free）：原样搬入全部业务装配、invoke 处理器体（含 info）+ 事件源（语义校验原地保留）、退出状态机、深链 intent 队列、通知 click 有界 ACK 队列/去重/限速（notifications.ts 纯逻辑 + main.ts 队列语义）、资源路径参数化收口。
 - `HostEdges` 依赖注入面（下述）。判定标准：core 对 `electron` 零 import（CI lint 门禁，electron-free-gate.test.ts）；Electron 版全部桌面测试继续绿。
-- `electron-edges.ts`（Electron flavor，归档）：HostEdges → Electron API。**Electron 应用菜单现状 = 未自定义（默认菜单含 Edit role，Cmd+C/V 靠它）**——保持不动。
+- `electron-edges.ts`（Electron flavor，归档）：HostEdges → Electron API。**本仓冻结 Electron 的应用菜单 = 未自定义（默认菜单含 Edit role，Cmd+C/V 靠它）**——保持不动；**上游当前 pin 的菜单基准**（`Menu.setApplicationMenu` + 原生 context-menu popup）见 registry `mirror.dsh-desktop-native-chrome-seats` 的 evidence，勿把本行当上游基准。
 - `node-edges.ts`（Swift flavor）：HostEdges → B 桥（Swift 执行边沿）。
 
 HostEdges 落定契约（字段语义与实现一一对应）：
@@ -166,9 +167,9 @@ HostEdges 落定契约（23 个成员：`rendererPush`、`showNativeNotification
 |---|---|
 | E1/E20 | `NSWindow`+`WKWebView`；`windowShouldClose` 按 14 D1 hide 而非关、mac Dock 为恢复入口；close-behavior='quit' 走完整确认链，绝不无窗常驻；重建只允许单窗 |
 | E7 | keep-awake = 设置开启且窗口可见（遮挡/最小化即释放），启动期 reconcile `keepAwake`（缺省 off / 损坏 loud+off；14 §D5） |
-| E19 | 三事件映射（didStartProvisional/didFinish/webViewWebContentProcessDidTerminate）+ 500ms 有界重载（60s ≤3 次 + NSAlert）；unresponsive 腿 v1 不可移植 → `RendererHangWatchdog` 心跳探针；前端 boot 逃生归页面（05 §4.3） |
+| E19 | 三事件映射（didStartProvisional/didFinish/webViewWebContentProcessDidTerminate）+ 500ms 有界重载（60s ≤3 次 + NSAlert）；unresponsive 腿 v1 不可移植 → `RendererHangWatchdog` 心跳探针；前端 boot 逃生归页面（05 §4.3）；**自动重载 = EXTRA+**（上游当前 pin 无对应符号；本壳语义 = §3.3 启动序列的 WebView 恢复腿） |
 | E21 | 宿主可见性事实（`dsh-chamber:shell-visibility {visible, occluded, active}`；`active = NSApp.isActive` 为 additive 字段）= 页面唯一事实通道（14 §D1）；相位门（可见且未遮挡）与注意力门（相位 ∧ active）分用，`focused` 事实按 `isKeyWindow && foregroundAllowed && NSApp.isActive` 派生、应用失活另有 `didResignActive` 显式推 `false` 兜底（§4.1） |
-| E3/E4/E16 | Edit 菜单保 Cmd+C/V/全选；网页 Notification 无预拒绝 API（双路径风险待实测）；剪贴板写自动放行、读走 NSPasteboard 用户授权 |
+| E3/E4/E16 | Edit 菜单保 Cmd+C/V/全选（上游菜单基准 = registry native-chrome evidence，见 §4.1）；网页 Notification 无预拒绝 API（双路径风险待实测）；剪贴板写自动放行、读走 NSPasteboard 用户授权 |
 | E2/E5/E6/E8–E15/E17/E18 | Tray/Dock 角标/唤醒补发/NSOpenPanel/NSAlert/外链/SMAppService/safeStorage（不移植，诚实 0600 明文）/crashReporter（不移植）等映射；逐项细节单源 = `macos/Sources/DSHChamber/` 源码，Electron 冻结面见 [electron-frozen.md](../../progress/electron-frozen.md) |
 
 **Rejected alternatives（E2 的托盘图标产出方式）**：① 继续把共享的 `NSApp.applicationIconImage` 改 size 再交给按钮——除首次布局竞态外还有全局副作用（Sparkle/关于面板等消费者会看到被改成 18pt 的共享图），否；② 专用菜单栏资产（36px PNG / asset catalog）——观感更常规，但要连带改 `Package.swift` 的逐条 `.process` 资源、`build-swift-app.mjs` 的 icns 装配链与本表 E2 行 / T-15 的「图标=应用图标」语义，属独立变更，不夹带；③ `isTemplate` 模板图——把彩色应用图标变单色剪影，改外观契约，否；④ `NSImage(size:flipped:drawingHandler:)`——代码更短，但 rep 是 0px 延迟 rep，「绘制域 = rep.size」这条唯一真会回归的断言无法表达，否；⑤ 只留单个 rep——非 Retina 外接屏走降采样发虚，收益极小，否。结论 = 自持 18pt 位图副本（`StatusItemIcon`），几何与时序无关。
@@ -353,7 +354,7 @@ composer 的拖入/回形针入稿有两条分支（上游 `apps/desktop/src/pre
 
 - Electron 版维持 electron-updater（GitHub provider、zip target）不动（归档参考，见 [11-auto-update.md](../archive/11-auto-update.md)）。
 - **Swift 版更新链 = Sparkle 2（「D-1 选 B」）**：壳内 `AppUpdater`（`macos/Sources/DSHChamber/AppUpdater.swift`）持 `SPUStandardUpdaterController`，承担检查 → 下载 → 重启并安装。安装必须由 bundle 外 helper 完成（运行中的 .app 不能覆盖自己），更新包以 **EdDSA 公钥**（`SUPublicEDKey`）鉴权（与 Developer ID 签名/公证两回事：后者分发信任，前者更新通道鉴权）。
-- **装配**：`Info.plist` 的 `SUFeedURL`/`SUPublicEDKey` 由 `build-swift-app` 的 `--sparkle-feed`/`--sparkle-public-key` 注入（占位符 `__SPARKLE_FEED_URL__` / `__SPARKLE_PUBLIC_ED_KEY__`）；任一为空 = 更新不可用（菜单「检查更新…」禁用，不声明 `--native-updater sparkle`）。`SUEnableAutomaticChecks` 模板常量 **true**：每次启动强制一次后台检查（S-37），此后 `SUScheduledCheckInterval=600`（10 min；与 `update-schedule.ts` 的默认 600_000ms 同值，可经环境覆盖，退避上限 1h）；scheduled 标准窗被壳内抑制（`SPUStandardUserDriverDelegate` 把展示权收回壳 → 相位进设置页），用户手动的「检查更新…」仍走标准窗。
+- **装配**：`Info.plist` 的 `SUFeedURL`/`SUPublicEDKey` 由 `build-swift-app` 的 `--sparkle-feed`/`--sparkle-public-key` 注入（占位符 `__SPARKLE_FEED_URL__` / `__SPARKLE_PUBLIC_ED_KEY__`）；任一为空 = 更新不可用（菜单「检查更新…」禁用，不声明 `--native-updater sparkle`）。`SUEnableAutomaticChecks` 模板常量 **true**：每次启动强制一次后台检查（S-37），此后 `SUScheduledCheckInterval=600`（固定 10 min；抖动/退避属**无原生腿的 sidecar 形态** `update-schedule.ts`，Sparkle 腿不消费其 `DSH_DESKTOP_UPDATE_CHECK_*` env；通道侧 env 只认 `DSH_CHAMBER_UPDATE_CHANNEL`）；scheduled 标准窗被壳内抑制（`SPUStandardUserDriverDelegate` 把展示权收回壳 → 相位进设置页），用户手动的「检查更新…」仍走标准窗。
 - **最低系统版本**：两 flavor 同为 **macOS 14.4**（`build.mac.minimumSystemVersion` 与 `LSMinimumSystemVersion` 写精确 14.4；`Package.swift` 的 `.macOS` 只能写 major，故写 `.macOS(.v14)`，精确下限由 Info.plist 承担；三处一致由 release 策略测试钉住）。**为什么 14.4**：OS WebKit 的出货 bundle 在多处构造路径直接调 `Promise.withResolvers`，该 API 自 Safari 17.4 / macOS 14.4 才有（13.x 与 14.0–14.3 会构造期 TypeError）；Electron 自带 V8 不受影响，但同一支持矩阵只保留一个下限（抬高下限，不加 polyfill）。
 - **feed 必须 appcast**：Sparkle 只读 appcast（XML feed + EdDSA 签名），不消费 GitHub REST API 或 `latest-mac.yml`；`SUFeedURL` 指向本仓 release 自带资产：稳定通道 `releases/latest/download/appcast-swift.xml`，beta 通道 `releases/download/appcast-swift-beta/appcast-swift-beta.xml`（滚动 tag `appcast-swift-beta`，每 beta `--clobber` 覆盖 ⇒ beta.N 见 beta.N+1）。
 - **确认门的有界武装**：页面回答携带状态 revision（过期回答被拒，宿主在拒绝时重推当前状态供就地重试）；`{ok:true}`（quitAndInstall 已武装）后页面侧单飞门**最多保持 60s**，超时仍未退出即释放门并提示「安装没有在预期时间内开始」（`installing` 相位期间继续武装——安装中放开会触发第二次安装）；单次确认 invoke 另设 15s 上限，宿主不回包也必然释放；宿主的原生安装触发另设 30s 上限（壳不回应按拒绝回执返回，不把 IPC 挂住）。被否：永久武装（退出被取消 / 全屏未退 / Sparkle 静默失败时，按钮与提示双双钉死，用户既不能重试也不能消除）；仅靠失败推送释放（宿主不推就永远锁死，用户已实际撞上）。
@@ -432,6 +433,30 @@ E1–E21 按 §5 实现（E15 走 §6.4）；manifest 生成与三件锁步护�
 
 **Rejected alternatives**：只用请求 ID 无法区分导航前后的重复编号；只重新读取 `info` 会让通知打开监听与事实基线保持在旧 sidecar 世代；把普通调用无限等待会让宿主重启后页面永久悬挂；用 `evaluateJavaScript("1")` 证明内容已绘制不成立，它只证明 JS 上下文应答。可见页的主动 rAF 心跳证明帧调度仍在前进，但 WKWebView 不向宿主暴露最终合成帧的提交游标；JS 与 rAF 同时正常而像素仍停滞时，宿主依旧无法单凭该探针自动重载。
 **Rejected alternatives（恢复预算）**：把排定后被新导航取消的重载仍计入 60s 配额，会让零次实际重载也耗尽三次预算；取消时退还该次计数，并用排程代际阻断取消后迟到执行的 work item。
+
+### 9.2 未对齐上游桌面能力面（登记）
+
+本节是**已知未对齐 / 已收窄的上游桌面能力面**的 owning 登记（§4.5 审计表里「缺口登记 = design 25 §9.2」的指针指向本节；分类沿用 parity 口径 GAP/PARTIAL/INTENT/已注入）。上游锚 = 当前 pin 的 `apps/desktop/src`（逐文件清单见 §4.5）；「本仓形态」是现行实现或缺口形态，**不是**排期承诺。
+
+| 面 | 上游锚 | 本仓形态 | 分类 |
+|---|---|---|---|
+| G01 账号登录闭环 | `account-backend.ts`、`welcome-backend.ts`（原生 PKCE + 本机回环回调） | 控制面只有 `/api`、`/health` 分流，无 `/oauth/callback` 反代 → 登录停在等待/失败 | GAP（TODO C§1） |
+| G02 客户端元数据注入 | `client-metadata.ts`（构建期内联 `DSH_CLIENT_VERSION`，缺值即抛） | **已闭合**：构建期 define 注入同一键，值从已提交的运行时锁文件派生（`packages/renderer/scripts/dsh-client-version.mjs`） | 已注入（§4.5 client-metadata 行） |
+| G03 诊断报告导出/取回 | `crash-report.ts`、`fatal-recovery.ts`（报告文件 + 10 份轮转 + Finder reveal + 恢复框取报告键） | 只有 `shell-crash.log` + marker；恢复框三键、无取报告 | GAP |
+| G04 插件操作取证链 | `operation-{journal,history,report,report-job,report-worker}.ts`、`desktop-host/operation-diagnostics.ts` | 零实现（无插件操作 journal 消费者） | GAP |
+| G05 fileActions / fileDrag 原生臂 | `preload-app.ts`、`file-actions.ts`、`file-drag{,-files}.ts`、`desktop-host/file-drag.ts` | dshDesktop 缺两成员；页面降级（另存为不可达、拖出 = 下载式） | GAP |
+| P01 安装前任务检查 | `update-error.ts`（preparationFailure 家族）、`desktop-host/update-tasks.ts` | 无安装前检查；`fullscreen-timeout` 是唯一 preparation 失败 | PARTIAL（§4.5 update-error 行） |
+| P04 下载百分比 / verifying | `update-coordinator.ts`、`update-presentation.ts` | Sparkle 不逐条上报百分比，相位表无 verifying | PARTIAL（§4.5 update-presentation 行） |
+| P09 Cmd+W / Cmd+R | `keyboard.ts`（File > Close Page → `page.close`） | AppKit 菜单：Cmd+W = 关窗（hide-to-tray 下表现为 hide）、Cmd+R = 整页重载 | PARTIAL（S-54、14 §D1） |
+| P12 宿主启动结构化诊断 | `desktop-host/fatal-diagnostic.ts` | 启动失败只留 stderr 末行与启动日志；候选 = 消费 dsh 已写的 `startup-*.log` | PARTIAL（§4.6 宿主侧文件表） |
+| P13 致命恢复动作集 | `fatal-recovery.ts`（禁用第三方插件 + 备份 profile patch） | 恢复框只有退出 / 重启 / 安全模式重启 | PARTIAL（§4.5 fatal-recovery 行） |
+| P18 `dshDesktop.updates.open` 语义 | `preload-app.ts`（打开壳自有更新对话流） | shim 映射为一次 `update.check`（无消费者） | PARTIAL（design 05 §5 被否方案） |
+| P20 残余：安装前全屏准备 | `update-window.ts`（`fullscreen-timeout`） | 设置行/页面路径已准备；Sparkle 标准窗二次确认路径未覆盖 | PARTIAL（§7 被否方案） |
+| 更新配置失败面 | `update-configuration.ts`、`settings-file.ts`（配置不可读 → 挂起更新） | 无挂起态；失败经失败行 / 技术详情呈现（§7） | PARTIAL |
+| 快捷键残余（S-54） | `keyboard.ts`、`keybindings.ts` | 无子 frame/webview 源与录制期菜单抑制；`closeWindow` loud reject | PARTIAL（§8.4、S-54） |
+| Manage dsh Command | `command-{installation,management,manager-entry}.ts` | 不提供该产品面（用户自行安装 dsh） | INTENT（§1.2 非目标） |
+
+**维护义务**：新增 / 关闭任一行时同步 §4.5 对应行的理由与 §4.6（若涉及手工移植面）；分类变化（GAP/PARTIAL → 已闭合）在本节就地改写并保留可复核锚（不写行号锚）。
 
 ## 相关文档
 
