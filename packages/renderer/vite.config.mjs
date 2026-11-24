@@ -5,6 +5,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VENDOR_PATCHES, applyVendorPatches } from './scripts/vendor-patches.mjs'
 import { resolveSimpleIconsEsmEntry } from './scripts/simple-icons-entry.mjs'
+import { resolveDshClientVersion } from './scripts/dsh-client-version.mjs'
 
 /**
  * dsh-chamber renderer build (design 05 §2/§3.6).
@@ -337,5 +338,14 @@ export default defineConfig({
     // constant-folds to a clean no-op — without the define the browser would
     // throw `process is not defined` inside the deferred apply on every boot.
     'process.env.DSH_CLIENT_BUILD_PROFILE': JSON.stringify('chamber'),
+    // G02：官方账号客户端元数据（@deepseek-ai/dsh-client-ui-settings-account 的
+    // client-metadata.ts）每次账号 RPC 都读 process.env.DSH_CLIENT_VERSION，缺值直接
+    // throw（「this client build carries no DSH_CLIENT_VERSION」）。上游 desktop 在构建期
+    // 把仓库版本内联成 define（apps/desktop/tsdown.config.ts:26-34）；我们的替换构建没有
+    // 那条注入面，而 Vite 6.4.3 对非 lib 客户端构建会把 process.env 自动折成 {}
+    // （definePlugin 的 processEnv；userDefine 在其后展开覆盖），所以必须显式 define。
+    // 值只从已提交的运行时锁文件 packages/desktop/vendor/dsh/pnpm-lock.yaml 读取
+    // （scripts/dsh-client-version.mjs 解析根 importer），不写版本字面量。
+    'process.env.DSH_CLIENT_VERSION': JSON.stringify(resolveDshClientVersion()),
   },
 })

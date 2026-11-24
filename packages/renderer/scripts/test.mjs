@@ -34,6 +34,10 @@ export const GROUPS = {
     'scripts/vendor-patches.test.mjs',
     // E1: simple-icons 必须解析到 ESM 入口（回落到 CJS 会把全量图标表带回 chamber 首屏）。
     'scripts/simple-icons-entry.test.mjs',
+    // G02: DSH_CLIENT_VERSION define 的已提交运行时锁文件单源（pnpm-lock.yaml；值随 pin 走，不写版本字面量）。
+    'scripts/dsh-client-version.test.mjs',
+    // G02 残留：构建产物必须内联版本字面量、不得残留 define 折叠（build 链同款断言的单测）。
+    'scripts/assert-client-version-inline.test.mjs',
     // Real-Cordis provide/get join for the public client-plugin base-path contract (design 09 §4).
     {
       file: 'scripts/chamber-base-path-real-context.test.mjs',

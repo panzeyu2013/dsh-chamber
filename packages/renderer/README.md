@@ -12,4 +12,4 @@
 
 ## 构建与检查
 
-`pnpm run build:renderer`：gen-typert-remotes → vite build → gen-boot-manifest → `check-chunk-budgets` → vendor 补丁校验（产物 `packages/desktop/dist/web`）。
+`pnpm run build:renderer`：**步骤与顺序单源 = `packages/renderer/package.json` 的 `build` 脚本**（本文不复述第二份清单）；现行链 = gen-typert-remotes → vite build → `assert-client-version-inline`（客户端元数据 define 生效断言）→ gen-boot-manifest → `check-chunk-budgets` → vendor 补丁校验（产物 `packages/desktop/dist/web`）。
