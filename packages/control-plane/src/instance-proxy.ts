@@ -648,6 +648,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     wsPingMissesBeforeTeardown,
     maxBufferedRequestBytes,
     streamRequestBody,
+    // Desktop-leg mirror of the upstream Electron document handler's plugin
+    // bundle policy (apps/desktop/src/web-document.ts:71,97): the Host marks
+    // plugin bundles immutable under a per-process revision, so a browser cache
+    // could only accumulate bundles no later launch can reuse. Same width as the
+    // upstream predicate (/^\/plugins\//u): only the '/plugins/' prefix is
+    // rewritten (the bare '/plugins' route keeps its upstream metadata), for
+    // every response status and method. Every other path is untouched.
+    onUpstreamResponseHeaders: (pathname, _status, headers) => {
+      if (!pathname.startsWith('/plugins/')) return
+      headers['cache-control'] = 'no-store'
+    },
     ...(deps.streamThresholdBytes === undefined ? {} : { streamThresholdBytes: deps.streamThresholdBytes }),
     ...(deps.streamBudgetMs === undefined ? {} : { streamBudgetMs: deps.streamBudgetMs }),
     liveStreams,

@@ -125,6 +125,11 @@ const GROUPS = {
     // 超声明字节 413、客户端 abort 释放。阈值/开关/预算边界的负控也在本文件。
     'test/proxy/streaming-body.test.ts',
     'test/proxy/response-encoding.test.ts',
+    // 插件 bundle 缓存策略（桌面腿镜像上游 Electron document handler，
+    // apps/desktop/src/web-document.ts:71,97）：实例代理转发的 /plugins/** 响应
+    // 强制 cache-control: no-store（上游按 per-process revision 标 immutable，
+    // 页面缓存会跨 launch 累积）；非插件路径原样保留上游元数据。
+    'test/proxy/plugin-bundle-cache.test.ts',
     'test/proxy/ws-upgrade.test.ts',
     'test/proxy/liveness-timeout.test.ts',
     'test/proxy/real-node-spki.test.ts',
