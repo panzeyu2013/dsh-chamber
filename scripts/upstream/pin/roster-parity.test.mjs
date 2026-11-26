@@ -39,10 +39,19 @@ function pinBundleRosterNames() {
   return names
 }
 
-/** chamber-covered.ts 里的 covered id 集（按源码字面量读，避免把模块图拖进测试）。 */
+/**
+ * chamber-covered.ts 的 CHAMBER_COVERED_IDS 段（按源码字面量读，避免把模块图拖进测试）。
+ * 只读这一段：同文件的 SEED_PLATFORM_IDS 是 seed 回答的平台词，不是 covered 行，
+ * 整文件扫字面量会把 cordis / react-virtual / ui-slots 误判成 covered id。
+ */
 function coveredIds() {
   const text = readFileSync(COVERED_FILE, 'utf8')
-  return [...new Set([...text.matchAll(/'(@[^']+)'/gu)].map((match) => match[1]))]
+  const start = text.indexOf('export const CHAMBER_COVERED_IDS')
+  assert.ok(start >= 0, 'CHAMBER_COVERED_IDS declaration not found')
+  const end = text.indexOf('\n]', start)
+  assert.ok(end > start, 'CHAMBER_COVERED_IDS terminator not found')
+  const body = text.slice(start, end)
+  return [...new Set([...body.matchAll(/'(@[^']+)'/gu)].map((match) => match[1]))]
 }
 
 test('roster 对账：非 chamber 的 covered id 必须落在 pin 的 bundle roster 里（例外须有登记）', () => {
