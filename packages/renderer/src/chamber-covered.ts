@@ -4,8 +4,9 @@
  * Loading any of these again from the host graph would register the same plugin
  * twice on one cordis ctx (duplicate provide / slot), so they are skipped, never
  * loaded — mostly the client plugin packages the composite registers, plus the
- * page-own rows (ui-sidebar / ui-modules / ui-renderer / ui-layout) and the
- * PLATFORM_MODULES words the composite answers.
+ * page-own rows (ui-sidebar / ui-modules / ui-renderer / ui-layout) and the one
+ * seed platform word that must be deduped (`@deepseek-ai/dsh-client-store`; the page
+ * seed answers it, the composite registers no factory for it).
  *
  * The deliberate extra ids — covered but never loaded — are the skips: hmr /
  * directory-picker-native. They are page-own rows the composite replaces
@@ -20,6 +21,25 @@
  * must be covered here. Own module so shell.ts can import it without pulling
  * chamber-entry.ts's module-table handoff into the main chunk.
  */
+
+/**
+ * The shell seed's platform words (`packages/dsh-client-web/src/platform.ts` PLATFORM_MODULES):
+ * the module system registers them at CREATION, before any bundle executes. The composite
+ * must NEVER factory-register one — a second registration is boot-fatal — and the
+ * unsatisfiable-external predicate treats them as answered. Pinned against the seed source
+ * by test; the local copy keeps the renderer's pure modules importable under plain node.
+ */
+export const SEED_PLATFORM_IDS: readonly string[] = [
+  'react',
+  'react/jsx-runtime',
+  'react-dom',
+  'react-dom/client',
+  '@deepseek-ai/cordis',
+  'zod',
+  '@tanstack/react-virtual',
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-slots',
+]
 
 export const CHAMBER_COVERED_IDS: readonly string[] = [
   // chamber composite registration (chamber-entry.ts import list)
@@ -37,10 +57,10 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // PENDING (or throws at render) on a degraded or older host graph while boot reports success.
   '@deepseek-ai/dsh-client-ui-context-menu',
   '@deepseek-ai/dsh-api-remotes',
-  // provider group: the platform store word (a PLATFORM_MODULES seed), the two
+  // provider group: the platform store word (seed-answered; listed here only so a host
+  // that ever serves it as a graph row never double-mounts the store engine), the two
   // api controllers (ctx.sessions / ctx.workspaces), and the three conversation
-  // families the web roster carries. All six are composite-covered: loading any
-  // again would double-register on one ctx (or split the store engine version).
+  // families the web roster carries.
   '@deepseek-ai/dsh-client-store',
   // C3: ui-primitives is NOT a loader row — it joins the covered + factory set so
   // the composite answers the platform-word require edges of extra bundles after
@@ -215,11 +235,11 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   // PENDING (or throws at render) on a degraded or older host graph while boot reports success.
   '@deepseek-ai/dsh-client-ui-context-menu',
   '@deepseek-ai/dsh-api-remotes',
-  // provider group: the store is a platform word (registered factory, no
-  // ctx.plugin); the controllers and conversation families are first-screen
-  // plugins. C3: ui-primitives joins here — platform word the composite answers
-  // since the seed dropped it (factory only).
-  '@deepseek-ai/dsh-client-store',
+  // provider group: the controllers and conversation families are first-screen plugins.
+  // The store word is seed-answered (PLATFORM_MODULES) and must NEVER be a factory here:
+  // the seed registers it before any bundle executes and a second registration is
+  // boot-fatal. C3: ui-primitives joins here — a platform word the seed dropped
+  // (factory only).
   '@deepseek-ai/dsh-client-ui-primitives',
   // the docking-kit word answered by the composite factory.
   '@deepseek-ai/dsh-client-ui-dockkit',

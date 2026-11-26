@@ -7,9 +7,11 @@
  * awaited). The split is safe ONLY because no first-screen family root-injects a deferred
  * service (vendor inject lists are the authority); a new deferred family needs one
  * DEFERRED_ROWS row plus the same id in DEFERRED_EXTRA_ROW_IDS.
- * This module is also the module-table provider for every covered package: their rows are
- * dropped from the merged graph, so their factories register here at bundle execution
- * (map↔list lockstep asserted in apply; keep chamber-covered.ts in lockstep).
+ * This module is also the module-table provider for the statically imported first-screen
+ * families (COVERED_FACTORIES): their rows are dropped from the merged graph, so their
+ * factories register here at bundle execution. Seed platform words are answered by the
+ * page seed and no-factory covered rows answer nothing (see chamber-covered.ts;
+ * map↔list lockstep asserted in apply).
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -61,10 +63,9 @@ import * as ClientFileDrag from '@deepseek-ai/dsh-client-ui-file-drag/client'
 // ui-open-in-app inject contextMenus. Same rule as shortcuts/file-drag.
 import * as UiContextMenu from '@deepseek-ai/dsh-client-ui-context-menu/client'
 import * as ApiRemotes from '@deepseek-ai/dsh-api-remotes/client'
-// provider group: the platform store word (plain module, covered factory only — never
-// ctx.plugin'd) plus the two api controllers (ctx.sessions / ctx.workspaces). All
-// first-screen: the conversation/workspace/sidebar families graph-inject the controllers.
-import * as Store from '@deepseek-ai/dsh-client-store'
+// The platform store word is NOT imported here: the page shell's seed registers
+// `@deepseek-ai/dsh-client-store` before any bundle executes (dsh-client-web/src/seed.ts
+// over PLATFORM_MODULES) and a second registration is boot-fatal (see chamber-covered.ts).
 // ui-primitives is another platform word answered by a covered factory (the seed does
 // not carry it). Static import, never ctx.plugin'd; the shell's pre-load gate evaluates
 // THIS bundle before any extra-row load, so their require edges land on this factory.
@@ -477,10 +478,11 @@ export function apply(ctx: Context): void {
   // The context-menu hub: its root standard prop is read by covered conversation rows.
   register('@deepseek-ai/dsh-client-ui-context-menu', UiContextMenu)
   register('@deepseek-ai/dsh-api-remotes', ApiRemotes)
-  // Provider group: the store is a platform word (covered factory, no plugin); the api
-  // controllers provide ctx.sessions / ctx.workspaces; ui-session/ui-chat/ui-approval are
-  // the conversation families. ApiRemotes' async apply mounts the generated Remote
-  // namespaces the controllers require — fibers wait on inject sets, so order is free.
+  // Provider group: the api controllers provide ctx.sessions / ctx.workspaces;
+  // ui-session/ui-chat/ui-approval are the conversation families. The store is a seed
+  // platform word and is NOT registered here (see the import note). ApiRemotes' async
+  // apply mounts the generated Remote namespaces the controllers require — fibers wait on
+  // inject sets, so order is free.
   register('@deepseek-ai/dsh-api-session-controller', ApiSessionController)
   register('@deepseek-ai/dsh-api-workspace-controller', ApiWorkspaceController)
   // Covers the host-graph row: conversation + api-session-controller root-inject `fileUpload`.
@@ -666,10 +668,7 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-file-drag', coveredFactory(ClientFileDrag)],
   ['@deepseek-ai/dsh-client-ui-context-menu', coveredFactory(UiContextMenu)],
   ['@deepseek-ai/dsh-api-remotes', coveredFactory(ApiRemotes)],
-  // provider group: the seed provides the store word too; this factory is the
-  // composite-side fallback for the same require edge (seed wins). Controllers and
-  // conversation families are first-screen plugins mirrored by their factories.
-  ['@deepseek-ai/dsh-client-store', coveredFactory(Store)],
+  // The store word is seed-answered and must never appear here (see the import note).
   // The primitives platform word (seed does not answer it); factory only.
   ['@deepseek-ai/dsh-client-ui-primitives', coveredFactory(UiPrimitives)],
   // The docking-kit word: factory only, never ctx.plugin'd.

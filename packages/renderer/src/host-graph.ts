@@ -12,7 +12,7 @@
  * authoritative control-plane rpc-envelope.ts via the shared browser kernel.
  */
 
-import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS, SEED_PLATFORM_IDS } from './chamber-covered.ts'
 import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
 import type { SyncedConfigValues } from './synced-config.ts'
 // Boot-graph wire validators are UPSTREAM's own — never hand-rolled — imported
@@ -280,7 +280,8 @@ const KERNEL_ADOPTED_IDS: readonly string[] = [
  * The `external` requests of the kept rows this page can NEVER satisfy: a request
  * naming a composite-COVERED id that no registration ever answers. Covered rows are
  * filtered out of the host graph, and the page's module table answers only:
- *  - the composite's FIRST-SCREEN factories (`COVERED_FACTORIES`), and
+ *  - the composite's FIRST-SCREEN factories (`COVERED_FACTORIES`),
+ *  - the shell seed's platform words ({@link SEED_PLATFORM_IDS}), and
  *  - the kernel-adopted ids above.
  * Everything else covered is permanently unresolvable: the deliberate skips
  * (hmr / directory-picker-native) are never loaded; the deferred families
@@ -290,13 +291,13 @@ const KERNEL_ADOPTED_IDS: readonly string[] = [
  * This is NOT a timing claim — there is no later moment at which those ids resolve,
  * which is why every qualifying id is reported the same way. Only this merge knows
  * the covered/factory/kernel sets without a round trip, so it names the miss here.
- * Requests are matched suffix-stripped exactly as the kernel does; first-screen
- * factories and kernel-adopted ids are satisfied, not reported, while kept peers and
- * every other non-covered id are OUTSIDE the domain (the seed table must stay
- * disjoint from the covered non-factory ids — pinned by an invariant test). Three boundaries: only the `external` WIRE form is judged (a
- * bundle's bare `inject`-style require was already dropped by toExtraRows and stays
- * the kernel fix's failure face), and the verdict assumes the composite entry
- * EVALUATED — a failed prefetch is the composite path's report, not re-derived here.
+ * Requests are matched suffix-stripped as the kernel does; first-screen factories, the
+ * seed's platform words and kernel-adopted ids are satisfied, not reported, while kept
+ * peers and every other non-covered id are OUTSIDE the domain. Seed ∩ factory = ∅, yet
+ * a covered seed word stays satisfied via SEED_PLATFORM_IDS (pinned by test). Three
+ * boundaries: only the `external` WIRE form is judged (a bundle's bare `inject`-style
+ * require was already dropped by toExtraRows and stays the kernel fix's failure face),
+ * and the verdict assumes the composite entry EVALUATED — a failed prefetch is not re-derived.
  * Requests onto ids OUTSIDE the covered set are not judged either: a non-covered id
  * that never loads is the kernel `require`'s failure face.
  */
@@ -304,7 +305,7 @@ export function findUnsatisfiableExternalDependencies(
   rows: readonly ExtraModuleRow[],
 ): UnsatisfiableExternalRequests[] {
   const covered = new Set(CHAMBER_COVERED_IDS)
-  const satisfied = new Set<string>([...CHAMBER_COVERED_FACTORY_IDS, ...KERNEL_ADOPTED_IDS])
+  const satisfied = new Set<string>([...CHAMBER_COVERED_FACTORY_IDS, ...SEED_PLATFORM_IDS, ...KERNEL_ADOPTED_IDS])
   const out: UnsatisfiableExternalRequests[] = []
   for (const row of rows) {
     const dependencies: string[] = []
@@ -866,7 +867,7 @@ export async function collectExtraRows(
           firstRowId: misses[0]!.rowId,
           message: `额外行的模块依赖本 boot 无法满足：${misses
             .map(miss => `${miss.rowId} → ${miss.dependencies.join(', ')}`).join('; ')}`
-            + ' — 这些 id 在覆盖集内，而覆盖集内可被模块表应答的只有首屏 factory 与内核收编的 '
+            + ' — 这些 id 在覆盖集内，而覆盖集内可被模块表应答的只有首屏 factory、seed 平台词与内核收编的 '
             + `${KERNEL_ADOPTED_IDS.join(' / ')}；有意跳过行、延迟族（只以 ctx.plugin 挂载）、页面自有/被替换的`
             + '官方行都不注册 factory，任何时刻都拿不到；相关功能在本 boot 缺失（extra 行的 create 期 require 落空）',
         }

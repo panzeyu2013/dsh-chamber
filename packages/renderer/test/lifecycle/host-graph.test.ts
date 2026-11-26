@@ -11,7 +11,7 @@ import {
 import {
  classifyPluginGraphOutcome, graphEntryImmediatelyMessage,
 } from '@dsh-chamber/dsh-chamber-client-core/plugin-graph-classify'
-import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../../src/chamber-covered.ts'
+import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS, SEED_PLATFORM_IDS } from '../../src/chamber-covered.ts'
 import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
 // The kernel-adopted ids are imported BY VALUE from the boot source: KERNEL_ADOPTED_IDS
 // keys on them, so a wrong literal in host-graph.ts must fail the behavior test below
@@ -587,9 +587,9 @@ test('toExtraRows: passes `external` through to the kernel row (never dropped, n
 
 test('findUnsatisfiableExternalDependencies: names covered requires no registration answers', () => {
   // Covered rows are filtered out of the host graph, so the module table is the
-  // only possible source — and it answers the composite's first-screen factories
-  // plus the two kernel-adopted ids, NOTHING else covered: the deliberate skips
-  // are never loaded, the deferred families are mounted via `ctx.plugin` but
+  // only possible source — and it answers the composite's first-screen factories,
+  // the seed platform words plus the two kernel-adopted ids, NOTHING else covered —
+  // the deliberate skips are never loaded, the deferred families are mounted via `ctx.plugin` but
   // never registered, and page-own / replaced official rows register nothing.
   // Not a timing distinction: those requires miss at create AND later.
   const deferredId = DEFERRED_EXTRA_ROW_IDS[0]!
@@ -601,15 +601,23 @@ test('findUnsatisfiableExternalDependencies: names covered requires no registrat
   assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(skipId), 'the fixture skip has no factory')
   assert.ok(CHAMBER_COVERED_IDS.includes(kernelAdoptedId), 'the kernel-adopted id is a covered id')
   assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(kernelAdoptedId), 'and has no composite factory')
+  // A platform seed word is covered yet has NO composite factory: the seed answers it,
+  // so the predicate's satisfied set must include it (dropping SEED_PLATFORM_IDS from
+  // host-graph.ts turns this fixture red).
+  const seedWord = '@deepseek-ai/dsh-client-store'
+  assert.ok(CHAMBER_COVERED_IDS.includes(seedWord), 'the fixture seed word is covered')
+  assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(seedWord), 'the fixture seed word has no composite factory')
+  assert.ok(SEED_PLATFORM_IDS.includes(seedWord), 'the fixture seed word is a seed platform word')
   const rows: ExtraModuleRow[] = [
     {
       id: 'a', url: '/plugins/a', initialUrl: '/plugins/a', rev: 'r', inject: [],
       // The `/client` subpath form (upstream stripClientSuffix) and the bare id are
-      // the SAME dependency: reported once, stripped. A first-screen factory and a
-      // kernel-adopted id are satisfied; the kept peer is outside the judged domain.
+      // the SAME dependency: reported once, stripped. A first-screen factory, a covered
+      // seed word (answered by the page seed) and a kernel-adopted id are satisfied; the
+      // kept peer is outside the judged domain.
       external: [
         `${deferredId}/client`, deferredId, `${coveredFactoryId}/client`, `${skipId}/client`,
-        `${kernelAdoptedId}/client`, '@scope/kept-peer',
+        `${kernelAdoptedId}/client`, `${seedWord}/client`, seedWord, '@scope/kept-peer',
       ],
     },
     {
@@ -649,21 +657,29 @@ test('the kernel-adopted id set stays lockstep with boot-rows.ts / boot.ts (the 
   }
 })
 
-test('no platform seed word is a covered id without a composite factory (predicate safety)', () => {
-  // The kernel resolves seed words BEFORE registered factories, so a seed word that
-  // is covered but NOT factory-answered would still resolve — the predicate must
-  // never name it. Today the only covered seed word (`dsh-client-store`) has a
-  // factory; this pins that no future platform word lands in the gap.
+test('no platform seed word is a composite factory (a second registration is boot-fatal)', () => {
+  // The seed registers PLATFORM_MODULES words at module-system CREATION, before any
+  // bundle executes; the composite's registration loop runs later, so a factory for a
+  // seed word throws in ClientModuleSystem.register ('duplicate factory registration')
+  // and fails the whole boot (the @deepseek-ai/dsh-client-store bug). SEED_PLATFORM_IDS
+  // is pinned to the seed source here; the predicate's satisfied set is locked by the
+  // findUnsatisfiableExternalDependencies fixture above.
   const root = join(import.meta.dirname, '..', '..', '..', '..')
   const platform = stripComments(readFileSync(join(root, 'packages/dsh-client-web/src/platform.ts'), 'utf8'))
-  const words = [...platform.matchAll(/'([^']+)'/g)].map(match => match[1]!)
+  const block = platform.slice(platform.indexOf('PLATFORM_MODULES = ['))
+  const words = [...block.slice(0, block.indexOf('] as const')).matchAll(/'([^']+)'/g)].map(match => match[1]!)
   assert.ok(words.length > 0, 'platform seed words extracted from the pinned source')
-  const covered = new Set(CHAMBER_COVERED_IDS)
+  assert.deepEqual([...SEED_PLATFORM_IDS].sort(), [...words].sort(), 'SEED_PLATFORM_IDS mirrors PLATFORM_MODULES')
+  // The composite's own bundle must not re-register a seed word: the factories table is
+  // read as source text because importing chamber-entry pulls the whole React plugin graph.
+  const entry = readFileSync(join(root, 'packages/renderer/src/chamber-entry.ts'), 'utf8')
+  assert.doesNotMatch(entry, /import \* as Store from '@deepseek-ai\/dsh-client-store'/, 'the store word must not be imported as a composite factory')
+  assert.doesNotMatch(entry, /\['@deepseek-ai\/dsh-client-store',/, 'the store word must never be a COVERED_FACTORIES row')
   const factories = new Set(CHAMBER_COVERED_FACTORY_IDS)
   assert.deepEqual(
-    words.filter(word => covered.has(word) && !factories.has(word)),
+    words.filter(word => factories.has(word)),
     [],
-    'a covered seed word without a factory would resolve through the seed, not the module table',
+    'a seed word must never also be a composite factory: the seed registers it first and the second registration is boot-fatal',
   )
 })
 
