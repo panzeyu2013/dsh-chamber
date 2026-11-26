@@ -124,7 +124,7 @@ ssh 读面与 gateway/local 同形：`readManifest` = `plugin_list` IPC（cat �
 ### 6.8 故障域与恢复
 
 - 故障域：插件代码执行在托管 dsh 实例进程/前端（进程隔离）；`/chamber` 管理面挂宿主、非 ready-gated——实例崩溃/停机时管理面存活；可能伤宿主的仅机器级资源与 profile 元数据损坏。
-- 分层兜底：client 插件页面级（Loader fiber failed）；host 插件进程级（健康自动重启窗口 → restart-exhausted）；corrupt → `profile_corrupt`；seed（host 包 extraneous + 每次 spawn 前 seed thunk 自愈，免疫）。
+- 分层兜底：client 插件页面级（Loader fiber failed）；host 插件进程级（健康自动重启窗口 → restart-exhausted）；corrupt → `profile_corrupt`；seed（host 包落在 install-level fallback `profiles/node_modules`，不在 pnpm 管理的 profile 树内 ⇒ `dsh plugin add/remove` 重链不裁剪；每次 spawn 前 seed thunk 仍幂等补种）。
 - 恢复阶梯：r0 实例存活（读面照常）；r1 停机（stopped/error/restart-exhausted）→ `POST /chamber/runtime/start`（决策 12；卡片/视图给明确动作，失败诚实回 error + 提示，可再次查看连接日志）；r2 profile 损坏 → 诚实投影 `profile_corrupt`（GET installed 500）+ 视图横幅 + 停机态 `start`；无备份时走 operator runbook（从 `<stateDir>/dsh-runtime/snapshots/` 手工恢复 dsh-home 快照）；r3 脚本风险登记（决策 20；恢复阶梯不承诺覆盖安装在 dsh-home 之外的持久物）；r4 宿主不可达 = 机器级 runbook（`gateway plugin` 操作员子命令仍二期；现 CLI 除 serve 外只有 `gateway auth` 的 status/reset-password/clear）。
 - 恢复判据：视图「已加载」Loader 事实行 + 状态行（重启前 active / 移除后消失）为细节证据；成功文案用自然语言（「实例已重新就绪」），不把 Loader 行当面向用户的判据。
 

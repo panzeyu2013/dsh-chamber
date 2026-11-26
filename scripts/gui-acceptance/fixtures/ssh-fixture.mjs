@@ -170,7 +170,9 @@ export async function startSshFixture({ outDir = '.tmp/gui-acceptance', sourceId
     ['host-git-worktree-package', '@dsh-chamber/dsh-chamber-seed-git-worktree', 'git-worktree'],
     ['host-archive-cleanup-package', '@dsh-chamber/dsh-chamber-seed-archive-cleanup', 'archive-cleanup'],
   ]
-  const remoteModules = path.join(remoteHome, 'profiles', 'web', 'node_modules', '@dsh-chamber')
+  // Install-level fallback (design 13): the same level the product's ssh seed writer
+  // and its probe use, outside the profile's pnpm-owned node_modules.
+  const remoteModules = path.join(remoteHome, 'profiles', 'node_modules', '@dsh-chamber')
   mkdirSync(remoteModules, { recursive: true })
   const inserts = []
   for (const [dirName, packageName, insertId] of seedPackages) {

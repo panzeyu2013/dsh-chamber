@@ -23,6 +23,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { hostGraphPlane, skipSymlinksUnavailable, tempDir, writeLocalProfileFixture } from '../support/utils.ts'
 import {
@@ -42,6 +43,7 @@ import {
   HOST_GRAPH_PATCH_FILENAME,
   HOST_OPEN_IN_INSERT,
   OFFICIAL_OPEN_IN_DISABLE,
+  removeLegacySeedCopy,
 } from '../../src/host-graph-seed.ts'
 import { webProfileArgs, DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import { createLocalConnection } from '../../src/local-connection.ts'
@@ -81,7 +83,7 @@ const EXPECTED_BOTH_OVERLAY = `- insert:
 
 /** The seeded package location inside a managed dsh home. */
 function seedTarget(dshHome: string) {
-  return join(dshHome, 'profiles', 'web', 'node_modules', HOST_GRAPH_PACKAGE_NAME)
+  return join(dshHome, 'profiles', 'node_modules', HOST_GRAPH_PACKAGE_NAME)
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +288,7 @@ test('ensureSeedPackage (host-graph) rejects a symlinked profile node_modules an
   const outside = tempDir(t)
   const sentinel = join(outside, 'sentinel')
   writeFileSync(sentinel, 'DO NOT TOUCH')
-  const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
+  const modulesDir = join(dshHome, 'profiles', 'node_modules')
   mkdirSync(join(dshHome, 'profiles', 'web'), { recursive: true })
   try {
     symlinkSync(outside, modulesDir, 'dir')
@@ -305,7 +307,7 @@ test('ensureSeedPackage (host-graph) rejects a symlinked chamber scope without c
   const outside = tempDir(t)
   const sentinel = join(outside, 'sentinel')
   writeFileSync(sentinel, 'DO NOT TOUCH')
-  const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
+  const modulesDir = join(dshHome, 'profiles', 'node_modules')
   mkdirSync(modulesDir, { recursive: true })
   try {
     symlinkSync(outside, join(modulesDir, '@dsh-chamber'), 'dir')
@@ -325,7 +327,7 @@ test('ensureSeedPackage (host-graph) rejects a symlinked chamber package directo
   const sentinel = join(outside, 'sentinel')
   writeFileSync(sentinel, 'DO NOT TOUCH')
   const target = seedTarget(dshHome)
-  mkdirSync(join(dshHome, 'profiles', 'web', 'node_modules', '@dsh-chamber'), { recursive: true })
+  mkdirSync(join(dshHome, 'profiles', 'node_modules', '@dsh-chamber'), { recursive: true })
   try {
     symlinkSync(outside, target, 'dir')
   } catch (error) {
@@ -361,6 +363,84 @@ test('ensureSeedPackage (host-graph) returns false without touching the profile 
   assert.equal(existsSync(seedTarget(dshHome)), false)
 })
 
+// The seed lives at the module-fallback level (profiles/node_modules), NOT inside the
+// profile's pnpm-owned node_modules: a plugin install re-links that tree and moves unknown
+// packages to node_modules/.ignored, which deleted the seeds and left the next in-process
+// loader reload with unresolvable --patch rows (2026-11 failure).
+
+test('ensureSeedPackage (host-graph) seeds the module-fallback level, never the pnpm-owned profile tree', t => {
+  const dshHome = tempDir(t)
+  ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, stageSource(t))
+  assert.equal(existsSync(join(seedTarget(dshHome), 'dist', 'index.js')), true)
+  assert.equal(
+    existsSync(join(dshHome, 'profiles', 'web', 'node_modules')),
+    false,
+    'the seed must not create (or write into) the profile pnpm tree',
+  )
+})
+
+test('a pnpm relink of the profile tree cannot prune the fallback seed (the row still resolves)', t => {
+  const dshHome = tempDir(t)
+  ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, stageSource(t))
+  // What an out-of-tree installed profile carries: pnpm's own packages and bookkeeping.
+  const profileModules = join(dshHome, 'profiles', 'web', 'node_modules')
+  mkdirSync(join(profileModules, 'left-pad'), { recursive: true })
+  writeFileSync(join(profileModules, 'left-pad', 'package.json'), JSON.stringify({ name: 'left-pad', version: '1.0.0' }))
+  writeFileSync(join(profileModules, '.modules.yaml'), '{}\n')
+  // A plugin install/remove re-links the whole tree (and prunes unknown packages).
+  rmSync(profileModules, { recursive: true, force: true })
+  assert.equal(existsSync(join(seedTarget(dshHome), 'dist', 'index.js')), true, 'the seed survives the relink')
+  const resolved = createRequire(join(dshHome, 'profiles', 'web', 'package.json')).resolve(HOST_GRAPH_PACKAGE_NAME)
+  assert.equal(resolved, join(seedTarget(dshHome), 'dist', 'index.js'), 'the loader row still resolves by name')
+})
+
+test('removeLegacySeedCopy drops only the shadowing chamber package and keeps the rest of the pnpm tree', t => {
+  const dshHome = tempDir(t)
+  const profileModules = join(dshHome, 'profiles', 'web', 'node_modules')
+  const scope = join(profileModules, '@dsh-chamber')
+  const legacy = join(scope, HOST_GRAPH_PACKAGE_NAME.slice('@dsh-chamber/'.length))
+  mkdirSync(join(legacy, 'dist'), { recursive: true })
+  writeFileSync(join(legacy, 'dist', 'index.js'), 'export const stale = 1\n')
+  mkdirSync(join(scope, 'some-other-chamber-package'), { recursive: true })
+  mkdirSync(join(profileModules, 'left-pad'), { recursive: true })
+  assert.equal(removeLegacySeedCopy(dshHome, HOST_GRAPH_PACKAGE_NAME), true)
+  assert.equal(existsSync(legacy), false, 'the legacy copy is removed (it would shadow the fallback seed)')
+  assert.equal(existsSync(join(scope, 'some-other-chamber-package')), true, 'a package we do not own is untouched')
+  assert.equal(existsSync(join(profileModules, 'left-pad')), true, 'pnpm packages are untouched')
+  assert.equal(removeLegacySeedCopy(dshHome, HOST_GRAPH_PACKAGE_NAME), false, 'idempotent: absent is not a write')
+})
+
+test('removeLegacySeedCopy removes the empty legacy scope and module directories', t => {
+  const dshHome = tempDir(t)
+  const profileModules = join(dshHome, 'profiles', 'web', 'node_modules')
+  const legacy = join(profileModules, '@dsh-chamber', HOST_GRAPH_PACKAGE_NAME.slice('@dsh-chamber/'.length))
+  mkdirSync(join(legacy, 'dist'), { recursive: true })
+  writeFileSync(join(legacy, 'dist', 'index.js'), 'export const stale = 1\n')
+  assert.equal(removeLegacySeedCopy(dshHome, HOST_GRAPH_PACKAGE_NAME), true)
+  assert.equal(existsSync(join(profileModules, '@dsh-chamber')), false, 'the empty chamber scope is cleaned up')
+  assert.equal(existsSync(profileModules), false, 'the empty pnpm module directory is cleaned up too')
+})
+
+test('removeLegacySeedCopy refuses a symlinked legacy scope instead of deleting outside the dsh home', t => {
+  const dshHome = tempDir(t)
+  const outside = tempDir(t)
+  const outsideScope = join(outside, '@dsh-chamber')
+  const outsidePackage = join(outsideScope, HOST_GRAPH_PACKAGE_NAME.slice('@dsh-chamber/'.length))
+  mkdirSync(outsidePackage, { recursive: true })
+  const sentinel = join(outside, 'sentinel')
+  writeFileSync(sentinel, 'DO NOT TOUCH')
+  mkdirSync(join(dshHome, 'profiles', 'web', 'node_modules'), { recursive: true })
+  try {
+    symlinkSync(outsideScope, join(dshHome, 'profiles', 'web', 'node_modules', '@dsh-chamber'), 'dir')
+  } catch (error) {
+    if (skipSymlinksUnavailable(error, t)) return
+    throw error
+  }
+  assert.throws(() => removeLegacySeedCopy(dshHome, HOST_GRAPH_PACKAGE_NAME), /not a real directory/)
+  assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
+  assert.equal(existsSync(outsidePackage), true)
+})
+
 test('ensureSeedPackage reuses the seed path for the Git worktree host package', t => {
   const dshHome = tempDir(t)
   const source = tempDir(t)
@@ -369,7 +449,7 @@ test('ensureSeedPackage reuses the seed path for the Git worktree host package',
   writeFileSync(join(source, 'dist', 'index.js'), 'export default {}\n')
   assert.equal(ensureSeedPackage(dshHome, HOST_GIT_WORKTREE_PACKAGE_NAME, source), true)
   assert.equal(
-    readFileSync(join(dshHome, 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+    readFileSync(join(dshHome, 'profiles', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
     'export default {}\n',
   )
 })
@@ -944,7 +1024,7 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     await plane.startLocal()
     const overlay = readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8')
     assert.equal(
-      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const git = 1\n',
       'the git-worktree host package is seeded too (merged from the two-package case)',
     )
@@ -962,7 +1042,7 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     assert.ok(seedSource.includes('CHAMBER_HOST_PACKAGES'), 'the seed derives its rows from the registry, never a parallel row table')
     assert.ok(!/probeDomains: \['/.test(seedSource), 'the seed call site must not hand-write a probe domain literal')
     assert.equal(
-      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_ARCHIVE_CLEANUP_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'node_modules', HOST_ARCHIVE_CLEANUP_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const archiveCleanup = 1\n',
     )
     assert.ok(overlay.includes(`- id: open-in`), 'the local-shape-only open-in row is seeded into the local profile')
@@ -978,7 +1058,7 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     )
     assert.equal((overlay.match(/- id: open-in-app/g) ?? []).length, 1, 'exactly one disable row')
     assert.equal(
-      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_OPEN_IN_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'node_modules', HOST_OPEN_IN_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const openIn = 1\n',
     )
   } finally {
@@ -1056,7 +1136,7 @@ test('createControlPlane.startLocal() merges extra seed entries (client plugin) 
     assert.match(overlay, /- id: test-client/)
     assert.match(overlay, /name: '@dsh-chamber\/dsh-chamber-client-ui-test'/)
     assert.equal(
-      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', '@dsh-chamber', 'dsh-chamber-client-ui-test', 'dist', 'index.js'), 'utf8'),
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'node_modules', '@dsh-chamber', 'dsh-chamber-client-ui-test', 'dist', 'index.js'), 'utf8'),
       'export const client = 1\n',
     )
   } finally {
@@ -1131,7 +1211,7 @@ test('ensureSeedPackage seeds a custom seedFiles set with arbitrary-depth real t
     ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['package.json', 'dist/index.js', 'assets/css/app.css']),
     true,
   )
-  const target = join(dshHome, 'profiles', 'web', 'node_modules', HOST_GRAPH_PACKAGE_NAME)
+  const target = join(dshHome, 'profiles', 'node_modules', HOST_GRAPH_PACKAGE_NAME)
   assert.equal(readFileSync(join(target, 'package.json'), 'utf8'), readFileSync(join(source, 'package.json'), 'utf8'))
   assert.equal(readFileSync(join(target, 'assets', 'css', 'app.css'), 'utf8'), 'body { color: red }\n')
   assert.equal(statSync(join(target, 'assets', 'css')).isDirectory(), true, 'the deep asset dir is a real directory')
@@ -1149,7 +1229,7 @@ test('ensureSeedPackage seeds a custom seedFiles set with arbitrary-depth real t
 test('ensureSeedPackage returns false for a null sourceDir without touching the profile', t => {
   const dshHome = tempDir(t)
   assert.equal(ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, null), false)
-  assert.equal(existsSync(join(dshHome, 'profiles', 'web', 'node_modules', '@dsh-chamber')), false)
+  assert.equal(existsSync(join(dshHome, 'profiles', 'node_modules', '@dsh-chamber')), false)
 })
 
 test('ensureSeedPackage rejects malformed seedFiles entries fail-loud', t => {
@@ -1164,7 +1244,7 @@ test('ensureSeedPackage rejects malformed seedFiles entries fail-loud', t => {
   assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['../package.json']), /invalid seed file path/)
   assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['/etc/passwd']), /invalid seed file path/)
   assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source, ['']), /invalid seed file path/)
-  assert.equal(existsSync(join(dshHome, 'profiles', 'web', 'node_modules', '@dsh-chamber')), false)
+  assert.equal(existsSync(join(dshHome, 'profiles', 'node_modules', '@dsh-chamber')), false)
 })
 
 test('createControlPlane.startLocal() lets an extra seed entry shadow the base host package (no duplicate rows)', async t => {
@@ -1197,7 +1277,7 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
     assert.equal((overlay.match(/- id: client-graph/g) ?? []).length, 1, 'the shadowing extra entry must not duplicate the loader row')
     // The synced source wins: its bytes land in the profile, not the base's.
     const seeded = readFileSync(
-      join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GRAPH_PACKAGE_NAME, 'dist', 'index.js'),
+      join(dir, 'dsh-home', 'profiles', 'node_modules', HOST_GRAPH_PACKAGE_NAME, 'dist', 'index.js'),
       'utf8',
     )
     assert.equal(seeded, 'export const synced = 1\n')
@@ -1270,6 +1350,34 @@ test('the seed registry refuses a non-canonical host entry before any profile wr
   }
 })
 
+// ---------------------------------------------------------------------------
+// 迁移：旧的 profile-tree seed 副本（pnpm 管）→ fallback 层（profiles/node_modules）
+// ---------------------------------------------------------------------------
+
+test('resolveLocalHostGraphOverlay migrates a legacy profile-tree seed copy to the fallback level', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const profileModules = join(dshHome, 'profiles', 'web', 'node_modules')
+  const legacy = join(profileModules, '@dsh-chamber', HOST_GRAPH_PACKAGE_NAME.slice('@dsh-chamber/'.length))
+  mkdirSync(join(legacy, 'dist'), { recursive: true })
+  writeFileSync(join(legacy, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME }) + '\n')
+  writeFileSync(join(legacy, 'dist', 'index.js'), 'export const stale = 1\n')
+  mkdirSync(join(profileModules, 'left-pad'), { recursive: true })
+  const logs: string[] = []
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: ['clientGraph/graph'] }],
+    log: message => logs.push(message),
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(existsSync(legacy), false, 'the legacy copy inside the pnpm-owned tree is gone')
+  assert.equal(existsSync(join(profileModules, 'left-pad')), true, 'pnpm packages stay')
+  assert.equal(existsSync(join(seedTarget(dshHome), 'dist', 'index.js')), true, 'the fallback seed is materialized')
+  assert.ok(logs.some(line => line.includes('removed the legacy')), 'the migration is diagnosed')
+})
 // ---------------------------------------------------------------------------
 // C4 安全模式：DSH_CHAMBER_SAFE_MODE=1 → 不 seed 任何 chamber 宿主包、不传
 // --patch、清遗留 overlay（「文件存在 ⟺ 本次 spawn 会传它」不变式）、期望集

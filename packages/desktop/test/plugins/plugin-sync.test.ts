@@ -236,8 +236,8 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
   // the temp sandbox.
   const base = tempDir()
   const home = join(base, 'home')
-  const profileDir = writeLocalProfile(home, {}, [])
-  const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
+  writeLocalProfile(home, {}, [])
+  const moduleADir = join(home, 'profiles', 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
   mkdirSync(join(moduleADir, 'dist'), { recursive: true })
   writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
   writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
@@ -259,8 +259,8 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
   // package.json without dist/index.js must report 未注入, never "done".
   const base = tempDir()
   const home = join(base, 'home')
-  const profileDir = writeLocalProfile(home, {}, [])
-  const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
+  writeLocalProfile(home, {}, [])
+  const moduleADir = join(home, 'profiles', 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
   mkdirSync(moduleADir, { recursive: true })
   writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
@@ -272,8 +272,8 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
 test('localPluginList: chamber host-graph version is read from the seeded module A manifest', () => {
   const base = tempDir()
   const home = join(base, 'home')
-  const profileDir = writeLocalProfile(home, {}, [])
-  const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
+  writeLocalProfile(home, {}, [])
+  const moduleADir = join(home, 'profiles', 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
   mkdirSync(join(moduleADir, 'dist'), { recursive: true })
   writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}')
   writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
@@ -293,10 +293,10 @@ test('localPluginList: git-worktree patched is CONTENT-aware — a stale overlay
   // never 已注入).
   const base = tempDir()
   const home = join(base, 'home')
-  const profileDir = writeLocalProfile(home, {}, [])
-  // Both packages' files present.
+  writeLocalProfile(home, {}, [])
+  // Both packages' files present at the module-fallback level (outside pnpm's profile tree).
   for (const name of [CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME]) {
-    const pkgDir = join(profileDir, 'node_modules', name)
+    const pkgDir = join(home, 'profiles', 'node_modules', name)
     mkdirSync(join(pkgDir, 'dist'), { recursive: true })
     writeFileSync(join(pkgDir, 'package.json'), `{"name":"${name}"}`)
     writeFileSync(join(pkgDir, 'dist', 'index.js'), 'export const x = 1\n')
@@ -324,9 +324,11 @@ test('localPluginList: git-worktree patched is CONTENT-aware — a stale overlay
   }
 })
 
-/** Seed one chamber host package's two files into a profile's node_modules. */
-function seedChamberPackage(profileDir: string, name: string): void {
-  const pkgDir = join(profileDir, 'node_modules', name)
+/** Seed one chamber host package's two files into the module-fallback level the
+ *  control-plane seed writer targets (<dshHome>/profiles/node_modules, outside pnpm's
+ *  profile tree). */
+function seedChamberPackage(home: string, name: string): void {
+  const pkgDir = join(home, 'profiles', 'node_modules', name)
   mkdirSync(join(pkgDir, 'dist'), { recursive: true })
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name }))
   writeFileSync(join(pkgDir, 'dist', 'index.js'), 'export const x = 1\n')
@@ -352,7 +354,7 @@ test('localPluginList: chamber patched covers the four mount-source combinations
     const base = tempDir()
     const home = join(base, 'home')
     const profileDir = writeLocalProfile(home, {}, [])
-    seedChamberPackage(profileDir, CLIENT_GRAPH_PACKAGE_NAME)
+    seedChamberPackage(home, CLIENT_GRAPH_PACKAGE_NAME)
     if (scenario.profilePatch) writeFileSync(join(profileDir, 'cordis.patch.yml'), CLIENT_GRAPH_ROW)
     if (scenario.overlay) writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), CLIENT_GRAPH_ROW)
     assert.equal(

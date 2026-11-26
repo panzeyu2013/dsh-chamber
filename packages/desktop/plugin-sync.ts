@@ -471,7 +471,7 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
       unsyncable.push({ name, reason: 'package name is not a safe registry name' })
       continue
     }
-    const pkg = readDependencyManifest(profileDir, name)
+    const pkg = readDependencyManifest(join(profileDir, 'node_modules'), name)
     const kind = pkg !== null ? classifyLocalDependency(pkg) : 'plain'
     if (kind === 'client') clientLines.push(name)
     // The VALUE uses classifyDependencyValue: `^1.0.0`/`~2.0.0` are ordinary
@@ -513,9 +513,9 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
         // remote probe and the seed writer: a package.json without dist/index.js is a
         // half-injected package (the boot row could not resolve) and reports 未注入.
         installed: SEED_FILES.every(relative =>
-          existsSync(join(profileDir, 'node_modules', descriptor.insert.name, relative))),
+          existsSync(join(localDshHome, 'profiles', 'node_modules', descriptor.insert.name, relative))),
         patched: localChamberRowPatched(localDshHome, descriptor.insert),
-        version: readManifestVersion(readDependencyManifest(profileDir, descriptor.insert.name)),
+        version: readManifestVersion(readDependencyManifest(join(localDshHome, 'profiles', 'node_modules'), descriptor.insert.name)),
         live: null,
         // A local-shape-only row is reported as the registry declares it; the view lists it
         // here and omits it remotely. The field is written only when true (normal rows have no key).
@@ -619,10 +619,10 @@ function localChamberRowPatched(localDshHome: string, insert: HostPackageInsert)
 }
 
 
-/** Read `<profile>/node_modules/<name>/package.json`; null when absent/unreadable. */
-function readDependencyManifest(profileDir: string, name: string): unknown {
+/** Read `<modulesDir>/<name>/package.json`; null when absent/unreadable. */
+function readDependencyManifest(modulesDir: string, name: string): unknown {
   try {
-    return JSON.parse(readFileSync(join(profileDir, 'node_modules', name, 'package.json'), 'utf8'))
+    return JSON.parse(readFileSync(join(modulesDir, name, 'package.json'), 'utf8'))
   } catch {
     return null
   }

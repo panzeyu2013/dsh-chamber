@@ -86,7 +86,7 @@ function graphEntry(sourceDir: string) {
 
 /** The seeded profile location of the generated bridge package. */
 function bridgeSeedTarget(dshHome: string): string {
-  return join(dshHome, 'profiles', 'web', 'node_modules', HOST_LOG_BRIDGE_PACKAGE_NAME)
+  return join(dshHome, 'profiles', 'node_modules', HOST_LOG_BRIDGE_PACKAGE_NAME)
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@ test('overlay: an enabled switch appends the bridge row and seeds the package, l
   assert.equal(readFileSync(overlay as string, 'utf8'), EXPECTED_BRIDGE_OVERLAY)
   // The graph seed is untouched, and the bridge package was seeded like any
   // other host seed (the profile's node_modules anchor the loader row resolves).
-  assert.equal(existsSync(join(dshHome, 'profiles', 'web', 'node_modules', HOST_GRAPH_PACKAGE_NAME, 'dist', 'index.js')), true)
+  assert.equal(existsSync(join(dshHome, 'profiles', 'node_modules', HOST_GRAPH_PACKAGE_NAME, 'dist', 'index.js')), true)
   const seededModule = join(bridgeSeedTarget(dshHome), 'dist', 'index.js')
   assert.equal(existsSync(seededModule), true)
   assert.match(readFileSync(seededModule, 'utf8'), /const LEVEL = 2\b/)

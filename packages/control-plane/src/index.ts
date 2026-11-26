@@ -559,14 +559,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const healthListeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
 
   /**
-   * Idempotent host-graph seed, resolved at every spawn (initial and restart): the
-   * seeded package is extraneous to the web profile's dependency graph, and
-   * `dsh plugin add/remove` re-links profile node_modules and prunes it, so without
-   * the per-spawn re-seed the next restart would boot with an unresolvable --patch
-   * row. Returns the overlay path, or null when this spawn passes none (a leftover
-   * overlay is removed so the file's presence keeps meaning "this spawn passes
-   * it"). A seed throw lands the instance in error state on initial spawn, and in
-   * restart-exhausted after bounded retries.
+   * Idempotent host-graph seed, resolved at every spawn (initial and restart). The seed
+   * lands at the module-fallback level (`profiles/node_modules`), outside the profile's
+   * pnpm-owned tree, so `dsh plugin add/remove` cannot prune it — that prune used to
+   * leave the next in-process loader reload with an unresolvable --patch row. Each
+   * resolution also migrates a legacy copy out of the pnpm tree (it would shadow the
+   * fallback seed). Returns the overlay path, or null when this spawn passes none (a
+   * leftover overlay is removed so the file's presence keeps meaning "this spawn
+   * passes it"). A seed throw lands the instance in error state on initial spawn, and in restart-exhausted after bounded retries.
    */
   function resolveHostGraphPatch(): string | null {
     return resolveLocalHostGraphOverlay({

@@ -20,7 +20,7 @@
 
 ## 3. 宿主包 seed 编排（`plugin-sync.ts`）
 
-`seedRemoteChamberHostPackages(exec, spec, seeds)` 经受限 `cat`/`write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的 chamber 宿主包（loader id 与包名一一对应：`client-graph` / `git-worktree` / `archive-cleanup`；`HOST_*_PACKAGE_NAME` ↔ `HOST_*_INSERT` ↔ `CHAMBER_HOST_PACKAGES` 三面一致由 C13 锁，open-in 为 `localOnly` 不进远端 seed；清单唯一来源 = `packages/control-plane/src/host-graph-seed.ts`）落到远端 install-level fallback `profiles/node_modules`，并按实例 home 写到 `profiles/web/node_modules/@dsh-chamber/<package>/`，再合并 web profile 的 `cordis.patch.yml`；单包/多包走同一条路径，手动 IPC `desktop_ssh_seed_host_graph` 复用同一实现。序列与失败语义固定：
+`seedRemoteChamberHostPackages(exec, spec, seeds)` 经受限 `cat`/`write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的 chamber 宿主包（loader id 与包名一一对应：`client-graph` / `git-worktree` / `archive-cleanup`；`HOST_*_PACKAGE_NAME` ↔ `HOST_*_INSERT` ↔ `CHAMBER_HOST_PACKAGES` 三面一致由 C13 锁，open-in 为 `localOnly` 不进远端 seed；清单唯一来源 = `packages/control-plane/src/host-graph-seed.ts`）落到远端 install-level fallback `profiles/node_modules`（与本地 seed 同层：pnpm 不管这一层，`dsh plugin add/remove` 重链不裁剪），再合并 web profile 的 `cordis.patch.yml`；单包/多包走同一条路径，手动 IPC `desktop_ssh_seed_host_graph` 复用同一实现。序列与失败语义固定：
 
 1. 先在本机预检所有可用包的 `package.json + dist/index.js`；任一包损坏时远端零调用。未构建的包被排除，绝不产生悬空 loader row。
 2. 第一条远端调用只读 `<remoteDshHome>/profiles/web/cordis.patch.yml`；文件缺失（profile 未初始化）或不是可安全追加的顶层 YAML list 时，在任何远端写入前 fail-loud。

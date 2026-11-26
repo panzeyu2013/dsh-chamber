@@ -4,15 +4,23 @@
  * it over a Remote (`clientModules.graph()`). This module distributes it into the
  * managed local profile and materializes the `--patch` overlay that mounts it:
  * ensureSeedPackage copies package.json + dist/index.js into
- * <dshHome>/profiles/web/node_modules/@dsh-chamber/<pkg>/ (the anchor user plugins
- * resolve from; in-sync copies are skipped, drifted ones overwritten), and
- * buildPatchOverlay writes <stateDir>/dsh-chamber-graph.patch.yml in the shared
- * loader-patch format. Both are idempotent; the overlay rides every spawn and
- * applies at host boot. All paths derive from stateDir/dshHome; target parents are
- * real directory components and writes use the shared no-follow + fsync primitive.
+ * <dshHome>/profiles/node_modules/@dsh-chamber/<pkg>/ — the module-fallback level the
+ * profile's Node resolution already searches after its own node_modules, beside the
+ * managed host's `@deepseek-ai/*` fallback farm (in-sync copies are skipped, drifted
+ * ones overwritten) — and buildPatchOverlay writes
+ * <stateDir>/dsh-chamber-graph.patch.yml in the shared loader-patch format. Both are
+ * idempotent; the overlay rides every spawn and applies at host boot.
+ *
+ * The seed deliberately lives OUTSIDE `<profile>/node_modules`: that tree belongs to
+ * pnpm, and every `dsh plugin add/remove` re-links it and moves unknown packages to
+ * node_modules/.ignored, which deleted the seeds and left the next in-process loader
+ * reload with unresolvable `--patch` rows. The fallback level is not pnpm-managed, so a
+ * plugin install can no longer prune a mounted chamber host package. All paths derive
+ * from stateDir/dshHome; target parents are real directory components and writes use the
+ * shared no-follow + fsync primitive.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // The loader `insert` row render/parse/conflict logic is single-sourced in
 // cordis-inserts.ts; only the fail-loud message wording stays here.
@@ -306,12 +314,24 @@ function readSeedTarget(path: string, maxBytes = MAX_SEED_TARGET_BYTES): string 
   }
 }
 
-/** Materialize the profile-owned resolution anchors one final component at a time: the
- *  official hoisted profile contract makes `web/node_modules` and its scope real
- *  directories (package entries beneath them may be pnpm links), while `profiles/web`
- *  remains an ordinary ancestor so established layouts can place it through a symlink. */
+/** The managed dsh home's module-fallback level: `profiles/node_modules`.
+ *  Node's profile resolution searches it after `<profile>/node_modules`, the managed
+ *  host's own `@deepseek-ai/*` fallback farm lives there, and pnpm never manages it —
+ *  so a `dsh plugin add/remove` cannot prune a seeded host package. */
+const SEED_MODULES_SEGMENTS = ['profiles', 'node_modules'] as const
+
+/** The pre-fix seed location inside the profile's pnpm-owned tree. A copy left there
+ *  shadows the fallback seed (Node searches the deeper node_modules first) and re-enters
+ *  pnpm's unknown-package pruning, so every resolution drops it again (see
+ *  {@link removeLegacySeedCopy}). */
+const LEGACY_SEED_MODULES_SEGMENTS = ['profiles', 'web', 'node_modules'] as const
+
+/** Materialize the fallback-owned resolution anchors one final component at a time: the
+ *  fallback level and its scope must be real directories (a copy beneath them is the
+ *  chamber's own), while `profiles` remains an ordinary ancestor so established layouts
+ *  can place it through a symlink. */
 function ensureSeedTargetParent(dshHome: string, packageName: string, relative: string): string {
-  const modulesDir = join(dshHome, 'profiles', 'web', 'node_modules')
+  const modulesDir = join(dshHome, ...SEED_MODULES_SEGMENTS)
   const scopeDir = join(modulesDir, '@dsh-chamber')
   const packageDir = join(scopeDir, packageName.slice('@dsh-chamber/'.length))
   const directoryOptions = { existingMode: 'preserve' as const }
@@ -363,7 +383,8 @@ export function buildPatchOverlay(
 /**
  * Distribute one seed entry into the managed local profile so the spawned host can
  * resolve the overlay row: copy each declared seed file to
- * <dshHome>/profiles/web/node_modules/@dsh-chamber/<name>/. Idempotent per file
+ * <dshHome>/profiles/node_modules/@dsh-chamber/<name>/ (the fallback level beside the
+ * host's own `@deepseek-ai/*` farm, outside pnpm's profile tree). Idempotent per file
  * (identical bytes skipped, missing/drifted rewritten atomically with 0600).
  *
  * An absent sourceDir is NOT an error (the entry may not be built in this runtime), so
@@ -400,7 +421,7 @@ export function ensureSeedPackage(
     }
     // Source packages may live in the development tree or a packaged resource VFS, so their
     // read boundary stays unchanged. The chamber-owned target parent must be a real final
-    // component: a pnpm operation may prune it, but may not redirect it.
+    // component: a redirected (symlinked) component must never receive the seed write.
     const sourceBytes = readFileSync(source)
     const target = ensureSeedTargetParent(dshHome, packageName, relative)
     const current = readSeedTarget(target, Math.max(MAX_SEED_TARGET_BYTES, sourceBytes.length))
@@ -409,4 +430,74 @@ export function ensureSeedPackage(
     wrote = true
   }
   return wrote
+}
+
+/** Whether `path` exists as any entry (directory, file, or symlink); never follows it. */
+function entryExistsNoFollow(path: string): boolean {
+  try {
+    lstatSync(path)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+/**
+ * Prove a legacy seed ancestor is absent or a real directory: a symlinked component would
+ * redirect the removal outside the dsh home, so the legacy layout fails loud instead of
+ * following it.
+ * @param path - the ancestor to inspect.
+ * @param label - the component name used in the failure message.
+ */
+function assertRealDirectoryOrAbsent(path: string, label: string): void {
+  try {
+    const stat = lstatSync(path)
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(
+        `chamber seed: the legacy seed ${label} ${path} is not a real directory; refusing to remove a seed copy through it`,
+      )
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+}
+
+/**
+ * Remove one legacy seed copy from the profile's pnpm-owned tree.
+ *
+ * Before the fallback-level move the seed lived at
+ * `<dshHome>/profiles/web/node_modules/@dsh-chamber/<pkg>`, i.e. inside the tree
+ * `dsh plugin add/remove` re-links. A copy there now SHADOWS the fallback seed (Node
+ * searches the deeper node_modules first) and re-enters pnpm's unknown-package pruning, so
+ * every resolution below the profile drops it again. Only the exact chamber package
+ * directory is removed; the legacy scope and module directories are removed when they end
+ * up empty, and a symlinked ancestor aborts before anything is touched.
+ *
+ * @param dshHome - the managed dsh home.
+ * @param packageName - the `@dsh-chamber/<id>` package whose legacy copy is dropped.
+ * @returns true when this call removed the package directory.
+ */
+export function removeLegacySeedCopy(dshHome: string, packageName: string): boolean {
+  if (!/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(packageName)) {
+    throw new Error(`chamber seed: invalid chamber package name ${JSON.stringify(packageName)}`)
+  }
+  const modulesDir = join(dshHome, ...LEGACY_SEED_MODULES_SEGMENTS)
+  const scopeDir = join(modulesDir, '@dsh-chamber')
+  const packageDir = join(scopeDir, packageName.slice('@dsh-chamber/'.length))
+  assertRealDirectoryOrAbsent(modulesDir, 'modules directory')
+  assertRealDirectoryOrAbsent(scopeDir, 'scope directory')
+  if (!entryExistsNoFollow(packageDir)) return false
+  rmSync(packageDir, { recursive: true, force: true })
+  for (const dir of [scopeDir, modulesDir]) {
+    try {
+      rmdirSync(dir)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTEMPTY' || code === 'EEXIST') continue
+      throw error
+    }
+  }
+  return true
 }

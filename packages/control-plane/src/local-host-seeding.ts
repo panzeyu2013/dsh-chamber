@@ -14,6 +14,7 @@ import {
   HOST_OPEN_IN_INSERT_ID,
   missingHostPackageInserts,
   OFFICIAL_OPEN_IN_DISABLE,
+  removeLegacySeedCopy,
   type SeedEntry,
 } from './host-graph-seed.ts'
 import {
@@ -191,6 +192,15 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   // this spawn. With the switch absent the entry list (and every overlay byte below) carries none.
   const bridgeEntry = planHostLogBridge({ stateDir, env: input.env ?? {}, warn })
   const entries = bridgeEntry === null ? baseEntries : [...baseEntries, bridgeEntry]
+  // Migrate the pre-fix seed copies out of the profile's pnpm-owned tree. A copy there
+  // shadows the fallback-level seed (Node searches the deeper node_modules first) and is
+  // pruned by every `dsh plugin add/remove`, the exact failure the fallback level ends.
+  // Runs before any availability decision: a stub entry's stale copy is still a shadow.
+  for (const entry of entries) {
+    if (removeLegacySeedCopy(dshHome, entry.insert.name)) {
+      log(`${entry.insert.id}: removed the legacy ${entry.insert.name} copy from the profile's pnpm-managed node_modules`)
+    }
+  }
   // An extra entry with no packaged source is warned, never fatal — but the wording
   // distinguishes a true stub from a desktop-synced entry awaiting its first sync. The base
   // packaged dirs keep their silent-skip behavior (absent source or dist = no row).
@@ -295,7 +305,7 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
     : missingHostPackageInserts(profilePatch, available.map(entry => entry.insert))
   for (const entry of available) {
     if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
-      log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
+      log(`${entry.label}: seeded ${entry.packageName} into the profile module fallback`)
     }
   }
   // The official web bundle's open-in HOST row is superseded exactly when chamber's own
