@@ -330,6 +330,10 @@ export default defineConfig({
   define: {
     'process.versions.node': '"0.0.0"',
     'process.execArgv': '[]',
+    // The bundled cordis loader reads `process.platform` in EntryTree.import
+    // (vendor/loader/src/config/tree.ts); upstream's web build defines the same key
+    // (apps/web/vite.config.ts:263) — without it every loader entry import throws.
+    'process.platform': '"browser"',
     'process.env.CORDIS_SHARED': 'undefined',
     // design 09 §4: ui-brand-official gates its official brand fills on
     // `DSH_CLIENT_BUILD_PROFILE === 'official'` ("other builds load the plugin
