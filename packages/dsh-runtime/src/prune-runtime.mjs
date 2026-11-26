@@ -16,24 +16,35 @@
  *   文档，随安装分发的 bundle 都把它放在 `docs/DETAIL*.md`；删掉它会让详情页
  *   以 `invalid` 失败（「插件声明的详细介绍文件无效」，重试也无效）。保留整个
  *   `docs/` 的 Markdown 不依赖上游的文档命名习惯：新增一份 `docs/` 文档无需
- *   再加规则；其它位置的 Markdown 仍按原规则裁掉。
+ *   再加规则；其余位置的 Markdown 仍按原规则裁掉（`skills/`、`references/` 是另外两条保留面）。
  *   除缩减体积外，这直接关系 Windows 安装体验：NSIS 安装器要**逐文件**解压
  *   这些内容（Windows Defender 实时扫描每个新建文件会把安装拖到"看起来
  *   卡死"，且文件被锁时安装器会进入"重解压→再拷贝"的重试循环，进度条来回
  *   反复）——文件数越少，安装越快、被锁触发循环的概率越低。保留面本身：
- *   钉版声明目标 34 个（约 4 KiB），按目录还会留下第三方包自带的 `docs/`
- *   文档（同钉版 `undici@8.11.2` 一家 46 个 / 约 405 KiB），整树约 80 个 /
- *   0.4 MiB，约为 hoisted 树文件数的 0.25%。**已知例外**：附属物目录名
+ *   详情文档（`meta.detail` 指名）、`skills/` 与 `references/` 下的技能面 Markdown，
+ *   以及第三方包自带的 `docs/` 文档（同钉版 `undici@8.11.2` 一家 46 个 / 约
+ *   405 KiB）；相对 hoisted 树（约 3.3 万文件）是零头，数量以两个 collector 实测
+ *   为准、不硬编码清单（设计口径见 design 18 §3.7）。**已知例外**：附属物目录名
  *   （{@link PRUNE_DIR_NAMES}）在 `docs/` 内仍整目录删除（`docs/test/**`
  *   等是测试素材而不是文档）——声明的详情文档若落在那里，`bundle-dsh` 的
  *   核对会让封装失败，不会静默发出去（design 18 §3.7）。
+ * - **另外两条保留面：`skills/` 与 `references/` 下的 Markdown**——上游
+ *   `dsh-plugin-recommendations` / `dsh-creation-recommendations` 的技能 provider 以
+ *   `new URL('../skills/<name>.md', import.meta.url)` 读正文，`dsh-skill-filesystem`
+ *   扫 `skills/` 下任意深度的 `SKILL.md`；`dsh-creation-recommendations` 还把
+ *   `import.meta.resolve` 得到的 `references/` 下 Markdown 路径写进创建流程 prompt。
+ *   这些文件只能从包内相对路径读到（没有外部 `assetRoot` 可替代，与 office skill
+ *   不同）：裁掉即让技能装载以 ENOENT 失败、或让提示词指向不存在的文件——技能
+ *   目录照常列出条目、点开才报错。规则 = 任意名为 `skills` 或 `references` 的
+ *   目录下的 Markdown（任意深度、名字大小写不敏感，与 `docs/` 同规）；附属物目录
+ *   在这三个面内仍整目录删除（同 `docs/` 的已知例外）。
  * - 全树 *.d.ts / *.d.cts / *.d.mts / *.map（类型声明与源码映射，运行期零使用）
  *
  * 版本无关：包级特化规则（node-pty/mistralai/openai）同时覆盖 hoisted
  * （顶层实体目录）与 isolated（.pnpm/<name>@<ver>[_peer]/node_modules/<name>）
  * 两种 pnpm 布局，找不到（版本重构）时静默跳过；通用规则全树生效。
- * 正确性由 bundle-dsh 安装后的冒烟检查与 `collectDeclaredDetailFiles` 的
- * prune 前后核对兜底（design 18 §4.1）。
+ * 正确性由 bundle-dsh 安装后的冒烟检查与 `collectDeclaredDetailFiles` /
+ * `collectRuntimeSkillFiles` 的 prune 前后核对兜底（design 18 §4.1）。
  */
 import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -42,7 +53,7 @@ import { join } from 'node:path'
  * 只收"语义明确为附属物"的名字：yaml 的 `dist/doc/` 是 Document 模型的
  * 运行时代码（目录名 doc 但实际是代码），因此 `doc`/`docs` 不进此表，文档
  * 文件由 PRUNE_FILE_PATTERNS 的 *.md 规则单独清理（`docs/` 下的 Markdown
- * 是详情页运行时内容，见 {@link RUNTIME_DOCUMENT_DIR}）。整目录删除先于
+ * 是详情页运行时内容，见 {@link RUNTIME_MARKDOWN_DIRS}）。整目录删除先于
  * 文件规则，所以 `docs/` 内的同名目录照样整体删除（design 18 §3.7 的已知
  * 例外）。 */
 const PRUNE_DIR_NAMES = new Set([
@@ -52,24 +63,37 @@ const PRUNE_DIR_NAMES = new Set([
 ])
 
 /**
- * 运行期文档目录：其中的 Markdown 是插件管理器 bundle 详情页的运行时内容
- * （locale `meta.detail` 指名），任何深度都保留；目录本身不整体删，目录内
- * 其它文件模式照旧。名字按大小写不敏感匹配——macOS/Windows 宿主上 `Docs/`
- * 与 `docs/` 是同一个目录，规则不该因打包容器的文件系统而分叉。
+ * 运行期 Markdown 目录：其中的 Markdown 是运行时内容，任何深度都保留——
+ * - `docs/`：插件管理器 bundle 详情页读 locale `meta.detail` 指名的文档；
+ * - `skills/`：技能正文（provider 读 `skills/<name>.md` / `SKILL.md`）；
+ * - `references/`：技能参考文档（`import.meta.resolve` 的路径被写进创建流程 prompt）。
+ * 目录本身不整体删，目录内其它文件模式照旧。名字按大小写不敏感匹配——macOS/Windows
+ * 宿主上 `Docs/` 与 `docs/` 是同一个目录，规则不该因打包容器的文件系统而分叉。
  */
-const RUNTIME_DOCUMENT_DIR = 'docs'
+const RUNTIME_MARKDOWN_DIRS = new Set(['docs', 'skills', 'references'])
 
 /** @param name - 目录名。 */
-const isRuntimeDocumentDir = (name) => name.toLowerCase() === RUNTIME_DOCUMENT_DIR
+const isRuntimeMarkdownDir = (name) => RUNTIME_MARKDOWN_DIRS.has(name.toLowerCase())
+
+/**
+ * 技能面目录：`skills/` 与 `references/`（`docs/` 由 `collectDeclaredDetailFiles`
+ * 按 locale 声明单独核对，不进这个收集器）。
+ */
+const SKILL_FACE_DIRS = new Set(['skills', 'references'])
+
+/** @param name - 目录名。 */
+const isSkillFaceDir = (name) => SKILL_FACE_DIRS.has(name.toLowerCase())
 
 /**
  * 裁剪规则集版本：保留面或删除面一变就递增。`bundle-dsh` 把它写进封装
  * manifest 的 `dsh.pruneRevision`，幂等跳过据此判定——否则同版本同平台的旧
- * 树会被直接复用，规则变更永远进不了安装包。
+ * 树会被直接复用，规则变更永远进不了安装包。v2 = `docs/` 之外的运行期
+ * Markdown（`skills/`、`references/`）纳入保留面，v1 = 只有 `docs/` 的例外。
  */
-export const PRUNE_RULES_REVISION = 1
+export const PRUNE_RULES_REVISION = 2
 
-/** Markdown 文件：除 `docs/` 下以外运行期零使用。 */
+/** Markdown 文件：默认按「运行期零使用」裁剪；`docs/`、`skills/`、`references/`
+ * 是保留面，其它目录（如 `assets/`）仍走默认裁剪——已知限制见 design 18 §4.1。 */
 const MARKDOWN_FILE = /\.md$/i
 
 /** 运行期零使用的文件模式（文档/许可/CI 配置/测试文件/构建中间产物）。 */
@@ -142,8 +166,11 @@ export function pruneRuntimeArtifacts(root) {
     }
     return n
   }
-  /** @param inDocumentDir - 当前目录位于某个 docs/ 之下（其 Markdown 是运行时内容）。 */
-  const walk = (dir, inDocumentDir = false) => {
+  /**
+   * @param inRuntimeDir - 当前目录位于某个运行期 Markdown 目录（docs/、skills/、
+   *   references/）之下：其中的 Markdown 是运行时内容，必须保留。
+   */
+  const walk = (dir, inRuntimeDir = false) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name)
       if (entry.isDirectory()) {
@@ -153,9 +180,9 @@ export function pruneRuntimeArtifacts(root) {
           rmSync(full, { recursive: true, force: true })
           continue
         }
-        walk(full, inDocumentDir || isRuntimeDocumentDir(entry.name))
+        walk(full, inRuntimeDir || isRuntimeMarkdownDir(entry.name))
       } else if (
-        !(inDocumentDir && MARKDOWN_FILE.test(entry.name))
+        !(inRuntimeDir && MARKDOWN_FILE.test(entry.name))
         && (
           PRUNE_FILE_PATTERNS.some((pattern) => pattern.test(entry.name))
           || /\.d\.(ts|cts|mts)$/.test(entry.name)
@@ -221,4 +248,54 @@ export function collectDeclaredDetailFiles(root) {
   }
   walk(root)
   return [...found].sort()
+}
+
+/**
+ * 收集树内运行期技能面 Markdown（任意 `skills/`、`references/` 目录下的
+ * Markdown），供 `bundle-dsh` 在 prune 前后核对：规则漂移（把这两面重新列入
+ * 删除面）即封装失败，而不是让装好的应用在技能装载时以 ENOENT 失败、或让创建
+ * 流程的提示词指向不存在的参考文档。附属物目录（{@link PRUNE_DIR_NAMES}）在这
+ * 两个面内本来就会被整目录删除，故收集时同样跳过——核对只对保留面负责。
+ * `docs/` 不进这里：它由 `collectDeclaredDetailFiles` 按 locale 声明单独核对。
+ * @param root - 安装树根（与 {@link pruneRuntimeArtifacts} 同一入参）。
+ * @returns 技能面 Markdown 绝对路径，去重并按字典序排列。
+ */
+export function collectRuntimeSkillFiles(root) {
+  const found = new Set()
+  /** @param inSkillFace - 当前目录位于某个 skills/ 或 references/ 之下。 */
+  const walk = (dir, inSkillFace) => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (PRUNE_DIR_NAMES.has(entry.name)) continue
+        walk(full, inSkillFace || isSkillFaceDir(entry.name))
+        continue
+      }
+      if (inSkillFace && MARKDOWN_FILE.test(entry.name)) found.add(full)
+    }
+  }
+  walk(root, false)
+  return [...found].sort()
+}
+
+/**
+ * 运行期 Markdown 保留面的 prune 前后裁决——`bundle-dsh` 的唯一判定；`exists` 可注入，
+ * 便于对「空保留面」与「prune 删掉了收集到的文件」两条失败分支直接做单测。
+ * @param declared - prune 前 {@link collectRuntimeSkillFiles} 的结果。
+ * @param options.exists - 存在性判定（默认 `fs.existsSync`）。
+ * @returns `{ok, kind, missing}`：`kind` ∈ `kept`（通过）、`empty`（收集面为空——
+ *   上游把技能面移出 `skills/`/`references/` 或收集器失效）、`dropped`（prune 删掉了
+ *   收集到的文件，`missing` 是被删的路径）。
+ */
+export function judgeRuntimeMarkdownRetention(declared, { exists = existsSync } = {}) {
+  if (declared.length === 0) return { ok: false, kind: 'empty', missing: [] }
+  const missing = declared.filter((file) => !exists(file))
+  if (missing.length > 0) return { ok: false, kind: 'dropped', missing }
+  return { ok: true, kind: 'kept', missing: [] }
 }

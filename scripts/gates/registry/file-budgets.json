@@ -313,9 +313,9 @@
     },
     {
       "path": "packages/dsh-runtime/src/runtime-installer.ts",
-      "lines": 1255,
+      "lines": 1275,
       "target": 1255,
-      "note": "FROZEN, no adjudicated target: top-level runtime install transaction (registry resolution → SRI verify → local tarball handoff to pnpm → store prune request). One restartable sequence; the row locks growth only."
+      "note": "FROZEN, no adjudicated target: top-level runtime install transaction (registry resolution → SRI verify → local tarball handoff to pnpm → store prune request). One restartable sequence; the row locks growth only. 2026-11-26 ratified 1255→1275: the install manifest now records dsh.pruneRevision and an existing tree is classified replaceable when the recorded rule revision differs — 20 lines that cannot move out (verifyRuntimeTreeCriticalFiles lives here; every candidate module is FROZEN or would create an installer cycle)."
     },
     {
       "path": "packages/dsh-runtime/src/runtime-metadata-recovery.ts",

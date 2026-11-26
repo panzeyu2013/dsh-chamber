@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
 import { BUNDLE_PNPM_INSTALL_ATTEMPTS, bundlePnpmLaunch, isTransientPnpmEagain, mergePnpmInstallOutput, pnpmInstallRetryEnv } from './bundle-pnpm-launcher.mjs';
-import { PRUNE_RULES_REVISION, collectDeclaredDetailFiles, renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
+import { PRUNE_RULES_REVISION, collectDeclaredDetailFiles, collectRuntimeSkillFiles, judgeRuntimeMarkdownRetention, renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 import { assertPatchesApplied, renderRuntimeWorkspace, stageUpstreamPatches, upstreamPatchedDependencies } from './upstream-patches.mjs';
 
 /**
@@ -271,6 +271,17 @@ runPnpmInstall(
 // 先记录安装树里实际存在的声明目标，裁剪后逐个核对——规则若漂移（上游把文档移出
 // docs/），这里失败而不是让封装出的应用显示「插件声明的详细介绍文件无效」。
 const declaredDetailFiles = collectDeclaredDetailFiles(work);
+// 技能面 Markdown（skills/、references/ 下）同样是运行期内容：上游 provider 以包内相对路径读取，
+// prune 的保留面见 prune-runtime；这里同样先记录后核对——规则漂移（技能面被重新列入
+// 删除面）时封装失败，而不是让装好的应用在第一个技能装载时 ENOENT。
+const runtimeSkillFiles = collectRuntimeSkillFiles(work);
+// 技能面为空 = 上游把技能面移出 skills/、references/ 或收集器失效：封装失败，
+// 而不是让「核对删掉了谁」在空集合上静默通过（pre-prune 即可判定，无需先裁剪）。
+const emptySkillFace = judgeRuntimeMarkdownRetention(runtimeSkillFiles);
+if (!emptySkillFace.ok && emptySkillFace.kind === 'empty') {
+  console.error('[bundle-dsh] 安装树里没有任何 skills/ 或 references/ 下的 Markdown：上游把技能面移出这两个目录或保留面失效，封装未完成（复核 design 18 §3.7 后调整保留面）。');
+  process.exit(1);
+}
 const pruned = pruneRuntimeArtifacts(work);
 const removedDetailFiles = declaredDetailFiles.filter((file) => !existsSync(file));
 if (removedDetailFiles.length > 0) {
@@ -278,7 +289,13 @@ if (removedDetailFiles.length > 0) {
   for (const file of removedDetailFiles.slice(0, 5)) console.error(`  ${path.relative(work, file)}`);
   process.exit(1);
 }
-console.log(`[bundle-dsh] 清理运行期不需要内容：${pruned.removedFiles} 个文件（含 ${pruned.removedDirs} 个整目录）+ node-pty/mistralai/openai 构建产物；保留 ${declaredDetailFiles.length} 个 bundle 详情文档`);
+const skillRetention = judgeRuntimeMarkdownRetention(runtimeSkillFiles);
+if (!skillRetention.ok) {
+  console.error(`[bundle-dsh] 裁剪删除了 ${skillRetention.missing.length} 个运行期技能面 Markdown（skills/、references/ 下），封装未完成：`);
+  for (const file of skillRetention.missing.slice(0, 5)) console.error(`  ${path.relative(work, file)}`);
+  process.exit(1);
+}
+console.log(`[bundle-dsh] 清理运行期不需要内容：${pruned.removedFiles} 个文件（含 ${pruned.removedDirs} 个整目录）+ node-pty/mistralai/openai 构建产物；保留 ${declaredDetailFiles.length} 个 bundle 详情文档与 ${runtimeSkillFiles.length} 个 skills/references 下 Markdown`);
 
 const binPath = path.join(work, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 if (!existsSync(binPath)) {

@@ -175,15 +175,20 @@ applied → 下一周期 checking；rollback/failed → 终态（回滚后可再
 - **安装**：work manifest 写 `dependencies["@deepseek-ai/dsh"] = "file:./dsh-runtime-package.tgz"`，`node <pnpm>/bin/pnpm.cjs install --config.node-linker=hoisted --store-dir <userData>/dsh-runtime/.pnpm-store --cache-dir … --registry <所选源> --fetch-retries=0`。
 - **源钉死**：安装子进程 env scrubbing（只留 PATH + HTTP(S)/NO_PROXY）+ HOME/XDG_CACHE_HOME 钉到 `.install-home`/`.xdg-cache` + `NPM_CONFIG_USERCONFIG` 指向壳自管空文件 + 显式 `--registry`；registry 源用户自设（settings 版本源，URL 白名单 §6，非秘密），**不做按 locale 的静默默认切换**（语言≠地理位置，换源=换信任锚）。
 - **allowBuilds**：单一来源常量放行 6 项（node-pty / koffi / fs-ext / protobufjs / @google/genai / @deepseek-ai/dsh-subprocess-local）+ 显式否认 `msgpackr-extract`（运行时闭包不含）；work 目录必须先写 pnpm-workspace.yaml 且不得位于其祖先下；**白名单 miss 是硬失败**（ERR_PNPM_IGNORED_BUILDS）→ UI 引导升级 chamber（「不等 chamber 发版」对这类版本不成立）。
-- **prune 打包纪律**：规则单源 `prune-runtime.mjs`（bundle 与运行期安装器同一实现）；版本切换 = current 指针原子写（不搬 bundle-swap 目录 rename）；`docs/` 下任意深度 Markdown 是运行时内容（插件 bundle 详情页）→ prune 保留，其余 Markdown 裁剪；声明目标（钉版 34 个 ≈4 KiB；整树约 80 个/0.4 MiB）prune 前后比对，删掉即封装失败；规则漂移由 `PRUNE_RULES_REVISION` 进入封装 manifest。已知边界：包内技能资产（`assets/**`/`skills/**`）仍裁掉 → 本地启动行用外部 `assetRoot` sibling（§4.2）。
+- **prune 打包纪律**：规则单源 `prune-runtime.mjs`（bundle 与运行期安装器同一实现）；版本切换 = current 指针原子写（不搬 bundle-swap 目录 rename）；`docs/`、`skills/`、`references/` 三个面上任意深度的 Markdown 是运行时内容 → prune 保留：`docs/` 是插件 bundle 详情页读 locale `meta.detail` 指名的文档，`skills/` 是技能正文（provider 以 `new URL('../skills/…', import.meta.url)` 读取），`references/` 是技能参考文档（`import.meta.resolve` 的路径被写进创建流程 prompt）；三面都只能从包内相对路径读到，没有外部 assetRoot 可替代。其余 Markdown 裁剪。声明目标（详情文档 = `docs/DETAIL*.md`；技能面 = `skills/`、`references/` 下 Markdown）prune 前后逐项比对，删掉即封装失败；安装树里一条技能面 Markdown 都没有时同样封装失败（防上游把技能面移出这两个目录后核对静默通过）；数量以 collector 实测为准，不硬编码清单。规则漂移由 `PRUNE_RULES_REVISION` 进入封装 manifest（v2 起含 `skills/`、`references/` 保留面）。已知边界：包内 `assets/**` 仍裁掉 → 本地启动行用外部 `assetRoot` sibling（§4.2）。运行期安装树同规失效：安装 manifest 的 `dsh.pruneRevision` 与当前规则不一致（含旧 chamber 未记录该字段）即按「可替换」处理，重装会覆盖；激活/启动判定不读该字段，升级 chamber 不会拒绝已选中的旧树（旧树需重装才拿到技能面 Markdown）。
 - **供应链/浮动/路径/磁盘**：信任模型 = 钉源 + 精确版本 + integrity + allowBuilds fail-safe（用户选择安装即显式接受）；无 frozen lockfile → pnpm 解析最新传递依赖，冒烟（`bin.js --version` == 目标版本）+ 探针兜底；registry 版本串进路径前强制 EXACT_SEMVER 预校验 + 拒绝 `/`、`\`、`..`，tarball 302 最终 origin 同白名单 + 强制 HTTPS；安装中断残留启动判活清理，新安装超 10 GiB 软阈值 fail-closed；用户清理只允许 inactive 且 explicit-retained 版本（writer fence 内重读保护集，受保护必须响亮拒绝）。
 - **发布**：prune + 冒烟后写精确版本/源/SRI/关键文件 SHA-256，原子发布为只读版本树并复验（半成品绝不当作已装、既有有效树绝不覆盖）；一次 source-bound 顶层下载（metadata `{origin,version,tarball,integrity}` 先绑定，pnpm 从本地 `file:` 安装）；metadata 用简略 packument（`dist-tags.latest` 缺失回退 max semver/报无法推荐）；integrity 粒度 = 顶层 SRI 钉死 + 传递依赖各自 integrity + 关键文件摘要/冒烟/探针兜底。
 
 ### 4.1 已否决的替代方案——裁剪与运行时 Markdown
 - **只保留 locale `meta.detail` 指名文件**：少留约 405 KiB，但 prune 会与上游文档约定耦合；取「保留 `docs/` Markdown」超集，只对声明的详情文档负责。
 - **删掉 `*.md` 裁剪规则**（约 +1429 文件/10.5 MiB，但顶掉 Windows 逐文件解压目标）/ **改上游 `readPackageDocument`**（上游要求 fail loudly）/ **保留包根 README 作详情回退**（`README.zh.md` 不匹配 readme 名规则）：均不采纳。
-- **核对只在封装期做**：运行期安装器复用同一 prune 实现但不二次断言（详情文档是展示内容，宁可降级也不阻断安装；drift 由发版前封装失败暴露）。
-- **已知边界**：包内技能资产仍被裁 → 本地启动行用外部 `assetRoot` sibling（§4.2），bundle 同名行 id-targeted disable（三态：缺失=跳过+诊断 / 在=disable / 改名=loud）。
+- **核对只在封装期做**：运行期安装器复用同一 prune 实现但不二次断言保留面——它不知道上游「应有哪些」技能面文件，按目录名断言会与上游布局耦合；封装期 guard 只覆盖 pin 树，运行期装的任意版本若把技能面移出 `skills/`/`references/` 会安静发布缺件树（由 §3.7 的 `pruneRevision` 失效与本节已知限制承接；详情文档同理，宁可降级也不阻断安装）。
+- **已知边界**：包内 `assets/**` 仍被裁 → 本地启动行用外部 `assetRoot` sibling（§4.2），bundle 同名行 id-targeted disable（三态：缺失=跳过+诊断 / 在=disable / 改名=loud）。
+- **只保留 `docs/` 的 Markdown（v1 行为）**：`skills/` 与 `references/` 下的 Markdown 同样被裁 → 技能目录照常列出条目、装载却以 ENOENT 失败（`official-plugins` / `personalized-pages` / preset `dsh-doc` 三处实测），创建流程还会拿到不存在的参考路径；这些文件只能从包内相对路径读到、没有 assetRoot 替代，不采纳（§3.7 的三面保留面即为此）。
+- **`assets/` 下的运行期 Markdown（已知限制）**：`dsh-skill-badge` 的 `assets/dsh-badge.md`（`lib/index.js` 以 `new URL('../assets/…')` 在 `get()` 里读取）仍被裁掉，启用该 opt-in bundle 后技能装载同样 ENOENT。不并入保留面：`assets/` 是 chamber 既定不读的包内资产面（office skill 走外部 `assetRoot`，§4.2），按包登记保留路径属单独裁决；在补面之前，发布说明不得声称「运行期 Markdown 已全部保留」。
+- **把保留面收窄到「包根 `skills/`」**：需要识别包边界（hoisted 顶层实体目录 vs `.pnpm` 隔离布局 vs 嵌套包），收益为零，且漏掉 presets/模板里的技能目录；不采纳。
+- **按包白名单**：上游新增 skill 包或改目录即失效，每次 dsh pin 升级都要重新审计；不采纳。
+- **静态扫描代码里被读取的 Markdown**：`new URL` 拼接、`import.meta.resolve`、模板字符串与 `join` 让规则脆弱、也无法在 prune 时判定运行期可达性；不采纳（按三个目录名收口）。
 
 ### 4.2 内建 primary-runtime 载荷（Swift 本地：python + node + pnpm + office-skills）
 - 范围 = **本地 Swift flavor**（design 25 §3.2 sidecar 装配）；remote（gateway/SSH）不随包、不做 provisioning。它与 §3/§4 的「dsh 运行时版本树」是两份东西：前者供上游 `load_workspace_dependencies` 使用，后者是可切换 dsh 宿主树；唯一版本交集 = pnpm（单源 = 根 `package.json` 的 `packageManager`）。

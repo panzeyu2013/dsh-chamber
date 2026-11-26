@@ -354,5 +354,7 @@ export {
 export {
   PRUNE_RULES_REVISION,
   collectDeclaredDetailFiles,
+  collectRuntimeSkillFiles,
+  judgeRuntimeMarkdownRetention,
   pruneRuntimeArtifacts,
 } from './prune-runtime.mjs'

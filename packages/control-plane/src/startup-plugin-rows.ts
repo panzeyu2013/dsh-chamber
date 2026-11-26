@@ -9,8 +9,9 @@
  *
  * rc.2 moved Office into the web-app bundle: the bundle's own `skill-office` row mounts
  * in EVERY profile from the package's packaged assets, but the sidecar payload's runtime
- * tree is pruned (every non-`docs/` Markdown is deleted, including the packaged
- * SKILL.md files), so that row cannot serve skills from the payload. This plane keeps
+ * tree is pruned (Markdown outside `docs/`, `skills/` and `references/` is deleted,
+ * including the packaged `assets/` SKILL.md files), so that row cannot serve skills
+ * from the payload. This plane keeps
  * mounting `chamber-office-skills` with `assetRoot` -> `<sidecar>/office-skills` and the
  * local overlay force-disables the bundle row by id (bundle-row-disables.ts) — mounting
  * both would register the `dsh-office` skill provider twice and fail the second mount.

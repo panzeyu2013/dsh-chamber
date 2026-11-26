@@ -2,8 +2,9 @@
  * prune-runtime.mjs 规则测试（design 18 §3.7 / §4.1）——`docs/` 下的 Markdown 是
  * 插件管理器 bundle 详情页的运行时内容（locale `meta.detail` 指名），任意深度保留；
  * `PRUNE_DIR_NAMES` 的附属物目录即使位于 `docs/` 内也整目录删除（已知例外）；
- * `collectDeclaredDetailFiles` 只认上游 `dsh-plugin-detail` 接受的声明，供
- * bundle-dsh 在 prune 前后核对。
+ * `skills/` 与 `references/` 下的 Markdown 是技能正文/参考文档（provider 以包内相对
+ * 路径读取、`import.meta.resolve` 的路径被写进 prompt），同样任意深度保留；`collectDeclaredDetailFiles` 只认上游 `dsh-plugin-detail` 接受的
+ * 声明、`collectRuntimeSkillFiles` 收集技能保留面，供 bundle-dsh 在 prune 前后核对。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,6 +14,8 @@ import { dirname, join } from 'node:path';
 import {
   PRUNE_RULES_REVISION,
   collectDeclaredDetailFiles,
+  collectRuntimeSkillFiles,
+  judgeRuntimeMarkdownRetention,
   pruneRuntimeArtifacts,
 } from '../../src/prune-runtime.mjs';
 
@@ -75,6 +78,50 @@ test('pruneRuntimeArtifacts: 附属物目录在 docs/ 内仍整目录删除（�
   assert.deepEqual(result, { removedFiles: 2, removedDirs: 2 });
 });
 
+test('pruneRuntimeArtifacts: skills/ 与 references/ 下的 Markdown 任意深度保留（技能正文与参考文档，design 18 §3.7）', (t) => {
+  const tree = fixture(t);
+  const kept = [
+    'node_modules/@deepseek-ai/dsh-plugin-recommendations/skills/official-plugins.md',
+    'node_modules/@deepseek-ai/dsh-agent-preset/skills/dsh-doc/SKILL.md',
+    'node_modules/@deepseek-ai/dsh-agent-preset/skills/dsh-doc/references/mcp-bundle.md',
+    'node_modules/@deepseek-ai/x/dist/skills/nested/notes.md',
+    'node_modules/@deepseek-ai/x/Skills/UP.md',
+    'node_modules/@deepseek-ai/dsh-creation-recommendations/references/sidebar-right.md',
+    'node_modules/@deepseek-ai/x/References/UP.md',
+    'node_modules/@deepseek-ai/x/dist/references/nested/notes.md',
+  ];
+  const pruned = [
+    'node_modules/@deepseek-ai/x/README.md',
+    'node_modules/@deepseek-ai/x/CHANGELOG.md',
+    'node_modules/@deepseek-ai/x/skills/types.d.ts',
+    'node_modules/@deepseek-ai/x/skills/index.js.map',
+    'node_modules/@deepseek-ai/x/references/types.d.ts',
+    'node_modules/@deepseek-ai/x/references/index.js.map',
+  ];
+  for (const rel of kept) tree.put(rel, '# skill');
+  for (const rel of pruned) tree.put(rel);
+
+  const result = pruneRuntimeArtifacts(tree.root);
+
+  for (const rel of kept) assert.ok(tree.has(rel), `${rel} must survive the prune`);
+  for (const rel of pruned) assert.ok(!tree.has(rel), `${rel} must be pruned`);
+  assert.deepEqual(result, { removedFiles: 6, removedDirs: 0 });
+});
+
+test('pruneRuntimeArtifacts: 附属物目录在 skills/ 内仍整目录删除（同 docs/ 的已知例外）', (t) => {
+  const tree = fixture(t);
+  tree.put('node_modules/@deepseek-ai/x/skills/official-plugins.md');
+  tree.put('node_modules/@deepseek-ai/x/skills/fixtures/demo.md');
+  tree.put('node_modules/@deepseek-ai/x/skills/templates/run.js');
+
+  const result = pruneRuntimeArtifacts(tree.root);
+
+  assert.ok(tree.has('node_modules/@deepseek-ai/x/skills/official-plugins.md'));
+  assert.equal(tree.has('node_modules/@deepseek-ai/x/skills/fixtures'), false);
+  assert.ok(tree.has('node_modules/@deepseek-ai/x/skills/templates/run.js'));
+  assert.deepEqual(result, { removedFiles: 1, removedDirs: 1 });
+});
+
 test('collectDeclaredDetailFiles: 收集存在的合法声明（去重、排序、相对包含 locale 的目录解析）', (t) => {
   const tree = fixture(t);
   const first = tree.put('node_modules/@deepseek-ai/a/docs/DETAIL.md');
@@ -118,6 +165,50 @@ test('collectDeclaredDetailFiles + prune: docs 内的声明目标存活，docs �
   assert.equal(declared.length, 2);
 });
 
+test('collectRuntimeSkillFiles: 只收 skills/ 与 references/ 下的 Markdown（跳过 docs、assets、其他位置与附属物目录），prune 后不变', (t) => {
+  const tree = fixture(t);
+  const body = tree.put('node_modules/@deepseek-ai/a/skills/official-plugins.md');
+  const skill = tree.put('node_modules/@deepseek-ai/a/skills/dsh-doc/SKILL.md');
+  const ref = tree.put('node_modules/@deepseek-ai/a/skills/dsh-doc/references/x.md');
+  const nested = tree.put('node_modules/@deepseek-ai/b/dist/skills/n.md');
+  const refsFile = tree.put('node_modules/@deepseek-ai/a/references/sidebar-right.md');
+  const refsUpper = tree.put('node_modules/@deepseek-ai/c/References/UP.md');
+  tree.put('node_modules/@deepseek-ai/a/skills/types.d.ts');
+  tree.put('node_modules/@deepseek-ai/a/docs/DETAIL.md');
+  tree.put('node_modules/@deepseek-ai/a/README.md');
+  tree.put('node_modules/@deepseek-ai/a/assets/dsh-badge.md');
+  tree.put('node_modules/@deepseek-ai/a/skills/fixtures/f.md');
+
+  // bundle-dsh 的顺序：先记录保留面，再裁剪，最后核对删掉了谁。
+  const collected = collectRuntimeSkillFiles(tree.root);
+  pruneRuntimeArtifacts(tree.root);
+
+  assert.deepEqual(collected, [body, skill, ref, nested, refsFile, refsUpper].sort());
+  assert.deepEqual(collected.filter((file) => !existsSync(file)), []);
+});
+
+test('prune + collector: .pnpm 隔离布局下的技能面同样保留并被收集（两种布局同一规则）', (t) => {
+  const tree = fixture(t);
+  const skill = tree.put('node_modules/.pnpm/@deepseek-ai+dsh-agent-preset@1.2.3/node_modules/@deepseek-ai/dsh-agent-preset/skills/dsh-doc/SKILL.md');
+  const reference = tree.put('node_modules/.pnpm/@deepseek-ai+dsh-creation-recommendations@1.2.3/node_modules/@deepseek-ai/dsh-creation-recommendations/references/sidebar-right.md');
+
+  const collected = collectRuntimeSkillFiles(tree.root);
+  pruneRuntimeArtifacts(tree.root);
+
+  assert.deepEqual(collected, [skill, reference].sort());
+  assert.deepEqual(collected.filter((file) => !existsSync(file)), []);
+});
+
+test('judgeRuntimeMarkdownRetention: kept / empty / dropped 三分支（bundle-dsh 的失败策略）', () => {
+  const declared = ['/x/skills/a.md', '/x/references/b.md'];
+  assert.deepEqual(judgeRuntimeMarkdownRetention(declared, { exists: () => true }), { ok: true, kind: 'kept', missing: [] });
+  assert.deepEqual(judgeRuntimeMarkdownRetention([], { exists: () => true }), { ok: false, kind: 'empty', missing: [] });
+  assert.deepEqual(
+    judgeRuntimeMarkdownRetention(declared, { exists: (file) => file !== '/x/references/b.md' }),
+    { ok: false, kind: 'dropped', missing: ['/x/references/b.md'] },
+  );
+});
+
 test('PRUNE_RULES_REVISION: 规则集版本显式登记（改规则即改版本与封装跳过语义）', () => {
-  assert.equal(PRUNE_RULES_REVISION, 1);
+  assert.equal(PRUNE_RULES_REVISION, 2);
 });

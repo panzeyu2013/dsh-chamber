@@ -19,6 +19,7 @@ import type { RuntimeInstallResolution } from '../../src/dsh-runtime-updater.ts'
 import { markStorePruneNeeded } from '../../src/dsh-runtime-store.ts'
 import { parsePidEvidence } from '../../src/process-identity.ts'
 import { criticalFilesFor } from '../support/store-fixtures.ts'
+import { PRUNE_RULES_REVISION } from '../../src/prune-runtime.mjs'
 
 const VERSION = '0.1.1-rc.2'
 const TARBALL = Buffer.from('controlled top-level dsh tarball fixture')
@@ -102,7 +103,7 @@ function makeExistingTree(baseDir: string, version: string, valid: boolean): str
   const criticalFiles = criticalFilesFor(tree)
   writeFileSync(path.join(tree, 'package.json'), JSON.stringify(valid ? {
     dependencies: { '@deepseek-ai/dsh': version },
-    dsh: { platform: `${process.platform}-${process.arch}`, criticalFiles },
+    dsh: { platform: `${process.platform}-${process.arch}`, criticalFiles, pruneRevision: PRUNE_RULES_REVISION },
   } : { dependencies: {} }))
   return tree
 }
@@ -267,6 +268,7 @@ test('installRuntimeVersion: success publishes exact version/source manifest ato
   assert.match(manifest.dsh.platform, /-/)
   assert.equal(manifest.dsh.registryOrigin, 'https://registry.npmjs.org')
   assert.equal(manifest.dsh.integrity, VALID_SRI)
+  assert.equal(manifest.dsh.pruneRevision, PRUNE_RULES_REVISION)
   assert.deepEqual(Object.keys(manifest.dsh.criticalFiles).sort(), [
     'node_modules/@deepseek-ai/dsh/lib/bin.js',
     'node_modules/@deepseek-ai/dsh/package.json',
@@ -288,6 +290,19 @@ test('installRuntimeVersion: refuses to overwrite or reuse an already-valid tree
   assert.equal(downloads, 0)
   assert.equal(readFileSync(path.join(tree, 'sentinel.txt'), 'utf8'), 'previous tree')
   assert.equal(existsSync(path.join(baseDir, 'dsh-runtime', `${VERSION}.failed`)), false)
+})
+
+test('installRuntimeVersion: replaces a tree recorded with an older prune revision', async () => {
+  const baseDir = makeBaseDir()
+  const tree = makeExistingTree(baseDir, VERSION, true)
+  const stale = JSON.parse(readFileSync(path.join(tree, 'package.json'), 'utf8'))
+  stale.dsh.pruneRevision = PRUNE_RULES_REVISION - 1
+  writeFileSync(path.join(tree, 'package.json'), JSON.stringify(stale))
+  const result = await install(baseDir, depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })))
+  assert.equal(result.versionTreeDir, tree)
+  assert.equal(existsSync(path.join(tree, 'sentinel.txt')), false)
+  const manifest = JSON.parse(readFileSync(path.join(tree, 'package.json'), 'utf8'))
+  assert.equal(manifest.dsh.pruneRevision, PRUNE_RULES_REVISION)
 })
 
 test('installRuntimeVersion: safely replaces a legacy tree without critical-file digests', async () => {

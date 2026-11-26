@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES } from '../../src/activation-gate.ts'
 import { HOST_DOMAIN_PROBE_NAMES } from '../../src/activation-gate.ts'
 import { PROBE_TEXT_KEEP_TOKENS, SETTINGS_FILE_MAX_BYTES } from '../../src/runtime-probes.ts'
+import { PRUNE_RULES_REVISION } from '../../src/prune-runtime.mjs'
 
 /** test/install → the package root (and its dist/) is two levels up. */
 const here = dirname(fileURLToPath(import.meta.url))
@@ -36,13 +37,16 @@ test('dist/index.js exports exactly the src/index.ts export set', async () => {
   }
 })
 
-test('dist/index.js carries the CURRENT probe-contract constant values (value-level lockstep)', async () => {
+test('dist/index.js carries the CURRENT probe-contract and prune-rule constant values (value-level lockstep)', async () => {
   const dist = await import('../../dist/index.js' as string) as Record<string, unknown>
   const constCases: Array<[string, unknown]> = [
     ['REQUIRED_ACTIVATION_PROBES', REQUIRED_ACTIVATION_PROBES],
     ['HOST_DOMAIN_PROBE_NAMES', HOST_DOMAIN_PROBE_NAMES],
     ['PROBE_NAMES_WITHOUT_HOST_DOMAINS', PROBE_NAMES_WITHOUT_HOST_DOMAINS],
     ['PROBE_TEXT_KEEP_TOKENS', PROBE_TEXT_KEEP_TOKENS],
+    // 裁剪规则版本是发布面常量：只改它而不重跑 build:dsh-runtime 时，device
+    // bundle/运行期安装树会把旧规则带进安装包 — 这里让陈旧 dist 直接红。
+    ['PRUNE_RULES_REVISION', PRUNE_RULES_REVISION],
   ]
   for (const [name, expected] of constCases) {
     assert.deepEqual(dist[name], expected, `${name} drifted in the committed dist — rebuild with \`pnpm run build:dsh-runtime\``)

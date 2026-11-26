@@ -74,8 +74,9 @@ export const FORGE_GITLAB_ROW: BundleRowDisableTarget = {
 
 /**
  * rc.2 web-app mounts its own `skill-office` row in EVERY profile (from the package's
- * packaged assets). The Swift sidecar payload's runtime tree is pruned — every non-`docs/`
- * Markdown is deleted, including the packaged `SKILL.md` files — so that row cannot serve
+ * packaged assets). The Swift sidecar payload's runtime tree is pruned — Markdown outside
+ * `docs/`, `skills/` and `references/` is deleted, including the packaged `assets/`
+ * `SKILL.md` files — so that row cannot serve
  * skills from the payload; the local spawn mounts its own `chamber-office-skills` row with
  * `assetRoot` pointing at the prune-surviving sibling copy. Two live skill-office mounts
  * would register the same `dsh-office` skill provider twice, and the skill registry makes

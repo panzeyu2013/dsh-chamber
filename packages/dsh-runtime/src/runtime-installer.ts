@@ -22,6 +22,7 @@ import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { renderAllowBuildsBlock } from './allow-builds.mjs'
 import { validateVersionTree, readStorePruneRequest } from './dsh-runtime-store.ts'
+import { PRUNE_RULES_REVISION } from './prune-runtime.mjs'
 import type { RuntimeInstallResolution } from './dsh-runtime-updater.ts'
 import { createIntegrityVerifier, isSupportedIntegrity } from './registry-integrity.ts'
 import { fetchRegistryResponse } from './registry-metadata.ts'
@@ -321,11 +322,29 @@ function existingRuntimeTreeIsValid(baseDir: string, version: string): ExistingR
   const structural = validateVersionTree(baseDir, version)
   if (structural.kind === 'unknown') return 'unknown'
   if (!structural.ok) return 'invalid'
+  // 裁剪规则版本是安装产物的一部分：旧规则裁出的树缺运行期技能面 Markdown
+  // （skills/、references/ 被删），对用户是坏树。安装路径按「可替换」处理，让它
+  // 被重新安装覆盖；激活/启动路径不走这个判定，旧树仍可先启动，不会因升级 chamber
+  // 而拒绝已选中的运行时。
+  if (readRecordedPruneRevision(structural.path) !== PRUNE_RULES_REVISION) return 'invalid'
   try {
     verifyRuntimeTreeCriticalFiles(structural.path, version)
     return 'valid'
   } catch (error) {
     return isUnreadableFsError(error) ? 'unknown' : 'invalid'
+  }
+}
+
+/** 已发布版本树 manifest 记录的裁剪规则版本；缺失（旧 chamber 装的树）或不可读
+ *  一律返回 undefined —— 安装判定把两者都当「可替换」，绝不复用为 valid。 */
+function readRecordedPruneRevision(treePath: string): number | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(treePath, 'package.json'), 'utf8')) as
+      { dsh?: { pruneRevision?: unknown } }
+    const revision = manifest.dsh?.pruneRevision
+    return typeof revision === 'number' ? revision : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -1172,6 +1191,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       registryOrigin: resolution.registryOrigin,
       integrity: resolution.integrity,
       criticalFiles: computeCriticalDigests(workDir, version),
+      pruneRevision: PRUNE_RULES_REVISION,
     }
     atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 
