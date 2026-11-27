@@ -45,6 +45,7 @@
 import { type NotificationEdge, type NotificationKind } from './notification-edges.ts'
 import { isWatermark, maxWatermarkValue, nextNotifiedWatermark } from './watermark.ts'
 import type { CompletionDecisionState, PendingCompletion, SettleFenceEntry } from './complete-ledger.ts'
+import { NOTIFICATION_MAX_SESSIONS_PER_SOURCE, tailOutcomeTable, tailSessionTable } from './notification-bounds.ts'
 import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
 
 /** 一条待发通知；facts 入口带 host 域水位/事件序与运行身份（壳边沿可缺席）。 */
@@ -168,7 +169,7 @@ function pendingOf(state: CompletionDecisionState, sourceId: string, sessionId: 
 // 全部写点写时复制（与 complete-ledger 的 setter 同纪律）：旧快照冻结在写入时刻。
 function writePending(state: CompletionDecisionState, sourceId: string, sessionId: string, entry: PendingCompletion): void {
   const table = state.pending[sourceId] ?? {}
-  state.pending = { ...state.pending, [sourceId]: { ...table, [sessionId]: entry } }
+  state.pending = tailSessionTable({ ...state.pending, [sourceId]: { ...table, [sessionId]: entry } }, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
 }
 
 function dropPending(state: CompletionDecisionState, sourceId: string, sessionId: string): void {
@@ -202,7 +203,7 @@ function advanceNotified(
   const row = sourceTable[sessionId] ?? {}
   const next = nextNotifiedWatermark(row[kind], watermark)
   if (next === undefined || next === row[kind]) return
-  state.notified = { ...state.notified, [sourceId]: { ...sourceTable, [sessionId]: { ...row, [kind]: next } } }
+  state.notified = tailSessionTable({ ...state.notified, [sourceId]: { ...sourceTable, [sessionId]: { ...row, [kind]: next } } }, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
 }
 
 function goalOutcome(state: CompletionDecisionState, sourceId: string, goalId: string): number | undefined {
@@ -215,7 +216,7 @@ function recordOutcome(state: CompletionDecisionState, sourceId: string, goalId:
   const table = state.outcomes[sourceId] ?? {}
   const current = table[goalId]
   if (current !== undefined && current >= watermark) return
-  state.outcomes = { ...state.outcomes, [sourceId]: { ...table, [goalId]: watermark } }
+  state.outcomes = tailOutcomeTable({ ...state.outcomes, [sourceId]: { ...table, [goalId]: watermark } }, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
 }
 
 /**

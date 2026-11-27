@@ -1,17 +1,19 @@
 /**
  * complete 通知记忆的单一账本内核。
  *
- * 状态面（design 19 §3.2.3）：**三张 durable 表 + 五项易失 per-source 表**：
- *   - notified（durable）：facts 入口的已通知水位（每 (source, session, kind)，单调只升）；
+ * 状态面（design 19 §3.2.3）：**durable 三表（notifiedRuns/pending/outcomes）+ 页内水位 notified + 六项易失 per-source 表**：
+ *   - notifiedRuns（durable）：投递身份的已通知 receipt（每 (source, session)，单调只升）；
  *   - outcomes（durable）：目标/中性标题的**一次性身份**（每 (source, goalId) 的水位）——
  *     TL1：同一 goalId 的「目标已完成/已受阻/未继续运行」至多发一次，其后一律回落
  *     「会话已完成」；
  *   - pending（durable）：目标活跃期间被压制的完成结算位（每 (source, session)）；
+ *   - notified（页内水位，不落盘）：facts 入口的已通知水位（每 (source, session, kind)，单调只升）；
  *   - armed（volatile）：壳边沿的「已发 complete 直到重新 running」武装位；
  *   - armedFloor（volatile）：与 armed 同拍的已消费水位上界（F5 阻断项 2）；
  *   - settleFence（volatile）：无水位消费的 emit 后的一次性围栏（A2/A3-3/B3-1）；
  *   - generation（volatile）：每来源当前代（G1 门）；
- *   - goalKnown（volatile）：§3.5 结算点记忆（首份已知 goal 事实）。
+ *   - goalKnown（volatile）：§3.5 结算点记忆（首份已知 goal 事实）；
+ *   - runtimeSettled（volatile）：native 结算边沿的 host updatedAt 待归属锚点（500/source 窗）。
  *
  * 键空间、读取、写入与整体清除只有一处（两级键 source → session/goalId）；App 只持有
  * 一个引用，per-source 剪枝不会漏表。本模块不重写任何一轨的裁定规则：水位原语在
@@ -20,9 +22,9 @@
  *
  * 撤回语义（R2-D）：withdraw 清 armed + armedFloor + pending +
  * settleFence + goalKnown（撤回窗口内的完成不得在恢复后补发，附属围栏不得跨撤回存活，
- * 结算点记忆随会话身份作废），notified/outcomes 保持 durable；forgetSession 对单会话
+ * 结算点记忆随会话身份作废），notifiedRuns/outcomes 保持 durable；forgetSession 对单会话
  * 执行同一纪律（B4-2：goalKnown 不得在会话 churn 下泄漏）；forget/prune 收敛全部
- * **8 张 per-source 表**（durable + 易失）。页代 token 的单源是 boot-token.ts：
+ * **10 张 per-source 表**（state 8 表 + 身份轨 notifiedRuns/runtimeSettled）。页代 token 的单源是 boot-token.ts：
  * 本账本不读、不存、不参与来源收敛（兼容入参已在 beta 线退役，别再加回）。
  *
  * 加载期卫生（§3.5）：boot='fresh'（新进程/新窗口）丢弃全部 pending 并 loud；
@@ -33,9 +35,10 @@
  * SessionRunId（notifications.v1 的持久来源；v2 迁移对旧水位表写 LEGACY_NOTIFIED_RUN_ID
  * 哨兵），以及易失的 runtimeSettled = source → session → 原生结算边沿的 host updatedAt
  * 锚点（无 host 身份的运行完成后，下一份可信 host 完成据此认领身份）。身份面与水位的
- * notified/pending/outcomes 只并列存储、互不混写：水位裁定仍全部走 state()。
+ * notifiedRuns/notified/pending/outcomes 只并列存储、互不混写：水位裁定仍全部走 state()。
  */
 import { isPlainRecord } from './plain-record.ts'
+import { NOTIFICATION_MAX_SESSIONS_PER_SOURCE, tailOutcomeTable, tailSessionTable } from './notification-bounds.ts'
 import { isWatermark, maxWatermarkValue } from './watermark.ts'
 import type { UnreadKind } from './watermark.ts'
 import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
@@ -91,8 +94,9 @@ type SettleFenceTable = Record<string, Record<string, SettleFenceEntry>>
 export type GoalOutcomeTable = Record<string, Record<string, number>>
 
 /**
- * reconcile 的完整状态（v5 §3.1：三张 durable 表 + 五项易失状态）。
- * durable 三表（notified/pending/outcomes）走通知载荷增量；其余全部易失：
+ * `state` 的 8 张表（v5 §3.1）：页内水位 notified + durable pending/outcomes + 五项易失 armed/armedFloor/settleFence/generation/goalKnown。
+ * 身份键空间（notifiedRuns durable、runtimeSettled 易失）在 `CompleteLedger` 闭包里独立维护，不在 `CompletionDecisionState` 内；
+ * pending/outcomes 走通知载荷增量，notified 是页内水位、不落盘；其余易失：
  *   - armed：壳边沿武装位；
  *   - armedFloor：与 armed 同拍的「已消费水位上界」（arm 时写；见字段注释）；
  *   - settleFence：无水位消费的 emit 后按 boundary（置栏时已吸收的 facts 水位）
@@ -156,7 +160,7 @@ export function completionAlreadySettled(
 
 /** 通知水位与壳边沿武装位的合并账本（App 单例持有）。 */
 export interface CompleteLedger {
-  /** 完整状态（reconcile 直接读写；durable 三表是持久化来源）。 */
+  /** 完整状态（reconcile 直接读写；notifiedRuns/pending/outcomes 是持久化来源）。 */
   state(): CompletionDecisionState
   /** 水位轨：v2 落盘读出的表（内部对象，调用方只读）。 */
   notifiedTable(): NotifiedWatermarkTable
@@ -218,7 +222,7 @@ export interface CompleteLedger {
   hasDurable(sourceId: string): boolean
   /**
    * 撤回：清 armed + pending + settleFence + goalKnown，保留 durable 的
-   * notified/outcomes（R2-D）。通道撤回（壳重连/重 boot）时调用；恢复后首份观测
+   * notifiedRuns/outcomes（R2-D）。通道撤回（壳重连/重 boot）时调用；恢复后首份观测
    * 不补发窗口内完成，且不得围栏吞掉窗口外的下一条真完成。
    */
   withdraw(sourceId: string): void
@@ -233,7 +237,7 @@ export interface CompleteLedger {
   forgetPending(sourceId: string): void
   /**
    * 会话消失（两条通道都不再列出，§3.1）：该会话的 armed + settleFence + pending
-   * + goalKnown 同拍清（notified/outcomes 保持 durable），与来源级撤回同纪律、只收窄
+   * + goalKnown 同拍清（notifiedRuns/outcomes 保持 durable），与来源级撤回同纪律、只收窄
    * 到单会话。不这样做时，残留围栏/武装会吞掉重现会话之后的新完成，且水位已被静默
    * 推进（评审 A 重要项）；goalKnown 残留则是会话级泄漏（B4-2），会话重现时首份已知
    * goal 事实也不再是 §3.5 结算点。
@@ -326,9 +330,9 @@ export function createCompleteLedger(
   }
 
   const state: CompletionDecisionState = {
-    notified: initialWatermarks,
+    notified: tailSessionTable(initialWatermarks),
     pending: {},
-    outcomes: copyOutcomes(options.outcomes),
+    outcomes: tailOutcomeTable(copyOutcomes(options.outcomes)),
     armed: {},
     armedFloor: {},
     settleFence: {},
@@ -377,15 +381,18 @@ export function createCompleteLedger(
   if (droppedFresh > 0) {
     report(
       'fresh boot (new process/window): discarded ' + String(droppedFresh) +
-      ' pending completion(s); notified/outcomes stay durable',
+      ' pending completion(s); notifiedRuns/outcomes stay durable',
     )
   }
   if (droppedStale > 0) {
     report('discarded ' + String(droppedStale) + ' pending completion(s) older than ' + String(maxAge) + 'ms')
   }
 
+  // 持久 pending 装载后同样收敛到内存上界（构造期 state 字面量只覆盖初始空表）。
+  state.pending = tailSessionTable(state.pending)
+
   /** 身份轨（独立键空间）：持久身份 + 易失的原生结算待归属标记。 */
-  let notifiedRuns: NotifiedRunTable = { ...initialRuns }
+  let notifiedRuns: NotifiedRunTable = tailSessionTable({ ...initialRuns })
   let runtimeSettled: Record<string, Map<string, number | undefined>> = {}
 
   /** 待归属标记消费（写时复制；空 map 收敛掉来源表项）。setNotifiedRun 命中即清。 */
@@ -493,7 +500,7 @@ export function createCompleteLedger(
   }
 
   /**
-   * 会话消失（§3.1）：armed + settleFence + pending 同拍清（notified/outcomes durable）。
+   * 会话消失（§3.1）：armed + settleFence + pending 同拍清（notifiedRuns/outcomes durable）。
    * 与 withdrawSource 同一纪律，只是作用域为一个会话：残留围栏/武装会让重现会话的
    * **新**完成被静默吞掉（facts 候选被围栏消费或被武装门单调记账），而消除它们的
    * 依据（会话已不在两条通道）恰恰要求旧身份一起作废。
@@ -503,15 +510,23 @@ export function createCompleteLedger(
     clearArmedSession(sourceId, sessionId)
     clearFenceSession(sourceId, sessionId)
     clearGoalKnownSession(sourceId, sessionId)
+    // 易失的 native 结算待归属标记与会话身份同寿：会话消失后残留只会让长活来源缓慢增长，
+    // 且没有消费者（下一次 setNotifiedRun 命中同一 sessionId 才会消费，已不可达）。
+    clearRuntimeSettled(sourceId, sessionId)
   }
 
   /**
-   * 撤回：armed + pending + settleFence 同拍清（notified/outcomes 保持 durable）。
+   * 撤回：armed + pending + settleFence 同拍清（notifiedRuns/outcomes 保持 durable）。
    * settleFence 是「无 facts 水位的 pending 结算」的附属易失轨：pending 被撤回后
    * 它守卫的那次完成已不再是待结算身份，围栏必须随之消失——否则它会吞掉恢复后
    * 第一条**新的** facts 候选（撤回窗口外的真完成），而那条候选与旧完成无关。
    */
   const withdrawSource = (sourceId: string): void => {
+    if (runtimeSettled[sourceId] !== undefined) {
+      const nextSettled = { ...runtimeSettled }
+      delete nextSettled[sourceId]
+      runtimeSettled = nextSettled
+    }
     if (state.armed[sourceId] !== undefined) {
       const next = { ...state.armed }
       delete next[sourceId]
@@ -533,7 +548,7 @@ export function createCompleteLedger(
       state.armedFloor = next
     }
     // B4-2：结算点记忆与会话身份同批作废（撤回窗口内的完成恢复后不补发；会话若重现，
-    // 首份已知 goal 事实重新成为 §3.5 结算点）。notified/outcomes 仍 durable。
+    // 首份已知 goal 事实重新成为 §3.5 结算点）。notifiedRuns/outcomes 仍 durable。
     if (state.goalKnown[sourceId] !== undefined) {
       const next = { ...state.goalKnown }
       delete next[sourceId]
@@ -550,14 +565,14 @@ export function createCompleteLedger(
     setNotifiedWatermark(sourceId, sessionId, kind, watermark) {
       const sourceTable = state.notified[sourceId] ?? {}
       const row = sourceTable[sessionId] ?? {}
-      state.notified = { ...state.notified, [sourceId]: { ...sourceTable, [sessionId]: { ...row, [kind]: watermark } } }
+      state.notified = tailSessionTable({ ...state.notified, [sourceId]: { ...sourceTable, [sessionId]: { ...row, [kind]: watermark } } })
     },
     notifiedRunTable() { return notifiedRuns },
     notifiedRun(sourceId, sessionId) { return notifiedRuns[sourceId]?.[sessionId] },
     setNotifiedRun(sourceId, sessionId, runId) {
       const sourceTable = notifiedRuns[sourceId] ?? {}
       if (sourceTable[sessionId] !== runId) {
-        notifiedRuns = { ...notifiedRuns, [sourceId]: { ...sourceTable, [sessionId]: runId } }
+        notifiedRuns = tailSessionTable({ ...notifiedRuns, [sourceId]: { ...sourceTable, [sessionId]: runId } })
       }
       clearRuntimeSettled(sourceId, sessionId)
     },
@@ -565,6 +580,11 @@ export function createCompleteLedger(
     markRuntimeSettled(sourceId, sessionId, hostObservedAt) {
       const sessions = runtimeSettled[sourceId] ?? EMPTY_SETTLED
       const next = new Map(sessions)
+      if (!next.has(sessionId) && next.size >= NOTIFICATION_MAX_SESSIONS_PER_SOURCE) {
+        // 易失锚点与身份面共用 500 会话窗口：迟到的结算边沿不得让长活来源的 Map 无界增长。
+        const oldest = next.keys().next().value
+        if (oldest !== undefined) next.delete(oldest)
+      }
       next.set(sessionId, hostObservedAt)
       runtimeSettled = { ...runtimeSettled, [sourceId]: next }
     },
@@ -572,7 +592,7 @@ export function createCompleteLedger(
     pendingEntry(sourceId, sessionId) { return state.pending[sourceId]?.[sessionId] },
     setPending(sourceId, sessionId, entry) {
       const table = state.pending[sourceId] ?? {}
-      state.pending = { ...state.pending, [sourceId]: { ...table, [sessionId]: { ...entry } } }
+      state.pending = tailSessionTable({ ...state.pending, [sourceId]: { ...table, [sessionId]: { ...entry } } })
     },
     clearPending(sourceId, sessionId) { clearPending(sourceId, sessionId) },
     outcomesTable() { return state.outcomes },
@@ -582,7 +602,7 @@ export function createCompleteLedger(
       const table = state.outcomes[sourceId] ?? {}
       const current = table[goalId]
       if (current !== undefined && current >= watermark) return
-      state.outcomes = { ...state.outcomes, [sourceId]: { ...table, [goalId]: watermark } }
+      state.outcomes = tailOutcomeTable({ ...state.outcomes, [sourceId]: { ...table, [goalId]: watermark } })
     },
     armed(sourceId) { return state.armed[sourceId] ?? EMPTY_ARMED },
     setArmed(sourceId, sessions) {
@@ -629,8 +649,8 @@ export function createCompleteLedger(
       seedFenceSession(sourceId, sessionId, seededWatermark)
     },
     hasDurable(sourceId) {
-      return state.notified[sourceId] !== undefined
-        || state.pending[sourceId] !== undefined
+      // state.notified is the page-local watermark, not persisted; only the payload keys count.
+      return state.pending[sourceId] !== undefined
         || state.outcomes[sourceId] !== undefined
         || notifiedRuns[sourceId] !== undefined
     },

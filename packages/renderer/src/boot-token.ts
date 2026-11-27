@@ -5,7 +5,7 @@
  * localStorage 里同形，无法判别。sessionStorage 的生命周期恰好对齐「页会话」：
  * 同 tab reload 保留，新进程/新窗口为空——因此首帧写入一个随机 token，加载时
  * 读到同 token = reload（保留 pending/outcomes），读不到 = fresh（丢弃 pending
- * 并 loud；notified/outcomes 仍 durable）。
+ * 并 loud；notifiedRuns/outcomes 仍 durable）。
  *
  * 本模块 only 判定 + 读写 token，不做 pending 处置：处置在
  * complete-ledger.createCompleteLedger({ boot })。

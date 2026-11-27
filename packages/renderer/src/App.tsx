@@ -613,7 +613,7 @@ export default function App() {
     // （freshState 播种）。观测状态删除 = 该来源观测代终结：账本里的旧代易失轨
     // （armed/armedFloor/settleFence/goalKnown）与 pending 必须同拍 scoped withdraw——门关窗口
     // （未结算/degraded/rosterIncomplete）下 durable 剪枝不执行，残留旧 pending 会被重建的新代
-    // 首个 outcome 以旧 watermark flush。notified/outcomes 保持 durable；pending 有内容时落盘。
+    // 首个 outcome 以旧 watermark flush。notifiedRuns/outcomes 保持 durable；pending 有内容时落盘。
     if (!durableFrozen) for (const sourceId of [...completionObservationRef.current.keys()]) {
       if (live.has(sourceId)) continue
       completionObservationRef.current.delete(sourceId)
@@ -622,7 +622,7 @@ export default function App() {
       }
     }
     // ── durable（旧载荷载入）四类剪枝：权威 roster / 无桥形态门控（F6+F11） ────
-    // complete 通知账本的 notified/pending/outcomes 在 App 首帧
+    // complete 通知账本的 notifiedRuns/pending/outcomes 在 App 首帧
     // **同步**载入，而权威远端 roster 是异步事实（桥探测 + IPC 往返）：未结算前按 live={local}
     // 剪枝会把远端来源的 durable 键当退役来源写盘删除。只放行结算后（或确认无桥）的剪枝；
     // 有桥但未结算严格关门。易失轨（prevRunning / 观测状态 / 水位记账）不受此门约束。
@@ -726,7 +726,7 @@ export default function App() {
       chamberBridge.clearPluginDiagnostic(sourceId)
       delete prevRunningRef.current[sourceId]
       completionObservationRef.current.delete(sourceId)
-      // 退役 = 四表同拍删除；durable 三表（notified/pending/outcomes）有内容时必须落盘
+      // 退役 = 四表同拍删除；durable 三表（notifiedRuns/pending/outcomes）有内容时必须落盘
       // （易失轨不入盘）。先查再删，避免给空账本白排一次写。
       const ledger = completeLedgerRef.current
       const ledgerHadDurable = ledger.hasDurable(sourceId)

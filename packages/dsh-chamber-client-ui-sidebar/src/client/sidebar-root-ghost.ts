@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { armBlankGhost, BLANK_GHOST_GRACE_MS } from '@dsh-chamber/dsh-chamber-client-core/derive'
 import type { ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-core/aggregate-store'
+import { armGhostExpiry, expireGhostSlot, ghostSlotKey } from './ghost-expiry.ts'
 
 export function useSidebarGhost({ servers, chamberInstanceId }: {
   servers: readonly ChamberServerAggregate[]
@@ -40,9 +41,13 @@ export function useSidebarGhost({ servers, chamberInstanceId }: {
       workspace.sessions.some(session => session.id === current && session.blank === true))
     if (!isBlankCurrent) return
     armBlankGhost(active.id, current)
-    ghostExpiry.current.set(current, Date.now() + BLANK_GHOST_GRACE_MS)
+    const slotKey = ghostSlotKey(active.id, current)
+    armGhostExpiry(ghostExpiry.current, slotKey, Date.now(), BLANK_GHOST_GRACE_MS)
     // The one-shot timer trims itself from the ref once it fires, so repeated armings cannot grow ghostTimers unboundedly.
     const timerId = window.setTimeout(() => {
+      // 截止时刻已到的条目才能删：同一 session 的又一次 arm 会写入更晚的 deadline，
+      // 旧 timer 不得把新 deadline 删掉。
+      expireGhostSlot(ghostExpiry.current, slotKey, Date.now())
       setGhostTick(tick => tick + 1)
       const index = ghostTimers.current.indexOf(timerId)
       if (index >= 0) ghostTimers.current.splice(index, 1)

@@ -130,7 +130,7 @@ export type DesktopBridgeVerdict = 'pending' | 'present' | 'absent'
 /**
  * Durable（落盘）通知账本的剪枝门控。
  *
- * App 首帧**同步**从 localStorage 载入 notified/pending/outcomes
+ * App 首帧**同步**从 localStorage 载入 notifiedRuns/pending/outcomes
  * （notification-store → complete-ledger），而权威远端 roster 是异步事实：
  * 桥要等 `window.dshChamber` 暴露（500ms 探测），`instances_get` 还要一次 IPC
  * 往返，期间 `remoteInstances` 仍是 `[]`、`servers` 只含 local。若此时按

@@ -374,7 +374,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 ### 3. 页面侧性能残项（推迟中）
 
-> 本节只承载页面侧性能修订中**未实现**的残项（侧栏 T2、E2 首屏 markdown 按需化、A5 重订阅修正、B2 style 归属测量、B5 虚拟化 spike、A7 剩余）；
+> 本节只承载页面侧性能修订中**未实现**的残项（侧栏 T2、E2 首屏 markdown 按需化、A5 重订阅修正、B2 style 归属测量、B5 虚拟化 spike、A7 剩余、3.7 切会话放大器、3.8 左栏/M×N/recall watcher、3.9 唤醒/快捷键/主题/vendor-RO 扩面（M2/M3/M5/M6））；
 > 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §7（观察者对账与页面恢复：隐藏期不采样）、19 §3.5（覆盖边界与诚实性：`factAt` 1s 签名桶、facts/mux 空帧去重）、
 > 24 F5（purged 孤儿键收敛）。各项都保留证据与设计以便下次决策，落地前不进入任何提交面。本节条目 ID（E2/A5/B2/B5/A7 与 E1/W2/D4/B1/B6 等）是渲染 P0 批的工作名，只在本节内有效；与各 design 文档的既有编号（design 25 §5 的 E2/E7/E21、[design 14](../design/runtime/14-sleep-background.md) §D4 唤醒恢复、design 25 §8 的 W2 菜单快捷键、design 06 §3.4 的 B6「本地账号成员集」、[remote-browser-acceptance.md](../checklists/acceptance/remote-browser-acceptance.md) §E2 等）无关。
 
@@ -383,7 +383,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 **证据（代码）**：sidebar 的行状态把 menuOpen/renaming/rowErrors 与全量字段 ctxValue 放在同一条更新通道上， 任何一处的交互都会走到全部 ServerSection 与全部行；搜索通道（client-core 的 search-state.ts）每个按键立即 notify，menus.ts 与 ServerSection.tsx 都订阅它，所以一次键入会重渲染所有壳的全部行；
 sessionsOf/orderedWorkspaces/dropEnv 每次渲染按来源重算。
 
-**已知前置**：`ctxValue` 的 useMemo 覆盖全量字段，但各 hook 提供的动作回调（toggleMenu/closeMenu/commitSessionDrag/onNewSession 等）仍每次渲染重建，因此 `ctxValue` 只在回调身份恰好不变时命中；要拿到完整收益需先把这些回调 useCallback 化。
+**已知前置**：`ctxValue` 的 useMemo 覆盖全量字段；动作回调已由 `useStableHandlers` 冻结身份（[SidebarRoot.tsx](../../packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx)），因此「动作回调每次渲染重建」不再是当前判据——ctxValue 命中率取决于其余字段与 memo 依赖，是否仍值得拆 context 需先用 render 计数重新取基线。
 
 **设计**：menuOpen/renaming/rowErrors 拆成独立 context（只有需要它们的行与 section 订阅）；
 sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) 加一层按来源缓存；搜索通知合并到一次 （微任务或帧级），把「每键通知」降为「每帧至多一次」。
@@ -435,6 +435,38 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 **未闭环测试 / owner 登记**：⑤ A6/A7⑤ 签名缓存的行为测试需把 `reportSignatureOf`/`snapshotSignatureOf` 抽成纯工厂（当前仅源码锁）；⑥ Swift 纯函数缺 XCTest（macOS 测试 target；本机 NOT RUN）：`MainWindowController` 的 `shellVisibilityFacts`/`shellVisibilityScript` 与 `SwiftEdgeHostLegs` 的 keep-awake `desired = keepAwakeRequested && windowVisible` 判据；`pushShellVisibility` 接线（AppDelegate 4 处恢复入口 + 3 处 orderOut 双保险、SwiftEdgeHostLegs focusMainWindow 腿）同样缺 XCTest/源文本锁；⑦ W2 hairline `--dsh-hairline-width` 页面级 refcount（每个 ctx.effect 各自写/还原，A dispose 会删仍在的 B 的值；上游同形态，本补丁未扩大）；⑧ D2 恢复补偿 hook 行为测（当前源码锁；门序已改为先判统一相位门、后记 250ms 去重，仍缺行为测试）；⑨ A1 摘要行 key 与 `start()` 重置回归测试（同内容换 id 必须交付、新订阅寿命首帧必交付）；⑩ 1s 桶两份字面量（`source-mux-facts.ts` 的 `FACT_AT_PUBLISH_BUCKET_MS` 与 `derive.ts` 的 `FACT_AT_SIGNATURE_BUCKET_MS`）统一到单源；⑪ A3 打开态 A/B 必须包含「隐藏壳静默死亡 >~5min + 恢复」场景（mounted 为 sticky 权威位，observer 可能已不存在）。
 
+#### 3.7 交互卡顿：会话切换的 chamber 侧放大器（未排期）
+
+**证据**：每次会话点击（含点已选中行的 noop）触发 openIntent arm+release 的 ≥2 次全 fleet 派生/发布（publishes 1–3、rowDerivations 26–110）；`retainedBy` 与 `current` 同处投影 cacheKey，变更时逐源重建；`selectView` 每次点会话都调 `ssh.reverify`（源码路径显示收益小，先测再定）。
+
+**设计**：openIntent 只影响 current 的窄派生、arm+release 合并只发终态（会削弱 pending-open 语义，需单独裁决）；`retainedBy` 变化用窄签名跳过逐源重建；`openSession` 路径跳过 `ssh.reverify`；行级成本需 vendor 行虚拟化/markdown 按需化（§3.2/§3.5 同一批）。
+
+**触发**：右栏 docked track 按 design 06 §13 改为瞬时落位后，若仍反馈切 session 慢，或需把 settle 从 ~0.5–1.3s 继续压缩时。
+
+**验证**：运行页注入探针同口径 A/B（帧 p95/worst、≥50ms 帧、`__dshChamberRenderCounters` publishes/derivations）+ 相关包测试；真机生效需重建+重启（单独安排）。
+
+#### 3.8 交互卡顿：同族未修项（左栏 track / 侧栏 M×N / recall watcher）
+
+**证据**：vendor `.frame[data-animating]` 的 300ms `grid-template-columns` 同样作用于左栏 collapse/expand（本仓 D1 只压右栏）；多源侧栏在每个常驻壳各渲一遍全部来源 section（`SidebarRoot.tsx` 常驻 policy 硬上限 12），每 section 挂 document 级 pointer 捕获/click 监听与 search 订阅，`setSearchQuery` 每击键 notify 全部监听者（壳数 M×来源数 N，上限 12×12）；`window-drag/recall.ts` 每壳一份 MutationObserver + document 监听 + 每行 ResizeObserver，行移动过渡期间逐帧全行测量。
+
+**设计**：①左栏 toggle 复用 track 瞬时落位（视觉变化需先裁决/或先 A/B）；②侧栏 document 监听收成页面单例、search notify 按帧合并且只让承载该来源的 active 壳订阅；③recall watcher 页面级单例（首装复用 + dispose 引用计数）。
+
+**触发**：按「左栏折叠卡顿 / 搜索打字卡顿 / 窗口拖动/行移动耗电」的用户反馈排序，右栏/切 session 主项收敛后再排期。
+
+**验证**：运行页 A/B（左栏 toggle、搜索每键、窗口 resize 与行移动）+ 无行为回归；先登记再排期。
+
+#### 3.9 交互/长运行：扩面的残余（M2/M3/M5/M6，未排期）
+
+**证据（运行页实测）**：①**M2** 唤醒/online 扇出：N=5 壳 = 5 个来源（local+4 ssh），resume → 5 个 mux WS、online → 4 次 `ssh.reverify` 是 **per-source 必要成本**，不是冗余（无可合并对象）（设计读法见 [design 14 §D4](../design/runtime/14-sleep-background.md)）；可优化项只有「一次唤醒同时重连」的突发（隐藏壳延迟到下次激活/错峰），代价是隐藏源推送陈旧窗口。②**M3** 每键 20 次 → 105 次 `querySelectorAll(modalSelector)`（≈5/键 = 每壳 1 次，N=5；200 键 1005 次、单键 1.45–1.78ms）；机制 = vendor `shortcuts/dom.ts` 的 `changedModals` 在**任意** mutation 记录时清空 modal 缓存（应只对 modal 相关记录失效），live DOM churn 下每键每壳重查；修点属 vendor-patch 第二类准入（需同机 patched/unpatched A/B 写入 reason），且需先做 stack 归因区分 DOM/native 两条安装路径。③**M5** 同主题跨源切换实测≈0（3–5 次 getComputedStyle/切换、≈0ms），异主题整页 restyle 是换调色板固有成本；本机 5 源全 light/zh-CN，数百条 token 定义量级未测。④**M6** 右栏 docked 窗口已由 [design 06 §13](../design/client/06-sidebar-enhancements.md) 消除；剩余左栏 track 与 vendor RO 链见 §3.8①，不在本仓修。⑤**跨源隐藏壳 reveal/catch-up**：运行页注入实测跨源切换 worst 333–519ms、≥50ms 帧 10–13、阻塞 ~1.7s、settle ~6s（注入代理口径，未随仓归档）；当前无修复，触发=跨源切换用户反馈/右栏主项收敛后 A/B。⑥**D1 真机生效验证**：docked track 瞬时落位需重建 renderer + 重启 app 后验证；判据 = 开/关帧 p95/worst、≥50ms 帧、track 值/视觉；触发 = 合并后首轮真机验收。
+
+**设计**：M2 若做 = 页面定向派发（事件携带 targetSourceId）+ painted 变更补连，先注入 A/B 判收益再改；M3 = vendor patch 收窄 `changedModals` 的失效条件（先 stack 归因，`reason` 记录同机 A/B）；M5 = 需 light↔dark 或 zh↔en 来源 fixture，同值短路收益≈0，不排期；M6 = 只登记，vendor RO 链不在本仓修。
+
+**触发**：按用户反馈排序（唤醒后卡顿 / 打字延迟 / 跨源主题切换 / 左栏折叠），先有运行页 A/B 数字再动代码。
+
+**验证**：同口径注入代理 A/B（协议未归档）+ 包单测；M2 判据 = resume WS 数 = active 壳数、隐藏源在下次激活前无额外重连；M3 判据 = quiet 且非 modal mutation 时 qSA/键 = 0、modal 打开/关闭回归绿；M5/M6 先测量后定。
+**相邻小项（已定位、先登记不修）**：① browser `controllers` Map 以 sessionId 为键、仅 ctx dispose 清（[index.ts](../../packages/dsh-chamber-client-ui-browser/src/client/index.ts)）；② `RowHoverCard` 打开时 window scroll 每次 place（[RowHoverCard.tsx](../../packages/dsh-chamber-client-ui-sidebar/src/client/RowHoverCard.tsx)）；③ 设置页服务器下拉打开时 window scroll 同步 GBCR+setState（[SettingsShell.tsx](../../packages/dsh-chamber-client-ui-settings-bridge/src/client/SettingsShell.tsx)）——均低频/有早退/量级小，随隐藏壳门控或真实帧证据再处理。
+
+
 ### 4. 多实例常驻的后续研究（未排期）
 
 > 本条目的触发条件独立于 v1.1 落地；v1.1 只落 keep-all + 硬上限 + 压力阀（design 05 §4.1），
@@ -453,7 +485,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 |#|工作|触发 / 范围|退出|
 |---|---|---|---|
 |0|通用 alias→逻辑 URL 反查（**降级已裁决**）：只保持同一 forward alias origin 内的逻辑地址；不做 record 表通用反查、无未知 alias 显式提示（地址栏/历史会原样显示离开 origin 的 alias URL）|W-26 真机；产品要求地址栏永不暴露 alias 时|反查纯函数 + 状态表达式落地，W-26 该半段有可执行判据并 PASS|
-|1|统一 overlay 遮挡信号：当前 = 9 点 DOM 命中 + overlay 候选 selector（`OVERLAY_SELECTOR`，候选列表 250ms 缓存）+ 显式 `setOccluded` seam，浮层来源未统一接线|design 28 §4.1 / W-19 真机遮挡负例|一条统一信号驱动 guest 隐藏（9 点启发式仅兜底），W-19 以截图 region diff 转 PASS|
+|1|统一 overlay 遮挡信号：当前 = 9 点 DOM 命中 + overlay 候选 selector（`OVERLAY_SELECTOR`，候选列表 100ms 缓存）+ 显式 `setOccluded` seam，浮层来源未统一接线|design 28 §4.1 / W-19 真机遮挡负例|一条统一信号驱动 guest 隐藏（9 点启发式仅兜底），W-19 以截图 region diff 转 PASS|
 |2|verifySource 专用通道：当前借 `dsh-chamber:forward-list`（诊断面）返回 `ok:true` 做 source 指纹证明（失败/异常 = 拒绝并写审计日志）；替代 = Swift↔sidecar 专用 prove 通道（**不动 E1 manifest 的通道表**前提下评估复用/内部通道）|E1 通道表冻结期；`forward.list` 语义变化前|浏览器信任面不再耦合 forward 诊断面；`forward.list` 语义变化不静默破 browser|
 |3|forward 类型两处镜像去重：`packages/dsh-chamber-wire/src/forward.ts` 与 client 侧 `shared/forward-bridge.ts` 的 ForwardRecord/错误码表重复；合并需 `package.json` workspace 依赖（当前 client 包零依赖契约）|下次 workspace 依赖调整同批|单一类型源，镜像测试删除|
 |4|`browser.state` 的 `visible/occluded` 死可选字段清理：Swift 的 state push 不发这两个字段（遮挡走几何检测 + `setOccluded` seam），renderer 类型与服务侧保留可选仅为向前兼容|下次 state 载荷变更同批|字段从类型/解析删除或由 Swift 真实生产；删除前确认向前兼容臂不依赖|

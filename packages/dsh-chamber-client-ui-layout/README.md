@@ -36,6 +36,13 @@ versioned `localStorage` key):
   instance is collapsed `sidebar === 0`, never when the value is unchanged — no
   loops, no un-collapsing another shell's closed sidebar).
 
+The fork also settles the right panel's docked presentation transitions:
+`openRightbar` / `closeRightbar` set `rightbarInstant` for a docked open/close
+(and a fullscreen exit), so the frame's center-column grid track lands in one
+frame instead of easing over 300ms; the panel keeps its own transform slide.
+See [design 06 §13](../../docs/design/client/06-sidebar-enhancements.md) for the
+A/B evidence and rejected alternatives.
+
 The official `@deepseek-ai/dsh-client-ui-layout` bundle must never load in the
 chamber page (a second `root` slot registration at priority 0 would throw the
 one-declarer rule); it stays covered in

@@ -225,6 +225,8 @@ export const GROUPS = {
     'test/visual-lock/new-session-row.test.ts',
     // B6 FLIP 预算（渲染 P0）：两次 FLIP 起始批的最小间隔 + 只委托不复制 verbatim port。
     'test/session-rows/row-motion-budget.test.ts',
+    // blank-row GHOST 本地过期时钟：重臂/旧 timer 迟到/到期三态。
+    'test/session-rows/ghost-expiry.test.ts',
     // Row motion (the ported AnimatedRows + its key wiring, design 06 §7): the
     // byte-fidelity lock compares against the pinned vendor source.
     'test/session-rows/animated-rows.test.ts',

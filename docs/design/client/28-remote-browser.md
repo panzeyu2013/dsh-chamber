@@ -79,8 +79,8 @@ forward 面 4 个 invoke（wire version 3）：`forward.request({sourceId, sourc
 ### 4.1 宿主与几何
 
 - 宿主：`BrowserGuestLayerView`（isFlipped）挂在壳 `webView` 之上的 contentView 子视图（contentView 已多子视图：shell material + webView，不重排）；`hitTest` 只在活动 guest rect 内命中，其余穿透给壳页面；`visible=false` 时整层不参与命中。
-- 坐标：`points = cssPx * webView.pageZoom`；rect 相对壳 webView bounds 左上角；renderer 用 `ResizeObserver` + 捕获阶段 scroll + `visualViewport`/window resize + `requestAnimationFrame` 合并，只在变化时发（≥1px 或可见性变化）。
-- 遮挡：原生层无法被 DOM 覆盖（§8）——renderer 在每次占位测量（布局/滚动/可见性变化后经 rAF 合并）做两类检测：① 占位 rect 的 9 个采样点（中心 + 四角内缩 + 四边中点）DOM 命中，任一被非占位/非祖先层赢得即 occluded；② overlay 候选（`OVERLAY_SELECTOR`：`[data-chamber-overlay]`/`[role="dialog"]`/`[role="menu"]`/`[role="alertdialog"]`/`dialog[open]`/`[data-chamber-toast]`）的 rect 与占位 rect 相交（覆盖 `pointer-events:none` 遮罩）；候选列表每 250ms 至多刷新一次。命中即上报 `occluded=true` 隐藏 guest；rect 为 0/离屏/收起 → hide。
+- 坐标：`points = cssPx * webView.pageZoom`；rect 相对壳 webView bounds 左上角；renderer 用 `ResizeObserver` + 捕获阶段 scroll + `visualViewport`/window resize + `requestAnimationFrame` 合并，只在变化时发（≥1px 或可见性变化）。scroll 只对**文档/占位祖先容器**的滚动响应：占位祖先链为 `overflow:hidden|clip`（右栏 `.rightbarCol` 自身 `overflow:visible`，但不承载内容滚动），聊天等无关 scroller 物理上不能移动占位 rect，事件本身不触发几何测量（trailing 复检会补测一次，≤10Hz；design 28 §4.1，`classifyScrollTarget`）。
+- 遮挡：原生层无法被 DOM 覆盖（§8）——renderer 在占位测量（布局/滚动/可见性变化后经 rAF 合并）上做两类检测（几何每次测量都跑；遮挡检测按本段下述节流）：① 占位 rect 的 9 个采样点（中心 + 四角内缩 + 四边中点）DOM 命中，任一被非占位/非祖先层赢得即 occluded；② overlay 候选（`OVERLAY_SELECTOR`：`[data-chamber-overlay]`/`[role="dialog"]`/`[role="menu"]`/`[role="alertdialog"]`/`dialog[open]`/`[data-chamber-toast]`）的 rect 与占位 rect 相交（覆盖 `pointer-events:none` 遮罩）；候选列表每 100ms（=遮挡重判周期）至多刷新一次；due 检查与候选刷新同拍，避免陈旧候选漏判。**两档节流**：几何（占位 rect 测量/上报）每次测量都跑（rect 滞后 ≤1 帧）；遮挡命中（候选 GBCR + 9 点）≤10Hz（`OCCLUSION_CHECK_INTERVAL_MS=100`），几何事件流结束以 trailing 检查补齐，`setOccluded` 强制立即重判——有几何事件流时遮挡判定延迟上界 100ms（+1 帧，后台 timer 可能更晚）。遮挡复检由任意捕获 scroll（含被因果过滤的无关 scroller，它只 arm 一次 trailing 复检，该复检会做一次几何测量、≤10Hz；`setOccluded(true)` 的隐藏期短路）、resize/RO 流与 setOccluded 驱动；浮层打开本身不产生几何事件，依赖后续 scroll/resize 或显式 setOccluded（W-19 已知缺口，见 §8-5）。命中即上报 `occluded=true` 隐藏 guest；rect 为 0/离屏/收起 → hide。
 - 统一信号：`overlayDepth` 计数器尚未实现（浮层来源未统一接线；显式 `setOccluded` seam 保留）；当前判据 = 9 点命中 + overlay 候选 + rect 相交。登记 [TODO](../../progress/TODO.md) D§5 #1；未接入浮层的负例由 W-19 覆盖。
 - 调试面：`DSH_CHAMBER_SHELL_DEBUG` 下 registry 的 `emitRectAudit` 在几何/可见性变化与崩溃重建挂载时打一行 `[shell][browser-guest][rect-debug]`（含 actual/placeholder/差值 ≤1pt 判据），是 W-20 的唯一出口；不提供查询 accessor（查询面已删）。
 
@@ -139,7 +139,7 @@ guest 使用全新 `WKWebViewConfiguration`：无 `userContentController` 注入
 2. **引擎上限**：WebKit ↔ Chromium 的 UA、媒体/DRM、CSS、右键菜单、自动填充、devtools 面与错误码词汇表不同；「与上游桌面一致」以载体语义为界（[deviations](../../progress/deviations.md) S-64）。
 3. **子帧门的引擎可拦截性待真机探针定性**：若 WKWebView 不对子帧投递导航决策，则子帧安全面降级为 content rule 资源级（顶层规则数组 + WebKit 正则子集；S-59 为 open，判据 = 真机探针（子帧导航是否投递 `decidePolicyFor`））；投递则子帧门按上游语义实现、S-59 可闭合。
 4. **非 GET popup 不可承载**：`createWebViewWith` 拿不到 postBody → POST/PUT/PATCH 新窗一律丢弃（S-60）。
-5. **z-order/几何**：原生层无法被 DOM 覆盖（9 点 DOM 命中 + overlay 候选 selector（250ms 缓存）+ 显式 `setOccluded` seam）；rect 受 pageZoom/滚动/DPR/120Hz 影响（S-61）。
+5. **z-order/几何**：原生层无法被 DOM 覆盖（9 点 DOM 命中 + overlay 候选 selector（100ms 缓存）+ 显式 `setOccluded` seam；遮挡命中 ≤10Hz + trailing（100ms + 1 帧，且后台 timer 节流不保证，真机 W-19/W-20 必测），几何每帧）；rect 受 pageZoom/滚动/DPR/120Hz 影响（S-61）。**已知缺口**：`OVERLAY_SELECTOR` 未含 `[data-menu-popup]`（vendor `Menu` 的 searchable popup 不设 `role=menu`；`[data-chamber-overlay]`/`[data-chamber-toast]` 全仓无生产者），随 TODO D§5 #1 的统一 overlay 信号收口。
 6. **分区键含 source 身份**：同一 workspace 在不同 source 不共享站点数据（S-62）。
 7. **remote-source 可驱动本机 guest 访问内网**：浏览器语义的既有面，登记 + 验收（S-63）。
 8. **guest 进程数/内存**：每 tab 独立 web content process + keep-all 常驻；内存压力下 WebKit 可终止后台进程（崩溃投影承接）。**不设 guest 数量配额**：总量交给 N-ctx 源壳硬上限 12 的释放路径与 WebKit 内存压力；W-22 采内存曲线。
@@ -168,6 +168,11 @@ L1–L6 判据与执行见 [remote-browser-acceptance.md](../../checklists/accep
 - **iframe 载体（v2）**：被否——受目标站 XFO/frame-ancestors 限制、失败不可见、与壳共享存储/进程、弹窗无反应；与「与上游桌面端一致」的目标冲突（[ADR-0004](../decisions/0004-swift-guest-per-tab.md)）。
 - **同版本双载体（iframe 兜底）**：被否——兜底与 CSP 收窄互斥（兜底触发即被 CSP 全拒），且 Swift 恒有 native 桥（「无桥」在出货面不成立），双载体带来双验收/双文档/双安全面。
 - **Electron 复活**：不在范围（[ADR-0002](../decisions/0002-swift-only-flavor.md) / electron-frozen）。
+- **整帧节流（几何 ≤10Hz）**：被否——占位/guest 最多滞后 100ms，展开/收起/拖动时可见错位；只节流遮挡档。
+- **单点/少点命中**：被否——只盖一角/一边中点的对话框/菜单会漏判；v2 的多点采样保留。
+- **候选否定预判**：被否——9 点是主判据、候选 selector 只是 `pointer-events:none` 补充，否定式预判会把「非候选浮层盖住 guest」变成可见回归。
+- **候选缓存保留 250ms**：被否——遮挡 due 检查每 100ms 跑一次，250ms 候选缓存会让 pointer-events:none 浮层在最多 150ms 的窗口内漏判；改为与 due 同拍刷新（QSA ≤10Hz，成本有界）。
+- **整帧/阈值过滤**：被否——阈值 >1px 破坏「≥1px 才上报」契约；几何事件流用因果过滤（祖先链不可滚）而非节流。
 - **服务端抓取渲染（控制面代理取页再内嵌）**：新域（登录态/JS/证书/安全边界全部重做），且把控制面变成任意 URL 抓取面。拒绝。
 - **gateway 隧道（`/chamber/browser/<port>` 反代）**：把控制面变成任意远端端口的执行/转发面。拒绝。
 - **共享 `127.0.0.1` 回退**：远端可控信号触发安全降级；cookie jar 与用户本机服务同源。删除该臂。

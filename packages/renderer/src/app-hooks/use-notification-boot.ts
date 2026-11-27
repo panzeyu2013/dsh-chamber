@@ -21,13 +21,13 @@ export function useNotificationBoot() {
     // 通知三表首帧载入（旧 unread.v4/v2 一次性迁移并清理旧键，见 notification-store.ts）。
     const payload = loadNotifications(storage)
     // 页代 token（v5 §3.5）：同 tab reload = same（保留 pending/outcomes），新进程/新窗口 =
-    // fresh（丢弃 pending 并 loud；notified/outcomes 仍 durable）。
+    // fresh（丢弃 pending 并 loud；notifiedRuns/outcomes 仍 durable）。
     const boot = loadBootToken(browserBootTokenStorage())
     return { storage, payload, boot }
   })
   const notificationStorageRef = useRef<NotificationStorageLike | undefined>(notificationsBoot.storage)
   // complete 通知账本（设计 19 + goal-aware v5 §3.1 + v4 身份轨）：身份轨 notifiedRuns 与
-  // durable 三表（notified 身份哨兵 / pending 压制结算位 / outcomes 标题一次性身份）从 v4 落盘
+  // durable 三表（notifiedRuns 身份哨兵 / pending 压制结算位 / outcomes 标题一次性身份）从 v4 落盘
   // 恢复；armed/settleFence/generation/goalKnown 易失。fresh 丢弃 pending（loud），same 只做
   // 上界卫生。身份面与水位面并列、互不混写。
   const completeLedgerRef = useRef(createCompleteLedger(notificationsBoot.payload.notifiedRuns, {
