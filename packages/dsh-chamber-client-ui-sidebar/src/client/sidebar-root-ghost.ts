@@ -18,7 +18,11 @@ export function useSidebarGhost({ servers, chamberInstanceId }: {
   // placeholder must not linger. A one-shot timer per arming bumps the tick; armings are rare.
   const ghostExpiry = useRef<Map<string, number>>(new Map())
   const ghostTimers = useRef<number[]>([])
-  const [, setGhostTick] = useState(0)
+  // 到期必须换新 context 值，不能只 bump 本地 state：行渲染门在 memo(ServerSection) 与
+  // 稳定 ctxValue 之后，ghostExpiry 是稳定 ref ⇒ SidebarRoot 自己重渲染（memo 命中、值不变）
+  // 不会让 section/行重算 ServerSectionRows 的到期门。tick 值必须由 shell 放进 ctxValue
+  // （对象 + 依赖数组），消费者版本变化才重渲染；丢弃 tick 值是死机制。
+  const [ghostTick, setGhostTick] = useState(0)
   useEffect(() => {
     const timers = ghostTimers.current
     return () => { for (const timer of timers) window.clearTimeout(timer) }
@@ -54,5 +58,5 @@ export function useSidebarGhost({ servers, chamberInstanceId }: {
     }, BLANK_GHOST_GRACE_MS)
     ghostTimers.current.push(timerId)
   }
-  return { ghostExpiry, armBlankGhostForClick }
+  return { ghostExpiry, ghostTick, armBlankGhostForClick }
 }

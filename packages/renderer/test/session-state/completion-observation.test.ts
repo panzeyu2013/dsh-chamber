@@ -744,7 +744,12 @@ test('REGRESSION(§3.5/TL3): a watermark-only absorption persists without a disp
   assert.equal(calls.persists.length, afterHold + 1, 'the absorbed watermark is durable and must be persisted')
 })
 
-test('REGRESSION(§3.5): the G5 armed gate records its monotonic watermark and persists it', () => {
+test('REGRESSION(§3.5/page-local): the G5 armed gate only advances the page-local notified watermark — no persist', () => {
+  // 纯页内推进的负向对照：G5 armed 门把候选水位单调记进 state.notified（页内水位，
+  // 不进落盘载荷，reload 后由 facts 播种重建）。旧用例名叫「…persists it」并断言
+  // persists.length===1 + 理由「the durable notified table changed」，锁的是修复前的
+  // 错误模型（把页内 notified 当 durable）。durable 写点的正对照见
+  // 上一条（pending 水位吸收必须 persist）：本场景里 durable 载荷一格未动。
   const ledger = createCompleteLedger()
   ledger.setArmed('src', new Set(['s1']))
   const { calls, sink } = makeSink()
@@ -754,7 +759,10 @@ test('REGRESSION(§3.5): the G5 armed gate records its monotonic watermark and p
   })
   assert.equal(calls.notifications.length, 0, 'an already-armed session must not re-notify')
   assert.equal(ledger.state().notified.src?.s1?.complete, 700, 'the watermark is still recorded monotonically')
-  assert.equal(calls.persists.length, 1, 'the durable notified table changed and must persist')
+  assert.equal(calls.persists.length, 0, '页内水位推进不是 durable 变更，不得排盘')
+  assert.deepEqual(ledger.notifiedRunTable(), {}, 'notifiedRuns（投递结算的 durable 身份）未被这次吸收写入')
+  assert.deepEqual(ledger.pendingTable(), {})
+  assert.deepEqual(ledger.outcomesTable(), {})
 })
 
 test('REGRESSION(withdraw/fence): a channel withdrawal clears the settleFence so it cannot eat the next real completion', () => {
@@ -1744,7 +1752,7 @@ test('REGRESSION(FINAL-C): deleting the observation state withdraws the old gene
   assert.equal(ledger.state().settleFence.src, undefined, 'settleFence 无残留')
   assert.equal(ledger.state().goalKnown.src, undefined, 'goalKnown 无残留')
   assert.equal(ledger.pendingEntry('src', 's1'), undefined, '旧代 pending 无残留')
-  assert.equal(ledger.notifiedWatermark('src', 's3', 'complete'), 4242, 'notified 保持 durable')
+  assert.equal(ledger.notifiedWatermark('src', 's3', 'complete'), 4242, 'notified 页内水位不被 withdraw 清（页内状态，不落盘）')
   assert.equal(ledger.outcomeWatermark('src', 'g-keep'), 4243, 'outcomes 保持 durable')
   // 重建：freshState 新代；首份批次只含 other（烧掉 baseline），第二份带 g1 outcome。
   let fresh = observeSource({

@@ -47,18 +47,26 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
   const foreignOverlay = new FakeElement('foreign-overlay', false)
   const unrelated = new FakeElement('chat-scroller', false)
   const ancestor = new FakeElement('tab-body', true)
+  // 可换宿主的视口表：remount 用例改 getElementById 的返回值；activeHost 决定命中测试的 topmost。
+  const viewports: Record<string, FakeElement> = { viewport: host }
+  let activeHost: FakeElement = host
   const scrollListeners: Array<(event: Event) => void> = []
   let scrollCapture: boolean | null = null
   const documentRemoved: string[] = []
   const windowAdded: string[] = []
   const windowRemoved: string[] = []
   const activeTimers = new Set<number>()
+  const timerDelays: number[] = []
   let eipCalls = 0
   let hitCovered = false
   let overlayQsaCalls = 0
   let overlayCandidates: FakeElement[] = []
   const documents: any = {
-    getElementById: (id: string) => (id === 'viewport' ? host : null),
+    getElementById: (id: string) => {
+      const element = viewports[id] ?? null
+      if (element !== null) activeHost = element
+      return element
+    },
     addEventListener: (type: string, listener: (event: Event) => void, capture?: boolean) => { if (type === 'scroll') { scrollListeners.push(listener); scrollCapture = capture === true } },
     removeEventListener: (type: string, listener?: (event: Event) => void) => {
       documentRemoved.push(type)
@@ -68,7 +76,7 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
       }
     },
     querySelectorAll: () => { overlayQsaCalls += 1; return overlayCandidates },
-    elementsFromPoint: () => { eipCalls += 1; return [hitCovered ? foreignOverlay : host] },
+    elementsFromPoint: () => { eipCalls += 1; return [hitCovered ? foreignOverlay : activeHost] },
   }
   const windows: any = {
     visualViewport: undefined,
@@ -81,6 +89,7 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
   ;(globalThis as any).ResizeObserver = class { observe() {} disconnect() {} }
   ;(globalThis as any).requestAnimationFrame = (fn: () => void) => { frameQueue.push(fn); return frameQueue.length }
   ;(globalThis as any).setTimeout = (fn: () => void, ms?: number) => {
+    timerDelays.push(typeof ms === 'number' ? ms : 0)
     const id = saved.setTimeout(() => { activeTimers.delete(id); fn() }, ms) as number
     activeTimers.add(id)
     return id
@@ -97,13 +106,27 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
   })
   return {
     host, unrelated, ancestor, documents,
+    createElement: (id: string, containsHost = false) => new FakeElement(id, containsHost),
+    setViewport: (id: string, element: FakeElement) => { viewports[id] = element },
     pumpFrame: () => { const queue = frameQueue; frameQueue = []; for (const fn of queue) fn() },
     dispatchScroll: (target: unknown) => { for (const listener of scrollListeners) listener({ target } as unknown as Event) },
     setHitCovered: (covered: boolean) => { hitCovered = covered },
     setOverlayCandidates: (candidates: FakeElement[]) => { overlayCandidates = candidates },
     foreignOverlay,
-    stats: () => ({ eipCalls, overlayQsaCalls, scrollCapture, scrollListeners: scrollListeners.length, documentRemoved: [...documentRemoved], windowAdded: [...windowAdded], windowRemoved: [...windowRemoved], activeTimers: activeTimers.size }),
+    stats: () => ({ eipCalls, overlayQsaCalls, scrollCapture, scrollListeners: scrollListeners.length, documentRemoved: [...documentRemoved], windowAdded: [...windowAdded], windowRemoved: [...windowRemoved], activeTimers: activeTimers.size, timerDelays: [...timerDelays] }),
   }
+}
+
+/**
+ * 可控的 performance.now：把页面时基钉在测试指定的毫秒值，让候选 TTL / 遮挡节流窗口
+ * 这类按时间判定的分支可以精确断言（真实 timer 仍由 installFakeDom 记账）。
+ */
+function installFakeClock(t: { after: (fn: () => void) => void }) {
+  const saved = (globalThis as any).performance
+  let nowMs = 0
+  ;(globalThis as any).performance = { now: () => nowMs }
+  t.after(() => { (globalThis as any).performance = saved })
+  return { set: (value: number) => { nowMs = value } }
 }
 
 test('classifyScrollTarget: unrelated scrollers are the only skippable class', () => {
@@ -303,12 +326,16 @@ test('B1: an unrelated scroll still arms a trailing occlusion check', async (t) 
   presentation.mount('viewport')
   dom.pumpFrame()
   assert.equal(reports.at(-1)?.visible, true)
+  const baseGbcr = dom.host.gbcrCalls
   dom.setHitCovered(true)
   dom.dispatchScroll(dom.unrelated)
   dom.pumpFrame()
-  assert.equal(reports.at(-1)?.visible, true, 'an unrelated scroll must not measure geometry')
+  assert.equal(dom.host.gbcrCalls, baseGbcr, 'an unrelated scroll must not measure geometry')
+  assert.equal(reports.at(-1)?.visible, true, 'an unrelated scroll must not report')
   await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
   dom.pumpFrame()
+  // trailing 复检必须补一次占位几何测量：命中判定翻转之外，native guest 的 rect 也靠它刷新。
+  assert.equal(dom.host.gbcrCalls, baseGbcr + 1, 'the trailing check must re-measure the placeholder geometry')
   assert.equal(reports.at(-1)?.occluded, true, 'the trailing occlusion check must still run')
   presentation.dispose()
 })
@@ -333,4 +360,119 @@ test('B2: a due hit test refreshes a stale overlay candidate list', async (t) =>
   assert.equal(dom.stats().overlayQsaCalls, qsaAtMount + 1, 'one due check refreshes candidates at most once')
   assert.equal(reports.at(-1)?.occluded, true, 'a due check must see the new candidate')
   presentation.dispose()
+})
+
+test('E: a non-due flush arms the trailing check for the remaining interval, not immediately', async (t) => {
+  const dom = installFakeDom(t)
+  const clock = installFakeClock(t)
+  clock.set(1000)
+  const presentation = new NativeGuestPresentation({ report: () => {}, hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame() // 首个 due 检查：lastOcclusionAt=1000，候选缓存也落在 1000
+  const baseEip = dom.stats().eipCalls
+  const baseQsa = dom.stats().overlayQsaCalls
+  clock.set(1040) // due 检查后第 40ms
+  dom.dispatchScroll(dom.ancestor)
+  dom.pumpFrame()
+  assert.equal(dom.stats().eipCalls, baseEip, 'a non-due flush must not hit-test')
+  assert.equal(dom.stats().overlayQsaCalls, baseQsa, 'a non-due flush must not query candidates')
+  assert.equal(dom.stats().activeTimers, 1, 'the non-due flush arms exactly one trailing timer')
+  clock.set(1100) // 到达 due 时刻；trailing 在真实 60ms 后触发
+  // 真实 60ms 之前来一帧：trailing 不得提前命中测试/刷候选（delay=0 的变异在这里红）。
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  dom.pumpFrame()
+  assert.equal(dom.stats().eipCalls, baseEip, 'no hit test may run before the remaining interval elapses')
+  assert.equal(dom.stats().overlayQsaCalls, baseQsa, 'no candidate refresh may run before the due moment')
+  // 延迟必须是「剩余间隔」而不是 0：否则动画期命中测试回到 rAF 频率，≤10Hz 的上界失效。
+  assert.equal(dom.stats().timerDelays[0], OCCLUSION_CHECK_INTERVAL_MS - 40, 'the trailing delay is the remaining interval')
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  dom.pumpFrame()
+  assert.equal(dom.stats().eipCalls - baseEip, 9, 'the trailing check lands exactly one 9-point hit test')
+  assert.equal(dom.stats().overlayQsaCalls - baseQsa, 1, 'the trailing due check refreshes candidates once')
+  presentation.dispose()
+})
+
+test('M1: a mount inside the first 100ms still refreshes overlay candidates on the first due check', (t) => {
+  const dom = installFakeDom(t)
+  const clock = installFakeClock(t)
+  clock.set(50) // 页面时基 < 候选 TTL：初始挂载首帧的边界（壳文档 time origin 后 <100ms）
+  // pointer-events:none 浮层：rect 与占位相交，但永远赢不了 9 点命中测试。
+  dom.setOverlayCandidates([dom.foreignOverlay])
+  const reports: Array<{ visible: boolean; occluded: boolean }> = []
+  const presentation = new NativeGuestPresentation({ report: (r) => reports.push({ visible: r.visible, occluded: r.occluded }), hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  assert.equal(dom.stats().overlayQsaCalls, 1, 'the first due check must not reuse the never-refreshed candidate cache')
+  assert.equal(dom.stats().eipCalls, 0, 'a covering candidate short-circuits before the point hit test')
+  assert.equal(reports.at(-1)?.visible, false, 'the pointer-events:none overlay must hide the guest on the first frame')
+  assert.equal(reports.at(-1)?.occluded, true)
+  assert.equal(dom.stats().activeTimers, 0, 'the forced first check must not leave a trailing timer as the only recovery')
+  presentation.dispose()
+})
+
+test('W1: a remount re-runs the hit test and refreshes candidates instead of reusing the old host state', (t) => {
+  const dom = installFakeDom(t)
+  const clock = installFakeClock(t)
+  const reports: Array<{ visible: boolean; occluded: boolean }> = []
+  const presentation = new NativeGuestPresentation({ report: (r) => reports.push({ visible: r.visible, occluded: r.occluded }), hidden: () => {} }, 'tab-1')
+  clock.set(0)
+  const cleanup = presentation.mount('viewport')
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.visible, true)
+  // 旧宿主在 due 检查里判定 covered=true，并把 lastOcclusionAt/候选缓存时钟推到 150ms。
+  dom.setHitCovered(true)
+  clock.set(150)
+  dom.dispatchScroll(dom.ancestor)
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.occluded, true)
+  const eipBeforeRemount = dom.stats().eipCalls
+  const qsaBeforeRemount = dom.stats().overlayQsaCalls
+  dom.setHitCovered(false)
+  clock.set(160) // 距旧 due 检查只有 10ms：未重置的实现会走「非 due 复用旧判定」分支
+  cleanup()
+  const secondHost = dom.createElement('viewport-2')
+  dom.setViewport('viewport-2', secondHost)
+  presentation.mount('viewport-2')
+  dom.pumpFrame()
+  assert.equal(secondHost.gbcrCalls, 1, 'the remount first flush must measure the new host')
+  assert.equal(dom.stats().eipCalls - eipBeforeRemount, 9, 'the remount first flush must re-run the hit test')
+  assert.equal(dom.stats().overlayQsaCalls - qsaBeforeRemount, 1, 'the remount first flush must refresh candidates')
+  assert.equal(reports.at(-1)?.visible, true, 'the new host must not inherit the previous covered verdict')
+  assert.equal(secondHost.dataset.chamberBrowserTab, 'tab-1')
+  presentation.dispose()
+})
+
+test('W1: repeated non-due frames arm a single trailing timer', (t) => {
+  const dom = installFakeDom(t)
+  const clock = installFakeClock(t)
+  clock.set(1000)
+  const presentation = new NativeGuestPresentation({ report: () => {}, hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  const baseEip = dom.stats().eipCalls
+  clock.set(1040)
+  for (let frame = 0; frame < 3; frame += 1) {
+    dom.dispatchScroll(dom.ancestor)
+    dom.pumpFrame()
+  }
+  assert.equal(dom.stats().eipCalls, baseEip, 'three non-due frames must not hit-test')
+  assert.deepEqual(dom.stats().timerDelays, [OCCLUSION_CHECK_INTERVAL_MS - 40], 'the deduplicated timer keeps the remaining interval')
+  assert.equal(dom.stats().activeTimers, 1, 'three non-due frames must arm exactly one trailing timer')
+  presentation.dispose()
+  assert.equal(dom.stats().activeTimers, 0, 'dispose must clear the deduplicated timer')
+})
+
+test('W1: dispose drops an rAF flush that was already queued', (t) => {
+  const dom = installFakeDom(t)
+  const reports: unknown[] = []
+  const hiddenCalls: number[] = []
+  const presentation = new NativeGuestPresentation({ report: (r) => { reports.push(r) }, hidden: () => { hiddenCalls.push(1) } }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  assert.equal(reports.length, 1)
+  presentation.setOccluded(true) // 只排 rAF、不 pump：dispose 之后该帧不得再跑
+  presentation.dispose()
+  dom.pumpFrame()
+  assert.equal(reports.length, 1, 'a flush queued before dispose must not report')
+  assert.equal(hiddenCalls.length, 0, 'a flush queued before dispose must not emit hidden')
 })

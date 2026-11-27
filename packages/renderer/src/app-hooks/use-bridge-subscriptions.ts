@@ -135,8 +135,8 @@ export type DesktopBridgeVerdict = 'pending' | 'present' | 'absent'
  * 桥要等 `window.dshChamber` 暴露（500ms 探测），`instances_get` 还要一次 IPC
  * 往返，期间 `remoteInstances` 仍是 `[]`、`servers` 只含 local。若此时按
  * live={local} 剪枝，四类 durable 表里属于远端来源的键会被当成退役来源写盘删除
- * ——pending/outcomes/notified 全部不可恢复（这正是 F6 回归的写盘
- * 丢失）。因此四类 durable 剪枝统一由本谓词放行：
+ * ——notifiedRuns/pending/outcomes 全部不可恢复（这正是 F6 回归的写盘
+ * 丢失；页内水位 notified 不落盘，不在载荷内）。因此四类 durable 剪枝统一由本谓词放行：
  * - 有桥（`'present'`）：只有权威 roster 结算（`remoteRosterSettledRef`：refreshRemotes 成功结算后置位，见 App.tsx）
  *   后 live 才完整；结算那一拍的 `remoteRosterSettled` state 变化使剪枝 effect
  *   重跑，届时再按权威 live 收敛。

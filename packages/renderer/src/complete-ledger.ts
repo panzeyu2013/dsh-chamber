@@ -162,14 +162,15 @@ export function completionAlreadySettled(
 export interface CompleteLedger {
   /** 完整状态（reconcile 直接读写；notifiedRuns/pending/outcomes 是持久化来源）。 */
   state(): CompletionDecisionState
-  /** 水位轨：v2 落盘读出的表（内部对象，调用方只读）。 */
+  /** 水位轨：页内水位表（不落盘，reload 后由 facts 播种重建；内部对象，调用方只读）。 */
   notifiedTable(): NotifiedWatermarkTable
   /**
    * 水位轨：单会话单类别已通知水位。
    *
    * **仅测试/诊断面（D4 标注）**：生产无调用——reconcile 直接读写
-   * `state().notified`；保留给用例构造/直读与持久化核对。新生产代码不得以它为
-   * 接线面（需要水位请走 `state()`，与 reconcile 同纪律）。
+   * `state().notified`；保留给用例构造/直读（页内水位不进落盘载荷，持久化核对请读
+   * pending/outcomes/notifiedRuns 表）。新生产代码不得以它为接线面（需要水位请走
+   * `state()`，与 reconcile 同纪律）。
    */
   notifiedWatermark(sourceId: string, sessionId: string, kind: UnreadKind): number | undefined
   /** **仅测试/诊断面**（D4）：语义同 {@link notifiedWatermark}。 */
@@ -250,8 +251,15 @@ export interface CompleteLedger {
    * 更高的候选由吞栏判定吞一次）。无栏会话 = no-op。
    */
   seedSettleFence(sourceId: string, sessionId: string, seededWatermark: number): void
-  /** 按现存来源集合剪枝；返回是否有变化（调用方据此决定是否重建引用）。 */
-  prune(liveIds: ReadonlySet<string>): boolean
+  /**
+   * 按现存来源集合剪枝（10 张 per-source 表全收敛），返回两个变化位：
+   *  - `changed`：任一张表（含页内水位 notified 与易失轨）被删条目——调用方据此重建引用；
+   *  - `durableChanged`：**只有落盘载荷三表**（notifiedRuns/pending/outcomes）被删条目。
+   *    App 只用它决定是否排盘：页内水位 notified 不进载荷（reload 由 facts 播种重建），
+   *    armed/armedFloor/settleFence/generation/goalKnown/runtimeSettled 六张易失表同样
+   *    不落盘，只剪它们时落盘是无谓写。
+   */
+  prune(liveIds: ReadonlySet<string>): { changed: boolean; durableChanged: boolean }
 }
 
 const EMPTY_ARMED: ReadonlySet<string> = new Set()
@@ -510,8 +518,9 @@ export function createCompleteLedger(
     clearArmedSession(sourceId, sessionId)
     clearFenceSession(sourceId, sessionId)
     clearGoalKnownSession(sourceId, sessionId)
-    // 易失的 native 结算待归属标记与会话身份同寿：会话消失后残留只会让长活来源缓慢增长，
-    // 且没有消费者（下一次 setNotifiedRun 命中同一 sessionId 才会消费，已不可达）。
+    // 易失的 native 结算待归属标记与会话身份同寿：会话消失后残留只会让长活来源缓慢增长。
+    // 消费面（facts sink 对锚点的认领/抑制）只在 >500 forgotten 的极端 churn 边界可达——
+    // 那正是设计已登记的「可能重复一次」边界（§3.2.4 ③/⑩），此处少一张防重网属接受边界。
     clearRuntimeSettled(sourceId, sessionId)
   }
 
@@ -708,27 +717,33 @@ export function createCompleteLedger(
     },
     prune(liveIds) {
       let changed = false
-      /** 写时复制：无变化返回原表（旧快照冻结），有变化返回新表。 */
-      const drop = <T>(map: Record<string, T>): Record<string, T> => {
+      let durableChanged = false
+      /**
+       * 写时复制：无变化返回原表（旧快照冻结），有变化返回新表。
+       * `persisted` = 该表进落盘载荷（notifiedRuns/pending/outcomes）——删条目才置
+       * durableChanged；页内水位 notified 与易失轨只置 changed（不需要落盘）。
+       */
+      const drop = <T>(map: Record<string, T>, persisted: boolean): Record<string, T> => {
         let next: Record<string, T> | null = null
         for (const sourceId of Object.keys(map)) {
           if (liveIds.has(sourceId)) continue
           if (next === null) next = { ...map }
           delete next[sourceId]
           changed = true
+          if (persisted) durableChanged = true
         }
         return next ?? map
       }
-      state.notified = drop(state.notified)
-      state.outcomes = drop(state.outcomes)
-      state.pending = drop(state.pending)
-      state.armed = drop(state.armed)
-      state.armedFloor = drop(state.armedFloor)
-      state.settleFence = drop(state.settleFence)
-      state.generation = drop(state.generation)
-      state.goalKnown = drop(state.goalKnown)
+      state.notified = drop(state.notified, false)
+      state.outcomes = drop(state.outcomes, true)
+      state.pending = drop(state.pending, true)
+      state.armed = drop(state.armed, false)
+      state.armedFloor = drop(state.armedFloor, false)
+      state.settleFence = drop(state.settleFence, false)
+      state.generation = drop(state.generation, false)
+      state.goalKnown = drop(state.goalKnown, false)
       // 身份键空间不在 state 里：notifiedRuns 走同一 drop；runtimeSettled 是 Map 表，显式删。
-      notifiedRuns = drop(notifiedRuns)
+      notifiedRuns = drop(notifiedRuns, true)
       let nextRuntime: Record<string, Map<string, number | undefined>> | null = null
       for (const sourceId of Object.keys(runtimeSettled)) {
         if (liveIds.has(sourceId)) continue
@@ -737,7 +752,7 @@ export function createCompleteLedger(
         changed = true
       }
       if (nextRuntime !== null) runtimeSettled = nextRuntime
-      return changed
+      return { changed, durableChanged }
     },
   }
 }

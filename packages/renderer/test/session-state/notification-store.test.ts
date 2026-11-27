@@ -149,7 +149,22 @@ test('a large v4 migration returns the pruned in-memory payload', () => {
   assert.equal(Object.keys(loaded.pending!.a!).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
   assert.equal(Object.keys(loaded.outcomes!.a!).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
   const persisted = JSON.parse(data.get(NOTIFICATIONS_V1_KEY)!)
-  assert.equal(Object.keys(persisted.pending.a).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  // 落盘与内存同窗口（不是「内存裁、落盘原样」）：三表都必须 <=500。
+  assert.equal(persisted.v, 1)
+  for (const table of ['notifiedRuns', 'pending'] as const) {
+    const keys = Object.keys(persisted[table].a) as string[]
+    assert.equal(keys.length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE, table + ' 落盘上界 500')
+    assert.equal(keys[0], 's100', table + ' 保留尾部（最新 500），不是头部')
+    assert.equal(keys.at(-1), 's599')
+    assert.equal(persisted[table].a.s99, undefined, table + ' 最旧一行被尾截断')
+  }
+  assert.equal(Object.keys(persisted.outcomes.a).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE, 'outcomes 落盘上界 500')
+  assert.equal(persisted.outcomes.a.g99, undefined, 'outcomes 最低水位被裁')
+  assert.equal(persisted.outcomes.a.g100, 101, 'outcomes 保留最高水位的 500（g100..g599）')
+  assert.equal(persisted.outcomes.a.g599, 600)
+  assert.equal(Object.keys(persisted.outcomes.a)[0], 'g599', 'outcomes 落盘按水位降序（最高优先）')
+  // 迁移落盘 = 返回的内存载荷（同一次 prune 的同一窗口，逐字节一致）。
+  assert.equal(JSON.stringify(persisted), JSON.stringify(loaded), '迁移落盘载荷与返回载荷逐字节一致')
   assert.ok(!data.has(LEGACY_UNREAD_V4_KEY), 'migration still removes the legacy key')
 })
 

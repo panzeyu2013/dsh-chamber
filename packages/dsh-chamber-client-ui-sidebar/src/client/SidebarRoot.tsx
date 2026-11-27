@@ -138,7 +138,7 @@ export function SidebarRoot({
     servers, viewPrefs, sessionOrderOverride, setSessionOrderOverride,
     workspaceOrderOverride, setWorkspaceOrderOverride, runAction,
   })
-  const { ghostExpiry, armBlankGhostForClick } = useSidebarGhost({ servers, chamberInstanceId })
+  const { ghostExpiry, ghostTick, armBlankGhostForClick } = useSidebarGhost({ servers, chamberInstanceId })
   useSidebarClickGuard()
   const { clearOpenRowError } = useSidebarOpenOutcomes({ setRowErrors })
   const {
@@ -228,6 +228,8 @@ export function SidebarRoot({
     checkoutDropCommitted,
     serverDropCommitted,
     ghostExpiry,
+    // ghost 到期版本：ref 身份不变，memo(ServerSection)/行只能靠 ctxValue 换新才重算到期门。
+    ghostTick,
     rowErrors,
     menuOpen,
     sortMenuOpen,
@@ -245,7 +247,7 @@ export function SidebarRoot({
     checkoutDrag, setCheckoutDrag, serverDrag, setServerDrag,
     suppressClickRef,
     dragPressOnButtonRef, sessionDropCommitted, workspaceDropCommitted, checkoutDropCommitted, serverDropCommitted,
-    ghostExpiry, rowErrors, menuOpen, sortMenuOpen, setSortMenuOpen, renaming, setRenaming,
+    ghostExpiry, ghostTick, rowErrors, menuOpen, sortMenuOpen, setSortMenuOpen, renaming, setRenaming,
     openSession, notices, showNotice,
   ])
 

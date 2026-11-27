@@ -4,7 +4,8 @@
  * 两轨的裁定规则本体在 watermark.ts / notification-projection.reconcile，这里钉的是账本容器。
  *
  * goal-aware v5 §3.1 增量：pending（被压制完成结算位）与 outcomes（标题一次性身份）
- * 两张 durable 表 + boot/年龄卫生 + 撤回清 pending（notified/outcomes 保留）。
+ * 两张 durable 表 + boot/年龄卫生 + 撤回清 pending（notifiedRuns/outcomes 保留；
+ * 页内水位 notified 不落盘，reload 后由 facts 播种重建）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -101,8 +102,13 @@ test('forget drops every track; prune removes only absent sources and reports ch
   ledger.setArmed('b', new Set(['s']))
   ledger.markRuntimeSettled('a', 's')
   ledger.markRuntimeSettled('b', 's')
-  assert.equal(ledger.prune(new Set(['a'])), true)
-  assert.equal(ledger.prune(new Set(['a'])), false, '无变化必须返回 false（App 据此避免重建引用）')
+  // prune 返回结构化结果：durableChanged 只看落盘载荷三表（b 的 notifiedRuns 被删 ⇒ true）。
+  assert.deepEqual(ledger.prune(new Set(['a'])), { changed: true, durableChanged: true })
+  assert.deepEqual(
+    ledger.prune(new Set(['a'])),
+    { changed: false, durableChanged: false },
+    '无变化必须两位都 false（App 据此不排盘、不重建引用）',
+  )
   assert.equal(ledger.notifiedRun('a', 's'), 'host:turn%2F1')
   assert.equal(ledger.notifiedRun('b', 's'), undefined)
   assert.equal(ledger.armed('b').size, 0)
@@ -111,6 +117,35 @@ test('forget drops every track; prune removes only absent sources and reports ch
   assert.equal(ledger.notifiedRun('a', 's'), undefined)
   assert.equal(ledger.armed('a').size, 0)
   assert.equal(ledger.runtimeSettled('a').size, 0)
+})
+
+test('prune distinguishes volatile cleanup from a durable deletion (只有 durable 表被删才需要落盘)', () => {
+  // 旧契约（boolean changed）把任何一张表的清理都当「必须落盘」。页内水位 notified 与
+  // 六张易失表（armed/armedFloor/settleFence/generation/goalKnown/runtimeSettled）都不进
+  // 落盘载荷，只剪它们时排盘是无谓写；App 现在按 durableChanged 决定 schedulePersist，
+  // 仍用 changed 表示「有任意表变化」。三种形状逐一定位：
+  // ① 纯页内/易失清理 ⇒ changed=true、durableChanged=false。
+  const volatile = createCompleteLedger()
+  volatile.setNotifiedWatermark('gone', 's', 'complete', 3)
+  volatile.setArmed('gone', new Set(['s']))
+  volatile.state().settleFence = { gone: { s: { boundary: 1 } } }
+  volatile.state().goalKnown = { gone: new Set(['s']) }
+  volatile.markRuntimeSettled('gone', 's')
+  assert.deepEqual(
+    volatile.prune(new Set(['live'])),
+    { changed: true, durableChanged: false },
+    '只剪页内水位与易失表 ⇒ 不排盘',
+  )
+  assert.equal(volatile.state().notified.gone, undefined, '页内水位照常随来源收敛')
+  assert.equal(volatile.state().armed.gone, undefined)
+
+  // ② 只有 pending 被剪 ⇒ durableChanged=true。
+  const pendingOnly = createCompleteLedger(undefined, { pending: { gone: { s: { at: 1 } } }, now: 1 })
+  assert.deepEqual(pendingOnly.prune(new Set(['live'])), { changed: true, durableChanged: true }, 'pending 是落盘载荷')
+
+  // ③ 只有 outcomes 被剪 ⇒ durableChanged=true。
+  const outcomesOnly = createCompleteLedger(undefined, { outcomes: { gone: { g1: 7 } } })
+  assert.deepEqual(outcomesOnly.prune(new Set(['live'])), { changed: true, durableChanged: true }, 'outcomes 是落盘载荷')
 })
 
 test('notifiedRunTable is the persisted v4 shape and older snapshots are never mutated', () => {
@@ -154,7 +189,7 @@ test('outcomes are a per-goal one-shot identity, monotonic per (source, goalId)'
   assert.deepEqual(ledger.outcomesTable(), { src: { g1: 120 } })
 })
 
-test('withdrawal clears armed + pending but keeps durable notified/outcomes (R2-D)', () => {
+test('withdrawal clears armed + pending but keeps durable notifiedRuns/outcomes and the page-local notified (R2-D)', () => {
   const ledger = createCompleteLedger({ src: { s1: { complete: 7 } } }, {
     pending: { src: { s1: { watermark: 9, goalId: 'g1', at: 5 } } },
     outcomes: { src: { g1: 9 } },
@@ -164,7 +199,7 @@ test('withdrawal clears armed + pending but keeps durable notified/outcomes (R2-
   ledger.withdraw('src')
   assert.equal(ledger.armed('src').size, 0, '撤回清武装轨')
   assert.equal(ledger.pendingEntry('src', 's1'), undefined, '撤回清 pending：窗口内完成恢复后不补发')
-  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 7, 'notified durable')
+  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 7, 'notified 是页内水位（撤回不清；不落盘，reload 由 facts 播种重建）')
   assert.equal(ledger.outcomeWatermark('src', 'g1'), 9, 'outcomes durable')
   // forgetPending 只清 pending。
   ledger.setPending('src', 's1', { at: 7 })
@@ -191,7 +226,7 @@ test('forgetSession clears armed + settleFence + pending for one session only (�
   assert.equal(ledger.pendingEntry('src', 's1'), undefined, '消失会话的 pending 清')
   assert.equal(ledger.armed('src').has('s1'), false, '消失会话的 armed 清')
   assert.equal(ledger.state().settleFence.src?.s1 ?? false, false, '消失会话的 settleFence 清')
-  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 7, 'notified durable')
+  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 7, 'notified 页内水位不被 forgetSession 清（页内状态，不落盘）')
   assert.equal(ledger.pendingEntry('src', 's2')?.at, 2, '其它会话不受影响')
   assert.equal(ledger.armed('src').has('s2'), true)
   assert.equal(ledger.state().settleFence.src?.s2?.boundary, 200)
@@ -201,7 +236,7 @@ test('forgetSession clears armed + settleFence + pending for one session only (�
   assert.equal(ledger.pendingTable().src, undefined)
   assert.equal(ledger.state().armed.src, undefined)
   assert.equal(ledger.state().settleFence.src, undefined)
-  assert.equal(ledger.notifiedWatermark('src', 's2', 'complete'), 9, 'notified 仍 durable')
+  assert.equal(ledger.notifiedWatermark('src', 's2', 'complete'), 9, 'notified 仍为页内水位（不落盘）')
 })
 
 test('armedFloor (F5 阻断项 2) is volatile, cleared with armed, and pruned by forget/withdraw', () => {
@@ -218,7 +253,7 @@ test('armedFloor (F5 阻断项 2) is volatile, cleared with armed, and pruned by
   ledger.state().armedFloor.src = { s1: 300 }
   ledger.forget('src')
   assert.equal(ledger.state().armedFloor.src, undefined, '来源退役连水位界一起删')
-  assert.equal(ledger.prune(new Set()), false, '已空表无变化')
+  assert.deepEqual(ledger.prune(new Set()), { changed: false, durableChanged: false }, '已空表无变化')
 })
 
 test('seedSettleFence (F5 重要项 3 + A2/A3-3/B3-1) clears above boundary, records seededSince otherwise', () => {
@@ -258,7 +293,8 @@ test('settleFence cleanup: withdraw / forget / forgetSession / prune drop the re
   session.forgetSession('src', 's1')
   assert.deepEqual(session.state().settleFence.src, { s2: { boundary: 2 } }, 'forgetSession 只清该会话')
   const pruned = make()
-  assert.equal(pruned.prune(new Set(['src'])), true)
+  // 只有 settleFence（易失表）被剪：changed=true，但不需要落盘。
+  assert.deepEqual(pruned.prune(new Set(['src'])), { changed: true, durableChanged: false })
   assert.equal(pruned.state().settleFence.other, undefined, 'prune 剪掉不在场来源')
   assert.notEqual(pruned.state().settleFence.src, undefined, '在场来源保留')
 })
@@ -286,11 +322,11 @@ test('forget and prune converge all four tables', () => {
   )
   ledger.setArmed('a', new Set(['s']))
   ledger.setArmed('b', new Set(['s']))
-  assert.equal(ledger.prune(new Set(['a'])), true)
-  assert.equal(ledger.prune(new Set(['a'])), false, '无变化返回 false')
+  assert.deepEqual(ledger.prune(new Set(['a'])), { changed: true, durableChanged: true })
+  assert.deepEqual(ledger.prune(new Set(['a'])), { changed: false, durableChanged: false }, '无变化返回两位 false')
   assert.equal(ledger.pendingEntry('b', 's'), undefined)
   assert.equal(ledger.outcomeWatermark('b', 'g'), undefined)
-  assert.equal(ledger.notifiedWatermark('b', 's', 'complete'), undefined)
+  assert.equal(ledger.notifiedWatermark('b', 's', 'complete'), undefined, '页内水位随来源剪枝收敛（只置 changed）')
   assert.equal(ledger.armed('b').size, 0)
   ledger.forget('a')
   assert.equal(ledger.pendingEntry('a', 's'), undefined)
@@ -309,7 +345,7 @@ test('a fresh boot drops every pending entry loudly and keeps outcomes', () => {
     onDiagnostic: message => messages.push(message),
   })
   assert.deepEqual(ledger.pendingTable(), {}, '新进程/新窗口不得继承上一页会话的 pending')
-  assert.equal(ledger.outcomeWatermark('a', 'g1'), 1, 'outcomes 与 notified 同为 durable')
+  assert.equal(ledger.outcomeWatermark('a', 'g1'), 1, 'outcomes 是 durable 表（与 notifiedRuns 同域）')
   assert.ok(messages.some(message => message.includes('fresh boot') && message.includes('3')), messages.join(' | '))
 })
 
@@ -361,13 +397,14 @@ test('REGRESSION(B4-2): forgetSession / withdraw clear the settle-point memory (
   ledger.forgetSession('src', 's2')
   assert.equal(ledger.state().goalKnown.src, undefined, '空集收敛掉来源表项')
 
-  // withdraw（来源级撤回）同拍清该来源的结算点记忆；notified/outcomes 不受影响。
+  // withdraw（来源级撤回）同拍清该来源的结算点记忆；notifiedRuns/outcomes 不受影响
+  // （notified 是页内水位，本来就不落盘）。
   ledger.setNotifiedWatermark('src', 's1', 'complete', 7)
   ledger.setOutcome('src', 'g1', 7)
   ledger.state().goalKnown.src = new Set(['s3'])
   ledger.withdraw('src')
   assert.equal(ledger.state().goalKnown.src, undefined, 'withdraw 清该来源的结算点记忆（回退即红）')
   assert.deepEqual([...ledger.state().goalKnown.other ?? []], ['s9'], '撤回不得跨来源')
-  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 7, 'notified 仍 durable')
+  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 7, 'notified 仍为页内水位（不落盘）')
   assert.equal(ledger.outcomeWatermark('src', 'g1'), 7, 'outcomes 仍 durable')
 })

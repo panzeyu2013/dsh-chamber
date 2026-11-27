@@ -59,7 +59,11 @@ export class NativeGuestPresentation implements BrowserPresentation {
   private occluded = false
   /** Overlay-candidate cache: the DOM is queried at most once per occlusion interval (RT-04). */
   private overlayCandidates: Element[] = []
-  private overlayCandidatesAt = 0
+  /**
+   * 候选缓存时钟初值 -Infinity：页面时基 < TTL（壳文档 time origin 后 <100ms 的 mount
+   * 首帧）时，首个 due 检查也必须刷新候选，而不是把「还没查过」当成「刚刚查过」（M1）。
+   */
+  private overlayCandidatesAt = Number.NEGATIVE_INFINITY
   /** E: 遮挡命中测试节流（几何每帧，命中 ≤10Hz + trailing 兜底）。 */
   private lastOcclusionAt = Number.NEGATIVE_INFINITY
   private lastCovered = false
@@ -87,6 +91,10 @@ export class NativeGuestPresentation implements BrowserPresentation {
     this.lastOcclusionAt = Number.NEGATIVE_INFINITY
     this.lastCovered = false
     this.forceOcclusionCheck = true
+    // 候选缓存同样按 mount 重置：否则重挂载后的首个 due 检查可能复用上一个宿主的候选列表
+    //（页面时基 <TTL 时连 QSA 都不会发生），浮层漏判窗口会随重挂载延续。
+    this.overlayCandidates = []
+    this.overlayCandidatesAt = Number.NEGATIVE_INFINITY
     host.dataset.chamberBrowserTab = this.tabId
     this.writeLease()
     const schedule = (): void => { this.schedule() }

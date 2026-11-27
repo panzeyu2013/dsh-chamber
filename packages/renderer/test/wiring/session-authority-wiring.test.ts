@@ -232,11 +232,18 @@ test('the badge is fed the merged runtime projection, never the raw channel repo
 })
 
 test('the complete ledger persists when a prune/forget changes the durable tables (M6)', () => {
-  // 内存是权威、磁盘是缓存：剪枝/退役删掉的 durable 表项（notified/pending/
-  // outcomes/notifiedRuns）必须排一次写，否则重启后旧判定从磁盘复活。App 的早期
-  // effect 在 schedulePersistNotifications 定义之前就捕获它，所以走 ref 镜像
+  // 内存是权威、磁盘是缓存：剪枝/退役删掉的 durable 表项（notifiedRuns/pending/
+  // outcomes，落盘载荷三表）必须排一次写，否则重启后旧判定从磁盘复活。prune 返回
+  // { changed, durableChanged }：只有 durableChanged 才排盘——页内水位 notified 与
+  // 六张易失表的清理不进载荷，排盘是无谓写。App 的早期 effect 在
+  // schedulePersistNotifications 定义之前就捕获它，所以走 ref 镜像
   // （与 flushNotificationsRef 同纪律）；退役用 immediate 出口，不等 1s 节流。
-  assert.match(app, /if \(completeLedgerRef\.current\.prune\(live\)\) schedulePersistNotificationsRef\.current\(\)/)
+  assert.match(app, /if \(completeLedgerRef\.current\.prune\(live\)\.durableChanged\) schedulePersistNotificationsRef\.current\(\)/)
+  assert.doesNotMatch(
+    app,
+    /if \(completeLedgerRef\.current\.prune\(live\)\) schedulePersistNotificationsRef\.current\(\)/,
+    '不得退回 boolean changed（易失表清理也会排盘）',
+  )
   assert.match(app, /ledger\.hasDurable\(sourceId\)/)
   assert.match(app, /ledger\.forget\(sourceId\)/)
   assert.match(app, /if \(ledgerHadDurable\) persistNotificationsImmediatelyRef\.current\(\)/)
@@ -248,8 +255,8 @@ test('FINAL-C wiring: the observation-state prune withdraws the ledger scope bef
   // 观测状态删除 = 观测代终结：同一拍必须 scoped withdraw 账本易失轨（armed/
   // armedFloor/settleFence/goalKnown）+ pending。否则门关窗口（未结算/degraded/
   // rosterIncomplete）下 durable 剪枝不执行，残留的旧 pending 会被重建的新代首个
-  // outcome 以旧 watermark flush。notified/outcomes 保持 durable，故用 withdraw
-  // 而非 forget；pending 被删时必须排一次落盘。
+  // outcome 以旧 watermark flush。notifiedRuns/outcomes 保持 durable（页内水位 notified
+  // 本就不落盘），故用 withdraw 而非 forget；pending 被删时必须排一次落盘。
   const loopMarker = 'for (const sourceId of [...completionObservationRef.current.keys()]) {'
   const start = app.indexOf(loopMarker)
   assert.notEqual(start, -1, 'the observation-state prune loop must exist')

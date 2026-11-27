@@ -724,7 +724,8 @@ function resetRecordedGeneration(ledger: CompleteLedger, sourceId: string): void
  *  - forgotten ⇒ 逐会话 forgetSession（armed + settleFence + pending，评审 A 重要项）；
  *  - notification(s) ⇒ 唯一 emit 出口（一份观测可同时产出结算与 ask/request 两条）；
  *  - disposition ⇒ notificationLedger 的独立计数（held/flushed/voided/dropped/deferred）；
- *  - 有变更就落盘；flush/撤回/会话消失**立即** flush，voided/dropped 这类「pending
+ *  - 有 **durable** 变更（pending/outcomes 被写）就落盘；页内水位 notified 的推进不算、
+ *    notifiedRuns 由投递结算显式排盘；flush/撤回/会话消失**立即** flush，voided/dropped 这类「pending
  *    已作废/静默结清」的 durable 结算同样立即（§3.5 写点纪律；1s 节流窗口内的崩溃
  *    重放不得复活已作废的 pending）。
  */
@@ -770,11 +771,11 @@ export function applyObservationBatch(input: {
   for (const observation of batch.observations) {
     const state = ledger.state()
     // §3.5 写点纪律：reconcile 的**每次 durable 变更**都必须落盘——包括不产生
-    // disposition 的纯吸收（#5/#6 keep 时的水位吸收、G5 armed 门的单调记事、
-    // ask/request 的 notified 推进）。reconcile 的三处写点（页内 notified、durable
-    // pending/outcomes）全部写时复制，引用变化即变更证据；notifiedRuns 的投递结算
-    // 走显式 schedulePersist；只按 disposition 记账会让这些写点丢到页面关闭才落盘（TL3）。
-    const notifiedBefore = state.notified
+    // disposition 的纯吸收（#5/#6 keep 时的水位吸收）。reconcile 的 durable 写点只有
+    // pending/outcomes 两处，全部写时复制、引用变化即变更证据；页内水位 notified 的推进
+    // （G5 armed 门的单调记事、ask/request 推进、围栏吞并）只是页内状态，不进落盘载荷
+    // （reload 后由 facts 播种重建），不得当排盘触发；notifiedRuns 的投递结算走显式
+    // schedulePersist。只按 disposition 记账会让 durable 写点丢到页面关闭才落盘（TL3）。
     const pendingBefore = state.pending
     const outcomesBefore = state.outcomes
     // COR-1 精度（结果可达路径）：置栏是**无水位消费 emit** 的标记——reconcile 的
@@ -788,7 +789,7 @@ export function applyObservationBatch(input: {
       input.now,
       fenceSeedSessions.has(observation.sessionId) ? { keepFence: true } : undefined,
     )
-    if (state.notified !== notifiedBefore || state.pending !== pendingBefore || state.outcomes !== outcomesBefore) {
+    if (state.pending !== pendingBefore || state.outcomes !== outcomesBefore) {
       dirty = true
     }
     // 一份观测可产出两条通知（ask/request 直通 + pending 结算）；单通知结果保持原样。

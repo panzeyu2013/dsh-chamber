@@ -85,8 +85,9 @@ export function checkoutLayoutEntries(sourceId: string, layouts?: readonly RepoG
   return (layouts ?? getSourceRepoLayouts(sourceId)).flatMap(layout => layout.unregistered)
 }
 
-/** The layout entry a checkout row was derived from (canonical-path identity). */
-export function checkoutLayoutEntry(
+/** The layout entry a checkout row was derived from (canonical-path identity).
+ *  Package-internal: only checkoutBranchOf (this file) calls it. */
+function checkoutLayoutEntry(
   sourceId: string,
   path: string | undefined,
   layouts?: readonly RepoGitLayout[],

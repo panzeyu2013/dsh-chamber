@@ -2,7 +2,9 @@
  * 通知 durable 表内存上界（design 19 §3.2.4「卫生上界」，M1 修复）：
  *  - notification-bounds 的尾截断/水位 LRU helper 与落盘 prune 同规；
  *  - complete-ledger 构造期与四个写点把内存表收敛到同一上界；
- *  - notification-store load 对 v1 载荷只裁内存、不写盘；save 仍幂等兜底。
+ *  - notification-store load 对 v1 载荷只裁内存、不写盘；save 仍幂等兜底，
+ *    save→load→save 逐字节相同（内存三表 = 盘载荷 ⇒ reload 幂等）；
+ *  - hasDurable 覆盖每个落盘载荷表，页内水位与易失表不算；纯页内推进不排盘。
  * 变异自检：把 helper 改成 no-op（tailSessionTable 恒返回原表）时本文件必须红。
  */
 import { test } from 'node:test'
@@ -15,6 +17,11 @@ import {
 } from '../../src/notification-bounds.ts'
 import { createCompleteLedger } from '../../src/complete-ledger.ts'
 import { reconcile, type CompletionObservation } from '../../src/notification-projection.ts'
+import {
+  applyObservationBatch,
+  type CompletionSink,
+  type ObservationBatch,
+} from '../../src/completion-observation.ts'
 import {
   NOTIFICATIONS_V1_KEY,
   loadNotifications,
@@ -32,6 +39,19 @@ function fakeStorage(initial: Record<string, string> = {}) {
     removeItem: (key) => { data.delete(key) },
   }
   return { storage, data, writes }
+}
+
+/** applyObservationBatch 只读 batch 的元数据/观测；state 由调用方持有。 */
+function batchOf(observations: CompletionObservation[]): ObservationBatch {
+  return {
+    state: undefined as unknown as ObservationBatch['state'],
+    generation: 1,
+    generationChanged: false,
+    freshState: false,
+    observations,
+    forgotten: [],
+    fenceSeeds: [],
+  }
 }
 
 const sessionTable = (n: number, prefix = 'session-') => {
@@ -178,9 +198,14 @@ test('forgetSession clears the volatile native-settled attribution for that sess
   assert.deepEqual([...ledger.runtimeSettled('s').keys()].sort(), ['session-x', 'session-y'])
   ledger.forgetSession('s', 'session-x')
   assert.deepEqual([...ledger.runtimeSettled('s').keys()], ['session-y'])
-  // A source without any remaining volatile rows collapses to the shared empty map.
+  // 来源表项收敛后回落到共享空 Map（同一引用，不为「空」分配新表）。
   ledger.forget('s')
   assert.equal(ledger.runtimeSettled('s').size, 0)
+  assert.equal(
+    ledger.runtimeSettled('s'),
+    ledger.runtimeSettled('never-marked'),
+    '无来源表项时返回共享空 Map（同一引用）',
+  )
   // withdraw (carrier generation change) also drops the volatile anchors.
   ledger.markRuntimeSettled('s', 'session-z', 789)
   ledger.withdraw('s')
@@ -273,4 +298,69 @@ test('save stays bounded for an oversized payload', () => {
   assert.equal(ok, true)
   const persisted = JSON.parse(data.get(NOTIFICATIONS_V1_KEY)!)
   assert.equal(Object.keys(persisted.notifiedRuns.s).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+})
+
+test('save → load → save is byte-idempotent (内存三表 = 盘载荷 ⇒ reload 幂等)', () => {
+  // design 19 §3.2.4：flush 后内存三表与盘载荷逐字节一致、reload 幂等。
+  // load 只裁内存不写盘；把 load 的结果再 save 一次必须与首次落盘逐字节相同
+  // （否则每次 reload 都会改写载荷、窗口在两处实现之间漂移）。
+  const { storage, data, writes } = fakeStorage()
+  const payload = {
+    v: 1 as const,
+    notifiedRuns: { s: sessionTable(600) },
+    pending: { s: { 'session-598': { at: 1 }, 'session-599': { at: 2 } } },
+    outcomes: { s: { g1: 1, g2: 9 } },
+  }
+  assert.equal(saveNotifications(storage, payload), true)
+  const first = data.get(NOTIFICATIONS_V1_KEY)!
+  assert.deepEqual(writes, [NOTIFICATIONS_V1_KEY], 'flush 只写一次 v1 键')
+  const loaded = loadNotifications(storage)
+  assert.deepEqual(writes, [NOTIFICATIONS_V1_KEY], 'load 不得写盘（避开首帧写与 roster 剪枝门）')
+  assert.equal(JSON.stringify(loaded), first, 'load 读回的三表与盘载荷逐字节一致')
+  assert.equal(saveNotifications(storage, loaded), true)
+  assert.equal(data.get(NOTIFICATIONS_V1_KEY), first, '再次 flush 与首次逐字节相同 ⇒ reload 幂等')
+})
+
+test('hasDurable counts every payload table: pending-only and outcomes-only are durable', () => {
+  // 页内水位 notified-only 不算 durable（见上面的 'the page-local notified watermark is not counted as durable'）；
+  // pending/outcomes 各占一格载荷，
+  // 任一有内容都必须让来源退役 flush 文件，否则重启后旧判决从磁盘复活。
+  const pendingOnly = createCompleteLedger()
+  pendingOnly.setPending('s', 'session-x', { at: 1 })
+  assert.equal(pendingOnly.hasDurable('s'), true, 'pending 是落盘载荷')
+
+  const outcomesOnly = createCompleteLedger()
+  outcomesOnly.setOutcome('s', 'goal-x', 7)
+  assert.equal(outcomesOnly.hasDurable('s'), true, 'outcomes 是落盘载荷')
+})
+
+test('a pure page-local advance does not schedule a durable write (围栏吞并负向对照)', () => {
+  // 与 completion-observation.test.ts 的 G5 armed 门负向对照同源、路径独立：围栏吞并
+  // （candidate ≤ boundary）只推进页内水位 notified 并清易失 settleFence，两者都不进
+  // 落盘载荷（notified 不落盘、settleFence 是易失轨）。旧实现按 notified 引用变化置
+  // dirty ⇒ 每次吞并都排一次无谓全量 prune+stringify；新契约下 persists 必须为空。
+  const ledger = createCompleteLedger()
+  ledger.state().settleFence = { 'source-p': { 'session-x': { boundary: 500 } } }
+  const persists: boolean[] = []
+  const sink: CompletionSink = {
+    emitNotification: () => { assert.fail('a fenced candidate must not emit') },
+    countDisposition: () => {},
+    persist: immediate => { persists.push(immediate) },
+  }
+  applyObservationBatch({
+    ledger,
+    sourceId: 'source-p',
+    sink,
+    batch: batchOf([{
+      sourceId: 'source-p', sessionId: 'session-x', generation: 1,
+      running: 'idle', subagents: 'idle', goal: 'unknown', baseline: false, boot: 'same',
+      candidate: { kind: 'complete', watermark: 300, evidence: 'facts-watermark' },
+    }]),
+  })
+  assert.deepEqual(persists, [], '页内水位 + 易失围栏的变化不需要落盘')
+  assert.equal(ledger.state().notified['source-p']?.['session-x']?.complete, 300, '页内水位照常推进')
+  assert.equal(ledger.state().settleFence['source-p'], undefined, '易失围栏照常清除')
+  assert.deepEqual(ledger.pendingTable(), {})
+  assert.deepEqual(ledger.outcomesTable(), {})
+  assert.deepEqual(ledger.notifiedRunTable(), {})
 })

@@ -509,6 +509,28 @@ test('docked right-panel open/close suppress the animated frame track (instant l
   assert.equal(closed.getSnapshot().layoutInfo.rightbarInstant, false)
 })
 
+test('a trackless docked open is still an instant land and writes no persistence', () => {
+  const { env, viewPrefs } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  const layout = () => instance.getSnapshot().layoutInfo
+  // openRightbar(track=false, fullscreen=false)：instant 只由「是否 fullscreen 进入」决定，
+  // 不能把 track 掺进判定（`= !fullscreen && track` 的变异会让中心列 track 从无到有走
+  // 300ms 缓动）。当前 vendor 右栏 seat 用 shown && !autoFullscreen 得 track，产品上暂不
+  // 产出该组合——这条锁的是 store 契约本身，也是该变异（M15）的分界。
+  instance.actions.openRightbar(false, false)
+  assert.equal(layout().rightbarShown, true)
+  assert.equal(layout().rightbarTrack, false)
+  assert.equal(layout().rightbarFullscreen, false)
+  assert.equal(layout().rightbarInstant, true)
+  instance.actions.closeRightbar()
+  assert.equal(layout().rightbarShown, false)
+  assert.equal(layout().rightbarInstant, true)
+  // rightbar 呈现是瞬态：layout store 的持久化面只有 shared view-prefs 的 sidebarWidth，
+  // open/close 不得写任何持久化（fake view-prefs 记录每次 updateViewPrefs）。
+  assert.equal(viewPrefs.writeCount(), 0, 'rightbar presentation must never enter persistence')
+  assert.equal(viewPrefs.getViewPrefs().sidebarWidth, undefined, 'no sidebar width was ever persisted here')
+})
+
 test('a sidebar geometry action re-arms the frame easing after an instant right-panel landing', () => {
   for (const action of ['setSidebar', 'toggleSidebar', 'setViewportWidth'] as const) {
     const { env } = makeEnv()

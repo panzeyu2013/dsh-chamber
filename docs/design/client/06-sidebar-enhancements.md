@@ -49,7 +49,7 @@
   - 投影签名（`serversProjectionSignature`）**纳入会话 updatedAt**——时间戳变化会重发布投影，推导 effect 才能及时置顶（排序由 account 推导驱动，该字段不可从签名排除）。
 - **双击重命名**：workspace 头直接 dblclick 进入行内重命名（头本身不可点击，无延迟）；**会话行单击立即打开（零延迟，对齐 OpenChamber immediate-open 模型）**，双击重命名由同会话 350ms 内的二次点击判定（全局 pending 槽按 sessionId 键控、跨 N-ctx shell 共享，跨来源双击时可见 shell 在两次点击之间切换）；误判的双击只造成幂等重开、绝不误入重命名；kebab 菜单 rename 保留为 a11y 兜底；外部点击取消 pending。
   **行内形态**：workspace 重命名编辑框**嵌入表头行本身**——标题/orphan 徽标/计数/git occupant/悬停动作原位替换为输入框 + 保存/取消，行首折叠钮与图标槽保留（行身份与位置不变，**不**在表头下方追加输入行；编辑期行高放宽（输入框为官方行内 14/20 + `padding: 0 2px`，21px 盒：编辑期表头只长 ≈1px）、折叠字形 hover 切换抑制、悬停卡片禁用）；因此**折叠态 workspace 的 kebab 重命名同样可见**（编辑框随表头渲染，不依赖展开），rename/delete/拖拽失败的 inline 错误行也不受折叠门控。会话行重命名保持整行替换为编辑行（行槽原位 swap）。
-  **停冒泡控件的 pending 清理纪律**：**任何 stopPropagation 控件必须自己 clearPendingClick**（折叠/新建/kebab（含归档动词）+ 来源头排序/添加工作区/搜索）——React 的 stopPropagation 同时停掉原生事件，document 级监听看不到这些点击，残留的 pending 会让窗口内下一次同会话点击误入重命名。**空白"新建会话"行不参与双击重命名**（同款 `blank` 门控）。**blank 行 ghost 槽（双击误中修复）**：双击空白行下方的真实会话时，click1 打开会话 → 空白行失去 current 立即消失 → 其下所有行在 350ms 窗口内上移 ~30px → click2 落在目标行**下方**那一行上，误开别的会话；修复 = 过渡点击同步 arm 该空白行的 ghost 槽（`derive.ts armBlankGhost`，`BLANK_GHOST_GRACE_MS = 450` > 350ms），App 重派生时 `sessionVisible` 让该行在宽限期内留在投影里；侧边栏渲染为**非交互占位**（`visibility:hidden`，保留 26px 布局位），并在同一截止点（本地时钟 + 一次性定时器）停止渲染；宽限期后行才消失/列表才可位移，已安全越过双击窗口。
+  **停冒泡控件的 pending 清理纪律**：**任何 stopPropagation 控件必须自己 clearPendingClick**（折叠/新建/kebab（含归档动词）+ 来源头排序/添加工作区/搜索）——React 的 stopPropagation 同时停掉原生事件，document 级监听看不到这些点击，残留的 pending 会让窗口内下一次同会话点击误入重命名。**空白"新建会话"行不参与双击重命名**（同款 `blank` 门控）。**blank 行 ghost 槽（双击误中修复）**：双击空白行下方的真实会话时，click1 打开会话 → 空白行失去 current 立即消失 → 其下所有行在 350ms 窗口内上移 ~30px → click2 落在目标行**下方**那一行上，误开别的会话；修复 = 过渡点击同步 arm 该空白行的 ghost 槽（`derive.ts armBlankGhost`，`BLANK_GHOST_GRACE_MS = 450` > 350ms），App 重派生时 `sessionVisible` 让该行在宽限期内留在投影里；侧边栏渲染为**非交互占位**（`visibility:hidden`，保留 26px 布局位），并在同一截止点（本地时钟 + 一次性定时器）停止渲染——到期版本号经 section context 值发布（`ghostTick` 进 ctxValue 对象与依赖数组），穿透 `memo(ServerSection)` 让行重算到期门；宽限期后行才消失/列表才可位移，已安全越过**同 shell** 双击窗口（跨 shell 残余见 §5）。
   **跨 shell 滚动锚点同步（`renderer/src/sidebar-scroll-sync.ts`，App selectView 接线）**：切换来源（N-ctx）时恢复该来源上次的侧边栏滚动位置；ghost 行带 `data-chamber-ghost`，锚点捕获跳过之（仅 arming shell 渲染该行——锚到 ghost 会空转到 8s 截止）；入站 shell 在 `content-visibility:hidden` 时按 `checkVisibility` 门控重试，模块级 generation 取消被取代的重试链。
 
 ### 2.3 代码落点
@@ -205,7 +205,7 @@
 
   SettingsShell Modal 与其它官方 portal 面仍未修，同族 `ui-attachment/DropOverlay` 每个挂载中的 ComposerAttachments 各渲染一份（N 层遮罩）；⑤**主题样式表重复**——vendor `installThemeStyles` 每个实例 ctx 各插 6 个 `<style>`（同内容，随各自 fiber 移除，良性重复）。①（document 级 drop 扇出）已按「构建期 vendor 补丁 + 按落点壳 containment」落地：drop/dragenter/dragover/dragleave 四副作用同归属、隐藏壳不再入稿或叠遮罩（25 §5.7，残余见 S-56）；④ 的 portal 逃逸仍未修（任意打开态在程序化切换后盖在别的视图上），其中 `ui-attachment` 的 N 层遮罩已随 containment 消除。
 
-- **跨源切换的重投影成本**：活动来源切换时本节 theme/`<html lang>` 投影按 `useLayoutEffect` 在绘制前重放；投影器对同值写入早退（theme/lang 本身），同主题/同语言来源互切成本≈0；light↔dark 是换调色板固有成本，未加同值短路（收益≈0）。实测口径与 token 量级见 [TODO §3.9](../../progress/TODO.md)；整页 restyle 量级需要 light↔dark 或 zh↔en 来源 fixture 才能测。
+- **跨源切换的重投影成本**：活动来源切换时本节 theme/`<html lang>` 投影按 `useLayoutEffect` 在绘制前重放；`<html lang>` 只在值变化时写（`page-language.ts` 的 `recompute` 早退，`enforce` 只做未授权写回），theme 侧**没有文档态 diff**——每次激活都整份重放：`document-theme.ts` 的 self/缓存分支 → `applyDocumentTheme`（ui-layout `index.ts`）→ vendor `ThemePresenter.apply`（retract 旧 token + 重写全部 token + `getComputedStyle(body)` 的 theme-color）。实测同主题跨源切换 3–5 次 `getComputedStyle`、≈0ms（[TODO §3.9](../../progress/TODO.md)）；可省的部分只有同值重写、收益≈0，故不设同值短路；light↔dark 是换调色板固有成本，整页 restyle 量级需要 light↔dark 或 zh↔en 来源 fixture 才能测。
 
 ### 4.7 面板轴（`sidebar.panellist` 的宽态落点）
 
@@ -270,6 +270,7 @@
 - **修正臂跨断连冻结**：上报事实（runtimeFacts）断连即清（generation 级），修正臂在无上报时冻结（不武装也不清除）——断连期间该来源无行可显示，也不会有新完成；重连后按新上报重新对账。官方位照旧留在 vendor 内存 Set。无壳路径同规：facts 降级窗口保留行 + `stale` ⇒ 只冻结武装、保留边沿记忆；桥面上报撤回（`report === undefined`，facts 载体未换代）只清壳轨、保留 running 记忆与 facts 轨（§4.2 分域）；真正换代/退役由 `withdrawSource` 缺省 `scope='all'` 删 running 记忆与观测状态、撤回账本易失轨，**臂表冻结不误清**（§4.2）。
 - **保留的呈现偏差**：Dock/任务栏红气泡与桌面通知是 chamber 独有（上游无对应物），角标 = 官方位 ∪ 修正臂的投影 + 既有 goal/子代理压制（19 §3.7）；品牌蓝点与 14px pending 徽标同 §4.3。
 - 结果标题滞后 / 聚合错误源隐藏搜索 / rail 无搜索：接受（§1.2）。拖拽无 touch/键盘：已知限制（官方亦然）；拖拽乐观重排不设回滚：pull 模型自愈 + inline 错误，接受。
+- **blank 行 ghost 槽的跨 shell 残余**：ghost 的到期渲染门是**每个 SidebarRoot 一份的本地映射**（`useSidebarGhost` 的 `ghostExpiry` ref；页面级 arm 记录在 `derive.ts`），故只有「点击发生的 shell」渲染该非交互占位，其它 N-ctx shell 对同一投影行直接隐藏。同 shell 双击的位移保护完整；**跨来源双击**（click1 把可见 shell 切到另一 shell，`pending-click.ts` 的跨源双击契约）时新 shell 的列表可能已位移，350ms 窗口保护只对 arming shell 成立。修法方向 = 渲染门改读页面级单一源（client-core 的页面级 store + 订阅，一并覆盖所有 shell）；当前登记为已知残余，判据 = 页级 gate 落地后跨 shell 的 ghost 行集合一致。
 
 ## 6. 验证门
 

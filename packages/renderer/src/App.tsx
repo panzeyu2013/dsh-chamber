@@ -628,8 +628,8 @@ export default function App() {
     // 有桥但未结算严格关门。易失轨（prevRunning / 观测状态 / 水位记账）不受此门约束。
     if (durableUnreadPruneAllowed(rosterGate.isSettled(), bridgeVerdict, registryDegraded, rosterIncomplete)) {
       completedStore.prune(live)
-      // 剪掉的 durable 表项必须落盘（否则重启后旧判决复活）。
-      if (completeLedgerRef.current.prune(live)) schedulePersistNotificationsRef.current()
+      // 剪掉的 durable 表项（notifiedRuns/pending/outcomes）必须落盘（否则重启后旧判决复活）；页内 notified 与六张易失表只置 changed，不进载荷 ⇒ 不排盘。
+      if (completeLedgerRef.current.prune(live).durableChanged) schedulePersistNotificationsRef.current()
       // native 投递 journal 的退役来源同拍收敛（durable，与账本同受本门约束）。
       notificationOutboxRef.current.pruneSources(live)
       // 每来源账本一次收敛（字段表在 host/source-ledger.ts）：易失字段随同一次 prune 收敛。

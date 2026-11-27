@@ -249,6 +249,10 @@ export interface SidebarSectionContextValue {
   checkoutDropCommitted: MutableRefObject<boolean>
   serverDropCommitted: MutableRefObject<boolean>
   ghostExpiry: MutableRefObject<Map<string, number>>
+  /** GHOST 本地过期时钟的版本号：到期 timer bump 它，SidebarRoot 把新值放进 ctxValue
+   *  （对象 + 依赖数组）。行在 memo(ServerSection) 后只认 ctxValue 身份变化——ghostExpiry
+   *  是稳定 ref，只重渲染 shell 不会让行的到期门重算。 */
+  ghostTick: number
   armBlankGhostForClick: () => void
 
   rowErrors: Readonly<Record<string, string>>

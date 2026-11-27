@@ -85,6 +85,22 @@ const bracedBlock = (text: string, start: string): string => {
   assert.fail(start + ' block is unterminated')
 }
 
+/**
+ * Frame store wiring (design 06 §13): the frame's `layoutInfo.rightbarInstant` is only
+ * meaningful if the AppFrame reads THIS fork's store instance — the registration's
+ * `store` share. The vendor-source locks above never prove that: reverting the import to
+ * the vendor store, or dropping `store,` from the registration, leaves them all green
+ * while the fork's rightbarInstant never reaches the frame. Pin the two wiring edges.
+ */
+test('the frame consumes the fork layout store instance, not the vendor store', () => {
+  const code = stripComments(source)
+  assert.match(code, /import \{[^}]*\bcreateLayoutStore\b[^}]*\} from '\.\/stores\.ts'/u,
+    'createLayoutStore must come from the fork ./stores.ts (the vendor store has no rightbarInstant)')
+  const registration = bracedBlock(code, 'ctx.slots.register({')
+  assert.match(registration, /^\s*store,$/mu,
+    'the root registration must pass the fork store instance to the frame')
+})
+
 /** Every `'key': { kind: '…', scope: '…' }` spec in one declaration block. */
 const specsIn = (block: string): Array<{ key: string; kind: string; scope: string }> =>
   [...block.matchAll(/'([^']+)':\s*\{\s*kind:\s*'(single|keyed|list|chain)'\s*[,;]\s*scope:\s*'([a-z-]+)'/gu)]
@@ -172,9 +188,40 @@ test('the pinned frame consumes rightbarInstant as the docked-track transition s
     if (/transition\s*:/u.test(match[1])) assert.match(match[1], /transition:\s*none/u)
   }
   // The instant arm must win the cascade: equal specificity means source order decides.
-  const easingAt = vendorCss.indexOf('.frame[data-animating]')
-  const instantAt = vendorCss.indexOf('.frame[data-rightbar-instant]')
-  assert.ok(easingAt !== -1 && instantAt !== -1 && instantAt > easingAt,
-    'the instant rule must follow the eased-track rule (same specificity)')
+  // First-occurrence indexOf is NOT enough: a pin upgrade may append ANOTHER
+  // `.frame[data-animating]` rule after the instant block — same specificity, later in
+  // source order — which wins the cascade and resurrects the eased track while the old
+  // first-occurrence check stayed green. Compare every eased animating rule instead.
+  const firstInstantAt = Math.min(...instantRules.map((match) => match.index ?? Number.MAX_SAFE_INTEGER))
+  assert.ok(Number.isFinite(firstInstantAt), 'the instant rule set must carry a source position')
+  const animatingRules = [...vendorCss.matchAll(/[^{}]*\.frame\[data-animating\][^{}]*\{([^}]*)\}/gu)]
+  assert.ok(animatingRules.length >= 3,
+    'every animated-track mention must be extracted (base track, handle arm, reduced motion)')
+  /** Every `transition` value declared by one rule body (`none` = a pure suppressor). */
+  const transitionValues = (body: string): string[] =>
+    [...body.matchAll(/transition\s*:\s*([^;]+)/gu)].map((match) => (match[1] as string).trim())
+  // (1) Every animating rule that declares a transition other than `none` must precede the
+  // instant block — this covers the base `.frame[data-animating]` track AND its `.handle` arm,
+  // so a later equal-specificity easing rule can never win the cascade.
+  const easingRules = animatingRules.filter((match) =>
+    transitionValues(match[1]).some((value) => value !== 'none'))
+  assert.ok(easingRules.length >= 2,
+    'the base track and its handle arm both ease; the lock must see both (' + easingRules.length + ')')
+  for (const match of easingRules) {
+    const selector = match[0].slice(0, match[0].indexOf('{')).trim().replace(/\s+/gu, ' ')
+    assert.ok((match.index ?? -1) < firstInstantAt,
+      'an eased animating rule must precede the instant suppressor: ' + selector
+      + ' @ ' + match.index + ' is not < ' + firstInstantAt)
+  }
+  // (2) No animating rule AFTER the instant block may re-enable a transition; the only
+  // legal tail is suppression (the pinned CSS keeps the reduced-motion handle suppressor
+  // after the instant block). A new post-instant `transition: …` rule fails here even
+  // when it escapes the easing-rule scan above.
+  for (const match of animatingRules.filter((rule) => (rule.index ?? -1) > firstInstantAt)) {
+    for (const value of transitionValues(match[1])) {
+      assert.equal(value, 'none',
+        'an animating rule after the instant suppressor must only suppress, never re-enable, a transition')
+    }
+  }
   assert.doesNotMatch(instant, /!important/u, 'the suppression must win by source order, not !important')
 })
