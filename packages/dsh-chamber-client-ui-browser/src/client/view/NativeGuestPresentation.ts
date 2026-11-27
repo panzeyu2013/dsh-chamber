@@ -32,6 +32,7 @@ import {
   shouldMeasureOnScroll,
   shouldCheckOcclusion,
   OCCLUSION_CHECK_INTERVAL_MS,
+  OVERLAY_CANDIDATE_TTL_MS,
   OVERLAY_SELECTOR,
   type GuestFrameMeasurement,
 } from '../browser/guest-geometry.ts'
@@ -56,7 +57,7 @@ export class NativeGuestPresentation implements BrowserPresentation {
   private lease: string | undefined
   private pending = false
   private occluded = false
-  /** Overlay-candidate cache: the DOM is queried at most every 250 ms (RT-04). */
+  /** Overlay-candidate cache: the DOM is queried at most once per occlusion interval (RT-04). */
   private overlayCandidates: Element[] = []
   private overlayCandidatesAt = 0
   /** E: 遮挡命中测试节流（几何每帧，命中 ≤10Hz + trailing 兜底）。 */
@@ -205,10 +206,10 @@ export class NativeGuestPresentation implements BrowserPresentation {
     return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
   }
 
-  /** Overlay candidates, refreshed at most every 250 ms (RT-04). */
+  /** Overlay candidates, refreshed at most once per occlusion interval (RT-04). */
   private overlays(): Element[] {
     const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
-    if (now - this.overlayCandidatesAt < 250) return this.overlayCandidates
+    if (now - this.overlayCandidatesAt < OVERLAY_CANDIDATE_TTL_MS) return this.overlayCandidates
     this.overlayCandidatesAt = now
     try { this.overlayCandidates = [...document.querySelectorAll(OVERLAY_SELECTOR)] } catch { this.overlayCandidates = [] }
     return this.overlayCandidates

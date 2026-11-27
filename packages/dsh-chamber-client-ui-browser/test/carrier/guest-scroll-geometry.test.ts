@@ -11,6 +11,7 @@ import {
   shouldMeasureOnScroll,
   shouldCheckOcclusion,
   OCCLUSION_CHECK_INTERVAL_MS,
+  OVERLAY_CANDIDATE_TTL_MS,
 } from '../../src/client/browser/guest-geometry.ts'
 import { NativeGuestPresentation } from '../../src/client/view/NativeGuestPresentation.ts'
 
@@ -54,6 +55,7 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
   let eipCalls = 0
   let hitCovered = false
   let overlayQsaCalls = 0
+  let overlayCandidates: FakeElement[] = []
   const documents: any = {
     getElementById: (id: string) => (id === 'viewport' ? host : null),
     addEventListener: (type: string, listener: (event: Event) => void, capture?: boolean) => { if (type === 'scroll') { scrollListeners.push(listener); scrollCapture = capture === true } },
@@ -64,7 +66,7 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
         if (index >= 0) scrollListeners.splice(index, 1)
       }
     },
-    querySelectorAll: () => { overlayQsaCalls += 1; return [] },
+    querySelectorAll: () => { overlayQsaCalls += 1; return overlayCandidates },
     elementsFromPoint: () => { eipCalls += 1; return [hitCovered ? foreignOverlay : host] },
   }
   const windows: any = {
@@ -97,6 +99,8 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
     pumpFrame: () => { const queue = frameQueue; frameQueue = []; for (const fn of queue) fn() },
     dispatchScroll: (target: unknown) => { for (const listener of scrollListeners) listener({ target } as unknown as Event) },
     setHitCovered: (covered: boolean) => { hitCovered = covered },
+    setOverlayCandidates: (candidates: FakeElement[]) => { overlayCandidates = candidates },
+    foreignOverlay,
     stats: () => ({ eipCalls, overlayQsaCalls, scrollCapture, scrollListeners: scrollListeners.length, documentRemoved: [...documentRemoved], windowAdded: [...windowAdded], windowRemoved: [...windowRemoved], activeTimers: activeTimers.size }),
   }
 }
@@ -273,5 +277,24 @@ test('B1: an unrelated scroll still arms a trailing occlusion check', async (t) 
   await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
   dom.pumpFrame()
   assert.equal(reports.at(-1)?.occluded, true, 'the trailing occlusion check must still run')
+  presentation.dispose()
+})
+
+test('B2: a due hit test refreshes a stale overlay candidate list', async (t) => {
+  assert.equal(OVERLAY_CANDIDATE_TTL_MS, OCCLUSION_CHECK_INTERVAL_MS)
+  const dom = installFakeDom(t)
+  const reports: Array<{ visible: boolean; occluded: boolean }> = []
+  const presentation = new NativeGuestPresentation({ report: (r) => reports.push({ visible: r.visible, occluded: r.occluded }), hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.visible, true)
+  dom.setOverlayCandidates([dom.foreignOverlay])
+  dom.dispatchScroll(dom.ancestor)
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.visible, true, 'inside the interval the cached empty candidate list is reused')
+  await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
+  dom.dispatchScroll(dom.ancestor)
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.occluded, true, 'a due check must see the new candidate')
   presentation.dispose()
 })

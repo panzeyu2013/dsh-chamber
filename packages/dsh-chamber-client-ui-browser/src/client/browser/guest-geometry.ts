@@ -153,6 +153,8 @@ export function shouldMeasureOnScroll(kind: ScrollCausality): boolean {
 
 /** 遮挡命中测试的节流间隔（E，design 28 §4.1）：几何每帧，遮挡 ≤10Hz + trailing 兜底。 */
 export const OCCLUSION_CHECK_INTERVAL_MS = 100
+/** Overlay candidates share the occlusion re-check cadence: a due hit test must not use a stale candidate list. */
+export const OVERLAY_CANDIDATE_TTL_MS = OCCLUSION_CHECK_INTERVAL_MS
 
 /** 本帧是否需要重跑 9 点/候选 rect 的遮挡判定；其余帧复用上次判定。 */
 export function shouldCheckOcclusion(input: {
