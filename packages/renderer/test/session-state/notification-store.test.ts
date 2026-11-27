@@ -59,7 +59,7 @@ test('load/save round-trip the v1 payload (pending/outcomes helpers read the sam
   const payload: NotificationPayload = {
     v: 1,
     notifiedRuns: { a: { s1: 'host:turn%2F7' } },
-    pending: { a: { s1: { at: 100, watermark: 5, goalId: 'g1', completionSeq: 7, deferred: 'subagent-busy' } } },
+    pending: { a: { s1: { at: 100, watermark: 5, goalId: 'g1', completionSeq: 7, absorbedSeq: 9, deferred: 'subagent-busy' } } },
     outcomes: { a: { g1: 10 } },
   }
   assert.equal(saveNotifications(storage, payload), true)
@@ -226,7 +226,7 @@ test('sanitize is lenient field-wise: corrupt identities are stripped, bad pendi
         a: {
           s1: { at: 100, watermark: 5, goalId: 'g1', completionSeq: 4242, deferred: 'subagent-busy' },
           // 非法只丢字段，整条保留（at 是 pending 的身份）。
-          s2: { at: 100, watermark: 'x', goalId: '', completionSeq: -1, deferred: 'bogus' },
+          s2: { at: 100, watermark: 'x', goalId: '', completionSeq: -1, absorbedSeq: 1.5, deferred: 'bogus' },
           // at 不成立 ⇒ 整条丢弃。
           s3: { watermark: 5 },
           s4: 7,

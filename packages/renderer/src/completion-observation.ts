@@ -53,7 +53,8 @@ import type {
 } from './notification-projection.ts'
 import { reconcile } from './notification-projection.ts'
 import type { CompleteLedger } from './complete-ledger.ts'
-import { isFactsDecisionUsable, type SessionFactsSnapshot, type SessionFactsTurnEnd } from './session-facts-source.ts'
+import { subagentActivityFromLineage } from '@dsh-chamber/dsh-chamber-client-core'
+import { isFactsDecisionUsable, runningSubagentCountOf, type SessionFactsSnapshot, type SessionFactsTurnEnd } from './session-facts-source.ts'
 import { completionWatermark, maxWatermarkValue } from './watermark.ts'
 
 /** 壳行 pending 种类（InstanceRuntimeReport 的结构子集）。 */
@@ -83,8 +84,11 @@ export interface FactsObservationRow {
   /** 时钟域（可缺省 = host）：'observer' 的 observed 时刻不在 host 域，不具备通知资格（W2）。 */
   completedAtDomain?: 'host' | 'observer' | null
   updatedAt: number
+  /** 子代理计数（双口径）：P2b 行是**运行中**后代数；P2a 行是**在场**数（渲染口径）。 */
   subagentCount: number
-  /** I-12 谱系认证位（mux 完整基线重算过）：只有它在场，`subagentCount` 才是子代理证据。 */
+  /** P2a 加法字段：运行中的后代数（缺席 = 旧网关 ⇒ 判定退回 presence 语义）。 */
+  subagentRunningCount?: number
+  /** I-12 谱系认证位（完整基线重算过）：只有它在场，running 计数才是子代理证据。 */
   lineageVerified?: boolean
   /** I-12 压制表命中（保留谱系表里有 durable 子代）：认证位缺席时按 busy 处理（fail-closed）。 */
   subagentKnown?: boolean
@@ -225,14 +229,19 @@ export interface FenceSeed {
   readonly watermark: number
 }
 
-/** 壳行子代理活动（与 sidebar subagentActivityOf 同规；stale 的 running 降 unknown）。 */
+/**
+ * 壳行**已声明**的子代理活动（与 sidebar subagentActivityOf 同规；stale 的 running 降
+ * unknown）。只在 `shellHasEvidence`（行带 `subagentActivity` 或稀疏 `runningSubagents`）
+ * 时调用——「没有证据」不是本函数的分支：壳行拿不出证据时（facts-only 来源的
+ * `virtualRuntimeReport` 行、老生产者）由调用方回退 facts 谱系
+ * （{@link subagentActivityFromLineage}），旧口径把「没有这个字段」读成「没有子代理」，
+ * G4 因此永不延迟（design 19 §3.5 I-12 的判定面修正）。
+ */
 function shellActivityOf(row: ShellObservationRow, stale: boolean): ShellObservationActivity {
   const declared = row.subagentActivity
   const activity = declared !== undefined
     ? declared
-    : (row.runningSubagents ?? 0) > 0
-      ? 'running'
-      : 'none'
+    : (row.runningSubagents ?? 0) > 0 ? 'running' : 'none'
   if (stale && activity === 'running') return 'unknown'
   return activity
 }
@@ -469,22 +478,28 @@ export function observeSource(input: {
       ? maxWatermarkValue(memory.factsWatermark, rowWatermark)
       : memory.factsWatermark
 
-    // 子代理：壳行按运行证据（stale 降 unknown——残留计数**不是** busy 证据，契约测试钉住）。
-    // facts-only（I-12）：只有谱系已认证的行才作证据——认证过的 0 = idle（首次可证明「无
-    // 子代理」），认证过的 >0 = busy（抑制完成）；认证位缺席但保留表里有 durable 子代 =
-    // fail-closed busy（「列表不完整」不得读成「子代理结束」）；其余（watcher 来源）保持
-    // 旧口径：count>0 仅作 presence（unknown），永不作 busy 证据。
-    const subagents: SubagentObservation = shellRow !== undefined
-      ? (() => {
-          const activity = shellActivityOf(shellRow, shellStale)
-          return activity === 'running' ? 'busy' : activity === 'none' ? 'idle' : 'unknown'
-        })()
-      : factsRow !== undefined && factsUsable
-        ? (factsRow.lineageVerified === true
-            ? (factsRow.subagentCount > 0 ? 'busy' : 'idle')
-            : factsRow.subagentKnown === true
-              ? 'busy'
-              : factsRow.subagentCount > 0 ? 'unknown' : 'idle')
+    // 子代理（I-12）：壳行**有声明**的运行证据优先（声明过就由它裁决，stale 把 running
+    // 降 unknown——残留计数**不是** busy 证据，也不许被 facts 反推成 idle，契约测试钉住）；
+    // 壳行**拿不出证据**（既无 declared activity、也无稀疏计数：facts-only 来源的虚拟壳行、
+    // 老生产者）时才回退 facts 谱系；两轨都不给证据才是 unknown（G3 不压制）。
+    // 分类本体单源 = client-core `subagentActivityFromLineage`（呈现面 facts overlay 同用）。
+    const shellHasEvidence = shellRow !== undefined
+      && (shellRow.subagentActivity !== undefined || shellRow.runningSubagents !== undefined)
+    const shellActivity = shellRow !== undefined && shellHasEvidence ? shellActivityOf(shellRow, shellStale) : undefined
+    // 判定用**运行中**后代数：P2b 行本来就带运行数；P2a 行另带 subagentRunningCount，
+    // 旧网关缺席时退回在场数（presence ⇒ unknown，绝不 busy，与既有语义逐字一致）。
+    const factsActivity = factsRow !== undefined && factsUsable
+      ? subagentActivityFromLineage({
+          subagentCount: runningSubagentCountOf(factsRow),
+          ...(factsRow.lineageVerified === true ? { lineageVerified: true } : {}),
+          ...(factsRow.subagentKnown === true ? { subagentKnown: true } : {}),
+        })
+      : undefined
+    const activity = shellHasEvidence ? shellActivity : factsActivity
+    const subagents: SubagentObservation = activity === 'running' || activity === 'busy'
+      ? 'busy'
+      : activity === 'none' || activity === 'idle'
+        ? 'idle'
         : 'unknown'
 
     // 候选：complete 至多一个（归属过滤），ask/request 各自独立。重现会话的首份观测
@@ -778,7 +793,7 @@ export function applyObservationBatch(input: {
     const outcomesBefore = state.outcomes
     // COR-1 精度（结果可达路径）：置栏是**无水位消费 emit** 的标记——reconcile 的
     // setFenceForNoWatermarkConsumption 只在 consumedWatermark === undefined 时写栏
-    // （facts 候选消费水位不置栏），releaseDeferred 亦只在 pending.watermark 缺席时
+    // （facts 候选消费水位不置栏），settleDeferred 亦只在 pending.watermark 缺席时
     // 置栏。前后引用对比即「本次 reconcile 新置/覆盖了栏」。
     const fenceBefore = state.settleFence[sourceId]?.[observation.sessionId]
     const result = reconcile(
@@ -794,14 +809,22 @@ export function applyObservationBatch(input: {
     const notifications = result.notifications
       ?? (result.notification === undefined ? [] : [result.notification])
     for (const notification of notifications) sink.emitNotification(notification, result)
-    // COR-1 复位旗标：本份观测产出了 complete 通知，且本次 reconcile 新置/覆盖了该
-    // 会话的 settleFence ⇒ 一次无水位（壳证据）的完成确实被通知（hold/void/drop/
-    // 静默结清都不 emit，不置旗标）。只置旗标；把 factsSeeded 复位留到批末——
-    // observeSource 是纯函数，看不到本批 reconcile 结果（B3-2 同批形态）。手工
-    // 构造的直测批可无 state，跳过（它们的壳语义由 reconcile 直测钉住）。
+    // COR-1 复位旗标：本份观测**消费了一次无水位（壳证据）的完成**——complete 通知，
+    // 或 G4 延迟 pending 的静默结清（`subagent-busy-settled`）——且本次 reconcile 新置/
+    // 覆盖了该会话的 settleFence。hold/void/#3 静默 drop 都不置旗标。
+    //
+    // 静默结清必须计入证据（否则 A 只是把横幅推迟）：壳锚定 pending 没有 watermark，
+    // 结清只能置 settleFence；若这里不置 `shellCompleteSinceFacts`，facts 恢复批不会重
+    // 播种，被围栏守卫的同一完成会按 rule ③（更高水位）再报一次——用户看到的不是消失，
+    // 而是迟到的重复。只置旗标；把 factsSeeded 复位留到批末——observeSource 是纯函数，
+    // 看不到本批 reconcile 结果（B3-2 同批形态）。手工构造的直测批可无 state，跳过
+    // （它们的壳语义由 reconcile 直测钉住）。
     const completeEmitted = notifications.some(notification => notification.kind === 'complete')
+    // 无水位消费的静默结清：origin 是「G4 延迟完成被消费」的 durable 身份，与 settle-guard
+    // 的「水位已通知过」不同（后者没有新的完成要守卫）。
+    const settledSilently = result.origin === 'subagent-busy-settled'
     const fenceAfter = state.settleFence[sourceId]?.[observation.sessionId]
-    if (completeEmitted && fenceAfter !== undefined && fenceAfter !== fenceBefore && batch.state !== undefined) {
+    if ((completeEmitted || settledSilently) && fenceAfter !== undefined && fenceAfter !== fenceBefore && batch.state !== undefined) {
       batch.state.shellCompleteSinceFacts = true
       const memory = batch.state.sessions[observation.sessionId]
       if (memory !== undefined) memory.shellNotifiedSinceFacts = true

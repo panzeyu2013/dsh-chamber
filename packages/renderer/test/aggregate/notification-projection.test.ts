@@ -512,11 +512,11 @@ test('§3.3 settle guard / TL3: a replayed pending whose watermark is already no
   assert.equal(ledger.pendingEntry('src', 's1'), undefined)
 })
 
-test('§3.3/TL3 releaseDeferred settle-guard: an already-notified deferred pending drops without re-emitting', () => {
+test('§3.3/TL3 deferred settle-guard: an already-notified deferred pending drops without re-emitting', () => {
   // 崩溃/同页重放场景：busy 延迟的 pending 已 durable 且 notified 已推进到同水位
-  // （释放后崩溃，pending 尚未落盘即重放）⇒ releaseDeferred 只清不重发。该守卫是
+  // （结清后崩溃，pending 尚未落盘即重放）⇒ settleDeferred 只清不重发。该守卫是
   // goal-unknown 释放入口专属：goal 已已知（null/paused）时，主分支的 #3 类结算
-  // 守卫（reconcileCore 的 settle-guard）更早短路，不会到达 releaseDeferred。
+  // 守卫（reconcileCore 的 settle-guard）更早短路，不会到达 settleDeferred。
   const ledger = createCompleteLedger(undefined, {
     pending: { src: { s1: { watermark: 100, at: 1, deferred: 'subagent-busy' } } },
     now: 10,
@@ -573,7 +573,9 @@ test('INV2/TL2: a goal outcome observed online yields exactly one notification a
 
 // ── 评审 A 修复回归（Wave7）：G4 延迟释放 / ask 直通不短路结算 ───────────────
 
-test('G4 release (阻断项): a busy-deferred completion under goal null releases neutral exactly once', () => {
+test('G4 settlement (契约): a busy-deferred completion under goal null is settled SILENTLY (no banner)', () => {
+  // 契约修正：可续子代理 settle 会唤醒父会话再跑一轮，那轮结束才是用户语义的完成。
+  // 旧口径「busy 结束即中性直发」必得两条横幅（提前 + 真完成），故结清改为静默消费。
   const ledger = createCompleteLedger()
   const deferred = reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: shell() }), 10)
   assert.equal(deferred.disposition, 'deferred')
@@ -581,16 +583,15 @@ test('G4 release (阻断项): a busy-deferred completion under goal null release
   assert.equal(ledger.pendingEntry('src', 's1')?.deferred, 'subagent-busy', '延迟来源必须入账')
   assert.equal(ledger.armed('src').has('s1'), false, 'busy 期间不 arm')
 
-  // busy 结束（无候选）：必须中性释放一次，而不是 #3 静默 drop + 结清水位。
-  const released = reconcile(ledger.state(), observation({ goal: null }), 20)
-  assert.equal(released.disposition, 'flushed')
-  assert.equal(released.origin, 'subagent-busy-release')
-  assert.equal(released.notification?.kind, 'complete')
-  assert.equal(released.notification?.title, 'session-completed')
-  assert.equal(released.pendingAge, 10)
-  assert.equal(ledger.pendingEntry('src', 's1'), undefined, '释放消费 pending')
-  assert.equal(ledger.armed('src').has('s1'), true, '释放后 arm（同一完成的延迟边沿不得再出）')
-  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 0 }, '无 facts 水位的释放置栏（boundary=0）')
+  // busy 结束（无候选）：静默结清——账本写点全做，通知为 0。
+  const settled = reconcile(ledger.state(), observation({ goal: null }), 20)
+  assert.equal(settled.notification, undefined, '延迟的完成不得提前弹横幅')
+  assert.equal(settled.disposition, 'dropped')
+  assert.equal(settled.origin, 'subagent-busy-settled')
+  assert.equal(settled.pendingAge, 10)
+  assert.equal(ledger.pendingEntry('src', 's1'), undefined, '结清消费 pending')
+  assert.equal(ledger.armed('src').has('s1'), true, '结清后 arm（同一完成的延迟边沿不得再出）')
+  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 0 }, '无 facts 水位的结清置栏（boundary=0）')
 
   // 重放/后续无候选观测：零 emit（只发一次）。
   const replay = reconcile(ledger.state(), observation({ goal: null }), 30)
@@ -603,7 +604,7 @@ test('G4 release (阻断项): a busy-deferred completion under goal null release
   assert.equal(ledger.state().settleFence.src?.s1 ?? false, false, '放行即清栏')
 })
 
-test('G4 release (阻断项): goal unknown releases fail-open and consumes the facts watermark once', () => {
+test('G4 settlement (阻断项): goal unknown settles fail-open and consumes the facts watermark once', () => {
   const ledger = createCompleteLedger()
   const deferred = reconcile(ledger.state(), observation({ subagents: 'busy', goal: 'unknown', candidate: facts(120) }), 10)
   assert.equal(deferred.disposition, 'deferred')
@@ -616,11 +617,11 @@ test('G4 release (阻断项): goal unknown releases fail-open and consumes the f
   assert.notEqual(ledger.pendingEntry('src', 's1'), undefined)
   assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), undefined)
 
-  // busy 结束、goal 仍 unknown：fail-open 中性直发一次并推进水位（#11 语义）。
-  const released = reconcile(ledger.state(), observation({ goal: 'unknown' }), 20)
-  assert.equal(released.origin, 'subagent-busy-release')
-  assert.equal(released.notification?.title, 'session-completed')
-  assert.equal(released.notification?.watermark, 120)
+  // busy 结束、goal 仍 unknown：静默结清并消费水位（#11 语义；唤醒回合的完成才是横幅）。
+  const settled = reconcile(ledger.state(), observation({ goal: 'unknown' }), 20)
+  assert.equal(settled.origin, 'subagent-busy-settled')
+  assert.equal(settled.notification, undefined, '延迟的完成不得提前弹横幅')
+  assert.equal(settled.disposition, 'dropped')
   assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 120)
   assert.equal(ledger.pendingEntry('src', 's1'), undefined)
 
@@ -629,14 +630,14 @@ test('G4 release (阻断项): goal unknown releases fail-open and consumes the f
   assert.equal(replay.notification, undefined)
 })
 
-test('G4 release: paused releases neutral; active/complete keep their own branches', () => {
-  // paused：延迟 ≠ 压制（#10 语义），释放中性一次。
+test('G4 settlement: paused settles silently; active/complete keep their own branches', () => {
+  // paused：延迟 ≠ 压制（#10 语义），但结清同样静默（见 G4 settlement 契约用例）。
   const paused = createCompleteLedger()
   reconcile(paused.state(), observation({ subagents: 'busy', goal: goal({ phase: 'paused' }), candidate: shell() }), 10)
   assert.equal(paused.pendingEntry('src', 's1')?.deferred, 'subagent-busy')
-  const released = reconcile(paused.state(), observation({ goal: goal({ phase: 'paused' }) }), 20)
-  assert.equal(released.notification?.title, 'session-completed')
-  assert.equal(released.disposition, 'flushed')
+  const settled = reconcile(paused.state(), observation({ goal: goal({ phase: 'paused' }) }), 20)
+  assert.equal(settled.notification, undefined, 'paused 语境的延迟完成静默结清')
+  assert.equal(settled.disposition, 'dropped')
 
   // active+armed：pending 是目标压制位（不标延迟），继续 keep，outcome 到达才 flush。
   const active = createCompleteLedger()
@@ -656,26 +657,28 @@ test('G4 release: paused releases neutral; active/complete keep their own branch
   assert.equal(stopped.notification?.title, 'goal-stopped')
 })
 
-test('G4 release (A1): a baseline observation still releases a busy-deferred pending; non-deferred settles per §3.5', () => {
-  // goal null + 基线 + 延迟 pending：延迟位是 durable 身份（busy 只延迟不压制），
-  // 基线也必须释放一次——否则 pending 落回 #3 静默 drop，完成永久丢失。
+test('G4 settlement (A1): a baseline observation still SETTLES a busy-deferred pending; non-deferred settles per §3.5', () => {
+  // goal null + 基线 + 延迟 pending：延迟位是 durable 身份，基线也必须结清它（否则
+  // pending 永久留存、水位不推进）。结清是**静默**的：同一件事的横幅来自唤醒回合。
   const nullBase = createCompleteLedger(undefined, {
     pending: { src: { s1: { at: 1, deferred: 'subagent-busy' } } },
     now: 5,
   })
   const nullBaseline = reconcile(nullBase.state(), observation({ baseline: true, goal: null }), 10)
-  assert.equal(nullBaseline.notification?.title, 'session-completed', 'A1：基线释放中性通知')
-  assert.equal(nullBaseline.disposition, 'flushed')
+  assert.equal(nullBaseline.notification, undefined, 'A1：基线结清不补发横幅（G2 语义）')
+  assert.equal(nullBaseline.disposition, 'dropped')
+  assert.equal(nullBaseline.origin, 'subagent-busy-settled')
   assert.equal(nullBase.pendingEntry('src', 's1'), undefined)
 
-  // goal unknown + 基线 + 延迟 pending：G3 fail-open 同样释放并消费水位。
+  // goal unknown + 基线 + 延迟 pending：G3 fail-open 同样结清并消费水位。
   const unknownBase = createCompleteLedger(undefined, {
     pending: { src: { s1: { at: 1, watermark: 90, deferred: 'subagent-busy' } } },
     now: 5,
   })
   const unknownBaseline = reconcile(unknownBase.state(), observation({ baseline: true, goal: 'unknown' }), 10)
-  assert.equal(unknownBaseline.notification?.watermark, 90, 'A1：G3 基线释放且水位照记')
-  assert.equal(unknownBase.pendingEntry('src', 's1'), undefined, '释放消费 pending')
+  assert.equal(unknownBaseline.notification, undefined, 'A1：G3 基线结清不发横幅')
+  assert.equal(unknownBase.pendingEntry('src', 's1'), undefined, '结清消费 pending')
+  assert.equal(unknownBase.notifiedWatermark('src', 's1', 'complete'), 90, 'G3 结清仍消费水位（同一完成不得重报）')
 
   // 非延迟的基线 pending：仍按 #2 静默结清（G2 的「不补发」语义不变）。
   const basePending = createCompleteLedger(undefined, {
@@ -687,7 +690,101 @@ test('G4 release (A1): a baseline observation still releases a busy-deferred pen
   assert.equal(base.origin, 'silent-settle')
 })
 
-test('G4 release: an already-held goal pending keeps its identity even if busy follows', () => {
+
+// ── 完成身份 supersede（§3.2.3 #13；§3.5 边界④的闭合）：busy 证据滞后时的收尾完成 ──
+
+const factsSeq = (watermark: number, completionSeq: number) => ({
+  evidence: 'facts-watermark' as const,
+  watermark,
+  completionSeq,
+})
+
+test('G4 supersede: a strictly later completion absorbed while busy is notified once at settlement', () => {
+  // 形状（§3.5 边界④的闭合）：派出那一轮（S1）延迟 → 子代理已全部结束但 activity 仍报 busy 期间，
+  // 收尾完成（S2 > S1）从 facts 轨到达并被吸收 → activity 回落时结清。
+  // 没有身份时只能静默（漏一条）；有更晚的宿主 seq 就兑现一次，且不双发。
+  const ledger = createCompleteLedger()
+  const deferred = reconcile(ledger.state(), observation({
+    subagents: 'busy', goal: null, candidate: factsSeq(1000, 1099),
+  }), 10)
+  assert.equal(deferred.disposition, 'deferred')
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 1099)
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, undefined, '首次入场不写 supersede 记法')
+
+  // 收尾完成（更晚的 turn/end）在 activity 仍 busy 时到达：吸收并记下更晚身份。
+  const absorbed = reconcile(ledger.state(), observation({
+    subagents: 'busy', goal: null, candidate: factsSeq(2000, 1267),
+  }), 20)
+  assert.equal(absorbed.disposition, 'deferred')
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 1099, '原始身份不被改写（同次重放仍按原键去重）')
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, 1267)
+  assert.equal(ledger.pendingEntry('src', 's1')?.watermark, 2000)
+
+  // activity 回落（子代理全部结束）：兑现**一次**收尾完成，身份 = 更晚的宿主 seq。
+  const settled = reconcile(ledger.state(), observation({ goal: null }), 30)
+  assert.equal(settled.disposition, 'flushed')
+  assert.equal(settled.origin, 'subagent-busy-settled')
+  assert.equal(settled.notification?.kind, 'complete')
+  assert.equal(settled.notification?.completionSeq, 1267, '通知身份取更晚那条（host:turn/1267）')
+  assert.equal(settled.notification?.watermark, 2000)
+  assert.equal(settled.notification?.title, 'session-completed')
+  assert.equal(ledger.pendingEntry('src', 's1'), undefined, '结清消费 pending')
+  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 2000, '结清推进水位')
+  assert.equal(ledger.armed('src').has('s1'), true, '结清后 arm（同一完成的迟到边沿不得再出）')
+
+  // 同一完成从 facts 轨重放：水位已通知 ⇒ 零 emit（不得双发）。
+  const replay = reconcile(ledger.state(), observation({ goal: null, candidate: factsSeq(2000, 1267) }), 40)
+  assert.equal(replay.notification, undefined)
+
+  // 结清之后的**真正新完成**照常通知。
+  const next = reconcile(ledger.state(), observation({ goal: null, candidate: factsSeq(2600, 1301) }), 50)
+  assert.equal(next.notification?.completionSeq, 1301)
+})
+
+
+test('G4 supersede: a persisted absorbed identity still settles on the first BASELINE observation (G2 exception)', () => {
+  // 同页 reload 后首份观测是基线：G2 的「基线不 emit」只适用于**候选**；延迟位已吸收
+  // 更晚完成身份时必须兑现，否则收尾完成永久丢（design 19 §3.2.3 #13 / §3.5 ④）。
+  const ledger = createCompleteLedger(undefined, {
+    pending: { src: { s1: { at: 1, watermark: 2000, completionSeq: 1099, absorbedSeq: 1267, deferred: 'subagent-busy' } } },
+    now: 5,
+  })
+  const result = reconcile(ledger.state(), observation({ baseline: true, goal: null }), 10)
+  assert.equal(result.disposition, 'flushed')
+  assert.equal(result.notification?.completionSeq, 1267, '基线也兑现更晚身份')
+  assert.equal(result.notification?.watermark, 2000)
+  assert.equal(ledger.pendingEntry('src', 's1'), undefined)
+})
+
+test('G4 supersede: running voids the deferral first, so a user turn is never mistaken for the wake completion', () => {
+  // 对照（防误报）：用户在后排子代理仍在跑时自己发一轮，运行位先到 → #1 作废旧延迟位；
+  // 这一轮结束（S2）是**新的**延迟位，没有 supersede 记法 ⇒ 结清仍静默，横幅归唤醒回合。
+  const ledger = createCompleteLedger()
+  reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: factsSeq(1000, 1099) }), 10)
+  const running = reconcile(ledger.state(), observation({ running: 'running', goal: null }), 20)
+  assert.equal(running.disposition, 'voided')
+  reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: factsSeq(2000, 1200) }), 30)
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 1200)
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, undefined, '新延迟位没有更晚身份')
+  const settled = reconcile(ledger.state(), observation({ goal: null }), 40)
+  assert.equal(settled.notification, undefined, '用户那一轮不弹横幅（唤醒回合才是收尾）')
+  assert.equal(settled.disposition, 'dropped')
+})
+
+test('G4 supersede: a no-seq deferral stays silent even when a facts candidate lands while busy', () => {
+  // 无身份（facts 不可用期的壳边沿）不能证明「另一次完成」⇒ 保守静默（§3.5 边界③）。
+  const ledger = createCompleteLedger()
+  reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: shell() }), 10)
+  reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: factsSeq(500, 77) }), 20)
+  // 无身份时采纳后到的 seq（完成身份补全，W2 现状），但**不算 supersede**：无法证明它是
+  // 另一次完成（也可能只是同一次完成从 facts 轨浮出）。
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 77, '缺身份时采纳后到的 seq（现状）')
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, undefined, '不算更晚身份')
+  const settled = reconcile(ledger.state(), observation({ goal: null }), 30)
+  assert.equal(settled.notification, undefined, '无 supersede 证据 ⇒ 结清仍静默')
+})
+
+test('G4 settlement: an already-held goal pending keeps its identity even if busy follows', () => {
   const ledger = createCompleteLedger()
   // 先 hold（active+armed，目标压制位），随后 busy 到达：只能吸收水位，不得改写为延迟。
   reconcile(ledger.state(), observation({ goal: goal(), candidate: facts(50) }), 10)
@@ -749,7 +846,7 @@ test('#12/§3.3 (评审 A): ask/request no longer short-circuits the pending set
 
 // ── 围栏边界重构（A2/A3-3/B3-1）：R2/R4 直测收敛器；R1/R3 见 completion-observation ──
 
-test('R2【A3-3】: boundary-100 fence + seededSince 100 eats the first higher report once (2 notifications / 2 completions)', () => {
+test('R2【A3-3】: boundary-100 fence + seededSince 100 eats the first higher report once (1 banner / 2 completions)', () => {
   const ledger = createCompleteLedger()
   ledger.setNotifiedWatermark('src', 's1', 'complete', 50) // 模拟 facts 已播种到 50
   // C0(100)：facts 首次真正前进的完成 ⇒ 通知 #1。
@@ -758,12 +855,13 @@ test('R2【A3-3】: boundary-100 fence + seededSince 100 eats the first higher r
   // 新回合 running 清武装（无栏）。
   reconcile(ledger.state(), observation({ running: 'running', goal: 'unknown', factsMemory: 100 }), 7)
 
-  // C1：busy 延迟的壳候选（无水位）→ goal unknown fail-open 释放 ⇒ 通知 #2 + 置栏
-  // {boundary:100}。
+  // C1：busy 延迟的壳候选（无水位）→ goal unknown 静默结清（契约：延迟完成不发横幅）
+  // + 置栏 {boundary:100}（同一完成在 facts 侧首次上报必须被一次性守卫）。
   reconcile(ledger.state(), observation({ subagents: 'busy', goal: 'unknown', candidate: shell(), factsMemory: 100 }), 10)
-  const release = reconcile(ledger.state(), observation({ goal: 'unknown', factsMemory: 100 }), 20)
-  assert.equal(release.notification?.title, 'session-completed')
-  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 100 }, 'C1 释放置栏（boundary=100）')
+  const settled = reconcile(ledger.state(), observation({ goal: 'unknown', factsMemory: 100 }), 20)
+  assert.equal(settled.notification, undefined, 'C1 结清零 emit')
+  assert.equal(settled.origin, 'subagent-busy-settled')
+  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 100 }, 'C1 结清置栏（boundary=100）')
 
   // running 再次清栏（新回合）。
   reconcile(ledger.state(), observation({ running: 'running', goal: 'unknown', factsMemory: 100 }), 30)
@@ -787,10 +885,10 @@ test('R2【A3-3】: boundary-100 fence + seededSince 100 eats the first higher r
   assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 200, '吞掉也消费候选身份')
   const replay = reconcile(ledger.state(), observation({ goal: 'unknown', candidate: facts(200), factsMemory: 100 }), 65)
   assert.equal(replay.notification, undefined, '吞掉后相同 200 重放零 emit（身份已消费，不得被 armed 界放行）')
-  const emitted = [c0, release, silent, swallowed, replay].flatMap(result =>
+  const emitted = [c0, settled, silent, swallowed, replay].flatMap(result =>
     result.notifications ?? (result.notification === undefined ? [] : [result.notification]))
-  assert.equal(emitted.length, 2, '总数 2 条通知 / 2 个完成（全部阶段合计，不只 c0/release）')
-  assert.deepEqual(emitted.map(notification => notification.watermark), [100, undefined], '通知水位表值：facts 100 + 无水位释放')
+  assert.equal(emitted.length, 1, '总数 1 条横幅 / 2 个完成（C1 的延迟完成静默结清，横幅归唤醒回合）')
+  assert.deepEqual(emitted.map(notification => notification.watermark), [100], '横幅水位表值只剩 facts 100')
 })
 
 test('settleFence: #9/#10/#11 shell direct emits all set the boundary; facts consumption never does', () => {

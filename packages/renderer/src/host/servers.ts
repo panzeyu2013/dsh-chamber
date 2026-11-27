@@ -15,6 +15,7 @@ import {
   projectableCurrent,
   recordSidebarRowDerivations,
   SOURCE_PHASE_UNKNOWN,
+  subagentActivityFromLineage,
   withPendingArchives,
   withSessionEcho,
   withWorkspaceEcho,
@@ -35,7 +36,7 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-core'
 import { getSourceRepoLayouts, type RepoGitLayout } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
 import type { ConnectionSummary, HealthResponse } from '../api.ts'
-import { isFactsUsable, type SessionFactsRow, type SessionFactsSnapshot } from '../session-facts-source.ts'
+import { isFactsUsable, runningSubagentCountOf, type SessionFactsRow, type SessionFactsSnapshot } from '../session-facts-source.ts'
 import { sourceSessionFactsMode } from '../session-facts-mode.ts'
 import { presentedSessionFactsMode, producerOwnsSessionFacts } from './facts-authority.ts'
 import { LOCAL_INSTANCE_ID } from '../local-instance.ts'
@@ -104,9 +105,13 @@ export type HostFacts = { dshVersion?: string }
  * （行态/徽标）由此取代「原始计数 >0 即在跑」的旧反推。
  */
 function factsSubagentActivity(row: SessionFactsRow): 'busy' | 'idle' | 'unknown' {
-  if (row.lineageVerified === true) return row.subagentCount > 0 ? 'busy' : 'idle'
-  if (row.subagentKnown === true) return 'busy'
-  return row.subagentCount > 0 ? 'unknown' : 'idle'
+  // 单源 = client-core `subagentActivityFromLineage`（判定面与呈现面同一份 I-12 口径）。
+  // 计数口径与判定面一致：优先 P2a 的运行中后代数，旧网关缺席时退回在场数。
+  return subagentActivityFromLineage({
+    subagentCount: runningSubagentCountOf(row),
+    ...(row.lineageVerified === true ? { lineageVerified: true } : {}),
+    ...(row.subagentKnown === true ? { subagentKnown: true } : {}),
+  })
 }
 
 function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsOverlay | undefined {
@@ -121,7 +126,9 @@ function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsO
     if (pending === undefined && row.subagentCount <= 0 && !(row.factAt > 0) && row.goal === undefined) continue
     overlay[row.sessionId] = {
       ...(pending !== undefined ? { pending } : {}),
-      ...(row.subagentCount > 0 ? { runningSubagents: row.subagentCount } : {}),
+      ...(runningSubagentCountOf(row) > 0
+        ? { runningSubagents: runningSubagentCountOf(row) }
+        : {}),
       // 判定侧同一分类（busy/idle/unknown）；计数仍随行渲染，但不再决定压制。
       subagentActivity: factsSubagentActivity(row),
       ...(row.factAt > 0 ? { factAt: row.factAt } : {}),

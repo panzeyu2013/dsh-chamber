@@ -55,11 +55,17 @@ export interface PendingCompletion {
    * `host:turn/<seq>` 身份；缺席 ⇒ 释放沿用水位族（现状）。
    */
   completionSeq?: number
+  /**
+   * 等待期间吸收到的**更晚**完成身份（严格大于 {@link completionSeq} 的宿主 turn/end.seq）：
+   * 延迟位结清时据此区分「派出前半段」（静默）与「busy 证据滞后时已到达的收尾完成」
+   * （兑现一次通知，§3.2.3 #13；§3.5 边界④的闭合）。absent = 没有更晚身份。
+   */
+  absorbedSeq?: number
   /** 压制时该会话的 goal 身份；goalId 变化 ⇒ drop（§3.4 #3）。 */
   goalId?: string
   /**
    * 延迟来源（G4）：busy 只延迟「此刻本应直发」的完成（goal null/paused/unknown），
-   * 不制造目标压制。带此标记的 pending 在 busy 结束后必须中性释放一次（§3.2.3
+   * 不制造目标压制。带此标记的 pending 在 busy 结束后必须静默结清一次（§3.2.3
    * #10/#11 语义），不得被 #3/#G3 静默 drop 或永久留存（评审 A 阻断项）；只有新建
    * pending 时采纳——已有 pending（目标 hold）保持自己的身份。
    */
@@ -73,7 +79,7 @@ export type PendingCompletionTable = Record<string, Record<string, PendingComple
 
 /**
  * settleFence 的围栏条目（A2/A3-3/B3-1 围栏边界重构）：一次**无水位消费**的 emit
- * （壳候选直发 / flush 无水位 / releaseDeferred 无水位）之后置下的一次性守卫。
+ * （壳候选直发 / flush 无水位 / G4 静默结清无水位）之后置下的一次性守卫。
  *   - boundary：置栏观测当时该会话观察层**已吸收**的 facts 水位（不可知 = 0）；
  *   - seededSince：facts 播种批只播种到 ≤ boundary 时记录——被守卫的完成尚未在
  *     facts 侧出现，其后第一条严格更高的候选按「首次上报」吞一次（见 reconcile 的

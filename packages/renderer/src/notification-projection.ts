@@ -31,7 +31,9 @@
  *     静默结清（§3.5：离线完成不补发）；
  *   - settleFence：无水位消费的 emit 后置栏，boundary = 置栏观测当时该会话已吸收的
  *     facts 水位；栏只吞「≤ boundary」或「播种只到 ≤ boundary 之后的首条更高候选」
- *     一次——否则清栏放行（A2/A3-3/B3-1，语义见 swallowFactsCandidateByFence）。
+ *     一次——否则清栏放行（A2/A3-3/B3-1，语义见 swallowFactsCandidateByFence）；
+ *   - 完成身份 supersede（§3.2.3 #13；边界④的闭合）：延迟位吸收到严格更晚的宿主
+ *     turn/end.seq 时记 absorbedSeq，结清时按该身份兑现一次（收尾完成曾被 busy 证据挡住）。
  *
  * 幂等（INV6）：任何 emit/hold 都会消费候选身份（facts ⇒ notified 单调前进到水位；
  * 壳 ⇒ armed），相同观测重放不再产生第二条通知。
@@ -431,10 +433,27 @@ function absorbCandidate(
   // W2 身份：已有 pending 保持自己的身份（与 goalId 同规）——同一次完成的 seq 不得被
   // 后到的观测改写；只有新建时才采纳候选的 seq。
   const completionSeq = existing?.completionSeq ?? candidate.completionSeq
+  // 被吸收的**更晚**完成身份（完成身份的 supersede 记法）：宿主 turn/end 的 seq 严格前进
+  // = 另一次完成，不是同一次完成的重放。延迟位在结清时据此判定「被延迟的那次只是前半
+  // 段，真正收尾的完成在 busy 证据滞后时已经到达」（§3.2.3 #13；边界④的闭合）——有它
+  // 就得兑现一次通知，没有就静默结清。无 seq 的候选（facts 不可用的壳边沿）不改变身份：
+  // 无法证明是另一次完成，保持保守（宁少一条，不因猜测多一条）。
+  // 只有**延迟位**消费 supersede（`settleDeferred` 是唯一读者）；目标 hold 之类的
+  // 普通 pending 不记这个字段——省掉无读者的 durable 噪声（§3.2.4 载荷最小）。
+  const trackSupersede = deferredMark === 'subagent-busy'
+  const absorbedFloor = existing?.absorbedSeq ?? completionSeq
+  const absorbedSeq = trackSupersede
+    ? candidate.completionSeq !== undefined
+      && absorbedFloor !== undefined
+      && candidate.completionSeq > absorbedFloor
+      ? candidate.completionSeq
+      : existing?.absorbedSeq
+    : undefined
   const entry: PendingCompletion = {
     at: existing?.at ?? now,
     ...(watermark > 0 ? { watermark } : {}),
     ...(completionSeq === undefined ? {} : { completionSeq }),
+    ...(absorbedSeq === undefined ? {} : { absorbedSeq }),
     ...((existing?.goalId ?? goalId) === undefined ? {} : { goalId: (existing?.goalId ?? goalId) as string }),
     ...(deferredMark === undefined ? {} : { deferred: deferredMark }),
   }
@@ -481,12 +500,27 @@ function completeNotification(
 }
 
 /**
- * G4 延迟 pending 的释放（busy 结束）：busy 只延迟、不压制——goal 语境为 null/paused
- * （§3.2.3 #10）或 unknown（#11）时，延迟的完成必须中性「会话已完成」直发一次，
- * 消费 pending 并推进水位；无 facts 水位的释放置 settleFence（同一完成的下一条 facts
- * 候选不得双发）。结算守卫（§3.3/TL3）：水位已被通知过 ⇒ 只清不重发。
+ * G4 延迟 pending 的结清（busy 结束）：**静默消费，不 emit**（design 19 §3.2.3 #13 /
+ * §3.5「子代理运行期不视为完成」）。
+ *
+ * WHY（契约修正）：可续子代理 settle 时运行时会向父会话投递 settlement 消息并**唤醒**
+ * 它再跑一轮（宿主 `subagent/manager` 的 waking delivery）；那轮 turn 的结束才是用户
+ * 语义上的一次完成。旧口径「busy 结束即中性直发」把**派出子代理的那一轮**（父会话只是
+ * 转 idle 等子代）当成完成，于是同一件事必得两条横幅：先 `subagent-busy-release`、
+ * 再唤醒回合的真实完成。延迟的完成不是独立事件，它就是下一轮的前半段。
+ *
+ * 结清仍做全部账本写点（与 §3.2.3 #3 的静默 drop 同纪律）：推进 notified（单调，吞掉
+ * 同一完成的重复上报）、删除 pending、arm（同一完成的壳边沿不得再出）、无 facts 水位的
+ * 结清置 settleFence。区别只在**不发通知**；给 facts 恢复批的 COR-1 播种证据由
+ * `applyObservationBatch` 依本 origin 补记（否则被守卫的完成会在恢复批二次上报）。
+ *
+ * 结算守卫（§3.3/TL3）：水位已被通知过 ⇒ 同样只清不重发。
+ *
+ * 已知边界（可接受）：父会话**不再被唤醒**的形态（父 agent 已不在 ACTIVE、宿主重启、
+ * `delivery:'caller'`、宿主 teardown）下这次完成不会再有横幅——那类会话已结束、UI 无
+ * 实义；宁可不打扰，不提前谎报完成。
  */
-function releaseDeferred(
+function settleDeferred(
   state: CompletionDecisionState,
   sourceId: string,
   sessionId: string,
@@ -506,8 +540,17 @@ function releaseDeferred(
   dropPending(state, sourceId, sessionId)
   armSession(state, sourceId, sessionId, maxWatermarkValue(watermark, notifiedComplete(state, sourceId, sessionId)))
   if (watermark === undefined) setFence(state, sourceId, sessionId, factsMemory ?? 0)
+  // 完成身份 supersede（§3.2.3 #13；边界④的闭合）：等待期间吸收到**严格更晚**的宿主
+  // turn/end 完成 ⇒ 被延迟的那次只是派出前半段，真正收尾的完成已在 busy 证据滞后时到达。
+  // 此刻（子代理计数已回落到 idle）兑现一次通知，身份取更晚那条的 seq——同一完成此后
+  // 从 facts 轨重放会被 notified 水位吞掉，不会双发。没有更晚身份 = 常规延迟位（派出
+  // 那一轮），保持静默结清，横幅归唤醒回合。
+  const superseded = pending.absorbedSeq !== undefined
+    && pending.completionSeq !== undefined
+    && pending.absorbedSeq > pending.completionSeq
+  if (!superseded) return { disposition: 'dropped', origin, pendingAge }
   return {
-    notification: completeNotification(sessionId, watermark, 'session-completed', origin, pending.completionSeq),
+    notification: completeNotification(sessionId, watermark, 'session-completed', origin, pending.absorbedSeq),
     disposition: 'flushed',
     origin,
     pendingAge,
@@ -675,12 +718,12 @@ function reconcileCore(
       if (candidate !== undefined) {
         pending = absorbCandidate(state, sourceId, sessionId, candidate, undefined, now)
       }
-      // G4 释放：busy 延迟的 pending 不得被 goal unknown 永久留存——按 #11 fail-open
-      // 中性直发一次（消费 pending + 推进水位；无 facts 水位置围栏）。基线同样释放
-      // （A1 修复）：延迟标记本身就是「此刻本应直发」的证据，G2 的「不补发」只适用
-      // 于基线**候选**（候选无需消费），不得吞掉一条已经由 busy 延迟过一次的完成。
+      // G4 结清：busy 延迟的 pending 不得被 goal unknown 永久留存——按 #11
+      // 静默消费一次（消费 pending + 推进水位；无 facts 水位置围栏，零通知）。基线同样
+      // 结清（A1 修复）：延迟位是 durable 身份，G2 的「不补发」只适用于基线**候选**
+      // （候选无需消费），不得让一条已经由 busy 延迟过一次的完成永久滞留。
       if (pending.deferred === 'subagent-busy') {
-        return releaseDeferred(state, sourceId, sessionId, pending, now, 'subagent-busy-release', observation.factsMemory)
+        return settleDeferred(state, sourceId, sessionId, pending, now, 'subagent-busy-settled', observation.factsMemory)
       }
       return {}
     }
@@ -725,12 +768,13 @@ function reconcileCore(
       return { disposition: 'dropped', origin: 'settle-guard', pendingAge }
     }
 
-    // G4 释放（评审 A 阻断项）：busy 延迟的 pending 在「无压制」语境（goal null /
-    // paused，#10 语义）下中性直发一次——延迟 ≠ 压制，不得被 #3 静默 drop。基线同样
-    // 释放（A1 修复，与 G3 unknown 分支同纪律）：延迟位是 durable 身份，跨页重载
-    // （boot same）后第一次观测常是基线，若被 G2 吞掉则 busy 延迟的完成再次永久滞留。
+    // G4 结清：busy 延迟的 pending 在「无压制」语境（goal null / paused，#10 语义）
+    // 下静默消费一次——延迟 ≠ 压制，不得被 #3 静默 drop（两件不同的事：这里消费的是
+    // 已完成的前半段，横幅归唤醒回合）。基线同样结清（A1 修复，与 G3 unknown 分支同
+    // 纪律）：延迟位是 durable 身份，跨页重载（boot same）后第一次观测常是基线，
+    // 若被 G2 吞掉则 busy 延迟的完成永久滞留。
     if (pending.deferred === 'subagent-busy' && (knownGoal === null || knownGoal.phase === 'paused')) {
-      return releaseDeferred(state, sourceId, sessionId, pending, now, 'subagent-busy-release', observation.factsMemory)
+      return settleDeferred(state, sourceId, sessionId, pending, now, 'subagent-busy-settled', observation.factsMemory)
     }
 
     // #3 goal null / paused / goalId 变化 ⇒ drop（结清，不通知）。

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  goalSuppressesPresentation, sessionRowState, subagentActivityOf,
+  goalSuppressesPresentation, sessionRowState, subagentActivityFromLineage, subagentActivityOf,
 } from '@dsh-chamber/dsh-chamber-client-core/session-row-state'
 // Test-only internal: a package-internal deep import keeps it off the public subpath face.
 import { goalHoldsCompletion } from '../../../dsh-chamber-client-core/src/session-row-state.ts'
@@ -205,4 +205,17 @@ test('six faces derive from the single sessionRowState source (goal gate include
   assert.match(SECTION, /data-chamber-goal-active=\{sessionStateMarker\(server, session\)\.goalActive \? '' : undefined\}/)
   assert.match(SECTION, /sessionStateDot\(server, \{ id: item\.sessionId, running \}\)/)
   assert.match(SECTION, /sessionStateLabel\(server, \{ id: item\.sessionId, running \}\)/)
+})
+
+test('subagentActivityFromLineage: I-12 三档单源（判定面 completion-observation 与呈现面 facts overlay 同用）', () => {
+  // 认证过的 >0 = busy（抑制完成 / 点亮子代理读数）。
+  assert.equal(subagentActivityFromLineage({ subagentCount: 2, lineageVerified: true }), 'busy')
+  // 认证过的 0 = idle（首次可证明「没有子代理」）。
+  assert.equal(subagentActivityFromLineage({ subagentCount: 0, lineageVerified: true }), 'idle')
+  // 认证位缺席但保留谱系表命中 = fail-closed busy（列表不完整不得读成「子代理结束」）。
+  assert.equal(subagentActivityFromLineage({ subagentCount: 0, subagentKnown: true }), 'busy')
+  // 其余（watcher 平面）：count>0 只作 presence（unknown，永不作 busy 证据）。
+  assert.equal(subagentActivityFromLineage({ subagentCount: 3 }), 'unknown')
+  // count 0 且无认证 = idle（与既有 facts-only 口径一致）。
+  assert.equal(subagentActivityFromLineage({ subagentCount: 0 }), 'idle')
 })

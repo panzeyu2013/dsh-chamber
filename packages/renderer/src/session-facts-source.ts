@@ -115,16 +115,29 @@ export interface SessionFactsTurnEnd {
 export type SessionFactsGoalFact = SessionStateGoalFact
 
 /** 一行会话事实（wire SessionStateRow 的防御性投影）。 */
+/**
+ * 判定/呈现两侧的**唯一**运行数取值口径（design 19 §3.5 I-12）：P2a 网关行优先取
+ * `subagentRunningCount`（旧网关缺席 ⇒ 退回在场数 ⇒ 分类器据此只判 presence/unknown），
+ * P2b 行的 `subagentCount` 本身就是运行数。两侧手写 `??` 会各漂移一半，故收敛到这里。
+ */
+export function runningSubagentCountOf(row: Pick<SessionFactsRow, 'subagentCount' | 'subagentRunningCount'>): number {
+  return row.subagentRunningCount ?? row.subagentCount
+}
+
 export interface SessionFactsRow extends Omit<SessionStateRow, 'lastRunningAt' | 'lastTurnEnd'> {
   sessionId: string
   running: boolean
   pendingKind: SessionFactsPendingKind | null
   /**
-   * I-12 谱系压制表：running 子代理后代数（官方 `session/list` 的 origin/
-   * parentSessionId 谱系在**同一份完整基线**上重算；sidebar 口径同源）。只有配着
-   * {@link SessionFactsRow.lineageVerified} 才是权威证据。
+   * 子代理计数（**双口径**，判定侧只认 {@link SessionFactsRow.subagentRunningCount} 优先）：
+   *  - P2b（mux / 远程协议）行：running 子代理后代数（官方 `session/list` 的 origin/
+   *    parentSessionId 谱系在**同一份完整基线**上重算）；
+   *  - P2a（网关镜像）行：**在场**子会话数（渲染口径），运行数另在 subagentRunningCount。
+   * 只有配着 `lineageVerified` 才是权威证据；消费面一律先取 `subagentRunningCount ?? 本字段`。
    */
   subagentCount: number
+  /** P2a 加法字段：运行中的子代理后代数（缺席 = 旧网关，判定侧退回 presence 语义）。 */
+  subagentRunningCount?: number
   /**
    * I-12 完整性：true = 本行 `subagentCount` 来自一份可判的完整谱系基线（每条
    * subagent 行都有可用父边）。缺席 = 无谱系证据（watcher 来源 / 基线不完整 / 世代
@@ -426,6 +439,9 @@ export function parseSessionFactsRow(value: unknown): SessionFactsRow | null {
     running: value.running === true,
     pendingKind: pending,
     subagentCount: nonNegativeInt(value.subagentCount),
+    ...(typeof value.subagentRunningCount === 'number' && Number.isSafeInteger(value.subagentRunningCount) && value.subagentRunningCount >= 0
+      ? { subagentRunningCount: value.subagentRunningCount }
+      : {}),
     ...(value.lineageVerified === true ? { lineageVerified: true } : {}),
     ...(value.subagentKnown === true ? { subagentKnown: true } : {}),
     updatedAt: numberOrZero(value.updatedAt),
@@ -558,7 +574,9 @@ function bodyHasDisabledCode(body: unknown): boolean {
  */
 export function sessionFactsRowSignature(row: SessionFactsRow): string {
   return JSON.stringify([
-    row.running, row.pendingKind, row.subagentCount, row.lineageVerified === true, row.subagentKnown === true, row.updatedAt,
+    // 缺席（旧网关）与 0（新网关）必须可区分：-1 是「没有这个证据」的哨兵。
+    row.running, row.pendingKind, row.subagentCount, row.subagentRunningCount ?? -1,
+    row.lineageVerified === true, row.subagentKnown === true, row.updatedAt,
     row.completedAt, row.completedAtSource,
     row.lastTurnEnd === null
       ? null
@@ -596,6 +614,7 @@ function sameRowFacts(left: SessionFactsRow, right: SessionFactsRow): boolean {
   return left.running === right.running
     && left.pendingKind === right.pendingKind
     && left.subagentCount === right.subagentCount
+    && (left.subagentRunningCount ?? -1) === (right.subagentRunningCount ?? -1)
     && (left.lineageVerified === true) === (right.lineageVerified === true)
     && (left.subagentKnown === true) === (right.subagentKnown === true)
     && left.updatedAt === right.updatedAt

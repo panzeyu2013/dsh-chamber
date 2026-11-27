@@ -543,6 +543,72 @@ test('observeSource: lineage-verified facts rows are evidence; known durable chi
   assert.equal(failClosed.observations[0].subagents, 'busy', '保留表命中 ⇒ 抑制完成（fail-closed）')
 })
 
+test('P2a lineage (gateway): the running-descendant field is the only busy evidence, absent = presence', () => {
+  // 网关镜像（P2a）行：subagentCount 是在场数，subagentRunningCount 是运行数。
+  // 只有「谱系认证 + 运行数>0」才是 busy；旧网关无运行数字段 ⇒ 退回 presence（unknown）。
+  const busy = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 3, subagentRunningCount: 2, lineageVerified: true }) } },
+  })
+  assert.equal(busy.observations[0].subagents, 'busy', '认证过的运行中后代必须抑制')
+  const idle = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 3, subagentRunningCount: 0, lineageVerified: true }) } },
+  })
+  assert.equal(idle.observations[0].subagents, 'idle', '在场 3 个但一个都没跑 ⇒ 不是 busy')
+  const legacy = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 3 }) } },
+  })
+  assert.equal(legacy.observations[0].subagents, 'unknown', '旧网关（无运行数/认证位）保持 presence')
+  const failClosed = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 0, subagentKnown: true }) } },
+  })
+  assert.equal(failClosed.observations[0].subagents, 'busy', '保留表命中仍 fail-closed busy')
+})
+
+test('observeSource: a shell row with NO activity evidence falls back to the facts lineage (I-12 判定面)', () => {
+  // facts-only 来源的虚拟壳行（`virtualRuntimeReport`）只带 running/pending——没有
+  // subagentActivity、也没有稀疏计数。旧口径把「没有这个字段」读成「没有子代理」，
+  // G4 对无壳来源整体失效（子代理仍在跑时提前发完成横幅）。
+  const busy = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 2, lineageVerified: true }) } },
+  })
+  assert.equal(busy.observations[0].subagents, 'busy', '无活动证据的壳行必须回退 facts 谱系（不能当 idle）')
+  const idle = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 0, lineageVerified: true }) } },
+  })
+  assert.equal(idle.observations[0].subagents, 'idle', '谱系认证过的 0 才释放压制')
+  // 两轨都没有证据 ⇒ unknown（G3 不压制，绝不猜 idle）。
+  const unknown = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false } } },
+  })
+  assert.equal(unknown.observations[0].subagents, 'unknown', '两轨无证据 = unknown')
+})
+
+test('observeSource: a DECLARED shell activity outranks the facts lineage (even when it says none)', () => {
+  // 生产者既然声明了（running|none），就由它裁决——facts 谱系只补「没有证据」的空位。
+  // 否则 mounted 来源的通道读数会被一份滞后的 facts 行改写，六面同源破裂。
+  const declaredNone = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none' } } },
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 3, lineageVerified: true }) } },
+  })
+  assert.equal(declaredNone.observations[0].subagents, 'idle', '壳轨声明优先：facts 不覆盖 none')
+  const declaredRunning = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running' } } },
+    facts: { usable: true, rows: { s1: factsRow({ subagentCount: 0, lineageVerified: true }) } },
+  })
+  assert.equal(declaredRunning.observations[0].subagents, 'busy', '壳轨声明优先：facts 不解除 running')
+})
+
 test('observeSource: goal precedence is shell → facts → unknown and null never folds into unknown', () => {
   const shellGoal: GoalFact = { goalId: 'shell', revision: 1, phase: 'active' }
   const factsGoal: GoalFact = { goalId: 'facts', revision: 2, phase: 'paused' }
@@ -815,7 +881,7 @@ test('applyObservationBatch: a flush disposition is persisted immediately (TL3)'
 
 // ── 评审 A 修复回归：G4 延迟释放 / forgotten 全纪律 / facts 不可用 / 直通不短路 ──
 
-test('REGRESSION(G4 阻断项): a busy-deferred completion releases through the observation layer under goal null', () => {
+test('REGRESSION(G4 契约): a busy-deferred completion is settled silently through the observation layer under goal null', () => {
   const ledger = createCompleteLedger()
   const { calls, sink } = makeSink()
   const first = observeSource({
@@ -837,25 +903,36 @@ test('REGRESSION(G4 阻断项): a busy-deferred completion releases through the 
   assert.equal(calls.notifications.length, 0, 'busy 期间零通知')
   assert.equal(ledger.pendingEntry('src', 's1')?.deferred, 'subagent-busy')
 
-  // busy 结束（该观测本身没有候选）：延迟的完成必须中性发出一通知。
+  // busy 结束（该观测本身没有候选）：延迟的完成被静默结清——零横幅，账本消费干净。
   const idle = observeSource({
     state: busy.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
     shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
   })
   assert.equal(idle.observations[0].candidate, undefined, '忙碌结束本身不再是候选')
   applyObservationBatch({ ledger, sourceId: 'src', batch: idle, sink })
-  assert.equal(calls.notifications.length, 1, 'busy 结束后延迟的完成必须中性发出一通知')
-  assert.equal(calls.notifications[0].kind, 'complete')
-  assert.equal(calls.notifications[0].title, 'session-completed')
-  assert.equal(calls.dispositions.at(-1), 'flushed')
+  assert.equal(calls.notifications.length, 0, '延迟的完成不得提前弹横幅（横幅归唤醒回合）')
+  assert.equal(calls.dispositions.at(-1), 'dropped')
   assert.equal(ledger.pendingEntry('src', 's1'), undefined)
+
+  // 唤醒回合（子代理 settle 唤醒父会话再跑一轮）的完成才是用户语义的那一条。
+  const wakeRunning = observeSource({
+    state: idle.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, subagentActivity: 'none', goal: null } } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch: wakeRunning, sink })
+  const wakeIdle = observeSource({
+    state: wakeRunning.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch: wakeIdle, sink })
+  assert.equal(calls.notifications.length, 1, '一次任务（派出 + 唤醒）恰好一条横幅')
+  assert.equal(calls.notifications[0].title, 'session-completed')
 })
 
-test('REGRESSION(A1): a baseline observation still releases a busy-deferred pending (no G2 swallowing)', () => {
-  // 反例：busy 延迟的 pending 跨页保留（boot same），恢复后第一份观测是基线
-  // （goal null / subagents idle）：旧口径 !baseline 让释放分支不可达，pending 落回
-  // #3 静默 drop（goal null）或被永久留存（goal unknown）——busy 只延迟不压制，
-  // 基线也不得吞掉一条已经延迟过的完成。
+test('REGRESSION(A1): a baseline observation still SETTLES a busy-deferred pending (no G2 swallowing)', () => {
+  // busy 延迟的 pending 跨页保留（boot same），恢复后第一份观测是基线（goal null /
+  // subagents idle）：基线必须结清它（旧口径 !baseline 让分支不可达，pending 永久
+  // 留存），但结清是**静默**的——该 pending 是派出子代理那一轮的前半段，横幅归唤醒回合。
   const ledger = createCompleteLedger(undefined, {
     pending: { src: { s1: { at: 1, deferred: 'subagent-busy' } } },
     now: 5,
@@ -865,11 +942,9 @@ test('REGRESSION(A1): a baseline observation still releases a busy-deferred pend
     ledger, sourceId: 'src', sink,
     batch: batchOf([obs({ baseline: true, goal: null, subagents: 'idle' })]),
   })
-  assert.equal(calls.notifications.length, 1, '基线 + 延迟 pending ⇒ 必须 emit 一条中性通知')
-  assert.equal(calls.notifications[0].kind, 'complete')
-  assert.equal(calls.notifications[0].title, 'session-completed')
-  assert.equal(calls.dispositions.at(-1), 'flushed')
-  assert.equal(ledger.pendingEntry('src', 's1'), undefined, '释放消费 pending')
+  assert.equal(calls.notifications.length, 0, '基线结清不补发横幅（G2 语义）')
+  assert.equal(calls.dispositions.at(-1), 'dropped')
+  assert.equal(ledger.pendingEntry('src', 's1'), undefined, '结清消费 pending')
 })
 
 test('REGRESSION(forgotten 方向 A): a reappearing session seeds its first observation (no double-notify)', () => {
@@ -1115,7 +1190,7 @@ test('REGRESSION(TL3): a #3/silent drop is persisted immediately too', () => {
 
 // ── F5 修复回归（阻断 1/2 + 重要 3/4；每条都有临时回退即红的用例） ──────────
 
-test('REGRESSION(F5 阻断项 1): a busy-deferred pending survives the notifications.v1 round-trip and releases after a same-page reload', () => {
+test('REGRESSION(F5 阻断项 1): a busy-deferred pending survives the notifications.v1 round-trip and is settled silently after a same-page reload', () => {
   // 反例：goal unknown + busy 完成 → pending{deferred} 落盘 → 同页 reload（boot same）
   // → 标记丢 → busy 结束后零 emit、pending 永久留存（goal null/paused 则 #3 静默 drop）。
   const ledger = createCompleteLedger()
@@ -1146,12 +1221,13 @@ test('REGRESSION(F5 阻断项 1): a busy-deferred pending survives the notificat
   })
   assert.equal(restored.pendingEntry('src', 's1')?.deferred, 'subagent-busy', '同页 reload 后延迟身份仍在')
 
-  // 重载后 busy 结束 + goal null：必须中性释放一次（丢标记则 #3 静默 drop，零 emit）。
+  // 重载后 busy 结束 + goal null：结清（静默）——水位/账本消费干净，零横幅。
   const { calls: reloadedCalls, sink: reloadedSink } = makeSink()
   applyObservationBatch({ ledger: restored, sourceId: 'src', sink: reloadedSink, batch: batchOf([obs({ goal: null })]) })
-  assert.equal(reloadedCalls.notifications.length, 1, '重载后 busy 延迟的完成仍必须释放')
-  assert.equal(reloadedCalls.notifications[0].title, 'session-completed')
-  assert.equal(restored.pendingEntry('src', 's1'), undefined, '释放消费 pending')
+  assert.equal(reloadedCalls.notifications.length, 0, '结清不发横幅（横幅归唤醒回合）')
+  assert.equal(reloadedCalls.dispositions.at(-1), 'dropped')
+  assert.equal(restored.pendingEntry('src', 's1'), undefined, '结清消费 pending')
+  assert.equal(restored.notifiedWatermark('src', 's1', 'complete'), 120, '结清仍消费水位（同一完成不得重报）')
 })
 
 test('REGRESSION(F5 阻断项 2): 200 consecutive facts-only completions all notify through the observation layer', () => {
@@ -1198,8 +1274,8 @@ test('REGRESSION(F5 重要项 3): facts seeding consumes the settleFence so the 
     shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 1, 'busy 结束后延迟完成中性释放一次')
-  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 0 }, '无水位释放置一次性围栏（boundary = 置栏时已吸收的 facts 水位）')
+  assert.equal(calls.notifications.length, 0, 'busy 结束后延迟完成静默结清（零横幅）')
+  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 0 }, '无水位结清置一次性围栏（boundary = 置栏时已吸收的 facts 水位）')
 
   // facts 首次可用：同一完成被播种吸收 ⇒ 围栏必须随播种清除（播种 = 等价消费）。
   batch = observeSource({
@@ -1207,7 +1283,7 @@ test('REGRESSION(F5 重要项 3): facts seeding consumes the settleFence so the 
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 100, completedAtSource: 'observed', updatedAt: 100 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 1, '首份可用 facts 快照只播种')
+  assert.equal(calls.notifications.length, 0, '首份可用 facts 快照只播种（被守卫的完成不补发）')
   assert.equal(ledger.state().settleFence.src?.s1 ?? false, false, '播种吸收 100 > boundary 0 ⇒ 播种消耗围栏（回退即红）')
 
   batch = observeSource({
@@ -1215,8 +1291,8 @@ test('REGRESSION(F5 重要项 3): facts seeding consumes the settleFence so the 
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 200, completedAtSource: 'observed', updatedAt: 200 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 2, '播种之后的新完成不得被旧围栏吞掉')
-  assert.equal(calls.notifications[1].watermark, 200)
+  assert.equal(calls.notifications.length, 1, '播种之后的新完成不得被旧围栏吞掉')
+  assert.equal(calls.notifications[0].watermark, 200)
 })
 
 /** F5 重要项 4 的公共前缀：facts 已播种 → 壳边沿通知完成 → 两通道消失 → 壳先重现（无 facts 行）。 */
@@ -1771,8 +1847,112 @@ test('REGRESSION(FINAL-C): deleting the observation state withdraws the old gene
 
 // ── 围栏边界重构（A2/A3-3/B3-1）四条反例：R1/R3 走观测层，R2/R4 见 aggregate 直测 ──
 
-test('R1【A2 不得回归】: a boundary-0 release fence is cleared by the facts seeding, so the next completion emits', () => {
-  // 无水位释放置栏（boundary = 置栏时已吸收的 facts 水位 = 0）→ facts 首次播种吸收
+
+test('G4 supersede (#13 supersede): an activity-lagged wake completion is notified once with host identity, never dropped', () => {
+  // 形状：busy 期间报告 still busy（子代理其实已结束、activity 更新滞后），收尾完成（更晚的
+  // 宿主 turn/end）从 facts 轨到达并被吸收；随后 activity 回落。旧行为：静默结清 ⇒ 0 横幅；
+  // 现行为：按更晚身份兑现恰好一条，且同一完成重放不双发。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, subagentActivity: 'none', goal: null } } },
+    // 先播种 facts 轨（首份可用批只吸收，不产候选），否则下一次 facts 推进仍是播种批。
+    facts: { usable: true, rows: { s1: factsRow() } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(batch.state.factsSeeded, true)
+  // 派出那一轮结束（S1）→ 延迟。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 1000, completedAtSource: 'observed', updatedAt: 1000, lastTurnEnd: { kind: 'completed', at: 1000, seq: 1099 } }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 1099)
+
+  // 收尾完成（S2）在 activity 仍报 running 时到达 → 吸收并记 supersede。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 2000, completedAtSource: 'observed', updatedAt: 2000, lastTurnEnd: { kind: 'completed', at: 2000, seq: 1267 } }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, 1267)
+  assert.equal(calls.notifications.length, 0, 'busy 期间零通知')
+
+  // activity 回落：恰好一条，身份 = host:turn/1267。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 2000, completedAtSource: 'observed', updatedAt: 2000, lastTurnEnd: { kind: 'completed', at: 2000, seq: 1267 } }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '收尾完成必须兑现（旧行为 0 条）')
+  assert.equal(calls.notifications[0].completionSeq, 1267)
+  assert.equal(calls.notifications[0].watermark, 2000)
+  assert.equal(calls.dispositions.at(-1), 'flushed')
+  assert.equal(ledger.notifiedRun('src', 's1'), undefined, 'notifiedRuns 由投递层写（本层只记水位）')
+
+  // 同一完成重放：水位/武装门吸收，零 emit。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 2000, completedAtSource: 'observed', updatedAt: 2000, lastTurnEnd: { kind: 'completed', at: 2000, seq: 1267 } }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '同一完成不得双发')
+})
+
+test('G4 supersede (durable): absorbed identity survives notifications.v1 and still settles once after reload', () => {
+  // 持久化端到端：延迟位带更晚身份落盘 → 同页 reload（boot same）→ 活动回落仍兑现一次。
+  // 防「ledger 加载裁剪字段 ⇒ 静默结清吞掉收尾完成」的回归（absorbedSeq 是 durable 身份）。
+  const ledger = createCompleteLedger()
+  const { sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow() } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 1000, completedAtSource: 'observed', updatedAt: 1000, lastTurnEnd: { kind: 'completed', at: 1000, seq: 1099 } }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 2000, completedAtSource: 'observed', updatedAt: 2000, lastTurnEnd: { kind: 'completed', at: 2000, seq: 1267 } }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, 1267)
+
+  const { storage } = fakeStorage()
+  const payload: NotificationPayload = {
+    v: 1,
+    notifiedRuns: ledger.notifiedRunTable(),
+    pending: ledger.pendingTable(),
+    outcomes: ledger.outcomesTable(),
+  }
+  assert.equal(saveNotifications(storage, payload), true)
+  const loaded = loadNotifications(storage)
+  const restored = createCompleteLedger({}, {
+    pending: notificationPendingTable(loaded),
+    outcomes: notificationOutcomeTable(loaded),
+    boot: 'same',
+  })
+  assert.equal(restored.pendingEntry('src', 's1')?.absorbedSeq, 1267, '更晚身份必须存活 reload')
+
+  const { calls: afterReload, sink: afterSink } = makeSink()
+  applyObservationBatch({ ledger: restored, sourceId: 'src', sink: afterSink, batch: batchOf([obs({ goal: null })]) })
+  assert.equal(afterReload.notifications.length, 1, 'reload 后活动回落仍兑现一次')
+  assert.equal(afterReload.notifications[0].completionSeq, 1267)
+  assert.equal(restored.pendingEntry('src', 's1'), undefined)
+})
+test('R1【A2 不得回归】: a boundary-0 settlement fence is cleared by the facts seeding, so the next completion emits', () => {
+  // 无水位结清置栏（boundary = 结清时已吸收的 facts 水位 = 0）→ facts 首次播种吸收
   // 同一完成 1000（1000 > boundary ⇒ 播种已吸收被守卫的完成 ⇒ 清栏）→ 新完成 2000
   // 必须 emit。若播种把 1000 记成 seededSince 而不是清栏，2000 会被栏吞掉（回退即红）。
   const ledger = createCompleteLedger()
@@ -1796,8 +1976,11 @@ test('R1【A2 不得回归】: a boundary-0 release fence is cleared by the fact
     facts: { usable: false, rows: { s1: factsRow() } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 1, 'busy 结束后延迟完成中性释放一次')
-  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 0 }, '无水位释放置栏（boundary=0）')
+  assert.equal(calls.notifications.length, 0, 'busy 结束后延迟完成静默结清（零横幅）')
+  assert.deepEqual(ledger.state().settleFence.src?.s1, { boundary: 0 }, '无水位结清置栏（boundary=0）')
+  // COR-1：静默结清同样是一次「无水位消费」，必须留下恢复批重播种证据
+  // （否则 facts 恢复批会以更高水位把被围栏守卫的同一完成再报一次）。
+  assert.equal(batch.state.shellCompleteSinceFacts, true, '静默结清置 COR-1 证据位')
 
   batch = observeSource({
     state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
@@ -1805,7 +1988,7 @@ test('R1【A2 不得回归】: a boundary-0 release fence is cleared by the fact
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 1000, completedAtSource: 'observed', updatedAt: 1000 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 1, 'facts 首次播种只吸收水位')
+  assert.equal(calls.notifications.length, 0, 'facts 首次播种只吸收水位（恢复批不补发被守卫的完成）')
   assert.equal(ledger.state().settleFence.src?.s1 ?? false, false, '播种 1000 > boundary 0 ⇒ 清栏（A2）')
 
   batch = observeSource({
@@ -1814,11 +1997,67 @@ test('R1【A2 不得回归】: a boundary-0 release fence is cleared by the fact
     facts: { usable: true, rows: { s1: factsRow({ completedAt: 2000, completedAtSource: 'observed', updatedAt: 2000 }) } },
   })
   applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
-  assert.equal(calls.notifications.length, 2, '播种之后的新完成 2000 必须 emit')
-  assert.equal(calls.notifications[1].watermark, 2000)
+  assert.equal(calls.notifications.length, 1, '播种之后的新完成 2000 必须 emit（且只此一条）')
+  assert.equal(calls.notifications[0].watermark, 2000)
   assert.equal(ledger.notifiedWatermark('src', 's1', 'complete'), 2000, '新完成消费候选身份（水位表值）')
   assert.equal(calls.notifications[0].title, 'session-completed')
-  assert.equal(calls.notifications[0].watermark, undefined, '释放通知是壳证据（无 facts 水位）')
+})
+
+test('COR-1 guard【A 不得只推迟】: a silent settlement registers recovery seeding, so the facts track cannot re-report it', () => {
+  // 形状：facts 已播种 → facts 转不可用 → 壳边沿（无水位）延迟 → busy 结束**静默结清**
+  // （置栏 boundary=0）→ facts 恢复并首次报出**同一完成**（水位 500 > boundary）。
+  // 若静默结清不留下 COR-1 证据（shellCompleteSinceFacts / shellNotifiedSinceFacts），
+  // 恢复批就不会重播种，500 会按围栏 rule ③ 被当成新完成再弹一次——横幅只是推迟。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  let batch = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow() } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(batch.state.factsSeeded, true, '前置：facts 已播种')
+
+  // facts 不可用 + 子代理 busy ⇒ 壳边沿延迟（无水位）。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
+    facts: { usable: false, rows: { s1: factsRow() } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(ledger.pendingEntry('src', 's1')?.deferred, 'subagent-busy')
+
+  // busy 结束：静默结清 + COR-1 证据（批末复位播种位）。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: false, rows: { s1: factsRow() } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 0, '结清零横幅')
+  assert.equal(batch.state.shellCompleteSinceFacts, true, '静默结清必须置 COR-1 证据位')
+  assert.equal(batch.state.factsSeeded, false, '不可用批末复位播种位（恢复批重新播种）')
+  assert.equal(batch.state.factsReseedPending, true)
+
+  // facts 恢复并报出同一完成：重播种吸收 500，绝不二次弹横幅。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 500, completedAtSource: 'observed', updatedAt: 500 }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 0, '同一完成不得从 facts 轨补发（否则 A 只是推迟）')
+  assert.equal(ledger.notifiedWatermark('src', 's1', 'complete') ?? 0, 0, '播种不推进 notified（水位进 memory）')
+
+  // 真正的新完成照常通知。
+  batch = observeSource({
+    state: batch.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ completedAt: 900, completedAtSource: 'observed', updatedAt: 900 }) } },
+  })
+  applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+  assert.equal(calls.notifications.length, 1, '恢复播种之后的新完成必须通知')
+  assert.equal(calls.notifications[0].watermark, 900)
 })
 
 test('R3【B3-1】: seeding only to the boundary keeps the fence and eats the next higher report once (1 notification total)', () => {

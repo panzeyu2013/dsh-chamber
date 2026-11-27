@@ -380,6 +380,25 @@ test('I-12 facts overlay: activity is the lineage classification, never the raw 
   assert.equal(sessions.d?.runningSubagents, 3, 'the raw count still rides, but only for display')
 })
 
+
+test('I-12 facts overlay: the RUNNING count (not raw presence) drives activity and display', () => {
+  // P2a 网关行带运行数前，presence 只作 unknown；带运行数后必须用**运行数**判定，
+  // 否则「3 个在场、0 个在跑」会被误判成 busy（并把 3 当运行数显示）。
+  const f = fixture()
+  const servers = deriveServers(READY_HEALTH, [], f.remoteInstances, f.remoteStatus, f.aggregates,
+    {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh',
+    { [REMOTE_SOURCE_ID]: factsSnapshot({
+      a: factsRow({ sessionId: 'a', subagentCount: 3, subagentRunningCount: 0, lineageVerified: true }),
+      b: factsRow({ sessionId: 'b', subagentCount: 3, subagentRunningCount: 2, lineageVerified: true }),
+    }) })
+  const remote = servers.find(server => server.id === REMOTE_SOURCE_ID)
+  const sessions = remote?.runtime?.sessions ?? {}
+  assert.equal(sessions.a?.subagentActivity, 'none', '在场 3 但运行 0 ⇒ idle（不是 busy）')
+  assert.equal(sessions.a?.runningSubagents, undefined, '运行数为 0 时不显示在场数')
+  assert.equal(sessions.b?.subagentActivity, 'running', '运行数 >0 ⇒ busy')
+  assert.equal(sessions.b?.runningSubagents, 2, '显示口径同样用运行数（六面同源）')
+})
+
 test('projection signature cache: fragments are keyed by source identity (immutability contract)', () => {
   const servers = derive(fixture())
   const cache = createChamberProjectionSignatureCache()

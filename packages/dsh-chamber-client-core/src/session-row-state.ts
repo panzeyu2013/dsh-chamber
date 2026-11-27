@@ -136,6 +136,28 @@ export function subagentActivityOf(
 }
 
 /**
+ * facts 谱系活动三值（I-12）的**唯一实现**：判定面（`completion-observation` 的子代理
+ * 证据）与呈现面（`host/servers` 的 facts overlay）同用这一份，第二份拷贝会漂移成
+ * 「横幅被压制但徽标照亮」这类跨面分歧（design 19 §3.7 的同拍要求）。
+ *
+ * 口径（design 19 §3.5 / §3.2.3 G4）：谱系已认证（`lineageVerified`）= 该来源用完整
+ * 列表基线重算过子代 ⇒ `count>0` busy、`count 0` idle（首次可证明「没有子代理」）；
+ * 认证位缺席但保留谱系表命中（`subagentKnown`）= 列表不完整，fail-closed busy；
+ * 其余（watcher 平面）`count>0` 只作 presence（unknown，**永不作 busy 证据**）。
+ */
+export interface LineageActivityFacts {
+  readonly subagentCount: number
+  readonly lineageVerified?: boolean
+  readonly subagentKnown?: boolean
+}
+
+export function subagentActivityFromLineage(facts: LineageActivityFacts): 'busy' | 'idle' | 'unknown' {
+  if (facts.lineageVerified === true) return facts.subagentCount > 0 ? 'busy' : 'idle'
+  if (facts.subagentKnown === true) return 'busy'
+  return facts.subagentCount > 0 ? 'unknown' : 'idle'
+}
+
+/**
  * 官方 `ctx.uiSession.sessionStatus` 投影收敛成运行位后的形状：`undefined` = 该会话
  * **尚无运行观测**（`publishStatus` 的 id 并集含「只因 pending 交互或完成提醒而存在」的
  * 行，且直接写 `this.running.get(id)`）。每来源每代一份。

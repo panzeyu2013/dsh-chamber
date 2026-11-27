@@ -82,6 +82,16 @@
   纳入转发白名单。
 - 现状：`packages/dsh-chamber-client-core/src/derive.ts` 把缺席写成 `unknown`、stale 报告降级；上游给信号后删
   fallback 与对应契约测试。
+- 通知面的同族空窗（design 19 §3.5 已知边界②）：派活瞬间子会话的**运行位**尚未建立时，谱系计数与上游
+  `runningChildCount` 同口径（未知 ⇒ 不计）⇒ 派出那一轮的完成会立即通知一次；等上游给出 start/end 边沿或
+  `lineageAsOf` 一并收敛，不在本地加计数启发。
+- 会话级收尾信号（design 19 §3.5 的已知边界段是判据单源，§3.2.10 只按编号引用）：有宿主 seq 的延迟位已能确证收尾
+  （`absorbedSeq`）；P2a 谱系证据（`subagentRunningCount`/`lineageVerified`/`subagentKnown`，按祖先链归并）已把 gateway
+  来源拉到与 P2b 同口径。仍开放 ① 父会话不再被唤醒（接受）、② 派活瞬秒运行位未建立（接受）、③ 延迟位无身份
+  窗口的恢复批吸收、④ 首次延迟候选即收尾、⑤ goal 语境双标题、⑥ 旧版本混跑、⑦ 壳轨声明优先。根治候选是仓内可读的**唤醒信号**：P2a/P2b
+  每个完成边沿已发 `session/follow` 并读同一份 records，其中 `user/message.source.kind=subagent-settled` 即
+  「唤醒即将发生」（受 `FOLLOW_MAX_MESSAGES=8` 窗口限制，需裁决窗口与语义面）；挂载壳（P1）侧可发不激活的
+  一次性 follow（每边沿一次 RPC）。在此之前不加计数/定时启发。
 
 ### 8. 载波 open 的稳定 episode 身份（P3）
 
