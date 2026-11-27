@@ -72,7 +72,7 @@
 **前置门**：
 
 - **G1** 观测代际 ≠ 已记录代 ⇒ 整份丢弃（旧代迟到帧不得改状态）。
-- **G2** baseline（该来源本代第一份批次，空首帧也算）不 emit：有待结算 pending 时候选可用于水位吸收/静默结清；无 pending 时基线候选直接丢弃。**唯一例外**：延迟位已带更晚完成身份（`absorbedSeq > completionSeq`）时，基线也要兑现一次——否则同页 reload 后收尾完成永久丢（#13 的 supersede 出口不受基线门约束，用例 `G4 supersede: a persisted absorbed identity still settles on the first BASELINE observation`）。
+- **G2** baseline（该来源本代第一份批次，空首帧也算）不 emit：有待结算 pending 时候选可用于水位吸收/静默结清；无 pending 时基线候选直接丢弃。**例外**：延迟位已带更晚完成身份（`absorbedSeq > completionSeq`）且语境属 #13 的三种（goal null / unknown / paused）时，基线也要兑现一次——否则同页 reload 后收尾完成永久丢（#13 的 supersede 出口不受基线门约束，用例 `G4 supersede: a persisted absorbed identity still settles on the first BASELINE observation`）。goal complete/blocked 的首见 outcome 仍走 silent-settle（离线不补发，§3.2.4），supersede 不越过该纪律。
 - **G3** unknown 只栅栏对应维度：goal unknown ⇒ 不结算/不 hold（候选照走 #9–#11）；running unknown ⇒ 不作废；subagents unknown ⇒ 不压制。
 - **G4** 子代理 busy（仅运行证据，见 §3.5 的 facts-only 修正）⇒ complete 候选延迟：吸收进 pending，不 emit、不 flush、不推进 notified。busy 只延迟、不压制：busy 结束时 goal unknown（#11）/ 已知 null 或 paused（#10）⇒ **静默结清**（`origin='subagent-busy-settled'`：消费 pending、推进水位、arm，无 facts 水位时置 settleFence；**默认不发通知**，例外见 #13 的更晚完成身份）；active/complete/blocked 不在此结清，继续走既有 pending 分支（#2/#4–#6）。**为什么是静默**：可续子代理 settle 时运行时会向父会话投递 settlement 消息并**唤醒**它再跑一轮，那轮 turn 的结束才是用户语义的一次完成；「busy 结束即中性直发」把派出子代理的那一轮（父会话只是转 idle 等子代）当成完成，同一件事必得两条横幅。静默结清不是丢弃：该完成的前半段没有独立语义，横幅归唤醒回合。**已知边界**：父会话不再被唤醒的形态（父 agent 非 ACTIVE/已离线、宿主重启、宿主 teardown、`delivery:'caller'` 的子代理）下这次完成不会再有横幅——那类会话已结束，宁可不打扰也不提前谎报。口径细分：**本地** caller 子代理仍进父 catalog（上游 `subagent/types.ts` 的「本地子代总是进 catalog」），因此照样构成 G4 busy 证据、且 caller 在 `notifySettlement` 早退不唤醒父会话 ⇒ 正是本边界；只有**外部** caller 运行不进 catalog、不构成 G4 证据，与本分支无关。deferred 结清不受基线门（G2）约束：`deferred:'subagent-busy'` 是 durable 身份，boot=fresh 已在账本构造期丢弃 pending（不会补发离线完成），故基线观测同样静默结清（`baseline` 不参与判定）；否则同页 reload（boot same）后首次观测常是基线，延迟 pending 会永久滞留。非 deferred 的基线行为不变：goal unknown 只保留待下一份非基线观测、已知 null/paused 按 #3 静默结清（离线不补发）。延迟标记只在新建 pending 时采纳——已有 pending 保持自己的身份（目标 hold 不得被一次 busy 改写为可结清的延迟）。
 - **候选的完成证据（RC-2 收窄）**：facts 候选只认 host 域、`observed` 的 `completedAt`（`factsCompletionOf`）——`completionWatermark = max(completedAt, updatedAt)` 是内容水位（记忆/围栏用），把 `updatedAt` 的活动前进也算成更高水位；候选若用它，「一条老完成 + 新活动」或权威运行位抖动就会被重提成一次新完成（实测假通知的形状）。observer 域的 `reconstructed` 时刻不在 host 域（不作完成证据：不发通知，也不产生完成点），同样不作证据。
@@ -179,35 +179,18 @@
 1. **busy 结束即中性直发**（本设计的早期口径）：否决——可续子代理 settle 会唤醒父会话再跑一轮，派出那一轮的完成只是「转 idle 等子代」，直发必得两条横幅（一条提前、一条真完成）。改为静默结清；横幅归唤醒回合。
 2. **保留结清、只把文案/事件种类换掉**（如「子代理已结束」）：否决——等于为一次任务加第二条横幅（多个子代理最多多条噪音），且把进度谎报为完成，违反「不打扰」与事件词表（`complete`/`ask`/`request` 之外没有进度事件）。
 3. **结清时加一次观测宽限**（下一条观测若 `running=true` 就丢弃，否则发）：否决——收敛器无时钟、宽限需要新的易失状态；下一条观测可能很晚才来（facts 30s 对账），延迟无界且重载即丢宽限；把确定性改成概率性。
-4. **按「唤醒回合」识别并抑制**（让 settlement 唤醒的那一轮不算完成）：方向正确但要上游信号（`turn/end` 触发原因/消息来源）穿过 P2a/P2b 镜像与 wire；本批以「延迟 + 静默结清」达到同一用户效果，不需要新跨包契约。登记为后续可替换实现。
+4. **按「唤醒回合」识别并抑制**（让 settlement 唤醒的那一轮不算完成）：方向正确但要上游信号（`turn/end` 触发原因/消息来源）穿过 P2a/P2b 镜像与 wire；G4 出口本身以「延迟 + 静默结清」达到同一用户效果，不需要新契约（P2a 谱系证据是判定面的加法字段，见 §3.5 / [design 17](../gateway/17-server-side-gateway.md) §10.7，与唤醒信号无关）。登记为后续可替换实现。
 5. **用计数启发补救派活瞬间的谱系空窗**（如「刚 spawn 过就算 busy」）：否决——会误吞真实完成，且与上游 `runningChildCount` 口径分叉（运行位未知 ⇒ 不计）。边界如实登记在 §3.5。
 6. **只在观察层修 `'unknown'` 而不修「无证据」**：否决——生产壳行恒声明 `running`/`none`，`'unknown'` 只来自 stale（而 stale 已关闭完成边沿），改它等于惰性；真正的空窗是「壳行拿不出活动证据」（facts-only 虚拟行）与「声明 none 但谱系未知」，前者由判定面回退 facts 谱系收敛，后者按上游口径接受。
 
 #### 3.2.10 架构反思：完成身份、通知策略与剩余边界
 
-**不变量（产品口径）**：一次用户可见任务，**恰好一条**完成通知。它同时约束两个失败方向：重复（一次任务两条横幅，用户已申诉的 bug）与漏发（任务结束没有横幅）。
+**不变量（产品口径）**：一次用户可见任务，**恰好一条**完成通知；重复与漏发两个方向同时受约束。**策略唯一实现**（契约见 §3.2.3 G4/#13、身份语义见 §3.2.7 ⑧）：完成事件按序走四个出口——① `running` 权威 ⇒ 作废（新一轮已开始）；② 子代理 busy ⇒ 延迟（有身份就记 seq）；③ 延迟位在首个非 busy 观测时结清：吸收到严格更晚的完成身份（`absorbedSeq`）⇒ 兑现一次，否则静默（横幅归唤醒回合）；④ 其余 ⇒ 直接通知。**身份判据**：只有严格更晚的宿主 `turn/end.seq` 才能确证「延迟位之后还有一次真实完成」；`running` 观测链正常时它不会被同一次完成复用（#1 先作废延迟位）；观测链丢帧的极窄竞态归 §3.2.9 的被否方案与 §3.5 的边界。**信号现状**：`$events` 与摘要投影不含消息级事件；唤醒是否发生由 `session/follow` records 的 `user/message.source.kind=subagent-settled` 承载（P2a/P2b 每个完成边沿本就读一次 `session/follow`，受 `FOLLOW_MAX_MESSAGES=8` 窗口限制），属仓内可读、尚未纳入分类的收敛面（计划见 [TODO](../../progress/TODO.md) D§6）。
 
-**信号清单（本模块能看见什么）**：
-
-| 信号 | 载体 | 身份 | 已核实的事实 |
-|---|---|---|---|
-| 运行位 running | 壳通道行（侧栏 producer） | 无 | 行带 host `updatedAt`，无 turn 序号 |
-| 子代理活动 | 壳行 `subagentActivity` / facts 谱系三值 | 无 | 谱系滞后可让 busy 读数晚于真实结束 |
-| 完成水位 + `turn/end.seq` | facts 通道（P2a 镜像 / P2b 观察者） | **host seq** | 30s 对账或事件边沿；facts 不可用时无 |
-| 子代目录 | `projectionValues.subagentCatalog` | childId/createdAt/mode | 只说明「有子代」，无运行位、无终态 |
-| 唤醒触发（settlement 消息） | `session/follow` 读到的 `user/message.source.kind=subagent-settled` | 消息 id | `$events`/摘要投影不含消息级事件（上游转发白名单约 30 个事件但无消息级；chamber mux 只消费 `api-session/*` 与 `goal/activation-changed`）；但 P2a 网关观察者与 P2b mux **每个完成边沿本就打开一次 follow 读**（`FOLLOW_MAX_MESSAGES=8` 窗口），记录里可见该来源 ⇒ **仓内可读**（受窗口限制），不是「不可观测」 |
-
-**策略（当前唯一实现）**：完成事件按序走四个出口——① `running` 权威 = running ⇒ 作废（新一轮已开始，后续完成自然覆盖）；② 子代理 busy ⇒ 延迟（有身份就记 seq）；③ 延迟位在**首个非 busy 观测**（含 activity unknown 转 idle）时**结清**：吸收到严格更晚的完成身份 ⇒ 兑现一次（身份取更晚那条），否则静默；④ 其余 ⇒ 直接通知。
-
-**为什么这是「可用信号下的最优」**：settle 后父会话会被 settlement 唤醒并再跑一轮——那条完成才是用户语义的收尾；但「会不会被唤醒」没有可观测信号，于是策略把**派出那一轮**的前半段压掉，把横幅留给下一次完成的观测。唯一的例外是「收尾完成在 busy 证据滞后时到达」：它的宿主 seq 严格晚于被延迟的那次，且**以 running 观测链正常为前提**（观测到 running 必先作废延迟位，#1），因此可以确证它是**另一次完成**——这就是 `absorbedSeq` 出口的存在理由，也是它不会为同一次完成双发的原因。若 running 帧本身在观测链里丢失（latest-slot 合步、指纹门），该前提不成立：极窄竞态下一次用户自回合可能被当成收尾完成兑现，随后唤醒回合再发一条（两条都是真实完成，方向上仍是「多一条」而非「假完成」）。
-
-**剩余边界（判据与验收口径的唯一登记处 = §3.5，这里只按编号引用）**：① 父会话不再被唤醒（接受）；② 派活瞬秒运行位未建立（`runningChildCount` 同口径，接受）；③ 延迟位无身份窗口的恢复批吸收；④ 首次延迟候选即收尾；⑤ goal 语境双标题；⑥ 旧版本混跑；⑦ 壳轨声明优先。都不做计数/时间/定时器启发（§3.2.9）；③④⑤ 的闭合依赖「唤醒是否发生」的仓内信号（见上表与下文读取路径），①②⑥⑦ 属上游/版本/通道事实。
-
-**最优性方向（收敛路径，未实施）**：把 **host `turn/end.seq` 作为唯一完成身份**贯穿两条轨道：壳通道行若带 `lastTurnEnd`（或 status 投影带 `turn/end` 原因/后台工作标记），壳边沿即可携带身份 ⇒ 边界③ 与「无锚完成」的 nonce 退化一并消失；随后 `settleFence` / `armedFloor` / `recovery seeding` 这一族补偿机制可以整体退役，只留「身份单调前进 + 每身份至多一次」。**投影路径**做不到（`session/turn-outline` 是 summary-excluded，`$events` 不含消息级事件），但**读取路径已存在**：P2a/P2b 的每个完成边沿已经发一次 `session/follow` 并在读同一份 records（只抽 turn/end）——把其中的 `user/message.source.kind=「subagent-settled」` 纳入分类，即可得到「唤醒即将发生」的仓内信号，P2a/P2b **零额外 RPC**（受 `FOLLOW_MAX_MESSAGES=8` 窗口限制，窗口溢出即取不到）。挂载壳（P1）侧没有 follow 读，可用不激活的一次性 `session/follow`（每边沿一次 RPC）。两条路径都未实施：它们改变「何时判定收尾」的语义面（并以消息窗口为界），需要单独裁决与回归，登记为后续收敛方向（见 §3.2.9 #4 与 TODO A§7）。
+**剩余边界（判据与验收口径的唯一登记处 = §3.5，这里只按编号引用）**：①–⑧，不做计数/时间/定时器启发（§3.2.9）。
 
 **Rejected alternatives（本反思的补充）**：① **静默期定时器**（子代理回落后等 N 秒再结清，唤醒回合会取消它）：等待时长是猜测，重载即丢，且把确定性换成概率（与 §3.2.9 #3 同因）；② **无身份也兑现**（facts 不可用的延迟位在结清时直接发）：会让「派出前半段」提前弹横幅，恢复批再报一次就是用户申诉的重复；③ **把 running 未知当 running**（消除边界②）：会让整类无运行位的会话永久压制，且与上游口径分叉；④ **让 facts 恢复批一律不播种**（消除边界③）：跨批重复会回潮（§3.2.7 ⑥/⑦ 已钉住）；⑤ **用 sidecar/主进程补一层去重**：身份在渲染端且跨通道不同族，主进程只能按 (source, session, eventKey) 去重，补不上「两个不同身份其实是同一任务」的判定。
 
-**完整性视角的结论**：阈值不在「再加一条规则」，而在上游给出**会话级收尾信号**（`turn/end` 原因、后台工作待决位，或把 `lastTurnEnd` 进摘要投影）。在此之前，本设计的正确做法是：能确证的（更晚身份）兑现、不能确证的保守静默、把每个边界写明并与上游诉求对齐。
 ### 3.3 通知事件与 IPC
 
 **事件组装**（App effect 内，读 `activeViewRef` + `runtimeFacts` + `aggregates` ref）：
@@ -291,10 +274,11 @@
 - **③ 延迟位无身份期间 + facts 中途恢复**（首报走壳边沿、或 facts 在结清前未曾可用）：恢复批的 COR-1 播种吸收首条可用水位 ⇒ 若它正是收尾完成则 0 横幅。与 ① 的区别是父会话确实被唤醒并完成，只是两轨都没留下可发的边沿。
 - **④ 首次延迟候选即收尾**（前半段没有成为候选：I1 丢弃后 facts 行已前进、或页面晚开基线播种吸收）：延迟位拿到的就是收尾那次完成，没有更晚身份可依 ⇒ 结清静默，0 横幅。
 - **⑤ goal 语境双标题**：延迟位遇 goal active+disarmed / complete / blocked 走 #2/#4 flush（「目标已完成/已停止」），随后唤醒回合的完成再发一条「会话已完成」。
-- **⑥ 旧版本混跑**：旧 gateway（无 P2a 谱系字段）⇒ 汇总侧退回 presence/unknown，gateway 来源仍可能出现「派发 + 收尾」两条；旧桌面（v0.4.x）把 `lineageVerified && 在场数>0` 读成 busy，故 gateway 只在**运行数>0** 时下发该位——两者方向都收敛在「不制造永久压制、不提前通知」；升级两端即消失。
+- **⑥ 旧版本混跑**：三档横幅面——新网关 + 新桌面 = 恰好一条；旧网关 + 新桌面 = 镜像缺谱系字段 ⇒ 判定退回 presence/unknown（不 busy），派发轮与收尾轮可能各一条（1–2 条）；新网关 + 旧桌面 = `lineageVerified` 只在运行数>0 时下发（旧端的 busy 恰在正确处），但旧端 `releaseDeferred` 在 running 回落后仍会立即释放（旧口径的提前补发）⇒ 1–2 条；损坏谱系下发 `subagentKnown`，新旧两端都按 fail-closed 处理。双向保证是**不制造永久压制**，不是「不提前通知」；升级两端即收敛到一条。
 - **⑦ 壳轨声明优先**：壳行声明 `subagentActivity:'none'` 而 facts 谱系显示在跑时，以壳为准（mounted 来源六面同源的必要条件）⇒ 该形态仍可能提前一条。声明与 facts 冲突属于通道滞后，不引入第二份判定。
+- **⑧ 重启/首基线窗口的 fail-closed 延迟位**：gateway 重启后到首份成功基线之间，父行的 `subagentKnown`（谱系未认证 ⇒ fail-closed busy）会让该窗口内到达的**普通回合完成**进 G4 延迟；首份基线揭示子代全部 idle 后按常规静默结清（无 `absorbedSeq`，也没有唤醒回合可归）⇒ 0 横幅。窗口长度 = 重启到首份完整基线（poll 15s / sse ≤60s）；与 ④ 的区别是这里根本没有唤醒回合。
 
-③④⑤ 的闭合依赖「唤醒是否发生」的仓内信号（`session/follow` records 的 `user/message.source.kind=subagent-settled`，见 §3.2.10 的表与读取路径）；②⑥⑦ 属上游/版本事实。
+③④⑤ 的闭合依赖「唤醒是否发生」的仓内信号（`session/follow` records 的 `user/message.source.kind=subagent-settled`，见 §3.2.10 与 TODO D§6）；①②⑥⑦⑧ 属上游/版本/窗口事实。
 
 **损坏谱系（成环 / 自指父边 / 缺父边）的裁决**：`lineageVerified` 失效、`subagentKnown` 接管为 fail-closed busy；归并遍历用 in-progress 集合截断回边（2 环也必须在毫秒级终止，绝不死循环）。凭据是 `subagent-evidence.ts` 的模块说明与 `session-state-store.test.ts` 的环/自指用例——这是「列表不完整 ⇒ 抑制」在损坏数据上的同一纪律。**运行位滞后且带宿主完成身份**的形态已闭合：更晚的 `turn/end.seq` 记入 `absorbedSeq`，结清时按该身份兑现一次（§3.2.3 #13），同一完成随后从 facts 轨重放被 notified 水位吞掉；`running=true` 先作废延迟位（#1），「用户自己发一轮」不会被误认成收尾完成（对照用例钉住）。未读徽标应用同一压制（完成位保持武装，徽标投影同一个析取）。
 - 通知失败（isSupported false / 系统权限拒绝）按永久或可重试结果保留在待投递账本，不推进已通知水位；会话业务不受影响，蓝点照常。notification-open 的可靠投递（`send()` 返回不等于消费成功、未 ACK replay、deliveryId/attempt ACK 坐标、FIFO、proof 隔离 same-id replacement）见 §3.3。renderer 来源 ownership/producer 账本同样只保留 active Map 项，退役即删除；单调 serial 只生成 token，不按历史 sourceId 留 tombstone；权威 delta 到达时 `retireInstanceProducers` 同步撤销 runtime/snapshot token 与缓存，再异步 dispose shell。
