@@ -32,6 +32,7 @@ import { ROW_CARD_OPEN_DELAY_MS, dragOverState, rowHalf } from './server-section
 import { useTitleMarquee } from './session-title-marquee.ts'
 import { useServerSectionSessionState } from './server-section-session-state.tsx'
 import { useSidebarSection } from './sidebar-context.ts'
+import { ghostSlotKey } from './ghost-expiry.ts'
 import { useReadingReady } from './use-reading-seat.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -558,6 +559,7 @@ export function ServerSectionSessionRows({
   dragAccountKey, dragPlacementId, dragCheckoutPath,
 }: ServerSectionSessionRowsProps) {
   const { rowErrors, menuOpen, renaming, ghostExpiry } = useSidebarSection()
+  const ghostSlot = (sessionId: string): string => ghostSlotKey(server.id, sessionId)
   // 空账本不查表：绝大多数渲染没有任何行失败（提到 map 外：一次，而不是每行一次）。
   const hasRowErrors = Object.keys(rowErrors).length > 0
   return (
@@ -579,7 +581,7 @@ export function ServerSectionSessionRows({
         // 本地过期在渲染侧兜底：宽限过后即使 App 还没重派生也丢弃该
         // 不可见占位（下次发布起从投影消失；两种情况都不显示陈旧行）。
         const ghost = isGhostSession(session)
-        const ghostLive = ghost && (ghostExpiry.current.get(session.id) ?? 0) > Date.now()
+        const ghostLive = ghost && (ghostExpiry.current.get(ghostSlot(session.id)) ?? 0) > Date.now()
         if (ghost && !ghostLive) return null
         return (
           <SessionRow

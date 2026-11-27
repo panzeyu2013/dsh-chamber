@@ -3,7 +3,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
-import { armGhostExpiry, expireGhostSlot } from '../../src/client/ghost-expiry.ts'
+import { armGhostExpiry, expireGhostSlot, ghostSlotKey } from '../../src/client/ghost-expiry.ts'
+
+test('the slot key is source-scoped for cloned session UUIDs', () => {
+  assert.equal(ghostSlotKey('source-a', 'session-1'), 'source-a:session-1')
+  assert.notEqual(ghostSlotKey('source-a', 'session-1'), ghostSlotKey('source-b', 'session-1'))
+})
 
 test('arm stores now + grace, and a re-arm moves the deadline', () => {
   const map = new Map<string, number>()
@@ -34,8 +39,9 @@ test('a stale timer after a re-arm keeps the newer deadline', () => {
 
 test('the hook wires both pure expiry helpers', () => {
   const source = stripComments(readFileSync(new URL('../../src/client/sidebar-root-ghost.ts', import.meta.url), 'utf8'))
-  assert.match(source, /armGhostExpiry\(ghostExpiry\.current, current, Date\.now\(\), BLANK_GHOST_GRACE_MS\)/u)
-  assert.match(source, /expireGhostSlot\(ghostExpiry\.current, current, Date\.now\(\)\)/u)
+  assert.match(source, /armGhostExpiry\(ghostExpiry\.current, slotKey, Date\.now\(\), BLANK_GHOST_GRACE_MS\)/u)
+  assert.match(source, /expireGhostSlot\(ghostExpiry\.current, slotKey, Date\.now\(\)\)/u)
+  assert.match(source, /ghostSlotKey\(active\.id, current\)/u)
   assert.doesNotMatch(source, /ghostExpiry\.current\.set\(/u, 'the hook must arm through the pure helper')
   assert.doesNotMatch(source, /ghostExpiry\.current\.delete\(/u, 'the hook must expire through the pure helper')
 })
