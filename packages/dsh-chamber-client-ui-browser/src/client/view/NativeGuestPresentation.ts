@@ -106,7 +106,7 @@ export class NativeGuestPresentation implements BrowserPresentation {
       // 无关 scroller 不可能移动占位 rect；但浮层/遮挡仍可能随交互变化，只丢掉几何测量，
       // 仍安排一次遮挡 trailing 复检（否则 guest 可见时弹 Modal 后再无任何遮挡复检）。
       if (shouldMeasureOnScroll(kind)) this.schedule()
-      else this.scheduleOcclusionTrailingCheck()
+      else if (!this.occluded) this.scheduleOcclusionTrailingCheck()
     }
     this.listen(document, 'scroll', onScroll as EventListener, true)
     this.listen(window, 'resize', schedule, false)
@@ -178,6 +178,9 @@ export class NativeGuestPresentation implements BrowserPresentation {
     if (this.occlusionTimer !== undefined) { clearTimeout(this.occlusionTimer); this.occlusionTimer = undefined }
     for (const observer of this.observers.splice(0)) observer.disconnect()
     for (const entry of this.listeners.splice(0)) entry.target.removeEventListener(entry.type, entry.listener, entry.capture)
+    // Both datasets are mount-scoped: a released/disposed presentation must not keep
+    // a tab target on the placeholder (the shim's input replay would still find it).
+    if (this.host !== undefined) delete this.host.dataset.chamberBrowserTab
   }
 
   private schedule(): void {

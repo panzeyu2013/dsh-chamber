@@ -1,6 +1,7 @@
 /**
  * M4 修复的行为锁：右栏 Browser guest 的滚动几何 flush（design 28 §4.1）。
- *  - F：只有文档/占位祖先容器的滚动才 schedule；无关 scroller（chat 等）零 GBCR/零命中。
+ *  - F：只有文档/占位祖先容器的滚动才 schedule；无关 scroller 的事件本身零 GBCR/零命中，
+ *    但它的 trailing 复检会补测一次几何（≤10Hz）。
  *  - E：几何每帧读/上报；遮挡命中（候选 GBCR + 9 点）≤10Hz + trailing 补齐；setOccluded 强制。
  * 负控：去掉 F 的分类（恒 schedule）或去掉 E 的节流（每帧命中）时，对应用例必须红。
  */
@@ -166,7 +167,9 @@ test('E: occlusion hit test is throttled to <=10Hz but a trailing check lands', 
   const afterBurst = dom.stats().eipCalls - baseEip
   // 几何承诺：遮挡命中被节流时，占位 rect 仍每帧测量（10 frames -> 10 GBCR）。
   assert.equal(dom.host.gbcrCalls - baseGbcr, 10, 'geometry must run every frame while occlusion is throttled')
-  assert.ok(afterBurst <= 12, 'burst must not hit-test every frame (got ' + afterBurst + ')')
+  // A 10-frame burst must not hit-test every frame; allow at most the one 9-point
+  // check that may become due if the burst straddles the 100ms interval.
+  assert.ok(afterBurst <= 2, 'burst must not hit-test every frame (got ' + afterBurst + ')')
   await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
   dom.pumpFrame()
   const afterTrailing = dom.stats().eipCalls - baseEip
@@ -225,6 +228,7 @@ test('the document scroll listener uses the capture phase and is removed on disp
   assert.equal(dom.stats().scrollListeners, 0, 'document scroll listener must be removed on dispose')
   assert.ok(dom.stats().documentRemoved.includes('scroll'))
   assert.ok(dom.stats().windowRemoved.includes('resize'), 'window resize listener must be removed on dispose')
+  assert.equal(dom.host.dataset.chamberBrowserTab, undefined, 'the tab dataset must be cleared with the lease/listeners')
 })
 
 test('a cached occlusion verdict is reused inside the throttle window, then refreshed', async (t) => {
@@ -288,13 +292,16 @@ test('B2: a due hit test refreshes a stale overlay candidate list', async (t) =>
   presentation.mount('viewport')
   dom.pumpFrame()
   assert.equal(reports.at(-1)?.visible, true)
+  const qsaAtMount = dom.stats().overlayQsaCalls
   dom.setOverlayCandidates([dom.foreignOverlay])
   dom.dispatchScroll(dom.ancestor)
   dom.pumpFrame()
   assert.equal(reports.at(-1)?.visible, true, 'inside the interval the cached empty candidate list is reused')
+  assert.equal(dom.stats().overlayQsaCalls, qsaAtMount, 'a non-due geometry flush must not query candidates')
   await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
   dom.dispatchScroll(dom.ancestor)
   dom.pumpFrame()
+  assert.equal(dom.stats().overlayQsaCalls, qsaAtMount + 1, 'one due check refreshes candidates at most once')
   assert.equal(reports.at(-1)?.occluded, true, 'a due check must see the new candidate')
   presentation.dispose()
 })
