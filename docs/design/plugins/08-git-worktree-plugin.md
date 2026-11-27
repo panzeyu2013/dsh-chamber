@@ -1,6 +1,6 @@
 # 08 · Git Worktree 独立插件（seed rail + 官方 forge 同池）
 
-> **目标模型**：工作树是**仓库内的 Git checkout**，不是 dsh workspace。每个 checkout 落在 `<repo>/.agents/worktrees/<name>`（主 checkout 之内、自忽略），会话仍以源主 checkout 为根，创建后经 `gitWorktree/enter` 把 `workingDirectory` 切进 checkout。chamber seed 提供仓库级管理 rail（snapshot/create/enter/remove）；官方 `@deepseek-ai/dsh-experimental-forge-bundle`（opt-in）提供 agent 的 `create_worktree` 工具与 composer/restore UI，两套创建引擎共用同一个池与同一套行/放置。旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**（§7.4）。开放状态见本设计 §6–§7 与 TODO。
+> **目标模型**：工作树是**仓库内的 Git checkout**，不是 dsh workspace。每个 checkout 落在 `<repo>/.agents/worktrees/<name>`（主 checkout 之内、自忽略），会话仍以源主 checkout 为根，创建后经 `gitWorktree/enter` 把 `workingDirectory` 切进 checkout。chamber seed 提供仓库级管理 rail（snapshot/create/enter/remove）；官方 `@deepseek-ai/dsh-experimental-forge-bundle`（opt-in）提供 agent 的 `enter_worktree`/`exit_worktree` 工具与 composer/restore UI，两套创建引擎共用同一个池与同一套行/放置。旧 `$DSH_HOME/worktrees` 池**不迁移、不检测、不提示**（§7.4）。开放状态见本设计 §6–§7 与 TODO。
 
 ## 1. 边界与部署形态
 **原则：Git 只是会话工作区的实例内扩展，不是控制面或 Desktop 的新执行面。**
@@ -13,7 +13,7 @@
 6. **P5b opt-in**：forge bundle 默认不启用；用户在实例前端 Plugins → More 开启“Change requests & worktrees”，启用/关闭需重启。chamber 不预置该 bundle，也不以自定义 profile 冒充默认（§7.2）。
 7. **node 已保证，不做回退形态**：Swift 用 sidecar 自带 node（Electron 归档参考由 control-plane 的 PATH shim / string-only 解析提供 `node`，绝不写 `process.execPath`）；远程用 bundle 默认的 `node` + 部署方 PATH。缺失 = fail-fast + 诊断，不设计 E1/E2 回退。
 8. **Swift 原生壳与 sidecar 是唯一出货形态**：P5b 在 Swift 壳内验收（§7.3；Electron 冻结归档，不再作为验收形态——见 `../progress/electron-frozen.md`）。
-9. **worktree 是目录，不是权限边界（上游语义）**：上游 `workingDirectory.set` 的契约是“切换目录，不改变现有进程或权限”；`sandboxPolicy` 的 `workspaceRoot` 始终取 `session.header.cwd`（会话原始 workspace），池内 checkout 只有落在该根之下才可写。 chamber 不修改这一默认，也不把 worktree 注册成 workspace；会话仍属于源 workspace （官方 UI / mobile / gateway 亦按源 workspace 分组）。fork、subagent、AGENTS.md 与 skills 的目录解析都走 effective `workingDirectory`（fork 另经事件回放继承），与上游一致。
+9. **worktree 是目录，不是权限边界（上游语义）**：`workingDirectory.set` 只切换目录，不改变现有进程或权限；`sandboxPolicy.resolve({ session })` 的 `workspaceRoot` 取会话的 **effective working directory**（host working-directory 服务的值，缺省回落不可变的 `session.header.cwd`），随每次 host move 移动。链接 checkout 的 Git 目录（admin `<repo>/.git/worktrees/<name>` 与共享的 `<repo>/.git/{objects,refs}`）在边界之外：`workspace-write` 下其中的 `git add/commit` 等写操作被拒，除非部署给 `@deepseek-ai/dsh-sandbox-policy` 配置 `additionalWritableRoots`、或由部署方以 host 插件用 `registerWritableRoot` 注册该目录、或逐命令经审批提权；上游 worktree 服务不注册 grant，chamber 也不代做——沙箱授权归部署/宿主策略，chamber 只读不接管。chamber 不把 worktree 注册成 workspace；会话仍属于源 workspace（官方 UI / mobile / gateway 亦按源 workspace 分组）。fork、subagent、AGENTS.md 与 skills 的目录解析都走 effective `workingDirectory`（fork 另经事件回放继承），与上游一致。**旧日志**：`working-directory/change` 是退役事件、读取侧忽略；升级前的会话在源项目恢复，需显式 enter 才回到 checkout，不静默搬 cwd。
 
 ```text
 ┌─ 侧栏（自建）──────────────────────────────────────────────┐
@@ -28,7 +28,7 @@
                 │ 同一池（<repo>/.agents/worktrees）
                 ▲
 ┌─ 官方 forge-bundle（P5b，opt-in）──────────────────────────┐
-│ 单一 worktree 服务（tool create_worktree）+ 平铺 forge-panel  │
+│ 单一 worktree 服务（tool enter/exit_worktree）+ 平铺 forge-panel │
 │ composer/创建卡/hold/restore/右栏 tab；GitHub 行 disabled    │
 └───────────────────────────────────────────────────────────┘
 ```
@@ -96,13 +96,13 @@ preview -> (common-dir mutex) 复验 -> worktree add --no-checkout
 
 ### 2.5 会话运行事实（effective cwd）
 - `runningSessionIds` = 全部运行中会话（展示事实）；`blockingRunningSessionIds` = 其中 **非 INERT** 者（§5.2）。只读旧字段的客户端保持保守（任一运行中即阻塞）。
-- 运行位置读会话的 **effective 目录**：`sessionProjections.stateOf(session,'workingDirectory')` 非空即优先，否则回退不可变的 `session.header.cwd`（`pickEffectiveCwd`）；两者都非法（相对路径 / 空串）时进入 `cwdDrift` 诊断并在删除腿上 fail-closed。会话 `cd` 进某棵 checkout 后，该树的删除仍被 running 守卫拒绝。
+- 运行位置读会话的 **effective 目录**：host `workingDirectory` 服务的 `get(session)` 非空即优先，否则回退不可变的 `session.header.cwd`（`pickEffectiveCwd`）；两者都非法（相对路径 / 空串）时进入 `cwdDrift` 诊断并在删除腿上 fail-closed。会话 `cd` 进某棵 checkout 后，该树的删除仍被 running 守卫拒绝。
 - 归档集合读取是**响亮失败**：getter 缺失/非数组 = `state-source-unavailable`，元素漂移 = `state-source-invalid`；绝不当作空集合、绝不 `String()` 强转。agent 行的 `origin`/ `status`/`cwd` 三列逐行诊断（未知 status 按 running、不可解析 cwd 保持阻塞）。
 - **删除不触碰会话**：不再有“先归档再删”的强制前置；归档在本域只作为 running 的 INERT 判据（§5.2），由归档侧（design 24/05）独立负责。
 
 ## 3. 行模型：派生 checkout 行
 ### 3.1 座位与协调器
-座位仍是 **`sidebar.workspace.git`**（per-workspace 上下文座位）：sidebar root 对每来源渲染两次——`workspaceId === ''` 的源级警示条与每个 workspace 组头部行内的 occupant。 **主 checkout 行**是 Git 表面（创建入口、分支动作、健康）；**派生 checkout 行**的 occupant 由同一协调器的 checkout 上下文渲染（新建会话/删除/复制路径），但**不注册自定义 slot**。独立面板座位 `sidebar.git` 不存在（面板功能属远期二次开发）。源级警示条只承载 recovery/actionError；snapshot 安装类错误进 connections 插件的 chamber 块（§6.3）， not-loaded 源退化为普通无 worktree 视图。
+座位仍是 **`sidebar.workspace.git`**（per-workspace 上下文座位）：sidebar root 对每来源渲染两次——`workspaceId === ''` 的源级警示条与每个 workspace 组头部行内的 occupant。 **主 checkout 行**是 Git 表面（创建入口、分支动作）；**派生 checkout 行**的 occupant 由同一协调器的 checkout 上下文渲染（新建会话/删除/复制路径），但**不注册自定义 slot**。独立面板座位 `sidebar.git` 不存在（面板功能属远期二次开发）。源级警示条只承载 recovery/actionError；snapshot 安装类错误进 connections 插件的 chamber 块（§6.3）， not-loaded 源退化为普通无 worktree 视图。
 
 sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookContext { sourceId, workspaceId }` + slot 级 `inject.hooks.workspaceGitContext` （工厂必须在 children 表的 slot inject 声明，不能进插件 entry inject）。sidebar 不依赖 Git 类型；Git 插件用 slot inject 占位。窄栏 occupant 返回 `null`，但 slot 不卸载。
 
@@ -167,11 +167,11 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookC
 - **已知边界**：放置意图的退休依赖「观察到宿主值偏离创建 seed」；若用户在创建后、客户端首次观察到偏离之前又把会话目录切回源根（反向 cd），意图会把行暂留 checkout，直到下一次权威重读（create/enter 收敛臂或重连）或 10min TTL 生效——窗口极小，接受并登记。
 - 同一 checkout 可被多个会话进入；不引入宿主互斥，不做“一树一活跃会话”提示；计数被动。
 
-- **本代 pin exit_worktree 互操作（enter record）**：上游 `exit_worktree` 只认 `plugin:worktree/entered` / `created` 记录；chamber seed 的 enter 只提交 workingDirectory，故 enter 成功后必须向 Session log 追加**仅 ENTERED** 记录（`{ path, branch?, repositoryRoot }`，repositoryRoot = 会话不可变 header 根），**绝不写 `created`**（上游归档清理会回收 created 行，chamber 自建池由 seed 管理，design 08 §1 第 5 条）。重复 enter 同一路径时同进程内去重，避免重复记录；记录 literal/字段由 `enter-record.test.ts` 与 vendor projection 对拍。**已知偏差（repositoryRoot 口径，登记）**：上游自己的 enter 记 git toplevel，chamber 记会话不可变 header 根。差异仅在 header 为子目录/嵌套 enter 时影响 `exit_worktree` 的**回向目录**（上游 exit 按「包含 cwd 的最长 entered path」匹配，repositoryRoot 只作回向目的地）；chamber 不写 `created`，entered 是唯一回向记录，且 header 根 = 本仓 containment 根 ⇒ **接受，不改行为**。触发面 = opt-in forge bundle 开启时的真实多 worktree 会话；最便宜验证 = macOS + forge bundle 真实 session（本机 NOT RUN）。**被否方案**：① 同时写 `created` 记录——上游归档清理会回收 created 行，chamber 自建池由 seed 管理（§1 第 5 条），会与上游回收对打；② 完全不写记录——上游 `exit_worktree` 判 `WORKTREE_NOT_ENTERED`，退出回向失效；③ 改上游 exit 的匹配/记录 shape——vendor 只读且属上游宿主契约。故取「仅 ENTERED + 同进程去重 + repositoryRoot deviation 登记」。
+- **本代 pin exit_worktree 互操作（enter record）**：上游 `exit_worktree` 只认 `plugin:worktree/entered` / `created` 记录；chamber seed 的 enter 只提交 workingDirectory，故 enter 成功后必须向 Session log 追加**仅 ENTERED** 记录（`{ path, branch?, repositoryRoot }`，repositoryRoot = 会话不可变 header 根），**绝不写 `created`**（上游归档清理会回收 created 行，chamber 自建池由 seed 管理，design 08 §1 第 5 条）。重复 enter 同一路径时同进程内去重，避免重复记录；记录 literal/字段由 `enter-record.test.ts` 与 vendor projection 对拍。**已知偏差（repositoryRoot 口径，登记）**：上游自己的 enter 记 git toplevel，chamber 记会话不可变 header 根。差异仅在 header 为子目录/嵌套 enter 时影响 `exit_worktree` 的**回向目录**（上游 exit 按「包含 cwd 的最长 entered path」匹配，repositoryRoot 只作回向目的地）；chamber 不写 `created`，entered 是唯一回向记录，且 header 根 = 本仓 containment 根 ⇒ **接受，不改行为**。触发面 = opt-in forge bundle 开启时的真实多 worktree 会话；最便宜验证 = macOS + forge bundle 真实 session（本机 NOT RUN）。**被否方案**：① 同时写 `created` 记录——上游归档清理会回收 created 行，chamber 自建池由 seed 管理（§1 第 5 条），会与上游回收对打；② 完全不写记录——上游 `exit_worktree` 判 `WORKTREE_NOT_ENTERED`，退出回向失效；③ 改上游 exit 的匹配/记录 shape——vendor 只读且属上游宿主契约。故取「仅 ENTERED + 同进程去重 + repositoryRoot deviation 登记」。enter 只提交 workingDirectory 与记录，不注册 sandbox grant；checkout 内 git 写的边界与授权见 §1.9（部署 `additionalWritableRoots` / host 插件 / 审批或会话级 `danger-full-access`）。
 
 ### 4.3 forge composer、agent 工具与 restore（P5b）
 - forge 的 composer “New worktree”/创建卡/hold/取消/重试/不带工作树继续、右栏 tab、toast、行 hover 都保留；它创建的是同一个池里的 checkout，会话放置/行表现由本设计统一。
-- 官方 agent 工具 `create_worktree` 由 forge bundle 的 `worktree` + `tool-worktree` 行提供，产物自动成行/放置；linked 源不可用；工具树可被侧栏删除（running 守卫读 effective cwd）。
+- 官方 agent 工具 `enter_worktree`（进入已有 checkout；无则创建并进入）与 `exit_worktree`（回到源 checkout）由 forge bundle 的 `worktree` + `tool-worktree` 行提供，产物自动成行/放置；linked 源不可用；工具树可被侧栏删除（running 守卫读 effective cwd）。
 - **restore 仅 forge record**：forge 的 missing 树可 restore/continue；seed 自建的树没有 restore（不对称，接受并写入发布说明）。seed 删除 forge 树后 forge 显示 missing/restore，我们的派生行不显示幽灵；反向删除后行消失。
 - 同一池的三条断言：forge 创建 → 侧栏在单源有效周期（≤30s·ceil(N/2)，§3.1）内成行且会话 placed；seed 创建 → forge tab 可见； seed 删除 forge 树 → forge missing/restore 且反向行消失。
 
@@ -255,13 +255,13 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 - 打包前必须重建 host 产物（`build:artifacts` / `build:host-packages`），再拷贝到 desktop `dist/`。
 
 ### 7.2 P5b：forge bundle、GitHub 关闭与 node
-- **opt-in**：官方 `@deepseek-ai/dsh-experimental-forge-bundle`（OPTIONAL/EXPERIMENTAL）在实例前端 Plugins → More 开启 “Change requests & worktrees”；启用/关闭需重启。chamber 不在默认 profile 里预置该 bundle，也不提供页内开关。启用后其 patch 插入七个包、七个平铺 loader 行：`worktree`、`tool-worktree`、`forge`、`forge-github`、`forge-gitlab`、`forge-session`、`forge-panel`（`client-ui-forge`）。`forge-gitlab` 是上游本代新增的 GitLab 提供方行，本仓对 `forge-github` 与 `forge-gitlab` 都做 id-targeted disable（GitLab 行随 opt-in bundle 加载前被 overlay 关闭）。当前 pin 起该 bundle 只挂一个 `worktree` 服务（面板与 `create_worktree` 工具共用），原先的 `optional-forge-panel` 组与 `isolate:{worktrees:true}` 已删除，`forge` 与 `forge-panel` 行平铺到顶层。**不能与单独启用 `tool-worktree` 叠加**（同名行重复）。
+- **opt-in**：官方 `@deepseek-ai/dsh-experimental-forge-bundle`（OPTIONAL/EXPERIMENTAL）在实例前端 Plugins → More 开启 “Change requests & worktrees”；启用/关闭需重启。chamber 不在默认 profile 里预置该 bundle，也不提供页内开关。启用后其 patch 插入七个包、七个平铺 loader 行：`worktree`、`tool-worktree`、`forge`、`forge-github`、`forge-gitlab`、`forge-session`、`forge-panel`（`client-ui-forge`）。`forge-gitlab` 是上游本代新增的 GitLab 提供方行，本仓对 `forge-github` 与 `forge-gitlab` 都做 id-targeted disable（GitLab 行随 opt-in bundle 加载前被 overlay 关闭）。当前 pin 起该 bundle 只挂一个 `worktree` 服务（面板与 `enter_worktree`/`exit_worktree` 工具共用），原先的 `optional-forge-panel` 组与 `isolate:{worktrees:true}` 已删除，`forge` 与 `forge-panel` 行平铺到顶层。**不能与单独启用 `tool-worktree` 叠加**（同名行重复）。
 - **GitHub 关闭（P5b-0）**：chamber 的本地 `--patch` overlay 支持 **id-targeted `disabled`**（bundle 层行，含 group 内行），对 `forge-github` 注入 disabled。语义三态：**bundle 未启用 ⇒ 跳过 + 诊断（幂等，host 照常启动）**；**已启用但目标行在 bundle patch 内缺失 ⇒ 跳过 + 诊断**（旧运行时/回退，或上游退役行——没有可关的行，本地允许切换 dsh 版本，不得因此拒绝启动）；**改名（同包名换 loader id）/ 绑错包 / patch 不可读 / id 重复 ⇒ fail-closed**（id-targeted disable 会静默失效或写出歧义行，必须 loud；真实 vendor patch 测试钉住该 id）。`directory` 默认已是 `.agents/worktrees`，不必配；`config` 能力仅作远程/兜底。
-- **上游归档清树（当前 pin 的 reclamation，与 design 24 的边界）**：当前 pin 的 `worktree` 服务在 `workspace/session-archived` 时后台清理**它自己 `create()` 且 owned 的** checkout（无未归档会话引用、创建者策略非只读、Git 无 tracked/untracked 改动、无子模块/lock/detached；`git worktree remove` 非 force，分支与提交保留；失败只 warn 并保留分支），开关 `retainOnArchive` 默认 false（Plugins 页可改）。**它只认自己的创建记录**：seed 树、手工树与池外树永不被它清扫，所以 chamber 的池内行、删除确认与保护边界仍由 design 08 拥有；反之，归档任何**由 forge 服务创建**的会话会立刻移除其 checkout（用户可见的「归档」净后果因此变大），design 24 的归档管理器与提示必须按这个事实陈述，不得承诺「归档不动工作树」。
+- **上游归档清树（当前 pin 的 reclamation，与 design 24 的边界）**：当前 pin 的 `worktree` 服务在 `workspace/session-archived` 时后台清理**它自己 `create()` 且 owned 的** checkout（无未归档会话引用、Git 无 tracked/untracked 改动、无子模块/lock/detached；`git worktree remove` 非 force，分支与提交保留；失败只 warn 并保留分支），开关 `retainOnArchive` 默认 false（Plugins 页可改）。**它只认自己的创建记录**：seed 树、手工树与池外树永不被它清扫，所以 chamber 的池内行、删除确认与保护边界仍由 design 08 拥有；反之，归档任何**由 forge 服务创建**的会话会立刻移除其 checkout（用户可见的「归档」净后果因此变大），design 24 的归档管理器与提示必须按这个事实陈述，不得承诺「归档不动工作树」。
 - **node**：由 control-plane 统一保证。优先复用现有 PATH shim（`pnpm-shim.ts`）让默认 `nodeCommand:'node'` 解析到真实 node；若 shim 不在 host PATH，用 **string-only** 的 `resolvePlainNodeExecutable()`（跳过 Electron 分支；null → `node-unavailable`）。 **绝不写 `process.execPath`**（Electron 二进制不是 node）；两实例同一路径；失败 fail-fast
 + 诊断，不设计回退。node 实际创建必须含**打包态 + Finder 启动**。
 - **远程**：overlay 只服务本机 spawn；SSH 远程用 bundle 默认 `node` + 部署方 PATH，**不上传本地绝对路径**；远程只做诊断。
-- **单服务两入口**：当前 pin 起面板与 `create_worktree` 工具共用一个顶层 `worktree` 服务（无第二个实例）；P0 验收 = 面板与工具各实际建一次，且两次创建都由同一服务记录（session log 的 `plugin:worktree/created` + `worktree` projection）。
+- **单服务两入口**：当前 pin 起面板与 `enter_worktree`/`exit_worktree` 工具共用一个顶层 `worktree` 服务（无第二个实例）；P0 验收 = 面板与工具各实际建一次，且两次创建都由同一服务记录（session log 的 `plugin:worktree/created` + `worktree` projection）。
 - **filters**：forge 与 seed 使用同一两段 + 枚举 + required 语义（§2.3）；LFS/clean-smudge 降级登记，发布说明写明手动 `git lfs pull`。
 
 ### 7.3 Swift 腿与 node 来源
@@ -281,9 +281,12 @@ fresh facts -> 客户端守卫 -> host remove（mutex 内复验）-> refresh
 V1–V22 的判据与执行见 [release-checklist](../../checklists/release/release-checklist.md)；未跑项按发布清单开账，不以「代码已合」代替。
 
 ## 8. Rejected alternatives（统一模型与 P5b）
-- **worktree 作为 workspace（旧模型：`workspace.create` + `session.create` + 补偿 saga + 删除时 `workspace.delete`）**：否决。会话/工作区是两个持久化域，创建要补偿、删除要归档前置与 registered 删除；未挂载来源还要回声/位置意图才能看见空工作区；而 workspace-write 沙盒仍要求 checkout 在源 checkout 内。统一模型把 checkout 降为 Git 事实、会话留在源根，用一条 thin `enter` 完成放置，删掉了 workspace/session 生命周期、rollback、echo 与 registered remove。代价 = 旧池必须清空（§7.4）且池外树不可见；接受。
-- **自研 forge / 自建 restore**：否决。forge 已有 composer 开关、创建卡/hold、restore/ continue、右栏 tab 与 agent `create_worktree`；自研等于复制一套执行面与会话耦合，还要自己维护 restore 记录。保留 seed 只做仓库级 inventory/删除/enter，UI 交给 forge；代价 = restore 仅 forge record，seed 树无 restore（接受的不对称）。
-- **把 worktree 根继续放在 `$DSH_HOME/worktrees`**：否决。仓库外 = 不在源 checkout 的 workspace-write 沙盒内，会话无法 `git add/commit`；且旧池无法与 forge 共用。改为 `<repo>/.agents/worktrees` + 自忽略；代价 = 池内目录会出现在仓库工作树中（必须自忽略，不可写就 fail-closed）。
+- **worktree 作为 workspace（旧模型：`workspace.create` + `session.create` + 补偿 saga + 删除时 `workspace.delete`）**：否决。会话/工作区是两个持久化域，创建要补偿、删除要归档前置与 registered 删除；未挂载来源还要回声/位置意图才能看见空工作区；而 workspace-write 的写入边界与池位置无关——链接 checkout 的 Git 目录在任何会话根之外（授权由部署/host 插件给，见 §1.9），旧模型并不能靠把 checkout 放进源根获得可提交性。统一模型把 checkout 降为 Git 事实、会话留在源根，用一条 thin `enter` 完成放置，删掉了 workspace/session 生命周期、rollback、echo 与 registered remove。代价 = 旧池必须清空（§7.4）且池外树不可见；接受。
+- **自研 forge / 自建 restore**：否决。forge 已有 composer 开关、创建卡/hold、restore/ continue、右栏 tab 与 agent `enter_worktree`/`exit_worktree`；自研等于复制一套执行面与会话耦合，还要自己维护 restore 记录。保留 seed 只做仓库级 inventory/删除/enter，UI 交给 forge；代价 = restore 仅 forge record，seed 树无 restore（接受的不对称）。
+- **把 worktree 根继续放在 `$DSH_HOME/worktrees`**：否决。池位置不改变 Git 写入边界（链接 checkout 的 Git 目录都在会话根之外，提交需部署 grant，见 §1.9）；真实理由是旧池无法与 forge 共用、也不在本仓工作树可见范围内。改为 `<repo>/.agents/worktrees` + 自忽略；代价 = 池内目录会出现在仓库工作树中（必须自忽略，不可写就 fail-closed）。
+- **chamber 代注册 sandbox grant（seed 或独立插件）**：否决。沙箱授权归部署与宿主策略；上游 worktree 服务明确不注册 grant。代做的代价是 chamber 拥有一个跨会话的授权面，且 resume/fork 后要重注。保留：部署 `additionalWritableRoots`、部署方自写的 host 插件授权、或逐命令审批 / 会话级 `danger-full-access`。
+- **chamber 生成静态 `additionalWritableRoots`**：否决。chamber 不消费宿主帧、无法枚举动态 workspace；静态列表只覆盖安装时已知仓库，新仓库与远程实例需改配置并重启；把父目录加进去会授权整棵源码树。保留：部署自行配置或按会话切换权限模式。
+- **默认 `danger-full-access`**：否决。整机无沙箱。
 - **保留 registered remove / 先归档再删**：否决。checkout 不是 workspace，registered 删除只会把“删 Git 树”与“删注册/归档会话”两个域重新耦合；归档是用户对会话的选择，不应成为删除工作树的**默认前置**。改为 path-based remove + running/current 守卫；已注册路径先解注册。旧 registered 池由发布前提清空（§7.4）。**可选的**客户端归档勾选（默认关闭，§5.4）是显式用户授权，不改变默认语义，故保留。
 - **在 flags store 发布合成 checkout flag / 把派生行 id 写进 workspace order**：否决。 `retainSourceWorkspaceFlags` 会剪掉非 workspace key；派生行自带 `repoKey/familyMainId/isMain`，flag 查找回落即可。拖动用独立 `checkoutOrder` 子序， `resolveWorkspaceDrop`/`commitWorkspaceDrag` 零改动，避免把派生 id 送进宿主的 workspace order（会 404/污染注册表序）。
 - **恢复“trailing”行尾 glyph / GitHub PR 行图标**：否决。trailing 座席与行几何冲突（旧裁决不变）；P5b 关闭 GitHub provider，行图标/PR 卡暂缓。会话行**不画** checkout 分支 glyph （旧 worktree 会话显示同形，避免每行标题左移）。
