@@ -23,8 +23,8 @@ export interface StoredRow {
   /** 运行中的子代理后代数（P2a 谱系证据，与 P2b 的 subagentCount 同义）：只数
    *  origin===subagent、父边在场且 running===true 的子行。 */
   subagentRunningCount: number
-  /** I-12 认证位：本进程至少应用过一份完整列表基线（子行谱系可判），且没有
-   *  缺父边的子行。false ⇒ 下发的活动证据只作 presence（unknown），绝不 busy。 */
+  /** I-12 认证位：本进程至少应用过一份完整列表基线（子行谱系可判），没有缺父边的子行；
+   *  且仅在**有运行中后代**时置真（wire 兼容门，见 subagent-evidence.ts）；false ⇒ 只作 presence、绝不 busy。 */
   lineageVerified: boolean
   /** I-12 fail-closed 位：认证位缺席但保留表里确有该父的子行（列表可能不完整）
    *  ⇒ 判定侧按 busy 处理，不把「列表不完整」读成「子代理已结束」。 */

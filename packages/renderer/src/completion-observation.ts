@@ -825,9 +825,12 @@ export function applyObservationBatch(input: {
     //
     // 静默结清必须计入证据（否则 A 只是把横幅推迟）：壳锚定 pending 没有 watermark，
     // 结清只能置 settleFence。两条互补的补偿——
-    // ① facts 不可用/缺席批：置 `shellCompleteSinceFacts`，恢复批重新播种，被栏守卫的同一
-    //   完成的水位在播种中被吸收（不通知）。只置旗标；把 factsSeeded 复位留到批末——
-    //   observeSource 是纯函数，看不到本批 reconcile 结果（B3-2 同批形态）。
+    // ① **显式不可用**批（batch.factsUnusable === true）：置 `shellCompleteSinceFacts`；本批
+    //   置位也由批末的同一判定复位 factsSeeded（含本批置位），恢复批重新播种，被栏守卫的
+    //   同一完成的水位在播种中被吸收（不通知）。纯壳批（facts 输入缺席 ⇒ factsUsable ===
+    //   undefined）不复位——当前接线不可达，见 design 19 §3.2.7 ⑦ 的 G4 变体注。只置旗标；
+    //   把 factsSeeded 复位留到批末——observeSource 是纯函数，看不到本批 reconcile 结果
+    //   （B3-2 同批形态）。
     // ② facts 可用批：没有「恢复批」可依赖，按 C4-X2 同口径给新栏补记播种补偿（seededSince），
     //   让同一完成的迟到水位按 rule ② 吞一次；真正的新回合先有 running 帧（#1 清栏），不会被误吞。
     // 手工构造的直测批可无 state，跳过（它们的壳语义由 reconcile 直测钉住）。

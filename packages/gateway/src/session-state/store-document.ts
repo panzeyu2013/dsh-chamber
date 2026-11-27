@@ -89,7 +89,7 @@ function validateRow(value: unknown): StoredRow | null {
     lastTurnEnd: validateTurnEnd(value.lastTurnEnd),
     pendingKind: value.pendingKind === 'approval' || value.pendingKind === 'question' ? value.pendingKind : null,
     subagentCount: isWatermark(value.subagentCount) ? value.subagentCount : 0,
-    // 派生谱系证据不落盘也不采信（旧/篡改文档里即使出现也按「未认证、无证据」重建）。
+    // 派生谱系证据不落盘也不采信：加载后由 store.ts 的 recomputeSubagentEvidence 覆盖重建，这里归零只是篡改兜底。
     subagentRunningCount: 0,
     lineageVerified: false,
     subagentKnown: false,

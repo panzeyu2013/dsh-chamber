@@ -497,7 +497,7 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 |6|content rule 残面扩展：正则子集无法做地址归一，未枚举的混合进制/任意前导零逐段写法、其它 IPv6 展开写法与带 userinfo 的子资源 URL 仍可能绕过（S-59）|真机 W-17/W-25 出现绕过，或产品要求更强的资源级门|残面收敛为有证据的已知限制或资源级 seam 扩展；S-59 退役条件成立|
 |7|browser 面 invoke 的 renderer 侧 deadline：`browser` 命名空间由 Swift 本地 `BrowserIPCRouter` 分派、不经 A 桥 45s deadline；renderer 未设独立超时（等待期只由 push 投影失败条兜底）|真机出现永久 loading，或内容规则编译/来源证明等待明显时|renderer 侧截止与失败投影有可执行判据|
 
-### 6. 唤醒信号的读取面（design 19 §3.5 边界③④⑤ 的收敛面）
+### 6. 唤醒信号的读取面（design 19 §3.5 边界③④⑤⑨ 的收敛面）
 
 > 契约与边界判据见 [design 19](../design/client/19-notifications.md) §3.5 / §3.2.10；此处只记未实施的计划与待裁问题。
 

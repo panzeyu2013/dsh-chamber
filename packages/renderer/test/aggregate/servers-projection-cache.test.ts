@@ -399,6 +399,29 @@ test('I-12 facts overlay: the RUNNING count (not raw presence) drives activity a
   assert.equal(sessions.b?.runningSubagents, 2, '显示口径同样用运行数（六面同源）')
 })
 
+test('I-12 facts overlay: the inclusion predicate uses the RUNNING count too (presence zero must not drop the row)', () => {
+  // N1：factsOverlay 的行纳入谓词必须与同函数的分类口径一致。旧谓词用在场的
+  // subagentCount（present 数），P2a 行「在场 0 / 运行 2」会被整行 continue：
+  // activity 与 runningSubagents 一起不发布（呈现面静默丢证据），直到 producer 补 factAt。
+  // 这里 x/y 的 factAt 保持 0（不靠 I5 的 factAt 通路兜过纳入），只有运行数能救它们。
+  const f = fixture()
+  const servers = deriveServers(READY_HEALTH, [], f.remoteInstances, f.remoteStatus, f.aggregates,
+    {}, {}, {}, 'local', {}, {}, {}, {}, {}, {}, {}, 'zh',
+    { [REMOTE_SOURCE_ID]: factsSnapshot({
+      x: factsRow({ sessionId: 'x', subagentCount: 0, subagentRunningCount: 2, factAt: 0 }),
+      y: factsRow({ sessionId: 'y', subagentCount: 0, subagentRunningCount: 2, lineageVerified: true, factAt: 0 }),
+      // 真实新网关的 idle 形状（r-gateway 弱锁②）：运行数 0、认证位缺席、presence 仍在。
+      z: factsRow({ sessionId: 'z', subagentCount: 3, subagentRunningCount: 0 }),
+    }) })
+  const sessions = servers.find(server => server.id === REMOTE_SOURCE_ID)?.runtime?.sessions ?? {}
+  assert.equal(sessions.x?.runningSubagents, 2, '运行数 >0 的行必须过桥（旧在场数谓词会整行跳过）')
+  assert.equal(sessions.x?.subagentActivity, 'unknown', '未认证位的运行计数只作 presence（绝不 busy）')
+  assert.equal(sessions.y?.subagentActivity, 'running', '认证 + 运行数 >0 ⇒ busy（呈现面与判定面 running 口径一致）')
+  assert.equal(sessions.y?.runningSubagents, 2)
+  assert.equal(sessions.z?.subagentActivity, 'none', '运行数 0 ⇒ idle（新网关真实形状：无 verified 位也能证明不忙）')
+  assert.equal(sessions.z?.runningSubagents, undefined, '运行数为 0 时不显示在场数')
+})
+
 test('projection signature cache: fragments are keyed by source identity (immutability contract)', () => {
   const servers = derive(fixture())
   const cache = createChamberProjectionSignatureCache()

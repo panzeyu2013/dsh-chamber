@@ -3,7 +3,7 @@
  *  - notification-bounds 的尾截断/水位 LRU helper 与落盘 prune 同规；
  *  - complete-ledger 构造期与四个写点把内存表收敛到同一上界；
  *  - notification-store load 对 v1 载荷只裁内存、不写盘；save 仍幂等兜底，
- *    save→load→save 逐字节相同（内存三表 = 盘载荷 ⇒ reload 幂等）；
+ *    save→load 内容一致、第二次落盘起逐字节稳定（load 会把带 goalId 的 pending 键序归一）；
  *  - hasDurable 覆盖每个落盘载荷表，页内水位与易失表不算；纯页内推进不排盘。
  * 变异自检：把 helper 改成 no-op（tailSessionTable 恒返回原表）时本文件必须红。
  */
@@ -300,25 +300,41 @@ test('save stays bounded for an oversized payload', () => {
   assert.equal(Object.keys(persisted.notifiedRuns.s).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
 })
 
-test('save → load → save is byte-idempotent (内存三表 = 盘载荷 ⇒ reload 幂等)', () => {
-  // design 19 §3.2.4：flush 后内存三表与盘载荷逐字节一致、reload 幂等。
-  // load 只裁内存不写盘；把 load 的结果再 save 一次必须与首次落盘逐字节相同
-  // （否则每次 reload 都会改写载荷、窗口在两处实现之间漂移）。
+test('save → load → save is content-idempotent; the second flush onward is byte-stable (load 归一 pending 键序)', () => {
+  // design 19 §3.2.4：load 只裁内存不写盘；**内容**幂等（reload 不改语义、不额外写盘）。
+  // 键序细节（S1 修正）：sanitizePendingTables 逐字段重建 pending 条目，键序规范成
+  // at,watermark,goalId,completionSeq,absorbedSeq,deferred；内存写点顺序是
+  // at,watermark,completionSeq,absorbedSeq,goalId,deferred。带 goalId 的 pending 因此
+  // 首轮落盘与 reload 后重建的 JSON 键序不同（内容相等），**第二次落盘起**逐字节稳定。
   const { storage, data, writes } = fakeStorage()
   const payload = {
     v: 1 as const,
     notifiedRuns: { s: sessionTable(600) },
-    pending: { s: { 'session-598': { at: 1 }, 'session-599': { at: 2 } } },
+    pending: {
+      s: {
+        'session-598': { at: 1 },
+        'session-599': {
+          at: 2, watermark: 80, completionSeq: 77, absorbedSeq: 91, goalId: 'g1', deferred: 'subagent-busy' as const,
+        },
+      },
+    },
     outcomes: { s: { g1: 1, g2: 9 } },
   }
   assert.equal(saveNotifications(storage, payload), true)
   const first = data.get(NOTIFICATIONS_V1_KEY)!
   assert.deepEqual(writes, [NOTIFICATIONS_V1_KEY], 'flush 只写一次 v1 键')
+  // (a) save → load 内容一致：键序在 load 时归一，不按首轮字节比较。
   const loaded = loadNotifications(storage)
+  assert.deepEqual(loaded, JSON.parse(first), 'load 读回的内容与盘载荷一致（pending 键序归一不影响内容）')
+  // (c) load 不得写盘（避开首帧写与 roster 剪枝门）。
   assert.deepEqual(writes, [NOTIFICATIONS_V1_KEY], 'load 不得写盘（避开首帧写与 roster 剪枝门）')
-  assert.equal(JSON.stringify(loaded), first, 'load 读回的三表与盘载荷逐字节一致')
+  // (b) 第二次落盘起逐字节稳定：save(load(save(x))) 与再一轮 save(load(save(load(x)))) 相同。
   assert.equal(saveNotifications(storage, loaded), true)
-  assert.equal(data.get(NOTIFICATIONS_V1_KEY), first, '再次 flush 与首次逐字节相同 ⇒ reload 幂等')
+  const second = data.get(NOTIFICATIONS_V1_KEY)!
+  const reloaded = loadNotifications(storage)
+  assert.equal(saveNotifications(storage, reloaded), true)
+  const third = data.get(NOTIFICATIONS_V1_KEY)!
+  assert.equal(third, second, '第二次落盘起逐字节相同 ⇒ reload 幂等')
 })
 
 test('hasDurable counts every payload table: pending-only and outcomes-only are durable', () => {

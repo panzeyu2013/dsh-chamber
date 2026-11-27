@@ -133,9 +133,9 @@
     },
     {
       "path": "packages/gateway/src/session-state/store.ts",
-      "lines": 799,
+      "lines": 812,
       "target": 790,
-      "note": "Persisted session-state store: the delta ring, persistence/debounce, corrupt-aside recovery and the eight apply* methods. Row/document codecs live in store-codec.ts and store-document.ts; subagent evidence math lives in subagent-evidence.ts. The remaining body shares rows/ring/deltaSessions/pendingEdges, so the next cut needs a shared mutable context object. +1 (798 -> 799, review-justified; target 790 = next cut after the shared-context refactor): the once-per-process warning when a successful baseline still yields an unjudgeable subagent lineage - silent suppression on corrupt list data is not acceptable, and the warn-once flag needs one line."
+      "note": "Persisted session-state store: the delta ring, persistence/debounce, corrupt-aside recovery and the eight apply* methods. Row/document codecs live in store-codec.ts and store-document.ts; subagent evidence math lives in subagent-evidence.ts. The remaining body shares rows/ring/deltaSessions/pendingEdges, so the next cut needs a shared mutable context object. +13 (799 -> 812, review-justified; target 790 = next cut after the shared-context refactor): a legacy present:false subagent row flipped visible by an activity/pending/cancel frame OR by an already-stopped status frame now recomputes the parent evidence in the same tick (same rule as the running transitions), so the fail-closed lineage bit cannot be stale for a completion arriving in that window; the four call sites carry the wasPresent guard plus the stale-watermark delta commit, and the duplicated identity-boundary comment on applyAdded is dropped (-1, already counted)."
     },
     {
       "path": "packages/desktop/transport-registry.ts",

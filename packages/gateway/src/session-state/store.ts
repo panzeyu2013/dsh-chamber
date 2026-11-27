@@ -530,6 +530,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
 
     applyStatus(sessionId, running, at): CompletionEdge[] {
       const row = getOrCreate(sessionId, at)
+      const wasPresent = row.present
       row.observedAt = at
       row.present = true
       if (running) {
@@ -556,7 +557,9 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         return [newCompletionEdge(sessionId, source)]
       }
       // Already stopped: nothing changed (a duplicate status(false) must not advance the cursor).
-      // （S3 起行在即 present；旧的 !wasPresent 分支已无写入者，删除。）
+      // （S3 起行在即 present；旧文档 present:false 的子代理行被这一帧翻可见时，父行证据必须
+      // 同拍重算并投递——与其它在场帧同规，否则 fail-closed 位在首基线前不成立。）
+      if (!wasPresent && row.origin === 'subagent') recomputeSubagentCounts()
       commitDelta()
       return []
     },
@@ -564,9 +567,16 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     applyActivity(sessionId, updatedAt, at): boolean {
       if (!isWatermark(updatedAt)) return false
       const row = getOrCreate(sessionId, at)
+      const wasPresent = row.present
       row.observedAt = at
       row.present = true
-      if (updatedAt <= row.updatedAt) return false
+      // 兼容位（S3）：子代理行翻可见是父行证据的输入，与 applyStatus 同规同拍重算。
+      if (!wasPresent && row.origin === 'subagent') recomputeSubagentCounts()
+      if (updatedAt <= row.updatedAt) {
+        // 陈旧水位不改字段，但翻可见带来的证据变化仍须投递（父行不能停在旧证据）。
+        if (!wasPresent) commitDelta()
+        return false
+      }
       row.updatedAt = updatedAt
       if (!row.running) {
         clearConclusion(row)
@@ -587,7 +597,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       row.parentSessionId = item.parentSessionId
       row.origin = item.origin
       row.originKnown = true
-      // 与 applyBaseline 同一身份边界纪律：子代理行不带结论，翻回顶层即全新行。
       // 身份边界的结论清除：进入子代理 / 从子代理翻回顶层都不带旧结论（见 helper 头注）。
       if (item.origin === 'subagent' || previousOrigin === 'subagent') {
         clearConclusionAtSubagentBoundary(row)
@@ -697,8 +706,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
       const row = getOrCreate(sessionId, at)
       if (row.pendingKind === kind) return false
       // 兼容位（S3）：旧文档的 present:false 行仍按隐藏读；瀑布帧是行在场的证据，与
-      // applyStatus/applyActivity 同规把行置回 present（身份门 originKnown 不受影响）。
+      // applyStatus/applyActivity 同规置回 present（身份门不受影响），子代理行再同拍重算父行证据。
+      const wasPresent = row.present
       row.present = true
+      if (!wasPresent && row.origin === 'subagent') recomputeSubagentCounts()
       row.pendingKind = kind
       row.observedAt = at
       deltaSessions.set(sessionId, row)
@@ -709,8 +720,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     clearPending(sessionId, at): boolean {
       const row = rows.get(sessionId)
       if (row === undefined || row.pendingKind === null) return false
-      // 同上：cancel 帧同样证明行在场，与 status/activity 同规置回 present。
+      // 同上：cancel 帧同样证明行在场，与 status/activity 同规置回 present，子代理行同拍重算父行证据。
+      const wasPresent = row.present
       row.present = true
+      if (!wasPresent && row.origin === 'subagent') recomputeSubagentCounts()
       row.pendingKind = null
       row.observedAt = at
       deltaSessions.set(sessionId, row)

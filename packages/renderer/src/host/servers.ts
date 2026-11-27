@@ -118,16 +118,20 @@ function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsO
   if (snapshot === undefined || !isFactsUsable(snapshot)) return undefined
   const overlay: Record<string, RuntimeFactsOverlayRow> = {}
   for (const row of Object.values(snapshot.rows)) {
+    // 行纳入与分类同口径：用**运行中**后代数（P2a 运行数优先、旧网关退回在场数），
+    // 不用在场的 `subagentCount`——「在场 0 / 运行 2」的行若被纳入谓词跳过，
+    // activity 与 runningSubagents 会一起静默丢证据（N1）。
+    const runningSubagentCount = runningSubagentCountOf(row)
     const pending = row.pendingKind === 'approval'
       ? 'approval' as const
       : row.pendingKind === 'question' ? 'question' as const : undefined
     // I5：factAt 也是渲染字段（这一行有多新），因此只带它的行同样要过桥；
     // P2a 的 goal 事实同理（无壳来源唯一的 goal 通路）。
-    if (pending === undefined && row.subagentCount <= 0 && !(row.factAt > 0) && row.goal === undefined) continue
+    if (pending === undefined && runningSubagentCount <= 0 && !(row.factAt > 0) && row.goal === undefined) continue
     overlay[row.sessionId] = {
       ...(pending !== undefined ? { pending } : {}),
-      ...(runningSubagentCountOf(row) > 0
-        ? { runningSubagents: runningSubagentCountOf(row) }
+      ...(runningSubagentCount > 0
+        ? { runningSubagents: runningSubagentCount }
         : {}),
       // 判定侧同一分类（busy/idle/unknown）；计数仍随行渲染，但不再决定压制。
       subagentActivity: factsSubagentActivity(row),

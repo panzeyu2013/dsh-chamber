@@ -799,6 +799,22 @@ test('G4 supersede: a lower absorbed identity replay never rolls the identity ba
   const replay = reconcile(ledger.state(), observation({ goal: null, candidate: factsSeq(2000, 1267) }), 40)
   assert.equal(replay.notification, undefined)
 })
+
+test('G4 supersede: a bad payload absorbedSeq <= completionSeq settles silently (no duplicate banner)', () => {
+  // 结清兑现要求吸收身份**严格**更晚（§3.2.3 #13）：durable 载荷被污染/由旧版本写出
+  // absorbedSeq <= completionSeq 时，不能证明是另一次完成 ⇒ 只静默结清、不补横幅。
+  // 变异把严格 `>` 放宽成 `>=` 时，坏载荷会被当成 supersede ⇒ 本用例红。
+  const ledger = createCompleteLedger(undefined, {
+    pending: { src: { s1: { at: 1, watermark: 2000, completionSeq: 1267, absorbedSeq: 1267, deferred: 'subagent-busy' } } },
+    now: 5,
+  })
+  const settled = reconcile(ledger.state(), observation({ goal: null }), 10)
+  assert.equal(settled.notification, undefined, 'absorbedSeq <= completionSeq 不是另一次完成 ⇒ 静默结清')
+  assert.equal(settled.disposition, 'dropped')
+  assert.equal(settled.origin, 'subagent-busy-settled')
+  assert.equal(ledger.pendingEntry('src', 's1'), undefined, '坏载荷 pending 仍被消费（不滞留）')
+})
+
 test('G4 supersede: a persisted absorbed identity still settles on the first BASELINE observation (G2 exception)', () => {
   // 同页 reload 后首份观测是基线：G2 的「基线不 emit」只适用于**候选**；延迟位已吸收
   // 更晚完成身份时必须兑现，否则收尾完成永久丢（design 19 §3.2.3 #13 / §3.5 ④）。
@@ -844,10 +860,16 @@ test('G4 supersede: a no-seq deferral stays silent even when a facts candidate l
 test('G4 settlement: an already-held goal pending keeps its identity even if busy follows', () => {
   const ledger = createCompleteLedger()
   // 先 hold（active+armed，目标压制位），随后 busy 到达：只能吸收水位，不得改写为延迟。
-  reconcile(ledger.state(), observation({ goal: goal(), candidate: facts(50) }), 10)
-  reconcile(ledger.state(), observation({ subagents: 'busy', goal: goal(), candidate: facts(80) }), 20)
+  reconcile(ledger.state(), observation({ goal: goal(), candidate: factsSeq(50, 100) }), 10)
+  reconcile(ledger.state(), observation({ subagents: 'busy', goal: goal(), candidate: factsSeq(80, 300) }), 20)
   assert.equal(ledger.pendingEntry('src', 's1')?.deferred, undefined, '已有 pending 不得被 busy 改写身份')
   assert.equal(ledger.pendingEntry('src', 's1')?.watermark, 80)
+  // F2：supersede 记法只属于**延迟位**（settleDeferred 是唯一读者）；目标 hold 的普通
+  // pending 不写 absorbedSeq——省掉无读者的 durable 噪声（§3.2.4 载荷最小）。
+  // 变异把 trackSupersede 恒真时，这里会多出 absorbedSeq 300 ⇒ 本断言红。
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, undefined,
+    '非 deferred pending 不记 supersede（无读者 ⇒ 不落 durable 噪声）')
+  assert.equal(ledger.pendingEntry('src', 's1')?.completionSeq, 100, '已有 pending 的原始身份不被吸收改写')
   // 目标转 paused：目标压制位的 #3 drop（不是延迟释放）。
   const dropped = reconcile(ledger.state(), observation({ goal: goal({ phase: 'paused' }) }), 30)
   assert.equal(dropped.disposition, 'dropped')

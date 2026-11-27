@@ -920,6 +920,7 @@ test('REGRESSION(G4 契约): a busy-deferred completion is settled silently thro
   applyObservationBatch({ ledger, sourceId: 'src', batch: idle, sink })
   assert.equal(calls.notifications.length, 0, '延迟的完成不得提前弹横幅（横幅归唤醒回合）')
   assert.equal(calls.dispositions.at(-1), 'dropped')
+  assert.equal(calls.persists.at(-1), true, '静默结清是 durable 结算（dropped）⇒ 立即落盘，不留 1s 崩溃重放窗口')
   assert.equal(ledger.pendingEntry('src', 's1'), undefined)
 
   // 唤醒回合（子代理 settle 唤醒父会话再跑一轮）的完成才是用户语义的那一条。
@@ -1002,6 +1003,62 @@ test('REGRESSION(COR-1 precision): a silent settlement in an UNUSABLE/absent fac
   assert.equal(idle.state.shellCompleteSinceFacts, true, 'facts 缺席期结清必须留下恢复播种证据')
 })
 
+test('observeSource: the batch factsUsable field is tri-state — absent ⇒ undefined, usable ⇒ true, unusable ⇒ false', () => {
+  // F1 同族：`factsUsable` 是 COR-1 旗标门与「可用/不可用批」分支的输入三态，省略 ≠ false。
+  // 省略 = 纯壳批（本批没有 facts 输入）；把它退化成 false 会让纯壳批的静默结清走到
+  // 「显式不可用」以外的分支，恢复播种证据随之丢失（旗标门变异曾实测存活）。
+  const absent = observeSource({ sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true, shell: { rows: {} } })
+  assert.equal(absent.factsUsable, undefined, '无 facts 输入的纯壳批 ⇒ 省略（undefined），不是 false')
+  assert.equal(absent.factsUnusable, false, '省略批不是显式不可用（COR-1 同批复位不触发）')
+  const usable = observeSource({
+    state: absent.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: true, rows: {} },
+  })
+  assert.equal(usable.factsUsable, true, '可用 facts 批 ⇒ true')
+  const unusable = observeSource({
+    state: usable.state, sourceId: 'src', identity: 'fp', pageBoot: 'same',
+    facts: { usable: false, rows: {} },
+  })
+  assert.equal(unusable.factsUsable, false, '显式携带但不可用的 facts 批 ⇒ false')
+  assert.equal(unusable.factsUnusable, true, '只有显式不可用批才置 factsUnusable')
+})
+
+test('REGRESSION(COR-1 三态省略): a shell-only batch settles silently and still registers recovery seeding', () => {
+  // F1：COR-1 旗标门的输入是三态。纯壳来源（facts 输入从头缺席 ⇒ factsUsable === undefined）
+  // 的 G4 静默结清同样是一次「无水位消费」：必须置 shellCompleteSinceFacts 与 per-session
+  // shellNotifiedSinceFacts，否则 facts 之后接上线再抖动时，恢复批不会重播种，被围栏守卫的
+  // 同一完成会从 facts 轨二次上报（一次任务两条横幅）。旗标门把 undefined 当「不是不可用」
+  // 的反面（如 `batch.factsUsable === false`）时本用例红。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  const first = observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, subagentActivity: 'none', goal: null } } },
+  })
+  assert.equal(first.factsUsable, undefined, '纯壳三批：无 facts 输入 ⇒ factsUsable 省略')
+  applyObservationBatch({ ledger, sourceId: 'src', batch: first, sink })
+  assert.equal(calls.notifications.length, 0, '首份观测只播种')
+
+  const busy = observeSource({
+    state: first.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
+  })
+  assert.equal(busy.factsUsable, undefined, 'busy 延迟批同样是纯壳批')
+  applyObservationBatch({ ledger, sourceId: 'src', batch: busy, sink })
+  assert.deepEqual(calls.dispositions, ['deferred'], '子代理 busy 延迟无水位完成')
+
+  const idle = observeSource({
+    state: busy.state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+  })
+  assert.equal(idle.factsUsable, undefined, '结清批仍是纯壳批（省略态）')
+  applyObservationBatch({ ledger, sourceId: 'src', batch: idle, sink })
+  assert.equal(calls.notifications.length, 0, '静默结清不弹横幅')
+  assert.equal(calls.dispositions.at(-1), 'dropped')
+  assert.equal(idle.state.shellCompleteSinceFacts, true, '纯壳批的静默结清也必须留下 COR-1 恢复播种证据')
+  assert.equal(idle.state.sessions.s1?.shellNotifiedSinceFacts, true, 'per-session 证据同样置位（恢复批只重播种确实通知过的会话）')
+})
+
 
 test('KNOWN-BOUNDARY (§3.5 ⑧): a fail-closed busy deferral settles silently once the first baseline proves idle', () => {
   // gateway 重启到首份成功基线之间：父行 `subagentKnown`（谱系未认证 ⇒ fail-closed busy）⇒ 该窗口
@@ -1072,6 +1129,10 @@ test('REGRESSION(B1 closure): the dispatch completion\'s late facts watermark is
         shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
         facts: { usable: false, rows: {} },
       }))
+      // 「churn」形态锁的是围栏跨一次 facts 不可用批**存活**：可用批静默结清补记的
+      // 播种补偿（seededSince）不得被不可用批清掉，恢复批才能吞掉同一完成的迟到水位。
+      assert.equal(ledger.state().settleFence.src?.s1?.seededSince, 0,
+        'facts 不可用批不得清掉静默结清的播种补偿（恢复批靠它吞掉迟到水位）')
     }
     state = run(observeSource({
       state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
@@ -2116,6 +2177,7 @@ test('G4 supersede (#13 supersede): an activity-lagged wake completion is notifi
   assert.equal(calls.notifications[0].completionSeq, 1267)
   assert.equal(calls.notifications[0].watermark, 2000)
   assert.equal(calls.dispositions.at(-1), 'flushed')
+  assert.equal(calls.persists.at(-1), true, 'supersede 兑现（flushed）⇒ 立即落盘（durable pending 已消费）')
   assert.equal(ledger.notifiedRun('src', 's1'), undefined, 'notifiedRuns 由投递层写（本层只记水位）')
 
   // 同一完成重放：水位/武装门吸收，零 emit。
@@ -2172,6 +2234,7 @@ test('G4 supersede (durable): absorbed identity survives notifications.v1 and st
   const { calls: afterReload, sink: afterSink } = makeSink()
   applyObservationBatch({ ledger: restored, sourceId: 'src', sink: afterSink, batch: batchOf([obs({ goal: null })]) })
   assert.equal(afterReload.notifications.length, 1, 'reload 后活动回落仍兑现一次')
+  assert.equal(afterReload.persists.at(-1), true, 'reload 后的 supersede 结清同样立即落盘')
   assert.equal(afterReload.notifications[0].completionSeq, 1267)
   assert.equal(restored.pendingEntry('src', 's1'), undefined)
 })

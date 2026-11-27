@@ -16,6 +16,7 @@ import {
   SESSION_STATE_FILE_NAME,
   createSessionStateStore,
 } from '../../src/session-state.ts'
+import type { SessionStateDelta } from '@dsh-chamber/dsh-chamber-wire/session-state'
 import { baselineItem, capturingLogger, scratch, silentLogger } from './harness.ts'
 
 function stateFile(stateDir: string): string {
@@ -241,6 +242,77 @@ test('a legacy row with present:false stays hidden until a list fact re-confirms
   const row = store.snapshotFor('sse', store.host()).sessions[0]
   assert.equal(row.sessionId, 'hidden')
   assert.equal(row.updatedAt, 4)
+})
+
+/**
+ * 构造一份「S3 两阶段剪枝时代」的旧文档：父行已确认顶层（加载即可见），子代理行 hidden
+ * （present:false，且留 pendingKind 让 clearPending 有入口）。派生证据三个字段不落盘，
+ * 加载后由 store.ts 的 recomputeSubagentEvidence 按行集重建。
+ */
+async function openLegacyHiddenSubagentStore(t: { after(fn: () => void): void }): Promise<{
+  store: ReturnType<typeof createSessionStateStore>
+  deltas: SessionStateDelta[]
+}> {
+  const stateDir = scratch(t)
+  const { ensurePrivateDirectoryNoFollow } = await import('@dsh-chamber/control-plane')
+  ensurePrivateDirectoryNoFollow(join(stateDir, SESSION_STATE_DIR_NAME), 0o700)
+  writeFileSync(stateFile(stateDir), JSON.stringify({
+    schemaVersion: 1,
+    revision: 1,
+    cursor: 3,
+    watcherEpoch: 'e',
+    mode: 'poll',
+    host: { state: 'unknown', serviceable: false, since: 1 },
+    sessions: [
+      { sessionId: 'p', running: false, updatedAt: 10, present: true, observedAt: 11, originKnown: true },
+      {
+        sessionId: 'c', running: false, updatedAt: 4, present: false, observedAt: 5, originKnown: true,
+        origin: 'subagent', parentSessionId: 'p', pendingKind: 'approval',
+      },
+    ],
+    dropped: { sessions: 0, goalActivations: 0 },
+  }))
+  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
+  t.after(() => store.dispose())
+  const deltas: SessionStateDelta[] = []
+  store.subscribe(delta => deltas.push(delta))
+  return { store, deltas }
+}
+
+test('a legacy present:false subagent row revealed by any presence frame recomputes the parent evidence in the same delta', async t => {
+  // 旧文档的隐藏子代理行不经列表基线也能被在场帧翻可见（activity / 瀑布 pending / cancel）；
+  // 与 applyStatus、applyBaseline、applyAdded 同规：子代理行翻可见改变父行证据输入，必须同拍
+  // 重算并投递父行，否则父的 subagentCount/subagentKnown 停在 0/缺席——I-12 fail-closed 位
+  // 在该窗口不成立（判定侧按 idle 放行 ⇒ 派发回合提前发横幅）。
+  const entries = [
+    { label: 'applyActivity', reveal: (store: ReturnType<typeof createSessionStateStore>) => store.applyActivity('c', 50, 200) },
+    // 陈旧水位（重启后第一条 activity 帧的 updatedAt 往往等于持久值）：不改行字段，但翻可见的
+    // 证据变化仍须同拍投递（否则父行停在下一次无关事件的 delta 里）。
+    { label: 'applyActivity (stale watermark)', reveal: (store: ReturnType<typeof createSessionStateStore>) => store.applyActivity('c', 4, 200) },
+    { label: 'applyPending', reveal: (store: ReturnType<typeof createSessionStateStore>) => store.applyPending('c', 'question', 200) },
+    { label: 'clearPending', reveal: (store: ReturnType<typeof createSessionStateStore>) => store.clearPending('c', 200) },
+    // 已停住的 status(false) 帧同属在场证据（旧文档行翻可见）：尾分支此前只 commit、不重算。
+    { label: 'applyStatus (already stopped)', reveal: (store: ReturnType<typeof createSessionStateStore>) => store.applyStatus('c', false, 200) },
+  ]
+  for (const entry of entries) {
+    const { store, deltas } = await openLegacyHiddenSubagentStore(t)
+    const parentBefore = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+    assert.equal(parentBefore?.subagentCount, 0, entry.label + ': 加载后隐藏子行不计入父的在场数')
+    assert.equal(parentBefore?.subagentKnown, undefined, entry.label + ': 隐藏子行不制造 fail-closed')
+    const beats = deltas.length
+    entry.reveal(store)
+    const parentAfter = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+    assert.equal(parentAfter?.subagentCount, 1, entry.label + ': 子行翻可见后父的在场数必须同拍重算')
+    assert.equal(parentAfter?.subagentKnown, true, entry.label + ': 首基线前谱系未认证 ⇒ fail-closed 位成立')
+    assert.notEqual(parentAfter?.lineageVerified, true, entry.label + ': 首基线前认证位绝不置真')
+    assert.equal(deltas.length, beats + 1, entry.label + ': 翻可见必须产生恰好一份 delta')
+    const delta = deltas.at(-1)!
+    const parentWire = delta.sessions.find(row => row.sessionId === 'p')
+    assert.ok(parentWire !== undefined, entry.label + ': 父行必须进本拍 delta（否则客户端停在旧证据）')
+    assert.equal(parentWire.subagentCount, 1, entry.label + ': delta 里的父行带重算后的在场数')
+    assert.equal(parentWire.subagentKnown, true, entry.label + ': delta 里的父行带 fail-closed 位')
+    assert.deepEqual(delta.sessions.map(row => row.sessionId), ['p'], entry.label + ': 子代理行绝不随 delta 投递')
+  }
 })
 
 test('the row cap evicts the oldest rows and counts the loss', async t => {
