@@ -58,7 +58,7 @@ export { forgetPendingArchives, forgetPendingSessions, reconcilePendingArchives,
 export type * from './session-restore.ts'
 export { onSessionRestored } from './session-restore.ts'
 export type * from './session-row-state.ts'
-export { sessionRowState, subagentActivityOf } from './session-row-state.ts'
+export { sessionRowState, subagentActivityFromLineage, subagentActivityOf } from './session-row-state.ts'
 export { sessionOpenPromiseInFlight } from './session-open.ts'
 export type * from './session-create-ledger.ts'
 export { publishSessionCreationInstrument, sessionCreationLedger } from './session-create-ledger.ts'

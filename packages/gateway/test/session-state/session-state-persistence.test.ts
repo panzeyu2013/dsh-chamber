@@ -34,6 +34,34 @@ test('the snapshot is 0600 inside a 0700 directory (posix)', async t => {
   store.dispose()
 })
 
+
+test('derived subagent evidence never enters the persisted document', async t => {
+  // 三个派生字段由行集重建；落盘会被旧/篡改文档采信（validate 归零兜底，但白名单是契约）。
+  const stateDir = scratch(t)
+  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })
+  store.applyBaseline([
+    baselineItem('p', false, 1),
+    baselineItem('c', true, 2, { parentSessionId: 'p', origin: 'subagent' }),
+  ], { at: 100 })
+  const wire = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+  assert.equal(wire?.subagentRunningCount, 1, '前置事实：wire 行带证据')
+  await store.flush()
+  const raw = JSON.parse(readFileSync(stateFile(stateDir), 'utf8')) as {
+    sessions: Array<Record<string, unknown>>
+  }
+  for (const row of raw.sessions) {
+    assert.equal(row.subagentRunningCount, undefined, 'persisted row must not carry subagentRunningCount')
+    assert.equal(row.lineageVerified, undefined, 'persisted row must not carry lineageVerified')
+    assert.equal(row.subagentKnown, undefined, 'persisted row must not carry subagentKnown')
+  }
+  // 重载后由行集重建（不是从文档采信）。
+  store.dispose()
+  const second = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 200 })
+  const reloaded = second.snapshotFor('sse', second.host()).sessions.find(row => row.sessionId === 'p')
+  assert.equal(reloaded?.subagentRunningCount, 1, 'rebuilt from rows on load')
+  assert.notEqual(reloaded?.lineageVerified, true, 'no baseline in this process yet')
+  second.dispose()
+})
 test('reload preserves the cursor, rows and completion classification', async t => {
   const stateDir = scratch(t)
   const first = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 100 })

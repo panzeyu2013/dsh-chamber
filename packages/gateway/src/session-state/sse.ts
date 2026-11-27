@@ -142,7 +142,7 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
       'id: ' + delta.cursor + '\nevent: delta\ndata: ' + JSON.stringify(delta) + '\n\n'
     const snapshotFrame = (body: SessionStateSnapshot): string =>
       'id: ' + body.cursor + '\nevent: snapshot\ndata: ' + JSON.stringify(body) + '\n\n'
-    // Subscribe BEFORE the snapshot/replay so no delta can fall between the two; newer buffered deltas flush after.
+    // Subscribe BEFORE the snapshot/replay so no delta can fall between the two; newer buffered deltas flush after. The flush is defensive: this synchronous block has no yield point, so `buffered` is normally empty (the cursor guard also dedupes replay overlap).
     release = deps.store.subscribe(delta => {
       if (live) {
         writeFrame(frameFor(delta))

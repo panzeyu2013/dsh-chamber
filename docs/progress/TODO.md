@@ -16,7 +16,7 @@
 |A 上游|§1–§13 上游提案、§14 漂移收口、§15 UI 对齐、§16 完成/未读被动信号待裁、§17 客户端插件页面 base path 上游化|A§1–A§17|
 |B 平台|macOS Swift 壳、Windows v1（冻结，不排期）|B§1–B§2|
 |C 功能|账户登录、侧栏 subagents、open-in 超集|C§1–C§3|
-|D 工程|结构性重构、产物新鲜度、页面性能残项、多实例常驻后续研究、右栏浏览器 v3 落地债|D§1–D§5|
+|D 工程|结构性重构、产物新鲜度、页面性能残项、多实例常驻后续研究、右栏浏览器 v3 落地债、唤醒信号读取面|D§1–D§6|
 
 ## A. 上游依赖（A 类）
 
@@ -82,6 +82,10 @@
   纳入转发白名单。
 - 现状：`packages/dsh-chamber-client-core/src/derive.ts` 把缺席写成 `unknown`、stale 报告降级；上游给信号后删
   fallback 与对应契约测试。
+- 通知面的同族空窗（design 19 §3.5 已知边界②）：派活瞬间子会话的**运行位**尚未建立时，谱系计数与上游
+  `runningChildCount` 同口径（未知 ⇒ 不计）⇒ 派出那一轮的完成会立即通知一次；等上游给出 start/end 边沿或
+  `lineageAsOf` 一并收敛，不在本地加计数启发。
+- 会话级收尾信号（`turn/end` 原因/后台工作待决位，或把 `lastTurnEnd` 进摘要投影）：通知面的剩余边界与判据见 design 19 §3.5（那里是唯一登记处，本节不复述）。
 
 ### 8. 载波 open 的稳定 episode 身份（P3）
 
@@ -492,3 +496,11 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 |5|`runOpenPanel` 的安全开启：当前 = guest delegate 显式 `completionHandler(nil)` 拒绝（design 28 §8-13）；开启前置 = 用户手势证据 + **只回本 guest 的临时授权**（不回执本机路径、不落日志）|产品要求 guest 内可上传文件时；与 W-27 真机判据同批|安全开启路径落地 + W-27 判据从「显式拒绝」改写为「手势授权后仅本 guest 可用」并真机 PASS；未开启前保持拒绝|
 |6|content rule 残面扩展：正则子集无法做地址归一，未枚举的混合进制/任意前导零逐段写法、其它 IPv6 展开写法与带 userinfo 的子资源 URL 仍可能绕过（S-59）|真机 W-17/W-25 出现绕过，或产品要求更强的资源级门|残面收敛为有证据的已知限制或资源级 seam 扩展；S-59 退役条件成立|
 |7|browser 面 invoke 的 renderer 侧 deadline：`browser` 命名空间由 Swift 本地 `BrowserIPCRouter` 分派、不经 A 桥 45s deadline；renderer 未设独立超时（等待期只由 push 投影失败条兜底）|真机出现永久 loading，或内容规则编译/来源证明等待明显时|renderer 侧截止与失败投影有可执行判据|
+
+### 6. 唤醒信号的读取面（design 19 §3.5 边界③④⑤ 的收敛面）
+
+> 契约与边界判据见 [design 19](../design/client/19-notifications.md) §3.5 / §3.2.10；此处只记未实施的计划与待裁问题。
+
+- 现成事实：P2a/P2b 每个完成边沿已发一次 `session/follow` 并读同一份 records（只抽 turn/end）；记录里 `user/message.source.kind=subagent-settled` 即「唤醒即将发生」，纳入分类**零额外 RPC**。
+- 待裁：是否把该来源纳入收尾判定以关闭边界③④⑤⑨；两个约束 = `FOLLOW_MAX_MESSAGES=8` 窗口（溢出即取不到，需调大或加 turnWindow）与「何时判定收尾」的语义面变更（并需回归「两条都是真完成」的极窄竞态，见 design 19 §3.2.9 #4）。挂载壳（P1）侧没有 follow 读，可用不激活的一次性 `session/follow`（每边沿一次 RPC）。
+- 在此之前不加计数/时间/定时器启发。

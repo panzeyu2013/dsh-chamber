@@ -432,6 +432,20 @@ test('snapshot parser: rows, host gate and unknown fields are defensive', () => 
   // 未知/坏字段绝不被当成事实。
   assert.equal(parseSessionFactsSnapshotValue({ ...SNAPSHOT, host: {} })?.hostState, 'unknown')
   assert.equal(parseSessionFactsRow({ sessionId: 'x', updatedAt: -5 })?.updatedAt, 0)
+  // P2a 运行数：安全整数 ≥0 才采信；坏值只丢该字段（-1 是签名哨兵，绝不能被当成事实）。
+  for (const bad of [-1, -0.5, 1.5, 2 ** 53, Number.NaN, Number.POSITIVE_INFINITY, '3', null, {}]) {
+    assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: bad })?.subagentRunningCount, undefined,
+      'invalid subagentRunningCount ' + String(bad) + ' must be dropped')
+  }
+  assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: 0 })?.subagentRunningCount, 0, '0 是合法事实')
+  assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: 7 })?.subagentRunningCount, 7)
+  // 认证位/保留位只认 `=== true`：truthy 字符串/数字不得被采信（防御性解析的白名单语义）。
+  for (const bad of [1, 'true', {}, [], null]) {
+    const parsed = parseSessionFactsRow({ sessionId: 'x', lineageVerified: bad, subagentKnown: bad })
+    assert.equal(parsed?.lineageVerified, undefined, 'truthy lineageVerified must not be trusted')
+    assert.equal(parsed?.subagentKnown, undefined, 'truthy subagentKnown must not be trusted')
+  }
+  assert.equal(parseSessionFactsRow({ sessionId: 'x', lineageVerified: true, subagentKnown: true })?.lineageVerified, true)
   assert.equal(parseSessionFactsRow({}), null)
 })
 
@@ -612,6 +626,9 @@ test('A7 ①: the delta change detector and sessionFactsRowSignature judge the S
     ['running', { running: true }],
     ['pendingKind', { pendingKind: 'approval' }],
     ['subagentCount', { subagentCount: 2 }],
+    ['subagentRunningCount', { subagentRunningCount: 2 }],
+    // 缺席（旧网关）→ 0（新网关）必须判变化：-1 哨兵把「没有证据」与「证据为 0」分开。
+    ['subagentRunningCount:absent->0', { subagentRunningCount: 0 }],
     ['lineageVerified', { lineageVerified: true }],
     ['subagentKnown', { subagentKnown: true }],
     ['updatedAt', { updatedAt: 11 }],
@@ -1875,4 +1892,24 @@ test('isFactsUsable: verdict ok + serviceable false / non-ok / undefined are all
   assert.equal(isFactsUsable({ ...base, verdict: 'legacy-gateway' } as never), false)
 })
 
+test('P2a lineage: a running-count-only change changes the row signature (delta must publish)', () => {
+  // 网关形态的父行把「运行数」当**唯一**可投递变化（子代理行本身被 isDeliverable 过滤）。
+  // 签名与 sameRowFacts 必须同签它，否则 busy→idle 的边沿被判成「无变化」而不发布，
+  // G4 结清 / supersede 兑现要等下一次整量重取（最长一个静默看门狗窗口）。
+  const row = {
+    sessionId: 'p1', running: false, pendingKind: null, subagentCount: 2, subagentRunningCount: 1,
+    lineageVerified: true, updatedAt: 100, factAt: 100, completedAt: null, completedAtSource: null,
+    completedAtDomain: undefined, lastTurnEnd: null,
+  } as unknown as SessionFactsRow
+  assert.equal(
+    sessionFactsRowSignature(row),
+    sessionFactsRowSignature({ ...row, subagentRunningCount: 1 }),
+    '同值 ⇒ 同签名',
+  )
+  assert.notEqual(
+    sessionFactsRowSignature(row),
+    sessionFactsRowSignature({ ...row, subagentRunningCount: 0 }),
+    '只改运行数 ⇒ 签名必须变化（否则 delta 不发布）',
+  )
+})
 

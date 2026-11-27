@@ -144,8 +144,15 @@ function sanitizePendingTables(value: Record<string, unknown>, payload: Notifica
         } else if (entry.completionSeq !== undefined) {
           warn('payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid completionSeq; field dropped')
         }
+        // 被吸收的更晚完成身份（supersede）：与 completionSeq 同数值域；丢了它同页 reload
+        // 后延迟位会在结清时误判为「常规派出前半段」而静默吞掉已经到达的收尾完成。
+        if (typeof entry.absorbedSeq === 'number' && Number.isSafeInteger(entry.absorbedSeq) && entry.absorbedSeq >= 0) {
+          sanitized.absorbedSeq = entry.absorbedSeq
+        } else if (entry.absorbedSeq !== undefined) {
+          warn('payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid absorbedSeq; field dropped')
+        }
         // G4 延迟来源：deferred 是 pending 的 durable 身份，丢了它同页 reload 后 busy 延迟的
-        // 完成既不会中性释放、又可能被静默 drop——严格按合法值拷贝。
+        // 完成既不会被结清、又可能被静默 drop——严格按合法值拷贝。
         if (entry.deferred === 'subagent-busy') sanitized.deferred = 'subagent-busy'
         else if (entry.deferred !== undefined) warn('payload.pending entry ' + sourceId + '/' + sessionId + ' has an invalid deferred; field dropped')
         table[sessionId] = sanitized

@@ -160,6 +160,25 @@ test('notifiedRunTable is the persisted v4 shape and older snapshots are never m
 
 // ── goal-aware v5 §3.1：pending / outcomes 两表 ──────────────────────────────
 
+
+test('pending identity fields are validated on load (bad completionSeq/absorbedSeq are dropped)', () => {
+  // 账本是第二条加载路径：坏值只丢字段（条目仍靠 at 成立），绝不让非整数身份进判定。
+  const ledger = createCompleteLedger(undefined, {
+    pending: {
+      src: {
+        kept: { at: 1, watermark: 5, completionSeq: 7, absorbedSeq: 9 },
+        badSeq: { at: 2, watermark: 5, completionSeq: -1, absorbedSeq: 1.5 },
+      },
+    },
+    now: 1,
+  })
+  assert.equal(ledger.pendingEntry('src', 'kept')?.completionSeq, 7)
+  assert.equal(ledger.pendingEntry('src', 'kept')?.absorbedSeq, 9)
+  const bad = ledger.pendingEntry('src', 'badSeq')
+  assert.ok(bad !== undefined, '条目本身（at/watermark 合法）仍成立')
+  assert.equal(bad.completionSeq, undefined, '坏 completionSeq 只丢字段')
+  assert.equal(bad.absorbedSeq, undefined, '坏 absorbedSeq 只丢字段')
+})
 test('pending is two-level, copy-on-write, and snapshots stay frozen', () => {
   const ledger = createCompleteLedger()
   ledger.setPending('src', 's1', { watermark: 5, goalId: 'g1', at: 100 })

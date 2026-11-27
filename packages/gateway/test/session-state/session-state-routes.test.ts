@@ -92,9 +92,11 @@ test('GET snapshot answers the frozen descriptor and the whitelisted rows', asyn
   assert.equal(body.host.serviceable, true)
   assert.equal(body.host.state, 'ready')
   assert.equal(body.sessions.length, 1)
+  // P2a 谱系证据（design 19 §3.5 I-12）：subagentRunningCount 是加法字段（恒在场），
+  // lineageVerified 只在有运行中后代时出现（旧端 presence 读法在该位缺席时才安全），
   assert.deepEqual(Object.keys(body.sessions[0]).sort(), [
     'completedAt', 'completedAtSource', 'factAt', 'lastRunningAt', 'lastTurnEnd', 'pendingKind',
-    'running', 'sessionId', 'subagentCount', 'updatedAt',
+    'running', 'sessionId', 'subagentCount', 'subagentRunningCount', 'updatedAt',
   ])
   // I5：factAt 是观察者刷新该行事实的 host 域毫秒（基线后 = 观察时刻，不是 0）。
   assert.ok(typeof body.sessions[0].factAt === 'number')
