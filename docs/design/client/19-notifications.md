@@ -281,7 +281,7 @@
 - **⑧ 重启/首基线窗口的 fail-closed 延迟位**：gateway 重启后到首份成功基线之间，父行的 `subagentKnown`（谱系未认证 ⇒ fail-closed busy）会让该窗口内到达的**普通回合完成**进 G4 延迟；首份基线揭示子代全部 idle 后按常规静默结清（无 `absorbedSeq`，也没有唤醒回合可归）⇒ 0 横幅。窗口内若有多次完成，supersede 出口至多兑现**最后一条**（更晚身份），其余静默。窗口长度 = 重启到首份完整基线（poll 15s / sse ≤60s）；与 ④ 的区别是这里根本没有唤醒回合。
 - **⑨ 静默结清后的「无 running 帧」唤醒完成**：可用 facts 批静默结清会补记栏的播种补偿（§3.2.3 水位与围栏第五处），让被延迟完成的迟到水位吞一次；若唤醒回合的完成**没有 running 帧**先到（观测链丢帧/合步），它就可能被这次补偿吞掉 ⇒ 该任务 0 横幅。与 ③ 的区别是 facts 全程可用（不是恢复批吸收）。取舍：宁少勿重——补偿存在的理由是同一完成的水位必然迟到，而「是不是新回合」只能靠 running 帧区分；闭合需要完成身份/唤醒信号（§3.2.10、TODO D§6），不得用计数/定时启发。
 
-③④⑤ 的闭合依赖「唤醒是否发生」的仓内信号（`session/follow` records 的 `user/message.source.kind=subagent-settled`，见 §3.2.10 与 TODO D§6）；①②⑥⑦⑧⑨ 属上游/版本/窗口事实。
+③④⑤⑨ 的闭合依赖「唤醒是否发生」的仓内信号（`session/follow` records 的 `user/message.source.kind=subagent-settled`，见 §3.2.10 与 TODO D§6）；①②⑥⑦⑧ 属上游/版本/窗口事实。
 
 **损坏谱系（成环 / 自指父边 / 缺父边）的裁决**：`lineageVerified` 失效、`subagentKnown` 接管为 fail-closed busy；归并遍历用 in-progress 集合截断回边（2 环也必须在毫秒级终止，绝不死循环）。凭据是 `subagent-evidence.ts` 的模块说明与 `session-state-store.test.ts` 的环/自指用例——这是「列表不完整 ⇒ 抑制」在损坏数据上的同一纪律。**运行位滞后且带宿主完成身份**的形态已闭合：更晚的 `turn/end.seq` 记入 `absorbedSeq`，结清时按该身份兑现一次（§3.2.3 #13），同一完成随后从 facts 轨重放被 notified 水位吞掉；`running=true` 先作废延迟位（#1），「用户自己发一轮」不会被误认成收尾完成（对照用例钉住）。未读徽标应用同一压制（完成位保持武装，徽标投影同一个析取）。
 - 通知失败（isSupported false / 系统权限拒绝）按永久或可重试结果保留在待投递账本，不推进已通知水位；会话业务不受影响，蓝点照常。notification-open 的可靠投递（`send()` 返回不等于消费成功、未 ACK replay、deliveryId/attempt ACK 坐标、FIFO、proof 隔离 same-id replacement）见 §3.3。renderer 来源 ownership/producer 账本同样只保留 active Map 项，退役即删除；单调 serial 只生成 token，不按历史 sourceId 留 tombstone；权威 delta 到达时 `retireInstanceProducers` 同步撤销 runtime/snapshot token 与缓存，再异步 dispose shell。

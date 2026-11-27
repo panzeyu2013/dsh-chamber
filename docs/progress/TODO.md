@@ -470,5 +470,5 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 > 契约与边界判据见 [design 19](../design/client/19-notifications.md) §3.5 / §3.2.10；此处只记未实施的计划与待裁问题。
 
 - 现成事实：P2a/P2b 每个完成边沿已发一次 `session/follow` 并读同一份 records（只抽 turn/end）；记录里 `user/message.source.kind=subagent-settled` 即「唤醒即将发生」，纳入分类**零额外 RPC**。
-- 待裁：是否把该来源纳入收尾判定以关闭边界③④⑤；两个约束 = `FOLLOW_MAX_MESSAGES=8` 窗口（溢出即取不到，需调大或加 turnWindow）与「何时判定收尾」的语义面变更（并需回归「两条都是真完成」的极窄竞态，见 design 19 §3.2.9 #4）。挂载壳（P1）侧没有 follow 读，可用不激活的一次性 `session/follow`（每边沿一次 RPC）。
+- 待裁：是否把该来源纳入收尾判定以关闭边界③④⑤⑨；两个约束 = `FOLLOW_MAX_MESSAGES=8` 窗口（溢出即取不到，需调大或加 turnWindow）与「何时判定收尾」的语义面变更（并需回归「两条都是真完成」的极窄竞态，见 design 19 §3.2.9 #4）。挂载壳（P1）侧没有 follow 读，可用不激活的一次性 `session/follow`（每边沿一次 RPC）。
 - 在此之前不加计数/时间/定时器启发。
