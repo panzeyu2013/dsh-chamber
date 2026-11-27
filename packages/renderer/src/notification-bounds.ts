@@ -17,6 +17,7 @@ export const NOTIFICATION_MAX_SESSIONS_PER_SOURCE = 500
 /** 会话键表：保留 `Object.keys` 插入序尾部 max 条；未超界返回原引用（零 churn）。 */
 export function tailSessionTable<T>(table: Record<string, Record<string, T>>, maxPerSource: number = NOTIFICATION_MAX_SESSIONS_PER_SOURCE): Record<string, Record<string, T>> {
   if (maxPerSource <= 0) return {}
+  if (!Object.values(table).some((sessions) => Object.keys(sessions).length > maxPerSource)) return table
   const next: Record<string, Record<string, T>> = {}
   let changed = false
   for (const [sourceId, sessions] of Object.entries(table)) {
@@ -34,6 +35,7 @@ export function tailSessionTable<T>(table: Record<string, Record<string, T>>, ma
 /** outcomes 表：每来源按水位降序 + goalId 升序 tie-break 保留前 max 条；未超界返回原引用。 */
 export function tailOutcomeTable(table: Record<string, Record<string, number>>, maxPerSource: number = NOTIFICATION_MAX_SESSIONS_PER_SOURCE): Record<string, Record<string, number>> {
   if (maxPerSource <= 0) return {}
+  if (!Object.values(table).some((outcomes) => Object.keys(outcomes).length > maxPerSource)) return table
   const next: Record<string, Record<string, number>> = {}
   let changed = false
   for (const [sourceId, outcomes] of Object.entries(table)) {

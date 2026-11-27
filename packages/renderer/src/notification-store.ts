@@ -276,7 +276,7 @@ export function loadNotifications(storage: NotificationStorageLike | undefined):
     } catch (error) {
       warn('legacy → notifications.v1 migration failed; keeping the previous journal for a later attempt', error)
     }
-    return migrated
+    return pruneNotificationPayload(migrated)
   }
   // Nothing to migrate (absent or corrupt): the retired keys still收敛.
   removeLegacyKeys(storage)

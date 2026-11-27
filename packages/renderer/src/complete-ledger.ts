@@ -519,6 +519,11 @@ export function createCompleteLedger(
    * 第一条**新的** facts 候选（撤回窗口外的真完成），而那条候选与旧完成无关。
    */
   const withdrawSource = (sourceId: string): void => {
+    if (runtimeSettled[sourceId] !== undefined) {
+      const nextSettled = { ...runtimeSettled }
+      delete nextSettled[sourceId]
+      runtimeSettled = nextSettled
+    }
     if (state.armed[sourceId] !== undefined) {
       const next = { ...state.armed }
       delete next[sourceId]

@@ -165,8 +165,42 @@ test('forgetSession clears the volatile native-settled attribution for that sess
   // A source without any remaining volatile rows collapses to the shared empty map.
   ledger.forget('s')
   assert.equal(ledger.runtimeSettled('s').size, 0)
+  // withdraw (carrier generation change) also drops the volatile anchors.
+  ledger.markRuntimeSettled('s', 'session-z', 789)
+  ledger.withdraw('s')
+  assert.equal(ledger.runtimeSettled('s').size, 0)
 })
 
+test('the projection pending/outcome writers keep the same bound', () => {
+  const ledger = createCompleteLedger()
+  const base = { generation: 1, running: 'idle', subagents: 'idle', baseline: false, boot: 'same' } as const
+  for (let i = 0; i < 600; i += 1) {
+    reconcile(ledger.state(), {
+      ...base, sourceId: 'source-pending', sessionId: 'pending-' + i,
+      goal: { goalId: 'goal-p-' + i, revision: 1, phase: 'active', activation: 'armed' },
+      candidate: { watermark: i + 1, evidence: 'facts-watermark' },
+    }, 10)
+  }
+  const pendingRows = Object.keys(ledger.pendingTable()['source-pending'] ?? {}).length
+  assert.ok(pendingRows > 0 && pendingRows <= NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
+    'reconcile writePending must obey the 500/source bound (got ' + pendingRows + ')')
+
+  const outcomeLedger = createCompleteLedger()
+  for (let i = 0; i < 600; i += 1) {
+    reconcile(outcomeLedger.state(), {
+      ...base, sourceId: 'source-outcome', sessionId: 'outcome-' + i,
+      goal: { goalId: 'goal-o-' + i, revision: 1, phase: 'active', activation: 'armed' },
+      candidate: { watermark: i + 1, evidence: 'facts-watermark' },
+    }, 10)
+    reconcile(outcomeLedger.state(), {
+      ...base, sourceId: 'source-outcome', sessionId: 'outcome-' + i,
+      goal: { goalId: 'goal-o-' + i, revision: 2, phase: 'complete', updatedAt: i + 2 },
+    }, 20)
+  }
+  const outcomeRows = Object.keys(outcomeLedger.outcomesTable()['source-outcome'] ?? {}).length
+  assert.ok(outcomeRows > 0 && outcomeRows <= NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
+    'reconcile recordOutcome must obey the 500/source bound (got ' + outcomeRows + ')')
+})
 test('save stays bounded for an oversized payload', () => {
   const { storage, data } = fakeStorage()
   const ok = saveNotifications(storage, {
