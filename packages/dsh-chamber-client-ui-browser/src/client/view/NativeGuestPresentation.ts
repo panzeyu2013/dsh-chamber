@@ -28,6 +28,10 @@ import {
   occlusionSampleCoordinates,
   overlayCandidatesCover,
   shouldReportGuestFrame,
+  classifyScrollTarget,
+  shouldMeasureOnScroll,
+  shouldCheckOcclusion,
+  OCCLUSION_CHECK_INTERVAL_MS,
   OVERLAY_SELECTOR,
   type GuestFrameMeasurement,
 } from '../browser/guest-geometry.ts'
@@ -55,6 +59,11 @@ export class NativeGuestPresentation implements BrowserPresentation {
   /** Overlay-candidate cache: the DOM is queried at most every 250 ms (RT-04). */
   private overlayCandidates: Element[] = []
   private overlayCandidatesAt = 0
+  /** E: 遮挡命中测试节流（几何每帧，命中 ≤10Hz + trailing 兜底）。 */
+  private lastOcclusionAt = Number.NEGATIVE_INFINITY
+  private lastCovered = false
+  private forceOcclusionCheck = false
+  private occlusionTimer: ReturnType<typeof setTimeout> | undefined
   private disposed = false
 
   /**
@@ -73,13 +82,29 @@ export class NativeGuestPresentation implements BrowserPresentation {
     const host = document.getElementById(viewportId)
     if (host === null) throw new Error('native guest presentation: viewport is not mounted')
     this.host = host
+    // 重挂载重置遮挡节流态：上一次 mount 的判定/时钟不得让新宿主在 <100ms 内沿用旧遮挡。
+    this.lastOcclusionAt = Number.NEGATIVE_INFINITY
+    this.lastCovered = false
+    this.forceOcclusionCheck = true
     host.dataset.chamberBrowserTab = this.tabId
     this.writeLease()
     const schedule = (): void => { this.schedule() }
     const resizeObserver = new ResizeObserver(schedule)
     resizeObserver.observe(host)
     this.observers.push(resizeObserver)
-    this.listen(document, 'scroll', schedule, true)
+    // F: 只有文档/占位祖先容器的滚动才可能改变占位 rect；聊天等无关 scroller 物理上
+    // 挪不动占位（祖先链 overflow:hidden|clip），跳过它们的每帧几何/命中空转。
+    const onScroll = (event: Event): void => {
+      const target = event.target
+      const isElement = typeof Element !== 'undefined' && target instanceof Element
+      const kind = classifyScrollTarget({
+        targetIsDocument: target === document,
+        targetIsElement: isElement,
+        targetContainsHost: isElement && (target as Element).contains(host),
+      })
+      if (shouldMeasureOnScroll(kind)) this.schedule()
+    }
+    this.listen(document, 'scroll', onScroll as EventListener, true)
     this.listen(window, 'resize', schedule, false)
     const visualViewport = window.visualViewport
     if (visualViewport !== null && visualViewport !== undefined) {
@@ -118,6 +143,7 @@ export class NativeGuestPresentation implements BrowserPresentation {
   setOccluded(occluded: boolean): void {
     if (this.occluded === occluded) return
     this.occluded = occluded
+    this.forceOcclusionCheck = true
     this.schedule()
   }
 
@@ -145,6 +171,7 @@ export class NativeGuestPresentation implements BrowserPresentation {
   }
 
   private teardown(): void {
+    if (this.occlusionTimer !== undefined) { clearTimeout(this.occlusionTimer); this.occlusionTimer = undefined }
     for (const observer of this.observers.splice(0)) observer.disconnect()
     for (const entry of this.listeners.splice(0)) entry.target.removeEventListener(entry.type, entry.listener, entry.capture)
   }
@@ -158,6 +185,21 @@ export class NativeGuestPresentation implements BrowserPresentation {
     }
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush)
     else setTimeout(flush, 0)
+  }
+
+  /** 几何在跑但遮挡命中被节流时，安排一次 trailing 检查（≤100ms 内补齐遮挡判定）。 */
+  private scheduleOcclusionTrailingCheck(): void {
+    if (this.disposed || this.occlusionTimer !== undefined) return
+    const delay = Math.max(0, OCCLUSION_CHECK_INTERVAL_MS - (this.nowMs() - this.lastOcclusionAt))
+    this.occlusionTimer = setTimeout(() => {
+      this.occlusionTimer = undefined
+      this.forceOcclusionCheck = true
+      this.schedule()
+    }, delay)
+  }
+
+  private nowMs(): number {
+    return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
   }
 
   /** Overlay candidates, refreshed at most every 250 ms (RT-04). */
@@ -207,7 +249,19 @@ export class NativeGuestPresentation implements BrowserPresentation {
       return
     }
     const rect = host.getBoundingClientRect()
-    const covered = this.occluded || this.coveredByDomOverlay(host, rect)
+    // E: 几何（rect/上报）每帧都跑；只有遮挡命中/候选 GBCR 按 ≤10Hz + trailing 节流。
+    const now = this.nowMs()
+    const due = this.forceOcclusionCheck || shouldCheckOcclusion({ now, lastCheckAt: this.lastOcclusionAt, forced: false })
+    this.forceOcclusionCheck = false
+    let covered: boolean
+    if (due) {
+      this.lastOcclusionAt = now
+      covered = this.occluded || this.coveredByDomOverlay(host, rect)
+      this.lastCovered = covered
+    } else {
+      covered = this.occluded || this.lastCovered
+      if (!this.occluded) this.scheduleOcclusionTrailingCheck()
+    }
     const measurement: GuestFrameMeasurement = {
       x: rect.left,
       y: rect.top,

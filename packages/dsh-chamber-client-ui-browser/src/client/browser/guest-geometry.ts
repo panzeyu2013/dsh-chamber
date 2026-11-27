@@ -131,3 +131,37 @@ export function hiddenGuestFrame(previous: BrowserFrameReport | undefined): Brow
   const base = previous?.frame ?? { x: 0, y: 0, width: 0, height: 0 }
   return { frame: { ...base, width: 0, height: 0 }, visible: false, occluded: true }
 }
+
+/** 滚动因果：只有占位祖先容器/文档滚动才可能改变占位 rect（F，design 28 §4.1）。 */
+export type ScrollCausality = 'document' | 'ancestor' | 'unrelated' | 'unknown'
+
+/** 把一次 scroll 事件的目标分类成「可能影响占位几何」的因果类别；未知保守视为相关。 */
+export function classifyScrollTarget(facts: {
+  readonly targetIsDocument: boolean
+  readonly targetIsElement: boolean
+  readonly targetContainsHost: boolean
+}): ScrollCausality {
+  if (facts.targetIsDocument) return 'document'
+  if (!facts.targetIsElement) return 'unknown'
+  return facts.targetContainsHost ? 'ancestor' : 'unrelated'
+}
+
+/** 只有不相关的 scroller 才能被跳过；document/ancestor/unknown 一律照常测量。 */
+export function shouldMeasureOnScroll(kind: ScrollCausality): boolean {
+  return kind !== 'unrelated'
+}
+
+/** 遮挡命中测试的节流间隔（E，design 28 §4.1）：几何每帧，遮挡 ≤10Hz + trailing 兜底。 */
+export const OCCLUSION_CHECK_INTERVAL_MS = 100
+
+/** 本帧是否需要重跑 9 点/候选 rect 的遮挡判定；其余帧复用上次判定。 */
+export function shouldCheckOcclusion(input: {
+  readonly now: number
+  readonly lastCheckAt: number
+  readonly forced: boolean
+  readonly intervalMs?: number
+}): boolean {
+  if (input.forced) return true
+  if (!Number.isFinite(input.lastCheckAt)) return true
+  return input.now - input.lastCheckAt >= (input.intervalMs ?? OCCLUSION_CHECK_INTERVAL_MS)
+}

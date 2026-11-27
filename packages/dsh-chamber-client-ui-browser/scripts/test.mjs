@@ -40,6 +40,8 @@ const GROUPS = {
     'test/carrier/native-guest.test.ts',
     'test/carrier/guest-state.test.ts',
     'test/carrier/popup-limit.test.ts',
+    // M4: Browser guest 滚动几何 F（滚动因果过滤）+ E（遮挡 ≤10Hz+trailing）。
+    'test/carrier/guest-scroll-geometry.test.ts',
   ],
   // lifecycle: the tab-occurrence forward lease the resolver drives.
   lifecycle: [
