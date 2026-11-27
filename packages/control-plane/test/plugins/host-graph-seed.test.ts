@@ -22,7 +22,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { hostGraphPlane, skipSymlinksUnavailable, tempDir, writeLocalProfileFixture } from '../support/utils.ts'
@@ -391,7 +391,10 @@ test('a pnpm relink of the profile tree cannot prune the fallback seed (the row 
   rmSync(profileModules, { recursive: true, force: true })
   assert.equal(existsSync(join(seedTarget(dshHome), 'dist', 'index.js')), true, 'the seed survives the relink')
   const resolved = createRequire(join(dshHome, 'profiles', 'web', 'package.json')).resolve(HOST_GRAPH_PACKAGE_NAME)
-  assert.equal(resolved, join(seedTarget(dshHome), 'dist', 'index.js'), 'the loader row still resolves by name')
+  // macOS makes os.tmpdir() a symlinked path (/var -> /private/var): the loader returns the
+  // realpath while the expected join keeps the symlink. Compare canonical file identity, not
+  // the spelling of the same file, so the assertion holds on every platform CI/dev runs on.
+  assert.equal(realpathSync(resolved), realpathSync(join(seedTarget(dshHome), 'dist', 'index.js')), 'the loader row still resolves by name')
 })
 
 test('removeLegacySeedCopy drops only the shadowing chamber package and keeps the rest of the pnpm tree', t => {
