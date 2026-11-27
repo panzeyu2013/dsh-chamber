@@ -133,9 +133,9 @@
     },
     {
       "path": "packages/gateway/src/session-state/store.ts",
-      "lines": 798,
+      "lines": 799,
       "target": 800,
-      "note": "Persisted session-state store: the delta ring, persistence/debounce, corrupt-aside recovery and the eight apply* methods. Row/document codecs live in store-codec.ts (row shapes, goal merge, wire projection, row factory) and store-document.ts (document shape, emptyDocument, load validators); subagent evidence derivation lives in subagent-evidence.ts. The remaining body shares rows/ring/deltaSessions/pendingEdges, so the next cut needs a shared mutable context object."
+      "note": "Persisted session-state store: the delta ring, persistence/debounce, corrupt-aside recovery and the eight apply* methods. Row/document codecs live in store-codec.ts and store-document.ts; subagent evidence math lives in subagent-evidence.ts. The remaining body shares rows/ring/deltaSessions/pendingEdges, so the next cut needs a shared mutable context object. +1 (798 -> 799, review-justified): the once-per-process warning when a successful baseline still yields an unjudgeable subagent lineage - silent suppression on corrupt list data is not acceptable, and the warn-once flag needs one line."
     },
     {
       "path": "packages/desktop/transport-registry.ts",
@@ -419,6 +419,18 @@
       "target": 1900,
       "kind": "ceiling",
       "note": "Vendor patch table: one entry per admitted build-time patch (C9 anchors live here); grows only when a pin batch admits a patch, so it is a ceiling rather than a refactor target — raising it is a deliberate per-pin decision. Registered after the alpha.2 batch admitted the 21st patch (ui-renderer DocumentStyles page-global singleton)."
+    },
+    {
+      "path": "packages/gateway/src/session-state/store-document.ts",
+      "lines": 132,
+      "target": 120,
+      "note": "Persisted session-state document: shape, schema version, document clock, emptyDocument and the load-time validators/row (R1-A split so store.ts and store-codec.ts stay reviewable). Registered with the ratchet so it cannot grow silently; derived evidence fields are stripped here (never persisted) and rebuilt by store.ts after load."
+    },
+    {
+      "path": "packages/gateway/src/session-state/subagent-evidence.ts",
+      "lines": 118,
+      "target": 110,
+      "note": "P2a subagent evidence math (pure): ancestor-chain running merge (bottom-up post-order; cycle/missing/self edge -> fail-closed), lineage verified/known set and the wire field projection. Registered with the ratchet; no I/O, no logger, no store closure; returns whether the lineage was unjudgeable after a baseline (store logs it once)."
     }
   ]
 }

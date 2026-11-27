@@ -328,8 +328,10 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     markDirty()
   }
 
+  let lineageInvalidWarned = false // 已有成功基线后坏谱系才警告一次
   const recomputeSubagentCounts = (): void => { // 实现见 ./subagent-evidence.ts
-    recomputeSubagentEvidence(rows, baselinesApplied, row => { deltaSessions.set(row.sessionId, rows.get(row.sessionId)!) })
+    const invalid = recomputeSubagentEvidence(rows, baselinesApplied, row => { deltaSessions.set(row.sessionId, rows.get(row.sessionId)!) })
+    if (invalid && !lineageInvalidWarned) { lineageInvalidWarned = true; warn('subagent lineage unjudgeable (missing/self/cyclic parent edge); descendants fail closed') }
   }
 
   function getOrCreate(sessionId: string, at: number): StoredRow {
@@ -449,7 +451,6 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         row.parentSessionId = item.parentSessionId
         row.origin = item.origin
         row.originKnown = true
-        // 身份边界的结论清除：进入子代理 / 从子代理翻回顶层都不带旧结论（见 helper 头注）。
         if (item.origin === 'subagent' || previousOrigin === 'subagent') {
           clearConclusionAtSubagentBoundary(row)
         }

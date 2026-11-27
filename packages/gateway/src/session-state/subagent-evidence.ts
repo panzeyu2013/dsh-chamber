@@ -39,15 +39,17 @@ export function recomputeSubagentEvidence(
   rows: ReadonlyMap<string, EvidenceRow>,
   baselinesApplied: number,
   markDirty: (row: EvidenceRow) => void,
-): void {
+): boolean {
   const presence = new Map<string, number>()
   const children = new Map<string, string[]>()
   let verified = baselinesApplied > 0
+  let invalid = false
   for (const row of rows.values()) {
     if (!row.present || row.origin !== 'subagent') continue
     if (row.parentSessionId === null || row.parentSessionId === row.sessionId) {
       // A subagent row without a usable parent edge means the lineage is not judgeable.
       verified = false
+      invalid = true
       continue
     }
     presence.set(row.parentSessionId, (presence.get(row.parentSessionId) ?? 0) + 1)
@@ -72,7 +74,7 @@ export function recomputeSubagentEvidence(
         if (subtreeRunning.has(kid)) continue
         // A cycle is corrupt lineage: never loop (a 2-cycle would otherwise re-push
         // forever), truncate the walk and let fail-closed take over.
-        if (visiting.has(kid)) { verified = false; continue }
+        if (visiting.has(kid)) { verified = false; invalid = true; continue }
         visiting.add(kid)
         pending.push({ id: kid, next: 0 })
         continue
@@ -99,6 +101,8 @@ export function recomputeSubagentEvidence(
     row.subagentKnown = nextKnown
     markDirty(row)
   }
+  // 首基线前 known=fail-closed 是设计行为；已有成功基线后的坏谱系才是异常（调用方记日志）。
+  return invalid && baselinesApplied > 0
 }
 
 /**

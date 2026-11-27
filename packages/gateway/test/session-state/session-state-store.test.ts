@@ -21,6 +21,7 @@ import {
 } from '../../src/session-state.ts'
 import { baselineItem, capturingLogger, scratch, silentLogger } from './harness.ts'
 import { recomputeSubagentEvidence, type EvidenceRow } from '../../src/session-state/subagent-evidence.ts'
+import type { SessionStateDelta } from '@dsh-chamber/dsh-chamber-wire/session-state'
 
 
 function storeFor(t: { after(fn: () => void): void }, now: () => number = () => 1_000): ReturnType<typeof createSessionStateStore> {
@@ -997,6 +998,157 @@ test('P2a evidence math: a self-parented row never counts itself as its own chil
   assert.equal(rows.get('p')?.subagentRunningCount, 0, 'and attributes nothing to anyone else')
 })
 
+
+test('P2a evidence delivery: a subagent status edge rides the parent row in the same delta', t => {
+  // 证据改动必须经 delta 投递（desktop 靠这条边沿结算 G4 延迟位）；只在快照里可见
+  // 会让 SSE 客户端停在父行旧值直到下一份整量基线。
+  const store = storeFor(t)
+  const deltas: SessionStateDelta[] = []
+  store.subscribe(delta => deltas.push(delta))
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', true, 11, { parentSessionId: 'p', origin: 'subagent' }),
+  ], { at: 100 })
+  const before = deltas.length
+  store.applyStatus('c', false, 200)
+  const edge = deltas.slice(before)
+  assert.equal(edge.length, 1, '子行 running 边沿恰好一份 delta')
+  const parent = edge[0]!.sessions.find(row => row.sessionId === 'p')
+  assert.ok(parent !== undefined, '父行必须随该拍 delta 投递（否则客户端停在旧证据）')
+  assert.equal(parent.subagentRunningCount, 0)
+  assert.notEqual(parent.lineageVerified, true, '运行数回落后不再下发 verified')
+  const replay = store.replayFrom(0)
+  assert.ok(replay !== null && replay.length >= 2, 'delta 必须进入 replay ring')
+  assert.equal(replay[replay.length - 1]!.sessions.find(row => row.sessionId === 'p')?.subagentRunningCount, 0)
+})
+
+test('P2a lineage: a restart with only idle children still fails closed (known = true)', async t => {
+  // fail-closed 位存在于「首基线前不知道子代是否在跑」，与「持久化子行是否 running」无关。
+  // 只按 running 置 known 会让「重启 + 子代全 idle」窗口提前通知（该位存在的理由）。
+  const dir = scratch(t)
+  const first = createSessionStateStore({ stateDir: dir, logger: silentLogger, now: () => 100 })
+  first.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', false, 11, { parentSessionId: 'p', origin: 'subagent' }),
+  ], { at: 100 })
+  await first.flush()
+  first.dispose()
+  const second = createSessionStateStore({ stateDir: dir, logger: silentLogger, now: () => 200 })
+  const parent = second.snapshotFor('sse', second.host()).sessions.find(row => row.sessionId === 'p')
+  assert.equal(parent?.subagentRunningCount, 0)
+  assert.equal(parent?.subagentKnown, true, '在场子行存在而谱系未认证 ⇒ fail-closed busy')
+  second.dispose()
+})
+
+test('P2a lineage: one corrupt cycle invalidates the lineage for an otherwise verified parent', t => {
+  // 「损坏谱系 ⇒ 判不可判」必须锁在**有合法运行子行**的父行上（否则断言的是空父行，
+  // 成环失效变异仍全绿）。
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', true, 11, { parentSessionId: 'p', origin: 'subagent' }),
+    baselineItem('a', true, 12, { parentSessionId: 'b', origin: 'subagent' }),
+    baselineItem('b', true, 13, { parentSessionId: 'a', origin: 'subagent' }),
+  ], { at: 100 })
+  const parent = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+  assert.equal(parent?.subagentRunningCount, 1, '合法子行仍归并运行数')
+  assert.notEqual(parent?.lineageVerified, true, '同源的损坏环使整条谱系不可判（fail-closed）')
+  assert.equal(parent?.subagentKnown, true)
+})
+
+test('M8 diagnostics: the unjudgeable-lineage warning fires once, and only after a successful baseline', t => {
+  // 静默抑制不能无声无息：首基线前的 known=fail-closed 是设计行为（不警告），
+  // 已有成功基线后仍出现缺父边/自指/成环 ⇒ 坏数据，warn 恰一次（防日志风暴）。
+  const logger = capturingLogger()
+  const store = createSessionStateStore({ stateDir: scratch(t), logger, now: () => 100 })
+  store.applyStatus('idle', true, 10)
+  store.applyBaseline([baselineItem('clean', false, 20)], { at: 30 })
+  const baselineWarns = logger.lines.filter(line => line.includes('lineage unjudgeable')).length
+  assert.equal(baselineWarns, 0, '合法谱系不警告')
+  // 坏谱系：缺父边的子行 + 自指行。
+  store.applyBaseline([
+    baselineItem('clean', false, 20),
+    baselineItem('orphan', true, 21, { parentSessionId: null, origin: 'subagent' }),
+    baselineItem('self', true, 22, { parentSessionId: 'self', origin: 'subagent' }),
+  ], { at: 40 })
+  const warnsAfterBad = logger.lines.filter(line => line.includes('lineage unjudgeable')).length
+  assert.equal(warnsAfterBad, 1, '已有成功基线后的坏谱系必须警告')
+  store.applyStatus('orphan', false, 50)
+  store.applyBaseline([
+    baselineItem('clean', false, 20),
+    baselineItem('orphan', false, 21, { parentSessionId: null, origin: 'subagent' }),
+  ], { at: 60 })
+  const warnsTotal = logger.lines.filter(line => line.includes('lineage unjudgeable')).length
+  assert.equal(warnsTotal, 1, '警告只发一次（不随事件风暴反复刷）')
+})
+
+test('P2a evidence: the unjudgeable-lineage warning waits for a successful baseline (pre-baseline is design behavior)', t => {
+  // 本进程还没有**成功基线**时，known=fail-closed 是设计行为（谱系未认证），不警告；
+  // 首份成功基线仍带来坏谱系 ⇒ 才是坏数据。
+  const logger = capturingLogger()
+  const store = createSessionStateStore({ stateDir: scratch(t), logger, now: () => 100 })
+  store.applyAdded(baselineItem('orphan', true, 10, { parentSessionId: null, origin: 'subagent' }), 20)
+  assert.equal(logger.lines.filter(line => line.includes('lineage unjudgeable')).length, 0,
+    '成功基线之前不把 fail-closed 当坏数据')
+  store.applyBaseline([
+    baselineItem('orphan', true, 10, { parentSessionId: null, origin: 'subagent' }),
+  ], { at: 30 })
+  assert.equal(logger.lines.filter(line => line.includes('lineage unjudgeable')).length, 1,
+    '首份成功基线揭露坏谱系时警告一次')
+})
+
+test('P2a evidence: removing a running child walks the parent evidence back in the same delta', t => {
+  const store = storeFor(t)
+  const deltas: SessionStateDelta[] = []
+  store.subscribe(delta => deltas.push(delta))
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', true, 11, { parentSessionId: 'p', origin: 'subagent' }),
+  ], { at: 100 })
+  assert.equal(store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')?.subagentRunningCount, 1)
+  const before = deltas.length
+  store.applyRemoved('c', 200)
+  const edge = deltas.slice(before)
+  assert.equal(edge.length, 1, 'removal 帧恰好一份 delta')
+  const parent = edge[0]!.sessions.find(row => row.sessionId === 'p')
+  assert.equal(parent?.subagentRunningCount, 0, '父行证据必须随 removal 同拍回落')
+  assert.notEqual(parent?.lineageVerified, true)
+})
+
+test('P2a evidence: a persisted running row missing from the first baseline is not a reconstructed completion', async t => {
+  // gapCandidates 是「重启时在跑」的候选集；首份完整基线已给出判定后必须清空——
+  // 否则该会话重现时的首个 true→false 会被标 reconstructed（不可通知）⇒ 丢一次完成。
+  const dir = scratch(t)
+  const first = createSessionStateStore({ stateDir: dir, logger: silentLogger, now: () => 100 })
+  first.applyStatus('s1', true, 10)
+  first.applyBaseline([baselineItem('s1', true, 10)], { at: 20 })
+  await first.flush()
+  first.dispose()
+  const second = createSessionStateStore({ stateDir: dir, logger: silentLogger, now: () => 200 })
+  // 首份完整基线缺席该行：单阶段删除（并清 gap 候选）。
+  const edges = second.applyBaseline([], { at: 210 })
+  assert.equal(edges.length, 0, '缺席行不是完成边沿')
+  // 重新上架并真实结束：边沿必须是 observed（可通知），不是 reconstructed。
+  second.applyAdded(baselineItem('s1', true, 220), 230)
+  const finish = second.applyStatus('s1', false, 240)
+  assert.equal(finish.length, 1)
+  assert.equal(finish[0]!.source, 'observed', '首基线已判定过，重现行不是重启在跑候选')
+  second.dispose()
+})
+
+test('P2a evidence math: absent/hidden subagent rows never count as presence or running', () => {
+  const rows = new Map<string, EvidenceRow>()
+  const base = (over: Partial<EvidenceRow> & Pick<EvidenceRow, 'sessionId'>): EvidenceRow => ({
+    present: true, origin: null, parentSessionId: null, running: false,
+    subagentCount: 0, subagentRunningCount: 0, lineageVerified: false, subagentKnown: false, ...over,
+  })
+  rows.set('p', base({ sessionId: 'p' }))
+  rows.set('hidden', base({ sessionId: 'hidden', origin: 'subagent', parentSessionId: 'p', running: true, present: false }))
+  recomputeSubagentEvidence(rows, 1, () => {})
+  assert.equal(rows.get('p')?.subagentCount, 0, 'present:false 的历史子行不计入在场数')
+  assert.equal(rows.get('p')?.subagentRunningCount, 0, '也不计入运行数')
+  assert.notEqual(rows.get('p')?.subagentKnown, true, '隐藏行不制造 fail-closed')
+})
 // ---------------------------------------------------------------------------
 // Route constant/body parsing boundaries
 // ---------------------------------------------------------------------------
