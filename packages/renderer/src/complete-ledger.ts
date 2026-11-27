@@ -269,6 +269,7 @@ function isPendingCompletion(value: unknown): value is PendingCompletion {
   if (!isPlainRecord(value)) return false
   if (typeof value.at !== 'number' || !Number.isFinite(value.at)) return false
   if (value.watermark !== undefined && !isWatermark(value.watermark)) return false
+
   if (value.goalId !== undefined && (typeof value.goalId !== 'string' || value.goalId.length === 0)) return false
   return true
 }
@@ -372,6 +373,15 @@ export function createCompleteLedger(
       const sanitized: PendingCompletion = { ...entry }
       if (sanitized.deferred !== undefined && sanitized.deferred !== 'subagent-busy') {
         delete sanitized.deferred
+        droppedFields += 1
+      }
+      // 完成身份同域清洗（字段级）：坏 seq 只丢该字段，条目仍可做水位结算。
+      if (sanitized.completionSeq !== undefined && !isWatermark(sanitized.completionSeq)) {
+        delete sanitized.completionSeq
+        droppedFields += 1
+      }
+      if (sanitized.absorbedSeq !== undefined && !isWatermark(sanitized.absorbedSeq)) {
+        delete sanitized.absorbedSeq
         droppedFields += 1
       }
       kept[sessionId] = sanitized
