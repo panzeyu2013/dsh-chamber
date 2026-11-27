@@ -211,6 +211,13 @@ export interface ObservationBatch {
    * 省略 = 不复位）：批末若壳通知旗标为真，把 factsSeeded 复位为「恢复批重新播种」。
    */
   factsUnusable?: boolean
+  /**
+   * 本批 facts 输入的三态（COR-1 精度）：true = 本批可用；false = 显式携带但不可用；
+   * 省略 = 本批没有 facts 输入（纯壳批/直测批）。`shellCompleteSinceFacts` 的证据是
+   * 「**自上次可用 facts 批以来**壳轨消费过无水位完成」，因此只有 false/省略批才置旗标——
+   * 可用批里结清却置旗标，会被下一次 facts 抖动误当成缺席期证据，恢复批把真实完成吞掉。
+   */
+  factsUsable?: boolean
   observations: CompletionObservation[]
   /** 两条通道都不再列出的会话（调用方清 pending，§3.1）。 */
   forgotten: string[]
@@ -709,6 +716,7 @@ export function observeSource(input: {
     generationChanged,
     freshState,
     factsUnusable: input.facts !== undefined && !factsUsable,
+    factsUsable: input.facts === undefined ? undefined : factsUsable,
     observations,
     forgotten,
     fenceSeeds,
@@ -814,20 +822,32 @@ export function applyObservationBatch(input: {
     // 覆盖了该会话的 settleFence。hold/void/#3 静默 drop 都不置旗标。
     //
     // 静默结清必须计入证据（否则 A 只是把横幅推迟）：壳锚定 pending 没有 watermark，
-    // 结清只能置 settleFence；若这里不置 `shellCompleteSinceFacts`，facts 恢复批不会重
-    // 播种，被围栏守卫的同一完成会按 rule ③（更高水位）再报一次——用户看到的不是消失，
-    // 而是迟到的重复。只置旗标；把 factsSeeded 复位留到批末——observeSource 是纯函数，
-    // 看不到本批 reconcile 结果（B3-2 同批形态）。手工构造的直测批可无 state，跳过
-    // （它们的壳语义由 reconcile 直测钉住）。
+    // 结清只能置 settleFence。两条互补的补偿——
+    // ① facts 不可用/缺席批：置 `shellCompleteSinceFacts`，恢复批重新播种，被栏守卫的同一
+    //   完成的水位在播种中被吸收（不通知）。只置旗标；把 factsSeeded 复位留到批末——
+    //   observeSource 是纯函数，看不到本批 reconcile 结果（B3-2 同批形态）。
+    // ② facts 可用批：没有「恢复批」可依赖，按 C4-X2 同口径给新栏补记播种补偿（seededSince），
+    //   让同一完成的迟到水位按 rule ② 吞一次；真正的新回合先有 running 帧（#1 清栏），不会被误吞。
+    // 手工构造的直测批可无 state，跳过（它们的壳语义由 reconcile 直测钉住）。
     const completeEmitted = notifications.some(notification => notification.kind === 'complete')
     // 无水位消费的静默结清：origin 是「G4 延迟完成被消费」的 durable 身份，与 settle-guard
     // 的「水位已通知过」不同（后者没有新的完成要守卫）。
     const settledSilently = result.origin === 'subagent-busy-settled'
     const fenceAfter = state.settleFence[sourceId]?.[observation.sessionId]
-    if ((completeEmitted || settledSilently) && fenceAfter !== undefined && fenceAfter !== fenceBefore && batch.state !== undefined) {
+    const fenceNew = fenceAfter !== undefined && fenceAfter !== fenceBefore
+    // 证据的定义是「自上次可用 facts 批以来」：本批 facts 可用时 shellCompleteSinceFacts
+    // 在 observeSource 已清，这里再置会把它留成假证据（COR-1 精度，见字段注释）。
+    if ((completeEmitted || settledSilently) && fenceNew && batch.factsUsable !== true
+        && batch.state !== undefined) {
       batch.state.shellCompleteSinceFacts = true
       const memory = batch.state.sessions[observation.sessionId]
       if (memory !== undefined) memory.shellNotifiedSinceFacts = true
+    } else if (settledSilently && fenceNew && batch.factsUsable === true) {
+      // 可用批的静默结清没有「恢复批重播种」可依赖（facts 从未不可用）：同一完成的 facts
+      // 水位随后到达会按 rule ③ 判成新完成 ⇒ 提前一条横幅。补记播种补偿（C4-X2 同口径）：
+      // 栏的 boundary 是置栏时已吸收水位，`seededSince ≤ boundary` 让首条严格更高的水位被
+      // rule ② 吞一次；真正的新回合先有 running 帧（#1 清栏），不会被误吞。
+      ledger.seedSettleFence(sourceId, observation.sessionId, observation.factsMemory ?? 0)
     }
     if (result.disposition !== undefined) {
       sink.countDisposition(result.disposition)
