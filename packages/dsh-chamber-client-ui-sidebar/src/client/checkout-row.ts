@@ -21,7 +21,6 @@ import {
   getSourceRepoLayouts, getWorkspaceGitFlag,
   type RepoGitLayout, type UnregisteredWorktreeInfo, type WorkspaceGitFlag,
 } from '@dsh-chamber/dsh-chamber-client-core/workspace-git-flags'
-import type { SidebarKey } from './locales.ts'
 
 /** Minimal structural row shape the helpers accept (tests pass literals). */
 type CheckoutRowShape = Pick<ChamberServerWorkspace, 'id' | 'kind'> & Partial<Pick<
@@ -97,32 +96,6 @@ export function checkoutLayoutEntry(
   return checkoutLayoutEntries(sourceId, layouts).find(entry => canonicalPathKey(entry.path) === key)
 }
 
-/**
- * Row health, fail-closed: the layout entry's own status when the facts are
- * present, `unknown` when they are not (snapshot failure / cold facts). A row
- * must never claim `ready` from absent facts.
- */
-export type CheckoutHealth = 'ready' | 'missing' | 'invalid' | 'not-a-repo' | 'unknown'
-
-export function checkoutHealthOf(
-  sourceId: string,
-  workspace: CheckoutRowShape,
-  layouts?: readonly RepoGitLayout[],
-): CheckoutHealth {
-  const entry = checkoutLayoutEntry(sourceId, checkoutPathOf(workspace), layouts)
-  if (entry === undefined) return 'unknown'
-  return entry.status
-}
-
-/** Localized row-health hint; `ready` carries no copy (the row title already says it). */
-export function checkoutHealthLabelKey(health: CheckoutHealth): SidebarKey | undefined {
-  if (health === 'ready') return undefined
-  if (health === 'missing') return 'checkout.missing'
-  if (health === 'invalid') return 'checkout.invalid'
-  if (health === 'not-a-repo') return 'checkout.notARepo'
-  return 'checkout.statusUnknown'
-}
-
 /** Branch label of a checkout row (detached/unborn → the derived title stands). */
 export function checkoutBranchOf(
   sourceId: string,
@@ -134,7 +107,7 @@ export function checkoutBranchOf(
   return branch === undefined || branch === '' ? undefined : branch
 }
 
-/** Health/lock facts of one checkout row as the row + the Git occupant read them. */
+/** Display facts of one checkout row as the row + the Git occupant read them. */
 export interface CheckoutRowFacts {
   /** Canonical checkout path (row identity for order/actions). */
   path: string | undefined
@@ -142,8 +115,6 @@ export interface CheckoutRowFacts {
   branch: string
   /** Derived display title (the row's own title). */
   title: string
-  /** Localized health hint key; undefined = healthy (or no facts claimed yet). */
-  healthKey: SidebarKey | undefined
 }
 
 export function checkoutRowFacts(
@@ -157,7 +128,6 @@ export function checkoutRowFacts(
     path,
     branch: checkoutBranchOf(sourceId, workspace, layouts) ?? title,
     title,
-    healthKey: checkoutHealthLabelKey(checkoutHealthOf(sourceId, workspace, layouts)),
   }
 }
 

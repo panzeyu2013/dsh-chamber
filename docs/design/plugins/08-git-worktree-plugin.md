@@ -126,9 +126,9 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookC
 - **触发链**：renderer/App 订阅 `subscribeWorkspaceGitFlags`（或 `getWorkspaceGitFlagsVersion` 作为 memo key），version 变化 → 重跑 derive → 投影签名变化 → 重发；version 也进发布闸。没有这条链，外部（forge/agent）创建不会更新。
 - **签名**：生产者 `instanceSnapshotSignature` 包含 `workingDirectory`；App `serversProjectionSignature` 编码派生行（kind/repoKey/title/sessions）。dirty/locked 由 occupant 自读，不进聚合签名（避免每轮 dirty 变化重发整份投影）。
 - **flag 查找**：派生行不在 flags store（`retainSourceWorkspaceFlags` 会剪掉非 workspace key），sidebar 的 flag 查找回落到派生行自带的 `repoKey/familyMainId/isMain`； `derivedCheckoutFlag` 是唯一查找口，不发布合成 flag。
-- **标题与健康**：分支名优先，detached/unborn 用目录名；健康只到门控/诊断——`status` 非 ready 的行显示 missing/invalid/unhealthy/status-unknown 徽标并进 title/aria； `headState/attention/upstream/ahead/behind` 不进行内（保留给删除门控、创建对话框的 unborn 过滤与未来管理页）。facts 未到时显示骨架/源行回落，不能声称 ready。
+- **标题与健康**：分支名优先，detached/unborn 用目录名；**行内不展示健康徽标**（上游没有 worktree 清单面；健康只作动作门控/诊断）：`status` 非 ready 的行仍按 §5/§8 的门控拒绝删除/新建会话，原因由动作错误面给出； `headState/attention/upstream/ahead/behind` 不进行内（保留给删除门控、创建对话框的 unborn 过滤与未来管理页）。facts 未到时回落源行，不声称 ready。
 - **动作**：宽栏 hover 揭示（与主行同一 `data-git-action` 钩子、键盘焦点同一 `.rowActionsVisible` 路径）；派生行动作 = 新建会话、复制路径、删除；**没有 kebab / rename**，但**有独立折叠钮**（与旧 worktree 行同形：branch 字形 ↔ chevron，`viewPrefs.folded` 按行自己的 id）；主行折叠仍隐藏整族。**行尾静息态只有中性信息**（用户裁决 B+C，对齐上游 dsh 的会话行形态）：中性分支字形 + 计数徽标，**不含状态词**；计数徽标仍是行尾（保每行共享右列），**不显示「无改动」占位**。状态词（`有改动/已锁定/状态未知`）是**揭示簇内成员** ——渲染在 occupant 容器（`data-git-occupant`）**内部**、三个动作**之前**（簇的 2px gap 就是全部间距），`data-git-checkout-status` 只留作 DOM/测试钩子：容器静息 `display:none`， hover / 键盘焦点（`.rowActionsVisible`）揭示时 `inline-flex`，所以状态词静息不可见、随 `+`/复制/删除一起换入，揭示前后动作簇位置不变（design 06 §7）。删除阻断理由（dirty/locked）仍由这条揭示面（状态词 + 删除钮 title）与删除对话框的 dirty 确认承载。 **取舍**：①静息文本胶囊（否决：静息常驻噪声，用户裁决 hover-only）；②状态词与动作簇分两处 state-slot 换出（否决：同一行两套揭示路径，且静态计数徽标仍是行尾、机制重复）；③静息只留一个无文本色点/图标（否决：又引入一个需 hover 才解释的符号；上游静息形态本身就是中性分支字形）。会话行**不画** checkout 分支 glyph。命中盒=视觉盒（20px 动作钮的 24px 偏差与主行同一既有取舍）。occupant 容器 rest 态零布局占用（`data-git-occupant`，只住揭示簇成员：状态词 + 三个动作；**不得**再塞入静息可见元素——那会破坏零占用），与主行同一揭示规则；对话框是 body portal。
-- **可访问性**：动作有键盘等价入口（Tab 可达的揭示），拖动有非拖动替代（菜单移动）， aria 名称/描述覆盖分支、路径、健康与动作。
+- **可访问性**：动作有键盘等价入口（Tab 可达的揭示），拖动有非拖动替代（菜单移动）， aria 名称/描述覆盖分支、路径与动作。
 
 ### 3.3 家族、折叠、树、拖动与会话拖动
 - **折叠**：派生行带 `familyMainId`；`hiddenByMainWorkspaceFold` 读派生行字段，主行折叠隐藏同族 checkout，展开恢复；主行消失时谓词要求主行仍在列表，避免旧 folded 偏好把派生行锁死；隐藏行不携带破坏性在途状态。派生行**有自己的 folded 状态**（行头折叠钮，与旧 worktree 行同形）：只隐藏本行会话，不影响同族其它行。
@@ -144,7 +144,7 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookC
 - **只报池内**：见 §2.1。旧 `$DSH_HOME/worktrees` 残留不在 layout，不生成行，不显示 missing；它们是发布前必须清空的数据（§7.4）。
 - **池被注册成 workspace**：以 workspace 行存在（不生成派生行、不双显）；先经侧栏的 workspace 删除解注册，下一轮 facts 后变为 checkout 行。反过来，checkout 行上的删除是 path-based Git removal，**不会**删注册；host 对“路径仍是 workspace”的删除 fail-closed `workspace-registered`。
 - **没有 registered remove**：不存在 workspace.delete/归档前置的 Git 删除路径；旧 profile 里的 registered worktree 由 §7.4 的升级步骤处理，不由本插件提供第二套入口。
-- **missing 行**：目录被外部删掉但 admin 记录仍在时，派生行显示 missing 并可走残留记录清理（§5.5）；它不会被当作健康行提供新建会话。
+- **missing 行**：目录被外部删掉但 admin 记录仍在时，派生行仍列出行头（无 health 徽标），可走残留记录清理（§5.5）；它不会被当作可目标行提供新建会话。
 - **遗留 registered worktree（旧池）**：升级前未清空的旧池行仍是 workspace 行，不生成派生行；路径消失时按既有 orphaned 诊断与“仅注销注册”流程处理（design 06 §11），Git occupant 读取同一套 facts。本设计的 path-based remove 不接管已注册路径（先解注册，§3.4）。
 
 ## 4. 创建与进入会话
@@ -159,7 +159,7 @@ sidebar 包声明座位（kind single / scope root / `{wide}` owner）与 `hookC
 - **已知边界**：unborn 仓库分支候选必空（`show-ref` 空输出是真空仓库事实，不是读取失败）；读取成功但候选为空（unborn 仓 / 旧宿主空快照）时 Existing 页签保留既有的手输回退（host 仍以 `branch-not-found` 拒绝，与改动前一致）；detached/unborn 主 checkout 记过分支后 MenuSelect 无“回到默认”；快照回退路径的既有边界是 host `show-ref` 失败静默返回 `[]`，选择器可能只剩已 checkout 分支——按需读的失败走显式错误 + 重试，不经过该静默路径；非 git 工作区不渲染入口是设计行为。
 
 ### 4.2 在 checkout 新建会话（source + enter）
-`createSessionHere`（行内“+”）：fresh facts → `canTargetSession` 健康门 → 主 checkout 的 workspace id → `session.create(sourceWorkspaceId, {sessionId, origin:'user', workingDirectory:path})` → `requestOpenSession` → `gitWorktree/enter`。
+`createSessionHere`（行内“+”）：fresh facts → `canTargetSession` 可目标门 → 主 checkout 的 workspace id → `session.create(sourceWorkspaceId, {sessionId, origin:'user', workingDirectory:path})` → `requestOpenSession` → `gitWorktree/enter`。
 
 - 顺序是**先 open 后 enter**：打开是单向 UI 意图，先让 agent 开始加载，再把 workingDirectory 移进 checkout。enter 失败时会话已提交：不发终止/回滚（无 session delete wire），会话留在源根；错误如实上报，行不会消失。
 - enter 校验：`agent-not-ready`（retryable，client 在 open 后重试一次）、`not-a-repo`、 `worktree-not-listed`（含 missing）、`outside-writable-root`（target 在 `header.cwd` 之下）。 **不查 commonDir**（池注册边界冲突，Git facts 已足够），不检查 idle/blank，无 changed/session-busy/invalid-input。

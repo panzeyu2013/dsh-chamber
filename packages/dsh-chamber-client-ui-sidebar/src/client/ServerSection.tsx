@@ -835,7 +835,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                               // 派生 checkout 行头：与旧 worktree 行同形——有独立折叠钮（Tab 可达，
                               // 焦点揭示 Git 座席），无 kebab/rename；主行折叠仍隐藏整族。
                               data-checkout-row={checkout ? '' : undefined}
-                              data-chamber-checkout-health={checkoutFacts?.healthKey}
                               role="treeitem"
                               aria-expanded={!folded}
                               draggable={!renamingThisWorkspace
@@ -1008,16 +1007,6 @@ export const ServerSection = memo(function ServerSection({ server }: { server: C
                                   >
                                     {workspace.ungrouped ? t('list.ungrouped') : workspace.title}
                                   </span>
-                                  {/* 行健康（fail-closed）：非 ready 才出提示，unknown 也出——
-                                      绝不用缺席的 facts 假装健康（design 06 §1.3）。 */}
-                                  {checkoutFacts?.healthKey !== undefined && (
-                                    <span
-                                      className={cc.checkoutHealth}
-                                      data-chamber-checkout-health={checkoutFacts.healthKey}
-                                    >
-                                      {t(checkoutFacts.healthKey)}
-                                    </span>
-                                  )}
                                   {gitFlag?.orphaned === true && (
                                     // The workspace's path no longer exists (externally
                                     // deleted worktree left a ghost). The badge is the

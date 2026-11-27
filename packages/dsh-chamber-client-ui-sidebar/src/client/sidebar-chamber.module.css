@@ -984,19 +984,6 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* Checkout row health hint (design 06 §1.2-1.3): a small muted chip next to the
-   branch label; it only renders for a non-ready status (missing / invalid /
-   not-a-repo / unknown), so a healthy row is unchanged geometry. */
-.checkoutHealth {
-  flex: none;
-  padding: 0 4px;
-  border-radius: 4px;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
 .sessionRow {
   display: flex;
   align-items: center;

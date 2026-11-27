@@ -18,7 +18,7 @@ import { workspaceTreeDepths, workspaceTreeParents } from '@dsh-chamber/dsh-cham
 import type { ChamberServerWorkspace, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-core'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
-  applyCheckoutOrder, checkoutBranchOf, checkoutHealthLabelKey, checkoutHealthOf, checkoutPathOf,
+  applyCheckoutOrder, checkoutBranchOf, checkoutPathOf,
   checkoutRowFacts, derivedCheckoutFlag, insertCheckoutRows, isCheckoutRow, isRealWorkspaceRow,
   sessionFullOrder, workspaceFlagOf,
 } from '../../src/client/checkout-row.ts'
@@ -157,21 +157,16 @@ test('a checkout row folds with its main row and inherits the tree level', () =>
   assert.equal(workspaceTreeDepths(parents).get(row.id), workspaceTreeDepths(parents).get('w-main'))
 })
 
-test('row facts are fail-closed: absent layouts never read as healthy', () => {
+test('row facts use the published layout branch and fall back to the derived title', () => {
   const row = checkoutRow(derived())!
-  assert.equal(checkoutHealthOf('local', row, layouts()), 'ready')
-  assert.equal(checkoutHealthLabelKey('ready'), undefined, 'a healthy row carries no hint')
-  assert.equal(checkoutHealthOf('local', row, []), 'unknown', 'no facts = unknown, never ready')
-  assert.equal(checkoutHealthLabelKey('unknown'), 'checkout.statusUnknown')
+  assert.equal(checkoutBranchOf('local', row, layouts()), 'feat-a', 'a published layout branch is displayed')
   const missing = layouts([layoutEntry(CHECKOUT_A, { status: 'missing', branch: null })])
-  assert.equal(checkoutHealthOf('local', row, missing), 'missing')
-  assert.equal(checkoutHealthLabelKey('missing'), 'checkout.missing')
   assert.equal(checkoutBranchOf('local', row, missing), undefined, 'a detached/unknown branch falls back to the row title')
   const facts = checkoutRowFacts('local', row, 'feat-a', missing)
   assert.equal(facts.branch, 'feat-a')
-  assert.equal(facts.healthKey, 'checkout.missing')
+  assert.equal(facts.path, CHECKOUT_A, 'the row keeps its canonical path for order/actions')
   // The store fallback path (no layouts argument) reads the published layouts.
-  assert.equal(checkoutHealthOf('local', row), 'unknown', 'the store is empty in this process')
+  assert.equal(checkoutBranchOf('local', row), undefined, 'the store is empty in this process')
 })
 
 test('the session drag anchor space is the source full order when the family has checkouts', () => {
@@ -213,11 +208,13 @@ test('the checkout row renders as an action seat row, never as a workspace row',
     'no resident occupant rule: checkout rows reveal on hover like every workspace row')
 })
 
-test('the row renders branch title, health hint, count and no empty-state placeholder', () => {
+test('the row renders branch title, count and no empty-state placeholder', () => {
   assert.ok(SECTION.includes('checkoutRowFacts(server.id, workspace, workspace.title)'))
   assert.ok(SECTION.includes("checkoutFacts.branch, checkoutFacts.path ?? ''"),
     'the title carries a branch/path tooltip (a checkout row has no hover card)')
-  assert.ok(SECTION.includes('data-chamber-checkout-health={checkoutFacts?.healthKey}'))
+  assert.equal(SECTION.includes('data-chamber-checkout-health'), false, 'the in-row health badge is retired')
+  assert.equal(LOCALES.includes("'checkout.invalid'"), false, 'the health copy is retired (zh + en)')
+  assert.equal(LOCALES.includes("'checkout.statusUnknown'"), false, 'the unknown-status copy is retired (zh + en)')
   assert.ok(SECTION.includes('{visibleSessionCount > 0 && ('), 'the session count badge is shared with host rows')
   // A 0-session checkout row keeps its header and renders nothing under it — the
   // same shape a host workspace row has when it holds no sessions. No "no
