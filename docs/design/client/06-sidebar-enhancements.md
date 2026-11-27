@@ -205,6 +205,8 @@
 
   SettingsShell Modal 与其它官方 portal 面仍未修，同族 `ui-attachment/DropOverlay` 每个挂载中的 ComposerAttachments 各渲染一份（N 层遮罩）；⑤**主题样式表重复**——vendor `installThemeStyles` 每个实例 ctx 各插 6 个 `<style>`（同内容，随各自 fiber 移除，良性重复）。①（document 级 drop 扇出）已按「构建期 vendor 补丁 + 按落点壳 containment」落地：drop/dragenter/dragover/dragleave 四副作用同归属、隐藏壳不再入稿或叠遮罩（25 §5.7，残余见 S-56）；④ 的 portal 逃逸仍未修（任意打开态在程序化切换后盖在别的视图上），其中 `ui-attachment` 的 N 层遮罩已随 containment 消除。
 
+- **跨源切换的重投影成本（M5 实测口径）**：活动来源切换时本节 theme/`<html lang>` 投影按 `useLayoutEffect` 在绘制前重放；同值写法早退，同主题/同语言来源互切实测仅 3–5 次 `getComputedStyle`、≈0ms（N=5；见 TODO §3.9）；light↔dark（18 个 dark 块/481 条 token 定义）整页 restyle+repaint 是换调色板固有成本，未加同值短路（收益≈0）——481-token 量级需要 light↔dark 或 zh↔en 来源 fixture 才能测。
+
 ### 4.7 面板轴（`sidebar.panellist` 的宽态落点）
 
 **契约与 Rejected alternatives 见 [05](../control-plane/05-connection-manager.md) §2「来源级面板轴」**；本节只记实现面与副作用。
@@ -442,3 +444,12 @@
 5. **降级时清掉筛选存储值**：把瞬时可用性问题固化成偏好改写；改禁用三项 + 按默认渲染 + 保留存储值（并因此整体禁用——点击默认项也会把存储值写回 `default`）。
 6. **归档/置顶动作失败也弹来源警示**：失败面仍归行级 `rowErrors` 槽（既有族约定），警示条只承载「归档行不可打开」这一种瞬态通知（归档完成/停止并归档两态已按用户裁决移除，§3.4）。
 
+## 13. Rejected alternatives（右栏 docked 开/关不做 frame track 过渡）
+
+现行行为：右栏 docked 的展开/收起把 `rightbarInstant` 置真，vendor `AppFrame` 的 `grid-template-columns` 过渡因此被抑制——中心列轨道在**一帧内落位**，面板自身仍保留 300ms transform 滑动。全屏进入/退出不依赖本标记：vendor `.frame[data-rightbar-fullscreen]` 已把 frame 与 `.handle` 的 transition 置 none（进入全屏本就瞬时）；离开全屏（回到 docked）与 docked close 一样置真，保持「离开覆盖层即落位」。实现 = 本仓 ui-layout store fork 的 `openRightbar`/`closeRightbar`（`packages/dsh-chamber-client-ui-layout/src/client/store-core.ts`），vendor `AppFrame` 不动；回归锁 = 该包 `test/layout-store.test.ts` 的行为臂（含 4 个几何动作复位）+ `test/frame-slots.test.ts` 的 vendor 源文本臂（属性落点、层叠顺序、无 `!important`）。
+
+动机（运行页 A/B：向运行中的打包版页面注入 `[data-animating]{transition:none!important}` 作为「track 瞬时」代理，点击后 700ms 帧窗）：docked 开关的 300ms eased track 让活动壳的整棵会话树逐帧重排。最近一轮 4+4 reps（`results/rb-r5.json`，每 rep 帧数 35–44）：开基线 p95 62/66/105/62ms、关 111–119ms；抑制后开 p95 11–17ms、关 10–15ms（p50 两者都 ~8–9ms；≥50ms 帧 4–5→2；阻塞 285–360→93–124ms）。早期批次在重会话（~20k 节点）上基线开 p95 113/213ms→抑制后 16/22ms；同批另有一次 645ms close 离群样本（track:false rep，n≥50），说明 p95 在长短样本混合时不稳定——引用以 worst/≥50ms 帧/阻塞为主。该 A/B 是**注入代理**，不是构建产物路径；handle/窄视口未被 A/B 覆盖，真机生效验证需重建+重启（单独安排）。
+
+被否方案：1. **保留 300ms eased track**——逐帧重排是右栏交互卡顿主因，长会话下更明显；2. **vendor patch 缩短过渡/改用 overlay 呈现**——需要第二类准入（macOS 同机 A/B + 每 pin 维护），overlay 还改 presentation 语义；3. **只改 CSS 覆盖 vendor 过渡**——vendor CSS module 选择器不归 chamber 所有，覆盖会随 pin 漂移；4. **同时去掉面板 transform 滑动**——多损失一层动效且不解决 track 重排；5. **条件化瞬时（只在内容重时）**——同一开关的视觉跳变会随会话大小变化，反而不一致；6. **先做 F2（ChatView ResizeObserver/`scrollHeight` 链）让 eased track 变便宜**——成本在 vendor 且需第二类准入；本项只消除「逐帧」部分，残余单次重排仍归 F2/行级渲染。
+
+残余：轨道一帧落位时中心列内容仍有一次重排（最近一轮 worst 69–137ms；早期 heavy 样本 worst ~100–140ms）；跨来源切换另付隐藏壳 reveal/catch-up；左栏 collapse/expand 仍走同一 eased track（未在本项范围）。后两者与 chamber 侧放大器一起登记在 TODO §3.7/§3.8。左栏 track 窗口内另有 vendor 3 条 per-shell RO 链（`ui-conversation` 座位 RO、`ui-chat` WidthControls RO——后者每回调 localStorage 读 + 改写 `--dsh-chat-user-width`），不在本仓可修面（上游/class② 准入），与左栏触发一起登记 TODO §3.8/§3.9；右栏 docked 窗口已由本项消除。
