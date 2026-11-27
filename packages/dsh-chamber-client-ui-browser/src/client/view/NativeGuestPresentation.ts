@@ -102,7 +102,10 @@ export class NativeGuestPresentation implements BrowserPresentation {
         targetIsElement: isElement,
         targetContainsHost: isElement && (target as Element).contains(host),
       })
+      // 无关 scroller 不可能移动占位 rect；但浮层/遮挡仍可能随交互变化，只丢掉几何测量，
+      // 仍安排一次遮挡 trailing 复检（否则 guest 可见时弹 Modal 后再无任何遮挡复检）。
       if (shouldMeasureOnScroll(kind)) this.schedule()
+      else this.scheduleOcclusionTrailingCheck()
     }
     this.listen(document, 'scroll', onScroll as EventListener, true)
     this.listen(window, 'resize', schedule, false)

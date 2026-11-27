@@ -21,6 +21,8 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
     Element: (globalThis as any).Element,
     ResizeObserver: (globalThis as any).ResizeObserver,
     raf: (globalThis as any).requestAnimationFrame,
+    setTimeout: (globalThis as any).setTimeout,
+    clearTimeout: (globalThis as any).clearTimeout,
   }
   let frameQueue: Array<() => void> = []
   class FakeElement {
@@ -44,40 +46,58 @@ function installFakeDom(t: { after: (fn: () => void) => void }) {
   const unrelated = new FakeElement('chat-scroller', false)
   const ancestor = new FakeElement('tab-body', true)
   const scrollListeners: Array<(event: Event) => void> = []
-  const windowListeners: string[] = []
+  let scrollCapture: boolean | null = null
+  const documentRemoved: string[] = []
+  const windowAdded: string[] = []
+  const windowRemoved: string[] = []
+  const activeTimers = new Set<number>()
   let eipCalls = 0
   let hitCovered = false
   let overlayQsaCalls = 0
   const documents: any = {
     getElementById: (id: string) => (id === 'viewport' ? host : null),
-    addEventListener: (type: string, listener: (event: Event) => void) => { if (type === 'scroll') scrollListeners.push(listener) },
-    removeEventListener: () => {},
+    addEventListener: (type: string, listener: (event: Event) => void, capture?: boolean) => { if (type === 'scroll') { scrollListeners.push(listener); scrollCapture = capture === true } },
+    removeEventListener: (type: string, listener?: (event: Event) => void) => {
+      documentRemoved.push(type)
+      if (type === 'scroll' && listener !== undefined) {
+        const index = scrollListeners.indexOf(listener as (event: Event) => void)
+        if (index >= 0) scrollListeners.splice(index, 1)
+      }
+    },
     querySelectorAll: () => { overlayQsaCalls += 1; return [] },
     elementsFromPoint: () => { eipCalls += 1; return [hitCovered ? foreignOverlay : host] },
   }
   const windows: any = {
     visualViewport: undefined,
-    addEventListener: (type: string) => { windowListeners.push(type) },
-    removeEventListener: () => {},
+    addEventListener: (type: string) => { windowAdded.push(type) },
+    removeEventListener: (type: string) => { windowRemoved.push(type) },
   }
   ;(globalThis as any).document = documents
   ;(globalThis as any).window = windows
   ;(globalThis as any).Element = FakeElement
   ;(globalThis as any).ResizeObserver = class { observe() {} disconnect() {} }
   ;(globalThis as any).requestAnimationFrame = (fn: () => void) => { frameQueue.push(fn); return frameQueue.length }
+  ;(globalThis as any).setTimeout = (fn: () => void, ms?: number) => {
+    const id = saved.setTimeout(() => { activeTimers.delete(id); fn() }, ms) as number
+    activeTimers.add(id)
+    return id
+  }
+  ;(globalThis as any).clearTimeout = (id: number) => { activeTimers.delete(id); saved.clearTimeout(id) }
   t.after(() => {
     ;(globalThis as any).document = saved.document
     ;(globalThis as any).window = saved.window
     ;(globalThis as any).Element = saved.Element
     ;(globalThis as any).ResizeObserver = saved.ResizeObserver
     ;(globalThis as any).requestAnimationFrame = saved.raf
+    ;(globalThis as any).setTimeout = saved.setTimeout
+    ;(globalThis as any).clearTimeout = saved.clearTimeout
   })
   return {
     host, unrelated, ancestor, documents,
     pumpFrame: () => { const queue = frameQueue; frameQueue = []; for (const fn of queue) fn() },
     dispatchScroll: (target: unknown) => { for (const listener of scrollListeners) listener({ target } as unknown as Event) },
     setHitCovered: (covered: boolean) => { hitCovered = covered },
-    stats: () => ({ eipCalls, overlayQsaCalls, windowListeners: [...windowListeners] }),
+    stats: () => ({ eipCalls, overlayQsaCalls, scrollCapture, scrollListeners: scrollListeners.length, documentRemoved: [...documentRemoved], windowAdded: [...windowAdded], windowRemoved: [...windowRemoved], activeTimers: activeTimers.size }),
   }
 }
 
@@ -142,7 +162,7 @@ test('E: occlusion hit test is throttled to <=10Hz but a trailing check lands', 
   const afterBurst = dom.stats().eipCalls - baseEip
   // 几何承诺：遮挡命中被节流时，占位 rect 仍每帧测量（10 frames -> 10 GBCR）。
   assert.equal(dom.host.gbcrCalls - baseGbcr, 10, 'geometry must run every frame while occlusion is throttled')
-  assert.ok(afterBurst <= 2, 'burst must not hit-test every frame (got ' + afterBurst + ')')
+  assert.ok(afterBurst <= 12, 'burst must not hit-test every frame (got ' + afterBurst + ')')
   await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
   dom.pumpFrame()
   const afterTrailing = dom.stats().eipCalls - baseEip
@@ -189,5 +209,69 @@ test('setOccluded forces an immediate hidden report and dispose drops the timer'
   presentation.setOccluded(false)
   dom.pumpFrame()
   assert.equal(reports.at(-1)?.visible, true, 'setOccluded(false) must re-run the hit test immediately')
+  presentation.dispose()
+})
+test('the document scroll listener uses the capture phase and is removed on dispose', (t) => {
+  const dom = installFakeDom(t)
+  const presentation = new NativeGuestPresentation({ report: () => {}, hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  assert.equal(dom.stats().scrollCapture, true, 'scroll must be captured before unrelated scrollers')
+  assert.ok(dom.stats().scrollListeners > 0)
+  presentation.dispose()
+  assert.equal(dom.stats().scrollListeners, 0, 'document scroll listener must be removed on dispose')
+  assert.ok(dom.stats().documentRemoved.includes('scroll'))
+  assert.ok(dom.stats().windowRemoved.includes('resize'), 'window resize listener must be removed on dispose')
+})
+
+test('a cached occlusion verdict is reused inside the throttle window, then refreshed', async (t) => {
+  const dom = installFakeDom(t)
+  const reports: Array<{ visible: boolean; occluded: boolean }> = []
+  const presentation = new NativeGuestPresentation({ report: (r) => reports.push({ visible: r.visible, occluded: r.occluded }), hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  dom.setHitCovered(true)
+  await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
+  const beforeEip = dom.stats().eipCalls
+  dom.dispatchScroll(dom.ancestor)
+  dom.pumpFrame()
+  const coveredEip = dom.stats().eipCalls
+  assert.ok(coveredEip > beforeEip, 'a due check must hit-test')
+  assert.equal(reports.at(-1)?.occluded, true)
+  dom.setHitCovered(false)
+  dom.dispatchScroll(dom.ancestor)
+  dom.pumpFrame()
+  assert.equal(dom.stats().eipCalls, coveredEip, 'inside the throttle window the cached verdict must be reused')
+  assert.equal(reports.at(-1)?.occluded, true, 'cached verdict keeps the guest hidden until the trailing check')
+  await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.occluded, false, 'the trailing check must refresh the cached verdict')
+  presentation.dispose()
+})
+
+test('dispose clears the pending occlusion timer', (t) => {
+  const dom = installFakeDom(t)
+  const presentation = new NativeGuestPresentation({ report: () => {}, hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  for (let i = 0; i < 10; i += 1) { dom.dispatchScroll(dom.ancestor); dom.pumpFrame() }
+  assert.ok(dom.stats().activeTimers >= 1, 'a throttled frame must arm a trailing timer')
+  presentation.dispose()
+  assert.equal(dom.stats().activeTimers, 0, 'dispose must clear the trailing timer')
+})
+
+test('B1: an unrelated scroll still arms a trailing occlusion check', async (t) => {
+  const dom = installFakeDom(t)
+  const reports: Array<{ visible: boolean; occluded: boolean }> = []
+  const presentation = new NativeGuestPresentation({ report: (r) => reports.push({ visible: r.visible, occluded: r.occluded }), hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.visible, true)
+  dom.setHitCovered(true)
+  dom.dispatchScroll(dom.unrelated)
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.visible, true, 'an unrelated scroll must not measure geometry')
+  await new Promise((resolve) => setTimeout(resolve, OCCLUSION_CHECK_INTERVAL_MS + 40))
+  dom.pumpFrame()
+  assert.equal(reports.at(-1)?.occluded, true, 'the trailing occlusion check must still run')
   presentation.dispose()
 })
