@@ -712,7 +712,7 @@ export class GitWorktreeCore {
    *
    * Deliberately NOT a snapshot consumer: `snapshot().branches` rides the 30s discovery
    * cache and the page's poll wave, so a branch created out of band (forge composer, agent
-   * `create_worktree`, a terminal) can stay invisible for one wave. The picker needs the
+   * `enter_worktree`, a terminal) can stay invisible for one wave. The picker needs the
    * value at the moment it opens, so this read reruns the source gates and Git directly:
    * registered workspace -> repository shape -> authoritative main checkout (the exact
    * `previewCreate` preflight) and then `git show-ref --heads`.

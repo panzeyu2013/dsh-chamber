@@ -17,7 +17,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { pickEffectiveCwd, readProjectedWorkingDirectory, type ProjectionSource } from './core-validation.ts'
+import { pickEffectiveCwd, readWorkingDirectory, type WorkingDirectoryReader } from './core-validation.ts'
 import { enteredWorktreeRecord, rememberEnteredPath } from './enter-record.ts'
 import { appendEnteredRecord } from './enter-record-write.ts'
 import {
@@ -72,10 +72,11 @@ interface WorkingDirectoryHost {
   set(agent: object, path: string, signal?: AbortSignal): Promise<string>
 }
 
-/** The cwd fact of one live agent: projection first, the immutable header cwd as fallback. */
-function cwdFact(projections: ProjectionSource | undefined, agent: { session: { header: { cwd?: string } } }): object {
+/** The cwd fact of one live agent: the committed working directory first, the immutable
+ *  header cwd as fallback (the same pair the sandbox boundary resolves). */
+function cwdFact(workingDirectory: WorkingDirectoryReader | undefined, agent: { session: { header: { cwd?: string } } }): object {
   const cwd = pickEffectiveCwd(
-    readProjectedWorkingDirectory(projections, agent.session),
+    readWorkingDirectory(workingDirectory, agent.session),
     agent.session.header.cwd,
   )
   return cwd === undefined ? {} : { cwd }
@@ -97,11 +98,11 @@ export class GitWorktreeGateway extends TypertRemoteService {
     const host = ctx as GitWorktreeHostContext
     this.hostContext = ctx
     this.host = host
-    // Read lazily on every call: the projection registry is provided by a sibling plugin,
-    // so a capture at construction time would freeze an undefined value for the whole
-    // instance whenever this gateway activates first.
-    const projections = (): ProjectionSource | undefined =>
-      ctx.get('sessionProjections') as ProjectionSource | undefined
+    // Read lazily on every call: the working-directory service is provided by a sibling
+    // plugin, so a capture at construction time would freeze an undefined value for the
+    // whole instance whenever this gateway activates first.
+    const workingDirectory = (): WorkingDirectoryReader | undefined =>
+      ctx.get('workingDirectory') as WorkingDirectoryReader | undefined
     this.core = new GitWorktreeCore({
       source: {
         listWorkspaces: () => host.workspaceRegistry.list().map(workspace => ({
@@ -114,7 +115,7 @@ export class GitWorktreeGateway extends TypertRemoteService {
         listAgents: () => host.agents.list().map(agent => ({
           sessionId: String(agent.id),
           status: agent.status,
-          ...(cwdFact(projections(), agent)),
+          ...(cwdFact(workingDirectory(), agent)),
           ...(agent.session.header.parentSession === undefined
             ? {}
             : { parentSessionId: String(agent.session.header.parentSession) }),

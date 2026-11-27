@@ -2,7 +2,7 @@
  * On-demand branch candidates (`branches`, design 08 §2.1/§4.1).
  *
  * The create dialog's picker reads Git AT OPEN TIME: an out-of-band branch (forge composer,
- * agent `create_worktree`, a terminal) must be visible even when a snapshot cached the
+ * agent `enter_worktree`, a terminal) must be visible even when a snapshot cached the
  * discovery seconds earlier, and a read failure must be explicit instead of the snapshot's
  * silent empty-list degrade.
  */

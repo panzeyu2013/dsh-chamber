@@ -281,26 +281,28 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   fail('unsafe-git-argv', `Git command '${verb ?? '<empty>'}' is outside the worktree allowlist`)
 }
 
-/** Structural view of the optional session-projection registry (alpha.2+; absent earlier). */
-export interface ProjectionSource {
-  stateOf(session: object, key: string): unknown
+/** Structural view of the host's working-directory service: `get` reads the committed
+ *  directory without I/O (the same source the sandbox boundary reads). */
+export interface WorkingDirectoryReader {
+  get(session: object): string
 }
 
 /**
- * Read the projected `workingDirectory` of one session through an optional registry.
- * @param source - the registry read from the host context, or undefined before alpha.2.
+ * Read one Session's committed working directory through the host service that owns it.
+ * @param source - the service read from the host context, or undefined when the plugin is
+ *  not mounted.
  * @param session - the live session record.
- * @returns the projected absolute directory, or undefined when the service, the key or a
- *  non-string value is absent. A throwing projection collapses to undefined so the immutable
+ * @returns the committed absolute directory, or undefined when the service, the value or a
+ *  non-string value is absent. A throwing read collapses to undefined so the immutable
  *  header cwd stays authoritative instead of darkening the whole source.
  */
-export function readProjectedWorkingDirectory(
-  source: ProjectionSource | undefined,
+export function readWorkingDirectory(
+  source: WorkingDirectoryReader | undefined,
   session: object,
 ): string | undefined {
   if (source === undefined) return undefined
   try {
-    const value = source.stateOf(session, 'workingDirectory')
+    const value = source.get(session)
     return typeof value === 'string' && value !== '' ? value : undefined
   } catch (error) {
     void error
@@ -309,15 +311,16 @@ export function readProjectedWorkingDirectory(
 }
 
 /**
- * Pick one session's effective working directory: the alpha.2 `workingDirectory`
- * projection when it is a non-empty string, otherwise the immutable header directory.
- * @param projected - the projection value read from the optional host registry.
+ * Pick one session's effective working directory: the committed directory the
+ * host working-directory service reports when it is a non-empty string, otherwise the
+ * immutable header directory.
+ * @param committed - the service value read through the optional host surface.
  * @param headerCwd - the immutable `session.header.cwd`; any string passes through so the
  *  core still classifies a malformed value (relative/empty) as drift and refuses fail-closed.
  * @returns the effective directory, or undefined when neither value is a string.
  */
-export function pickEffectiveCwd(projected: unknown, headerCwd: unknown): string | undefined {
-  if (typeof projected === 'string' && projected !== '') return projected
+export function pickEffectiveCwd(committed: unknown, headerCwd: unknown): string | undefined {
+  if (typeof committed === 'string' && committed !== '') return committed
   return typeof headerCwd === 'string' ? headerCwd : undefined
 }
 

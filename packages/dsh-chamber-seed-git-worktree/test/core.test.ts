@@ -6,6 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   GitWorktreeCore,
@@ -25,7 +26,7 @@ import {
   type GitRunner,
   type WorkspaceFact,
 } from '../src/core.ts'
-import { pickEffectiveCwd, readProjectedWorkingDirectory } from '../src/core-validation.ts'
+import { pickEffectiveCwd, readWorkingDirectory } from '../src/core-validation.ts'
 import { HOOK_GUARD } from '../src/core-git-runner.ts'
 import {
   MAIN,
@@ -637,15 +638,15 @@ test('snapshot carries upstream/ahead/behind and dirty facts from the --branch s
   assert.equal(mainRow.behind, 0)
 })
 
-test('pickEffectiveCwd prefers the alpha.2 workingDirectory projection over the header', () => {
+test('pickEffectiveCwd prefers the committed working directory over the header', () => {
   assert.equal(pickEffectiveCwd('/repo/.agents/worktrees/task-1', '/repo'), '/repo/.agents/worktrees/task-1')
-  assert.equal(pickEffectiveCwd(undefined, '/repo'), '/repo', 'alpha.1 (no projection) falls back to the header cwd')
-  assert.equal(pickEffectiveCwd('', '/repo'), '/repo', 'an empty projection is the absent case')
-  assert.equal(pickEffectiveCwd(null, '/repo'), '/repo', 'a null projection is the absent case')
-  assert.equal(pickEffectiveCwd(42, '/repo'), '/repo', 'a non-string projection is the absent case')
+  assert.equal(pickEffectiveCwd(undefined, '/repo'), '/repo', 'an unmounted service falls back to the header cwd')
+  assert.equal(pickEffectiveCwd('', '/repo'), '/repo', 'an empty service value is the absent case')
+  assert.equal(pickEffectiveCwd(null, '/repo'), '/repo', 'a null service value is the absent case')
+  assert.equal(pickEffectiveCwd(42, '/repo'), '/repo', 'a non-string service value is the absent case')
   assert.equal(pickEffectiveCwd(undefined, undefined), undefined, 'neither value yields no cwd fact')
   assert.equal(pickEffectiveCwd(undefined, ''), '', 'a malformed header string passes through so core drift refuses fail-closed')
-  assert.equal(pickEffectiveCwd('relative/wt', '/abs'), 'relative/wt', 'a non-empty projection wins and core classifies the drift')
+  assert.equal(pickEffectiveCwd('relative/wt', '/abs'), 'relative/wt', 'a non-empty committed value wins and core classifies the drift')
 })
 
 test('the git guard disables repo hooks and the fsmonitor program', () => {
@@ -655,18 +656,25 @@ test('the git guard disables repo hooks and the fsmonitor program', () => {
   ], 'every spawn must keep the hook and fsmonitor overrides ahead of the allowlisted argv')
 })
 
-test('readProjectedWorkingDirectory reads through the optional registry and degrades quietly', () => {
+test('readWorkingDirectory reads through the host working-directory service and degrades quietly', () => {
   const session = { header: { cwd: '/repo' } }
-  assert.equal(readProjectedWorkingDirectory({ stateOf: () => '/repo/wt' }, session), '/repo/wt',
-    'a live alpha.2 registry supplies the effective directory')
-  assert.equal(readProjectedWorkingDirectory(undefined, session), undefined,
-    'alpha.1 has no registry; the caller falls back to the header cwd')
-  assert.equal(readProjectedWorkingDirectory({ stateOf: () => 42 }, session), undefined,
-    'a non-string projection is the absent case')
-  assert.equal(readProjectedWorkingDirectory({ stateOf: () => '' }, session), undefined,
-    'an empty projection is the absent case')
-  assert.equal(readProjectedWorkingDirectory({ stateOf: () => { throw new Error('collapsed') } }, session), undefined,
-    'a throwing projection must not darken the whole source')
+  assert.equal(readWorkingDirectory({ get: () => '/repo/wt' }, session), '/repo/wt',
+    'the committed directory supplies the effective directory')
+  assert.equal(readWorkingDirectory(undefined, session), undefined,
+    'an unmounted service leaves the caller on the header cwd')
+  assert.equal(readWorkingDirectory({ get: () => 42 as unknown as string }, session), undefined,
+    'a non-string value is the absent case')
+  assert.equal(readWorkingDirectory({ get: () => '' }, session), undefined,
+    'an empty value is the absent case')
+  assert.equal(readWorkingDirectory({ get: () => { throw new Error('collapsed') } }, session), undefined,
+    'a throwing read must not darken the whole source')
+})
+
+test('the gateway reads the committed working directory from the host service, never the retired projection key', () => {
+  const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(source, /ctx\.get\('workingDirectory'\)/u, 'the cwd fact reads the owning service')
+  assert.doesNotMatch(source, /sessionProjections/u, 'the deprecated projection registry is not consulted')
+  assert.doesNotMatch(source, /stateOf\(session, 'workingDirectory'\)/u, 'the deprecated per-key read is retired')
 })
 
 test('create writes the in-repo pool self-ignore exactly once and fails closed when it cannot', async () => {
