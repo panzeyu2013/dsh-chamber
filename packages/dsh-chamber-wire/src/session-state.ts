@@ -238,8 +238,8 @@ export interface SessionStateRow {
   running: boolean
   pendingKind: SessionStatePendingKind | null
   subagentCount: number
-  /** I-12 谱系证据（加法字段）：运行中后代数 / 认证位 / fail-closed 保留位。
-   *  旧网关三项缺席 ⇒ 判定侧退回 presence 语义（count>0 只作 unknown）。 */
+  /** I-12 谱系证据（加法字段）：运行中后代数 / 认证位 / fail-closed 保留位；旧网关缺席 ⇒ presence。
+   *  已发布渲染器把 verified 与在场数组合读成 busy，故 `lineageVerified` 只在运行数>0 时下发。 */
   subagentRunningCount?: number
   lineageVerified?: boolean
   subagentKnown?: boolean

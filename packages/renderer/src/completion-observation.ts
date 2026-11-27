@@ -846,7 +846,9 @@ export function applyObservationBatch(input: {
       // 可用批的静默结清没有「恢复批重播种」可依赖（facts 从未不可用）：同一完成的 facts
       // 水位随后到达会按 rule ③ 判成新完成 ⇒ 提前一条横幅。补记播种补偿（C4-X2 同口径）：
       // 栏的 boundary 是置栏时已吸收水位，`seededSince ≤ boundary` 让首条严格更高的水位被
-      // rule ② 吞一次；真正的新回合先有 running 帧（#1 清栏），不会被误吞。
+      // rule ② 吞一次。前提是「真正的新回合会先有 running 帧」（#1 清栏）；若 running 帧在
+      // 观测链丢失，唤醒轮的完成可能被这一吞而 0 横幅——登记的接受边界（design 19 §3.5 ⑨，
+      // 宁少勿重；闭合需唤醒信号，见 TODO D§6），不得用计数/定时启发绕过。
       ledger.seedSettleFence(sourceId, observation.sessionId, observation.factsMemory ?? 0)
     }
     if (result.disposition !== undefined) {

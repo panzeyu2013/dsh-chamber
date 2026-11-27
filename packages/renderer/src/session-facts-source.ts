@@ -114,7 +114,6 @@ export interface SessionFactsTurnEnd {
  */
 export type SessionFactsGoalFact = SessionStateGoalFact
 
-/** 一行会话事实（wire SessionStateRow 的防御性投影）。 */
 /**
  * 判定/呈现两侧的**唯一**运行数取值口径（design 19 §3.5 I-12）：P2a 网关行优先取
  * `subagentRunningCount`（旧网关缺席 ⇒ 退回在场数 ⇒ 分类器据此只判 presence/unknown），
@@ -124,6 +123,7 @@ export function runningSubagentCountOf(row: Pick<SessionFactsRow, 'subagentCount
   return row.subagentRunningCount ?? row.subagentCount
 }
 
+/** 一行会话事实（wire SessionStateRow 的防御性投影）。 */
 export interface SessionFactsRow extends Omit<SessionStateRow, 'lastRunningAt' | 'lastTurnEnd'> {
   sessionId: string
   running: boolean
