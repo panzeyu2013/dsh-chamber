@@ -150,8 +150,6 @@ N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*
 
   `ReasoningRow.module.css` 行 sweep（先于 `ui-primitives/TextShimmer` 合成器 keyframes）与 `GenericCommandCard` 行 sweep 均随上游删除而退役（`RETIRED_PATCHES` 的 `ensure` 钉住新形状）；`hasActiveSchedule` 回落链与以 `import.meta.url` 推导页面级 scope 都是被否/已删形式（前者归 [06](./06-sidebar-enhancements.md) §4.3 的 pin 变化，后者页面级事实不可分）。
 
-- **候选（未登记；class② A/B pending）**：N-ctx 单页里每壳 `dsh-client-shortcuts` 的 `installKeyboard` 各装一份 window keyboard 监听；`dom.ts` 的 `changedModals` 在**任意** mutation 记录时清空 modal 缓存（应只对 modal 相关记录失效），于是 live DOM churn 下每次 keydown、每壳都重查 `document.querySelectorAll(modalSelector)`（运行页实测 20 键 → 105 次 ≈5/键，N=5；单键 1.45–1.78ms，quiet 且缓存命中时 0）。候选补丁只收窄失效条件（复用同函数已有 modal 相关性判据），需先做 stack 归因区分 DOM/native 两条安装路径，并按 class② 记录同机 patched/unpatched A/B 后才可登记；见 [TODO](../../progress/TODO.md) §3.9。
-
 ### 3.7 活实例客户端的装/卸热同步（live graph sync）
 
 §3.2/§3.5 的合并与预载发生在窗口 boot：宿主图每 boot 取一次，bundle 那时执行。宿主侧 hmr 在场时（`dsh-hmr` 监听 profile 并 `reconcileProfilePatches`，插件管理器报 `application:'applied'`）装/卸已在宿主生效，但页面侧曾只能等一次窗口重载。本节的 per-instance `pluginEvents` 流订阅者是页面侧最后一环：把宿主图的变化实时消费进对应实例的活 ctx。
