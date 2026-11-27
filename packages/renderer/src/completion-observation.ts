@@ -719,7 +719,7 @@ function resetRecordedGeneration(ledger: CompleteLedger, sourceId: string): void
 
 /**
  * 把一批观测交给唯一收敛器（INV6：每份观测都跑 pending 结算），并统一处置：
- *  - generationChanged ⇒ withdraw(sourceId)（清 armed + pending，notified/outcomes durable）
+ *  - generationChanged ⇒ withdraw(sourceId)（清 armed + pending，notifiedRuns/outcomes durable）
  *    并放行新一代；
  *  - forgotten ⇒ 逐会话 forgetSession（armed + settleFence + pending，评审 A 重要项）；
  *  - notification(s) ⇒ 唯一 emit 出口（一份观测可同时产出结算与 ask/request 两条）；
@@ -771,8 +771,9 @@ export function applyObservationBatch(input: {
     const state = ledger.state()
     // §3.5 写点纪律：reconcile 的**每次 durable 变更**都必须落盘——包括不产生
     // disposition 的纯吸收（#5/#6 keep 时的水位吸收、G5 armed 门的单调记事、
-    // ask/request 的 notified 推进）。三张 durable 表全部写时复制，引用变化即
-    // 变更证据；只按 disposition 记账会让这些写点丢到页面关闭才落盘（TL3）。
+    // ask/request 的 notified 推进）。reconcile 的三处写点（页内 notified、durable
+    // pending/outcomes）全部写时复制，引用变化即变更证据；notifiedRuns 的投递结算
+    // 走显式 schedulePersist；只按 disposition 记账会让这些写点丢到页面关闭才落盘（TL3）。
     const notifiedBefore = state.notified
     const pendingBefore = state.pending
     const outcomesBefore = state.outcomes
@@ -861,7 +862,7 @@ export function withdrawShellTrack(state: SourceObservationState): void {
  * （未结算 / degraded / rosterIncomplete）下 durable 剪枝不会执行，残留的旧 pending
  * 会被重建的新代首个 outcome 以旧 watermark flush。删除路径必须同步 **scoped
  * withdraw**：armed / armedFloor / settleFence / goalKnown / pending 同拍清；
- * notified / outcomes 保持 durable（与通道撤回同语义——来源可能只是门关窗口内的
+ * notifiedRuns / outcomes 保持 durable（与通道撤回同语义——来源可能只是门关窗口内的
  * roster 缺口，不是退役，故不能走 forget 删 durable）。
  *
  * 注意：**不能**把清理挂到 batch.freshState 上——页面重载（boot='same'）时观测

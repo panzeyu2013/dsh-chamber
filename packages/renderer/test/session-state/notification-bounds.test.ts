@@ -201,6 +201,16 @@ test('the projection pending/outcome writers keep the same bound', () => {
   assert.ok(outcomeRows > 0 && outcomeRows <= NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
     'reconcile recordOutcome must obey the 500/source bound (got ' + outcomeRows + ')')
 })
+
+test('runtimeSettled keeps the shared per-source window', () => {
+  const ledger = createCompleteLedger()
+  const N = NOTIFICATION_MAX_SESSIONS_PER_SOURCE + 1
+  for (let i = 0; i < N; i += 1) ledger.markRuntimeSettled('source-r', 'session-' + i, i)
+  assert.equal(ledger.runtimeSettled('source-r').size, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  assert.equal(ledger.runtimeSettled('source-r').has('session-0'), false, 'oldest anchor is evicted')
+  assert.equal(ledger.runtimeSettled('source-r').has('session-' + (N - 1)), true)
+})
+
 test('save stays bounded for an oversized payload', () => {
   const { storage, data } = fakeStorage()
   const ok = saveNotifications(storage, {
