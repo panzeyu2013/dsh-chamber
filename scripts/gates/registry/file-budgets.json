@@ -79,9 +79,9 @@
     },
     {
       "path": "packages/dsh-chamber-wire/src/session-state.ts",
-      "lines": 543,
+      "lines": 548,
       "target": 500,
-      "note": "Session-state wire contract (protocol constants, descriptor parsing, capability matrix, turn-end classifier) shared by the gateway, the control-plane mux and the browser: one definition per rule, so it is the file most likely to accrete. Guards live in ./json-guards; register it here so the ratchet sees it."
+      "note": "Session-state wire contracts (P1-A): session-state rows/deltas/descriptors and their guards. Ratchet 543 -> 548 (review-justified): the P2a lineage evidence fields (subagentRunningCount / lineageVerified / subagentKnown, optional and additive) close the gateway-shape notification duplicate (design 17 §10.7, design 19 §3.5 I-12). Old gateways omit them (desktop falls back to presence); old desktops cannot read the new running count, so lineageVerified is emitted ONLY when running>0 — the one case their presence-based reading is correct (no permanent busy). Next cut: move the row guard table beside the parse helpers."
     },
     {
       "path": "packages/dsh-chamber-client-core/src/instance-api.ts",
@@ -133,9 +133,9 @@
     },
     {
       "path": "packages/gateway/src/session-state/store.ts",
-      "lines": 800,
+      "lines": 798,
       "target": 800,
-      "note": "Persisted session-state store: the delta ring, persistence/debounce, corrupt-aside recovery and the eight apply* methods. Everything closure-free moved to store-codec.ts (document/row codec + validators, R1-A + validation layer): 1056 -> 800. The remaining body shares rows/ring/deltaSessions/pendingEdges, so the next cut would need a shared mutable context - negative."
+      "note": "Persisted session-state store: the delta ring, persistence/debounce, corrupt-aside recovery and the eight apply* methods. Row/document codecs live in store-codec.ts (row shapes, goal merge, wire projection, row factory) and store-document.ts (document shape, emptyDocument, load validators); subagent evidence derivation lives in subagent-evidence.ts. The remaining body shares rows/ring/deltaSessions/pendingEdges, so the next cut needs a shared mutable context object."
     },
     {
       "path": "packages/desktop/transport-registry.ts",
@@ -241,9 +241,9 @@
     },
     {
       "path": "packages/gateway/src/session-state/store-codec.ts",
-      "lines": 285,
+      "lines": 183,
       "target": 285,
-      "note": "Persisted document shape + row codec (R1-A + validation layer): types, goal whitelist/merge, wire projection, row factory, emptyDocument and the load-time validators. Pure functions over (row, clock); the only importer is store.ts."
+      "note": "Row codec only: StoredRow/StoredHost types, goal whitelist/merge, toWireRow (evidence fields via subagent-evidence.ts evidenceWireFields), createStoredRow. Document shape/emptyDocument/validators live in store-document.ts (importers: store.ts and store-document.ts)."
     },
     {
       "path": "packages/desktop/host-key.ts",

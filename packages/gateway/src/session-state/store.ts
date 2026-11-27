@@ -17,13 +17,16 @@ import type {
   CompletionEdge, SessionStateStore, SessionStateStoreDeps, SessionStateStoreStatus,
 } from '../session-state-types.ts'
 import {
-  SESSION_STATE_SCHEMA_VERSION, cloneGoalFact, createStoredRow, emptyDocument, mergeGoalFact,
-  persistedGoalFact, persistedRow, toWireRow, validateDocument,
+  cloneGoalFact, createStoredRow, mergeGoalFact, persistedGoalFact, toWireRow,
   type SessionStateDocument, type StoredHost, type StoredRow,
 } from './store-codec.ts'
+import {
+  SESSION_STATE_SCHEMA_VERSION, emptyDocument, persistedRow, validateDocument,
+} from './store-document.ts'
 import { featuresForMode } from './features.ts'
+import { recomputeSubagentEvidence } from './subagent-evidence.ts'
 
-export { SESSION_STATE_SCHEMA_VERSION } from './store-codec.ts'
+export { SESSION_STATE_SCHEMA_VERSION } from './store-document.ts'
 export const SESSION_STATE_DIR_NAME = 'session-state'
 export const SESSION_STATE_FILE_NAME = 'state.json'
 /** Hard row cap; the excess is evicted by observedAt and counted in dropped. */
@@ -189,9 +192,12 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     }
     revision = isWatermark(doc.revision) ? doc.revision : 0
     for (const row of doc.sessions) {
-      rows.set(row.sessionId, row)
-      if (row.running) gapCandidates.add(row.sessionId)
+      const restored: StoredRow = { ...row, subagentRunningCount: 0, lineageVerified: false, subagentKnown: false }
+      rows.set(restored.sessionId, restored)
+      if (restored.running) gapCandidates.add(restored.sessionId)
     }
+    // 派生证据不落盘但加载后立即重建（首基线前 ⇒ verified=false、有子行 ⇒ known=fail-closed）。
+    recomputeSubagentEvidence(rows, 0, () => {})
   }
 
   // --- persistence ---------------------------------------------------------
@@ -322,19 +328,8 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
     markDirty()
   }
 
-  function recomputeSubagentCounts(): void {
-    const counts = new Map<string, number>()
-    for (const row of rows.values()) {
-      if (!row.present || row.origin !== 'subagent' || row.parentSessionId === null) continue
-      counts.set(row.parentSessionId, (counts.get(row.parentSessionId) ?? 0) + 1)
-    }
-    for (const row of rows.values()) {
-      const next = counts.get(row.sessionId) ?? 0
-      if (next !== row.subagentCount) {
-        row.subagentCount = next
-        deltaSessions.set(row.sessionId, row)
-      }
-    }
+  const recomputeSubagentCounts = (): void => { // 实现见 ./subagent-evidence.ts
+    recomputeSubagentEvidence(rows, baselinesApplied, row => { deltaSessions.set(row.sessionId, rows.get(row.sessionId)!) })
   }
 
   function getOrCreate(sessionId: string, at: number): StoredRow {
@@ -520,12 +515,13 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         // 从未上线的行（首基线前的 status 行、子代理行）删除时静默：补移除是幽灵撤回。
         if (wasDeliverable) deltaRemoved.add(row.sessionId)
       }
-      recomputeSubagentCounts()
       // A persisted running candidate is recognized on the first complete
       // baseline after load; an unreadable classification may still retry.
       // （首份基线的判定与新计数同源，不再维护第二个布尔。）
       if (baselinesApplied === 0) gapCandidates.clear()
+      // 先记账再重算：认证位在本份基线之后成立（避免同批行先落 false 再翻 true 的重复 upsert）。
       baselinesApplied += 1
+      recomputeSubagentCounts()
       // 每次成功基线照旧投递 host 帧（now 变化即证据）；host 本身只有 state/serviceable/since 三键。
       deltaHost = true
       commitDelta()
@@ -546,6 +542,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         row.pendingKind = null
         gapCandidates.delete(sessionId)
         if (changed) deltaSessions.set(sessionId, row)
+        if (row.origin === 'subagent') recomputeSubagentCounts()
         commitDelta()
         return []
       }
@@ -554,6 +551,7 @@ export function createSessionStateStore(deps: SessionStateStoreDeps): SessionSta
         const source: SessionStateCompletedAtSource = gapCandidates.has(sessionId) ? 'reconstructed' : 'observed'
         gapCandidates.delete(sessionId)
         deltaSessions.set(sessionId, row)
+        if (row.origin === 'subagent') recomputeSubagentCounts()
         commitDelta()
         return [newCompletionEdge(sessionId, source)]
       }

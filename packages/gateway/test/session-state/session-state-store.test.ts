@@ -20,6 +20,8 @@ import {
   normalizeHostState,
 } from '../../src/session-state.ts'
 import { baselineItem, capturingLogger, scratch, silentLogger } from './harness.ts'
+import { recomputeSubagentEvidence, type EvidenceRow } from '../../src/session-state/subagent-evidence.ts'
+
 
 function storeFor(t: { after(fn: () => void): void }, now: () => number = () => 1_000): ReturnType<typeof createSessionStateStore> {
   return createSessionStateStore({ stateDir: scratch(t), logger: silentLogger, now })
@@ -817,6 +819,182 @@ test('host-down keeps rows but flips serviceable false', t => {
   assert.equal(snapshot.host.serviceable, false)
   assert.equal(snapshot.host.state, 'stopped')
   assert.equal(snapshot.sessions.length, 1, 'rows survive host-down as unknown, not deleted')
+})
+
+// ---------------------------------------------------------------------------
+// P2a lineage evidence (design 19 §3.5 I-12)
+// ---------------------------------------------------------------------------
+
+test('P2a lineage: running children, verified lineage and fail-closed known children ride the wire row', t => {
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('s1', false, 10),
+    baselineItem('c1', true, 11, { parentSessionId: 's1', origin: 'subagent' }),
+    baselineItem('c2', false, 12, { parentSessionId: 's1', origin: 'subagent' }),
+  ], { at: 100 })
+  const parent = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 's1')
+  assert.equal(parent?.subagentCount, 2, 'presence count is unchanged (render field)')
+  assert.equal(parent?.subagentRunningCount, 1, 'only the running child counts as judgment evidence')
+  assert.equal(parent?.lineageVerified, true, 'a complete baseline with parent edges verifies the lineage')
+  assert.notEqual(parent?.subagentKnown, true, 'verified lineage never needs the fail-closed bit (absent = false)')
+  // 子代理从 idle 恢复运行（false→true）同样必须同拍重算：c2 在基线时不在跑。
+  store.applyStatus('c2', true, 150)
+  const resumed = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 's1')
+  assert.equal(resumed?.subagentRunningCount, 2, 'a child resuming running is recomputed on the status edge')
+  store.applyStatus('c2', false, 160)
+  store.applyStatus('c1', false, 200)
+  const settled = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 's1')
+  assert.equal(settled?.subagentRunningCount, 0)
+  assert.equal(settled?.subagentCount, 2, 'presence still counts both children')
+})
+
+test('P2a lineage: before any complete baseline the parent carries known children but no verified lineage', t => {
+  const store = storeFor(t)
+  store.applyAdded(baselineItem('s1', false, 10), 100)
+  store.applyAdded(baselineItem('c1', true, 11, { parentSessionId: 's1', origin: 'subagent' }), 100)
+  const parent = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 's1')
+  assert.equal(parent?.subagentRunningCount, 1)
+  assert.notEqual(parent?.lineageVerified, true, 'added alone is not a verified lineage (absent = false)')
+  assert.equal(parent?.subagentKnown, true, 'durable children with an unverified lineage fail closed')
+})
+
+
+test('P2a lineage: nested delegation attributes a running grandchild to every ancestor', t => {
+  // P → C（空闲）→ G（运行）：P2b/侧栏把 running 归并到所有祖先，网关必须同规则；
+  // 只看直接子行会把 P 读成 idle（孙代在跑），派发回合提前发横幅。
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', false, 11, { parentSessionId: 'p', origin: 'subagent' }),
+    baselineItem('g', true, 12, { parentSessionId: 'c', origin: 'subagent' }),
+  ], { at: 100 })
+  const rows = store.snapshotFor('sse', store.host()).sessions
+  const byId = (id: string) => rows.find(row => row.sessionId === id)
+  // 子代理行本身不上 wire（design 17 §10.7），证据只在顶层祖先行上可见。
+  assert.equal(byId('p')?.subagentRunningCount, 1, 'the running grandchild counts for the top-level ancestor')
+  assert.equal(byId('p')?.subagentCount, 1, 'presence stays direct children')
+  store.applyStatus('g', false, 200)
+  const after = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+  assert.equal(after?.subagentRunningCount, 0, 'the ancestor count falls with the grandchild')
+})
+
+test('P2a lineage: a subagent row without a parent edge invalidates the lineage (fail-closed busy)', t => {
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', true, 11, { parentSessionId: 'p', origin: 'subagent' }),
+    baselineItem('orphan', true, 12, { parentSessionId: null, origin: 'subagent' }),
+  ], { at: 100 })
+  const parent = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+  assert.notEqual(parent?.lineageVerified, true, 'an orphan subagent row means the lineage is not judgeable')
+  assert.equal(parent?.subagentKnown, true, 'with known children the fail-closed bit takes over')
+})
+
+test('P2a lineage: a restart rebuilds evidence from the persisted rows before the first baseline', async t => {
+  const dir = scratch(t)
+  const first = createSessionStateStore({ stateDir: dir, logger: silentLogger, now: () => 100 })
+  first.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', true, 11, { parentSessionId: 'p', origin: 'subagent' }),
+  ], { at: 100 })
+  await first.flush()
+  first.dispose()
+  const second = createSessionStateStore({ stateDir: dir, logger: silentLogger, now: () => 200 })
+  const parent = second.snapshotFor('sse', second.host()).sessions.find(row => row.sessionId === 'p')
+  assert.equal(parent?.subagentRunningCount, 1, 'a persisted running child is rebuilt on load')
+  assert.notEqual(parent?.lineageVerified, true, 'no baseline in this process yet')
+  assert.equal(parent?.subagentKnown, true, 'retained children fail closed until the first baseline')
+  second.dispose()
+})
+
+
+test('P2a lineage: an unmapped ancestor truncates the walk without inventing a verdict', t => {
+  // 谱系认证位的契约只按「缺父边」判不可判（design 19 §3.5）；祖先未镜像时归并截断，
+  // 但不得因此把整源标成未认证（那会让无关父行每次重算都翻 lineageVerified）。
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('c', true, 11, { parentSessionId: 'p', origin: 'subagent' }),
+    baselineItem('g', true, 12, { parentSessionId: 'ghost', origin: 'subagent' }),
+  ], { at: 100 })
+  const rows = store.snapshotFor('sse', store.host()).sessions
+  const parent = rows.find(row => row.sessionId === 'p')
+  assert.equal(parent?.lineageVerified, true, 'an unmapped ancestor is not a lineage verdict')
+  assert.equal(parent?.subagentRunningCount, 1, 'the mapped child still attributes running evidence')
+})
+
+
+test('P2a compatibility: lineageVerified is withheld where an old renderer would read it as busy', t => {
+  // 已发布渲染器 v0.4.x 用「lineageVerified && subagentCount(presence)>0 ⇒ busy」判定；
+  // 所以「在场 2、运行 0」的行不得下发 verified（否则旧桌面永久 busy ⇒ 横幅永不出现），
+  // 而「确有运行中后代」时必须下发（旧端据此 busy，与新端一致）。
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('idleParent', false, 10),
+    baselineItem('ic1', false, 11, { parentSessionId: 'idleParent', origin: 'subagent' }),
+    baselineItem('ic2', false, 12, { parentSessionId: 'idleParent', origin: 'subagent' }),
+    baselineItem('busyParent', false, 20),
+    baselineItem('bc1', true, 21, { parentSessionId: 'busyParent', origin: 'subagent' }),
+  ], { at: 100 })
+  const rows = store.snapshotFor('sse', store.host()).sessions
+  const idle = rows.find(row => row.sessionId === 'idleParent')
+  const busy = rows.find(row => row.sessionId === 'busyParent')
+  assert.equal(idle?.subagentCount, 2)
+  assert.equal(idle?.subagentRunningCount, 0)
+  assert.notEqual(idle?.lineageVerified, true, '在场>0 且运行 0：不下发 verified（旧端会误读 busy）')
+  assert.equal(busy?.subagentRunningCount, 1)
+  assert.equal(busy?.lineageVerified, true, '有运行中后代：照常下发（两端都读 busy）')
+})
+
+test('P2a lineage: a self-parented subagent row is not a usable edge (fail-closed)', t => {
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('self', true, 11, { parentSessionId: 'self', origin: 'subagent' }),
+  ], { at: 100 })
+  const parent = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+  assert.notEqual(parent?.lineageVerified, true, 'a self-parented row invalidates the lineage')
+  assert.equal(parent?.subagentCount, 0, 'a self edge never counts as a child of anyone else')
+})
+
+
+test('P2a lineage: a parent cycle terminates and fails closed (no hang, no phantom busy)', { timeout: 5_000 }, t => {
+  // 损坏谱系（A↔B 互为父）：遍历必须截断并判 fail-closed，绝不能死循环。
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('a', true, 10, { parentSessionId: 'b', origin: 'subagent' }),
+    baselineItem('b', true, 11, { parentSessionId: 'a', origin: 'subagent' }),
+  ], { at: 100 })
+  const rows = store.snapshotFor('sse', store.host()).sessions
+  // 两行都是 subagent（不上 wire），快照返回空且不挂——只要函数返回即通过。
+  assert.deepEqual(rows, [])
+})
+
+test('P2a lineage: a corrupt cycle invalidates the lineage for its top-level parents', t => {
+  const store = storeFor(t)
+  store.applyBaseline([
+    baselineItem('p', false, 10),
+    baselineItem('a', true, 11, { parentSessionId: 'b', origin: 'subagent' }),
+    baselineItem('b', true, 12, { parentSessionId: 'a', origin: 'subagent' }),
+  ], { at: 100 })
+  const parent = store.snapshotFor('sse', store.host()).sessions.find(row => row.sessionId === 'p')
+  assert.notEqual(parent?.lineageVerified, true, 'a cycle makes the lineage unjudgeable (fail-closed)')
+  assert.equal(parent?.subagentRunningCount, 0, 'a cyclic subtree attributes nothing to p')
+})
+
+test('P2a evidence math: a self-parented row never counts itself as its own child', () => {
+  // 自指父边是损坏谱系：不得计入在场数（否则父行会凭空多一个子代），且认证位失效。
+  const rows = new Map<string, EvidenceRow>()
+  const base = (over: Partial<EvidenceRow> & Pick<EvidenceRow, 'sessionId'>): EvidenceRow => ({
+    present: true, origin: null, parentSessionId: null, running: false,
+    subagentCount: 0, subagentRunningCount: 0, lineageVerified: false, subagentKnown: false, ...over,
+  })
+  rows.set('self', base({ sessionId: 'self', origin: 'subagent', parentSessionId: 'self', running: true }))
+  rows.set('p', base({ sessionId: 'p' }))
+  recomputeSubagentEvidence(rows, 1, () => {})
+  assert.equal(rows.get('self')?.subagentCount, 0, 'a self edge is not a child of itself')
+  assert.notEqual(rows.get('self')?.lineageVerified, true, 'a self edge invalidates the lineage')
+  assert.equal(rows.get('p')?.subagentRunningCount, 0, 'and attributes nothing to anyone else')
 })
 
 // ---------------------------------------------------------------------------

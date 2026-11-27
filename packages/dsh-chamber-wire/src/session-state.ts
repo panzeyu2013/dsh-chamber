@@ -238,6 +238,11 @@ export interface SessionStateRow {
   running: boolean
   pendingKind: SessionStatePendingKind | null
   subagentCount: number
+  /** I-12 谱系证据（加法字段）：运行中后代数 / 认证位 / fail-closed 保留位。
+   *  旧网关三项缺席 ⇒ 判定侧退回 presence 语义（count>0 只作 unknown）。 */
+  subagentRunningCount?: number
+  lineageVerified?: boolean
+  subagentKnown?: boolean
   /** Host-clock milliseconds (summary.updatedAt; on the current pin it only
    *  advances on user-authored durable messages). */
   updatedAt: number

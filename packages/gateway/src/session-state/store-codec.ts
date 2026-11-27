@@ -4,12 +4,11 @@
  * pure functions over a row and a goal fact (no store closure), split out of store.ts
  * so the persisted shape is reviewable on its own (optimality review R1-A).
  */
+import { evidenceWireFields } from './subagent-evidence.ts'
 import {
-  SESSION_STATE_SESSION_ID_MAX_CHARS, type SessionStateCompletedAtSource, type SessionStateGoalFact, type SessionStateHostState,
+  type SessionStateCompletedAtSource, type SessionStateGoalFact, type SessionStateHostState,
   type SessionStateMode, type SessionStatePendingKind, type SessionStateRow, type SessionTurnEnd,
 } from '@dsh-chamber/control-plane'
-import { isPlainRecord, isWatermark } from '@dsh-chamber/dsh-chamber-wire/json-guards'
-import { normalizeHostState } from './features.ts'
 /** Internal row = wire row + persistence/observer-only fields (toWireRow projects it; nothing sensitive is added). */
 export interface StoredRow {
   sessionId: string
@@ -21,6 +20,15 @@ export interface StoredRow {
   lastTurnEnd: SessionTurnEnd | null
   pendingKind: SessionStatePendingKind | null
   subagentCount: number
+  /** 运行中的子代理后代数（P2a 谱系证据，与 P2b 的 subagentCount 同义）：只数
+   *  origin===subagent、父边在场且 running===true 的子行。 */
+  subagentRunningCount: number
+  /** I-12 认证位：本进程至少应用过一份完整列表基线（子行谱系可判），且没有
+   *  缺父边的子行。false ⇒ 下发的活动证据只作 presence（unknown），绝不 busy。 */
+  lineageVerified: boolean
+  /** I-12 fail-closed 位：认证位缺席但保留表里确有该父的子行（列表可能不完整）
+   *  ⇒ 判定侧按 busy 处理，不把「列表不完整」读成「子代理已结束」。 */
+  subagentKnown: boolean
   /** Legacy 兼容位：S3 单阶段删除后行在即 present（没有任何写入者会置假）；仅
    *  旧文档的 `present: false` 仍按隐藏读，避免把历史隐藏行突然投递。 */
   present: boolean
@@ -50,6 +58,9 @@ export interface StoredHost {
   since: number
 }
 
+/** 持久化行：派生谱系证据不落盘（见 persistedRow）。 */
+export type PersistedStoredRow = Omit<StoredRow, 'subagentRunningCount' | 'lineageVerified' | 'subagentKnown'>
+
 /** The persisted document (createJsonStore free-form domain doc). */
 export interface SessionStateDocument {
   schemaVersion: number
@@ -58,7 +69,7 @@ export interface SessionStateDocument {
   watcherEpoch: string
   mode: SessionStateMode
   host: StoredHost
-  sessions: StoredRow[]
+  sessions: PersistedStoredRow[]
   dropped: { sessions: number; goalActivations: number }
   [key: string]: unknown
 }
@@ -133,6 +144,8 @@ export function toWireRow(row: StoredRow): SessionStateRow {
     running: row.running,
     pendingKind: row.pendingKind,
     subagentCount: row.subagentCount,
+    subagentRunningCount: row.subagentRunningCount,
+    ...evidenceWireFields(row),
     updatedAt: row.updatedAt,
     completedAt: row.completedAt,
     completedAtSource: row.completedAtSource,
@@ -157,6 +170,9 @@ export function createStoredRow(sessionId: string, at: number): StoredRow {
     lastTurnEnd: null,
     pendingKind: null,
     subagentCount: 0,
+    subagentRunningCount: 0,
+    lineageVerified: false,
+    subagentKnown: false,
     present: true,
     observedAt: at,
     parentSessionId: null,
@@ -165,121 +181,3 @@ export function createStoredRow(sessionId: string, at: number): StoredRow {
   }
 }
 
-/** Bumped when the persisted document shape changes; old documents fail loud. */
-export const SESSION_STATE_SCHEMA_VERSION = 1
-
-/** The two process-scoped values the validators need (never module state). */
-export interface DocumentClock { now: () => number; epoch: string }
-
-/** Persisted projection of one row: the goal fact drops its process-local activation. */
-export function persistedRow(row: StoredRow): StoredRow {
-  const goal = row.goal
-  if (goal === undefined || goal === null) return { ...row }
-  return { ...row, goal: persistedGoalFact(goal) }
-}
-
-export function emptyDocument(at: number, epoch: string): SessionStateDocument {
-  return {
-    schemaVersion: SESSION_STATE_SCHEMA_VERSION,
-    revision: 0,
-    cursor: 0,
-    watcherEpoch: epoch,
-    mode: 'poll',
-    host: { state: 'unknown', serviceable: false, since: at },
-    sessions: [],
-    dropped: { sessions: 0, goalActivations: 0 },
-  }
-}
-
-export function validateDocument(raw: Record<string, unknown>, clock: DocumentClock): { doc: SessionStateDocument; droppedSessions: number } {
-  if (raw.schemaVersion !== SESSION_STATE_SCHEMA_VERSION) {
-    throw new Error('unsupported session-state schemaVersion ' + String(raw.schemaVersion))
-  }
-  const normalized = emptyDocument(clock.now(), clock.epoch)
-  normalized.revision = isWatermark(raw.revision) ? raw.revision : 0
-  normalized.cursor = isWatermark(raw.cursor) ? raw.cursor : 0
-  normalized.watcherEpoch = typeof raw.watcherEpoch === 'string' ? raw.watcherEpoch : clock.epoch
-  normalized.mode = raw.mode === 'sse' || raw.mode === 'poll' || raw.mode === 'off' ? raw.mode : 'poll'
-  if (isPlainRecord(raw.host)) {
-    const state = typeof raw.host.state === 'string' ? normalizeHostState(raw.host.state) : 'unknown'
-    normalized.host = {
-      state,
-      serviceable: raw.host.serviceable === true,
-      since: isWatermark(raw.host.since) ? raw.host.since : clock.now(),
-    }
-  }
-  let droppedSessions = 0
-  const sessions: StoredRow[] = []
-  if (Array.isArray(raw.sessions)) {
-    for (const value of raw.sessions) {
-      const row = validateRow(value)
-      if (row === null) {
-        droppedSessions += 1
-        continue
-      }
-      sessions.push(row)
-    }
-  }
-  normalized.sessions = sessions
-  // Load-time losses ride the document itself (adoptDocument replaces the
-  // in-memory counters); a closure-only increment would be silently lost. The
-  // process-local goalActivations counter loads as 0: its retained state is
-  // never persisted, so adopting a stale value would be a lie.
-  normalized.dropped = { sessions: droppedSessions, goalActivations: 0 }
-  return { doc: normalized, droppedSessions }
-}
-
-function validateRow(value: unknown): StoredRow | null {
-  if (!isPlainRecord(value)) return null
-  const sessionId = value.sessionId
-  if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > SESSION_STATE_SESSION_ID_MAX_CHARS) return null
-  const completedAtSource = value.completedAtSource === 'observed' || value.completedAtSource === 'reconstructed'
-    ? value.completedAtSource
-    : null
-  return {
-    sessionId,
-    running: value.running === true,
-    lastRunningAt: isWatermark(value.lastRunningAt) ? value.lastRunningAt : null,
-    updatedAt: isWatermark(value.updatedAt) ? value.updatedAt : 0,
-    completedAt: isWatermark(value.completedAt) ? value.completedAt : null,
-    completedAtSource: completedAtSource !== null && isWatermark(value.completedAt) ? completedAtSource : null,
-    lastTurnEnd: validateTurnEnd(value.lastTurnEnd),
-    pendingKind: value.pendingKind === 'approval' || value.pendingKind === 'question' ? value.pendingKind : null,
-    subagentCount: isWatermark(value.subagentCount) ? value.subagentCount : 0,
-    present: value.present !== false,
-    observedAt: isWatermark(value.observedAt) ? value.observedAt : 0,
-    parentSessionId: typeof value.parentSessionId === 'string' ? value.parentSessionId : null,
-    origin: value.origin === 'subagent' ? 'subagent' : null,
-    // 旧文档（无该字段）按未确认读：保守地等到本进程的首份基线再投递。
-    originKnown: value.originKnown === true,
-    goal: validateGoalFact(value.goal),
-  }
-}
-
-function validateGoalFact(value: unknown): SessionStateGoalFact | null | undefined {
-  if (value === null) return null
-  if (!isPlainRecord(value)) return undefined
-  const goalId = value.goalId
-  const revision = value.revision
-  const phase = value.phase
-  if (typeof goalId !== 'string' || goalId.length === 0) return undefined
-  if (!isWatermark(revision) || revision < 1) return undefined
-  if (phase !== 'active' && phase !== 'paused' && phase !== 'blocked' && phase !== 'complete') return undefined
-  const fact: SessionStateGoalFact = { goalId, revision, phase }
-  if (isWatermark(value.updatedAt)) fact.updatedAt = value.updatedAt
-  return fact
-}
-
-function validateTurnEnd(value: unknown): SessionTurnEnd | null {
-  if (!isPlainRecord(value)) return null
-  const kind = value.kind
-  if (kind !== 'completed' && kind !== 'aborted' && kind !== 'blocked' && kind !== 'error'
-    && kind !== 'max-tokens' && kind !== 'interrupted') return null
-  const cause = value.cause
-  return {
-    kind,
-    cause: cause === 'user' || cause === 'parent' || cause === 'hook' || cause === 'disposed' || cause === 'legacy' ? cause : null,
-    at: isWatermark(value.at) ? value.at : 0,
-    seq: isWatermark(value.seq) ? value.seq : null,
-  }
-}
