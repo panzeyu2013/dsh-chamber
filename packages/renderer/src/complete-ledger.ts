@@ -649,8 +649,8 @@ export function createCompleteLedger(
       seedFenceSession(sourceId, sessionId, seededWatermark)
     },
     hasDurable(sourceId) {
-      return state.notified[sourceId] !== undefined
-        || state.pending[sourceId] !== undefined
+      // state.notified is the page-local watermark, not persisted; only the payload keys count.
+      return state.pending[sourceId] !== undefined
         || state.outcomes[sourceId] !== undefined
         || notifiedRuns[sourceId] !== undefined
     },

@@ -60,6 +60,8 @@ test('tailOutcomeTable keeps the highest watermarks with goalId ascending tie-br
     s: { g1: 1, g2: 5, g3: 5, g4: 2 },
   }
   assert.deepEqual(tailOutcomeTable(table, 3), { s: { g2: 5, g3: 5, g4: 2 } })
+  assert.deepEqual(tailOutcomeTable({ s: { g1: 1, g2: 5, g3: 5, g4: 5 } }, 2), { s: { g2: 5, g3: 5 } },
+    'equal watermarks truncate by goalId ascending, not descending')
   assert.deepEqual(tailOutcomeTable({ s: { a: 1, b: 2 } }, 0), {})
 })
 
@@ -117,6 +119,17 @@ test('the ledger trims oversized persisted tables at construction', () => {
   assert.equal(ledger.outcomesTable().s!['goal-0'], undefined)
 })
 
+test('the ledger trims oversized persisted watermarks at construction', () => {
+  const N = NOTIFICATION_MAX_SESSIONS_PER_SOURCE + 1
+  const watermarks: Record<string, Record<string, { complete: number }>> = { s: {} }
+  for (let i = 0; i < N; i += 1) watermarks.s['session-' + i] = { complete: i + 1 }
+  const ledger = createCompleteLedger(watermarks)
+  const kept = ledger.notifiedTable().s ?? {}
+  assert.equal(Object.keys(kept).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  assert.equal(kept['session-0'], undefined, 'oldest watermark row is evicted')
+  assert.ok(kept['session-' + (N - 1)] !== undefined, 'newest watermark row is kept')
+})
+
 test('loadNotifications bounds the in-memory payload without writing it back', () => {
   const oversized = {
     v: 1,
@@ -146,8 +159,11 @@ test('the projection write points keep the shared bound (behavior + wiring lock)
     boot: 'same',
   })
   for (let i = 0; i < 600; i += 1) reconcile(ledger.state(), obs('session-' + i, i + 1), 10)
-  assert.ok(Object.keys(ledger.state().notified['source-p'] ?? {}).length <= NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
-    'reconcile notified table must obey the 500/source bound')
+  const notifiedRows = ledger.state().notified['source-p'] ?? {}
+  assert.equal(Object.keys(notifiedRows).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
+    'reconcile notified table must keep exactly the 500/source window')
+  assert.equal(notifiedRows['session-0'], undefined, 'oldest notified session is evicted')
+  assert.ok(notifiedRows['session-599'] !== undefined, 'newest notified session is kept')
   const projectionSource = readFileSync(new URL('../../src/notification-projection.ts', import.meta.url), 'utf8')
   for (const needle of ['state.pending = tailSessionTable(', 'state.notified = tailSessionTable(', 'state.outcomes = tailOutcomeTable('] as const) {
     assert.ok(projectionSource.includes(needle), 'projection write point must trim through notification-bounds: ' + needle)
@@ -227,6 +243,23 @@ test('runtimeSettled evicts by insertion order, not by the smallest host timesta
   assert.equal(settled.has('old-but-newest-host-time'), false, 'first-inserted entry is evicted regardless of its host time')
   assert.equal(settled.has('session-0'), true, 'smallest host time is not the eviction key')
   assert.equal(settled.has('latest'), true)
+})
+
+test('runtimeSettled re-mark does not refresh insertion order', () => {
+  const ledger = createCompleteLedger()
+  for (let i = 0; i < NOTIFICATION_MAX_SESSIONS_PER_SOURCE; i += 1) ledger.markRuntimeSettled('source-r', 'session-' + i, i)
+  ledger.markRuntimeSettled('source-r', 'session-0', 9_999)
+  ledger.markRuntimeSettled('source-r', 'latest', 10_000)
+  const settled = ledger.runtimeSettled('source-r')
+  assert.equal(settled.has('session-0'), false, 're-marking an existing entry must not make it newest')
+  assert.equal(settled.has('session-1'), true)
+  assert.equal(settled.has('latest'), true)
+})
+
+test('the page-local notified watermark is not counted as durable', () => {
+  const ledger = createCompleteLedger()
+  ledger.setNotifiedWatermark('s', 'session-x', 'complete', 5)
+  assert.equal(ledger.hasDurable('s'), false, 'only persisted payload keys count for retirement flushes')
 })
 
 test('save stays bounded for an oversized payload', () => {
