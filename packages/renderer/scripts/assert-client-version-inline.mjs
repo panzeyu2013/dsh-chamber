@@ -3,7 +3,7 @@
  * G02 残留机器门：renderer 构建产物必须内联 `DSH_CLIENT_VERSION`。
  *
  * WHY. G02 的修复是构建期 define（vite.config.mjs 的 `process.env.DSH_CLIENT_VERSION`
- * 由 scripts/dsh-client-version.mjs 从已提交 lockfile 提供）。单测只能锁源码接线，
+ * 由 packages/renderer/scripts/dsh-client-version.mjs 从已提交 lockfile 提供）。单测只能锁源码接线，
  * 锁不住「这次构建到底有没有把 define 折进去」——Vite 对非 lib 客户端构建默认把
  * `process.env` 折成 `{}`，若 define 键名/插件顺序/构建器升级出现回归，产物里就会
  * 退回 `he.DSH_CLIENT_VERSION`（运行期恒 undefined → 账号 RPC 必抛）。本脚本在
@@ -20,7 +20,7 @@
  *
  * 何时需要更新本门（改任何一项都要同步本脚本 + 单测 + build 链源码锁）：
  *  - 新增/改名 define（例如 DSH_CLIENT_VERSION 换键或再加一个版本键）：同步
- *    `RESIDUAL_PATTERNS` 与期望值来源（scripts/dsh-client-version.mjs）；
+ *    `RESIDUAL_PATTERNS` 与期望值来源（packages/renderer/scripts/dsh-client-version.mjs）；
  *  - 产物目录/形态变化（vite outDir、资产子目录、非 .js 资产）：同步
  *    `DEFAULT_ASSETS_DIR` 与扫描范围；
  *  - 版本来源变化（lockfile 路径/结构/包名）：同步 dsh-client-version.mjs 与

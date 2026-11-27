@@ -383,7 +383,7 @@ const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save
  *  electron-edges.ts) preserves the lockstep strength: the handle/send sets must still equal
  *  the preload invoke/on sets, handle spellings accept both main-side spellings, and the
  *  per-test text anchors stay anchored to the union rather than one file. */
-// R1（装配单源化）后 main 侧名单的唯一来源 = scripts/main-side-files.mjs
+// R1（装配单源化）后 main 侧名单的唯一来源 = packages/desktop/scripts/main-side-files.mjs
 // （与 emit-bridge-manifest.mjs 的扫描面同一份；host-assembly.ts 已收进名单，
 // 集合不放宽：原 main.ts 断言逐条仍在，只是来源换成实现真正所在处）。
 import { MAIN_SIDE_FILES } from '../../scripts/main-side-files.mjs'

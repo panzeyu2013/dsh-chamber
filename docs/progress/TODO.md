@@ -310,6 +310,10 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 |5|单次 roster 快照（health+instances+generation 同一响应）|未排期：现行两次读 + seq 世代等价，无功能缺口；触发 = 扩冻结 preload 面 / sidecar 通道白名单裁决（[electron-frozen](electron-frozen.md) §5.2）|裁决后以单次响应替代两次读并补等价锁；未裁决不动宿主面|
 |5b|本地写者强制回收（forced reclaim）评估|未排期：退出证明未知时闩锁粘滞、只由重启应用再证明；触发 = 真机出现「无残留组但闩锁误粘滞」证据；修法 = 仅当 reaper 能证明组不存在时自动解锁|负控：人工注入 residual-group 时仍 fail-closed；verify:file-budgets 恒绿|
 |5c|宿主周期兜底 reconcile|未排期：现依赖事件（bindPlane 后启动 / 权威新增 / 唤醒）与 transport-manager 自身重试；触发 = 出现「意图允许但行长期 idle」的漏事件证据|注入时钟单测下不与 manager 重试重复动作；事件路径用例保持绿|
+|6|死导出/导出面收口：`verify:no-dead-exports` 的 own-entry skip 只覆盖 `import`，包自身 barrel 的 `export {…} from` 仍算消费者 ⇒ 已知 31 个 test-only runtime 导出保持绿（control-plane 15 / dsh-runtime 14 / client-core 1 / 其它 1）；另有 280 个 runtime 导出 + 799 个 type 导出「声明外零引用」（多数只是多余 `export` 关键字）|门禁注释是本条唯一登记处；该门 local-only（CI/发布不跑）|把 barrel-only 盲区补进门（或登记豁免表）后 31 归零；批量 `export` 收敛按文件分批做并保持 file-budgets/测试绿；出口 = 门禁能报出真零消费者导出且数归零，条目删除|
+|7|fork 复本依赖面裁剪（发布窗口外做）：`packages/dsh-client-connection` 的 `@deepseek-ai/dsh-credentials`；`packages/dsh-api-gateway` 的 `@deepseek-ai/dsh-timeout`/`schemastery`/`ws`；`packages/dsh-chamber-client-ui-git`/`open-in` 的 `sidebar`；`sidebar` 的 `wire` 移 devDependencies；connection `tsconfig.client.json`/`tsconfig.check-base.json` 两处 stale `dsh-credentials/types` 映射|registry 已记「按本仓消费面裁剪」，实测这些依赖零 import（Node-only `ws` 在客户端包安装图里、凭据面声明是安全审查信号）；改动会同步 pnpm-lock 与 THIRD_PARTY_NOTICES|四项同时删/移 + 两处 tsconfig 映射删除；`pnpm install` 后 frozen 安装、notices 无未审 diff、相关包 typecheck/测试绿；出口 = registry 裁剪清单与 package.json 一致|
+|8|pending durable 字段白名单双源：`notification-store.ts` 与 `complete-ledger.ts` 各写一份（deferred/completionSeq/absorbedSeq），注释自称同口径但 goalId 非法时 store 只丢字段、ledger 整条丢弃（生产链路 store 先清洗 ⇒ 当前不可达）|未来单侧改动会分叉，reload 路径可能静默丢 pending|抽共享叶函数（如 sanitizePendingCompletion）两处复用，或删 ledger 重复校验并加 load→constructor 幂等锁；出口 = 仅一处白名单 + 双路径幂等用例|
+|9|测试 runner 每文件超时与 CI job 超时：runner 自述「省略即无界」，22 个包清单只有 2 个传 timeoutMs；ci.yml/release.yml 无 timeout-minutes|子进程挂死时套件与 job 可被钉到 GitHub 默认 6h；实测最慢单文件 13.3s，暂无迫近风险|各清单传 timeoutMs（或 runner 给默认界）+ workflow job 加 timeout-minutes；出口 = 注入挂死用例在界内失败|
 
 #### 1.2 不做与保留（结论）
 

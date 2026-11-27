@@ -294,7 +294,7 @@ export function renderPlanSummary(plan) {
   const summary = summarizePlan(plan)
   const lines = [`锚点汇总：${summary.aligned}/${summary.total} 已是目标版本；待人工应用 ${summary.pendingLiteral} 处字面量 diff；派生锚（运行时锁文件）${summary.pendingDerived > 0 ? '待 bundle:dsh 重生成' : '已对齐'}。`]
   if (summary.pendingLiteral > 0) {
-    lines.push('本管线只打印 diff、不写锚（TODO A§16）：请人工应用上面的 diff；应用后可用 --strict 把「全部对齐」当硬断言。')
+    lines.push('本管线只打印 diff、不写锚（机械面单批步骤见 docs/checklists/upgrade/upstream-touchpoints.md §7 第 7 步）：请人工应用上面的 diff；应用后可用 --strict 把「全部对齐」当硬断言。')
   }
   return lines.join('\n')
 }

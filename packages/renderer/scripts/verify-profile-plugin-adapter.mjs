@@ -241,7 +241,7 @@ const FACTORY_SIDE_EFFECT_PATTERNS = [
 ]
 
 /** Best-effort runtime probe of one classic bundle text: registration + factory exports. */
-export async function inspectBundleShape(adapter, label, text) {
+async function inspectBundleShape(adapter, label, text) {
   const problems = []
   const warnings = []
   try {
@@ -286,7 +286,7 @@ export async function inspectBundleShape(adapter, label, text) {
 }
 
 /** Best-effort patched-text probe: the wrapper must expose a non-constructable apply and no dropped exports. */
-export async function inspectPatchedShape(adapter, label, patched) {
+async function inspectPatchedShape(adapter, label, patched) {
   const problems = []
   const warnings = []
   try {

@@ -816,7 +816,7 @@ function createDefaultProcessProbe(platform: NodeJS.Platform): ForwardProcessPro
       const argv = readLinuxArgv(pid)
       if (argv === null) {
         if (!processExists(pid)) return null
-        throw new Error('forward process probe cannot prove argv on platform ' + platform + ' (TODO S1/W0)')
+        throw new Error('forward process probe cannot prove argv on platform ' + platform)
       }
       const startTime = await readProcessStartTime(pid, platform)
       if (startTime === null) throw new Error('forward process probe cannot prove the start time of pid ' + String(pid))

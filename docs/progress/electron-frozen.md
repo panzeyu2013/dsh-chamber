@@ -72,6 +72,7 @@
   packaging-closure 的 Electron 项。
 - Electron 更新腿：`electron-updater` 打包 / 通道封签 / 发布 feed 校验。
 - Electron 产物 smoke：`scripts/gates/checks/verify-electron-artifacts.mjs`（ARCHIVED——断言 `dist/control-plane/index.js` 可启动应答 `/health`、`dist/preload.cjs` 在 node:vm 里可解析并暴露冻结面；默认门禁/CI/发布不再调用，`gate-surfaces.json` 已移除 `macos.electron-artifacts`）。
+- Electron 打包态运行时 smoke：`packages/desktop/scripts/runtime-mac-packaged-smoke.mjs`（design 18 的 macOS packaged-runtime 验收工具，文件头标 ARCHIVED、默认不运行，原根脚本 `acceptance:runtime:mac-packaged` 已随冻结移除；复活按其头注与本文件 §6 复活清单执行）。
 - Electron-only 工具链（全部冻结；native 替代见括号）：`scripts/perf/*` 的 CDP 驱动（→ `shell.log`/`[shell-fps]` + Safari Web Inspector）、`scripts/gui-acceptance/drivers/` 的 `--dev`/`--flavor electron`/`walkthrough.mjs`/`launch.mjs`/`packaged-ssh-smoke.mjs`/`mobile-walkthrough.mjs` 与 `drivers/cdp.mjs` 的 CDP 驱动、`scripts/gui-acceptance/fixtures/ssh-fixture.mjs`（打包态 smoke 的本地 SSH fixture）、`scripts/gui-acceptance/checks/mobile-checks.mjs`（移动档纯判据层）（→ `run.mjs --flavor native` 与真机/目检）、`scripts/dev/bootstrap/ensure-electron.mjs`（原根 `postinstall`，→ 不需要 Electron 二进制）。
 - 默认测试组里的 Electron-only 测试（FROZEN 组，见 §2）。
 - Electron dev 工作流（`dev:desktop` 等）；门禁 proof 里的 Electron 打包步骤。

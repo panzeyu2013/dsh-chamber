@@ -95,7 +95,7 @@ const bracedBlock = (text: string, start: string): string => {
 test('the frame consumes the fork layout store instance, not the vendor store', () => {
   const code = stripComments(source)
   assert.match(code, /import \{[^}]*\bcreateLayoutStore\b[^}]*\} from '\.\/stores\.ts'/u,
-    'createLayoutStore must come from the fork ./stores.ts (the vendor store has no rightbarInstant)')
+    'createLayoutStore must come from the fork ./stores.ts (the frame must consume the fork store, whose rightbarInstant also covers docked open/close)')
   const registration = bracedBlock(code, 'ctx.slots.register({')
   assert.match(registration, /^\s*store,$/mu,
     'the root registration must pass the fork store instance to the frame')

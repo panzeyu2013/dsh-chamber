@@ -377,16 +377,20 @@ test('E: a non-due flush arms the trailing check for the remaining interval, not
   assert.equal(dom.stats().eipCalls, baseEip, 'a non-due flush must not hit-test')
   assert.equal(dom.stats().overlayQsaCalls, baseQsa, 'a non-due flush must not query candidates')
   assert.equal(dom.stats().activeTimers, 1, 'the non-due flush arms exactly one trailing timer')
-  clock.set(1100) // 到达 due 时刻；trailing 在真实 60ms 后触发
-  // 真实 60ms 之前来一帧：trailing 不得提前命中测试/刷候选（delay=0 的变异在这里红）。
-  await new Promise((resolve) => setTimeout(resolve, 20))
+  // 延迟必须是「剩余间隔」而不是 0：否则动画期命中测试回到 rAF 频率，≤10Hz 的上界失效。
+  assert.equal(dom.stats().timerDelays[0], OCCLUSION_CHECK_INTERVAL_MS - 40, 'the trailing delay is the remaining interval')
+  clock.set(1100) // 到达 due 时刻；trailing 仍由真实定时器在「已 arm 的剩余间隔」后触发
+  // arm 之后不 await 任何真实时间就泵一帧：真实定时器没有宏任务边界可回调，trailing 尚未形成
+  // rAF，因此这一刻不可能命中（旧实现用 20ms sleep 与 60ms 真实定时器竞速，高负载下会假红）。
   dom.pumpFrame()
   assert.equal(dom.stats().eipCalls, baseEip, 'no hit test may run before the remaining interval elapses')
   assert.equal(dom.stats().overlayQsaCalls, baseQsa, 'no candidate refresh may run before the due moment')
-  // 延迟必须是「剩余间隔」而不是 0：否则动画期命中测试回到 rAF 频率，≤10Hz 的上界失效。
-  assert.equal(dom.stats().timerDelays[0], OCCLUSION_CHECK_INTERVAL_MS - 40, 'the trailing delay is the remaining interval')
-  await new Promise((resolve) => setTimeout(resolve, 100))
-  dom.pumpFrame()
+  // 有界等待 trailing：轮询泵帧直到命中或 500ms 截止，不假设真实调度的精度。
+  const deadline = Date.now() + 500
+  while (dom.stats().eipCalls === baseEip && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    dom.pumpFrame()
+  }
   assert.equal(dom.stats().eipCalls - baseEip, 9, 'the trailing check lands exactly one 9-point hit test')
   assert.equal(dom.stats().overlayQsaCalls - baseQsa, 1, 'the trailing due check refreshes candidates once')
   presentation.dispose()

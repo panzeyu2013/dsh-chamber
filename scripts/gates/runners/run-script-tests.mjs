@@ -84,6 +84,9 @@ export const GROUPS = {
     'scripts/dev/typecheck/typecheck-sdk-copy.test.mjs',
     // The shared test-only vendor resolve-hook factory (three package loaders).
     'scripts/dev/test-support/vendor-resolve.test.mjs',
+    // The shared comment stripper behind every source lock (and the ladder-table gate):
+    // its own contract plus the shipping-source canary for the registered hazard shape.
+    'scripts/dev/test-support/source-text.test.mjs',
     // Shared sidecar launch plumbing (free-port picker + argv/env contract).
     'scripts/lib/sidecar-launch.test.mjs',
     // Shared scripts-toolbox CLI epilogue (usage block / failure projection).
@@ -176,6 +179,10 @@ export const SUBJECT_TESTS = [
   {
     path: 'scripts/upstream/pin/lockfile-store-path-mappings.test.mjs',
     reason: 'locks tsconfig path mappings against pnpm-lock store paths that no chamber script owns',
+  },
+  {
+    path: 'scripts/dev/test-support/source-text.test.mjs',
+    reason: 'locks scripts/dev/test-support/source-text.ts — the .ts module the stem names, imported directly by node type stripping, so the sibling-`.mjs` naming probe cannot see it; the test is named after the module, not a subject lock',
   },
 ]
 

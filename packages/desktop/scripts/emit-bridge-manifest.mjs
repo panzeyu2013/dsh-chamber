@@ -80,7 +80,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = join(desktopDir, '..', '..')
 
-/** main 侧注册文件集（handle/send 调用所在）——单一来源 = scripts/lib/main-side-files.mjs
+/** main 侧注册文件集（handle/send 调用所在）——单一来源 = packages/desktop/scripts/main-side-files.mjs
  *  （与 ipc-surface-mirror.test.ts 的扫描面同一份名单；注册点迁移只改那里）。 */
 export { MAIN_SIDE_FILES } from './main-side-files.mjs'
 

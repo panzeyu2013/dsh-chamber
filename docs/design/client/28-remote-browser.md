@@ -45,7 +45,7 @@ target 恒 `127.0.0.1:<port>`，main 校验 `1..65535`；forward 目标恒远端
 
 ### 2.7 生命周期与清理
 
-拥有者 = source：无 pin、无 TTL；关闭 forward / 删除 source / retarget / app exit 才回收。子进程登记 `forward-children.json`（0600/ACL；`argv` 是完整 spawn argv，不加密、renderer 不可见）；启动 reaper 要求 `(pid 存活, startTime 匹配, cmdline 含本方案 -L 标记)` 三元成立才杀，无法证明即不杀（fail-closed）；`kill -9` 的窗口上界 = 下一次启动；flavor 退出链并发 signal 全部 forward，硬顶 3s。release 加固：`closing` → SIGKILL 升级 + 二次有界等待；仍不退保留记录 + `release_timeout`；child 真退出才删。
+拥有者 = source：无 pin、无 TTL；关闭 forward / 删除 source / retarget / app exit 才回收。子进程登记 `forward-children.json`（0600/ACL；`argv` 是完整 spawn argv，不加密、renderer 不可见）；启动 reaper 要求 `(pid 存活, startTime 匹配, cmdline 含本方案 -L 标记)` 三元成立才杀，无法证明即不杀（fail-closed）；**平台注**：argv/startTime 证据来自 `/proc`（linux）与 CIM（win32）；macOS 没有等价的进程 argv 读取缝，探针判「无法证明」⇒ 不杀（fail-closed），崩溃遗留的 `ssh -N -L` 子进程要等下次显式退出链/人工清理才消失（登记为已知限制）；`kill -9` 的窗口上界 = 下一次启动；flavor 退出链并发 signal 全部 forward，硬顶 3s。release 加固：`closing` → SIGKILL 升级 + 二次有界等待；仍不退保留记录 + `release_timeout`；child 真退出才删。
 
 ### 2.8 上限、节流、认证
 

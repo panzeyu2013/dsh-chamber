@@ -75,7 +75,7 @@ pnpm install --lockfile-only
 pnpm install --frozen-lockfile
 pnpm run typecheck:browser
 pnpm run build:renderer
-# ARCHIVED（Electron 冻结）：pnpm run build:preload
+# ARCHIVED（Electron 冻结；包归属 @dsh-chamber/desktop）：pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run build:sidecar
 pnpm run test:swift      # darwin
 pnpm run test:macos      # darwin
