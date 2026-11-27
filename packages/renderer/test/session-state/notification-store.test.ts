@@ -130,6 +130,29 @@ test('a v4 payload migrates to v1 one-shot: only the notification tables survive
   }
 })
 
+
+test('a large v4 migration returns the pruned in-memory payload', () => {
+  const rows = 600
+  const notifiedRuns: Record<string, Record<string, string>> = { a: {} }
+  const pending: Record<string, Record<string, { at: number; watermark: number }>> = { a: {} }
+  const outcomes: Record<string, Record<string, number>> = { a: {} }
+  for (let i = 0; i < rows; i += 1) {
+    notifiedRuns.a['s' + i] = 'host:run-' + i
+    pending.a['s' + i] = { at: Date.now(), watermark: i + 1 }
+    outcomes.a['g' + i] = i + 1
+  }
+  const { storage, data } = fakeStorage({
+    [LEGACY_UNREAD_V4_KEY]: JSON.stringify({ v: 4, read: {}, edge: {}, notifiedRuns, pending, outcomes }),
+  })
+  const loaded = loadNotifications(storage)
+  assert.equal(Object.keys(loaded.notifiedRuns.a!).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  assert.equal(Object.keys(loaded.pending!.a!).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  assert.equal(Object.keys(loaded.outcomes!.a!).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  const persisted = JSON.parse(data.get(NOTIFICATIONS_V1_KEY)!)
+  assert.equal(Object.keys(persisted.pending.a).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  assert.ok(!data.has(LEGACY_UNREAD_V4_KEY), 'migration still removes the legacy key')
+})
+
 test('a failing v4 → v1 write keeps the old journal for a later attempt', () => {
   const data = new Map<string, string>([[LEGACY_UNREAD_V4_KEY, JSON.stringify({
     v: 4,
