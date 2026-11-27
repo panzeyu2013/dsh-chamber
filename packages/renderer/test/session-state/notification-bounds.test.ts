@@ -181,9 +181,11 @@ test('the projection pending/outcome writers keep the same bound', () => {
       candidate: { watermark: i + 1, evidence: 'facts-watermark' },
     }, 10)
   }
-  const pendingRows = Object.keys(ledger.pendingTable()['source-pending'] ?? {}).length
-  assert.ok(pendingRows > 0 && pendingRows <= NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
-    'reconcile writePending must obey the 500/source bound (got ' + pendingRows + ')')
+  const pendingTable = ledger.pendingTable()['source-pending'] ?? {}
+  assert.equal(Object.keys(pendingTable).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
+    'reconcile writePending must keep exactly the 500/source window')
+  assert.equal(pendingTable['pending-0'], undefined, 'oldest pending session is evicted')
+  assert.ok(pendingTable['pending-599'] !== undefined, 'newest pending session is kept')
 
   const outcomeLedger = createCompleteLedger()
   for (let i = 0; i < 600; i += 1) {
@@ -197,9 +199,11 @@ test('the projection pending/outcome writers keep the same bound', () => {
       goal: { goalId: 'goal-o-' + i, revision: 2, phase: 'complete', updatedAt: i + 2 },
     }, 20)
   }
-  const outcomeRows = Object.keys(outcomeLedger.outcomesTable()['source-outcome'] ?? {}).length
-  assert.ok(outcomeRows > 0 && outcomeRows <= NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
-    'reconcile recordOutcome must obey the 500/source bound (got ' + outcomeRows + ')')
+  const outcomeTable = outcomeLedger.outcomesTable()['source-outcome'] ?? {}
+  assert.equal(Object.keys(outcomeTable).length, NOTIFICATION_MAX_SESSIONS_PER_SOURCE,
+    'reconcile recordOutcome must keep exactly the 500/source window')
+  assert.equal(outcomeTable['goal-o-0'], undefined, 'lowest-watermark outcome is evicted')
+  assert.ok(outcomeTable['goal-o-599'] !== undefined, 'highest-watermark outcome is kept')
 })
 
 test('runtimeSettled keeps the shared per-source window', () => {
@@ -209,6 +213,20 @@ test('runtimeSettled keeps the shared per-source window', () => {
   assert.equal(ledger.runtimeSettled('source-r').size, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
   assert.equal(ledger.runtimeSettled('source-r').has('session-0'), false, 'oldest anchor is evicted')
   assert.equal(ledger.runtimeSettled('source-r').has('session-' + (N - 1)), true)
+})
+
+test('runtimeSettled evicts by insertion order, not by the smallest host timestamp', () => {
+  const ledger = createCompleteLedger()
+  ledger.markRuntimeSettled('source-r', 'old-but-newest-host-time', 999)
+  for (let i = 0; i < NOTIFICATION_MAX_SESSIONS_PER_SOURCE - 1; i += 1) {
+    ledger.markRuntimeSettled('source-r', 'session-' + i, i)
+  }
+  ledger.markRuntimeSettled('source-r', 'latest', 1_000)
+  const settled = ledger.runtimeSettled('source-r')
+  assert.equal(settled.size, NOTIFICATION_MAX_SESSIONS_PER_SOURCE)
+  assert.equal(settled.has('old-but-newest-host-time'), false, 'first-inserted entry is evicted regardless of its host time')
+  assert.equal(settled.has('session-0'), true, 'smallest host time is not the eviction key')
+  assert.equal(settled.has('latest'), true)
 })
 
 test('save stays bounded for an oversized payload', () => {

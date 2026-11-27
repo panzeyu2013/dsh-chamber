@@ -44,4 +44,12 @@ test('the hook wires both pure expiry helpers', () => {
   assert.match(source, /ghostSlotKey\(active\.id, current\)/u)
   assert.doesNotMatch(source, /ghostExpiry\.current\.set\(/u, 'the hook must arm through the pure helper')
   assert.doesNotMatch(source, /ghostExpiry\.current\.delete\(/u, 'the hook must expire through the pure helper')
+  assert.match(source, /setGhostTick\(tick => tick \+ 1\)/u, 'expiry must bump a render tick, not freeze it')
+})
+
+test('the row renderer reads the same source-scoped slot it was armed under', () => {
+  const source = stripComments(readFileSync(new URL('../../src/client/ServerSectionRows.tsx', import.meta.url), 'utf8'))
+  assert.match(source, /ghostSlotKey\(server\.id, sessionId\)/u)
+  assert.match(source, /ghostExpiry\.current\.get\(ghostSlot\(session\.id\)\)/u)
+  assert.doesNotMatch(source, /ghostExpiry\.current\.get\(session\.id\)/u, 'a bare session key would never match the armed source-scoped key')
 })
