@@ -161,7 +161,7 @@
 
 仍无锚的完成改发页内 nonce（唯一），只保留有界重复。⑨ **页内非事件的页代判别符（ask/request）**：`PAGE_GENERATION` 取自 CSPRNG 的 53 位安全整数（跨页必不同、页内稳定），页内事件由 `localEventSequence` 区分。墙钟两条性质都不满足（同毫秒两次加载会撞、NTP 会回拨），故身份模块的 `Date.now()` 预算为 0——行为面由 `notification-identity.test.ts` 的 CSPRNG 页代/跨页唯一性用例覆盖。
 
-- **⑩ durable 表内存窗口**：durable 三表（`notifiedRuns`/`pending`/`outcomes`）的进程内窗口 = 每来源最近 500 会话（outcomes 为 500 goal），与 reload 后一致；页内水位 `notified` 同界但**不落盘**（reload 后为空，靠 facts 播种重建）。`forgottenSessions` FIFO 500 只闭合「从在场集消失→重现」的会话，不能覆盖「仍在场但被 identity 尾截断」的会话——后者重现窗口=500（与 reload 后相同，不新增重复类别）；TL1 的 outcomes 身份窗口同样从「永久」收窄为 500 goal。同一完成跨轨去重仍由 settleFence/armed/outbox receipt 承主。**淘汰序=会话键表的首次插入序（不是 LRU；同键替换不刷新位置）；outcomes 每次按水位降序重排（同水位 goalId 升序）**：durable 半窗=500；易失的 `armed`/`armedFloor`/`settleFence`/`goalKnown` **不设条数界**，按会话/来源生命期与 forgetSession/withdraw/forget/prune 清；`runtimeSettled` 与身份面共用 500/source 会话窗（迟到的 native 锚点按插入序淘汰）。被尾截断的会话若仍是 held pending（§3.2.3 INV1）属已知残余：现实需 >500 条并发 held 才可达，登记为边界。
+- **⑩ durable 表内存窗口**：durable 三表（`notifiedRuns`/`pending`/`outcomes`）的进程内窗口 = 每来源最近 500 会话（outcomes 为 500 goal），与 reload 后一致；页内水位 `notified` 同界但**不落盘**（reload 后为空，靠 facts 播种重建）。`forgottenSessions` FIFO 500 只闭合「从在场集消失→重现」的会话，不能覆盖「仍在场但被 identity 尾截断」的会话——后者重现窗口=500（与 reload 后相同，不新增重复类别）；TL1 的 outcomes 身份窗口同样从「永久」收窄为 500 goal。同一完成跨轨去重仍由 settleFence/armed/outbox receipt 承主。**淘汰序=会话键表的首次插入序（不是 LRU；同键替换不刷新位置）；outcomes 仅在超界时按水位降序重排（同水位 goalId 升序）**：durable 半窗=500；易失的 `armed`/`armedFloor`/`settleFence`/`goalKnown` **不设条数界**，按会话/来源生命期与 forgetSession/withdraw/forget/prune 清；`runtimeSettled` 与身份面共用 500/source 会话窗（迟到的 native 锚点按插入序淘汰）。被尾截断的会话若仍是 held pending（§3.2.3 INV1）属已知残余：现实需 >500 条并发 held 才可达，登记为边界。
 
 #### 3.2.8 Rejected alternatives（完成身份与跨批围栏）
 

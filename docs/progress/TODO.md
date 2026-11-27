@@ -374,7 +374,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 
 ### 3. 页面侧性能残项（推迟中）
 
-> 本节只承载页面侧性能修订中**未实现**的残项（侧栏 T2、E2 首屏 markdown 按需化、A5 重订阅修正、B2 style 归属测量、B5 虚拟化 spike、A7 剩余）；
+> 本节只承载页面侧性能修订中**未实现**的残项（侧栏 T2、E2 首屏 markdown 按需化、A5 重订阅修正、B2 style 归属测量、B5 虚拟化 spike、A7 剩余、3.7 切会话放大器、3.8 左栏/M×N/recall watcher、3.9 唤醒/快捷键/主题/vendor-RO 扩面（M2/M3/M5/M6））；
 > 既有实现面契约见 `docs/design` 的 05 §3（发布门与投影缓存）、14 §7（观察者对账与页面恢复：隐藏期不采样）、19 §3.5（覆盖边界与诚实性：`factAt` 1s 签名桶、facts/mux 空帧去重）、
 > 24 F5（purged 孤儿键收敛）。各项都保留证据与设计以便下次决策，落地前不进入任何提交面。本节条目 ID（E2/A5/B2/B5/A7 与 E1/W2/D4/B1/B6 等）是渲染 P0 批的工作名，只在本节内有效；与各 design 文档的既有编号（design 25 §5 的 E2/E7/E21、[design 14](../design/runtime/14-sleep-background.md) §D4 唤醒恢复、design 25 §8 的 W2 菜单快捷键、design 06 §3.4 的 B6「本地账号成员集」、[remote-browser-acceptance.md](../checklists/acceptance/remote-browser-acceptance.md) §E2 等）无关。
 
@@ -383,7 +383,7 @@ M0–M6 的 Windows runner / 实机门禁原文见 git 历史；复活时按 des
 **证据（代码）**：sidebar 的行状态把 menuOpen/renaming/rowErrors 与全量字段 ctxValue 放在同一条更新通道上， 任何一处的交互都会走到全部 ServerSection 与全部行；搜索通道（client-core 的 search-state.ts）每个按键立即 notify，menus.ts 与 ServerSection.tsx 都订阅它，所以一次键入会重渲染所有壳的全部行；
 sessionsOf/orderedWorkspaces/dropEnv 每次渲染按来源重算。
 
-**已知前置**：`ctxValue` 的 useMemo 覆盖全量字段；动作回调已由 `useStableHandlers` 冻结身份（`SidebarRoot.tsx:56-67,177-200`），因此「动作回调每次渲染重建」不再是当前判据——ctxValue 命中率取决于其余字段与 memo 依赖，是否仍值得拆 context 需先用 render 计数重新取基线。
+**已知前置**：`ctxValue` 的 useMemo 覆盖全量字段；动作回调已由 `useStableHandlers` 冻结身份（[SidebarRoot.tsx](../../packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx)），因此「动作回调每次渲染重建」不再是当前判据——ctxValue 命中率取决于其余字段与 memo 依赖，是否仍值得拆 context 需先用 render 计数重新取基线。
 
 **设计**：menuOpen/renaming/rowErrors 拆成独立 context（只有需要它们的行与 section 订阅）；
 sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) 加一层按来源缓存；搜索通知合并到一次 （微任务或帧级），把「每键通知」降为「每帧至多一次」。
@@ -455,16 +455,16 @@ sessionsOf/orderedWorkspaces/dropEnv 按 (server 身份, 相关 prefs 字段) �
 
 **验证**：运行页 A/B（左栏 toggle、搜索每键、窗口 resize 与行移动）+ 无行为回归；先登记再排期。
 
-#### 3.9 交互/长运行：第三轮扩面的残余（M2/M3/M5/M6，未排期）
+#### 3.9 交互/长运行：扩面的残余（M2/M3/M5/M6，未排期）
 
-**证据（运行页实测）**：①**M2** 唤醒/online 扇出：N=5 壳 = 5 个来源（local+4 ssh），resume → 5 个 mux WS、online → 4 次 `ssh.reverify` 是 **per-source 必要成本**，不是冗余（无可合并对象）；design 14 §D4「当前实例」应读作 per-source，App 页面级分发与措辞的偏差按同一读法收敛；可优化项只有「一次唤醒同时重连」的突发（隐藏壳延迟到下次激活/错峰），代价是隐藏源推送陈旧窗口。②**M3** 每键 20 次 → 105 次 `querySelectorAll(modalSelector)`（≈5/键 = 每壳 1 次，N=5；200 键 1005 次、单键 1.45–1.78ms）；机制 = vendor `shortcuts/dom.ts` 的 `changedModals` 在**任意** mutation 记录时清空 modal 缓存（应只对 modal 相关记录失效），live DOM churn 下每键每壳重查；修点属 vendor-patch 第二类准入（需同机 patched/unpatched A/B 写入 reason），且需先做 stack 归因区分 DOM/native 两条安装路径。③**M5** 同主题跨源切换实测≈0（3–5 次 getComputedStyle/切换、≈0ms），异主题整页 restyle 是换调色板固有成本；本机 5 源全 light/zh-CN，数百条 token 定义量级未测（旧 481 口径已过期）。④**M6** 右栏 D1 后已无 docked track 插值窗口；剩余窗口 = 左栏 track（§3.8①），期间 vendor 3 条 per-shell RO 链（已定位 `ui-conversation` 座位 RO/`ui-conversation/src/client/skeleton/ConversationWidthControls.tsx` 的 WidthControls RO，第三条待上游核对，不在 vendor-patch 面）需上游/第二类准入。⑤**跨源隐藏壳 reveal/catch-up**：运行页注入实测跨源切换 worst 333–519ms、≥50ms 帧 10–13、阻塞 ~1.7s、settle ~6s（注入代理口径，未随仓归档）；当前无修复，触发=跨源切换用户反馈/右栏主项收敛后 A/B。
+**证据（运行页实测）**：①**M2** 唤醒/online 扇出：N=5 壳 = 5 个来源（local+4 ssh），resume → 5 个 mux WS、online → 4 次 `ssh.reverify` 是 **per-source 必要成本**，不是冗余（无可合并对象）（设计读法见 [design 14 §D4](../design/runtime/14-sleep-background.md)）；可优化项只有「一次唤醒同时重连」的突发（隐藏壳延迟到下次激活/错峰），代价是隐藏源推送陈旧窗口。②**M3** 每键 20 次 → 105 次 `querySelectorAll(modalSelector)`（≈5/键 = 每壳 1 次，N=5；200 键 1005 次、单键 1.45–1.78ms）；机制 = vendor `shortcuts/dom.ts` 的 `changedModals` 在**任意** mutation 记录时清空 modal 缓存（应只对 modal 相关记录失效），live DOM churn 下每键每壳重查；修点属 vendor-patch 第二类准入（需同机 patched/unpatched A/B 写入 reason），且需先做 stack 归因区分 DOM/native 两条安装路径。③**M5** 同主题跨源切换实测≈0（3–5 次 getComputedStyle/切换、≈0ms），异主题整页 restyle 是换调色板固有成本；本机 5 源全 light/zh-CN，数百条 token 定义量级未测。④**M6** 右栏 docked 窗口已由 [design 06 §13](../design/client/06-sidebar-enhancements.md) 消除；剩余左栏 track 与 vendor RO 链见 §3.8①，不在本仓修。⑤**跨源隐藏壳 reveal/catch-up**：运行页注入实测跨源切换 worst 333–519ms、≥50ms 帧 10–13、阻塞 ~1.7s、settle ~6s（注入代理口径，未随仓归档）；当前无修复，触发=跨源切换用户反馈/右栏主项收敛后 A/B。⑥**D1 真机生效验证（open）**：docked track 瞬时落位需重建 renderer + 重启 app 后验证；判据 = 开/关帧 p95/worst、≥50ms 帧、track 值/视觉；触发 = 合并后首轮真机验收。
 
 **设计**：M2 若做 = 页面定向派发（事件携带 targetSourceId）+ painted 变更补连，先注入 A/B 判收益再改；M3 = vendor patch 收窄 `changedModals` 的失效条件（先 stack 归因，`reason` 记录同机 A/B）；M5 = 需 light↔dark 或 zh↔en 来源 fixture，同值短路收益≈0，不排期；M6 = 只登记，vendor RO 链不在本仓修。
 
 **触发**：按用户反馈排序（唤醒后卡顿 / 打字延迟 / 跨源主题切换 / 左栏折叠），先有运行页 A/B 数字再动代码。
 
 **验证**：运行页注入 bench（index.html + PERF-CMD 下行 + AX title 上行）+ 包单测；M2 判据 = resume WS 数 = active 壳数、隐藏源在下次激活前无额外重连；M3 判据 = quiet 且非 modal mutation 时 qSA/键 = 0、modal 打开/关闭回归绿；M5/M6 先测量后定。
-**相邻小项（已定位、先登记不修）**：① browser `controllers` Map 以 sessionId 为键、仅 ctx dispose 清（`client-ui-browser/src/client/index.ts:158,184-194`）；② `RowHoverCard` 打开时 window scroll 每次 place（`RowHoverCard.tsx:172`）；③ 设置页服务器下拉打开时 window scroll 同步 GBCR+setState（`SettingsShell.tsx:156-176`）——均低频/有早退/量级小，随隐藏壳门控或真实帧证据再处理。
+**相邻小项（已定位、先登记不修）**：① browser `controllers` Map 以 sessionId 为键、仅 ctx dispose 清（[index.ts](../../packages/dsh-chamber-client-ui-browser/src/client/index.ts)）；② `RowHoverCard` 打开时 window scroll 每次 place（[RowHoverCard.tsx](../../packages/dsh-chamber-client-ui-sidebar/src/client/RowHoverCard.tsx)）；③ 设置页服务器下拉打开时 window scroll 同步 GBCR+setState（[SettingsShell.tsx](../../packages/dsh-chamber-client-ui-settings-bridge/src/client/SettingsShell.tsx)）——均低频/有早退/量级小，随隐藏壳门控或真实帧证据再处理。
 
 
 ### 4. 多实例常驻的后续研究（未排期）
