@@ -40,9 +40,11 @@ import {
   type LiveGraphSync, type LiveLoaderFace,
 } from './live-graph.ts'
 import { readSafeModeFlag, SAFE_MODE_GLOBAL } from './safe-mode.ts'
-import { classifyClientPluginBundle, type ClientPluginPatch } from './client-plugin-patches.ts'
+import { classifyClientPluginBundle } from './client-plugin-patches.ts'
+import { classifyProfilePluginBundle } from './profile-plugin-adapters.ts'
+import { PROFILE_PLUGIN_ADAPTERS } from './profile-plugin-registry.ts'
 import {
-  executePatchedBundle, fetchPluginBundleText, loadPatchedBundle,
+  executePatchedBundle, fetchPluginBundleText, loadPatchedBundle, type LoadableBundlePatch,
 } from './patched-bundle-load.ts'
 import { BundleLoadTimeoutError, forgetInstanceGraphRelease } from '@dsh-chamber/dsh-chamber-client-core/client-plugin-loader'
 import { chamberBridge, describeThrown, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-core'
@@ -210,15 +212,24 @@ function loadScriptElementBundle(url: string): Promise<void> {
 }
 
 /**
- * Page loader dispatch: registered single-id combos load as PATCHED TEXT; a registered
- * package in a non-single-id combo shape is refused outright (fail-closed — the message
- * carries the patch reason and anchor count for diagnostics); every other URL keeps the
+ * Page loader dispatch, in order: official registered single-id combos load as PATCHED
+ * TEXT; a registered official package in a non-single-id combo is refused outright
+ * (fail-closed — the message carries the patch reason and anchor count). Optional
+ * profile adapters (third-party rows that predate the per-entry base-path contract,
+ * design 09 §4) are matched next on the same single-id rule; they NEVER refuse — a
+ * non-single-id combo keeps the untouched script path, and every unmatched URL keeps the
  * script-element path byte for byte.
  */
 function loadModuleBundle(url: string): Promise<void> {
   const match = classifyClientPluginBundle(url)
   if (match.kind === 'refuse') return Promise.reject(new Error(match.message))
   if (match.kind === 'patch') return loadPatchedModuleBundle(url, match.patch)
+  const profile = classifyProfilePluginBundle(url, PROFILE_PLUGIN_ADAPTERS)
+  if (profile.kind === 'patch') return loadPatchedModuleBundle(url, profile.patch)
+  if (profile.kind === 'unpatched') {
+    console.error('[chamber] ' + profile.message)
+    return loadScriptElementBundle(url)
+  }
   return loadScriptElementBundle(url)
 }
 
@@ -229,10 +240,10 @@ function loadModuleBundle(url: string): Promise<void> {
  * so the loader's own BundleLoadTimeoutError owns the timeout verdict), the page
  * executor, real timers, and the kernel's BundleLoadTimeoutError type.
  * @param url - the served bundle URL.
- * @param patch - the registered patch for that bundle.
- * @returns resolves when the patched bundle executed and registered its factory.
+ * @param patch - the registered patch for that bundle (official table or optional profile registry).
+ * @returns resolves when the patched bundle executed (or an optional-profile fallback settled).
  */
-function loadPatchedModuleBundle(url: string, patch: ClientPluginPatch): Promise<void> {
+function loadPatchedModuleBundle(url: string, patch: LoadableBundlePatch): Promise<void> {
   return loadPatchedBundle(url, patch, {
     readText: (target) => fetchPluginBundleText(target, {
       budget: 'caller-held',
@@ -245,6 +256,16 @@ function loadPatchedModuleBundle(url: string, patch: ClientPluginPatch): Promise
         + info.anchors + ') in ' + info.url
         + '; loading the served bundle through the untouched script path (degrade-unpatched) — this instance keeps upstream document-relative behaviour')
     },
+    onFallback: info => {
+      console.error('[chamber] optional profile adapter for ' + info.packageId
+        + ' fell back to the untouched script path (' + info.reason + '): ' + info.url)
+    },
+    // Pre-execution compile gate for optional-profile rows only (the loader asks for it
+    // exclusively on 'degrade-unpatched-optional'): a rewritten classic script that cannot
+    // compile must degrade, not reject; the loader names a SyntaxError 'compile-failed' and
+    // an unavailable eval executor (CSP refusal) 'eval-unavailable'. Official rows never
+    // reach this.
+    compile: (text) => { new Function(text) },
     createTimeoutError: (message, bundleOutcome) => new BundleLoadTimeoutError(message, bundleOutcome),
     setTimeout: (callback, ms) => setTimeout(callback, ms),
     clearTimeout: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>) },

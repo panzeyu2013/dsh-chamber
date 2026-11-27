@@ -45,6 +45,11 @@
  * exact anchors on the real payload; `degrade-unpatched` only absorbs a load-time
  * remote/local runtime line skew.
  *
+ * THIRD-PARTY PROFILE ROWS are NOT registered in this table: they go through the
+ * data-driven optional adapter layer in `profile-plugin-adapters.ts` +
+ * `profile-plugin-registry.ts` (design 09 §4), which wraps the factory per apply and
+ * degrades to the untouched script path on any pre-execution failure.
+ *
  * DELETE CONDITION. Remove an entry once upstream exposes a host-route base seam on the
  * page transport (or the plugin reads the chamber context key / the per-entry standard
  * prop itself); the current pin does not need the patch (design 09 §4, runtime base
@@ -214,6 +219,30 @@ const COMBO_MARKER = '/plugins/??'
 const COMBO_RESOURCE = /^((?:@[^/]+\/)?[^/]+)\/client\.js$/
 
 /**
+ * Split one combo URL into its raw resource tokens (the caller decides what a token
+ * means). Non-combo URLs answer an empty list.
+ * @param url - the bundle URL the loader received.
+ * @returns the raw `<resource>` tokens, or an empty array when the URL is no combo.
+ */
+function comboResourceTokens(url: string): string[] {
+  if (typeof url !== 'string' || url === '') return []
+  const markerAt = url.indexOf(COMBO_MARKER)
+  if (markerAt < 0) return []
+  const tail = url.slice(markerAt + COMBO_MARKER.length)
+  const revAt = firstRevisionIndex(tail)
+  return (revAt < 0 ? tail : tail.slice(0, revAt)).split(',')
+}
+
+/**
+ * Raw combo resource tokens of one bundle URL (the caller decides what a token means).
+ * @param url - the bundle URL the loader received.
+ * @returns the raw `<resource>` tokens, or an empty array when the URL is no combo.
+ */
+export function bundleComboResourceTokens(url: string): readonly string[] {
+  return comboResourceTokens(url)
+}
+
+/**
  * Parse the package id of a single-id combo bundle URL
  * (`<base>/plugins/??<id>/client.js&rev=<rev>` or the `?rev=` spelling). Batches,
  * chunk URLs and non-plugin assets name no single package and answer null.
@@ -221,12 +250,7 @@ const COMBO_RESOURCE = /^((?:@[^/]+\/)?[^/]+)\/client\.js$/
  * @returns the package id, or null when the URL is not a single-id combo.
  */
 export function bundlePackageIdOf(url: string): string | null {
-  if (typeof url !== 'string' || url === '') return null
-  const markerAt = url.indexOf(COMBO_MARKER)
-  if (markerAt < 0) return null
-  const tail = url.slice(markerAt + COMBO_MARKER.length)
-  const revAt = firstRevisionIndex(tail)
-  const resources = (revAt < 0 ? tail : tail.slice(0, revAt)).split(',')
+  const resources = comboResourceTokens(url)
   if (resources.length !== 1) return null
   return COMBO_RESOURCE.exec(resources[0] ?? '')?.[1] ?? null
 }
@@ -261,9 +285,14 @@ export type ClientPluginBundleMatch =
 export function classifyClientPluginBundle(url: string): ClientPluginBundleMatch {
   const patch = findClientPluginPatch(url)
   if (patch !== null) return { kind: 'patch', patch }
-  if (url.indexOf(COMBO_MARKER) >= 0) {
+  const resources = comboResourceTokens(url)
+  if (resources.length > 0) {
     for (const patch of CLIENT_PLUGIN_PATCHES) {
-      if (!url.includes(patch.packageId)) continue
+      // Exact resource matching (not substring): a FORK id that merely contains an
+      // official id must keep the untouched path. A malformed resource under the
+      // registered package namespace (for example id/client.other.js) still refuses.
+      const registered = resources.some(resource => resource === patch.packageId || resource.startsWith(patch.packageId + '/'))
+      if (!registered) continue
       return {
         kind: 'refuse',
         patch,

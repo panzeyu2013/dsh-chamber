@@ -114,6 +114,11 @@ test('a single-id combo names its package for both rev spellings; batches/chunks
   assert.equal(bundlePackageIdOf('not a url'), null)
 })
 
+test('classification: an official-id-lookalike (fork) is not refused by substring matching', () => {
+  const url = '/api/i/local/plugins/??' + CHAT_IMPORT_PACKAGE_ID + '-fork/client.js&rev=abc'
+  assert.equal(classifyClientPluginBundle(url).kind, 'none')
+})
+
 test('classification: patch only for the registered single-id combo; registered-in-batch refuses', () => {
   const id = CHAT_IMPORT_PACKAGE_ID
   const patch = classifyClientPluginBundle('/api/i/local/plugins/??' + id + '/client.js&rev=abc')
@@ -134,6 +139,7 @@ test('classification: patch only for the registered single-id combo; registered-
   }
   const wrongResource = classifyClientPluginBundle('/plugins/??' + id + '/client.other.js&rev=1')
   assert.equal(wrongResource.kind, 'refuse')
+  assert.equal(classifyClientPluginBundle('/plugins/??' + id + '&rev=1').kind, 'refuse', 'a token equal to the registered id is malformed, not a different package')
   // The document-preview entry keeps the same defensive shape rule: degrade covers anchor
   // misses only, never a non-single-id combo (an invariant breach, not runtime skew).
   const documentSingle = classifyClientPluginBundle('/api/i/local/plugins/??' + DOCUMENT_PREVIEW_PACKAGE_ID + '/client.js&rev=1')

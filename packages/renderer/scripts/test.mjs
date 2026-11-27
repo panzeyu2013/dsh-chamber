@@ -31,6 +31,8 @@ export const GROUPS = {
   // scripts: 包内构建/契约脚本的自测（留在 scripts/ 原地，不属于 test/<domain>/）
   scripts: [
     'scripts/typert-remote-contract.test.mjs',
+    // 可选 profile 适配证据工具（design 09 §4）：参数/服务变换/artifact 读取/结构诊断/CLI 退出码自测。
+    'scripts/verify-profile-plugin-adapter.test.mjs',
     'scripts/vendor-patches.test.mjs',
     // E1: simple-icons 必须解析到 ESM 入口（回落到 CJS 会把全量图标表带回 chamber 首屏）。
     'scripts/simple-icons-entry.test.mjs',
@@ -69,6 +71,9 @@ export const GROUPS = {
     'test/lifecycle/client-plugin-patches.test.ts',
     // 装载半行为测试（loader 契约/超时 outcome/fetch 文本守卫/new Function 注入面）。
     'test/lifecycle/patched-bundle-load.test.ts',
+    // 可选 profile 插件适配层（design 09 §4）：通用工厂包裹/baseURI 令牌改写/显式锚点/
+    // 组合分类/双 ctx 行为 harness；全部 fixture 为合成插件，注册表为空时也必须全绿。
+    'test/lifecycle/profile-plugin-adapters.test.ts',
     // 证据有效性层：页面调度记录（rAF 心跳/焦点/可见性 → 调度缺口）与有界持久证据账本。
     'test/lifecycle/page-schedule.test.ts',
     'test/lifecycle/evidence-log.test.ts',

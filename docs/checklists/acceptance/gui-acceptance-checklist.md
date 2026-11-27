@@ -35,7 +35,7 @@
 
 只能在打包态或真机上判，逐条判据见 design 与本清单 §4.2 真机项（开放工程项以 owning design 的「已知限制」段为准；本节不复述判据）：
 
-- 安装/更新事务、quitAndInstall、缓存清理 → design 11 §9；桌面更新补充面（nudge / 失败技术详情 / 全屏安装准备）、`dsh-chamber://open` 深链前置、初始/最小视口、快捷键持久化、更新指示器 → design 14 §D2、16 §3.1、25 §5.6/§7/§8.4、05 §5（逐项见 §4.2 真机表）；dsh 运行时版本事务（激活/回退/恢复）→ design 18 §3.5–§3.6、§9；通知与未读徽标、Dock/托盘/任务栏三形态；子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）→ design 19、§3.2/§3.5；多实例页级持久面（两个来源各自的会话选择/折叠等 scope 互不覆盖，重载后各自恢复）→ design 09 §3.6（第四类补丁）；open-in 拉起外部应用、图标、深链冷热启动 → design 16、20 §6/§10；N-ctx 文件动作 URL 前缀（交付卡文件夹菜单 / 聊天图片）→ design 09 §3.6、20 §2.2；N-ctx 文档预览图片前缀与 degrade（§4.3 第 5–7 步）→ design 09 §4；Git worktree 全链（真实远程 Linux 仓库）→ design 08；孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune；判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测）→ design 06 §7、§11、08 §3.4、§6.4；归档管理器与 force 清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）→ design 24 §5、§6、§13。
+- 安装/更新事务、quitAndInstall、缓存清理 → design 11 §9；桌面更新补充面（nudge / 失败技术详情 / 全屏安装准备）、`dsh-chamber://open` 深链前置、初始/最小视口、快捷键持久化、更新指示器 → design 14 §D2、16 §3.1、25 §5.6/§7/§8.4、05 §5（逐项见 §4.2 真机表）；dsh 运行时版本事务（激活/回退/恢复）→ design 18 §3.5–§3.6、§9；通知与未读徽标、Dock/托盘/任务栏三形态；子代理谱系压制（父会话闲置等子代理时不误报完成点/徽标，子代理结束即释放，断连窗口不误报）→ design 19、§3.2/§3.5；多实例页级持久面（两个来源各自的会话选择/折叠等 scope 互不覆盖，重载后各自恢复）→ design 09 §3.6（第四类补丁）；open-in 拉起外部应用、图标、深链冷热启动 → design 16、20 §6/§10；N-ctx 文件动作 URL 前缀（交付卡文件夹菜单 / 聊天图片）→ design 09 §3.6、20 §2.2；N-ctx 文档预览图片前缀与 degrade（§4.3 第 5–7 步；第三方 profile 适配项为第 9 步）→ design 09 §4；Git worktree 全链（真实远程 Linux 仓库）→ design 08；孤儿 workspace 注册清理（真实仓库两态：①外部删除目录；②目录+Git 记录都已 prune；判据＝该行仍有显式删除入口且可点：②在同一会话内先以 worktree 形态出现过时为常驻清理钮，冷启/重连后为普通 kebab 项（等价，均只注销注册、会话转未分组、行消失）；Git 来源整轮失败期间入口可缺席（design 08 §6.4），须待恢复后复测）→ design 06 §7、§11、08 §3.4、§6.4；归档管理器与 force 清理链（入口字形 = 归档盒、hover/aria = 「查看已归档内容」；保护三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止）→ design 24 §5、§6、§13。
 - gateway 形态（生产 TLS、`/chamber/*`、移动端）→ design 17、21 §9；移动端 Web 面（真机触控档、安全区、键盘只能真机；CDP 设备模拟半边见 §0 已标 ARCHIVED 的机械 B-mobile 行）→ design 17 §18.6，机器侧 = native 真机/目检（§4.2）；native guest 面（Swift .app 一次；Electron 打包态随冻结归档）：远端 dsh+ssh / gateway+ssh 的 loopback guest 加载与关 tab 释放、XFO 站点可见、失败可见性（code+description）、系统浏览器出口（alias 投影）、https 证书错误不绕过、跨源 cookie/登录、新窗/下载/权限/键盘焦点、guest 崩溃恢复、远端页面不能改 chamber 状态 → design 28 §4/§5/§8/§9、design 25 §8.5；**ARCHIVED（随 Electron 冻结）** Linux 桌面 / Windows 首版 → design 22 §6、23（ARCHIVED）。
 ### 4.1 I-15 矩阵执行序
 
@@ -62,7 +62,7 @@
 
 ### 4.3 运行期装载补丁探针（打包态）
 
-先决：打包态实例启用实验性 chat-import（插件页 More → 实验性插件），按插件页提示重启/等图刷新后重载页面；每步记「操作 → 观察到什么 → 证据路径」。（步骤 5–7 不需要该先决。）
+先决：打包态实例启用实验性 chat-import（插件页 More → 实验性插件），按插件页提示重启/等图刷新后重载页面；每步记「操作 → 观察到什么 → 证据路径」。（步骤 5–7、9 不需要该先决；第 9 步先决 = 已安装并启用登记项对应插件，注册表为空时记 NOT RUN。）
 
 1. **eval 可用性**：主窗口页面控制台执行 `new Function('return 1')()`，期望 `1`；抛 `EvalError` / CSP 拒绝 ⇒ 记「CSP/eval 不支持」并阻断后续（本探针面 = design 09 §4 的 classic-script 与 CSP `'unsafe-eval'` 前提，与锚点无关）。
 2. **上传路由**：侧栏 New Session 行点导入钮、选 <300 MiB 的导出 ZIP；DevTools Network 断言 `POST /api/i/<源 id>/api/deepseek-chat-import/archive?workspaceId=…` 返回 200 且 `application/x-ndjson`（若干 progress 行后 1 条 outcome 行）。负向对照：控制面根 `POST /api/deepseek-chat-import/archive` ⇒ 404 JSON；>300 MiB ⇒ 413。
@@ -72,6 +72,8 @@
 6. **degrade 启动**：受控单实例——只打开该来源、确保它第一个装载 documentpreview（其它已 pinned 来源暂不 boot；否则会经 first-load-wins 复用已补丁 factory 而假红）。把本地实例切到与 pin 不同的运行时线（或接一台**已含该包**但 bundle 文本与 pin 漂移的 dsh 远端并让其先装载）→ 期望壳正常启动（无失败覆盖层）、右栏图片保持坏（alt 文本）、Console 有 `degrade-unpatched` 判词；出现 `bundle-load-failed` 覆盖层 = 红灯。**旧远端臂（未证实，登记待远端实证）**：远端 dsh 旧于该包引入的版本时该行**整行缺席**（无右栏文档 tab、无 degrade 判词，壳正常）——该臂不得按 degrade 期望判红。
 7. **回归**：外链 https 图片仍正常；禁用 documentpreview 行后无文档 tab、无 `/api/file` 请求；PDF/Excel/HTML 懒块仍可打开（包内 chunk 未被拦截）。
 8. **gateway 形态 smoke**：gateway 页面（官方前端、单实例）启用该 bundle 后按步骤 2 上传一次；URL 无 `/api/i/` 前缀（root 直达），期望同样 200 NDJSON（验证「gateway 不需要该机制」的契约）。
+
+9. **可选 profile 适配项（仅当注册表有登记项时逐条执行）**：先决 = 对应第三方插件已安装在目标实例且其 client 行可加载。① 设置选中该实例 → 打开该插件的配置面 → 读取/保存/重开，DevTools Network 断言配置桥请求均带 `/api/i/<源 id>/` 前缀且 200；负向对照：控制面根同名路径 ⇒ 404 JSON。② 同一插件在两个来源都安装并启用时分别读取/保存，A 的改动不影响 B（再打开 B 配置仍为 B 原值）。③ 若该插件提供侧栏面板或斜杠命令：先在 A 打开/捕获其动作，切到 B 后执行 A 的延迟动作，写请求仍只带 A 前缀；B 的命令列表读到 B 的值。④ 原生 dsh 部署（root 与带路径前缀两种）不变：请求按 `document.baseURI` 原样。⑤ 制造形状漂移（换一个未登记版本或改 bundle 文本）：实例必须正常启动、配置面退化为未适配（无失败覆盖层），Console 出现 `[chamber] optional profile adapter for … fell back to the untouched script path (reason)` 判词；出现 `bundle-load-failed` 覆盖层 = 红灯。
 
 ### 4.4 适配增量用户可见面验收
 

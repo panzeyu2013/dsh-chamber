@@ -46,32 +46,61 @@ const SYNTHETIC_PATCH = {
 /** The synthetic CORE-row degrade patch: an anchor miss delegates to the script fallback. */
 const SYNTHETIC_DEGRADE_PATCH = { ...SYNTHETIC_PATCH, anchorMiss: 'degrade-unpatched' as const }
 
+/**
+ * The synthetic optional-profile patch: ANY pre-execution failure (read, rewrite,
+ * compile) degrades to the untouched script path; an execution failure stays loud.
+ */
+const SYNTHETIC_OPTIONAL_PATCH = { ...SYNTHETIC_PATCH, anchorMiss: 'degrade-unpatched-optional' as const }
+
+/** Optional-profile row whose rewrite itself throws: still a pre-execution fallback. */
+const SYNTHETIC_THROWING_OPTIONAL_PATCH = {
+  ...SYNTHETIC_OPTIONAL_PATCH,
+  apply: (): string | null => { throw new Error('rewrite exploded') },
+}
+
 /** One loader harness: manual timers, recorded deps, controllable read and degrade fallback. */
 function harness(options: { withAnchorMiss?: boolean } = {}): {
   deps: PatchedBundleLoadDeps
   setReadText(next: (url: string) => Promise<string>): void
   setUnpatched(next: (url: string) => Promise<void>): void
+  setExecute(next: (text: string, url: string) => void): void
+  setCompile(next: ((text: string) => void) | undefined): void
+  setAnchorSink(next: ((info: { packageId: string; anchors: number; url: string }) => void) | undefined): void
+  setFallbackSink(next: ((info: { packageId: string; reason: string; url: string }) => void) | undefined): void
   executed: Array<{ text: string; url: string }>
   unpatched: string[]
   anchorMisses: Array<{ packageId: string; anchors: number; url: string }>
+  fallbacks: Array<{ packageId: string; reason: string; url: string }>
   timeoutErrors: Array<{ message: string; outcome: Promise<boolean> }>
   timers: { fire(): void; pending(): number; cleared(): number }
 } {
   const executed: Array<{ text: string; url: string }> = []
   const unpatched: string[] = []
   const anchorMisses: Array<{ packageId: string; anchors: number; url: string }> = []
+  const fallbacks: Array<{ packageId: string; reason: string; url: string }> = []
   const timeoutErrors: Array<{ message: string; outcome: Promise<boolean> }> = []
   const callbacks: Array<() => void> = []
   let cleared = 0
   let readImpl: (url: string) => Promise<string> = async () => 'GOOD'
   let unpatchedImpl: (url: string) => Promise<void> = async () => {}
+  let executeImpl: ((text: string, url: string) => void) | undefined
+  let compileImpl: ((text: string) => void) | undefined
+  let anchorSinkImpl: ((info: { packageId: string; anchors: number; url: string }) => void) | undefined
+    = (info) => { anchorMisses.push(info) }
+  let fallbackSinkImpl: ((info: { packageId: string; reason: string; url: string }) => void) | undefined
+    = (info) => { fallbacks.push(info) }
   const deps: PatchedBundleLoadDeps = {
     readText: (url) => readImpl(url),
-    execute: (text, url) => { executed.push({ text, url }) },
+    execute: (text, url) => {
+      executed.push({ text, url })
+      executeImpl?.(text, url)
+    },
     loadUnpatched: (url) => { unpatched.push(url); return unpatchedImpl(url) },
     ...(options.withAnchorMiss === false
       ? {}
-      : { onAnchorMiss: (info: { packageId: string; anchors: number; url: string }) => { anchorMisses.push(info) } }),
+      : { onAnchorMiss: (info: { packageId: string; anchors: number; url: string }) => { anchorSinkImpl?.(info) } }),
+    onFallback: info => { fallbackSinkImpl?.(info) },
+    compile: (text) => { compileImpl?.(text) },
     createTimeoutError: (message, outcome) => {
       timeoutErrors.push({ message, outcome })
       const error = new Error(message)
@@ -86,9 +115,14 @@ function harness(options: { withAnchorMiss?: boolean } = {}): {
     deps,
     setReadText: (next: (url: string) => Promise<string>) => { readImpl = next },
     setUnpatched: (next: (url: string) => Promise<void>) => { unpatchedImpl = next },
+    setExecute: (next: (text: string, url: string) => void) => { executeImpl = next },
+    setCompile: (next: ((text: string) => void) | undefined) => { compileImpl = next },
+    setAnchorSink: (next) => { anchorSinkImpl = next },
+    setFallbackSink: (next) => { fallbackSinkImpl = next },
     executed,
     unpatched,
     anchorMisses,
+    fallbacks,
     timeoutErrors,
     timers: {
       fire: () => { for (const callback of callbacks.splice(0)) callback() },
@@ -142,6 +176,171 @@ test('loadPatchedBundle: degrade works without an onAnchorMiss sink (the callbac
   const h = harness({ withAnchorMiss: false })
   h.setReadText(async () => 'DRIFTED')
   await loadPatchedBundle('http://cp/x', SYNTHETIC_DEGRADE_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, ['http://cp/x'])
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: a degrade-unpatched core row read failure stays loud', async () => {
+  const h = harness()
+  const readError = new Error('served text unavailable')
+  h.setReadText(async () => { throw readError })
+  await assert.rejects(loadPatchedBundle('http://cp/x', SYNTHETIC_DEGRADE_PATCH, h.deps), error => error === readError)
+  assert.equal(h.unpatched.length, 0, 'a read failure is not an anchor miss; the core row must not fall back')
+  assert.equal(h.fallbacks.length, 0)
+})
+
+test('loadPatchedBundle: an official refuse row rewrite failure stays loud (fail-closed)', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  const throwingRefuse = { ...SYNTHETIC_PATCH, apply: (): string | null => { throw new Error('rewrite exploded') } }
+  await assert.rejects(loadPatchedBundle('http://cp/x', throwingRefuse, h.deps), /rewrite exploded/u)
+  assert.equal(h.unpatched.length, 0, 'only optional rows degrade; a refuse row must never run unpatched')
+  assert.equal(h.fallbacks.length, 0)
+})
+
+test('loadPatchedBundle: a degrade-unpatched core row never consults the compile gate', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  const compiled: string[] = []
+  h.setCompile(text => { compiled.push(text) })
+  await loadPatchedBundle('http://cp/x', SYNTHETIC_DEGRADE_PATCH, h.deps)
+  assert.deepEqual(h.executed, [{ text: 'PATCHED', url: 'http://cp/x' }])
+  assert.deepEqual(compiled, [], 'compile is only the optional-profile pre-execution gate')
+})
+
+test('loadPatchedBundle: optional-profile read failure degrades before any execution', async () => {
+  const h = harness()
+  const readError = new Error('served text unavailable')
+  h.setReadText(async () => { throw readError })
+  const url = 'http://cp/api/i/local/plugins/??x/client.js'
+  await loadPatchedBundle(url, SYNTHETIC_OPTIONAL_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url], 'the untouched script path carries the optional row')
+  assert.deepEqual(h.fallbacks, [{ packageId: SYNTHETIC_OPTIONAL_PATCH.packageId, reason: 'read-failed', url }])
+  assert.equal(h.executed.length, 0, 'a pre-execution failure never executes the patched text')
+  assert.equal(h.timers.cleared(), 1)
+})
+
+test('loadPatchedBundle: optional-profile rewrite that throws degrades with the rewrite-threw reason', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  const url = 'http://cp/x'
+  await loadPatchedBundle(url, SYNTHETIC_THROWING_OPTIONAL_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url])
+  assert.deepEqual(h.fallbacks, [{ packageId: SYNTHETIC_THROWING_OPTIONAL_PATCH.packageId, reason: 'rewrite-threw', url }])
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: official rows never consult the optional compile gate', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  const compiled: string[] = []
+  h.setCompile(text => { compiled.push(text) })
+  await loadPatchedBundle('http://cp/x', SYNTHETIC_PATCH, h.deps)
+  assert.deepEqual(h.executed, [{ text: 'PATCHED', url: 'http://cp/x' }])
+  assert.deepEqual(compiled, [], 'compile is only the optional-profile pre-execution gate')
+})
+
+test('loadPatchedBundle: optional-profile guard mismatch degrades with the mismatch reason', async () => {
+  const h = harness()
+  h.setReadText(async () => 'DRIFTED')
+  const url = 'http://cp/x'
+  await loadPatchedBundle(url, SYNTHETIC_OPTIONAL_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url])
+  assert.deepEqual(h.fallbacks, [{ packageId: SYNTHETIC_OPTIONAL_PATCH.packageId, reason: 'guards-mismatched', url }])
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: optional-profile compile failure degrades before execution', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  h.setCompile(() => { throw new SyntaxError('patched text does not compile') })
+  const url = 'http://cp/x'
+  await loadPatchedBundle(url, SYNTHETIC_OPTIONAL_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url])
+  assert.deepEqual(h.fallbacks, [{ packageId: SYNTHETIC_OPTIONAL_PATCH.packageId, reason: 'compile-failed', url }])
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: an unavailable compile executor degrades under its own reason', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  // A page CSP without 'unsafe-eval' makes `new Function` throw EvalError: the rewrite is
+  // not at fault, so the diagnostic must not blame it (only SyntaxError is compile-failed).
+  h.setCompile(() => { throw new EvalError("Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script") })
+  const url = 'http://cp/x'
+  await loadPatchedBundle(url, SYNTHETIC_OPTIONAL_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url])
+  assert.deepEqual(h.fallbacks, [{ packageId: SYNTHETIC_OPTIONAL_PATCH.packageId, reason: 'eval-unavailable', url }])
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: optional-profile success compiles then executes, never falls back', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  const compiled: string[] = []
+  h.setCompile(text => { compiled.push(text) })
+  await loadPatchedBundle('http://cp/x', SYNTHETIC_OPTIONAL_PATCH, h.deps)
+  // The gate must validate the REWRITTEN text; compiling the served text (or nothing) would
+  // let a broken rewrite through to execution and turn an optional row into a boot failure.
+  assert.deepEqual(compiled, ['PATCHED'], 'the pre-execution compile gate sees the patched text')
+  assert.deepEqual(h.executed, [{ text: 'PATCHED', url: 'http://cp/x' }])
+  assert.equal(h.unpatched.length, 0)
+  assert.equal(h.fallbacks.length, 0)
+})
+
+test('loadPatchedBundle: optional-profile execution failure stays loud and never degrades', async () => {
+  const h = harness()
+  h.setReadText(async () => 'GOOD')
+  const executeError = new Error('classic script threw while evaluating')
+  h.setExecute(() => { throw executeError })
+  await assert.rejects(loadPatchedBundle('http://cp/x', SYNTHETIC_OPTIONAL_PATCH, h.deps), error => error === executeError)
+  assert.equal(h.unpatched.length, 0, 'a started execution is never replayed through the script path')
+  assert.equal(h.fallbacks.length, 0)
+})
+
+test('loadPatchedBundle: a late optional-profile read failure after the timeout settles the fallback outcome true', async () => {
+  const h = harness()
+  const read = deferred<string>()
+  h.setReadText(() => read.promise)
+  const url = 'http://cp/x'
+  const promise = loadPatchedBundle(url, SYNTHETIC_OPTIONAL_PATCH, h.deps)
+  h.timers.fire()
+  await assert.rejects(promise)
+  const outcome = h.timeoutErrors[0]!.outcome
+  read.reject(new Error('late read failure'))
+  await tick()
+  assert.deepEqual(h.unpatched, [url], 'the late failure degrades through the untouched script path')
+  assert.equal(await outcome, true, 'the fallback success settles the tombstone outcome loaded')
+})
+
+test('loadPatchedBundle: a throwing optional-profile fallback sink never breaks the degrade', async () => {
+  const h = harness()
+  h.setReadText(async () => 'DRIFTED')
+  h.setFallbackSink(() => { throw new Error('diagnostic sink exploded') })
+  const url = 'http://cp/x'
+  await loadPatchedBundle(url, SYNTHETIC_OPTIONAL_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url], 'the fallback still runs when its diagnostic sink throws')
+  assert.equal(h.fallbacks.length, 0)
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: a throwing core-row anchor sink never breaks the degrade', async () => {
+  const h = harness()
+  h.setReadText(async () => 'DRIFTED')
+  h.setAnchorSink(() => { throw new Error('diagnostic sink exploded') })
+  const url = 'http://cp/x'
+  await loadPatchedBundle(url, SYNTHETIC_DEGRADE_PATCH, h.deps)
+  assert.deepEqual(h.unpatched, [url], 'the fallback still runs when its diagnostic sink throws')
+  assert.equal(h.anchorMisses.length, 0)
+  assert.equal(h.executed.length, 0)
+})
+
+test('loadPatchedBundle: an optional-profile fallback that itself fails rejects with that failure', async () => {
+  const h = harness()
+  h.setReadText(async () => 'DRIFTED')
+  const scriptFailure = new Error('script element failed')
+  h.setUnpatched(async () => { throw scriptFailure })
+  await assert.rejects(loadPatchedBundle('http://cp/x', SYNTHETIC_OPTIONAL_PATCH, h.deps), error => error === scriptFailure)
   assert.deepEqual(h.unpatched, ['http://cp/x'])
   assert.equal(h.executed.length, 0)
 })

@@ -47,6 +47,7 @@
 - [ ] `node scripts/upstream/verify/verify-upstream-touchpoints.mjs` 通过（若改动触及触点面）
 - [ ] `node scripts/upstream/registry/verify-registry.mjs` 与 `node scripts/upstream/anchors/check-anchors.mjs` 通过（结构登记改动时；新锚点写 `path#symbol`）
 - [ ] 运行期装载补丁不进 registry（design 09 §4）：若改/删 `packages/renderer/src/client-plugin-patches.ts`，在 PR 描述写清删除条件与每 pin 复核证据（`node scripts/upstream/verify/verify-runtime-plugin-patches.mjs --require`）
+- [ ] 可选 profile 适配（`packages/renderer/src/profile-plugin-adapters.ts` / `profile-plugin-registry.ts`）：改动附 `node packages/renderer/scripts/verify-profile-plugin-adapter.mjs --package … --artifact …` 输出与逐条删除条件（框架-only 改动免做）；框架/设计/测试/checklists 不得把具体包名或版本写成语义（注册表是唯一数据面）；登记项须确认工厂体无一次性页面副作用（或已移入 apply），并附 `evidence.sha256` 与 `evidence.artifact`
 
 ## Risks and failure behavior
 
