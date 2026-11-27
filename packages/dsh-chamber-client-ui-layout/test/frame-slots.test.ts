@@ -142,3 +142,25 @@ test('the pinned vendor frame renderSlot keys, children table and our registrati
   assert.equal(fixture.length, specOccurrences("{ 'shell.top-2': { kind: 'single'; scope: 'root' }, 'shell.topBar': { kind: 'list'; scope: 'root' } }"),
     'negative control: the count arm must see every fixture entry')
 })
+
+test('the pinned frame consumes rightbarInstant as the docked-track transition suppressor', () => {
+  // The store flag is only worth anything if the pinned vendor frame actually maps it
+  // to `transition: none` on the frame that carries the eased `grid-template-columns`.
+  // These are source-text locks on the vendored frame (pin drift fails visibly here).
+  const vendorFrame = stripComments(readFileSync(new URL('AppFrame.tsx', VENDOR_FRAME_DIR), 'utf8'))
+  assert.match(vendorFrame, /data-rightbar-instant=\{layoutInfo\.rightbarInstant \|\| undefined\}/u)
+  const vendorCss = stripComments(readFileSync(new URL('AppFrame.module.css', VENDOR_FRAME_DIR), 'utf8'))
+  // The transition the chamber store suppresses: the eased center-column track.
+  const eased = bracedBlock(vendorCss, '.frame[data-animating]')
+  assert.match(eased, /transition:\s*grid-template-columns/u)
+  // The suppression arm: the instant attribute turns the frame and its handle off.
+  const instant = bracedBlock(vendorCss, '.frame[data-rightbar-instant]')
+  assert.match(instant, /transition:\s*none/u)
+  assert.match(vendorCss, /\.frame\[data-rightbar-instant\] \.handle/u)
+  // The instant arm must win the cascade: equal specificity means source order decides.
+  const easingAt = vendorCss.indexOf('.frame[data-animating]')
+  const instantAt = vendorCss.indexOf('.frame[data-rightbar-instant]')
+  assert.ok(easingAt !== -1 && instantAt !== -1 && instantAt > easingAt,
+    'the instant rule must follow the eased-track rule (same specificity)')
+  assert.doesNotMatch(instant, /!important/u, 'the suppression must win by source order, not !important')
+})

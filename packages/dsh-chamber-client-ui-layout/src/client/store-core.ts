@@ -34,7 +34,13 @@ export type LayoutInfo = {
   rightbarTrack: boolean
   /** Reported fullscreen presentation; hides the outer resize handle. */
   rightbarFullscreen: boolean
-  /** Suppress transitions for a fullscreen exit until another geometry action. */
+  /**
+   * Suppress the frame's animated grid-track transition for the right panel's
+   * docked presentation changes: a docked open/close lands the column track in one
+   * frame (the panel keeps its own transform slide). A fullscreen exit also sets it;
+   * fullscreen entries rely on the vendor's own `[data-rightbar-fullscreen]`
+   * suppression instead. The next geometry action resets it.
+   */
   rightbarInstant: boolean
 }
 
@@ -328,7 +334,12 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
       },
       openRightbar: (d, track: boolean, fullscreen: boolean) => {
         if (!d.layoutInfo.rightbarShown || d.layoutInfo.rightbarTrack !== track || d.layoutInfo.rightbarFullscreen !== fullscreen) {
-          d.layoutInfo.rightbarInstant = d.layoutInfo.rightbarFullscreen && !fullscreen
+          // A docked presentation change lands the center-column track in ONE frame
+          // instead of easing it: the 300ms eased track reflowed the whole conversation
+          // on every animation frame. The panel keeps its own transform slide; fullscreen
+          // entries are already instant through the vendor's [data-rightbar-fullscreen] rule,
+          // and leaving fullscreen stays instant.
+          d.layoutInfo.rightbarInstant = !fullscreen
         }
         if (!d.layoutInfo.rightbarShown && d.layoutInfo.viewportWidth < columns.SIDEBAR_AUTO_COLLAPSE) d.layoutInfo.narrowExpanded = false
         d.layoutInfo.rightbar ??= Math.max(
@@ -340,7 +351,8 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
         d.layoutInfo.rightbarFullscreen = fullscreen
       },
       closeRightbar: (d) => {
-        if (d.layoutInfo.rightbarShown) d.layoutInfo.rightbarInstant = d.layoutInfo.rightbarFullscreen
+        // Any close (docked or fullscreen) lands the track in one frame; see openRightbar.
+        if (d.layoutInfo.rightbarShown) d.layoutInfo.rightbarInstant = true
         d.layoutInfo.rightbarShown = false
         d.layoutInfo.rightbarTrack = false
         d.layoutInfo.rightbarFullscreen = false

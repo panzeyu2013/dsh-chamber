@@ -482,6 +482,63 @@ test('openRightbar on a narrow frame clears the narrow re-expand override', () =
   assert.equal(instance.getSnapshot().layoutInfo.rightbarFullscreen, true)
 })
 
+test('docked right-panel open/close suppress the animated frame track (instant land)', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  const layout = () => instance.getSnapshot().layoutInfo
+  assert.equal(layout().rightbarInstant, false)
+  // A docked open must land the center track in one frame: the 300ms eased track
+  // reflowed the conversation on every frame on the running page (measured A/B).
+  instance.actions.openRightbar(true, false)
+  assert.equal(layout().rightbarShown, true)
+  assert.equal(layout().rightbarTrack, true)
+  assert.equal(layout().rightbarInstant, true)
+  // A geometry action (drag) re-enables easing for the next presentation change.
+  instance.actions.setRightbar(420)
+  assert.equal(layout().rightbarInstant, false)
+  // Re-reporting the same presentation is not a presentation change.
+  instance.actions.openRightbar(true, false)
+  assert.equal(layout().rightbarInstant, false)
+  // A docked close is instant as well; the px preference still survives it.
+  instance.actions.closeRightbar()
+  assert.equal(layout().rightbarShown, false)
+  assert.equal(layout().rightbarInstant, true)
+})
+
+test('a sidebar geometry action re-arms the frame easing after an instant right-panel landing', () => {
+  for (const action of ['setSidebar', 'toggleSidebar', 'setViewportWidth'] as const) {
+    const { env } = makeEnv()
+    const instance = createLayoutStore(env).create()
+    const layout = () => instance.getSnapshot().layoutInfo
+    instance.actions.openRightbar(true, false)
+    assert.equal(layout().rightbarInstant, true, action)
+    if (action === 'setSidebar') instance.actions.setSidebar(300)
+    else if (action === 'toggleSidebar') instance.actions.toggleSidebar()
+    else instance.actions.setViewportWidth(layout().viewportWidth + 10)
+    assert.equal(layout().rightbarInstant, false, action)
+  }
+})
+
+test('fullscreen entry leaves the instant flag alone; a fullscreen exit stays instant', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  const layout = () => instance.getSnapshot().layoutInfo
+  // Entering fullscreen does not set our flag: the vendor's [data-rightbar-fullscreen]
+  // suppression already covers the frame (design 06 §13).
+  instance.actions.openRightbar(false, true)
+  assert.equal(layout().rightbarFullscreen, true)
+  assert.equal(layout().rightbarInstant, false)
+  // Leaving fullscreen was instant before this change and must stay so.
+  instance.actions.openRightbar(true, false)
+  assert.equal(layout().rightbarFullscreen, false)
+  assert.equal(layout().rightbarInstant, true)
+  // Closing a fullscreen column is instant too (pre-existing behaviour).
+  instance.actions.openRightbar(false, true)
+  instance.actions.closeRightbar()
+  assert.equal(layout().rightbarShown, false)
+  assert.equal(layout().rightbarInstant, true)
+})
+
 // ---- no-op guard on the persistence write ----
 
 test('a drag onto the already-persisted width skips persist/notify entirely', withTimers(async () => {
