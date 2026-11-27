@@ -43,6 +43,10 @@ export function useSidebarGhost({ servers, chamberInstanceId }: {
     ghostExpiry.current.set(current, Date.now() + BLANK_GHOST_GRACE_MS)
     // The one-shot timer trims itself from the ref once it fires, so repeated armings cannot grow ghostTimers unboundedly.
     const timerId = window.setTimeout(() => {
+      // 截止时刻已到的条目才能删：同一 session 的又一次 arm 会写入更晚的 deadline，
+      // 旧 timer 不得把新 deadline 删掉。
+      const deadline = ghostExpiry.current.get(current)
+      if (deadline !== undefined && deadline <= Date.now()) ghostExpiry.current.delete(current)
       setGhostTick(tick => tick + 1)
       const index = ghostTimers.current.indexOf(timerId)
       if (index >= 0) ghostTimers.current.splice(index, 1)
