@@ -24,7 +24,7 @@
  * settleFence + goalKnown（撤回窗口内的完成不得在恢复后补发，附属围栏不得跨撤回存活，
  * 结算点记忆随会话身份作废），notifiedRuns/outcomes 保持 durable；forgetSession 对单会话
  * 执行同一纪律（B4-2：goalKnown 不得在会话 churn 下泄漏）；forget/prune 收敛全部
- * **8 张 per-source 表**（durable + 易失）。页代 token 的单源是 boot-token.ts：
+ * **10 张 per-source 表**（state 8 表 + 身份轨 notifiedRuns/runtimeSettled）。页代 token 的单源是 boot-token.ts：
  * 本账本不读、不存、不参与来源收敛（兼容入参已在 beta 线退役，别再加回）。
  *
  * 加载期卫生（§3.5）：boot='fresh'（新进程/新窗口）丢弃全部 pending 并 loud；
@@ -94,8 +94,9 @@ type SettleFenceTable = Record<string, Record<string, SettleFenceEntry>>
 export type GoalOutcomeTable = Record<string, Record<string, number>>
 
 /**
- * reconcile 的完整状态（v5 §3.1：durable 三表 + 页内水位 + 六项易失状态）。
- * durable 三表（notifiedRuns/pending/outcomes）走通知载荷增量；notified 是页内水位、不落盘；其余全部易失：
+ * `state` 的 8 张表（v5 §3.1）：页内水位 notified + durable pending/outcomes + 五项易失 armed/armedFloor/settleFence/generation/goalKnown。
+ * 身份键空间（notifiedRuns durable、runtimeSettled 易失）在 `CompleteLedger` 闭包里独立维护，不在 `CompletionDecisionState` 内；
+ * pending/outcomes 走通知载荷增量，notified 是页内水位、不落盘；其余易失：
  *   - armed：壳边沿武装位；
  *   - armedFloor：与 armed 同拍的「已消费水位上界」（arm 时写；见字段注释）；
  *   - settleFence：无水位消费的 emit 后按 boundary（置栏时已吸收的 facts 水位）
