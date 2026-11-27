@@ -503,6 +503,10 @@ test('docked right-panel open/close suppress the animated frame track (instant l
   instance.actions.closeRightbar()
   assert.equal(layout().rightbarShown, false)
   assert.equal(layout().rightbarInstant, true)
+  // Closing an already-closed panel must not arm a stale instant flag.
+  const closed = createLayoutStore(makeEnv().env).create()
+  closed.actions.closeRightbar()
+  assert.equal(closed.getSnapshot().layoutInfo.rightbarInstant, false)
 })
 
 test('a sidebar geometry action re-arms the frame easing after an instant right-panel landing', () => {

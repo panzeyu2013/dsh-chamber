@@ -163,6 +163,14 @@ test('the pinned frame consumes rightbarInstant as the docked-track transition s
   // The bare selector must reach the transition:none block, not an empty decoy rule.
   assert.match(vendorCss, /\.frame\[data-rightbar-instant\][^{}]*\{[^}]*transition:\s*none/u)
   assert.doesNotMatch(vendorCss, /\.frame\[data-rightbar-instant\]\s*\{\s*\}/u, 'empty bare rule would let the track keep easing')
+  // Every rule whose selector mentions the arm must suppress the transition; a later
+  // equal-specificity rule would win the cascade and resurrect the eased track.
+  const instantRules = [...vendorCss.matchAll(/[^{}]*\.frame\[data-rightbar-instant\][^{}]*\{([^}]*)\}/gu)]
+  assert.ok(instantRules.length > 0)
+  assert.ok(instantRules.some((match) => /transition:\s*none/u.test(match[1])))
+  for (const match of instantRules) {
+    if (/transition\s*:/u.test(match[1])) assert.match(match[1], /transition:\s*none/u)
+  }
   // The instant arm must win the cascade: equal specificity means source order decides.
   const easingAt = vendorCss.indexOf('.frame[data-animating]')
   const instantAt = vendorCss.indexOf('.frame[data-rightbar-instant]')

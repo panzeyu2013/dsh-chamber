@@ -1,5 +1,5 @@
 /**
- * M4 修复的行为锁：右栏 Browser guest 的滚动几何 flush（design 28 §4.1）。
+ * 右栏 Browser guest 的滚动几何 flush 行为锁（design 28 §4.1）。
  *  - F：只有文档/占位祖先容器的滚动才 schedule；无关 scroller 的事件本身零 GBCR/零命中，
  *    但它的 trailing 复检会补测一次几何（≤10Hz）。
  *  - E：几何每帧读/上报；遮挡命中（候选 GBCR + 9 点）≤10Hz + trailing 补齐；setOccluded 强制。
@@ -254,6 +254,35 @@ test('a cached occlusion verdict is reused inside the throttle window, then refr
   dom.pumpFrame()
   assert.equal(reports.at(-1)?.occluded, false, 'the trailing check must refresh the cached verdict')
   presentation.dispose()
+})
+
+test('n2: an occluded guest skips the unrelated-scroll trailing arm until released', (t) => {
+  const dom = installFakeDom(t)
+  const presentation = new NativeGuestPresentation({ report: () => {}, hidden: () => {} }, 'tab-1')
+  presentation.mount('viewport')
+  dom.pumpFrame()
+  presentation.setOccluded(true)
+  dom.pumpFrame()
+  dom.dispatchScroll(dom.unrelated)
+  dom.pumpFrame()
+  assert.equal(dom.stats().activeTimers, 0, 'occluded guest must not arm a trailing geometry check')
+  presentation.setOccluded(false)
+  dom.pumpFrame()
+  dom.dispatchScroll(dom.unrelated)
+  dom.pumpFrame()
+  assert.ok(dom.stats().activeTimers >= 1, 'after release, unrelated scroll arms the trailing check again')
+  presentation.dispose()
+})
+
+test('n3: the mount cleanup clears both placeholder datasets', (t) => {
+  const dom = installFakeDom(t)
+  const presentation = new NativeGuestPresentation({ report: () => {}, hidden: () => {} }, 'tab-1')
+  const cleanup = presentation.mount('viewport')
+  dom.pumpFrame()
+  assert.equal(dom.host.dataset.chamberBrowserTab, 'tab-1')
+  cleanup()
+  assert.equal(dom.host.dataset.chamberBrowserTab, undefined)
+  assert.equal(dom.host.dataset.chamberBrowserLease, undefined)
 })
 
 test('dispose clears the pending occlusion timer', (t) => {

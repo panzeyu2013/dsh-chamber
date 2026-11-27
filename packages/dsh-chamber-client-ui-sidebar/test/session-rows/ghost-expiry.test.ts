@@ -45,6 +45,9 @@ test('the hook wires both pure expiry helpers', () => {
   assert.doesNotMatch(source, /ghostExpiry\.current\.set\(/u, 'the hook must arm through the pure helper')
   assert.doesNotMatch(source, /ghostExpiry\.current\.delete\(/u, 'the hook must expire through the pure helper')
   assert.match(source, /setGhostTick\(tick => tick \+ 1\)/u, 'expiry must bump a render tick, not freeze it')
+  const timerBody = source.match(/window\.setTimeout\(\(\) => \{([\s\S]*?)\}, BLANK_GHOST_GRACE_MS\)/u)?.[1] ?? ''
+  assert.match(timerBody, /expireGhostSlot\(ghostExpiry\.current, slotKey, Date\.now\(\)\)/u,
+    'the timeout callback itself must expire the slot')
 })
 
 test('the row renderer reads the same source-scoped slot it was armed under', () => {
