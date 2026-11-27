@@ -779,6 +779,26 @@ test('G4 supersede: a goal-paused deferral also honours the absorbed later compl
   assert.equal(settled.disposition, 'flushed', 'goal paused 结清同样兑现更晚身份')
   assert.equal(settled.notification?.completionSeq, 1267)
 })
+
+test('G4 supersede: a lower absorbed identity replay never rolls the identity back', () => {
+  // absorbedFloor 记录已消费的最高吸收 seq：更晚吸收后，低 seq 重放不得回退身份或再通知。
+  const ledger = createCompleteLedger()
+  const deferred = reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: factsSeq(1000, 1099) }), 10)
+  assert.equal(deferred.disposition, 'deferred')
+  reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: factsSeq(2000, 1267) }), 20)
+  // 比已吸收身份更低（但仍高于原始 completionSeq）的迟到候选不得把身份拉回：吸收位取历史最高。
+  const lower = reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: factsSeq(2200, 1200) }), 22)
+  assert.equal(lower.disposition, 'deferred')
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, 1267, '低 seq 不得回退吸收位')
+  const later = reconcile(ledger.state(), observation({ subagents: 'busy', goal: null, candidate: factsSeq(2500, 1301) }), 25)
+  assert.equal(later.disposition, 'deferred')
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, 1301, '吸收位取最高 seq')
+  const settled = reconcile(ledger.state(), observation({ goal: null }), 30)
+  assert.equal(settled.notification?.completionSeq, 1301)
+  // 更低的吸收身份重放：不得再发（notified 水位已推进）。
+  const replay = reconcile(ledger.state(), observation({ goal: null, candidate: factsSeq(2000, 1267) }), 40)
+  assert.equal(replay.notification, undefined)
+})
 test('G4 supersede: a persisted absorbed identity still settles on the first BASELINE observation (G2 exception)', () => {
   // 同页 reload 后首份观测是基线：G2 的「基线不 emit」只适用于**候选**；延迟位已吸收
   // 更晚完成身份时必须兑现，否则收尾完成永久丢（design 19 §3.2.3 #13 / §3.5 ④）。

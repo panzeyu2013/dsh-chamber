@@ -936,6 +936,7 @@ test('P2a compatibility: lineageVerified is withheld where an old renderer would
     baselineItem('ic2', false, 12, { parentSessionId: 'idleParent', origin: 'subagent' }),
     baselineItem('busyParent', false, 20),
     baselineItem('bc1', true, 21, { parentSessionId: 'busyParent', origin: 'subagent' }),
+    baselineItem('unrelated', false, 30),
   ], { at: 100 })
   const rows = store.snapshotFor('sse', store.host()).sessions
   const idle = rows.find(row => row.sessionId === 'idleParent')
@@ -945,6 +946,10 @@ test('P2a compatibility: lineageVerified is withheld where an old renderer would
   assert.notEqual(idle?.lineageVerified, true, '在场>0 且运行 0：不下发 verified（旧端会误读 busy）')
   assert.equal(busy?.subagentRunningCount, 1)
   assert.equal(busy?.lineageVerified, true, '有运行中后代：照常下发（两端都读 busy）')
+  // 无子行的会话不得被坏谱系/在场计数连坐成 fail-closed（known 只按自己的在场数置位）。
+  const unrelated = rows.find(row => row.sessionId === 'unrelated')
+  assert.equal(unrelated?.subagentKnown, undefined, '无子行会话的 known 必须缺席')
+  assert.notEqual(unrelated?.lineageVerified, true, '无运行后代不下发 verified')
 })
 
 test('P2a lineage: a self-parented subagent row is not a usable edge (fail-closed)', t => {
@@ -1030,6 +1035,7 @@ test('P2a lineage: a restart with only idle children still fails closed (known =
   first.applyBaseline([
     baselineItem('p', false, 10),
     baselineItem('c', false, 11, { parentSessionId: 'p', origin: 'subagent' }),
+    baselineItem('unrelated', false, 12),
   ], { at: 100 })
   await first.flush()
   first.dispose()
@@ -1037,6 +1043,8 @@ test('P2a lineage: a restart with only idle children still fails closed (known =
   const parent = second.snapshotFor('sse', second.host()).sessions.find(row => row.sessionId === 'p')
   assert.equal(parent?.subagentRunningCount, 0)
   assert.equal(parent?.subagentKnown, true, '在场子行存在而谱系未认证 ⇒ fail-closed busy')
+  const unrelated = second.snapshotFor('sse', second.host()).sessions.find(row => row.sessionId === 'unrelated')
+  assert.equal(unrelated?.subagentKnown, undefined, '无子行的会话不得被全源 fail-closed 连坐')
   second.dispose()
 })
 

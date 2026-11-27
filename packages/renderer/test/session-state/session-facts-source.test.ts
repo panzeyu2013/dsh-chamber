@@ -439,6 +439,13 @@ test('snapshot parser: rows, host gate and unknown fields are defensive', () => 
   }
   assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: 0 })?.subagentRunningCount, 0, '0 是合法事实')
   assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: 7 })?.subagentRunningCount, 7)
+  // 认证位/保留位只认 `=== true`：truthy 字符串/数字不得被采信（防御性解析的白名单语义）。
+  for (const bad of [1, 'true', {}, [], null]) {
+    const parsed = parseSessionFactsRow({ sessionId: 'x', lineageVerified: bad, subagentKnown: bad })
+    assert.equal(parsed?.lineageVerified, undefined, 'truthy lineageVerified must not be trusted')
+    assert.equal(parsed?.subagentKnown, undefined, 'truthy subagentKnown must not be trusted')
+  }
+  assert.equal(parseSessionFactsRow({ sessionId: 'x', lineageVerified: true, subagentKnown: true })?.lineageVerified, true)
   assert.equal(parseSessionFactsRow({}), null)
 })
 

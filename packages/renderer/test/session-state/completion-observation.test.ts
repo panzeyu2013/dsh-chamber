@@ -1092,6 +1092,59 @@ test('REGRESSION(B1 closure): the dispatch completion\'s late facts watermark is
   }
 })
 
+
+test('KNOWN-BOUNDARY (§3.5 ⑨): a wake completion that arrives without a running frame can be swallowed once', () => {
+  // 可用 facts 批静默结清会补记栏的播种补偿（§3.2.3 第五处），让被延迟完成的迟到水位吞一次。
+  // 若唤醒回合的完成**没有 running 帧**先到（观测链丢帧/合步），它可能被这次补偿吞掉 ⇒ 0 横幅。
+  // 取舍：宁少勿重（补偿的理由是同一完成的水位必然迟到）；不是永久压制——后续新回合照常。
+  const ledger = createCompleteLedger()
+  const { calls, sink } = makeSink()
+  const run = (batch: ReturnType<typeof observeSource>) => {
+    applyObservationBatch({ ledger, sourceId: 'src', batch, sink })
+    return batch.state
+  }
+  let state = run(observeSource({
+    sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ running: true }) } },
+  }))
+  state = run(observeSource({
+    state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'running', goal: null } } },
+  }))
+  state = run(observeSource({
+    state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({ updatedAt: 2000 }) } },
+  }))
+  assert.equal(calls.notifications.length, 0, '结清静默（前置事实）')
+  // 没有 running 帧的唤醒完成：被 seededSince 补偿吞掉。
+  state = run(observeSource({
+    state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({
+      updatedAt: 3000, completedAt: 3000, completedAtSource: 'observed', completedAtDomain: 'host',
+    }) } },
+  }))
+  assert.equal(calls.notifications.length, 0, '登记边界：无 running 帧的唤醒完成 0 横幅（宁少勿重）')
+  // 不是永久压制：下一回合有 running 帧 → 完成照常通知。
+  state = run(observeSource({
+    state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: true, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({
+      running: true, updatedAt: 3500, completedAt: 3000, completedAtSource: 'observed', completedAtDomain: 'host',
+    }) } },
+  }))
+  run(observeSource({
+    state, sourceId: 'src', identity: 'fp', pageBoot: 'same', shellReport: true,
+    shell: { rows: { s1: { running: false, subagentActivity: 'none', goal: null } } },
+    facts: { usable: true, rows: { s1: factsRow({
+      updatedAt: 4000, completedAt: 4000, completedAtSource: 'observed', completedAtDomain: 'host',
+    }) } },
+  }))
+  assert.equal(calls.notifications.length, 1, '后续真实回合不被永久压制')
+  assert.equal(calls.notifications[0]?.watermark, 4000)
+})
 test('REGRESSION(A1): a baseline observation still SETTLES a busy-deferred pending (no G2 swallowing)', () => {
   // busy 延迟的 pending 跨页保留（boot same），恢复后第一份观测是基线（goal null /
   // subagents idle）：基线必须结清它（旧口径 !baseline 让分支不可达，pending 永久
