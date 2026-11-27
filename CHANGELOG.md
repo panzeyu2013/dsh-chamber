@@ -10,7 +10,7 @@
 
 > English: [docs/CHANGELOG.en-US.md](./docs/CHANGELOG.en-US.md)
 
-## [0.4.6-beta.1] - 2026-11-26
+## [0.4.6-beta.2] - 2026-11-27
 
 ### 变更
 - **捆绑 dsh 基线升至 0.2.3-alpha.2（4b399c39）** —— 上游 rc.3 → alpha.2 的差异集中在包版本 bump 与少量注释级源文件（`src/` 下仅 4 个真实源文件变化：3 个仅注释 TS 与 1 个 python 包初始化文件），alpha.2 的运行期闭包修复了 alpha.1 的 `EntryValidationError` 导出断链。chamber 同批适配：covered/extra 行的宿主同步客户端配置、`ui-session-status` 首屏行与自挂 HMR remote、HMR live sync 改为每实例 `pluginEvents` Remote 流、`ui-theme` 补丁退役、Office 资产收敛与 pypdf 载荷、remote-connection/forge-gitlab 行禁用、官方 worktree entered 记录、sidebar/layout/seed fork 重放（design 02/09/19；现行值单源 = `harness.commit` 与 `packages/desktop/vendor/dsh/pnpm-lock.yaml`）。
@@ -19,6 +19,13 @@
 - **通知、关注与完成投递按应用激活与后台完成重构** —— 通知焦点由 app 激活派生、页面不可见时后台会话完成仍投递、durable 通知在部分 roster 上不再丢失；renderer 侧按 v3 attention 模型补齐 notification/attention 门禁（design 06、design 19）。
 - **文档与门禁面收敛** —— 文档集瘦身并补齐包 README 契约、移除代码与测试注释里的状态记录、CI 在 typecheck 模式运行 seed 与 gateway 的类型检查、浏览器上游文件按 vendor 树校验（文档规则与 gate-surfaces 单源）。
 
+- **右栏开合不再逐帧重排会话** —— docked 右栏的展开/收起把中心列轨道在**一帧内落位**（面板自身保留 300ms transform 滑动；全屏进入/退出语义不变），避免 300ms 缓动期间整棵会话树逐帧重排。运行页 A/B（向打包版页面注入「track 瞬时」代理的口径）：开 p95 62–105ms → 11–17ms、关 111–119ms → 10–15ms，≥50ms 帧与阻塞时间同步下降；残余的一次落位重排与左栏轨道不在本项范围（design 06 §13、TODO §3.9）。
+- **右栏浏览器 guest 的滚动与遮挡检测开销收敛** —— 无关 scroller（聊天等）的滚动不再触发占位几何测量；遮挡命中判定按 ≤10Hz 节流并以 trailing 检查补齐（占位几何仍每帧测量），overlay 候选列表按 100ms 重判周期刷新且首帧强制刷新。guest 的位置/遮挡/隐藏行为不变（design 28 §4.1）。
+- **通知账本的内存与写盘有界** —— durable 三表（`notifiedRuns`/`pending`/`outcomes`）在进程内与落盘同为每来源最近 500 会话（outcomes 为 500 goal）的窗口，长活来源不再随会话 churn 无界增长；页内水位不再被当作落盘变更证据、剪枝只在 durable 三表被删时排盘，减少无谓的全量序列化与写盘（design 19 §3.2.4、§3.2.7⑩）。
+- **一次任务至多一条完成横幅（目标恰好一条）** —— 父会话回合结束但子代理仍在运行时完成候选延迟，子代理全部结束后**静默结清**（横幅归唤醒回合）；延迟期间若吸收到更晚的宿主 `turn/end` 身份则以该身份兑现一次。修复「派出那一轮 + 唤醒回合」各弹一条的重复（design 19 §3.2.3 G4/#13、§3.5）。
+- **gateway 来源也带子代理运行证据** —— session-state 镜像新增三个加法可选字段（运行中后代数、谱系认证位、fail-closed 保留位）：旧网关缺字段时退回「在场数 ⇒ presence/unknown、绝不 busy」，旧桌面按「认证位 && 在场数」的读法恰在运行数>0 时正确；升级两端后收敛（design 17 §10.7、design 19 §3.5 I-12）。
+- **facts 证据在壳行无活动证据时回退谱系分类** —— facts-only 来源（无壳）此前从不延迟完成；现在判定面与呈现面共用同一三值分类器，运行中后代数进入 facts 行签名（busy→idle 的变化会被发布，不再被内容去重吞掉）（design 19 §3.5 I-12）。
+- **侧栏 checkout 行的健康徽标退役** —— chamber 独有的「worktree invalid / 状态未知」行内徽标移除：上游 worktree 服务没有该健康面，它只是把 Git 探测失败误呈现为行状态；删除/定位仍由动作门与错误文案承担（design 06 §3.2、design 08 §3.2）。
 ### 修复
 - **chamber host seed 迁到 profile fallback 层** —— seed 不再落在 pnpm 管理的 `profiles/web/node_modules`：`dsh plugin add/remove` 重链不再把 client-graph/git-worktree/archive-cleanup/open-in 挪进 `.ignored`；每次解析先删除旧位置遗留副本再按 fallback 重种，desktop 本地插件探测与验收 fixture 同批改读 fallback（design 09 §3.5、design 02 §2.6）。
 - **页面 boot 的 store 双注册** —— seed 在模块系统创建时已注册 `@deepseek-ai/dsh-client-store`，复合 bundle 又从 `COVERED_FACTORIES` 注册同一 id，触发 `duplicate factory registration` 并中断其余覆盖 factory 的注册；store 仅保留在去重集，新增 `SEED_PLATFORM_IDS` 计入不可满足依赖谓词，设计文档与双向测试锁同批更新（design 09 §3.2/§3.5）。
@@ -27,9 +34,15 @@
 - **侧栏 fork 命名跳过已用标题**、文档预览图片按每 entry 的 base 路径解析。
 - **macOS 壳** —— phase-plan 测试传入 active fact，design 25 的崩溃反汇编说明与 XCTest 锁同步。
 
+- **空白「新建会话」行的幽灵占位到点真正消失** —— 本地过期时钟此前只更新自身状态、不穿透 memo 的 section 渲染，隐藏占位（26px 布局位）会残留到下一次投影；现在到期经 section context 的版本发布，行立即停止渲染，槽位键按来源作用域（克隆实例携带相同 session UUID 不再串源）（design 06 §2.2）。
+- **右栏浏览器 guest 在页面启动首 100ms 内挂载时补上首帧遮挡候选刷新** —— 候选缓存时钟不再把「从未查询」当「刚查过」，重挂载同样重置（design 28 §4.1）。
+- **通知账本的纯页内推进不再触发全量落盘** —— 页内水位与易失轨变化不再计入持久化变更证据，`prune` 只在 durable 三表被删时排盘（design 19 §3.2.4）。
+- **gateway 旧文档里被隐藏的子代理行翻可见时同拍重算父行证据** —— activity / pending / cancel / 已停 status 四类在场帧都会重算，避免重启后首基线前的 fail-closed 窗口把该来源读成 idle 而提前一条横幅（design 17 §10.7、design 19 §3.5⑧）。
+- **持久化完成身份在加载期校验** —— pending 的 `completionSeq`/`absorbedSeq` 逐字段清洗（非法只丢字段、不丢条目），reload 后延迟完成的 supersede 仍能兑现（design 19 §3.2.4）。
+- **网关谱系不可判时改为每进程一次告警** —— 成功基线后仍不可判的谱系不再静默抑制子代理 busy 证据（design 19 §3.5）。
+- **打包运行时保留技能 Markdown** —— 载荷裁剪不再误删运行时技能目录的 Markdown，打包态技能文档可读。
 ### 文档
-- 设计文档与进度记录同批更新：design 02/05/06/09/18/19/21/25/26、checklists 与 i18n 记录。
-
+- 设计文档与进度记录同批更新：design 02/05/06/09/14/17/18/19/21/25/26/28、checklists、TODO（边界登记与工程债清单）与 i18n 记录。
 ## [0.4.5] - 2026-11-16
 
 ### 新增
