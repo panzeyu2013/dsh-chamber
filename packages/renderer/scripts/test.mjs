@@ -171,6 +171,8 @@ export const GROUPS = {
     'test/session-state/virtual-runtime-report.test.ts',
     // 通知三表落盘（notifications.v1 键常量/清洗/旧 v4+v2 一次性迁移/有界化/落盘合并器/隐私白名单）。
     'test/session-state/notification-store.test.ts',
+    // 通知 durable 表内存上界（design 19 §3.2.4）：helper 语义 + 账本写点/构造期 + load 只裁内存。
+    'test/session-state/notification-bounds.test.ts',
     // 回声账本单一 store（同步快照/identity-preserving/三表独立/镜像不得复活）。
     'test/session-state/echo-store.test.ts',
     // facts 表单一 store（同步快照/幂等静默/唯一退役路径/渲染期镜像不得复活）。

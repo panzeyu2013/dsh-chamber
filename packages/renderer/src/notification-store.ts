@@ -25,6 +25,7 @@
 import { isWatermark } from './watermark.ts'
 import { LEGACY_NOTIFIED_RUN_ID, isSessionRunId } from './notification-identity.ts'
 import { isPlainRecord } from './plain-record.ts'
+import { NOTIFICATION_MAX_SESSIONS_PER_SOURCE, tailOutcomeTable, tailSessionTable } from './notification-bounds.ts'
 import type { GoalOutcomeTable, PendingCompletion, PendingCompletionTable } from './complete-ledger.ts'
 
 /** 通知载荷键（唯一被持续写入的键）。 */
@@ -41,7 +42,7 @@ export const LEGACY_UNREAD_V1_KEY = 'dsh-chamber.unread.v1'
 /** 旧读回执的 per-install id：随读回执退役一起清理。 */
 export const LEGACY_CLIENT_INSTALL_ID_KEY = 'dsh-chamber.client-install-id.v1'
 /** 每来源通知表上限（身份表与 pending 表按插入序保留最近 N 条）。 */
-export const NOTIFICATION_MAX_SESSIONS_PER_SOURCE = 500
+export { NOTIFICATION_MAX_SESSIONS_PER_SOURCE }
 
 export interface NotificationPayload {
   v: 1
@@ -230,32 +231,16 @@ export function pruneEmptyNotificationTables(payload: NotificationPayload): Noti
 export function pruneNotificationPayload(payload: NotificationPayload, maxPerSource = NOTIFICATION_MAX_SESSIONS_PER_SOURCE): NotificationPayload {
   if (maxPerSource <= 0) return emptyNotificationPayload()
   const next = emptyNotificationPayload()
-  const tail = <T>(table: Record<string, T>): Record<string, T> | undefined => {
-    const keys = Object.keys(table)
-    if (keys.length === 0) return undefined
-    const kept: Record<string, T> = {}
-    for (const key of keys.slice(keys.length > maxPerSource ? keys.length - maxPerSource : 0)) kept[key] = table[key]
-    return kept
+  // 界与内存侧共用 notification-bounds 的单一实现；逐来源浅拷贝保持原「返回新对象」契约。
+  const keepNonEmpty = <T>(table: Record<string, T>): boolean => Object.keys(table).length > 0
+  for (const [sourceId, table] of Object.entries(tailSessionTable(payload.notifiedRuns, maxPerSource))) {
+    if (keepNonEmpty(table)) next.notifiedRuns[sourceId] = { ...table }
   }
-  for (const [sourceId, table] of Object.entries(payload.notifiedRuns)) {
-    const kept = tail(table)
-    if (kept !== undefined) next.notifiedRuns[sourceId] = kept
+  for (const [sourceId, table] of Object.entries(tailSessionTable(notificationPendingTable(payload), maxPerSource))) {
+    if (keepNonEmpty(table)) next.pending![sourceId] = { ...table }
   }
-  for (const [sourceId, table] of Object.entries(notificationPendingTable(payload))) {
-    const kept = tail(table)
-    if (kept !== undefined) next.pending![sourceId] = kept
-  }
-  // outcomes 以 goalId 为键：每来源按水位 LRU 保留上限条。
-  for (const [sourceId, table] of Object.entries(notificationOutcomeTable(payload))) {
-    const entries = Object.entries(table)
-    if (entries.length <= maxPerSource) {
-      next.outcomes![sourceId] = { ...table }
-      continue
-    }
-    entries.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-    const kept: Record<string, number> = {}
-    for (const [goalId, watermark] of entries.slice(0, maxPerSource)) kept[goalId] = watermark
-    next.outcomes![sourceId] = kept
+  for (const [sourceId, table] of Object.entries(tailOutcomeTable(notificationOutcomeTable(payload), maxPerSource))) {
+    if (keepNonEmpty(table)) next.outcomes![sourceId] = { ...table }
   }
   return next
 }
@@ -279,7 +264,7 @@ export function loadNotifications(storage: NotificationStorageLike | undefined):
     // v1 is authoritative: retire every pre-v1 key regardless of whether it ever
     // parsed (a corrupt v4 must not survive forever).
     removeLegacyKeys(storage)
-    return sanitizeNotificationPayload(current)
+    return pruneNotificationPayload(sanitizeNotificationPayload(current))
   }
   const legacyV4 = version(LEGACY_UNREAD_V4_KEY, 4)
   const legacyV2 = legacyV4 === null ? version(LEGACY_UNREAD_V2_KEY, 2) : null

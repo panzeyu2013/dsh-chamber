@@ -36,6 +36,7 @@
  * notified/pending/outcomes 只并列存储、互不混写：水位裁定仍全部走 state()。
  */
 import { isPlainRecord } from './plain-record.ts'
+import { tailOutcomeTable, tailSessionTable } from './notification-bounds.ts'
 import { isWatermark, maxWatermarkValue } from './watermark.ts'
 import type { UnreadKind } from './watermark.ts'
 import type { SessionRunId } from '@dsh-chamber/dsh-stream-state'
@@ -326,9 +327,9 @@ export function createCompleteLedger(
   }
 
   const state: CompletionDecisionState = {
-    notified: initialWatermarks,
+    notified: tailSessionTable(initialWatermarks),
     pending: {},
-    outcomes: copyOutcomes(options.outcomes),
+    outcomes: tailOutcomeTable(copyOutcomes(options.outcomes)),
     armed: {},
     armedFloor: {},
     settleFence: {},
@@ -384,8 +385,11 @@ export function createCompleteLedger(
     report('discarded ' + String(droppedStale) + ' pending completion(s) older than ' + String(maxAge) + 'ms')
   }
 
+  // 持久 pending 装载后同样收敛到内存上界（构造期 state 字面量只覆盖初始空表）。
+  state.pending = tailSessionTable(state.pending)
+
   /** 身份轨（独立键空间）：持久身份 + 易失的原生结算待归属标记。 */
-  let notifiedRuns: NotifiedRunTable = { ...initialRuns }
+  let notifiedRuns: NotifiedRunTable = tailSessionTable({ ...initialRuns })
   let runtimeSettled: Record<string, Map<string, number | undefined>> = {}
 
   /** 待归属标记消费（写时复制；空 map 收敛掉来源表项）。setNotifiedRun 命中即清。 */
@@ -503,6 +507,9 @@ export function createCompleteLedger(
     clearArmedSession(sourceId, sessionId)
     clearFenceSession(sourceId, sessionId)
     clearGoalKnownSession(sourceId, sessionId)
+    // 易失的 native 结算待归属标记与会话身份同寿：会话消失后残留只会让长活来源缓慢增长，
+    // 且没有消费者（下一次 setNotifiedRun 命中同一 sessionId 才会消费，已不可达）。
+    clearRuntimeSettled(sourceId, sessionId)
   }
 
   /**
@@ -550,14 +557,14 @@ export function createCompleteLedger(
     setNotifiedWatermark(sourceId, sessionId, kind, watermark) {
       const sourceTable = state.notified[sourceId] ?? {}
       const row = sourceTable[sessionId] ?? {}
-      state.notified = { ...state.notified, [sourceId]: { ...sourceTable, [sessionId]: { ...row, [kind]: watermark } } }
+      state.notified = tailSessionTable({ ...state.notified, [sourceId]: { ...sourceTable, [sessionId]: { ...row, [kind]: watermark } } })
     },
     notifiedRunTable() { return notifiedRuns },
     notifiedRun(sourceId, sessionId) { return notifiedRuns[sourceId]?.[sessionId] },
     setNotifiedRun(sourceId, sessionId, runId) {
       const sourceTable = notifiedRuns[sourceId] ?? {}
       if (sourceTable[sessionId] !== runId) {
-        notifiedRuns = { ...notifiedRuns, [sourceId]: { ...sourceTable, [sessionId]: runId } }
+        notifiedRuns = tailSessionTable({ ...notifiedRuns, [sourceId]: { ...sourceTable, [sessionId]: runId } })
       }
       clearRuntimeSettled(sourceId, sessionId)
     },
@@ -572,7 +579,7 @@ export function createCompleteLedger(
     pendingEntry(sourceId, sessionId) { return state.pending[sourceId]?.[sessionId] },
     setPending(sourceId, sessionId, entry) {
       const table = state.pending[sourceId] ?? {}
-      state.pending = { ...state.pending, [sourceId]: { ...table, [sessionId]: { ...entry } } }
+      state.pending = tailSessionTable({ ...state.pending, [sourceId]: { ...table, [sessionId]: { ...entry } } })
     },
     clearPending(sourceId, sessionId) { clearPending(sourceId, sessionId) },
     outcomesTable() { return state.outcomes },
@@ -582,7 +589,7 @@ export function createCompleteLedger(
       const table = state.outcomes[sourceId] ?? {}
       const current = table[goalId]
       if (current !== undefined && current >= watermark) return
-      state.outcomes = { ...state.outcomes, [sourceId]: { ...table, [goalId]: watermark } }
+      state.outcomes = tailOutcomeTable({ ...state.outcomes, [sourceId]: { ...table, [goalId]: watermark } })
     },
     armed(sourceId) { return state.armed[sourceId] ?? EMPTY_ARMED },
     setArmed(sourceId, sessions) {
