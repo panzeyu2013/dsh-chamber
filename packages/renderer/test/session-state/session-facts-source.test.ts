@@ -432,6 +432,13 @@ test('snapshot parser: rows, host gate and unknown fields are defensive', () => 
   // 未知/坏字段绝不被当成事实。
   assert.equal(parseSessionFactsSnapshotValue({ ...SNAPSHOT, host: {} })?.hostState, 'unknown')
   assert.equal(parseSessionFactsRow({ sessionId: 'x', updatedAt: -5 })?.updatedAt, 0)
+  // P2a 运行数：安全整数 ≥0 才采信；坏值只丢该字段（-1 是签名哨兵，绝不能被当成事实）。
+  for (const bad of [-1, -0.5, 1.5, 2 ** 53, Number.NaN, Number.POSITIVE_INFINITY, '3', null, {}]) {
+    assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: bad })?.subagentRunningCount, undefined,
+      'invalid subagentRunningCount ' + String(bad) + ' must be dropped')
+  }
+  assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: 0 })?.subagentRunningCount, 0, '0 是合法事实')
+  assert.equal(parseSessionFactsRow({ sessionId: 'x', subagentRunningCount: 7 })?.subagentRunningCount, 7)
   assert.equal(parseSessionFactsRow({}), null)
 })
 

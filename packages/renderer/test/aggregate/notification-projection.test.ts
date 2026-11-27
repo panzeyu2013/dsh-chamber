@@ -742,6 +742,43 @@ test('G4 supersede: a strictly later completion absorbed while busy is notified 
 })
 
 
+
+test('G4 supersede: a goal-unknown deferral also honours the absorbed later completion', () => {
+  // 出口覆盖（M9）：goal unknown 是 facts 尚未到达时的默认入口——supersede 不能只在 goal null 下兑现。
+  const ledger = createCompleteLedger()
+  const deferred = reconcile(ledger.state(), observation({
+    subagents: 'busy', goal: 'unknown', candidate: factsSeq(1000, 1099),
+  }), 10)
+  assert.equal(deferred.disposition, 'deferred')
+  assert.equal(ledger.pendingEntry('src', 's1')?.deferred, 'subagent-busy')
+  const absorbed = reconcile(ledger.state(), observation({
+    subagents: 'busy', goal: 'unknown', candidate: factsSeq(2000, 1267),
+  }), 20)
+  assert.equal(absorbed.disposition, 'deferred')
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, 1267)
+  const settled = reconcile(ledger.state(), observation({ goal: 'unknown' }), 30)
+  assert.equal(settled.disposition, 'flushed', 'goal unknown 结清同样兑现更晚身份')
+  assert.equal(settled.origin, 'subagent-busy-settled')
+  assert.equal(settled.notification?.completionSeq, 1267)
+  assert.equal(settled.notification?.title, 'session-completed')
+})
+
+test('G4 supersede: a goal-paused deferral also honours the absorbed later completion', () => {
+  const paused: GoalFact = { goalId: 'g1', revision: 1, phase: 'paused', updatedAt: 1 }
+  const ledger = createCompleteLedger()
+  const deferred = reconcile(ledger.state(), observation({
+    subagents: 'busy', goal: paused, candidate: factsSeq(1000, 1099),
+  }), 10)
+  assert.equal(deferred.disposition, 'deferred')
+  const absorbed = reconcile(ledger.state(), observation({
+    subagents: 'busy', goal: paused, candidate: factsSeq(2000, 1267),
+  }), 20)
+  assert.equal(absorbed.disposition, 'deferred')
+  assert.equal(ledger.pendingEntry('src', 's1')?.absorbedSeq, 1267)
+  const settled = reconcile(ledger.state(), observation({ goal: paused }), 30)
+  assert.equal(settled.disposition, 'flushed', 'goal paused 结清同样兑现更晚身份')
+  assert.equal(settled.notification?.completionSeq, 1267)
+})
 test('G4 supersede: a persisted absorbed identity still settles on the first BASELINE observation (G2 exception)', () => {
   // 同页 reload 后首份观测是基线：G2 的「基线不 emit」只适用于**候选**；延迟位已吸收
   // 更晚完成身份时必须兑现，否则收尾完成永久丢（design 19 §3.2.3 #13 / §3.5 ④）。
